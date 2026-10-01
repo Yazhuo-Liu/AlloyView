@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <meta
+      name="description"
+      content="Browser-only atomistic structure visualization and coordination analysis"
+    >
+    <title>AlloyView · Atomistic Structure Viewer</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="./" aria-label="AlloyView home">
+          <span class="brand-mark" aria-hidden="true">
+            <i></i><i></i><i></i><i></i>
+          </span>
+          <span>
+            <strong>AlloyView</strong>
+            <small>LOCAL ATOM LAB</small>
+          </span>
+        </a>
+
+        <div class="file-actions">
+          <input id="file-input" type="file" accept=".cfg,.dump,.lammpstrj,.txt" hidden>
+          <button id="open-file" class="button button-primary" type="button">
+            <span aria-hidden="true">＋</span> Open local file
+          </button>
+          <button id="load-fcc" class="button" type="button">FCC example</button>
+          <button id="load-bcc" class="button" type="button">BCC trajectory</button>
+        </div>
+
+        <div class="privacy-badge" title="Files are processed only in this browser">
+          <span class="privacy-dot"></span>
+          <span><strong>Local processing</strong><small>Structure data stays on this device</small></span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="viewport-panel" aria-label="3D atomistic viewport">
+          <canvas id="viewport" tabindex="0"></canvas>
+
+          <div id="empty-state" class="empty-state">
+            <div class="empty-orbit" aria-hidden="true">
+              <span class="nucleus"></span>
+              <span class="electron e1"></span>
+              <span class="electron e2"></span>
+              <span class="electron e3"></span>
+            </div>
+            <p class="eyebrow">BROWSER-NATIVE MATERIALS VIEWER</p>
+            <h1>See materials<br>atom by atom</h1>
+            <p class="empty-copy">Open an AtomEye CFG or LAMMPS text trajectory. Parsing, analysis, and rendering all stay in this browser.</p>
+            <button id="empty-open" class="button button-primary button-large" type="button">Choose a structure file</button>
+            <p class="format-note">Orthogonal and restricted triclinic cells supported</p>
+          </div>
+
+          <div class="view-toolbar" aria-label="View tools">
+            <button id="reset-camera" type="button" title="Reset view" aria-label="Reset view">⌂</button>
+            <button id="toggle-projection" type="button" title="Toggle projection" aria-label="Toggle projection">◫</button>
+            <span></span>
+            <button id="export-png" type="button" title="Export PNG" aria-label="Export PNG">⇩</button>
+          </div>
+
+          <div class="interaction-hint">Drag to rotate · Shift/right-drag to pan · Scroll to zoom · Click to select</div>
+          <div id="legend" class="legend" hidden></div>
+          <div id="loading" class="loading" hidden>
+            <span class="spinner"></span>
+            <span id="loading-text">Reading…</span>
+          </div>
+          <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+        </section>
+
+        <aside class="sidebar" aria-label="Structure and display controls">
+          <section class="side-section structure-summary">
+            <p class="section-kicker">STRUCTURE</p>
+            <div class="filename-row">
+              <div>
+                <h2 id="file-name">No structure loaded</h2>
+                <p id="file-meta">CFG / LAMMPS dump</p>
+              </div>
+              <span id="format-chip" class="chip">—</span>
+            </div>
+            <div class="stat-grid">
+              <div><span>Atoms</span><strong id="atom-count">—</strong></div>
+              <div><span>Frames</span><strong id="frame-count">—</strong></div>
+              <div><span>Cell</span><strong id="cell-kind">—</strong></div>
+              <div><span>PBC</span><strong id="pbc-flags">—</strong></div>
+            </div>
+          </section>
+
+          <section class="side-section" id="trajectory-section" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">TRAJECTORY</p><h3>Trajectory frame</h3></div>
+              <output id="frame-label">1 / 1</output>
+            </div>
+            <input id="frame-slider" class="range" type="range" min="0" max="0" value="0" step="1">
+            <div class="inline-meta"><span id="timestep-label">timestep —</span><span id="cache-label">cache 1 / 3</span></div>
+          </section>
+
+          <section class="side-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">APPEARANCE</p><h3>Display</h3></div>
+            </div>
+            <label class="field">
+              <span>Coordinates</span>
+              <select id="coordinate-mode" disabled>
+                <option value="wrapped">Wrapped into periodic cell</option>
+                <option value="unwrapped" disabled>Unwrapped coordinates</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Color by</span>
+              <select id="color-mode" disabled><option value="type">Atom type</option></select>
+            </label>
+            <label class="field range-field">
+              <span>Atom radius <output id="radius-value">0.70 Å</output></span>
+              <input id="radius" class="range" type="range" min="0.1" max="2.0" value="0.7" step="0.05" disabled>
+            </label>
+            <div class="field two-column">
+              <label><span>Projection</span><select id="projection" disabled><option value="perspective">Perspective</option><option value="orthographic">Orthographic</option></select></label>
+              <label><span>Background</span><input id="background" type="color" value="#071018" disabled></label>
+            </div>
+            <div class="field display-options">
+              <label><input id="show-cell" type="checkbox" checked disabled><span>Show cell box</span></label>
+              <label><input id="png-background" type="checkbox" checked disabled><span>Include background in PNG</span></label>
+            </div>
+          </section>
+
+          <section class="side-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">SLICE</p><h3>Slice</h3></div>
+              <output id="slice-value">100%</output>
+            </div>
+            <div class="field slice-row">
+              <select id="slice-axis" aria-label="Slice axis" disabled>
+                <option value="0">a axis</option><option value="1">b axis</option><option value="2">c axis</option>
+              </select>
+              <input id="slice-position" class="range" type="range" min="0" max="100" value="100" step="1" disabled>
+            </div>
+            <p class="help">Uses wrapped fractional coordinates, including when the trajectory is displayed unwrapped.</p>
+          </section>
+
+          <section class="side-section analysis-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">ANALYSIS</p><h3>Coordination number</h3></div>
+              <span id="analysis-state" class="state-pill">Not calculated</span>
+            </div>
+            <div class="analysis-controls">
+              <label><span>Cutoff radius</span><span class="input-unit"><input id="cutoff" type="number" value="3.0" min="0.01" step="0.05" disabled><i>Å</i></span></label>
+              <button id="run-analysis" class="button button-accent" type="button" disabled>Calculate</button>
+            </div>
+            <p id="analysis-help" class="help">Periodic axes use minimum images; non-periodic axes use direct distances. Camera movement does not rerun analysis.</p>
+          </section>
+
+          <section class="side-section selection-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">SELECTION</p><h3>Atom details</h3></div>
+              <button id="clear-selection" class="text-button" type="button" hidden>Clear</button>
+            </div>
+            <div id="selection-empty" class="selection-empty">Click an atom to inspect its ID, type, coordinates, and properties.</div>
+            <dl id="selection-data" class="selection-data" hidden></dl>
+          </section>
+
+          <section class="side-section performance-section">
+            <details>
+              <summary><span><span class="section-kicker">PERFORMANCE</span>Current measurements</span><span>＋</span></summary>
+              <dl class="perf-list">
+                <div><dt>File indexing</dt><dd id="metric-index">—</dd></div>
+                <div><dt>Frame parsing</dt><dd id="metric-parse">—</dd></div>
+                <div><dt>GPU upload</dt><dd id="metric-upload">—</dd></div>
+                <div><dt>Coordination</dt><dd id="metric-analysis">—</dd></div>
+                <div><dt>Interactive FPS</dt><dd id="metric-fps">—</dd></div>
+                <div><dt>JS memory</dt><dd id="metric-memory">Not exposed by browser</dd></div>
+              </dl>
+            </details>
+          </section>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>

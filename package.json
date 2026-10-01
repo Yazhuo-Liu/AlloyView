@@ -1,0 +1,19 @@
+{
+  "name": "alloyview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-only atomistic visualization and analysis for metals and alloys",
+  "scripts": {
+    "dev": "node scripts/serve.mjs . 5173",
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/serve.mjs dist 4173",
+    "test": "node --test",
+    "benchmark": "node scripts/benchmark.mjs",
+    "build:wasm": "bash wasm/build.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
