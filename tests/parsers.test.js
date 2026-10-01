@@ -17,6 +17,33 @@ test('extended AtomEye CFG preserves cell, atom count, properties, and fractiona
   assert.deepEqual([...frame.positions.slice(3, 6)].map(round6), [0, 2.025, 2.025]);
 });
 
+test('LAMMPS-generated CFG promotes id and ix/iy/iz auxiliaries to frame semantics', async () => {
+  const text = await readFile(new URL('100110.cfg', root), 'utf8');
+  const frame = parseCfg(text, '100110.cfg');
+  assert.equal(frame.ids.length, 7648);
+  assert.equal(frame.ids[0], 12);
+  assert.equal(new Set(frame.ids).size, 7648);
+  assert.equal(Math.min(...frame.ids), 1);
+  assert.equal(Math.max(...frame.ids), 7648);
+  assert.deepEqual(frame.typeLabels, ['Ni']);
+  assert.equal(frame.unwrapSource, 'ix/iy/iz');
+  assert.ok(frame.unwrappedPositions);
+  assert.ok(frame.imageFlags instanceof Int32Array);
+  assert.deepEqual(frame.properties.map((property) => property.name), ['mass']);
+
+  let crossedZ = 0;
+  for (let atom = 0; atom < frame.ids.length; atom += 1) {
+    const base = atom * 3;
+    assert.ok(Math.abs(frame.unwrappedPositions[base] - frame.positions[base]) < 1e-5);
+    assert.ok(Math.abs(frame.unwrappedPositions[base + 1] - frame.positions[base + 1]) < 1e-5);
+    const deltaZ = frame.unwrappedPositions[base + 2] - frame.positions[base + 2];
+    if (Math.abs(deltaZ + 9.95285) < 1e-4) crossedZ += 1;
+    else assert.ok(Math.abs(deltaZ) < 1e-5, `unexpected z image displacement ${deltaZ}`);
+  }
+  assert.equal(crossedZ, 480);
+  assert.equal([...frame.imageFlags].filter((value) => value === -1).length, 480);
+});
+
 test('basic AtomEye CFG applies A and Transform to row-vector coordinates', () => {
   const frame = parseCfg(`Number of particles = 1
 A = 2.0 Angstrom
@@ -134,6 +161,7 @@ ITEM: ATOMS id type xs ys zs ix iy iz
   assert.deepEqual([...frame.positions].map(round6), [3, 4.2, 4]);
   assertArrayClose(frame.unwrappedPositions, [13, 0.2, 24]);
   assert.equal(frame.unwrapSource, 'ix/iy/iz');
+  assert.deepEqual([...frame.imageFlags], [1, -1, 2]);
   assert.equal(frame.properties.length, 0);
 });
 

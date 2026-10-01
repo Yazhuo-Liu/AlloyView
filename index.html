@@ -64,6 +64,22 @@
             <button id="export-png" type="button" title="Export PNG" aria-label="Export PNG">⇩</button>
           </div>
 
+          <div class="view-presets" aria-label="Standard camera views">
+            <button type="button" data-view="top" disabled>Top</button>
+            <button type="button" data-view="bottom" disabled>Bottom</button>
+            <button type="button" data-view="front" disabled>Front</button>
+            <button type="button" data-view="back" disabled>Back</button>
+            <button type="button" data-view="left" disabled>Left</button>
+            <button type="button" data-view="right" disabled>Right</button>
+          </div>
+
+          <svg id="axis-triad" class="axis-triad" viewBox="0 0 96 96" aria-label="Global Cartesian axes" hidden>
+            <circle cx="48" cy="48" r="3"></circle>
+            <g class="axis-x"><line id="axis-x-line" x1="48" y1="48" x2="75" y2="48"></line><text id="axis-x-label" x="80" y="48">X</text></g>
+            <g class="axis-y"><line id="axis-y-line" x1="48" y1="48" x2="48" y2="21"></line><text id="axis-y-label" x="48" y="16">Y</text></g>
+            <g class="axis-z"><line id="axis-z-line" x1="48" y1="48" x2="48" y2="75"></line><text id="axis-z-label" x="48" y="84">Z</text></g>
+          </svg>
+
           <div class="interaction-hint">Drag to rotate · Shift/right-drag to pan · Scroll to zoom · Click to select</div>
           <div id="legend" class="legend" hidden></div>
           <div id="loading" class="loading" hidden>
@@ -121,7 +137,7 @@
             </label>
             <div class="field two-column">
               <label><span>Projection</span><select id="projection" disabled><option value="perspective">Perspective</option><option value="orthographic">Orthographic</option></select></label>
-              <label><span>Background</span><input id="background" type="color" value="#071018" disabled></label>
+              <label><span>Background</span><input id="background" type="color" value="#0e1113" disabled></label>
             </div>
             <div class="field display-options">
               <label><input id="show-cell" type="checkbox" checked disabled><span>Show cell box</span></label>
@@ -152,6 +168,7 @@
               <label><span>Cutoff radius</span><span class="input-unit"><input id="cutoff" type="number" value="3.0" min="0.01" step="0.05" disabled><i>Å</i></span></label>
               <button id="run-analysis" class="button button-accent" type="button" disabled>Calculate</button>
             </div>
+            <p id="cutoff-help" class="help">A starting value will be suggested from recognized metallic elements.</p>
             <p id="analysis-help" class="help">Periodic axes use minimum images; non-periodic axes use direct distances. Camera movement does not rerun analysis.</p>
           </section>
 

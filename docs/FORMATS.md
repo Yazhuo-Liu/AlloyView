@@ -9,6 +9,8 @@ Each parsed frame contains:
   fractional`, wrapped only along axes marked periodic;
 - optional `Float32Array unwrappedPositions` when the input provides enough
   information to reconstruct unwrapped coordinates;
+- optional interleaved `Int32Array imageFlags` storing `ix/iy/iz` when the
+  source provides them;
 - a cell origin, three row vectors, and three PBC flags;
 - named scalar per-atom typed arrays;
 - optional timestep/source metadata.
@@ -27,6 +29,9 @@ Supported:
 - `A`, all nine `H0(i,j)` entries, `.NO_VELOCITY.`, `entry_count`, and scalar
   `auxiliary[n]` fields;
 - `Transform` or symmetric Lagrangian `eta` deformation;
+- LAMMPS-generated extended CFG auxiliaries named `id`, `ix`, `iy`, and `iz`:
+  `id` becomes the frame's unique identifier array and a complete image triplet
+  is retained and used to reconstruct unwrapped coordinates;
 - orthogonal and fully populated triclinic cells.
 
 Rejected explicitly:
@@ -39,8 +44,12 @@ Rejected explicitly:
   rule would risk silently displaying the wrong structure.
 
 CFG has no portable per-axis boundary flag in this supported grammar, so all
-three axes are treated as periodic. CFG also has no supported image flags or
-trajectory-continuity metadata, so the unwrapped display option is unavailable.
+three axes are treated as periodic. A complete `ix/iy/iz` auxiliary triplet is
+interpreted using the [LAMMPS image-flag definition](https://docs.lammps.org/dump.html):
+the integers multiply the three cell vectors, including for triclinic cells.
+Partial triplets, non-integer flags, and duplicate/non-positive `id` values are
+rejected. Without image flags, CFG has no trajectory-continuity metadata and
+the unwrapped display option remains unavailable.
 
 ## LAMMPS text dump
 
@@ -85,6 +94,18 @@ If a periodic cell face height is smaller than twice the cutoff, the UI warns
 that multiple images of the same atom are not counted repeatedly. This makes the
 small-cell convention explicit instead of silently claiming an infinite-crystal
 coordination.
+
+## Coordination cutoff suggestion
+
+Coordination analysis always uses one explicit, user-editable global cutoff.
+When all type labels are recognized metallic element symbols, the UI initializes
+that cutoff from the largest tabulated metallic radius pair with 15% first-shell
+padding, rounded to 0.05 Å. Unknown/numeric types use an explicit 3.00 Å
+fallback. This is a convenience estimate, not phase recognition and not an
+OVITO algorithm; users should verify it against the first minimum of the radial
+distribution function. OVITO's own Coordination Analysis likewise accepts an
+explicit uniform cutoff. OVITO's separate Create Bonds modifier is the feature
+that provides element-aware radius and pair-wise cutoff modes.
 
 ## Trajectory memory behavior
 

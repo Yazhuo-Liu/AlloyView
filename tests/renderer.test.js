@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { WebGLRenderer } from '../src/render/webgl-renderer.js';
+import { axisDirectionsFromView, WebGLRenderer } from '../src/render/webgl-renderer.js';
 
 test('cell box visibility is renderer state and requests a redraw', () => {
   const renderer = Object.create(WebGLRenderer.prototype);
@@ -98,4 +98,35 @@ test('transparent PNG export uses a transparent render and restores the viewport
     if (originalDocument === undefined) delete globalThis.document;
     else globalThis.document = originalDocument;
   }
+});
+
+test('standard views set a constrained camera orientation and orthographic projection', () => {
+  const renderer = Object.create(WebGLRenderer.prototype);
+  renderer.pan = [2, 3, 4];
+  renderer.requestRender = () => {};
+  let projection;
+  renderer.onProjectionChange = (value) => { projection = value; };
+
+  renderer.setView('front');
+  assert.equal(renderer.yaw, 0);
+  assert.equal(renderer.pitch, 0);
+  assert.deepEqual(renderer.pan, [0, 0, 0]);
+  assert.equal(renderer.projectionMode, 'orthographic');
+  assert.equal(projection, 'orthographic');
+
+  renderer.setView('top');
+  assert.equal(renderer.pitch, Math.PI / 2);
+  assert.deepEqual(renderer.cameraOrientation().upHint, [0, 1, 0]);
+});
+
+test('axis tripod directions use global Cartesian axes in screen space', () => {
+  const axes = axisDirectionsFromView(new Float32Array([
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+  ]));
+  assert.deepEqual(axes.x, { x: 1, y: -0, depth: 0 });
+  assert.deepEqual(axes.y, { x: 0, y: -1, depth: 0 });
+  assert.deepEqual(axes.z, { x: 0, y: -0, depth: 1 });
 });

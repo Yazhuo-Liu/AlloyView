@@ -123,14 +123,28 @@ export function parseCfg(text, sourceName = 'structure.cfg') {
     ? parseBasicAtoms(lines, dataIndex, count)
     : parseExtendedAtoms(lines, dataIndex, count, entryCount, noVelocity, auxiliary);
   const fractional = Float32Array.from(parsed.fractional);
+  const semantics = extractExtendedSemantics(parsed.properties, count);
+  let unwrappedPositions;
+  if (semantics.imageFlags) {
+    const unwrappedFractional = Float64Array.from(fractional);
+    for (let atom = 0; atom < count; atom += 1) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        unwrappedFractional[atom * 3 + axis] += semantics.imageFlags[atom * 3 + axis];
+      }
+    }
+    unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
+  }
   const frame = validateFrame({
-    ids: Float64Array.from({ length: count }, (_, index) => index + 1),
+    ids: semantics.ids ?? Float64Array.from({ length: count }, (_, index) => index + 1),
     types: Uint16Array.from(parsed.types),
     typeLabels: parsed.typeLabels,
     positions: fractionalToCartesian(fractional, cell),
+    unwrappedPositions,
+    imageFlags: semantics.imageFlags,
+    unwrapSource: unwrappedPositions ? 'ix/iy/iz' : undefined,
     fractional,
     cell,
-    properties: parsed.properties,
+    properties: semantics.properties,
     timestep: null,
     title: sourceName,
     sourceFormat: 'cfg',
@@ -198,7 +212,11 @@ function parseExtendedAtoms(lines, start, count, entryCount, noVelocity, auxilia
   for (let index = 0; index < auxiliaryCount; index += 1) {
     propertyDefinitions.push(auxiliary.get(index) ?? { name: `aux_${index}`, unit: '' });
   }
-  const propertyData = propertyDefinitions.map(() => new Float32Array(count));
+  const propertyData = propertyDefinitions.map((definition) => (
+    ['id', 'ix', 'iy', 'iz'].includes(definition.name.toLowerCase())
+      ? new Float64Array(count)
+      : new Float32Array(count)
+  ));
   const masses = new Float32Array(count);
   const fractional = [];
   const types = [];
@@ -255,6 +273,57 @@ function parseExtendedAtoms(lines, start, count, entryCount, noVelocity, auxilia
       { name: 'mass', unit: 'amu', data: masses },
       ...propertyDefinitions.map((definition, index) => ({ ...definition, data: propertyData[index] })),
     ],
+  };
+}
+
+function extractExtendedSemantics(properties, count) {
+  const byName = new Map();
+  for (const property of properties) {
+    const name = property.name.toLowerCase();
+    if (!['id', 'ix', 'iy', 'iz'].includes(name)) continue;
+    if (byName.has(name)) throw cfgError(`The auxiliary field “${name}” is defined more than once.`);
+    byName.set(name, property);
+  }
+
+  const imageNames = ['ix', 'iy', 'iz'];
+  const imageCount = imageNames.filter((name) => byName.has(name)).length;
+  if (imageCount !== 0 && imageCount !== 3) {
+    throw cfgError('Image flags must provide ix, iy, and iz together; a partial triplet cannot be unwrapped safely.');
+  }
+
+  let ids;
+  if (byName.has('id')) {
+    ids = Float64Array.from(byName.get('id').data);
+    const seen = new Set();
+    for (let atom = 0; atom < count; atom += 1) {
+      const id = ids[atom];
+      if (!Number.isSafeInteger(id) || id <= 0) {
+        throw cfgError(`Auxiliary id value ${id} at atom row ${atom + 1} is not a positive safe integer.`);
+      }
+      if (seen.has(id)) throw cfgError(`Auxiliary id value ${id} occurs more than once.`);
+      seen.add(id);
+    }
+  }
+
+  let imageFlags;
+  if (imageCount === 3) {
+    const imageColumns = imageNames.map((name) => byName.get(name).data);
+    imageFlags = new Int32Array(count * 3);
+    for (let axis = 0; axis < 3; axis += 1) {
+      for (let atom = 0; atom < count; atom += 1) {
+        const image = imageColumns[axis][atom];
+        if (!Number.isSafeInteger(image) || image < -2_147_483_648 || image > 2_147_483_647) {
+          throw cfgError(`Auxiliary ${imageNames[axis]} value ${image} at atom row ${atom + 1} is not a supported 32-bit integer.`);
+        }
+        imageFlags[atom * 3 + axis] = image;
+      }
+    }
+  }
+
+  return {
+    ids,
+    imageFlags,
+    properties: properties.filter((property) => !byName.has(property.name.toLowerCase())),
   };
 }
 

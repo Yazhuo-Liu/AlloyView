@@ -1,15 +1,15 @@
 const TYPE_COLORS = [
-  [79, 226, 208], [255, 180, 88], [121, 166, 255], [244, 112, 139],
-  [178, 132, 255], [119, 214, 120], [255, 224, 107], [105, 205, 244],
-  [241, 143, 220], [197, 211, 220], [235, 125, 86], [129, 236, 178],
+  [214, 157, 92], [111, 177, 150], [205, 112, 96], [157, 139, 185],
+  [202, 184, 126], [91, 163, 174], [190, 120, 145], [177, 187, 191],
+  [157, 169, 105], [206, 145, 128], [125, 151, 183], [171, 133, 103],
 ];
 
 const ELEMENT_COLORS = {
-  Al: [138, 183, 255], Cr: [138, 153, 199], Cu: [224, 129, 62],
-  Fe: [224, 118, 81], Mg: [142, 224, 152], Mn: [168, 120, 211],
-  Mo: [118, 190, 200], Nb: [99, 194, 180], Ni: [108, 202, 116],
-  Ti: [172, 181, 190], V: [153, 168, 201], W: [93, 122, 181],
-  Zn: [143, 161, 214], C: [98, 112, 120], H: [225, 233, 235],
+  Al: [190, 194, 194], Cr: [142, 151, 163], Cu: [207, 124, 65],
+  Fe: [198, 105, 78], Mg: [153, 181, 148], Mn: [158, 126, 174],
+  Mo: [130, 160, 168], Nb: [104, 166, 158], Ni: [205, 170, 112],
+  Ti: [166, 172, 176], V: [137, 150, 160], W: [117, 128, 143],
+  Zn: [155, 163, 181], C: [83, 89, 91], H: [228, 226, 219],
 };
 
 const VIRIDIS = [
@@ -34,16 +34,21 @@ export function colorsByType(frame) {
   };
 }
 
-export function colorsByProperty(property) {
-  let minimum = Number.POSITIVE_INFINITY;
-  let maximum = Number.NEGATIVE_INFINITY;
+export function colorsByProperty(property, limits = null) {
+  let dataMinimum = Number.POSITIVE_INFINITY;
+  let dataMaximum = Number.NEGATIVE_INFINITY;
   for (const value of property.data) {
     if (!Number.isFinite(value)) continue;
-    minimum = Math.min(minimum, value);
-    maximum = Math.max(maximum, value);
+    dataMinimum = Math.min(dataMinimum, value);
+    dataMaximum = Math.max(dataMaximum, value);
   }
-  if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) {
+  if (!Number.isFinite(dataMinimum) || !Number.isFinite(dataMaximum)) {
     throw new Error(`Property ${property.name} has no finite values to color.`);
+  }
+  const minimum = limits?.minimum ?? dataMinimum;
+  const maximum = limits?.maximum ?? dataMaximum;
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || (limits && maximum <= minimum)) {
+    throw new Error('The scalar color maximum must be greater than its minimum.');
   }
   const span = maximum - minimum;
   const colors = new Uint8Array(property.data.length * 3);
@@ -60,6 +65,10 @@ export function colorsByProperty(property) {
       unit: property.unit,
       minimum,
       maximum,
+      dataMinimum,
+      dataMaximum,
+      property,
+      customRange: Boolean(limits),
     },
   };
 }

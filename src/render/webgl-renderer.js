@@ -8,7 +8,6 @@ import {
   orthographic,
   perspective,
   scale,
-  subtract,
   transformPoint,
 } from './math.js';
 
@@ -56,13 +55,34 @@ void main() {
   if (radiusSquared > 1.0) discard;
   float normalZ = sqrt(max(0.0, 1.0 - radiusSquared));
   vec3 normal = vec3(vCorner, normalZ);
-  vec3 lightDirection = normalize(vec3(-0.42, 0.58, 0.72));
-  float diffuse = max(0.0, dot(normal, lightDirection));
-  float rim = pow(1.0 - normalZ, 2.0) * 0.10;
-  vec3 shaded = vColor * (0.32 + 0.68 * diffuse) + vec3(rim);
+
+  // View-space studio lighting keeps illumination stable while orbiting and
+  // costs only a few ALU operations per covered fragment. Work in approximate
+  // linear RGB so the diffuse gradient retains depth without muddying colors.
+  vec3 baseColor = pow(vColor, vec3(2.2));
+  vec3 viewDirection = vec3(0.0, 0.0, 1.0);
+  vec3 keyDirection = normalize(vec3(-0.48, 0.62, 0.72));
+  vec3 fillDirection = normalize(vec3(0.68, -0.36, 0.48));
+  float keyDiffuse = max(0.0, dot(normal, keyDirection));
+  float fillDiffuse = max(0.0, dot(normal, fillDirection));
+  float hemisphere = normal.y * 0.5 + 0.5;
+  float ambient = mix(0.22, 0.31, hemisphere);
+
+  // Darken the silhouette slightly to make the analytic disc read as a sphere.
+  float curvature = mix(0.58, 1.0, smoothstep(0.02, 0.58, normalZ));
+  float illumination = (ambient + 0.66 * keyDiffuse + 0.17 * fillDiffuse) * curvature;
+  vec3 linearShaded = baseColor * illumination;
+
+  // A broad, restrained metallic highlight gives curvature cues without the
+  // plastic-looking hotspot produced by a very high Phong exponent.
+  vec3 halfDirection = normalize(keyDirection + viewDirection);
+  float specular = pow(max(0.0, dot(normal, halfDirection)), 34.0) * 0.20;
+  vec3 highlightColor = mix(vec3(1.0, 0.94, 0.82), baseColor, 0.12);
+  linearShaded += highlightColor * specular;
+  vec3 shaded = pow(clamp(linearShaded, 0.0, 1.0), vec3(1.0 / 2.2));
   if (vSelected == 1) {
     float ring = smoothstep(0.68, 0.84, radiusSquared);
-    shaded = mix(shaded * 1.14, vec3(1.0, 0.69, 0.24), ring);
+    shaded = mix(min(shaded * 1.10, vec3(1.0)), vec3(1.0, 0.67, 0.20), ring);
   }
   vec3 surfaceView = vCenterView + vec3(vCorner * uRadius, normalZ * uRadius);
   vec4 surfaceClip = uProjection * vec4(surfaceView, 1.0);
@@ -88,8 +108,23 @@ const CELL_EDGES = [
   2, 6, 4, 5, 4, 6, 3, 7, 5, 7, 6, 7,
 ];
 
+const MAX_ORBIT_PITCH = Math.PI / 2 - 0.008;
+const VIEW_PRESETS = Object.freeze({
+  front: { yaw: 0, pitch: 0 },
+  back: { yaw: Math.PI, pitch: 0 },
+  left: { yaw: -Math.PI / 2, pitch: 0 },
+  right: { yaw: Math.PI / 2, pitch: 0 },
+  top: { yaw: 0, pitch: Math.PI / 2 },
+  bottom: { yaw: 0, pitch: -Math.PI / 2 },
+});
+
 export class WebGLRenderer {
-  constructor(canvas, { onPick = () => {}, onStats = () => {} } = {}) {
+  constructor(canvas, {
+    onPick = () => {},
+    onStats = () => {},
+    onCameraChange = () => {},
+    onProjectionChange = () => {},
+  } = {}) {
     this.canvas = canvas;
     this.gl = canvas.getContext('webgl2', {
       antialias: true,
@@ -101,11 +136,13 @@ export class WebGLRenderer {
     if (!this.gl) throw new Error('WebGL 2 is not available in this browser or on this GPU.');
     this.onPick = onPick;
     this.onStats = onStats;
+    this.onCameraChange = onCameraChange;
+    this.onProjectionChange = onProjectionChange;
     this.frame = null;
     this.displayPositions = null;
     this.atomCount = 0;
     this.radius = 0.7;
-    this.background = [7 / 255, 16 / 255, 24 / 255];
+    this.background = [14 / 255, 17 / 255, 19 / 255];
     this.cellVisible = true;
     this.sliceAxis = 2;
     this.sliceMaximum = 1;
@@ -260,6 +297,17 @@ export class WebGLRenderer {
     this.requestRender();
   }
 
+  setView(name) {
+    const preset = VIEW_PRESETS[name];
+    if (!preset) throw new Error(`Unknown camera view “${name}”.`);
+    this.yaw = preset.yaw;
+    this.pitch = preset.pitch;
+    this.pan = [0, 0, 0];
+    this.projectionMode = 'orthographic';
+    this.onProjectionChange(this.projectionMode);
+    this.requestRender();
+  }
+
   requestRender() {
     if (this.renderRequested) return;
     this.renderRequested = true;
@@ -312,14 +360,10 @@ export class WebGLRenderer {
     const height = Math.max(1, this.canvas.height);
     const aspect = width / height;
     const target = add(this.target, this.pan);
-    const cosinePitch = Math.cos(this.pitch);
-    const offset = [
-      this.distance * cosinePitch * Math.sin(this.yaw),
-      this.distance * Math.sin(this.pitch),
-      this.distance * cosinePitch * Math.cos(this.yaw),
-    ];
+    const { offsetDirection, upHint } = this.cameraOrientation();
+    const offset = scale(offsetDirection, this.distance);
     const eye = add(target, offset);
-    this.viewMatrix = lookAt(eye, target, [0, 1, 0]);
+    this.viewMatrix = lookAt(eye, target, upHint);
     const near = Math.max(0.001, Math.min(this.modelRadius * 0.01, this.distance * 0.05));
     const far = Math.max(near + 1, this.distance + this.modelRadius * 6 + 10);
     if (this.projectionMode === 'orthographic') {
@@ -329,6 +373,7 @@ export class WebGLRenderer {
       this.projectionMatrix = perspective(this.fov, aspect, near, far);
     }
     this.viewProjectionMatrix = multiply4(this.projectionMatrix, this.viewMatrix);
+    this.onCameraChange(axisDirectionsFromView(this.viewMatrix));
   }
 
   resize() {
@@ -364,9 +409,10 @@ export class WebGLRenderer {
       pointer.y = event.clientY;
       if (pointer.mode === 'rotate') {
         this.yaw -= deltaX * 0.008;
-        // Keep screen-space motion intuitive: dragging upward (negative deltaY)
-        // tilts the view upward instead of moving the camera above the model.
-        this.pitch = Math.max(-1.52, Math.min(1.52, this.pitch + deltaY * 0.008));
+        // OVITO-style constrained orbit: global Z stays upright and the camera
+        // cannot roll over a pole. Upward drags retain the established
+        // screen-space direction while the pitch remains bounded.
+        this.pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, this.pitch + deltaY * 0.008));
       } else {
         const { right, up } = this.cameraBasis();
         const worldPerPixel = this.projectionMode === 'orthographic'
@@ -396,16 +442,23 @@ export class WebGLRenderer {
   }
 
   cameraBasis() {
-    const target = add(this.target, this.pan);
-    const cosinePitch = Math.cos(this.pitch);
-    const eye = add(target, [
-      this.distance * cosinePitch * Math.sin(this.yaw),
-      this.distance * Math.sin(this.pitch),
-      this.distance * cosinePitch * Math.cos(this.yaw),
-    ]);
-    const forward = normalize(subtract(target, eye));
-    const right = normalize(cross(forward, [0, 1, 0]));
+    const { offsetDirection, upHint } = this.cameraOrientation();
+    const forward = scale(offsetDirection, -1);
+    const right = normalize(cross(upHint, offsetDirection));
     return { right, up: normalize(cross(right, forward)) };
+  }
+
+  cameraOrientation() {
+    const cosinePitch = Math.cos(this.pitch);
+    const offsetDirection = [
+      cosinePitch * Math.sin(this.yaw),
+      -cosinePitch * Math.cos(this.yaw),
+      Math.sin(this.pitch),
+    ];
+    // At the exact top/bottom presets global Z is parallel to the viewing
+    // direction, so global Y provides a deterministic screen-up direction.
+    const upHint = Math.abs(cosinePitch) < 1e-7 ? [0, 1, 0] : [0, 0, 1];
+    return { offsetDirection, upHint };
   }
 
   pick(clientX, clientY) {
@@ -488,6 +541,14 @@ export class WebGLRenderer {
       this.lastStatsAt = timestamp;
     }
   }
+}
+
+export function axisDirectionsFromView(viewMatrix) {
+  return {
+    x: { x: viewMatrix[0], y: -viewMatrix[1], depth: viewMatrix[2] },
+    y: { x: viewMatrix[4], y: -viewMatrix[5], depth: viewMatrix[6] },
+    z: { x: viewMatrix[8], y: -viewMatrix[9], depth: viewMatrix[10] },
+  };
 }
 
 function buildCellLines(cell) {

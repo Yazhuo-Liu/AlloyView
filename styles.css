@@ -88,14 +88,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .privacy-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 4px rgba(79,226,208,.1), 0 0 16px rgba(79,226,208,.5); }
 
 .workspace { height: calc(100vh - 72px); display: grid; grid-template-columns: minmax(0, 1fr) 342px; }
-.viewport-panel { position: relative; min-width: 0; overflow: hidden; background: #071018; }
+.viewport-panel { position: relative; min-width: 0; overflow: hidden; background: #0e1113; }
 #viewport { width: 100%; height: 100%; display: block; touch-action: none; }
 .viewport-panel::before {
   content: "";
   pointer-events: none;
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 50% 46%, transparent 0, transparent 32%, rgba(0, 0, 0, 0.22) 100%);
+  background: radial-gradient(circle at 50% 44%, transparent 0, transparent 30%, rgba(0, 0, 0, 0.28) 100%);
 }
 
 .empty-state { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 32px; background-image: linear-gradient(rgba(79,226,208,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(79,226,208,.025) 1px, transparent 1px); background-size: 48px 48px; }
@@ -115,6 +115,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .view-toolbar button { width: 36px; height: 34px; border: 0; border-radius: 5px; color: #d8e7ea; background: transparent; font-size: 17px; }
 .view-toolbar button:hover { color: var(--cyan); background: rgba(79,226,208,.09); }
 .view-toolbar span { width: 1px; margin: 6px 3px; background: var(--line-strong); }
+.view-presets { position: absolute; z-index: 3; top: 18px; left: 50%; transform: translateX(-50%); display: flex; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 7px; background: rgba(9,22,31,.88); backdrop-filter: blur(12px); box-shadow: var(--shadow); }
+.view-presets button { min-width: 48px; height: 34px; padding: 0 9px; border: 0; border-right: 1px solid var(--line); color: #aebfc5; background: transparent; font-size: 10px; }
+.view-presets button:last-child { border-right: 0; }
+.view-presets button:hover:not(:disabled) { color: var(--cyan); background: rgba(79,226,208,.09); }
+.view-presets button:disabled { cursor: not-allowed; opacity: .38; }
+.axis-triad { position: absolute; z-index: 2; right: 18px; bottom: 17px; width: 96px; height: 96px; overflow: visible; pointer-events: none; filter: drop-shadow(0 2px 4px rgba(0,0,0,.75)); }
+.axis-triad[hidden] { display: none; }
+.axis-triad circle { fill: #dce9ea; stroke: #071018; stroke-width: 1.5; }
+.axis-triad line { stroke-width: 3; stroke-linecap: round; }
+.axis-triad text { font: 700 11px Inter, ui-sans-serif, sans-serif; text-anchor: middle; dominant-baseline: central; paint-order: stroke; stroke: #071018; stroke-width: 3px; }
+.axis-triad .axis-x line, .axis-triad .axis-x text { stroke: #071018; color: #ff6f67; fill: #ff6f67; }
+.axis-triad .axis-x line { stroke: #ff6f67; }
+.axis-triad .axis-y line, .axis-triad .axis-y text { stroke: #071018; color: #6ee083; fill: #6ee083; }
+.axis-triad .axis-y line { stroke: #6ee083; }
+.axis-triad .axis-z line, .axis-triad .axis-z text { stroke: #071018; color: #65a7ff; fill: #65a7ff; }
+.axis-triad .axis-z line { stroke: #65a7ff; }
 .interaction-hint { position: absolute; z-index: 2; left: 50%; bottom: 17px; transform: translateX(-50%); color: #7e949e; font-size: 11px; background: rgba(7,16,24,.72); border: 1px solid var(--line); border-radius: 99px; padding: 7px 13px; pointer-events: none; white-space: nowrap; }
 
 .legend { position: absolute; z-index: 3; left: 18px; bottom: 18px; min-width: 190px; max-width: 300px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 12px; background: rgba(9,22,31,.9); backdrop-filter: blur(12px); box-shadow: var(--shadow); }
@@ -126,6 +142,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .legend-swatch { width: 9px; height: 9px; border-radius: 50%; }
 .legend-gradient { height: 8px; border-radius: 99px; background: linear-gradient(90deg, #440154, #3b528b, #21918c, #5ec962, #fde725); }
 .legend-range { display: flex; justify-content: space-between; margin-top: 5px; color: var(--muted); font-size: 9px; }
+.legend-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.legend-controls label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; }
+.legend-controls input { height: 28px; min-width: 0; padding: 0 7px; font-size: 10px; }
+.legend-actions { grid-column: 1 / -1; display: flex; gap: 6px; }
+.legend-actions button { flex: 1; height: 27px; border: 1px solid var(--line-strong); border-radius: 5px; color: #b9cbd0; background: rgba(7,19,28,.9); font-size: 9px; }
+.legend-actions button:hover:not(:disabled) { color: var(--cyan); border-color: rgba(79,226,208,.4); }
+.legend-actions button:disabled { cursor: not-allowed; opacity: .38; }
 
 .loading { position: absolute; z-index: 5; inset: 0; display: flex; flex-direction: column; gap: 12px; justify-content: center; align-items: center; background: rgba(7,16,24,.72); backdrop-filter: blur(4px); color: #c8dadd; }
 .loading[hidden], .toast[hidden] { display: none; }
@@ -191,6 +214,8 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .workspace { height: auto; min-height: calc(100vh - 118px); grid-template-columns: 1fr; grid-template-rows: 62vh auto; }
   .sidebar { overflow: visible; border-left: 0; border-top: 1px solid var(--line); }
   .interaction-hint { display: none; }
+  .view-presets { top: auto; bottom: 18px; }
+  .axis-triad { bottom: 58px; }
 }
 
 @media (max-width: 520px) {
@@ -199,4 +224,7 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .empty-state h1 { font-size: 42px; }
   .workspace { grid-template-rows: 56vh auto; }
   .legend { right: 12px; left: 12px; bottom: 12px; max-width: none; }
+  .view-presets { display: grid; grid-template-columns: repeat(3, 1fr); left: auto; right: 12px; bottom: auto; top: 12px; transform: none; }
+  .view-presets button:nth-child(3) { border-right: 0; }
+  .axis-triad { right: 8px; bottom: 8px; }
 }

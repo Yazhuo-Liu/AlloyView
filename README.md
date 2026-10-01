@@ -67,7 +67,9 @@ session does not provide a browser graphics context.
 ## Supported scope
 
 - AtomEye CFG: basic and extended CFG, `H0`, `A`, `Transform`, `eta`, optional
-  velocities, and scalar `auxiliary[]` columns. A non-identity `Transform`
+  velocities, and scalar `auxiliary[]` columns. LAMMPS-written CFG auxiliaries
+  `id` and complete `ix/iy/iz` image flags are recognized for stable atom IDs
+  and unwrapped display. A non-identity `Transform`
   combined with non-zero `eta` is rejected because upstream AtomEye gives those
   fields ambiguous precedence.
 - LAMMPS text dump: `id`, numeric `type`, common scalar columns, `x/y/z`,
@@ -81,10 +83,14 @@ session does not provide a browser graphics context.
   parsed frames.
 - Rendering: one instanced quad per atom with an analytic sphere/depth shader,
   optional wrapped/unwrapped trajectory coordinates, and an optional cell
-  wireframe. There is no per-atom mesh or draw call.
+  wireframe. The camera uses a Z-up constrained orbit, six orthographic standard
+  views, and a live Cartesian axis tripod. There is no per-atom mesh or draw call.
 - Analysis: cutoff-based coordination number using fractional-space linked cells,
   cell face heights, per-axis periodic bin wrapping, and a triclinic-safe image
-  search. Display unwrapping never changes the coordinates used for analysis.
+  search. A recognized metal composition initializes an editable radius-based
+  cutoff suggestion; unknown types fall back to 3.00 Å. Scalar color legends
+  have editable ranges. Display unwrapping never changes the coordinates used
+  for analysis.
 
 More detail is in [docs/FORMATS.md](docs/FORMATS.md) and actual executed results
 are in [docs/VALIDATION.md](docs/VALIDATION.md).

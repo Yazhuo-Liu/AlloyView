@@ -33,14 +33,18 @@ Command:
 npm test
 ```
 
-Result: all 4 test files passed (parser, coordination, bounded frame cache, and
-renderer export state), with no failures. The cases executed were:
+Result: all 6 test files passed (parser, coordination, cutoff recommendation,
+palette ranges, bounded frame cache, and renderer state), with no failures. The
+cases executed were:
 
 - extended CFG: 31 atoms, IDs, FCC cell, fractional/Cartesian coordinates,
   mass and `site_energy` property;
 - basic CFG: `A` and `Transform` coordinate conversion, plus symmetric
   Lagrangian `eta` deformation;
 - malformed/incomplete CFG rejection;
+- the repository-root `100110.cfg`: 7,648 unique IDs spanning 1–7,648, Ni type,
+  480 atoms with `iz=-1`, unwrapped Z displacement of exactly one negative cell
+  vector, and removal of `id/ix/iy/iz` from generic scalar properties;
 - restricted-triclinic LAMMPS bound correction and scaled coordinates;
 - triclinic `ix/iy/iz` image translation, explicit `xu/yu/zu`, wrapping only
   along periodic axes, and partial-image-flag rejection;
@@ -58,6 +62,17 @@ renderer export state), with no failures. The cases executed were:
   redraws without replacing the analysis frame; transparent PNG export selects
   a transparent render, restores the opaque viewport afterward, and flips WebGL
   pixel rows into the PNG's top-to-bottom order.
+- six standard camera presets choose the expected constrained orientation and
+  orthographic projection; the coordinate tripod maps global Cartesian axes to
+  screen directions;
+- element-aware cutoff recommendation, numeric-type fallback, and custom scalar
+  legend ranges including outlier color clamping and invalid-range rejection.
+
+The real `100110.cfg` was also parsed and analyzed through the JavaScript
+reference path at the suggested 2.85 Å Ni cutoff. One run measured 55.43 ms for
+parsing and 90.19 ms for coordination. Its coordination histogram was
+`7:48, 8:68, 10:24, 11:136, 12:7364, 13:8`. These are Node timings on the CPU
+listed above, not browser or GPU performance measurements.
 
 The FCC/BCC coordination expectations are analytic reference results for a
 cutoff between the first and second shells. A binary comparison against a built
@@ -105,6 +120,8 @@ unverified.
 
 - WebGL shader appearance, depth edges, cell line occlusion, and PNG output;
 - pointer picking under perspective/orthographic cameras;
+- manual feel/visual inspection of constrained Z-up orbiting, all six standard
+  views, and the live coordinate tripod on the target desktop GPU;
 - slice/selection/color state over manual rapid trajectory changes;
 - measured GPU upload completion and sustained rotation FPS;
 - confirmation from DevTools/network policy that no local file bytes leave the

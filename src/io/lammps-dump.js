@@ -149,7 +149,7 @@ export function parseLammpsFrame(text, sourceName = 'trajectory.dump') {
   const types = new Uint16Array(count);
   const wrappedValues = wrappedCoordinateSet ? new Float32Array(count * 3) : null;
   const unwrappedValues = unwrappedCoordinateSet ? new Float32Array(count * 3) : null;
-  const imageFlags = hasImageFlags ? new Float64Array(count * 3) : null;
+  const imageFlags = hasImageFlags ? new Int32Array(count * 3) : null;
   const properties = propertyNames.map((name) => ({ name, unit: '', data: new Float32Array(count) }));
   const elements = columnIndex.has('element') ? new Array(count) : null;
   const idSet = new Set();
@@ -182,12 +182,16 @@ export function parseLammpsFrame(text, sourceName = 'trajectory.dump') {
     if (imageFlags) {
       for (let component = 0; component < 3; component += 1) {
         const name = IMAGE_COLUMNS[component];
-        imageFlags[atom * 3 + component] = integerValue(
+        const image = integerValue(
           tokens[columnIndex.get(name)],
           cursor,
           name,
           { allowNegative: true },
         );
+        if (image < -2_147_483_648 || image > 2_147_483_647) {
+          throw dumpError(`Line ${cursor + 1}: ${name} is outside the supported 32-bit image-flag range.`);
+        }
+        imageFlags[atom * 3 + component] = image;
       }
     }
     for (let property = 0; property < properties.length; property += 1) {
@@ -241,6 +245,7 @@ export function parseLammpsFrame(text, sourceName = 'trajectory.dump') {
     positions,
     fractional,
     unwrappedPositions,
+    imageFlags,
     cell,
     properties,
     timestep,

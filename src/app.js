@@ -1,4 +1,5 @@
 import { FrameCache } from './data/frame-cache.js';
+import { recommendCoordinationCutoff } from './analysis/cutoff.js';
 import { colorsByProperty, colorsByType } from './render/palette.js';
 import { WebGLRenderer } from './render/webgl-renderer.js';
 import { StructureWorkerClient } from './worker-client.js';
@@ -9,13 +10,15 @@ const elements = Object.fromEntries([
   'cell-kind', 'pbc-flags', 'trajectory-section', 'frame-slider', 'frame-label', 'timestep-label',
   'cache-label', 'coordinate-mode', 'color-mode', 'radius', 'radius-value', 'projection', 'background',
   'show-cell', 'png-background', 'slice-axis', 'slice-position', 'slice-value', 'cutoff', 'run-analysis',
-  'analysis-state', 'analysis-help', 'selection-empty', 'selection-data', 'clear-selection', 'legend',
+  'analysis-state', 'cutoff-help', 'analysis-help', 'selection-empty', 'selection-data', 'clear-selection', 'legend',
   'reset-camera', 'toggle-projection', 'export-png', 'loading', 'loading-text', 'toast',
+  'axis-triad', 'axis-x-line', 'axis-y-line', 'axis-z-line', 'axis-x-label', 'axis-y-label', 'axis-z-label',
   'metric-index', 'metric-parse', 'metric-upload', 'metric-analysis', 'metric-fps',
   'metric-memory',
 ].map((id) => [id, document.getElementById(id)]));
 
 const cache = new FrameCache(3);
+const scalarColorRanges = new WeakMap();
 const state = {
   file: null,
   format: null,
@@ -36,6 +39,8 @@ try {
   renderer = new WebGLRenderer(elements.viewport, {
     onPick: selectAtom,
     onStats: ({ fps }) => { elements['metric-fps'].textContent = `${fps.toFixed(1)} FPS`; },
+    onCameraChange: updateAxisTriad,
+    onProjectionChange: (mode) => { elements.projection.value = mode; },
   });
 } catch (error) {
   showToast(error.message);
@@ -85,6 +90,9 @@ elements['slice-position'].addEventListener('input', updateSlice);
 elements['run-analysis'].addEventListener('click', runCoordination);
 elements['clear-selection'].addEventListener('click', () => selectAtom(-1));
 elements['reset-camera'].addEventListener('click', () => renderer.resetCamera());
+for (const button of document.querySelectorAll('[data-view]')) {
+  button.addEventListener('click', () => renderer.setView(button.dataset.view));
+}
 elements['toggle-projection'].addEventListener('click', () => {
   const mode = elements.projection.value === 'perspective' ? 'orthographic' : 'perspective';
   elements.projection.value = mode;
@@ -144,6 +152,7 @@ async function loadFile(file) {
     state.selectedId = null;
     state.colorMode = 'type';
     state.coordinateMode = 'wrapped';
+    configureSuggestedCutoff(result.frame);
     elements['metric-index'].textContent = formatDuration(Math.max(0, result.indexMs));
     configureSourceUi(result);
     displayFrame(result.frame, { resetCamera: true });
@@ -157,6 +166,12 @@ async function loadFile(file) {
       showToast(error.message);
     }
   }
+}
+
+function configureSuggestedCutoff(frame) {
+  const recommendation = recommendCoordinationCutoff(frame);
+  elements.cutoff.value = recommendation.value.toFixed(2);
+  elements['cutoff-help'].textContent = `Suggested cutoff: ${recommendation.message}`;
 }
 
 function configureSourceUi(result) {
@@ -294,7 +309,7 @@ function paletteForCurrentMode() {
     elements['color-mode'].value = 'type';
     return colorsByType(state.frame);
   }
-  return colorsByProperty(property);
+  return colorsByProperty(property, scalarColorRanges.get(property));
 }
 
 async function runCoordination() {
@@ -403,6 +418,7 @@ function updateSelectionPanel(index = null) {
   const rows = [
     ['ID', String(frame.ids[index])],
     ['Type', frame.typeLabels[frame.types[index]]],
+    ...(frame.imageFlags ? [['Image flags (ix, iy, iz)', formatVector(frame.imageFlags, base)]] : []),
     ...coordinateRows,
     ...frame.properties.map((property) => [
       property.name,
@@ -459,9 +475,69 @@ function renderLegend(legend) {
     const maximum = document.createElement('span');
     maximum.textContent = formatValue(legend.maximum);
     range.append(minimum, maximum);
-    elements.legend.append(gradient, range);
+    const controls = document.createElement('div');
+    controls.className = 'legend-controls';
+    const minimumControl = legendNumberControl('Min', legend.minimum);
+    const maximumControl = legendNumberControl('Max', legend.maximum);
+    const actions = document.createElement('div');
+    actions.className = 'legend-actions';
+    const apply = document.createElement('button');
+    apply.type = 'button';
+    apply.textContent = 'Apply';
+    const automatic = document.createElement('button');
+    automatic.type = 'button';
+    automatic.textContent = 'Auto';
+    automatic.disabled = !legend.customRange;
+    actions.append(apply, automatic);
+    controls.append(minimumControl.label, maximumControl.label, actions);
+    apply.addEventListener('click', () => {
+      const requestedMinimum = Number(minimumControl.input.value);
+      const requestedMaximum = Number(maximumControl.input.value);
+      if (!Number.isFinite(requestedMinimum) || !Number.isFinite(requestedMaximum) || requestedMaximum <= requestedMinimum) {
+        showToast('The legend maximum must be greater than its minimum.');
+        return;
+      }
+      scalarColorRanges.set(legend.property, { minimum: requestedMinimum, maximum: requestedMaximum });
+      applyColors();
+    });
+    automatic.addEventListener('click', () => {
+      scalarColorRanges.delete(legend.property);
+      applyColors();
+    });
+    elements.legend.append(gradient, range, controls);
   }
   elements.legend.hidden = false;
+}
+
+function legendNumberControl(name, value) {
+  const label = document.createElement('label');
+  const text = document.createElement('span');
+  text.textContent = name;
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.step = 'any';
+  input.value = Number(value.toPrecision(8)).toString();
+  label.append(text, input);
+  return { label, input };
+}
+
+function updateAxisTriad(directions) {
+  const origin = 48;
+  const length = 27;
+  for (const axis of ['x', 'y', 'z']) {
+    const direction = directions[axis];
+    const endpointX = origin + direction.x * length;
+    const endpointY = origin + direction.y * length;
+    const projectedLength = Math.hypot(direction.x, direction.y);
+    const labelDistance = projectedLength > 0.08 ? 7 / projectedLength : 0;
+    const line = elements[`axis-${axis}-line`];
+    const label = elements[`axis-${axis}-label`];
+    line.setAttribute('x2', endpointX.toFixed(2));
+    line.setAttribute('y2', endpointY.toFixed(2));
+    label.setAttribute('x', (endpointX + direction.x * labelDistance).toFixed(2));
+    label.setAttribute('y', (endpointY + direction.y * labelDistance + 3).toFixed(2));
+    line.parentElement.style.opacity = String(0.62 + 0.38 * (direction.depth + 1) / 2);
+  }
 }
 
 function setControlsEnabled(enabled) {
@@ -471,6 +547,8 @@ function setControlsEnabled(enabled) {
   ]) {
     elements[id].disabled = !enabled;
   }
+  for (const button of document.querySelectorAll('[data-view]')) button.disabled = !enabled;
+  elements['axis-triad'].hidden = !enabled;
 }
 
 function setLoading(visible, text = '') {

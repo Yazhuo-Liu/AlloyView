@@ -132,6 +132,9 @@ export function validateFrame(frame) {
   if (frame.unwrappedPositions && frame.unwrappedPositions.length !== count * 3) {
     throw new Error('The unwrapped coordinate array length does not match the atom count.');
   }
+  if (frame.imageFlags && frame.imageFlags.length !== count * 3) {
+    throw new Error('The image flag array length does not match the atom count.');
+  }
   for (const property of frame.properties) {
     if (property.data.length !== count) throw new Error(`Per-atom property ${property.name} has an invalid length.`);
   }
@@ -148,6 +151,7 @@ export function frameTransferables(frame) {
     frame.cell.vectors.buffer,
   ];
   if (frame.unwrappedPositions) transferables.push(frame.unwrappedPositions.buffer);
+  if (frame.imageFlags) transferables.push(frame.imageFlags.buffer);
   for (const property of frame.properties) transferables.push(property.data.buffer);
   return transferables;
 }
