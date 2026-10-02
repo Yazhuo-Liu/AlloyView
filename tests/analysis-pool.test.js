@@ -91,10 +91,21 @@ test('cached strain shares typed PTM inputs safely and reuses fits for an edited
   } finally { pool.close(); }
 });
 
+test('unmatched strain remains NaN without reporting an analysis warning', async () => {
+  const pool = new AnalysisPool({ workerFactory: nodeFactory({ active: 0, maximum: 0 }) });
+  const frame = crystalFrame('fcc', 2);
+  try {
+    const result = await pool.analyze(frame, { kind: 'strain', references: [{ structure: 3, a: 4 }], flags: 31 });
+    assert.ok(result.atomicShearStrain.every(Number.isNaN));
+    assert.equal(result.warning, null);
+  } finally { pool.close(); }
+});
+
 test('cancelling running and queued tasks rejects promptly and releases all slots', async () => {
-  let active = 0;
+  let active = 0, started = 0;
   const pool = new AnalysisPool({ environment: { navigator: { hardwareConcurrency: 2 } }, workerFactory: () => {
     active += 1;
+    started += 1;
     return { addEventListener() {}, postMessage() {}, terminate() { active -= 1; } };
   } });
   const controller = new AbortController();
@@ -106,6 +117,7 @@ test('cancelling running and queued tasks rejects promptly and releases all slot
   const results = await outcomes;
   assert.ok(results.every((result) => result.status === 'rejected' && result.reason.name === 'AbortError'));
   assert.equal(active, 0);
+  assert.equal(started, 1, 'aborting a running task must not start its already-cancelled queued successor');
   assert.equal(pool.queue.length, 0);
   assert.equal(pool.active.size, 0);
   pool.close();

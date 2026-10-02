@@ -155,7 +155,7 @@ try {
     await delay(150); // Let the 120 ms button background transitions finish.
     assert.ok((await evaluate('document.querySelector(".empty-logo").src')).endsWith('AlloyView_logo_only.png'));
     await checkTextContrast(['.empty-state h1', '.empty-copy', '.format-note', '.privacy-badge small', '.field > span:first-child', '.help', '.selection-empty']);
-    await checkTextContrast(['.view-presets > button', '.projection-switch button', '.viewport-toggle', '#coordinate-mode', '#cutoff', '#run-analysis', '#cna-mode', '#cna-cutoff', '#csp-neighbors', '#run-cna', '#run-csp', '#ptm-rmsd', '#run-ptm', '#run-strain', '#lattice-reset', '.display-options label', '#empty-open'], 4.5);
+    await checkTextContrast(['.view-presets > button', '.projection-switch button', '.viewport-toggle', '#coordinate-mode', '#cutoff', '#run-analysis', '#cna-mode', '#cna-cutoff', '#csp-neighbors', '#run-cna', '#run-csp', '#ptm-rmsd', '#run-ptm', '#run-strain', '#lattice-reset', '.analysis-state-controls .text-button', '.display-options label', '#empty-open'], 4.5);
     await evaluate(`document.getElementById('open-examples').click()`);
     await checkTextContrast(['.source-dialog-summary', '.source-option small']);
     await checkTextContrast(['.source-option-kind'], 4.5);
@@ -384,6 +384,7 @@ try {
     const original = WebGLRenderer.prototype.setColors;
     WebGLRenderer.prototype.setColors = function(...args) {
       window.structureTestRenderer = this;
+      window.structureTestColors = args[0];
       return original.apply(this, args);
     };
     document.getElementById('run-cna').click();
@@ -441,9 +442,12 @@ try {
       return original.call(this, frame, parameters, ...rest);
     };
     window.restorePtmPool = () => { AnalysisPool.prototype.analyze = original; };
+    document.getElementById('toast').hidden = true;
     document.getElementById('run-ptm').click(); document.getElementById('run-strain').click();
   })()`);
   await waitFor('document.getElementById("ptm-state").textContent === "Calculated" && document.getElementById("strain-state").textContent === "Calculated"', 'PTM and atomic strain');
+  assert.equal(await evaluate('document.getElementById("toast").hidden'), true, 'unmatched defect atoms must not produce a warning');
+  assert.equal(await evaluate('window.structureTestRenderer.frame.properties.find(p => p.name === "atomicShearStrain").data.filter(Number.isNaN).length'), 12);
   assert.equal(await evaluate('document.querySelector("[data-lattice-a]").valueAsNumber'), 4.05);
   assert.equal(await evaluate('document.querySelector("[data-reference-element]").value'), 'Al');
   assert.ok(await evaluate('window.analysisInputs.some(input => input.kind === "strain" && input.reused)'));
@@ -473,8 +477,12 @@ try {
   assert.equal(await evaluate('window.structureTestRenderer.visibility.every(value => value === 0)'), true);
   await evaluate(`document.querySelector('[data-structure-type="1"]').click(); window.restorePtmPool();`);
   await evaluate(`(() => { const crystal = document.querySelector('[data-reference-structure]'); crystal.value = '3'; crystal.dispatchEvent(new Event('change')); })()`);
-  await waitFor('document.getElementById("strain-state").textContent === "Failed"', 'mismatched reference rejection');
-  assert.ok((await evaluate('document.getElementById("strain-status").textContent')).includes('No atoms match'));
+  await waitFor('document.getElementById("strain-state").textContent === "Calculated"', 'entirely NaN strain');
+  assert.equal(await evaluate('document.getElementById("toast").hidden'), true);
+  assert.equal(await evaluate('window.structureTestRenderer.frame.properties.find(p => p.name === "atomicShearStrain").data.every(Number.isNaN)'), true);
+  await evaluate(`(() => { const mode = document.getElementById('color-mode'); mode.value = 'property:atomicShearStrain'; mode.dispatchEvent(new Event('change')); })()`);
+  assert.equal(await evaluate('window.structureTestColors.every(value => value === 130)'), true);
+  assert.equal(await evaluate('document.querySelector(".legend-items").textContent'), 'NaN');
   await evaluate(`(() => { const crystal = document.querySelector('[data-reference-structure]'); crystal.value = '1'; crystal.dispatchEvent(new Event('change')); })()`);
   await waitFor('document.getElementById("strain-state").textContent === "Calculated"', 'reference recovery');
   // A new source clears filters; enabled analysis follows trajectory frames.
@@ -545,6 +553,127 @@ try {
   await evaluate(`document.querySelector('[data-ptm-template="4"]').click()`);
   await waitFor('document.getElementById("ptm-state").textContent === "Calculated"', 'PTM template recovery');
   assert.equal(await evaluate('window.structureTestRenderer.frame.properties.find(p => p.name === "ptmStructureType").data.every(type => type === 3)'), true);
+
+  // User cancellation stops real Workers, restores the uncomputed state and
+  // removes results from cached frames without stopping independent analyses.
+  const cancelCases = [['coordination', 'analysis'], ['cna', 'cna'], ['centrosymmetry', 'csp'], ['ptm', 'ptm'], ['strain', 'strain']];
+  await evaluate(`(async () => {
+    for (const prefix of ['analysis', 'cna', 'csp', 'ptm', 'strain']) document.getElementById('cancel-' + prefix).click();
+    const appUrl = document.querySelector('script[type="module"]').src;
+    const { AnalysisPool } = await import(new URL('./analysis/analysis-pool.js', appUrl));
+    const original = AnalysisPool.prototype.analyze;
+    window.cancelTestCalls = [];
+    window.cancelWorkers = { created: 0, terminated: 0 };
+    let originalFactory;
+    AnalysisPool.prototype.analyze = function(frame, parameters, ...rest) {
+      if (!window.cancelTestPool) {
+        window.cancelTestPool = this;
+        originalFactory = this.workerFactory;
+        this.workerFactory = () => {
+          const worker = originalFactory();
+          const terminate = worker.terminate.bind(worker);
+          window.cancelWorkers.created++;
+          worker.terminate = () => { window.cancelWorkers.terminated++; terminate(); };
+          return worker;
+        };
+      }
+      window.cancelTestCalls.push(parameters.kind);
+      const task = original.call(this, frame, parameters, ...rest);
+      if (window.cancelDelayKind === parameters.kind) return task.then(async result => {
+        window.cancelHeldResultReady = true;
+        await new Promise(done => { window.releaseCanceledResult = done; });
+        return result;
+      });
+      return task;
+    };
+    window.restoreCancelTesting = () => {
+      AnalysisPool.prototype.analyze = original;
+      window.cancelTestPool.workerFactory = originalFactory;
+    };
+  })()`);
+  for (const [kind, prefix] of cancelCases) {
+    const cancelled = await evaluate(`(async () => {
+      document.getElementById('run-${prefix}').click();
+      await Promise.resolve(); await Promise.resolve();
+      const before = document.getElementById('${prefix}-state').textContent;
+      const activeBefore = window.cancelTestPool.active.size;
+      document.getElementById('cancel-${prefix}').click();
+      return { before, activeBefore,
+        state: document.getElementById('${prefix}-state').textContent,
+        startDisabled: document.getElementById('run-${prefix}').disabled,
+        cancelDisabled: document.getElementById('cancel-${prefix}').disabled,
+        metric: document.getElementById('metric-${prefix}').textContent,
+        active: window.cancelTestPool.active.size, queued: window.cancelTestPool.queue.length,
+        color: document.getElementById('color-mode').value,
+        results: window.structureTestRenderer.frame.properties.some(property => property.analysisKind === '${kind}'),
+        loading: !document.getElementById('loading').hidden,
+        liveWorkers: window.cancelWorkers.created - window.cancelWorkers.terminated };
+    })()`);
+    assert.equal(cancelled.before, 'Calculating…', kind);
+    assert.ok(cancelled.activeBefore >= 1, `${kind} must start a real Worker`);
+    assert.equal(cancelled.state, 'Not calculated', kind);
+    assert.equal(cancelled.startDisabled, false, kind);
+    assert.equal(cancelled.cancelDisabled, true, kind);
+    assert.equal(cancelled.metric, '—', kind);
+    assert.equal(cancelled.active, 0, kind);
+    assert.equal(cancelled.queued, 0, kind);
+    assert.equal(cancelled.liveWorkers, 0, kind);
+    assert.equal(cancelled.results, false, kind);
+    assert.equal(cancelled.color, 'type', kind);
+    assert.equal(cancelled.loading, false, kind);
+  }
+  assert.equal(await evaluate('document.querySelector("[data-lattice-a]").valueAsNumber'), 3.3, 'reset preserves the reference settings');
+  assert.equal(await evaluate('window.structureTestRenderer.frame.ptm === undefined'), true);
+  const callsBeforeFrames = await evaluate('window.cancelTestCalls.length');
+  for (const [button, label] of [['frame-last', '2 / 2'], ['frame-first', '1 / 2']]) {
+    await evaluate(`document.getElementById('${button}').click()`);
+    await waitFor(`document.getElementById('frame-label').textContent === '${label}' && document.getElementById('loading').hidden`, 'frames after cancellation');
+    for (const [, prefix] of cancelCases) assert.equal(await evaluate(`document.getElementById('${prefix}-state').textContent`), 'Not calculated');
+    assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(property => property.analysisKind)'), false);
+    assert.equal(await evaluate('window.structureTestRenderer.frame.ptm === undefined'), true);
+  }
+  await evaluate(`document.querySelector('[data-lattice-a]').dispatchEvent(new Event('change')); document.getElementById('ptm-rmsd').dispatchEvent(new Event('change')); document.getElementById('cna-mode').dispatchEvent(new Event('change'));`);
+  assert.equal(await evaluate('window.cancelTestCalls.length'), callsBeforeFrames, 'cancelled analyses must not restart on frames or reference edits');
+
+  // Cancellation must also ignore a completed result held before UI delivery.
+  await evaluate(`window.cancelDelayKind = 'cna'; document.getElementById('run-cna').click()`);
+  await waitFor('window.cancelHeldResultReady === true', 'held completed result');
+  await evaluate(`document.getElementById('cancel-cna').click(); window.cancelDelayKind = null; window.releaseCanceledResult()`);
+  await delay(100);
+  assert.equal(await evaluate('document.getElementById("cna-state").textContent'), 'Not calculated');
+  assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(property => property.analysisKind === "cna")'), false);
+
+  // Restart together, then reset a completed strain without removing PTM/CNA.
+  await evaluate(`for (const prefix of ['analysis', 'cna', 'csp', 'ptm', 'strain']) document.getElementById('run-' + prefix).click()`);
+  await waitFor(`[${cancelCases.map(([, prefix]) => `document.getElementById('${prefix}-state').textContent === 'Calculated'`).join(',')}].every(Boolean)`, 'restarted concurrent analyses');
+  await evaluate(`document.getElementById('cancel-strain').click()`);
+  assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(property => property.analysisKind === "strain")'), false);
+  for (const [, prefix] of cancelCases.slice(0, 4)) assert.equal(await evaluate(`document.getElementById('${prefix}-state').textContent`), 'Calculated');
+  assert.equal(await evaluate('window.structureTestRenderer.frame.ptm.structures.every(type => type === 3)'), true);
+
+  // Strain waiting for PTM can continue with its own fit if PTM is cancelled.
+  await evaluate(`(async () => {
+    document.getElementById('cancel-ptm').click();
+    document.getElementById('run-ptm').click(); document.getElementById('run-strain').click();
+    await Promise.resolve(); document.getElementById('cancel-ptm').click();
+  })()`);
+  await waitFor('document.getElementById("strain-state").textContent === "Calculated"', 'strain after prerequisite cancellation');
+  assert.equal(await evaluate('document.getElementById("ptm-state").textContent'), 'Not calculated');
+  assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(property => property.analysisKind === "ptm")'), false);
+  assert.equal(await evaluate('window.structureTestRenderer.frame.properties.find(property => property.name === "atomicShearStrain").data.every(Number.isFinite)'), true);
+
+  // Cancelling waiting strain preserves PTM and never schedules a strain job.
+  const strainCalls = await evaluate('window.cancelTestCalls.filter(kind => kind === "strain").length');
+  await evaluate(`(async () => {
+    document.getElementById('cancel-strain').click();
+    document.getElementById('run-ptm').click(); document.getElementById('run-strain').click();
+    await Promise.resolve(); document.getElementById('cancel-strain').click();
+  })()`);
+  await waitFor('document.getElementById("ptm-state").textContent === "Calculated"', 'PTM after waiting strain cancellation');
+  assert.equal(await evaluate('document.getElementById("strain-state").textContent'), 'Not calculated');
+  assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(property => property.analysisKind === "strain")'), false);
+  assert.equal(await evaluate('window.cancelTestCalls.filter(kind => kind === "strain").length'), strainCalls);
+  await evaluate('window.restoreCancelTesting()');
   // Theme persists on reload. A manually selected viewport color stays intact.
   await evaluate(`document.querySelector('[data-background="#fff8e7"]').click(); document.getElementById('theme-light').click();`);
   assert.equal(await evaluate('document.getElementById("background").value'), '#fff8e7');
@@ -562,7 +691,7 @@ try {
   assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors));
   assert.ok(requests.some(path => path.endsWith('ptm-kernel.wasm')), 'browser must load the real PTM kernel');
   assert.ok(requests.filter((path) => /\.(js|mjs|wasm)$/.test(path)).every((path) => /^\/AlloyView\/assets\/[a-f0-9]+\//.test(path)));
-  console.log('Browser smoke passed: Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent CNA/CSP/PTM/strain and coordination; crystal colors/filters and per-frame cache; editable lattice references and PTM reuse; draggable/persistent sidebar and narrow layout; logos and contrast in both themes; transparent PNG and optional XYZ arrows.');
+  console.log('Browser smoke passed: Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent analyses; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; crystal filters; editable lattice references and PTM reuse; sidebar/layout/themes; transparent PNG and optional XYZ arrows.');
   console.log(JSON.stringify(exports));
 } finally {
   websocket?.close();

@@ -2,6 +2,29 @@
 
 Validation date: 2026-10-02 (UTC)
 
+## Silent strain NaNs and analysis cancellation
+
+Validated with Node.js v24.19.0 and Chromium 151.0.7922.173:
+
+- `npm test`: 117 tests passed, none failed/skipped. New checks cover silent
+  unmatched strain, gray coloring and a NaN legend for entirely undefined data,
+  analysis-specific result cleanup, restoration of imported properties after
+  repeated calculations, and accounting for retained source buffers.
+- Cancellation releases running/queued tasks without starting an already-aborted
+  queued Worker. The existing shared concurrency and range-merging tests pass.
+- `npm run build` and `npm run test:browser`: passed. The browser confirms
+  FCC-vacancy NaNs do not emit a toast, and entirely NaN strain completes without
+  an error or fabricated finite values.
+- Every Cancel button stops a real running Worker and restores **Not calculated**,
+  start/cancel controls, metrics, coloring and the loading indicator. Cancelled
+  results stay absent across cached trajectory frames and input edits; input
+  reference parameters are preserved. A held completed response verifies a late
+  result cannot undo cancellation. All five analyses can restart concurrently.
+- Resetting completed strain preserves PTM/CNA/coordination results. Strain
+  waiting on a cancelled PTM request computes its own fit; cancelling waiting
+  strain leaves PTM running without scheduling a strain Worker or restoring
+  removed properties. Existing PNG, theme, sidebar and deployment checks remain.
+
 ## PTM, atomic elastic strain and PNG arrows
 
 Validated with Node.js v24.19.0 and Chromium 151.0.7922.173:

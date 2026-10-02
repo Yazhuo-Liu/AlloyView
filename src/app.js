@@ -8,6 +8,7 @@ import { STRUCTURE_TYPES } from './analysis/cna.js';
 import { PTM_TYPES } from './analysis/ptm.js';
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
 import { ELEMENT_LATTICES, STRAIN_STRUCTURES, referenceForElement, validateReferences } from './analysis/lattice.js';
+import { clearAnalysisResults, replaceAnalysisProperty } from './analysis/results.js';
 import {
   catalogLocalSources,
   detectStructureFormatHeader,
@@ -41,6 +42,7 @@ const elements = Object.fromEntries([
   'cna-mode', 'cna-cutoff', 'cna-cutoff-field', 'run-cna', 'cna-state', 'cna-help', 'cna-status',
   'csp-neighbors', 'run-csp', 'csp-state', 'csp-status', 'metric-cna', 'metric-csp',
   'ptm-rmsd', 'run-ptm', 'ptm-state', 'ptm-status', 'metric-ptm',
+  'cancel-analysis', 'cancel-cna', 'cancel-csp', 'cancel-ptm', 'cancel-strain',
   'lattice-references', 'lattice-reset', 'run-strain', 'strain-state', 'strain-status', 'metric-strain',
   'reset-camera', 'export-png', 'loading', 'loading-text', 'toast', 'interaction-hint',
   'axis-triad', 'axis-arrows', 'axis-x-line', 'axis-y-line', 'axis-z-line', 'axis-x-label', 'axis-y-label', 'axis-z-label',
@@ -56,13 +58,13 @@ const scalarHideOutside = new Map();
 const hiddenStructureTypes = new Set();
 const analysisPool = new AnalysisPool();
 const coordinationPool = new CoordinationPool(analysisPool);
-const structureControllers = new Map();
+const analysisControllers = new Map();
 const analysisTasks = new Map();
 const ANALYSES = {
-  cna: { prefix: 'cna', name: 'structureType', label: 'Crystal structure (CNA)' },
-  centrosymmetry: { prefix: 'csp', name: 'centralSymmetry', label: 'Central symmetry (normalized)' },
-  ptm: { prefix: 'ptm', name: 'ptmStructureType', label: 'Crystal structure (PTM)' },
-  strain: { prefix: 'strain', name: 'atomicShearStrain', label: 'Atomic shear strain' },
+  cna: { prefix: 'cna', name: 'structureType', label: 'Crystal structure (CNA)', help: 'Calculate to color by crystal structure. The legend checkboxes control visibility.' },
+  centrosymmetry: { prefix: 'csp', name: 'centralSymmetry', label: 'Central symmetry (normalized)', help: 'Runs on the complete structure, including hidden atoms.' },
+  ptm: { prefix: 'ptm', name: 'ptmStructureType', label: 'Crystal structure (PTM)', help: 'Results include structure type, RMSD and nearest-neighbor distance.' },
+  strain: { prefix: 'strain', name: 'atomicShearStrain', label: 'Atomic shear strain', help: 'Unknown numeric atom types need an element or explicit lattice parameters. This is not displacement strain between trajectory frames.' },
 };
 const state = {
   file: null,
@@ -106,6 +108,7 @@ let interactionHintTimer = null;
 let interactionHintFadeTimer = null;
 let cutoffTimer = null;
 let coordinationQueue = Promise.resolve();
+let loadingOwner = null;
 let renderer;
 let backgroundCustomized = false;
 
@@ -215,6 +218,10 @@ elements['run-cna'].addEventListener('click', () => runStructureAnalysis('cna'))
 elements['run-csp'].addEventListener('click', () => runStructureAnalysis('centrosymmetry'));
 elements['run-ptm'].addEventListener('click', () => runStructureAnalysis('ptm'));
 elements['run-strain'].addEventListener('click', () => runStructureAnalysis('strain'));
+for (const kind of Object.keys(state.analysis)) {
+  const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
+  elements[`cancel-${prefix}`].addEventListener('click', () => cancelAnalysis(kind));
+}
 elements['ptm-rmsd'].addEventListener('change', updatePtmSettings);
 for (const checkbox of document.querySelectorAll('[data-ptm-template]')) checkbox.addEventListener('change', updatePtmSettings);
 elements['lattice-reset'].addEventListener('click', () => {
@@ -519,7 +526,7 @@ async function loadNebExample() {
 
 async function loadFiles(inputFiles, sourceDescriptor = null) {
   clearTimeout(cutoffTimer);
-  cancelStructureAnalyses();
+  abortAnalysisJobs();
   stopFramePlayback();
   const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
   const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
@@ -652,7 +659,7 @@ async function showFrame(index) {
 }
 
 async function displayFrame(frame, { resetCamera = false } = {}) {
-  for (const controller of structureControllers.values()) controller.abort();
+  abortAnalysisJobs();
   state.frame = frame;
   renderLatticeReferences(frame);
   syncAxisVisibility();
@@ -690,22 +697,23 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   setRangeProgress(elements['frame-slider']);
   updateCnaMethodUi();
   const pending = [];
+  const strainRequest = state.analysis.strain.request;
   for (const kind of Object.keys(ANALYSES)) {
     const prefix = ANALYSES[kind].prefix;
     elements[`${prefix}-state`].textContent = 'Not calculated';
     elements[`${prefix}-state`].classList.remove('ready');
     elements[`run-${prefix}`].disabled = false;
-    elements[`${prefix}-status`].textContent = kind === 'cna'
-      ? 'Calculate to color by crystal structure. The legend checkboxes control visibility.'
-      : 'Runs on the complete structure, including hidden atoms.';
+    elements[`${prefix}-status`].textContent = ANALYSES[kind].help;
+    syncCancelButton(kind);
     if (!state.analysis[kind].enabled) continue;
     if (kind === 'strain' && state.analysis.ptm.enabled) continue;
     const task = runStructureAnalysis(kind, { automatic: true, frame });
     pending.push(kind === 'ptm' ? task.then(() => {
-      if (state.analysis.strain.enabled && frame === state.frame) return runStructureAnalysis('strain', { automatic: true, frame });
+      if (state.analysis.strain.enabled && strainRequest === state.analysis.strain.request && frame === state.frame) return runStructureAnalysis('strain', { automatic: true, frame });
     }) : task);
   }
   if (state.analysis.coordination.enabled) pending.push(runCoordination({ automatic: true, frame, frameIndex: state.frameIndex }));
+  syncCancelButton('coordination');
   await Promise.all(pending);
 }
 
@@ -985,13 +993,52 @@ function paletteForCurrentMode() {
   );
 }
 
-function cancelStructureAnalyses() {
-  for (const [kind, controller] of structureControllers) {
-    controller.abort();
-    const prefix = ANALYSES[kind].prefix;
-    elements[`run-${prefix}`].disabled = !state.frame;
-    elements[`${prefix}-state`].textContent = 'Cancelled';
-    elements[`${prefix}-state`].classList.remove('ready');
+function abortAnalysisJobs() {
+  for (const controller of analysisControllers.values()) controller.abort();
+  analysisControllers.clear();
+  analysisTasks.clear();
+}
+
+function syncCancelButton(kind) {
+  const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
+  elements[`cancel-${prefix}`].disabled = !state.frame || (!state.analysis[kind].enabled
+    && elements[`${prefix}-state`].textContent !== 'Failed');
+}
+
+function cancelAnalysis(kind) {
+  const analysis = state.analysis[kind];
+  // Invalidate results immediately, including work that has already completed
+  // in a Worker but has not yet reached the UI.
+  analysis.request += 1;
+  analysis.enabled = false;
+  if (kind === 'coordination') {
+    clearTimeout(cutoffTimer);
+    analysis.cutoff = null;
+    if (loadingOwner === 'coordination') setLoading(false);
+  } else { analysis.key = null; analysis.parameters = null; }
+  analysisControllers.get(kind)?.abort();
+  analysisControllers.delete(kind);
+  analysisTasks.delete(kind);
+  const frames = new Set([state.frame, ...cache.frames.values()]);
+  for (const frame of frames) {
+    if (!frame) continue;
+    for (const name of clearAnalysisResults(frame, kind)) {
+      scalarColorRanges.delete(name);
+      scalarColorSchemes.delete(name);
+      scalarHideOutside.delete(name);
+    }
+    if (['ptm', 'strain'].includes(kind) && !state.analysis.ptm.enabled && !state.analysis.strain.enabled) delete frame.ptm;
+  }
+  if (!state.analysis.cna.enabled && !state.analysis.ptm.enabled) hiddenStructureTypes.clear();
+  const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
+  elements[`${prefix}-state`].textContent = 'Not calculated';
+  elements[`${prefix}-state`].classList.remove('ready');
+  elements[`run-${prefix}`].disabled = !state.frame;
+  elements[`metric-${prefix}`].textContent = '—';
+  if (kind !== 'coordination') elements[`${prefix}-status`].textContent = ANALYSES[kind].help;
+  syncCancelButton(kind);
+  if (state.frame) {
+    refreshColorOptions(); applyColors(); restoreSelection(); updateMemoryMetric();
   }
 }
 
@@ -1086,19 +1133,13 @@ function storePtmResult(frame, result, parameters, expose = true) {
     structures: result.structures, rmsd: result.rmsd, scales: result.scales,
     deformation: result.deformation, distances: result.distances };
   if (!expose) return;
-  const metadata = { analysisMs: result.elapsedMs, analysisEngine: result.engine, analysisKey: frame.ptm.key, unit: '' };
+  const metadata = { analysisKind: 'ptm', analysisMs: result.elapsedMs, analysisEngine: result.engine, analysisKey: frame.ptm.key, unit: '' };
   const properties = [
     { ...metadata, name: 'ptmStructureType', displayName: 'Crystal structure (PTM)', data: result.structures, categories: PTM_TYPES },
     { ...metadata, name: 'ptmRmsd', displayName: 'PTM RMSD (best fit)', data: result.rmsd },
     { ...metadata, name: 'ptmDistance', displayName: 'PTM nearest-neighbor distance', unit: 'Å', data: result.distances },
   ];
-  for (const property of properties) replaceProperty(frame, property);
-}
-
-function replaceProperty(frame, property) {
-  const index = frame.properties.findIndex(candidate => candidate.name === property.name);
-  if (index < 0) frame.properties.push(property);
-  else frame.properties[index] = property;
+  for (const property of properties) replaceAnalysisProperty(frame, property);
 }
 
 async function runStructureAnalysis(kind, { automatic = false, frame = state.frame } = {}) {
@@ -1123,18 +1164,20 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       throw new Error('CNA cutoff must be greater than zero.');
     }
   } catch (error) {
-    structureControllers.get(kind)?.abort();
+    analysisControllers.get(kind)?.abort();
     analysis.request += 1;
     elements[`${prefix}-state`].textContent = 'Failed';
     elements[`${prefix}-state`].classList.remove('ready');
     elements[`${prefix}-status`].textContent = error.message;
     elements[`run-${prefix}`].disabled = false;
+    syncCancelButton(kind);
     showToast(error.message);
     return;
   }
   analysis.enabled = true;
   analysis.parameters = parameters;
   analysis.key = JSON.stringify(parameters);
+  syncCancelButton(kind);
   if (!automatic) state.colorMode = `property:${name}`;
   refreshColorOptions();
   const key = analysis.key;
@@ -1142,16 +1185,16 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
   const sourceVersion = state.sourceVersion;
   const isCurrent = () => frame === state.frame && sourceVersion === state.sourceVersion
     && analysis === state.analysis[kind] && request === analysis.request && key === analysis.key;
-  structureControllers.get(kind)?.abort();
+  analysisControllers.get(kind)?.abort();
   const controller = new AbortController();
-  structureControllers.set(kind, controller);
+  analysisControllers.set(kind, controller);
   const ready = property => {
     elements[`${prefix}-state`].textContent = 'Calculated';
     elements[`${prefix}-state`].classList.add('ready');
     elements[`${prefix}-status`].textContent = kind === 'cna' || kind === 'ptm'
       ? 'Use the legend checkboxes to show or hide each structure type. Filters do not change the analysis.'
       : kind === 'strain'
-        ? `Green–Lagrange strain relative to the reference lattice.${property.incomplete ? ` ${property.incomplete} unmatched atoms are gray.` : ''}`
+        ? 'Green–Lagrange strain relative to the reference lattice.'
         : `Calculated with ${parameters.neighbors} neighbors.${property.incomplete ? ` ${property.incomplete} undefined environments are gray.` : ''}`;
     elements[`metric-${prefix}`].textContent = `${formatDuration(property.analysisMs)} · ${property.analysisEngine}`;
     elements[`run-${prefix}`].disabled = false;
@@ -1159,7 +1202,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
   const cached = frame.properties.find(property => property.name === name && property.analysisKey === key);
   if (cached) {
     ready(cached); refreshColorOptions(); applyColors();
-    structureControllers.delete(kind);
+    analysisControllers.delete(kind);
     return;
   }
   elements[`run-${prefix}`].disabled = true;
@@ -1169,7 +1212,14 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     const ptmKey = JSON.stringify({ flags: parameters.flags, rmsdCutoff: parameters.rmsdCutoff });
     if (kind === 'strain') {
       const ptmTask = analysisTasks.get('ptm');
-      if (ptmTask?.frame === frame && ptmTask.key === ptmKey) await ptmTask.promise;
+      if (ptmTask?.frame === frame && ptmTask.key === ptmKey) {
+        try { await ptmTask.promise; }
+        catch {
+          // Cancelling PTM does not cancel a separate strain request. If its
+          // prerequisite was stopped, strain can obtain its own geometry fit.
+          if (!isCurrent() || controller.signal.aborted) return;
+        }
+      }
       if (!isCurrent()) return;
     }
     const inputs = { kind, ...parameters,
@@ -1183,7 +1233,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     analysisTasks.set(kind, { frame, key, request, promise: task });
     const result = await task;
     if (!isCurrent()) return;
-    const metadata = { unit: '', analysisKey: key, analysisMs: result.elapsedMs,
+    const metadata = { unit: '', analysisKind: kind, analysisKey: key, analysisMs: result.elapsedMs,
       analysisEngine: result.engine, incomplete: result.incomplete ?? 0 };
     let properties;
     if (kind === 'ptm') {
@@ -1191,8 +1241,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       properties = [frame.properties.find(property => property.name === name)];
     } else if (kind === 'strain') {
       const visiblePtmKey = JSON.stringify(state.analysis.ptm.parameters);
-      storePtmResult(frame, result, parameters, !state.analysis.ptm.enabled || visiblePtmKey === ptmKey);
-      if (!result.atomicShearStrain.some(Number.isFinite)) throw new Error('No atoms match the reference crystal and PTM threshold; elastic strain is undefined.');
+      storePtmResult(frame, result, parameters, state.analysis.ptm.enabled && visiblePtmKey === ptmKey);
       const labels = { atomicShearStrain: 'Atomic shear strain', atomicHydrostaticStrain: 'Atomic hydrostatic strain',
         atomicVolumeChange: 'Atomic volume change' };
       properties = STRAIN_FIELDS.map(field => ({ ...metadata, name: field,
@@ -1202,7 +1251,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       properties = [{ ...metadata, name, displayName: label, data: result.structures ?? result.centrosymmetry,
         ...(kind === 'cna' ? { categories: STRUCTURE_TYPES } : {}) }];
     }
-    for (const property of properties) replaceProperty(frame, property);
+    for (const property of properties) replaceAnalysisProperty(frame, property);
     reassessFrameCache(frame); ready(properties[0]);
     refreshColorOptions(); applyColors(); restoreSelection(); updateMemoryMetric();
     if (result.warning) showToast(result.warning);
@@ -1214,7 +1263,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     refreshColorOptions(); showToast(error.message);
   } finally {
     if (isCurrent()) elements[`run-${prefix}`].disabled = false;
-    if (structureControllers.get(kind) === controller) structureControllers.delete(kind);
+    if (analysisControllers.get(kind) === controller) analysisControllers.delete(kind);
     if (analysisTasks.get(kind)?.request === request) analysisTasks.delete(kind);
   }
 }
@@ -1230,23 +1279,27 @@ function scheduleCutoffAnalysis({ immediate = false } = {}) {
 
 async function runCoordination({ automatic = false, frame = state.frame, frameIndex = state.frameIndex } = {}) {
   if (!frame) return;
+  const analysis = state.analysis.coordination;
   const cutoff = automatic ? state.analysis.coordination.cutoff : Number(elements.cutoff.value);
   if (!Number.isFinite(cutoff) || cutoff <= 0) {
     showToast('The cutoff radius must be greater than zero.');
     return;
   }
   if (!automatic) {
-    state.analysis.coordination.enabled = true;
-    state.analysis.coordination.cutoff = cutoff;
+    analysis.enabled = true;
+    analysis.cutoff = cutoff;
     state.colorMode = 'property:coordination';
     refreshColorOptions();
   }
-  const request = state.analysis.coordination.request + 1;
-  state.analysis.coordination.request = request;
+  syncCancelButton('coordination');
+  const request = ++analysis.request;
   const sourceVersion = state.sourceVersion;
-  const isCurrent = () => sourceVersion === state.sourceVersion
-    && request === state.analysis.coordination.request
-    && state.analysis.coordination.enabled && state.analysis.coordination.cutoff === cutoff;
+  const isCurrent = () => frame === state.frame && frameIndex === state.frameIndex && sourceVersion === state.sourceVersion
+    && analysis === state.analysis.coordination && request === analysis.request
+    && analysis.enabled && analysis.cutoff === cutoff;
+  analysisControllers.get('coordination')?.abort();
+  const controller = new AbortController();
+  analysisControllers.set('coordination', controller);
   const existing = frame.properties.find((property) => property.name === 'coordination');
   if (existing?.analysisCutoff === cutoff) {
     if (frame === state.frame) {
@@ -1255,20 +1308,22 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
       elements['analysis-state'].textContent = 'Calculated';
       elements['analysis-state'].classList.add('ready');
       elements['run-analysis'].disabled = false;
-      setLoading(false);
+      if (loadingOwner === 'coordination') setLoading(false);
     }
+    analysisControllers.delete('coordination');
     return;
   }
   elements['run-analysis'].disabled = true;
   elements['analysis-state'].textContent = 'Calculating…';
   elements['analysis-state'].classList.remove('ready');
-  setLoading(true, `Calculating coordination for frame ${frameIndex + 1}…`);
+  setLoading(true, `Calculating coordination for frame ${frameIndex + 1}…`, 'coordination');
   try {
     // Keep one analysis active. Rapid edits replace queued requests with the
     // latest cutoff rather than launching overlapping Worker pools.
     const task = coordinationQueue.then(() => {
       if (!isCurrent()) return null;
       return coordinationPool.analyze(frame, cutoff, {
+        signal: controller.signal,
         onProgress: ({ completed, total, workerCount }) => {
           if (frame !== state.frame || !isCurrent()) return;
           elements['loading-text'].textContent = workerCount > 1
@@ -1282,10 +1337,9 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     // An edit or source change can supersede an active request. Keep its older
     // result out of the property cache and UI, including after a cache hit.
     if (!result || !isCurrent()) return;
-    const existingIndex = frame.properties.findIndex((property) => property.name === 'coordination');
-    const property = { name: 'coordination', unit: '', data: result.coordination, analysisCutoff: cutoff };
-    if (existingIndex >= 0) frame.properties[existingIndex] = property;
-    else frame.properties.push(property);
+    const property = { name: 'coordination', unit: '', data: result.coordination, analysisCutoff: cutoff,
+      analysisKind: 'coordination', analysisMs: result.elapsedMs, analysisEngine: result.engine };
+    replaceAnalysisProperty(frame, property);
     reassessFrameCache(frame);
     if (frame !== state.frame || frameIndex !== state.frameIndex
         || !state.analysis.coordination.enabled || state.analysis.coordination.cutoff !== cutoff) return;
@@ -1298,17 +1352,16 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     updateMemoryMetric();
     if (result.warning) showToast(result.warning);
   } catch (error) {
-    if (frame === state.frame && sourceVersion === state.sourceVersion
-        && request === state.analysis.coordination.request) {
+    if (isCurrent() && error.name !== 'AbortError') {
       elements['analysis-state'].textContent = 'Failed';
       showToast(error.message);
     }
   } finally {
-    if (frame === state.frame && sourceVersion === state.sourceVersion
-        && request === state.analysis.coordination.request) {
+    if (isCurrent()) {
       elements['run-analysis'].disabled = false;
-      setLoading(false);
+      if (loadingOwner === 'coordination') setLoading(false);
     }
+    if (analysisControllers.get('coordination') === controller) analysisControllers.delete('coordination');
   }
 }
 
@@ -1701,6 +1754,11 @@ function setControlsEnabled(enabled) {
   for (const button of document.querySelectorAll('[data-view]')) button.disabled = !enabled;
   for (const input of document.querySelectorAll('[data-ptm-template], #lattice-references input, #lattice-references select')) input.disabled = !enabled;
   for (const button of document.querySelectorAll('[data-background]')) button.disabled = !enabled;
+  for (const kind of Object.keys(state.analysis)) {
+    const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
+    if (enabled) syncCancelButton(kind);
+    else elements[`cancel-${prefix}`].disabled = true;
+  }
   elements['background-picker'].classList.toggle('is-disabled', !enabled);
   if (!enabled) elements['background-picker'].open = false;
   syncAxisVisibility();
@@ -1731,8 +1789,9 @@ function dismissInteractionHint() {
   }, 300);
 }
 
-function setLoading(visible, text = '') {
+function setLoading(visible, text = '', owner = null) {
   elements.loading.hidden = !visible;
+  loadingOwner = visible ? owner : null;
   if (text) elements['loading-text'].textContent = text;
 }
 

@@ -75,7 +75,7 @@ export class AnalysisPool {
       const partials = await Promise.all(Array.from({ length: workerCount }, (_, index) => {
         const startAtom = Math.floor(atomCount * index / workerCount);
         const endAtom = Math.floor(atomCount * (index + 1) / workerCount);
-        return this.runTask({ fractional: coordinates, cell: frame.cell, ...inputs, startAtom, endAtom }, controller.signal)
+        return this.runTask({ fractional: coordinates, cell: frame.cell, ...inputs, startAtom, endAtom }, controller.signal, signal)
           .then((partial) => {
             completed += 1;
             onProgress({ completed, total: workerCount, workerCount });
@@ -104,8 +104,7 @@ export class AnalysisPool {
           for (const [name, [, stride]] of Object.entries(fields)) values[name].set(partial[name], partial.startAtom * stride);
           incomplete += partial.incomplete ?? 0;
         }
-        return { ...metadata, ...values, incomplete,
-          warning: incomplete ? `${incomplete} atoms do not match their reference lattice; their elastic strain is undefined (NaN).` : null };
+        return { ...metadata, ...values, incomplete, warning: null };
       }
       const field = parameters.kind === 'cna' ? 'structures' : 'centrosymmetry';
       const values = parameters.kind === 'cna' ? new Uint8Array(atomCount) : new Float32Array(atomCount);
@@ -124,9 +123,9 @@ export class AnalysisPool {
     }
   }
 
-  runTask(payload, signal) {
+  runTask(payload, signal, sourceSignal) {
     return new Promise((resolve, reject) => {
-      const task = { id: this.nextId++, payload, signal, resolve, reject, worker: null, done: false };
+      const task = { id: this.nextId++, payload, signal, sourceSignal, resolve, reject, worker: null, done: false };
       task.abort = () => this.finish(task, abortError());
       signal.addEventListener('abort', task.abort, { once: true });
       this.queue.push(task);
@@ -139,6 +138,9 @@ export class AnalysisPool {
     while (!this.closed && this.active.size < this.limit && this.queue.length) {
       const task = this.queue.shift();
       if (task.done) continue;
+      // A caller's abort listeners run one at a time. Its original signal may
+      // already be aborted before another job's internal controller sees it.
+      if (task.signal.aborted || task.sourceSignal?.aborted) { this.finish(task, abortError()); continue; }
       this.active.add(task);
       try {
         task.worker = this.workerFactory();

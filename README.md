@@ -47,6 +47,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   lattice constants, shear/hydrostatic strain, volume change and tensor components.
 - AtomEye normalized central symmetry with 8/12 neighbors; all analyses share
   a bounded parallel Worker scheduler and retain per-frame results.
+- Per-analysis Cancel controls stop computation and reset results and frame
+  caches while keeping input settings and other analyses.
 - Atom-type colors and five scalar color maps, with editable ranges and
   optional filtering of out-of-range atoms.
 - PNG export with independent background, legend and XYZ-arrow controls.

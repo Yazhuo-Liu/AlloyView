@@ -15,6 +15,7 @@ export function estimateFrameBytes(frame) {
   include(frame.cell?.origin);
   include(frame.cell?.vectors);
   for (const property of frame.properties ?? []) include(property.data);
+  for (const property of frame.analysisOriginalProperties?.values() ?? []) include(property.data);
   for (const value of Object.values(frame.ptm ?? {})) include(value);
   return [...buffers].reduce((total, buffer) => total + buffer.byteLength, 0);
 }

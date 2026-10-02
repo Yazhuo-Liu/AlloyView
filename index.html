@@ -209,7 +209,7 @@
           <section class="side-section analysis-section">
             <div class="section-heading">
               <div><p class="section-kicker">ANALYSIS</p><h3>Coordination number</h3></div>
-              <span id="analysis-state" class="state-pill">Not calculated</span>
+              <div class="analysis-state-controls"><span id="analysis-state" class="state-pill">Not calculated</span><button id="cancel-analysis" class="text-button" type="button" disabled>Cancel</button></div>
             </div>
             <div class="analysis-controls">
               <label><span>Cutoff radius <small>Auto updates</small></span><span class="input-unit"><input id="cutoff" type="number" value="3.0" min="0.01" step="0.05" disabled><i>Å</i></span></label>
@@ -222,7 +222,7 @@
           <section class="side-section analysis-section">
             <div class="section-heading">
               <div><p class="section-kicker">CRYSTAL STRUCTURE</p><h3>Common neighbor analysis</h3></div>
-              <span id="cna-state" class="state-pill">Not calculated</span>
+              <div class="analysis-state-controls"><span id="cna-state" class="state-pill">Not calculated</span><button id="cancel-cna" class="text-button" type="button" disabled>Cancel</button></div>
             </div>
             <label class="field"><span>Method</span>
               <select id="cna-mode" disabled><option value="adaptive">Adaptive CNA</option><option value="fixed">Fixed cutoff CNA</option></select>
@@ -238,7 +238,7 @@
           <section class="side-section analysis-section">
             <div class="section-heading">
               <div><p class="section-kicker">DEFECT ANALYSIS</p><h3>Central symmetry</h3></div>
-              <span id="csp-state" class="state-pill">Not calculated</span>
+              <div class="analysis-state-controls"><span id="csp-state" class="state-pill">Not calculated</span><button id="cancel-csp" class="text-button" type="button" disabled>Cancel</button></div>
             </div>
             <div class="analysis-controls">
               <label><span>Nearest neighbors</span><select id="csp-neighbors" disabled><option value="12">12 · FCC</option><option value="8">8 · BCC</option></select></label>
@@ -251,7 +251,7 @@
           <section class="side-section analysis-section">
             <div class="section-heading">
               <div><p class="section-kicker">TEMPLATE MATCHING</p><h3>Polyhedral template matching</h3></div>
-              <span id="ptm-state" class="state-pill">Not calculated</span>
+              <div class="analysis-state-controls"><span id="ptm-state" class="state-pill">Not calculated</span><button id="cancel-ptm" class="text-button" type="button" disabled>Cancel</button></div>
             </div>
             <div class="analysis-controls">
               <label><span>RMSD threshold</span><input id="ptm-rmsd" type="number" value="0.1" min="0" step="0.01" disabled></label>
@@ -274,7 +274,7 @@
           <section class="side-section analysis-section">
             <div class="section-heading">
               <div><p class="section-kicker">ATOMIC ELASTIC STRAIN</p><h3>Ideal lattice reference</h3></div>
-              <span id="strain-state" class="state-pill">Not calculated</span>
+              <div class="analysis-state-controls"><span id="strain-state" class="state-pill">Not calculated</span><button id="cancel-strain" class="text-button" type="button" disabled>Cancel</button></div>
             </div>
             <p class="help">Element presets give editable reference lattice constants in Å. For alloys or other temperatures, supply the stress-free values appropriate to your system.</p>
             <div id="lattice-references" class="lattice-references"></div>
@@ -282,7 +282,7 @@
               <button id="lattice-reset" class="button button-secondary" type="button" disabled>Element defaults</button>
               <button id="run-strain" class="button button-accent" type="button" disabled>Calculate strain</button>
             </div>
-            <p class="help">PTM correspondence gives Green–Lagrange elastic strain relative to the reference crystal, including absolute lattice expansion. Tensor components use local crystal axes. Unmatched atoms are undefined (gray).</p>
+            <p class="help">PTM correspondence gives Green–Lagrange elastic strain relative to the reference crystal, including absolute lattice expansion. Tensor components use local crystal axes.</p>
             <p id="strain-status" class="help" role="status" aria-live="polite">Unknown numeric atom types need an element or explicit lattice parameters. This is not displacement strain between trajectory frames.</p>
           </section>
 

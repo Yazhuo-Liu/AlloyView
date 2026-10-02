@@ -104,7 +104,11 @@ export function colorsByProperty(property, limits = null, scheme = 'atomeye') {
     dataMaximum = Math.max(dataMaximum, value);
   }
   if (!Number.isFinite(dataMinimum) || !Number.isFinite(dataMaximum)) {
-    throw new Error(`Property ${property.name} has no finite values to color.`);
+    // An entirely undefined strain field is a valid result, including at
+    // defects or for an unmatched reference. Display NaN without an error.
+    const colors = new Uint8Array(property.data.length * 3).fill(130);
+    return { colors, legend: { kind: 'types', title: property.displayName ?? property.name,
+      property, items: [{ label: 'NaN', color: [130, 130, 130] }] } };
   }
   const minimum = limits?.minimum ?? dataMinimum;
   const maximum = limits?.maximum ?? dataMaximum;

@@ -86,8 +86,9 @@ zero, preventing roundoff from becoming a visible strain range in ideal crystals
 The default scalar view is shear strain; choose hydrostatic strain, volume
 change or individual tensor components in **Color by**. Atoms whose best PTM
 phase does not match their selected reference, whose fit exceeds the cutoff or
-whose environment is invalid get NaN, shown gray. An entirely unmatched frame
-reports the reason. Strain is a least-squares local fit and includes thermal
+whose environment is invalid get NaN, shown gray, without an unmatched-atom
+count or warning. An entirely NaN frame completes normally and uses a gray
+NaN legend key. Strain is a least-squares local fit and includes thermal
 displacements; it does not measure plastic displacement or non-affine `D²min`.
 It does not use another trajectory frame as its reference. Graphene and ICO
 identification are available, but these do not define a supported 3D strain
@@ -112,6 +113,22 @@ choice or another source. Element reference edits persist by input type label
 across frames and reset with a new source. PTM deformation arrays are counted in
 the adaptive frame-cache memory budget. Results are available in **Atom details** and
 **Current measurements**.
+
+Each analysis has a **Cancel** button beside its status. It stops that analysis's
+running/queued Workers and returns it to **Not calculated**. The button can also
+reset a completed analysis. Its generated properties and per-frame results are
+removed across the frame cache, metrics are cleared, and automatic analysis on
+subsequent frames stops. When the removed property was selected for coloring,
+the view returns to atom-type colors. Input parameters and reference constants
+are retained so **Calculate/Identify** can restart it. Imported properties that
+were overwritten by an analysis result are restored.
+
+Other analyses continue independently. PTM and strain can share a geometry fit,
+but cancelling one does not cancel the other. A strain request waiting for a
+cancelled PTM job obtains its own fit; cancelled PTM display properties stay
+removed. Strain's internal PTM fit alone does not enable the PTM display. Shared
+fits are released when neither analysis needs them. Cancelled results cannot
+reappear through a late response or a cached frame.
 
 ## Numerical implementation
 

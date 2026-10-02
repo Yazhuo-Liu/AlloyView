@@ -64,6 +64,15 @@ test('scalar legend rejects an inverted custom range', () => {
   );
 });
 
+test('entirely NaN strain is gray with a NaN key instead of a numeric range or error', () => {
+  const property = { name: 'atomicShearStrain', displayName: 'Atomic shear strain', data: new Float32Array([NaN, NaN]) };
+  const { colors, legend } = colorsByProperty(property, { minimum: 0, maximum: 1 });
+  assert.deepEqual([...colors], [130, 130, 130, 130, 130, 130]);
+  assert.equal(legend.title, 'Atomic shear strain');
+  assert.equal(legend.kind, 'types');
+  assert.deepEqual(legend.items, [{ label: 'NaN', color: [130, 130, 130] }]);
+});
+
 test('AtomEye-style scalar thresholds hide only values outside the inclusive range', () => {
   const property = { data: new Float32Array([7, 8, 10, 12, 13, Number.NaN]) };
   assert.deepEqual(

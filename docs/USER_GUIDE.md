@@ -100,6 +100,15 @@ shear strain, hydrostatic strain, volume change and six tensor components in the
 local crystal frame. Undefined fits are NaN/gray. This measures strain relative
 to an ideal lattice, not displacement relative to another trajectory frame.
 Changing only the reference constants reuses PTM fits where possible.
+Unmatched atoms, including an entirely NaN frame, do not trigger warnings.
+
+Every analysis has a **Cancel** button next to its status. Use it to stop a
+running calculation or reset a completed result to **Not calculated**. It clears
+that analysis's properties, metrics and cached-frame results, and stops automatic
+calculation on later frames. Input settings remain available for restarting with
+**Calculate/Identify**. Other enabled analyses continue, including independent
+PTM/strain requests. Cancelling the selected coloring result returns the view
+to atom-type coloring; imported source properties are retained or restored.
 
 ## Tests and benchmark
 
