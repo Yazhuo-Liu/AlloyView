@@ -2,7 +2,59 @@
 
 Validation date: 2026-10-02 (America/New_York)
 
-## Environment
+## Browser and deployment regression update
+
+The current fixes were validated with Node.js v24.9.0 and Google Chrome
+144.0.7559.109 using SwiftShader software WebGL. The inherited remote `DISPLAY`
+was removed for headless execution. This checks rendering and export correctness;
+it does not establish hardware GPU performance.
+
+Executed commands:
+
+```bash
+npm test
+npm run build
+npm run test:browser
+```
+
+All 16 unit-test files passed. New regressions cover the earlier `file` Worker
+message and the current `files` message, single files and sequences, failed
+cloning, transparent legends, and a build version that changes even when only
+a Worker changes.
+
+The browser test serves the production artifact at `/AlloyView/` without
+COOP/COEP headers (`crossOriginIsolated === false`). It loaded a native local
+CFG selection, the FCC and BCC examples, and all 40 NEB images, including the
+last trajectory frames. It also calculated coordination, switched both themes
+and their logos, checked saved theme preference and custom viewport colors,
+and decoded actual PNG blobs for type and scalar legends.
+
+For both legends with **Include background in PNG** unchecked, the exported
+corner and empty legend padding had alpha **0**. With background enabled, the
+same pixels had alpha **255**. Atoms and legend content remained in the exports.
+The documentation screenshots were captured from these real browser views.
+
+Follow-up UI checks drag the actual panel divider in both directions, verify
+that the WebGL canvas resizes, reset the width, check persistence on reload,
+and verify the stacked layout hides the divider below the desktop breakpoint.
+Cutoff edits are tested without clicking Calculate. Delayed real analyses
+exercise rapid edits, a single active Worker pool, skipping superseded requests,
+and switching back to a cached cutoff without allowing an older result to
+replace it. The browser also types a decimal legend limit one character at a
+time and clears the field to verify immediate application and preservation of
+the last valid range.
+
+Homepage checks also load the supplied transparent crystal logo and capture
+both themes. Browser contrast checks use computed text colors, composited
+ancestor backgrounds and cumulative opacity, covering homepage copy, sidebar
+labels, help text, source descriptions, and scalar legends at a minimum 7:1.
+Controls, including disabled controls on the initial page, are checked at a
+minimum 4.5:1 after theme transition animations finish.
+
+The earlier environment, benchmark and validation details below remain as a
+record of the original checks.
+
+## Original validation environment
 
 - Linux 6.8.0-134-generic x86_64
 - Intel Xeon E5-2470 v2 @ 2.40 GHz, 10 cores / 20 hardware threads

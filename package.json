@@ -9,6 +9,7 @@
     "build": "node scripts/build.mjs",
     "preview": "node scripts/serve.mjs dist 4173",
     "test": "node --test",
+    "test:browser": "node scripts/browser-smoke.mjs",
     "benchmark": "node scripts/benchmark.mjs",
     "build:wasm": "bash wasm/build.sh"
   },

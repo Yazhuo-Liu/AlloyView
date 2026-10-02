@@ -1,42 +1,63 @@
-import { access, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = resolve(import.meta.dirname, '..');
-const out = resolve(root, 'dist');
+const projectRoot = resolve(import.meta.dirname, '..');
 
-await rm(out, { recursive: true, force: true });
-await mkdir(out, { recursive: true });
+export async function buildSite(root = projectRoot, out = resolve(root, 'dist')) {
+  const entries = ['src', 'examples', 'styles.css'];
+  const wasmEntries = ['wasm/coordination.mjs', 'wasm/coordination.wasm'];
+  try {
+    await Promise.all(wasmEntries.map((entry) => access(resolve(root, entry))));
+    entries.push(...wasmEntries);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
 
-// Keep the Pages artifact limited to files used by the browser application.
-// Repository documentation, tests, benchmarks, and native sources stay out of
-// the public web root.
-for (const entry of ['src', 'examples']) {
-  await cp(resolve(root, entry), resolve(out, entry), { recursive: true });
+  // Every import, Worker and asset lives in the same content-versioned tree.
+  // Versioning only app.js leaves its imports vulnerable to stale Pages caches.
+  const hash = createHash('sha256');
+  async function hashEntry(entry) {
+    const path = resolve(root, entry);
+    const children = await readdir(path, { withFileTypes: true }).catch((error) => {
+      if (error.code === 'ENOTDIR') return null;
+      throw error;
+    });
+    if (children) {
+      for (const child of children.sort((left, right) => left.name.localeCompare(right.name, 'en'))) {
+        await hashEntry(`${entry}/${child.name}`);
+      }
+    } else {
+      hash.update(entry).update('\0').update(await readFile(path)).update('\0');
+    }
+  }
+  for (const entry of [...entries, 'index.html']) await hashEntry(entry);
+  const buildId = hash.digest('hex').slice(0, 16);
+  const assetPrefix = `./assets/${buildId}/`;
+  const runtimeRoot = resolve(out, 'assets', buildId);
+
+  await rm(out, { recursive: true, force: true });
+  await mkdir(runtimeRoot, { recursive: true });
+  for (const entry of entries) {
+    // Keep the earlier unversioned entrypoints available while an old index.html
+    // can still be cached. New HTML only uses the versioned tree above.
+    for (const destination of [runtimeRoot, out]) {
+      const target = resolve(destination, entry);
+      await mkdir(resolve(target, '..'), { recursive: true });
+      await cp(resolve(root, entry), target, { recursive: true });
+    }
+  }
+  await cp(resolve(root, 'LICENSE'), resolve(out, 'LICENSE'));
+  const html = await readFile(resolve(root, 'index.html'), 'utf8');
+  await writeFile(resolve(out, 'index.html'), html
+    .replaceAll('./src/', `${assetPrefix}src/`)
+    .replace('./styles.css', `${assetPrefix}styles.css`)
+    .replace('</head>', `  <meta name="alloyview-build" content="${buildId}">\n  </head>`));
+  return { out, buildId, assetPrefix };
 }
-for (const entry of ['index.html', 'styles.css', 'LICENSE']) {
-  await cp(resolve(root, entry), resolve(out, entry));
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const { out, buildId } = await buildSite();
+  console.log(`Built static site: ${out} (${buildId})`);
 }
-
-// Include the optional Emscripten module only when it has actually been built.
-try {
-  await Promise.all([
-    access(resolve(root, 'wasm/coordination.mjs')),
-    access(resolve(root, 'wasm/coordination.wasm')),
-  ]);
-  await mkdir(resolve(out, 'wasm'));
-  await Promise.all([
-    cp(resolve(root, 'wasm/coordination.mjs'), resolve(out, 'wasm/coordination.mjs')),
-    cp(resolve(root, 'wasm/coordination.wasm'), resolve(out, 'wasm/coordination.wasm')),
-  ]);
-} catch (error) {
-  if (error?.code !== 'ENOENT') throw error;
-}
-
-const htmlPath = resolve(out, 'index.html');
-const html = await readFile(htmlPath, 'utf8');
-await writeFile(
-  htmlPath,
-  html.replace('</head>', '  <meta name="alloyview-build" content="production">\n</head>'),
-);
-
-console.log(`Built static site: ${out}`);

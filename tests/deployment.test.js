@@ -1,0 +1,56 @@
+import assert from 'node:assert/strict';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import test from 'node:test';
+import { buildSite } from '../scripts/build.mjs';
+
+test('production versions the whole module graph and works at a Pages subpath', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'alloyview-build-'));
+  const root = join(temporary, 'project');
+  const out = join(temporary, 'dist');
+  try {
+    for (const entry of ['src/workers', 'src/asserts/logo', 'examples', 'wasm']) {
+      await mkdir(join(root, entry), { recursive: true });
+    }
+    await writeFile(join(root, 'index.html'), '<head><link href="./styles.css"><img src="./src/asserts/logo/light.svg"></head><script src="./src/app.js"></script>');
+    await writeFile(join(root, 'styles.css'), 'body { color: black; }');
+    await writeFile(join(root, 'LICENSE'), 'MIT');
+    await writeFile(join(root, 'src/app.js'), "import './worker-client.js';");
+    await writeFile(join(root, 'src/worker-client.js'), "new Worker(new URL('./workers/structure-worker.js', import.meta.url));");
+    await writeFile(join(root, 'src/workers/structure-worker.js'), 'self.onmessage = () => {};');
+    await writeFile(join(root, 'src/asserts/logo/light.svg'), '<svg/>');
+    await writeFile(join(root, 'examples/test.cfg'), 'example');
+
+    const first = await buildSite(root, out);
+    assert.equal((await buildSite(root, out)).buildId, first.buildId);
+    const html = await readFile(join(out, 'index.html'), 'utf8');
+    assert.ok(html.includes(`${first.assetPrefix}src/app.js`));
+    const base = new URL('https://example.github.io/AlloyView/');
+    const appUrl = new URL(`${first.assetPrefix}src/app.js`, base);
+    const workerUrl = new URL('./workers/structure-worker.js', new URL('./worker-client.js', appUrl));
+    const exampleUrl = new URL('../examples/test.cfg', appUrl);
+    for (const url of [appUrl, workerUrl, exampleUrl, new URL(`${first.assetPrefix}src/asserts/logo/light.svg`, base)]) {
+      assert.ok(url.pathname.startsWith(`/AlloyView/assets/${first.buildId}/`));
+      await access(resolve(out, url.pathname.replace('/AlloyView/', '')));
+    }
+    assert.equal(html.includes('src="./src/'), false);
+    // Cached pre-versioning HTML must also keep loading during the transition.
+    for (const entry of ['src/app.js', 'src/worker-client.js', 'src/workers/structure-worker.js', 'examples/test.cfg', 'styles.css']) {
+      await access(join(out, entry));
+    }
+
+    // A change only to the Worker must invalidate app and client URLs too.
+    await writeFile(join(root, 'src/workers/structure-worker.js'), 'self.onmessage = () => { /* v2 */ };');
+    const second = await buildSite(root, out);
+    assert.notEqual(first.buildId, second.buildId);
+
+    await writeFile(join(root, 'wasm/coordination.mjs'), 'export default {};');
+    await writeFile(join(root, 'wasm/coordination.wasm'), new Uint8Array([0, 97, 115, 109]));
+    const withWasm = await buildSite(root, out);
+    await access(join(out, 'assets', withWasm.buildId, 'wasm/coordination.mjs'));
+    await access(join(out, 'assets', withWasm.buildId, 'wasm/coordination.wasm'));
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});

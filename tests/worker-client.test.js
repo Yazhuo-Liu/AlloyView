@@ -20,6 +20,54 @@ class FakeWorker {
   terminate() {}
 }
 
+test('load accepts a single File and preserves the legacy single-file message', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const client = new StructureWorkerClient();
+    const file = new File(['Number of particles = 1'], 'structure.cfg');
+    const pending = client.load(file);
+    assert.deepEqual(client.worker.messages[0].payload.files, [file]);
+    assert.equal(client.worker.messages[0].payload.file, file);
+    client.handleMessage({ id: 1, ok: true, result: {} });
+    await pending;
+    client.close();
+  } finally {
+    globalThis.Worker = originalWorker;
+  }
+});
+
+test('load retains every file in a FileList-like selection', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const client = new StructureWorkerClient();
+    const files = [new File(['first'], 'frame.1.cfg'), new File(['second'], 'frame.2.cfg')];
+    const pending = client.load({ 0: files[0], 1: files[1], length: 2 });
+    assert.deepEqual(client.worker.messages[0].payload.files, files);
+    assert.equal(client.worker.messages[0].payload.file, undefined);
+    client.handleMessage({ id: 1, ok: true, result: {} });
+    await pending;
+    client.close();
+  } finally {
+    globalThis.Worker = originalWorker;
+  }
+});
+
+test('a failed postMessage does not leave a pending request behind', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const client = new StructureWorkerClient();
+    client.worker.postMessage = () => { throw new DOMException('Cannot clone this file', 'DataCloneError'); };
+    await assert.rejects(client.load(new File(['data'], 'data.cfg')), /Cannot clone/);
+    assert.equal(client.pending.size, 0);
+    client.close();
+  } finally {
+    globalThis.Worker = originalWorker;
+  }
+});
+
 test('background frame requests do not surface progress in the blocking UI', async () => {
   const originalWorker = globalThis.Worker;
   globalThis.Worker = FakeWorker;

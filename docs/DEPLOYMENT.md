@@ -5,12 +5,11 @@ The production artifact contains only the browser application, examples, root
 license, and an optional prebuilt Wasm module. Tests, benchmarks, documentation,
 and native C++ sources are not copied into the web root.
 
-The single **Open local** action uses a read-only `webkitdirectory` file input.
-The browser returns the selected directory as a complete `FileList`, including
-relative paths, and AlloyView presents that list in its own file/sequence chooser.
-Folder access is requested by an explicit user action and no selected file is
-uploaded. This also avoids browser-specific `showDirectoryPicker()` behavior that
-can expose only part of a provider-backed folder.
+**Open local** offers a file picker and a read-only `webkitdirectory` folder
+picker. Individual files and multi-file selections load directly when they
+form one source. A folder selection returns a complete `FileList` with relative
+paths, which AlloyView presents in its file/sequence chooser. No selected file
+is uploaded.
 
 ## GitHub Actions
 
@@ -27,10 +26,19 @@ In the repository on GitHub, select **Settings → Pages → Build and deploymen
 Source → GitHub Actions**. No branch containing generated files, personal access
 token, deployment secret, or custom base-path setting is required.
 
-All runtime paths are document-relative, so a project site at
+All runtime paths are relative, so a project site at
 `https://<owner>.github.io/<repository>/` works without rewriting URLs. The two
-built-in examples are fetched from the same Pages origin. User-selected files
+built-in files and the NEB sequence are fetched from the same Pages origin. User-selected files
 are read with the browser `File` API and are not uploaded.
+
+The build computes a content hash and places the complete runtime tree under
+`assets/<hash>/`. The HTML references this tree, so JavaScript imports, Workers,
+examples, styles and logos all use one build version. A change to a Worker also
+changes the URL of its client. This prevents independently cached modules from
+mixing incompatible file-loading message formats after a deployment. The
+current loader also accepts the earlier single-file message format.
+Unversioned entrypoints remain available for an older cached HTML document
+during the transition; newly generated HTML always uses the versioned tree.
 
 ## Other static hosts
 

@@ -1,54 +1,60 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="color-scheme" content="dark">
+    <meta name="color-scheme" content="dark light">
     <meta
       name="description"
       content="Browser-only atomistic structure visualization and coordination analysis"
     >
     <title>AlloyView · Atomistic Structure Viewer</title>
+    <link rel="icon" type="image/png" href="./src/asserts/logo/AlloyView_logo_only.png">
+    <script>
+      try {
+        const saved = localStorage.getItem('alloyview-theme');
+        document.documentElement.dataset.theme = saved === 'light' || saved === 'dark'
+          ? saved : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      } catch {
+        document.documentElement.dataset.theme = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      }
+    </script>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="./" aria-label="AlloyView home">
-          <span class="brand-mark" aria-hidden="true">
-            <i></i><i></i><i></i><i></i>
-          </span>
-          <span>
-            <strong>AlloyView</strong>
-            <small>LOCAL ATOM LAB</small>
-          </span>
+          <img id="brand-logo" class="brand-logo" src="./src/asserts/logo/AlloyView_logo_light.svg" alt="AlloyView" width="1700" height="500">
         </a>
 
         <div class="file-actions">
+          <input id="file-input" type="file" multiple hidden>
           <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
-          <button id="open-local" class="button button-primary" type="button" title="Choose a local folder, then select a file or detected sequence">
+          <button id="open-local" class="button button-primary" type="button" title="Open individual structure files or browse a local folder">
             <span aria-hidden="true">＋</span> Open local
           </button>
           <button id="open-examples" class="button" type="button">Examples</button>
         </div>
 
-        <div class="privacy-badge" title="Files are processed only in this browser">
-          <span class="privacy-dot"></span>
-          <span><strong>Local processing</strong><small>Structure data stays on this device</small></span>
+        <div class="header-tools">
+          <div class="privacy-badge" title="Files are processed only in this browser">
+            <span class="privacy-dot"></span>
+            <span><strong>Local processing</strong><small>Structure data stays on this device</small></span>
+          </div>
+          <div class="theme-switch" role="group" aria-label="Color theme">
+            <button id="theme-light" type="button" aria-pressed="false"><span aria-hidden="true">☀</span> Light</button>
+            <button id="theme-dark" type="button" aria-pressed="true"><span aria-hidden="true">☾</span> Dark</button>
+          </div>
         </div>
       </header>
 
-      <main class="workspace">
+      <main id="workspace" class="workspace">
         <section class="viewport-panel" aria-label="3D atomistic viewport">
           <canvas id="viewport" tabindex="0"></canvas>
 
           <div id="empty-state" class="empty-state">
-            <div class="empty-orbit" aria-hidden="true">
-              <span class="nucleus"></span>
-              <span class="electron e1"></span>
-              <span class="electron e2"></span>
-              <span class="electron e3"></span>
-            </div>
+            <img class="empty-logo" src="./src/asserts/logo/AlloyView_logo_only.png" alt="AlloyView crystal structure logo" width="2400" height="2400">
             <p class="eyebrow">BROWSER-NATIVE MATERIALS VIEWER</p>
             <h1>See materials<br>atom by atom</h1>
             <p class="empty-copy">Open an AtomEye CFG, select a local folder to detect numbered CFG sequences, or load a LAMMPS text trajectory. Parsing, analysis, and rendering all stay in this browser.</p>
@@ -74,17 +80,16 @@
               <button id="projection-orthographic" type="button" aria-pressed="false" disabled>Ortho</button>
             </div>
             <details id="background-picker" class="background-picker is-disabled">
-              <summary title="Background color"><span>BG</span><i id="background-current" style="--swatch: #0e1113"></i></summary>
+              <summary title="Background color"><span>BG</span><i id="background-current" style="--swatch: #000000"></i></summary>
               <div class="background-menu">
                 <strong>Background</strong>
                 <div class="background-swatches" role="group" aria-label="Background presets">
-                  <button type="button" data-background="#0e1113" style="--swatch: #0e1113" aria-label="Dark" title="Dark" disabled></button>
                   <button type="button" data-background="#000000" style="--swatch: #000000" aria-label="Black" title="Black" disabled></button>
                   <button type="button" data-background="#ffffff" style="--swatch: #ffffff" aria-label="White" title="White" disabled></button>
                   <button type="button" data-background="#fff8e7" style="--swatch: #fff8e7" aria-label="Ivory" title="Ivory" disabled></button>
                   <button type="button" data-background="#fff4c2" style="--swatch: #fff4c2" aria-label="Pale yellow" title="Pale yellow" disabled></button>
                 </div>
-                <label class="background-custom"><span>Custom</span><input id="background" type="color" value="#0e1113" disabled></label>
+                <label class="background-custom"><span>Custom</span><input id="background" type="color" value="#000000" disabled></label>
               </div>
             </details>
             <label class="viewport-toggle" title="Show Cartesian axes"><input id="show-axes" type="checkbox" checked disabled><span>Axes</span></label>
@@ -137,7 +142,9 @@
           </section>
         </section>
 
-        <aside class="sidebar" aria-label="Structure and display controls">
+        <div id="sidebar-resizer" class="sidebar-resizer" role="separator" aria-label="Resize controls panel" aria-orientation="vertical" aria-controls="sidebar" aria-valuemin="280" aria-valuemax="640" aria-valuenow="342" tabindex="0" title="Drag to resize controls · Double-click to reset"></div>
+
+        <aside id="sidebar" class="sidebar" aria-label="Structure and display controls">
           <section class="side-section structure-summary">
             <p class="section-kicker">STRUCTURE</p>
             <div class="filename-row">
@@ -204,7 +211,7 @@
               <span id="analysis-state" class="state-pill">Not calculated</span>
             </div>
             <div class="analysis-controls">
-              <label><span>Cutoff radius</span><span class="input-unit"><input id="cutoff" type="number" value="3.0" min="0.01" step="0.05" disabled><i>Å</i></span></label>
+              <label><span>Cutoff radius <small>Auto updates</small></span><span class="input-unit"><input id="cutoff" type="number" value="3.0" min="0.01" step="0.05" disabled><i>Å</i></span></label>
               <button id="run-analysis" class="button button-accent" type="button" disabled>Calculate</button>
             </div>
             <p id="cutoff-help" class="help">A starting value will be suggested from recognized metallic elements.</p>

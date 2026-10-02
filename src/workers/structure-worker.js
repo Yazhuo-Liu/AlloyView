@@ -2,6 +2,7 @@ import { calculateCoordination } from '../analysis/coordination.js';
 import { cellFaceHeights, frameTransferables } from '../data/model.js';
 import { prepareSequenceBaseline, unwrapSequenceFrame } from '../data/trajectory.js';
 import { parseCfg } from '../io/cfg.js';
+import { isReadableLocalFile, normalizeLocalFiles } from '../io/local-files.js';
 import { detectStructureFormatHeader, inferStructureFormatFromPath } from '../io/file-sequences.js';
 import { indexLammpsDump, readLammpsFrame } from '../io/lammps-dump.js';
 import { indexLammpsDumpSeries, readLammpsSeriesFrame } from '../io/lammps-series.js';
@@ -13,7 +14,9 @@ self.addEventListener('message', async (event) => {
   const { id, type, payload } = event.data;
   try {
     if (type === 'load') {
-      const result = await loadSource(payload.files, id);
+      // Older cached clients sent `file`, including an array during the
+      // transition to sequences. Accept both versions of the load message.
+      const result = await loadSource(payload.files ?? payload.file, id);
       self.postMessage({ id, ok: true, result }, frameTransferables(result.frame));
       return;
     }
@@ -48,8 +51,8 @@ self.addEventListener('message', async (event) => {
 });
 
 async function loadSource(inputFiles, requestId) {
-  const files = Array.from(inputFiles ?? []);
-  if (files.length === 0 || files.some((file) => !(file instanceof Blob))) {
+  const files = normalizeLocalFiles(inputFiles);
+  if (files.length === 0 || files.some((file) => !isReadableLocalFile(file))) {
     throw new Error('No valid local file was provided.');
   }
   if (files.length > 1) {

@@ -149,7 +149,7 @@ export class WebGLRenderer {
     this.atomCount = 0;
     this.radiusScale = 1;
     this.atomRadii = null;
-    this.background = [14 / 255, 17 / 255, 19 / 255];
+    this.background = [0, 0, 0];
     this.cellColor = [0.62, 0.78, 0.81];
     this.cellVisible = true;
     this.sliceAxis = 2;
@@ -372,7 +372,8 @@ export class WebGLRenderer {
     const gl = this.gl;
     this.resize();
     this.updateMatrices();
-    gl.clearColor(...this.background, transparentBackground ? 0 : 1);
+    if (transparentBackground) gl.clearColor(0, 0, 0, 0);
+    else gl.clearColor(...this.background, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!this.frame) return;
 
@@ -576,7 +577,7 @@ export class WebGLRenderer {
     if (legend) {
       const cssWidth = Number(this.canvas.clientWidth) || width;
       const scale = Math.max(1, Math.min(3, width / cssWidth));
-      drawLegendOverlay(context, legend, width, height, scale);
+      drawLegendOverlay(context, legend, width, height, scale, { includeBackground });
     }
     exportCanvas.toBlob((blob) => {
       if (!blob) return;
@@ -601,7 +602,7 @@ export class WebGLRenderer {
   }
 }
 
-export function drawLegendOverlay(context, legend, width, height, scale = 1) {
+export function drawLegendOverlay(context, legend, width, height, scale = 1, { includeBackground = true } = {}) {
   if (!legend || width < 100 * scale || height < 72 * scale) return;
   const margin = 18 * scale;
   const padding = 12 * scale;
@@ -617,15 +618,22 @@ export function drawLegendOverlay(context, legend, width, height, scale = 1) {
   panelHeight = Math.min(panelHeight, height - margin * 2);
   const x = margin;
   const y = height - margin - panelHeight;
+  const textColors = includeBackground
+    ? { title: '#d9e7ea', label: '#a4b7be', muted: '#8299a2' }
+    : { title: '#142f3e', label: '#355563', muted: '#526d7b' };
 
   context.save();
-  context.fillStyle = 'rgba(9, 22, 31, 0.92)';
-  context.strokeStyle = 'rgba(105, 139, 151, 0.7)';
-  context.lineWidth = scale;
-  context.fillRect(x, y, panelWidth, panelHeight);
-  context.strokeRect(x + scale * 0.5, y + scale * 0.5, panelWidth - scale, panelHeight - scale);
+  // Background is one export option for the viewport AND legend. Keep only
+  // text, swatches and the scalar color bar when exporting transparency.
+  if (includeBackground) {
+    context.fillStyle = 'rgba(9, 22, 31, 0.92)';
+    context.strokeStyle = 'rgba(105, 139, 151, 0.7)';
+    context.lineWidth = scale;
+    context.fillRect(x, y, panelWidth, panelHeight);
+    context.strokeRect(x + scale * 0.5, y + scale * 0.5, panelWidth - scale, panelHeight - scale);
+  }
   context.textBaseline = 'alphabetic';
-  context.fillStyle = '#d9e7ea';
+  context.fillStyle = textColors.title;
   context.font = `600 ${11 * scale}px system-ui, sans-serif`;
   const title = legend.kind === 'scalar' && legend.unit
     ? `${legend.title} [${legend.unit}]`
@@ -633,16 +641,16 @@ export function drawLegendOverlay(context, legend, width, height, scale = 1) {
   context.fillText(title, x + padding, y + 20 * scale, panelWidth - padding * 2);
 
   if (legend.kind === 'types') {
-    drawTypeLegend(context, legend, x, y, panelWidth, panelHeight, padding, scale);
+    drawTypeLegend(context, legend, x, y, panelWidth, panelHeight, padding, scale, textColors);
   } else if (legend.kind === 'scalar') {
-    drawScalarLegend(context, legend, x, y, panelWidth, padding, scale);
+    drawScalarLegend(context, legend, x, y, panelWidth, padding, scale, textColors);
   }
   context.restore();
 }
 
-function drawScalarLegend(context, legend, x, y, panelWidth, padding, scale) {
+function drawScalarLegend(context, legend, x, y, panelWidth, padding, scale, textColors) {
   if (legend.schemeLabel) {
-    context.fillStyle = '#8299a2';
+    context.fillStyle = textColors.muted;
     context.font = `${8 * scale}px system-ui, sans-serif`;
     context.textAlign = 'right';
     context.fillText(legend.schemeLabel, x + panelWidth - padding, y + 20 * scale, panelWidth * 0.46);
@@ -661,7 +669,7 @@ function drawScalarLegend(context, legend, x, y, panelWidth, padding, scale) {
   context.strokeStyle = 'rgba(220, 235, 239, 0.38)';
   context.lineWidth = scale;
   context.strokeRect(gradientX, gradientY, gradientWidth, gradientHeight);
-  context.fillStyle = '#a4b7be';
+  context.fillStyle = textColors.label;
   context.font = `${9 * scale}px system-ui, sans-serif`;
   context.fillText(formatLegendNumber(legend.minimum), gradientX, y + 64 * scale);
   context.textAlign = 'right';
@@ -669,7 +677,7 @@ function drawScalarLegend(context, legend, x, y, panelWidth, padding, scale) {
   context.textAlign = 'left';
 }
 
-function drawTypeLegend(context, legend, x, y, panelWidth, panelHeight, padding, scale) {
+function drawTypeLegend(context, legend, x, y, panelWidth, panelHeight, padding, scale, textColors) {
   const columns = legend.items.length > 6 ? 2 : 1;
   const rows = Math.ceil(legend.items.length / columns);
   const columnWidth = (panelWidth - padding * 2) / columns;
@@ -685,7 +693,7 @@ function drawTypeLegend(context, legend, x, y, panelWidth, panelHeight, padding,
     context.arc(itemX + 4 * scale, itemY - 3 * scale, 4 * scale, 0, Math.PI * 2);
     context.fillStyle = `rgb(${item.color.join(' ')})`;
     context.fill();
-    context.fillStyle = '#a4b7be';
+    context.fillStyle = textColors.label;
     context.fillText(item.label, itemX + 13 * scale, itemY, columnWidth - 16 * scale);
   }
 }

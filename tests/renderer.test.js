@@ -176,6 +176,36 @@ test('PNG atom-type legend overlay draws the current type swatches', () => {
   assert.equal(arcs.length, 2);
 });
 
+test('transparent PNG legends keep text and color keys without a panel background', () => {
+  for (const legend of [
+    { kind: 'types', title: 'Atom type', items: [{ label: 'Al', color: [201, 198, 181] }] },
+    { kind: 'scalar', title: 'coordination', minimum: 8, maximum: 12, colorStops: [[0, 0, 0, 0], [1, 255, 255, 255]] },
+  ]) {
+    const rectangles = [];
+    const texts = [];
+    let swatches = 0;
+    const context = {
+      save() {}, restore() {}, beginPath() {}, arc() {},
+      fill() { swatches += 1; },
+      fillRect(...args) { rectangles.push(args); },
+      strokeRect() {},
+      fillText(value) { texts.push(value); },
+      createLinearGradient() { return { addColorStop() {} }; },
+    };
+    drawLegendOverlay(context, legend, 640, 480, 1, { includeBackground: false });
+    assert.equal(texts[0], legend.title);
+    if (legend.kind === 'types') {
+      assert.equal(swatches, 1);
+      assert.deepEqual(texts, ['Atom type', 'Al']);
+      assert.deepEqual(rectangles, []);
+    } else {
+      assert.deepEqual(texts, ['coordination', '8', '12']);
+      assert.equal(rectangles.length, 1);
+      assert.equal(rectangles[0][3], 10); // Only the color bar is filled.
+    }
+  }
+});
+
 test('standard views set a constrained camera orientation and orthographic projection', () => {
   const renderer = Object.create(WebGLRenderer.prototype);
   renderer.pan = [2, 3, 4];

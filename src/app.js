@@ -19,9 +19,11 @@ import {
 import { normalizeRadiusPercent, radiiByType } from './render/atomic-radii.js';
 import { WebGLRenderer } from './render/webgl-renderer.js';
 import { StructureWorkerClient } from './worker-client.js';
+import { initializeTheme } from './theme.js';
+import { initializeSidebarResize } from './sidebar-resize.js';
 
 const elements = Object.fromEntries([
-  'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport',
+  'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport',
   'empty-state', 'file-name', 'file-meta', 'format-chip', 'atom-count', 'frame-count',
   'cell-kind', 'pbc-flags', 'trajectory-section', 'frame-slider', 'frame-label', 'timestep-label',
   'cache-label', 'frame-first', 'frame-previous', 'frame-play', 'frame-next', 'frame-last', 'frame-ticks',
@@ -74,7 +76,19 @@ let frameTimer = null;
 let playbackTimer = null;
 let interactionHintTimer = null;
 let interactionHintFadeTimer = null;
+let cutoffTimer = null;
+let coordinationQueue = Promise.resolve();
 let renderer;
+let backgroundCustomized = false;
+
+initializeSidebarResize();
+initializeTheme((theme) => {
+  if (!backgroundCustomized) {
+    const background = theme === 'light' ? '#ffffff' : '#000000';
+    if (renderer) setBackgroundColor(background, { automatic: true });
+    else elements.background.value = background;
+  }
+});
 
 try {
   renderer = new WebGLRenderer(elements.viewport, {
@@ -102,8 +116,16 @@ const worker = new StructureWorkerClient(({ loaded, total, stage }) => {
   }
 });
 
-elements['open-local'].addEventListener('click', openFolderPicker);
-elements['empty-open'].addEventListener('click', openFolderPicker);
+elements['open-local'].addEventListener('click', showLocalPicker);
+elements['empty-open'].addEventListener('click', showLocalPicker);
+elements['file-input'].addEventListener('change', () => {
+  const entries = fileEntries(elements['file-input'].files);
+  if (entries.length > 0) inspectLocalEntries(entries, {
+    allowManualCfgSequence: true,
+    originLabel: 'selected files',
+  });
+  elements['file-input'].value = '';
+});
 elements['folder-input'].addEventListener('change', () => {
   const entries = fileEntries(elements['folder-input'].files);
   if (entries.length > 0) inspectLocalEntries(entries, {
@@ -155,7 +177,12 @@ elements['show-axes'].addEventListener('change', syncAxisVisibility);
 elements['show-cell'].addEventListener('change', () => renderer.setCellVisible(elements['show-cell'].checked));
 elements['slice-axis'].addEventListener('change', updateSlice);
 elements['slice-position'].addEventListener('input', updateSlice);
-elements['run-analysis'].addEventListener('click', () => runCoordination({ automatic: false }));
+elements['run-analysis'].addEventListener('click', () => {
+  clearTimeout(cutoffTimer);
+  runCoordination({ automatic: false });
+});
+elements.cutoff.addEventListener('input', scheduleCutoffAnalysis);
+elements.cutoff.addEventListener('change', () => scheduleCutoffAnalysis({ immediate: true }));
 elements['clear-selection'].addEventListener('click', () => selectAtom(-1));
 elements['reset-camera'].addEventListener('click', () => renderer.resetCamera());
 for (const eventName of ['pointerdown', 'wheel', 'touchstart']) {
@@ -181,7 +208,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 syncProjectionControls('perspective');
-syncBackgroundControl(elements.background.value);
+setBackgroundColor(elements.background.value, { automatic: true });
 
 for (const eventName of ['dragenter', 'dragover']) {
   elements.viewport.addEventListener(eventName, (event) => {
@@ -200,15 +227,20 @@ elements.viewport.addEventListener('drop', (event) => {
 
 for (const range of document.querySelectorAll('.range')) setRangeProgress(range);
 window.addEventListener('beforeunload', () => {
+  clearTimeout(cutoffTimer);
   worker.close();
   coordinationPool.close();
 });
 
-function openFolderPicker() {
-  // A directory FileList is more transparent on desktop browsers than
-  // showDirectoryPicker(): the native dialog can display the directory's files
-  // and the resulting list includes every selected descendant up front.
-  elements['folder-input'].click();
+function showLocalPicker() {
+  elements['source-dialog-kicker'].textContent = 'LOCAL SOURCES';
+  elements['source-dialog-title'].textContent = 'Open local structures';
+  elements['source-dialog-summary'].textContent = 'Choose individual files or a folder. All structure data is processed on this device.';
+  elements['source-options'].replaceChildren(
+    exampleOption('Choose files…', 'Files', 'Open CFG or LAMMPS files, or select multiple trajectory frames.', () => elements['file-input'].click()),
+    exampleOption('Choose folder…', 'Folder', 'Browse all files and automatically detect numbered sequences.', () => elements['folder-input'].click()),
+  );
+  elements['source-dialog'].showModal();
 }
 
 async function inspectLocalEntries(entries, {
@@ -404,7 +436,7 @@ function fileEntries(files) {
 async function loadExample(url, name) {
   try {
     setLoading(true, 'Loading example…');
-    const response = await fetch(url);
+    const response = await fetch(new URL(`../${url}`, import.meta.url));
     if (!response.ok) throw new Error(`Example request failed: HTTP ${response.status}`);
     const blob = await response.blob();
     await loadFiles([new File([blob], name, { type: 'text/plain' })]);
@@ -419,7 +451,7 @@ async function loadNebExample() {
     setLoading(true, 'Loading NEB example images…');
     const files = await Promise.all(Array.from({ length: 40 }, async (_, index) => {
       const name = `replica.${index}.cfg`;
-      const response = await fetch(`./examples/fixed_end_climb/${name}`);
+      const response = await fetch(new URL(`../examples/fixed_end_climb/${name}`, import.meta.url));
       if (!response.ok) throw new Error(`NEB example request failed for ${name}: HTTP ${response.status}`);
       return new File([await response.blob()], name, { type: 'text/plain' });
     }));
@@ -436,6 +468,7 @@ async function loadNebExample() {
 }
 
 async function loadFiles(inputFiles, sourceDescriptor = null) {
+  clearTimeout(cutoffTimer);
   stopFramePlayback();
   const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
   const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
@@ -860,6 +893,15 @@ function paletteForCurrentMode() {
   );
 }
 
+function scheduleCutoffAnalysis({ immediate = false } = {}) {
+  clearTimeout(cutoffTimer);
+  const cutoff = elements.cutoff.valueAsNumber;
+  if (!state.frame || elements.cutoff.disabled || !Number.isFinite(cutoff) || cutoff <= 0) return;
+  // Let a multi-digit edit settle before starting a potentially large analysis.
+  // Empty or incomplete number input keeps the last valid result on screen.
+  cutoffTimer = setTimeout(() => runCoordination({ automatic: false }), immediate ? 0 : 300);
+}
+
 async function runCoordination({ automatic = false, frame = state.frame, frameIndex = state.frameIndex } = {}) {
   if (!frame) return;
   const cutoff = automatic ? state.analysis.coordination.cutoff : Number(elements.cutoff.value);
@@ -873,6 +915,12 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     state.colorMode = 'property:coordination';
     refreshColorOptions();
   }
+  const request = state.analysis.coordination.request + 1;
+  state.analysis.coordination.request = request;
+  const sourceVersion = state.sourceVersion;
+  const isCurrent = () => sourceVersion === state.sourceVersion
+    && request === state.analysis.coordination.request
+    && state.analysis.coordination.enabled && state.analysis.coordination.cutoff === cutoff;
   const existing = frame.properties.find((property) => property.name === 'coordination');
   if (existing?.analysisCutoff === cutoff) {
     if (frame === state.frame) {
@@ -880,24 +928,34 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
       applyColors();
       elements['analysis-state'].textContent = 'Calculated';
       elements['analysis-state'].classList.add('ready');
+      elements['run-analysis'].disabled = false;
+      setLoading(false);
     }
     return;
   }
-  const request = state.analysis.coordination.request + 1;
-  state.analysis.coordination.request = request;
   elements['run-analysis'].disabled = true;
   elements['analysis-state'].textContent = 'Calculating…';
   elements['analysis-state'].classList.remove('ready');
   setLoading(true, `Calculating coordination for frame ${frameIndex + 1}…`);
   try {
-    const result = await coordinationPool.analyze(frame, cutoff, {
-      onProgress: ({ completed, total, workerCount }) => {
-        if (frame !== state.frame) return;
-        elements['loading-text'].textContent = workerCount > 1
-          ? `Calculating coordination with ${workerCount} Workers… ${completed} / ${total}`
-          : 'Calculating coordination in a Worker…';
-      },
+    // Keep one analysis active. Rapid edits replace queued requests with the
+    // latest cutoff rather than launching overlapping Worker pools.
+    const task = coordinationQueue.then(() => {
+      if (!isCurrent()) return null;
+      return coordinationPool.analyze(frame, cutoff, {
+        onProgress: ({ completed, total, workerCount }) => {
+          if (frame !== state.frame || !isCurrent()) return;
+          elements['loading-text'].textContent = workerCount > 1
+            ? `Calculating coordination with ${workerCount} Workers… ${completed} / ${total}`
+            : 'Calculating coordination in a Worker…';
+        },
+      });
     });
+    coordinationQueue = task.catch(() => {});
+    const result = await task;
+    // An edit or source change can supersede an active request. Keep its older
+    // result out of the property cache and UI, including after a cache hit.
+    if (!result || !isCurrent()) return;
     const existingIndex = frame.properties.findIndex((property) => property.name === 'coordination');
     const property = { name: 'coordination', unit: '', data: result.coordination, analysisCutoff: cutoff };
     if (existingIndex >= 0) frame.properties[existingIndex] = property;
@@ -915,12 +973,14 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     updateMemoryMetric();
     if (result.warning) showToast(result.warning);
   } catch (error) {
-    if (frame === state.frame) {
+    if (frame === state.frame && sourceVersion === state.sourceVersion
+        && request === state.analysis.coordination.request) {
       elements['analysis-state'].textContent = 'Failed';
       showToast(error.message);
     }
   } finally {
-    if (frame === state.frame && request === state.analysis.coordination.request) {
+    if (frame === state.frame && sourceVersion === state.sourceVersion
+        && request === state.analysis.coordination.request) {
       elements['run-analysis'].disabled = false;
       setLoading(false);
     }
@@ -1087,15 +1147,17 @@ function renderLegend(legend) {
     controls.append(schemeControl, minimumControl.label, maximumControl.label, visibility, actions);
     const applyLiveRange = (changed) => {
       const coupled = coupleScalarRange(
-        Number(minimumControl.input.value),
-        Number(maximumControl.input.value),
+        minimumControl.input.valueAsNumber,
+        maximumControl.input.valueAsNumber,
         changed,
         step,
       );
       if (!coupled) return;
       const { minimum: requestedMinimum, maximum: requestedMaximum } = coupled;
-      minimumControl.input.value = formatEditableNumber(requestedMinimum);
-      maximumControl.input.value = formatEditableNumber(requestedMaximum);
+      // Preserve the active field's editing state (e.g. typing a decimal).
+      // Only adjust its opposite bound when enforcing the ordered range.
+      if (changed !== 'minimum') minimumControl.input.value = formatEditableNumber(requestedMinimum);
+      if (changed !== 'maximum') maximumControl.input.value = formatEditableNumber(requestedMaximum);
       const limits = { minimum: requestedMinimum, maximum: requestedMaximum };
       scalarColorRanges.set(legend.property.name, limits);
       scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
@@ -1108,6 +1170,8 @@ function renderLegend(legend) {
     };
     minimumControl.input.addEventListener('input', () => applyLiveRange('minimum'));
     maximumControl.input.addEventListener('input', () => applyLiveRange('maximum'));
+    minimumControl.input.addEventListener('change', () => applyLiveRange('minimum'));
+    maximumControl.input.addEventListener('change', () => applyLiveRange('maximum'));
     schemeSelect.addEventListener('change', () => {
       scalarColorSchemes.set(legend.property.name, schemeSelect.value);
       applyColors();
@@ -1242,8 +1306,9 @@ function syncProjectionControls(mode) {
   }
 }
 
-function setBackgroundColor(value, { close = false } = {}) {
+function setBackgroundColor(value, { close = false, automatic = false } = {}) {
   if (!/^#[0-9a-f]{6}$/i.test(value)) return;
+  if (!automatic) backgroundCustomized = true;
   elements.background.value = value;
   renderer.setBackground(value);
   syncBackgroundControl(value);
