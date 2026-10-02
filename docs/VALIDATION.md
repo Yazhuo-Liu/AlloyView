@@ -2,6 +2,31 @@
 
 Validation date: 2026-10-02 (UTC)
 
+## Display replication and responsive tools
+
+Validated with Node.js v24.19.0 and Chromium 151.0.7922.173:
+
+- `npm test`: 122 tests passed, none failed/skipped. Replication follows skew
+  and rotated cell vectors, handles negative vector components and unwrapped
+  coordinate bounds, disables non-periodic directions, validates counts and
+  retains the source cell, atom buffers and property arrays. The expanded slice
+  is shared by picking and selection restoration.
+- `npm run build` and `npm run test:browser`: passed. A triclinic 16-atom source
+  replicated `2 × 3 × 2` draws 192 atom instances while preserving the source
+  coordinates and analysis arrays and scheduling zero additional analysis jobs.
+  Copied atoms resolve to original IDs; category masks and PNG export include
+  the copies. Reset and non-periodic controls are checked in the browser.
+- Tool buttons show one configuration panel at a time. Switching panels retains
+  concurrent analyses; closing an enabled analysis cancels it and clears results.
+- Chromium phone emulation at 390 × 844 checks default collapsed View and
+  Legend / atoms controls, expansion, crystal checkboxes and real touch scrolling
+  in the lower sidebar. Canvas bounds stay fixed, page scroll remains zero and
+  the document fits within the screen. A separate 844 × 390 check verifies the
+  compact landscape header and independently scrolling tools. Desktop sidebar
+  resizing and persistence continue to pass.
+- Rendering and picking grow with displayed copies. These checks establish
+  analysis isolation and behavior, not performance on a target phone GPU.
+
 ## Silent strain NaNs and analysis cancellation
 
 Validated with Node.js v24.19.0 and Chromium 151.0.7922.173:

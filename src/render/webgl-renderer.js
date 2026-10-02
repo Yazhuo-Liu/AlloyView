@@ -1,4 +1,5 @@
 import { cellVertices } from '../data/model.js';
+import { createReplication } from './replication.js';
 import {
   add,
   cross,
@@ -25,6 +26,9 @@ uniform float uRadiusScale;
 uniform int uSliceAxis;
 uniform float uSliceMaximum;
 uniform int uSelected;
+uniform vec3 uReplicaOffset;
+uniform vec3 uReplicaIndex;
+uniform vec3 uRepetitions;
 out vec2 vCorner;
 out vec3 vColor;
 out vec3 vCenterView;
@@ -32,14 +36,15 @@ flat out int vVisible;
 flat out int vSelected;
 flat out float vRadius;
 void main() {
-  vec4 centerView = uView * vec4(aCenter, 1.0);
+  vec4 centerView = uView * vec4(aCenter + uReplicaOffset, 1.0);
   float radius = aRadius * uRadiusScale;
   vec4 cornerView = centerView + vec4(aCorner * radius, 0.0, 0.0);
   gl_Position = uProjection * cornerView;
   vCorner = aCorner;
   vColor = aColor;
   vCenterView = centerView.xyz;
-  vVisible = aVisible > 0.5 && aFractional[uSliceAxis] <= uSliceMaximum ? 1 : 0;
+  float sliceCoordinate = (aFractional[uSliceAxis] + uReplicaIndex[uSliceAxis]) / uRepetitions[uSliceAxis];
+  vVisible = aVisible > 0.5 && sliceCoordinate <= uSliceMaximum ? 1 : 0;
   vSelected = gl_InstanceID == uSelected ? 1 : 0;
   vRadius = radius;
 }`;
@@ -114,6 +119,7 @@ const CELL_EDGES = [
 ];
 
 const MAX_ORBIT_PITCH = Math.PI / 2 - 0.008;
+const SOURCE_REPLICA = [0, 0, 0];
 const VIEW_PRESETS = Object.freeze({
   front: { yaw: 0, pitch: 0 },
   back: { yaw: Math.PI, pitch: 0 },
@@ -147,6 +153,9 @@ export class WebGLRenderer {
     this.displayPositions = null;
     this.visibility = null;
     this.atomCount = 0;
+    this.repetitions = [1, 1, 1];
+    this.replicas = [{ indices: [0, 0, 0], offset: [0, 0, 0] }];
+    this.displayAtomCount = 0;
     this.radiusScale = 1;
     this.atomRadii = null;
     this.background = [0, 0, 0];
@@ -231,6 +240,7 @@ export class WebGLRenderer {
 
     this.sphereUniforms = uniforms(gl, this.sphereProgram, [
       'uView', 'uProjection', 'uRadiusScale', 'uSliceAxis', 'uSliceMaximum', 'uSelected',
+      'uReplicaOffset', 'uReplicaIndex', 'uRepetitions',
     ]);
     this.lineUniforms = uniforms(gl, this.lineProgram, ['uViewProjection', 'uColor']);
     gl.enable(gl.DEPTH_TEST);
@@ -240,12 +250,14 @@ export class WebGLRenderer {
     gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
   }
 
-  setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null) {
+  setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions) {
     const startedAt = performance.now();
     const gl = this.gl;
     this.frame = frame;
     this.displayPositions = displayPositions;
     this.atomCount = frame.ids.length;
+    Object.assign(this, createReplication(frame.cell, repetitions));
+    this.displayAtomCount = this.atomCount * this.replicas.length;
     this.atomRadii = atomRadii ?? new Float32Array(this.atomCount).fill(0.7);
     if (this.atomRadii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
     this.visibility = new Uint8Array(this.atomCount).fill(255);
@@ -260,7 +272,7 @@ export class WebGLRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.radiusBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, this.atomRadii, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.cellBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, buildCellLines(frame.cell), gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, buildCellLines(this.displayCell), gl.STATIC_DRAW);
     gl.finish();
     this.requestRender();
     return performance.now() - startedAt;
@@ -299,6 +311,16 @@ export class WebGLRenderer {
     return performance.now() - startedAt;
   }
 
+  setReplications(counts) {
+    if (!this.frame) return;
+    const replication = createReplication(this.frame.cell, counts);
+    Object.assign(this, replication);
+    this.displayAtomCount = this.atomCount * this.replicas.length;
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.cellBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, buildCellLines(this.displayCell), this.gl.STATIC_DRAW);
+    this.requestRender();
+  }
+
   setRadiusScale(scaleFactor) {
     if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) throw new Error('The atom radius scale must be greater than zero.');
     this.radiusScale = scaleFactor;
@@ -325,14 +347,17 @@ export class WebGLRenderer {
 
   resetCamera() {
     if (!this.frame) return;
-    const vertices = cellVertices(this.frame.cell);
+    const vertices = cellVertices(this.displayCell ?? this.frame.cell);
     const minimum = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
     const maximum = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
     for (const array of [vertices, this.displayPositions]) {
       for (let index = 0; index < array.length; index += 3) {
         for (let component = 0; component < 3; component += 1) {
-          minimum[component] = Math.min(minimum[component], array[index + component]);
-          maximum[component] = Math.max(maximum[component], array[index + component]);
+          const isAtoms = array === this.displayPositions;
+          minimum[component] = Math.min(minimum[component], array[index + component]
+            + (isAtoms ? this.minimumOffset?.[component] ?? 0 : 0));
+          maximum[component] = Math.max(maximum[component], array[index + component]
+            + (isAtoms ? this.maximumOffset?.[component] ?? 0 : 0));
         }
       }
     }
@@ -390,7 +415,14 @@ export class WebGLRenderer {
     gl.uniform1i(this.sphereUniforms.uSliceAxis, this.sliceAxis);
     gl.uniform1f(this.sphereUniforms.uSliceMaximum, this.sliceMaximum);
     gl.uniform1i(this.sphereUniforms.uSelected, this.selected);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.atomCount);
+    gl.uniform3f(this.sphereUniforms.uRepetitions, ...this.repetitions);
+    // Reuse the same atom buffers for every image. Analysis, color updates and
+    // visibility masks still have exactly one entry per original atom.
+    for (const replica of this.replicas) {
+      gl.uniform3f(this.sphereUniforms.uReplicaOffset, ...replica.offset);
+      gl.uniform3f(this.sphereUniforms.uReplicaIndex, ...replica.indices);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.atomCount);
+    }
 
     if (this.cellVisible) {
       gl.enable(gl.BLEND);
@@ -513,6 +545,12 @@ export class WebGLRenderer {
     return { offsetDirection, upHint };
   }
 
+  isAtomVisible(atom, replicaIndices = SOURCE_REPLICA) {
+    return this.visibility?.[atom] !== 0
+      && (this.frame.fractional[atom * 3 + this.sliceAxis] + replicaIndices[this.sliceAxis])
+        / (this.repetitions?.[this.sliceAxis] ?? 1) <= this.sliceMaximum;
+  }
+
   pick(clientX, clientY) {
     if (!this.frame) return -1;
     this.updateMatrices();
@@ -522,24 +560,25 @@ export class WebGLRenderer {
     let closest = -1;
     let closestDepth = Number.NEGATIVE_INFINITY;
     const positions = this.displayPositions;
-    const fractional = this.frame.fractional;
-    for (let atom = 0; atom < this.atomCount; atom += 1) {
-      if (this.visibility?.[atom] === 0) continue;
-      const index = atom * 3;
-      if (fractional[index + this.sliceAxis] > this.sliceMaximum) continue;
-      const view = transformPoint(this.viewMatrix, positions[index], positions[index + 1], positions[index + 2]);
-      if (view[2] >= 0) continue;
-      const clip = transformPoint(this.projectionMatrix, view[0], view[1], view[2]);
-      if (clip[3] <= 0) continue;
-      const screenX = (clip[0] / clip[3] * 0.5 + 0.5) * rectangle.width;
-      const screenY = (0.5 - clip[1] / clip[3] * 0.5) * rectangle.height;
-      const radius = (this.atomRadii?.[atom] ?? 0.7) * this.radiusScale;
-      const edgeClip = transformPoint(this.projectionMatrix, view[0] + radius, view[1], view[2]);
-      const radiusPixels = Math.max(3, Math.abs(edgeClip[0] / edgeClip[3] - clip[0] / clip[3]) * rectangle.width * 0.5);
-      const distanceSquared = (x - screenX) ** 2 + (y - screenY) ** 2;
-      if (distanceSquared <= radiusPixels ** 2 && view[2] > closestDepth) {
-        closest = atom;
-        closestDepth = view[2];
+    for (const replica of this.replicas ?? [{ indices: [0, 0, 0], offset: [0, 0, 0] }]) {
+      for (let atom = 0; atom < this.atomCount; atom += 1) {
+        if (!this.isAtomVisible(atom, replica.indices)) continue;
+        const index = atom * 3;
+        const view = transformPoint(this.viewMatrix, positions[index] + replica.offset[0],
+          positions[index + 1] + replica.offset[1], positions[index + 2] + replica.offset[2]);
+        if (view[2] >= 0) continue;
+        const clip = transformPoint(this.projectionMatrix, view[0], view[1], view[2]);
+        if (clip[3] <= 0) continue;
+        const screenX = (clip[0] / clip[3] * 0.5 + 0.5) * rectangle.width;
+        const screenY = (0.5 - clip[1] / clip[3] * 0.5) * rectangle.height;
+        const radius = (this.atomRadii?.[atom] ?? 0.7) * this.radiusScale;
+        const edgeClip = transformPoint(this.projectionMatrix, view[0] + radius, view[1], view[2]);
+        const radiusPixels = Math.max(3, Math.abs(edgeClip[0] / edgeClip[3] - clip[0] / clip[3]) * rectangle.width * 0.5);
+        const distanceSquared = (x - screenX) ** 2 + (y - screenY) ** 2;
+        if (distanceSquared <= radiusPixels ** 2 && view[2] > closestDepth) {
+          closest = atom;
+          closestDepth = view[2];
+        }
       }
     }
     return closest;

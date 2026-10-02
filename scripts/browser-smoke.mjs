@@ -91,6 +91,12 @@ try {
     }
     throw new Error(`Timed out waiting for ${label}: ${await evaluate('document.getElementById("toast")?.textContent')} ${JSON.stringify(pageErrors)}`);
   }
+  async function showTool(name) {
+    await evaluate(`(() => {
+      const panel = document.querySelector('[data-tool-panel="${name}"]');
+      if (panel.hidden) document.querySelector('[data-tool-button="${name}"]').click();
+    })()`);
+  }
   async function reloadPage() {
     let cleanup;
     const loaded = new Promise((done, reject) => {
@@ -146,6 +152,8 @@ try {
   await waitFor('document.readyState === "complete" && location.pathname === "/AlloyView/"', 'page load');
   await waitFor('document.getElementById("brand-logo").src.endsWith("AlloyView_logo_dark.svg")', 'app initialization');
   assert.equal(await evaluate('crossOriginIsolated'), false);
+  assert.equal(await evaluate('document.querySelector("[data-tool-panel=display]").hidden'), false);
+  assert.equal(await evaluate('[...document.querySelectorAll("[data-tool-panel]")].filter(panel => !panel.hidden).length'), 1);
 
   // Check the initial page as well as the loaded viewer: disabled controls must
   // remain readable, and the central mark must be the supplied project logo.
@@ -186,6 +194,7 @@ try {
   }
 
   // A cutoff edit starts analysis without a separate Apply/Calculate click.
+  await showTool('coordination');
   await evaluate(`(() => { const cutoff = document.getElementById('cutoff'); cutoff.value = '2'; cutoff.dispatchEvent(new Event('input')); })()`);
   await waitFor('document.getElementById("analysis-state").classList.contains("ready")', 'coordination analysis');
   assert.deepEqual(await evaluate('[...document.querySelectorAll(".legend-range span")].map(span => Number(span.textContent))'), [0, 0]);
@@ -378,6 +387,7 @@ try {
   const colors = await evaluate('[...document.querySelectorAll("[data-background]")].map(button => button.dataset.background)');
   assert.deepEqual(colors, ['#000000', '#ffffff', '#fff8e7', '#fff4c2']);
   // Observe the actual renderer buffers while exercising the structure UI.
+  await showTool('cna');
   await evaluate(`(async () => {
     const appUrl = document.querySelector('script[type="module"]').src;
     const { WebGLRenderer } = await import(new URL('./render/webgl-renderer.js', appUrl));
@@ -423,6 +433,7 @@ try {
   await evaluate(`(() => { const select = document.getElementById('color-mode'); select.value = 'property:structureType'; select.dispatchEvent(new Event('change')); })()`);
   assert.equal(await evaluate(`document.querySelector('[data-structure-type="0"]').checked`), false);
   // Changing the method replaces the result and invalidates only its own cache.
+  await showTool('cna');
   await evaluate(`(() => { document.getElementById('cna-cutoff').value = '0.1'; const mode = document.getElementById('cna-mode'); mode.value = 'fixed'; mode.dispatchEvent(new Event('change')); })()`);
   await waitFor('document.getElementById("cna-state").textContent === "Calculated"', 'fixed CNA');
   assert.equal(await evaluate('getComputedStyle(document.getElementById("cna-cutoff-field")).display !== "none"'), true);
@@ -458,6 +469,7 @@ try {
   assert.equal(await evaluate(`window.structureTestRenderer.frame.properties.find(p => p.name === 'atomicVolumeChange').data.filter(Number.isFinite).every(value => Math.abs(value - ((4.05 / 3.9) ** 3 - 1)) < 1e-5)`), true);
   assert.equal(await evaluate('window.analysisInputs.filter(input => input.kind === "ptm").length'), 1);
   if (process.argv.includes('--structure-screenshot')) {
+    await showTool('strain');
     await evaluate(`document.getElementById('strain-state').closest('section').scrollIntoView({ block: 'center' })`);
     const capture = await call('Page.captureScreenshot', { format: 'png' });
     await writeFile('/tmp/alloyview-strain.png', Buffer.from(capture.data, 'base64'));
@@ -465,6 +477,7 @@ try {
   await evaluate(`(() => { const mode = document.getElementById('color-mode'); mode.value = 'property:ptmStructureType'; mode.dispatchEvent(new Event('change')); })()`);
   assert.equal(await evaluate('document.querySelectorAll(".crystal-items input[type=checkbox]").length'), 9);
   if (process.argv.includes('--structure-screenshot')) {
+    await showTool('ptm');
     await evaluate(`document.getElementById('ptm-state').closest('section').scrollIntoView({ block: 'center' })`);
     const capture = await call('Page.captureScreenshot', { format: 'png' });
     await writeFile('/tmp/alloyview-ptm.png', Buffer.from(capture.data, 'base64'));
@@ -553,6 +566,26 @@ try {
   await evaluate(`document.querySelector('[data-ptm-template="4"]').click()`);
   await waitFor('document.getElementById("ptm-state").textContent === "Calculated"', 'PTM template recovery');
   assert.equal(await evaluate('window.structureTestRenderer.frame.properties.find(p => p.name === "ptmStructureType").data.every(type => type === 3)'), true);
+
+  // Tool buttons expose one configuration at a time. Opening settings does
+  // not calculate; switching panels preserves concurrent analysis, whereas
+  // explicitly closing an analysis returns it to the uncomputed state.
+  await showTool('cna');
+  assert.equal(await evaluate('document.getElementById("cna-state").textContent'), 'Not calculated');
+  assert.equal(await evaluate('document.querySelector("[data-tool-panel=cna]").hidden'), false);
+  assert.equal(await evaluate('[...document.querySelectorAll("[data-tool-panel]")].filter(panel => !panel.hidden).length'), 1);
+  await evaluate('document.getElementById("run-cna").click()');
+  await waitFor('document.getElementById("cna-state").textContent === "Calculated"', 'CNA tool calculation');
+  await showTool('display');
+  assert.equal(await evaluate('document.querySelector("[data-tool-panel=cna]").hidden'), true);
+  assert.equal(await evaluate('document.getElementById("cna-state").textContent'), 'Calculated');
+  assert.equal(await evaluate('document.getElementById("ptm-state").textContent'), 'Calculated');
+  await showTool('cna');
+  await evaluate('document.querySelector("[data-tool-button=cna]").click()');
+  assert.equal(await evaluate('document.querySelector("[data-tool-panel=cna]").hidden'), true);
+  assert.equal(await evaluate('document.getElementById("cna-state").textContent'), 'Not calculated');
+  assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(p => p.analysisKind === "cna")'), false);
+  assert.equal(await evaluate('document.getElementById("ptm-state").textContent'), 'Calculated');
 
   // User cancellation stops real Workers, restores the uncomputed state and
   // removes results from cached frames without stopping independent analyses.
@@ -674,6 +707,140 @@ try {
   assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(property => property.analysisKind === "strain")'), false);
   assert.equal(await evaluate('window.cancelTestCalls.filter(kind => kind === "strain").length'), strainCalls);
   await evaluate('window.restoreCancelTesting()');
+
+  // Replication changes only rendering. This source has all three triclinic
+  // tilts, so copies must follow its basis vectors rather than Cartesian axes.
+  await showTool('replicate');
+  const replication = await evaluate(`(async () => {
+    const appUrl = document.querySelector('script[type="module"]').src;
+    const { AnalysisPool } = await import(new URL('./analysis/analysis-pool.js', appUrl));
+    const { CoordinationPool } = await import(new URL('./analysis/coordination-pool.js', appUrl));
+    const { transformPoint } = await import(new URL('./render/math.js', appUrl));
+    const renderer = window.structureTestRenderer, frame = renderer.frame;
+    const propertyData = frame.properties.map(property => property.data);
+    const originalPositions = frame.positions, originalFractional = frame.fractional;
+    const originalCell = Array.from(frame.cell.vectors), originalColors = Array.from(window.structureTestColors);
+    const originalAnalysis = AnalysisPool.prototype.analyze, originalCoordination = CoordinationPool.prototype.analyze;
+    let analyses = 0;
+    AnalysisPool.prototype.analyze = function(...args) { analyses++; return originalAnalysis.apply(this, args); };
+    CoordinationPool.prototype.analyze = function(...args) { analyses++; return originalCoordination.apply(this, args); };
+    const originalDraw = renderer.gl.drawArraysInstanced;
+    const draws = [];
+    renderer.gl.drawArraysInstanced = function(...args) { draws.push(args[3]); return originalDraw.apply(this, args); };
+    try {
+      for (const [axis, count] of [['a', 2], ['b', 3], ['c', 2]]) document.getElementById('replicate-' + axis).value = count;
+      document.getElementById('apply-replicate').click();
+      renderer.render(performance.now(), { trackStats: false });
+      const drawInstances = draws.reduce((total, count) => total + count, 0);
+      const last = renderer.replicas.at(-1);
+      const counts = Array.from(renderer.repetitions), displayCell = Array.from(renderer.displayCell.vectors);
+      const cellCopies = renderer.replicas.map(replica => ({ offset: Array.from(replica.offset), indices: Array.from(replica.indices) }));
+      const colorsStable = originalColors.every((value, i) => value === window.structureTestColors[i]);
+      const sourceStable = frame === renderer.frame && frame.positions === originalPositions && frame.fractional === originalFractional
+        && frame.properties.every((property, i) => property.data === propertyData[i])
+        && originalCell.every((value, i) => value === frame.cell.vectors[i]);
+      // Pick a copied image while retaining a single base atom in the mask.
+      const previousVisibility = renderer.visibility, previousAxis = renderer.sliceAxis, previousMaximum = renderer.sliceMaximum;
+      const visibility = new Uint8Array(renderer.atomCount); visibility[7] = 255;
+      renderer.setVisibility(visibility); renderer.setSlice(2, 1); renderer.setView('front'); renderer.updateMatrices();
+      const position = renderer.displayPositions.subarray(21, 24);
+      const clip = transformPoint(renderer.viewProjectionMatrix, position[0] + last.offset[0], position[1] + last.offset[1], position[2] + last.offset[2]);
+      const rect = renderer.canvas.getBoundingClientRect();
+      const point = { x: rect.left + (clip[0] / clip[3] * .5 + .5) * rect.width, y: rect.top + (.5 - clip[1] / clip[3] * .5) * rect.height };
+      const picked = renderer.pick(point.x, point.y);
+      renderer.setVisibility(new Uint8Array(renderer.atomCount));
+      const hiddenPick = renderer.pick(point.x, point.y);
+      renderer.setVisibility(previousVisibility); renderer.setSlice(previousAxis, previousMaximum);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return { counts, displayCell, originalCell, cellCopies, atomCount: renderer.atomCount, displayAtomCount: renderer.displayAtomCount,
+        drawInstances, sourceStable, colorsStable, analyses, picked, hiddenPick, glError: renderer.gl.getError() };
+    } finally {
+      AnalysisPool.prototype.analyze = originalAnalysis; CoordinationPool.prototype.analyze = originalCoordination;
+      renderer.gl.drawArraysInstanced = originalDraw;
+    }
+  })()`);
+  assert.deepEqual(replication.counts, [2, 3, 2]);
+  assert.equal(replication.atomCount, 16);
+  assert.equal(replication.displayAtomCount, 192);
+  assert.equal(replication.drawInstances, 192, 'WebGL must draw all twelve copies');
+  assert.equal(replication.sourceStable, true, 'replication must retain the original analysis arrays');
+  assert.equal(replication.colorsStable, true);
+  assert.equal(replication.analyses, 0, 'changing repetitions must not schedule any analysis');
+  assert.equal(replication.picked, 7, 'a repeated image resolves to its original atom');
+  assert.equal(replication.hiddenPick, -1, 'the shared visibility mask also hides copied images');
+  assert.equal(replication.glError, 0);
+  for (let i = 0; i < 9; i++) assert.ok(Math.abs(replication.displayCell[i] - replication.originalCell[i] * replication.counts[Math.floor(i / 3)]) < 1e-5);
+  assert.equal(replication.cellCopies.length, 12);
+  for (const { offset, indices } of replication.cellCopies) for (let component = 0; component < 3; component++) {
+    const expected = indices.reduce((sum, index, axis) => sum + index * replication.originalCell[axis * 3 + component], 0);
+    assert.ok(Math.abs(offset[component] - expected) < 1e-5, 'copy offsets must include triclinic tilt');
+  }
+  // Selection uses the same expanded fractional range as rendering/picking.
+  // An atom beyond halfway in its source cell remains inside the first half
+  // of a doubled cell, then becomes hidden when repetition is reset to one.
+  const repeatedSelection = await evaluate(`(() => {
+    const renderer = window.structureTestRenderer;
+    const atom = renderer.frame.fractional.findIndex((value, component) => component % 3 === 0 && value > .5) / 3;
+    if (atom < 0) throw new Error('Expected an atom beyond half of the source a vector');
+    renderer.onPick(atom);
+    const axis = document.getElementById('slice-axis'), position = document.getElementById('slice-position');
+    axis.value = '0'; axis.dispatchEvent(new Event('change'));
+    position.value = '50'; position.dispatchEvent(new Event('input'));
+    const color = document.getElementById('color-mode'); color.value = 'type'; color.dispatchEvent(new Event('change'));
+    const copied = { selected: renderer.selected, detailsHidden: document.getElementById('selection-data').hidden };
+    document.getElementById('reset-replicate').click();
+    const source = { selected: renderer.selected, detailsHidden: document.getElementById('selection-data').hidden };
+    position.value = '100'; position.dispatchEvent(new Event('input'));
+    document.getElementById('clear-selection').click();
+    for (const [direction, count] of [['a', 2], ['b', 3], ['c', 2]]) document.getElementById('replicate-' + direction).value = count;
+    document.getElementById('apply-replicate').click();
+    return { atom, copied, source, restoredSlice: renderer.sliceMaximum };
+  })()`);
+  assert.equal(repeatedSelection.copied.selected, repeatedSelection.atom, 'expanded slicing must retain a visible selected atom');
+  assert.equal(repeatedSelection.copied.detailsHidden, false);
+  assert.equal(repeatedSelection.source.selected, -1, 'resetting replication hides an atom outside the source-cell slice');
+  assert.equal(repeatedSelection.source.detailsHidden, true);
+  assert.equal(repeatedSelection.restoredSlice, 1);
+  assert.equal(await evaluate('Number(document.getElementById("atom-count").textContent)'), 16, 'structure summary retains the source atom count');
+  await evaluate(`(() => { const mode = document.getElementById('color-mode'); mode.value = 'property:ptmStructureType'; mode.dispatchEvent(new Event('change')); document.querySelector('[data-structure-type="3"]').click(); })()`);
+  assert.equal(await evaluate('window.structureTestRenderer.visibility.every(value => value === 0)'), true);
+  await evaluate(`document.querySelector('[data-structure-type="3"]').click()`);
+  const replicatedPng = await evaluate(`(async () => {
+    const originalToBlob = HTMLCanvasElement.prototype.toBlob, originalClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = () => {};
+    document.getElementById('png-background').checked = false; document.getElementById('png-legend').checked = false;
+    try {
+      return await new Promise((resolve, reject) => {
+        HTMLCanvasElement.prototype.toBlob = function(callback, type) {
+          originalToBlob.call(this, async blob => {
+            try {
+              const bitmap = await createImageBitmap(blob), canvas = document.createElement('canvas');
+              canvas.width = bitmap.width; canvas.height = bitmap.height;
+              const context = canvas.getContext('2d'); context.drawImage(bitmap, 0, 0);
+              const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+              let content = 0; for (let i = 3; i < pixels.length; i += 4) if (pixels[i]) content++;
+              callback(blob); resolve({ corner: pixels[3], content, atomCount: window.structureTestRenderer.displayAtomCount });
+            } catch (error) { reject(error); }
+          }, type);
+        };
+        document.getElementById('export-png').click();
+      });
+    } finally { HTMLCanvasElement.prototype.toBlob = originalToBlob; HTMLAnchorElement.prototype.click = originalClick; }
+  })()`);
+  assert.equal(replicatedPng.atomCount, 192);
+  assert.equal(replicatedPng.corner, 0);
+  assert.ok(replicatedPng.content > 1000, 'PNG export must retain the replicated structure');
+  await evaluate('document.getElementById("reset-replicate").click()');
+  assert.deepEqual(await evaluate('Array.from(window.structureTestRenderer.repetitions)'), [1, 1, 1]);
+  assert.equal(await evaluate('window.structureTestRenderer.displayAtomCount'), 16);
+
+  const partialPbcPath = resolve(profile, 'partial-pbc.dump');
+  await writeFile(partialPbcPath, (await readFile(numericPath, 'utf8')).replaceAll('yz pp pp pp', 'yz pp ff pp'));
+  await call('DOM.setFileInputFiles', { nodeId, files: [partialPbcPath] });
+  await waitFor('document.getElementById("file-name").textContent === "partial-pbc.dump" && document.getElementById("loading").hidden', 'partially periodic source');
+  await showTool('replicate');
+  assert.deepEqual(await evaluate('["a", "b", "c"].map(axis => document.getElementById("replicate-" + axis).disabled)'), [false, true, false]);
+  assert.equal(await evaluate('document.getElementById("replicate-b").valueAsNumber'), 1);
   // Theme persists on reload. A manually selected viewport color stays intact.
   await evaluate(`document.querySelector('[data-background="#fff8e7"]').click(); document.getElementById('theme-light').click();`);
   assert.equal(await evaluate('document.getElementById("background").value'), '#fff8e7');
@@ -688,10 +855,58 @@ try {
   await call('Emulation.setDeviceMetricsOverride', { width: 800, height: 1000, deviceScaleFactor: 1, mobile: false });
   await waitFor('getComputedStyle(document.getElementById("sidebar-resizer")).display === "none"', 'narrow layout');
   assert.ok(await evaluate('document.getElementById("sidebar").getBoundingClientRect().top >= document.getElementById("viewport").getBoundingClientRect().bottom'));
+
+  // A phone keeps the viewer on screen while its lower tool area scrolls.
+  // Compact overlay buttons start closed and expose the full controls on tap.
+  await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  await waitFor('document.getElementById("toggle-view-controls").getAttribute("aria-expanded") === "false"', 'collapsed phone view controls');
+  assert.equal(await evaluate('getComputedStyle(document.getElementById("view-controls")).display'), 'none');
+  await evaluate('document.getElementById("toggle-view-controls").click()');
+  assert.equal(await evaluate('document.getElementById("toggle-view-controls").getAttribute("aria-expanded")'), 'true');
+  assert.notEqual(await evaluate('getComputedStyle(document.getElementById("view-controls")).display'), 'none');
+  await evaluate('document.getElementById("toggle-view-controls").click()');
+  await evaluate(`document.getElementById('open-examples').click(); [...document.querySelectorAll('.source-option')].find(button => button.textContent.includes('fcc-vacancy.cfg')).click();`);
+  await waitFor('document.getElementById("file-name").textContent.includes("fcc-vacancy.cfg") && document.getElementById("loading").hidden', 'phone structure');
+  await showTool('cna');
+  await evaluate('document.getElementById("run-cna").click()');
+  await waitFor('document.getElementById("cna-state").textContent === "Calculated"', 'phone CNA legend');
+  assert.equal(await evaluate('document.getElementById("toggle-legend").getAttribute("aria-expanded")'), 'false');
+  assert.equal(await evaluate('getComputedStyle(document.getElementById("legend")).display'), 'none');
+  await evaluate('document.getElementById("toggle-legend").click()');
+  assert.equal(await evaluate('document.getElementById("toggle-legend").getAttribute("aria-expanded")'), 'true');
+  assert.notEqual(await evaluate('getComputedStyle(document.getElementById("legend")).display'), 'none');
+  assert.equal(await evaluate('document.querySelectorAll(".crystal-items input[type=checkbox]").length'), 5);
+  await evaluate('document.getElementById("toggle-legend").click()');
+  await showTool('strain');
+  await evaluate('document.getElementById("sidebar").scrollTop = 0');
+  const phoneBefore = await evaluate(`(() => {
+    const rect = document.getElementById('viewport').getBoundingClientRect();
+    const sidebar = document.getElementById('sidebar').getBoundingClientRect();
+    return { canvas: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      touch: { x: sidebar.x + sidebar.width - 14, y: sidebar.top + sidebar.height - 24 },
+      sidebarTop: sidebar.top, canScroll: document.getElementById('sidebar').scrollHeight > document.getElementById('sidebar').clientHeight };
+  })()`);
+  assert.equal(phoneBefore.canScroll, true, 'phone settings must scroll independently');
+  await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [phoneBefore.touch] });
+  for (let step = 1; step <= 8; step++) {
+    await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: phoneBefore.touch.x, y: phoneBefore.touch.y - step * 22 }] });
+    await delay(20);
+  }
+  await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await waitFor('document.getElementById("sidebar").scrollTop > 0', 'phone touch scrolling');
+  const phoneAfter = await evaluate(`(() => {
+    const rect = document.getElementById('viewport').getBoundingClientRect();
+    return { canvas: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      pageScroll: window.scrollY, overflow: document.documentElement.scrollHeight > innerHeight + 1 };
+  })()`);
+  assert.deepEqual(phoneAfter.canvas, phoneBefore.canvas, 'scrolling tools must leave the viewport fixed');
+  assert.equal(phoneAfter.pageScroll, 0);
+  assert.equal(phoneAfter.overflow, false, 'phone layout must fit within the visible screen');
   assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors));
   assert.ok(requests.some(path => path.endsWith('ptm-kernel.wasm')), 'browser must load the real PTM kernel');
   assert.ok(requests.filter((path) => /\.(js|mjs|wasm)$/.test(path)).every((path) => /^\/AlloyView\/assets\/[a-f0-9]+\//.test(path)));
-  console.log('Browser smoke passed: Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent analyses; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; crystal filters; editable lattice references and PTM reuse; sidebar/layout/themes; transparent PNG and optional XYZ arrows.');
+  console.log('Browser smoke passed: Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent analyses; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; selectable tools; triclinic display replication, unchanged analysis inputs, repeated picking/filtering and PNG export; editable lattice references and PTM reuse; sidebar/themes; fixed phone viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
   console.log(JSON.stringify(exports));
 } finally {
   websocket?.close();

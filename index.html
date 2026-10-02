@@ -68,7 +68,9 @@
             <button id="export-png" type="button" title="Export PNG" aria-label="Export PNG">⇩</button>
           </div>
 
-          <div class="view-presets" aria-label="Standard camera views">
+          <div id="view-overlay" class="view-overlay">
+            <button id="toggle-view-controls" class="mobile-overlay-toggle" type="button" aria-controls="view-controls" aria-expanded="false">View</button>
+          <div id="view-controls" class="view-presets" aria-label="Standard camera views">
             <button type="button" data-view="top" disabled>Top</button>
             <button type="button" data-view="bottom" disabled>Bottom</button>
             <button type="button" data-view="front" disabled>Front</button>
@@ -94,6 +96,7 @@
             </details>
             <label class="viewport-toggle" title="Show Cartesian axes"><input id="show-axes" type="checkbox" checked disabled><span>Axes</span></label>
           </div>
+          </div>
 
           <svg id="axis-triad" class="axis-triad" viewBox="0 0 96 96" aria-label="Global Cartesian axes" hidden>
             <defs>
@@ -116,7 +119,10 @@
           </svg>
 
           <div id="interaction-hint" class="interaction-hint" hidden>Drag to rotate · Shift/right-drag to pan · Scroll to zoom · Click to select</div>
-          <div id="legend" class="legend" hidden></div>
+          <div id="legend-overlay" class="legend-overlay">
+            <button id="toggle-legend" class="mobile-overlay-toggle" type="button" aria-controls="legend" aria-expanded="false">Legend / atoms</button>
+            <div id="legend" class="legend" hidden></div>
+          </div>
           <div id="loading" class="loading" role="status" aria-live="polite" hidden>
             <span class="spinner"></span>
             <span id="loading-text">Reading…</span>
@@ -162,7 +168,27 @@
             </div>
           </section>
 
-          <section class="side-section">
+          <section class="side-section tool-section">
+            <div class="section-heading tool-selector-heading">
+              <div><p class="section-kicker">TOOLS</p><h3>Choose a tool</h3></div>
+              <button id="close-tool" class="text-button" type="button" hidden>Close</button>
+            </div>
+            <div class="tool-selector" role="group" aria-label="Choose a tool to configure">
+              <button type="button" data-tool-button="display" aria-controls="tool-display" aria-pressed="true" aria-expanded="true"><span class="tool-button-label">Display</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="replicate" aria-controls="tool-replicate" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Replicate</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="slice" aria-controls="tool-slice" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Slice</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="coordination" aria-controls="tool-coordination" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Coordination</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="cna" aria-controls="tool-cna" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">CNA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="centrosymmetry" aria-controls="tool-centrosymmetry" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Symmetry</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="ptm" aria-controls="tool-ptm" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">PTM</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="strain" aria-controls="tool-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="selection" aria-controls="tool-selection" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Atom details</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="performance" aria-controls="tool-performance" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Performance</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+            </div>
+            <p class="help tool-selector-help">Select a tool to show its settings. Close an analysis to cancel it and clear its results.</p>
+          </section>
+
+          <section id="tool-display" class="side-section" data-tool-panel="display">
             <div class="section-heading">
               <div><p class="section-kicker">APPEARANCE</p><h3>Display</h3></div>
             </div>
@@ -192,7 +218,24 @@
             </div>
           </section>
 
-          <section class="side-section">
+          <section id="tool-replicate" class="side-section" data-tool-panel="replicate" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">PERIODIC DISPLAY</p><h3>Replicate</h3></div>
+            </div>
+            <div class="replicate-controls">
+              <label class="field"><span>a vector</span><input id="replicate-a" type="number" value="1" min="1" max="4096" step="1" disabled></label>
+              <label class="field"><span>b vector</span><input id="replicate-b" type="number" value="1" min="1" max="4096" step="1" disabled></label>
+              <label class="field"><span>c vector</span><input id="replicate-c" type="number" value="1" min="1" max="4096" step="1" disabled></label>
+            </div>
+            <div class="replicate-actions">
+              <button id="reset-replicate" class="button button-secondary" type="button" disabled>Original cell</button>
+              <button id="apply-replicate" class="button button-accent" type="button" disabled>Apply</button>
+            </div>
+            <p id="replicate-summary" class="help" role="status" aria-live="polite">1 × 1 × 1 · Original cell</p>
+            <p class="help">Total copies along each periodic cell vector, including the original. A value of 1 keeps that direction unchanged. Triclinic cells follow their tilted vectors. Analysis uses the original atoms; only rendering is repeated.</p>
+          </section>
+
+          <section id="tool-slice" class="side-section" data-tool-panel="slice" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">SLICE</p><h3>Slice</h3></div>
               <output id="slice-value">100%</output>
@@ -203,10 +246,10 @@
               </select>
               <input id="slice-position" class="range" type="range" min="0" max="100" value="100" step="1" disabled>
             </div>
-            <p class="help">Uses wrapped fractional coordinates, including when the trajectory is displayed unwrapped.</p>
+            <p class="help">Slices the displayed cell along a, b or c. Replicated cells share one expanded slice range. Uses wrapped fractional coordinates even when displayed unwrapped.</p>
           </section>
 
-          <section class="side-section analysis-section">
+          <section id="tool-coordination" class="side-section analysis-section" data-tool-panel="coordination" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">ANALYSIS</p><h3>Coordination number</h3></div>
               <div class="analysis-state-controls"><span id="analysis-state" class="state-pill">Not calculated</span><button id="cancel-analysis" class="text-button" type="button" disabled>Cancel</button></div>
@@ -219,7 +262,7 @@
             <p id="analysis-help" class="help">Periodic axes use minimum images; non-periodic axes use direct distances. Camera movement does not rerun analysis.</p>
           </section>
 
-          <section class="side-section analysis-section">
+          <section id="tool-cna" class="side-section analysis-section" data-tool-panel="cna" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">CRYSTAL STRUCTURE</p><h3>Common neighbor analysis</h3></div>
               <div class="analysis-state-controls"><span id="cna-state" class="state-pill">Not calculated</span><button id="cancel-cna" class="text-button" type="button" disabled>Cancel</button></div>
@@ -235,7 +278,7 @@
             <p id="cna-status" class="help" role="status" aria-live="polite">Calculate to color by crystal structure. The legend checkboxes control visibility.</p>
           </section>
 
-          <section class="side-section analysis-section">
+          <section id="tool-centrosymmetry" class="side-section analysis-section" data-tool-panel="centrosymmetry" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">DEFECT ANALYSIS</p><h3>Central symmetry</h3></div>
               <div class="analysis-state-controls"><span id="csp-state" class="state-pill">Not calculated</span><button id="cancel-csp" class="text-button" type="button" disabled>Cancel</button></div>
@@ -248,7 +291,7 @@
             <p id="csp-status" class="help" role="status" aria-live="polite">Runs on the complete structure, including hidden atoms.</p>
           </section>
 
-          <section class="side-section analysis-section">
+          <section id="tool-ptm" class="side-section analysis-section" data-tool-panel="ptm" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">TEMPLATE MATCHING</p><h3>Polyhedral template matching</h3></div>
               <div class="analysis-state-controls"><span id="ptm-state" class="state-pill">Not calculated</span><button id="cancel-ptm" class="text-button" type="button" disabled>Cancel</button></div>
@@ -271,7 +314,7 @@
             <p id="ptm-status" class="help" role="status" aria-live="polite">Results include structure type, RMSD and nearest-neighbor distance.</p>
           </section>
 
-          <section class="side-section analysis-section">
+          <section id="tool-strain" class="side-section analysis-section" data-tool-panel="strain" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">ATOMIC ELASTIC STRAIN</p><h3>Ideal lattice reference</h3></div>
               <div class="analysis-state-controls"><span id="strain-state" class="state-pill">Not calculated</span><button id="cancel-strain" class="text-button" type="button" disabled>Cancel</button></div>
@@ -286,7 +329,7 @@
             <p id="strain-status" class="help" role="status" aria-live="polite">Unknown numeric atom types need an element or explicit lattice parameters. This is not displacement strain between trajectory frames.</p>
           </section>
 
-          <section class="side-section selection-section">
+          <section id="tool-selection" class="side-section selection-section" data-tool-panel="selection" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">SELECTION</p><h3>Atom details</h3></div>
               <button id="clear-selection" class="text-button" type="button" hidden>Clear</button>
@@ -295,7 +338,7 @@
             <dl id="selection-data" class="selection-data" hidden></dl>
           </section>
 
-          <section class="side-section performance-section">
+          <section id="tool-performance" class="side-section performance-section" data-tool-panel="performance" hidden>
             <details>
               <summary><span><span class="section-kicker">PERFORMANCE</span>Current measurements</span><span>＋</span></summary>
               <dl class="perf-list">

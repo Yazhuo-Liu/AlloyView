@@ -29,6 +29,8 @@ import { WebGLRenderer } from './render/webgl-renderer.js';
 import { StructureWorkerClient } from './worker-client.js';
 import { initializeTheme } from './theme.js';
 import { initializeSidebarResize } from './sidebar-resize.js';
+import { initializeToolPanels } from './tool-panels.js';
+import { initializeMobileControls } from './mobile-controls.js';
 
 const elements = Object.fromEntries([
   'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport',
@@ -48,6 +50,7 @@ const elements = Object.fromEntries([
   'axis-triad', 'axis-arrows', 'axis-x-line', 'axis-y-line', 'axis-z-line', 'axis-x-label', 'axis-y-label', 'axis-z-label',
   'metric-index', 'metric-parse', 'metric-upload', 'metric-analysis', 'metric-fps',
   'metric-memory',
+  'replicate-a', 'replicate-b', 'replicate-c', 'apply-replicate', 'reset-replicate', 'replicate-summary',
   'source-dialog', 'source-dialog-kicker', 'source-dialog-title', 'source-dialog-summary', 'source-dialog-close', 'source-options',
 ].map((id) => [id, document.getElementById(id)]));
 
@@ -77,6 +80,7 @@ const state = {
   frameRequest: 0,
   colorMode: 'type',
   coordinateMode: 'wrapped',
+  repetitions: [1, 1, 1],
   radiusPercent: 100,
   source: null,
   availableSources: [],
@@ -113,6 +117,14 @@ let renderer;
 let backgroundCustomized = false;
 
 initializeSidebarResize();
+const toolPanels = initializeToolPanels({
+  onDeactivateAnalysis: cancelAnalysis,
+  onDeactivateTool: (name) => {
+    if (name === 'replicate') resetReplication();
+    if (name === 'slice') { elements['slice-position'].value = '100'; updateSlice(); }
+  },
+});
+initializeMobileControls();
 initializeTheme((theme) => {
   if (!backgroundCustomized) {
     const background = theme === 'light' ? '#ffffff' : '#000000';
@@ -123,7 +135,10 @@ initializeTheme((theme) => {
 
 try {
   renderer = new WebGLRenderer(elements.viewport, {
-    onPick: selectAtom,
+    onPick: (index) => {
+      selectAtom(index);
+      if (index >= 0) toolPanels.selectTool('selection');
+    },
     onStats: ({ fps }) => { elements['metric-fps'].textContent = `${fps.toFixed(1)} FPS`; },
     onCameraChange: updateAxisTriad,
     onProjectionChange: syncProjectionControls,
@@ -206,6 +221,8 @@ document.addEventListener('pointerdown', (event) => {
 });
 elements['show-axes'].addEventListener('change', syncAxisVisibility);
 elements['show-cell'].addEventListener('change', () => renderer.setCellVisible(elements['show-cell'].checked));
+elements['apply-replicate'].addEventListener('click', applyReplication);
+elements['reset-replicate'].addEventListener('click', resetReplication);
 elements['slice-axis'].addEventListener('change', updateSlice);
 elements['slice-position'].addEventListener('input', updateSlice);
 elements['run-analysis'].addEventListener('click', () => {
@@ -556,12 +573,15 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     state.selectedId = null;
     state.colorMode = 'type';
     state.coordinateMode = 'wrapped';
+    state.repetitions = [1, 1, 1];
     state.source = sourceDescriptor;
     state.analysis.coordination = { enabled: false, cutoff: null, request: 0 };
     state.analysis.cna = { enabled: false, parameters: null, key: null, request: 0 };
     state.analysis.centrosymmetry = { enabled: false, parameters: null, key: null, request: 0 };
     state.analysis.ptm = { enabled: false, parameters: null, key: null, request: 0 };
     state.analysis.strain = { enabled: false, parameters: null, key: null, request: 0 };
+    for (const kind of Object.keys(state.analysis)) toolPanels.setToolEnabled(kind, false);
+    toolPanels.setToolEnabled('replicate', false);
     state.references = result.frame.typeLabels.map(referenceForElement);
     state.referenceLabels = [...result.frame.typeLabels];
     state.referenceByLabel.clear();
@@ -666,7 +686,8 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   configureCoordinateMode(frame);
   refreshColorOptions();
   const palette = paletteForCurrentMode();
-  const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), radiiByType(frame));
+  const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), radiiByType(frame), state.repetitions);
+  configureReplicationUi();
   applyScalarVisibility(palette.legend);
   renderLegend(palette.legend);
   if (resetCamera) renderer.resetCamera();
@@ -1011,6 +1032,7 @@ function cancelAnalysis(kind) {
   // in a Worker but has not yet reached the UI.
   analysis.request += 1;
   analysis.enabled = false;
+  toolPanels.setToolEnabled(kind, false);
   if (kind === 'coordination') {
     clearTimeout(cutoffTimer);
     analysis.cutoff = null;
@@ -1175,6 +1197,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     return;
   }
   analysis.enabled = true;
+  toolPanels.setToolEnabled(kind, true, { reveal: !automatic });
   analysis.parameters = parameters;
   analysis.key = JSON.stringify(parameters);
   syncCancelButton(kind);
@@ -1287,6 +1310,7 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
   }
   if (!automatic) {
     analysis.enabled = true;
+    toolPanels.setToolEnabled('coordination', true, { reveal: true });
     analysis.cutoff = cutoff;
     state.colorMode = 'property:coordination';
     refreshColorOptions();
@@ -1371,6 +1395,7 @@ function updateSlice() {
   elements['slice-value'].textContent = `${percentage}%`;
   setRangeProgress(elements['slice-position']);
   renderer.setSlice(axis, percentage / 100);
+  toolPanels.setToolEnabled('slice', percentage < 100);
   if (state.selectedId !== null) restoreSelection();
 }
 
@@ -1399,13 +1424,7 @@ function restoreSelection() {
     updateSelectionPanel();
     return;
   }
-  const fractional = state.frame.fractional[index * 3 + Number(elements['slice-axis'].value)];
-  if (fractional > Number(elements['slice-position'].value) / 100) {
-    renderer.setSelected(-1);
-    updateSelectionPanel();
-    return;
-  }
-  if (renderer.visibility?.[index] === 0) {
+  if (!renderer.isAtomVisible(index)) {
     renderer.setSelected(-1);
     elements['selection-empty'].hidden = false;
     elements['selection-data'].hidden = true;
@@ -1421,7 +1440,7 @@ function updateSelectionPanel(index = null) {
     const found = state.frame.ids.findIndex((id) => id === state.selectedId);
     if (found >= 0) index = found;
   }
-  if (index !== null && renderer.visibility?.[index] === 0) {
+  if (index !== null && !renderer.isAtomVisible(index)) {
     elements['selection-empty'].hidden = false;
     elements['selection-data'].hidden = true;
     elements['clear-selection'].hidden = state.selectedId === null;
@@ -1748,6 +1767,7 @@ function setControlsEnabled(enabled) {
     'slice-axis', 'slice-position', 'cutoff', 'run-analysis',
     'cna-mode', 'cna-cutoff', 'run-cna', 'csp-neighbors', 'run-csp',
     'ptm-rmsd', 'run-ptm', 'lattice-reset', 'run-strain',
+    'apply-replicate', 'reset-replicate',
   ]) {
     elements[id].disabled = !enabled;
   }
@@ -1761,7 +1781,43 @@ function setControlsEnabled(enabled) {
   }
   elements['background-picker'].classList.toggle('is-disabled', !enabled);
   if (!enabled) elements['background-picker'].open = false;
+  configureReplicationUi(enabled);
   syncAxisVisibility();
+}
+
+function configureReplicationUi(enabled = Boolean(state.frame)) {
+  if (state.frame && renderer.frame === state.frame) state.repetitions = [...renderer.repetitions];
+  for (const [axis, name] of ['a', 'b', 'c'].entries()) {
+    const input = elements[`replicate-${name}`];
+    input.value = String(state.repetitions[axis]);
+    input.disabled = !enabled || !state.frame?.cell.pbc[axis];
+    input.title = state.frame?.cell.pbc[axis] ? `Total copies along cell vector ${name}` : 'This cell direction is not periodic.';
+  }
+  const copies = state.repetitions.reduce((product, count) => product * count, 1);
+  toolPanels.setToolEnabled('replicate', copies > 1);
+  elements['replicate-summary'].textContent = state.frame
+    ? `${formatInteger(copies)} cells · ${formatInteger(state.frame.ids.length * copies)} displayed atoms. Analysis uses the ${formatInteger(state.frame.ids.length)} source atoms.`
+    : 'Load a structure to enable its periodic directions.';
+}
+
+function applyReplication() {
+  if (!state.frame) return;
+  try {
+    renderer.setReplications(['a', 'b', 'c'].map(name => elements[`replicate-${name}`].valueAsNumber));
+    configureReplicationUi();
+    restoreSelection();
+    renderer.resetCamera();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function resetReplication() {
+  state.repetitions = [1, 1, 1];
+  renderer?.setReplications(state.repetitions);
+  configureReplicationUi();
+  if (state.frame) restoreSelection();
+  renderer?.resetCamera();
 }
 
 function syncAxisVisibility() {

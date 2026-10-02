@@ -37,6 +37,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - WebGL 2 sphere rendering, element-aware atom radii, six standard views,
   perspective/orthographic projection, cell outlines and Cartesian axes.
 - Wrapped and unwrapped trajectory views, atom selection and fractional slicing.
+- Display-only replication along independent periodic cell vectors, including
+  triclinic tilts, without expanding or rerunning analysis.
 - Periodic cutoff-based coordination analysis in browser Workers, with an
   editable cutoff suggestion for recognized metallic elements.
 - Adaptive/fixed-cutoff CNA for FCC, HCP, BCC and icosahedral environments,
@@ -57,6 +59,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Light and dark themes with matching project logos and a saved preference.
 - A resizable controls panel with saved width, plus live display and legend
   edits and automatic coordination updates when the cutoff changes.
+- Selectable tool settings and a phone layout with the viewport fixed above
+  independently scrolling tools and collapsed camera/legend controls.
 - Bundled FCC, BCC trajectory and 40-image NEB examples.
 
 ## Quick start
@@ -76,6 +80,9 @@ WebGL 2 support. No installation or account is needed.
 3. **Adjust the view.** Choose colors and atom size in **Display**, change the
    viewport color with **BG**, or hide the cell and axes. Trajectories expose
    wrapped/unwrapped coordinates and frame controls below the viewport.
+   Select **Replicate** to set total copies along periodic **a/b/c** directions
+   and click **Apply**. Select a tool button to open its settings; switch tools
+   to keep analyses running, or close an analysis to cancel it and reset results.
 4. **Analyze.** Check the suggested cutoff under **Coordination number** and
    click **Calculate**. The scalar legend lets you choose a color map and
    adjust the visible range. Editing the cutoff automatically recalculates

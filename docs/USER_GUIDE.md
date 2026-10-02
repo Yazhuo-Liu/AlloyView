@@ -23,7 +23,16 @@ split into separate top-bar actions.
 On desktop, drag the divider between the viewport and the right controls panel
 to adjust its width. The browser saves the chosen width. Double-click the
 divider or press Enter while it is focused to reset it; Left/Right arrow keys
-also adjust it. On narrow screens the panel stacks below the viewport.
+also adjust it. Select a button under **Tools** to show that tool's settings.
+Only one configuration panel is shown at a time. A dot marks an enabled
+analysis; opening another tool keeps existing analyses running. Click the
+current tool again or **Close / cancel** to cancel that analysis and clear its
+results. **Cancel** clears the result while leaving the settings open to retry.
+
+On phones, the viewport stays above an independently scrolling tools panel.
+**View** and **Legend / atoms** start collapsed; tap to open camera controls or
+the legend's atom filters. Collapsing a legend preserves its filters and the
+separate PNG legend option. Click an atom to open its details in the tools panel.
 
 Display options, color maps and legend limits apply as you edit them. Incomplete
 or empty numeric input keeps the last valid result instead of becoming zero.
@@ -31,6 +40,25 @@ Editing the coordination cutoff starts or updates analysis automatically after
 a short typing pause, or immediately on committing the field. Rapid edits keep
 one analysis active and use the latest requested cutoff. The Calculate button
 is available to run the suggested cutoff without editing it.
+
+## Display replication
+
+Select **Replicate**, enter independent total copy counts along **a**, **b** and
+**c**, then click **Apply**. Each count includes the original cell: `2 × 3 × 1`
+displays six cells. Only periodic directions are editable. Copies follow the
+actual cell vectors, including tilted or rotated vectors in a triclinic cell.
+The outline and camera expand to enclose the displayed supercell. **Original
+cell** or closing Replicate restores `1 × 1 × 1`.
+
+Replication reuses the original GPU atom buffers and all calculated properties.
+It does not add atoms to CNA, PTM, coordination or atomic-strain input, or rerun
+those calculations. Coloring and atom visibility apply to every copy; clicking
+an image shows the original atom's ID and properties. The structure summary and
+crystal legend counts refer to source atoms. Slicing spans the expanded cell,
+and PNG exports include the copies. Counts follow trajectory frames and reset
+when a new source is opened. Up to 4,096 displayed cells are allowed; rendering
+and picking cost increase with the number of copies even though analysis cost
+does not.
 
 ## Run locally
 
@@ -226,7 +254,7 @@ This is a provenance and risk statement, not legal advice.
   sibling files as a native desktop application can. **Open local** offers both a file picker and a folder picker. Choose a folder
   to detect sibling sequences automatically, or select several files together.
 - Bonds, reference-frame displacement strain, partial `g(r)`, DXA,
-  defect lines and periodic image replication are future modules. The
+  and defect lines are future modules. The
   AtomEye-evidenced migration candidates are separated from unrelated features
   in `docs/ATOMEYE_REVIEW.md`.
 - CNA, normalized central symmetry and coordination use JavaScript Workers;
