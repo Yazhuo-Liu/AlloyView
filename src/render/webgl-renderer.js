@@ -17,9 +17,11 @@ layout(location=0) in vec2 aCorner;
 layout(location=1) in vec3 aCenter;
 layout(location=2) in vec3 aColor;
 layout(location=3) in vec3 aFractional;
+layout(location=4) in float aVisible;
+layout(location=5) in float aRadius;
 uniform mat4 uView;
 uniform mat4 uProjection;
-uniform float uRadius;
+uniform float uRadiusScale;
 uniform int uSliceAxis;
 uniform float uSliceMaximum;
 uniform int uSelected;
@@ -28,15 +30,18 @@ out vec3 vColor;
 out vec3 vCenterView;
 flat out int vVisible;
 flat out int vSelected;
+flat out float vRadius;
 void main() {
   vec4 centerView = uView * vec4(aCenter, 1.0);
-  vec4 cornerView = centerView + vec4(aCorner * uRadius, 0.0, 0.0);
+  float radius = aRadius * uRadiusScale;
+  vec4 cornerView = centerView + vec4(aCorner * radius, 0.0, 0.0);
   gl_Position = uProjection * cornerView;
   vCorner = aCorner;
   vColor = aColor;
   vCenterView = centerView.xyz;
-  vVisible = aFractional[uSliceAxis] <= uSliceMaximum ? 1 : 0;
+  vVisible = aVisible > 0.5 && aFractional[uSliceAxis] <= uSliceMaximum ? 1 : 0;
   vSelected = gl_InstanceID == uSelected ? 1 : 0;
+  vRadius = radius;
 }`;
 
 const SPHERE_FRAGMENT = `#version 300 es
@@ -46,8 +51,8 @@ in vec3 vColor;
 in vec3 vCenterView;
 flat in int vVisible;
 flat in int vSelected;
+flat in float vRadius;
 uniform mat4 uProjection;
-uniform float uRadius;
 out vec4 outColor;
 void main() {
   if (vVisible == 0) discard;
@@ -84,7 +89,7 @@ void main() {
     float ring = smoothstep(0.68, 0.84, radiusSquared);
     shaded = mix(min(shaded * 1.10, vec3(1.0)), vec3(1.0, 0.67, 0.20), ring);
   }
-  vec3 surfaceView = vCenterView + vec3(vCorner * uRadius, normalZ * uRadius);
+  vec3 surfaceView = vCenterView + vec3(vCorner * vRadius, normalZ * vRadius);
   vec4 surfaceClip = uProjection * vec4(surfaceView, 1.0);
   gl_FragDepth = surfaceClip.z / surfaceClip.w * 0.5 + 0.5;
   float alpha = 1.0 - smoothstep(0.965, 1.0, radiusSquared);
@@ -140,9 +145,12 @@ export class WebGLRenderer {
     this.onProjectionChange = onProjectionChange;
     this.frame = null;
     this.displayPositions = null;
+    this.visibility = null;
     this.atomCount = 0;
-    this.radius = 0.7;
+    this.radiusScale = 1;
+    this.atomRadii = null;
     this.background = [14 / 255, 17 / 255, 19 / 255];
+    this.cellColor = [0.62, 0.78, 0.81];
     this.cellVisible = true;
     this.sliceAxis = 2;
     this.sliceMaximum = 1;
@@ -177,6 +185,8 @@ export class WebGLRenderer {
     this.positionBuffer = gl.createBuffer();
     this.colorBuffer = gl.createBuffer();
     this.fractionalBuffer = gl.createBuffer();
+    this.visibilityBuffer = gl.createBuffer();
+    this.radiusBuffer = gl.createBuffer();
     this.cellVao = gl.createVertexArray();
     this.cellBuffer = gl.createBuffer();
 
@@ -201,6 +211,16 @@ export class WebGLRenderer {
     gl.enableVertexAttribArray(3);
     gl.vertexAttribPointer(3, 3, gl.FLOAT, false, 0, 0);
     gl.vertexAttribDivisor(3, 1);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
+    gl.enableVertexAttribArray(4);
+    gl.vertexAttribPointer(4, 1, gl.UNSIGNED_BYTE, true, 0, 0);
+    gl.vertexAttribDivisor(4, 1);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.radiusBuffer);
+    gl.enableVertexAttribArray(5);
+    gl.vertexAttribPointer(5, 1, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(5, 1);
     gl.bindVertexArray(null);
 
     gl.bindVertexArray(this.cellVao);
@@ -210,7 +230,7 @@ export class WebGLRenderer {
     gl.bindVertexArray(null);
 
     this.sphereUniforms = uniforms(gl, this.sphereProgram, [
-      'uView', 'uProjection', 'uRadius', 'uSliceAxis', 'uSliceMaximum', 'uSelected',
+      'uView', 'uProjection', 'uRadiusScale', 'uSliceAxis', 'uSliceMaximum', 'uSelected',
     ]);
     this.lineUniforms = uniforms(gl, this.lineProgram, ['uViewProjection', 'uColor']);
     gl.enable(gl.DEPTH_TEST);
@@ -220,18 +240,25 @@ export class WebGLRenderer {
     gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
   }
 
-  setFrame(frame, colors, displayPositions = frame.positions) {
+  setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null) {
     const startedAt = performance.now();
     const gl = this.gl;
     this.frame = frame;
     this.displayPositions = displayPositions;
     this.atomCount = frame.ids.length;
+    this.atomRadii = atomRadii ?? new Float32Array(this.atomCount).fill(0.7);
+    if (this.atomRadii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
+    this.visibility = new Uint8Array(this.atomCount).fill(255);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, displayPositions, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.fractionalBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, frame.fractional, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, this.visibility, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.radiusBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, this.atomRadii, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.cellBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, buildCellLines(frame.cell), gl.STATIC_DRAW);
     gl.finish();
@@ -243,6 +270,19 @@ export class WebGLRenderer {
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
+    this.requestRender();
+  }
+
+  setVisibility(visibility = null) {
+    if (!this.frame) return;
+    const values = visibility ?? new Uint8Array(this.atomCount).fill(255);
+    if (values.length !== this.atomCount) {
+      throw new Error('The visibility mask does not match the current frame.');
+    }
+    this.visibility = values;
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, values, gl.DYNAMIC_DRAW);
     this.requestRender();
   }
 
@@ -259,16 +299,27 @@ export class WebGLRenderer {
     return performance.now() - startedAt;
   }
 
-  setRadius(radius) { this.radius = radius; this.requestRender(); }
+  setRadiusScale(scaleFactor) {
+    if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) throw new Error('The atom radius scale must be greater than zero.');
+    this.radiusScale = scaleFactor;
+    this.requestRender();
+  }
   setSlice(axis, maximum) { this.sliceAxis = axis; this.sliceMaximum = maximum; this.requestRender(); }
   setSelected(index) { this.selected = index ?? -1; this.requestRender(); }
-  setProjection(mode) { this.projectionMode = mode; this.requestRender(); }
+  setProjection(mode) {
+    if (mode !== 'perspective' && mode !== 'orthographic') throw new Error(`Unknown projection mode “${mode}”.`);
+    this.projectionMode = mode;
+    this.onProjectionChange(mode);
+    this.requestRender();
+  }
   setCellVisible(visible) { this.cellVisible = Boolean(visible); this.requestRender(); }
 
   setBackground(hex) {
     const value = hex.replace('#', '');
     if (!/^[0-9a-f]{6}$/i.test(value)) return;
     this.background = [0, 2, 4].map((index) => Number.parseInt(value.slice(index, index + 2), 16) / 255);
+    const luminance = 0.2126 * this.background[0] + 0.7152 * this.background[1] + 0.0722 * this.background[2];
+    this.cellColor = luminance > 0.68 ? [0.22, 0.34, 0.38] : [0.62, 0.78, 0.81];
     this.requestRender();
   }
 
@@ -334,7 +385,7 @@ export class WebGLRenderer {
     gl.bindVertexArray(this.sphereVao);
     gl.uniformMatrix4fv(this.sphereUniforms.uView, false, this.viewMatrix);
     gl.uniformMatrix4fv(this.sphereUniforms.uProjection, false, this.projectionMatrix);
-    gl.uniform1f(this.sphereUniforms.uRadius, this.radius);
+    gl.uniform1f(this.sphereUniforms.uRadiusScale, this.radiusScale);
     gl.uniform1i(this.sphereUniforms.uSliceAxis, this.sliceAxis);
     gl.uniform1f(this.sphereUniforms.uSliceMaximum, this.sliceMaximum);
     gl.uniform1i(this.sphereUniforms.uSelected, this.selected);
@@ -346,7 +397,7 @@ export class WebGLRenderer {
       gl.useProgram(this.lineProgram);
       gl.bindVertexArray(this.cellVao);
       gl.uniformMatrix4fv(this.lineUniforms.uViewProjection, false, this.viewProjectionMatrix);
-      gl.uniform3f(this.lineUniforms.uColor, 0.62, 0.78, 0.81);
+      gl.uniform3f(this.lineUniforms.uColor, ...this.cellColor);
       gl.drawArrays(gl.LINES, 0, CELL_EDGES.length);
     }
     gl.disable(gl.BLEND);
@@ -472,6 +523,7 @@ export class WebGLRenderer {
     const positions = this.displayPositions;
     const fractional = this.frame.fractional;
     for (let atom = 0; atom < this.atomCount; atom += 1) {
+      if (this.visibility?.[atom] === 0) continue;
       const index = atom * 3;
       if (fractional[index + this.sliceAxis] > this.sliceMaximum) continue;
       const view = transformPoint(this.viewMatrix, positions[index], positions[index + 1], positions[index + 2]);
@@ -480,7 +532,8 @@ export class WebGLRenderer {
       if (clip[3] <= 0) continue;
       const screenX = (clip[0] / clip[3] * 0.5 + 0.5) * rectangle.width;
       const screenY = (0.5 - clip[1] / clip[3] * 0.5) * rectangle.height;
-      const edgeClip = transformPoint(this.projectionMatrix, view[0] + this.radius, view[1], view[2]);
+      const radius = (this.atomRadii?.[atom] ?? 0.7) * this.radiusScale;
+      const edgeClip = transformPoint(this.projectionMatrix, view[0] + radius, view[1], view[2]);
       const radiusPixels = Math.max(3, Math.abs(edgeClip[0] / edgeClip[3] - clip[0] / clip[3]) * rectangle.width * 0.5);
       const distanceSquared = (x - screenX) ** 2 + (y - screenY) ** 2;
       if (distanceSquared <= radiusPixels ** 2 && view[2] > closestDepth) {
@@ -491,7 +544,7 @@ export class WebGLRenderer {
     return closest;
   }
 
-  exportPng(filename = 'alloyview.png', { includeBackground = true } = {}) {
+  exportPng(filename = 'alloyview.png', { includeBackground = true, legend = null } = {}) {
     const gl = this.gl;
     let width;
     let height;
@@ -520,6 +573,11 @@ export class WebGLRenderer {
       image.data.set(pixels.subarray(source, source + stride), row * stride);
     }
     context.putImageData(image, 0, 0);
+    if (legend) {
+      const cssWidth = Number(this.canvas.clientWidth) || width;
+      const scale = Math.max(1, Math.min(3, width / cssWidth));
+      drawLegendOverlay(context, legend, width, height, scale);
+    }
     exportCanvas.toBlob((blob) => {
       if (!blob) return;
       const link = document.createElement('a');
@@ -541,6 +599,103 @@ export class WebGLRenderer {
       this.lastStatsAt = timestamp;
     }
   }
+}
+
+export function drawLegendOverlay(context, legend, width, height, scale = 1) {
+  if (!legend || width < 100 * scale || height < 72 * scale) return;
+  const margin = 18 * scale;
+  const padding = 12 * scale;
+  const titleHeight = 23 * scale;
+  const panelWidth = Math.min((legend.kind === 'types' ? 260 : 240) * scale, width - margin * 2);
+  let panelHeight;
+  if (legend.kind === 'types') {
+    const columns = legend.items.length > 6 ? 2 : 1;
+    panelHeight = (padding * 2) + titleHeight + Math.ceil(legend.items.length / columns) * 19 * scale;
+  } else {
+    panelHeight = 82 * scale;
+  }
+  panelHeight = Math.min(panelHeight, height - margin * 2);
+  const x = margin;
+  const y = height - margin - panelHeight;
+
+  context.save();
+  context.fillStyle = 'rgba(9, 22, 31, 0.92)';
+  context.strokeStyle = 'rgba(105, 139, 151, 0.7)';
+  context.lineWidth = scale;
+  context.fillRect(x, y, panelWidth, panelHeight);
+  context.strokeRect(x + scale * 0.5, y + scale * 0.5, panelWidth - scale, panelHeight - scale);
+  context.textBaseline = 'alphabetic';
+  context.fillStyle = '#d9e7ea';
+  context.font = `600 ${11 * scale}px system-ui, sans-serif`;
+  const title = legend.kind === 'scalar' && legend.unit
+    ? `${legend.title} [${legend.unit}]`
+    : legend.title;
+  context.fillText(title, x + padding, y + 20 * scale, panelWidth - padding * 2);
+
+  if (legend.kind === 'types') {
+    drawTypeLegend(context, legend, x, y, panelWidth, panelHeight, padding, scale);
+  } else if (legend.kind === 'scalar') {
+    drawScalarLegend(context, legend, x, y, panelWidth, padding, scale);
+  }
+  context.restore();
+}
+
+function drawScalarLegend(context, legend, x, y, panelWidth, padding, scale) {
+  if (legend.schemeLabel) {
+    context.fillStyle = '#8299a2';
+    context.font = `${8 * scale}px system-ui, sans-serif`;
+    context.textAlign = 'right';
+    context.fillText(legend.schemeLabel, x + panelWidth - padding, y + 20 * scale, panelWidth * 0.46);
+    context.textAlign = 'left';
+  }
+  const gradientX = x + padding;
+  const gradientY = y + 34 * scale;
+  const gradientWidth = panelWidth - padding * 2;
+  const gradientHeight = 10 * scale;
+  const gradient = context.createLinearGradient(gradientX, 0, gradientX + gradientWidth, 0);
+  for (const [position, red, green, blue] of legend.colorStops) {
+    gradient.addColorStop(position, `rgb(${red} ${green} ${blue})`);
+  }
+  context.fillStyle = gradient;
+  context.fillRect(gradientX, gradientY, gradientWidth, gradientHeight);
+  context.strokeStyle = 'rgba(220, 235, 239, 0.38)';
+  context.lineWidth = scale;
+  context.strokeRect(gradientX, gradientY, gradientWidth, gradientHeight);
+  context.fillStyle = '#a4b7be';
+  context.font = `${9 * scale}px system-ui, sans-serif`;
+  context.fillText(formatLegendNumber(legend.minimum), gradientX, y + 64 * scale);
+  context.textAlign = 'right';
+  context.fillText(formatLegendNumber(legend.maximum), gradientX + gradientWidth, y + 64 * scale);
+  context.textAlign = 'left';
+}
+
+function drawTypeLegend(context, legend, x, y, panelWidth, panelHeight, padding, scale) {
+  const columns = legend.items.length > 6 ? 2 : 1;
+  const rows = Math.ceil(legend.items.length / columns);
+  const columnWidth = (panelWidth - padding * 2) / columns;
+  context.font = `${9 * scale}px system-ui, sans-serif`;
+  for (let index = 0; index < legend.items.length; index += 1) {
+    const column = Math.floor(index / rows);
+    const row = index % rows;
+    const itemX = x + padding + column * columnWidth;
+    const itemY = y + 38 * scale + row * 19 * scale;
+    if (itemY > y + panelHeight - 8 * scale) break;
+    const item = legend.items[index];
+    context.beginPath();
+    context.arc(itemX + 4 * scale, itemY - 3 * scale, 4 * scale, 0, Math.PI * 2);
+    context.fillStyle = `rgb(${item.color.join(' ')})`;
+    context.fill();
+    context.fillStyle = '#a4b7be';
+    context.fillText(item.label, itemX + 13 * scale, itemY, columnWidth - 16 * scale);
+  }
+}
+
+function formatLegendNumber(value) {
+  if (!Number.isFinite(value)) return String(value);
+  if (value === 0) return '0';
+  const magnitude = Math.abs(value);
+  if (magnitude >= 10_000 || magnitude < 0.001) return value.toExponential(3);
+  return Number(value.toPrecision(6)).toString();
 }
 
 export function axisDirectionsFromView(viewMatrix) {

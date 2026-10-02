@@ -45,6 +45,16 @@ test('one FCC vacancy lowers exactly its 12 nearest neighbors to coordination 11
   assert.equal(histogram.get(12), frame.fractional.length / 3 - 12);
 });
 
+test('independent atom-range results merge to the single-worker result', () => {
+  const frame = crystalFrame('fcc', 3, 4.05);
+  const expected = calculateCoordination(frame, 3.0).coordination;
+  const midpoint = expected.length / 2;
+  const left = calculateCoordination(frame, 3.0, { startAtom: 0, endAtom: midpoint }).coordination;
+  const right = calculateCoordination(frame, 3.0, { startAtom: midpoint, endAtom: expected.length }).coordination;
+  const merged = Uint32Array.from(left, (value, atom) => value + right[atom]);
+  assert.deepEqual(merged, expected);
+});
+
 function crystalFrame(kind, repetitions, latticeConstant) {
   const basis = kind === 'fcc'
     ? [[0, 0, 0], [0, 0.5, 0.5], [0.5, 0, 0.5], [0.5, 0.5, 0]]

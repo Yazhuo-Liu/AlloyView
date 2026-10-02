@@ -10,12 +10,18 @@ const MAX_BINS = 2_000_000;
  * connectivity), but is an independent implementation with dynamic counts and
  * an image search that remains correct for restricted triclinic cells.
  */
-export function calculateCoordination(frameLike, cutoff) {
+export function calculateCoordination(frameLike, cutoff, range = {}) {
   const startedAt = performance.now();
   const { fractional, cell } = frameLike;
   const count = fractional.length / 3;
   if (!Number.isInteger(count) || count < 1) throw new Error('Coordination analysis requires at least one atom.');
   if (!Number.isFinite(cutoff) || cutoff <= 0) throw new Error('The cutoff radius must be a finite value greater than zero.');
+  const startAtom = range.startAtom ?? 0;
+  const endAtom = range.endAtom ?? count;
+  if (!Number.isInteger(startAtom) || !Number.isInteger(endAtom)
+      || startAtom < 0 || endAtom > count || startAtom >= endAtom) {
+    throw new Error('The coordination atom range is invalid.');
+  }
 
   const heights = cellFaceHeights(cell);
   const smallPeriodicAxes = Array.from(heights, (height, axis) => (
@@ -53,7 +59,7 @@ export function calculateCoordination(frameLike, cutoff) {
   let candidatePairs = 0;
   let acceptedPairs = 0;
 
-  for (let atom = 0; atom < count; atom += 1) {
+  for (let atom = startAtom; atom < endAtom; atom += 1) {
     const [binX, binY, binZ] = expandBin(atomBins[atom], dimensions);
     let neighborBinCount = 0;
     for (let deltaX = -1; deltaX <= 1; deltaX += 1) {
@@ -105,6 +111,8 @@ export function calculateCoordination(frameLike, cutoff) {
     candidatePairs,
     acceptedPairs,
     bins: dimensions,
+    startAtom,
+    endAtom,
     warning: smallPeriodicAxes.length > 0
       ? `The cell height along periodic axis ${smallPeriodicAxes.map((axis) => 'abc'[axis]).join(', ')} is less than twice the cutoff. Results count the closest image of each unique atom ID and do not count multiple periodic images of the same atom.`
       : null,

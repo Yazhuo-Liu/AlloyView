@@ -17,31 +17,37 @@ test('extended AtomEye CFG preserves cell, atom count, properties, and fractiona
   assert.deepEqual([...frame.positions.slice(3, 6)].map(round6), [0, 2.025, 2.025]);
 });
 
-test('LAMMPS-generated CFG promotes id and ix/iy/iz auxiliaries to frame semantics', async () => {
-  const text = await readFile(new URL('100110.cfg', root), 'utf8');
-  const frame = parseCfg(text, '100110.cfg');
-  assert.equal(frame.ids.length, 7648);
-  assert.equal(frame.ids[0], 12);
-  assert.equal(new Set(frame.ids).size, 7648);
-  assert.equal(Math.min(...frame.ids), 1);
-  assert.equal(Math.max(...frame.ids), 7648);
+test('LAMMPS-generated CFG promotes id and ix/iy/iz auxiliaries to frame semantics', () => {
+  const frame = parseCfg(`Number of particles = 2
+H0(1,1) = 10
+H0(1,2) = 0
+H0(1,3) = 0
+H0(2,1) = 0
+H0(2,2) = 10
+H0(2,3) = 0
+H0(3,1) = 0
+H0(3,2) = 0
+H0(3,3) = 10
+.NO_VELOCITY.
+entry_count = 7
+auxiliary[0] = ix
+auxiliary[1] = iy
+auxiliary[2] = iz
+auxiliary[3] = id
+58.6934
+Ni
+0.1 0.2 0.3 0 0 -1 12
+0.4 0.5 0.6 0 0 0 1
+`, 'lammps-generated.cfg');
+  assert.deepEqual([...frame.ids], [12, 1]);
   assert.deepEqual(frame.typeLabels, ['Ni']);
   assert.equal(frame.unwrapSource, 'ix/iy/iz');
   assert.ok(frame.unwrappedPositions);
   assert.ok(frame.imageFlags instanceof Int32Array);
   assert.deepEqual(frame.properties.map((property) => property.name), ['mass']);
-
-  let crossedZ = 0;
-  for (let atom = 0; atom < frame.ids.length; atom += 1) {
-    const base = atom * 3;
-    assert.ok(Math.abs(frame.unwrappedPositions[base] - frame.positions[base]) < 1e-5);
-    assert.ok(Math.abs(frame.unwrappedPositions[base + 1] - frame.positions[base + 1]) < 1e-5);
-    const deltaZ = frame.unwrappedPositions[base + 2] - frame.positions[base + 2];
-    if (Math.abs(deltaZ + 9.95285) < 1e-4) crossedZ += 1;
-    else assert.ok(Math.abs(deltaZ) < 1e-5, `unexpected z image displacement ${deltaZ}`);
-  }
-  assert.equal(crossedZ, 480);
-  assert.equal([...frame.imageFlags].filter((value) => value === -1).length, 480);
+  assertArrayClose(frame.positions, [1, 2, 3, 4, 5, 6]);
+  assertArrayClose(frame.unwrappedPositions, [1, 2, -7, 4, 5, 6]);
+  assert.deepEqual([...frame.imageFlags], [0, 0, -1, 0, 0, 0]);
 });
 
 test('basic AtomEye CFG applies A and Transform to row-vector coordinates', () => {
@@ -89,6 +95,52 @@ test('CFG rejects incomplete rows rather than silently inventing atoms', () => {
   assert.throws(() => parseCfg(`Number of particles = 1
 H0(1,1) = 1
 `), /cell definition is incomplete/);
+});
+
+test('CFG wraps meaningful out-of-cell fractional coordinates and preserves an inferred unwrapped view', () => {
+  const frame = parseCfg(`Number of particles = 1
+H0(1,1) = 10
+H0(1,2) = 0
+H0(1,3) = 0
+H0(2,1) = 0
+H0(2,2) = 10
+H0(2,3) = 0
+H0(3,1) = 0
+H0(3,2) = 0
+H0(3,3) = 10
+.NO_VELOCITY.
+entry_count = 3
+58.6934
+Ni
+1.2 -0.3 0.5
+`);
+  assertArrayClose(frame.fractional, [0.2, 0.7, 0.5]);
+  assertArrayClose(frame.positions, [2, 7, 5]);
+  assertArrayClose(frame.unwrappedPositions, [12, -3, 5]);
+  assert.deepEqual([...frame.imageFlags], [1, -1, 0]);
+  assert.equal(frame.unwrapSource, 'out-of-cell CFG coordinates');
+});
+
+test('CFG treats tiny boundary overshoot as floating-point noise, not crossing history', () => {
+  const frame = parseCfg(`Number of particles = 1
+H0(1,1) = 1
+H0(1,2) = 0
+H0(1,3) = 0
+H0(2,1) = 0
+H0(2,2) = 1
+H0(2,3) = 0
+H0(3,1) = 0
+H0(3,2) = 0
+H0(3,3) = 1
+.NO_VELOCITY.
+entry_count = 3
+1
+X
+1.000001 -0.000001 0.5
+`);
+  assertArrayClose(frame.fractional, [0, 0, 0.5]);
+  assert.equal(frame.unwrappedPositions, undefined);
+  assert.equal(frame.imageFlags, undefined);
 });
 
 test('restricted triclinic LAMMPS dump reconstructs true bounds and scaled positions', async () => {

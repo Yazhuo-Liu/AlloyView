@@ -25,12 +25,11 @@
         </a>
 
         <div class="file-actions">
-          <input id="file-input" type="file" accept=".cfg,.dump,.lammpstrj,.txt" hidden>
-          <button id="open-file" class="button button-primary" type="button">
-            <span aria-hidden="true">＋</span> Open local file
+          <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
+          <button id="open-local" class="button button-primary" type="button" title="Choose a local folder, then select a file or detected sequence">
+            <span aria-hidden="true">＋</span> Open local
           </button>
-          <button id="load-fcc" class="button" type="button">FCC example</button>
-          <button id="load-bcc" class="button" type="button">BCC trajectory</button>
+          <button id="open-examples" class="button" type="button">Examples</button>
         </div>
 
         <div class="privacy-badge" title="Files are processed only in this browser">
@@ -52,14 +51,13 @@
             </div>
             <p class="eyebrow">BROWSER-NATIVE MATERIALS VIEWER</p>
             <h1>See materials<br>atom by atom</h1>
-            <p class="empty-copy">Open an AtomEye CFG or LAMMPS text trajectory. Parsing, analysis, and rendering all stay in this browser.</p>
-            <button id="empty-open" class="button button-primary button-large" type="button">Choose a structure file</button>
+            <p class="empty-copy">Open an AtomEye CFG, select a local folder to detect numbered CFG sequences, or load a LAMMPS text trajectory. Parsing, analysis, and rendering all stay in this browser.</p>
+            <button id="empty-open" class="button button-primary button-large" type="button">Open local structures</button>
             <p class="format-note">Orthogonal and restricted triclinic cells supported</p>
           </div>
 
           <div class="view-toolbar" aria-label="View tools">
             <button id="reset-camera" type="button" title="Reset view" aria-label="Reset view">⌂</button>
-            <button id="toggle-projection" type="button" title="Toggle projection" aria-label="Toggle projection">◫</button>
             <span></span>
             <button id="export-png" type="button" title="Export PNG" aria-label="Export PNG">⇩</button>
           </div>
@@ -71,22 +69,72 @@
             <button type="button" data-view="back" disabled>Back</button>
             <button type="button" data-view="left" disabled>Left</button>
             <button type="button" data-view="right" disabled>Right</button>
+            <div class="projection-switch" role="group" aria-label="Projection">
+              <button id="projection-perspective" class="active" type="button" aria-pressed="true" disabled>Perspective</button>
+              <button id="projection-orthographic" type="button" aria-pressed="false" disabled>Ortho</button>
+            </div>
+            <details id="background-picker" class="background-picker is-disabled">
+              <summary title="Background color"><span>BG</span><i id="background-current" style="--swatch: #0e1113"></i></summary>
+              <div class="background-menu">
+                <strong>Background</strong>
+                <div class="background-swatches" role="group" aria-label="Background presets">
+                  <button type="button" data-background="#0e1113" style="--swatch: #0e1113" aria-label="Dark" title="Dark" disabled></button>
+                  <button type="button" data-background="#000000" style="--swatch: #000000" aria-label="Black" title="Black" disabled></button>
+                  <button type="button" data-background="#ffffff" style="--swatch: #ffffff" aria-label="White" title="White" disabled></button>
+                  <button type="button" data-background="#fff8e7" style="--swatch: #fff8e7" aria-label="Ivory" title="Ivory" disabled></button>
+                  <button type="button" data-background="#fff4c2" style="--swatch: #fff4c2" aria-label="Pale yellow" title="Pale yellow" disabled></button>
+                </div>
+                <label class="background-custom"><span>Custom</span><input id="background" type="color" value="#0e1113" disabled></label>
+              </div>
+            </details>
+            <label class="viewport-toggle" title="Show Cartesian axes"><input id="show-axes" type="checkbox" checked disabled><span>Axes</span></label>
           </div>
 
           <svg id="axis-triad" class="axis-triad" viewBox="0 0 96 96" aria-label="Global Cartesian axes" hidden>
-            <circle cx="48" cy="48" r="3"></circle>
-            <g class="axis-x"><line id="axis-x-line" x1="48" y1="48" x2="75" y2="48"></line><text id="axis-x-label" x="80" y="48">X</text></g>
-            <g class="axis-y"><line id="axis-y-line" x1="48" y1="48" x2="48" y2="21"></line><text id="axis-y-label" x="48" y="16">Y</text></g>
-            <g class="axis-z"><line id="axis-z-line" x1="48" y1="48" x2="48" y2="75"></line><text id="axis-z-label" x="48" y="84">Z</text></g>
+            <defs>
+              <radialGradient id="axis-origin-fill" cx="32%" cy="28%" r="72%"><stop offset="0" stop-color="#ffffff"></stop><stop offset="0.38" stop-color="#b8cad0"></stop><stop offset="1" stop-color="#40535d"></stop></radialGradient>
+              <filter id="axis-depth-shadow" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="0" dy="1.5" stdDeviation="1.4" flood-color="#000000" flood-opacity="0.75"></feDropShadow></filter>
+              <linearGradient id="axis-x-shaft-gradient" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#7c2627"></stop><stop offset="0.48" stop-color="#ff827b"></stop><stop offset="1" stop-color="#bd3535"></stop></linearGradient>
+              <linearGradient id="axis-y-shaft-gradient" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#1e6d37"></stop><stop offset="0.48" stop-color="#84f19a"></stop><stop offset="1" stop-color="#32a751"></stop></linearGradient>
+              <linearGradient id="axis-z-shaft-gradient" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#244e94"></stop><stop offset="0.48" stop-color="#8abaff"></stop><stop offset="1" stop-color="#3674d1"></stop></linearGradient>
+              <linearGradient id="axis-x-cone-gradient" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#862829"></stop><stop offset="0.45" stop-color="#ff827b"></stop><stop offset="1" stop-color="#c53a3a"></stop></linearGradient>
+              <linearGradient id="axis-y-cone-gradient" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#216c38"></stop><stop offset="0.45" stop-color="#8cf3a0"></stop><stop offset="1" stop-color="#34ae54"></stop></linearGradient>
+              <linearGradient id="axis-z-cone-gradient" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#28529a"></stop><stop offset="0.45" stop-color="#90bfff"></stop><stop offset="1" stop-color="#3978d8"></stop></linearGradient>
+            </defs>
+            <g id="axis-arrows">
+              <g class="axis-x"><line class="axis-shadow" x1="48" y1="48" x2="75" y2="48"></line><line id="axis-x-line" class="axis-shaft" x1="48" y1="48" x2="75" y2="48"></line><line class="axis-shaft-highlight" x1="48" y1="47" x2="75" y2="47"></line><ellipse class="axis-cone-base" cx="75" cy="48" rx="2" ry="5"></ellipse><polygon class="axis-cone" points="75,43 86,48 75,53"></polygon><line class="axis-cone-highlight" x1="75" y1="45" x2="85" y2="48"></line><text id="axis-x-label" x="92" y="48">X</text></g>
+              <g class="axis-y"><line class="axis-shadow" x1="48" y1="48" x2="48" y2="21"></line><line id="axis-y-line" class="axis-shaft" x1="48" y1="48" x2="48" y2="21"></line><line class="axis-shaft-highlight" x1="47" y1="48" x2="47" y2="21"></line><ellipse class="axis-cone-base" cx="48" cy="21" rx="5" ry="2"></ellipse><polygon class="axis-cone" points="43,21 48,10 53,21"></polygon><line class="axis-cone-highlight" x1="45" y1="21" x2="48" y2="11"></line><text id="axis-y-label" x="48" y="4">Y</text></g>
+              <g class="axis-z"><line class="axis-shadow" x1="48" y1="48" x2="48" y2="75"></line><line id="axis-z-line" class="axis-shaft" x1="48" y1="48" x2="48" y2="75"></line><line class="axis-shaft-highlight" x1="47" y1="48" x2="47" y2="75"></line><ellipse class="axis-cone-base" cx="48" cy="75" rx="5" ry="2"></ellipse><polygon class="axis-cone" points="43,75 48,86 53,75"></polygon><line class="axis-cone-highlight" x1="45" y1="75" x2="48" y2="85"></line><text id="axis-z-label" x="48" y="93">Z</text></g>
+            </g>
+            <circle class="axis-origin" cx="48" cy="48" r="5"></circle>
+            <circle class="axis-origin-highlight" cx="46.5" cy="46.3" r="1.25"></circle>
           </svg>
 
-          <div class="interaction-hint">Drag to rotate · Shift/right-drag to pan · Scroll to zoom · Click to select</div>
+          <div id="interaction-hint" class="interaction-hint" hidden>Drag to rotate · Shift/right-drag to pan · Scroll to zoom · Click to select</div>
           <div id="legend" class="legend" hidden></div>
-          <div id="loading" class="loading" hidden>
+          <div id="loading" class="loading" role="status" aria-live="polite" hidden>
             <span class="spinner"></span>
             <span id="loading-text">Reading…</span>
           </div>
           <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+          <section class="trajectory-bar" id="trajectory-section" aria-label="Trajectory controls" hidden>
+            <div class="trajectory-header">
+              <div><strong id="timestep-label">timestep —</strong><span id="cache-label">cache 1 / 3</span><span>1 s/frame</span></div>
+              <output id="frame-label">1 / 1</output>
+            </div>
+            <div class="trajectory-controls">
+              <button id="frame-first" type="button" title="First frame" aria-label="First frame">|◀</button>
+              <button id="frame-previous" type="button" title="Previous frame" aria-label="Previous frame">◀</button>
+              <button id="frame-play" class="frame-play" type="button" title="Play at 1 frame per second" aria-label="Play trajectory" aria-pressed="false">▶</button>
+              <div class="frame-track">
+                <input id="frame-slider" class="range" type="range" min="0" max="0" value="0" step="1">
+                <div id="frame-ticks" class="frame-ticks" aria-hidden="true"></div>
+              </div>
+              <button id="frame-next" type="button" title="Next frame" aria-label="Next frame">▶</button>
+              <button id="frame-last" type="button" title="Last frame" aria-label="Last frame">▶|</button>
+            </div>
+          </section>
         </section>
 
         <aside class="sidebar" aria-label="Structure and display controls">
@@ -107,15 +155,6 @@
             </div>
           </section>
 
-          <section class="side-section" id="trajectory-section" hidden>
-            <div class="section-heading">
-              <div><p class="section-kicker">TRAJECTORY</p><h3>Trajectory frame</h3></div>
-              <output id="frame-label">1 / 1</output>
-            </div>
-            <input id="frame-slider" class="range" type="range" min="0" max="0" value="0" step="1">
-            <div class="inline-meta"><span id="timestep-label">timestep —</span><span id="cache-label">cache 1 / 3</span></div>
-          </section>
-
           <section class="side-section">
             <div class="section-heading">
               <div><p class="section-kicker">APPEARANCE</p><h3>Display</h3></div>
@@ -131,17 +170,17 @@
               <span>Color by</span>
               <select id="color-mode" disabled><option value="type">Atom type</option></select>
             </label>
-            <label class="field range-field">
-              <span>Atom radius <output id="radius-value">0.70 Å</output></span>
-              <input id="radius" class="range" type="range" min="0.1" max="2.0" value="0.7" step="0.05" disabled>
+            <label class="field radius-field">
+              <span>Atom radius <small>Element defaults</small></span>
+              <span class="range-number-row">
+                <input id="radius-scale" class="range" type="range" min="20" max="200" value="100" step="1" title="Drag from 20% to 200%" disabled>
+                <span class="input-unit percent-input"><input id="radius-percent" type="number" min="5" max="500" value="100" step="1" title="Type a value from 5% to 500%" disabled><i>%</i></span>
+              </span>
             </label>
-            <div class="field two-column">
-              <label><span>Projection</span><select id="projection" disabled><option value="perspective">Perspective</option><option value="orthographic">Orthographic</option></select></label>
-              <label><span>Background</span><input id="background" type="color" value="#0e1113" disabled></label>
-            </div>
             <div class="field display-options">
               <label><input id="show-cell" type="checkbox" checked disabled><span>Show cell box</span></label>
               <label><input id="png-background" type="checkbox" checked disabled><span>Include background in PNG</span></label>
+              <label><input id="png-legend" type="checkbox" disabled><span>Include legend in PNG</span></label>
             </div>
           </section>
 
@@ -197,6 +236,20 @@
         </aside>
       </main>
     </div>
+
+    <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-dialog-title">
+      <div class="source-dialog-card">
+        <div class="source-dialog-heading">
+          <div>
+            <p id="source-dialog-kicker" class="section-kicker">LOCAL SOURCES</p>
+            <h2 id="source-dialog-title">Choose a structure or sequence</h2>
+          </div>
+          <button id="source-dialog-close" class="dialog-close" type="button" aria-label="Close">×</button>
+        </div>
+        <p id="source-dialog-summary" class="source-dialog-summary"></p>
+        <div id="source-options" class="source-options"></div>
+      </div>
+    </dialog>
     <script type="module" src="./src/app.js"></script>
   </body>
 </html>

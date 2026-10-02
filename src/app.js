@@ -1,26 +1,49 @@
 import { FrameCache } from './data/frame-cache.js';
+import { chooseFrameCachePolicy } from './data/cache-policy.js';
+import { DEFAULT_PLAYBACK_INTERVAL_MS, nextPlaybackFrame } from './data/playback.js';
 import { recommendCoordinationCutoff } from './analysis/cutoff.js';
-import { colorsByProperty, colorsByType } from './render/palette.js';
+import { CoordinationPool } from './analysis/coordination-pool.js';
+import {
+  catalogLocalSources,
+  detectStructureFormatHeader,
+  inferStructureFormatFromPath,
+  isPotentialStructurePath,
+} from './io/file-sequences.js';
+import {
+  colorsByProperty,
+  colorsByType,
+  coupleScalarRange,
+  SCALAR_COLOR_SCHEMES,
+  visibilityByProperty,
+} from './render/palette.js';
+import { normalizeRadiusPercent, radiiByType } from './render/atomic-radii.js';
 import { WebGLRenderer } from './render/webgl-renderer.js';
 import { StructureWorkerClient } from './worker-client.js';
 
 const elements = Object.fromEntries([
-  'file-input', 'open-file', 'empty-open', 'load-fcc', 'load-bcc', 'viewport',
+  'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport',
   'empty-state', 'file-name', 'file-meta', 'format-chip', 'atom-count', 'frame-count',
   'cell-kind', 'pbc-flags', 'trajectory-section', 'frame-slider', 'frame-label', 'timestep-label',
-  'cache-label', 'coordinate-mode', 'color-mode', 'radius', 'radius-value', 'projection', 'background',
-  'show-cell', 'png-background', 'slice-axis', 'slice-position', 'slice-value', 'cutoff', 'run-analysis',
+  'cache-label', 'frame-first', 'frame-previous', 'frame-play', 'frame-next', 'frame-last', 'frame-ticks',
+  'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
+  'background-picker', 'background-current', 'background', 'show-axes',
+  'show-cell', 'png-background', 'png-legend', 'slice-axis', 'slice-position', 'slice-value', 'cutoff', 'run-analysis',
   'analysis-state', 'cutoff-help', 'analysis-help', 'selection-empty', 'selection-data', 'clear-selection', 'legend',
-  'reset-camera', 'toggle-projection', 'export-png', 'loading', 'loading-text', 'toast',
-  'axis-triad', 'axis-x-line', 'axis-y-line', 'axis-z-line', 'axis-x-label', 'axis-y-label', 'axis-z-label',
+  'reset-camera', 'export-png', 'loading', 'loading-text', 'toast', 'interaction-hint',
+  'axis-triad', 'axis-arrows', 'axis-x-line', 'axis-y-line', 'axis-z-line', 'axis-x-label', 'axis-y-label', 'axis-z-label',
   'metric-index', 'metric-parse', 'metric-upload', 'metric-analysis', 'metric-fps',
   'metric-memory',
+  'source-dialog', 'source-dialog-kicker', 'source-dialog-title', 'source-dialog-summary', 'source-dialog-close', 'source-options',
 ].map((id) => [id, document.getElementById(id)]));
 
 const cache = new FrameCache(3);
-const scalarColorRanges = new WeakMap();
+const scalarColorRanges = new Map();
+const scalarColorSchemes = new Map();
+const scalarHideOutside = new Map();
+const coordinationPool = new CoordinationPool();
 const state = {
   file: null,
+  files: [],
   format: null,
   frameCount: 0,
   frameIndex: 0,
@@ -29,10 +52,28 @@ const state = {
   frameRequest: 0,
   colorMode: 'type',
   coordinateMode: 'wrapped',
+  radiusPercent: 100,
+  source: null,
+  availableSources: [],
+  availableEntries: [],
+  sourceVersion: 0,
+  pendingFrames: new Map(),
+  cachePlan: null,
+  prefetchToken: 0,
+  playing: false,
+  analysis: {
+    coordination: { enabled: false, cutoff: null, request: 0 },
+  },
 };
+
+const FOLDER_FILE_LIMIT = 20_000;
+const localPathCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
 let toastTimer = null;
 let frameTimer = null;
+let playbackTimer = null;
+let interactionHintTimer = null;
+let interactionHintFadeTimer = null;
 let renderer;
 
 try {
@@ -40,7 +81,7 @@ try {
     onPick: selectAtom,
     onStats: ({ fps }) => { elements['metric-fps'].textContent = `${fps.toFixed(1)} FPS`; },
     onCameraChange: updateAxisTriad,
-    onProjectionChange: (mode) => { elements.projection.value = mode; },
+    onProjectionChange: syncProjectionControls,
   });
 } catch (error) {
   showToast(error.message);
@@ -51,60 +92,96 @@ const worker = new StructureWorkerClient(({ loaded, total, stage }) => {
   if (stage === 'index') {
     const percentage = total > 0 ? Math.round(loaded / total * 100) : 0;
     setLoading(true, `Indexing trajectory frames… ${percentage}%`);
+  } else if (stage === 'sequence-index') {
+    setLoading(true, `Checking CFG sequence… ${loaded} / ${total}`);
+  } else if (stage === 'sequence-unwrap') {
+    setLoading(true, `Inferring continuous trajectory coordinates… ${loaded} / ${total}`);
+  } else if (stage === 'series-index') {
+    const percentage = total > 0 ? Math.round(loaded / total * 100) : 0;
+    setLoading(true, `Indexing numbered LAMMPS dumps… ${percentage}%`);
   }
 });
 
-elements['open-file'].addEventListener('click', openPicker);
-elements['empty-open'].addEventListener('click', openPicker);
-elements['file-input'].addEventListener('change', () => {
-  const [file] = elements['file-input'].files;
-  if (file) loadFile(file);
-  elements['file-input'].value = '';
+elements['open-local'].addEventListener('click', openFolderPicker);
+elements['empty-open'].addEventListener('click', openFolderPicker);
+elements['folder-input'].addEventListener('change', () => {
+  const entries = fileEntries(elements['folder-input'].files);
+  if (entries.length > 0) inspectLocalEntries(entries, {
+    originLabel: 'selected folder',
+    showAllFiles: true,
+  });
+  elements['folder-input'].value = '';
 });
-elements['load-fcc'].addEventListener('click', () => loadExample('./examples/fcc-vacancy.cfg', 'fcc-vacancy.cfg'));
-elements['load-bcc'].addEventListener('click', () => loadExample('./examples/bcc-trajectory.dump', 'bcc-trajectory.dump'));
+elements['source-dialog-close'].addEventListener('click', () => elements['source-dialog'].close());
+elements['open-examples'].addEventListener('click', showExampleChooser);
 
 elements['frame-slider'].addEventListener('input', () => {
+  stopFramePlayback();
   const index = Number(elements['frame-slider'].value);
   elements['frame-label'].textContent = `${index + 1} / ${state.frameCount}`;
   clearTimeout(frameTimer);
   frameTimer = setTimeout(() => showFrame(index), 70);
 });
+elements['frame-first'].addEventListener('click', () => showFrameManually(0));
+elements['frame-previous'].addEventListener('click', () => showFrameManually(Math.max(0, state.frameIndex - 1)));
+elements['frame-play'].addEventListener('click', toggleFramePlayback);
+elements['frame-next'].addEventListener('click', () => showFrameManually(Math.min(state.frameCount - 1, state.frameIndex + 1)));
+elements['frame-last'].addEventListener('click', () => showFrameManually(state.frameCount - 1));
 
 elements['color-mode'].addEventListener('change', () => {
   state.colorMode = elements['color-mode'].value;
   applyColors();
 });
 elements['coordinate-mode'].addEventListener('change', updateCoordinateMode);
-elements.radius.addEventListener('input', () => {
-  const value = Number(elements.radius.value);
-  elements['radius-value'].textContent = `${value.toFixed(2)} Å`;
-  setRangeProgress(elements.radius);
-  renderer.setRadius(value);
+elements['radius-scale'].addEventListener('input', () => setRadiusPercent(elements['radius-scale'].value, { source: 'slider' }));
+elements['radius-percent'].addEventListener('input', () => setRadiusPercent(elements['radius-percent'].value, { source: 'number' }));
+elements['radius-percent'].addEventListener('blur', () => {
+  if (elements['radius-percent'].value.trim() === '') setRadiusPercent(state.radiusPercent);
 });
-elements.projection.addEventListener('change', () => renderer.setProjection(elements.projection.value));
-elements.background.addEventListener('input', () => renderer.setBackground(elements.background.value));
+elements['projection-perspective'].addEventListener('click', () => renderer.setProjection('perspective'));
+elements['projection-orthographic'].addEventListener('click', () => renderer.setProjection('orthographic'));
+elements.background.addEventListener('input', () => setBackgroundColor(elements.background.value));
+elements.background.addEventListener('change', () => { elements['background-picker'].open = false; });
+for (const button of document.querySelectorAll('[data-background]')) {
+  button.addEventListener('click', () => setBackgroundColor(button.dataset.background, { close: true }));
+}
+elements['background-picker'].addEventListener('click', (event) => {
+  if (elements['background-picker'].classList.contains('is-disabled')) event.preventDefault();
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!elements['background-picker'].contains(event.target)) elements['background-picker'].open = false;
+});
+elements['show-axes'].addEventListener('change', syncAxisVisibility);
 elements['show-cell'].addEventListener('change', () => renderer.setCellVisible(elements['show-cell'].checked));
 elements['slice-axis'].addEventListener('change', updateSlice);
 elements['slice-position'].addEventListener('input', updateSlice);
-elements['run-analysis'].addEventListener('click', runCoordination);
+elements['run-analysis'].addEventListener('click', () => runCoordination({ automatic: false }));
 elements['clear-selection'].addEventListener('click', () => selectAtom(-1));
 elements['reset-camera'].addEventListener('click', () => renderer.resetCamera());
+for (const eventName of ['pointerdown', 'wheel', 'touchstart']) {
+  elements.viewport.addEventListener(eventName, dismissInteractionHint, { passive: true });
+}
 for (const button of document.querySelectorAll('[data-view]')) {
   button.addEventListener('click', () => renderer.setView(button.dataset.view));
 }
-elements['toggle-projection'].addEventListener('click', () => {
-  const mode = elements.projection.value === 'perspective' ? 'orthographic' : 'perspective';
-  elements.projection.value = mode;
-  renderer.setProjection(mode);
-});
 elements['export-png'].addEventListener('click', () => {
   if (!state.frame) return;
   const stem = (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, '');
-  renderer.exportPng(`${stem}-frame-${state.frameIndex + 1}.png`, {
-    includeBackground: elements['png-background'].checked,
-  });
+  try {
+    renderer.exportPng(`${stem}-frame-${state.frameIndex + 1}.png`, {
+      includeBackground: elements['png-background'].checked,
+      legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
+    });
+  } catch (error) {
+    showToast(error.message);
+  }
 });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopFramePlayback();
+});
+
+syncProjectionControls('perspective');
+syncBackgroundControl(elements.background.value);
 
 for (const eventName of ['dragenter', 'dragover']) {
   elements.viewport.addEventListener(eventName, (event) => {
@@ -114,14 +191,215 @@ for (const eventName of ['dragenter', 'dragover']) {
 }
 elements.viewport.addEventListener('drop', (event) => {
   event.preventDefault();
-  const [file] = event.dataTransfer.files;
-  if (file) loadFile(file);
+  const entries = fileEntries(event.dataTransfer.files);
+  if (entries.length > 0) inspectLocalEntries(entries, {
+    allowManualCfgSequence: true,
+    originLabel: 'dropped files',
+  });
 });
 
 for (const range of document.querySelectorAll('.range')) setRangeProgress(range);
-window.addEventListener('beforeunload', () => worker.close());
+window.addEventListener('beforeunload', () => {
+  worker.close();
+  coordinationPool.close();
+});
 
-function openPicker() { elements['file-input'].click(); }
+function openFolderPicker() {
+  // A directory FileList is more transparent on desktop browsers than
+  // showDirectoryPicker(): the native dialog can display the directory's files
+  // and the resulting list includes every selected descendant up front.
+  elements['folder-input'].click();
+}
+
+async function inspectLocalEntries(entries, {
+  allowManualCfgSequence = false,
+  originLabel = 'local selection',
+  showAllFiles = false,
+} = {}) {
+  try {
+    if (entries.length > FOLDER_FILE_LIMIT) {
+      throw new Error(`The selection contains more than ${formatInteger(FOLDER_FILE_LIMIT)} files. Choose a smaller structure folder.`);
+    }
+    setLoading(true, `Detecting structures and numbered sequences in ${originLabel}…`);
+    const orderedEntries = [...entries].sort((left, right) => (
+      localPathCollator.compare(left.relativePath, right.relativePath)
+    ));
+    const classified = await classifyStructureEntries(orderedEntries, originLabel);
+    const catalog = catalogLocalSources(classified, { allowManualCfgSequence });
+    if (catalog.sources.length === 0 && !showAllFiles) {
+      throw new Error(await unrecognizedFilesMessage(entries.filter((entry) => isPotentialStructurePath(entry.relativePath))));
+    }
+    state.availableSources = catalog.sources;
+    state.availableEntries = classified;
+    if (catalog.sources.length === 1 && !showAllFiles) {
+      await loadFiles(catalog.sources[0].files, catalog.sources[0]);
+      return;
+    }
+    setLoading(false);
+    showSourceChooser(catalog, originLabel, classified);
+  } catch (error) {
+    setLoading(false);
+    showToast(error.message ?? String(error));
+  }
+}
+
+async function classifyStructureEntries(entries, originLabel) {
+  const classified = new Array(entries.length);
+  let cursor = 0;
+  let completed = 0;
+  const scanNext = async () => {
+    while (cursor < entries.length) {
+      const index = cursor;
+      const entry = entries[index];
+      cursor += 1;
+      let format = null;
+      if (isPotentialStructurePath(entry.relativePath)) {
+        const header = await entry.file.slice(0, 64 * 1024).text();
+        const detectedFormat = detectStructureFormatHeader(header);
+        const filenameHint = inferStructureFormatFromPath(entry.relativePath);
+        format = detectedFormat ?? (filenameHint === 'cfg' ? 'cfg' : null);
+      }
+      classified[index] = { ...entry, format };
+      completed += 1;
+      if (completed % 25 === 0 || completed === entries.length) {
+        setLoading(true, `Inspecting ${originLabel}… ${completed} / ${entries.length}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, entries.length) }, scanNext));
+  return classified;
+}
+
+async function unrecognizedFilesMessage(candidates) {
+  const count = candidates.length;
+  if (count === 0) return 'The selected folder contains no supported or numbered candidate files.';
+  const first = candidates[0];
+  const preview = await first.file.slice(0, 120).text();
+  const compactPreview = preview.replace(/\s+/g, ' ').trim().slice(0, 72) || '(empty file)';
+  return `No CFG or LAMMPS text data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
+}
+
+function showSourceChooser(catalog, originLabel, entries = state.availableEntries) {
+  elements['source-dialog-kicker'].textContent = 'LOCAL SOURCES';
+  elements['source-dialog-title'].textContent = 'Choose a structure or sequence';
+  elements['source-dialog-summary'].textContent = `The browser supplied ${entries.length} files from the ${originLabel}. ${catalog.supportedCount} structure files and ${catalog.sequenceCount} numbered structure sequence${catalog.sequenceCount === 1 ? '' : 's'} were recognized.`;
+  const fragment = document.createDocumentFragment();
+  const sequences = catalog.sources.filter((source) => source.kind === 'sequence');
+  if (sequences.length > 0) {
+    fragment.append(sourceListHeading('Detected sequences', `${sequences.length}`));
+    for (const source of sequences) {
+      fragment.append(sourceOption(
+        source,
+        source.format === 'cfg' ? 'CFG sequence' : 'Dump series',
+        source.detail,
+      ));
+    }
+  }
+  fragment.append(sourceListHeading('All files', `${entries.length}`));
+  const sequenceByPath = new Map();
+  for (const sequence of sequences) {
+    for (const entry of sequence.entries) sequenceByPath.set(entry.relativePath, sequence);
+  }
+  const singleByPath = new Map(catalog.sources
+    .filter((source) => source.kind === 'file')
+    .map((source) => [source.entries[0].relativePath, source]));
+  for (const entry of entries) {
+    const sequence = sequenceByPath.get(entry.relativePath);
+    const single = singleByPath.get(entry.relativePath);
+    if (sequence) {
+      fragment.append(sourceOption(
+        sequence,
+        'Sequence member',
+        `Opens detected sequence · ${sequence.detail}`,
+        entry.relativePath,
+      ));
+    } else if (single) {
+      fragment.append(sourceOption(single, entry.format === 'cfg' ? 'CFG' : 'LAMMPS', single.detail));
+    } else {
+      fragment.append(sourceOption(null, 'Other', 'Not recognized as CFG or LAMMPS structure data', entry.relativePath));
+    }
+  }
+  elements['source-options'].replaceChildren(fragment);
+  elements['source-dialog'].showModal();
+}
+
+function sourceListHeading(title, count) {
+  const heading = document.createElement('div');
+  heading.className = 'source-list-heading';
+  const label = document.createElement('strong');
+  label.textContent = title;
+  const total = document.createElement('small');
+  total.textContent = count;
+  heading.append(label, total);
+  return heading;
+}
+
+function sourceOption(source, kindLabel, detailText, labelOverride = null) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'source-option';
+  button.disabled = !source;
+  const title = document.createElement('strong');
+  title.textContent = labelOverride ?? source?.label ?? 'Unknown file';
+  const kind = document.createElement('span');
+  kind.className = 'source-option-kind';
+  kind.textContent = kindLabel;
+  const detail = document.createElement('small');
+  detail.textContent = detailText;
+  button.append(title, kind, detail);
+  if (source) {
+    button.addEventListener('click', () => {
+      elements['source-dialog'].close();
+      loadFiles(source.files, source);
+    });
+  }
+  return button;
+}
+
+function showExampleChooser() {
+  elements['source-dialog-kicker'].textContent = 'EXAMPLES';
+  elements['source-dialog-title'].textContent = 'Choose an example';
+  elements['source-dialog-summary'].textContent = 'Files and folders bundled under examples/.';
+  const fragment = document.createDocumentFragment();
+  fragment.append(sourceListHeading('examples/', '3 items'));
+  fragment.append(exampleOption(
+    'examples/fixed_end_climb/',
+    'Folder',
+    '40 numbered CFG files · NEB sequence',
+    loadNebExample,
+  ));
+  fragment.append(exampleOption(
+    'examples/fcc-vacancy.cfg',
+    'CFG',
+    'FCC crystal with one vacancy',
+    () => loadExample('./examples/fcc-vacancy.cfg', 'fcc-vacancy.cfg'),
+  ));
+  fragment.append(exampleOption(
+    'examples/bcc-trajectory.dump',
+    'LAMMPS',
+    'Multi-frame BCC text trajectory',
+    () => loadExample('./examples/bcc-trajectory.dump', 'bcc-trajectory.dump'),
+  ));
+  elements['source-options'].replaceChildren(fragment);
+  elements['source-dialog'].showModal();
+}
+
+function exampleOption(labelText, kindLabel, detailText, action) {
+  const button = sourceOption(null, kindLabel, detailText, labelText);
+  button.disabled = false;
+  button.addEventListener('click', () => {
+    elements['source-dialog'].close();
+    action();
+  });
+  return button;
+}
+
+function fileEntries(files) {
+  return [...files].map((file) => ({
+    file,
+    relativePath: file.webkitRelativePath || file.name,
+  }));
+}
 
 async function loadExample(url, name) {
   try {
@@ -129,37 +407,85 @@ async function loadExample(url, name) {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Example request failed: HTTP ${response.status}`);
     const blob = await response.blob();
-    await loadFile(new File([blob], name, { type: 'text/plain' }));
+    await loadFiles([new File([blob], name, { type: 'text/plain' })]);
   } catch (error) {
     setLoading(false);
     showToast(error.message);
   }
 }
 
-async function loadFile(file) {
+async function loadNebExample() {
+  try {
+    setLoading(true, 'Loading NEB example images…');
+    const files = await Promise.all(Array.from({ length: 40 }, async (_, index) => {
+      const name = `replica.${index}.cfg`;
+      const response = await fetch(`./examples/fixed_end_climb/${name}`);
+      if (!response.ok) throw new Error(`NEB example request failed for ${name}: HTTP ${response.status}`);
+      return new File([await response.blob()], name, { type: 'text/plain' });
+    }));
+    await loadFiles(files, {
+      kind: 'sequence',
+      detected: true,
+      label: 'examples/fixed_end_climb/',
+      format: 'cfg',
+    });
+  } catch (error) {
+    setLoading(false);
+    showToast(error.message);
+  }
+}
+
+async function loadFiles(inputFiles, sourceDescriptor = null) {
+  stopFramePlayback();
+  const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+  const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
+  const sourceVersion = state.sourceVersion + 1;
+  state.sourceVersion = sourceVersion;
+  state.prefetchToken += 1;
+  state.pendingFrames.clear();
   const request = state.frameRequest + 1;
   state.frameRequest = request;
-  setLoading(true, 'Reading local file…');
+  setLoading(true, files.length > 1 ? `Reading ${files.length} local CFG files…` : 'Reading local file…');
   try {
-    const result = await worker.load(file);
-    if (request !== state.frameRequest) return;
+    const result = await worker.load(files);
+    if (request !== state.frameRequest || sourceVersion !== state.sourceVersion) return;
     cache.clear();
+    state.cachePlan = chooseFrameCachePolicy(result.frame, result.frameCount, {
+      heapLimit: performance.memory?.jsHeapSizeLimit,
+      heapUsed: performance.memory?.usedJSHeapSize,
+      deviceMemoryGiB: navigator.deviceMemory,
+    });
+    cache.setLimit(state.cachePlan.limit);
     cache.set(0, result.frame);
-    state.file = file;
+    state.file = files[0];
+    state.files = files;
     state.format = result.format;
     state.frameCount = result.frameCount;
     state.frameIndex = 0;
     state.selectedId = null;
     state.colorMode = 'type';
     state.coordinateMode = 'wrapped';
+    state.source = sourceDescriptor;
+    state.analysis.coordination = { enabled: false, cutoff: null, request: 0 };
+    scalarColorRanges.clear();
+    scalarColorSchemes.clear();
+    scalarHideOutside.clear();
+    setRadiusPercent(100);
     configureSuggestedCutoff(result.frame);
     elements['metric-index'].textContent = formatDuration(Math.max(0, result.indexMs));
     configureSourceUi(result);
-    displayFrame(result.frame, { resetCamera: true });
+    await displayFrame(result.frame, { resetCamera: true });
     elements['empty-state'].hidden = true;
     setControlsEnabled(true);
     setLoading(false);
-    showToast(`Loaded ${formatInteger(result.frame.ids.length)} atoms locally.`, true);
+    showInteractionHint();
+    scheduleFramePrefetch(0);
+    showToast(
+      files.length > 1
+        ? `Loaded ${result.frameCount} frames from ${files.length} local files; the first frame has ${formatInteger(result.frame.ids.length)} atoms.`
+        : `Loaded ${formatInteger(result.frame.ids.length)} atoms locally.`,
+      true,
+    );
   } catch (error) {
     if (request === state.frameRequest) {
       setLoading(false);
@@ -175,51 +501,68 @@ function configureSuggestedCutoff(frame) {
 }
 
 function configureSourceUi(result) {
-  elements['file-name'].textContent = state.file.name;
-  elements['file-meta'].textContent = `${formatBytes(state.file.size)} · local browser file`;
-  elements['format-chip'].textContent = result.format === 'cfg' ? 'CFG' : 'LAMMPS';
+  const totalBytes = state.files.reduce((total, file) => total + file.size, 0);
+  elements['file-name'].textContent = state.source?.label ?? (state.files.length > 1
+    ? `${state.files[0].name} … ${state.files.at(-1).name}`
+    : state.file.name);
+  elements['file-meta'].textContent = state.files.length > 1
+    ? `${formatBytes(totalBytes)} · ${state.files.length} local files${state.source?.detected ? ' · numbered sequence' : ''}`
+    : `${formatBytes(totalBytes)} · local browser file`;
+  elements['format-chip'].textContent = result.format === 'cfg'
+    ? 'CFG'
+    : result.format === 'cfg-sequence' ? 'CFG · sequence' : 'LAMMPS';
   elements['frame-count'].textContent = formatInteger(result.frameCount);
   elements['trajectory-section'].hidden = result.frameCount <= 1;
+  elements.viewport.parentElement.classList.toggle('trajectory-visible', result.frameCount > 1);
   elements['frame-slider'].min = '0';
   elements['frame-slider'].max = String(Math.max(0, result.frameCount - 1));
   elements['frame-slider'].value = '0';
   elements['frame-label'].textContent = `1 / ${result.frameCount}`;
+  renderFrameTicks(result.frameCount);
+  updateFrameNavigation();
   setRangeProgress(elements['frame-slider']);
 }
 
 async function showFrame(index) {
-  if (!Number.isInteger(index) || index < 0 || index >= state.frameCount || index === state.frameIndex) return;
+  if (!Number.isInteger(index) || index < 0 || index >= state.frameCount) return false;
   const request = state.frameRequest + 1;
   state.frameRequest = request;
-  const cached = cache.get(index);
-  if (cached) {
-    state.frameIndex = index;
-    displayFrame(cached);
-    return;
-  }
-  setLoading(true, `Parsing frame ${index + 1}…`);
-  try {
-    const result = await worker.frame(index);
-    if (request !== state.frameRequest) return;
-    cache.set(index, result.frame);
-    state.frameIndex = index;
-    displayFrame(result.frame);
+  if (index === state.frameIndex) {
+    elements['frame-slider'].value = String(index);
+    elements['frame-label'].textContent = `${index + 1} / ${state.frameCount}`;
+    setRangeProgress(elements['frame-slider']);
     setLoading(false);
+    return true;
+  }
+  const requiresLoad = !cache.has(index);
+  if (requiresLoad) setLoading(true, `Preparing frame ${index + 1}…`);
+  try {
+    const frame = await getFrame(index);
+    if (request !== state.frameRequest) return false;
+    if (!frame) return false;
+    state.frameIndex = index;
+    await displayFrame(frame);
+    if (requiresLoad) setLoading(false);
+    scheduleFramePrefetch(index);
+    return true;
   } catch (error) {
     if (request === state.frameRequest) {
-      setLoading(false);
+      if (requiresLoad) setLoading(false);
       elements['frame-slider'].value = String(state.frameIndex);
       showToast(error.message);
     }
+    return false;
   }
 }
 
-function displayFrame(frame, { resetCamera = false } = {}) {
+async function displayFrame(frame, { resetCamera = false } = {}) {
   state.frame = frame;
+  syncAxisVisibility();
   configureCoordinateMode(frame);
   refreshColorOptions();
   const palette = paletteForCurrentMode();
-  const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame));
+  const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), radiiByType(frame));
+  applyScalarVisibility(palette.legend);
   renderLegend(palette.legend);
   if (resetCamera) renderer.resetCamera();
   updateSlice();
@@ -232,16 +575,200 @@ function displayFrame(frame, { resetCamera = false } = {}) {
   elements['analysis-help'].textContent = periodicAxes.length > 0
     ? `Minimum images are used along ${periodicAxes.join(', ')}; non-periodic axes use direct distances. Camera movement does not rerun analysis.`
     : 'No periodic axes: all distances are direct. Camera movement does not rerun analysis.';
-  elements['timestep-label'].textContent = frame.timestep === null ? 'Single frame' : `timestep ${frame.timestep}`;
+  elements['timestep-label'].textContent = state.format === 'cfg-sequence'
+    ? `frame ${state.frameIndex + 1}`
+    : frame.timestep === null ? 'Single frame' : `timestep ${frame.timestep}`;
   elements['frame-label'].textContent = `${state.frameIndex + 1} / ${state.frameCount}`;
   elements['frame-slider'].value = String(state.frameIndex);
-  elements['cache-label'].textContent = `cache ${cache.size} / ${cache.limit}`;
+  updateCacheLabel();
   elements['metric-parse'].textContent = formatDuration(frame.parseMs);
   elements['metric-upload'].textContent = formatDuration(uploadMs);
-  elements['analysis-state'].textContent = frame.properties.some((property) => property.name === 'coordination') ? 'Calculated' : 'Not calculated';
+  elements['analysis-state'].textContent = frame.properties.some((property) => property.name === 'coordination')
+    ? 'Calculated'
+    : state.analysis.coordination.enabled ? 'Queued' : 'Not calculated';
   elements['analysis-state'].classList.toggle('ready', elements['analysis-state'].textContent === 'Calculated');
+  updateFrameNavigation();
   updateMemoryMetric();
   setRangeProgress(elements['frame-slider']);
+  if (state.analysis.coordination.enabled) {
+    await runCoordination({ automatic: true, frame, frameIndex: state.frameIndex });
+  }
+}
+
+async function getFrame(index, { background = false } = {}) {
+  const cached = cache.get(index);
+  if (cached) return cached;
+  const existing = state.pendingFrames.get(index);
+  if (existing) return existing;
+  const sourceVersion = state.sourceVersion;
+  const pending = worker.frame(index, { reportProgress: !background })
+    .then((result) => {
+      if (sourceVersion !== state.sourceVersion) return null;
+      cache.set(index, result.frame);
+      updateCacheLabel();
+      return result.frame;
+    })
+    .finally(() => {
+      if (state.pendingFrames.get(index) === pending) state.pendingFrames.delete(index);
+    });
+  state.pendingFrames.set(index, pending);
+  return pending;
+}
+
+function scheduleFramePrefetch(centerIndex) {
+  if (state.frameCount <= 1 || !state.cachePlan) return;
+  const token = state.prefetchToken + 1;
+  state.prefetchToken = token;
+  const indices = prefetchOrder(centerIndex, state.frameCount, state.cachePlan.limit, state.cachePlan.fullTrajectory);
+  const run = async () => {
+    for (const index of indices) {
+      if (token !== state.prefetchToken) return;
+      if (cache.has(index)) continue;
+      try {
+        await getFrame(index, { background: true });
+        if (cache.has(centerIndex)) cache.get(centerIndex);
+      } catch {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  };
+  if ('requestIdleCallback' in window) window.requestIdleCallback(() => run(), { timeout: 800 });
+  else setTimeout(run, 40);
+}
+
+function prefetchOrder(center, count, limit, fullTrajectory) {
+  if (fullTrajectory) return Array.from({ length: count - 1 }, (_, offset) => (center + offset + 1) % count);
+  const indices = [];
+  for (let distance = 1; indices.length < Math.max(0, limit - 1) && distance < count; distance += 1) {
+    if (center + distance < count) indices.push(center + distance);
+    if (indices.length >= limit - 1) break;
+    if (center - distance >= 0) indices.push(center - distance);
+  }
+  return indices;
+}
+
+function renderFrameTicks(frameCount) {
+  elements['frame-ticks'].replaceChildren();
+  if (frameCount <= 1) return;
+  const interval = frameCount <= 60 ? 5 : niceFrameInterval(frameCount);
+  const frames = new Set([1, frameCount]);
+  for (let frame = interval; frame < frameCount; frame += interval) frames.add(frame);
+  const fragment = document.createDocumentFragment();
+  for (const frame of [...frames].sort((left, right) => left - right)) {
+    const tick = document.createElement('span');
+    tick.className = 'frame-tick';
+    tick.textContent = String(frame);
+    tick.style.left = `${(frame - 1) / (frameCount - 1) * 100}%`;
+    fragment.append(tick);
+  }
+  elements['frame-ticks'].append(fragment);
+}
+
+function niceFrameInterval(frameCount) {
+  const rough = frameCount / 10;
+  const magnitude = 10 ** Math.floor(Math.log10(rough));
+  const normalized = rough / magnitude;
+  const multiplier = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return Math.max(5, multiplier * magnitude);
+}
+
+function updateFrameNavigation() {
+  const atStart = state.frameIndex <= 0;
+  const atEnd = state.frameIndex >= state.frameCount - 1;
+  elements['frame-first'].disabled = atStart;
+  elements['frame-previous'].disabled = atStart;
+  elements['frame-next'].disabled = atEnd;
+  elements['frame-last'].disabled = atEnd;
+  elements['frame-play'].disabled = state.frameCount <= 1;
+}
+
+function showFrameManually(index) {
+  stopFramePlayback();
+  void showFrame(index);
+}
+
+function toggleFramePlayback() {
+  if (state.playing) {
+    stopFramePlayback();
+    return;
+  }
+  if (state.frameCount <= 1) return;
+  state.playing = true;
+  updatePlaybackButton();
+  schedulePlaybackStep();
+}
+
+function schedulePlaybackStep() {
+  clearTimeout(playbackTimer);
+  playbackTimer = setTimeout(async () => {
+    if (!state.playing || state.frameCount <= 1) return;
+    const sourceVersion = state.sourceVersion;
+    const next = nextPlaybackFrame(state.frameIndex, state.frameCount);
+    const displayed = await showFrame(next);
+    if (!displayed || !state.playing || sourceVersion !== state.sourceVersion) {
+      stopFramePlayback();
+      return;
+    }
+    schedulePlaybackStep();
+  }, DEFAULT_PLAYBACK_INTERVAL_MS);
+}
+
+function stopFramePlayback() {
+  clearTimeout(playbackTimer);
+  playbackTimer = null;
+  if (!state.playing) return;
+  state.playing = false;
+  updatePlaybackButton();
+}
+
+function updatePlaybackButton() {
+  elements['frame-play'].textContent = state.playing ? '❚❚' : '▶';
+  elements['frame-play'].title = state.playing ? 'Pause trajectory' : 'Play at 1 frame per second';
+  elements['frame-play'].setAttribute('aria-label', state.playing ? 'Pause trajectory' : 'Play trajectory');
+  elements['frame-play'].setAttribute('aria-pressed', String(state.playing));
+  elements['frame-play'].classList.toggle('active', state.playing);
+}
+
+function updateCacheLabel() {
+  if (!state.cachePlan) {
+    elements['cache-label'].textContent = `cached ${cache.size}`;
+    return;
+  }
+  elements['cache-label'].textContent = state.cachePlan.fullTrajectory
+    ? `cached ${cache.size} / ${state.frameCount} · lazy all-frame`
+    : `cached ${cache.size} / ${state.cachePlan.limit} · adaptive window`;
+}
+
+function reassessFrameCache(frame) {
+  if (!state.cachePlan || state.frameCount <= 1) return;
+  const revised = chooseFrameCachePolicy(frame, state.frameCount, {
+    heapLimit: performance.memory?.jsHeapSizeLimit,
+    heapUsed: performance.memory?.usedJSHeapSize,
+    deviceMemoryGiB: navigator.deviceMemory,
+  });
+  if (revised.limit >= cache.limit) return;
+  state.cachePlan = revised;
+  state.prefetchToken += 1;
+  cache.setLimit(revised.limit);
+  updateCacheLabel();
+}
+
+function setRadiusPercent(rawValue, { source = 'number' } = {}) {
+  const normalized = normalizeRadiusPercent(rawValue, {
+    source,
+    sliderMinimum: Number(elements['radius-scale'].min),
+    sliderMaximum: Number(elements['radius-scale'].max),
+    inputMinimum: Number(elements['radius-percent'].min),
+    inputMaximum: Number(elements['radius-percent'].max),
+  });
+  if (!normalized) return;
+  const { percentage, sliderPercentage } = normalized;
+  state.radiusPercent = percentage;
+  elements['radius-scale'].value = String(sliderPercentage);
+  elements['radius-percent'].value = String(percentage);
+  setRangeProgress(elements['radius-scale']);
+  renderer.setRadiusScale(percentage / 100);
 }
 
 function configureCoordinateMode(frame) {
@@ -269,7 +796,7 @@ function updateCoordinateMode() {
   const requested = elements['coordinate-mode'].value;
   if (requested === 'unwrapped' && !state.frame.unwrappedPositions) {
     elements['coordinate-mode'].value = 'wrapped';
-    showToast('Unwrapped display requires xu/yu/zu, xsu/ysu/zsu, or complete ix/iy/iz image flags.');
+    showToast('Unwrapped display requires explicit image data, meaningful out-of-cell CFG coordinates, or an ordered multi-CFG sequence.');
     return;
   }
   state.coordinateMode = requested;
@@ -281,9 +808,15 @@ function updateCoordinateMode() {
 function refreshColorOptions() {
   const previous = state.colorMode;
   elements['color-mode'].replaceChildren(option('type', 'Atom type'));
-  state.frame.properties.forEach((property, index) => {
-    elements['color-mode'].append(option(`property:${index}`, `${property.name}${property.unit ? ` [${property.unit}]` : ''}`));
+  const propertyNames = new Set();
+  state.frame.properties.forEach((property) => {
+    if (propertyNames.has(property.name)) return;
+    propertyNames.add(property.name);
+    elements['color-mode'].append(option(`property:${property.name}`, `${property.name}${property.unit ? ` [${property.unit}]` : ''}`));
   });
+  if (state.analysis.coordination.enabled && !propertyNames.has('coordination')) {
+    elements['color-mode'].append(option('property:coordination', 'coordination (calculating…)'));
+  }
   const available = [...elements['color-mode'].options].some((item) => item.value === previous);
   state.colorMode = available ? previous : 'type';
   elements['color-mode'].value = state.colorMode;
@@ -294,44 +827,85 @@ function applyColors() {
   try {
     const palette = paletteForCurrentMode();
     renderer.setColors(palette.colors);
+    applyScalarVisibility(palette.legend);
     renderLegend(palette.legend);
   } catch (error) {
     showToast(error.message);
   }
 }
 
-function paletteForCurrentMode() {
-  if (state.colorMode === 'type') return colorsByType(state.frame);
-  const propertyIndex = Number(state.colorMode.slice('property:'.length));
-  const property = state.frame.properties[propertyIndex];
-  if (!property) {
-    state.colorMode = 'type';
-    elements['color-mode'].value = 'type';
-    return colorsByType(state.frame);
+function applyScalarVisibility(legend) {
+  if (legend.kind !== 'scalar') {
+    renderer.setVisibility(null);
+    return;
   }
-  return colorsByProperty(property, scalarColorRanges.get(property));
+  renderer.setVisibility(visibilityByProperty(
+    legend.property,
+    legend.customRange ? { minimum: legend.minimum, maximum: legend.maximum } : null,
+    scalarHideOutside.get(legend.property.name) !== false,
+  ));
 }
 
-async function runCoordination() {
-  if (!state.frame) return;
-  const cutoff = Number(elements.cutoff.value);
+function paletteForCurrentMode() {
+  if (state.colorMode === 'type') return colorsByType(state.frame);
+  const propertyName = state.colorMode.slice('property:'.length);
+  const property = state.frame.properties.find((candidate) => candidate.name === propertyName);
+  if (!property) {
+    return colorsByType(state.frame);
+  }
+  return colorsByProperty(
+    property,
+    scalarColorRanges.get(property.name),
+    scalarColorSchemes.get(property.name) ?? 'atomeye',
+  );
+}
+
+async function runCoordination({ automatic = false, frame = state.frame, frameIndex = state.frameIndex } = {}) {
+  if (!frame) return;
+  const cutoff = automatic ? state.analysis.coordination.cutoff : Number(elements.cutoff.value);
   if (!Number.isFinite(cutoff) || cutoff <= 0) {
     showToast('The cutoff radius must be greater than zero.');
     return;
   }
-  const frame = state.frame;
-  const frameIndex = state.frameIndex;
+  if (!automatic) {
+    state.analysis.coordination.enabled = true;
+    state.analysis.coordination.cutoff = cutoff;
+    state.colorMode = 'property:coordination';
+    refreshColorOptions();
+  }
+  const existing = frame.properties.find((property) => property.name === 'coordination');
+  if (existing?.analysisCutoff === cutoff) {
+    if (frame === state.frame) {
+      refreshColorOptions();
+      applyColors();
+      elements['analysis-state'].textContent = 'Calculated';
+      elements['analysis-state'].classList.add('ready');
+    }
+    return;
+  }
+  const request = state.analysis.coordination.request + 1;
+  state.analysis.coordination.request = request;
   elements['run-analysis'].disabled = true;
   elements['analysis-state'].textContent = 'Calculating…';
   elements['analysis-state'].classList.remove('ready');
+  setLoading(true, `Calculating coordination for frame ${frameIndex + 1}…`);
   try {
-    const result = await worker.coordination(frame, cutoff);
-    if (frame !== state.frame || frameIndex !== state.frameIndex) return;
-    const existing = frame.properties.findIndex((property) => property.name === 'coordination');
-    const property = { name: 'coordination', unit: '', data: result.coordination };
-    if (existing >= 0) frame.properties[existing] = property;
+    const result = await coordinationPool.analyze(frame, cutoff, {
+      onProgress: ({ completed, total, workerCount }) => {
+        if (frame !== state.frame) return;
+        elements['loading-text'].textContent = workerCount > 1
+          ? `Calculating coordination with ${workerCount} Workers… ${completed} / ${total}`
+          : 'Calculating coordination in a Worker…';
+      },
+    });
+    const existingIndex = frame.properties.findIndex((property) => property.name === 'coordination');
+    const property = { name: 'coordination', unit: '', data: result.coordination, analysisCutoff: cutoff };
+    if (existingIndex >= 0) frame.properties[existingIndex] = property;
     else frame.properties.push(property);
-    state.colorMode = `property:${existing >= 0 ? existing : frame.properties.length - 1}`;
+    reassessFrameCache(frame);
+    if (frame !== state.frame || frameIndex !== state.frameIndex
+        || !state.analysis.coordination.enabled || state.analysis.coordination.cutoff !== cutoff) return;
+    state.colorMode = 'property:coordination';
     refreshColorOptions();
     applyColors();
     elements['analysis-state'].textContent = 'Calculated';
@@ -341,10 +915,15 @@ async function runCoordination() {
     updateMemoryMetric();
     if (result.warning) showToast(result.warning);
   } catch (error) {
-    elements['analysis-state'].textContent = 'Failed';
-    showToast(error.message);
+    if (frame === state.frame) {
+      elements['analysis-state'].textContent = 'Failed';
+      showToast(error.message);
+    }
   } finally {
-    elements['run-analysis'].disabled = false;
+    if (frame === state.frame && request === state.analysis.coordination.request) {
+      elements['run-analysis'].disabled = false;
+      setLoading(false);
+    }
   }
 }
 
@@ -468,6 +1047,7 @@ function renderLegend(legend) {
   } else {
     const gradient = document.createElement('div');
     gradient.className = 'legend-gradient';
+    gradient.style.background = legend.gradient;
     const range = document.createElement('div');
     range.className = 'legend-range';
     const minimum = document.createElement('span');
@@ -477,31 +1057,68 @@ function renderLegend(legend) {
     range.append(minimum, maximum);
     const controls = document.createElement('div');
     controls.className = 'legend-controls';
-    const minimumControl = legendNumberControl('Min', legend.minimum);
-    const maximumControl = legendNumberControl('Max', legend.maximum);
+    const schemeControl = document.createElement('label');
+    schemeControl.className = 'legend-scheme';
+    const schemeLabel = document.createElement('span');
+    schemeLabel.textContent = 'Color map';
+    const schemeSelect = document.createElement('select');
+    for (const scheme of SCALAR_COLOR_SCHEMES) {
+      schemeSelect.append(option(scheme.value, scheme.label));
+    }
+    schemeSelect.value = legend.scheme;
+    schemeControl.append(schemeLabel, schemeSelect);
+    const step = scalarLegendStep(legend);
+    const minimumControl = legendNumberControl('Min', legend.minimum, step);
+    const editableMaximum = legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step;
+    const maximumControl = legendNumberControl('Max', editableMaximum, step);
     const actions = document.createElement('div');
     actions.className = 'legend-actions';
-    const apply = document.createElement('button');
-    apply.type = 'button';
-    apply.textContent = 'Apply';
+    const visibility = document.createElement('label');
+    visibility.className = 'legend-visibility';
+    const visibilityCheckbox = document.createElement('input');
+    visibilityCheckbox.type = 'checkbox';
+    visibilityCheckbox.checked = scalarHideOutside.get(legend.property.name) !== false;
+    visibility.append(visibilityCheckbox, document.createTextNode('Hide values outside range'));
     const automatic = document.createElement('button');
     automatic.type = 'button';
     automatic.textContent = 'Auto';
     automatic.disabled = !legend.customRange;
-    actions.append(apply, automatic);
-    controls.append(minimumControl.label, maximumControl.label, actions);
-    apply.addEventListener('click', () => {
-      const requestedMinimum = Number(minimumControl.input.value);
-      const requestedMaximum = Number(maximumControl.input.value);
-      if (!Number.isFinite(requestedMinimum) || !Number.isFinite(requestedMaximum) || requestedMaximum <= requestedMinimum) {
-        showToast('The legend maximum must be greater than its minimum.');
-        return;
-      }
-      scalarColorRanges.set(legend.property, { minimum: requestedMinimum, maximum: requestedMaximum });
+    actions.append(automatic);
+    controls.append(schemeControl, minimumControl.label, maximumControl.label, visibility, actions);
+    const applyLiveRange = (changed) => {
+      const coupled = coupleScalarRange(
+        Number(minimumControl.input.value),
+        Number(maximumControl.input.value),
+        changed,
+        step,
+      );
+      if (!coupled) return;
+      const { minimum: requestedMinimum, maximum: requestedMaximum } = coupled;
+      minimumControl.input.value = formatEditableNumber(requestedMinimum);
+      maximumControl.input.value = formatEditableNumber(requestedMaximum);
+      const limits = { minimum: requestedMinimum, maximum: requestedMaximum };
+      scalarColorRanges.set(legend.property.name, limits);
+      scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
+      const palette = colorsByProperty(legend.property, limits, legend.scheme);
+      renderer.setColors(palette.colors);
+      applyScalarVisibility(palette.legend);
+      minimum.textContent = formatValue(requestedMinimum);
+      maximum.textContent = formatValue(requestedMaximum);
+      automatic.disabled = false;
+    };
+    minimumControl.input.addEventListener('input', () => applyLiveRange('minimum'));
+    maximumControl.input.addEventListener('input', () => applyLiveRange('maximum'));
+    schemeSelect.addEventListener('change', () => {
+      scalarColorSchemes.set(legend.property.name, schemeSelect.value);
       applyColors();
     });
+    visibilityCheckbox.addEventListener('change', () => {
+      scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
+      const limits = scalarColorRanges.get(legend.property.name) ?? null;
+      renderer.setVisibility(visibilityByProperty(legend.property, limits, visibilityCheckbox.checked));
+    });
     automatic.addEventListener('click', () => {
-      scalarColorRanges.delete(legend.property);
+      scalarColorRanges.delete(legend.property.name);
       applyColors();
     });
     elements.legend.append(gradient, range, controls);
@@ -509,46 +1126,178 @@ function renderLegend(legend) {
   elements.legend.hidden = false;
 }
 
-function legendNumberControl(name, value) {
+function legendNumberControl(name, value, step) {
   const label = document.createElement('label');
   const text = document.createElement('span');
   text.textContent = name;
   const input = document.createElement('input');
   input.type = 'number';
-  input.step = 'any';
+  input.step = String(step);
   input.value = Number(value.toPrecision(8)).toString();
   label.append(text, input);
   return { label, input };
 }
 
+function scalarLegendStep(legend) {
+  if (legend.property.data instanceof Uint8Array
+      || legend.property.data instanceof Uint16Array
+      || legend.property.data instanceof Uint32Array
+      || legend.property.data instanceof Int8Array
+      || legend.property.data instanceof Int16Array
+      || legend.property.data instanceof Int32Array) return 1;
+  const span = Math.abs(legend.dataMaximum - legend.dataMinimum);
+  return span > 0 ? 10 ** Math.floor(Math.log10(span / 100)) : 0.01;
+}
+
+function formatEditableNumber(value) {
+  return Number(value.toPrecision(10)).toString();
+}
+
 function updateAxisTriad(directions) {
   const origin = 48;
-  const length = 27;
+  const length = 35;
+  const renderOrder = [];
   for (const axis of ['x', 'y', 'z']) {
     const direction = directions[axis];
     const endpointX = origin + direction.x * length;
     const endpointY = origin + direction.y * length;
     const projectedLength = Math.hypot(direction.x, direction.y);
-    const labelDistance = projectedLength > 0.08 ? 7 / projectedLength : 0;
+    const unitX = projectedLength > 1e-5 ? direction.x / projectedLength : 0;
+    const unitY = projectedLength > 1e-5 ? direction.y / projectedLength : -1;
+    const perpendicularX = -unitY;
+    const perpendicularY = unitX;
+    const labelDistance = projectedLength > 0.08 ? 7.5 / projectedLength : 0;
     const line = elements[`axis-${axis}-line`];
     const label = elements[`axis-${axis}-label`];
-    line.setAttribute('x2', endpointX.toFixed(2));
-    line.setAttribute('y2', endpointY.toFixed(2));
-    label.setAttribute('x', (endpointX + direction.x * labelDistance).toFixed(2));
-    label.setAttribute('y', (endpointY + direction.y * labelDistance + 3).toFixed(2));
-    line.parentElement.style.opacity = String(0.62 + 0.38 * (direction.depth + 1) / 2);
+    const group = line.parentElement;
+    const shadow = group.querySelector('.axis-shadow');
+    const shaftHighlight = group.querySelector('.axis-shaft-highlight');
+    const cone = group.querySelector('.axis-cone');
+    const coneBase = group.querySelector('.axis-cone-base');
+    const coneHighlight = group.querySelector('.axis-cone-highlight');
+    const depth = Math.max(0, Math.min(1, (direction.depth + 1) / 2));
+    const viewAligned = projectedLength < 0.08;
+    const visibleLength = projectedLength * length;
+    const coneLength = Math.min(10.5 + depth * 2, Math.max(3.5, visibleLength * 0.42));
+    const coneRadius = 4.2 + depth * 1.35;
+    const shaftEndX = endpointX - unitX * coneLength;
+    const shaftEndY = endpointY - unitY * coneLength;
+    const coneSideAX = shaftEndX + perpendicularX * coneRadius;
+    const coneSideAY = shaftEndY + perpendicularY * coneRadius;
+    const coneSideBX = shaftEndX - perpendicularX * coneRadius;
+    const coneSideBY = shaftEndY - perpendicularY * coneRadius;
+    const highlightOffset = -0.85;
+    const lineWidth = 4.2 + depth * 1.25;
+
+    for (const shaft of [line, shadow]) {
+      shaft.setAttribute('x2', shaftEndX.toFixed(2));
+      shaft.setAttribute('y2', shaftEndY.toFixed(2));
+    }
+    shaftHighlight.setAttribute('x1', (origin + perpendicularX * highlightOffset).toFixed(2));
+    shaftHighlight.setAttribute('y1', (origin + perpendicularY * highlightOffset).toFixed(2));
+    shaftHighlight.setAttribute('x2', (shaftEndX + perpendicularX * highlightOffset).toFixed(2));
+    shaftHighlight.setAttribute('y2', (shaftEndY + perpendicularY * highlightOffset).toFixed(2));
+    cone.setAttribute('points', `${coneSideAX.toFixed(2)},${coneSideAY.toFixed(2)} ${endpointX.toFixed(2)},${endpointY.toFixed(2)} ${coneSideBX.toFixed(2)},${coneSideBY.toFixed(2)}`);
+    coneBase.setAttribute('cx', '0');
+    coneBase.setAttribute('cy', '0');
+    coneBase.setAttribute('rx', (viewAligned ? coneRadius + 3 : 1.55 + depth * 0.65).toFixed(2));
+    coneBase.setAttribute('ry', (viewAligned ? coneRadius + 3 : coneRadius).toFixed(2));
+    coneBase.setAttribute('transform', viewAligned
+      ? `translate(${origin} ${origin})`
+      : `translate(${shaftEndX.toFixed(2)} ${shaftEndY.toFixed(2)}) rotate(${(Math.atan2(unitY, unitX) * 180 / Math.PI).toFixed(2)})`);
+    coneHighlight.setAttribute('x1', (shaftEndX + perpendicularX * coneRadius * 0.36).toFixed(2));
+    coneHighlight.setAttribute('y1', (shaftEndY + perpendicularY * coneRadius * 0.36).toFixed(2));
+    coneHighlight.setAttribute('x2', (endpointX - unitX * 1.35).toFixed(2));
+    coneHighlight.setAttribute('y2', (endpointY - unitY * 1.35).toFixed(2));
+    label.setAttribute('x', (viewAligned ? origin : endpointX + direction.x * labelDistance).toFixed(2));
+    label.setAttribute('y', (viewAligned ? origin - 9 : endpointY + direction.y * labelDistance + 3).toFixed(2));
+    line.style.strokeWidth = lineWidth.toFixed(2);
+    shadow.style.strokeWidth = (lineWidth + 2.8).toFixed(2);
+    group.style.opacity = String(0.5 + depth * 0.5);
+    for (const item of [line, shadow, shaftHighlight, cone, coneHighlight]) {
+      item.style.display = viewAligned ? 'none' : '';
+    }
+    group.classList.toggle('view-aligned', viewAligned);
+
+    const shaftGradient = document.getElementById(`axis-${axis}-shaft-gradient`);
+    const coneGradient = document.getElementById(`axis-${axis}-cone-gradient`);
+    for (const gradient of [shaftGradient, coneGradient]) {
+      gradient.setAttribute('x1', (origin + perpendicularX * lineWidth).toFixed(2));
+      gradient.setAttribute('y1', (origin + perpendicularY * lineWidth).toFixed(2));
+      gradient.setAttribute('x2', (origin - perpendicularX * lineWidth).toFixed(2));
+      gradient.setAttribute('y2', (origin - perpendicularY * lineWidth).toFixed(2));
+    }
+    renderOrder.push({ depth: direction.depth, group });
+  }
+  renderOrder.sort((left, right) => left.depth - right.depth);
+  for (const { group } of renderOrder) elements['axis-arrows'].append(group);
+}
+
+function syncProjectionControls(mode) {
+  for (const value of ['perspective', 'orthographic']) {
+    const button = elements[`projection-${value}`];
+    const active = value === mode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+}
+
+function setBackgroundColor(value, { close = false } = {}) {
+  if (!/^#[0-9a-f]{6}$/i.test(value)) return;
+  elements.background.value = value;
+  renderer.setBackground(value);
+  syncBackgroundControl(value);
+  if (close) elements['background-picker'].open = false;
+}
+
+function syncBackgroundControl(value) {
+  const normalized = value.toLowerCase();
+  elements['background-current'].style.setProperty('--swatch', normalized);
+  for (const button of document.querySelectorAll('[data-background]')) {
+    const active = button.dataset.background.toLowerCase() === normalized;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
   }
 }
 
 function setControlsEnabled(enabled) {
   for (const id of [
-    'coordinate-mode', 'color-mode', 'radius', 'projection', 'background', 'show-cell', 'png-background',
+    'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
+    'background', 'show-axes', 'show-cell', 'png-background', 'png-legend',
     'slice-axis', 'slice-position', 'cutoff', 'run-analysis',
   ]) {
     elements[id].disabled = !enabled;
   }
   for (const button of document.querySelectorAll('[data-view]')) button.disabled = !enabled;
-  elements['axis-triad'].hidden = !enabled;
+  for (const button of document.querySelectorAll('[data-background]')) button.disabled = !enabled;
+  elements['background-picker'].classList.toggle('is-disabled', !enabled);
+  if (!enabled) elements['background-picker'].open = false;
+  syncAxisVisibility();
+}
+
+function syncAxisVisibility() {
+  const hidden = !state.frame || !elements['show-axes'].checked;
+  elements['axis-triad'].toggleAttribute('hidden', hidden);
+  elements['axis-triad'].setAttribute('aria-hidden', String(hidden));
+}
+
+function showInteractionHint() {
+  clearTimeout(interactionHintTimer);
+  clearTimeout(interactionHintFadeTimer);
+  elements['interaction-hint'].classList.remove('is-hiding');
+  elements['interaction-hint'].hidden = false;
+  interactionHintTimer = setTimeout(dismissInteractionHint, 5000);
+}
+
+function dismissInteractionHint() {
+  clearTimeout(interactionHintTimer);
+  clearTimeout(interactionHintFadeTimer);
+  if (elements['interaction-hint'].hidden) return;
+  elements['interaction-hint'].classList.add('is-hiding');
+  interactionHintFadeTimer = setTimeout(() => {
+    elements['interaction-hint'].hidden = true;
+    elements['interaction-hint'].classList.remove('is-hiding');
+  }, 300);
 }
 
 function setLoading(visible, text = '') {

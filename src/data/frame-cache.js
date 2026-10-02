@@ -7,6 +7,15 @@ export class FrameCache {
 
   get size() { return this.frames.size; }
 
+  setLimit(limit) {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('The cache limit must be a positive integer.');
+    this.limit = limit;
+    while (this.frames.size > this.limit) {
+      const oldest = this.frames.keys().next().value;
+      this.frames.delete(oldest);
+    }
+  }
+
   has(index) { return this.frames.has(index); }
 
   get(index) {

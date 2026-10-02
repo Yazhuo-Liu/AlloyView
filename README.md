@@ -7,11 +7,16 @@ application.
 
 The current milestone closes the first useful loop:
 
-1. open a local CFG or LAMMPS dump;
+1. authorize a local folder, then open an individual CFG/LAMMPS file or an
+   automatically detected numbered CFG sequence;
 2. render atoms and the simulation cell on the GPU;
 3. calculate periodic coordination numbers off the UI thread;
 4. color, slice, inspect, change trajectory frames, and export an opaque or
-   transparent PNG.
+   transparent PNG with an optional embedded legend.
+
+The single **Examples** button opens an in-app listing of the bundled
+`examples/` files and the `fixed_end_climb/` sequence folder; examples are not
+split into separate top-bar actions.
 
 ## Run locally
 
@@ -23,8 +28,11 @@ npm run dev
 ```
 
 Open <http://localhost:5173>. The development server sends COOP/COEP headers so
-that a future threaded Wasm build can use shared memory. The current release uses
-one Worker and does not require `SharedArrayBuffer`.
+that the coordination Worker pool can share one coordinate buffer when the
+browser supports `SharedArrayBuffer`. Non-isolated deployments, including
+GitHub Pages, use bounded structured-clone copies between Workers in the user's
+browser instead. Both modes parse and calculate entirely on the user's device;
+the static host never receives structure data or performs analysis.
 
 Build and preview the static site:
 
@@ -69,7 +77,10 @@ session does not provide a browser graphics context.
 - AtomEye CFG: basic and extended CFG, `H0`, `A`, `Transform`, `eta`, optional
   velocities, and scalar `auxiliary[]` columns. LAMMPS-written CFG auxiliaries
   `id` and complete `ix/iy/iz` image flags are recognized for stable atom IDs
-  and unwrapped display. A non-identity `Transform`
+  and unwrapped display. Meaningful out-of-cell fractional coordinates are
+  wrapped while retaining the original unwrapped view. Multiple CFG files can
+  be selected together and are continuously unwrapped by ID and adjacent
+  minimum-image displacement. A non-identity `Transform`
   combined with non-zero `eta` is rejected because upstream AtomEye gives those
   fields ambiguous precedence.
 - LAMMPS text dump: `id`, numeric `type`, common scalar columns, `x/y/z`,
@@ -77,20 +88,47 @@ session does not provide a browser graphics context.
   `xy/xz/yz` boxes; per-axis boundary flags; and optional `ix/iy/iz` image flags
   for unwrapped display. General triclinic `abc origin`, compressed/binary dumps,
   partial image flags, and non-numeric custom columns (except `element`) are
-  rejected explicitly.
-- Trajectories: byte offsets are indexed incrementally from the local `File`;
-  requested frames are sliced and parsed on demand. The UI keeps at most three
-  parsed frames.
+  rejected explicitly. Format recognition is content-based; conventional
+  `.dump`, `.lmp`, `.lammpstrj`, and `.lammpstraj` names are shown as candidates.
+  A `.lmp` containing a LAMMPS data/input file rather than `ITEM:` dump blocks
+  is not silently treated as a trajectory and is not supported yet.
+- Trajectories: LAMMPS byte offsets are indexed incrementally; requested frames
+  are sliced and parsed on demand. A single dump file may contain multiple
+  frames. Numbered LAMMPS dump files are naturally sorted, their internal frame
+  indexes are combined, and frames remain on-demand. Multi-CFG sequences,
+  including NEB image sets, are naturally sorted and parsed forward with one
+  continuity state. **Open local** recursively scans a
+  user-authorized directory, verifies formats from their headers, and detects a
+  varying run of digits anywhere in a structure filename, while keeping different
+  folders, formats, and filename patterns separate. The in-browser chooser displays every
+  file: selecting any detected sequence member opens the complete sequence,
+  while non-structure files remain visible but disabled. After displaying the
+  first frame, a memory-budgeted background prefetch caches the complete
+  trajectory when practical, or a bounded window around the current frame for
+  larger data. The viewer labels all such inputs generically as trajectory
+  frames. The bottom timeline can play continuously at one frame per second and
+  loops from the final frame to the first without queuing overlapping loads.
 - Rendering: one instanced quad per atom with an analytic sphere/depth shader,
   optional wrapped/unwrapped trajectory coordinates, and an optional cell
-  wireframe. The camera uses a Z-up constrained orbit, six orthographic standard
-  views, and a live Cartesian axis tripod. There is no per-atom mesh or draw call.
+  wireframe. Per-element radii are uploaded per atom; the slider covers
+  20–200%, while direct numeric entry covers 5–500%. The camera uses a Z-up
+  constrained orbit, six orthographic standard views, and explicit Perspective
+  and Ortho buttons. Background presets provide dark, black, white, ivory, and
+  pale-yellow choices before a custom color input. The optional, default-on
+  Cartesian tripod uses camera-dependent depth ordering and shading. There is no
+  per-atom mesh or draw call.
 - Analysis: cutoff-based coordination number using fractional-space linked cells,
   cell face heights, per-axis periodic bin wrapping, and a triclinic-safe image
-  search. A recognized metal composition initializes an editable radius-based
-  cutoff suggestion; unknown types fall back to 3.00 Å. Scalar color legends
-  have editable ranges. Display unwrapping never changes the coordinates used
-  for analysis.
+  search. Large frames are partitioned across a memory-aware JavaScript Worker
+  pool; small frames stay on one Worker to avoid parallel overhead. A recognized metal composition initializes an editable radius-based
+  cutoff suggestion; unknown types fall back to 3.00 Å. Scalar properties can
+  use AtomEye rainbow, Viridis, Plasma, Cool–warm, or Grayscale maps. The chosen
+  map and live legend thresholds persist by property when the frame changes;
+  thresholds hide out-of-range atoms by default and push the opposite bound to
+  remain strictly ordered. PNG export can independently include the viewport
+  background and the current type/scalar legend. Active coordination analysis
+  is recomputed automatically on a newly displayed frame. Display unwrapping
+  never changes the coordinates used for analysis.
 
 More detail is in [docs/FORMATS.md](docs/FORMATS.md) and actual executed results
 are in [docs/VALIDATION.md](docs/VALIDATION.md).
@@ -119,8 +157,16 @@ This is a provenance and risk statement, not legal advice.
   the main-thread copy, and GPU buffers. One million atoms is an exploration
   target, not a performance claim.
 - Coordination has one global cutoff, not a species-pair matrix.
-- Bonds, DXA, PTM, CNA, defect lines, and periodic image replication are future
-  modules.
+- Multi-CFG minimum-image unwrapping assumes adjacent images move by less than
+  half a periodic cell per axis. A single already-wrapped CFG cannot reveal
+  historical crossings without image flags or an adjacent reference frame.
+- Browser file permissions do not allow a normal single-file picker to enumerate
+  sibling files as a native desktop application can. **Open local** therefore
+  requests directory read access and provides its own file/sequence chooser.
+- Bonds, normalized central symmetry, local strain, partial `g(r)`, DXA, PTM,
+  CNA, defect lines, and periodic image replication are future modules. The
+  AtomEye-evidenced migration candidates are separated from unrelated features
+  in `docs/ATOMEYE_REVIEW.md`.
 - `wasm/` defines the intended native ABI, but the verified default build uses
   the JavaScript Worker implementation because Emscripten is not installed in
   the validation environment.

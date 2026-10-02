@@ -1,6 +1,6 @@
 # Validation record
 
-Validation date: 2026-10-01 (America/New_York)
+Validation date: 2026-10-02 (America/New_York)
 
 ## Environment
 
@@ -33,22 +33,31 @@ Command:
 npm test
 ```
 
-Result: all 6 test files passed (parser, coordination, cutoff recommendation,
-palette ranges, bounded frame cache, and renderer state), with no failures. The
-cases executed were:
+Result: all 14 test files passed (parser, coordination and range partitioning,
+Worker-count policy, cutoff recommendation, palette ranges, atomic radii,
+file-sequence discovery, multi-file LAMMPS indexing, trajectory unwrapping,
+adaptive frame-cache policy, renderer state, and suppression of blocking UI
+progress for background frame prefetch, plus playback interval/wrapping),
+with no failures. The cases executed were:
 
 - extended CFG: 31 atoms, IDs, FCC cell, fractional/Cartesian coordinates,
   mass and `site_energy` property;
 - basic CFG: `A` and `Transform` coordinate conversion, plus symmetric
   Lagrangian `eta` deformation;
 - malformed/incomplete CFG rejection;
-- the repository-root `100110.cfg`: 7,648 unique IDs spanning 1–7,648, Ni type,
-  480 atoms with `iz=-1`, unwrapped Z displacement of exactly one negative cell
-  vector, and removal of `id/ix/iy/iz` from generic scalar properties;
+- a self-contained LAMMPS-generated CFG fixture verifies promotion of `id` and
+  `ix/iy/iz`, unwrapped cell-vector translation, and removal of those semantic
+  fields from generic scalar properties;
+- out-of-cell CFG coordinates are wrapped while their original unwrapped view
+  and inferred image flags are retained; `1e-6` boundary noise is canonicalized
+  without inventing crossing history;
 - restricted-triclinic LAMMPS bound correction and scaled coordinates;
 - triclinic `ix/iy/iz` image translation, explicit `xu/yu/zu`, wrapping only
   along periodic axes, and partial-image-flag rejection;
 - two-frame byte-offset indexing and frame-2 on-demand parsing;
+- two numbered `.lmp` dump files containing two frames each: numeric file order,
+  four-frame combined indexing, cross-file random frame access, and range-error
+  reporting;
 - explicit general-triclinic and non-numeric-property rejection;
 - perfect 2×2×2 FCC coordination = 12 at 3.0 Å;
 - perfect 2×2×2 BCC coordination = 8 at 3.0 Å;
@@ -57,22 +66,42 @@ cases executed were:
 - a skew restricted-triclinic periodic pair;
 - a 3×3×3 FCC cell with one vacancy: exactly the 12 nearest sites change from
   coordination 12 to 11;
-- three-entry LRU eviction, including access-order refresh.
+- LRU eviction, access-order refresh, and safe run-time cache-limit shrinking
+  and growth;
+- memory-policy selection of complete lazy caching for a small trajectory and a
+  bounded adaptive window for a synthetic million-atom/500-frame case (policy
+  test only; it does not allocate all 500 frames);
 - cell-box visibility and wrapped/unwrapped display-buffer changes request
   redraws without replacing the analysis frame; transparent PNG export selects
   a transparent render, restores the opaque viewport afterward, and flips WebGL
-  pixel rows into the PNG's top-to-bottom order.
+  pixel rows into the PNG's top-to-bottom order. The canvas legend test verifies
+  that a scalar PNG overlay receives the selected color-map stops and the active
+  visible range.
 - six standard camera presets choose the expected constrained orientation and
   orthographic projection; the coordinate tripod maps global Cartesian axes to
   screen directions;
-- element-aware cutoff recommendation, numeric-type fallback, and custom scalar
-  legend ranges including outlier color clamping and invalid-range rejection.
-
-The real `100110.cfg` was also parsed and analyzed through the JavaScript
-reference path at the suggested 2.85 Å Ni cutoff. One run measured 55.43 ms for
-parsing and 90.19 ms for coordination. Its coordination histogram was
-`7:48, 8:68, 10:24, 11:136, 12:7364, 13:8`. These are Node timings on the CPU
-listed above, not browser or GPU performance measurements.
+- element-aware cutoff recommendation, periodic-table display radii with a
+  generic fallback, numeric-type fallback, AtomEye-style beige/rainbow defaults,
+  all selectable scalar color maps and their endpoints, custom scalar ranges
+  including outlier clamping, and strict live bound coupling in both adjustment
+  directions;
+- per-atom visibility-mask upload for threshold filtering;
+- coordination results from two independent atom-index ranges merge exactly to
+  the single-range FCC result; the Worker-count policy selects one Worker for a
+  small frame, two for 100k atoms on eight advertised cores, up to six for one
+  million atoms, and reduces to one under an artificial clone-memory limit;
+- synthetic ID-reordered periodic crossing plus all 40 files in
+  `examples/fixed_end_climb`: 257 stable atoms per image, 32 non-zero inferred
+  image-flag components in `replica.39.cfg`, maximum absolute flag 1, and maximum
+  adjacent fractional step 0.001932 (well below the 0.5 ambiguity threshold).
+- numbered CFG discovery with the varying digit run at an arbitrary filename
+  position (including `replica.cfg.0`), content-based header recognition, fixed
+  numeric fields, `.cfg`/`.dump` segment fallback hints, separate subdirectories,
+  missing-index reporting, standalone LAMMPS files, and manual non-numbered CFG
+  selection. Explicitly rejected log/text files remain excluded even when their
+  filename extension might otherwise be used as a weak format hint.
+- `_number.cfg` and `_number.lmp` sequence patterns plus `.lmp`, `.lammpstrj`,
+  and `.lammpstraj` LAMMPS dump filename recognition.
 
 The FCC/BCC coordination expectations are analytic reference results for a
 cutoff between the first and second shells. A binary comparison against a built
@@ -91,9 +120,10 @@ This checks the portable C++ source, not an Emscripten/Wasm artifact. The defaul
 Worker JavaScript path is the runtime that was executed by the automated tests.
 
 `npm run build` also completed successfully. The generated static site was
-served locally and returned HTTP 200 for the document, module Worker, and example
-trajectory. The observed MIME types were `text/html`, `text/javascript`, and
-`text/plain`, and the server emitted the documented COOP/COEP/CORP headers.
+served locally and returned HTTP 200 for the document, the new coordination
+module Worker, and `examples/fixed_end_climb/replica.39.cfg`. The observed MIME
+types were `text/html`, `text/javascript`, and `text/plain`, and the server
+emitted the documented COOP/COEP/CORP headers.
 
 ## 97,556-atom CPU benchmark
 
@@ -103,15 +133,16 @@ cells (97,556 atoms), 4.05 Å lattice constant, 3.0 Å cutoff, orthogonal PBC,
 
 | Stage | Measured result |
 | --- | ---: |
-| Generate benchmark text (not a product stage) | 117.71 ms |
-| Parse LAMMPS frame | 200.34 ms |
-| Coordination analysis | 372.35 ms |
+| Generate benchmark text (not a product stage) | 185.14 ms |
+| Parse LAMMPS frame | 323.94 ms |
+| Coordination analysis | 297.24 ms |
 | Candidate pairs tested | 1,905,076 |
 | Result | all 97,556 atoms have coordination 12 |
-| Process RSS after run | 170.83 MiB |
-| Node heap used after run | 59.23 MiB |
+| Process RSS after run | 169.97 MiB |
+| Node heap used after run | 58.65 MiB |
 
-These are one-run Node timings, not browser performance guarantees. File index
+These are one-run Node timings from the direct single-range kernel, not a browser
+Worker-pool speedup measurement or browser performance guarantee. File index
 time, GPU upload, and frame rate are separate stages and were not conflated with
 the CPU numbers. The 1,000,000-atom path was not executed; it is explicitly
 unverified.
@@ -127,3 +158,10 @@ unverified.
 - confirmation from DevTools/network policy that no local file bytes leave the
   page (the code has no upload path, but this was not network-captured here);
 - optional Emscripten build and result parity with the JavaScript kernel.
+- visual/manual confirmation of the bottom discrete timeline, preset-adjacent
+  segmented projection controls, background palette, continuously shaded 3D
+  axis tripod, playback button, live legend controls, and final PNG legend
+  appearance;
+- end-to-end browser timing of the multi-Worker coordination pool with and
+  without cross-origin-isolated shared coordinates. Unit tests cover its range
+  merge and resource-selection policy, not browser scheduling speedup.

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { axisDirectionsFromView, WebGLRenderer } from '../src/render/webgl-renderer.js';
+import { axisDirectionsFromView, drawLegendOverlay, WebGLRenderer } from '../src/render/webgl-renderer.js';
 
 test('cell box visibility is renderer state and requests a redraw', () => {
   const renderer = Object.create(WebGLRenderer.prototype);
@@ -41,6 +41,27 @@ test('display coordinates can change without replacing the analysis frame', () =
   assert.equal(renderer.displayPositions, unwrapped);
   assert.equal(uploads[1][2], unwrapped);
   assert.equal(redraws, 1);
+});
+
+test('per-atom visibility mask uploads without replacing the analysis frame', () => {
+  const renderer = Object.create(WebGLRenderer.prototype);
+  const uploads = [];
+  renderer.frame = {};
+  renderer.atomCount = 3;
+  renderer.visibilityBuffer = {};
+  renderer.gl = {
+    ARRAY_BUFFER: 0x8892,
+    DYNAMIC_DRAW: 0x88E8,
+    bindBuffer(target, buffer) { uploads.push(['bind', target, buffer]); },
+    bufferData(target, data, usage) { uploads.push(['data', target, data, usage]); },
+  };
+  renderer.requestRender = () => {};
+  const mask = new Uint8Array([255, 0, 255]);
+
+  renderer.setVisibility(mask);
+  assert.equal(renderer.visibility, mask);
+  assert.equal(uploads[1][2], mask);
+  assert.throws(() => renderer.setVisibility(new Uint8Array(2)), /does not match/);
 });
 
 test('transparent PNG export uses a transparent render and restores the viewport', () => {
@@ -100,6 +121,61 @@ test('transparent PNG export uses a transparent render and restores the viewport
   }
 });
 
+test('PNG scalar legend overlay uses the selected color map and visible range', () => {
+  const texts = [];
+  const stops = [];
+  const context = {
+    save() {},
+    restore() {},
+    fillRect() {},
+    strokeRect() {},
+    fillText(value) { texts.push(value); },
+    createLinearGradient() {
+      return { addColorStop(position, color) { stops.push([position, color]); } };
+    },
+  };
+
+  drawLegendOverlay(context, {
+    kind: 'scalar',
+    title: 'coordination',
+    unit: '',
+    minimum: 8,
+    maximum: 12,
+    schemeLabel: 'Viridis',
+    colorStops: [[0, 68, 1, 84], [1, 253, 231, 37]],
+  }, 640, 480);
+
+  assert.deepEqual(texts, ['coordination', 'Viridis', '8', '12']);
+  assert.deepEqual(stops, [[0, 'rgb(68 1 84)'], [1, 'rgb(253 231 37)']]);
+});
+
+test('PNG atom-type legend overlay draws the current type swatches', () => {
+  const texts = [];
+  const arcs = [];
+  const context = {
+    save() {},
+    restore() {},
+    fillRect() {},
+    strokeRect() {},
+    fillText(value) { texts.push(value); },
+    beginPath() {},
+    arc(...values) { arcs.push(values); },
+    fill() {},
+  };
+
+  drawLegendOverlay(context, {
+    kind: 'types',
+    title: 'Atom type',
+    items: [
+      { label: 'Al', color: [201, 198, 181] },
+      { label: 'Ni', color: [214, 194, 151] },
+    ],
+  }, 640, 480);
+
+  assert.deepEqual(texts, ['Atom type', 'Al', 'Ni']);
+  assert.equal(arcs.length, 2);
+});
+
 test('standard views set a constrained camera orientation and orthographic projection', () => {
   const renderer = Object.create(WebGLRenderer.prototype);
   renderer.pan = [2, 3, 4];
@@ -117,6 +193,28 @@ test('standard views set a constrained camera orientation and orthographic proje
   renderer.setView('top');
   assert.equal(renderer.pitch, Math.PI / 2);
   assert.deepEqual(renderer.cameraOrientation().upHint, [0, 1, 0]);
+});
+
+test('projection changes notify the segmented control', () => {
+  const renderer = Object.create(WebGLRenderer.prototype);
+  renderer.requestRender = () => {};
+  let projection;
+  renderer.onProjectionChange = (value) => { projection = value; };
+
+  renderer.setProjection('orthographic');
+  assert.equal(renderer.projectionMode, 'orthographic');
+  assert.equal(projection, 'orthographic');
+  assert.throws(() => renderer.setProjection('fish-eye'), /Unknown projection mode/);
+});
+
+test('light backgrounds switch the cell box to a darker contrast color', () => {
+  const renderer = Object.create(WebGLRenderer.prototype);
+  renderer.requestRender = () => {};
+
+  renderer.setBackground('#ffffff');
+  assert.deepEqual(renderer.cellColor, [0.22, 0.34, 0.38]);
+  renderer.setBackground('#000000');
+  assert.deepEqual(renderer.cellColor, [0.62, 0.78, 0.81]);
 });
 
 test('axis tripod directions use global Cartesian axes in screen space', () => {

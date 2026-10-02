@@ -41,8 +41,11 @@ unnecessary dependencies.
 
 AlloyView therefore uses a narrow compute contract: typed arrays for fractional
 coordinates and a 3×3 cell in, typed per-atom results out. `wasm/coordination.cpp`
-implements that ABI independently. The Web Worker first attempts the optional
-Wasm module and otherwise executes the code-equivalent JavaScript kernel.
+implements that ABI independently. The interactive application currently uses
+the range-partitionable JavaScript kernel so large frames can be split across a
+Worker pool. The optional single-call Wasm ABI remains an experimental build
+target; it needs a ranged entry point before it can replace pooled tasks without
+silently returning to one core.
 
 ## Actual parallel mechanisms in this snapshot
 
@@ -90,3 +93,28 @@ blocked pending written license clarification. This is not legal advice.
 - **Replace:** AX/X11 renderer with WebGL 2 instanced impostors; X11/CUI controls
   with DOM/pointer controls; native file I/O with `File`, `Blob.slice()`, and
   Workers; process/MPI orchestration with browser task boundaries.
+
+## Analysis migration inventory
+
+This list is limited to functionality evidenced in the pinned upstream commit.
+It deliberately does not attribute CNA from unrelated AtomEye forks, nor DXA or
+PTM, to this source tree.
+
+| Upstream feature | Code evidence | Browser migration assessment |
+| --- | --- | --- |
+| Coordination number and histogram | `A3/geo.c` builds `coordination[]` from `N`; `A3/info.c` prints the histogram; `A3/utils.c` colors by coordination. | **Implemented independently.** AlloyView uses the same neighbor-list invariant with an explicit uniform cutoff, triclinic minimum images, a Worker pool, scalar coloring, and live range filtering. A histogram UI remains small follow-up work. |
+| Central-symmetry parameter | `A3/geo.c:evaluate_central_symm()` creates a non-pairwise image list and pairs the nearest even number of displacement vectors in `compute_central_symm()`. | **Good next candidate.** It can reuse AlloyView's neighbor search, but the UI must expose the even neighbor count and document AtomEye's normalized result rather than silently calling it the conventional unnormalized CSP. |
+| Local geometric shear measure | `A3/geo.c:evaluate_shear_strain()` selects the modal coordination shell, accumulates a local metric tensor, and reduces it to a Mises invariant, optionally subtracting the mean tensor. | **Migratable with care.** It is a single-frame geometric disorder/shear measure, not the same calculation as reference-frame atomic strain. It needs a separately named module and validation fixtures. |
+| Reference-frame least-squares deformation and strain | `Atoms/LeastSquareStrain.c:ComputeLeastSquareDeformationGradient()` and `A3/LeastSquareStrain.c:LeastSquareStrain_Append()` produce `eta_Mises`, `eta_hydro`, and nine `J` components from an imprinted isoatomic reference. | **High-value sequence feature.** Stable IDs, a chosen reference frame, PBC-aware neighbor correspondence, and singular-fit reporting are required. AlloyView's trajectory-level analysis state is now designed to hold such a reference. |
+| Partial radial distribution functions, `g(r)` | `Atoms/Gr.c` owns species-pair cutoffs, meshes, accumulation, normalization, and save logic. | **Straightforward global analysis.** Implement a Worker histogram returning species-pair curves; replace `FILE*`/Matlab output with typed arrays and a browser plot/export. It is global rather than per-atom coloring. |
+| Pair cutoffs, neighbor/bond graph, and coordination-based visibility | `Atoms/Neighborlist.c`, `A3/rcut_patch.c`, and `A3/utils.c` maintain species-pair cutoffs and bond/coordination display state. | **Useful shared infrastructure.** Generalize the current single-cutoff neighbor interface to a pair matrix, then reuse it for bonds, coordination, CSP, and strain. Rendering bonds should remain a WebGL concern. |
+| Auxiliary scalar coloring and thresholds | `A3/A.c` and `A3/utils.c` select auxiliary arrays, colormaps, saturation, and visibility thresholds. | **Implemented in browser form.** CFG/dump scalar properties share a jet map, persistent live limits, and optional out-of-range hiding. |
+| Distance, bond-angle, and local atom inquiry | `doc/atomeye.html` and the A3 interaction paths expose atom/bond information and geometric queries. | **Easy UI addition.** Picking already preserves atom IDs across frames; multi-selection and a small measurement overlay are needed. |
+| Vector-field arrows | Upstream README documents `draw_arrows` for consecutive auxiliary triplets and overlays. | **Rendering feature, not an analysis kernel.** Suitable after vector-property parsing is made explicit. |
+| Voronoi grain construction | `Atoms/Voronoi.c` rotates/cuts copies around seed sites to generate polycrystals and removes close GB atoms. | **Do not mislabel as Voronoi analysis.** It is a structure-construction tool, not per-atom Voronoi volume/index computation. It belongs in a future builder module, if at all. |
+
+Recommended order is: shared pair-cutoff neighbor graph → coordination histogram
+and bonds → normalized central symmetry → reference-frame least-squares strain →
+partial `g(r)`. The first three reuse the current frame-local data contract;
+least-squares strain is the first feature that needs persistent cross-frame
+reference state.

@@ -3,10 +3,12 @@ import {
   fractionalToCartesian,
   multiply3,
   validateFrame,
+  wrapFractional,
 } from '../data/model.js';
 
 const NUMBER_PATTERN = '[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[EeDd][-+]?\\d+)?';
 const IDENTITY = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+const CFG_BOUNDARY_TOLERANCE = 1e-5;
 
 export function parseCfg(text, sourceName = 'structure.cfg') {
   const startedAt = performance.now();
@@ -122,9 +124,12 @@ export function parseCfg(text, sourceName = 'structure.cfg') {
   const parsed = entryCount === null
     ? parseBasicAtoms(lines, dataIndex, count)
     : parseExtendedAtoms(lines, dataIndex, count, entryCount, noVelocity, auxiliary);
-  const fractional = Float32Array.from(parsed.fractional);
+  const rawFractional = Float64Array.from(parsed.fractional);
+  const fractional = wrapCfgFractional(rawFractional, cell.pbc);
   const semantics = extractExtendedSemantics(parsed.properties, count);
   let unwrappedPositions;
+  let imageFlags = semantics.imageFlags;
+  let unwrapSource;
   if (semantics.imageFlags) {
     const unwrappedFractional = Float64Array.from(fractional);
     for (let atom = 0; atom < count; atom += 1) {
@@ -133,15 +138,27 @@ export function parseCfg(text, sourceName = 'structure.cfg') {
       }
     }
     unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
+    unwrapSource = 'ix/iy/iz';
+  } else {
+    imageFlags = inferCfgImageFlags(rawFractional, cell.pbc);
+    if (imageFlags) {
+      const unwrappedFractional = Float64Array.from(
+        fractional,
+        (value, index) => value + imageFlags[index],
+      );
+      unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
+      unwrapSource = 'out-of-cell CFG coordinates';
+    }
   }
   const frame = validateFrame({
     ids: semantics.ids ?? Float64Array.from({ length: count }, (_, index) => index + 1),
     types: Uint16Array.from(parsed.types),
     typeLabels: parsed.typeLabels,
+    idSource: semantics.ids ? 'explicit' : 'row-order',
     positions: fractionalToCartesian(fractional, cell),
     unwrappedPositions,
-    imageFlags: semantics.imageFlags,
-    unwrapSource: unwrappedPositions ? 'ix/iy/iz' : undefined,
+    imageFlags,
+    unwrapSource,
     fractional,
     cell,
     properties: semantics.properties,
@@ -151,6 +168,33 @@ export function parseCfg(text, sourceName = 'structure.cfg') {
     parseMs: performance.now() - startedAt,
   });
   return frame;
+}
+
+function wrapCfgFractional(fractional, pbc) {
+  const stabilized = Float64Array.from(fractional, (value, index) => {
+    if (!pbc[index % 3]) return value;
+    const nearestInteger = Math.round(value);
+    return Math.abs(value - nearestInteger) <= CFG_BOUNDARY_TOLERANCE ? nearestInteger : value;
+  });
+  return wrapFractional(stabilized, pbc);
+}
+
+function inferCfgImageFlags(rawFractional, pbc) {
+  let hasMeaningfulImage = false;
+  const flags = new Int32Array(rawFractional.length);
+  for (let index = 0; index < rawFractional.length; index += 1) {
+    if (!pbc[index % 3]) continue;
+    const value = rawFractional[index];
+    if (value < -CFG_BOUNDARY_TOLERANCE || value > 1 + CFG_BOUNDARY_TOLERANCE) {
+      const image = Math.floor(value);
+      if (image < -2_147_483_648 || image > 2_147_483_647) {
+        throw cfgError(`Fractional coordinate ${value} requires an unsupported image flag.`);
+      }
+      flags[index] = image;
+      hasMeaningfulImage = true;
+    }
+  }
+  return hasMeaningfulImage ? flags : undefined;
 }
 
 function parseBasicAtoms(lines, start, count) {

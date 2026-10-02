@@ -13,3 +13,13 @@ test('frame cache enforces its limit and uses LRU ordering', () => {
   assert.equal(cache.has(1), false);
   assert.deepEqual(cache.keys(), [2, 0, 3]);
 });
+
+test('frame cache limit can grow and shrink without losing newest frames', () => {
+  const cache = new FrameCache(4);
+  for (let index = 0; index < 4; index += 1) cache.set(index, { id: index });
+  cache.setLimit(2);
+  assert.deepEqual(cache.keys(), [2, 3]);
+  cache.setLimit(5);
+  cache.set(4, { id: 4 });
+  assert.deepEqual(cache.keys(), [2, 3, 4]);
+});

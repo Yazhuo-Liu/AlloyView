@@ -4,6 +4,7 @@ dist/
 coverage/
 *.log
 .DS_Store
+TODO
 
 # Local environment files
 .env
