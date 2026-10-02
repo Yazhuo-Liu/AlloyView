@@ -1,6 +1,82 @@
 # Validation record
 
-Validation date: 2026-10-02 (America/New_York)
+Validation date: 2026-10-02 (UTC)
+
+## PTM, atomic elastic strain and PNG arrows
+
+Validated with Node.js v24.19.0 and Chromium 151.0.7922.173:
+
+- `npm run build:ptm`: real MIT PTM library compiled with Emscripten 3.1.69 /
+  LLVM 19. Browser-compatible ES modules contain no static Node imports. Vendored
+  source checksums are verified; generated artifacts ship with license notices.
+- `npm test`: 113 tests passed, none failed/skipped. Real Wasm tests identify
+  ideal FCC/HCP/BCC/SC/cubic diamond/hexagonal diamond, primitive periodic cells,
+  graphene and an icosahedral center. Mild perturbation, selectable templates,
+  accepted/rejected RMSD and disabled cutoff are tested.
+- Ideal-reference strain vanishes for all six supported 3D reference phases.
+  A 5% uniform dilation gives hydrostatic strain 0.05125 and volume change
+  0.157625; rigid rotation gives zero; finite simple shear matches the analytic
+  Green–Lagrange invariants. Nonideal hexagonal `c/a`, axial stretch, edited
+  lattice constants, per-species references, unmatched NaNs and cached ranges
+  are checked against independent expected results.
+- Real Node Workers merge parallel PTM and fresh strain including all nine
+  deformation components, respect the shared concurrency cap, preserve input
+  arrays and reuse shared cached fits. Adaptive cache accounting includes the
+  PTM matrices without counting aliased scalar property buffers twice.
+- `npm run build` and `npm run test:browser`: passed. The production build is
+  served at `/AlloyView/` without isolation headers. Tests load the actual Wasm
+  asset, run PTM/strain together, check Al/Fe reference presets, change `a` and
+  verify the resulting physical volume change, reuse PTM, reject a mismatched
+  reference, check all nine legend rows and visibility, and follow/cache BCC
+  trajectory frames. Numeric types require explicit element selection; changing
+  PTM's template mask keeps its classification separate from the templates
+  required by strain. Existing regressions remain enabled.
+- Actual PNG blobs verify optional XYZ arrows are off by default, independent
+  of the screen axes toggle, limited to their overlay region and preserve
+  transparent corners. Renderer tests verify rotated arrow directions. Existing
+  transparent type/scalar legend pixel checks still pass.
+
+These are deterministic scientific fixtures and browser correctness checks;
+they do not establish recognition accuracy across all temperatures/materials,
+million-atom performance or a target GPU's rendering speed. Atomic strain here
+uses an ideal lattice reference, not OVITO/AtomEye's trajectory reference-frame
+atomic-strain workflow.
+
+## CNA and normalized central-symmetry update
+
+Validated in the cloud environment with Node.js v24.19.0 and Chromium
+151.0.7922.173, using the existing SwiftShader browser runner.
+
+- `npm test`: 96 tests passed, none failed/skipped. Added ideal FCC/HCP/BCC,
+  icosahedral center, vacancy, mild perturbation, mixed lattice scales, primitive
+  periodic cells, rotated/scaled cells, skew/mixed-PBC brute-force neighbor
+  comparisons, ranged kernels, palette/filter counts and real Worker tests.
+- Real Node Workers verified range merging for CNA, central symmetry and
+  coordination, the shared concurrency cap, shared/copied inputs, cancellation,
+  pool shutdown and recovery from Worker startup/analysis errors.
+- `npm run build`: passed. `npm run test:browser`: production assets without
+  isolation headers tested CNA/CSP, concurrent coordination, FCC-vacancy counts
+  (19 FCC / 12 Other), filtering and picking, fixed/adaptive method changes,
+  BCC trajectory analysis, cached frames and superseded-result protection.
+  The existing theme, contrast, scalar legend, PNG and layout assertions remain.
+  Reload assertions now wait for the real page-load event and sidebar
+  initialization instead of matching the previous/initial HTML state.
+
+Representative compute measurements used a periodic 97,556-atom ideal FCC
+fixture, with all CNA classifications checked against FCC and all normalized
+central-symmetry results checked against zero. These are single measurements
+of Node kernels / actual Node Worker execution, not browser rendering timings.
+Pooled times include Worker startup, coordinate sharing and output merging.
+
+| Analysis | Single kernel | 3 Workers, shared input |
+| --- | ---: | ---: |
+| Adaptive CNA | 1,996 ms | 860 ms |
+| Normalized central symmetry, 12 neighbors | 1,974 ms | 821 ms |
+
+The scheduler reserved a core from the runtime's reported four available cores.
+These results establish working parallel computation for this representative
+fixture. Million-atom performance and broad thermal recognition accuracy were
+not validated by that update. PTM validation is recorded above.
 
 ## Browser and deployment regression update
 

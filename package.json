@@ -11,7 +11,8 @@
     "test": "node --test",
     "test:browser": "node scripts/browser-smoke.mjs",
     "benchmark": "node scripts/benchmark.mjs",
-    "build:wasm": "bash wasm/build.sh"
+    "build:wasm": "bash wasm/build.sh",
+    "build:ptm": "bash wasm/build-ptm.sh"
   },
   "engines": {
     "node": ">=20"

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { axisDirectionsFromView, drawLegendOverlay, WebGLRenderer } from '../src/render/webgl-renderer.js';
+import { axisDirectionsFromView, drawAxesOverlay, drawLegendOverlay, WebGLRenderer } from '../src/render/webgl-renderer.js';
 
 test('cell box visibility is renderer state and requests a redraw', () => {
   const renderer = Object.create(WebGLRenderer.prototype);
@@ -257,4 +257,20 @@ test('axis tripod directions use global Cartesian axes in screen space', () => {
   assert.deepEqual(axes.x, { x: 1, y: -0, depth: 0 });
   assert.deepEqual(axes.y, { x: 0, y: -1, depth: 0 });
   assert.deepEqual(axes.z, { x: 0, y: -0, depth: 1 });
+});
+
+test('PNG arrows follow camera rotation, draw XYZ labels and leave the background transparent', () => {
+  const lines = [], labels = [];
+  const context = { save() {}, restore() {}, beginPath() {}, arc() {}, moveTo() {},
+    lineTo(x, y) { lines.push([x, y]); }, stroke() {}, strokeText() {},
+    fillText(label, x, y) { labels.push([label, x, y]); },
+    fillRect() { assert.fail('axes must not create an opaque background'); } };
+  const axes = axisDirectionsFromView(new Float32Array([
+    0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+  ]));
+  drawAxesOverlay(context, axes, 640, 480);
+  assert.deepEqual(labels.map(item => item[0]), ['X', 'Y', 'Z']);
+  assert.ok(labels[0][2] < 415, 'rotated X points upward');
+  assert.ok(labels[1][1] < 575, 'rotated Y points left');
+  assert.ok(lines.length >= 4);
 });

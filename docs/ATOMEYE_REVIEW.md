@@ -66,9 +66,10 @@ described precisely:
   sources. A `-lgomp` occurrence in a special static macOS link recipe does not
   by itself make these C loops OpenMP-parallel.
 
-The first AlloyView release deliberately uses one Web Worker. Worker pools or
-Wasm pthreads should be added only after browser profiling shows that analysis,
-rather than text parsing, transfer, or rendering, is the limiting stage.
+The initial AlloyView release used one Web Worker. The current analysis modules
+share a bounded Worker pool with independent atom ranges; PTM uses a separate
+Wasm instance per Worker. Parsing and WebGL rendering remain distinct stages.
+Wasm pthreads would require separate profiling and hosting changes.
 
 ## License and distribution finding
 
@@ -103,7 +104,7 @@ PTM, to this source tree.
 | Upstream feature | Code evidence | Browser migration assessment |
 | --- | --- | --- |
 | Coordination number and histogram | `A3/geo.c` builds `coordination[]` from `N`; `A3/info.c` prints the histogram; `A3/utils.c` colors by coordination. | **Implemented independently.** AlloyView uses the same neighbor-list invariant with an explicit uniform cutoff, triclinic minimum images, a Worker pool, scalar coloring, and live range filtering. A histogram UI remains small follow-up work. |
-| Central-symmetry parameter | `A3/geo.c:evaluate_central_symm()` creates a non-pairwise image list and pairs the nearest even number of displacement vectors in `compute_central_symm()`. | **Good next candidate.** It can reuse AlloyView's neighbor search, but the UI must expose the even neighbor count and document AtomEye's normalized result rather than silently calling it the conventional unnormalized CSP. |
+| Central-symmetry parameter | `A3/geo.c:evaluate_central_symm()` creates a non-pairwise image list and pairs the nearest even number of displacement vectors in `compute_central_symm()`. | **Implemented independently.** The browser exposes 8/12 nearest neighbors, normalized dimensionless results, scalar coloring and parallel range execution. It does not use the original viewer's neighbor-list cutoff. See [Structure analysis](STRUCTURE_ANALYSIS.md). |
 | Local geometric shear measure | `A3/geo.c:evaluate_shear_strain()` selects the modal coordination shell, accumulates a local metric tensor, and reduces it to a Mises invariant, optionally subtracting the mean tensor. | **Migratable with care.** It is a single-frame geometric disorder/shear measure, not the same calculation as reference-frame atomic strain. It needs a separately named module and validation fixtures. |
 | Reference-frame least-squares deformation and strain | `Atoms/LeastSquareStrain.c:ComputeLeastSquareDeformationGradient()` and `A3/LeastSquareStrain.c:LeastSquareStrain_Append()` produce `eta_Mises`, `eta_hydro`, and nine `J` components from an imprinted isoatomic reference. | **High-value sequence feature.** Stable IDs, a chosen reference frame, PBC-aware neighbor correspondence, and singular-fit reporting are required. AlloyView's trajectory-level analysis state is now designed to hold such a reference. |
 | Partial radial distribution functions, `g(r)` | `Atoms/Gr.c` owns species-pair cutoffs, meshes, accumulation, normalization, and save logic. | **Straightforward global analysis.** Implement a Worker histogram returning species-pair curves; replace `FILE*`/Matlab output with typed arrays and a browser plot/export. It is global rather than per-atom coloring. |
@@ -113,8 +114,13 @@ PTM, to this source tree.
 | Vector-field arrows | Upstream README documents `draw_arrows` for consecutive auxiliary triplets and overlays. | **Rendering feature, not an analysis kernel.** Suitable after vector-property parsing is made explicit. |
 | Voronoi grain construction | `Atoms/Voronoi.c` rotates/cuts copies around seed sites to generate polycrystals and removes close GB atoms. | **Do not mislabel as Voronoi analysis.** It is a structure-construction tool, not per-atom Voronoi volume/index computation. It belongs in a future builder module, if at all. |
 
-Recommended order is: shared pair-cutoff neighbor graph → coordination histogram
-and bonds → normalized central symmetry → reference-frame least-squares strain →
-partial `g(r)`. The first three reuse the current frame-local data contract;
-least-squares strain is the first feature that needs persistent cross-frame
-reference state.
+Normalized central symmetry, independently implemented adaptive/fixed CNA,
+real PTM and ideal-reference atomic elastic strain now share the bounded analysis
+scheduler with coordination. CNA and PTM are OVITO-style additions rather than
+functionality found in this AtomEye snapshot. PTM's ideal-lattice strain includes
+editable element defaults and absolute expansion; it does not implement
+AtomEye's imprinted reference-frame calculation. Remaining
+candidates include a shared pair-cutoff graph, coordination histograms and bonds,
+reference-frame least-squares strain and partial `g(r)`. Least-squares strain
+needs persistent cross-frame reference state. Actual PTM library integration is
+documented separately in [Structure analysis](STRUCTURE_ANALYSIS.md).

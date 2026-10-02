@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const projectRoot = resolve(import.meta.dirname, '..');
 
 export async function buildSite(root = projectRoot, out = resolve(root, 'dist')) {
-  const entries = ['src', 'examples', 'styles.css'];
+  const entries = ['src', 'examples', 'styles.css', 'licenses'];
   const wasmEntries = ['wasm/coordination.mjs', 'wasm/coordination.wasm'];
   try {
     await Promise.all(wasmEntries.map((entry) => access(resolve(root, entry))));

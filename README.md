@@ -39,9 +39,18 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Wrapped and unwrapped trajectory views, atom selection and fractional slicing.
 - Periodic cutoff-based coordination analysis in browser Workers, with an
   editable cutoff suggestion for recognized metallic elements.
+- Adaptive/fixed-cutoff CNA for FCC, HCP, BCC and icosahedral environments,
+  crystal colors and per-class visibility checkboxes with live counts.
+- Real polyhedral template matching (PTM) in Wasm Workers, with eight crystal
+  templates, an adjustable RMSD threshold and the same crystal visibility controls.
+- Atomic elastic strain relative to an ideal lattice, with editable element-based
+  lattice constants, shear/hydrostatic strain, volume change and tensor components.
+- AtomEye normalized central symmetry with 8/12 neighbors; all analyses share
+  a bounded parallel Worker scheduler and retain per-frame results.
 - Atom-type colors and five scalar color maps, with editable ranges and
   optional filtering of out-of-range atoms.
-- PNG export with independent background and legend controls. Transparent
+- PNG export with independent background, legend and XYZ-arrow controls.
+  Exported arrows are optional and off by default. Transparent
   exports keep the legend labels and color keys without a filled legend panel.
 - Light and dark themes with matching project logos and a saved preference.
 - A resizable controls panel with saved width, plus live display and legend
@@ -71,9 +80,15 @@ WebGL 2 support. No installation or account is needed.
    after a short typing pause. Display and legend edits apply immediately.
    The cutoff is a starting estimate; choose it for
    your structure's neighbor shells.
+   Use **Common neighbor analysis** or **Polyhedral template matching** for
+   crystal identification, then the legend checkboxes to show/hide each class.
+   Under **Ideal lattice reference**, check the element, crystal phase and
+   lattice constants before calculating atomic elastic strain.
 5. **Export.** Choose **Include background in PNG** and **Include legend in
    PNG** independently, then click the download arrow in the viewport toolbar.
    Uncheck the background option for transparency, including around the legend.
+   **Include XYZ arrows in PNG** adds the current Cartesian orientation even
+   when the screen's axes are hidden; it is unchecked by default.
 
 A single file picker cannot discover unselected sibling files. Select all
 frames together or choose their folder to open a sequence.
@@ -95,6 +110,10 @@ npm run preview
 
 Open <http://localhost:4173>. The deployable site is in `dist/`.
 
+The compiled PTM kernel is included in the repository. Normal development and
+CI need no compiler. To change its C++ integration, install Emscripten and run
+`npm run build:ptm`; see [Structure analysis](docs/STRUCTURE_ANALYSIS.md).
+
 ## Tests and deployment
 
 ```bash
@@ -106,7 +125,8 @@ npm run test:browser
 The browser regression requires Node.js 24 and Chrome/Chromium; set
 `CHROME_PATH` if needed. It serves the production build at `/AlloyView/`
 without isolation headers, loads local files and all examples, checks themes
-and trajectory frames, and decodes PNG exports to verify transparency.
+and trajectory frames, exercises CNA/CSP/PTM/strain and crystal visibility
+filters, and decodes PNG exports to verify transparency and optional axes.
 
 The included GitHub Actions workflow tests, builds and deploys on pushes to
 `main`. Set **Settings → Pages → Source → GitHub Actions** in the repository.
@@ -123,6 +143,7 @@ modules from mixing file-loading protocols after deployment. See the
 | Static hosting and GitHub Pages | [Deployment](docs/DEPLOYMENT.md) |
 | Executed tests and benchmark results | [Validation record](docs/VALIDATION.md) |
 | AtomEye design references and source provenance | [AtomEye review](docs/ATOMEYE_REVIEW.md) |
+| CNA, PTM, atomic strain, central symmetry and parallel execution | [Structure analysis](docs/STRUCTURE_ANALYSIS.md) |
 
 WebGL 2 is required. Compressed/binary dumps, LAMMPS data/input files and
 LAMMPS general triclinic `abc origin` dumps are not supported. Coordination
@@ -140,4 +161,6 @@ sample when possible. Contributions are welcome as pull requests.
 
 AlloyView is distributed under the [MIT License](LICENSE). AtomEye informed
 format conventions and neighbor-search design; no AtomEye C source or asset
-is copied into this repository. See the [provenance review](docs/ATOMEYE_REVIEW.md).
+is copied into this repository. The vendored PTM library is MIT licensed and
+its embedded Voro++ code is BSD licensed; [third-party notices](licenses/)
+ship with the static build. See the [provenance review](docs/ATOMEYE_REVIEW.md).

@@ -72,6 +72,27 @@ export function colorsByType(frame) {
   };
 }
 
+export function colorsByCategory(property, hiddenTypes = new Set()) {
+  const colors = new Uint8Array(property.data.length * 3);
+  const counts = new Map();
+  const categories = new Map(property.categories.map((item) => [item.id, item]));
+  for (let atom = 0; atom < property.data.length; atom += 1) {
+    const id = property.data[atom];
+    colors.set(categories.get(id)?.color ?? [242, 242, 242], atom * 3);
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return { colors, legend: {
+    kind: 'types', title: property.displayName ?? property.name, property,
+    items: property.categories.map((item) => ({ ...item, count: counts.get(item.id) ?? 0,
+      visible: !hiddenTypes.has(item.id) })),
+  } };
+}
+
+export function visibilityByCategory(property, hiddenTypes) {
+  if (hiddenTypes.size === 0) return null;
+  return Uint8Array.from(property.data, (id) => hiddenTypes.has(id) ? 0 : 255);
+}
+
 export function colorsByProperty(property, limits = null, scheme = 'atomeye') {
   const colorMap = COLOR_MAPS[scheme];
   if (!colorMap) throw new Error(`Unknown scalar color scheme “${scheme}”.`);
@@ -95,13 +116,13 @@ export function colorsByProperty(property, limits = null, scheme = 'atomeye') {
   for (let atom = 0; atom < property.data.length; atom += 1) {
     const value = property.data[atom];
     const normalized = Number.isFinite(value) && span > 0 ? (value - minimum) / span : 0.5;
-    colors.set(sampleColorMap(normalized, colorMap.stops), atom * 3);
+    colors.set(Number.isFinite(value) ? sampleColorMap(normalized, colorMap.stops) : [130, 130, 130], atom * 3);
   }
   return {
     colors,
     legend: {
       kind: 'scalar',
-      title: property.name,
+      title: property.displayName ?? property.name,
       unit: property.unit,
       minimum,
       maximum,

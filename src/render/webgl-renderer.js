@@ -545,7 +545,7 @@ export class WebGLRenderer {
     return closest;
   }
 
-  exportPng(filename = 'alloyview.png', { includeBackground = true, legend = null } = {}) {
+  exportPng(filename = 'alloyview.png', { includeBackground = true, legend = null, includeAxes = false } = {}) {
     const gl = this.gl;
     let width;
     let height;
@@ -574,11 +574,12 @@ export class WebGLRenderer {
       image.data.set(pixels.subarray(source, source + stride), row * stride);
     }
     context.putImageData(image, 0, 0);
+    const cssWidth = Number(this.canvas.clientWidth) || width;
+    const scale = Math.max(1, Math.min(3, width / cssWidth));
     if (legend) {
-      const cssWidth = Number(this.canvas.clientWidth) || width;
-      const scale = Math.max(1, Math.min(3, width / cssWidth));
       drawLegendOverlay(context, legend, width, height, scale, { includeBackground });
     }
+    if (includeAxes) drawAxesOverlay(context, axisDirectionsFromView(this.viewMatrix), width, height, scale);
     exportCanvas.toBlob((blob) => {
       if (!blob) return;
       const link = document.createElement('a');
@@ -694,7 +695,9 @@ function drawTypeLegend(context, legend, x, y, panelWidth, panelHeight, padding,
     context.fillStyle = `rgb(${item.color.join(' ')})`;
     context.fill();
     context.fillStyle = textColors.label;
-    context.fillText(item.label, itemX + 13 * scale, itemY, columnWidth - 16 * scale);
+    const label = item.count === undefined ? item.label
+      : `${item.label}: ${item.count}${item.visible === false ? ' (hidden)' : ''}`;
+    context.fillText(label, itemX + 13 * scale, itemY, columnWidth - 16 * scale);
   }
 }
 
@@ -704,6 +707,41 @@ function formatLegendNumber(value) {
   const magnitude = Math.abs(value);
   if (magnitude >= 10_000 || magnitude < 0.001) return value.toExponential(3);
   return Number(value.toPrecision(6)).toString();
+}
+
+export function drawAxesOverlay(context, directions, width, height, scale = 1) {
+  if (width < 130 * scale || height < 130 * scale) return;
+  const center = { x: width - 65 * scale, y: height - 65 * scale };
+  const colors = { x: '#e5635b', y: '#70be83', z: '#649df2' };
+  context.save();
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.font = `bold ${12 * scale}px system-ui, sans-serif`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  const axes = Object.entries(directions).sort((a, b) => a[1].depth - b[1].depth);
+  for (const [name, direction] of axes) {
+    const x = center.x + direction.x * 35 * scale;
+    const y = center.y + direction.y * 35 * scale;
+    const norm = Math.hypot(direction.x, direction.y);
+    const ux = norm > 1e-6 ? direction.x / norm : 0;
+    const uy = norm > 1e-6 ? direction.y / norm : -1;
+    context.beginPath();
+    if (norm > .12) {
+      context.moveTo(center.x, center.y); context.lineTo(x, y);
+      context.moveTo(x - (ux * 6 - uy * 3) * scale, y - (uy * 6 + ux * 3) * scale);
+      context.lineTo(x, y);
+      context.lineTo(x - (ux * 6 + uy * 3) * scale, y - (uy * 6 - ux * 3) * scale);
+    } else context.arc(x, y, 2.5 * scale, 0, 2 * Math.PI);
+    context.strokeStyle = 'rgba(0, 0, 0, .8)'; context.lineWidth = 4 * scale; context.stroke();
+    context.strokeStyle = colors[name]; context.lineWidth = 2 * scale; context.stroke();
+    const labelX = x + ux * 10 * scale;
+    const labelY = y + uy * 10 * scale;
+    context.lineWidth = 2.5 * scale; context.strokeStyle = 'rgba(0, 0, 0, .9)';
+    context.strokeText(name.toUpperCase(), labelX, labelY);
+    context.fillStyle = colors[name]; context.fillText(name.toUpperCase(), labelX, labelY);
+  }
+  context.restore();
 }
 
 export function axisDirectionsFromView(viewMatrix) {

@@ -10,7 +10,7 @@ test('production versions the whole module graph and works at a Pages subpath', 
   const root = join(temporary, 'project');
   const out = join(temporary, 'dist');
   try {
-    for (const entry of ['src/workers', 'src/asserts/logo', 'examples', 'wasm']) {
+    for (const entry of ['src/workers', 'src/analysis', 'src/asserts/logo', 'examples', 'wasm', 'licenses']) {
       await mkdir(join(root, entry), { recursive: true });
     }
     await writeFile(join(root, 'index.html'), '<head><link href="./styles.css"><img src="./src/asserts/logo/light.svg"></head><script src="./src/app.js"></script>');
@@ -21,6 +21,9 @@ test('production versions the whole module graph and works at a Pages subpath', 
     await writeFile(join(root, 'src/workers/structure-worker.js'), 'self.onmessage = () => {};');
     await writeFile(join(root, 'src/asserts/logo/light.svg'), '<svg/>');
     await writeFile(join(root, 'examples/test.cfg'), 'example');
+    await writeFile(join(root, 'licenses/PTM-MIT.txt'), 'PTM notice');
+    await writeFile(join(root, 'src/analysis/ptm-kernel.mjs'), "new URL('ptm-kernel.wasm', import.meta.url);");
+    await writeFile(join(root, 'src/analysis/ptm-kernel.wasm'), new Uint8Array([0, 97, 115, 109]));
 
     const first = await buildSite(root, out);
     assert.equal((await buildSite(root, out)).buildId, first.buildId);
@@ -30,11 +33,13 @@ test('production versions the whole module graph and works at a Pages subpath', 
     const appUrl = new URL(`${first.assetPrefix}src/app.js`, base);
     const workerUrl = new URL('./workers/structure-worker.js', new URL('./worker-client.js', appUrl));
     const exampleUrl = new URL('../examples/test.cfg', appUrl);
-    for (const url of [appUrl, workerUrl, exampleUrl, new URL(`${first.assetPrefix}src/asserts/logo/light.svg`, base)]) {
+    const ptmUrl = new URL('./analysis/ptm-kernel.wasm', appUrl);
+    for (const url of [appUrl, workerUrl, exampleUrl, ptmUrl, new URL(`${first.assetPrefix}src/asserts/logo/light.svg`, base)]) {
       assert.ok(url.pathname.startsWith(`/AlloyView/assets/${first.buildId}/`));
       await access(resolve(out, url.pathname.replace('/AlloyView/', '')));
     }
     assert.equal(html.includes('src="./src/'), false);
+    assert.equal(await readFile(join(out, 'licenses/PTM-MIT.txt'), 'utf8'), 'PTM notice');
     // Cached pre-versioning HTML must also keep loading during the transition.
     for (const entry of ['src/app.js', 'src/worker-client.js', 'src/workers/structure-worker.js', 'examples/test.cfg', 'styles.css']) {
       await access(join(out, entry));
@@ -44,6 +49,10 @@ test('production versions the whole module graph and works at a Pages subpath', 
     await writeFile(join(root, 'src/workers/structure-worker.js'), 'self.onmessage = () => { /* v2 */ };');
     const second = await buildSite(root, out);
     assert.notEqual(first.buildId, second.buildId);
+
+    // Changing just the compiled PTM binary must also invalidate the module graph.
+    await writeFile(join(root, 'src/analysis/ptm-kernel.wasm'), new Uint8Array([0, 97, 115, 109, 1]));
+    assert.notEqual((await buildSite(root, out)).buildId, second.buildId);
 
     await writeFile(join(root, 'wasm/coordination.mjs'), 'export default {};');
     await writeFile(join(root, 'wasm/coordination.wasm'), new Uint8Array([0, 97, 115, 109]));

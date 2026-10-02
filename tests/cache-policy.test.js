@@ -19,6 +19,14 @@ test('large trajectories use a bounded adaptive cache', () => {
   assert.equal(policy.fullTrajectory, false);
 });
 
+test('PTM deformation cache is counted once including shared property buffers', () => {
+  const frame = sampleFrame(100), initial = estimateFrameBytes(frame);
+  frame.ptm = { structures: new Uint8Array(100), rmsd: new Float32Array(100),
+    scales: new Float64Array(100), deformation: new Float64Array(900), distances: new Float32Array(100), key: 'test' };
+  frame.properties.push({ data: frame.ptm.structures }, { data: frame.ptm.rmsd });
+  assert.equal(estimateFrameBytes(frame), initial + 8900);
+});
+
 function sampleFrame(atomCount) {
   return {
     ids: new Float64Array(atomCount),

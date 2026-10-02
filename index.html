@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="dark light">
     <meta
       name="description"
-      content="Browser-only atomistic structure visualization and coordination analysis"
+      content="Browser-only atomistic visualization, crystal structure and defect analysis"
     >
     <title>AlloyView · Atomistic Structure Viewer</title>
     <link rel="icon" type="image/png" href="./src/asserts/logo/AlloyView_logo_only.png">
@@ -188,6 +188,7 @@
               <label><input id="show-cell" type="checkbox" checked disabled><span>Show cell box</span></label>
               <label><input id="png-background" type="checkbox" checked disabled><span>Include background in PNG</span></label>
               <label><input id="png-legend" type="checkbox" disabled><span>Include legend in PNG</span></label>
+              <label><input id="png-axes" type="checkbox" disabled><span>Include XYZ arrows in PNG</span></label>
             </div>
           </section>
 
@@ -218,6 +219,73 @@
             <p id="analysis-help" class="help">Periodic axes use minimum images; non-periodic axes use direct distances. Camera movement does not rerun analysis.</p>
           </section>
 
+          <section class="side-section analysis-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">CRYSTAL STRUCTURE</p><h3>Common neighbor analysis</h3></div>
+              <span id="cna-state" class="state-pill">Not calculated</span>
+            </div>
+            <label class="field"><span>Method</span>
+              <select id="cna-mode" disabled><option value="adaptive">Adaptive CNA</option><option value="fixed">Fixed cutoff CNA</option></select>
+            </label>
+            <div class="analysis-controls">
+              <label id="cna-cutoff-field" hidden><span>Cutoff radius</span><span class="input-unit"><input id="cna-cutoff" type="number" value="3.5" min="0.01" step="0.05" disabled><i>Å</i></span></label>
+              <button id="run-cna" class="button button-accent" type="button" disabled>Identify structure</button>
+            </div>
+            <p id="cna-help" class="help">Adaptive CNA chooses a local cutoff for each atom. Identifies FCC, HCP, BCC and icosahedral environments; other environments are marked Other.</p>
+            <p id="cna-status" class="help" role="status" aria-live="polite">Calculate to color by crystal structure. The legend checkboxes control visibility.</p>
+          </section>
+
+          <section class="side-section analysis-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">DEFECT ANALYSIS</p><h3>Central symmetry</h3></div>
+              <span id="csp-state" class="state-pill">Not calculated</span>
+            </div>
+            <div class="analysis-controls">
+              <label><span>Nearest neighbors</span><select id="csp-neighbors" disabled><option value="12">12 · FCC</option><option value="8">8 · BCC</option></select></label>
+              <button id="run-csp" class="button button-accent" type="button" disabled>Calculate</button>
+            </div>
+            <p class="help">AtomEye normalized central symmetry: zero for centrosymmetric environments, higher near defects. Dimensionless; differs from conventional CSP in Å².</p>
+            <p id="csp-status" class="help" role="status" aria-live="polite">Runs on the complete structure, including hidden atoms.</p>
+          </section>
+
+          <section class="side-section analysis-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">TEMPLATE MATCHING</p><h3>Polyhedral template matching</h3></div>
+              <span id="ptm-state" class="state-pill">Not calculated</span>
+            </div>
+            <div class="analysis-controls">
+              <label><span>RMSD threshold</span><input id="ptm-rmsd" type="number" value="0.1" min="0" step="0.01" disabled></label>
+              <button id="run-ptm" class="button button-accent" type="button" disabled>Identify</button>
+            </div>
+            <div class="template-options" aria-label="PTM templates">
+              <label><input type="checkbox" data-ptm-template="1" checked disabled>FCC</label>
+              <label><input type="checkbox" data-ptm-template="2" checked disabled>HCP</label>
+              <label><input type="checkbox" data-ptm-template="4" checked disabled>BCC</label>
+              <label><input type="checkbox" data-ptm-template="8" checked disabled>ICO</label>
+              <label><input type="checkbox" data-ptm-template="16" checked disabled>SC</label>
+              <label><input type="checkbox" data-ptm-template="32" disabled>Diamond</label>
+              <label><input type="checkbox" data-ptm-template="64" disabled>Hex. diamond</label>
+              <label><input type="checkbox" data-ptm-template="128" disabled>Graphene</label>
+            </div>
+            <p class="help">Matches local polyhedra to crystal templates. Fits above the RMSD threshold are Other; 0 disables this threshold. Diamond and graphene templates use additional neighbor shells.</p>
+            <p id="ptm-status" class="help" role="status" aria-live="polite">Results include structure type, RMSD and nearest-neighbor distance.</p>
+          </section>
+
+          <section class="side-section analysis-section">
+            <div class="section-heading">
+              <div><p class="section-kicker">ATOMIC ELASTIC STRAIN</p><h3>Ideal lattice reference</h3></div>
+              <span id="strain-state" class="state-pill">Not calculated</span>
+            </div>
+            <p class="help">Element presets give editable reference lattice constants in Å. For alloys or other temperatures, supply the stress-free values appropriate to your system.</p>
+            <div id="lattice-references" class="lattice-references"></div>
+            <div class="strain-actions">
+              <button id="lattice-reset" class="button button-secondary" type="button" disabled>Element defaults</button>
+              <button id="run-strain" class="button button-accent" type="button" disabled>Calculate strain</button>
+            </div>
+            <p class="help">PTM correspondence gives Green–Lagrange elastic strain relative to the reference crystal, including absolute lattice expansion. Tensor components use local crystal axes. Unmatched atoms are undefined (gray).</p>
+            <p id="strain-status" class="help" role="status" aria-live="polite">Unknown numeric atom types need an element or explicit lattice parameters. This is not displacement strain between trajectory frames.</p>
+          </section>
+
           <section class="side-section selection-section">
             <div class="section-heading">
               <div><p class="section-kicker">SELECTION</p><h3>Atom details</h3></div>
@@ -235,6 +303,10 @@
                 <div><dt>Frame parsing</dt><dd id="metric-parse">—</dd></div>
                 <div><dt>GPU upload</dt><dd id="metric-upload">—</dd></div>
                 <div><dt>Coordination</dt><dd id="metric-analysis">—</dd></div>
+                <div><dt>CNA</dt><dd id="metric-cna">—</dd></div>
+                <div><dt>Central symmetry</dt><dd id="metric-csp">—</dd></div>
+                <div><dt>PTM</dt><dd id="metric-ptm">—</dd></div>
+                <div><dt>Atomic strain</dt><dd id="metric-strain">—</dd></div>
                 <div><dt>Interactive FPS</dt><dd id="metric-fps">—</dd></div>
                 <div><dt>JS memory</dt><dd id="metric-memory">Not exposed by browser</dd></div>
               </dl>

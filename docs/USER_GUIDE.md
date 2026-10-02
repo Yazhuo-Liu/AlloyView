@@ -72,6 +72,35 @@ Pages** manually from the Actions tab. No repository secret is required.
 After the first successful deployment, the project site is expected at
 <https://yazhuo-liu.github.io/AlloyView/>.
 
+## Crystal structure and atomic strain
+
+Click **Identify structure** under **Common neighbor analysis** for automatic
+local FCC/HCP/BCC/icosahedral classification. The crystal legend shows counts
+and a visibility checkbox per class. **Fixed cutoff CNA** allows an explicit
+radius; BCC requires its first two neighbor shells. **Central symmetry** offers
+the dimensionless AtomEye normalized parameter with 8 or 12 neighbors and
+scalar coloring. Enabled analyses follow trajectory frames and use a shared
+parallel Worker budget. See [Structure analysis](STRUCTURE_ANALYSIS.md) for
+definitions, filtering behavior and numerical limitations.
+
+**Polyhedral template matching** uses the actual PTM library compiled to Wasm.
+Select the crystal templates and an RMSD threshold (default 0.1; 0 disables
+rejection), then click **Identify**. It adds SC, cubic/hexagonal diamond and
+graphene identification to the CNA classes. All nine legend rows have counts,
+colors and visibility checkboxes. Template checkboxes select what to analyze;
+legend checkboxes control visibility without recalculating.
+
+**Ideal lattice reference** calculates per-atom Green–Lagrange elastic strain
+from PTM correspondence. Recognized elements initialize editable phase and
+lattice parameters from ASE reference-state data; hexagonal phases expose
+both `a` and `c`. Numeric/unknown types require selecting an element or entering
+a reference explicitly. **Element defaults** restores presets from the source
+labels. Edit them for your alloy, temperature or model potential. Results include
+shear strain, hydrostatic strain, volume change and six tensor components in the
+local crystal frame. Undefined fits are NaN/gray. This measures strain relative
+to an ideal lattice, not displacement relative to another trajectory frame.
+Changing only the reference constants reuses PTM fits where possible.
+
 ## Tests and benchmark
 
 ```bash
@@ -145,9 +174,10 @@ uses software WebGL to verify correctness, not to measure target GPU performance
   use AtomEye rainbow, Viridis, Plasma, Cool–warm, or Grayscale maps. The chosen
   map and live legend thresholds persist by property when the frame changes;
   thresholds hide out-of-range atoms by default and push the opposite bound to
-  remain strictly ordered. PNG export can independently include the background
-  and the current
-  type/scalar legend. Disabling the background also removes the legend panel
+  remain strictly ordered. PNG export can independently include the background,
+  current type/scalar legend and Cartesian XYZ arrows. The arrows default to off
+  and follow the current camera independently of the screen axis toggle.
+  Disabling the background also removes the legend panel
   fill, leaving transparent space around the labels and color keys. Active
   coordination analysis
   is recomputed automatically on a newly displayed frame. Display unwrapping
@@ -186,13 +216,13 @@ This is a provenance and risk statement, not legal advice.
 - Browser file permissions do not allow a normal single-file picker to enumerate
   sibling files as a native desktop application can. **Open local** offers both a file picker and a folder picker. Choose a folder
   to detect sibling sequences automatically, or select several files together.
-- Bonds, normalized central symmetry, local strain, partial `g(r)`, DXA, PTM,
-  CNA, defect lines, and periodic image replication are future modules. The
+- Bonds, reference-frame displacement strain, partial `g(r)`, DXA,
+  defect lines and periodic image replication are future modules. The
   AtomEye-evidenced migration candidates are separated from unrelated features
   in `docs/ATOMEYE_REVIEW.md`.
-- `wasm/` defines the intended native ABI, but the verified default build uses
-  the JavaScript Worker implementation because Emscripten is not installed in
-  the validation environment.
+- CNA, normalized central symmetry and coordination use JavaScript Workers;
+  PTM and its deformation fit use the included Wasm kernel. No Emscripten
+  installation is needed unless rebuilding C++ with `npm run build:ptm`.
 
 Recommended next work is to benchmark real 100k/1M trajectories on target GPUs,
 then compile the isolated coordination ABI with Emscripten and compare it against

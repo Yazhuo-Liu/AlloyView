@@ -3,6 +3,11 @@ import { chooseFrameCachePolicy } from './data/cache-policy.js';
 import { DEFAULT_PLAYBACK_INTERVAL_MS, nextPlaybackFrame } from './data/playback.js';
 import { recommendCoordinationCutoff } from './analysis/cutoff.js';
 import { CoordinationPool } from './analysis/coordination-pool.js';
+import { AnalysisPool } from './analysis/analysis-pool.js';
+import { STRUCTURE_TYPES } from './analysis/cna.js';
+import { PTM_TYPES } from './analysis/ptm.js';
+import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
+import { ELEMENT_LATTICES, STRAIN_STRUCTURES, referenceForElement, validateReferences } from './analysis/lattice.js';
 import {
   catalogLocalSources,
   detectStructureFormatHeader,
@@ -11,10 +16,12 @@ import {
 } from './io/file-sequences.js';
 import {
   colorsByProperty,
+  colorsByCategory,
   colorsByType,
   coupleScalarRange,
   SCALAR_COLOR_SCHEMES,
   visibilityByProperty,
+  visibilityByCategory,
 } from './render/palette.js';
 import { normalizeRadiusPercent, radiiByType } from './render/atomic-radii.js';
 import { WebGLRenderer } from './render/webgl-renderer.js';
@@ -29,8 +36,12 @@ const elements = Object.fromEntries([
   'cache-label', 'frame-first', 'frame-previous', 'frame-play', 'frame-next', 'frame-last', 'frame-ticks',
   'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
   'background-picker', 'background-current', 'background', 'show-axes',
-  'show-cell', 'png-background', 'png-legend', 'slice-axis', 'slice-position', 'slice-value', 'cutoff', 'run-analysis',
+  'show-cell', 'png-background', 'png-legend', 'png-axes', 'slice-axis', 'slice-position', 'slice-value', 'cutoff', 'run-analysis',
   'analysis-state', 'cutoff-help', 'analysis-help', 'selection-empty', 'selection-data', 'clear-selection', 'legend',
+  'cna-mode', 'cna-cutoff', 'cna-cutoff-field', 'run-cna', 'cna-state', 'cna-help', 'cna-status',
+  'csp-neighbors', 'run-csp', 'csp-state', 'csp-status', 'metric-cna', 'metric-csp',
+  'ptm-rmsd', 'run-ptm', 'ptm-state', 'ptm-status', 'metric-ptm',
+  'lattice-references', 'lattice-reset', 'run-strain', 'strain-state', 'strain-status', 'metric-strain',
   'reset-camera', 'export-png', 'loading', 'loading-text', 'toast', 'interaction-hint',
   'axis-triad', 'axis-arrows', 'axis-x-line', 'axis-y-line', 'axis-z-line', 'axis-x-label', 'axis-y-label', 'axis-z-label',
   'metric-index', 'metric-parse', 'metric-upload', 'metric-analysis', 'metric-fps',
@@ -42,7 +53,17 @@ const cache = new FrameCache(3);
 const scalarColorRanges = new Map();
 const scalarColorSchemes = new Map();
 const scalarHideOutside = new Map();
-const coordinationPool = new CoordinationPool();
+const hiddenStructureTypes = new Set();
+const analysisPool = new AnalysisPool();
+const coordinationPool = new CoordinationPool(analysisPool);
+const structureControllers = new Map();
+const analysisTasks = new Map();
+const ANALYSES = {
+  cna: { prefix: 'cna', name: 'structureType', label: 'Crystal structure (CNA)' },
+  centrosymmetry: { prefix: 'csp', name: 'centralSymmetry', label: 'Central symmetry (normalized)' },
+  ptm: { prefix: 'ptm', name: 'ptmStructureType', label: 'Crystal structure (PTM)' },
+  strain: { prefix: 'strain', name: 'atomicShearStrain', label: 'Atomic shear strain' },
+};
 const state = {
   file: null,
   files: [],
@@ -63,8 +84,15 @@ const state = {
   cachePlan: null,
   prefetchToken: 0,
   playing: false,
+  references: [],
+  referenceLabels: [],
+  referenceByLabel: new Map(),
   analysis: {
     coordination: { enabled: false, cutoff: null, request: 0 },
+    cna: { enabled: false, parameters: null, key: null, request: 0 },
+    centrosymmetry: { enabled: false, parameters: null, key: null, request: 0 },
+    ptm: { enabled: false, parameters: null, key: null, request: 0 },
+    strain: { enabled: false, parameters: null, key: null, request: 0 },
   },
 };
 
@@ -183,6 +211,27 @@ elements['run-analysis'].addEventListener('click', () => {
 });
 elements.cutoff.addEventListener('input', scheduleCutoffAnalysis);
 elements.cutoff.addEventListener('change', () => scheduleCutoffAnalysis({ immediate: true }));
+elements['run-cna'].addEventListener('click', () => runStructureAnalysis('cna'));
+elements['run-csp'].addEventListener('click', () => runStructureAnalysis('centrosymmetry'));
+elements['run-ptm'].addEventListener('click', () => runStructureAnalysis('ptm'));
+elements['run-strain'].addEventListener('click', () => runStructureAnalysis('strain'));
+elements['ptm-rmsd'].addEventListener('change', updatePtmSettings);
+for (const checkbox of document.querySelectorAll('[data-ptm-template]')) checkbox.addEventListener('change', updatePtmSettings);
+elements['lattice-reset'].addEventListener('click', () => {
+  state.references = state.references.map((reference, type) => referenceForElement(reference.element || state.frame.typeLabels[type]));
+  renderLatticeReferences();
+  if (state.analysis.strain.enabled) runStructureAnalysis('strain');
+});
+elements['cna-mode'].addEventListener('change', () => {
+  updateCnaMethodUi();
+  if (state.analysis.cna.enabled) runStructureAnalysis('cna');
+});
+elements['cna-cutoff'].addEventListener('change', () => {
+  if (state.analysis.cna.enabled && elements['cna-mode'].value === 'fixed') runStructureAnalysis('cna');
+});
+elements['csp-neighbors'].addEventListener('change', () => {
+  if (state.analysis.centrosymmetry.enabled) runStructureAnalysis('centrosymmetry');
+});
 elements['clear-selection'].addEventListener('click', () => selectAtom(-1));
 elements['reset-camera'].addEventListener('click', () => renderer.resetCamera());
 for (const eventName of ['pointerdown', 'wheel', 'touchstart']) {
@@ -197,6 +246,7 @@ elements['export-png'].addEventListener('click', () => {
   try {
     renderer.exportPng(`${stem}-frame-${state.frameIndex + 1}.png`, {
       includeBackground: elements['png-background'].checked,
+      includeAxes: elements['png-axes'].checked,
       legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
     });
   } catch (error) {
@@ -469,6 +519,7 @@ async function loadNebExample() {
 
 async function loadFiles(inputFiles, sourceDescriptor = null) {
   clearTimeout(cutoffTimer);
+  cancelStructureAnalyses();
   stopFramePlayback();
   const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
   const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
@@ -500,6 +551,17 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     state.coordinateMode = 'wrapped';
     state.source = sourceDescriptor;
     state.analysis.coordination = { enabled: false, cutoff: null, request: 0 };
+    state.analysis.cna = { enabled: false, parameters: null, key: null, request: 0 };
+    state.analysis.centrosymmetry = { enabled: false, parameters: null, key: null, request: 0 };
+    state.analysis.ptm = { enabled: false, parameters: null, key: null, request: 0 };
+    state.analysis.strain = { enabled: false, parameters: null, key: null, request: 0 };
+    state.references = result.frame.typeLabels.map(referenceForElement);
+    state.referenceLabels = [...result.frame.typeLabels];
+    state.referenceByLabel.clear();
+    renderLatticeReferences(result.frame);
+    hiddenStructureTypes.clear();
+    elements['metric-cna'].textContent = elements['metric-csp'].textContent = '—';
+    elements['metric-ptm'].textContent = elements['metric-strain'].textContent = '—';
     scalarColorRanges.clear();
     scalarColorSchemes.clear();
     scalarHideOutside.clear();
@@ -530,6 +592,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
 function configureSuggestedCutoff(frame) {
   const recommendation = recommendCoordinationCutoff(frame);
   elements.cutoff.value = recommendation.value.toFixed(2);
+  elements['cna-cutoff'].value = recommendation.value.toFixed(2);
   elements['cutoff-help'].textContent = `Suggested cutoff: ${recommendation.message}`;
 }
 
@@ -589,7 +652,9 @@ async function showFrame(index) {
 }
 
 async function displayFrame(frame, { resetCamera = false } = {}) {
+  for (const controller of structureControllers.values()) controller.abort();
   state.frame = frame;
+  renderLatticeReferences(frame);
   syncAxisVisibility();
   configureCoordinateMode(frame);
   refreshColorOptions();
@@ -623,9 +688,25 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   updateFrameNavigation();
   updateMemoryMetric();
   setRangeProgress(elements['frame-slider']);
-  if (state.analysis.coordination.enabled) {
-    await runCoordination({ automatic: true, frame, frameIndex: state.frameIndex });
+  updateCnaMethodUi();
+  const pending = [];
+  for (const kind of Object.keys(ANALYSES)) {
+    const prefix = ANALYSES[kind].prefix;
+    elements[`${prefix}-state`].textContent = 'Not calculated';
+    elements[`${prefix}-state`].classList.remove('ready');
+    elements[`run-${prefix}`].disabled = false;
+    elements[`${prefix}-status`].textContent = kind === 'cna'
+      ? 'Calculate to color by crystal structure. The legend checkboxes control visibility.'
+      : 'Runs on the complete structure, including hidden atoms.';
+    if (!state.analysis[kind].enabled) continue;
+    if (kind === 'strain' && state.analysis.ptm.enabled) continue;
+    const task = runStructureAnalysis(kind, { automatic: true, frame });
+    pending.push(kind === 'ptm' ? task.then(() => {
+      if (state.analysis.strain.enabled && frame === state.frame) return runStructureAnalysis('strain', { automatic: true, frame });
+    }) : task);
   }
+  if (state.analysis.coordination.enabled) pending.push(runCoordination({ automatic: true, frame, frameIndex: state.frameIndex }));
+  await Promise.all(pending);
 }
 
 async function getFrame(index, { background = false } = {}) {
@@ -845,10 +926,15 @@ function refreshColorOptions() {
   state.frame.properties.forEach((property) => {
     if (propertyNames.has(property.name)) return;
     propertyNames.add(property.name);
-    elements['color-mode'].append(option(`property:${property.name}`, `${property.name}${property.unit ? ` [${property.unit}]` : ''}`));
+    elements['color-mode'].append(option(`property:${property.name}`, `${property.displayName ?? property.name}${property.unit ? ` [${property.unit}]` : ''}`));
   });
   if (state.analysis.coordination.enabled && !propertyNames.has('coordination')) {
     elements['color-mode'].append(option('property:coordination', 'coordination (calculating…)'));
+  }
+  for (const [kind, { name, label, prefix }] of Object.entries(ANALYSES)) {
+    if (state.analysis[kind].enabled && !propertyNames.has(name) && elements[`${prefix}-state`].textContent !== 'Failed') {
+      elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
+    }
   }
   const available = [...elements['color-mode'].options].some((item) => item.value === previous);
   state.colorMode = available ? previous : 'type';
@@ -868,6 +954,11 @@ function applyColors() {
 }
 
 function applyScalarVisibility(legend) {
+  if (legend.kind === 'types' && legend.property?.categories) {
+    renderer.setVisibility(visibilityByCategory(legend.property, hiddenStructureTypes));
+    restoreSelection();
+    return;
+  }
   if (legend.kind !== 'scalar') {
     renderer.setVisibility(null);
     return;
@@ -886,11 +977,246 @@ function paletteForCurrentMode() {
   if (!property) {
     return colorsByType(state.frame);
   }
+  if (property.categories) return colorsByCategory(property, hiddenStructureTypes);
   return colorsByProperty(
     property,
     scalarColorRanges.get(property.name),
     scalarColorSchemes.get(property.name) ?? 'atomeye',
   );
+}
+
+function cancelStructureAnalyses() {
+  for (const [kind, controller] of structureControllers) {
+    controller.abort();
+    const prefix = ANALYSES[kind].prefix;
+    elements[`run-${prefix}`].disabled = !state.frame;
+    elements[`${prefix}-state`].textContent = 'Cancelled';
+    elements[`${prefix}-state`].classList.remove('ready');
+  }
+}
+
+function updateCnaMethodUi() {
+  const fixed = elements['cna-mode'].value === 'fixed';
+  elements['cna-cutoff-field'].hidden = !fixed;
+  elements['cna-help'].textContent = fixed
+    ? 'FCC/HCP need a cutoff between the first and second shells; BCC needs one between the second and third shells. All distances are in Å.'
+    : 'Adaptive CNA chooses a local cutoff for each atom. Identifies FCC, HCP, BCC and icosahedral environments; other environments are marked Other.';
+}
+
+function ptmParameters() {
+  const flags = [...document.querySelectorAll('[data-ptm-template]:checked')]
+    .reduce((mask, input) => mask | Number(input.dataset.ptmTemplate), 0);
+  const rmsdCutoff = elements['ptm-rmsd'].valueAsNumber;
+  if (!flags) throw new Error('Select at least one PTM template.');
+  if (!Number.isFinite(rmsdCutoff) || rmsdCutoff < 0) throw new Error('PTM RMSD threshold must be non-negative.');
+  return { flags, rmsdCutoff };
+}
+
+function updatePtmSettings() {
+  if (state.analysis.ptm.enabled) runStructureAnalysis('ptm');
+  if (state.analysis.strain.enabled) runStructureAnalysis('strain');
+}
+
+function renderLatticeReferences(frame = state.frame) {
+  if (!frame) return;
+  if (state.referenceLabels.join('\0') !== frame.typeLabels.join('\0')) {
+    state.referenceLabels = [...frame.typeLabels];
+    state.references = frame.typeLabels.map(label => state.referenceByLabel.get(label) ?? referenceForElement(label));
+  }
+  elements['lattice-references'].replaceChildren();
+  state.references.forEach((reference, type) => {
+    const label = frame.typeLabels[type];
+    state.referenceByLabel.set(label, reference);
+    const row = document.createElement('div');
+    row.className = 'lattice-reference';
+    const field = (caption, control) => {
+      const holder = document.createElement('label');
+      holder.append(document.createTextNode(caption), control);
+      return holder;
+    };
+    const element = document.createElement('select');
+    element.dataset.referenceElement = String(type);
+    element.setAttribute('aria-label', `Reference element for ${label}`);
+    element.append(option('', `${label} · Unknown`));
+    for (const symbol of Object.keys(ELEMENT_LATTICES)) element.append(option(symbol, symbol));
+    element.value = reference.element;
+    const structure = document.createElement('select');
+    structure.dataset.referenceStructure = String(type);
+    structure.setAttribute('aria-label', `Reference crystal for ${label}`);
+    for (const id of STRAIN_STRUCTURES) structure.append(option(String(id), PTM_TYPES.find(item => item.id === id).label));
+    structure.value = String(reference.structure);
+    const number = (axis) => {
+      const input = document.createElement('input');
+      input.type = 'number'; input.min = '.001'; input.step = '.001';
+      input.value = Number.isFinite(reference[axis]) ? String(reference[axis]) : '';
+      input.placeholder = 'Enter reference';
+      input.dataset[`lattice${axis.toUpperCase()}`] = String(type);
+      input.setAttribute('aria-label', `Reference ${axis} in angstroms for ${label}`);
+      input.addEventListener('change', () => {
+        reference[axis] = input.valueAsNumber;
+        if (state.analysis.strain.enabled) runStructureAnalysis('strain');
+      });
+      return input;
+    };
+    const a = number('a'), c = number('c');
+    const cField = field('c (Å)', c);
+    cField.hidden = ![2, 7].includes(reference.structure);
+    row.append(field(`Type ${label} · Element`, element), field('Reference crystal', structure), field('a (Å)', a), cField);
+    element.addEventListener('change', () => {
+      state.references[type] = referenceForElement(element.value);
+      renderLatticeReferences(frame);
+      if (state.analysis.strain.enabled) runStructureAnalysis('strain');
+    });
+    structure.addEventListener('change', () => {
+      reference.structure = Number(structure.value);
+      if ([2, 7].includes(reference.structure) && !Number.isFinite(reference.c)) {
+        reference.c = reference.a * Math.sqrt(8 / 3);
+        c.value = Number.isFinite(reference.c) ? String(reference.c) : '';
+      }
+      cField.hidden = ![2, 7].includes(reference.structure);
+      if (state.analysis.strain.enabled) runStructureAnalysis('strain');
+    });
+    elements['lattice-references'].append(row);
+  });
+}
+
+function storePtmResult(frame, result, parameters, expose = true) {
+  if (!result.structures) return;
+  frame.ptm = { key: JSON.stringify({ flags: parameters.flags, rmsdCutoff: parameters.rmsdCutoff }),
+    structures: result.structures, rmsd: result.rmsd, scales: result.scales,
+    deformation: result.deformation, distances: result.distances };
+  if (!expose) return;
+  const metadata = { analysisMs: result.elapsedMs, analysisEngine: result.engine, analysisKey: frame.ptm.key, unit: '' };
+  const properties = [
+    { ...metadata, name: 'ptmStructureType', displayName: 'Crystal structure (PTM)', data: result.structures, categories: PTM_TYPES },
+    { ...metadata, name: 'ptmRmsd', displayName: 'PTM RMSD (best fit)', data: result.rmsd },
+    { ...metadata, name: 'ptmDistance', displayName: 'PTM nearest-neighbor distance', unit: 'Å', data: result.distances },
+  ];
+  for (const property of properties) replaceProperty(frame, property);
+}
+
+function replaceProperty(frame, property) {
+  const index = frame.properties.findIndex(candidate => candidate.name === property.name);
+  if (index < 0) frame.properties.push(property);
+  else frame.properties[index] = property;
+}
+
+async function runStructureAnalysis(kind, { automatic = false, frame = state.frame } = {}) {
+  if (!frame) return;
+  const analysis = state.analysis[kind];
+  const { prefix, name, label } = ANALYSES[kind];
+  let parameters = analysis.parameters;
+  try {
+    if (!automatic) {
+      if (kind === 'cna') parameters = { mode: elements['cna-mode'].value,
+        ...(elements['cna-mode'].value === 'fixed' ? { cutoff: elements['cna-cutoff'].valueAsNumber } : {}) };
+      else if (kind === 'centrosymmetry') parameters = { neighbors: Number(elements['csp-neighbors'].value) };
+      else parameters = ptmParameters();
+    }
+    if (kind === 'strain') {
+      parameters = { ...parameters, references: state.references.map(reference => ({ ...reference })) };
+      validateReferences(parameters.references, frame.types);
+      // Always include the templates needed by the selected reference phases.
+      parameters.flags |= parameters.references.reduce((mask, reference) => mask | (1 << (reference.structure - 1)), 0);
+    }
+    if (parameters.mode === 'fixed' && (!Number.isFinite(parameters.cutoff) || parameters.cutoff <= 0)) {
+      throw new Error('CNA cutoff must be greater than zero.');
+    }
+  } catch (error) {
+    structureControllers.get(kind)?.abort();
+    analysis.request += 1;
+    elements[`${prefix}-state`].textContent = 'Failed';
+    elements[`${prefix}-state`].classList.remove('ready');
+    elements[`${prefix}-status`].textContent = error.message;
+    elements[`run-${prefix}`].disabled = false;
+    showToast(error.message);
+    return;
+  }
+  analysis.enabled = true;
+  analysis.parameters = parameters;
+  analysis.key = JSON.stringify(parameters);
+  if (!automatic) state.colorMode = `property:${name}`;
+  refreshColorOptions();
+  const key = analysis.key;
+  const request = ++analysis.request;
+  const sourceVersion = state.sourceVersion;
+  const isCurrent = () => frame === state.frame && sourceVersion === state.sourceVersion
+    && analysis === state.analysis[kind] && request === analysis.request && key === analysis.key;
+  structureControllers.get(kind)?.abort();
+  const controller = new AbortController();
+  structureControllers.set(kind, controller);
+  const ready = property => {
+    elements[`${prefix}-state`].textContent = 'Calculated';
+    elements[`${prefix}-state`].classList.add('ready');
+    elements[`${prefix}-status`].textContent = kind === 'cna' || kind === 'ptm'
+      ? 'Use the legend checkboxes to show or hide each structure type. Filters do not change the analysis.'
+      : kind === 'strain'
+        ? `Green–Lagrange strain relative to the reference lattice.${property.incomplete ? ` ${property.incomplete} unmatched atoms are gray.` : ''}`
+        : `Calculated with ${parameters.neighbors} neighbors.${property.incomplete ? ` ${property.incomplete} undefined environments are gray.` : ''}`;
+    elements[`metric-${prefix}`].textContent = `${formatDuration(property.analysisMs)} · ${property.analysisEngine}`;
+    elements[`run-${prefix}`].disabled = false;
+  };
+  const cached = frame.properties.find(property => property.name === name && property.analysisKey === key);
+  if (cached) {
+    ready(cached); refreshColorOptions(); applyColors();
+    structureControllers.delete(kind);
+    return;
+  }
+  elements[`run-${prefix}`].disabled = true;
+  elements[`${prefix}-state`].textContent = 'Calculating…';
+  elements[`${prefix}-state`].classList.remove('ready');
+  try {
+    const ptmKey = JSON.stringify({ flags: parameters.flags, rmsdCutoff: parameters.rmsdCutoff });
+    if (kind === 'strain') {
+      const ptmTask = analysisTasks.get('ptm');
+      if (ptmTask?.frame === frame && ptmTask.key === ptmKey) await ptmTask.promise;
+      if (!isCurrent()) return;
+    }
+    const inputs = { kind, ...parameters,
+      ...(kind === 'strain' && frame.ptm?.key === ptmKey ? { ptmInput: frame.ptm } : {}) };
+    const task = analysisPool.analyze(frame, inputs, {
+      signal: controller.signal,
+      onProgress: ({ completed, total, workerCount }) => {
+        if (isCurrent()) elements[`${prefix}-status`].textContent = `Analyzing frame ${state.frameIndex + 1} with ${workerCount} Worker${workerCount > 1 ? 's' : ''}… ${completed} / ${total}`;
+      },
+    });
+    analysisTasks.set(kind, { frame, key, request, promise: task });
+    const result = await task;
+    if (!isCurrent()) return;
+    const metadata = { unit: '', analysisKey: key, analysisMs: result.elapsedMs,
+      analysisEngine: result.engine, incomplete: result.incomplete ?? 0 };
+    let properties;
+    if (kind === 'ptm') {
+      storePtmResult(frame, result, parameters);
+      properties = [frame.properties.find(property => property.name === name)];
+    } else if (kind === 'strain') {
+      const visiblePtmKey = JSON.stringify(state.analysis.ptm.parameters);
+      storePtmResult(frame, result, parameters, !state.analysis.ptm.enabled || visiblePtmKey === ptmKey);
+      if (!result.atomicShearStrain.some(Number.isFinite)) throw new Error('No atoms match the reference crystal and PTM threshold; elastic strain is undefined.');
+      const labels = { atomicShearStrain: 'Atomic shear strain', atomicHydrostaticStrain: 'Atomic hydrostatic strain',
+        atomicVolumeChange: 'Atomic volume change' };
+      properties = STRAIN_FIELDS.map(field => ({ ...metadata, name: field,
+        displayName: labels[field] ?? `${field.replace('strain', '')} (crystal frame)`, data: result[field] }));
+    } else {
+      if (kind === 'centrosymmetry' && !result.centrosymmetry.some(Number.isFinite)) throw new Error('No valid central-symmetry environments: too few neighbors or coincident atoms.');
+      properties = [{ ...metadata, name, displayName: label, data: result.structures ?? result.centrosymmetry,
+        ...(kind === 'cna' ? { categories: STRUCTURE_TYPES } : {}) }];
+    }
+    for (const property of properties) replaceProperty(frame, property);
+    reassessFrameCache(frame); ready(properties[0]);
+    refreshColorOptions(); applyColors(); restoreSelection(); updateMemoryMetric();
+    if (result.warning) showToast(result.warning);
+  } catch (error) {
+    if (!isCurrent() || error.name === 'AbortError') return;
+    elements[`${prefix}-state`].textContent = 'Failed';
+    elements[`${prefix}-status`].textContent = error.message;
+    reassessFrameCache(frame); updateMemoryMetric();
+    refreshColorOptions(); showToast(error.message);
+  } finally {
+    if (isCurrent()) elements[`run-${prefix}`].disabled = false;
+    if (structureControllers.get(kind) === controller) structureControllers.delete(kind);
+    if (analysisTasks.get(kind)?.request === request) analysisTasks.delete(kind);
+  }
 }
 
 function scheduleCutoffAnalysis({ immediate = false } = {}) {
@@ -963,7 +1289,6 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     reassessFrameCache(frame);
     if (frame !== state.frame || frameIndex !== state.frameIndex
         || !state.analysis.coordination.enabled || state.analysis.coordination.cutoff !== cutoff) return;
-    state.colorMode = 'property:coordination';
     refreshColorOptions();
     applyColors();
     elements['analysis-state'].textContent = 'Calculated';
@@ -1027,6 +1352,13 @@ function restoreSelection() {
     updateSelectionPanel();
     return;
   }
+  if (renderer.visibility?.[index] === 0) {
+    renderer.setSelected(-1);
+    elements['selection-empty'].hidden = false;
+    elements['selection-data'].hidden = true;
+    elements['clear-selection'].hidden = false;
+    return;
+  }
   renderer.setSelected(index);
   updateSelectionPanel(index);
 }
@@ -1035,6 +1367,12 @@ function updateSelectionPanel(index = null) {
   if (index === null && state.selectedId !== null && state.frame) {
     const found = state.frame.ids.findIndex((id) => id === state.selectedId);
     if (found >= 0) index = found;
+  }
+  if (index !== null && renderer.visibility?.[index] === 0) {
+    elements['selection-empty'].hidden = false;
+    elements['selection-data'].hidden = true;
+    elements['clear-selection'].hidden = state.selectedId === null;
+    return;
   }
   if (index === null || index < 0 || !state.frame) {
     elements['selection-empty'].hidden = false;
@@ -1061,7 +1399,9 @@ function updateSelectionPanel(index = null) {
     ...coordinateRows,
     ...frame.properties.map((property) => [
       property.name,
-      `${formatValue(property.data[index])}${property.unit ? ` ${property.unit}` : ''}`,
+      property.categories
+        ? `${property.categories.find((item) => item.id === property.data[index])?.label ?? 'Other'} (${property.data[index]})`
+        : `${formatValue(property.data[index])}${property.unit ? ` ${property.unit}` : ''}`,
     ]),
   ];
   const fragment = document.createDocumentFragment();
@@ -1094,13 +1434,36 @@ function renderLegend(legend) {
   if (legend.kind === 'types') {
     const items = document.createElement('div');
     items.className = 'legend-items';
+    if (legend.property?.categories) items.classList.add('crystal-items');
     for (const item of legend.items) {
-      const row = document.createElement('span');
+      const row = document.createElement(legend.property?.categories ? 'label' : 'span');
       row.className = 'legend-item';
       const swatch = document.createElement('i');
       swatch.className = 'legend-swatch';
       swatch.style.background = `rgb(${item.color.join(' ')})`;
+      if (legend.property?.categories) {
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = item.visible;
+        checkbox.dataset.structureType = String(item.id);
+        checkbox.setAttribute('aria-label', `Show ${item.label} atoms`);
+        row.title = item.description;
+        row.classList.toggle('is-hidden', !item.visible);
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) hiddenStructureTypes.delete(item.id);
+          else hiddenStructureTypes.add(item.id);
+          row.classList.toggle('is-hidden', !checkbox.checked);
+          applyScalarVisibility(paletteForCurrentMode().legend);
+        });
+        row.append(checkbox);
+      }
       row.append(swatch, document.createTextNode(item.label));
+      if (legend.property?.categories) {
+        const count = document.createElement('span');
+        count.className = 'legend-count';
+        count.textContent = `${formatInteger(item.count)} · ${(100 * item.count / legend.property.data.length).toFixed(1)}%`;
+        row.append(count);
+      }
       items.append(row);
     }
     elements.legend.append(items);
@@ -1328,12 +1691,15 @@ function syncBackgroundControl(value) {
 function setControlsEnabled(enabled) {
   for (const id of [
     'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
-    'background', 'show-axes', 'show-cell', 'png-background', 'png-legend',
+    'background', 'show-axes', 'show-cell', 'png-background', 'png-legend', 'png-axes',
     'slice-axis', 'slice-position', 'cutoff', 'run-analysis',
+    'cna-mode', 'cna-cutoff', 'run-cna', 'csp-neighbors', 'run-csp',
+    'ptm-rmsd', 'run-ptm', 'lattice-reset', 'run-strain',
   ]) {
     elements[id].disabled = !enabled;
   }
   for (const button of document.querySelectorAll('[data-view]')) button.disabled = !enabled;
+  for (const input of document.querySelectorAll('[data-ptm-template], #lattice-references input, #lattice-references select')) input.disabled = !enabled;
   for (const button of document.querySelectorAll('[data-background]')) button.disabled = !enabled;
   elements['background-picker'].classList.toggle('is-disabled', !enabled);
   if (!enabled) elements['background-picker'].open = false;
