@@ -33,6 +33,9 @@ import { initializeSidebarResize } from './sidebar-resize.js';
 import { initializeToolPanels } from './tool-panels.js';
 import { initializeMobileControls } from './mobile-controls.js';
 import { initializeFileDrop } from './file-drop.js';
+import { initializeSliceControls } from './slice-controls.js';
+import { initializeSliceGizmo } from './render/slice-gizmo.js';
+import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './configuration.js';
 
 const elements = Object.fromEntries([
   'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar',
@@ -53,6 +56,7 @@ const elements = Object.fromEntries([
   'metric-index', 'metric-parse', 'metric-upload', 'metric-analysis', 'metric-fps',
   'metric-memory',
   'replicate-a', 'replicate-b', 'replicate-c', 'apply-replicate', 'reset-replicate', 'replicate-summary',
+  'export-configuration', 'import-configuration', 'configuration-file', 'configuration-status',
   'source-dialog', 'source-dialog-kicker', 'source-dialog-title', 'source-dialog-summary', 'source-dialog-close', 'source-options',
 ].map((id) => [id, document.getElementById(id)]));
 
@@ -117,16 +121,27 @@ let coordinationQueue = Promise.resolve();
 let loadingOwner = null;
 let sourceOpenRequest = 0;
 let sourceFetchController = null;
+let sourceLoadingOwner = null;
 let renderer;
 let backgroundCustomized = false;
+let sliceControls;
+let sliceGizmo;
+let pendingConfiguration = null;
+let configurationRequest = 0;
+let configurationReadRequest = 0;
+let restorationOwner = null;
 
 initializeSidebarResize();
 const toolPanels = initializeToolPanels({
-  onDeactivateAnalysis: cancelAnalysis,
+  onDeactivateAnalysis: (kind) => {
+    interruptConfigurationRestore('an analysis change');
+    cancelAnalysis(kind);
+  },
   onDeactivateTool: (name) => {
     if (name === 'replicate') resetReplication();
-    if (name === 'slice') { elements['slice-position'].value = '100'; updateSlice(); }
+    if (name === 'slice') toolPanels.setToolEnabled('slice', sliceControls.getState().slices.some(slice => slice.enabled));
   },
+  onSelectionChange: syncSliceGizmo,
 });
 initializeMobileControls();
 initializeTheme((theme) => {
@@ -146,11 +161,33 @@ try {
     onStats: ({ fps }) => { elements['metric-fps'].textContent = `${fps.toFixed(1)} FPS`; },
     onCameraChange: updateAxisTriad,
     onProjectionChange: syncProjectionControls,
+    onRender: () => sliceGizmo?.update(),
   });
 } catch (error) {
   showToast(error.message);
   throw error;
 }
+
+sliceControls = initializeSliceControls({
+  getDefaultSlice: () => {
+    const bounds = renderer.getDisplayBounds();
+    return { normal: [0, 0, 1], position: bounds ? (bounds.minimum[2] + bounds.maximum[2]) / 2 : 0 };
+  },
+  onChange: updateSlices,
+  onSelectionChange: syncSliceGizmo,
+});
+sliceGizmo = initializeSliceGizmo(renderer, {
+  onChange: (id, changes) => {
+    interruptConfigurationRestore('a slice edit');
+    const saved = sliceControls.getState();
+    sliceControls.setState({ ...saved, slices: saved.slices.map(slice => slice.id === id ? { ...slice, ...changes } : slice) });
+    updateSlices();
+  },
+  onSelect: (selectedId) => {
+    sliceControls.setState({ ...sliceControls.getState(), selectedId });
+    syncSliceGizmo();
+  },
+});
 
 const worker = new StructureWorkerClient(({ loaded, total, stage }) => {
   if (stage === 'index') {
@@ -191,6 +228,7 @@ elements['open-examples'].addEventListener('click', showExampleChooser);
 elements['close-file'].addEventListener('click', closeSource);
 
 elements['frame-slider'].addEventListener('input', () => {
+  interruptConfigurationRestore('a frame change');
   stopFramePlayback();
   const index = Number(elements['frame-slider'].value);
   elements['frame-label'].textContent = `${index + 1} / ${state.frameCount}`;
@@ -230,6 +268,9 @@ elements['show-axes'].addEventListener('change', syncAxisVisibility);
 elements['show-cell'].addEventListener('change', () => renderer.setCellVisible(elements['show-cell'].checked));
 elements['apply-replicate'].addEventListener('click', applyReplication);
 elements['reset-replicate'].addEventListener('click', resetReplication);
+elements['export-configuration'].addEventListener('click', exportConfiguration);
+elements['import-configuration'].addEventListener('click', () => elements['configuration-file'].click());
+elements['configuration-file'].addEventListener('change', importConfiguration);
 elements['slice-axis'].addEventListener('change', updateSlice);
 elements['slice-position'].addEventListener('input', updateSlice);
 elements['run-analysis'].addEventListener('click', () => {
@@ -244,7 +285,10 @@ elements['run-ptm'].addEventListener('click', () => runStructureAnalysis('ptm'))
 elements['run-strain'].addEventListener('click', () => runStructureAnalysis('strain'));
 for (const kind of Object.keys(state.analysis)) {
   const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
-  elements[`cancel-${prefix}`].addEventListener('click', () => cancelAnalysis(kind));
+  elements[`cancel-${prefix}`].addEventListener('click', () => {
+    interruptConfigurationRestore('an analysis cancellation');
+    cancelAnalysis(kind);
+  });
 }
 elements['ptm-rmsd'].addEventListener('change', updatePtmSettings);
 for (const checkbox of document.querySelectorAll('[data-ptm-template]')) checkbox.addEventListener('change', updatePtmSettings);
@@ -287,6 +331,19 @@ elements['export-png'].addEventListener('click', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) stopFramePlayback();
 });
+for (const name of ['input', 'change']) {
+  document.addEventListener(name, (event) => {
+    if (event.target.id !== 'configuration-file' && event.target.closest('#sidebar')) {
+      interruptConfigurationRestore('a settings edit');
+    }
+  });
+}
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('#sidebar button');
+  if (button && !['import-configuration', 'export-configuration'].includes(button.id)) {
+    interruptConfigurationRestore('a settings change');
+  }
+});
 
 syncProjectionControls('perspective');
 setBackgroundColor(elements.background.value, { automatic: true });
@@ -311,16 +368,32 @@ window.addEventListener('beforeunload', () => {
   clearTimeout(cutoffTimer);
   worker.close();
   coordinationPool.close();
+  sliceGizmo.dispose();
 });
 
 function beginSourceOpen() {
+  interruptConfigurationRestore('a new source selection');
   sourceFetchController?.abort();
   sourceFetchController = null;
   elements['close-file'].hidden = false;
-  return ++sourceOpenRequest;
+  sourceLoadingOwner = ++sourceOpenRequest;
+  stopFramePlayback();
+  setControlsEnabled(false);
+  syncSliceGizmo();
+  return sourceOpenRequest;
+}
+
+function finishSourceOpen(request) {
+  if (sourceLoadingOwner !== request) return;
+  sourceLoadingOwner = null;
+  setControlsEnabled(Boolean(state.frame));
+  syncSliceGizmo();
 }
 
 function closeSource() {
+  configurationRequest++;
+  restorationOwner = null;
+  sourceLoadingOwner = null;
   sourceOpenRequest++;
   sourceFetchController?.abort();
   sourceFetchController = null;
@@ -380,7 +453,8 @@ function closeSource() {
   elements.legend.hidden = true;
   elements.legend.replaceChildren();
   elements['slice-position'].value = '100';
-  updateSlice();
+  sliceControls.reset();
+  updateSlices();
   setRadiusPercent(100);
   toolPanels.selectTool('display');
   elements.sidebar.scrollTop = 0;
@@ -444,6 +518,8 @@ async function inspectLocalEntries(entries, {
     setLoading(false);
     elements['close-file'].hidden = !state.frame;
     showToast(error.message ?? String(error));
+  } finally {
+    finishSourceOpen(request);
   }
 }
 
@@ -626,6 +702,7 @@ async function loadExample(url, name) {
     showToast(error.message);
   } finally {
     if (sourceFetchController === controller) sourceFetchController = null;
+    finishSourceOpen(request);
   }
 }
 
@@ -655,6 +732,7 @@ async function loadNebExample() {
     showToast(error.message);
   } finally {
     if (sourceFetchController === controller) sourceFetchController = null;
+    finishSourceOpen(request);
   }
 }
 
@@ -695,6 +773,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     state.colorMode = 'type';
     state.coordinateMode = 'wrapped';
     state.repetitions = [1, 1, 1];
+    sliceControls.reset();
     state.source = sourceDescriptor;
     state.analysis.coordination = { enabled: false, cutoff: null, request: 0 };
     state.analysis.cna = { enabled: false, parameters: null, key: null, request: 0 };
@@ -720,7 +799,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     await displayFrame(result.frame, { resetCamera: true });
     if (selectionRequest !== sourceOpenRequest || request !== state.frameRequest || sourceVersion !== state.sourceVersion) return;
     elements['empty-state'].hidden = true;
-    setControlsEnabled(true);
+    finishSourceOpen(selectionRequest);
     setLoading(false);
     showInteractionHint();
     scheduleFramePrefetch(0);
@@ -730,12 +809,26 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
         : `Loaded ${formatInteger(result.frame.ids.length)} atoms locally.`,
       true,
     );
+    if (pendingConfiguration && matchesSource(pendingConfiguration, state.files, state.format)) {
+      const saved = pendingConfiguration;
+      const restoreRequest = configurationRequest;
+      pendingConfiguration = null;
+      try { await restoreConfiguration(saved); }
+      catch (error) {
+        if (selectionRequest === sourceOpenRequest && restoreRequest === configurationRequest) {
+          elements['configuration-status'].textContent = `Could not restore configuration: ${error.message}`;
+          showToast(error.message);
+        }
+      }
+    }
   } catch (error) {
     if (selectionRequest === sourceOpenRequest && request === state.frameRequest) {
       setLoading(false);
       elements['close-file'].hidden = !state.frame;
       showToast(error.message);
     }
+  } finally {
+    finishSourceOpen(selectionRequest);
   }
 }
 
@@ -770,6 +863,7 @@ function configureSourceUi(result) {
 }
 
 async function showFrame(index) {
+  if (sourceLoadingOwner !== null) return false;
   if (!Number.isInteger(index) || index < 0 || index >= state.frameCount) return false;
   const request = state.frameRequest + 1;
   state.frameRequest = request;
@@ -815,7 +909,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   applyScalarVisibility(palette.legend);
   renderLegend(palette.legend);
   if (resetCamera) renderer.resetCamera();
-  updateSlice();
+  updateSlices();
   restoreSelection();
   elements['atom-count'].textContent = formatInteger(frame.ids.length);
   elements['cell-kind'].textContent = frame.cell.triclinic ? 'Triclinic' : 'Orthogonal';
@@ -951,11 +1045,13 @@ function updateFrameNavigation() {
 }
 
 function showFrameManually(index) {
+  interruptConfigurationRestore('a frame change');
   stopFramePlayback();
   void showFrame(index);
 }
 
 function toggleFramePlayback() {
+  interruptConfigurationRestore('trajectory playback');
   if (state.playing) {
     stopFramePlayback();
     return;
@@ -1289,6 +1385,7 @@ function storePtmResult(frame, result, parameters, expose = true) {
 }
 
 async function runStructureAnalysis(kind, { automatic = false, frame = state.frame } = {}) {
+  if (!automatic) interruptConfigurationRestore('an analysis change');
   if (!frame) return;
   const analysis = state.analysis[kind];
   const { prefix, name, label } = ANALYSES[kind];
@@ -1373,8 +1470,8 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       ...(kind === 'strain' && frame.ptm?.key === ptmKey ? { ptmInput: frame.ptm } : {}) };
     const task = analysisPool.analyze(frame, inputs, {
       signal: controller.signal,
-      onProgress: ({ completed, total, workerCount }) => {
-        if (isCurrent()) elements[`${prefix}-status`].textContent = `Analyzing frame ${state.frameIndex + 1} with ${workerCount} Worker${workerCount > 1 ? 's' : ''}… ${completed} / ${total}`;
+      onProgress: (progress) => {
+        if (isCurrent()) elements[`${prefix}-status`].textContent = analysisProgressText(progress, kind);
       },
     });
     analysisTasks.set(kind, { frame, key, request, promise: task });
@@ -1425,6 +1522,7 @@ function scheduleCutoffAnalysis({ immediate = false } = {}) {
 }
 
 async function runCoordination({ automatic = false, frame = state.frame, frameIndex = state.frameIndex } = {}) {
+  if (!automatic) interruptConfigurationRestore('an analysis change');
   if (!frame) return;
   const analysis = state.analysis.coordination;
   const cutoff = automatic ? state.analysis.coordination.cutoff : Number(elements.cutoff.value);
@@ -1472,11 +1570,9 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
       if (!isCurrent()) return null;
       return coordinationPool.analyze(frame, cutoff, {
         signal: controller.signal,
-        onProgress: ({ completed, total, workerCount }) => {
+        onProgress: (progress) => {
           if (frame !== state.frame || !isCurrent()) return;
-          elements['loading-text'].textContent = workerCount > 1
-            ? `Calculating coordination with ${workerCount} Workers… ${completed} / ${total}`
-            : 'Calculating coordination in a Worker…';
+          elements['loading-text'].textContent = analysisProgressText(progress, 'coordination');
         },
       });
     });
@@ -1548,7 +1644,7 @@ function restoreSelection() {
     updateSelectionPanel();
     return;
   }
-  if (!renderer.isAtomVisible(index)) {
+  if (!renderer.isAnyReplicaVisible(index)) {
     renderer.setSelected(-1);
     elements['selection-empty'].hidden = false;
     elements['selection-data'].hidden = true;
@@ -1564,7 +1660,7 @@ function updateSelectionPanel(index = null) {
     const found = state.frame.ids.findIndex((id) => id === state.selectedId);
     if (found >= 0) index = found;
   }
-  if (index !== null && !renderer.isAtomVisible(index)) {
+  if (index !== null && !renderer.isAnyReplicaVisible(index)) {
     elements['selection-empty'].hidden = false;
     elements['selection-data'].hidden = true;
     elements['clear-selection'].hidden = state.selectedId === null;
@@ -1886,7 +1982,7 @@ function syncBackgroundControl(value) {
 
 function setControlsEnabled(enabled) {
   for (const id of [
-    'reset-camera', 'export-png', 'frame-slider',
+    'reset-camera', 'export-png', 'export-configuration', 'frame-slider',
     'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
     'background', 'show-axes', 'show-cell', 'png-background', 'png-legend', 'png-axes',
     'slice-axis', 'slice-position', 'cutoff', 'run-analysis',
@@ -1907,7 +2003,227 @@ function setControlsEnabled(enabled) {
   elements['background-picker'].classList.toggle('is-disabled', !enabled);
   if (!enabled) elements['background-picker'].open = false;
   configureReplicationUi(enabled);
+  sliceControls.setEnabled(enabled);
   syncAxisVisibility();
+}
+
+function updateSlices() {
+  if (!sliceControls) return;
+  const { slices } = sliceControls.getState();
+  renderer.setSlices(slices);
+  toolPanels.setToolEnabled('slice', slices.some(slice => slice.enabled));
+  syncSliceGizmo();
+  if (state.frame) restoreSelection();
+}
+
+function syncSliceGizmo() {
+  if (!sliceControls || !sliceGizmo) return;
+  sliceGizmo.setState({ ...sliceControls.getState(), visible: Boolean(state.frame) && sourceLoadingOwner === null && toolPanels.getActiveTool() === 'slice' });
+}
+
+function interruptConfigurationRestore(reason) {
+  if (restorationOwner === null) return;
+  configurationRequest++;
+  restorationOwner = null;
+  elements['configuration-status'].textContent = `Configuration restore interrupted by ${reason}.`;
+}
+
+function analysisProgressText({ phase, completed = 0, total = 1, workerCount = total,
+  prepared = 0, initialized = 0, completedAtoms, totalAtoms }, kind) {
+  const frame = `frame ${state.frameIndex + 1}`;
+  if (phase === 'queued') return `Waiting for available analysis Workers for ${frame}…`;
+  if (phase === 'preparing') return `Preparing ${frame} data… ${prepared} / ${total} Worker inputs`;
+  if (phase === 'initializing') return `Initializing ${kind === 'ptm' || kind === 'strain' ? 'PTM and ' : ''}Workers… ${initialized} / ${total}`;
+  if (phase === 'indexing') return `Building neighbor search for ${frame}…`;
+  const atoms = Number.isFinite(completedAtoms) && totalAtoms > 0
+    ? ` ${formatInteger(completedAtoms)} / ${formatInteger(totalAtoms)} atoms ·` : '';
+  return `Analyzing ${frame} with ${workerCount} Worker${workerCount > 1 ? 's' : ''}…${atoms} ${completed} / ${total} completed`;
+}
+
+function captureConfiguration() {
+  const ptmFlags = [...document.querySelectorAll('[data-ptm-template]:checked')]
+    .reduce((flags, input) => flags | Number(input.dataset.ptmTemplate), 0);
+  const sliceState = sliceControls.getState();
+  return createConfiguration({
+    source: state.frame ? {
+      kind: state.files.length > 1 ? 'sequence' : 'file',
+      label: state.source?.label ?? state.file.name, format: state.format,
+      frameIndex: state.frameIndex, frameCount: state.frameCount,
+      files: state.files.map(file => ({ name: file.name, size: file.size, lastModified: file.lastModified,
+        ...(file.webkitRelativePath ? { relativePath: file.webkitRelativePath } : {}) })),
+    } : null,
+    settings: {
+      display: { coordinateMode: state.coordinateMode, colorMode: state.colorMode,
+        radiusPercent: state.radiusPercent, background: elements.background.value,
+        showCell: elements['show-cell'].checked, showAxes: elements['show-axes'].checked,
+        projectionMode: renderer.projectionMode,
+        png: { background: elements['png-background'].checked, legend: elements['png-legend'].checked, axes: elements['png-axes'].checked } },
+      analyses: {
+        coordination: { enabled: state.analysis.coordination.enabled, cutoff: elements.cutoff.valueAsNumber },
+        cna: { enabled: state.analysis.cna.enabled, mode: elements['cna-mode'].value, cutoff: elements['cna-cutoff'].valueAsNumber },
+        centrosymmetry: { enabled: state.analysis.centrosymmetry.enabled, neighbors: Number(elements['csp-neighbors'].value) },
+        ptm: { enabled: state.analysis.ptm.enabled, flags: ptmFlags, rmsdCutoff: elements['ptm-rmsd'].valueAsNumber },
+        strain: { enabled: state.analysis.strain.enabled, references: state.references.map((reference, type) => ({ ...reference, label: state.referenceLabels[type] })) },
+      },
+      replicate: [...state.repetitions],
+      slices: { items: sliceState.slices, selectedId: sliceState.selectedId, showGizmo: true },
+      colors: {
+        ranges: [...scalarColorRanges].map(([property, range]) => ({ property, ...range })),
+        schemes: [...scalarColorSchemes].map(([property, scheme]) => ({ property, scheme })),
+        hideOutside: [...scalarHideOutside].map(([property, hide]) => ({ property, hide })),
+        hiddenStructureTypes: [...hiddenStructureTypes],
+      },
+      camera: { yaw: renderer.yaw, pitch: renderer.pitch, target: [...renderer.target], pan: [...renderer.pan],
+        distance: renderer.distance, orthographicScale: renderer.orthographicScale, projectionMode: renderer.projectionMode },
+      activeTool: toolPanels.getActiveTool(), selectedAtomId: state.selectedId,
+      theme: document.documentElement.dataset.theme,
+    },
+  });
+}
+
+function exportConfiguration() {
+  try {
+    if (sourceLoadingOwner !== null) throw new Error('Wait for the selected source to finish loading before exporting its configuration.');
+    const config = captureConfiguration();
+    const stem = state.file?.name.replace(/\.[^.]+$/, '') ?? 'alloyview';
+    downloadConfiguration(config, `${stem}-configuration.json`);
+    elements['configuration-status'].textContent = 'Configuration exported. Source file names and settings are included; atom data will be read from your local files.';
+  } catch (error) { showToast(error.message); }
+}
+
+async function importConfiguration() {
+  const [file] = elements['configuration-file'].files;
+  elements['configuration-file'].value = '';
+  if (!file) return;
+  const readRequest = ++configurationReadRequest;
+  let acceptedRequest = null;
+  try {
+    if (file.size > 8 * 1024 * 1024) throw new Error('Configuration files must be no larger than 8 MiB.');
+    const config = parseConfiguration(await file.text());
+    if (readRequest !== configurationReadRequest) return;
+    configurationRequest++;
+    acceptedRequest = configurationRequest;
+    restorationOwner = null;
+    pendingConfiguration = null;
+    if (sourceLoadingOwner === null && (!config.source || matchesSource(config, state.files, state.format))) await restoreConfiguration(config);
+    else {
+      pendingConfiguration = config;
+      toolPanels.selectTool('configuration');
+      const names = config.source?.files.map(item => item.relativePath || item.name).join(', ') ?? 'the source currently loading';
+      elements['configuration-status'].textContent = `Waiting for source files: ${names}. Use Open local to select them; matching file names and sizes will restore the saved operations automatically.`;
+    }
+  } catch (error) {
+    if (readRequest === configurationReadRequest && (acceptedRequest === null || acceptedRequest === configurationRequest)) showToast(error.message);
+  }
+}
+
+async function restoreConfiguration(config) {
+  const request = configurationRequest, sourceVersion = state.sourceVersion, sourceRequest = sourceOpenRequest;
+  const current = () => request === configurationRequest && sourceVersion === state.sourceVersion && sourceRequest === sourceOpenRequest;
+  const saved = config.settings;
+  const targetIndex = config.source?.frameIndex ?? state.frameIndex;
+  restorationOwner = request;
+  try {
+    clearTimeout(frameTimer);
+    if (config.source && targetIndex >= state.frameCount) throw new Error('The saved frame is not available in the loaded source.');
+    const targetFrame = state.frame ? await getFrame(targetIndex) : null;
+    if (!current()) return;
+    if (targetFrame && saved.display.coordinateMode === 'unwrapped' && !targetFrame.unwrappedPositions) {
+      throw new Error('The saved unwrapped view requires coordinates that this source does not provide.');
+    }
+    const references = targetFrame ? targetFrame.typeLabels.map((label, type) => {
+      const reference = saved.analyses.strain.references.find(item => item.label === label)
+        ?? (saved.analyses.strain.references[type]?.label ? null : saved.analyses.strain.references[type]);
+      return reference ? { ...reference } : referenceForElement(label);
+    }) : saved.analyses.strain.references.map(reference => ({ ...reference }));
+    if (targetFrame && saved.analyses.strain.enabled) validateReferences(references, targetFrame.types);
+    elements['configuration-status'].textContent = 'Restoring configuration and recalculating enabled analyses…';
+    stopFramePlayback();
+    clearTimeout(cutoffTimer);
+    for (const kind of Object.keys(state.analysis)) cancelAnalysis(kind);
+    if (targetFrame && !(await showFrame(targetIndex))) throw new Error('The saved frame could not be loaded.');
+    if (!current()) return;
+
+    document.getElementById(`theme-${saved.theme}`).click();
+    setBackgroundColor(saved.display.background);
+    for (const [id, value] of [
+      ['show-cell', saved.display.showCell], ['show-axes', saved.display.showAxes],
+      ['png-background', saved.display.png.background], ['png-legend', saved.display.png.legend], ['png-axes', saved.display.png.axes],
+    ]) elements[id].checked = value;
+    renderer.setCellVisible(saved.display.showCell);
+    syncAxisVisibility();
+    setRadiusPercent(saved.display.radiusPercent);
+    state.coordinateMode = saved.display.coordinateMode;
+    if (state.frame) {
+      configureCoordinateMode(state.frame);
+      renderer.setDisplayPositions(displayPositionsForFrame());
+      renderer.setReplications(saved.replicate);
+    }
+    state.repetitions = [...saved.replicate];
+    configureReplicationUi();
+    sliceControls.setState({ slices: saved.slices.items.map(slice => ({ ...slice,
+      showGizmo: saved.slices.showGizmo && slice.showGizmo })), selectedId: saved.slices.selectedId });
+    updateSlices();
+
+    elements.cutoff.value = String(saved.analyses.coordination.cutoff);
+    elements['cna-mode'].value = saved.analyses.cna.mode;
+    elements['cna-cutoff'].value = String(saved.analyses.cna.cutoff);
+    elements['csp-neighbors'].value = String(saved.analyses.centrosymmetry.neighbors);
+    elements['ptm-rmsd'].value = String(saved.analyses.ptm.rmsdCutoff);
+    for (const checkbox of document.querySelectorAll('[data-ptm-template]')) checkbox.checked = Boolean(saved.analyses.ptm.flags & Number(checkbox.dataset.ptmTemplate));
+    state.references = references;
+    state.referenceLabels = state.frame ? [...state.frame.typeLabels] : [];
+    state.referenceByLabel.clear();
+    renderLatticeReferences();
+    updateCnaMethodUi();
+    scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear(); hiddenStructureTypes.clear();
+    for (const { property, minimum, maximum } of saved.colors.ranges) scalarColorRanges.set(property, { minimum, maximum });
+    for (const { property, scheme } of saved.colors.schemes) scalarColorSchemes.set(property, scheme);
+    for (const { property, hide } of saved.colors.hideOutside) scalarHideOutside.set(property, hide);
+    for (const id of saved.colors.hiddenStructureTypes) hiddenStructureTypes.add(id);
+
+    for (const [kind, parameters] of Object.entries(saved.analyses)) {
+      const analysis = state.analysis[kind];
+      analysis.enabled = Boolean(state.frame) && parameters.enabled;
+      if (kind === 'coordination') analysis.cutoff = parameters.cutoff;
+      else {
+        analysis.parameters = kind === 'cna' ? { mode: parameters.mode, ...(parameters.mode === 'fixed' ? { cutoff: parameters.cutoff } : {}) }
+          : kind === 'centrosymmetry' ? { neighbors: parameters.neighbors } : { flags: saved.analyses.ptm.flags, rmsdCutoff: saved.analyses.ptm.rmsdCutoff };
+        analysis.key = JSON.stringify(analysis.parameters);
+      }
+      toolPanels.setToolEnabled(kind, analysis.enabled);
+      syncCancelButton(kind);
+    }
+    state.colorMode = saved.display.colorMode;
+    state.selectedId = saved.selectedAtomId;
+    if (saved.camera) {
+      for (const name of ['yaw', 'pitch', 'distance', 'orthographicScale']) renderer[name] = saved.camera[name];
+      renderer.target = [...saved.camera.target]; renderer.pan = [...saved.camera.pan];
+      renderer.setProjection(saved.camera.projectionMode);
+    } else renderer.setProjection(saved.display.projectionMode);
+    renderer.requestRender();
+    if (saved.activeTool) toolPanels.selectTool(saved.activeTool);
+    else toolPanels.closeTool(toolPanels.getActiveTool(), { deactivate: false });
+    syncSliceGizmo();
+    if (state.frame) { refreshColorOptions(); applyColors(); restoreSelection(); }
+    const tasks = Object.keys(state.analysis).filter(kind => state.analysis[kind].enabled).map(kind => kind === 'coordination'
+      ? runCoordination({ automatic: true }) : runStructureAnalysis(kind, { automatic: true }));
+    await Promise.all(tasks);
+    if (!current()) return;
+    if (state.frame) {
+      state.colorMode = saved.display.colorMode;
+      refreshColorOptions(); applyColors(); restoreSelection();
+    }
+    const failed = Object.keys(state.analysis).filter(kind => {
+      const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
+      return state.analysis[kind].enabled && elements[`${prefix}-state`].textContent === 'Failed';
+    });
+    elements['configuration-status'].textContent = failed.length
+      ? `Configuration restored; these analyses could not complete: ${failed.join(', ')}.`
+      : 'Configuration restored. Enabled analyses and saved display settings are ready.';
+  } finally {
+    if (restorationOwner === request) restorationOwner = null;
+  }
 }
 
 function configureReplicationUi(enabled = Boolean(state.frame)) {
@@ -1932,6 +2248,7 @@ function applyReplication() {
     configureReplicationUi();
     restoreSelection();
     renderer.resetCamera();
+    syncSliceGizmo();
   } catch (error) {
     showToast(error.message);
   }
@@ -1943,6 +2260,7 @@ function resetReplication() {
   configureReplicationUi();
   if (state.frame) restoreSelection();
   renderer?.resetCamera();
+  syncSliceGizmo();
 }
 
 function syncAxisVisibility() {

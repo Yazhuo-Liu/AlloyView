@@ -97,6 +97,77 @@ try {
       if (panel.hidden) document.querySelector('[data-tool-button="${name}"]').click();
     })()`);
   }
+  async function clickElement(selector) {
+    const point = await evaluate(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      element.scrollIntoView({ block: 'nearest' });
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`);
+    await call('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
+    await call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
+  }
+  async function dragElement(selector, deltaX, deltaY) {
+    const point = await evaluate(`(() => {
+      const rect = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`);
+    await call('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
+    if (selector === '.slice-normal-head' && process.argv.includes('--structure-screenshot')) {
+      const capture = await call('Page.captureScreenshot', { format: 'png' });
+      await writeFile('/tmp/alloyview-slices.png', Buffer.from(capture.data, 'base64'));
+    }
+    for (let step = 1; step <= 6; step++) await call('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: point.x + deltaX * step / 6, y: point.y + deltaY * step / 6, button: 'left', buttons: 1,
+    });
+    await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x + deltaX, y: point.y + deltaY, button: 'left', clickCount: 1 });
+  }
+  async function exportConfiguration() {
+    return evaluate(`(async () => {
+      const originalUrl = URL.createObjectURL, originalClick = HTMLAnchorElement.prototype.click;
+      let saved;
+      URL.createObjectURL = function(blob) { saved = blob; return originalUrl.call(this, blob); };
+      HTMLAnchorElement.prototype.click = () => {};
+      try {
+        document.getElementById('export-configuration').click();
+        if (!saved) throw new Error('Configuration export did not create a downloadable Blob: ' + document.getElementById('toast').textContent + ' / ' + document.getElementById('configuration-status').textContent);
+        return JSON.parse(await saved.text());
+      } finally { URL.createObjectURL = originalUrl; HTMLAnchorElement.prototype.click = originalClick; }
+    })()`);
+  }
+  async function holdRecipePreflight() {
+    await evaluate(`(async () => {
+      const appUrl = document.querySelector('script[type="module"]').src;
+      const { FrameCache } = await import(new URL('./data/frame-cache.js', appUrl));
+      const { StructureWorkerClient } = await import(new URL('./worker-client.js', appUrl));
+      const get = FrameCache.prototype.get, frame = StructureWorkerClient.prototype.frame;
+      let miss = true, hold = true;
+      window.preflightResultHeld = false;
+      FrameCache.prototype.get = function(index) {
+        if (index === 0 && miss) { miss = false; return undefined; }
+        return get.call(this, index);
+      };
+      StructureWorkerClient.prototype.frame = function(index, ...rest) {
+        const response = frame.call(this, index, ...rest);
+        if (index !== 0 || !hold) return response;
+        hold = false;
+        return response.then(value => new Promise((resolve, reject) => {
+          window.preflightResultHeld = true;
+          window.releasePreflight = () => resolve(value);
+          window.rejectPreflight = () => reject(new Error('Stale pending recipe failed'));
+        }));
+      };
+      window.restorePreflightHooks = () => { FrameCache.prototype.get = get; StructureWorkerClient.prototype.frame = frame; };
+    })()`);
+  }
+  function compareSettings(actual, expected, path = 'settings') {
+    if (typeof expected === 'number') {
+      assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 1e-6 * Math.max(1, Math.abs(expected)), `${path}: ${actual} != ${expected}`);
+    } else if (expected !== null && typeof expected === 'object') {
+      assert.deepEqual(Object.keys(actual).sort(), Object.keys(expected).sort(), `${path} keys`);
+      for (const key of Object.keys(expected)) compareSettings(actual[key], expected[key], `${path}.${key}`);
+    } else assert.equal(actual, expected, path);
+  }
   async function reloadPage() {
     let cleanup;
     const loaded = new Promise((done, reject) => {
@@ -568,15 +639,33 @@ try {
     const { AnalysisPool } = await import(new URL('./analysis/analysis-pool.js', appUrl));
     const original = AnalysisPool.prototype.analyze;
     window.analysisInputs = [];
+    window.ptmStartup = []; window.ptmStatuses = []; window.ptmWorkersCreated = 0;
+    let pool, originalFactory;
     AnalysisPool.prototype.analyze = function(frame, parameters, ...rest) {
+      if (!pool) {
+        pool = this; originalFactory = this.workerFactory;
+        this.workerFactory = () => { window.ptmWorkersCreated++; return originalFactory(); };
+      }
       window.analysisInputs.push({ kind: parameters.kind, reused: !!parameters.ptmInput });
-      return original.call(this, frame, parameters, ...rest);
+      const options = rest[0] ?? {};
+      return original.call(this, frame, parameters, { ...options, onProgress(progress) {
+        if (parameters.kind === 'ptm') window.ptmStartup.push(progress);
+        options.onProgress?.(progress);
+        if (parameters.kind === 'ptm') window.ptmStatuses.push(document.getElementById('ptm-status').textContent);
+      } });
     };
-    window.restorePtmPool = () => { AnalysisPool.prototype.analyze = original; };
+    window.restorePtmPool = () => { AnalysisPool.prototype.analyze = original; pool.workerFactory = originalFactory; };
     document.getElementById('toast').hidden = true;
     document.getElementById('run-ptm').click(); document.getElementById('run-strain').click();
   })()`);
   await waitFor('document.getElementById("ptm-state").textContent === "Calculated" && document.getElementById("strain-state").textContent === "Calculated"', 'PTM and atomic strain');
+  const startupPhases = await evaluate('window.ptmStartup.map(progress => progress.phase)');
+  for (const phase of ['preparing', 'initializing', 'indexing', 'analyzing', 'complete']) assert.ok(startupPhases.includes(phase), `PTM startup must report ${phase}`);
+  assert.deepEqual(await evaluate('(() => { const last = window.ptmStartup.at(-1); return [last.completedAtoms, last.totalAtoms]; })()'), [31, 31], 'PTM progress must end with the actual processed atom count');
+  assert.ok(await evaluate('window.ptmStatuses.some(status => status.includes("Preparing frame"))'), 'the UI must describe coordinate preparation');
+  assert.ok(await evaluate('window.ptmStatuses.some(status => status.includes("Initializing"))'), 'the UI must describe Worker/Wasm initialization');
+  assert.ok(await evaluate('window.ptmStatuses.some(status => status.includes("Analyzing frame"))'), 'the UI must distinguish analysis from initialization');
+  const warmWorkerCount = await evaluate('window.ptmWorkersCreated');
   assert.equal(await evaluate('document.getElementById("toast").hidden'), true, 'unmatched defect atoms must not produce a warning');
   assert.equal(await evaluate('window.structureTestRenderer.frame.properties.find(p => p.name === "atomicShearStrain").data.filter(Number.isNaN).length'), 12);
   assert.equal(await evaluate('document.querySelector("[data-lattice-a]").valueAsNumber'), 4.05);
@@ -586,6 +675,7 @@ try {
   assert.ok(await evaluate('window.structureTestRenderer.frame.properties.find(p => p.name === "atomicHydrostaticStrain").data.some(Number.isFinite)'));
   await evaluate(`(() => { const input = document.querySelector('[data-lattice-a]'); input.value = '3.9'; input.dispatchEvent(new Event('change')); })()`);
   await waitFor('document.getElementById("strain-state").textContent === "Calculated"', 'edited lattice strain');
+  assert.equal(await evaluate('window.ptmWorkersCreated'), warmWorkerCount, 'subsequent strain must reuse an idle initialized Worker');
   assert.equal(await evaluate(`window.structureTestRenderer.frame.properties.find(p => p.name === 'atomicVolumeChange').data.filter(Number.isFinite).every(value => Math.abs(value - ((4.05 / 3.9) ** 3 - 1)) < 1e-5)`), true);
   assert.equal(await evaluate('window.analysisInputs.filter(input => input.kind === "ptm").length'), 1);
   if (process.argv.includes('--structure-screenshot')) {
@@ -985,6 +1075,292 @@ try {
   await showTool('replicate');
   assert.deepEqual(await evaluate('["a", "b", "c"].map(axis => document.getElementById("replicate-" + axis).disabled)'), [false, true, false]);
   assert.equal(await evaluate('document.getElementById("replicate-b").valueAsNumber'), 1);
+
+  // Multiple world-space half-planes intersect, including repeated images.
+  // The controls normalize arbitrary XYZ normals and retain distinct names.
+  await evaluate(`document.getElementById('replicate-a').value = '2'; document.getElementById('apply-replicate').click()`);
+  await showTool('slice');
+  await clickElement('#add-slice');
+  await evaluate(`(() => {
+    const name = document.getElementById('slice-name'); name.value = 'Oblique cap'; name.dispatchEvent(new Event('input')); name.dispatchEvent(new Event('change'));
+    const entries = [['slice-normal-x', 1], ['slice-normal-y', 1], ['slice-normal-z', 0], ['slice-offset', 4]];
+    for (const [id, value] of entries) document.getElementById(id).value = value;
+    const normal = document.getElementById('slice-normal-x'); normal.dispatchEvent(new Event('input')); normal.dispatchEvent(new Event('change'));
+  })()`);
+  await clickElement('#add-slice');
+  await evaluate(`(() => {
+    const name = document.getElementById('slice-name'); name.value = 'Lower X bound'; name.dispatchEvent(new Event('input')); name.dispatchEvent(new Event('change'));
+    const entries = [['slice-normal-x', 1], ['slice-normal-y', 0], ['slice-normal-z', 0], ['slice-offset', 2]];
+    for (const [id, value] of entries) document.getElementById(id).value = value;
+    const normal = document.getElementById('slice-normal-x'); normal.dispatchEvent(new Event('input')); normal.dispatchEvent(new Event('change'));
+    const side = document.getElementById('slice-side'); side.value = 'positive'; side.dispatchEvent(new Event('change'));
+  })()`);
+  const worldSlices = await evaluate(`(() => {
+    const renderer = window.structureTestRenderer;
+    const values = renderer.replicas.map(replica => Array.from({ length: renderer.atomCount }, (_, atom) => renderer.isAtomVisible(atom, replica.indices)));
+    return { planes: renderer.slices, values, positions: Array.from(renderer.displayPositions), offsets: renderer.replicas.map(replica => replica.offset),
+      names: [...document.querySelectorAll('#slice-list [data-slice-id]')].map(button => button.textContent) };
+  })()`);
+  assert.equal(worldSlices.planes.length, 2);
+  assert.ok(worldSlices.names[0].includes('Oblique cap'));
+  assert.ok(worldSlices.names[1].includes('Lower X bound'));
+  assert.ok(Math.abs(Math.hypot(...worldSlices.planes[0].normal) - 1) < 1e-6);
+  assert.ok(Math.abs(worldSlices.planes[0].normal[0] - Math.SQRT1_2) < 1e-6);
+  assert.ok(worldSlices.values[0].some(Boolean), 'the two half-planes must leave some source atoms');
+  assert.ok(worldSlices.values[1].every(value => !value), 'world-space slicing must remove distant replicated images');
+  for (let copy = 0; copy < worldSlices.values.length; copy++) for (let atom = 0; atom < worldSlices.values[copy].length; atom++) {
+    const position = worldSlices.positions.slice(atom * 3, atom * 3 + 3).map((value, axis) => value + worldSlices.offsets[copy][axis]);
+    const expected = worldSlices.planes.every(plane => {
+      const distance = plane.normal.reduce((sum, component, axis) => sum + component * position[axis], 0) - plane.position;
+      return !plane.enabled || (plane.side === 'positive' ? distance >= -1e-5 : distance <= 1e-5);
+    });
+    assert.equal(worldSlices.values[copy][atom], expected, 'CPU picking visibility must use the intersection in Cartesian space');
+  }
+  await clickElement('#slice-list [data-slice-id="slice-0"]');
+  await clickElement('#slice-enabled');
+  assert.equal(await evaluate('window.structureTestRenderer.replicas.every(replica => Array.from({length: window.structureTestRenderer.atomCount}, (_, atom) => window.structureTestRenderer.isAtomVisible(atom, replica.indices)).some(Boolean))'), true, 'disabling one plane must reveal clipped copies');
+  await clickElement('#slice-enabled');
+
+  // Changing the displayed coordinates changes clipping, even though wrapped
+  // fractional analysis coordinates stay untouched (the unwrapped-view path).
+  const displayedClipping = await evaluate(`(() => {
+    const renderer = window.structureTestRenderer, original = renderer.displayPositions;
+    const atom = Array.from({ length: renderer.atomCount }, (_, index) => index).find(index => renderer.isAtomVisible(index));
+    const moved = new original.constructor(original); moved[atom * 3] += 100;
+    renderer.setDisplayPositions(moved);
+    const hidden = !renderer.isAtomVisible(atom);
+    renderer.setDisplayPositions(original);
+    return { hidden, restored: renderer.isAtomVisible(atom) };
+  })()`);
+  assert.deepEqual(displayedClipping, { hidden: true, restored: true });
+
+  // Dragging a normal/position handle updates numerical settings while the
+  // underlying camera retains its orientation and pan.
+  await waitFor('!document.querySelector("svg.slice-gizmo").hidden && document.querySelector(".slice-normal-head").getBoundingClientRect().width > 0', 'slice gizmo');
+  const gizmoBefore = await evaluate(`(() => {
+    const renderer = window.structureTestRenderer;
+    return { yaw: renderer.yaw, pitch: renderer.pitch, pan: [...renderer.pan], normal: [...renderer.slices[0].normal], position: renderer.slices[0].position };
+  })()`);
+  await dragElement('.slice-normal-head', 34, -28);
+  const rotatedPlane = await evaluate(`(() => {
+    const renderer = window.structureTestRenderer;
+    return { yaw: renderer.yaw, pitch: renderer.pitch, pan: [...renderer.pan], normal: [...renderer.slices[0].normal],
+      position: renderer.slices[0].position, fields: ['x', 'y', 'z'].map(axis => document.getElementById('slice-normal-' + axis).valueAsNumber) };
+  })()`);
+  assert.ok(rotatedPlane.normal.some((value, axis) => Math.abs(value - gizmoBefore.normal[axis]) > .01), 'the normal handle must rotate the plane');
+  assert.ok(Math.abs(Math.hypot(...rotatedPlane.normal) - 1) < 1e-5);
+  rotatedPlane.fields.forEach((value, axis) => assert.ok(Math.abs(value - rotatedPlane.normal[axis]) < 1e-4, 'rotation must update sidebar values'));
+  assert.equal(rotatedPlane.yaw, gizmoBefore.yaw); assert.equal(rotatedPlane.pitch, gizmoBefore.pitch); assert.deepEqual(rotatedPlane.pan, gizmoBefore.pan);
+  await dragElement('.slice-position-handle', 22, 25);
+  const translatedPlane = await evaluate(`(() => {
+    const renderer = window.structureTestRenderer;
+    return { yaw: renderer.yaw, pitch: renderer.pitch, pan: [...renderer.pan], position: renderer.slices[0].position,
+      field: document.getElementById('slice-offset').valueAsNumber };
+  })()`);
+  assert.ok(Math.abs(translatedPlane.position - rotatedPlane.position) > .01, 'the position handle must translate the plane');
+  assert.ok(Math.abs(translatedPlane.field - translatedPlane.position) < 1e-4, 'translation must update the sidebar offset');
+  assert.equal(translatedPlane.yaw, gizmoBefore.yaw); assert.equal(translatedPlane.pitch, gizmoBefore.pitch); assert.deepEqual(translatedPlane.pan, gizmoBefore.pan);
+  await clickElement('#delete-slice');
+  assert.equal(await evaluate('window.structureTestRenderer.slices.length'), 1);
+  assert.equal(await evaluate('document.getElementById("slice-name").value'), 'Lower X bound');
+  const clippedCopy = await evaluate(`(async () => {
+    const renderer = window.structureTestRenderer, gl = renderer.gl;
+    const appUrl = document.querySelector('script[type="module"]').src;
+    const { transformPoint } = await import(new URL('./render/math.js', appUrl));
+    const visibility = renderer.visibility, cellVisible = renderer.cellVisible, repetitions = [...renderer.repetitions];
+    const mask = new Uint8Array(renderer.atomCount); mask[0] = 255;
+    const coverage = async () => {
+      const query = gl.createQuery();
+      try {
+        gl.beginQuery(gl.ANY_SAMPLES_PASSED, query); renderer.render(performance.now(), { trackStats: false }); gl.endQuery(gl.ANY_SAMPLES_PASSED); gl.finish();
+        for (let attempt = 0; attempt < 200 && !gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+        if (!gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE)) throw new Error('Slice GPU query timed out');
+        return Boolean(gl.getQueryParameter(query, gl.QUERY_RESULT));
+      } finally { gl.deleteQuery(query); }
+    };
+    try {
+      renderer.setVisibility(mask); renderer.setCellVisible(false); renderer.updateMatrices();
+      const offset = renderer.replicas[1].offset, position = renderer.displayPositions.subarray(0, 3);
+      const clip = transformPoint(renderer.viewProjectionMatrix, ...position.map((value, axis) => value + offset[axis]));
+      const rect = renderer.canvas.getBoundingClientRect();
+      const picked = renderer.pick(rect.left + (clip[0] / clip[3] * .5 + .5) * rect.width, rect.top + (.5 - clip[1] / clip[3] * .5) * rect.height);
+      const sourceVisible = renderer.isAtomVisible(0), replicaVisible = renderer.isAtomVisible(0, renderer.replicas[1].indices), withCopy = await coverage();
+      renderer.setReplications([1, 1, 1]);
+      return { picked, sourceVisible, replicaVisible, withCopy, sourceOnly: await coverage(), glError: gl.getError() };
+    } finally { renderer.setReplications(repetitions); renderer.setVisibility(visibility); renderer.setCellVisible(cellVisible); }
+  })()`);
+  assert.deepEqual(clippedCopy, { picked: 0, sourceVisible: false, replicaVisible: true, withCopy: true, sourceOnly: false, glError: 0 }, 'a visible copy of a clipped source atom must render and pick its original ID');
+
+  // A processing recipe restores settings on the current source and after
+  // closing/reselecting local files, without embedding their coordinates.
+  await evaluate('document.getElementById("frame-last").click()');
+  await waitFor('document.getElementById("frame-label").textContent === "2 / 2" && document.getElementById("loading").hidden', 'recipe trajectory frame');
+  await evaluate(`(() => {
+    const element = document.querySelector('[data-reference-element]'); element.value = 'Fe'; element.dispatchEvent(new Event('change'));
+    const lattice = document.querySelector('[data-lattice-a]'); lattice.value = '3.3'; lattice.dispatchEvent(new Event('change'));
+    for (const prefix of ['cna', 'ptm', 'strain']) document.getElementById('run-' + prefix).click();
+  })()`);
+  await waitFor('["cna", "ptm", "strain"].every(prefix => document.getElementById(prefix + "-state").textContent === "Calculated")', 'recipe analyses');
+  await showTool('slice');
+  await clickElement('#add-slice');
+  await evaluate(`(() => {
+    const name = document.getElementById('slice-name'); name.value = 'Saved cap'; name.dispatchEvent(new Event('input'));
+    const offset = document.getElementById('slice-offset'); offset.value = '100'; offset.dispatchEvent(new Event('change'));
+    const radius = document.getElementById('radius-percent'); radius.value = '67'; radius.dispatchEvent(new Event('input'));
+    document.querySelector('[data-background="#fff8e7"]').click();
+    for (const [id, value] of [['show-cell', false], ['show-axes', false]]) {
+      const field = document.getElementById(id); field.checked = value; field.dispatchEvent(new Event('change'));
+    }
+    document.getElementById('png-background').checked = false; document.getElementById('png-legend').checked = true; document.getElementById('png-axes').checked = true;
+    const mode = document.getElementById('color-mode'); mode.value = 'property:ptmStructureType'; mode.dispatchEvent(new Event('change'));
+    const other = document.querySelector('[data-structure-type="0"]'); if (other.checked) other.click();
+    const renderer = window.structureTestRenderer;
+    renderer.setProjection('orthographic'); renderer.yaw = .34; renderer.pitch = .27; renderer.pan = [.2, -.4, .1]; renderer.requestRender();
+    const selected = Array.from({ length: renderer.atomCount }, (_, atom) => atom).find(atom => renderer.isAtomVisible(atom));
+    renderer.onPick(selected);
+  })()`);
+  await showTool('configuration');
+  const recipe = await exportConfiguration();
+  assert.equal(recipe.app, 'AlloyView'); assert.equal(recipe.version, 1);
+  assert.equal(recipe.source.files[0].name, 'partial-pbc.dump'); assert.equal(recipe.source.frameIndex, 1);
+  assert.equal(recipe.settings.display.radiusPercent, 67);
+  assert.deepEqual(recipe.settings.replicate, [2, 1, 1]);
+  assert.equal(recipe.settings.slices.items.length, 2);
+  assert.equal(recipe.settings.analyses.strain.references[0].a, 3.3);
+  for (const name of ['cna', 'ptm', 'strain']) assert.equal(recipe.settings.analyses[name].enabled, true);
+  assert.ok(JSON.stringify(recipe).length < 20_000, 'recipes must not serialize atom arrays');
+  const recipePath = resolve(profile, 'processing-recipe.json');
+  await writeFile(recipePath, JSON.stringify(recipe));
+  const { nodeId: configurationInput } = await call('DOM.querySelector', { nodeId: domRoot.nodeId, selector: '#configuration-file' });
+  await evaluate(`(() => {
+    for (const prefix of ['cna', 'ptm', 'strain']) document.getElementById('cancel-' + prefix).click();
+    document.getElementById('reset-replicate').click();
+    while (window.structureTestRenderer.slices.length) document.getElementById('delete-slice').click();
+    const radius = document.getElementById('radius-percent'); radius.value = '120'; radius.dispatchEvent(new Event('input'));
+    document.querySelector('[data-background="#000000"]').click(); document.getElementById('reset-camera').click();
+  })()`);
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [recipePath] });
+  await waitFor('document.getElementById("radius-percent").value === "67" && ["cna", "ptm", "strain"].every(prefix => document.getElementById(prefix + "-state").textContent === "Calculated")', 'same-source recipe replay');
+  compareSettings((await exportConfiguration()).settings, recipe.settings);
+  await evaluate('document.getElementById("close-file").click()');
+  await checkHome();
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [recipePath] });
+  await waitFor('document.getElementById("configuration-status").textContent.toLowerCase().includes("select")', 'recipe awaiting local files');
+  assert.equal(await evaluate('window.structureTestRenderer.frame'), null, 'imported recipes cannot load missing local files automatically');
+  await call('DOM.setFileInputFiles', { nodeId, files: [partialPbcPath] });
+  await waitFor('document.getElementById("frame-label").textContent === "2 / 2" && document.getElementById("radius-percent").value === "67" && ["cna", "ptm", "strain"].every(prefix => document.getElementById(prefix + "-state").textContent === "Calculated")', 'reselected-source recipe replay');
+  const replayed = await exportConfiguration();
+  compareSettings(replayed.settings, recipe.settings);
+  assert.equal(replayed.source.frameIndex, 1);
+
+  // Importing an old recipe during source loading must wait for the new
+  // source to commit. It cannot change the frame request and discard it.
+  await evaluate('window.holdNextSource = true; window.sourceResultHeld = false');
+  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(root, 'examples/fcc-vacancy.cfg')] });
+  await waitFor('window.sourceResultHeld === true', 'held replacement source');
+  assert.equal(await evaluate('document.getElementById("export-configuration").disabled'), true, 'export must be disabled while source ownership is changing');
+  assert.equal(await evaluate('document.getElementById("frame-slider").disabled'), true);
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [recipePath] });
+  await waitFor('document.getElementById("configuration-status").textContent.includes("Waiting for source files")', 'recipe pending during source loading');
+  await evaluate('window.releaseSource()');
+  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden', 'replacement source commits after recipe import');
+  assert.equal(await evaluate('window.structureTestRenderer.frame.ids.length'), 31);
+  assert.equal(await evaluate('document.getElementById("frame-label").textContent'), '1 / 1');
+  assert.ok(await evaluate('document.getElementById("configuration-status").textContent.includes("partial-pbc.dump")'));
+  await call('DOM.setFileInputFiles', { nodeId, files: [partialPbcPath] });
+  await waitFor('document.getElementById("frame-label").textContent === "2 / 2" && ["cna", "ptm", "strain"].every(prefix => document.getElementById(prefix + "-state").textContent === "Calculated")', 'pending recipe resumes after the matching source');
+  compareSettings((await exportConfiguration()).settings, recipe.settings);
+
+  // A recipe's asynchronous frame preflight can also lose source ownership.
+  // Hold a real parser response, then open a different source before delivery.
+  const preflightRecipe = structuredClone(recipe);
+  preflightRecipe.source.frameIndex = 0; preflightRecipe.settings.display.radiusPercent = 211;
+  preflightRecipe.settings.camera.yaw = 1.11;
+  const preflightPath = resolve(profile, 'preflight-recipe.json');
+  await writeFile(preflightPath, JSON.stringify(preflightRecipe));
+  await holdRecipePreflight();
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [preflightPath] });
+  await waitFor('window.preflightResultHeld === true', 'held recipe frame preflight');
+  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(root, 'examples/fcc-vacancy.cfg')] });
+  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden', 'source replacing an in-flight recipe');
+  const replacementRadius = await evaluate('document.getElementById("radius-percent").value');
+  await evaluate('window.releasePreflight(); window.restorePreflightHooks()');
+  await delay(100);
+  assert.equal(await evaluate('window.structureTestRenderer.frame.ids.length'), 31);
+  assert.equal(await evaluate('document.getElementById("frame-label").textContent'), '1 / 1');
+  assert.equal(await evaluate('document.getElementById("radius-percent").value'), replacementRadius, 'a stale recipe must not write its radius after source replacement');
+  assert.notEqual(replacementRadius, '211');
+  assert.notEqual(await evaluate('window.structureTestRenderer.yaw'), 1.11, 'a stale recipe must not write its camera');
+  assert.equal(await evaluate('document.getElementById("export-configuration").disabled'), false);
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [recipePath] });
+  await waitFor('document.getElementById("configuration-status").textContent.includes("Waiting for source files")', 'original recipe pending again');
+  await call('DOM.setFileInputFiles', { nodeId, files: [partialPbcPath] });
+  await waitFor('document.getElementById("frame-label").textContent === "2 / 2" && ["cna", "ptm", "strain"].every(prefix => document.getElementById(prefix + "-state").textContent === "Calculated")', 'recipe recovery after preflight interruption');
+  compareSettings((await exportConfiguration()).settings, recipe.settings);
+
+  // A real user edit supersedes a held restore, even without changing source.
+  // Its delayed response must leave the typed value and current frame intact.
+  await holdRecipePreflight();
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [preflightPath] });
+  await waitFor('window.preflightResultHeld === true', 'recipe preflight before a manual edit');
+  await showTool('display');
+  await clickElement('#radius-percent');
+  await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+  await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+  await call('Input.insertText', { text: '83' });
+  assert.equal(await evaluate('document.getElementById("radius-percent").value'), '83');
+  await evaluate('window.releasePreflight(); window.restorePreflightHooks()');
+  await delay(100);
+  assert.equal(await evaluate('document.getElementById("radius-percent").value'), '83', 'the delayed recipe must not overwrite a manual settings edit');
+  assert.equal(await evaluate('document.getElementById("frame-label").textContent'), '2 / 2', 'the delayed recipe must not change frames after a manual settings edit');
+  assert.ok(await evaluate('document.getElementById("configuration-status").textContent.toLowerCase().includes("interrupt")'));
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [recipePath] });
+  await waitFor('document.getElementById("radius-percent").value === "67" && ["cna", "ptm", "strain"].every(prefix => document.getElementById(prefix + "-state").textContent === "Calculated")', 'recipe can be retried after a manual edit');
+  compareSettings((await exportConfiguration()).settings, recipe.settings);
+
+  // A failed automatically resumed recipe loses status ownership when a
+  // newer recipe is imported, even while the same source remains active.
+  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(root, 'examples/fcc-vacancy.cfg')] });
+  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden', 'source before competing pending recipes');
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [preflightPath] });
+  await waitFor('document.getElementById("configuration-status").textContent.includes("Waiting for source files")', 'pending recipe A');
+  await holdRecipePreflight();
+  await call('DOM.setFileInputFiles', { nodeId, files: [partialPbcPath] });
+  await waitFor('window.preflightResultHeld === true', 'held automatically resumed recipe A');
+  const newerRecipe = structuredClone(recipe);
+  newerRecipe.source = { kind: 'file', label: 'fcc-vacancy.cfg', format: 'cfg', frameIndex: 0, frameCount: 1,
+    files: [{ name: 'fcc-vacancy.cfg', relativePath: 'fcc-vacancy.cfg', size: (await readFile(resolve(root, 'examples/fcc-vacancy.cfg'))).byteLength }] };
+  const newerPath = resolve(profile, 'newer-pending-recipe.json');
+  await writeFile(newerPath, JSON.stringify(newerRecipe));
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [newerPath] });
+  await waitFor('document.getElementById("configuration-status").textContent.includes("Waiting for source files") && document.getElementById("configuration-status").textContent.includes("fcc-vacancy.cfg")', 'newer pending recipe B');
+  const newerStatus = await evaluate('document.getElementById("configuration-status").textContent');
+  await evaluate('window.rejectPreflight(); window.restorePreflightHooks()');
+  await delay(100);
+  assert.equal(await evaluate('document.getElementById("configuration-status").textContent'), newerStatus, 'a stale pending restore failure must not replace the newer recipe status');
+  assert.equal(await evaluate('document.getElementById("toast").textContent.includes("Stale pending recipe failed")'), false, 'a stale pending restore failure must not show an error for the newer recipe');
+  assert.equal(await evaluate('window.structureTestRenderer.frame.ids.length'), 16);
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [recipePath] });
+  await waitFor('document.getElementById("frame-label").textContent === "2 / 2" && ["cna", "ptm", "strain"].every(prefix => document.getElementById(prefix + "-state").textContent === "Calculated")', 'recipe recovery after competing imports');
+  compareSettings((await exportConfiguration()).settings, recipe.settings);
+
+  // Invalid schemas and unavailable saved frames reject before altering
+  // camera, filters, references or the currently calculated analyses.
+  const invalidRecipe = structuredClone(recipe); invalidRecipe.version = 999;
+  const invalidPath = resolve(profile, 'invalid-recipe.json');
+  await writeFile(invalidPath, JSON.stringify(invalidRecipe));
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [invalidPath] });
+  await waitFor('document.getElementById("toast").textContent.includes("version")', 'invalid configuration version rejection');
+  compareSettings((await exportConfiguration()).settings, recipe.settings);
+  const unavailableRecipe = structuredClone(recipe);
+  unavailableRecipe.source.frameIndex = 2; unavailableRecipe.source.frameCount = 3;
+  unavailableRecipe.settings.display.radiusPercent = 211;
+  const unavailablePath = resolve(profile, 'unavailable-frame-recipe.json');
+  await writeFile(unavailablePath, JSON.stringify(unavailableRecipe));
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [unavailablePath] });
+  await waitFor('document.getElementById("toast").textContent.includes("saved frame is not available")', 'unavailable saved frame rejection');
+  compareSettings((await exportConfiguration()).settings, recipe.settings);
+
   // Theme persists on reload. A manually selected viewport color stays intact.
   await evaluate(`document.querySelector('[data-background="#fff8e7"]').click(); document.getElementById('theme-light').click();`);
   assert.equal(await evaluate('document.getElementById("background").value'), '#fff8e7');
@@ -1220,7 +1596,7 @@ try {
   assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors));
   assert.ok(requests.some(path => path.endsWith('ptm-kernel.wasm')), 'browser must load the real PTM kernel');
   assert.ok(requests.filter((path) => /\.(js|mjs|wasm)$/.test(path)).every((path) => /^\/AlloyView\/assets\/[a-f0-9]+\//.test(path)));
-  console.log('Browser smoke passed: continuous 3D BCC logo including reduced-motion settings; Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent analyses; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; selectable tools; triclinic display replication, unchanged analysis inputs, repeated picking/filtering and PNG export; editable lattice references and PTM reuse; sidebar/themes; phone pinch zoom, two-finger pan, one-finger orbit, tap picking, fixed viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
+  console.log('Browser smoke passed: continuous 3D BCC logo including reduced-motion settings; Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent analyses; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; startup preparation/Wasm/indexing/atom progress and warm Worker reuse; selectable tools; triclinic display replication and unchanged analysis inputs; intersecting arbitrary world-space slices, displayed/unwrapped coordinates, visible-copy GPU coverage/picking and real handle drags without camera motion; JSON configuration export/replay, local-source reselection, source-loading/preflight races and unchanged settings after rejected recipes; editable lattice references and PTM reuse; sidebar/themes; phone pinch zoom, two-finger pan, one-finger orbit, tap picking, fixed viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
   console.log(JSON.stringify(exports));
   console.log(`Large-structure clipping passed: ${largeCount} local CFG atoms; depth range ${largeDepths.minimum.toFixed(4)}..${largeDepths.maximum.toFixed(4)}; first/last atoms rendered and picked.`);
 } finally {

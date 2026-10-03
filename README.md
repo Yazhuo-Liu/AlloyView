@@ -36,7 +36,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   dump series, with a timeline and continuous playback.
 - WebGL 2 sphere rendering, element-aware atom radii, six standard views,
   perspective/orthographic projection, cell outlines and Cartesian axes.
-- Wrapped and unwrapped trajectory views, atom selection and fractional slicing.
+- Wrapped and unwrapped trajectory views and atom selection.
+- Up to 16 independent clipping planes with arbitrary Cartesian normals,
+  editable names and positions, and draggable plane/normal controls.
 - Display-only replication along independent periodic cell vectors, including
   triclinic tilts, without expanding or rerunning analysis.
 - Periodic cutoff-based coordination analysis in browser Workers, with an
@@ -48,7 +50,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Atomic elastic strain relative to an ideal lattice, with editable element-based
   lattice constants, shear/hydrostatic strain, volume change and tensor components.
 - AtomEye normalized central symmetry with 8/12 neighbors; all analyses share
-  a bounded parallel Worker scheduler and retain per-frame results.
+  a bounded parallel Worker scheduler and retain per-frame results. Workers
+  and PTM kernels are reused, with preparation stages and PTM atom progress.
 - Per-analysis Cancel controls stop computation and reset results and frame
   caches while keeping input settings and other analyses.
 - Atom-type colors and five scalar color maps, with editable ranges and
@@ -61,6 +64,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   edits and automatic coordination updates when the cutoff changes.
 - Selectable tool settings and a phone layout with the viewport fixed above
   independently scrolling tools and collapsed camera/legend controls.
+- JSON configuration export/import saves source file metadata, processing
+  settings, camera and theme, then restores the view and recomputes enabled
+  analyses after the matching local files are opened.
 - Bundled FCC, BCC trajectory and 40-image NEB examples.
 
 ## Quick start
@@ -85,7 +91,11 @@ WebGL 2 support. No installation or account is needed.
    viewport color with **BG**, or hide the cell and axes. Trajectories expose
    wrapped/unwrapped coordinates and frame controls below the viewport.
    Select **Replicate** to set total copies along periodic **a/b/c** directions
-   and click **Apply**. Select a tool button to open its settings; switch tools
+   and click **Apply**. Under **Slice**, click **Add slice** and set a Cartesian
+   normal, position in Å and retained side. Drag the arrowhead to rotate the
+   plane on a guide sphere, or its shaft to move it; the fields follow dragging.
+   Multiple enabled slices keep the intersection of their retained sides.
+   Select a tool button to open its settings; switch tools
    to keep analyses running, or close an analysis to cancel it and reset results.
 4. **Analyze.** Check the suggested cutoff under **Coordination number** and
    click **Calculate**. The scalar legend lets you choose a color map and
@@ -101,7 +111,13 @@ WebGL 2 support. No installation or account is needed.
    PNG** independently, then click the download arrow in the viewport toolbar.
    Uncheck the background option for transparency, including around the legend.
    **Include XYZ arrows in PNG** adds the current Cartesian orientation even
-   when the screen's axes are hidden; it is unchecked by default.
+   when the screen's axes are hidden; it is unchecked by default. PNGs show
+   clipped atoms and omit slice editing overlays. Under **Configuration**,
+   **Export JSON** saves the current processing and view. **Import JSON**
+   restores settings immediately for a matching open source; otherwise use
+   **Open local** to select the saved source files with matching names and sizes.
+   Atom data and calculated results stay in the source/session and are not
+   embedded in the JSON.
 
 A single file picker cannot discover unselected sibling files. Select all
 frames together or choose their folder to open a sequence.

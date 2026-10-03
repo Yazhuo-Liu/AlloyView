@@ -2,6 +2,49 @@
 
 Validation date: 2026-10-03 (America/New_York)
 
+## Multiple tilted slices, processing recipes and PTM startup
+
+Validated with Node.js v24.19.0 and Chromium 151.0.7922.173 using software WebGL:
+
+- `npm test`: 177 tests passed, none failed/skipped. New tests cover normalized
+  Cartesian slice normals, half-space intersection, skew-cell polygons,
+  replicated/unwrapped atom visibility, arrow arcball and position geometry,
+  strict configuration validation and unambiguous local-source matching.
+- `npm run build` and `npm run test:browser -- --screenshots --structure-screenshot`:
+  passed. Chromium edits, renames and deletes multiple slices, verifies their
+  intersection, and dispatches actual pointer drags on the normal head and
+  position handle. The auxiliary sphere appears, sidebar values follow and
+  the camera stays unchanged. A GPU occlusion query and CPU pick verify an
+  original image can be clipped while its visible replicated image remains.
+- JSON export/import restores the saved frame, camera, theme, display and PNG
+  flags, crystal filters, replication, named planes and enabled analyses.
+  Same-source import replays immediately; import after closing the source waits
+  for native selection of matching files. Invalid schema/frame recipes preserve
+  settings. Held parser responses exercise importing an old-source recipe
+  during a new load and changing sources during restoration's frame pre-read;
+  neither stale operation can overwrite or discard the newly committed source.
+  Actual text input interrupts a held restore without changing the user's
+  values or frame; a rejected older pending restore cannot replace a newer
+  recipe's waiting status or display a stale error toast.
+- Successful tasks reuse bounded idle Workers and their PTM Wasm instances.
+  Progress distinguishes queued/preparing/initializing/neighbor-indexing work
+  and reports real atom counts during PTM/strain. Non-isolated inputs are copied
+  in 4 MiB pieces and transferred without detaching original arrays. Tests
+  confirm reused Workers do not retain old-frame coordinates, stale messages
+  are ignored, real running cancellation stops computation, and closing during
+  shared-buffer preparation releases the pool.
+- A separate Node test run on 32,000 generated FCC atoms with six Workers took
+  about 951 ms initially and 462 ms on the same Workers next time; the second
+  job created no Workers or Wasm instances. The difference includes JIT warmup
+  and is a local observation, not a browser/GPU speedup guarantee. Measured
+  Wasm heap capacity was about 16.25 MiB per initialized Worker; at most six
+  instances are retained, and source/neighbor contexts are released after jobs.
+
+Recipe files contain file metadata and parameters, not coordinates or computed
+result arrays. Browsers require the user to select local files again. Slice
+editing graphics are an interactive overlay; exported PNGs contain the clipped
+atom view and the independently selected legend/axis options.
+
 ## Closing sources and page-wide file drops
 
 Validated with Node.js v24.9.0 and Google Chrome 144.0.7559.109 using

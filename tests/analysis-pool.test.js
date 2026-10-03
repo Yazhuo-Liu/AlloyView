@@ -13,12 +13,13 @@ function nodeFactory(stats) {
   return () => {
     const worker = new Worker(new URL('./helpers/node-analysis-worker.mjs', import.meta.url));
     stats.active += 1;
+    stats.created = (stats.created ?? 0) + 1;
     stats.maximum = Math.max(stats.maximum, stats.active);
     return {
       addEventListener(name, listener) {
         worker.on(name, (data) => listener(name === 'message' ? { data } : data));
       },
-      postMessage(data) { worker.postMessage(data); },
+      postMessage(data, transferables) { worker.postMessage(data, transferables); },
       terminate() { stats.active -= 1; worker.terminate(); },
     };
   };
@@ -41,9 +42,11 @@ test('real Worker ranges merge correctly across concurrent CNA, CSP and coordina
     assert.deepEqual(csp.centrosymmetry, calculateCentrosymmetry(frame).centrosymmetry);
     assert.deepEqual(coordination.coordination, calculateCoordination(frame, 3.5).coordination);
     assert.equal(stats.maximum, pool.limit);
-    assert.equal(stats.active, 0);
+    assert.equal(pool.active.size, 0);
+    assert.equal(stats.active, pool.idle.length, 'successful Workers remain available for reuse');
     assert.ok(frame.fractional.byteLength > 0, 'source buffers are retained');
   } finally { pool.close(); }
+  assert.equal(stats.active, 0, 'closing the pool terminates its warm Workers');
 });
 
 test('isolated Worker mode preserves Float64 coordinates and matches copied results', async () => {
@@ -54,6 +57,152 @@ test('isolated Worker mode preserves Float64 coordinates and matches copied resu
     assert.equal(result.sharedMemory, true);
     assert.deepEqual(result.structures, calculateCna(frame).structures);
   } finally { pool.close(); }
+});
+
+test('warm Workers reuse one Wasm kernel and rebuild neighbors for a different frame', async () => {
+  const stats = { active: 0, maximum: 0 };
+  const pool = new AnalysisPool({ environment: { navigator: { hardwareConcurrency: 2 } }, workerFactory: nodeFactory(stats) });
+  const fcc = crystalFrame('fcc', 3), bcc = crystalFrame('bcc', 3);
+  const phases = [];
+  try {
+    const first = await pool.analyze(fcc, { kind: 'ptm' }, { onProgress: (progress) => phases.push(progress) });
+    const second = await pool.analyze(bcc, { kind: 'ptm' });
+    assert.equal(first.kernelInitializations, 1);
+    assert.equal(second.kernelInitializations, 0);
+    assert.equal(stats.created, 1, 'the second job uses the resident Worker');
+    const direct = await calculatePtm(bcc);
+    for (const field of Object.keys(PTM_FIELDS)) assert.deepEqual(second[field], direct[field], field);
+    assert.ok(first.structures.every((type) => type === 1));
+    assert.ok(second.structures.every((type) => type === 3), 'a reused kernel uses the new frame coordinates');
+    assert.ok(['preparing', 'initializing', 'indexing', 'analyzing', 'complete'].every((phase) => phases.some((progress) => progress.phase === phase)));
+    assert.equal(phases.at(-1).completed, phases.at(-1).total);
+    assert.equal(phases.at(-1).initialized, 1);
+    assert.equal(phases.at(-1).completedAtoms, fcc.ids.length);
+    assert.ok(phases.every((progress, index) => !index || progress.completedAtoms >= phases[index - 1].completedAtoms));
+    assert.ok(fcc.fractional.byteLength > 0 && bcc.fractional.byteLength > 0, 'input coordinates are never transferred away');
+  } finally { pool.close(); }
+  assert.equal(stats.active, 0);
+});
+
+test('non-isolated dispatch yields and transfers a private typed coordinate copy', async () => {
+  const frame = crystalFrame('fcc', 2);
+  const source = frame.fractional;
+  const originalCoordinates = source.slice();
+  const stats = { active: 0, maximum: 0 };
+  const realFactory = nodeFactory(stats);
+  let yielded = false, posted = false;
+  const pool = new AnalysisPool({ environment: { crossOriginIsolated: false }, workerFactory: () => {
+    const worker = realFactory();
+    return { addEventListener: worker.addEventListener.bind(worker), terminate: worker.terminate.bind(worker),
+      postMessage(data, transferables) {
+        assert.ok(yielded, 'the main thread gets a turn before dispatch');
+        assert.notEqual(data.fractional.buffer, source.buffer);
+        assert.deepEqual(data.fractional, source);
+        assert.deepEqual(transferables, [data.fractional.buffer]);
+        worker.postMessage(data, transferables);
+        assert.equal(data.fractional.byteLength, 0, 'the private copy is transferred, not cloned');
+        posted = true;
+      } };
+  } });
+  setTimeout(() => { yielded = true; }, 0);
+  const pending = pool.analyze(frame, { kind: 'cna' });
+  assert.equal(posted, false, 'postMessage must not synchronously clone all inputs in analyze');
+  try {
+    const result = await pending;
+    assert.equal(posted, true);
+    assert.deepEqual(source, originalCoordinates);
+    assert.deepEqual(result.structures, calculateCna(frame).structures);
+  } finally { pool.close(); }
+});
+
+test('real atom progress allows cancelling a running fit while a queued independent job continues', async () => {
+  const stats = { active: 0, maximum: 0 };
+  const pool = new AnalysisPool({ environment: { navigator: { hardwareConcurrency: 2 } }, workerFactory: nodeFactory(stats) });
+  const controller = new AbortController();
+  let interruptedProgress = null;
+  const first = pool.analyze(crystalFrame('fcc', 16), { kind: 'ptm' }, {
+    signal: controller.signal,
+    onProgress(progress) {
+      if (progress.completedAtoms > 0 && progress.completedAtoms < progress.totalAtoms) {
+        interruptedProgress = progress;
+        controller.abort();
+      }
+    },
+  });
+  const secondFrame = crystalFrame('bcc', 2);
+  const second = pool.analyze(secondFrame, { kind: 'cna' });
+  try {
+    const [cancelled, continued] = await Promise.allSettled([first, second]);
+    assert.equal(cancelled.status, 'rejected');
+    assert.equal(cancelled.reason.name, 'AbortError');
+    assert.ok(interruptedProgress, 'the fit emits actual partial atom progress before its final result');
+    assert.equal(interruptedProgress.phase, 'analyzing');
+    assert.equal(continued.status, 'fulfilled');
+    assert.deepEqual(continued.value.structures, calculateCna(secondFrame).structures);
+    assert.equal(stats.created, 2, 'a cancelled busy Worker is replaced rather than reused');
+    assert.equal(stats.maximum, 1, 'the queued job respects the pool concurrency budget');
+    assert.equal(pool.active.size, 0);
+  } finally { pool.close(); }
+  assert.equal(stats.active, 0);
+});
+
+test('closing during shared-memory preparation settles before any Worker is dispatched', async () => {
+  let created = 0;
+  const pool = new AnalysisPool({ environment: { crossOriginIsolated: true }, workerFactory: () => {
+    created += 1;
+    throw new Error('Must not dispatch after close');
+  } });
+  const pending = pool.analyze(crystalFrame('fcc', 2), { kind: 'ptm' });
+  const outcome = assert.rejects(pending, { name: 'AbortError' });
+  pool.close();
+  await outcome;
+  assert.equal(created, 0);
+  assert.equal(pool.controllers.size, 0);
+});
+
+test('cancelling preparation prevents input transfer and terminates the allocated Worker', async () => {
+  let posted = 0, terminated = 0;
+  const pool = new AnalysisPool({ workerFactory: () => ({ addEventListener() {},
+    postMessage() { posted += 1; }, terminate() { terminated += 1; } }) });
+  const controller = new AbortController();
+  const pending = pool.analyze(crystalFrame('fcc', 2), { kind: 'ptm' }, { signal: controller.signal });
+  const outcome = assert.rejects(pending, { name: 'AbortError' });
+  controller.abort();
+  await outcome;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(posted, 0);
+  assert.equal(terminated, 1);
+  assert.equal(pool.idle.length, 0);
+  pool.close();
+});
+
+test('reused Workers ignore old result and progress messages after a new task starts', async () => {
+  const listeners = new Map(), posted = [];
+  let created = 0;
+  const pool = new AnalysisPool({ workerFactory: () => {
+    created += 1;
+    return { addEventListener(name, listener) { listeners.set(name, listener); },
+      postMessage(data) { posted.push(data); }, terminate() {} };
+  } });
+  const frame = crystalFrame('fcc', 1);
+  const first = pool.analyze(frame, { kind: 'cna' });
+  while (!posted.length) await new Promise((resolve) => setTimeout(resolve, 0));
+  const reply = (task, value) => listeners.get('message')({ data: { id: task.id, ok: true,
+    result: { startAtom: 0, structures: new Uint8Array(frame.ids.length).fill(value) } } });
+  reply(posted[0], 1);
+  await first;
+  const progress = [];
+  const second = pool.analyze(frame, { kind: 'cna' }, { onProgress: (value) => progress.push(value) });
+  while (posted.length < 2) await new Promise((resolve) => setTimeout(resolve, 0));
+  const updates = progress.length;
+  listeners.get('message')({ data: { id: posted[0].id, phase: 'analyzing' } });
+  reply(posted[0], 5);
+  assert.equal(progress.length, updates, 'old progress must not update the new task');
+  assert.equal(pool.active.size, 1, 'an old result must not settle the new request');
+  reply(posted[1], 3);
+  assert.ok((await second).structures.every((value) => value === 3));
+  assert.equal(created, 1);
+  pool.close();
 });
 
 test('parallel PTM and fresh strain merge real Wasm Worker outputs including matrix strides', async () => {
@@ -73,7 +222,8 @@ test('parallel PTM and fresh strain merge real Wasm Worker outputs including mat
     for (const field of [...Object.keys(PTM_FIELDS), ...STRAIN_FIELDS]) assert.deepEqual(strain[field], direct[field], field);
     for (const field of Object.keys(PTM_FIELDS)) assert.deepEqual(ptm[field], direct[field], field);
     assert.equal(stats.maximum, pool.limit);
-    assert.equal(stats.active, 0);
+    assert.equal(pool.active.size, 0);
+    assert.equal(stats.active, pool.idle.length);
   } finally { pool.close(); }
 });
 

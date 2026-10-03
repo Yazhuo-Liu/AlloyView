@@ -12,16 +12,21 @@ const numericalZero = value => Math.abs(value) < 1e-12 ? 0 : value;
 /** Local elastic strain relative to an ideal PTM lattice, not trajectory strain.
  * Restore the absolute scale removed by PTM before computing E=(FᵀF-I)/2.
  */
-export async function calculateAtomicStrain(frame, { references, ptmInput = null, ...parameters }) {
+export async function calculateAtomicStrain(frame, { references, ptmInput = null, onAtoms = () => {}, ...parameters }) {
   validateReferences(references, frame.types);
   const startedAt = performance.now();
   const { startAtom, endAtom } = atomRange(frame.fractional.length / 3, parameters);
   const count = endAtom - startAtom;
-  const ptm = ptmInput ?? await calculatePtm(frame, parameters);
+  const ptm = ptmInput ?? await calculatePtm(frame, { ...parameters, onAtoms });
   const result = Object.fromEntries(STRAIN_FIELDS.map((name) => [name, new Float32Array(count).fill(NaN)]));
   let incomplete = 0;
+  let lastProgressAt = performance.now();
   for (let atom = startAtom; atom < endAtom; atom += 1) {
     const i = atom - startAtom;
+    if (ptmInput && i && i % 1024 === 0 && performance.now() - lastProgressAt >= 150) {
+      onAtoms(i, count);
+      lastProgressAt = performance.now();
+    }
     const p = ptmInput ? atom : i;
     const type = ptm.structures[p];
     const reference = references[frame.types[atom]];
@@ -45,6 +50,7 @@ export async function calculateAtomicStrain(frame, { references, ptmInput = null
     for (const [name, k] of [['strainE11', 0], ['strainE22', 4], ['strainE33', 8],
       ['strainE12', 1], ['strainE13', 2], ['strainE23', 5]]) result[name][i] = E[k];
   }
+  if (ptmInput) onAtoms(count, count);
   return { ...result, ...(ptmInput ? {} : ptm), incomplete, startAtom, endAtom, elapsedMs: performance.now() - startedAt };
 }
 

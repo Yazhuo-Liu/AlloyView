@@ -361,7 +361,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .field { display: grid; gap: 7px; margin-top: 13px; }
 .field > span, .field label > span, .analysis-controls label > span { color: var(--muted); font-size: 10px; }
 .range-field > span { display: flex; justify-content: space-between; }.range-field output { color: var(--cyan); }
-select, input[type="number"] { width: 100%; height: 36px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--text-soft); padding: 0 10px; }
+select, input[type="number"], .slice-settings input[type="text"] { width: 100%; height: 36px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--text-soft); padding: 0 10px; }
 select:disabled, input:disabled { cursor: not-allowed; opacity: 1; }
 select:disabled, input[type="number"]:disabled { color: var(--disabled-text); -webkit-text-fill-color: var(--disabled-text); background: var(--disabled-bg); }
 input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); padding: 4px; }
@@ -383,6 +383,29 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
 .range::-moz-range-thumb { width: 9px; height: 9px; border-radius: 50%; background: var(--accent-text); border: 3px solid var(--cyan); }
 .inline-meta { display: flex; justify-content: space-between; color: var(--subtle); font-size: 9px; margin-top: 8px; }
 .slice-row { grid-template-columns: 76px 1fr; align-items: center; margin: 0; }
+.slice-list { display: grid; gap: 6px; max-height: 192px; overflow-y: auto; scrollbar-width: thin; margin-bottom: 10px; }
+.slice-list:empty { display: none; }
+.slice-list button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--muted); text-align: left; cursor: pointer; }
+.slice-list button:hover { color: var(--text); border-color: var(--accent-line); }
+.slice-list button[aria-pressed="true"] { color: var(--accent-text); background: var(--accent-soft); border-color: var(--cyan); }
+.slice-list .slice-list-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.slice-list .slice-list-state { flex: 0 0 auto; color: var(--subtle); font-size: 9px; }
+.slice-list .slice-list-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--subtle); }
+.slice-list button.is-enabled .slice-list-dot { background: var(--cyan); border-color: var(--cyan); }
+.slice-settings[hidden] { display: none; }
+.slice-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.slice-toggle { display: flex; align-items: center; gap: 7px; min-height: 30px; color: var(--muted); font-size: 10px; cursor: pointer; }
+.slice-toggle input { width: 14px; height: 14px; margin: 0; accent-color: var(--cyan); }
+.slice-gizmo-toggle { margin-top: 10px; }
+.slice-normal-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 10px; }
+.slice-normal-presets { display: flex; gap: 4px; }
+.slice-normal-presets button { width: 26px; height: 25px; padding: 0; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--control-bg); color: var(--text-soft); font-size: 10px; cursor: pointer; }
+.slice-normal-presets button:hover { color: var(--cyan); border-color: var(--cyan); }
+.slice-normal-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.slice-normal-inputs label { display: grid; gap: 5px; min-width: 0; color: var(--muted); font-size: 10px; }
+.slice-normal-inputs input { min-width: 0; padding: 0 6px; }
+.slice-settings input[aria-invalid="true"] { border-color: var(--danger-text); }
+.configuration-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .help { color: var(--subtle); font-size: 9px; line-height: 1.5; margin: 10px 0 0; }
 
 .analysis-controls { display: grid; grid-template-columns: 1fr 80px; gap: 9px; align-items: end; }

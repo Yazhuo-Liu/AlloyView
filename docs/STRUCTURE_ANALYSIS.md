@@ -163,6 +163,21 @@ not distinguish chemical ordering or crystal orientation.
 
 ## Parallel execution
 
+Successful Workers remain in a bounded idle pool, and PTM initializes its Wasm
+kernel once per Worker. Cancellation and failures terminate the affected Worker;
+later jobs create a replacement. Each task carries an ID, so late results or
+progress cannot be applied to another job. Coordinates and neighbor contexts
+are released after processing; only the reusable kernel remains.
+
+Progress separates waiting for a slot, preparing inputs, initializing the
+kernel, constructing the neighbor search and processing atoms. PTM and strain
+report actual processed-atom counts, throttled to avoid flooding the UI.
+Non-isolated deployments copy private input arrays in 4 MiB pieces with yields
+to the main thread before transferring them. Shared-buffer preparation also
+supports cancellation. This reduces repeated startup work and keeps controls
+responsive during preparation; it does not remove neighbor-search or fitting
+cost.
+
 Coordination, CNA, central symmetry, PTM and atomic strain share `AnalysisPool`. Independent central
 atom ranges execute in module Workers; the main thread uploads results and
 updates controls. CNA/CSP/PTM/fresh strain use 4,096 atoms per target range;

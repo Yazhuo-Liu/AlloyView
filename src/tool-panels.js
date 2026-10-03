@@ -5,7 +5,7 @@ const ANALYSIS_TOOLS = new Set(['coordination', 'cna', 'centrosymmetry', 'ptm', 
  * Opening settings does not start computation. Closing an analysis explicitly
  * deactivates it; switching settings leaves its computation and results intact.
  */
-export function initializeToolPanels({ onDeactivateAnalysis = () => {}, onDeactivateTool = () => {} } = {}) {
+export function initializeToolPanels({ onDeactivateAnalysis = () => {}, onDeactivateTool = () => {}, onSelectionChange = () => {} } = {}) {
   const buttons = new Map([...document.querySelectorAll('[data-tool-button]')]
     .map((button) => [button.dataset.toolButton, button]));
   const panels = new Map([...document.querySelectorAll('[data-tool-panel]')]
@@ -41,6 +41,7 @@ export function initializeToolPanels({ onDeactivateAnalysis = () => {}, onDeacti
     if (!panels.has(name)) return false;
     activeTool = name;
     render();
+    onSelectionChange(activeTool);
     if (focus) buttons.get(name)?.focus();
     return true;
   }
@@ -50,6 +51,7 @@ export function initializeToolPanels({ onDeactivateAnalysis = () => {}, onDeacti
     if (name === activeTool) activeTool = null;
     if (deactivate) enabledTools.delete(name);
     render();
+    onSelectionChange(activeTool);
     if (deactivate) {
       if (ANALYSIS_TOOLS.has(name)) onDeactivateAnalysis(name);
       else onDeactivateTool(name);
@@ -65,6 +67,7 @@ export function initializeToolPanels({ onDeactivateAnalysis = () => {}, onDeacti
     // Callers explicitly close the tool when they also want to hide settings.
     if (reveal) activeTool = name;
     render();
+    if (reveal) onSelectionChange(activeTool);
     return true;
   }
 

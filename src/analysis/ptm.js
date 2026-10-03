@@ -15,49 +15,79 @@ export const PTM_FIELDS = Object.freeze({ structures: [Uint8Array, 1], rmsd: [Fl
 // The generated module targets browsers without static Node imports. Node's
 // scientific tests supply the same binary directly (fetch cannot read file:).
 let nodeBinary;
+let kernelPromise;
+let neighborContext = null;
 async function kernelOptions() {
   if (typeof process !== 'object' || !process.versions?.node) return {};
   nodeBinary ??= import('node:fs/promises').then(({ readFile }) => readFile(new URL('./ptm-kernel.wasm', import.meta.url)));
   return { wasmBinary: await nodeBinary };
 }
 
-export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, ...range } = {}) {
+function getKernel() {
+  if (!kernelPromise) {
+    kernelPromise = (async () => {
+      let module;
+      module = await createPtm({ ...await kernelOptions(), fetchNeighbors(atom, requested, points, indices) {
+        const { search, cache } = neighborContext;
+        let neighbors = cache.get(atom);
+        if (!neighbors) {
+          neighbors = search.nearest(atom, 18);
+          // Degenerate/coincident environments must not enter the Voronoi sorter.
+          if (neighbors.some((n) => n.distanceSquared < 1e-20)) neighbors = [];
+          if (cache.size >= 512) cache.delete(cache.keys().next().value);
+          cache.set(atom, neighbors);
+        }
+        const count = Math.min(requested, neighbors.length);
+        for (let i = 0; i < count; i += 1) {
+          const n = neighbors[i];
+          module.HEAPF64.set([n.x, n.y, n.z], (points >> 3) + i * 3);
+          module.HEAPU32[(indices >> 2) + i] = n.atom;
+        }
+        return count;
+      } });
+      if (module._alloy_ptm_init() !== 0) throw new Error('PTM initialization failed.');
+      return module;
+    })().catch((error) => {
+      kernelPromise = undefined;
+      throw error;
+    });
+  }
+  return kernelPromise;
+}
+
+export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, onPhase = () => {}, onAtoms = () => {}, ...range } = {}) {
   if (!Number.isFinite(rmsdCutoff) || rmsdCutoff < 0) throw new Error('PTM RMSD threshold must be finite and non-negative.');
   if (!Number.isInteger(flags) || flags < 1 || flags > 255) throw new Error('Select at least one PTM template.');
   const startedAt = performance.now();
+  const kernelReused = Boolean(kernelPromise);
+  onPhase('initializing');
+  const module = await getKernel();
+  onPhase('indexing');
   const search = new NeighborSearch(frame);
   const { startAtom, endAtom } = atomRange(search.count, range);
   const count = endAtom - startAtom;
   const result = Object.fromEntries(Object.entries(PTM_FIELDS).map(([name, [Type, stride]]) => [name,
     name === 'structures' ? new Type(count * stride) : new Type(count * stride).fill(NaN)]));
   const cache = new Map();
-  let module;
-  module = await createPtm({ ...await kernelOptions(), fetchNeighbors(atom, requested, points, indices) {
-    let neighbors = cache.get(atom);
-    if (!neighbors) {
-      neighbors = search.nearest(atom, 18);
-      // Degenerate/coincident environments must not enter the Voronoi sorter.
-      if (neighbors.some((n) => n.distanceSquared < 1e-20)) neighbors = [];
-      if (cache.size >= 512) cache.delete(cache.keys().next().value);
-      cache.set(atom, neighbors);
-    }
-    const count = Math.min(requested, neighbors.length);
-    for (let i = 0; i < count; i += 1) {
-      const n = neighbors[i];
-      module.HEAPF64.set([n.x, n.y, n.z], (points >> 3) + i * 3);
-      module.HEAPU32[(indices >> 2) + i] = n.atom;
-    }
-    return count;
-  } });
-  if (module._alloy_ptm_init() !== 0) throw new Error('PTM initialization failed.');
   const output = module._malloc(13 * 8);
   if (!output) throw new Error('PTM output allocation failed.');
+  neighborContext = { search, cache };
   try {
+    onPhase('analyzing');
+    onAtoms(0, count);
+    let lastProgressAt = performance.now();
     for (let atom = startAtom; atom < endAtom; atom += 1) {
+      const index = atom - startAtom;
+      // Report real completed atoms while fitting, rather than leaving a long
+      // range at 0 / workers until its final result. Throttle messages to avoid
+      // competing with the renderer on fast/small analyses.
+      if (index && index % 128 === 0 && performance.now() - lastProgressAt >= 150) {
+        onAtoms(index, count);
+        lastProgressAt = performance.now();
+      }
       const error = module._alloy_ptm_atom(atom, flags, output);
       if (error) throw new Error(`PTM failed for atom ${atom + 1} (code ${error}).`);
       const data = module.HEAPF64.subarray(output >> 3, (output >> 3) + 13);
-      const index = atom - startAtom;
       result.rmsd[index] = data[1]; // Retain best-fit RMSD even for rejected fits.
       if (!data[0] || (rmsdCutoff > 0 && data[1] > rmsdCutoff)) continue;
       result.structures[index] = data[0];
@@ -65,6 +95,11 @@ export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, ...rang
       result.distances[index] = data[3];
       result.deformation.set(data.subarray(4, 13), index * 9);
     }
-  } finally { module._free(output); }
-  return { ...result, startAtom, endAtom, elapsedMs: performance.now() - startedAt };
+    onAtoms(count, count);
+  } finally {
+    module._free(output);
+    // The reusable module must not retain coordinates from a closed source.
+    neighborContext = null;
+  }
+  return { ...result, startAtom, endAtom, kernelReused, elapsedMs: performance.now() - startedAt };
 }

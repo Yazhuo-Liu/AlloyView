@@ -1,6 +1,7 @@
 import { cellVertices } from '../data/model.js';
 import { createReplication } from './replication.js';
 import { installCameraInteractions } from './camera-interactions.js';
+import { MAX_SLICES, SLICE_EPSILON, pointVisible, validateSlices } from './slicing.js';
 import {
   add,
   cross,
@@ -26,6 +27,9 @@ uniform mat4 uProjection;
 uniform float uRadiusScale;
 uniform int uSliceAxis;
 uniform float uSliceMaximum;
+uniform int uSliceMode;
+uniform int uSliceCount;
+uniform vec4 uSlicePlanes[${MAX_SLICES}];
 uniform int uSelected;
 uniform vec3 uReplicaOffset;
 uniform vec3 uReplicaIndex;
@@ -37,15 +41,28 @@ flat out int vVisible;
 flat out int vSelected;
 flat out float vRadius;
 void main() {
-  vec4 centerView = uView * vec4(aCenter + uReplicaOffset, 1.0);
+  vec3 worldCenter = aCenter + uReplicaOffset;
+  vec4 centerView = uView * vec4(worldCenter, 1.0);
   float radius = aRadius * uRadiusScale;
   vec4 cornerView = centerView + vec4(aCorner * radius, 0.0, 0.0);
   gl_Position = uProjection * cornerView;
   vCorner = aCorner;
   vColor = aColor;
   vCenterView = centerView.xyz;
-  float sliceCoordinate = (aFractional[uSliceAxis] + uReplicaIndex[uSliceAxis]) / uRepetitions[uSliceAxis];
-  vVisible = aVisible > 0.5 && sliceCoordinate <= uSliceMaximum ? 1 : 0;
+  bool sliceVisible = true;
+  if (uSliceMode == 0) {
+    float sliceCoordinate = (aFractional[uSliceAxis] + uReplicaIndex[uSliceAxis]) / uRepetitions[uSliceAxis];
+    sliceVisible = sliceCoordinate <= uSliceMaximum;
+  } else {
+    for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
+      if (plane >= uSliceCount) break;
+      if (dot(uSlicePlanes[plane].xyz, worldCenter) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) {
+        sliceVisible = false;
+        break;
+      }
+    }
+  }
+  vVisible = aVisible > 0.5 && sliceVisible ? 1 : 0;
   vSelected = gl_InstanceID == uSelected ? 1 : 0;
   vRadius = radius;
 }`;
@@ -135,6 +152,7 @@ export class WebGLRenderer {
     onStats = () => {},
     onCameraChange = () => {},
     onProjectionChange = () => {},
+    onRender = () => {},
   } = {}) {
     this.canvas = canvas;
     this.gl = canvas.getContext('webgl2', {
@@ -149,6 +167,7 @@ export class WebGLRenderer {
     this.onStats = onStats;
     this.onCameraChange = onCameraChange;
     this.onProjectionChange = onProjectionChange;
+    this.onRender = onRender;
     this.frame = null;
     this.displayPositions = null;
     this.visibility = null;
@@ -163,6 +182,10 @@ export class WebGLRenderer {
     this.cellVisible = true;
     this.sliceAxis = 2;
     this.sliceMaximum = 1;
+    this.sliceMode = 'legacy';
+    this.slices = [];
+    this.slicePlaneValues = new Float32Array(MAX_SLICES * 4);
+    this.sliceCount = 0;
     this.selected = -1;
     this.projectionMode = 'perspective';
     this.fov = 40 * Math.PI / 180;
@@ -243,6 +266,7 @@ export class WebGLRenderer {
     this.sphereUniforms = uniforms(gl, this.sphereProgram, [
       'uView', 'uProjection', 'uRadiusScale', 'uSliceAxis', 'uSliceMaximum', 'uSelected',
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions',
+      'uSliceMode', 'uSliceCount', 'uSlicePlanes[0]',
     ]);
     this.lineUniforms = uniforms(gl, this.lineProgram, ['uViewProjection', 'uColor']);
     gl.enable(gl.DEPTH_TEST);
@@ -290,6 +314,12 @@ export class WebGLRenderer {
     this.repetitions = [1, 1, 1];
     this.replicas = [{ indices: [0, 0, 0], offset: [0, 0, 0] }];
     this.selected = -1;
+    this.sliceMode = 'legacy';
+    this.slices = [];
+    this.sliceCount = 0;
+    this.sliceAxis = 2;
+    this.sliceMaximum = 1;
+    this.slicePlaneValues?.fill(0);
     this.target = this.pan = [0, 0, 0];
     this.distance = 10;
     this.orthographicScale = this.modelRadius = 5;
@@ -358,7 +388,29 @@ export class WebGLRenderer {
     this.radiusScale = scaleFactor;
     this.requestRender();
   }
-  setSlice(axis, maximum) { this.sliceAxis = axis; this.sliceMaximum = maximum; this.requestRender(); }
+  setSlice(axis, maximum) {
+    this.sliceMode = 'legacy';
+    this.sliceAxis = axis;
+    this.sliceMaximum = maximum;
+    this.requestRender();
+  }
+  setSlices(slices) {
+    const normalized = validateSlices(slices);
+    const values = new Float32Array(MAX_SLICES * 4);
+    let count = 0;
+    for (const slice of normalized) {
+      if (!slice.enabled) continue;
+      const direction = slice.side === 'positive' ? -1 : 1;
+      for (let axis = 0; axis < 3; axis += 1) values[count * 4 + axis] = slice.normal[axis] * direction;
+      values[count * 4 + 3] = slice.position * direction;
+      count += 1;
+    }
+    this.slices = normalized;
+    this.sliceMode = 'planes';
+    this.slicePlaneValues = values;
+    this.sliceCount = count;
+    this.requestRender();
+  }
   setSelected(index) { this.selected = index ?? -1; this.requestRender(); }
   setProjection(mode) {
     if (mode !== 'perspective' && mode !== 'orthographic') throw new Error(`Unknown projection mode “${mode}”.`);
@@ -394,6 +446,16 @@ export class WebGLRenderer {
     }
     this.sceneBounds = { minimum, maximum };
     return this.sceneBounds;
+  }
+
+  getDisplayBounds() {
+    if (!this.frame) return null;
+    const bounds = this.sceneBounds ?? this.updateSceneBounds();
+    return { minimum: [...bounds.minimum], maximum: [...bounds.maximum] };
+  }
+
+  getDisplayCellVertices() {
+    return this.frame ? cellVertices(this.displayCell ?? this.frame.cell) : new Float32Array(0);
   }
 
   resetCamera() {
@@ -438,7 +500,7 @@ export class WebGLRenderer {
     if (transparentBackground) gl.clearColor(0, 0, 0, 0);
     else gl.clearColor(...this.background, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (!this.frame) return;
+    if (!this.frame) { this.onRender?.(this); return; }
 
     // Preserve an opaque alpha channel for the interactive view and normal PNG
     // exports. Transparent exports keep atom edge coverage in the alpha channel.
@@ -452,6 +514,9 @@ export class WebGLRenderer {
     gl.uniform1f(this.sphereUniforms.uRadiusScale, this.radiusScale);
     gl.uniform1i(this.sphereUniforms.uSliceAxis, this.sliceAxis);
     gl.uniform1f(this.sphereUniforms.uSliceMaximum, this.sliceMaximum);
+    gl.uniform1i(this.sphereUniforms.uSliceMode, this.sliceMode === 'planes' ? 1 : 0);
+    gl.uniform1i(this.sphereUniforms.uSliceCount, this.sliceCount ?? 0);
+    gl.uniform4fv(this.sphereUniforms['uSlicePlanes[0]'], this.slicePlaneValues ?? new Float32Array(MAX_SLICES * 4));
     gl.uniform1i(this.sphereUniforms.uSelected, this.selected);
     gl.uniform3f(this.sphereUniforms.uRepetitions, ...this.repetitions);
     // Reuse the same atom buffers for every image. Analysis, color updates and
@@ -475,6 +540,7 @@ export class WebGLRenderer {
     gl.bindVertexArray(null);
     gl.colorMask(true, true, true, true);
     if (trackStats) this.recordFrame(timestamp);
+    this.onRender?.(this);
   }
 
   updateMatrices() {
@@ -555,9 +621,21 @@ export class WebGLRenderer {
   }
 
   isAtomVisible(atom, replicaIndices = SOURCE_REPLICA) {
+    if (!this.frame || atom < 0 || atom >= this.atomCount || this.visibility?.[atom] === 0) return false;
+    if (this.sliceMode === 'planes') {
+      const index = atom * 3;
+      const vectors = this.frame.cell.vectors;
+      const position = [0, 1, 2].map(axis => this.displayPositions[index + axis]
+        + replicaIndices[0] * vectors[axis] + replicaIndices[1] * vectors[3 + axis] + replicaIndices[2] * vectors[6 + axis]);
+      return pointVisible(position, this.slices);
+    }
     return this.visibility?.[atom] !== 0
       && (this.frame.fractional[atom * 3 + this.sliceAxis] + replicaIndices[this.sliceAxis])
         / (this.repetitions?.[this.sliceAxis] ?? 1) <= this.sliceMaximum;
+  }
+
+  isAnyReplicaVisible(atom) {
+    return (this.replicas ?? [{ indices: SOURCE_REPLICA }]).some(replica => this.isAtomVisible(atom, replica.indices));
   }
 
   pick(clientX, clientY) {

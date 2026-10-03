@@ -10,9 +10,11 @@ The viewer supports this workflow:
 1. open individual CFG/LAMMPS files, a multi-file selection, or a detected
    numbered structure sequence from a local folder;
 2. render atoms and the simulation cell on the GPU;
-3. calculate periodic coordination numbers off the UI thread;
+3. calculate coordination, crystal structure and atomic strain off the UI thread;
 4. color, slice, inspect, change trajectory frames, and export an opaque or
-   transparent PNG with an optional embedded legend.
+   transparent PNG with an optional embedded legend;
+5. save the processing and view as a JSON configuration and restore it with the
+   matching source files.
 
 The single **Examples** button opens an in-app listing of the bundled
 `examples/` files and the `fixed_end_climb/` sequence folder; examples are not
@@ -68,11 +70,75 @@ Replication reuses the original GPU atom buffers and all calculated properties.
 It does not add atoms to CNA, PTM, coordination or atomic-strain input, or rerun
 those calculations. Coloring and atom visibility apply to every copy; clicking
 an image shows the original atom's ID and properties. The structure summary and
-crystal legend counts refer to source atoms. Slicing spans the expanded cell,
-and PNG exports include the copies. Counts follow trajectory frames and reset
+crystal legend counts refer to source atoms. Cartesian slicing spans the
+displayed copies, and PNG exports include the copies. Counts follow trajectory frames and reset
 when a new source is opened. Up to 4,096 displayed cells are allowed; rendering
 and picking cost increase with the number of copies even though analysis cost
 does not.
+
+## Arbitrary clipping planes
+
+Open **Slice** and click **Add slice** to create a plane through the displayed
+structure's center. Each plane appears in the list as **Slice 0**, **Slice 1**,
+and so on. Select a list entry to edit it; change **Name** to rename it,
+uncheck **Enable this slice** to keep its settings without clipping, or click
+**Delete** to remove it. Up to 16 planes can exist, including disabled planes.
+
+Set **Plane normal · Cartesian XYZ** to any finite, nonzero vector, or use the
+**X**, **Y** and **Z** presets. The normal is normalized to unit length when
+committed. **Plane position** is the signed distance `d` in Å from the global
+Cartesian origin: points on the plane satisfy `n · r = d`. **Keep atoms on**
+selects `n · r ≤ d` for the negative side or `n · r ≥ d` for the positive side.
+All enabled planes apply together, so only atoms in the intersection of the
+retained half-spaces remain visible and selectable.
+
+Clipping uses the atom's actual displayed Cartesian position. Switching from
+wrapped to unwrapped coordinates can therefore change which atoms a plane
+keeps. Each replicated image is tested at its translated position along the
+actual cell vectors; tilted cells and replicas use the same global plane.
+Slicing and replication leave the original analysis input unchanged.
+
+With the Slice settings open, a translucent plane and central normal arrow
+show the selected slice in the viewport. Drag the arrowhead to adjust its
+direction; a translucent guide sphere with orientation circles appears while
+dragging. Rotation keeps the plane's editing center fixed, so its position
+field can change together with its normal. Drag the arrow shaft or circular
+position handle to move the plane along the normal. The toolbar's normal and
+position update throughout either gesture. The separate position handle stays
+usable even when the normal points toward the camera.
+
+Uncheck **Show plane and editing arrow** to hide a plane's editing overlay.
+Switching tools or closing Slice hides the editing controls while retaining
+all enabled clipping planes. PNG export includes the sliced structure and
+omits translucent editing planes, arrows and guide spheres.
+
+## Save and restore a configuration
+
+Select **Configuration → Export JSON** to save the current source file names,
+sizes, available relative paths and saved trajectory frame, together with the
+processing and view settings. The configuration includes enabled coordination,
+CNA, central symmetry, PTM and strain analyses and their parameters, editable
+lattice references, replication, all slices and their names, color maps and
+visibility filters, wrapped/unwrapped mode, atom radius, cell/axis/background
+and PNG options, camera, selected atom, current tool and theme.
+
+Click **Import JSON** and choose a saved configuration. If the matching source
+is already open, the viewer returns to the saved frame, restores the settings
+and recalculates enabled analyses. Otherwise the configuration remains pending
+and the status lists the required files. Use **Open local** to select those
+files or their folder; matching file names and byte sizes trigger restoration
+automatically. Relative paths distinguish identically named files in different
+folders when needed.
+
+The JSON contains metadata and settings. Source atom data and calculated result
+arrays are not packaged into it; analysis results are recreated from the source.
+The browser cannot reopen disk files automatically, so selecting the matching
+local source is required after starting a new session. Loading a different
+source leaves the configuration pending for the requested files.
+
+Editing values or pressing setting buttons in the tools, or choosing another
+trajectory frame, interrupts an in-progress restore so those changes take
+priority. Invalid configurations leave the current settings intact.
 
 ## Run locally
 
@@ -86,9 +152,10 @@ npm run dev
 Open <http://localhost:5173>. The development server sends COOP/COEP headers so
 that the coordination Worker pool can share one coordinate buffer when the
 browser supports `SharedArrayBuffer`. Non-isolated deployments, including
-GitHub Pages, use bounded structured-clone copies between Workers in the user's
-browser instead. Both modes parse and calculate entirely on the user's device;
-the static host never receives structure data or performs analysis.
+GitHub Pages, use bounded private coordinate copies instead, prepared in chunks
+and transferred to Workers while allowing the UI to update. Both modes parse
+and calculate entirely on the user's device; the static host never receives
+structure data or performs analysis.
 
 Build and preview the static site:
 
@@ -131,6 +198,14 @@ rejection), then click **Identify**. It adds SC, cubic/hexagonal diamond and
 graphene identification to the CNA classes. All nine legend rows have counts,
 colors and visibility checkboxes. Template checkboxes select what to analyze;
 legend checkboxes control visibility without recalculating.
+
+Analysis status distinguishes waiting for Workers, preparing input, initializing
+PTM and building the neighbor search from the matching calculation itself.
+PTM reports processed atom counts while partitions are still running, alongside
+the number of completed Workers. Successful jobs return their Workers to the
+shared pool, retaining the initialized PTM Wasm kernel for subsequent jobs;
+input preparation yields between large chunks so the status and **Cancel**
+controls can remain responsive.
 
 **Ideal lattice reference** calculates per-atom Green–Lagrange elastic strain
 from PTM correspondence. Recognized elements initialize editable phase and
@@ -216,7 +291,9 @@ uses software WebGL to verify correctness, not to measure target GPU performance
   presets provide black, white, ivory, and
   pale-yellow choices before a custom color input. The optional, default-on
   Cartesian tripod uses camera-dependent depth ordering and shading. There is no
-  per-atom mesh or draw call.
+  per-atom mesh or draw call. Up to 16 Cartesian clipping planes use arbitrary
+  normals and intersect their retained sides in both rendering and picking;
+  interactive editing overlays are kept out of PNG exports.
 - Analysis: cutoff-based coordination number using fractional-space linked cells,
   cell face heights, per-axis periodic bin wrapping, and a triclinic-safe image
   search. Large frames are partitioned across a memory-aware JavaScript Worker

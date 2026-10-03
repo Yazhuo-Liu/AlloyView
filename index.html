@@ -190,6 +190,7 @@
               <button type="button" data-tool-button="strain" aria-controls="tool-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="selection" aria-controls="tool-selection" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Atom details</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="performance" aria-controls="tool-performance" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Performance</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="configuration" aria-controls="tool-configuration" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Configuration</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
             </div>
             <p class="help tool-selector-help">Select a tool to show its settings. Close an analysis to cancel it and clear its results.</p>
           </section>
@@ -243,16 +244,39 @@
 
           <section id="tool-slice" class="side-section" data-tool-panel="slice" hidden>
             <div class="section-heading">
-              <div><p class="section-kicker">SLICE</p><h3>Slice</h3></div>
-              <output id="slice-value">100%</output>
+              <div><p class="section-kicker">CLIPPING PLANES</p><h3>Slices</h3></div>
+              <button id="add-slice" class="button button-secondary" type="button" disabled>Add slice</button>
             </div>
-            <div class="field slice-row">
+            <div id="slice-list" class="slice-list" role="group" aria-label="Slices"></div>
+            <p id="slice-empty" class="selection-empty">Add a slice to cut the displayed structure with a plane.</p>
+            <div id="slice-settings" class="slice-settings" hidden>
+              <div class="slice-actions">
+                <label class="slice-toggle"><input id="slice-enabled" type="checkbox" checked disabled><span>Enable this slice</span></label>
+                <button id="delete-slice" class="text-button" type="button" disabled>Delete</button>
+              </div>
+              <label class="field"><span>Name</span><input id="slice-name" type="text" value="" maxlength="80" autocomplete="off" disabled></label>
+              <div class="field">
+                <div class="slice-normal-heading"><span>Plane normal · Cartesian XYZ</span><div class="slice-normal-presets" role="group" aria-label="Normal presets"><button type="button" data-slice-normal="x" disabled>X</button><button type="button" data-slice-normal="y" disabled>Y</button><button type="button" data-slice-normal="z" disabled>Z</button></div></div>
+                <div class="slice-normal-inputs">
+                  <label><span>X</span><input id="slice-normal-x" type="number" value="0" step="0.1" aria-label="Slice normal X" disabled></label>
+                  <label><span>Y</span><input id="slice-normal-y" type="number" value="0" step="0.1" aria-label="Slice normal Y" disabled></label>
+                  <label><span>Z</span><input id="slice-normal-z" type="number" value="1" step="0.1" aria-label="Slice normal Z" disabled></label>
+                </div>
+              </div>
+              <label class="field"><span>Plane position · n · r = d</span><span class="input-unit"><input id="slice-offset" type="number" value="0" step="0.1" disabled><i>Å</i></span></label>
+              <label class="field"><span>Keep atoms on</span><select id="slice-side" disabled><option value="negative">Negative side · n · r ≤ d</option><option value="positive">Positive side · n · r ≥ d</option></select></label>
+              <label class="slice-toggle slice-gizmo-toggle"><input id="slice-show-gizmo" type="checkbox" checked disabled><span>Show plane and editing arrow</span></label>
+              <p class="help">Normals are normalized on commit. Position is the signed distance from the Cartesian origin in Å. All enabled slices apply together.</p>
+              <p class="help">Drag the arrow head to rotate the normal on a guide sphere. Drag the shaft to move the plane. Values above update while dragging.</p>
+            </div>
+            <p id="slice-status" class="help" role="status" aria-live="polite">Up to 16 independent slices.</p>
+            <div hidden aria-hidden="true">
+              <output id="slice-value">100%</output>
               <select id="slice-axis" aria-label="Slice axis" disabled>
                 <option value="0">a axis</option><option value="1">b axis</option><option value="2">c axis</option>
               </select>
               <input id="slice-position" class="range" type="range" min="0" max="100" value="100" step="1" disabled>
             </div>
-            <p class="help">Slices the displayed cell along a, b or c. Replicated cells share one expanded slice range. Uses wrapped fractional coordinates even when displayed unwrapped.</p>
           </section>
 
           <section id="tool-coordination" class="side-section analysis-section" data-tool-panel="coordination" hidden>
@@ -360,6 +384,16 @@
                 <div><dt>JS memory</dt><dd id="metric-memory">Not exposed by browser</dd></div>
               </dl>
             </details>
+          </section>
+          <section id="tool-configuration" class="side-section" data-tool-panel="configuration" hidden>
+            <div class="section-heading"><div><p class="section-kicker">SAVE / RESTORE</p><h3>Configuration</h3></div></div>
+            <div class="configuration-actions">
+              <button id="export-configuration" class="button button-secondary" type="button" disabled>Export JSON</button>
+              <button id="import-configuration" class="button button-accent" type="button">Import JSON</button>
+              <input id="configuration-file" type="file" accept=".json,application/json" hidden>
+            </div>
+            <p class="help">Save source file names, camera, display settings, slices, and enabled analyses. Reopen the original files on this device to restore a saved view.</p>
+            <p id="configuration-status" class="help" role="status" aria-live="polite">Export the current settings or import a saved configuration.</p>
           </section>
           <footer class="sidebar-credits" aria-label="Project credits">
             <p>
