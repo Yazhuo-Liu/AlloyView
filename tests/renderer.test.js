@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCell } from '../src/data/model.js';
 
 import { axisDirectionsFromView, drawAxesOverlay, drawLegendOverlay, WebGLRenderer } from '../src/render/webgl-renderer.js';
 
@@ -17,9 +18,26 @@ test('cell box visibility is renderer state and requests a redraw', () => {
   assert.equal(redraws, 2);
 });
 
+test('closing a frame releases atom data and GPU buffers while retaining the renderer', () => {
+  const r = Object.create(WebGLRenderer.prototype), sizes = new Map();
+  Object.assign(r, { frame: {}, displayPositions: new Float32Array(300), atomCount: 100,
+    displayAtomCount: 400, atomRadii: new Float32Array(100), visibility: new Uint8Array(100),
+    sceneBounds: {}, displayCell: {}, selected: 9, requestRender() {}, onProjectionChange() {},
+    interactions: { reset() {} } });
+  let bound;
+  r.gl = { ARRAY_BUFFER: 1, STATIC_DRAW: 2, bindBuffer(target, buffer) { bound = buffer; },
+    bufferData(target, size) { sizes.set(bound, size); } };
+  for (const name of ['positionBuffer', 'colorBuffer', 'fractionalBuffer', 'visibilityBuffer', 'radiusBuffer', 'cellBuffer']) r[name] = {};
+  r.clearFrame();
+  assert.equal(r.frame, null); assert.equal(r.displayPositions, null); assert.equal(r.atomRadii, null);
+  assert.equal(r.atomCount, 0); assert.equal(r.displayAtomCount, 0); assert.equal(r.sceneBounds, null);
+  assert.equal(r.selected, -1); assert.equal(r.projectionMode, 'perspective');
+  assert.equal(sizes.size, 6); assert.ok([...sizes.values()].every(size => size === 0));
+});
+
 test('display coordinates can change without replacing the analysis frame', () => {
   const renderer = Object.create(WebGLRenderer.prototype);
-  const frame = { positions: new Float32Array(6) };
+  const frame = { positions: new Float32Array(6), cell: createCell({ vectors: [8, 0, 0, 0, 8, 0, 0, 0, 8] }) };
   const unwrapped = new Float32Array([0, 0, 0, 4, 5, 6]);
   const uploads = [];
   let redraws = 0;

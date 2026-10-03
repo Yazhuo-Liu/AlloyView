@@ -54,7 +54,10 @@
           <canvas id="viewport" tabindex="0"></canvas>
 
           <div id="empty-state" class="empty-state">
-            <img class="empty-logo" src="./src/asserts/logo/AlloyView_logo_only.png" alt="AlloyView crystal structure logo" width="2400" height="2400">
+            <div class="empty-logo" role="img" aria-label="BCC ball-and-stick crystal model">
+              <canvas id="bcc-logo" width="264" height="264" aria-hidden="true" hidden></canvas>
+              <img class="empty-logo-fallback" src="./src/asserts/logo/AlloyView_logo_only.png" alt="" width="2400" height="2400">
+            </div>
             <p class="eyebrow">BROWSER-NATIVE MATERIALS VIEWER</p>
             <h1>See materials<br>atom by atom</h1>
             <p class="empty-copy">Open an AtomEye CFG, select a local folder to detect numbered CFG sequences, or load a LAMMPS text trajectory. Parsing, analysis, and rendering all stay in this browser.</p>
@@ -63,9 +66,9 @@
           </div>
 
           <div class="view-toolbar" aria-label="View tools">
-            <button id="reset-camera" type="button" title="Reset view" aria-label="Reset view">⌂</button>
+            <button id="reset-camera" type="button" title="Reset view" aria-label="Reset view" disabled>⌂</button>
             <span></span>
-            <button id="export-png" type="button" title="Export PNG" aria-label="Export PNG">⇩</button>
+            <button id="export-png" type="button" title="Export PNG" aria-label="Export PNG" disabled>⇩</button>
           </div>
 
           <div id="view-overlay" class="view-overlay">
@@ -154,11 +157,14 @@
           <section class="side-section structure-summary">
             <p class="section-kicker">STRUCTURE</p>
             <div class="filename-row">
-              <div>
+              <div class="filename-info">
                 <h2 id="file-name">No structure loaded</h2>
                 <p id="file-meta">CFG / LAMMPS dump</p>
               </div>
-              <span id="format-chip" class="chip">—</span>
+              <div class="filename-actions">
+                <span id="format-chip" class="chip">—</span>
+                <button id="close-file" class="close-file" type="button" title="Close file and return home" aria-label="Close file and return home" hidden>×</button>
+              </div>
             </div>
             <div class="stat-grid">
               <div><span>Atoms</span><strong id="atom-count">—</strong></div>
@@ -355,10 +361,24 @@
               </dl>
             </details>
           </section>
+          <footer class="sidebar-credits" aria-label="Project credits">
+            <p>
+              By: <a href="https://yazhuoliu.com/" target="_blank" rel="noopener noreferrer">Yazhuo Liu</a>,
+              <a href="https://www.zhugroup.gatech.edu/" target="_blank" rel="noopener noreferrer">Ting Zhu</a><br>
+              at Georgia Tech
+            </p>
+            <p>
+              Inspired by <a href="https://www.ovito.org/" target="_blank" rel="noopener noreferrer">OVITO</a>
+              and <a href="http://li.mit.edu/Archive/Graphics/A/" target="_blank" rel="noopener noreferrer">AtomEye</a>
+            </p>
+          </footer>
         </aside>
       </main>
     </div>
 
+    <div id="file-drop-overlay" class="file-drop-overlay" aria-hidden="true" hidden>
+      <div><strong>Drop a structure file to open</strong><span>CFG / LAMMPS · One file at a time</span></div>
+    </div>
     <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-dialog-title">
       <div class="source-dialog-card">
         <div class="source-dialog-heading">

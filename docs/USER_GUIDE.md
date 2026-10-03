@@ -18,6 +18,17 @@ The single **Examples** button opens an in-app listing of the bundled
 `examples/` files and the `fixed_end_climb/` sequence folder; examples are not
 split into separate top-bar actions.
 
+Drop a CFG or LAMMPS file anywhere on the page, including the homepage, header
+or controls panel, to open it directly. Dropping multiple files opens a chooser
+for a single file; numbered names stay independent. Use **Open local → Choose
+files…** or **Choose folder…** when you want to open a multi-file sequence.
+
+Click **×** beside the filename to close the current structure or cancel an
+ongoing load and return to the homepage. Closing stops trajectory playback,
+prefetching and analyses, releases the source and its cached/GPU data, and
+resumes the rotating BCC model. You can immediately open the same or another
+file.
+
 ## Live controls and panel width
 
 On desktop, drag the divider between the viewport and the right controls panel
@@ -32,7 +43,10 @@ results. **Cancel** clears the result while leaving the settings open to retry.
 On phones, the viewport stays above an independently scrolling tools panel.
 **View** and **Legend / atoms** start collapsed; tap to open camera controls or
 the legend's atom filters. Collapsing a legend preserves its filters and the
-separate PNG legend option. Click an atom to open its details in the tools panel.
+separate PNG legend option. Drag one finger over the structure to rotate it;
+spread or pinch two fingers to zoom in or out, and move both fingers together
+to pan. These gestures work in both Perspective and Ortho. Tap an atom to open
+its details in the tools panel.
 
 Display options, color maps and legend limits apply as you edit them. Incomplete
 or empty numeric input keeps the last valid result instead of becoming zero.

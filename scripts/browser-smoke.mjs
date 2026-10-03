@@ -147,7 +147,7 @@ try {
   await call('Page.enable');
   await call('Runtime.enable');
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
-  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
+  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }, { name: 'prefers-reduced-motion', value: 'reduce' }] });
   await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/AlloyView/` });
   await waitFor('document.readyState === "complete" && location.pathname === "/AlloyView/"', 'page load');
   await waitFor('document.getElementById("brand-logo").src.endsWith("AlloyView_logo_dark.svg")', 'app initialization');
@@ -155,13 +155,39 @@ try {
   assert.equal(await evaluate('document.querySelector("[data-tool-panel=display]").hidden'), false);
   assert.equal(await evaluate('[...document.querySelectorAll("[data-tool-panel]")].filter(panel => !panel.hidden).length'), 1);
 
-  // Check the initial page as well as the loaded viewer: disabled controls must
-  // remain readable, and the central mark must be the supplied project logo.
+  // Real 3D animation changes the rendered pixels without a CSS image transform.
+  await waitFor('!document.getElementById("bcc-logo").hidden', '3D BCC logo');
+  await evaluate(`(() => {
+    window.logoDraws = 0;
+    const original = WebGL2RenderingContext.prototype.drawElements;
+    WebGL2RenderingContext.prototype.drawElements = function(...args) {
+      if (this.canvas.id === 'bcc-logo') window.logoDraws += 1;
+      return original.apply(this, args);
+    };
+  })()`);
+  await waitFor('window.logoDraws > 2', 'logo rendering');
+  const logoClip = await evaluate(`(() => { const rect = document.querySelector('.empty-logo').getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, scale: 1 }; })()`);
+  const firstLogo = await call('Page.captureScreenshot', { format: 'png', clip: logoClip });
+  await delay(600);
+  const rotatedLogo = await call('Page.captureScreenshot', { format: 'png', clip: logoClip });
+  assert.notEqual(firstLogo.data, rotatedLogo.data, 'rotating BCC geometry must change the rendered image');
+  assert.equal(await evaluate('getComputedStyle(document.getElementById("bcc-logo")).transform'), 'none');
+  // The homepage model rotates even if the OS requests reduced animation.
+  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+  const reducedDraws = await evaluate('window.logoDraws');
+  const reducedFirst = await call('Page.captureScreenshot', { format: 'png', clip: logoClip });
+  await delay(600);
+  const reducedRotated = await call('Page.captureScreenshot', { format: 'png', clip: logoClip });
+  assert.ok(await evaluate('window.logoDraws') > reducedDraws + 2);
+  assert.notEqual(reducedFirst.data, reducedRotated.data, 'reduced-motion settings must not freeze the BCC model');
+  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }, { name: 'prefers-reduced-motion', value: 'no-preference' }] });
+
+  // Check initial and loaded views in both themes, including disabled controls.
   for (const theme of ['light', 'dark']) {
     await evaluate(`document.getElementById('theme-${theme}').click()`);
-    await waitFor('document.querySelector(".empty-logo").complete && document.querySelector(".empty-logo").naturalWidth > 0 && document.getElementById("brand-logo").complete', 'home logos');
+    await waitFor('!document.getElementById("bcc-logo").hidden && document.getElementById("brand-logo").complete', 'home logos');
     await delay(150); // Let the 120 ms button background transitions finish.
-    assert.ok((await evaluate('document.querySelector(".empty-logo").src')).endsWith('AlloyView_logo_only.png'));
+    assert.equal(await evaluate('document.querySelector(".empty-logo-fallback").hidden'), true);
     await checkTextContrast(['.empty-state h1', '.empty-copy', '.format-note', '.privacy-badge small', '.field > span:first-child', '.help', '.selection-empty']);
     await checkTextContrast(['.view-presets > button', '.projection-switch button', '.viewport-toggle', '#coordinate-mode', '#cutoff', '#run-analysis', '#cna-mode', '#cna-cutoff', '#csp-neighbors', '#run-cna', '#run-csp', '#ptm-rmsd', '#run-ptm', '#run-strain', '#lattice-reset', '.analysis-state-controls .text-button', '.display-options label', '#empty-open'], 4.5);
     await evaluate(`document.getElementById('open-examples').click()`);
@@ -171,6 +197,96 @@ try {
     await screenshot(`home-${theme}`);
   }
   await evaluate('document.getElementById("theme-light").click()');
+
+  // Dropping on the homepage overlay or header must open a file, and closing
+  // must resume the homepage scene without retaining the old source.
+  assert.equal(await evaluate('document.getElementById("close-file").hidden'), true);
+  await evaluate(`(async () => {
+    const appUrl = document.querySelector('script[type="module"]').src;
+    const { StructureWorkerClient } = await import(new URL('./worker-client.js', appUrl));
+    const load = StructureWorkerClient.prototype.load;
+    StructureWorkerClient.prototype.load = function(...args) {
+      window.closeTestClient = this;
+      const result = load.apply(this, args);
+      if (!window.holdNextSource) return result;
+      window.holdNextSource = false;
+      return result.then(value => new Promise(resolve => {
+        window.sourceResultHeld = true;
+        window.releaseSource = () => resolve(value);
+      }));
+    };
+  })()`);
+  const dropPoint = await evaluate(`(() => {
+    const rect = document.querySelector('.empty-copy').getBoundingClientRect();
+    const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    if (document.elementFromPoint(point.x, point.y).id === 'viewport') throw new Error('drop test must hit the homepage overlay');
+    return point;
+  })()`);
+  async function dropFiles(paths, point = dropPoint) {
+    const data = { items: [], files: paths, dragOperationsMask: 1 };
+    await call('Input.dispatchDragEvent', { type: 'dragEnter', ...point, data });
+    await waitFor('!document.getElementById("file-drop-overlay").hidden', 'file drag feedback');
+    await call('Input.dispatchDragEvent', { type: 'dragOver', ...point, data });
+    await call('Input.dispatchDragEvent', { type: 'drop', ...point, data });
+  }
+  async function checkHome() {
+    await waitFor('!document.getElementById("empty-state").hidden && document.getElementById("loading").hidden', 'closed source homepage');
+    assert.equal(await evaluate('document.getElementById("file-name").textContent'), 'No structure loaded');
+    assert.equal(await evaluate('document.getElementById("atom-count").textContent'), '—');
+    assert.equal(await evaluate('document.getElementById("close-file").hidden'), true);
+    assert.equal(await evaluate('document.getElementById("legend").hidden'), true);
+    assert.equal(await evaluate('document.getElementById("trajectory-section").hidden'), true);
+    assert.equal(await evaluate('document.getElementById("export-png").disabled'), true);
+    assert.equal(await evaluate('window.closeTestClient.worker === null && window.closeTestClient.pending.size === 0'), true);
+  }
+  await dropFiles([resolve(root, 'examples/fcc-vacancy.cfg')]);
+  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden && document.getElementById("empty-state").hidden', 'homepage file drop');
+  assert.equal(await evaluate('document.getElementById("frame-count").textContent'), '1');
+  assert.equal(await evaluate('document.getElementById("close-file").hidden'), false);
+  const closedDraws = await evaluate('window.logoDraws');
+  await evaluate('document.getElementById("close-file").click()');
+  await checkHome();
+  await waitFor(`window.logoDraws > ${closedDraws} + 2`, 'logo resumes after closing');
+  const headerPoint = await evaluate(`(() => { const rect = document.getElementById('brand-logo').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; })()`);
+  await dropFiles([resolve(root, 'examples/fixed_end_climb/replica.0.cfg'), resolve(root, 'examples/fixed_end_climb/replica.1.cfg')], headerPoint);
+  await waitFor('document.getElementById("source-dialog").open', 'multiple dropped files');
+  assert.equal(await evaluate('document.getElementById("source-dialog-title").textContent'), 'Choose a file to open');
+  assert.equal(await evaluate('document.querySelectorAll(".source-option:not(:disabled)").length'), 2);
+  await evaluate(`[...document.querySelectorAll('.source-option')].find(button => button.textContent.includes('replica.1.cfg')).click()`);
+  await waitFor('document.getElementById("empty-state").hidden && document.getElementById("loading").hidden', 'single numbered CFG drop');
+  assert.equal(await evaluate('document.getElementById("frame-count").textContent'), '1');
+  await evaluate('document.getElementById("close-file").click()');
+  await checkHome();
+
+  // A completed parser response that reaches the UI after close stays closed.
+  await evaluate('window.holdNextSource = true; window.sourceResultHeld = false');
+  await dropFiles([resolve(root, 'examples/fcc-vacancy.cfg')]);
+  await waitFor('window.sourceResultHeld', 'held source response');
+  await evaluate('document.getElementById("close-file").click(); window.releaseSource()');
+  await delay(100);
+  await checkHome();
+
+  // Closing also aborts fetched examples; guard against a fetch that ignores
+  // its AbortSignal and completes later (e.g. an already cached response).
+  await evaluate(`(() => {
+    window.sourceOriginalFetch = window.fetch;
+    window.fetch = (url, options) => {
+      if (!String(url).endsWith('fcc-vacancy.cfg')) return window.sourceOriginalFetch(url, options);
+      window.heldFetchSignal = options.signal;
+      return new Promise(resolve => {
+        window.releaseExampleFetch = async () => resolve(await window.sourceOriginalFetch(url));
+      });
+    };
+    document.getElementById('open-examples').click();
+    [...document.querySelectorAll('.source-option')].find(button => button.textContent.includes('fcc-vacancy.cfg')).click();
+  })()`);
+  await waitFor('Boolean(window.releaseExampleFetch)', 'held example request');
+  await evaluate('document.getElementById("close-file").click()');
+  assert.equal(await evaluate('window.heldFetchSignal.aborted'), true);
+  await evaluate('window.releaseExampleFetch()');
+  await delay(100);
+  await checkHome();
+  await evaluate('window.fetch = window.sourceOriginalFetch');
 
   // Load all bundled sources through the actual Examples UI.
   for (const [name, frames] of [['fcc-vacancy.cfg', 1], ['bcc-trajectory.dump', 2], ['fixed_end_climb/', 40]]) {
@@ -182,6 +298,10 @@ try {
       await waitFor(`document.getElementById('frame-label').textContent === '${frames} / ${frames}' && document.getElementById('loading').hidden`, 'last trajectory frame');
     }
   }
+
+  const stoppedLogoDraws = await evaluate('window.logoDraws');
+  await delay(100);
+  assert.equal(await evaluate('window.logoDraws'), stoppedLogoDraws, 'loading a structure must stop the hidden homepage animation');
 
   // Use Chrome's native file input, rather than constructing a fetched example.
   const { root: domRoot } = await call('DOM.getDocument');
@@ -706,6 +826,7 @@ try {
   assert.equal(await evaluate('document.getElementById("strain-state").textContent'), 'Not calculated');
   assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(property => property.analysisKind === "strain")'), false);
   assert.equal(await evaluate('window.cancelTestCalls.filter(kind => kind === "strain").length'), strainCalls);
+
   await evaluate('window.restoreCancelTesting()');
 
   // Replication changes only rendering. This source has all three triclinic
@@ -834,6 +955,29 @@ try {
   assert.deepEqual(await evaluate('Array.from(window.structureTestRenderer.repetitions)'), [1, 1, 1]);
   assert.equal(await evaluate('window.structureTestRenderer.displayAtomCount'), 16);
 
+  // Close during real Worker analysis and trajectory playback, then ensure
+  // old results and prefetched frames cannot restore the structure.
+  const sourceClose = await evaluate(`(async () => {
+    document.getElementById('cancel-cna').click();
+    document.getElementById('run-cna').click();
+    document.getElementById('frame-play').click();
+    await Promise.resolve();
+    const activeBefore = window.cancelTestPool.active.size;
+    document.getElementById('close-file').click();
+    return { activeBefore, active: window.cancelTestPool.active.size, queued: window.cancelTestPool.queue.length,
+      frame: window.structureTestRenderer.frame, atoms: window.structureTestRenderer.atomCount,
+      bufferBytes: (() => {
+        const r = window.structureTestRenderer; r.gl.bindBuffer(r.gl.ARRAY_BUFFER, r.positionBuffer);
+        return r.gl.getBufferParameter(r.gl.ARRAY_BUFFER, r.gl.BUFFER_SIZE);
+      })() };
+  })()`);
+  assert.ok(sourceClose.activeBefore > 0);
+  assert.equal(sourceClose.active, 0); assert.equal(sourceClose.queued, 0);
+  assert.equal(sourceClose.frame, null); assert.equal(sourceClose.atoms, 0); assert.equal(sourceClose.bufferBytes, 0);
+  await delay(1100);
+  await checkHome();
+  assert.equal(await evaluate('document.getElementById("frame-play").getAttribute("aria-pressed")'), 'false');
+
   const partialPbcPath = resolve(profile, 'partial-pbc.dump');
   await writeFile(partialPbcPath, (await readFile(numericPath, 'utf8')).replaceAll('yz pp pp pp', 'yz pp ff pp'));
   await call('DOM.setFileInputFiles', { nodeId, files: [partialPbcPath] });
@@ -859,7 +1003,7 @@ try {
   // A phone keeps the viewer on screen while its lower tool area scrolls.
   // Compact overlay buttons start closed and expose the full controls on tap.
   await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-  await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
   await waitFor('document.getElementById("toggle-view-controls").getAttribute("aria-expanded") === "false"', 'collapsed phone view controls');
   assert.equal(await evaluate('getComputedStyle(document.getElementById("view-controls")).display'), 'none');
   await evaluate('document.getElementById("toggle-view-controls").click()');
@@ -869,7 +1013,16 @@ try {
   await evaluate(`document.getElementById('open-examples').click(); [...document.querySelectorAll('.source-option')].find(button => button.textContent.includes('fcc-vacancy.cfg')).click();`);
   await waitFor('document.getElementById("file-name").textContent.includes("fcc-vacancy.cfg") && document.getElementById("loading").hidden', 'phone structure');
   await showTool('cna');
-  await evaluate('document.getElementById("run-cna").click()');
+  await evaluate(`(async () => {
+    const appUrl = document.querySelector('script[type="module"]').src;
+    const { WebGLRenderer } = await import(new URL('./render/webgl-renderer.js', appUrl));
+    const original = WebGLRenderer.prototype.setColors;
+    WebGLRenderer.prototype.setColors = function(...args) {
+      window.touchTestRenderer = this;
+      return original.apply(this, args);
+    };
+    document.getElementById('run-cna').click();
+  })()`);
   await waitFor('document.getElementById("cna-state").textContent === "Calculated"', 'phone CNA legend');
   assert.equal(await evaluate('document.getElementById("toggle-legend").getAttribute("aria-expanded")'), 'false');
   assert.equal(await evaluate('getComputedStyle(document.getElementById("legend")).display'), 'none');
@@ -878,6 +1031,72 @@ try {
   assert.notEqual(await evaluate('getComputedStyle(document.getElementById("legend")).display'), 'none');
   assert.equal(await evaluate('document.querySelectorAll(".crystal-items input[type=checkbox]").length'), 5);
   await evaluate('document.getElementById("toggle-legend").click()');
+
+  // Actual multi-touch input must zoom/pan the WebGL camera, not the webpage.
+  const touchCenter = await evaluate(`(() => {
+    const r = window.touchTestRenderer, rect = r.canvas.getBoundingClientRect();
+    window.touchCameraStart = { projection: r.projectionMode, yaw: r.yaw, pitch: r.pitch,
+      pan: [...r.pan], distance: r.distance, scale: r.orthographicScale };
+    window.touchPicks = 0;
+    const originalPick = r.onPick;
+    r.onPick = function(...args) { window.touchPicks++; return originalPick.apply(this, args); };
+    return { x: Math.floor(rect.left + rect.width / 2), y: Math.floor(rect.top + rect.height / 2) };
+  })()`);
+  const cameraState = () => evaluate(`(() => {
+    const r = window.touchTestRenderer;
+    return { yaw: r.yaw, pitch: r.pitch, pan: [...r.pan], distance: r.distance,
+      scale: r.orthographicScale, basis: r.cameraBasis(), height: r.canvas.clientHeight, fov: r.fov };
+  })()`);
+  const closeNumber = (a, b, label) => assert.ok(Math.abs(a - b) < 1e-6, `${label}: ${a} != ${b}`);
+  const fingers = (span, dx = 0, dy = 0) => [
+    { id: 1, x: touchCenter.x - span / 2 + dx, y: touchCenter.y + dy },
+    { id: 2, x: touchCenter.x + span / 2 + dx, y: touchCenter.y + dy },
+  ];
+  const touchInput = (type, touchPoints) => call('Input.dispatchTouchEvent', { type, touchPoints });
+  for (const projection of ['perspective', 'orthographic']) {
+    await evaluate(`window.touchTestRenderer.setProjection('${projection}')`);
+    const before = await cameraState(), sizeKey = projection === 'orthographic' ? 'scale' : 'distance';
+    await touchInput('touchStart', fingers(100));
+    await touchInput('touchMove', fingers(160));
+    const zoomed = await cameraState();
+    closeNumber(zoomed[sizeKey], before[sizeKey] / 1.6, `${projection} pinch opens`);
+    assert.equal(zoomed.yaw, before.yaw); assert.equal(zoomed.pitch, before.pitch);
+    await touchInput('touchMove', fingers(100));
+    await touchInput('touchEnd', []);
+    const restored = await cameraState();
+    closeNumber(restored[sizeKey], before[sizeKey], `${projection} pinch closes`);
+    restored.pan.forEach((value, axis) => closeNumber(value, before.pan[axis], 'pinch pan restoration'));
+
+    await touchInput('touchStart', fingers(100));
+    await touchInput('touchMove', fingers(100, 24, 18));
+    await touchInput('touchEnd', []);
+    const panned = await cameraState();
+    const units = 2 * (projection === 'orthographic' ? before.scale : Math.tan(before.fov / 2) * before.distance) / before.height;
+    closeNumber(panned[sizeKey], before[sizeKey], `${projection} pan retains zoom`);
+    panned.pan.forEach((value, axis) => closeNumber(value, restored.pan[axis]
+      - 24 * units * before.basis.right[axis] + 18 * units * before.basis.up[axis], `${projection} pan axis ${axis}`));
+    assert.equal(panned.yaw, before.yaw); assert.equal(panned.pitch, before.pitch);
+  }
+  assert.equal(await evaluate('window.touchPicks'), 0, 'multi-touch gestures must not pick atoms');
+  await touchInput('touchStart', [{ id: 1, x: touchCenter.x, y: touchCenter.y }]);
+  const orbitBefore = await cameraState();
+  await touchInput('touchMove', [{ id: 1, x: touchCenter.x + 20, y: touchCenter.y + 10 }]);
+  await touchInput('touchEnd', []);
+  const orbitAfter = await cameraState();
+  closeNumber(orbitAfter.yaw, orbitBefore.yaw - .16, 'one-finger orbit yaw');
+  closeNumber(orbitAfter.pitch, orbitBefore.pitch + .08, 'one-finger orbit pitch');
+  assert.equal(await evaluate('window.touchPicks'), 0);
+  await touchInput('touchStart', [{ id: 1, x: touchCenter.x, y: touchCenter.y }]);
+  await touchInput('touchEnd', []);
+  assert.equal(await evaluate('window.touchPicks'), 1, 'a single tap must still inspect atoms');
+  assert.equal(await evaluate('window.scrollY'), 0, 'canvas gestures must not scroll the page');
+  await evaluate(`(() => {
+    const r = window.touchTestRenderer, start = window.touchCameraStart;
+    r.yaw = start.yaw; r.pitch = start.pitch; r.pan = start.pan;
+    r.distance = start.distance; r.orthographicScale = start.scale;
+    r.setProjection(start.projection);
+  })()`);
+
   await showTool('strain');
   await evaluate('document.getElementById("sidebar").scrollTop = 0');
   const phoneBefore = await evaluate(`(() => {
@@ -903,11 +1122,107 @@ try {
   assert.deepEqual(phoneAfter.canvas, phoneBefore.canvas, 'scrolling tools must leave the viewport fixed');
   assert.equal(phoneAfter.pageScroll, 0);
   assert.equal(phoneAfter.overflow, false, 'phone layout must fit within the visible screen');
+
+  // Reproduce zooming into a large thin crystal, then switching to Ortho.
+  // Use a real local CFG and verify GPU coverage at both ends of its buffers.
+  await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await call('Emulation.setTouchEmulationEnabled', { enabled: false });
+  const largeCount = 400 * 64 * 4 * 2, largePath = resolve(profile, 'large-bcc.cfg');
+  const largeLines = [`Number of particles = ${largeCount}`, 'A = 1.0 Angstrom'];
+  for (let row = 0; row < 3; row++) for (let column = 0; column < 3; column++) {
+    largeLines.push(`H0(${row + 1},${column + 1}) = ${row === column ? [1144, 183.04, 11.44][row] : 0} A`);
+  }
+  largeLines.push('.NO_VELOCITY.', 'entry_count = 3', '55.845', 'Fe');
+  for (let x = 0; x < 400; x++) for (let y = 0; y < 64; y++) for (let z = 0; z < 4; z++) {
+    for (const basis of [0, .5]) largeLines.push(`${(x + basis) / 400} ${(y + basis) / 64} ${(z + basis) / 4}`);
+  }
+  await writeFile(largePath, largeLines.join('\n'));
+  const { root: largeDomRoot } = await call('DOM.getDocument');
+  const { nodeId: largeInput } = await call('DOM.querySelector', { nodeId: largeDomRoot.nodeId, selector: '#file-input' });
+  await call('DOM.setFileInputFiles', { nodeId: largeInput, files: [largePath] });
+  await waitFor('document.getElementById("file-name").textContent === "large-bcc.cfg" && document.getElementById("loading").hidden', 'large local CFG');
+  assert.equal(await evaluate('window.touchTestRenderer.atomCount'), largeCount);
+  await evaluate(`(() => {
+    const r = window.touchTestRenderer;
+    document.getElementById('projection-perspective').click();
+    r.distance = r.modelRadius * .25;
+    r.orthographicScale = r.modelRadius * .8;
+    r.setRadiusScale(.56);
+    document.getElementById('projection-orthographic').click();
+    document.getElementById('toast').hidden = true;
+  })()`);
+  const largeDepths = await evaluate(`(async () => {
+    const r = window.touchTestRenderer;
+    const appUrl = document.querySelector('script[type="module"]').src;
+    const { cellVertices } = await import(new URL('./data/model.js', appUrl));
+    const { transformPoint } = await import(new URL('./render/math.js', appUrl));
+    r.updateMatrices();
+    let minimum = Infinity, maximum = -Infinity;
+    for (const values of [cellVertices(r.displayCell), r.displayPositions]) {
+      for (let i = 0; i < values.length; i += 3) {
+        const clip = transformPoint(r.viewProjectionMatrix, values[i], values[i + 1], values[i + 2]);
+        const depth = clip[2] / clip[3];
+        minimum = Math.min(minimum, depth); maximum = Math.max(maximum, depth);
+      }
+    }
+    return { minimum, maximum, positions: r.displayPositions.length, glError: r.gl.getError() };
+  })()`);
+  assert.ok(largeDepths.minimum > -1 && largeDepths.maximum < 1, `large structure must fit within depth planes: ${JSON.stringify(largeDepths)}`);
+  assert.equal(largeDepths.positions, largeCount * 3);
+  assert.equal(largeDepths.glError, 0);
+  if (process.argv.includes('--clipping-screenshot')) {
+    await delay(100);
+    const capture = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile('/tmp/alloyview-large-structure.png', Buffer.from(capture.data, 'base64'));
+  }
+  const largeSamples = await evaluate(`(async () => {
+    const r = window.touchTestRenderer, gl = r.gl;
+    const appUrl = document.querySelector('script[type="module"]').src;
+    const { transformPoint } = await import(new URL('./render/math.js', appUrl));
+    const originalVisibility = r.visibility, originalScale = r.radiusScale, originalCell = r.cellVisible;
+    const originalDraw = gl.drawArraysInstanced;
+    const draws = [], samples = [];
+    gl.drawArraysInstanced = function(...args) { draws.push(args[3]); return originalDraw.apply(this, args); };
+    try {
+      r.setCellVisible(false); r.setRadiusScale(5);
+      for (const atom of [0, r.atomCount - 1]) {
+        const mask = new Uint8Array(r.atomCount); mask[atom] = 255; r.setVisibility(mask);
+        const query = gl.createQuery();
+        gl.beginQuery(gl.ANY_SAMPLES_PASSED, query);
+        r.render(performance.now(), { transparentBackground: true, trackStats: false });
+        gl.endQuery(gl.ANY_SAMPLES_PASSED); gl.finish();
+        try {
+          for (let attempt = 0; attempt < 200 && !gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE); attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 5));
+          }
+          if (!gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE)) throw new Error('GPU coverage query timed out');
+          const covered = Boolean(gl.getQueryParameter(query, gl.QUERY_RESULT));
+          const index = atom * 3;
+          const clip = transformPoint(r.viewProjectionMatrix, ...r.displayPositions.subarray(index, index + 3));
+          const rect = r.canvas.getBoundingClientRect();
+          const picked = r.pick(rect.left + (clip[0] / clip[3] * .5 + .5) * rect.width,
+            rect.top + (.5 - clip[1] / clip[3] * .5) * rect.height);
+          samples.push({ atom, covered, picked });
+        } finally { gl.deleteQuery(query); }
+      }
+      return { samples, draws, glError: gl.getError() };
+    } finally {
+      gl.drawArraysInstanced = originalDraw;
+      r.setVisibility(originalVisibility); r.setRadiusScale(originalScale); r.setCellVisible(originalCell);
+    }
+  })()`);
+  assert.deepEqual(largeSamples.samples, [
+    { atom: 0, covered: true, picked: 0 },
+    { atom: largeCount - 1, covered: true, picked: largeCount - 1 },
+  ]);
+  assert.ok(largeSamples.draws.length >= 2 && largeSamples.draws.every(count => count === largeCount));
+  assert.equal(largeSamples.glError, 0);
   assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors));
   assert.ok(requests.some(path => path.endsWith('ptm-kernel.wasm')), 'browser must load the real PTM kernel');
   assert.ok(requests.filter((path) => /\.(js|mjs|wasm)$/.test(path)).every((path) => /^\/AlloyView\/assets\/[a-f0-9]+\//.test(path)));
-  console.log('Browser smoke passed: Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent analyses; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; selectable tools; triclinic display replication, unchanged analysis inputs, repeated picking/filtering and PNG export; editable lattice references and PTM reuse; sidebar/themes; fixed phone viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
+  console.log('Browser smoke passed: continuous 3D BCC logo including reduced-motion settings; Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent analyses; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; selectable tools; triclinic display replication, unchanged analysis inputs, repeated picking/filtering and PNG export; editable lattice references and PTM reuse; sidebar/themes; phone pinch zoom, two-finger pan, one-finger orbit, tap picking, fixed viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
   console.log(JSON.stringify(exports));
+  console.log(`Large-structure clipping passed: ${largeCount} local CFG atoms; depth range ${largeDepths.minimum.toFixed(4)}..${largeDepths.maximum.toFixed(4)}; first/last atoms rendered and picked.`);
 } finally {
   websocket?.close();
   chrome.kill();

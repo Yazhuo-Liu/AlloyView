@@ -26,15 +26,17 @@ import {
 } from './render/palette.js';
 import { normalizeRadiusPercent, radiiByType } from './render/atomic-radii.js';
 import { WebGLRenderer } from './render/webgl-renderer.js';
+import { initializeBccLogo } from './render/bcc-logo.js';
 import { StructureWorkerClient } from './worker-client.js';
 import { initializeTheme } from './theme.js';
 import { initializeSidebarResize } from './sidebar-resize.js';
 import { initializeToolPanels } from './tool-panels.js';
 import { initializeMobileControls } from './mobile-controls.js';
+import { initializeFileDrop } from './file-drop.js';
 
 const elements = Object.fromEntries([
-  'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport',
-  'empty-state', 'file-name', 'file-meta', 'format-chip', 'atom-count', 'frame-count',
+  'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar',
+  'empty-state', 'file-name', 'file-meta', 'format-chip', 'close-file', 'file-drop-overlay', 'atom-count', 'frame-count',
   'cell-kind', 'pbc-flags', 'trajectory-section', 'frame-slider', 'frame-label', 'timestep-label',
   'cache-label', 'frame-first', 'frame-previous', 'frame-play', 'frame-next', 'frame-last', 'frame-ticks',
   'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
@@ -113,6 +115,8 @@ let interactionHintFadeTimer = null;
 let cutoffTimer = null;
 let coordinationQueue = Promise.resolve();
 let loadingOwner = null;
+let sourceOpenRequest = 0;
+let sourceFetchController = null;
 let renderer;
 let backgroundCustomized = false;
 
@@ -162,6 +166,8 @@ const worker = new StructureWorkerClient(({ loaded, total, stage }) => {
   }
 });
 
+const bccLogo = initializeBccLogo(elements['empty-state']);
+
 elements['open-local'].addEventListener('click', showLocalPicker);
 elements['empty-open'].addEventListener('click', showLocalPicker);
 elements['file-input'].addEventListener('change', () => {
@@ -182,6 +188,7 @@ elements['folder-input'].addEventListener('change', () => {
 });
 elements['source-dialog-close'].addEventListener('click', () => elements['source-dialog'].close());
 elements['open-examples'].addEventListener('click', showExampleChooser);
+elements['close-file'].addEventListener('click', closeSource);
 
 elements['frame-slider'].addEventListener('input', () => {
   stopFramePlayback();
@@ -284,27 +291,112 @@ document.addEventListener('visibilitychange', () => {
 syncProjectionControls('perspective');
 setBackgroundColor(elements.background.value, { automatic: true });
 
-for (const eventName of ['dragenter', 'dragover']) {
-  elements.viewport.addEventListener(eventName, (event) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
-  });
-}
-elements.viewport.addEventListener('drop', (event) => {
-  event.preventDefault();
-  const entries = fileEntries(event.dataTransfer.files);
-  if (entries.length > 0) inspectLocalEntries(entries, {
-    allowManualCfgSequence: true,
-    originLabel: 'dropped files',
-  });
+const fileDrop = initializeFileDrop({
+  overlay: elements['file-drop-overlay'],
+  onFiles: files => {
+    if (elements['source-dialog'].open) elements['source-dialog'].close();
+    inspectLocalEntries(fileEntries(files), {
+      singleFiles: true,
+      originLabel: 'dropped files',
+    });
+  },
 });
 
 for (const range of document.querySelectorAll('.range')) setRangeProgress(range);
 window.addEventListener('beforeunload', () => {
+  bccLogo.dispose();
+  renderer?.interactions?.dispose();
+  fileDrop.dispose();
+  sourceFetchController?.abort();
   clearTimeout(cutoffTimer);
   worker.close();
   coordinationPool.close();
 });
+
+function beginSourceOpen() {
+  sourceFetchController?.abort();
+  sourceFetchController = null;
+  elements['close-file'].hidden = false;
+  return ++sourceOpenRequest;
+}
+
+function closeSource() {
+  sourceOpenRequest++;
+  sourceFetchController?.abort();
+  sourceFetchController = null;
+  state.sourceVersion++;
+  state.frameRequest++;
+  state.prefetchToken++;
+  clearTimeout(frameTimer);
+  clearTimeout(cutoffTimer);
+  clearTimeout(toastTimer);
+  clearTimeout(interactionHintTimer);
+  clearTimeout(interactionHintFadeTimer);
+  stopFramePlayback();
+  abortAnalysisJobs();
+  worker.reset();
+  state.pendingFrames.clear();
+  cache.clear();
+  cache.setLimit(3);
+  Object.assign(state, {
+    file: null, files: [], frame: null, format: null, frameCount: 0, frameIndex: 0,
+    selectedId: null, colorMode: 'type', coordinateMode: 'wrapped', repetitions: [1, 1, 1],
+    source: null, availableSources: [], availableEntries: [], cachePlan: null,
+    references: [], referenceLabels: [],
+  });
+  state.referenceByLabel.clear();
+  scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear(); hiddenStructureTypes.clear();
+  for (const [kind, analysis] of Object.entries(state.analysis)) {
+    analysis.request++;
+    analysis.enabled = false;
+    if (kind === 'coordination') analysis.cutoff = null;
+    else { analysis.key = null; analysis.parameters = null; }
+    toolPanels.setToolEnabled(kind, false);
+    const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
+    elements[`${prefix}-state`].textContent = 'Not calculated';
+    elements[`${prefix}-state`].classList.remove('ready');
+    elements[`metric-${prefix}`].textContent = '—';
+    if (kind !== 'coordination') elements[`${prefix}-status`].textContent = ANALYSES[kind].help;
+  }
+  renderer.clearFrame();
+  elements['file-name'].textContent = 'No structure loaded';
+  elements['file-meta'].textContent = 'CFG / LAMMPS dump';
+  for (const id of ['format-chip', 'atom-count', 'frame-count', 'cell-kind', 'pbc-flags',
+    'metric-index', 'metric-parse', 'metric-upload', 'metric-fps']) elements[id].textContent = '—';
+  elements['pbc-flags'].removeAttribute('title');
+  elements['trajectory-section'].hidden = true;
+  elements.viewport.parentElement.classList.remove('trajectory-visible');
+  elements['frame-slider'].max = elements['frame-slider'].value = '0';
+  elements['frame-label'].textContent = '0 / 0';
+  elements['frame-ticks'].replaceChildren();
+  elements['timestep-label'].textContent = 'timestep —';
+  updateFrameNavigation(); updateCacheLabel();
+  elements['color-mode'].replaceChildren(option('type', 'Atom type'));
+  elements['coordinate-mode'].value = 'wrapped';
+  elements['coordinate-mode'].querySelector('[value="unwrapped"]').disabled = true;
+  elements['lattice-references'].replaceChildren();
+  elements['selection-data'].replaceChildren();
+  updateSelectionPanel();
+  elements.legend.hidden = true;
+  elements.legend.replaceChildren();
+  elements['slice-position'].value = '100';
+  updateSlice();
+  setRadiusPercent(100);
+  toolPanels.selectTool('display');
+  elements.sidebar.scrollTop = 0;
+  setControlsEnabled(false);
+  setLoading(false);
+  elements.toast.hidden = elements['interaction-hint'].hidden = true;
+  elements['interaction-hint'].classList.remove('is-hiding');
+  elements['close-file'].hidden = true;
+  if (elements['source-dialog'].open) elements['source-dialog'].close();
+  elements['source-options'].replaceChildren();
+  elements['file-input'].value = elements['folder-input'].value = '';
+  fileDrop.clear();
+  elements['empty-state'].hidden = false;
+  updateMemoryMetric();
+  elements['empty-open'].focus({ preventScroll: true });
+}
 
 function showLocalPicker() {
   elements['source-dialog-kicker'].textContent = 'LOCAL SOURCES';
@@ -321,7 +413,10 @@ async function inspectLocalEntries(entries, {
   allowManualCfgSequence = false,
   originLabel = 'local selection',
   showAllFiles = false,
+  singleFiles = false,
 } = {}) {
+  const request = beginSourceOpen();
+  const isCurrent = () => request === sourceOpenRequest;
   try {
     if (entries.length > FOLDER_FILE_LIMIT) {
       throw new Error(`The selection contains more than ${formatInteger(FOLDER_FILE_LIMIT)} files. Choose a smaller structure folder.`);
@@ -330,8 +425,9 @@ async function inspectLocalEntries(entries, {
     const orderedEntries = [...entries].sort((left, right) => (
       localPathCollator.compare(left.relativePath, right.relativePath)
     ));
-    const classified = await classifyStructureEntries(orderedEntries, originLabel);
-    const catalog = catalogLocalSources(classified, { allowManualCfgSequence });
+    const classified = await classifyStructureEntries(orderedEntries, originLabel, isCurrent);
+    if (!isCurrent()) return;
+    const catalog = catalogLocalSources(classified, { allowManualCfgSequence, singleFiles });
     if (catalog.sources.length === 0 && !showAllFiles) {
       throw new Error(await unrecognizedFilesMessage(entries.filter((entry) => isPotentialStructurePath(entry.relativePath))));
     }
@@ -342,25 +438,28 @@ async function inspectLocalEntries(entries, {
       return;
     }
     setLoading(false);
-    showSourceChooser(catalog, originLabel, classified);
+    showSourceChooser(catalog, originLabel, classified, { singleFiles });
   } catch (error) {
+    if (!isCurrent()) return;
     setLoading(false);
+    elements['close-file'].hidden = !state.frame;
     showToast(error.message ?? String(error));
   }
 }
 
-async function classifyStructureEntries(entries, originLabel) {
+async function classifyStructureEntries(entries, originLabel, isCurrent) {
   const classified = new Array(entries.length);
   let cursor = 0;
   let completed = 0;
   const scanNext = async () => {
-    while (cursor < entries.length) {
+    while (cursor < entries.length && isCurrent()) {
       const index = cursor;
       const entry = entries[index];
       cursor += 1;
       let format = null;
       if (isPotentialStructurePath(entry.relativePath)) {
         const header = await entry.file.slice(0, 64 * 1024).text();
+        if (!isCurrent()) return;
         const detectedFormat = detectStructureFormatHeader(header);
         const filenameHint = inferStructureFormatFromPath(entry.relativePath);
         format = detectedFormat ?? (filenameHint === 'cfg' ? 'cfg' : null);
@@ -385,10 +484,12 @@ async function unrecognizedFilesMessage(candidates) {
   return `No CFG or LAMMPS text data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
 }
 
-function showSourceChooser(catalog, originLabel, entries = state.availableEntries) {
+function showSourceChooser(catalog, originLabel, entries = state.availableEntries, { singleFiles = false } = {}) {
   elements['source-dialog-kicker'].textContent = 'LOCAL SOURCES';
-  elements['source-dialog-title'].textContent = 'Choose a structure or sequence';
-  elements['source-dialog-summary'].textContent = `The browser supplied ${entries.length} files from the ${originLabel}. ${catalog.supportedCount} structure files and ${catalog.sequenceCount} numbered structure sequence${catalog.sequenceCount === 1 ? '' : 's'} were recognized.`;
+  elements['source-dialog-title'].textContent = singleFiles ? 'Choose a file to open' : 'Choose a structure or sequence';
+  elements['source-dialog-summary'].textContent = singleFiles
+    ? `Choose one of the ${catalog.supportedCount} recognized structure files. Each file opens individually.`
+    : `The browser supplied ${entries.length} files from the ${originLabel}. ${catalog.supportedCount} structure files and ${catalog.sequenceCount} numbered structure sequence${catalog.sequenceCount === 1 ? '' : 's'} were recognized.`;
   const fragment = document.createDocumentFragment();
   const sequences = catalog.sources.filter((source) => source.kind === 'sequence');
   if (sequences.length > 0) {
@@ -508,27 +609,39 @@ function fileEntries(files) {
 }
 
 async function loadExample(url, name) {
+  const request = beginSourceOpen();
+  const controller = new AbortController();
+  sourceFetchController = controller;
   try {
     setLoading(true, 'Loading example…');
-    const response = await fetch(new URL(`../${url}`, import.meta.url));
+    const response = await fetch(new URL(`../${url}`, import.meta.url), { signal: controller.signal });
     if (!response.ok) throw new Error(`Example request failed: HTTP ${response.status}`);
     const blob = await response.blob();
+    if (request !== sourceOpenRequest) return;
     await loadFiles([new File([blob], name, { type: 'text/plain' })]);
   } catch (error) {
+    if (request !== sourceOpenRequest) return;
     setLoading(false);
+    elements['close-file'].hidden = !state.frame;
     showToast(error.message);
+  } finally {
+    if (sourceFetchController === controller) sourceFetchController = null;
   }
 }
 
 async function loadNebExample() {
+  const request = beginSourceOpen();
+  const controller = new AbortController();
+  sourceFetchController = controller;
   try {
     setLoading(true, 'Loading NEB example images…');
     const files = await Promise.all(Array.from({ length: 40 }, async (_, index) => {
       const name = `replica.${index}.cfg`;
-      const response = await fetch(new URL(`../examples/fixed_end_climb/${name}`, import.meta.url));
+      const response = await fetch(new URL(`../examples/fixed_end_climb/${name}`, import.meta.url), { signal: controller.signal });
       if (!response.ok) throw new Error(`NEB example request failed for ${name}: HTTP ${response.status}`);
       return new File([await response.blob()], name, { type: 'text/plain' });
     }));
+    if (request !== sourceOpenRequest) return;
     await loadFiles(files, {
       kind: 'sequence',
       detected: true,
@@ -536,12 +649,17 @@ async function loadNebExample() {
       format: 'cfg',
     });
   } catch (error) {
+    if (request !== sourceOpenRequest) return;
     setLoading(false);
+    elements['close-file'].hidden = !state.frame;
     showToast(error.message);
+  } finally {
+    if (sourceFetchController === controller) sourceFetchController = null;
   }
 }
 
 async function loadFiles(inputFiles, sourceDescriptor = null) {
+  const selectionRequest = beginSourceOpen();
   clearTimeout(cutoffTimer);
   abortAnalysisJobs();
   stopFramePlayback();
@@ -553,10 +671,13 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
   state.pendingFrames.clear();
   const request = state.frameRequest + 1;
   state.frameRequest = request;
+  worker.reset();
+  elements['file-name'].textContent = sourceDescriptor?.label ?? (files.length > 1
+    ? `${files[0].name} … ${files.at(-1).name}` : files[0].name);
   setLoading(true, files.length > 1 ? `Reading ${files.length} local CFG files…` : 'Reading local file…');
   try {
     const result = await worker.load(files);
-    if (request !== state.frameRequest || sourceVersion !== state.sourceVersion) return;
+    if (selectionRequest !== sourceOpenRequest || request !== state.frameRequest || sourceVersion !== state.sourceVersion) return;
     cache.clear();
     state.cachePlan = chooseFrameCachePolicy(result.frame, result.frameCount, {
       heapLimit: performance.memory?.jsHeapSizeLimit,
@@ -597,6 +718,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     elements['metric-index'].textContent = formatDuration(Math.max(0, result.indexMs));
     configureSourceUi(result);
     await displayFrame(result.frame, { resetCamera: true });
+    if (selectionRequest !== sourceOpenRequest || request !== state.frameRequest || sourceVersion !== state.sourceVersion) return;
     elements['empty-state'].hidden = true;
     setControlsEnabled(true);
     setLoading(false);
@@ -609,8 +731,9 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
       true,
     );
   } catch (error) {
-    if (request === state.frameRequest) {
+    if (selectionRequest === sourceOpenRequest && request === state.frameRequest) {
       setLoading(false);
+      elements['close-file'].hidden = !state.frame;
       showToast(error.message);
     }
   }
@@ -665,6 +788,7 @@ async function showFrame(index) {
     if (!frame) return false;
     state.frameIndex = index;
     await displayFrame(frame);
+    if (request !== state.frameRequest) return false;
     if (requiresLoad) setLoading(false);
     scheduleFramePrefetch(index);
     return true;
@@ -1762,6 +1886,7 @@ function syncBackgroundControl(value) {
 
 function setControlsEnabled(enabled) {
   for (const id of [
+    'reset-camera', 'export-png', 'frame-slider',
     'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
     'background', 'show-axes', 'show-cell', 'png-background', 'png-legend', 'png-axes',
     'slice-axis', 'slice-position', 'cutoff', 'run-analysis',

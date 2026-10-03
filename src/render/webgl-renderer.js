@@ -1,5 +1,6 @@
 import { cellVertices } from '../data/model.js';
 import { createReplication } from './replication.js';
+import { installCameraInteractions } from './camera-interactions.js';
 import {
   add,
   cross,
@@ -118,7 +119,6 @@ const CELL_EDGES = [
   2, 6, 4, 5, 4, 6, 3, 7, 5, 7, 6, 7,
 ];
 
-const MAX_ORBIT_PITCH = Math.PI / 2 - 0.008;
 const SOURCE_REPLICA = [0, 0, 0];
 const VIEW_PRESETS = Object.freeze({
   front: { yaw: 0, pitch: 0 },
@@ -173,6 +173,8 @@ export class WebGLRenderer {
     this.distance = 10;
     this.orthographicScale = 5;
     this.modelRadius = 5;
+    this.sceneBounds = null;
+    this.maximumAtomRadius = 0.7;
     this.viewMatrix = new Float32Array(16);
     this.projectionMatrix = new Float32Array(16);
     this.viewProjectionMatrix = new Float32Array(16);
@@ -260,6 +262,8 @@ export class WebGLRenderer {
     this.displayAtomCount = this.atomCount * this.replicas.length;
     this.atomRadii = atomRadii ?? new Float32Array(this.atomCount).fill(0.7);
     if (this.atomRadii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
+    this.maximumAtomRadius = this.atomRadii.reduce((maximum, radius) => Math.max(maximum, radius), 0);
+    this.updateSceneBounds();
     this.visibility = new Uint8Array(this.atomCount).fill(255);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, displayPositions, gl.STATIC_DRAW);
@@ -276,6 +280,32 @@ export class WebGLRenderer {
     gl.finish();
     this.requestRender();
     return performance.now() - startedAt;
+  }
+
+  clearFrame() {
+    this.interactions?.reset();
+    this.frame = this.displayPositions = this.visibility = this.atomRadii = null;
+    this.displayCell = this.sceneBounds = this.minimumOffset = this.maximumOffset = null;
+    this.atomCount = this.displayAtomCount = 0;
+    this.repetitions = [1, 1, 1];
+    this.replicas = [{ indices: [0, 0, 0], offset: [0, 0, 0] }];
+    this.selected = -1;
+    this.target = this.pan = [0, 0, 0];
+    this.distance = 10;
+    this.orthographicScale = this.modelRadius = 5;
+    this.maximumAtomRadius = 0.7;
+    this.yaw = -0.62;
+    this.pitch = 0.38;
+    this.frameTimes = [];
+    this.projectionMode = 'perspective';
+    this.onProjectionChange(this.projectionMode);
+    const gl = this.gl;
+    for (const buffer of [this.positionBuffer, this.colorBuffer, this.fractionalBuffer,
+      this.visibilityBuffer, this.radiusBuffer, this.cellBuffer]) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, 0, gl.STATIC_DRAW);
+    }
+    this.requestRender();
   }
 
   setColors(colors) {
@@ -304,6 +334,7 @@ export class WebGLRenderer {
     }
     const startedAt = performance.now();
     this.displayPositions = positions;
+    this.updateSceneBounds();
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.STATIC_DRAW);
     this.gl.finish();
@@ -316,6 +347,7 @@ export class WebGLRenderer {
     const replication = createReplication(this.frame.cell, counts);
     Object.assign(this, replication);
     this.displayAtomCount = this.atomCount * this.replicas.length;
+    this.updateSceneBounds();
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.cellBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, buildCellLines(this.displayCell), this.gl.STATIC_DRAW);
     this.requestRender();
@@ -345,8 +377,7 @@ export class WebGLRenderer {
     this.requestRender();
   }
 
-  resetCamera() {
-    if (!this.frame) return;
+  updateSceneBounds() {
     const vertices = cellVertices(this.displayCell ?? this.frame.cell);
     const minimum = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
     const maximum = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
@@ -361,6 +392,13 @@ export class WebGLRenderer {
         }
       }
     }
+    this.sceneBounds = { minimum, maximum };
+    return this.sceneBounds;
+  }
+
+  resetCamera() {
+    if (!this.frame) return;
+    const { minimum, maximum } = this.sceneBounds ?? this.updateSceneBounds();
     this.target = minimum.map((value, component) => (value + maximum[component]) / 2);
     this.pan = [0, 0, 0];
     this.modelRadius = Math.max(0.5, Math.hypot(
@@ -445,11 +483,31 @@ export class WebGLRenderer {
     const aspect = width / height;
     const target = add(this.target, this.pan);
     const { offsetDirection, upHint } = this.cameraOrientation();
-    const offset = scale(offsetDirection, this.distance);
+    // Project the cached cell/atom bounds onto the camera axis. Recompute these
+    // six scalars while orbiting, rather than scanning every atom per draw.
+    let closest = this.modelRadius, furthest = -this.modelRadius;
+    if (this.sceneBounds) {
+      const { minimum, maximum } = this.sceneBounds;
+      closest = furthest = 0;
+      for (let axis = 0; axis < 3; axis++) {
+        const a = (minimum[axis] - target[axis]) * offsetDirection[axis];
+        const b = (maximum[axis] - target[axis]) * offsetDirection[axis];
+        closest += Math.max(a, b);
+        furthest += Math.min(a, b);
+      }
+    }
+    const padding = (this.maximumAtomRadius ?? 0.7) * this.radiusScale
+      + Math.max(0.001, (closest - furthest) * 1e-5);
+    // Orthographic size depends only on its scale. Keep its virtual eye in
+    // front of the entire scene even after a close perspective zoom; moving
+    // this eye backward changes depth without changing the apparent size.
+    const cameraDistance = this.projectionMode === 'orthographic'
+      ? Math.max(this.distance, closest + padding + 1) : this.distance;
+    const offset = scale(offsetDirection, cameraDistance);
     const eye = add(target, offset);
     this.viewMatrix = lookAt(eye, target, upHint);
-    const near = Math.max(0.001, Math.min(this.modelRadius * 0.01, this.distance * 0.05));
-    const far = Math.max(near + 1, this.distance + this.modelRadius * 6 + 10);
+    const near = Math.max(0.001, cameraDistance - closest - padding);
+    const far = Math.max(near + 0.001, cameraDistance - furthest + padding);
     if (this.projectionMode === 'orthographic') {
       const halfHeight = this.orthographicScale;
       this.projectionMatrix = orthographic(-halfHeight * aspect, halfHeight * aspect, -halfHeight, halfHeight, near, far);
@@ -472,57 +530,8 @@ export class WebGLRenderer {
   }
 
   installInteractions() {
-    let pointer = null;
-    this.canvas.addEventListener('pointerdown', (event) => {
-      if (!this.frame) return;
-      this.canvas.setPointerCapture(event.pointerId);
-      pointer = {
-        id: event.pointerId,
-        x: event.clientX,
-        y: event.clientY,
-        startX: event.clientX,
-        startY: event.clientY,
-        mode: event.button === 2 || event.shiftKey ? 'pan' : 'rotate',
-      };
-    });
-    this.canvas.addEventListener('pointermove', (event) => {
-      if (!pointer || pointer.id !== event.pointerId) return;
-      const deltaX = event.clientX - pointer.x;
-      const deltaY = event.clientY - pointer.y;
-      pointer.x = event.clientX;
-      pointer.y = event.clientY;
-      if (pointer.mode === 'rotate') {
-        this.yaw -= deltaX * 0.008;
-        // OVITO-style constrained orbit: global Z stays upright and the camera
-        // cannot roll over a pole. Upward drags retain the established
-        // screen-space direction while the pitch remains bounded.
-        this.pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, this.pitch + deltaY * 0.008));
-      } else {
-        const { right, up } = this.cameraBasis();
-        const worldPerPixel = this.projectionMode === 'orthographic'
-          ? 2 * this.orthographicScale / Math.max(1, this.canvas.clientHeight)
-          : 2 * Math.tan(this.fov / 2) * this.distance / Math.max(1, this.canvas.clientHeight);
-        this.pan = add(this.pan, add(scale(right, -deltaX * worldPerPixel), scale(up, deltaY * worldPerPixel)));
-      }
-      this.requestRender();
-    });
-    const endPointer = (event) => {
-      if (!pointer || pointer.id !== event.pointerId) return;
-      const moved = Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY);
-      if (moved < 4 && event.button === 0) this.onPick(this.pick(event.clientX, event.clientY));
-      pointer = null;
-    };
-    this.canvas.addEventListener('pointerup', endPointer);
-    this.canvas.addEventListener('pointercancel', () => { pointer = null; });
-    this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
-    this.canvas.addEventListener('wheel', (event) => {
-      if (!this.frame) return;
-      event.preventDefault();
-      const factor = Math.exp(Math.max(-100, Math.min(100, event.deltaY)) * 0.0018);
-      if (this.projectionMode === 'orthographic') this.orthographicScale = Math.max(0.02, this.orthographicScale * factor);
-      else this.distance = Math.max(0.02, this.distance * factor);
-      this.requestRender();
-    }, { passive: false });
+    this.interactions?.dispose();
+    this.interactions = installCameraInteractions(this);
   }
 
   cameraBasis() {

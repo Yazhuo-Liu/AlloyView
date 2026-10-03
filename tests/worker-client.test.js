@@ -17,7 +17,7 @@ class FakeWorker {
     this.messages.push(message);
   }
 
-  terminate() {}
+  terminate() { this.terminated = true; }
 }
 
 test('load accepts a single File and preserves the legacy single-file message', async () => {
@@ -90,4 +90,31 @@ test('background frame requests do not surface progress in the blocking UI', asy
   } finally {
     globalThis.Worker = originalWorker;
   }
+});
+
+test('reset rejects pending loads/frames, ignores old Workers and allows a fresh source', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const progress = [], client = new StructureWorkerClient(event => progress.push(event));
+    const oldWorker = client.worker;
+    const pending = client.load(new File(['first'], 'first.cfg'));
+    const background = client.frame(39, { reportProgress: false });
+    const cancelled = Promise.all([assert.rejects(pending, { name: 'AbortError' }), assert.rejects(background, { name: 'AbortError' })]);
+    client.reset();
+    await cancelled;
+    assert.equal(oldWorker.terminated, true);
+    assert.equal(client.pending.size, 0);
+    assert.equal(client.worker, null, 'home holds no parsed structure Worker');
+    const next = client.load(new File(['second'], 'second.cfg'));
+    const id = client.worker.messages[0].id;
+    assert.notEqual(client.worker, oldWorker);
+    oldWorker.listeners.get('message')({ data: { id, event: 'progress' } });
+    oldWorker.listeners.get('error')({ message: 'stale failure' });
+    assert.deepEqual(progress, []);
+    assert.equal(client.pending.size, 1);
+    client.handleMessage({ id, ok: true, result: { title: 'second' } });
+    assert.deepEqual(await next, { title: 'second' });
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
 });

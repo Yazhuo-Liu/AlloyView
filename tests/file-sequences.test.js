@@ -114,3 +114,12 @@ test('explicitly selected non-numbered CFG files retain manual sequence behavior
 function entry(relativePath, format) {
   return { file: { name: relativePath.split('/').at(-1), size: 100 }, relativePath, format };
 }
+
+test('single-file drops keep numbered and manually selected CFG files independent', () => {
+  for (const names of [['replica.0.cfg', 'replica.1.cfg'], ['initial.cfg', 'saddle.cfg']]) {
+    const catalog = catalogLocalSources(names.map(name => entry(name)), { singleFiles: true, allowManualCfgSequence: true });
+    assert.equal(catalog.sequenceCount, 0);
+    assert.equal(catalog.sources.length, 2);
+    assert.ok(catalog.sources.every(source => source.kind === 'file' && source.files.length === 1));
+  }
+});

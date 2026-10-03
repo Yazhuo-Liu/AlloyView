@@ -27,12 +27,12 @@ export function detectStructureFormatHeader(text) {
   return null;
 }
 
-export function catalogLocalSources(inputEntries, { allowManualCfgSequence = false } = {}) {
+export function catalogLocalSources(inputEntries, { allowManualCfgSequence = false, singleFiles = false } = {}) {
   const entries = inputEntries
     .map(normalizeEntry)
     .filter((entry) => entry.format)
     .sort((left, right) => naturalCollator.compare(left.relativePath, right.relativePath));
-  const sequences = detectNumberedStructureSequences(entries);
+  const sequences = singleFiles ? [] : detectNumberedStructureSequences(entries);
   const claimedPaths = new Set(sequences.flatMap((sequence) => sequence.entries.map((entry) => entry.relativePath)));
   const singles = entries
     .filter((entry) => !claimedPaths.has(entry.relativePath))
@@ -45,7 +45,7 @@ export function catalogLocalSources(inputEntries, { allowManualCfgSequence = fal
       entries: [entry],
     }));
 
-  if (sequences.length === 0 && allowManualCfgSequence && entries.length > 1
+  if (!singleFiles && sequences.length === 0 && allowManualCfgSequence && entries.length > 1
       && entries.every((entry) => entry.format === 'cfg')) {
     return {
       sources: [{

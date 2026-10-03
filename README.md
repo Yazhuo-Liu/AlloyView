@@ -70,10 +70,14 @@ WebGL 2 support. No installation or account is needed.
 
 1. **Open a structure.** Click **Open local → Choose files…** for one or more
    CFG/LAMMPS files. Use **Choose folder…** to browse a folder and detect
-   numbered sequences automatically. Dragging files into the viewport also
-   works. Or click **Examples** and choose a bundled source.
+   numbered sequences automatically. Drop a file anywhere on the page to open
+   it individually; dropping several files lets you choose one. Or click
+   **Examples** and choose a bundled source. The **×** beside the filename closes
+   the current structure and returns to the homepage.
 2. **Navigate.** Drag to rotate, Shift/right-drag to pan, and scroll to zoom.
-   Click an atom to inspect its ID, type, coordinates and scalar properties.
+   On touchscreens, drag with one finger to rotate, pinch with two fingers to
+   zoom, and move both fingers together to pan. Click or tap an atom to inspect
+   its ID, type, coordinates and scalar properties.
    Use the standard views, **Perspective** or **Ortho** to set the camera.
    Drag the divider beside the right panel to adjust its width; double-click
    the divider to restore the default.

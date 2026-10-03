@@ -1,6 +1,92 @@
 # Validation record
 
-Validation date: 2026-10-02 (UTC)
+Validation date: 2026-10-03 (America/New_York)
+
+## Closing sources and page-wide file drops
+
+Validated with Node.js v24.9.0 and Google Chrome 144.0.7559.109 using
+SwiftShader software WebGL:
+
+- `npm test`: all 26 test files passed. New checks cover drag feedback across
+  nested elements, normal text drags, independent numbered files in single-file
+  mode, pending Worker cancellation, stale Worker messages and reopening a fresh
+  source. Renderer cleanup releases coordinate/color/filter/radius/cell GPU
+  buffers and source references while retaining the reusable viewport.
+- `npm run build` and `npm run test:browser -- --screenshots`: passed. Chrome
+  dispatches native file drags over the homepage description and header, with
+  visible drag feedback. A single CFG opens directly; two numbered CFG files
+  present a single-file chooser, and selecting one reports one frame.
+- The filename's close button returns to the empty homepage, disables export,
+  hides the legend/timeline, stops the source Worker and resumes BCC animation.
+  The same file can be reopened. Closing during actual CNA Worker execution and
+  trajectory playback leaves zero active/queued analysis jobs, null renderer
+  frame, zero displayed atoms and a zero-byte position buffer.
+- A held completed parser response and an example fetch that deliberately
+  ignores its aborted signal cannot reopen the closed source. Source/frame
+  generations and cancelled prefetching prevent late UI updates.
+- Existing local-file/folder/example, analysis cancellation, PNG transparency,
+  replication, phone gesture/layout and 204,800-atom clipping checks still pass.
+
+## Large structures after zooming and switching to Ortho
+
+Validated with Node.js v24.9.0 and Google Chrome 144.0.7559.109 using
+SwiftShader software WebGL:
+
+- Reproduced clipping with a `1144 × 183.04 × 11.44 Å` cell: retaining a
+  perspective camera distance of `0.25 × modelRadius` in Ortho put four of its
+  eight vertices outside the old near plane. This also clipped the box edges.
+- Orthographic rendering now places its virtual eye ahead of all cell/atom
+  bounds while retaining the zoom scale and saved perspective distance. Near
+  and far planes follow cached display bounds plus the largest rendered atom
+  radius. Coordinate/frame changes and replication refresh these bounds;
+  orbiting uses their projected extrema without scanning all atoms per draw.
+- `npm test`: all 25 test files passed. New regressions cover close zooms,
+  all six standard views, orbit/pan, picking formerly clipped foreground atoms,
+  growing unwrapped coordinates, negative replication vectors and enlarged
+  sphere surfaces in both projection modes.
+- `npm run build` and `npm run test:browser -- --clipping-screenshot`: passed.
+  Chrome's native file input loads a generated 204,800-atom BCC thin-sheet CFG.
+  After the close zoom and Ortho switch, all atom centers and cell vertices have
+  normalized depths between `-0.9981` and `0.9981`. GPU occlusion queries confirm
+  actual sample coverage for atom indices `0` and `204799`, and both can be
+  picked. Every observed instanced draw submits all 204,800 atoms; WebGL reports
+  no error. The screenshot shows the complete cell boundary.
+- Existing PNG transparency, analyses, local files/examples, replication,
+  themes, continuous homepage animation and mobile gestures still pass. The
+  generated fixture verifies this failure mode; it is not the user's input file
+  or a hardware GPU performance benchmark.
+
+## Continuous BCC logo and mobile camera gestures
+
+Validated with Node.js v24.9.0 and Google Chrome 144.0.7559.109 using
+SwiftShader software WebGL:
+
+- `npm test`: all 24 test files passed. The model checks establish eight
+  unique cubic corners, one body center, eight equal body-diagonal bonds, and
+  twelve cell edges with three incident edges at each corner.
+- `npm run build` and `npm run test:browser -- --screenshots`: passed. The
+  homepage uses a separate transparent WebGL 2 scene with sphere/cylinder
+  geometry, depth testing and studio lighting. Two cropped browser screenshots
+  600 ms apart differ while the canvas has no CSS transform.
+- The model keeps rotating with the OS reduced-motion preference enabled;
+  cropped screenshots 600 ms apart still differ and draw calls continue.
+  A separate source-page check starts with reduced motion enabled and the same
+  COOP/COEP headers as the localhost development server, confirming continuous
+  rendering in that configuration. Loading a structure hides the homepage and
+  stops its draw calls. Both theme screenshots use the live 3D model.
+- Camera tests cover pinch opening/closing, screen-space translation, combined
+  pinch/pan anchoring, finger-count transitions, tap selection, cancellation,
+  lost pointer capture and desktop controls. Perspective and orthographic
+  gestures preserve camera orientation; multi-touch never selects atoms.
+- Chrome phone emulation at 390 × 844 dispatches actual two-touch events.
+  Opening the span from 100 to 160 pixels changes camera distance or
+  orthographic scale by `1 / 1.6`; closing restores it. Moving both fingers by
+  `(24, 18)` pixels produces the expected pan with unchanged zoom and orbit.
+  One-finger rotation and tap picking still work; page scrolling remains zero
+  while the lower tools panel continues to scroll independently.
+- Existing local-file, example, analysis, replication, phone-layout and PNG
+  transparency checks continue to pass. These are correctness checks, not
+  hardware GPU performance measurements.
 
 ## Display replication and responsive tools
 
