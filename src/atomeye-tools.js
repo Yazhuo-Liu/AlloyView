@@ -3,7 +3,7 @@ import { radiusForElement } from './render/atomic-radii.js';
 import { colorsByType } from './render/palette.js';
 import { WebGLRenderer } from './render/webgl-renderer.js';
 import { replaceAnalysisProperty, clearAnalysisResults } from './analysis/results.js';
-import { createReferenceMappingAsync } from './analysis/reference-strain.js';
+import { createReferenceMappingAsync, REFERENCE_STRAIN_FIELDS } from './analysis/reference-strain.js';
 import { measureAtoms } from './measurements.js';
 import { createImageArchive, downloadBlob } from './export-archive.js';
 import { imageToEps } from './export-eps.js';
@@ -27,7 +27,7 @@ const canvasBlob = (canvas, type = 'image/png') => new Promise((resolve, reject)
  * display-only settings and invalidates pending results on source/frame edits. */
 export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFrameAt,
   getFrameIndex, getFrameCount, getFrames, getSourceVersion, getSelectedIndex,
-  selectAtom, refresh, chooseProperty, getColorMode, getExportOptions, showFrame,
+  selectAtom, refresh, chooseProperty, getColorMode, getColorChoiceVersion = () => 0, getExportOptions, showFrame,
   stopPlayback, getFileStem, notify = () => {}, onEdit = () => {}, onMemoryChange = () => {} }) {
   const jobs = Object.fromEntries(Object.keys(JOBS).map(kind => [kind, { enabled: false, parameters: null, controller: null, request: 0 }]));
   let generation = 0, measurements = [], appearance = { elements: [], atoms: [] };
@@ -90,7 +90,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       job.controller?.abort();
       const controller = new AbortController(), request = ++job.request;
       job.controller = controller;
-      const source = getSourceVersion(), token = generation, parameters = { ...job.parameters };
+      const source = getSourceVersion(), token = generation, colorChoice = getColorChoiceVersion(), parameters = { ...job.parameters };
       const key = JSON.stringify(parameters);
       const current = () => frame === getFrame() && source === getSourceVersion() && token === generation
         && request === job.request && job.enabled && !controller.signal.aborted;
@@ -144,7 +144,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
             }
           }
         }
-        if (!automatic && JOBS[kind].property) chooseProperty(JOBS[kind].property);
+        if (!automatic && JOBS[kind].property && colorChoice === getColorChoiceVersion()) chooseProperty(JOBS[kind].property);
         else refresh();
         stateFor(kind, 'Calculated', `${kind === 'bonds' ? `${result.count.toLocaleString()} bonds · ` : ''}${(result.elapsedMs / 1000).toFixed(2)} s · ${result.engine}`);
         onMemoryChange(frame); updateStatistics(); syncComparison();
@@ -544,6 +544,11 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     refresh: () => { updateStatistics(); updateMeasurements(); applyRadii(); },
     deactivate: name => { if (name === 'statistics') cancel('rdf'); else if (name === 'vectors') { $('show-vectors').checked = false; updateVectors(); } else if (JOBS[name]) cancel(name); },
     failed: () => Object.entries(JOBS).filter(([, { prefix }]) => $(`${prefix}-state`).textContent === 'Failed').map(([kind]) => kind),
+    pendingColorProperties: () => Object.entries(JOBS).flatMap(([kind, { prefix, property }]) =>
+      jobs[kind].enabled && property && $(`${prefix}-state`).textContent !== 'Failed'
+        ? (kind === 'referenceStrain' ? REFERENCE_STRAIN_FIELDS : [property]).map(name => ({
+          name, label: name === 'bondCoordination' ? 'Coordination (bond cutoffs)' : name,
+        })) : []),
   };
 }
 

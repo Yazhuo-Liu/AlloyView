@@ -2,6 +2,23 @@
 
 Validation date: 2026-10-03 (America/New_York)
 
+## Legend coloring quantity selector
+
+- `npm test`: 280 tests passed, none failed/skipped. Build
+  `25d067f19029b2fa` and the complete browser smoke with both screenshot flags
+  passed with no page or GL errors.
+- The legend and Display quantity selectors stay synchronized for imported
+  scalars, entirely NaN fields, CNA/PTM/Auto symmetry, bond coordination, local
+  shear and reference strain. Switching quantities starts no analysis jobs.
+- Fixed bounds, palettes and Auto settings survive quantity changes and fresh
+  or cached frame transitions. Pending enabled outputs stay selected until
+  calculation completes. A manual choice during calculation is retained when
+  an earlier analysis finishes; cancelling a displayed analysis removes its
+  fields and falls back to atom types. JSON saves the selected quantity.
+- Actual phone touch and keyboard selection preserve focus after legend
+  redraw. Desktop and phone screenshots were inspected; the full-width dropdown
+  fits above existing controls and the phone legend retains its collapse behavior.
+
 ## AtomEye analysis and viewer alignment
 
 Validated on 2026-10-03 with Node.js v24.19.0 and Chromium software WebGL:

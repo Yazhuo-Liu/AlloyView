@@ -64,7 +64,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   and PTM kernels are reused, with preparation stages and PTM atom progress.
 - Per-analysis Cancel controls stop computation and reset results and frame
   caches while keeping input settings and other analyses.
-- Atom-type colors and ten scalar color maps, with an Auto range toggle,
+- A legend **Color by** selector for switching between available properties and
+  completed analysis quantities, synchronized with the Display controls.
+  Atom-type colors and ten scalar color maps, with an Auto range toggle,
   editable limits that stay fixed across frames, and optional filtering of
   out-of-range atoms.
 - PNG export with independent background, legend and XYZ-arrow controls,
@@ -113,7 +115,9 @@ WebGL 2 support. No installation or account is needed.
    Select a tool button to open its settings; switch tools
    to keep analyses running, or close an analysis to cancel it and reset results.
 4. **Analyze.** Check the suggested cutoff under **Coordination number** and
-   click **Calculate**. The scalar legend lets you choose a color map and
+   click **Calculate**. Use **Color by** in the viewport legend to switch
+   between available quantities without recalculating. The scalar legend also
+   lets you choose a color map and
    adjust the visible range. Highlighted **Auto** follows the current frame;
    editing either limit turns Auto off and preserves that property's limits
    across frames. Click **Auto** again to fit the current frame and resume

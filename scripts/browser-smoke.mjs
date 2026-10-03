@@ -400,9 +400,10 @@ try {
   await waitFor('document.getElementById("file-name").textContent === "legend-ranges.dump" && document.getElementById("loading").hidden', 'legend trajectory');
   const legendRange = () => evaluate('[...document.querySelectorAll(".legend-range span")].map(span => Number(span.textContent))');
   const legendAuto = () => evaluate('document.getElementById("legend-auto").getAttribute("aria-pressed") === "true"');
-  const colorProperty = async name => {
-    await evaluate(`(() => { const color = document.getElementById('color-mode'); color.value = 'property:' + ${JSON.stringify(name)}; color.dispatchEvent(new Event('change')); })()`);
+  const colorProperty = async (name, source = 'sidebar') => {
+    await evaluate(`(() => { const color = document.getElementById(${JSON.stringify(source === 'legend' ? 'legend-color-mode' : 'color-mode')}); color.value = 'property:' + ${JSON.stringify(name)}; color.dispatchEvent(new Event('change')); })()`);
     assert.equal(await evaluate('document.getElementById("color-mode").value'), `property:${name}`);
+    assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), `property:${name}`, 'legend and sidebar color quantities stay synchronized');
   };
   const legendFrame = async index => {
     await evaluate(`(() => { const frame = document.getElementById('frame-slider'); frame.value = ${index}; frame.dispatchEvent(new Event('input')); })()`);
@@ -412,7 +413,9 @@ try {
     await evaluate(`(() => { const select = document.querySelector('.legend-scheme select'); select.value = ${JSON.stringify(scheme)}; select.dispatchEvent(new Event('change')); })()`);
     assert.equal(await evaluate('document.querySelector(".legend-scheme select").value'), scheme);
   };
-  await colorProperty('pe');
+  assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), 'type');
+  assert.deepEqual(await evaluate('Array.from(document.getElementById("legend-color-mode").options, option => [option.value, option.text])'), await evaluate('Array.from(document.getElementById("color-mode").options, option => [option.value, option.text])'));
+  await colorProperty('pe', 'legend');
   assert.equal(await legendAuto(), true, 'a new property starts with Auto on');
   assert.equal(await evaluate('document.getElementById("legend-auto").disabled'), false, 'Auto is an always-available toggle');
   assert.equal(await evaluate('document.querySelector(".legend-scheme select").value'), 'atomeye', 'existing AtomEye default is preserved');
@@ -538,12 +541,12 @@ try {
     assert.equal(entry.pixels[3], 255, 'the exported color bar is present');
     assert.ok(entry.texts.includes('-5') && entry.texts.includes('25'), 'PNG labels use the saved bounds');
   }
-  await colorProperty('temp');
+  await colorProperty('temp', 'legend');
   assert.equal(await legendAuto(), true, 'another property has independent Auto state');
   assert.deepEqual(await legendRange(), [300, 1200]);
   await legendScheme('magma');
   await evaluate(`(() => { const [minimum, maximum] = document.querySelectorAll('.legend-controls input[type=number]'); minimum.value = '0'; minimum.dispatchEvent(new Event('input')); maximum.value = '1500'; maximum.dispatchEvent(new Event('input')); })()`);
-  await colorProperty('pe');
+  await colorProperty('pe', 'legend');
   assert.equal(await legendAuto(), false);
   assert.deepEqual(await legendRange(), [-5, 25]);
   assert.equal(await evaluate('document.querySelector(".legend-scheme select").value'), 'spectral');
@@ -559,6 +562,7 @@ try {
   await legendFrame(2);
   await colorProperty('pe');
   const fixedLegendRecipe = await exportConfiguration();
+  assert.equal(fixedLegendRecipe.settings.display.colorMode, 'property:pe', 'the selected legend quantity is saved in configuration');
   assert.ok(fixedLegendRecipe.settings.colors.ranges.some(range => range.property === 'pe' && range.minimum === -5 && range.maximum === 25));
   assert.ok(fixedLegendRecipe.settings.colors.ranges.some(range => range.property === 'temp' && range.minimum === 0 && range.maximum === 1500));
   const legendRecipePath = resolve(profile, 'legend-recipe.json');
@@ -1739,6 +1743,29 @@ try {
   assert.equal(await evaluate('document.getElementById("toggle-legend").getAttribute("aria-expanded")'), 'true');
   assert.notEqual(await evaluate('getComputedStyle(document.getElementById("legend")).display'), 'none');
   assert.equal(await evaluate('document.querySelectorAll(".crystal-items input[type=checkbox]").length'), 5);
+  const phoneQuantity = await evaluate(`(() => {
+    const select = document.getElementById('legend-color-mode'); select.scrollIntoView({ block: 'nearest' });
+    const rect = select.getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2,
+      target: [...select.options].findIndex(option => option.value === 'property:site_energy') };
+  })()`);
+  assert.ok(phoneQuantity.x > 0 && phoneQuantity.x < 390 && phoneQuantity.y > 0 && phoneQuantity.y < 844, 'phone quantity selector is reachable');
+  await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: phoneQuantity.x, y: phoneQuantity.y }] });
+  await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await evaluate('document.getElementById("legend-color-mode").focus()');
+  for (const key of ['Home', ...Array(phoneQuantity.target).fill('ArrowDown'), 'Enter']) {
+    const code = { Home: 36, ArrowDown: 40, Enter: 13 }[key];
+    await call('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode: code });
+    await call('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: code });
+  }
+  await waitFor('document.getElementById("legend-color-mode").value === "property:site_energy" && document.getElementById("color-mode").value === "property:site_energy"', 'phone touch and keyboard legend quantity selection');
+  assert.equal(await evaluate('document.activeElement.id'), 'legend-color-mode', 'legend quantity redraw preserves keyboard focus');
+  if (process.argv.includes('--structure-screenshot')) {
+    const capture = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile('/tmp/alloyview-legend-quantity-phone.png', Buffer.from(capture.data, 'base64'));
+  }
   await colorProperty('site_energy');
   assert.equal(await legendAuto(), true);
   const phoneAutoPoint = await evaluate(`(() => {

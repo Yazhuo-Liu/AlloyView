@@ -125,6 +125,7 @@ let sourceFetchController = null;
 let sourceLoadingOwner = null;
 let renderer;
 let atomEyeTools;
+let colorChoiceVersion = 0;
 let backgroundCustomized = false;
 let sliceControls;
 let sliceGizmo;
@@ -218,6 +219,7 @@ atomEyeTools = initializeAtomEyeTools({
   refresh: () => { if (state.frame) { refreshColorOptions(); applyColors(); updateSelectionPanel(); } },
   chooseProperty: name => { state.colorMode = `property:${name}`; refreshColorOptions(); applyColors(); },
   getColorMode: () => state.colorMode,
+  getColorChoiceVersion: () => colorChoiceVersion,
   getExportOptions: () => ({ includeBackground: elements['png-background'].checked,
     includeAxes: elements['png-axes'].checked, legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null }),
   showFrame, stopPlayback: stopFramePlayback,
@@ -265,8 +267,7 @@ elements['frame-next'].addEventListener('click', () => showFrameManually(Math.mi
 elements['frame-last'].addEventListener('click', () => showFrameManually(state.frameCount - 1));
 
 elements['color-mode'].addEventListener('change', () => {
-  state.colorMode = elements['color-mode'].value;
-  applyColors();
+  selectColorMode(elements['color-mode'].value);
 });
 elements['coordinate-mode'].addEventListener('change', updateCoordinateMode);
 elements['radius-scale'].addEventListener('input', () => setRadiusPercent(elements['radius-scale'].value, { source: 'slider' }));
@@ -1209,6 +1210,16 @@ function updateCoordinateMode() {
   atomEyeTools.syncComparison();
 }
 
+function selectColorMode(value) {
+  if (!state.frame || ![...elements['color-mode'].options].some(item => item.value === value)) return;
+  interruptConfigurationRestore('a color quantity change');
+  atomEyeTools.cancelBatch({ restore: false });
+  colorChoiceVersion++;
+  state.colorMode = value;
+  elements['color-mode'].value = value;
+  applyColors();
+}
+
 function refreshColorOptions() {
   const previous = state.colorMode;
   elements['color-mode'].replaceChildren(option('type', 'Atom type'));
@@ -1222,8 +1233,13 @@ function refreshColorOptions() {
     elements['color-mode'].append(option('property:coordination', 'coordination (calculating…)'));
   }
   for (const [kind, { name, label, prefix }] of Object.entries(ANALYSES)) {
-    if (state.analysis[kind].enabled && !propertyNames.has(name) && elements[`${prefix}-state`].textContent !== 'Failed') {
-      elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
+    if (state.analysis[kind].enabled && elements[`${prefix}-state`].textContent !== 'Failed') {
+      const outputs = kind === 'strain' ? STRAIN_FIELDS.map(field => [field, field === name ? label : field])
+        : kind === 'ptm' ? [[name, label], ['ptmRmsd', 'PTM RMSD (best fit)'], ['ptmDistance', 'PTM nearest-neighbor distance [Å]']]
+          : [[name, label]];
+      for (const [field, fieldLabel] of outputs) {
+        if (!propertyNames.has(field)) elements['color-mode'].append(option(`property:${field}`, `${fieldLabel} (calculating…)`));
+      }
     }
   }
   if (state.analysis.centrosymmetry.enabled && state.analysis.centrosymmetry.parameters?.mode === 'auto'
@@ -1232,6 +1248,9 @@ function refreshColorOptions() {
       ['centralSymmetryNeighbors', 'Central symmetry neighbor count']]) {
       if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
     }
+  }
+  for (const { name, label } of atomEyeTools.pendingColorProperties()) {
+    if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
   }
   const available = [...elements['color-mode'].options].some((item) => item.value === previous);
   state.colorMode = available ? previous : 'type';
@@ -1826,6 +1845,26 @@ function updateSelectionPanel(index = null) {
 
 function renderLegend(legend) {
   elements.legend.replaceChildren();
+  const propertyControl = document.createElement('label');
+  propertyControl.className = 'legend-property';
+  const propertyLabel = document.createElement('span');
+  propertyLabel.textContent = 'Color by';
+  const propertySelect = document.createElement('select');
+  propertySelect.id = 'legend-color-mode';
+  for (const sourceOption of elements['color-mode'].options) {
+    const item = option(sourceOption.value, sourceOption.textContent);
+    item.disabled = sourceOption.disabled;
+    propertySelect.append(item);
+  }
+  propertySelect.value = state.colorMode;
+  propertySelect.title = propertySelect.selectedOptions[0]?.textContent ?? 'Choose the coloring quantity';
+  propertySelect.addEventListener('change', () => {
+    const focused = document.activeElement === propertySelect;
+    selectColorMode(propertySelect.value);
+    if (focused) document.getElementById('legend-color-mode')?.focus({ preventScroll: true });
+  });
+  propertyControl.append(propertyLabel, propertySelect);
+  elements.legend.append(propertyControl);
   const title = document.createElement('div');
   title.className = 'legend-title';
   const label = document.createElement('strong');

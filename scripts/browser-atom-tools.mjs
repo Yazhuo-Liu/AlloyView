@@ -10,6 +10,11 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await evaluate(`(async () => {
     const appUrl = document.querySelector('script[type="module"]').src;
     const { WebGLRenderer } = await import(new URL('./render/webgl-renderer.js', appUrl));
+    const { AnalysisPool } = await import(new URL('./analysis/analysis-pool.js', appUrl));
+    const analyze = AnalysisPool.prototype.analyze;
+    window.atomToolsAnalysisCalls = 0;
+    window.atomToolsAnalysisKinds = [];
+    AnalysisPool.prototype.analyze = function(...args) { window.atomToolsAnalysisCalls++; window.atomToolsAnalysisKinds.push(args[1]?.kind); return analyze.apply(this, args); };
     const setFrame = WebGLRenderer.prototype.setFrame;
     window.atomToolsRenderers = [];
     WebGLRenderer.prototype.setFrame = function(...args) {
@@ -60,10 +65,10 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   const trajectory = [];
   for (let frame = 0; frame < 2; frame += 1) {
     const scale = frame ? 1.02 : 1;
-    trajectory.push(String(source.ids.length), `Lattice="${Array.from(source.cell.vectors, value => value * scale).join(' ')}" pbc="T T T" Properties=species:S:1:pos:R:3:id:I:1:force:R:3:energy:R:1 Step=${frame}`);
+    trajectory.push(String(source.ids.length), `Lattice="${Array.from(source.cell.vectors, value => value * scale).join(' ')}" pbc="T T T" Properties=species:S:1:pos:R:3:id:I:1:force:R:3:energy:R:1:all_nan:R:1 Step=${frame}`);
     for (let atom = 0; atom < source.ids.length; atom += 1) {
       const xyz = Array.from(source.positions.subarray(atom * 3, atom * 3 + 3), value => value * scale);
-      trajectory.push(`Cu ${xyz.join(' ')} ${source.ids[atom]} 1 0.5 -0.25 ${atom / 100}`);
+      trajectory.push(`Cu ${xyz.join(' ')} ${source.ids[atom]} 1 0.5 -0.25 ${atom / 100} NaN`);
     }
   }
   const xyzPath = resolve(profile, 'worker-tools.extxyz');
@@ -71,8 +76,12 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await loadFile(xyzPath, 'worker-tools.extxyz');
   assert.equal(await evaluate('window.atomToolsRenderer.atomCount'), 108);
   assert.equal(await evaluate('document.getElementById("frame-count").textContent'), '2');
-  assert.deepEqual(await evaluate('window.atomToolsRenderer.frame.properties.map(property => property.name)'), ['force_0', 'force_1', 'force_2', 'energy']);
+  assert.deepEqual(await evaluate('window.atomToolsRenderer.frame.properties.map(property => property.name)'), ['force_0', 'force_1', 'force_2', 'energy', 'all_nan']);
   assert.deepEqual(await evaluate('window.atomToolsRenderer.frame.cell.pbc'), [true, true, true]);
+  await change('legend-color-mode', 'property:all_nan');
+  assert.equal(await evaluate('document.getElementById("color-mode").value'), 'property:all_nan');
+  assert.match(await evaluate('document.querySelector(".legend-items").textContent'), /NaN/);
+  await change('legend-color-mode', 'type');
   for (const tool of ['bonds', 'vectors', 'statistics', 'referenceStrain', 'localShear']) {
     await showTool(tool);
     assert.equal(await evaluate('[...document.querySelectorAll("[data-tool-panel]")].filter(panel => !panel.hidden).length'), 1);
@@ -173,6 +182,66 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await click('run-local-shear');
   await waitFor('document.getElementById("local-shear-state").textContent === "Calculated"', 'local shear after shared pool warmup');
   assert.equal(await evaluate('window.atomToolsWorkers.length'), workerCount, 'repeating an analysis should reuse warm Workers');
+
+  for (const [tool, runId, stateId] of [['cna', 'run-cna', 'cna-state'], ['ptm', 'run-ptm', 'ptm-state'], ['centrosymmetry', 'run-csp', 'csp-state']]) {
+    await showTool(tool); await click(runId);
+    await waitFor(`document.getElementById(${JSON.stringify(stateId)}).textContent === 'Calculated'`, `${tool} quantity selector input`);
+  }
+  workerCount = await evaluate('window.atomToolsWorkers.length');
+  const beforeQuantityEdits = await evaluate('window.atomToolsAnalysisCalls');
+  for (const property of ['structureType', 'ptmStructureType', 'ptmRmsd', 'centralSymmetry', 'centralSymmetryStructureType', 'centralSymmetryNeighbors', 'referenceHydrostaticStrain', 'referenceShearStrain', 'localShear', 'bondCoordination', 'coordination', 'energy', 'all_nan']) {
+    await change('legend-color-mode', `property:${property}`);
+    assert.equal(await evaluate('document.getElementById("color-mode").value'), `property:${property}`);
+    assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), `property:${property}`);
+    assert.deepEqual(await evaluate('Array.from(document.getElementById("legend-color-mode").options, option => [option.value, option.text])'), await evaluate('Array.from(document.getElementById("color-mode").options, option => [option.value, option.text])'));
+  }
+  await change('legend-color-mode', 'property:referenceHydrostaticStrain');
+  await evaluate(`(() => {
+    const [minimum, maximum] = document.querySelectorAll('.legend-controls input[type="number"]');
+    minimum.value = '-.05'; minimum.dispatchEvent(new Event('input'));
+    maximum.value = '.1'; maximum.dispatchEvent(new Event('input'));
+    const scheme = document.querySelector('.legend-scheme select'); scheme.value = 'coolwarm'; scheme.dispatchEvent(new Event('change'));
+  })()`);
+  await change('legend-color-mode', 'property:ptmStructureType');
+  assert.equal(await evaluate('document.querySelectorAll(".crystal-items input[type=checkbox]").length'), 9);
+  await change('legend-color-mode', 'property:referenceHydrostaticStrain');
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".legend-controls input[type=number]"), input => input.valueAsNumber)'), [-.05, .1]);
+  assert.equal(await evaluate('document.querySelector(".legend-scheme select").value'), 'coolwarm');
+  assert.equal(await evaluate('document.getElementById("legend-auto").getAttribute("aria-pressed")'), 'false');
+  await change('color-mode', 'property:localShear');
+  assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), 'property:localShear');
+  assert.equal(await evaluate('window.atomToolsAnalysisCalls'), beforeQuantityEdits, 'choosing available quantities must not launch any analysis');
+  await click('cancel-local-shear');
+  assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), 'type');
+  assert.equal(await evaluate('document.getElementById("color-mode").value'), 'type');
+  assert.equal(await evaluate('Array.from(document.getElementById("legend-color-mode").options).some(option => option.value === "property:localShear")'), false);
+  const beforePendingChoice = await evaluate('window.atomToolsAnalysisKinds.length');
+  await evaluate(`(() => {
+    document.getElementById('run-local-shear').click();
+    const select = document.getElementById('legend-color-mode'); select.value = 'type'; select.dispatchEvent(new Event('change'));
+  })()`);
+  await waitFor('document.getElementById("local-shear-state").textContent === "Calculated"', 'restored local shear after selector removal');
+  assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), 'type', 'a finished analysis must preserve a later manual legend quantity choice');
+  assert.equal(await evaluate('document.getElementById("color-mode").value'), 'type');
+  const pendingKinds = await evaluate(`window.atomToolsAnalysisKinds.slice(${beforePendingChoice})`);
+  assert.equal(pendingKinds.filter(kind => kind === 'localShear').length, 1);
+  assert.ok(pendingKinds.every(kind => kind?.startsWith('localShear')), 'the pending quantity edit must not launch other calculations');
+  await change('legend-color-mode', 'property:referenceHydrostaticStrain');
+  assert.equal((await exportConfiguration()).settings.display.colorMode, 'property:referenceHydrostaticStrain');
+  if (screenshots) {
+    const capture = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile('/tmp/alloyview-legend-quantities.png', Buffer.from(capture.data, 'base64'));
+  }
+  for (const [button, index] of [['frame-first', 0], ['frame-next', 1]]) {
+    await click(button);
+    await waitFor(`window.atomToolsRenderer.frame.frameIndex === ${index} && document.getElementById('loading').hidden && document.getElementById('reference-strain-state').textContent === 'Calculated' && window.atomToolsRenderer.frame.properties.some(property => property.name === 'referenceHydrostaticStrain')`, 'selected extension quantity across frame recomputation');
+    assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), 'property:referenceHydrostaticStrain');
+    assert.equal(await evaluate('document.getElementById("color-mode").value'), 'property:referenceHydrostaticStrain');
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".legend-controls input[type=number]"), input => input.valueAsNumber)'), [-.05, .1]);
+    assert.equal(await evaluate('document.querySelector(".legend-scheme select").value'), 'coolwarm');
+    assert.equal(await evaluate('document.getElementById("legend-auto").getAttribute("aria-pressed")'), 'false');
+  }
+  workerCount = await evaluate('window.atomToolsWorkers.length');
 
   await showTool('display');
   await change('compare-preset', 'top');
@@ -286,5 +355,6 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await click('run-rdf');
   await waitFor('document.getElementById("rdf-state").textContent !== "Calculating…"', 'nonperiodic RDF rejection');
   assert.notEqual(await evaluate('document.getElementById("rdf-state").textContent'), 'Calculated');
+  console.log('Legend quantity checks passed: scalar/category/NaN choices, synchronized sidebar options, fixed per-field palettes/ranges, removal fallback, saved configuration quantity, no calculation on selection, pending-job manual-choice precedence and selected reference quantities across cached/cold frame updates.');
   console.log(`AtomEye alignment browser checks passed: XYZ/PDB parsing; ID lookup and centering; distance/angle/dihedral picks; atom and element appearance; pair-cutoff bonds and vectors; coordination histogram and RDF CSV; reference strain and local shear; cancellation; ${workerCount} reused Workers; simultaneous views with matching primitives and phone layout; JPG/EPS, six-view PNG, frame ZIP and visible IDs; configuration replay.`);
 }

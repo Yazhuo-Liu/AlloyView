@@ -59,8 +59,17 @@ is available to run the suggested cutoff without editing it.
 
 ## Scalar color legends
 
-Choose a scalar property under **Color by**, then select a palette in its
-viewport legend. The ten maps are AtomEye rainbow, Viridis, Plasma, Magma,
+Use **Color by** at the top of the viewport legend to switch between atom
+types, input properties and completed analysis quantities. The same selector
+under **Display** stays synchronized. Changing the quantity reuses existing
+results; it does not start another calculation. The selector is also available
+for crystal classifications and fields containing only NaN values. On phones,
+expand **Legend / atoms** to access it.
+Enabled analysis quantities remain selected while their results update for a
+different frame.
+
+For scalar properties, choose a palette below the quantity selector.
+The ten maps are AtomEye rainbow, Viridis, Plasma, Magma,
 Inferno, Cividis, Turbo, Spectral, Cool–warm and Grayscale. The selected colors
 also appear in exported PNG legends.
 
@@ -69,7 +78,10 @@ maximum follow that property's data in the current frame. Click **Auto** to
 turn it off and keep the displayed limits. Editing either limit also turns
 Auto off. Those fixed limits survive frame changes, analysis-result reuse and
 switching away from and back to that color property. Each scalar property keeps
-its own range and Auto setting. Click **Auto** while it is off to fit the
+its own palette, range and Auto setting. Configurations save the selected
+quantity along with these settings. Cancelling an analysis removes its
+quantities from both selectors; cancelling the displayed quantity returns to
+atom-type colors. Click **Auto** while it is off to fit the
 current frame and resume automatic limits. Uniform-valued data gets a small
 range padding so both limits remain editable.
 
