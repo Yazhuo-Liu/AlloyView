@@ -27,6 +27,41 @@ test('PTM deformation cache is counted once including shared property buffers', 
   assert.equal(estimateFrameBytes(frame), initial + 8900);
 });
 
+test('nested AtomEye caches count bond buffers and local coordination exactly once', () => {
+  const frame = sampleFrame(100), initial = estimateFrameBytes(frame);
+  const indices = new Uint32Array(200), vectors = new Float32Array(300), shifts = new Int32Array(300);
+  const coordination = new Uint32Array(100), localShear = new Float32Array(100);
+  frame.atomeyeResults = { bonds: { result: { indices, vectors, shifts, coordination } },
+    localShear: { result: { localShear, coordination }, reusedCoordinates: frame.fractional } };
+  frame.properties.push({ data: coordination }, { data: localShear });
+  frame.analysisOriginalProperties = new Map([['localShear', { data: localShear.subarray(10, 20) }]]);
+  assert.equal(estimateFrameBytes(frame), initial + 4000);
+});
+
+test('memory accounting handles cyclic metadata, Maps, Sets, views and raw shared buffers', () => {
+  const frame = sampleFrame(10), initial = estimateFrameBytes(frame);
+  const buffer = new ArrayBuffer(1000), shared = new SharedArrayBuffer(64);
+  const cache = { full: buffer, view: new DataView(buffer, 100, 20), short: new Float32Array(buffer, 0, 2),
+    shared, sharedView: new Uint8Array(shared), map: new Map(), set: new Set() };
+  cache.map.set(cache, new Uint8Array(buffer));
+  cache.set.add(cache.map); cache.set.add(frame);
+  cache.self = cache;
+  frame.atomeyeResults = cache;
+  assert.equal(estimateFrameBytes(frame), initial + 1064);
+});
+
+test('retained analysis buffers reduce trajectory cache capacity under the same budget', () => {
+  const frame = sampleFrame(10), environment = { heapLimit: 128 * 1024 ** 2, deviceMemoryGiB: 2 };
+  const before = chooseFrameCachePolicy(frame, 500, environment);
+  frame.atomeyeResults = { bonds: { result: { vectors: new Float32Array(2_000_000) } } };
+  const after = chooseFrameCachePolicy(frame, 500, environment);
+  assert.equal(before.limit, 500);
+  assert.equal(after.fullTrajectory, false);
+  assert.equal(after.estimatedFrameBytes, Math.ceil(estimateFrameBytes(frame) * 1.35));
+  assert.equal(after.limit, Math.max(3, Math.floor(after.budgetBytes / after.estimatedFrameBytes)));
+  assert.ok(after.limit < before.limit);
+});
+
 function sampleFrame(atomCount) {
   return {
     ids: new Float64Array(atomCount),

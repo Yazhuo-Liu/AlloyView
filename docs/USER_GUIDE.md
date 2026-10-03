@@ -1,18 +1,18 @@
 # AlloyView user and development guide
 
 AlloyView is a browser-only atomistic structure viewer and analysis prototype for
-metals and alloys. Local AtomEye CFG and LAMMPS text dump files are parsed in a
+metals and alloys. Local AtomEye CFG, LAMMPS text dump, XYZ and PDB files are parsed in a
 Web Worker, rendered with WebGL 2 sphere impostors, and never uploaded by the
 application.
 
 The viewer supports this workflow:
 
-1. open individual CFG/LAMMPS files, a multi-file selection, or a detected
+1. open individual CFG/LAMMPS/XYZ/PDB files, a multi-file selection, or a detected
    numbered structure sequence from a local folder;
 2. render atoms and the simulation cell on the GPU;
-3. calculate coordination, crystal structure and atomic strain off the UI thread;
-4. color, slice, inspect, change trajectory frames, and export an opaque or
-   transparent PNG with an optional embedded legend;
+3. calculate coordination, crystal structure, bonds, strain and RDF off the UI thread;
+4. color, slice, inspect, measure, change trajectory frames, and export figures
+   or trajectory image sequences;
 5. save the processing and view as a JSON configuration and restore it with the
    matching source files.
 
@@ -20,7 +20,7 @@ The single **Examples** button opens an in-app listing of the bundled
 `examples/` files and the `fixed_end_climb/` sequence folder; examples are not
 split into separate top-bar actions.
 
-Drop a CFG or LAMMPS file anywhere on the page, including the homepage, header
+Drop a CFG, LAMMPS, XYZ or PDB file anywhere on the page, including the homepage, header
 or controls panel, to open it directly. Dropping multiple files opens a chooser
 for a single file; numbered names stay independent. Use **Open local → Choose
 files…** or **Choose folder…** when you want to open a multi-file sequence.
@@ -138,11 +138,17 @@ omits translucent editing planes, arrows and guide spheres.
 Select **Configuration → Export JSON** to save the current source file names,
 sizes, available relative paths and saved trajectory frame, together with the
 processing and view settings. The configuration includes enabled coordination,
-CNA, central symmetry, PTM and strain analyses and their parameters, editable
+CNA, central symmetry, PTM, ideal-lattice/reference-frame strain, local shear,
+bonds and RDF analyses and their parameters, editable
 lattice references, replication, all slices and their names, color maps,
 per-property fixed ranges and Auto settings, visibility filters,
 wrapped/unwrapped mode, atom radius, cell/axis/background
-and PNG options, camera, selected atom, current tool and theme.
+and PNG options, camera, selected atom, current tool and theme. Optional
+settings also retain element/atom appearance overrides, vector components and
+scale, measurement IDs and periodic-image mode, and the second view's enabled
+state and direction. Bond visibility is saved independently from whether its
+graph analysis is enabled. Older version 1 configurations leave these additions
+disabled.
 
 Click **Import JSON** and choose a saved configuration. If the matching source
 is already open, the viewer returns to the saved frame, restores the settings
@@ -253,6 +259,117 @@ to an ideal lattice, not displacement relative to another trajectory frame.
 Changing only the reference constants reuses PTM fits where possible.
 Unmatched atoms, including an entirely NaN frame, do not trigger warnings.
 
+## Reference-frame strain and local geometric shear
+
+Select **Frame strain**, choose a **Reference frame** (numbered from 1 in the
+interface), set the reference-neighbor cutoff, and calculate. The viewer
+matches explicit atom IDs, selects neighbors in the reference configuration,
+and fits a local deformation gradient to their current vectors. It returns
+Green–Lagrange shear and hydrostatic strain, volume change, six strain-tensor
+components and nine deformation-gradient components in Cartesian axes.
+This compares trajectory configurations; **Ideal lattice reference** instead
+uses PTM correspondence and editable perfect-lattice constants.
+
+Cross-frame correspondence requires explicit stable IDs: LAMMPS dump IDs, CFG
+`id` auxiliaries, Extended XYZ `id`, or PDB serial numbers. Generated row-order
+IDs cannot establish which atom moved between frames. Reference and current
+frames must use the same periodic axes. Missing atoms, insufficient independent
+neighbor vectors and singular or inverted fits receive NaN without defect-count
+warnings. Nearest-image correspondence cannot recover large relative motions
+that are ambiguous from wrapped coordinates alone.
+
+**Local shear** uses only the current frame and a neighbor cutoff. Its
+AtomEye-style geometric metric uses the modal coordination shell, normalizes
+neighbor second moments by the average squared bond length, and reduces the
+result to a shear invariant. **Subtract the mean local tensor** removes the
+frame's average tensor before calculating that invariant. This is a local
+geometry/disorder indicator, not strain relative to a selected trajectory
+frame or an ideal crystal template.
+
+Both calculations partition atoms across the existing Worker pool. Local shear
+uses parallel stages with global reductions for its modal coordination,
+normalization and mean tensor. They retain per-frame results and support the
+same cancellation/reset behavior as the other analyses.
+
+## Bonds, vector arrows and structure statistics
+
+Open **Bonds**, set **Default cutoff**, and optionally override individual
+element-pair distances. A zero pair cutoff disables that pair. Click
+**Calculate bonds** to construct the periodic neighbor graph. **Bond radius**
+and **Show calculated bonds** change its appearance without calculating again.
+Connections follow the actual cell vectors, including tilted cells, and
+replication reuses the original connections. Bond coordination includes
+qualifying periodic images, including self images; the original **Coordination**
+tool retains its convention of counting distinct atom IDs at their nearest
+qualifying image. Very large neighbor graphs fail explicitly rather than
+silently truncating connections.
+
+In **Vector arrows**, select X/Y/Z scalar properties, set **Length scale** and
+**Arrow color**, then enable **Show arrows**. Components describe Cartesian
+directions; the scale converts their values into arrow lengths in Å. Use force,
+velocity or another vector field already present in the source. Rendering
+settings reuse those values and do not run a neighbor analysis. Only one
+vector field is displayed at a time.
+
+**Statistics** shows the distribution and mean of calculated coordination
+numbers, using bond-cutoff coordination when bonds are calculated, otherwise
+the original global-cutoff coordination result. For **Radial distribution g(r)**, choose the maximum distance,
+1–4,096 bins, and optional first/second element filters. **All types** produces
+the total distribution; selecting elements produces partial distributions.
+The Worker pool accumulates histograms and combines them using exact spherical
+shell volumes and a finite-population correction. **Export CSV** saves the
+distances, g(r) values and counts.
+
+Normalized RDF requires periodic boundaries along all three axes and a cutoff
+no greater than half the shortest cell face height. A nonperiodic structure
+needs a separate surface correction, which is not implemented. RDF uses source
+atoms before replication or display filtering. The graph and histogram use
+the source structure, rather than treating replicated display cells as extra
+samples.
+
+## Measurements and appearance overrides
+
+Open **Atom details** and use **Atom ID → Find** to select an atom by its
+identifier. **Center** makes the selected atom the camera target. Enable
+**Measure selected atoms** and select two atoms for a distance, three for a
+bond angle, or four for a dihedral. **Use nearest periodic images** applies
+the cell's PBC flags; turn it off to measure the source atoms' displayed
+wrapped/unwrapped coordinates directly. Measurements track source atom IDs;
+selecting different display replicas does not create separate measurement
+points. **Clear measurements** clears that selection.
+
+Under **Display → Element colors and radii**, change an element's appearance
+or visibility. **Atom details → Selected atom appearance** overrides a
+specific atom's color, radius or visibility; **Reset** returns it to element
+settings. Overrides follow the original atom IDs across frames and displayed
+replicas. Element colors apply to atom-type coloring, while single-atom colors
+override the selected scalar/structure palette too. Radius values are in Å
+before the overall radius scale.
+
+## Multiple views and image exports
+
+Enable **Display → Show a second view** and choose its direction to inspect
+the same frame from another angle. Both views share calculated results;
+camera movement does not launch another analysis. **Six-view PNG** exports
+a contact sheet of the six standard directions.
+
+**Export JPG** produces an opaque image. **Export EPS** embeds an opaque
+raster screenshot in an Encapsulated PostScript file; it is not a vector
+drawing of individual atoms. Both include the selected legend and XYZ-arrow
+overlays. PNG retains the independent
+background/legend/XYZ-arrow controls described above. **Visible atom IDs**
+saves a list of source IDs that pass the current display filters, without
+duplicating IDs for display replicas.
+
+**Frame images** traverses the requested first/last frame and step, completes
+the enabled processing for each frame, and packages the PNG images in a ZIP.
+**Cancel frame export** stops traversal. This is image-sequence export;
+movie encoding and a general command-script interpreter are not included.
+Each archive is limited to 500 images and 256 MiB; the selected frame and
+camera are restored when traversal ends.
+
+## Cancel an analysis
+
 Every analysis has a **Cancel** button next to its status. Use it to stop a
 running calculation or reset a completed result to **Not calculated**. It clears
 that analysis's properties, metrics and cached-frame results, and stops automatic
@@ -297,6 +414,13 @@ uses software WebGL to verify correctness, not to measure target GPU performance
   `.dump`, `.lmp`, `.lammpstrj`, and `.lammpstraj` names are shown as candidates.
   A `.lmp` containing a LAMMPS data/input file rather than `ITEM:` dump blocks
   is not silently treated as a trajectory and is not supported yet.
+- XYZ: plain rows and Extended XYZ `Properties`, row-vector `Lattice`,
+  per-axis `pbc`, and numeric auxiliary/vector columns. An explicit `id`
+  property supplies stable correspondence. XYZ without a lattice uses a padded
+  nonperiodic bounding cell.
+- PDB: fixed-width `ATOM`/`HETATM`, decimal serial IDs, `CRYST1` lengths and
+  angles, occupancy/temperature factors and multi-model trajectories.
+  Structures without `CRYST1` use a padded nonperiodic bounding cell.
 - Trajectories: LAMMPS byte offsets are indexed incrementally; requested frames
   are sliced and parsed on demand. A single dump file may contain multiple
   frames. Numbered LAMMPS dump files are naturally sorted, their internal frame
@@ -373,17 +497,19 @@ This is a provenance and risk statement, not legal advice.
 - Very large text frames still require memory for the frame slice, parsed arrays,
   the main-thread copy, and GPU buffers. One million atoms is an exploration
   target, not a performance claim.
-- Coordination has one global cutoff, not a species-pair matrix.
+- Coordination retains a global cutoff; the separate bond graph provides
+  element-pair cutoff overrides.
 - Multi-CFG minimum-image unwrapping assumes adjacent images move by less than
   half a periodic cell per axis. A single already-wrapped CFG cannot reveal
   historical crossings without image flags or an adjacent reference frame.
 - Browser file permissions do not allow a normal single-file picker to enumerate
   sibling files as a native desktop application can. **Open local** offers both a file picker and a folder picker. Choose a folder
   to detect sibling sequences automatically, or select several files together.
-- Bonds, reference-frame displacement strain, partial `g(r)`, DXA,
-  and defect lines are future modules. The
-  AtomEye-evidenced migration candidates are separated from unrelated features
-  in `docs/ATOMEYE_REVIEW.md`.
+- NetCDF, Python/ASE integration, arbitrary command scripts, live monitoring
+  of growing files, atom color/radius file imports, color tiling blocks and
+  Voronoi polycrystal construction are not implemented. DXA and defect lines
+  also remain separate future modules; they are not attributed to the reviewed
+  AtomEye snapshot. See `docs/ATOMEYE_REVIEW.md`.
 - CNA, normalized central symmetry and coordination use JavaScript Workers;
   PTM and its deformation fit use the included Wasm kernel. No Emscripten
   installation is needed unless rebuilding C++ with `npm run build:ptm`.

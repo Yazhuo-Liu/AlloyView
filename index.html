@@ -29,7 +29,7 @@
         </a>
 
         <div class="file-actions">
-          <input id="file-input" type="file" multiple hidden>
+          <input id="file-input" type="file" accept=".cfg,.dump,.lammpstrj,.lammps,.xyz,.extxyz,.pdb,.ent,text/plain" multiple hidden>
           <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
           <button id="open-local" class="button button-primary" type="button" title="Open individual structure files or browse a local folder">
             <span aria-hidden="true">＋</span> Open local
@@ -60,7 +60,7 @@
             </div>
             <p class="eyebrow">BROWSER-NATIVE MATERIALS VIEWER</p>
             <h1>See materials<br>atom by atom</h1>
-            <p class="empty-copy">Open an AtomEye CFG, select a local folder to detect numbered CFG sequences, or load a LAMMPS text trajectory. Parsing, analysis, and rendering all stay in this browser.</p>
+            <p class="empty-copy">Open CFG, LAMMPS dump, XYZ or PDB structures, or select a folder to detect numbered structure sequences. Parsing, analysis, and rendering all stay in this browser.</p>
             <button id="empty-open" class="button button-primary button-large" type="button">Open local structures</button>
             <p class="format-note">Orthogonal and restricted triclinic cells supported</p>
           </div>
@@ -159,7 +159,7 @@
             <div class="filename-row">
               <div class="filename-info">
                 <h2 id="file-name">No structure loaded</h2>
-                <p id="file-meta">CFG / LAMMPS dump</p>
+                <p id="file-meta">CFG / LAMMPS / XYZ / PDB</p>
               </div>
               <div class="filename-actions">
                 <span id="format-chip" class="chip">—</span>
@@ -184,10 +184,15 @@
               <button type="button" data-tool-button="replicate" aria-controls="tool-replicate" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Replicate</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="slice" aria-controls="tool-slice" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Slice</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="coordination" aria-controls="tool-coordination" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Coordination</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="bonds" aria-controls="tool-bonds" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Bonds</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="vectors" aria-controls="tool-vectors" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Vectors</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="statistics" aria-controls="tool-statistics" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Statistics</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="cna" aria-controls="tool-cna" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">CNA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="centrosymmetry" aria-controls="tool-centrosymmetry" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Symmetry</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="ptm" aria-controls="tool-ptm" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">PTM</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="strain" aria-controls="tool-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="referenceStrain" aria-controls="tool-reference-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Frame strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="localShear" aria-controls="tool-local-shear" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Local shear</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="selection" aria-controls="tool-selection" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Atom details</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="performance" aria-controls="tool-performance" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Performance</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="configuration" aria-controls="tool-configuration" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Configuration</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
@@ -219,10 +224,34 @@
             </label>
             <div class="field display-options">
               <label><input id="show-cell" type="checkbox" checked disabled><span>Show cell box</span></label>
+              <label><input id="compare-view" type="checkbox" disabled><span>Show a second view</span></label>
               <label><input id="png-background" type="checkbox" checked disabled><span>Include background in PNG</span></label>
               <label><input id="png-legend" type="checkbox" disabled><span>Include legend in PNG</span></label>
               <label><input id="png-axes" type="checkbox" disabled><span>Include XYZ arrows in PNG</span></label>
             </div>
+            <label class="field"><span>Second view direction</span><select id="compare-preset" disabled><option value="front">Front</option><option value="back">Back</option><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option></select></label>
+            <details class="tool-details">
+              <summary>Element colors and radii</summary>
+              <div id="element-style-controls" class="element-style-controls"></div>
+            </details>
+            <details class="tool-details">
+              <summary>Export images and atom IDs</summary>
+              <div class="export-actions">
+                <button id="export-jpg" class="button button-secondary" type="button" disabled>Export JPG</button>
+                <button id="export-eps" class="button button-secondary" type="button" disabled>Export EPS</button>
+                <button id="export-atom-indices" class="button button-secondary" type="button" disabled>Visible atom IDs</button>
+                <button id="export-multiview" class="button button-secondary" type="button" disabled>Six-view PNG</button>
+                <button id="export-frame-series" class="button button-secondary" type="button" disabled>Frame images</button>
+              </div>
+              <div class="triple-fields export-series-range">
+                <label><span>First frame</span><input id="export-series-first" type="number" value="1" min="1" step="1" disabled></label>
+                <label><span>Last frame</span><input id="export-series-last" type="number" value="1" min="1" step="1" disabled></label>
+                <label><span>Step</span><input id="export-series-step" type="number" value="1" min="1" step="1" disabled></label>
+              </div>
+              <button id="cancel-frame-series" class="text-button" type="button" disabled>Cancel frame export</button>
+              <p id="batch-export-status" class="help" role="status" aria-live="polite">Export a six-view image or one image per trajectory frame.</p>
+              <p id="export-series-status" class="help" role="status" aria-live="polite"></p>
+            </details>
           </section>
 
           <section id="tool-replicate" class="side-section" data-tool-panel="replicate" hidden>
@@ -290,6 +319,59 @@
             </div>
             <p id="cutoff-help" class="help">A starting value will be suggested from recognized metallic elements.</p>
             <p id="analysis-help" class="help">Periodic axes use minimum images; non-periodic axes use direct distances. Camera movement does not rerun analysis.</p>
+          </section>
+
+          <section id="tool-bonds" class="side-section analysis-section" data-tool-panel="bonds" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">NEIGHBOR CONNECTIONS</p><h3>Bonds</h3></div>
+              <div class="analysis-state-controls"><span id="bonds-state" class="state-pill">Not calculated</span><button id="cancel-bonds" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <div class="paired-fields">
+              <label class="field"><span>Default cutoff</span><span class="input-unit"><input id="bonds-cutoff" type="number" value="3.0" min="0.01" step="0.05" disabled><i>Å</i></span></label>
+              <label class="field"><span>Bond radius</span><span class="input-unit"><input id="bonds-radius" type="number" value="0.12" min="0.01" step="0.01" disabled><i>Å</i></span></label>
+            </div>
+            <div id="bond-pair-cutoffs" class="bond-pair-cutoffs" aria-label="Element pair cutoff overrides"></div>
+            <label class="slice-toggle"><input id="show-bonds" type="checkbox" checked disabled><span>Show calculated bonds</span></label>
+            <button id="run-bonds" class="button button-accent tool-run-button" type="button" disabled>Calculate bonds</button>
+            <p class="help">Use different cutoffs for different element pairs. Periodic connections follow the cell vectors, including tilted cells; display replication reuses the calculated connections.</p>
+            <p id="bonds-status" class="help" role="status" aria-live="polite">Calculate neighbor connections on the original structure.</p>
+          </section>
+
+          <section id="tool-vectors" class="side-section" data-tool-panel="vectors" hidden>
+            <div class="section-heading"><div><p class="section-kicker">PER-ATOM DIRECTIONS</p><h3>Vector arrows</h3></div></div>
+            <div class="triple-fields">
+              <label><span>X property</span><select id="vector-x" disabled><option value="">Choose X</option></select></label>
+              <label><span>Y property</span><select id="vector-y" disabled><option value="">Choose Y</option></select></label>
+              <label><span>Z property</span><select id="vector-z" disabled><option value="">Choose Z</option></select></label>
+            </div>
+            <div class="paired-fields">
+              <label class="field"><span>Length scale</span><input id="vector-scale" type="number" value="1" min="0.000001" step="0.1" disabled></label>
+              <label class="field"><span>Arrow color</span><input id="vector-color" type="color" value="#f9ca57" disabled></label>
+            </div>
+            <label class="slice-toggle"><input id="show-vectors" type="checkbox" disabled><span>Show arrows</span></label>
+            <p class="help">Choose three scalar properties to display forces, velocities or other vectors in Cartesian XYZ. The scale converts property values to arrow lengths in Å.</p>
+          </section>
+
+          <section id="tool-statistics" class="side-section analysis-section" data-tool-panel="statistics" hidden>
+            <div class="section-heading"><div><p class="section-kicker">STRUCTURE STATISTICS</p><h3>Coordination distribution</h3></div></div>
+            <div id="coordination-histogram" class="statistics-chart" role="img" aria-label="Coordination number distribution"><p class="selection-empty">Calculate coordination to show its distribution.</p></div>
+            <div class="section-heading statistics-subheading">
+              <div><h3>Radial distribution g(r)</h3></div>
+              <div class="analysis-state-controls"><span id="rdf-state" class="state-pill">Not calculated</span><button id="cancel-rdf" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <div class="paired-fields">
+              <label class="field"><span>Maximum distance</span><span class="input-unit"><input id="rdf-cutoff" type="number" value="6" min="0.01" step="0.1" disabled><i>Å</i></span></label>
+              <label class="field"><span>Bins</span><input id="rdf-bins" type="number" value="100" min="1" max="4096" step="1" disabled></label>
+              <label class="field"><span>First element</span><select id="rdf-first-type" disabled><option value="all">All types</option></select></label>
+              <label class="field"><span>Second element</span><select id="rdf-second-type" disabled><option value="all">All types</option></select></label>
+            </div>
+            <div class="paired-actions">
+              <button id="run-rdf" class="button button-accent" type="button" disabled>Calculate RDF</button>
+              <button id="export-rdf" class="button button-secondary" type="button" disabled>Export CSV</button>
+            </div>
+            <div id="rdf-chart" class="statistics-chart" role="img" aria-label="Radial distribution function"></div>
+            <p class="help">Normalized g(r) requires a fully periodic three-dimensional cell. Element filters calculate partial pair distributions. Statistics use the original structure before display replication.</p>
+            <p id="rdf-status" class="help" role="status" aria-live="polite">Choose a distance range and calculate the pair distribution.</p>
           </section>
 
           <section id="tool-cna" class="side-section analysis-section" data-tool-panel="cna" hidden>
@@ -360,13 +442,63 @@
             <p id="strain-status" class="help" role="status" aria-live="polite">Unknown numeric atom types need an element or explicit lattice parameters. This is not displacement strain between trajectory frames.</p>
           </section>
 
+          <section id="tool-reference-strain" class="side-section analysis-section" data-tool-panel="referenceStrain" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">TRAJECTORY DEFORMATION</p><h3>Reference frame strain</h3></div>
+              <div class="analysis-state-controls"><span id="reference-strain-state" class="state-pill">Not calculated</span><button id="cancel-reference-strain" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <div class="paired-fields">
+              <label class="field"><span>Reference frame</span><input id="reference-frame" type="number" value="1" min="1" step="1" disabled></label>
+              <label class="field"><span>Reference neighbor cutoff</span><span class="input-unit"><input id="reference-cutoff" type="number" value="3.0" min="0.01" step="0.05" disabled><i>Å</i></span></label>
+            </div>
+            <button id="run-reference-strain" class="button button-accent tool-run-button" type="button" disabled>Calculate frame strain</button>
+            <p class="help">Fit the current neighbor vectors to a selected reference frame using stable atom IDs. Green–Lagrange strain uses Cartesian axes; insufficient or unmatched neighborhoods receive NaN.</p>
+            <p id="reference-strain-status" class="help" role="status" aria-live="polite">Open a trajectory and choose a reference frame.</p>
+          </section>
+
+          <section id="tool-local-shear" class="side-section analysis-section" data-tool-panel="localShear" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">LOCAL GEOMETRY</p><h3>Local shear</h3></div>
+              <div class="analysis-state-controls"><span id="local-shear-state" class="state-pill">Not calculated</span><button id="cancel-local-shear" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <label class="field"><span>Neighbor cutoff</span><span class="input-unit"><input id="local-shear-cutoff" type="number" value="3.0" min="0.01" step="0.05" disabled><i>Å</i></span></label>
+            <label class="slice-toggle"><input id="local-shear-subtract-mean" type="checkbox" disabled><span>Subtract the mean local tensor</span></label>
+            <button id="run-local-shear" class="button button-accent tool-run-button" type="button" disabled>Calculate local shear</button>
+            <p class="help">AtomEye-style shear measures the shape of each local neighbor environment in this frame. It does not require a reference frame or a matched crystal template.</p>
+            <p id="local-shear-status" class="help" role="status" aria-live="polite">Calculate a local geometric shear indicator.</p>
+          </section>
+
           <section id="tool-selection" class="side-section selection-section" data-tool-panel="selection" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">SELECTION</p><h3>Atom details</h3></div>
               <button id="clear-selection" class="text-button" type="button" hidden>Clear</button>
             </div>
+            <div class="atom-search-row">
+              <label class="field"><span>Atom ID</span><input id="atom-search-id" type="number" step="1" placeholder="Enter ID" disabled></label>
+              <button id="find-atom" class="button button-secondary" type="button" disabled>Find</button>
+              <button id="center-atom" class="button button-secondary" type="button" disabled>Center</button>
+            </div>
             <div id="selection-empty" class="selection-empty">Click an atom to inspect its ID, type, coordinates, and properties.</div>
             <dl id="selection-data" class="selection-data" hidden></dl>
+            <div class="measurement-controls">
+              <label class="slice-toggle"><input id="measure-mode" type="checkbox" disabled><span>Measure selected atoms</span></label>
+              <label class="slice-toggle"><input id="measure-pbc" type="checkbox" checked disabled><span>Use nearest periodic images</span></label>
+              <p class="help">Select 2 atoms for distance, 3 for angle or 4 for dihedral. Turn off periodic images to measure the displayed coordinates directly.</p>
+              <dl id="measurement-data" class="selection-data measurement-data" aria-live="polite"></dl>
+              <button id="clear-measurements" class="text-button" type="button" disabled>Clear measurements</button>
+            </div>
+            <details class="tool-details">
+              <summary>Selected atom appearance</summary>
+              <div class="paired-fields">
+                <label class="field"><span>Color</span><input id="selected-atom-color" type="color" value="#ffffff" disabled></label>
+                <label class="field"><span>Radius</span><span class="input-unit"><input id="selected-atom-radius" type="number" value="1" min="0.01" step="0.05" disabled><i>Å</i></span></label>
+              </div>
+              <label class="slice-toggle"><input id="selected-atom-visible" type="checkbox" checked disabled><span>Show this atom</span></label>
+              <div class="paired-actions">
+                <button id="apply-atom-style" class="button button-accent" type="button" disabled>Apply</button>
+                <button id="reset-atom-style" class="button button-secondary" type="button" disabled>Reset</button>
+              </div>
+            </details>
           </section>
 
           <section id="tool-performance" class="side-section performance-section" data-tool-panel="performance" hidden>
@@ -412,7 +544,7 @@
     </div>
 
     <div id="file-drop-overlay" class="file-drop-overlay" aria-hidden="true" hidden>
-      <div><strong>Drop a structure file to open</strong><span>CFG / LAMMPS · One file at a time</span></div>
+      <div><strong>Drop a structure file to open</strong><span>CFG / LAMMPS / XYZ / PDB · One file at a time</span></div>
     </div>
     <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-dialog-title">
       <div class="source-dialog-card">

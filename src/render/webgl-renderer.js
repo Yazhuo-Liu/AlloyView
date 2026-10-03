@@ -1,6 +1,7 @@
 import { cellVertices } from '../data/model.js';
 import { createReplication } from './replication.js';
 import { installCameraInteractions } from './camera-interactions.js';
+import { AtomPrimitiveLayer } from './atom-primitives.js';
 import { MAX_SLICES, SLICE_EPSILON, pointVisible, validateSlices } from './slicing.js';
 import {
   add,
@@ -31,6 +32,7 @@ uniform int uSliceMode;
 uniform int uSliceCount;
 uniform vec4 uSlicePlanes[${MAX_SLICES}];
 uniform int uSelected;
+uniform int uSelectedAtoms[16];
 uniform vec3 uReplicaOffset;
 uniform vec3 uReplicaIndex;
 uniform vec3 uRepetitions;
@@ -63,7 +65,9 @@ void main() {
     }
   }
   vVisible = aVisible > 0.5 && sliceVisible ? 1 : 0;
-  vSelected = gl_InstanceID == uSelected ? 1 : 0;
+  bool selected = gl_InstanceID == uSelected;
+  for (int item = 0; item < 16; item++) selected = selected || gl_InstanceID == uSelectedAtoms[item];
+  vSelected = selected ? 1 : 0;
   vRadius = radius;
 }`;
 
@@ -187,6 +191,12 @@ export class WebGLRenderer {
     this.slicePlaneValues = new Float32Array(MAX_SLICES * 4);
     this.sliceCount = 0;
     this.selected = -1;
+    this.selectedAtoms = new Int32Array(16).fill(-1);
+    this.atomColors = null;
+    this.primitiveLayer = null;
+    this.atomBonds = this.atomVectors = null;
+    this.bondOptions = { visible: true, radius: 0.08 };
+    this.vectorOptions = { visible: true, scale: 1, radius: 0.06, color: '#f7a633' };
     this.projectionMode = 'perspective';
     this.fov = 40 * Math.PI / 180;
     this.yaw = -0.62;
@@ -267,6 +277,7 @@ export class WebGLRenderer {
       'uView', 'uProjection', 'uRadiusScale', 'uSliceAxis', 'uSliceMaximum', 'uSelected',
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions',
       'uSliceMode', 'uSliceCount', 'uSlicePlanes[0]',
+      'uSelectedAtoms[0]',
     ]);
     this.lineUniforms = uniforms(gl, this.lineProgram, ['uViewProjection', 'uColor']);
     gl.enable(gl.DEPTH_TEST);
@@ -282,12 +293,15 @@ export class WebGLRenderer {
     this.frame = frame;
     this.displayPositions = displayPositions;
     this.atomCount = frame.ids.length;
+    this.atomColors = colors;
+    this.atomBonds = this.atomVectors = null;
+    this.selected = -1;
+    this.selectedAtoms?.fill(-1);
     Object.assign(this, createReplication(frame.cell, repetitions));
     this.displayAtomCount = this.atomCount * this.replicas.length;
     this.atomRadii = atomRadii ?? new Float32Array(this.atomCount).fill(0.7);
     if (this.atomRadii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
     this.maximumAtomRadius = this.atomRadii.reduce((maximum, radius) => Math.max(maximum, radius), 0);
-    this.updateSceneBounds();
     this.visibility = new Uint8Array(this.atomCount).fill(255);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, displayPositions, gl.STATIC_DRAW);
@@ -301,6 +315,8 @@ export class WebGLRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, this.atomRadii, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.cellBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, buildCellLines(this.displayCell), gl.STATIC_DRAW);
+    this.primitiveLayer?.setFrame(this, colors);
+    this.updateSceneBounds();
     gl.finish();
     this.requestRender();
     return performance.now() - startedAt;
@@ -309,11 +325,15 @@ export class WebGLRenderer {
   clearFrame() {
     this.interactions?.reset();
     this.frame = this.displayPositions = this.visibility = this.atomRadii = null;
+    this.atomColors = null;
+    this.atomBonds = this.atomVectors = null;
+    this.primitiveLayer?.clear();
     this.displayCell = this.sceneBounds = this.minimumOffset = this.maximumOffset = null;
     this.atomCount = this.displayAtomCount = 0;
     this.repetitions = [1, 1, 1];
     this.replicas = [{ indices: [0, 0, 0], offset: [0, 0, 0] }];
     this.selected = -1;
+    this.selectedAtoms?.fill(-1);
     this.sliceMode = 'legacy';
     this.slices = [];
     this.sliceCount = 0;
@@ -339,9 +359,12 @@ export class WebGLRenderer {
   }
 
   setColors(colors) {
+    if (this.frame && colors.length !== this.atomCount * 3) throw new Error('The color array does not match the current frame.');
+    this.atomColors = colors;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
+    this.primitiveLayer?.updateColors(colors);
     this.requestRender();
   }
 
@@ -355,6 +378,7 @@ export class WebGLRenderer {
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, values, gl.DYNAMIC_DRAW);
+    this.primitiveLayer?.updatePositions(this, false);
     this.requestRender();
   }
 
@@ -367,6 +391,7 @@ export class WebGLRenderer {
     this.updateSceneBounds();
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.STATIC_DRAW);
+    this.primitiveLayer?.updatePositions(this);
     this.gl.finish();
     this.requestRender();
     return performance.now() - startedAt;
@@ -386,6 +411,48 @@ export class WebGLRenderer {
   setRadiusScale(scaleFactor) {
     if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) throw new Error('The atom radius scale must be greater than zero.');
     this.radiusScale = scaleFactor;
+    this.requestRender();
+  }
+  setAtomRadii(radii) {
+    if (!this.frame || !(radii instanceof Float32Array) || radii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
+    let maximum = 0;
+    for (const radius of radii) {
+      if (!Number.isFinite(radius) || radius <= 0) throw new Error('Atom radii must be finite and greater than zero.');
+      maximum = Math.max(maximum, radius);
+    }
+    this.atomRadii = radii;
+    this.maximumAtomRadius = maximum;
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.radiusBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, radii, gl.DYNAMIC_DRAW);
+    this.requestRender();
+  }
+
+  ensurePrimitiveLayer() {
+    if (!this.frame) throw new Error('Load a structure before displaying atom geometry.');
+    if (!this.primitiveLayer) {
+      this.primitiveLayer = new AtomPrimitiveLayer(this.gl);
+      this.primitiveLayer.setFrame(this, this.atomColors);
+    }
+    return this.primitiveLayer;
+  }
+
+  setBonds(result, options = {}) {
+    if (!result && (!this.frame || !this.primitiveLayer)) { this.atomBonds = null; return; }
+    const layer = this.ensurePrimitiveLayer();
+    layer.setBonds(this, result, options);
+    this.atomBonds = layer.bonds;
+    this.bondOptions = { ...layer.bondOptions };
+    this.requestRender();
+  }
+
+  setVectors(vectors, options = {}) {
+    if (!vectors && (!this.frame || !this.primitiveLayer)) { this.atomVectors = null; return; }
+    const layer = this.ensurePrimitiveLayer();
+    layer.setVectors(this, vectors, options);
+    this.atomVectors = layer.vectors;
+    this.vectorOptions = { ...layer.vectorOptions };
+    this.updateSceneBounds();
     this.requestRender();
   }
   setSlice(axis, maximum) {
@@ -412,6 +479,27 @@ export class WebGLRenderer {
     this.requestRender();
   }
   setSelected(index) { this.selected = index ?? -1; this.requestRender(); }
+  setSelectedAtoms(indices = []) {
+    const values = Array.from(new Set(indices));
+    if (values.length > 16 || values.some(index => !Number.isSafeInteger(index) || index < 0 || index >= this.atomCount)) {
+      throw new Error('Select up to sixteen atoms from the current frame.');
+    }
+    this.selectedAtoms = new Int32Array(16).fill(-1);
+    this.selectedAtoms.set(values);
+    this.requestRender();
+  }
+
+  centerOnPoint(point) {
+    if (!point || point.length !== 3 || !Array.from(point).every(Number.isFinite)) throw new Error('The camera center requires three finite coordinates.');
+    this.target = Array.from(point);
+    this.pan = [0, 0, 0];
+    this.requestRender();
+  }
+
+  centerOnAtom(index) {
+    if (!this.frame || !Number.isSafeInteger(index) || index < 0 || index >= this.atomCount) throw new Error('The atom is outside the current frame.');
+    this.centerOnPoint(this.displayPositions.subarray(index * 3, index * 3 + 3));
+  }
   setProjection(mode) {
     if (mode !== 'perspective' && mode !== 'orthographic') throw new Error(`Unknown projection mode “${mode}”.`);
     this.projectionMode = mode;
@@ -444,6 +532,7 @@ export class WebGLRenderer {
         }
       }
     }
+    this.primitiveLayer?.extendBounds(this, minimum, maximum);
     this.sceneBounds = { minimum, maximum };
     return this.sceneBounds;
   }
@@ -518,6 +607,7 @@ export class WebGLRenderer {
     gl.uniform1i(this.sphereUniforms.uSliceCount, this.sliceCount ?? 0);
     gl.uniform4fv(this.sphereUniforms['uSlicePlanes[0]'], this.slicePlaneValues ?? new Float32Array(MAX_SLICES * 4));
     gl.uniform1i(this.sphereUniforms.uSelected, this.selected);
+    if (this.sphereUniforms['uSelectedAtoms[0]'] != null) gl.uniform1iv(this.sphereUniforms['uSelectedAtoms[0]'], this.selectedAtoms);
     gl.uniform3f(this.sphereUniforms.uRepetitions, ...this.repetitions);
     // Reuse the same atom buffers for every image. Analysis, color updates and
     // visibility masks still have exactly one entry per original atom.
@@ -526,6 +616,7 @@ export class WebGLRenderer {
       gl.uniform3f(this.sphereUniforms.uReplicaIndex, ...replica.indices);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.atomCount);
     }
+    this.primitiveLayer?.render(this);
 
     if (this.cellVisible) {
       gl.enable(gl.BLEND);
@@ -671,7 +762,7 @@ export class WebGLRenderer {
     return closest;
   }
 
-  exportPng(filename = 'alloyview.png', { includeBackground = true, legend = null, includeAxes = false } = {}) {
+  captureImage({ includeBackground = true, legend = null, includeAxes = false } = {}) {
     const gl = this.gl;
     let width;
     let height;
@@ -706,6 +797,11 @@ export class WebGLRenderer {
       drawLegendOverlay(context, legend, width, height, scale, { includeBackground });
     }
     if (includeAxes) drawAxesOverlay(context, axisDirectionsFromView(this.viewMatrix), width, height, scale);
+    return exportCanvas;
+  }
+
+  exportImage(filename, options, format) {
+    const exportCanvas = this.captureImage(options);
     exportCanvas.toBlob((blob) => {
       if (!blob) return;
       const link = document.createElement('a');
@@ -713,8 +809,11 @@ export class WebGLRenderer {
       link.href = URL.createObjectURL(blob);
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 0);
-    }, 'image/png');
+    }, format);
   }
+
+  exportPng(filename = 'alloyview.png', options = {}) { this.exportImage(filename, options, 'image/png'); }
+  exportJpg(filename = 'alloyview.jpg', options = {}) { this.exportImage(filename, { ...options, includeBackground: true }, 'image/jpeg'); }
 
   recordFrame(timestamp) {
     this.frameTimes.push(timestamp);

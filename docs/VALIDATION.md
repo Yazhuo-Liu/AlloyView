@@ -2,6 +2,46 @@
 
 Validation date: 2026-10-03 (America/New_York)
 
+## AtomEye analysis and viewer alignment
+
+Validated on 2026-10-03 with Node.js v24.19.0 and Chromium software WebGL:
+
+- `npm test`: 280 tests passed, none failed/skipped. New numerical checks cover
+  element-pair bonds, distinct periodic/self images, triclinic geometry, RDF
+  shell/population normalization, AtomEye geometric shear reductions and
+  reference-frame strain under stretch, shear, rotation, reordered IDs and
+  defects. Unmatched or underdetermined strain fits remain NaN without warnings.
+- Real Worker tests cover disjoint ranges, shared/private typed inputs,
+  cancellation between shear stages and independent concurrent analyses. CNA,
+  PTM and the new analyses share the same capped six-Worker pool. Reference ID
+  preparation yields and accepts cancellation before Worker dispatch; nested
+  output buffers are counted once in the frame-cache budget.
+- `npm run build` and
+  `npm run test:browser -- --screenshots --structure-screenshot` passed for
+  build `87509a867ba502e5`. Native Extended XYZ/PDB files exercise the parser
+  Worker, trajectory navigation and new scalar/vector properties. A uniformly
+  expanded second FCC frame has reference hydrostatic strain 0.0202 and zero
+  shear within tolerance; the undeformed local geometric shear is near zero.
+- Chromium verifies ID lookup/centering, distance/angle/dihedral picks,
+  individual and element color/radius/visibility overrides, pair cutoff zero
+  exclusions, RDF CSV and coordination charts. Both real GPU views show the
+  same bonds/arrows without GL errors. Separate pixel checks validate cylinder
+  and cone rendering, filtering, clipping and skew periodic self-image edges.
+- JPG/EPS signatures, six-view PNG, visible IDs and selected-frame ZIP exports
+  pass. Cancelling a ZIP creates no archive and restores the original frame
+  and camera; a subsequent manual frame edit retains ownership. Recipe replay
+  restores enabled analyses and appearance; importing disabled extensions
+  clears derived fields/primitives on both current and cached frames.
+- Actual phone screenshots were inspected. The viewport stays fixed above the
+  scrolling tools, the comparison inset fits, and legends/views remain compact.
+  All earlier browser regressions, including 204,800-atom clipping, still pass.
+
+A separate Node run on 97,556 FCC atoms used six actual Workers throughout:
+bonds took approximately 731 ms (585,336 edges), RDF 654 ms and local geometric
+shear 1,033 ms. No additional Workers were created between these jobs; source
+buffers stayed intact. Peak process RSS was about 330 MiB. These are local CPU
+measurements, not browser/GPU timing guarantees.
+
 ## Scalar palettes and persistent Auto ranges
 
 Validated with Node.js v24.19.0 and Chromium 151.0.7922.173:

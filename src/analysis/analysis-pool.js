@@ -1,4 +1,8 @@
 import { CSP_SUMMARY_FIELDS } from './centrosymmetry.js';
+import { MAX_BONDS } from './bonds.js';
+import { finalizeRdf } from './rdf.js';
+import { modalCoordination, shearInvariant } from './local-shear.js';
+import { REFERENCE_STRAIN_FIELDS } from './reference-strain.js';
 
 const MAX_WORKERS = 6;
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
@@ -6,6 +10,15 @@ const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1]
   deformation: [Float64Array, 9], distances: [Float32Array, 1] };
 const STRAIN_OUTPUT_FIELDS = Object.fromEntries(['atomicShearStrain', 'atomicHydrostaticStrain', 'atomicVolumeChange',
   'strainE11', 'strainE22', 'strainE33', 'strainE12', 'strainE13', 'strainE23'].map((name) => [name, [Float32Array, 1]]));
+const INPUT_ARRAY_FIELDS = ['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput'];
+const EXTRA_OUTPUT_FIELDS = {
+  bonds: { coordination: [Uint32Array, 1] },
+  rdf: {},
+  localShearCoordination: { coordination: [Uint32Array, 1] },
+  localShearMetrics: { metrics: [Float64Array, 6] },
+  localShearFinalize: { localShear: [Float32Array, 1] },
+  referenceStrain: Object.fromEntries(REFERENCE_STRAIN_FIELDS.map((name) => [name, [Float32Array, 1]])),
+};
 
 export function chooseWorkerCount(atomCount, coordinateBytes, environment = globalThis, targetAtoms = 50_000) {
   const hardware = Math.max(1, Number(environment.navigator?.hardwareConcurrency) || 2);
@@ -37,6 +50,7 @@ export class AnalysisPool {
   async analyze(frame, parameters, { onProgress = () => {}, signal } = {}) {
     if (this.closed) throw new Error('The analysis pool is closed.');
     if (signal?.aborted) throw abortError();
+    if (parameters.kind === 'localShear') return this.analyzeLocalShear(frame, parameters, { onProgress, signal });
     const startedAt = performance.now();
     const atomCount = frame.fractional.length / 3;
     if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
@@ -51,9 +65,18 @@ export class AnalysisPool {
       }
       extraBytes += parameters.structureInput.byteLength;
     }
-    if (parameters.kind === 'strain') {
+    if (['strain', 'bonds', 'rdf'].includes(parameters.kind)) {
       inputs.types = frame.types;
+      if (!ArrayBuffer.isView(frame.types) || frame.types.length !== atomCount) throw new Error('Analysis requires one element type per atom.');
       extraBytes += frame.types.byteLength;
+    }
+    for (const name of ['referenceFractional', 'referenceMapping', 'metricInput']) {
+      if (inputs[name]) {
+        if (!ArrayBuffer.isView(inputs[name])) throw new Error(`Analysis ${name} must be a typed array.`);
+        extraBytes += inputs[name].byteLength;
+      }
+    }
+    if (parameters.kind === 'strain') {
       if (parameters.ptmInput) {
         inputs.ptmInput = Object.fromEntries(Object.keys(PTM_OUTPUT_FIELDS).map((name) => {
           extraBytes += parameters.ptmInput[name].byteLength;
@@ -61,10 +84,10 @@ export class AnalysisPool {
         }));
       }
     }
-    const outputFields = parameters.kind === 'ptm' ? PTM_OUTPUT_FIELDS
+    const outputFields = EXTRA_OUTPUT_FIELDS[parameters.kind] ?? (parameters.kind === 'ptm' ? PTM_OUTPUT_FIELDS
       : parameters.kind === 'strain' ? { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : PTM_OUTPUT_FIELDS) }
         : autoCentrosymmetry ? { centrosymmetry: [Float32Array, 1], cspStructureTypes: [Uint8Array, 1], cspNeighborCounts: [Uint8Array, 1] }
-          : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] };
+          : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] });
     const outputBytesPerAtom = Object.values(outputFields).reduce((sum, [Type, stride]) => sum + Type.BYTES_PER_ELEMENT * stride, 0);
     const workerCount = Math.min(this.limit, chooseWorkerCount(atomCount,
       (sharedMemory ? 0 : frame.fractional.byteLength + extraBytes) + atomCount * (48 + outputBytesPerAtom), this.environment,
@@ -100,8 +123,7 @@ export class AnalysisPool {
       let coordinates = frame.fractional;
       if (sharedMemory) {
         coordinates = await copyCoordinates(frame.fractional, controller.signal, true);
-        if (inputs.structureInput) inputs.structureInput = await copyCoordinates(inputs.structureInput, controller.signal, true);
-        if (inputs.types) inputs.types = await copyCoordinates(inputs.types, controller.signal, true);
+        for (const name of INPUT_ARRAY_FIELDS) if (inputs[name]) inputs[name] = await copyCoordinates(inputs[name], controller.signal, true);
         if (inputs.ptmInput) {
           inputs.ptmInput = await copyFields(inputs.ptmInput, controller.signal, true);
         }
@@ -118,6 +140,7 @@ export class AnalysisPool {
             return partial;
           });
       }));
+      if (controller.signal.aborted) throw abortError();
       const metadata = { elapsedMs: performance.now() - startedAt, workerCount, sharedMemory,
         engine: `${parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput) ? 'ptm-wasm' : 'js'}-worker${workerCount === 1 ? '' : `-pool×${workerCount}`}` };
       if (parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput)) {
@@ -127,12 +150,54 @@ export class AnalysisPool {
         const coordination = new Uint32Array(atomCount);
         let candidatePairs = 0, acceptedPairs = 0;
         for (const partial of partials) {
-          for (let atom = 0; atom < atomCount; atom += 1) coordination[atom] += partial.coordination[atom];
+          for (let atom = 0; atom < atomCount; atom += 1) {
+            coordination[atom] += partial.coordination[atom];
+            if (atom && atom % 65_536 === 0) { await yieldToMain(); if (controller.signal.aborted) throw abortError(); }
+          }
           candidatePairs += partial.candidatePairs;
           acceptedPairs += partial.acceptedPairs;
         }
-        return { ...metadata, coordination, candidatePairs, acceptedPairs, bins: partials[0]?.bins,
+        return { ...metadata, coordination, ...await coordinationStatistics(coordination, controller.signal), candidatePairs, acceptedPairs, bins: partials[0]?.bins,
           warning: partials.find((partial) => partial.warning)?.warning ?? null };
+      }
+      if (EXTRA_OUTPUT_FIELDS[parameters.kind]) {
+        const fields = EXTRA_OUTPUT_FIELDS[parameters.kind];
+        const values = Object.fromEntries(Object.entries(fields).map(([name, [Type, stride]]) => [name, new Type(atomCount * stride)]));
+        for (const partial of partials) {
+          for (const [name, [, stride]] of Object.entries(fields)) values[name].set(partial[name], partial.startAtom * stride);
+          if (atomCount > 65_536) { await yieldToMain(); if (controller.signal.aborted) throw abortError(); }
+        }
+        if (parameters.kind === 'rdf') {
+          const counts = new Float64Array(parameters.bins ?? 100);
+          for (const partial of partials) for (let bin = 0; bin < counts.length; bin += 1) counts[bin] += partial.counts[bin];
+          return { ...metadata, ...finalizeRdf(counts, partials[0].normalization) };
+        }
+        if (parameters.kind === 'bonds') {
+          const count = partials.reduce((sum, partial) => sum + partial.count, 0), maxBonds = parameters.maxBonds ?? MAX_BONDS;
+          if (count > maxBonds) throw new Error(`Bond output exceeds ${maxBonds.toLocaleString('en-US')} edges; reduce the cutoff.`);
+          const indices = new Uint32Array(count * 2), vectors = new Float32Array(count * 3), shifts = new Int32Array(count * 3);
+          let offset = 0;
+          for (const partial of partials) {
+            indices.set(partial.indices, offset * 2); vectors.set(partial.vectors, offset * 3); shifts.set(partial.shifts, offset * 3);
+            offset += partial.count;
+            await yieldToMain(); if (controller.signal.aborted) throw abortError();
+          }
+          return { ...metadata, ...values, indices, vectors, shifts, count, ...await coordinationStatistics(values.coordination, controller.signal), warning: null };
+        }
+        if (parameters.kind === 'localShearCoordination') {
+          const histogram = [];
+          for (const partial of partials) for (let index = 0; index < partial.histogram.length; index += 1) {
+            histogram[index] = (histogram[index] ?? 0) + partial.histogram[index];
+          }
+          return { ...metadata, ...values, histogram, coordinationSum: partials.reduce((sum, partial) => sum + partial.coordinationSum, 0) };
+        }
+        if (parameters.kind === 'localShearMetrics') {
+          const metricSum = new Array(6).fill(0);
+          for (const partial of partials) for (let component = 0; component < 6; component += 1) metricSum[component] += partial.metricSum[component];
+          return { ...metadata, ...values, metricSum, normalizationSum: partials.reduce((sum, partial) => sum + partial.normalizationSum, 0),
+            normalizationParticipants: partials.reduce((sum, partial) => sum + partial.normalizationParticipants, 0) };
+        }
+        return { ...metadata, ...values, incomplete: partials.reduce((sum, partial) => sum + (partial.incomplete ?? 0), 0), warning: null };
       }
       if (parameters.kind === 'ptm' || parameters.kind === 'strain') {
         const fields = parameters.kind === 'ptm' ? PTM_OUTPUT_FIELDS
@@ -165,6 +230,34 @@ export class AnalysisPool {
     } catch (error) {
       controller.abort();
       throw error;
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      this.controllers.delete(controller);
+    }
+  }
+
+  async analyzeLocalShear(frame, parameters, { onProgress, signal }) {
+    const startedAt = performance.now(), atomCount = frame.fractional.length / 3;
+    const controller = new AbortController(), abort = () => controller.abort();
+    this.controllers.add(controller);
+    signal?.addEventListener('abort', abort, { once: true });
+    const progress = (stage) => (update) => onProgress({ ...update, stage,
+      completedAtoms: atomCount * stage + update.completedAtoms, totalAtoms: atomCount * 3 });
+    try {
+      const coordination = await this.analyze(frame, { ...parameters, kind: 'localShearCoordination' }, {
+        signal: controller.signal, onProgress: progress(0),
+      });
+      const coordinationMode = modalCoordination(coordination.histogram);
+      const metrics = await this.analyze(frame, { ...parameters, kind: 'localShearMetrics', coordinationMode }, {
+        signal: controller.signal, onProgress: progress(1),
+      });
+      const normalization = metrics.normalizationParticipants ? metrics.normalizationSum / metrics.normalizationParticipants / 3 : NaN;
+      const meanMetric = metrics.metricSum.map((value) => value / atomCount / normalization);
+      const result = await this.analyze(frame, { ...parameters, kind: 'localShearFinalize', metricInput: metrics.metrics,
+        normalization, meanMetric }, { signal: controller.signal, onProgress: progress(2) });
+      return { ...result, elapsedMs: performance.now() - startedAt, coordination: coordination.coordination,
+        coordinationMode, normalization, meanMetric, averageCoordination: coordination.coordinationSum / atomCount,
+        averageShear: shearInvariant(meanMetric), warning: null };
     } finally {
       signal?.removeEventListener('abort', abort);
       this.controllers.delete(controller);
@@ -231,13 +324,11 @@ export class AnalysisPool {
       if (!task.sharedMemory) {
         payload = { ...payload, fractional: await copyCoordinates(payload.fractional, task.signal) };
         transferables.push(payload.fractional.buffer);
-        if (payload.structureInput) {
-          payload.structureInput = await copyCoordinates(payload.structureInput, task.signal);
-          transferables.push(payload.structureInput.buffer);
-        }
-        if (payload.types) {
-          payload.types = await copyCoordinates(payload.types, task.signal);
-          transferables.push(payload.types.buffer);
+        for (const name of INPUT_ARRAY_FIELDS) if (payload[name]) {
+          const source = name === 'metricInput' ? payload[name].subarray(payload.startAtom * 6, payload.endAtom * 6) : payload[name];
+          payload[name] = await copyCoordinates(source, task.signal);
+          transferables.push(payload[name].buffer);
+          if (name === 'metricInput') payload.metricStartAtom = payload.startAtom;
         }
         if (payload.ptmInput) {
           payload.ptmInput = await copyFields(payload.ptmInput, task.signal);
@@ -310,4 +401,15 @@ function yieldToMain() {
 
 function abortError() {
   return new DOMException('Analysis cancelled.', 'AbortError');
+}
+
+async function coordinationStatistics(values, signal) {
+  const counts = new Map();
+  let sum = 0;
+  for (let atom = 0; atom < values.length; atom += 1) {
+    const value = values[atom]; counts.set(value, (counts.get(value) ?? 0) + 1); sum += value;
+    if (atom && atom % 65_536 === 0) { await yieldToMain(); if (signal.aborted) throw abortError(); }
+  }
+  return { histogram: [...counts].sort((a, b) => a[0] - b[0]).map(([coordination, count]) => ({ coordination, count })),
+    meanCoordination: sum / values.length };
 }

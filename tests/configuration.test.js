@@ -7,6 +7,9 @@ import {
   matchesSource,
   MAX_CONFIGURATION_BYTES,
   MAX_CONFIGURATION_SLICES,
+  MAX_CONFIGURATION_PAIR_CUTOFFS,
+  MAX_CONFIGURATION_ATOM_OVERRIDES,
+  MAX_CONFIGURATION_RDF_BINS,
   parseConfiguration,
 } from '../src/configuration.js';
 
@@ -44,6 +47,148 @@ test('display-only recipes work without source files and use stable defaults', (
   assert.equal(matchesSource(recipe, []), true);
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
 });
+
+test('AtomEye extension recipes round-trip processing settings without computed data', () => {
+  const extensions = extensionSnapshot();
+  const recipe = createConfiguration({ settings: { extensions, activeTool: 'referenceStrain' } });
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.deepEqual(restored.settings.extensions, extensions);
+  assert.equal(restored.version, 1);
+  assert.equal(restored.settings.activeTool, 'referenceStrain');
+  extensions.bonds.pairCutoffs[0].cutoff = 99;
+  extensions.vectors.components[0] = 'changed';
+  extensions.measurements.atomIds.push(100);
+  extensions.appearance.atoms[0].visible = true;
+  assert.equal(recipe.settings.extensions.bonds.pairCutoffs[0].cutoff, 2.4);
+  assert.equal(recipe.settings.extensions.vectors.components[0], 'force_x');
+  assert.deepEqual(recipe.settings.extensions.measurements.atomIds, [1, 2, 3, 4]);
+  assert.equal(recipe.settings.extensions.appearance.atoms[0].visible, false);
+  assert.equal(JSON.stringify(recipe).includes('positions'), false);
+  assert.equal(JSON.stringify(recipe).includes('histogram'), false);
+  for (const activeTool of ['bonds', 'vectors', 'statistics', 'referenceStrain', 'localShear']) {
+    assert.equal(createConfiguration({ settings: { activeTool } }).settings.activeTool, activeTool);
+  }
+});
+
+test('older version 1 recipes disable every new computation and use portable defaults', () => {
+  const recipe = createConfiguration();
+  delete recipe.settings.extensions;
+  const extensions = parseConfiguration(JSON.stringify(recipe)).settings.extensions;
+  assert.deepEqual(extensions, {
+    bonds: { enabled: false, cutoff: null, pairCutoffs: [], radius: 0.12, visible: true },
+    vectors: { enabled: false, components: [null, null, null], scale: 1, color: '#f9ca57' },
+    referenceStrain: { enabled: false, cutoff: null, frameIndex: 0 },
+    localShear: { enabled: false, cutoff: null, subtractMean: false },
+    rdf: { enabled: false, cutoff: null, bins: 100, firstType: null, secondType: null },
+    measurements: { enabled: false, minimumImage: true, atomIds: [] },
+    appearance: { elements: [], atoms: [] },
+    comparison: { enabled: false, preset: 'top' },
+  });
+  assert.deepEqual(createConfiguration().settings.extensions, extensions);
+});
+
+test('extension settings reject invalid cutoffs, resources, properties and appearance values', () => {
+  const recipe = createConfiguration({ settings: { extensions: extensionSnapshot() } });
+  for (const mutate of [
+    value => { value.bonds.cutoff = null; },
+    value => { value.bonds.cutoff = 0; },
+    value => { value.bonds.radius = -1; },
+    value => { value.bonds.visible = 'false'; },
+    value => { value.bonds.pairCutoffs[0].cutoff = '2.4'; },
+    value => { value.bonds.pairCutoffs[0].first = ' '; },
+    value => { value.bonds.pairCutoffs.push({ first: 'C', second: 'Fe', cutoff: 3 }); },
+    value => { value.bonds.pairCutoffs = Array(MAX_CONFIGURATION_PAIR_CUTOFFS + 1).fill({ first: 'Fe', second: 'Fe', cutoff: 3 }); },
+    value => { value.vectors.components = ['force_x', 'force_y']; },
+    value => { value.vectors.components[2] = null; },
+    value => { value.vectors.components[0] = '__proto__'; },
+    value => { value.vectors.scale = 0; },
+    value => { value.vectors.color = 'red'; },
+    value => { value.referenceStrain.frameIndex = 0.5; },
+    value => { value.referenceStrain.frameIndex = -1; },
+    value => { value.referenceStrain.cutoff = null; },
+    value => { value.localShear.subtractMean = 'false'; },
+    value => { value.rdf.bins = 0; },
+    value => { value.rdf.bins = MAX_CONFIGURATION_RDF_BINS + 1; },
+    value => { value.rdf.bins = 2.5; },
+    value => { value.rdf.firstType = 'constructor'; },
+    value => { value.measurements.minimumImage = 1; },
+    value => { value.measurements.atomIds = [1, '1']; },
+    value => { value.measurements.atomIds = [1, 2, 3, 4, 5]; },
+    value => { value.appearance.elements[0].color = '#fff'; },
+    value => { value.appearance.elements[0].radius = 0; },
+    value => { value.appearance.elements.push({ label: 'Fe' }); },
+    value => { value.appearance.atoms.push({ id: '2' }); },
+    value => { value.appearance.atoms = Array(MAX_CONFIGURATION_ATOM_OVERRIDES + 1).fill({ id: 1 }); },
+    value => { value.appearance.atoms[0].visible = 'false'; },
+    value => { value.comparison.preset = 'isometric'; },
+    value => { value.comparison.enabled = 1; },
+    value => { value.rdf.histogram = [1, 2, 3]; },
+    value => { value.referenceStrain.positions = [[0, 0, 0]]; },
+  ]) {
+    const mutated = structuredClone(recipe);
+    mutate(mutated.settings.extensions);
+    assert.throws(() => parseConfiguration(JSON.stringify(mutated)), /Invalid AlloyView configuration/);
+  }
+  const polluted = JSON.stringify(recipe).replace('"extensions":{', '"extensions":{"__proto__":{"polluted":true},');
+  assert.throws(() => parseConfiguration(polluted), /__proto__/);
+  assert.equal({}.polluted, undefined);
+});
+
+test('disabled extension inputs normalize unconfigured values but cannot hide malformed settings', () => {
+  const recipe = createConfiguration({ settings: { extensions: {
+    bonds: { cutoff: NaN }, referenceStrain: { cutoff: NaN }, localShear: { cutoff: NaN }, rdf: { cutoff: NaN },
+    appearance: { elements: [{ label: 'Fe', color: '#ABCDEF', radius: NaN }] },
+  } } });
+  for (const name of ['bonds', 'referenceStrain', 'localShear', 'rdf']) {
+    assert.equal(recipe.settings.extensions[name].enabled, false);
+    assert.equal(recipe.settings.extensions[name].cutoff, null);
+  }
+  assert.deepEqual(recipe.settings.extensions.appearance.elements, [{ label: 'Fe', color: '#abcdef', radius: null, visible: true }]);
+  assert.throws(() => createConfiguration({ settings: { extensions: { bonds: { cutoff: -1 } } } }), /cutoff/);
+  assert.throws(() => createConfiguration({ settings: { extensions: { vectors: { enabled: true } } } }), /three properties/);
+  assert.throws(() => createConfiguration({ settings: { extensions: { rdf: { enabled: true } } } }), /required/);
+  const pairOff = createConfiguration({ settings: { extensions: { bonds: {
+    pairCutoffs: [{ first: 'Fe', second: 'C', cutoff: 0 }],
+  } } } });
+  assert.equal(pairOff.settings.extensions.bonds.pairCutoffs[0].cutoff, 0);
+  assert.equal(createConfiguration({ settings: { extensions: { rdf: { bins: 1 } } } }).settings.extensions.rdf.bins, 1);
+});
+
+test('reference-frame recipes validate known trajectory bounds before restoration', () => {
+  const snapshot = fullSnapshot();
+  snapshot.settings.extensions = extensionSnapshot();
+  snapshot.settings.extensions.referenceStrain.frameIndex = 7;
+  snapshot.source.frameCount = 8;
+  assert.equal(createConfiguration(snapshot).settings.extensions.referenceStrain.frameIndex, 7);
+  snapshot.settings.extensions.referenceStrain.frameIndex = 8;
+  assert.throws(() => createConfiguration(snapshot), /referenceStrain\.frameIndex/);
+  snapshot.settings.extensions.referenceStrain.enabled = false;
+  assert.equal(createConfiguration(snapshot).settings.extensions.referenceStrain.frameIndex, 8);
+});
+
+test('XYZ and PDB recipes match either a trajectory or its corresponding numbered sequence', () => {
+  for (const format of ['xyz', 'pdb']) {
+    const recipe = createConfiguration({ source: { format: `${format}-sequence`, files: [{ name: `frame.${format}`, size: 300 }] } });
+    assert.equal(matchesSource(recipe, [{ name: `frame.${format}`, size: 300 }], format), true);
+    assert.equal(matchesSource(recipe, [{ name: `frame.${format}`, size: 300 }], `${format}-sequence`), true);
+    assert.equal(matchesSource(recipe, [{ name: `frame.${format}`, size: 300 }], 'cfg'), false);
+    assert.equal(matchesSource(recipe, [{ name: `frame.${format}`, size: 300 }], format === 'xyz' ? 'pdb' : 'xyz'), false);
+    assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
+  }
+});
+
+function extensionSnapshot() {
+  return {
+    bonds: { enabled: true, cutoff: 3.1, pairCutoffs: [{ first: 'Fe', second: 'C', cutoff: 2.4 }], radius: 0.18, visible: false },
+    vectors: { enabled: true, components: ['force_x', 'force_y', 'force_z'], scale: 2, color: '#ffb84a' },
+    referenceStrain: { enabled: true, cutoff: 3.1, frameIndex: 2 },
+    localShear: { enabled: true, cutoff: 3.1, subtractMean: true },
+    rdf: { enabled: true, cutoff: 8, bins: 256, firstType: 'Fe', secondType: 'C' },
+    measurements: { enabled: true, minimumImage: true, atomIds: [1, 2, 3, 4] },
+    appearance: { elements: [{ label: 'Fe', color: '#ff1122', radius: 1.5, visible: true }], atoms: [{ id: 2, color: null, radius: null, visible: false }] },
+    comparison: { enabled: true, preset: 'right' },
+  };
+}
 
 test('new scalar schemes round-trip with fixed ranges and automatic ranges remain absent', () => {
   for (const scheme of ['magma', 'inferno', 'cividis', 'turbo', 'spectral']) {

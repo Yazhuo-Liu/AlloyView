@@ -65,6 +65,8 @@ test('structure headers are identified without relying on filename extensions', 
   assert.equal(detectStructureFormatHeader('# generated\nNumber of particles = 5\n'), 'cfg');
   assert.equal(detectStructureFormatHeader('ITEM: TIMESTEP\n0\n'), 'lammps-dump');
   assert.equal(detectStructureFormatHeader('ordinary text'), null);
+  assert.equal(detectStructureFormatHeader('2\ncomment\nFe 0 0 0\nC 1 1 1\n'), 'xyz');
+  assert.equal(detectStructureFormatHeader('REMARK   generated\nATOM      1  C   MOL A   1       0.000   0.000   0.000\n'), 'pdb');
 });
 
 test('CFG filename hints remain valid when a numeric suffix follows the extension', () => {
@@ -73,6 +75,24 @@ test('CFG filename hints remain valid when a numeric suffix follows the extensio
   assert.equal(inferStructureFormatFromPath('trajectory.dump.25'), 'lammps-dump');
   assert.equal(inferStructureFormatFromPath('trajectory_25.lmp'), 'lammps-dump');
   assert.equal(inferStructureFormatFromPath('trajectory.lammpstraj'), 'lammps-dump');
+  assert.equal(inferStructureFormatFromPath('trajectory.extxyz.1'), 'xyz');
+  assert.equal(inferStructureFormatFromPath('snapshot.xyz'), 'xyz');
+  assert.equal(inferStructureFormatFromPath('snapshot.pdb.2'), 'pdb');
+  assert.equal(inferStructureFormatFromPath('snapshot.ent'), 'pdb');
+});
+
+test('numbered XYZ and PDB files remain homogeneous sequences with natural order', () => {
+  const catalog = catalogLocalSources([
+    entry('xyz/frame.10.xyz'), entry('xyz/frame.2.xyz'),
+    entry('pdb/model.1.pdb'), entry('pdb/model.0.pdb'),
+    entry('single.extxyz'),
+  ]);
+  assert.equal(catalog.sequenceCount, 2);
+  assert.equal(catalog.supportedCount, 5);
+  assert.deepEqual(catalog.sources.map((source) => source.format), ['pdb', 'xyz', 'xyz']);
+  assert.deepEqual(catalog.sources[1].files.map((file) => file.name), ['frame.2.xyz', 'frame.10.xyz']);
+  assert.match(catalog.sources[0].detail, /PDB files/);
+  assert.match(catalog.sources[1].detail, /XYZ files/);
 });
 
 test('an explicitly rejected text file is not restored from its extension hint', () => {

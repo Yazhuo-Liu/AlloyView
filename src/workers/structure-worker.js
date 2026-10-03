@@ -6,6 +6,8 @@ import { isReadableLocalFile, normalizeLocalFiles } from '../io/local-files.js';
 import { detectStructureFormatHeader, inferStructureFormatFromPath } from '../io/file-sequences.js';
 import { indexLammpsDump, readLammpsFrame } from '../io/lammps-dump.js';
 import { indexLammpsDumpSeries, readLammpsSeriesFrame } from '../io/lammps-series.js';
+import { indexXyz, readXyzFrame } from '../io/xyz.js';
+import { indexPdb, readPdbFrame } from '../io/pdb.js';
 
 let source = null;
 let wasmModulePromise;
@@ -29,6 +31,8 @@ self.addEventListener('message', async (event) => {
         frame = await readLammpsSeriesFrame(source, payload.index);
       } else if (source.format === 'cfg-sequence') {
         frame = await queueCfgSequenceFrame(payload.index, id);
+      } else if (['xyz', 'xyz-sequence', 'pdb', 'pdb-sequence'].includes(source.format)) {
+        frame = await readIndexedTextFrame(source, payload.index);
       } else {
         throw new Error('A single CFG file contains only one frame. Select multiple numbered CFG files to load a sequence.');
       }
@@ -63,7 +67,9 @@ async function loadSource(inputFiles, requestId) {
     }
     if (formats.every((format) => format === 'cfg')) return loadCfgSequence(files, requestId);
     if (formats.every((format) => format === 'lammps-dump')) return loadLammpsDumpSequence(files, requestId);
-    throw new Error('A numbered file sequence must contain only CFG files or only LAMMPS text dump files.');
+    if (formats.every((format) => format === 'xyz')) return loadIndexedTextSource(files, 'xyz', requestId);
+    if (formats.every((format) => format === 'pdb')) return loadIndexedTextSource(files, 'pdb', requestId);
+    throw new Error('A numbered file sequence must contain a single format: CFG, LAMMPS text dump, XYZ, or PDB.');
   }
   const [file] = files;
   const header = await file.slice(0, 64 * 1024).text();
@@ -83,7 +89,44 @@ async function loadSource(inputFiles, requestId) {
     const frame = parseCfg(text, file.name);
     return { format: source.format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
   }
-  throw new Error('Unrecognized file format. The file must begin with AtomEye “Number of particles =” or LAMMPS “ITEM: TIMESTEP”.');
+  if (format === 'xyz' || format === 'pdb') return loadIndexedTextSource(files, format, requestId);
+  throw new Error('Unrecognized file format. Supported structures are AtomEye CFG, LAMMPS text dump, XYZ / Extended XYZ, and PDB.');
+}
+
+async function loadIndexedTextSource(inputFiles, format, requestId) {
+  const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+  const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
+  const chunks = [];
+  let frameCount = 0;
+  let indexMs = 0;
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+    const file = files[fileIndex];
+    const onProgress = ({ loaded, total }) => self.postMessage({ id: requestId, event: 'progress',
+      loaded: fileIndex + (total ? loaded / total : 0), total: files.length, stage: files.length > 1 ? 'series-index' : 'index' });
+    const indexed = format === 'xyz' ? await indexXyz(file, onProgress) : await indexPdb(file, onProgress);
+    chunks.push({ file, indexed, firstFrame: frameCount });
+    frameCount += format === 'xyz' ? indexed.offsets.length : indexed.frames.length;
+    indexMs += indexed.indexMs;
+  }
+  const indexedSource = { format: files.length > 1 ? `${format}-sequence` : format, baseFormat: format, chunks, frameCount };
+  const frame = await readIndexedTextFrame(indexedSource, 0);
+  source = indexedSource;
+  return { format: source.format, frameCount, indexMs, frame };
+}
+
+async function readIndexedTextFrame(indexedSource, index) {
+  if (!Number.isInteger(index) || index < 0 || index >= indexedSource.frameCount) throw new Error(`Trajectory frame ${index} is outside the available range.`);
+  let chunk = indexedSource.chunks[0];
+  for (let current = 1; current < indexedSource.chunks.length; current += 1) {
+    if (indexedSource.chunks[current].firstFrame > index) break;
+    chunk = indexedSource.chunks[current];
+  }
+  const localIndex = index - chunk.firstFrame;
+  const frame = indexedSource.baseFormat === 'xyz'
+    ? await readXyzFrame(chunk.file, chunk.indexed.offsets, localIndex, chunk.file.name)
+    : await readPdbFrame(chunk.file, chunk.indexed, localIndex, chunk.file.name);
+  frame.frameIndex = index;
+  return frame;
 }
 
 async function loadLammpsDumpSequence(inputFiles, requestId) {

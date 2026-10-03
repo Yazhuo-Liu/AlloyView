@@ -70,6 +70,49 @@ test('Worker parses current and previously cached load messages', async (t) => {
         assert.match(result.error, /No valid local file/);
       }
     });
+    await t.test('XYZ trajectory loading indexes frames and preserves typed properties', async () => {
+      const xyz = new File(['1\nfirst frame\nFe 0 0 0\n1\nProperties=species:S:1:pos:R:3:id:I:1:force:R:3\nFe 1 2 3 72 4 5 6\n'], 'trajectory.extxyz');
+      const loaded = await send('load', { files: [xyz] });
+      assert.equal(loaded.ok, true, loaded.error);
+      assert.equal(loaded.result.format, 'xyz');
+      assert.equal(loaded.result.frameCount, 2);
+      assert.equal(loaded.result.frame.idSource, 'row-order');
+      const next = await send('frame', { index: 1 });
+      assert.equal(next.ok, true, next.error);
+      assert.equal(next.result.frame.ids[0], 72);
+      assert.equal(next.result.frame.properties[2].name, 'force_2');
+      assert.equal(next.result.frame.properties[2].data[0], 6);
+    });
+    await t.test('numbered XYZ files concatenate their internal trajectories', async () => {
+      const loaded = await send('load', { files: [
+        new File(['1\nthird\nC 3 0 0\n'], 'frame.10.xyz'),
+        new File(['1\nfirst\nFe 1 0 0\n1\nsecond\nFe 2 0 0\n'], 'frame.2.xyz'),
+      ] });
+      assert.equal(loaded.ok, true, loaded.error);
+      assert.equal(loaded.result.format, 'xyz-sequence');
+      assert.equal(loaded.result.frameCount, 3);
+      const frame = await send('frame', { index: 2 });
+      assert.equal(frame.ok, true, frame.error);
+      assert.equal(frame.result.frame.typeLabels[0], 'C');
+      assert.equal(frame.result.frame.positions[0], 3);
+    });
+    await t.test('PDB models are indexed inside the Worker and can be loaded as sequences', async () => {
+      const pdbAtom = 'ATOM      7  CA  ALA A   1       1.000   2.000   3.000  1.00 12.50           C  ';
+      const models = new File([`MODEL        1\n${pdbAtom}\nENDMDL\nMODEL        2\n${pdbAtom}\nENDMDL\n`], 'model.0.pdb');
+      const loaded = await send('load', { files: [models] });
+      assert.equal(loaded.ok, true, loaded.error);
+      assert.equal(loaded.result.format, 'pdb');
+      assert.equal(loaded.result.frameCount, 2);
+      const next = await send('frame', { index: 1 });
+      assert.equal(next.ok, true, next.error);
+      assert.equal(next.result.frame.timestep, 2);
+      assert.equal(next.result.frame.ids[0], 7);
+      const sequence = await send('load', { files: [new File([pdbAtom], 'model.1.pdb'), models] });
+      assert.equal(sequence.ok, true, sequence.error);
+      assert.equal(sequence.result.format, 'pdb-sequence');
+      assert.equal(sequence.result.frameCount, 3);
+      assert.equal((await send('frame', { index: 2 })).ok, true);
+    });
   } finally {
     if (originalSelf === undefined) delete globalThis.self;
     else globalThis.self = originalSelf;

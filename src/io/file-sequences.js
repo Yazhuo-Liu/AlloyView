@@ -1,4 +1,4 @@
-const SUPPORTED_EXTENSION = /\.(?:cfg|dump|lmp|lammpstrj|lammpstraj|txt)$/i;
+const SUPPORTED_EXTENSION = /\.(?:cfg|dump|lmp|lammpstrj|lammpstraj|xyz|extxyz|pdb|ent|txt)$/i;
 const NUMBER_RUN = /\d+/g;
 
 const naturalCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
@@ -16,6 +16,8 @@ export function inferStructureFormatFromPath(path) {
   const filename = String(path).replaceAll('\\', '/').split('/').at(-1);
   if (/(?:^|\.)cfg(?:\.|$)/i.test(filename)) return 'cfg';
   if (/(?:^|\.)(?:dump|lmp|lammpstrj|lammpstraj)(?:\.|$)/i.test(filename)) return 'lammps-dump';
+  if (/(?:^|\.)(?:xyz|extxyz)(?:\.|$)/i.test(filename)) return 'xyz';
+  if (/(?:^|\.)(?:pdb|ent)(?:\.|$)/i.test(filename)) return 'pdb';
   return null;
 }
 
@@ -24,6 +26,8 @@ export function detectStructureFormatHeader(text) {
   const firstDataLine = lines.find((line) => line.trim() && !line.trim().startsWith('#'))?.trim() ?? '';
   if (/^Number\s+of\s+particles\s*=\s*\d+/i.test(firstDataLine)) return 'cfg';
   if (/^ITEM:\s+TIMESTEP\b/i.test(firstDataLine)) return 'lammps-dump';
+  if (/^\d+$/.test(firstDataLine) && Number(firstDataLine) > 0) return 'xyz';
+  if (lines.some((line) => /^(?:HEADER|TITLE|CRYST1|MODEL|ATOM|HETATM)(?:\s|$)/.test(line))) return 'pdb';
   return null;
 }
 
@@ -87,7 +91,7 @@ export function detectNumberedStructureSequences(inputEntries) {
   const groups = new Map();
   const entries = inputEntries.map(normalizeEntry);
   for (const entry of entries) {
-    if (entry.format !== 'cfg' && entry.format !== 'lammps-dump') continue;
+    if (!['cfg', 'lammps-dump', 'xyz', 'pdb'].includes(entry.format)) continue;
     const { directory, filename } = splitPath(entry.relativePath);
     for (const match of filename.matchAll(NUMBER_RUN)) {
       const index = Number(match[0]);
@@ -164,7 +168,7 @@ function formatFromPath(path) {
 
 function sequenceDetail(sequence) {
   const gap = sequence.missingCount > 0 ? ` · ${sequence.missingCount} missing index${sequence.missingCount === 1 ? '' : 'es'}` : '';
-  const contents = sequence.format === 'cfg' ? 'CFG frames' : 'LAMMPS dump files';
+  const contents = { cfg: 'CFG frames', 'lammps-dump': 'LAMMPS dump files', xyz: 'XYZ files', pdb: 'PDB files' }[sequence.format];
   return `${sequence.entries.length} ${contents} · indices ${sequence.firstIndex}–${sequence.lastIndex}${gap}`;
 }
 

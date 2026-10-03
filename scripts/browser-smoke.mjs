@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { extname, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { crystalFrame } from '../tests/helpers/crystals.js';
+import { runAtomToolsSmoke } from './browser-atom-tools.mjs';
 
 // No browser automation dependency: Node 24's WebSocket talks directly to CDP.
 const root = resolve(import.meta.dirname, '..');
@@ -1939,6 +1940,7 @@ try {
   ]);
   assert.ok(largeSamples.draws.length >= 2 && largeSamples.draws.every(count => count === largeCount));
   assert.equal(largeSamples.glError, 0);
+  await runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exportConfiguration, reloadPage, compareSettings, profile, screenshots: process.argv.includes('--structure-screenshot') });
   assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors));
   assert.ok(requests.some(path => path.endsWith('ptm-kernel.wasm')), 'browser must load the real PTM kernel');
   assert.ok(requests.filter((path) => /\.(js|mjs|wasm)$/.test(path)).every((path) => /^\/AlloyView\/assets\/[a-f0-9]+\//.test(path)));

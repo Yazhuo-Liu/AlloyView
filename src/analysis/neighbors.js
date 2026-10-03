@@ -119,7 +119,7 @@ export class NeighborSearch {
               const z = da * h[2] + db * h[5] + dc * h[8];
               const distanceSquared = x * x + y * y + z * z;
               if (distanceSquared <= radiusSquared) {
-                neighbors.push({ atom: other, x, y, z, distanceSquared });
+                neighbors.push({ atom: other, x, y, z, distanceSquared, imageA: a, imageB: b, imageC: c });
                 if (neighbors.length >= limit) return neighbors;
               }
             }

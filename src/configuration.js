@@ -5,9 +5,12 @@ import { SCALAR_COLOR_SCHEMES } from './render/palette.js';
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
 export const MAX_CONFIGURATION_SLICES = 16;
+export const MAX_CONFIGURATION_PAIR_CUTOFFS = 1024;
+export const MAX_CONFIGURATION_ATOM_OVERRIDES = 100_000;
+export const MAX_CONFIGURATION_RDF_BINS = 4096;
 
-const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'performance', 'configuration']);
+const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'performance', 'configuration', 'bonds', 'vectors', 'statistics', 'referenceStrain', 'localShear']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
@@ -118,13 +121,19 @@ function normalizeConfiguration(value, fromSnapshot) {
     || !Number.isFinite(Date.parse(exportedAt))) fail('exportedAt', 'must be an ISO timestamp');
   if (!Object.hasOwn(input, 'source')) fail('source', 'is missing');
   if (!Object.hasOwn(input, 'settings')) fail('settings', 'is missing');
-  return {
+  const configuration = {
     app: 'AlloyView',
     version: CONFIGURATION_VERSION,
     exportedAt,
     source: normalizeSource(input.source),
     settings: normalizeSettings(input.settings, fromSnapshot),
   };
+  const reference = configuration.settings.extensions.referenceStrain;
+  if (reference.enabled && configuration.source?.frameCount !== undefined
+    && reference.frameIndex >= configuration.source.frameCount) {
+    fail('settings.extensions.referenceStrain.frameIndex', 'must be smaller than the source frame count');
+  }
+  return configuration;
 }
 
 function normalizeSource(value) {
@@ -160,12 +169,13 @@ function normalizeSource(value) {
 }
 
 function normalizeSettings(value, fromSnapshot) {
-  const input = record(value, 'settings', ['display', 'analyses', 'replicate', 'slices', 'colors', 'camera', 'activeTool', 'selectedAtomId', 'theme']);
+  const input = record(value, 'settings', ['display', 'analyses', 'extensions', 'replicate', 'slices', 'colors', 'camera', 'activeTool', 'selectedAtomId', 'theme']);
   const repetitions = vector(input.replicate ?? [1, 1, 1], 'settings.replicate', 1, 4096, true);
   if (repetitions.reduce((product, count) => product * count, 1) > 4096) fail('settings.replicate', 'exceeds 4096 displayed cells');
   return {
     display: normalizeDisplay(input.display ?? {}),
     analyses: normalizeAnalyses(input.analyses ?? {}, fromSnapshot),
+    extensions: normalizeExtensions(input.extensions ?? {}, fromSnapshot),
     replicate: repetitions,
     slices: normalizeSlices(input.slices ?? {}),
     colors: normalizeColors(input.colors ?? {}),
@@ -174,6 +184,122 @@ function normalizeSettings(value, fromSnapshot) {
     selectedAtomId: identifier(input.selectedAtomId ?? null, 'settings.selectedAtomId', true),
     theme: choice(input.theme ?? 'dark', 'settings.theme', new Set(['light', 'dark'])),
   };
+}
+
+/** Optional version 1 additions keep older recipes disabled and data-free. */
+function normalizeExtensions(value, fromSnapshot) {
+  const path = 'settings.extensions';
+  const input = record(value, path, ['bonds', 'vectors', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison']);
+  const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
+  const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color']);
+  const referenceStrain = record(input.referenceStrain ?? {}, `${path}.referenceStrain`, ['enabled', 'frameIndex', 'cutoff']);
+  const localShear = record(input.localShear ?? {}, `${path}.localShear`, ['enabled', 'cutoff', 'subtractMean']);
+  const rdf = record(input.rdf ?? {}, `${path}.rdf`, ['enabled', 'cutoff', 'bins', 'firstType', 'secondType']);
+  const measurements = record(input.measurements ?? {}, `${path}.measurements`, ['enabled', 'minimumImage', 'atomIds']);
+  const appearance = record(input.appearance ?? {}, `${path}.appearance`, ['elements', 'atoms']);
+  const comparison = record(input.comparison ?? {}, `${path}.comparison`, ['enabled', 'preset']);
+  const pairCutoffs = list(bonds.pairCutoffs ?? [], `${path}.bonds.pairCutoffs`, MAX_CONFIGURATION_PAIR_CUTOFFS).map((value, index) => {
+    const entryPath = `${path}.bonds.pairCutoffs[${index}]`;
+    const entry = record(value, entryPath, ['first', 'second', 'cutoff']);
+    return {
+      first: typeLabel(entry.first, `${entryPath}.first`),
+      second: typeLabel(entry.second, `${entryPath}.second`),
+      cutoff: number(entry.cutoff, `${entryPath}.cutoff`, 0, MAX_COORDINATE),
+    };
+  });
+  ensureUnique(pairCutoffs.map(({ first, second }) => JSON.stringify([first, second].sort())), `${path}.bonds.pairCutoffs`);
+  const components = list(vectors.components ?? [null, null, null], `${path}.vectors.components`, 3, 3).map((value, index) => {
+    if (value === null) return null;
+    const property = string(value, `${path}.vectors.components[${index}]`, 256);
+    if (FORBIDDEN_KEYS.has(property)) fail(`${path}.vectors.components[${index}]`, 'is reserved');
+    return property;
+  });
+  const vectorsEnabled = boolean(vectors.enabled, `${path}.vectors.enabled`, false);
+  if (vectorsEnabled && components.includes(null)) fail(`${path}.vectors.components`, 'needs three properties for enabled vectors');
+  const atomIds = list(measurements.atomIds ?? [], `${path}.measurements.atomIds`, 4).map((value, index) => identifier(value, `${path}.measurements.atomIds[${index}]`));
+  ensureUnique(atomIds.map(String), `${path}.measurements.atomIds`);
+  const elements = list(appearance.elements ?? [], `${path}.appearance.elements`, MAX_PROPERTIES).map((value, index) => {
+    const entryPath = `${path}.appearance.elements[${index}]`;
+    const entry = record(value, entryPath, ['label', 'color', 'radius', 'visible']);
+    return { label: typeLabel(entry.label, `${entryPath}.label`), ...normalizeAppearance(entry, entryPath, fromSnapshot) };
+  });
+  ensureUnique(elements.map(({ label }) => label), `${path}.appearance.elements`);
+  const atoms = list(appearance.atoms ?? [], `${path}.appearance.atoms`, MAX_CONFIGURATION_ATOM_OVERRIDES).map((value, index) => {
+    const entryPath = `${path}.appearance.atoms[${index}]`;
+    const entry = record(value, entryPath, ['id', 'color', 'radius', 'visible']);
+    return { id: identifier(entry.id, `${entryPath}.id`), ...normalizeAppearance(entry, entryPath, fromSnapshot) };
+  });
+  ensureUnique(atoms.map(({ id }) => String(id)), `${path}.appearance.atoms`);
+  return {
+    bonds: {
+      ...normalizeCutoffAnalysis(bonds, `${path}.bonds`, fromSnapshot),
+      pairCutoffs,
+      radius: number(bonds.radius ?? 0.12, `${path}.bonds.radius`, 1e-12, MAX_COORDINATE),
+      visible: boolean(bonds.visible, `${path}.bonds.visible`, true),
+    },
+    vectors: {
+      enabled: vectorsEnabled,
+      components,
+      scale: number(vectors.scale ?? 1, `${path}.vectors.scale`, 1e-12, 1e12),
+      color: hexColor(vectors.color ?? '#f9ca57', `${path}.vectors.color`),
+    },
+    referenceStrain: {
+      ...normalizeCutoffAnalysis(referenceStrain, `${path}.referenceStrain`, fromSnapshot),
+      frameIndex: number(referenceStrain.frameIndex ?? 0, `${path}.referenceStrain.frameIndex`, 0, Number.MAX_SAFE_INTEGER, true),
+    },
+    localShear: {
+      ...normalizeCutoffAnalysis(localShear, `${path}.localShear`, fromSnapshot),
+      subtractMean: boolean(localShear.subtractMean, `${path}.localShear.subtractMean`, false),
+    },
+    rdf: {
+      ...normalizeCutoffAnalysis(rdf, `${path}.rdf`, fromSnapshot),
+      bins: number(rdf.bins ?? 100, `${path}.rdf.bins`, 1, MAX_CONFIGURATION_RDF_BINS, true),
+      firstType: rdf.firstType === undefined || rdf.firstType === null ? null : typeLabel(rdf.firstType, `${path}.rdf.firstType`),
+      secondType: rdf.secondType === undefined || rdf.secondType === null ? null : typeLabel(rdf.secondType, `${path}.rdf.secondType`),
+    },
+    measurements: {
+      enabled: boolean(measurements.enabled, `${path}.measurements.enabled`, false),
+      minimumImage: boolean(measurements.minimumImage, `${path}.measurements.minimumImage`, true),
+      atomIds,
+    },
+    appearance: { elements, atoms },
+    comparison: {
+      enabled: boolean(comparison.enabled, `${path}.comparison.enabled`, false),
+      preset: choice(comparison.preset ?? 'top', `${path}.comparison.preset`, new Set(['front', 'back', 'left', 'right', 'top', 'bottom'])),
+    },
+  };
+}
+
+function normalizeCutoffAnalysis(input, path, fromSnapshot) {
+  const enabled = boolean(input.enabled, `${path}.enabled`, false);
+  const cutoff = nullablePositive(input.cutoff, `${path}.cutoff`, fromSnapshot);
+  if (enabled && cutoff === null) fail(`${path}.cutoff`, 'is required for enabled analysis');
+  return { enabled, cutoff };
+}
+
+function normalizeAppearance(input, path, fromSnapshot) {
+  return {
+    color: input.color === undefined || input.color === null ? null : hexColor(input.color, `${path}.color`),
+    radius: nullablePositive(input.radius, `${path}.radius`, fromSnapshot),
+    visible: boolean(input.visible, `${path}.visible`, true),
+  };
+}
+
+function typeLabel(value, path) {
+  const label = string(value, path, 256);
+  if (!label.trim()) fail(path, 'must contain a non-whitespace label');
+  if (FORBIDDEN_KEYS.has(label)) fail(path, 'is reserved');
+  return label;
+}
+
+function hexColor(value, path) {
+  const color = string(value, path, 7);
+  if (!/^#[\da-f]{6}$/i.test(color)) fail(path, 'must be a six-digit hex color');
+  return color.toLowerCase();
+}
+
+function ensureUnique(values, path) {
+  if (new Set(values).size !== values.length) fail(path, 'contains duplicates');
 }
 
 function normalizeDisplay(value) {
@@ -397,6 +523,8 @@ function sliceIdentifier(value, path, nullable = false) {
 function canonicalFormat(format) {
   if (format === 'cfg' || format === 'cfg-sequence') return 'cfg';
   if (format === 'lammps-dump' || format === 'lammps-dump-sequence') return 'lammps-dump';
+  if (format === 'xyz' || format === 'xyz-sequence') return 'xyz';
+  if (format === 'pdb' || format === 'pdb-sequence') return 'pdb';
   return null;
 }
 

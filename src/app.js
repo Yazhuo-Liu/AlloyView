@@ -36,6 +36,7 @@ import { initializeFileDrop } from './file-drop.js';
 import { initializeSliceControls } from './slice-controls.js';
 import { initializeSliceGizmo } from './render/slice-gizmo.js';
 import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './configuration.js';
+import { initializeAtomEyeTools } from './atomeye-tools.js';
 
 const elements = Object.fromEntries([
   'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar',
@@ -123,6 +124,7 @@ let sourceOpenRequest = 0;
 let sourceFetchController = null;
 let sourceLoadingOwner = null;
 let renderer;
+let atomEyeTools;
 let backgroundCustomized = false;
 let sliceControls;
 let sliceGizmo;
@@ -135,9 +137,11 @@ initializeSidebarResize();
 const toolPanels = initializeToolPanels({
   onDeactivateAnalysis: (kind) => {
     interruptConfigurationRestore('an analysis change');
-    cancelAnalysis(kind);
+    if (state.analysis[kind]) cancelAnalysis(kind);
+    else atomEyeTools?.deactivate(kind);
   },
   onDeactivateTool: (name) => {
+    atomEyeTools?.deactivate(name);
     if (name === 'replicate') resetReplication();
     if (name === 'slice') toolPanels.setToolEnabled('slice', sliceControls.getState().slices.some(slice => slice.enabled));
   },
@@ -203,6 +207,24 @@ const worker = new StructureWorkerClient(({ loaded, total, stage }) => {
   }
 });
 
+atomEyeTools = initializeAtomEyeTools({
+  renderer, pool: analysisPool, tools: toolPanels,
+  getFrame: () => state.frame, getFrameAt: getFrame,
+  getFrameIndex: () => state.frameIndex, getFrameCount: () => state.frameCount,
+  getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
+  getSourceVersion: () => state.sourceVersion,
+  getSelectedIndex: () => state.selectedId === null || !state.frame ? -1 : state.frame.ids.findIndex(id => String(id) === String(state.selectedId)),
+  selectAtom,
+  refresh: () => { if (state.frame) { refreshColorOptions(); applyColors(); updateSelectionPanel(); } },
+  chooseProperty: name => { state.colorMode = `property:${name}`; refreshColorOptions(); applyColors(); },
+  getColorMode: () => state.colorMode,
+  getExportOptions: () => ({ includeBackground: elements['png-background'].checked,
+    includeAxes: elements['png-axes'].checked, legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null }),
+  showFrame, stopPlayback: stopFramePlayback,
+  getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
+  notify: showToast, onEdit: () => interruptConfigurationRestore('a settings edit'), onMemoryChange: reassessFrameCache,
+});
+
 const bccLogo = initializeBccLogo(elements['empty-state']);
 
 elements['open-local'].addEventListener('click', showLocalPicker);
@@ -228,6 +250,7 @@ elements['open-examples'].addEventListener('click', showExampleChooser);
 elements['close-file'].addEventListener('click', closeSource);
 
 elements['frame-slider'].addEventListener('input', () => {
+  atomEyeTools.cancelBatch({ restore: false });
   interruptConfigurationRestore('a frame change');
   stopFramePlayback();
   const index = Number(elements['frame-slider'].value);
@@ -265,7 +288,7 @@ document.addEventListener('pointerdown', (event) => {
   if (!elements['background-picker'].contains(event.target)) elements['background-picker'].open = false;
 });
 elements['show-axes'].addEventListener('change', syncAxisVisibility);
-elements['show-cell'].addEventListener('change', () => renderer.setCellVisible(elements['show-cell'].checked));
+elements['show-cell'].addEventListener('change', () => { renderer.setCellVisible(elements['show-cell'].checked); atomEyeTools.syncComparison(); });
 elements['apply-replicate'].addEventListener('click', applyReplication);
 elements['reset-replicate'].addEventListener('click', resetReplication);
 elements['export-configuration'].addEventListener('click', exportConfiguration);
@@ -335,6 +358,7 @@ document.addEventListener('visibilitychange', () => {
 for (const name of ['input', 'change']) {
   document.addEventListener(name, (event) => {
     if (event.target.id !== 'configuration-file' && event.target.closest('#sidebar')) {
+      atomEyeTools.cancelBatch({ restore: false });
       interruptConfigurationRestore('a settings edit');
     }
   });
@@ -342,6 +366,7 @@ for (const name of ['input', 'change']) {
 document.addEventListener('click', (event) => {
   const button = event.target.closest('#sidebar button');
   if (button && !['import-configuration', 'export-configuration'].includes(button.id)) {
+    if (!button.id.startsWith('export-') && button.id !== 'cancel-frame-series') atomEyeTools.cancelBatch({ restore: false });
     interruptConfigurationRestore('a settings change');
   }
 });
@@ -409,6 +434,7 @@ function closeSource() {
   clearTimeout(interactionHintFadeTimer);
   stopFramePlayback();
   abortAnalysisJobs();
+  atomEyeTools.reset();
   worker.reset();
   state.pendingFrames.clear();
   cache.clear();
@@ -436,7 +462,7 @@ function closeSource() {
   renderer.clearFrame();
   updateCspMethodUi();
   elements['file-name'].textContent = 'No structure loaded';
-  elements['file-meta'].textContent = 'CFG / LAMMPS dump';
+  elements['file-meta'].textContent = 'CFG / LAMMPS / XYZ / PDB';
   for (const id of ['format-chip', 'atom-count', 'frame-count', 'cell-kind', 'pbc-flags',
     'metric-index', 'metric-parse', 'metric-upload', 'metric-fps']) elements[id].textContent = '—';
   elements['pbc-flags'].removeAttribute('title');
@@ -541,7 +567,7 @@ async function classifyStructureEntries(entries, originLabel, isCurrent) {
         if (!isCurrent()) return;
         const detectedFormat = detectStructureFormatHeader(header);
         const filenameHint = inferStructureFormatFromPath(entry.relativePath);
-        format = detectedFormat ?? (filenameHint === 'cfg' ? 'cfg' : null);
+        format = detectedFormat ?? (['cfg', 'xyz', 'pdb'].includes(filenameHint) ? filenameHint : null);
       }
       classified[index] = { ...entry, format };
       completed += 1;
@@ -560,7 +586,7 @@ async function unrecognizedFilesMessage(candidates) {
   const first = candidates[0];
   const preview = await first.file.slice(0, 120).text();
   const compactPreview = preview.replace(/\s+/g, ' ').trim().slice(0, 72) || '(empty file)';
-  return `No CFG or LAMMPS text data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
+  return `No CFG, LAMMPS, XYZ or PDB data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
 }
 
 function showSourceChooser(catalog, originLabel, entries = state.availableEntries, { singleFiles = false } = {}) {
@@ -576,7 +602,7 @@ function showSourceChooser(catalog, originLabel, entries = state.availableEntrie
     for (const source of sequences) {
       fragment.append(sourceOption(
         source,
-        source.format === 'cfg' ? 'CFG sequence' : 'Dump series',
+        `${sourceFormatLabel(source.format)} sequence`,
         source.detail,
       ));
     }
@@ -600,7 +626,7 @@ function showSourceChooser(catalog, originLabel, entries = state.availableEntrie
         entry.relativePath,
       ));
     } else if (single) {
-      fragment.append(sourceOption(single, entry.format === 'cfg' ? 'CFG' : 'LAMMPS', single.detail));
+      fragment.append(sourceOption(single, sourceFormatLabel(entry.format), single.detail));
     } else {
       fragment.append(sourceOption(null, 'Other', 'Not recognized as CFG or LAMMPS structure data', entry.relativePath));
     }
@@ -783,6 +809,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     state.analysis.centrosymmetry = { enabled: false, parameters: null, key: null, request: 0 };
     state.analysis.ptm = { enabled: false, parameters: null, key: null, request: 0 };
     state.analysis.strain = { enabled: false, parameters: null, key: null, request: 0 };
+    atomEyeTools.reset();
     for (const kind of Object.keys(state.analysis)) toolPanels.setToolEnabled(kind, false);
     toolPanels.setToolEnabled('replicate', false);
     state.references = result.frame.typeLabels.map(referenceForElement);
@@ -850,9 +877,7 @@ function configureSourceUi(result) {
   elements['file-meta'].textContent = state.files.length > 1
     ? `${formatBytes(totalBytes)} · ${state.files.length} local files${state.source?.detected ? ' · numbered sequence' : ''}`
     : `${formatBytes(totalBytes)} · local browser file`;
-  elements['format-chip'].textContent = result.format === 'cfg'
-    ? 'CFG'
-    : result.format === 'cfg-sequence' ? 'CFG · sequence' : 'LAMMPS';
+  elements['format-chip'].textContent = sourceFormatLabel(result.format);
   elements['frame-count'].textContent = formatInteger(result.frameCount);
   elements['trajectory-section'].hidden = result.frameCount <= 1;
   elements.viewport.parentElement.classList.toggle('trajectory-visible', result.frameCount > 1);
@@ -863,6 +888,12 @@ function configureSourceUi(result) {
   renderFrameTicks(result.frameCount);
   updateFrameNavigation();
   setRangeProgress(elements['frame-slider']);
+}
+
+function sourceFormatLabel(format) {
+  const sequence = format.endsWith('-sequence');
+  const base = sequence ? format.slice(0, -9) : format;
+  return `${({ cfg: 'CFG', 'lammps-dump': 'LAMMPS', xyz: 'XYZ', pdb: 'PDB' })[base] ?? base.toUpperCase()}${sequence ? ' · sequence' : ''}`;
 }
 
 async function showFrame(index) {
@@ -906,7 +937,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   syncAxisVisibility();
   configureCoordinateMode(frame);
   refreshColorOptions();
-  const palette = paletteForCurrentMode();
+  const palette = atomEyeTools.customizePalette(paletteForCurrentMode());
   const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), radiiByType(frame), state.repetitions);
   configureReplicationUi();
   applyScalarVisibility(palette.legend);
@@ -956,6 +987,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
     }) : task);
   }
   if (state.analysis.coordination.enabled) pending.push(runCoordination({ automatic: true, frame, frameIndex: state.frameIndex }));
+  pending.push(atomEyeTools.onFrame({ suggestedCutoff: recommendCoordinationCutoff(frame).value }));
   syncCancelButton('coordination');
   await Promise.all(pending);
 }
@@ -1049,12 +1081,14 @@ function updateFrameNavigation() {
 }
 
 function showFrameManually(index) {
+  atomEyeTools.cancelBatch({ restore: false });
   interruptConfigurationRestore('a frame change');
   stopFramePlayback();
   void showFrame(index);
 }
 
 function toggleFramePlayback() {
+  atomEyeTools.cancelBatch({ restore: false });
   interruptConfigurationRestore('trajectory playback');
   if (state.playing) {
     stopFramePlayback();
@@ -1136,6 +1170,7 @@ function setRadiusPercent(rawValue, { source = 'number' } = {}) {
   elements['radius-percent'].value = String(percentage);
   setRangeProgress(elements['radius-scale']);
   renderer.setRadiusScale(percentage / 100);
+  atomEyeTools?.syncComparison();
 }
 
 function configureCoordinateMode(frame) {
@@ -1170,6 +1205,8 @@ function updateCoordinateMode() {
   elements['metric-upload'].textContent = formatDuration(renderer.setDisplayPositions(displayPositionsForFrame()));
   renderer.resetCamera();
   restoreSelection();
+  atomEyeTools.updateMeasurements();
+  atomEyeTools.syncComparison();
 }
 
 function refreshColorOptions() {
@@ -1204,10 +1241,12 @@ function refreshColorOptions() {
 function applyColors() {
   if (!state.frame) return;
   try {
-    const palette = paletteForCurrentMode();
+    const palette = atomEyeTools.customizePalette(paletteForCurrentMode());
     renderer.setColors(palette.colors);
     applyScalarVisibility(palette.legend);
     renderLegend(palette.legend);
+    atomEyeTools.applyRadii();
+    atomEyeTools.updateStatistics();
   } catch (error) {
     showToast(error.message);
   }
@@ -1215,19 +1254,19 @@ function applyColors() {
 
 function applyScalarVisibility(legend) {
   if (legend.kind === 'types' && legend.property?.categories) {
-    renderer.setVisibility(visibilityByCategory(legend.property, hiddenStructureTypes));
+    renderer.setVisibility(atomEyeTools.filterVisibility(visibilityByCategory(legend.property, hiddenStructureTypes)));
     restoreSelection();
     return;
   }
   if (legend.kind !== 'scalar') {
-    renderer.setVisibility(null);
+    renderer.setVisibility(atomEyeTools.filterVisibility(null));
     return;
   }
-  renderer.setVisibility(visibilityByProperty(
+  renderer.setVisibility(atomEyeTools.filterVisibility(visibilityByProperty(
     legend.property,
     legend.customRange ? { minimum: legend.minimum, maximum: legend.maximum } : null,
     scalarHideOutside.get(legend.property.name) !== false,
-  ));
+  )));
 }
 
 function paletteForCurrentMode() {
@@ -1246,6 +1285,7 @@ function paletteForCurrentMode() {
 }
 
 function abortAnalysisJobs() {
+  atomEyeTools?.abortJobs();
   for (const controller of analysisControllers.values()) controller.abort();
   analysisControllers.clear();
   analysisTasks.clear();
@@ -1653,6 +1693,7 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     // result out of the property cache and UI, including after a cache hit.
     if (!result || !isCurrent()) return;
     const property = { name: 'coordination', unit: '', data: result.coordination, analysisCutoff: cutoff,
+      histogram: result.histogram, meanCoordination: result.meanCoordination,
       analysisKind: 'coordination', analysisMs: result.elapsedMs, analysisEngine: result.engine };
     replaceAnalysisProperty(frame, property);
     reassessFrameCache(frame);
@@ -1695,11 +1736,13 @@ function selectAtom(index) {
     state.selectedId = null;
     renderer.setSelected(-1);
     updateSelectionPanel();
+    atomEyeTools?.selected(-1);
     return;
   }
   state.selectedId = state.frame.ids[index];
   renderer.setSelected(index);
   updateSelectionPanel(index);
+  atomEyeTools?.selected(index);
 }
 
 function restoreSelection() {
@@ -2071,6 +2114,7 @@ function setBackgroundColor(value, { close = false, automatic = false } = {}) {
   if (!automatic) backgroundCustomized = true;
   elements.background.value = value;
   renderer.setBackground(value);
+  atomEyeTools?.syncComparison();
   syncBackgroundControl(value);
   if (close) elements['background-picker'].open = false;
 }
@@ -2086,6 +2130,7 @@ function syncBackgroundControl(value) {
 }
 
 function setControlsEnabled(enabled) {
+  atomEyeTools?.setEnabled(enabled);
   for (const id of [
     'reset-camera', 'export-png', 'export-configuration', 'frame-slider',
     'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
@@ -2119,6 +2164,7 @@ function updateSlices() {
   toolPanels.setToolEnabled('slice', slices.some(slice => slice.enabled));
   syncSliceGizmo();
   if (state.frame) restoreSelection();
+  atomEyeTools?.syncComparison();
 }
 
 function syncSliceGizmo() {
@@ -2182,6 +2228,7 @@ function captureConfiguration() {
       camera: { yaw: renderer.yaw, pitch: renderer.pitch, target: [...renderer.target], pan: [...renderer.pan],
         distance: renderer.distance, orthographicScale: renderer.orthographicScale, projectionMode: renderer.projectionMode },
       activeTool: toolPanels.getActiveTool(), selectedAtomId: state.selectedId,
+      extensions: atomEyeTools.serialize(),
       theme: document.documentElement.dataset.theme,
     },
   });
@@ -2247,6 +2294,7 @@ async function restoreConfiguration(config) {
     stopFramePlayback();
     clearTimeout(cutoffTimer);
     for (const kind of Object.keys(state.analysis)) cancelAnalysis(kind);
+    atomEyeTools.reset();
     if (targetFrame && !(await showFrame(targetIndex))) throw new Error('The saved frame could not be loaded.');
     if (!current()) return;
 
@@ -2316,16 +2364,16 @@ async function restoreConfiguration(config) {
     if (state.frame) { refreshColorOptions(); applyColors(); restoreSelection(); }
     const tasks = Object.keys(state.analysis).filter(kind => state.analysis[kind].enabled).map(kind => kind === 'coordination'
       ? runCoordination({ automatic: true }) : runStructureAnalysis(kind, { automatic: true }));
-    await Promise.all(tasks);
+    await Promise.all([...tasks, atomEyeTools.restore(saved.extensions)]);
     if (!current()) return;
     if (state.frame) {
       state.colorMode = saved.display.colorMode;
       refreshColorOptions(); applyColors(); restoreSelection();
     }
-    const failed = Object.keys(state.analysis).filter(kind => {
+    const failed = [...Object.keys(state.analysis).filter(kind => {
       const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
       return state.analysis[kind].enabled && elements[`${prefix}-state`].textContent === 'Failed';
-    });
+    }), ...atomEyeTools.failed()];
     elements['configuration-status'].textContent = failed.length
       ? `Configuration restored; these analyses could not complete: ${failed.join(', ')}.`
       : 'Configuration restored. Enabled analyses and saved display settings are ready.';
@@ -2343,6 +2391,7 @@ function configureReplicationUi(enabled = Boolean(state.frame)) {
     input.title = state.frame?.cell.pbc[axis] ? `Total copies along cell vector ${name}` : 'This cell direction is not periodic.';
   }
   const copies = state.repetitions.reduce((product, count) => product * count, 1);
+  atomEyeTools?.syncComparison();
   toolPanels.setToolEnabled('replicate', copies > 1);
   elements['replicate-summary'].textContent = state.frame
     ? `${formatInteger(copies)} cells · ${formatInteger(state.frame.ids.length * copies)} displayed atoms. Analysis uses the ${formatInteger(state.frame.ids.length)} source atoms.`

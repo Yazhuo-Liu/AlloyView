@@ -2,22 +2,33 @@ const MEBIBYTE = 1024 ** 2;
 const GIBIBYTE = 1024 ** 3;
 
 export function estimateFrameBytes(frame) {
-  const buffers = new Set();
-  const include = (value) => {
-    if (ArrayBuffer.isView(value)) buffers.add(value.buffer);
+  const buffers = new Set(), visited = new Set(), pending = [frame];
+  let bytes = 0;
+  const includeBuffer = (buffer) => {
+    if (buffers.has(buffer)) return;
+    buffers.add(buffer);
+    bytes += buffer.byteLength;
   };
-  include(frame.ids);
-  include(frame.types);
-  include(frame.positions);
-  include(frame.fractional);
-  include(frame.unwrappedPositions);
-  include(frame.imageFlags);
-  include(frame.cell?.origin);
-  include(frame.cell?.vectors);
-  for (const property of frame.properties ?? []) include(property.data);
-  for (const property of frame.analysisOriginalProperties?.values() ?? []) include(property.data);
-  for (const value of Object.values(frame.ptm ?? {})) include(value);
-  return [...buffers].reduce((total, buffer) => total + buffer.byteLength, 0);
+  // Analysis caches can nest arrays below result/metadata records, Maps and
+  // Sets. Walk their containers, but never enumerate per-atom typed elements.
+  // A view retains its complete backing allocation, even when it is a slice.
+  while (pending.length) {
+    const value = pending.pop();
+    if (!value || typeof value !== 'object' || visited.has(value)) continue;
+    visited.add(value);
+    if (ArrayBuffer.isView(value)) { includeBuffer(value.buffer); continue; }
+    if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer === 'function' && value instanceof SharedArrayBuffer)) {
+      includeBuffer(value); continue;
+    }
+    if (value instanceof Map) {
+      for (const [key, entry] of value) pending.push(key, entry);
+    } else if (value instanceof Set || Array.isArray(value)) {
+      for (const entry of value) if (entry && typeof entry === 'object') pending.push(entry);
+    } else {
+      for (const entry of Object.values(value)) if (entry && typeof entry === 'object') pending.push(entry);
+    }
+  }
+  return bytes;
 }
 
 export function chooseFrameCachePolicy(frame, frameCount, environment = {}) {

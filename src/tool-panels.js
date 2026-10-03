@@ -1,4 +1,4 @@
-const ANALYSIS_TOOLS = new Set(['coordination', 'cna', 'centrosymmetry', 'ptm', 'strain']);
+const ANALYSIS_TOOLS = new Set(['coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'bonds', 'statistics', 'referenceStrain', 'localShear']);
 
 /**
  * Show one configuration panel while keeping independently enabled analyses.

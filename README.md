@@ -13,8 +13,8 @@
 </p>
 
 AlloyView is a browser-based viewer for atomistic structures and trajectories
-in metals and alloys. Open AtomEye CFG or LAMMPS text dumps, inspect atoms,
-calculate coordination numbers, and export figures. Files are parsed and
+in metals and alloys. Open AtomEye CFG, LAMMPS text dumps, XYZ or PDB, inspect
+atoms, calculate structural properties, and export figures. Files are parsed and
 analyzed on your device; structure data is never uploaded by the application.
 
 ## Viewer
@@ -30,13 +30,17 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 
 ## Features
 
-- AtomEye CFG and LAMMPS text dumps, including orthogonal and restricted
-  triclinic cells, scalar properties and periodic boundary flags.
-- Individual files, multi-frame dumps, numbered CFG sequences and numbered
-  dump series, with a timeline and continuous playback.
+- AtomEye CFG, LAMMPS text dumps, plain/extended XYZ and PDB, including
+  triclinic cells, numeric scalar/vector properties and periodic boundary flags.
+- Individual files, multi-frame trajectories and numbered structure sequences,
+  with a timeline and continuous playback.
 - WebGL 2 sphere rendering, element-aware atom radii, six standard views,
   perspective/orthographic projection, cell outlines and Cartesian axes.
-- Wrapped and unwrapped trajectory views and atom selection.
+- Wrapped and unwrapped trajectory views, atom-ID search/centering, and
+  distance, bond-angle and dihedral measurements with optional periodic images.
+- Element and individual-atom color, radius and visibility overrides.
+- Periodic bond graphs with element-pair cutoff overrides and adjustable bond
+  radius, plus force/velocity/other vector arrows from three scalar components.
 - Up to 16 independent clipping planes with arbitrary Cartesian normals,
   editable names and positions, and draggable plane/normal controls.
 - Display-only replication along independent periodic cell vectors, including
@@ -49,6 +53,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   templates, an adjustable RMSD threshold and the same crystal visibility controls.
 - Atomic elastic strain relative to an ideal lattice, with editable element-based
   lattice constants, shear/hydrostatic strain, volume change and tensor components.
+- Reference-frame least-squares strain using stable atom IDs, plus AtomEye-style
+  single-frame local geometric shear with optional mean-tensor subtraction.
+- Coordination histograms and total/element-pair radial distribution functions
+  with CSV export. Normalized RDF requires three periodic axes and a cutoff
+  within half the shortest cell face height.
 - AtomEye normalized central symmetry with automatic local FCC/HCP/BCC
   settings for mixed structures, or manual 8/12 neighbors. All analyses share
   a bounded parallel Worker scheduler and retain per-frame results. Workers
@@ -58,7 +67,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Atom-type colors and ten scalar color maps, with an Auto range toggle,
   editable limits that stay fixed across frames, and optional filtering of
   out-of-range atoms.
-- PNG export with independent background, legend and XYZ-arrow controls.
+- PNG export with independent background, legend and XYZ-arrow controls,
+  JPG and raster EPS export, visible atom-ID lists, six-view contact sheets and cancellable
+  trajectory image sequences packaged as ZIP files.
   Exported arrows are optional and off by default. Transparent
   exports keep the legend labels and color keys without a filled legend panel.
 - Light and dark themes with matching project logos and a saved preference.
@@ -66,6 +77,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   edits and automatic coordination updates when the cutoff changes.
 - Selectable tool settings and a phone layout with the viewport fixed above
   independently scrolling tools and collapsed camera/legend controls.
+- An optional simultaneous second view reuses the current frame and analysis
+  results, with its own camera orientation.
 - JSON configuration export/import saves source file metadata, processing
   settings, camera and theme, then restores the view and recomputes enabled
   analyses after the matching local files are opened.
@@ -77,7 +90,7 @@ Open the [online viewer](https://yazhuoliu.com/AlloyView/) in a browser with
 WebGL 2 support. No installation or account is needed.
 
 1. **Open a structure.** Click **Open local → Choose files…** for one or more
-   CFG/LAMMPS files. Use **Choose folder…** to browse a folder and detect
+   CFG/LAMMPS/XYZ/PDB files. Use **Choose folder…** to browse a folder and detect
    numbered sequences automatically. Drop a file anywhere on the page to open
    it individually; dropping several files lets you choose one. Or click
    **Examples** and choose a bundled source. The **×** beside the filename closes
@@ -115,6 +128,12 @@ WebGL 2 support. No installation or account is needed.
    shows the recognized phases; ideal HCP has a finite symmetry value.
    Under **Ideal lattice reference**, check the element, crystal phase and
    lattice constants before calculating atomic elastic strain.
+   **Bonds** adds neighbor connections with optional element-pair cutoffs.
+   **Vector arrows** selects three Cartesian scalar components.
+   **Frame strain** compares against a chosen trajectory frame;
+   **Local shear** measures the current neighbor geometry without a reference.
+   **Statistics** shows coordination distributions and calculates total or
+   element-pair RDF curves on fully periodic cells.
 5. **Export.** Choose **Include background in PNG** and **Include legend in
    PNG** independently, then click the download arrow in the viewport toolbar.
    Uncheck the background option for transparency, including around the legend.
@@ -126,6 +145,8 @@ WebGL 2 support. No installation or account is needed.
    **Open local** to select the saved source files with matching names and sizes.
    Atom data and calculated results stay in the source/session and are not
    embedded in the JSON.
+   **Display → Export images and atom IDs** also offers JPG, raster EPS, six-view PNG,
+   visible atom-ID lists and a ZIP of selected trajectory-frame images.
 
 A single file picker cannot discover unselected sibling files. Select all
 frames together or choose their folder to open a sequence.
@@ -176,15 +197,17 @@ modules from mixing file-loading protocols after deployment. See the
 | Topic | Reference |
 | --- | --- |
 | Detailed capabilities, local setup and current limits | [User & development guide](docs/USER_GUIDE.md) |
-| CFG and LAMMPS conventions | [Supported formats](docs/FORMATS.md) |
+| CFG, LAMMPS, XYZ and PDB conventions | [Supported formats](docs/FORMATS.md) |
 | Static hosting and GitHub Pages | [Deployment](docs/DEPLOYMENT.md) |
 | Executed tests and benchmark results | [Validation record](docs/VALIDATION.md) |
 | AtomEye design references and source provenance | [AtomEye review](docs/ATOMEYE_REVIEW.md) |
-| CNA, PTM, atomic strain, central symmetry and parallel execution | [Structure analysis](docs/STRUCTURE_ANALYSIS.md) |
+| CNA, PTM, ideal-lattice strain, central symmetry and parallel execution | [Structure analysis](docs/STRUCTURE_ANALYSIS.md) |
 
 WebGL 2 is required. Compressed/binary dumps, LAMMPS data/input files and
-LAMMPS general triclinic `abc origin` dumps are not supported. Coordination
-currently uses one global cutoff. Million-atom interactive performance has
+LAMMPS general triclinic `abc origin` dumps and NetCDF are not supported.
+Coordination uses one global cutoff; bond graphs have separate element-pair
+overrides. Reference-frame strain requires explicit stable atom IDs.
+Million-atom interactive performance has
 not been verified; see the guide for memory and trajectory limitations.
 
 ## Contributing and support
