@@ -385,6 +385,219 @@ try {
     assert.equal(await evaluate('Number(document.getElementById("frame-count").textContent)'), frames);
   }
 
+  // Native trajectory data has deliberately different scalar bounds on each
+  // frame, so Auto must track data while manual ranges remain comparable.
+  const legendTrajectoryPath = resolve(profile, 'legend-ranges.dump');
+  const legendTrajectory = [[0, 1, 2, 3], [-10, 0, 10, 20], [100, 120, 140, 160]].map((values, frame) => [
+    'ITEM: TIMESTEP', frame * 100, 'ITEM: NUMBER OF ATOMS', 4,
+    'ITEM: BOX BOUNDS pp pp pp', '0 10', '0 10', '0 10',
+    'ITEM: ATOMS id type element xs ys zs pe temp constant',
+    ...values.map((value, atom) => `${atom + 1} 1 Fe ${.15 + atom * .2} ${.2 + atom * .1} .5 ${value} ${(frame + 1) * (atom + 1) * 100} 7`),
+  ].join('\n')).join('\n') + '\n';
+  await writeFile(legendTrajectoryPath, legendTrajectory);
+  await call('DOM.setFileInputFiles', { nodeId, files: [legendTrajectoryPath] });
+  await waitFor('document.getElementById("file-name").textContent === "legend-ranges.dump" && document.getElementById("loading").hidden', 'legend trajectory');
+  const legendRange = () => evaluate('[...document.querySelectorAll(".legend-range span")].map(span => Number(span.textContent))');
+  const legendAuto = () => evaluate('document.getElementById("legend-auto").getAttribute("aria-pressed") === "true"');
+  const colorProperty = async name => {
+    await evaluate(`(() => { const color = document.getElementById('color-mode'); color.value = 'property:' + ${JSON.stringify(name)}; color.dispatchEvent(new Event('change')); })()`);
+    assert.equal(await evaluate('document.getElementById("color-mode").value'), `property:${name}`);
+  };
+  const legendFrame = async index => {
+    await evaluate(`(() => { const frame = document.getElementById('frame-slider'); frame.value = ${index}; frame.dispatchEvent(new Event('input')); })()`);
+    await waitFor(`document.getElementById('frame-label').textContent === '${index + 1} / 3' && document.getElementById('timestep-label').textContent === 'timestep ${index * 100}' && document.getElementById('loading').hidden`, 'legend trajectory frame');
+  };
+  const legendScheme = async scheme => {
+    await evaluate(`(() => { const select = document.querySelector('.legend-scheme select'); select.value = ${JSON.stringify(scheme)}; select.dispatchEvent(new Event('change')); })()`);
+    assert.equal(await evaluate('document.querySelector(".legend-scheme select").value'), scheme);
+  };
+  await colorProperty('pe');
+  assert.equal(await legendAuto(), true, 'a new property starts with Auto on');
+  assert.equal(await evaluate('document.getElementById("legend-auto").disabled'), false, 'Auto is an always-available toggle');
+  assert.equal(await evaluate('document.querySelector(".legend-scheme select").value'), 'atomeye', 'existing AtomEye default is preserved');
+  assert.deepEqual(await legendRange(), [0, 3]);
+  await delay(150);
+  const autoOnBackground = await evaluate('getComputedStyle(document.getElementById("legend-auto")).backgroundColor');
+  await legendFrame(1);
+  assert.deepEqual(await legendRange(), [-10, 20], 'Auto follows the new frame data');
+  await evaluate('document.getElementById("legend-auto").click()');
+  assert.equal(await legendAuto(), false);
+  await delay(150);
+  assert.notEqual(await evaluate('getComputedStyle(document.getElementById("legend-auto")).backgroundColor'), autoOnBackground, 'Auto on is visually highlighted');
+  await legendFrame(2);
+  assert.deepEqual(await legendRange(), [-10, 20], 'turning Auto off freezes the current range');
+  await legendFrame(0);
+  assert.deepEqual(await legendRange(), [-10, 20], 'a fixed range also survives cached-frame navigation');
+  await evaluate('document.getElementById("legend-auto").click()');
+  assert.equal(await legendAuto(), true);
+  assert.deepEqual(await legendRange(), [0, 3], 'turning Auto on immediately fits the current frame');
+
+  // Incomplete typing must switch Auto off without replacing the typed field
+  // or discarding the last valid range. Exercise actual keyboard input too.
+  await evaluate(`(() => { const minimum = document.querySelector('.legend-controls input[type=number]'); minimum.focus(); minimum.value = ''; minimum.dispatchEvent(new Event('input')); })()`);
+  assert.equal(await legendAuto(), false, 'even clearing a field turns Auto off');
+  assert.equal(await evaluate('document.querySelector(".legend-controls input[type=number]").value'), '');
+  assert.deepEqual(await legendRange(), [0, 3]);
+  await legendFrame(1);
+  assert.deepEqual(await legendRange(), [0, 3]);
+  await evaluate('document.getElementById("legend-auto").click(); document.querySelector(".legend-controls input[type=number]").focus(); document.querySelector(".legend-controls input[type=number]").select()');
+  await call('Input.insertText', { text: '-' });
+  assert.equal(await legendAuto(), false, 'a partial signed number turns Auto off');
+  assert.equal(await evaluate('document.querySelector(".legend-controls input[type=number]").value'), '', 'partial typing is not rewritten');
+  assert.deepEqual(await legendRange(), [-10, 20]);
+
+  // Editing a bound far above the old data must still advance the opposite
+  // bound; rerenders must preserve close limits instead of rounding them equal.
+  await legendFrame(0);
+  const highMagnitudeToast = await evaluate('document.getElementById("toast").textContent');
+  const preciseLegendRange = () => evaluate('[...document.querySelectorAll(".legend-controls input[type=number]")].map(input => input.valueAsNumber)');
+  await evaluate(`(() => { const minimum = document.querySelector('.legend-controls input[type=number]'); minimum.value = '100000000'; minimum.dispatchEvent(new Event('input')); })()`);
+  const coupledLargeRange = await preciseLegendRange();
+  assert.equal(await legendAuto(), false);
+  assert.equal(coupledLargeRange[0], 1e8);
+  assert.ok(Number.isFinite(coupledLargeRange[1]) && coupledLargeRange[1] > 1e8, 'a large edited minimum advances the maximum');
+  await evaluate(`(() => { const maximum = document.querySelectorAll('.legend-controls input[type=number]')[1]; maximum.value = '100000000.01'; maximum.dispatchEvent(new Event('input')); })()`);
+  assert.deepEqual(await preciseLegendRange(), [1e8, 1e8 + .01]);
+  await legendScheme('plasma');
+  assert.deepEqual(await preciseLegendRange(), [1e8, 1e8 + .01], 'palette rerenders preserve close large numeric bounds');
+  await legendFrame(2);
+  assert.deepEqual(await preciseLegendRange(), [1e8, 1e8 + .01], 'frame rerenders preserve close large numeric bounds');
+  assert.equal(await legendAuto(), false);
+  const largeRangeRecipe = await exportConfiguration();
+  assert.deepEqual(largeRangeRecipe.settings.colors.ranges.find(range => range.property === 'pe'), { property: 'pe', minimum: 1e8, maximum: 1e8 + .01 });
+  assert.equal(await evaluate('document.getElementById("toast").textContent'), highMagnitudeToast, 'valid large edits do not report an error');
+  await evaluate(`(() => {
+    const [minimum, maximum] = document.querySelectorAll('.legend-controls input[type=number]');
+    minimum.value = '-5'; minimum.dispatchEvent(new Event('input'));
+    maximum.value = '25'; maximum.dispatchEvent(new Event('change'));
+  })()`);
+  assert.deepEqual(await legendRange(), [-5, 25]);
+  await legendFrame(2);
+  assert.deepEqual(await legendRange(), [-5, 25], 'valid manual bounds persist across frames');
+  for (const theme of ['light', 'dark']) {
+    await evaluate(`document.getElementById('theme-${theme}').click()`);
+    await delay(150);
+    await checkTextContrast(['#legend-auto'], 4.5);
+    await evaluate('document.getElementById("legend-auto").click()');
+    await delay(150);
+    assert.equal(await legendAuto(), true);
+    await checkTextContrast(['#legend-auto'], 4.5);
+    await evaluate(`(() => { const [minimum, maximum] = document.querySelectorAll('.legend-controls input[type=number]'); minimum.value = '-5'; minimum.dispatchEvent(new Event('input')); maximum.value = '25'; maximum.dispatchEvent(new Event('input')); })()`);
+    assert.equal(await legendAuto(), false);
+  }
+  await evaluate('document.getElementById("theme-light").click()');
+
+  // Exercise all new maps through the real PNG exporter: the supplied scalar
+  // bounds appear in the drawn labels and the decoded color bars differ.
+  const paletteExports = await evaluate(`(async () => {
+    const appUrl = document.querySelector('script[type="module"]').src;
+    const { WebGLRenderer } = await import(new URL('./render/webgl-renderer.js', appUrl));
+    const originalExport = WebGLRenderer.prototype.exportPng, originalToBlob = HTMLCanvasElement.prototype.toBlob;
+    const originalClick = HTMLAnchorElement.prototype.click, originalText = CanvasRenderingContext2D.prototype.fillText;
+    let exportedLegend, texts = [];
+    WebGLRenderer.prototype.exportPng = function(filename, options) { exportedLegend = options.legend; return originalExport.call(this, filename, options); };
+    CanvasRenderingContext2D.prototype.fillText = function(text, ...rest) { texts.push(String(text)); return originalText.call(this, text, ...rest); };
+    HTMLAnchorElement.prototype.click = () => {};
+    document.getElementById('png-background').checked = false;
+    document.getElementById('png-legend').checked = true;
+    const results = [];
+    try {
+      for (const scheme of ['magma', 'inferno', 'cividis', 'turbo', 'spectral']) {
+        const select = document.querySelector('.legend-scheme select'); select.value = scheme; select.dispatchEvent(new Event('change'));
+        if (select.value !== scheme) throw new Error('Missing palette: ' + scheme);
+        texts = [];
+        const pixels = await new Promise((resolve, reject) => {
+          HTMLCanvasElement.prototype.toBlob = function(callback, type) {
+            originalToBlob.call(this, async blob => {
+              try {
+                const bitmap = await createImageBitmap(blob), canvas = document.createElement('canvas');
+                canvas.width = bitmap.width; canvas.height = bitmap.height;
+                const context = canvas.getContext('2d'); context.drawImage(bitmap, 0, 0);
+                const scale = Math.max(1, Math.min(3, bitmap.width / document.getElementById('viewport').clientWidth));
+                const sample = [...context.getImageData(Math.round(138 * scale), Math.round(bitmap.height - 61 * scale), 1, 1).data];
+                callback(blob); resolve(sample);
+              } catch (error) { reject(error); }
+            }, type);
+          };
+          document.getElementById('export-png').click();
+        });
+        results.push({ scheme: exportedLegend.scheme, minimum: exportedLegend.minimum, maximum: exportedLegend.maximum, pixels, texts: [...texts], auto: document.getElementById('legend-auto').getAttribute('aria-pressed') });
+      }
+    } finally {
+      WebGLRenderer.prototype.exportPng = originalExport; HTMLCanvasElement.prototype.toBlob = originalToBlob;
+      HTMLAnchorElement.prototype.click = originalClick; CanvasRenderingContext2D.prototype.fillText = originalText;
+    }
+    return results;
+  })()`);
+  assert.deepEqual(paletteExports.map(entry => entry.scheme), ['magma', 'inferno', 'cividis', 'turbo', 'spectral']);
+  assert.equal(new Set(paletteExports.map(entry => entry.pixels.join(','))).size, 5, 'new maps produce different PNG color bars');
+  for (const entry of paletteExports) {
+    assert.deepEqual([entry.minimum, entry.maximum], [-5, 25]);
+    assert.equal(entry.auto, 'false', 'changing palettes does not change range mode');
+    assert.equal(entry.pixels[3], 255, 'the exported color bar is present');
+    assert.ok(entry.texts.includes('-5') && entry.texts.includes('25'), 'PNG labels use the saved bounds');
+  }
+  await colorProperty('temp');
+  assert.equal(await legendAuto(), true, 'another property has independent Auto state');
+  assert.deepEqual(await legendRange(), [300, 1200]);
+  await legendScheme('magma');
+  await evaluate(`(() => { const [minimum, maximum] = document.querySelectorAll('.legend-controls input[type=number]'); minimum.value = '0'; minimum.dispatchEvent(new Event('input')); maximum.value = '1500'; maximum.dispatchEvent(new Event('input')); })()`);
+  await colorProperty('pe');
+  assert.equal(await legendAuto(), false);
+  assert.deepEqual(await legendRange(), [-5, 25]);
+  assert.equal(await evaluate('document.querySelector(".legend-scheme select").value'), 'spectral');
+  await colorProperty('constant');
+  assert.deepEqual(await legendRange(), [7, 7]);
+  await evaluate('document.getElementById("legend-auto").click()');
+  const constantLimits = await legendRange();
+  assert.equal(await legendAuto(), false);
+  assert.equal(constantLimits[0], 7);
+  assert.ok(Number.isFinite(constantLimits[1]) && constantLimits[1] > 7, 'a constant scalar freezes to a valid ordered range');
+  await legendFrame(0);
+  assert.deepEqual(await legendRange(), constantLimits);
+  await legendFrame(2);
+  await colorProperty('pe');
+  const fixedLegendRecipe = await exportConfiguration();
+  assert.ok(fixedLegendRecipe.settings.colors.ranges.some(range => range.property === 'pe' && range.minimum === -5 && range.maximum === 25));
+  assert.ok(fixedLegendRecipe.settings.colors.ranges.some(range => range.property === 'temp' && range.minimum === 0 && range.maximum === 1500));
+  const legendRecipePath = resolve(profile, 'legend-recipe.json');
+  await writeFile(legendRecipePath, JSON.stringify(fixedLegendRecipe));
+  const { nodeId: legendConfigurationInput } = await call('DOM.querySelector', { nodeId: domRoot.nodeId, selector: '#configuration-file' });
+  await legendFrame(0);
+  await evaluate('document.getElementById("legend-auto").click()');
+  await legendScheme('viridis');
+  await call('DOM.setFileInputFiles', { nodeId: legendConfigurationInput, files: [legendRecipePath] });
+  await waitFor('document.getElementById("frame-label").textContent === "3 / 3" && document.getElementById("configuration-status").textContent.includes("restored")', 'fixed legend recipe replay');
+  assert.equal(await legendAuto(), false);
+  compareSettings((await exportConfiguration()).settings, fixedLegendRecipe.settings);
+  await legendFrame(0);
+  assert.deepEqual(await legendRange(), [-5, 25]);
+  await colorProperty('temp');
+  assert.equal(await legendAuto(), false);
+  assert.deepEqual(await legendRange(), [0, 1500]);
+  assert.equal(await evaluate('document.querySelector(".legend-scheme select").value'), 'magma');
+  await colorProperty('pe');
+  await evaluate('document.getElementById("legend-auto").click()');
+  const automaticLegendRecipe = await exportConfiguration();
+  assert.equal(automaticLegendRecipe.settings.colors.ranges.some(range => range.property === 'pe'), false, 'Auto is exported as absence of fixed bounds');
+  assert.ok(automaticLegendRecipe.settings.colors.ranges.some(range => range.property === 'temp'), 'other fixed properties remain saved');
+  const automaticLegendPath = resolve(profile, 'legend-auto-recipe.json');
+  await writeFile(automaticLegendPath, JSON.stringify(automaticLegendRecipe));
+  await legendFrame(2);
+  await evaluate('document.getElementById("legend-auto").click()');
+  await call('DOM.setFileInputFiles', { nodeId: legendConfigurationInput, files: [automaticLegendPath] });
+  await waitFor('document.getElementById("frame-label").textContent === "1 / 3" && document.getElementById("legend-auto").getAttribute("aria-pressed") === "true" && document.getElementById("configuration-status").textContent.includes("restored")', 'automatic legend recipe replay');
+  assert.deepEqual(await legendRange(), [0, 3]);
+  await legendFrame(1);
+  assert.deepEqual(await legendRange(), [-10, 20], 'imported Auto continues to fit subsequent frames');
+  if (process.argv.includes('--structure-screenshot')) {
+    await showTool('display');
+    const capture = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile('/tmp/alloyview-legend-auto.png', Buffer.from(capture.data, 'base64'));
+  }
+  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(root, 'examples/fcc-vacancy.cfg')] });
+  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden', 'return from legend trajectory');
+
   // A cutoff edit starts analysis without a separate Apply/Calculate click.
   await showTool('coordination');
   await evaluate(`(() => { const cutoff = document.getElementById('cutoff'); cutoff.value = '2'; cutoff.dispatchEvent(new Event('input')); })()`);
@@ -1525,6 +1738,20 @@ try {
   assert.equal(await evaluate('document.getElementById("toggle-legend").getAttribute("aria-expanded")'), 'true');
   assert.notEqual(await evaluate('getComputedStyle(document.getElementById("legend")).display'), 'none');
   assert.equal(await evaluate('document.querySelectorAll(".crystal-items input[type=checkbox]").length'), 5);
+  await colorProperty('site_energy');
+  assert.equal(await legendAuto(), true);
+  const phoneAutoPoint = await evaluate(`(() => {
+    const button = document.getElementById('legend-auto'); button.scrollIntoView({ block: 'nearest' });
+    const rect = button.getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`);
+  assert.ok(phoneAutoPoint.x > 0 && phoneAutoPoint.x < 390 && phoneAutoPoint.y > 0 && phoneAutoPoint.y < 844, 'phone Auto toggle is reachable');
+  for (const expected of [false, true]) {
+    await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, ...phoneAutoPoint }] });
+    await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await waitFor(`document.getElementById('legend-auto').getAttribute('aria-pressed') === '${expected}'`, 'phone Auto tap');
+  }
+  await colorProperty('structureType');
   await evaluate('document.getElementById("toggle-legend").click()');
 
   // Actual multi-touch input must zoom/pan the WebGL camera, not the webpage.
@@ -1715,7 +1942,7 @@ try {
   assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors));
   assert.ok(requests.some(path => path.endsWith('ptm-kernel.wasm')), 'browser must load the real PTM kernel');
   assert.ok(requests.filter((path) => /\.(js|mjs|wasm)$/.test(path)).every((path) => /^\/AlloyView\/assets\/[a-f0-9]+\//.test(path)));
-  console.log('Browser smoke passed: continuous 3D BCC logo including reduced-motion settings; Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent analyses; Auto central symmetry for FCC/HCP/BCC and local mixed-phase neighbor shells, trajectory/cache reuse, cancellation reset and Auto/legacy-manual recipe replay; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; startup preparation/Wasm/indexing/atom progress and warm Worker reuse; selectable tools; triclinic display replication and unchanged analysis inputs; intersecting arbitrary world-space slices, displayed/unwrapped coordinates, visible-copy GPU coverage/picking and real handle drags without camera motion; JSON configuration export/replay, local-source reselection, source-loading/preflight races and unchanged settings after rejected recipes; editable lattice references and PTM reuse; sidebar/themes; phone pinch zoom, two-finger pan, one-finger orbit, tap picking, fixed viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
+  console.log('Browser smoke passed: continuous 3D BCC logo including reduced-motion settings; Pages Wasm loading; trajectories; automatic cutoff/legend edits; highlighted legend Auto toggle, manual/incomplete/constant scalar bounds, stable ranges across fresh/cached frames, independent property maps/ranges, five new PNG palettes and fixed/Auto recipe replay; latest-result queueing; concurrent analyses; Auto central symmetry for FCC/HCP/BCC and local mixed-phase neighbor shells, trajectory/cache reuse, cancellation reset and Auto/legacy-manual recipe replay; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; startup preparation/Wasm/indexing/atom progress and warm Worker reuse; selectable tools; triclinic display replication and unchanged analysis inputs; intersecting arbitrary world-space slices, displayed/unwrapped coordinates, visible-copy GPU coverage/picking and real handle drags without camera motion; JSON configuration export/replay, local-source reselection, source-loading/preflight races and unchanged settings after rejected recipes; editable lattice references and PTM reuse; sidebar/themes; phone Auto tap, pinch zoom, two-finger pan, one-finger orbit, tap picking, fixed viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
   console.log(JSON.stringify(exports));
   console.log(`Large-structure clipping passed: ${largeCount} local CFG atoms; depth range ${largeDepths.minimum.toFixed(4)}..${largeDepths.maximum.toFixed(4)}; first/last atoms rendered and picked.`);
 } finally {

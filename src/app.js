@@ -1867,48 +1867,81 @@ function renderLegend(legend) {
     visibility.append(visibilityCheckbox, document.createTextNode('Hide values outside range'));
     const automatic = document.createElement('button');
     automatic.type = 'button';
+    automatic.id = 'legend-auto';
+    automatic.className = 'legend-auto';
     automatic.textContent = 'Auto';
-    automatic.disabled = !legend.customRange;
+    const syncAutomatic = () => {
+      const enabled = !scalarColorRanges.has(legend.property.name);
+      automatic.classList.toggle('active', enabled);
+      automatic.setAttribute('aria-pressed', String(enabled));
+      automatic.setAttribute('aria-label', `Automatic color range ${enabled ? 'on' : 'off'}`);
+      automatic.title = enabled
+        ? 'Auto on: limits follow each frame. Click to keep the current range.'
+        : 'Auto off: limits stay fixed across frames. Click to fit the current frame.';
+    };
+    syncAutomatic();
     actions.append(automatic);
     controls.append(schemeControl, minimumControl.label, maximumControl.label, visibility, actions);
+    const freezeCurrentRange = () => {
+      const limits = scalarColorRanges.get(legend.property.name)
+        ?? { minimum: legend.minimum, maximum: editableMaximum };
+      scalarColorRanges.set(legend.property.name, limits);
+      return limits;
+    };
+    const applyRange = (limits) => {
+      const palette = colorsByProperty(legend.property, limits, legend.scheme);
+      scalarColorRanges.set(legend.property.name, limits);
+      scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
+      renderer.setColors(palette.colors);
+      applyScalarVisibility(palette.legend);
+      minimum.textContent = formatValue(limits.minimum);
+      maximum.textContent = formatValue(limits.maximum);
+      syncAutomatic();
+    };
     const applyLiveRange = (changed) => {
+      interruptConfigurationRestore('a color range edit');
+      // Even an incomplete edit turns Auto off. Preserve the last valid range
+      // until both numbers are valid, without replacing the active input.
+      const wasAutomatic = !scalarColorRanges.has(legend.property.name);
+      const previousRange = freezeCurrentRange();
+      syncAutomatic();
       const coupled = coupleScalarRange(
         minimumControl.input.valueAsNumber,
         maximumControl.input.valueAsNumber,
         changed,
         step,
       );
-      if (!coupled) return;
+      if (!coupled) {
+        if (wasAutomatic) applyRange(previousRange);
+        return;
+      }
       const { minimum: requestedMinimum, maximum: requestedMaximum } = coupled;
       // Preserve the active field's editing state (e.g. typing a decimal).
       // Only adjust its opposite bound when enforcing the ordered range.
       if (changed !== 'minimum') minimumControl.input.value = formatEditableNumber(requestedMinimum);
       if (changed !== 'maximum') maximumControl.input.value = formatEditableNumber(requestedMaximum);
       const limits = { minimum: requestedMinimum, maximum: requestedMaximum };
-      scalarColorRanges.set(legend.property.name, limits);
-      scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
-      const palette = colorsByProperty(legend.property, limits, legend.scheme);
-      renderer.setColors(palette.colors);
-      applyScalarVisibility(palette.legend);
-      minimum.textContent = formatValue(requestedMinimum);
-      maximum.textContent = formatValue(requestedMaximum);
-      automatic.disabled = false;
+      applyRange(limits);
     };
     minimumControl.input.addEventListener('input', () => applyLiveRange('minimum'));
     maximumControl.input.addEventListener('input', () => applyLiveRange('maximum'));
     minimumControl.input.addEventListener('change', () => applyLiveRange('minimum'));
     maximumControl.input.addEventListener('change', () => applyLiveRange('maximum'));
     schemeSelect.addEventListener('change', () => {
+      interruptConfigurationRestore('a color map change');
       scalarColorSchemes.set(legend.property.name, schemeSelect.value);
       applyColors();
     });
     visibilityCheckbox.addEventListener('change', () => {
+      interruptConfigurationRestore('a color visibility change');
       scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
       const limits = scalarColorRanges.get(legend.property.name) ?? null;
       renderer.setVisibility(visibilityByProperty(legend.property, limits, visibilityCheckbox.checked));
     });
     automatic.addEventListener('click', () => {
-      scalarColorRanges.delete(legend.property.name);
+      interruptConfigurationRestore('a color range change');
+      if (scalarColorRanges.has(legend.property.name)) scalarColorRanges.delete(legend.property.name);
+      else freezeCurrentRange();
       applyColors();
     });
     elements.legend.append(gradient, range, controls);
@@ -1923,7 +1956,7 @@ function legendNumberControl(name, value, step) {
   const input = document.createElement('input');
   input.type = 'number';
   input.step = String(step);
-  input.value = Number(value.toPrecision(8)).toString();
+  input.value = formatEditableNumber(value);
   label.append(text, input);
   return { label, input };
 }
@@ -1936,11 +1969,12 @@ function scalarLegendStep(legend) {
       || legend.property.data instanceof Int16Array
       || legend.property.data instanceof Int32Array) return 1;
   const span = Math.abs(legend.dataMaximum - legend.dataMinimum);
-  return span > 0 ? 10 ** Math.floor(Math.log10(span / 100)) : 0.01;
+  const precision = Math.max(Math.abs(legend.minimum), Math.abs(legend.maximum)) * Number.EPSILON * 2;
+  return Math.max(span > 0 ? 10 ** Math.floor(Math.log10(span / 100)) : 0.01, precision);
 }
 
 function formatEditableNumber(value) {
-  return Number(value.toPrecision(10)).toString();
+  return String(value);
 }
 
 function updateAxisTriad(directions) {

@@ -1,12 +1,14 @@
 // Portable processing recipes deliberately contain no coordinates or atom data.
 // Local files must be selected again; source metadata is only used to match them.
+import { SCALAR_COLOR_SCHEMES } from './render/palette.js';
+
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
 export const MAX_CONFIGURATION_SLICES = 16;
 
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence']);
 const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'performance', 'configuration']);
-const COLOR_SCHEMES = new Set(['atomeye', 'viridis', 'plasma', 'coolwarm', 'grayscale']);
+const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const MAX_FILES = 20_000;

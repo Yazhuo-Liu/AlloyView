@@ -19,6 +19,16 @@ temporarily suspends it. Checkbox preferences survive frame changes and
 recalculation, and reset when a different source is opened. PNG legends include
 counts and mark hidden classes.
 
+Scalar analysis results use a separate legend with ten palettes: AtomEye
+rainbow, Viridis, Plasma, Magma, Inferno, Cividis, Turbo, Spectral, Cool–warm
+and Grayscale. Highlighted **Auto** fits the range to the current frame.
+Turning Auto off freezes the displayed limits; editing either limit also turns
+it off. Each property's fixed limits survive trajectory frame changes,
+reused results and switching color properties. Clicking Auto again fits the
+current frame and resumes automatic limits. Range, palette and outside-range
+filter edits do not rerun analysis, and PNG output uses the same legend settings.
+Processing configurations preserve the palettes and per-property range mode.
+
 | ID | Class | Environment | Color (OVITO convention) |
 | --- | --- | --- | --- |
 | 0 | Other | Unrecognized, disordered or defective | White, RGB 242/242/242 |

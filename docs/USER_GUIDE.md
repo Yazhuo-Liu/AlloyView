@@ -57,6 +57,27 @@ a short typing pause, or immediately on committing the field. Rapid edits keep
 one analysis active and use the latest requested cutoff. The Calculate button
 is available to run the suggested cutoff without editing it.
 
+## Scalar color legends
+
+Choose a scalar property under **Color by**, then select a palette in its
+viewport legend. The ten maps are AtomEye rainbow, Viridis, Plasma, Magma,
+Inferno, Cividis, Turbo, Spectral, Cool–warm and Grayscale. The selected colors
+also appear in exported PNG legends.
+
+The highlighted **Auto** button means automatic limits are on: the minimum and
+maximum follow that property's data in the current frame. Click **Auto** to
+turn it off and keep the displayed limits. Editing either limit also turns
+Auto off. Those fixed limits survive frame changes, analysis-result reuse and
+switching away from and back to that color property. Each scalar property keeps
+its own range and Auto setting. Click **Auto** while it is off to fit the
+current frame and resume automatic limits. Uniform-valued data gets a small
+range padding so both limits remain editable.
+
+**Hide outside range** uses the displayed limits; PNG output uses the same
+limits and palette as the viewport. Range and palette changes apply immediately
+without rerunning an analysis. Crystal-structure legends retain their separate
+class visibility checkboxes.
+
 ## Display replication
 
 Select **Replicate**, enter independent total copy counts along **a**, **b** and
@@ -118,8 +139,9 @@ Select **Configuration → Export JSON** to save the current source file names,
 sizes, available relative paths and saved trajectory frame, together with the
 processing and view settings. The configuration includes enabled coordination,
 CNA, central symmetry, PTM and strain analyses and their parameters, editable
-lattice references, replication, all slices and their names, color maps and
-visibility filters, wrapped/unwrapped mode, atom radius, cell/axis/background
+lattice references, replication, all slices and their names, color maps,
+per-property fixed ranges and Auto settings, visibility filters,
+wrapped/unwrapped mode, atom radius, cell/axis/background
 and PNG options, camera, selected atom, current tool and theme.
 
 Click **Import JSON** and choose a saved configuration. If the matching source
@@ -311,10 +333,12 @@ uses software WebGL to verify correctness, not to measure target GPU performance
   search. Large frames are partitioned across a memory-aware JavaScript Worker
   pool; small frames stay on one Worker to avoid parallel overhead. A recognized metal composition initializes an editable radius-based
   cutoff suggestion; unknown types fall back to 3.00 Å. Scalar properties can
-  use AtomEye rainbow, Viridis, Plasma, Cool–warm, or Grayscale maps. The chosen
-  map and live legend thresholds persist by property when the frame changes;
-  thresholds hide out-of-range atoms by default and push the opposite bound to
-  remain strictly ordered. PNG export can independently include the background,
+  use AtomEye rainbow, Viridis, Plasma, Magma, Inferno, Cividis, Turbo, Spectral,
+  Cool–warm or Grayscale maps. The chosen map persists per property. Highlighted
+  Auto updates legend limits for the current frame; switching Auto off or
+  editing a limit preserves that property's range across frames. Thresholds
+  hide out-of-range atoms by default and push the opposite bound to remain
+  strictly ordered. PNG export can independently include the background,
   current type/scalar legend and Cartesian XYZ arrows. The arrows default to off
   and follow the current camera independently of the screen axis toggle.
   Disabling the background also removes the legend panel

@@ -2,6 +2,33 @@
 
 Validation date: 2026-10-03 (America/New_York)
 
+## Scalar palettes and persistent Auto ranges
+
+Validated with Node.js v24.19.0 and Chromium 151.0.7922.173:
+
+- `npm test`: 197 tests passed, none failed/skipped. New checks cover Magma,
+  Inferno, Cividis, Turbo and Spectral endpoints/interpolation, shared atom and
+  legend stops, outlier clamping, NaN handling and JSON scheme compatibility.
+  Large numeric edits keep ordered, representable bounds; overflow is rejected.
+- `npm run build` and `npm run test:browser -- --screenshots --structure-screenshot`
+  passed. A native three-frame LAMMPS source has distinct scalar ranges
+  `[0, 3]`, `[-10, 20]` and `[100, 160]`. Highlighted Auto follows the current
+  frame. Clicking it off, or editing either bound, freezes limits across both
+  fresh and cached frame transitions. Blank/partial input turns Auto off while
+  retaining the last valid limits, and constant data freezes to ordered bounds.
+- Switching properties preserves independent ranges and maps. JSON replay
+  restores fixed/Auto mode and new schemes. The narrow bounds
+  `[100000000, 100000000.01]` survive palette/frame redraws and export without
+  rounding into equal values or emitting an error.
+- Real PNG exports produce distinct color bars for all five new palettes and
+  retain selected range labels. Auto on/off text meets 4.5 contrast in both
+  themes; Chromium phone emulation verifies actual taps on the toggle.
+- The actual updated legend screenshot was inspected; existing analysis,
+  slicing, configuration-race, phone and large-structure checks continue to pass.
+
+Fixed ranges are represented by existing per-property recipe range entries;
+absence of an entry means Auto on. The configuration schema remains version 1.
+
 ## Automatic local central symmetry
 
 Validated with Node.js v24.19.0 and Chromium 151.0.7922.173:

@@ -282,6 +282,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .legend-actions { grid-column: 1 / -1; display: flex; gap: 6px; }
 .legend-actions button { flex: 1; height: 27px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text-soft); background: var(--control-bg); font-size: 9px; }
 .legend-actions button:hover:not(:disabled) { color: var(--cyan); border-color: var(--accent-line); }
+.legend-actions .legend-auto.active { color: var(--primary-text); background: var(--cyan); border-color: var(--cyan); font-weight: 700; }
+.legend-actions .legend-auto.active:hover { color: var(--primary-text); background: var(--cyan); border-color: var(--cyan); }
 .legend-actions button:disabled { cursor: not-allowed; color: var(--disabled-text); background: var(--disabled-bg); }
 
 .loading { position: absolute; z-index: 5; top: 68px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; max-width: calc(100% - 36px); padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 99px; background: var(--overlay); box-shadow: var(--shadow); color: var(--text-soft); font-size: 11px; white-space: nowrap; pointer-events: none; }

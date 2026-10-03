@@ -55,8 +55,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   and PTM kernels are reused, with preparation stages and PTM atom progress.
 - Per-analysis Cancel controls stop computation and reset results and frame
   caches while keeping input settings and other analyses.
-- Atom-type colors and five scalar color maps, with editable ranges and
-  optional filtering of out-of-range atoms.
+- Atom-type colors and ten scalar color maps, with an Auto range toggle,
+  editable limits that stay fixed across frames, and optional filtering of
+  out-of-range atoms.
 - PNG export with independent background, legend and XYZ-arrow controls.
   Exported arrows are optional and off by default. Transparent
   exports keep the legend labels and color keys without a filled legend panel.
@@ -100,7 +101,10 @@ WebGL 2 support. No installation or account is needed.
    to keep analyses running, or close an analysis to cancel it and reset results.
 4. **Analyze.** Check the suggested cutoff under **Coordination number** and
    click **Calculate**. The scalar legend lets you choose a color map and
-   adjust the visible range. Editing the cutoff automatically recalculates
+   adjust the visible range. Highlighted **Auto** follows the current frame;
+   editing either limit turns Auto off and preserves that property's limits
+   across frames. Click **Auto** again to fit the current frame and resume
+   automatic limits. Editing the cutoff automatically recalculates
    after a short typing pause. Display and legend edits apply immediately.
    The cutoff is a starting estimate; choose it for
    your structure's neighbor shells.

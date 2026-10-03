@@ -47,6 +47,50 @@ const COLOR_MAPS = Object.freeze({
     label: 'Grayscale',
     stops: [[0.00, 32, 35, 38], [1.00, 244, 244, 240]],
   },
+  // Sampled from the standard Matplotlib maps; both atoms and exported
+  // legends interpolate the same anchors rather than using separate gradients.
+  magma: {
+    label: 'Magma',
+    stops: [
+      [0.000, 0, 0, 4], [0.125, 29, 17, 71], [0.250, 81, 18, 124],
+      [0.375, 131, 38, 129], [0.500, 183, 55, 121], [0.625, 231, 82, 99],
+      [0.750, 252, 137, 97], [0.875, 254, 196, 136], [1.000, 252, 253, 191],
+    ],
+  },
+  inferno: {
+    label: 'Inferno',
+    stops: [
+      [0.000, 0, 0, 4], [0.125, 33, 12, 74], [0.250, 87, 16, 110],
+      [0.375, 138, 34, 106], [0.500, 188, 55, 84], [0.625, 228, 90, 49],
+      [0.750, 249, 142, 9], [0.875, 249, 203, 53], [1.000, 252, 255, 164],
+    ],
+  },
+  cividis: {
+    label: 'Cividis',
+    stops: [
+      [0.000, 0, 34, 78], [0.125, 26, 56, 111], [0.250, 67, 78, 108],
+      [0.375, 97, 101, 111], [0.500, 125, 124, 120], [0.625, 155, 148, 118],
+      [0.750, 188, 174, 108], [0.875, 222, 201, 88], [1.000, 254, 232, 56],
+    ],
+  },
+  turbo: {
+    label: 'Turbo',
+    stops: [
+      [0.000, 48, 18, 59], [0.125, 70, 107, 227], [0.250, 40, 188, 235],
+      [0.375, 50, 242, 152], [0.500, 164, 252, 60], [0.625, 238, 207, 58],
+      [0.750, 251, 126, 33], [0.875, 208, 47, 5], [1.000, 122, 4, 3],
+    ],
+  },
+  spectral: {
+    label: 'Spectral',
+    // ColorBrewer's diverging eleven-color Spectral sequence.
+    stops: [
+      [0.0, 158, 1, 66], [0.1, 213, 62, 79], [0.2, 244, 109, 67],
+      [0.3, 253, 174, 97], [0.4, 254, 224, 139], [0.5, 255, 255, 191],
+      [0.6, 230, 245, 152], [0.7, 171, 221, 164], [0.8, 102, 194, 165],
+      [0.9, 50, 136, 189], [1.0, 94, 79, 162],
+    ],
+  },
 });
 
 export const SCALAR_COLOR_SCHEMES = Object.freeze(Object.entries(COLOR_MAPS).map(([value, map]) => ({
@@ -155,11 +199,19 @@ export function visibilityByProperty(property, limits, hideOutside = true) {
 
 export function coupleScalarRange(minimum, maximum, changed, step) {
   if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) return null;
-  const increment = Number.isFinite(step) && step > 0 ? step : Number.EPSILON;
   if (minimum >= maximum) {
+    // The requested bound can be much larger than the current data. A step
+    // derived from the old range must still advance its floating-point value.
+    const changedValue = changed === 'minimum' ? minimum : maximum;
+    const increment = Math.max(
+      Number.isFinite(step) && step > 0 ? step : 0,
+      Math.abs(changedValue) * Number.EPSILON * 2,
+      Number.MIN_VALUE,
+    );
     if (changed === 'minimum') maximum = minimum + increment;
     else minimum = maximum - increment;
   }
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || minimum >= maximum) return null;
   return { minimum, maximum };
 }
 

@@ -45,6 +45,25 @@ test('display-only recipes work without source files and use stable defaults', (
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
 });
 
+test('new scalar schemes round-trip with fixed ranges and automatic ranges remain absent', () => {
+  for (const scheme of ['magma', 'inferno', 'cividis', 'turbo', 'spectral']) {
+    const colors = {
+      schemes: [{ property: 'energy', scheme }, { property: 'coordination', scheme }],
+      ranges: [{ property: 'energy', minimum: -2, maximum: 4 }],
+      hideOutside: [], hiddenStructureTypes: [],
+    };
+    const recipe = createConfiguration({ settings: { colors } });
+    assert.deepEqual(recipe.settings.colors, colors);
+    const restored = parseConfiguration(JSON.stringify(recipe));
+    assert.deepEqual(restored.settings.colors, colors);
+    assert.equal(restored.settings.colors.ranges.some(({ property }) => property === 'coordination'), false);
+    assert.equal(restored.version, 1);
+  }
+  const invalid = createConfiguration();
+  invalid.settings.colors.schemes = [{ property: 'energy', scheme: 'unrecognized' }];
+  assert.throws(() => parseConfiguration(JSON.stringify(invalid)), /settings\.colors\.schemes\[0\]\.scheme/);
+});
+
 test('central symmetry recipes retain Auto and manual neighbor settings', () => {
   for (const mode of ['auto', 'manual']) {
     for (const neighbors of [8, 12]) {
