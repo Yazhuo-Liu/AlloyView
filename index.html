@@ -314,10 +314,11 @@
               <div class="analysis-state-controls"><span id="csp-state" class="state-pill">Not calculated</span><button id="cancel-csp" class="text-button" type="button" disabled>Cancel</button></div>
             </div>
             <div class="analysis-controls">
-              <label><span>Nearest neighbors</span><select id="csp-neighbors" disabled><option value="12">12 · FCC</option><option value="8">8 · BCC</option></select></label>
+              <label><span>Structure / neighbors</span><select id="csp-neighbors" disabled><option value="auto">Auto</option><option value="12">12 · FCC / HCP</option><option value="8">8 · BCC</option></select></label>
               <button id="run-csp" class="button button-accent" type="button" disabled>Calculate</button>
             </div>
-            <p class="help">AtomEye normalized central symmetry: zero for centrosymmetric environments, higher near defects. Dimensionless; differs from conventional CSP in Å².</p>
+            <p id="csp-auto-result" class="help" role="status" aria-live="polite">Auto identifies local FCC, HCP and BCC environments, including mixed structures.</p>
+            <p id="csp-help" class="help">AtomEye normalized central symmetry: Auto uses 12 neighbors for FCC/HCP and 8 for BCC. Ideal HCP has a finite value because it is not centrosymmetric. Dimensionless; differs from conventional CSP in Å².</p>
             <p id="csp-status" class="help" role="status" aria-live="polite">Runs on the complete structure, including hidden atoms.</p>
           </section>
 

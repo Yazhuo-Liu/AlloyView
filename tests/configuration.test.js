@@ -40,8 +40,43 @@ test('display-only recipes work without source files and use stable defaults', (
   assert.deepEqual(recipe.settings.slices.items, []);
   assert.equal(recipe.settings.slices.selectedId, null);
   assert.equal(recipe.settings.display.png.axes, false);
+  assert.deepEqual(recipe.settings.analyses.centrosymmetry, { enabled: false, mode: 'auto', neighbors: 12 });
   assert.equal(matchesSource(recipe, []), true);
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
+});
+
+test('central symmetry recipes retain Auto and manual neighbor settings', () => {
+  for (const mode of ['auto', 'manual']) {
+    for (const neighbors of [8, 12]) {
+      const settings = { enabled: true, mode, neighbors };
+      const recipe = createConfiguration({ settings: { analyses: { centrosymmetry: settings } } });
+      assert.deepEqual(recipe.settings.analyses.centrosymmetry, settings);
+      assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.analyses.centrosymmetry, settings);
+    }
+  }
+});
+
+test('older version 1 central symmetry recipes restore manual neighbor counts', () => {
+  for (const neighbors of [8, 12]) {
+    const recipe = createConfiguration();
+    recipe.settings.analyses.centrosymmetry = { enabled: true, neighbors };
+    assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.analyses.centrosymmetry, {
+      enabled: true, mode: 'manual', neighbors,
+    });
+  }
+  const recipe = createConfiguration();
+  delete recipe.settings.analyses.centrosymmetry;
+  assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.analyses.centrosymmetry, {
+    enabled: false, mode: 'auto', neighbors: 12,
+  });
+});
+
+test('central symmetry recipes reject unknown modes and unsupported neighbor counts', () => {
+  for (const invalid of [{ mode: 'hcp' }, { mode: 'Auto' }, { mode: 'auto', neighbors: 14 }, { mode: null }]) {
+    const recipe = createConfiguration();
+    recipe.settings.analyses.centrosymmetry = { enabled: true, neighbors: 12, ...invalid };
+    assert.throws(() => parseConfiguration(JSON.stringify(recipe)), /settings\.analyses\.centrosymmetry/);
+  }
 });
 
 test('unconfigured disabled lattice constants export as null but enabled strain needs valid references', () => {
@@ -251,7 +286,7 @@ function fullSnapshot() {
       analyses: {
         coordination: { enabled: true, cutoff: 3.1 },
         cna: { enabled: true, mode: 'fixed', cutoff: 3.3 },
-        centrosymmetry: { enabled: true, neighbors: 8 },
+        centrosymmetry: { enabled: true, mode: 'manual', neighbors: 8 },
         ptm: { enabled: true, flags: 7, rmsdCutoff: 0.12 },
         strain: { enabled: true, references: [
           { label: 'Cu', element: 'Cu', structure: 1, a: 3.61 },

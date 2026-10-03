@@ -59,6 +59,85 @@ test('isolated Worker mode preserves Float64 coordinates and matches copied resu
   } finally { pool.close(); }
 });
 
+test('Auto CSP merges per-atom shells across real Workers and reuses a warm PTM pool', async () => {
+  const stats = { active: 0, maximum: 0 };
+  const pool = new AnalysisPool({ environment: { navigator: { hardwareConcurrency: 4 } }, workerFactory: nodeFactory(stats) });
+  const frame = crystalFrame('fcc', 11);
+  frame.fractional = frame.fractional.slice(3);
+  const structureInput = calculateCna(frame).structures;
+  const original = structureInput.slice();
+  const phases = [];
+  try {
+    await pool.analyze(frame, { kind: 'ptm' });
+    const created = stats.created;
+    const result = await pool.analyze(frame, { kind: 'centrosymmetry', mode: 'auto', structureInput }, {
+      onProgress: (progress) => phases.push(progress),
+    });
+    const direct = calculateCentrosymmetry(frame, { mode: 'auto' });
+    assert.equal(result.workerCount, 2);
+    assert.equal(stats.created, created, 'Auto can run on the Workers that previously ran PTM');
+    for (const key of ['centrosymmetry', 'cspStructureTypes', 'cspNeighborCounts', 'cspSummary']) assert.deepEqual(result[key], direct[key], key);
+    assert.deepEqual(structureInput, original, 'CNA labels are copied before transfer rather than detached');
+    assert.ok(frame.fractional.byteLength > 0);
+    assert.ok(phases.some((progress) => progress.completedAtoms > 0 && progress.completedAtoms < progress.totalAtoms));
+    assert.ok(phases.every((progress, index) => !index || progress.completedAtoms >= phases[index - 1].completedAtoms));
+    assert.equal(phases.at(-1).completedAtoms, frame.fractional.length / 3);
+    assert.equal(result.warning, null);
+  } finally { pool.close(); }
+  assert.equal(stats.active, 0);
+});
+
+test('Auto CSP copies shared cached labels safely and leaves unknown structures NaN without warnings', async () => {
+  const stats = { active: 0, maximum: 0 };
+  const pool = new AnalysisPool({ environment: { crossOriginIsolated: true }, workerFactory: nodeFactory(stats) });
+  const frame = crystalFrame('hcp', 2);
+  const structureInput = calculateCna(frame).structures;
+  try {
+    const cached = await pool.analyze(frame, { kind: 'centrosymmetry', mode: 'auto', structureInput });
+    const direct = calculateCentrosymmetry(frame, { mode: 'auto' });
+    assert.equal(cached.sharedMemory, true);
+    for (const key of ['centrosymmetry', 'cspStructureTypes', 'cspNeighborCounts', 'cspSummary']) assert.deepEqual(cached[key], direct[key], key);
+    assert.ok(structureInput.every((type) => type === 2));
+    const unknown = await pool.analyze(crystalFrame('sc', 2), { kind: 'centrosymmetry', mode: 'auto' });
+    assert.ok(unknown.centrosymmetry.every(Number.isNaN));
+    assert.equal(unknown.warning, null);
+    assert.equal(unknown.cspSummary.unresolved, unknown.centrosymmetry.length);
+    await assert.rejects(pool.analyze(frame, { kind: 'centrosymmetry', mode: 'auto', structureInput: new Uint8Array(1) }));
+    await assert.rejects(pool.analyze(frame, { kind: 'centrosymmetry', mode: 'auto', structureInput: new Uint8Array(frame.ids.length).fill(5) }));
+    assert.equal(stats.created, 1, 'invalid cached input never dispatches another Worker');
+  } finally { pool.close(); }
+});
+
+test('real Auto CSP atom progress allows cancellation while an independent queued CNA completes', async () => {
+  const stats = { active: 0, maximum: 0 };
+  const pool = new AnalysisPool({ environment: { navigator: { hardwareConcurrency: 2 } }, workerFactory: nodeFactory(stats) });
+  const controller = new AbortController();
+  let interrupted = null;
+  const first = pool.analyze(crystalFrame('fcc', 16), { kind: 'centrosymmetry', mode: 'auto' }, {
+    signal: controller.signal,
+    onProgress(progress) {
+      if (progress.completedAtoms > 0 && progress.completedAtoms < progress.totalAtoms) {
+        interrupted = progress;
+        controller.abort();
+      }
+    },
+  });
+  const nextFrame = crystalFrame('bcc', 2);
+  const second = pool.analyze(nextFrame, { kind: 'cna' });
+  try {
+    const outcomes = await Promise.allSettled([first, second]);
+    assert.equal(outcomes[0].status, 'rejected');
+    assert.equal(outcomes[0].reason.name, 'AbortError');
+    assert.equal(interrupted?.phase, 'analyzing');
+    assert.equal(outcomes[1].status, 'fulfilled');
+    assert.deepEqual(outcomes[1].value.structures, calculateCna(nextFrame).structures);
+    assert.equal(stats.created, 2, 'a terminated Auto Worker is replaced for the queued job');
+    assert.equal(stats.maximum, 1);
+    assert.equal(pool.active.size, 0);
+  } finally { pool.close(); }
+  assert.equal(stats.active, 0);
+});
+
 test('warm Workers reuse one Wasm kernel and rebuild neighbors for a different frame', async () => {
   const stats = { active: 0, maximum: 0 };
   const pool = new AnalysisPool({ environment: { navigator: { hardwareConcurrency: 2 } }, workerFactory: nodeFactory(stats) });

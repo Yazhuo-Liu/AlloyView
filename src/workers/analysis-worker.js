@@ -22,8 +22,7 @@ self.addEventListener('message', async ({ data }) => {
       onPhase('analyzing');
       result = calculateCna(frame, parameters);
     } else if (kind === 'centrosymmetry') {
-      onPhase('analyzing');
-      result = calculateCentrosymmetry(frame, parameters);
+      result = calculateCentrosymmetry(frame, { ...parameters, onPhase, onAtoms });
     } else throw new Error(`Unknown analysis kind: ${kind}`);
     const buffers = [...new Set(Object.values(result).filter(ArrayBuffer.isView).map((value) => value.buffer))];
     self.postMessage({ id, ok: true, result }, buffers);

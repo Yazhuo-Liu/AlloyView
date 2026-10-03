@@ -187,10 +187,22 @@ Click **Identify structure** under **Common neighbor analysis** for automatic
 local FCC/HCP/BCC/icosahedral classification. The crystal legend shows counts
 and a visibility checkbox per class. **Fixed cutoff CNA** allows an explicit
 radius; BCC requires its first two neighbor shells. **Central symmetry** offers
-the dimensionless AtomEye normalized parameter with 8 or 12 neighbors and
-scalar coloring. Enabled analyses follow trajectory frames and use a shared
-parallel Worker budget. See [Structure analysis](STRUCTURE_ANALYSIS.md) for
-definitions, filtering behavior and numerical limitations.
+the dimensionless AtomEye normalized parameter and scalar coloring. Its default
+**Auto** mode uses adaptive CNA to identify local FCC/HCP/BCC environments,
+then applies 12 neighbors for FCC/HCP or 8 for BCC to each atom. The Auto option
+and recognition summary show the resulting phases. Mixed structures use local
+settings directly; no manual partitioning is required. Unclassified defect
+atoms can inherit the locally dominant supported neighbor setting: FCC/HCP
+neighbors vote together for 12, while BCC neighbors vote for 8. Ties and
+unsupported neighborhoods remain NaN. You can select **12 · FCC / HCP** or
+**8 · BCC** to apply a single neighbor count manually.
+
+Ideal HCP is not centrosymmetric, so it has a finite central-symmetry value
+even without defects. Its baseline is retained; compare defects against the
+same phase rather than treating every nonzero value as a defect. Enabled
+analyses follow trajectory frames and use a shared parallel Worker budget.
+See [Structure analysis](STRUCTURE_ANALYSIS.md) for definitions, filtering
+behavior and numerical limitations.
 
 **Polyhedral template matching** uses the actual PTM library compiled to Wasm.
 Select the crystal templates and an RMSD threshold (default 0.1; 0 disables

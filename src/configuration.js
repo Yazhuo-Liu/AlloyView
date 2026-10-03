@@ -201,7 +201,7 @@ function normalizeAnalyses(value, fromSnapshot) {
   const input = record(value, 'settings.analyses', ['coordination', 'cna', 'centrosymmetry', 'ptm', 'strain']);
   const coordination = record(input.coordination ?? {}, 'settings.analyses.coordination', ['enabled', 'cutoff']);
   const cna = record(input.cna ?? {}, 'settings.analyses.cna', ['enabled', 'mode', 'cutoff']);
-  const centrosymmetry = record(input.centrosymmetry ?? {}, 'settings.analyses.centrosymmetry', ['enabled', 'neighbors']);
+  const centrosymmetry = record(input.centrosymmetry ?? {}, 'settings.analyses.centrosymmetry', ['enabled', 'mode', 'neighbors']);
   const ptm = record(input.ptm ?? {}, 'settings.analyses.ptm', ['enabled', 'flags', 'rmsdCutoff']);
   const strain = record(input.strain ?? {}, 'settings.analyses.strain', ['enabled', 'references']);
   const coordinationEnabled = boolean(coordination.enabled, 'settings.analyses.coordination.enabled', false);
@@ -236,6 +236,9 @@ function normalizeAnalyses(value, fromSnapshot) {
     cna: { enabled: cnaEnabled, mode: cnaMode, cutoff: cnaCutoff },
     centrosymmetry: {
       enabled: boolean(centrosymmetry.enabled, 'settings.analyses.centrosymmetry.enabled', false),
+      // Version 1 recipes exported before Auto stored only a global neighbor
+      // count; retain their manual behavior when restoring them.
+      mode: choice(centrosymmetry.mode === undefined ? (centrosymmetry.neighbors === undefined ? 'auto' : 'manual') : centrosymmetry.mode, 'settings.analyses.centrosymmetry.mode', new Set(['auto', 'manual'])),
       neighbors: choice(centrosymmetry.neighbors ?? 12, 'settings.analyses.centrosymmetry.neighbors', new Set([8, 12])),
     },
     ptm: {

@@ -2,6 +2,33 @@
 
 Validation date: 2026-10-03 (America/New_York)
 
+## Automatic local central symmetry
+
+Validated with Node.js v24.19.0 and Chromium 151.0.7922.173:
+
+- `npm test`: 191 tests passed, none failed/skipped. Auto recognizes ideal FCC,
+  BCC and HCP including primitive periodic cells. Mixed phases select 12/8
+  neighbors locally; vacancy environments retain elevated finite CSP through
+  neighboring settings, and disjoint atom ranges reproduce the complete result.
+- FCC and HCP votes both support 12 neighbors, while BCC supports 8. Ties or
+  absent supported neighbors remain NaN. Raw Other labels remain Other after
+  inference, and ideal HCP keeps its nonzero baseline. Unsupported ICO remains
+  undefined in Auto; manual neighbor selection is available.
+- Real Workers merge recognition arrays and summaries, reuse Workers already
+  initialized for PTM, safely copy/share cached adaptive CNA inputs, report
+  atom progress, and cancel Auto while an independent queued CNA completes.
+- `npm run build` and `npm run test:browser -- --screenshots --structure-screenshot`
+  passed. Native FCC/HCP/BCC and mixed-source files exercise recognition labels,
+  per-atom settings, trajectory/cache restoration, Cancel cleanup and auxiliary
+  color properties. Adaptive CNA results are reused; fixed CNA is not reused.
+  JSON replay preserves Auto and restores older version 1 recipes as manual.
+- Actual HCP and mixed-structure screenshots were inspected. Existing mobile,
+  multi-slice, PNG, configuration-race and large-structure GPU checks still pass.
+
+Auto selects local neighbor settings rather than geometrically segmenting a
+structure. Local inference is a heuristic at defects/interfaces; CSP values
+from different crystal phases should be interpreted within their own phase.
+
 ## Multiple tilted slices, processing recipes and PTM startup
 
 Validated with Node.js v24.19.0 and Chromium 151.0.7922.173 using software WebGL:

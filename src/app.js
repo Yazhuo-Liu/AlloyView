@@ -47,7 +47,7 @@ const elements = Object.fromEntries([
   'show-cell', 'png-background', 'png-legend', 'png-axes', 'slice-axis', 'slice-position', 'slice-value', 'cutoff', 'run-analysis',
   'analysis-state', 'cutoff-help', 'analysis-help', 'selection-empty', 'selection-data', 'clear-selection', 'legend',
   'cna-mode', 'cna-cutoff', 'cna-cutoff-field', 'run-cna', 'cna-state', 'cna-help', 'cna-status',
-  'csp-neighbors', 'run-csp', 'csp-state', 'csp-status', 'metric-cna', 'metric-csp',
+  'csp-neighbors', 'csp-auto-result', 'csp-help', 'run-csp', 'csp-state', 'csp-status', 'metric-cna', 'metric-csp',
   'ptm-rmsd', 'run-ptm', 'ptm-state', 'ptm-status', 'metric-ptm',
   'cancel-analysis', 'cancel-cna', 'cancel-csp', 'cancel-ptm', 'cancel-strain',
   'lattice-references', 'lattice-reset', 'run-strain', 'strain-state', 'strain-status', 'metric-strain',
@@ -305,6 +305,7 @@ elements['cna-cutoff'].addEventListener('change', () => {
   if (state.analysis.cna.enabled && elements['cna-mode'].value === 'fixed') runStructureAnalysis('cna');
 });
 elements['csp-neighbors'].addEventListener('change', () => {
+  updateCspMethodUi();
   if (state.analysis.centrosymmetry.enabled) runStructureAnalysis('centrosymmetry');
 });
 elements['clear-selection'].addEventListener('click', () => selectAtom(-1));
@@ -346,6 +347,7 @@ document.addEventListener('click', (event) => {
 });
 
 syncProjectionControls('perspective');
+updateCspMethodUi();
 setBackgroundColor(elements.background.value, { automatic: true });
 
 const fileDrop = initializeFileDrop({
@@ -432,6 +434,7 @@ function closeSource() {
     if (kind !== 'coordination') elements[`${prefix}-status`].textContent = ANALYSES[kind].help;
   }
   renderer.clearFrame();
+  updateCspMethodUi();
   elements['file-name'].textContent = 'No structure loaded';
   elements['file-meta'].textContent = 'CFG / LAMMPS dump';
   for (const id of ['format-chip', 'atom-count', 'frame-count', 'cell-kind', 'pbc-flags',
@@ -935,6 +938,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   updateMemoryMetric();
   setRangeProgress(elements['frame-slider']);
   updateCnaMethodUi();
+  updateCspMethodUi();
   const pending = [];
   const strainRequest = state.analysis.strain.request;
   for (const kind of Object.keys(ANALYSES)) {
@@ -1185,6 +1189,13 @@ function refreshColorOptions() {
       elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
     }
   }
+  if (state.analysis.centrosymmetry.enabled && state.analysis.centrosymmetry.parameters?.mode === 'auto'
+      && elements['csp-state'].textContent !== 'Failed') {
+    for (const [name, label] of [['centralSymmetryStructureType', 'Local structure (Auto symmetry)'],
+      ['centralSymmetryNeighbors', 'Central symmetry neighbor count']]) {
+      if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
+    }
+  }
   const available = [...elements['color-mode'].options].some((item) => item.value === previous);
   state.colorMode = available ? previous : 'type';
   elements['color-mode'].value = state.colorMode;
@@ -1271,7 +1282,8 @@ function cancelAnalysis(kind) {
     }
     if (['ptm', 'strain'].includes(kind) && !state.analysis.ptm.enabled && !state.analysis.strain.enabled) delete frame.ptm;
   }
-  if (!state.analysis.cna.enabled && !state.analysis.ptm.enabled) hiddenStructureTypes.clear();
+  if (!state.analysis.cna.enabled && !state.analysis.ptm.enabled
+      && !(state.analysis.centrosymmetry.enabled && state.analysis.centrosymmetry.parameters?.mode === 'auto')) hiddenStructureTypes.clear();
   const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
   elements[`${prefix}-state`].textContent = 'Not calculated';
   elements[`${prefix}-state`].classList.remove('ready');
@@ -1279,6 +1291,7 @@ function cancelAnalysis(kind) {
   elements[`metric-${prefix}`].textContent = '—';
   if (kind !== 'coordination') elements[`${prefix}-status`].textContent = ANALYSES[kind].help;
   syncCancelButton(kind);
+  if (kind === 'centrosymmetry') updateCspMethodUi();
   if (state.frame) {
     refreshColorOptions(); applyColors(); restoreSelection(); updateMemoryMetric();
   }
@@ -1290,6 +1303,36 @@ function updateCnaMethodUi() {
   elements['cna-help'].textContent = fixed
     ? 'FCC/HCP need a cutoff between the first and second shells; BCC needs one between the second and third shells. All distances are in Å.'
     : 'Adaptive CNA chooses a local cutoff for each atom. Identifies FCC, HCP, BCC and icosahedral environments; other environments are marked Other.';
+}
+
+function cspParameters() {
+  return elements['csp-neighbors'].value === 'auto'
+    ? { mode: 'auto' }
+    : { mode: 'manual', neighbors: Number(elements['csp-neighbors'].value) };
+}
+
+function updateCspMethodUi({ property, calculating = false } = {}) {
+  const auto = elements['csp-neighbors'].value === 'auto';
+  const analysis = state.analysis.centrosymmetry;
+  property ??= analysis.enabled ? state.frame?.properties.find(item => item.name === 'centralSymmetry'
+    && item.analysisKind === 'centrosymmetry' && item.analysisKey === analysis.key) : null;
+  const summary = auto && !calculating ? property?.cspSummary : null;
+  const option = elements['csp-neighbors'].querySelector('[value="auto"]');
+  option.textContent = auto && calculating ? 'Auto · identifying…' : 'Auto';
+  elements['csp-auto-result'].hidden = !summary;
+  elements['csp-auto-result'].textContent = '';
+  if (!summary) return;
+  const phases = [['FCC', summary.fcc, 12], ['HCP', summary.hcp, 12], ['BCC', summary.bcc, 8]];
+  const recognized = phases.filter(([, count]) => count > 0);
+  const names = recognized.map(([label]) => label).join(' + ');
+  option.textContent = recognized.length > 1 ? `Auto · Mixed (${names})` : `Auto · ${names || 'Unrecognized'}`;
+  const details = recognized.map(([label, count, neighbors]) => `${label}: ${formatInteger(count)} atoms · ${neighbors} neighbors`);
+  if (summary.other) details.push(`Other: ${formatInteger(summary.other)}`);
+  if (summary.ico) details.push(`ICO: ${formatInteger(summary.ico)} · no automatic shell`);
+  if (summary.inferred) details.push(`Local neighbor settings inferred: ${formatInteger(summary.inferred)}`);
+  if (summary.unresolved) details.push(`Undefined (NaN): ${formatInteger(summary.unresolved)}`);
+  if (summary.hcp) details.push('Ideal HCP has a non-zero central-symmetry baseline.');
+  elements['csp-auto-result'].textContent = details.join('; ');
 }
 
 function ptmParameters() {
@@ -1394,7 +1437,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     if (!automatic) {
       if (kind === 'cna') parameters = { mode: elements['cna-mode'].value,
         ...(elements['cna-mode'].value === 'fixed' ? { cutoff: elements['cna-cutoff'].valueAsNumber } : {}) };
-      else if (kind === 'centrosymmetry') parameters = { neighbors: Number(elements['csp-neighbors'].value) };
+      else if (kind === 'centrosymmetry') parameters = cspParameters();
       else parameters = ptmParameters();
     }
     if (kind === 'strain') {
@@ -1439,7 +1482,10 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       ? 'Use the legend checkboxes to show or hide each structure type. Filters do not change the analysis.'
       : kind === 'strain'
         ? 'Green–Lagrange strain relative to the reference lattice.'
+        : parameters.mode === 'auto'
+          ? 'Local structure recognition selects 12 neighbors for FCC/HCP and 8 for BCC. Unresolved environments are gray.'
         : `Calculated with ${parameters.neighbors} neighbors.${property.incomplete ? ` ${property.incomplete} undefined environments are gray.` : ''}`;
+    if (kind === 'centrosymmetry') updateCspMethodUi({ property });
     elements[`metric-${prefix}`].textContent = `${formatDuration(property.analysisMs)} · ${property.analysisEngine}`;
     elements[`run-${prefix}`].disabled = false;
   };
@@ -1452,6 +1498,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
   elements[`run-${prefix}`].disabled = true;
   elements[`${prefix}-state`].textContent = 'Calculating…';
   elements[`${prefix}-state`].classList.remove('ready');
+  if (kind === 'centrosymmetry') updateCspMethodUi({ calculating: true });
   try {
     const ptmKey = JSON.stringify({ flags: parameters.flags, rmsdCutoff: parameters.rmsdCutoff });
     if (kind === 'strain') {
@@ -1466,7 +1513,22 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       }
       if (!isCurrent()) return;
     }
+    if (kind === 'centrosymmetry' && parameters.mode === 'auto') {
+      const cnaTask = analysisTasks.get('cna');
+      if (cnaTask?.frame === frame && cnaTask.key === JSON.stringify({ mode: 'adaptive' })) {
+        elements['csp-status'].textContent = 'Waiting for the adaptive CNA structure recognition already running…';
+        try { await cnaTask.promise; }
+        catch {
+          if (!isCurrent() || controller.signal.aborted) return;
+        }
+      }
+      if (!isCurrent()) return;
+    }
+    const adaptiveCna = kind === 'centrosymmetry' && parameters.mode === 'auto'
+      ? frame.properties.find(property => property.name === 'structureType' && property.analysisKind === 'cna'
+        && property.analysisKey === JSON.stringify({ mode: 'adaptive' })) : null;
     const inputs = { kind, ...parameters,
+      ...(adaptiveCna ? { structureInput: adaptiveCna.data } : {}),
       ...(kind === 'strain' && frame.ptm?.key === ptmKey ? { ptmInput: frame.ptm } : {}) };
     const task = analysisPool.analyze(frame, inputs, {
       signal: controller.signal,
@@ -1491,9 +1553,17 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       properties = STRAIN_FIELDS.map(field => ({ ...metadata, name: field,
         displayName: labels[field] ?? `${field.replace('strain', '')} (crystal frame)`, data: result[field] }));
     } else {
-      if (kind === 'centrosymmetry' && !result.centrosymmetry.some(Number.isFinite)) throw new Error('No valid central-symmetry environments: too few neighbors or coincident atoms.');
+      if (kind === 'centrosymmetry' && parameters.mode !== 'auto' && !result.centrosymmetry.some(Number.isFinite)) throw new Error('No valid central-symmetry environments: too few neighbors or coincident atoms.');
       properties = [{ ...metadata, name, displayName: label, data: result.structures ?? result.centrosymmetry,
+        ...(kind === 'centrosymmetry' && result.cspSummary ? { cspSummary: result.cspSummary } : {}),
         ...(kind === 'cna' ? { categories: STRUCTURE_TYPES } : {}) }];
+      if (kind === 'centrosymmetry') {
+        clearAnalysisResults(frame, kind);
+        if (result.cspStructureTypes) properties.push({ ...metadata, name: 'centralSymmetryStructureType',
+          displayName: 'Local structure (Auto symmetry)', data: result.cspStructureTypes, categories: STRUCTURE_TYPES });
+        if (result.cspNeighborCounts) properties.push({ ...metadata, name: 'centralSymmetryNeighbors',
+          displayName: 'Central symmetry neighbor count', data: result.cspNeighborCounts });
+      }
     }
     for (const property of properties) replaceAnalysisProperty(frame, property);
     reassessFrameCache(frame); ready(properties[0]);
@@ -1503,6 +1573,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     if (!isCurrent() || error.name === 'AbortError') return;
     elements[`${prefix}-state`].textContent = 'Failed';
     elements[`${prefix}-status`].textContent = error.message;
+    if (kind === 'centrosymmetry') updateCspMethodUi();
     reassessFrameCache(frame); updateMemoryMetric();
     refreshColorOptions(); showToast(error.message);
   } finally {
@@ -2061,7 +2132,8 @@ function captureConfiguration() {
       analyses: {
         coordination: { enabled: state.analysis.coordination.enabled, cutoff: elements.cutoff.valueAsNumber },
         cna: { enabled: state.analysis.cna.enabled, mode: elements['cna-mode'].value, cutoff: elements['cna-cutoff'].valueAsNumber },
-        centrosymmetry: { enabled: state.analysis.centrosymmetry.enabled, neighbors: Number(elements['csp-neighbors'].value) },
+        centrosymmetry: { enabled: state.analysis.centrosymmetry.enabled, ...cspParameters(),
+          neighbors: elements['csp-neighbors'].value === 'auto' ? 12 : Number(elements['csp-neighbors'].value) },
         ptm: { enabled: state.analysis.ptm.enabled, flags: ptmFlags, rmsdCutoff: elements['ptm-rmsd'].valueAsNumber },
         strain: { enabled: state.analysis.strain.enabled, references: state.references.map((reference, type) => ({ ...reference, label: state.referenceLabels[type] })) },
       },
@@ -2168,7 +2240,7 @@ async function restoreConfiguration(config) {
     elements.cutoff.value = String(saved.analyses.coordination.cutoff);
     elements['cna-mode'].value = saved.analyses.cna.mode;
     elements['cna-cutoff'].value = String(saved.analyses.cna.cutoff);
-    elements['csp-neighbors'].value = String(saved.analyses.centrosymmetry.neighbors);
+    elements['csp-neighbors'].value = saved.analyses.centrosymmetry.mode === 'auto' ? 'auto' : String(saved.analyses.centrosymmetry.neighbors);
     elements['ptm-rmsd'].value = String(saved.analyses.ptm.rmsdCutoff);
     for (const checkbox of document.querySelectorAll('[data-ptm-template]')) checkbox.checked = Boolean(saved.analyses.ptm.flags & Number(checkbox.dataset.ptmTemplate));
     state.references = references;
@@ -2188,12 +2260,14 @@ async function restoreConfiguration(config) {
       if (kind === 'coordination') analysis.cutoff = parameters.cutoff;
       else {
         analysis.parameters = kind === 'cna' ? { mode: parameters.mode, ...(parameters.mode === 'fixed' ? { cutoff: parameters.cutoff } : {}) }
-          : kind === 'centrosymmetry' ? { neighbors: parameters.neighbors } : { flags: saved.analyses.ptm.flags, rmsdCutoff: saved.analyses.ptm.rmsdCutoff };
+          : kind === 'centrosymmetry' ? (parameters.mode === 'auto' ? { mode: 'auto' } : { mode: 'manual', neighbors: parameters.neighbors })
+            : { flags: saved.analyses.ptm.flags, rmsdCutoff: saved.analyses.ptm.rmsdCutoff };
         analysis.key = JSON.stringify(analysis.parameters);
       }
       toolPanels.setToolEnabled(kind, analysis.enabled);
       syncCancelButton(kind);
     }
+    updateCspMethodUi();
     state.colorMode = saved.display.colorMode;
     state.selectedId = saved.selectedAtomId;
     if (saved.camera) {

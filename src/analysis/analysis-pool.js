@@ -1,3 +1,5 @@
+import { CSP_SUMMARY_FIELDS } from './centrosymmetry.js';
+
 const MAX_WORKERS = 6;
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
@@ -41,6 +43,14 @@ export class AnalysisPool {
     const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
     let extraBytes = 0;
     const inputs = { ...parameters };
+    const autoCentrosymmetry = parameters.kind === 'centrosymmetry' && parameters.mode === 'auto';
+    if (parameters.structureInput !== undefined) {
+      if (!autoCentrosymmetry || !(parameters.structureInput instanceof Uint8Array)
+          || parameters.structureInput.length !== atomCount || parameters.structureInput.some((type) => type > 4)) {
+        throw new Error('Auto central symmetry requires complete adaptive CNA structure IDs.');
+      }
+      extraBytes += parameters.structureInput.byteLength;
+    }
     if (parameters.kind === 'strain') {
       inputs.types = frame.types;
       extraBytes += frame.types.byteLength;
@@ -53,7 +63,8 @@ export class AnalysisPool {
     }
     const outputFields = parameters.kind === 'ptm' ? PTM_OUTPUT_FIELDS
       : parameters.kind === 'strain' ? { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : PTM_OUTPUT_FIELDS) }
-        : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] };
+        : autoCentrosymmetry ? { centrosymmetry: [Float32Array, 1], cspStructureTypes: [Uint8Array, 1], cspNeighborCounts: [Uint8Array, 1] }
+          : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] };
     const outputBytesPerAtom = Object.values(outputFields).reduce((sum, [Type, stride]) => sum + Type.BYTES_PER_ELEMENT * stride, 0);
     const workerCount = Math.min(this.limit, chooseWorkerCount(atomCount,
       (sharedMemory ? 0 : frame.fractional.byteLength + extraBytes) + atomCount * (48 + outputBytesPerAtom), this.environment,
@@ -89,6 +100,7 @@ export class AnalysisPool {
       let coordinates = frame.fractional;
       if (sharedMemory) {
         coordinates = await copyCoordinates(frame.fractional, controller.signal, true);
+        if (inputs.structureInput) inputs.structureInput = await copyCoordinates(inputs.structureInput, controller.signal, true);
         if (inputs.types) inputs.types = await copyCoordinates(inputs.types, controller.signal, true);
         if (inputs.ptmInput) {
           inputs.ptmInput = await copyFields(inputs.ptmInput, controller.signal, true);
@@ -135,12 +147,20 @@ export class AnalysisPool {
       }
       const field = parameters.kind === 'cna' ? 'structures' : 'centrosymmetry';
       const values = parameters.kind === 'cna' ? new Uint8Array(atomCount) : new Float32Array(atomCount);
+      const cspStructureTypes = autoCentrosymmetry ? new Uint8Array(atomCount) : null;
+      const cspNeighborCounts = autoCentrosymmetry ? new Uint8Array(atomCount) : null;
+      const cspSummary = autoCentrosymmetry ? Object.fromEntries(CSP_SUMMARY_FIELDS.map((name) => [name, 0])) : null;
       let incomplete = 0;
       for (const partial of partials) {
         values.set(partial[field], partial.startAtom);
+        if (autoCentrosymmetry) {
+          cspStructureTypes.set(partial.cspStructureTypes, partial.startAtom);
+          cspNeighborCounts.set(partial.cspNeighborCounts, partial.startAtom);
+          for (const name of CSP_SUMMARY_FIELDS) cspSummary[name] += partial.cspSummary[name];
+        }
         incomplete += partial.incomplete ?? 0;
       }
-      return { ...metadata, [field]: values, incomplete,
+      return { ...metadata, [field]: values, ...(autoCentrosymmetry ? { cspStructureTypes, cspNeighborCounts, cspSummary } : {}), incomplete,
         warning: incomplete ? `${incomplete} atoms have insufficient neighbors or zero-length environments; central symmetry is undefined (NaN) for them.` : null };
     } catch (error) {
       controller.abort();
@@ -211,6 +231,10 @@ export class AnalysisPool {
       if (!task.sharedMemory) {
         payload = { ...payload, fractional: await copyCoordinates(payload.fractional, task.signal) };
         transferables.push(payload.fractional.buffer);
+        if (payload.structureInput) {
+          payload.structureInput = await copyCoordinates(payload.structureInput, task.signal);
+          transferables.push(payload.structureInput.buffer);
+        }
         if (payload.types) {
           payload.types = await copyCoordinates(payload.types, task.signal);
           transferables.push(payload.types.buffer);

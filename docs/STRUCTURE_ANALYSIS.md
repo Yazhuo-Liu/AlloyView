@@ -94,20 +94,45 @@ It does not use another trajectory frame as its reference. Graphene and ICO
 identification are available, but these do not define a supported 3D strain
 reference here.
 
-**Central symmetry** independently calculates the AtomEye-style normalized
-parameter from 12 (FCC) or 8 (BCC) nearest-neighbor displacement vectors.
+**Central symmetry** calculates the AtomEye-style normalized parameter from
+12 (FCC/HCP) or 8 (BCC) nearest-neighbor displacement vectors. The default
+**Auto** setting first identifies each atom's local structure using adaptive
+CNA, reusing a compatible cached classification when available. It applies
+12 neighbors to FCC/HCP atoms and 8 to BCC atoms. Mixed FCC/HCP/BCC structures
+therefore use different neighbor counts within one calculation, without
+splitting the input or changing coordinates. The selected Auto option and
+summary report the recognized phases.
+
+Defect atoms classified as Other inherit a neighbor setting only when supported
+atoms among their nearest 14 neighbors give one setting a local majority.
+FCC/HCP votes are combined for 12 neighbors; BCC votes select 8. A tie between
+8 and 12, an unrecognized neighborhood or an ICO environment remains NaN.
+This permits FCC/HCP fault neighborhoods to retain the shared 12-neighbor
+setting without requiring agreement on the phase label. Manual settings
+**12 · FCC / HCP** and **8 · BCC** retain a single count for the complete frame;
+Auto/manual mode is saved in processing configurations. Older version 1
+configurations containing only a neighbor count restore the manual setting.
+
 The result is scalar-colored with the existing editable legend. Each vector
 is paired once, greedily choosing its most nearly opposite unused partner in
 nearest-neighbor order. The sum of squared vector-pair sums is divided by twice
 the sum of squared neighbor distances. This dimensionless value vanishes in
-an ideal centrosymmetric environment. It is not the conventional CSP in Å²,
-nor OVITO's minimum-weight matching CSP. Missing environments are NaN (shown
-gray when some valid results exist); an entirely undefined frame reports a
-failure with the reason instead of pretending the parameter is zero.
+an ideal centrosymmetric environment. Ideal HCP is not centrosymmetric and
+has a finite value even without defects; Auto retains that physical baseline
+rather than subtracting it. Values from different phases are therefore not
+equivalent defect thresholds. This is not the conventional CSP in Å² or
+OVITO's minimum-weight matching CSP. Undefined Auto environments are NaN and
+shown gray, including a completely unsupported frame. Manual calculations
+with no valid neighbor environments retain the explicit failure status.
+
+Auto also provides **Local structure (Auto symmetry)** and **Central symmetry
+neighbor count** as color properties. The first retains raw CNA labels, so
+inferred Other sites remain Other; the second shows their selected 8/12 setting
+or 0 when no setting was selected.
 
 All analyses automatically run on subsequent trajectory frames after first
 being enabled. Per-frame results are reused only when their method/parameters
-match. Changes to CNA method, fixed radius or central-symmetry neighbor count
+match. Changes to CNA method, fixed radius or central-symmetry mode/neighbor count
 replace the affected result. Older requests cannot replace a newer parameter
 choice or another source. Element reference edits persist by input type label
 across frames and reset with a new source. PTM deformation arrays are counted in

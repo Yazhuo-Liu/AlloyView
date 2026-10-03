@@ -25,21 +25,27 @@ export function calculateCna(frame, { mode = 'adaptive', cutoff = 3, ...range } 
       structures[atom - startAtom] = classify(neighbors, cutoff);
       continue;
     }
-    const neighbors = search.nearest(atom, 14);
-    if (neighbors.length < 12) continue;
-    const closePackedRadius = neighbors.slice(0, 12).reduce((sum, n) => sum + Math.sqrt(n.distanceSquared), 0)
-      / 12 * (1 + Math.SQRT2) / 2;
-    const closePackedType = classify(neighbors.slice(0, 12), closePackedRadius);
-    if (closePackedType) {
-      structures[atom - startAtom] = closePackedType;
-    } else if (neighbors.length === 14) {
-      const bccRadius = neighbors.reduce((sum, n, index) => (
-        sum + Math.sqrt(n.distanceSquared) * (index < 8 ? 2 / Math.sqrt(3) : 1)
-      ), 0) / 14 * (1 + Math.SQRT2) / 2;
-      structures[atom - startAtom] = classify(neighbors, bccRadius);
-    }
+    structures[atom - startAtom] = classifyAdaptiveEnvironment(search.nearest(atom, 14));
   }
   return { structures, startAtom, endAtom, elapsedMs: performance.now() - startedAt };
+}
+
+/** Adaptive CNA for one complete, distance-ordered nearest-neighbor shell.
+ * Consumers can share their own NeighborSearch rather than building another
+ * linked-cell index or launching a second analysis.
+ */
+export function classifyAdaptiveEnvironment(neighbors) {
+  if (neighbors.length < 12) return 0;
+  const closePacked = neighbors.slice(0, 12);
+  const closePackedRadius = closePacked.reduce((sum, n) => sum + Math.sqrt(n.distanceSquared), 0)
+    / 12 * (1 + Math.SQRT2) / 2;
+  const closePackedType = classify(closePacked, closePackedRadius);
+  if (closePackedType) return closePackedType;
+  if (neighbors.length !== 14) return 0;
+  const bccRadius = neighbors.reduce((sum, n, index) => (
+    sum + Math.sqrt(n.distanceSquared) * (index < 8 ? 2 / Math.sqrt(3) : 1)
+  ), 0) / 14 * (1 + Math.SQRT2) / 2;
+  return classify(neighbors, bccRadius);
 }
 
 function classify(neighbors, radius) {

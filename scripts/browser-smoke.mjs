@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { crystalFrame } from '../tests/helpers/crystals.js';
 
 // No browser automation dependency: Node 24's WebSocket talks directly to CDP.
 const root = resolve(import.meta.dirname, '..');
@@ -715,17 +716,21 @@ try {
   await waitFor('document.getElementById("cna-state").textContent === "Calculated"', 'BCC classification');
   assert.equal(await evaluate('window.structureTestRenderer.frame.properties.find(p => p.name === "structureType").data.every(id => id === 3)'), true);
   assert.equal(await evaluate(`document.querySelector('[data-structure-type="0"]').checked`), true);
-  await evaluate(`document.getElementById('run-ptm').click(); document.getElementById('run-strain').click();`);
-  await waitFor('document.getElementById("ptm-state").textContent === "Calculated" && document.getElementById("strain-state").textContent === "Calculated"', 'BCC PTM and strain');
+  await evaluate(`document.getElementById('run-csp').click(); document.getElementById('run-ptm').click(); document.getElementById('run-strain').click();`);
+  await waitFor('["csp", "ptm", "strain"].every(prefix => document.getElementById(prefix + "-state").textContent === "Calculated")', 'BCC Auto central symmetry, PTM and strain');
+  assert.equal(await evaluate('document.getElementById("csp-neighbors").value'), 'auto');
+  assert.match(await evaluate('document.getElementById("csp-neighbors").selectedOptions[0].textContent'), /Auto.*BCC/);
   assert.equal(await evaluate('window.structureTestRenderer.frame.ptm.structures.every(type => type === 3)'), true);
   assert.equal(await evaluate('document.querySelector("[data-lattice-a]").valueAsNumber'), 2.87);
   await evaluate(`(() => { const select = document.getElementById('color-mode'); select.value = 'property:ptmStructureType'; select.dispatchEvent(new Event('change')); })()`);
   await evaluate(`document.querySelector('[data-structure-type="3"]').click(); document.getElementById('frame-last').click();`);
-  await waitFor('document.getElementById("frame-label").textContent === "2 / 2" && document.getElementById("cna-state").textContent === "Calculated" && document.getElementById("ptm-state").textContent === "Calculated" && document.getElementById("strain-state").textContent === "Calculated"', 'trajectory CNA/PTM/strain');
+  await waitFor('document.getElementById("frame-label").textContent === "2 / 2" && ["cna", "csp", "ptm", "strain"].every(prefix => document.getElementById(prefix + "-state").textContent === "Calculated")', 'trajectory CNA/Auto central symmetry/PTM/strain');
+  assert.equal(await evaluate('window.structureTestRenderer.frame.properties.find(p => p.name === "centralSymmetryNeighbors").data.every(value => value === 8)'), true);
   assert.equal(await evaluate(`document.querySelector('[data-structure-type="3"]').checked`), false);
   assert.equal(await evaluate('window.structureTestRenderer.visibility.every(value => value === 0)'), true);
   await evaluate(`document.querySelector('[data-structure-type="3"]').click(); document.getElementById('frame-first').click();`);
-  await waitFor('document.getElementById("frame-label").textContent === "1 / 2" && document.getElementById("cna-state").textContent === "Calculated" && document.getElementById("strain-state").textContent === "Calculated"', 'cached trajectory analyses');
+  await waitFor('document.getElementById("frame-label").textContent === "1 / 2" && ["cna", "csp", "strain"].every(prefix => document.getElementById(prefix + "-state").textContent === "Calculated")', 'cached trajectory analyses');
+  assert.match(await evaluate('document.getElementById("csp-neighbors").selectedOptions[0].textContent'), /Auto.*BCC/);
   // Retain all original assertions while simulating a late superseded result.
   await evaluate(`(async () => {
     const appUrl = document.querySelector('script[type="module"]').src;
@@ -864,6 +869,10 @@ try {
     assert.equal(cancelled.results, false, kind);
     assert.equal(cancelled.color, 'type', kind);
     assert.equal(cancelled.loading, false, kind);
+    if (kind === 'centrosymmetry') {
+      assert.equal(await evaluate('document.getElementById("csp-neighbors").selectedOptions[0].textContent.trim()'), 'Auto');
+      assert.equal(await evaluate('document.getElementById("csp-auto-result").hidden'), true);
+    }
   }
   assert.equal(await evaluate('document.querySelector("[data-lattice-a]").valueAsNumber'), 3.3, 'reset preserves the reference settings');
   assert.equal(await evaluate('window.structureTestRenderer.frame.ptm === undefined'), true);
@@ -1361,6 +1370,116 @@ try {
   await waitFor('document.getElementById("toast").textContent.includes("saved frame is not available")', 'unavailable saved frame rejection');
   compareSettings((await exportConfiguration()).settings, recipe.settings);
 
+  // Auto central symmetry chooses a neighbor shell per atom. Real native
+  // sources cover HCP's finite nonzero CSP and coexisting FCC/BCC regions.
+  for (const [phase, type, neighbors] of [['fcc', 1, 12], ['hcp', 2, 12], ['bcc', 3, 8]]) {
+    const frame = crystalFrame(phase), sourceName = `auto-csp-${phase}.cfg`, path = resolve(profile, sourceName);
+    const lines = [`Number of particles = ${frame.ids.length}`, 'A = 1.0 Angstrom'];
+    for (let row = 0; row < 3; row++) for (let column = 0; column < 3; column++) {
+      lines.push(`H0(${row + 1},${column + 1}) = ${frame.cell.vectors[row * 3 + column]} A`);
+    }
+    lines.push('.NO_VELOCITY.', 'entry_count = 3', '1', 'X');
+    for (let atom = 0; atom < frame.ids.length; atom++) lines.push([...frame.fractional.subarray(atom * 3, atom * 3 + 3)].join(' '));
+    await writeFile(path, lines.join('\n'));
+    await call('DOM.setFileInputFiles', { nodeId, files: [path] });
+    await waitFor(`document.getElementById('file-name').textContent === '${sourceName}' && document.getElementById('loading').hidden`, `${phase} Auto CSP source`);
+    await showTool('centrosymmetry');
+    await evaluate(`(() => {
+      const select = document.getElementById('csp-neighbors'); select.value = 'auto'; select.dispatchEvent(new Event('change'));
+      document.getElementById('run-csp').click();
+    })()`);
+    await waitFor('document.getElementById("csp-state").textContent === "Calculated"', `${phase} Auto CSP`);
+    assert.match(await evaluate('document.getElementById("csp-neighbors").selectedOptions[0].textContent'), new RegExp(`Auto.*${phase.toUpperCase()}`));
+    assert.ok(await evaluate(`document.getElementById('csp-auto-result').textContent.includes('${phase.toUpperCase()}')`));
+    assert.equal(await evaluate(`(() => {
+      const properties = window.structureTestRenderer.frame.properties;
+      return properties.find(p => p.name === 'centralSymmetryStructureType').data.every(value => value === ${type})
+        && properties.find(p => p.name === 'centralSymmetryNeighbors').data.every(value => value === ${neighbors});
+    })()`), true);
+    assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(p => p.analysisKind === "cna")'), false, 'Auto CSP must not enable a separate CNA analysis');
+    assert.equal(await evaluate(`window.structureTestRenderer.frame.properties.find(p => p.name === 'centralSymmetry').data.every(value => Number.isFinite(value) && ${phase === 'hcp' ? 'value > 0.001' : 'value < 1e-9'})`), true);
+    if (phase === 'hcp' && process.argv.includes('--structure-screenshot')) {
+      const capture = await call('Page.captureScreenshot', { format: 'png' });
+      await writeFile('/tmp/alloyview-auto-csp-hcp.png', Buffer.from(capture.data, 'base64'));
+    }
+  }
+  const mixedFcc = crystalFrame('fcc', 4, 4), mixedBcc = crystalFrame('bcc', 4, 7);
+  const mixedPositions = [...mixedFcc.positions, ...Array.from(mixedBcc.positions, (value, index) => value + (index % 3 === 0 ? 40 : 0))];
+  const mixedCount = mixedPositions.length / 3, mixedPath = resolve(profile, 'auto-csp-mixed.dump');
+  const mixedLines = ['ITEM: TIMESTEP', '0', 'ITEM: NUMBER OF ATOMS', String(mixedCount),
+    'ITEM: BOX BOUNDS ff ff ff', '0 80', '0 80', '0 80', 'ITEM: ATOMS id type element x y z'];
+  for (let atom = 0; atom < mixedCount; atom++) mixedLines.push(`${atom + 1} 1 X ${mixedPositions.slice(atom * 3, atom * 3 + 3).join(' ')}`);
+  await writeFile(mixedPath, mixedLines.join('\n'));
+  await call('DOM.setFileInputFiles', { nodeId, files: [mixedPath] });
+  await waitFor('document.getElementById("file-name").textContent === "auto-csp-mixed.dump" && document.getElementById("loading").hidden', 'mixed Auto CSP source');
+  await showTool('centrosymmetry');
+  await evaluate('document.getElementById("run-csp").click()');
+  await waitFor('document.getElementById("csp-state").textContent === "Calculated"', 'mixed Auto CSP');
+  assert.match(await evaluate('document.getElementById("csp-neighbors").selectedOptions[0].textContent'), /Auto.*Mixed/);
+  assert.equal(await evaluate(`(() => {
+    const properties = window.structureTestRenderer.frame.properties;
+    const types = properties.find(p => p.name === 'centralSymmetryStructureType').data;
+    const neighbors = properties.find(p => p.name === 'centralSymmetryNeighbors').data;
+    return types[84] === 1 && neighbors[84] === 12 && types[${mixedFcc.ids.length + 42}] === 3 && neighbors[${mixedFcc.ids.length + 42}] === 8
+      && types.every((type, atom) => type === 3 ? neighbors[atom] === 8 : type === 1 || type === 2 ? neighbors[atom] === 12 : true);
+  })()`), true, 'coexisting phases must use their own local shells');
+  if (process.argv.includes('--structure-screenshot')) {
+    const capture = await call('Page.captureScreenshot', { format: 'png' });
+    await writeFile('/tmp/alloyview-auto-csp-mixed.png', Buffer.from(capture.data, 'base64'));
+  }
+  // Auto reuses genuine adaptive-CNA classifications, while a fixed-cutoff
+  // result cannot supply the local reference shells for an Auto calculation.
+  await evaluate(`(async () => {
+    const appUrl = document.querySelector('script[type="module"]').src;
+    const { AnalysisPool } = await import(new URL('./analysis/analysis-pool.js', appUrl));
+    const original = AnalysisPool.prototype.analyze;
+    window.cspStructureInputReuse = [];
+    AnalysisPool.prototype.analyze = function(frame, parameters, ...rest) {
+      if (parameters.kind === 'centrosymmetry') window.cspStructureInputReuse.push(!!parameters.structureInput);
+      return original.call(this, frame, parameters, ...rest);
+    };
+    window.restoreCspReuseHook = () => { AnalysisPool.prototype.analyze = original; };
+    const mode = document.getElementById('cna-mode'); mode.value = 'fixed'; mode.dispatchEvent(new Event('change'));
+    document.getElementById('run-cna').click();
+  })()`);
+  await waitFor('document.getElementById("cna-state").textContent === "Calculated"', 'fixed CNA before Auto CSP');
+  await evaluate('document.getElementById("cancel-csp").click(); document.getElementById("run-csp").click()');
+  await waitFor('document.getElementById("csp-state").textContent === "Calculated"', 'Auto CSP ignoring fixed CNA');
+  assert.equal(await evaluate('window.cspStructureInputReuse.at(-1)'), false);
+  await evaluate(`(() => { const mode = document.getElementById('cna-mode'); mode.value = 'adaptive'; mode.dispatchEvent(new Event('change')); })()`);
+  await waitFor('document.getElementById("cna-state").textContent === "Calculated"', 'adaptive CNA before Auto CSP');
+  await evaluate('document.getElementById("cancel-csp").click(); document.getElementById("run-csp").click()');
+  await waitFor('document.getElementById("csp-state").textContent === "Calculated"', 'Auto CSP reusing adaptive CNA');
+  assert.equal(await evaluate('window.cspStructureInputReuse.at(-1)'), true);
+  await evaluate('window.restoreCspReuseHook()');
+  const autoCspRecipe = await exportConfiguration();
+  assert.equal(autoCspRecipe.settings.analyses.centrosymmetry.enabled, true);
+  assert.equal(autoCspRecipe.settings.analyses.centrosymmetry.mode, 'auto');
+  const autoCspPath = resolve(profile, 'auto-csp-recipe.json');
+  await writeFile(autoCspPath, JSON.stringify(autoCspRecipe));
+  await evaluate('document.getElementById("cancel-csp").click()');
+  assert.equal(await evaluate('document.getElementById("csp-neighbors").selectedOptions[0].textContent.trim()'), 'Auto');
+  assert.equal(await evaluate('document.getElementById("csp-auto-result").hidden'), true);
+  assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(p => p.analysisKind === "centrosymmetry")'), false);
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [autoCspPath] });
+  await waitFor('document.getElementById("csp-state").textContent === "Calculated" && document.getElementById("configuration-status").textContent.includes("restored")', 'Auto CSP recipe replay');
+  assert.match(await evaluate('document.getElementById("csp-neighbors").selectedOptions[0].textContent'), /Auto.*Mixed/);
+  await showTool('centrosymmetry');
+  await evaluate(`(() => { const select = document.getElementById('csp-neighbors'); select.value = '12'; select.dispatchEvent(new Event('change')); })()`);
+  await waitFor('document.getElementById("csp-state").textContent === "Calculated"', 'manual 12-neighbor CSP');
+  assert.equal(await evaluate('document.getElementById("csp-auto-result").hidden'), true);
+  const manualCspRecipe = await exportConfiguration();
+  assert.equal(manualCspRecipe.settings.analyses.centrosymmetry.mode, 'manual');
+  assert.equal(manualCspRecipe.settings.analyses.centrosymmetry.neighbors, 12);
+  // A pre-Auto version-one recipe had only enabled and neighbors fields.
+  delete manualCspRecipe.settings.analyses.centrosymmetry.mode;
+  const manualCspPath = resolve(profile, 'legacy-manual-csp-recipe.json');
+  await writeFile(manualCspPath, JSON.stringify(manualCspRecipe));
+  await evaluate(`(() => { const select = document.getElementById('csp-neighbors'); select.value = '8'; select.dispatchEvent(new Event('change')); })()`);
+  await waitFor('document.getElementById("csp-state").textContent === "Calculated"', 'manual 8-neighbor CSP');
+  await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [manualCspPath] });
+  await waitFor('document.getElementById("csp-neighbors").value === "12" && document.getElementById("csp-state").textContent === "Calculated" && document.getElementById("configuration-status").textContent.includes("restored")', 'legacy manual CSP recipe replay');
+
   // Theme persists on reload. A manually selected viewport color stays intact.
   await evaluate(`document.querySelector('[data-background="#fff8e7"]').click(); document.getElementById('theme-light').click();`);
   assert.equal(await evaluate('document.getElementById("background").value'), '#fff8e7');
@@ -1596,7 +1715,7 @@ try {
   assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors));
   assert.ok(requests.some(path => path.endsWith('ptm-kernel.wasm')), 'browser must load the real PTM kernel');
   assert.ok(requests.filter((path) => /\.(js|mjs|wasm)$/.test(path)).every((path) => /^\/AlloyView\/assets\/[a-f0-9]+\//.test(path)));
-  console.log('Browser smoke passed: continuous 3D BCC logo including reduced-motion settings; Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent analyses; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; startup preparation/Wasm/indexing/atom progress and warm Worker reuse; selectable tools; triclinic display replication and unchanged analysis inputs; intersecting arbitrary world-space slices, displayed/unwrapped coordinates, visible-copy GPU coverage/picking and real handle drags without camera motion; JSON configuration export/replay, local-source reselection, source-loading/preflight races and unchanged settings after rejected recipes; editable lattice references and PTM reuse; sidebar/themes; phone pinch zoom, two-finger pan, one-finger orbit, tap picking, fixed viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
+  console.log('Browser smoke passed: continuous 3D BCC logo including reduced-motion settings; Pages Wasm loading; trajectories; automatic cutoff/legend edits; latest-result queueing; concurrent analyses; Auto central symmetry for FCC/HCP/BCC and local mixed-phase neighbor shells, trajectory/cache reuse, cancellation reset and Auto/legacy-manual recipe replay; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; startup preparation/Wasm/indexing/atom progress and warm Worker reuse; selectable tools; triclinic display replication and unchanged analysis inputs; intersecting arbitrary world-space slices, displayed/unwrapped coordinates, visible-copy GPU coverage/picking and real handle drags without camera motion; JSON configuration export/replay, local-source reselection, source-loading/preflight races and unchanged settings after rejected recipes; editable lattice references and PTM reuse; sidebar/themes; phone pinch zoom, two-finger pan, one-finger orbit, tap picking, fixed viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
   console.log(JSON.stringify(exports));
   console.log(`Large-structure clipping passed: ${largeCount} local CFG atoms; depth range ${largeDepths.minimum.toFixed(4)}..${largeDepths.maximum.toFixed(4)}; first/last atoms rendered and picked.`);
 } finally {

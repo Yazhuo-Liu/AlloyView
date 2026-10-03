@@ -49,7 +49,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   templates, an adjustable RMSD threshold and the same crystal visibility controls.
 - Atomic elastic strain relative to an ideal lattice, with editable element-based
   lattice constants, shear/hydrostatic strain, volume change and tensor components.
-- AtomEye normalized central symmetry with 8/12 neighbors; all analyses share
+- AtomEye normalized central symmetry with automatic local FCC/HCP/BCC
+  settings for mixed structures, or manual 8/12 neighbors. All analyses share
   a bounded parallel Worker scheduler and retain per-frame results. Workers
   and PTM kernels are reused, with preparation stages and PTM atom progress.
 - Per-analysis Cancel controls stop computation and reset results and frame
@@ -105,6 +106,9 @@ WebGL 2 support. No installation or account is needed.
    your structure's neighbor shells.
    Use **Common neighbor analysis** or **Polyhedral template matching** for
    crystal identification, then the legend checkboxes to show/hide each class.
+   **Central symmetry → Auto** identifies FCC/HCP/BCC locally and selects 12
+   neighbors for FCC/HCP or 8 for BCC, including mixed structures. Its summary
+   shows the recognized phases; ideal HCP has a finite symmetry value.
    Under **Ideal lattice reference**, check the element, crystal phase and
    lattice constants before calculating atomic elastic strain.
 5. **Export.** Choose **Include background in PNG** and **Include legend in
