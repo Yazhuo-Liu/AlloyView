@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { GpuRuntime, MAX_GPU_PERIODIC_RADIUS_FACES } from '../src/analysis/gpu/runtime.js';
 import { CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER } from '../src/analysis/gpu/cna-shaders.js';
 import { REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER } from '../src/analysis/gpu/reference-strain-shaders.js';
+import { CSP_SHADER } from '../src/analysis/gpu/centrosymmetry-shaders.js';
+import { DISPLACEMENT_SHADER } from '../src/analysis/gpu/displacement-shaders.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, FALLBACK_GPU_BUDGET_BYTES,
   frameUploadBytes, gpuWorkspaceBytes, trajectoryCapacity } from '../src/analysis/gpu/cache-policy.js';
 import { crystalFrame } from './helpers/crystals.js';
@@ -204,8 +206,8 @@ test('clearing a source frees input and index buffers while retaining the device
   const state = fixture(), { runtime } = state;
   try {
     await runtime.warmup();
-    assert.equal(state.compiled, 17);
-    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER]) {
+    assert.equal(state.compiled, 19);
+    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER, CSP_SHADER, DISPLACEMENT_SHADER]) {
       assert.ok(runtime.pipelines.has(source), 'new analysis kernels compile during device warmup');
     }
     const pipelines = [...runtime.pipelines.values()], device = runtime.device;
@@ -221,6 +223,115 @@ test('clearing a source frees input and index buffers while retaining the device
     assert.ok(state.allocations.every(buffer => buffer.destroyed));
   } finally { runtime.close(); }
   assert.equal(state.destroyed, true);
+});
+
+test('Cartesian-only residency accepts open positions outside the box and anchors precise source coordinates', async () => {
+  const { runtime } = fixture();
+  try {
+    const frame = input(0), count = frame.types.length;
+    frame.cell.pbc = [false, false, false];
+    frame.fractional[0] = 2;
+    const positions = new Float64Array(count * 3).fill(1e8);
+    positions[3] = 1e8 + 1.4901161193847656e-8;
+    const result = await runtime.prepareCartesianFrame(frame, positions, { frameIndex: 0 });
+    assert.deepEqual([...result.anchor], [1e8, 1e8, 1e8]);
+    const packed = new Float32Array(result.positionsBuffer.lastWrite.buffer);
+    assert.equal(packed[8] + packed[12], positions[3] - positions[0]);
+    assert.equal(runtime.frames.get(100).positionsBuffer, undefined, 'displacement needs no wrapped neighbor upload');
+    assert.equal(runtime.frames.get(100).bytes, count * 32);
+    assert.equal(runtime.cacheStatus().residentBytes, count * 32);
+    await assert.rejects(runtime.uploadFrame(frame), /nonperiodic coordinates inside/);
+    assert.equal(result.positionsBuffer.destroyed, false);
+    const reused = await runtime.prepareCartesianFrame(frame, positions);
+    assert.equal(reused.positionsBuffer, result.positionsBuffer);
+    assert.equal(runtime.inputUploads, 1);
+  } finally { runtime.close(); }
+});
+
+test('Cartesian packing carries a conservative encoding error for tiny motion across large source spans', async () => {
+  const { runtime } = fixture();
+  try {
+    const frame = input(0), positions = new Float64Array(frame.types.length * 3);
+    positions[3] = 1e6 + .02;
+    const result = await runtime.prepareCartesianFrame(frame, positions);
+    const packed = new Float32Array(result.positionsBuffer.lastWrite.buffer);
+    assert.equal(packed[3], 0);
+    const error = Math.abs(positions[3] - (packed[8] + packed[12]));
+    assert.ok(error > 0);
+    assert.ok(packed[11] >= error, 'the shader can identify displacement comparable to quantization uncertainty');
+  } finally { runtime.close(); }
+});
+
+test('Cartesian variants reuse immutable inputs, refresh source changes, and coexist with lazy species uploads', async () => {
+  const { runtime, allocations } = fixture();
+  try {
+    const frame = input(0), count = frame.types.length;
+    const wrapped = Float64Array.from(frame.positions), unwrapped = Float64Array.from(wrapped, value => value + 40);
+    const first = await runtime.prepareCartesianFrame(frame, wrapped, { frameIndex: 0 });
+    const second = await runtime.prepareCartesianFrame(frame, unwrapped, { variant: 'unwrapped-cartesian' });
+    assert.notEqual(first.positionsBuffer, second.positionsBuffer);
+    assert.equal(runtime.frames.get(100).bytes, count * 64);
+    await runtime.uploadFrame(frame, { frameIndex: 0 });
+    const resident = runtime.frames.get(100);
+    assert.equal(resident.bytes, count * 100);
+    assert.equal(runtime.cacheStatus().residentBytes, count * 100);
+    assert.ok(resident.typesBuffer);
+    assert.equal(first.positionsBuffer.destroyed, false);
+    const changed = wrapped.slice(); changed[3] += .125;
+    const updated = await runtime.prepareCartesianFrame(frame, changed);
+    assert.notEqual(updated.positionsBuffer, first.positionsBuffer);
+    assert.equal(first.positionsBuffer.destroyed, true);
+    assert.equal(second.positionsBuffer.destroyed, false);
+    assert.equal(runtime.cacheStatus().residentBytes, count * 100, 'replacement does not add a new residency variant');
+    assert.equal((await runtime.prepareCartesianFrame(frame, unwrapped, { variant: 'unwrapped-cartesian' })).positionsBuffer, second.positionsBuffer);
+    runtime.clearFrames();
+    assert.equal(runtime.allocatedBytes, 0);
+    assert.ok(allocations.every(buffer => buffer.destroyed));
+  } finally { runtime.close(); }
+});
+
+test('adaptive GPU CNA classifications survive result transfer but expire with their resident source', async () => {
+  const { runtime } = fixture();
+  try {
+    const frame = input(0), structures = new Uint8Array(frame.types.length).fill(2);
+    assert.equal(runtime.cacheAdaptiveCna(frame, structures), false, 'unresident or partial classifications are not cached');
+    await runtime.uploadFrame(frame);
+    assert.equal(runtime.cacheAdaptiveCna(frame, structures.subarray(1)), false);
+    assert.equal(runtime.cacheAdaptiveCna(frame, structures), true);
+    structuredClone(structures, { transfer: [structures.buffer] });
+    assert.ok(runtime.getAdaptiveCna(frame).every(type => type === 2));
+    runtime.evictFrame(100);
+    assert.equal(runtime.getAdaptiveCna(frame), undefined);
+    await runtime.uploadFrame(frame);
+    runtime.cacheAdaptiveCna(frame, new Uint8Array(frame.types.length));
+    runtime.clearFrames();
+    assert.equal(runtime.adaptiveCna.size, 0);
+  } finally { runtime.close(); }
+});
+
+test('Cartesian variant OOM retry preserves both active frames and frees its failed partial buffer', async () => {
+  const state = fixture(), { runtime } = state;
+  let releasePins;
+  try {
+    const frames = [input(0), input(1), input(3)], bytes = frames[0].types.length * 32;
+    runtime.configureCache({ frameCount: 4, currentIndex: 1, budgetBytes: gpuWorkspaceBytes(bytes * 2) + bytes * 3 });
+    for (const frame of frames) await runtime.prepareCartesianFrame(frame, Float64Array.from(frame.positions), { frameIndex: frame.gpuFrameId - 100 });
+    const current = runtime.frames.get(101).cartesian.get('cartesian').positionsBuffer;
+    const reference = runtime.frames.get(100).cartesian.get('cartesian').positionsBuffer;
+    releasePins = runtime.pinFrames([frames[0], frames[1]]);
+    state.failNextAllocation();
+    const unwrapped = await runtime.prepareCartesianFrame(frames[0], Float64Array.from(frames[0].positions, value => value + 80),
+      { variant: 'unwrapped-cartesian', frameIndex: 0 });
+    assert.equal(current.destroyed, false); assert.equal(reference.destroyed, false);
+    assert.equal(unwrapped.positionsBuffer.destroyed, false);
+    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [0, 1]);
+    assert.equal(runtime.cacheStatus().currentIndex, 1);
+    assert.equal(runtime.cacheStatus().residentBytes, bytes * 3);
+    assert.equal(runtime.allocatedBytes, bytes * 3);
+    assert.ok(state.allocations.at(-2).destroyed, 'the first failed variant upload is released before retry');
+    assert.deepEqual(state.scopes, []);
+  } finally { releasePins?.(); runtime.close(); }
+  assert.ok(state.allocations.every(buffer => buffer.destroyed));
 });
 
 test('collapsed linked-cell dimensions use the unique stencil size when bounding adaptive search work', async () => {

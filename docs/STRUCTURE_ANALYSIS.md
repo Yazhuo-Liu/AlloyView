@@ -140,6 +140,14 @@ neighbor count** as color properties. The first retains raw CNA labels, so
 inferred Other sites remain Other; the second shows their selected 8/12 setting
 or 0 when no setting was selected.
 
+With GPU computing enabled, manual and Auto central symmetry run nearest-shell
+selection and greedy pairing on WebGPU. Auto can reuse adaptive-CNA labels or
+calculate them on GPU first. The pairing shader emulates IEEE 64-bit arithmetic
+to preserve the CPU's strict distance/vector ordering and pair comparisons,
+then emits the same Float32 scalar. HCP baselines, local shell voting and NaN
+semantics are unchanged. See [central symmetry](features/centrosymmetry.md)
+for bounded search and fallback details.
+
 All analyses automatically run on subsequent trajectory frames after first
 being enabled. Per-frame results are reused only when their method/parameters
 match. Changes to CNA method, fixed radius or central-symmetry mode/neighbor count
@@ -199,11 +207,13 @@ not distinguish chemical ordering or crystal orientation.
 ## Parallel execution
 
 The default backend uses CPU Workers. With **Enable GPU computing** selected,
-both adaptive and fixed-cutoff CNA and reference-frame strain can use WebGPU.
-The GPU kernels preserve the same crystal labels, reference-neighbor convention
-and output fields, with CPU fallback for unsupported inputs or unavailable GPU
-support. PTM fitting and central symmetry remain CPU calculations, including
-the Auto central-symmetry calculation. See [CNA](features/cna.md),
+adaptive/fixed-cutoff CNA, manual/Auto central symmetry, displacement and
+reference-frame strain can use WebGPU. The GPU kernels preserve the same
+crystal labels, central-symmetry normalization, atom correspondence,
+reference-neighbor convention and output fields, with CPU fallback for
+unsupported inputs or unavailable GPU support. PTM fitting remains CPU work.
+See [CNA](features/cna.md), [central symmetry](features/centrosymmetry.md),
+[displacement](features/displacement.md),
 [reference-frame strain](features/reference-strain.md) and
 [performance](features/performance.md) for backend and precision details.
 
@@ -222,10 +232,11 @@ supports cancellation. This reduces repeated startup work and keeps controls
 responsive during preparation; it does not remove neighbor-search or fitting
 cost.
 
-Coordination, CNA, central symmetry, PTM and atomic strain share `AnalysisPool`. Independent central
-atom ranges execute in module Workers; the main thread uploads results and
-updates controls. CNA/CSP/PTM/fresh strain use 4,096 atoms per target range;
-cheaper coordination and cached-fit strain target 50,000 atoms. Each PTM Worker
+Coordination, CNA, central symmetry, PTM, ideal/reference strain and displacement
+share `AnalysisPool`. Independent central atom ranges execute in module Workers;
+the main thread uploads results and updates controls. CNA/CSP/PTM/fresh strain
+use 4,096 atoms per target range; cheaper coordination, displacement and
+cached-fit strain target 50,000 atoms. Each PTM Worker
 has its own Wasm instance, avoiding pthread/shared-Wasm hosting requirements.
 There is one total concurrency limit across
 all analyses: at most six Workers and at most `hardwareConcurrency - 1`, with

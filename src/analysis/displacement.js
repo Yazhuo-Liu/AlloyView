@@ -2,6 +2,7 @@ import { cellFaceHeights, fractionalToCartesian, invert3 } from '../data/model.j
 import { createReferenceMappingAsync } from './reference-strain.js';
 
 const MAX_IMAGE_CANDIDATES = 100_000;
+const derivedCartesianPositions = new WeakMap();
 
 /** Cartesian current − reference displacement, matched by explicit atom IDs.
  * When both frames have generated row IDs, equal atom counts permit a row-order
@@ -13,6 +14,31 @@ const MAX_IMAGE_CANDIDATES = 100_000;
  */
 export async function computeDisplacements(frame, reference, {
   minimumImage = true, signal, onProgress = () => {},
+} = {}) {
+  const parameters = await prepareDisplacements(frame, reference, { minimumImage, signal, onProgress, cacheDerivedPositions: false });
+  const context = prepareDisplacementCalculation(frame, parameters);
+  const { referenceMapping, mappingMode } = parameters;
+  const count = referenceMapping.length, vectors = new Float32Array(count * 3).fill(NaN);
+  let matched = 0, lastYieldAt = performance.now();
+  for (let atom = 0; atom < count; atom += 1) {
+    throwIfAborted(signal);
+    if (calculateDisplacementAtom(context, atom, vectors, atom * 3)) matched += 1;
+    if ((atom + 1) % 2048 === 0 || performance.now() - lastYieldAt >= 24) {
+      onProgress({ phase: 'displacement', completed: atom + 1, total: count });
+      await yieldToMain();
+      lastYieldAt = performance.now();
+    }
+  }
+  throwIfAborted(signal);
+  onProgress({ phase: 'displacement', completed: count, total: count });
+  return { vectors, matched, unmatched: count - matched, referenceMapping, minimumImage, mappingMode };
+}
+
+/** Match IDs once, before dispatching CPU ranges or GPU arithmetic. Cartesian
+ * inputs retain the original precision, origin and unwrapped trajectory data.
+ */
+export async function prepareDisplacements(frame, reference, {
+  minimumImage = true, signal, onProgress = () => {}, cacheDerivedPositions = true,
 } = {}) {
   throwIfAborted(signal);
   if (typeof minimumImage !== 'boolean') throw new Error('The displacement minimum-image option must be a boolean.');
@@ -48,35 +74,74 @@ export async function computeDisplacements(frame, reference, {
       throw new Error(error.message.replaceAll('Reference-frame strain', 'Displacement'));
     }
   }
-  const currentPositions = displacementPositions(frame, minimumImage);
-  const referencePositions = displacementPositions(reference, minimumImage);
+  const currentPositions = displacementPositions(frame, minimumImage, cacheDerivedPositions);
+  const referencePositions = frame === reference ? currentPositions : displacementPositions(reference, minimumImage, cacheDerivedPositions);
+  throwIfAborted(signal);
+  return { referenceFrame: reference, referenceFractional: reference.fractional, referenceCell: reference.cell,
+    referenceMapping, currentPositions, referencePositions, minimumImage, mappingMode };
+}
+
+/** Reusable double-precision geometry for CPU worker ranges and sparse GPU
+ * image corrections. Matching is already complete when this helper runs.
+ */
+export function prepareDisplacementCalculation(frame, parameters) {
+  const { referenceMapping, currentPositions, referencePositions, minimumImage = true, mappingMode = 'id' } = parameters;
+  if (typeof minimumImage !== 'boolean') throw new Error('The displacement minimum-image option must be a boolean.');
+  const count = coordinateCount(frame), referenceCount = referencePositions?.length / 3;
+  if (!(referenceMapping instanceof Int32Array) || referenceMapping.length !== count
+    || currentPositions?.length !== count * 3 || !Number.isInteger(referenceCount) || referenceCount < 1) {
+    throw new Error('Displacement coordinates or atom mapping are incomplete.');
+  }
+  if (mappingMode !== 'id' && mappingMode !== 'row-order') throw new Error('The displacement mapping mode is invalid.');
+  for (const atom of referenceMapping) if (atom < -1 || atom >= referenceCount) throw new Error('Displacement mapping is outside the reference frame.');
   const inverse = minimumImage ? invert3(frame.cell.vectors) : null;
   const orthogonal = minimumImage && orthogonalBasis(frame.cell.vectors);
   const heights = minimumImage && !orthogonal ? cellFaceHeights(frame.cell) : null;
-  const count = referenceMapping.length, vectors = new Float32Array(count * 3).fill(NaN);
-  const change = new Float64Array(3);
-  let matched = 0, lastYieldAt = performance.now();
-  for (let atom = 0; atom < count; atom += 1) {
+  return { frame, referenceMapping, currentPositions, referencePositions, minimumImage, mappingMode,
+    inverse, orthogonal, heights, change: new Float64Array(3) };
+}
+
+/** Synchronous atom ranges run inside CPU workers without repeating ID maps. */
+export function calculatePreparedDisplacements(frame, parameters, { signal, onProgress = () => {} } = {}) {
+  const context = parameters.preparedContext ?? prepareDisplacementCalculation(frame, parameters);
+  if (context.frame !== frame || context.referenceMapping !== parameters.referenceMapping
+    || context.currentPositions !== parameters.currentPositions || context.referencePositions !== parameters.referencePositions
+    || context.minimumImage !== (parameters.minimumImage ?? true)) throw new Error('The prepared displacement context does not match these inputs.');
+  const count = context.referenceMapping.length;
+  const startAtom = parameters.startAtom ?? 0, endAtom = parameters.endAtom ?? count;
+  if (!Number.isInteger(startAtom) || !Number.isInteger(endAtom) || startAtom < 0 || endAtom > count || endAtom < startAtom) {
+    throw new Error('The displacement atom range is invalid.');
+  }
+  const vectors = new Float32Array((endAtom - startAtom) * 3).fill(NaN);
+  const magnitudes = new Float64Array(endAtom - startAtom).fill(NaN);
+  let matched = 0;
+  for (let atom = startAtom; atom < endAtom; atom += 1) {
     throwIfAborted(signal);
-    const referenceAtom = referenceMapping[atom];
-    if (referenceAtom >= 0) {
-      for (let axis = 0; axis < 3; axis += 1) {
-        change[axis] = currentPositions[atom * 3 + axis] - referencePositions[referenceAtom * 3 + axis];
-        if (!Number.isFinite(change[axis])) throw new Error('Displacement requires finite atom coordinates.');
-      }
-      if (minimumImage) resolveMinimumImage(change, frame.cell, inverse, heights, orthogonal);
-      vectors.set(change, atom * 3);
+    const index = atom - startAtom;
+    if (calculateDisplacementAtom(context, atom, vectors, index * 3)) {
       matched += 1;
+      const components = vectors.subarray(index * 3, index * 3 + 3);
+      magnitudes[index] = components.every(Number.isFinite) ? Math.hypot(...components) : NaN;
     }
-    if ((atom + 1) % 2048 === 0 || performance.now() - lastYieldAt >= 24) {
-      onProgress({ phase: 'displacement', completed: atom + 1, total: count });
-      await yieldToMain();
-      lastYieldAt = performance.now();
-    }
+    if ((index + 1) % 2048 === 0) onProgress({ phase: 'displacement', completed: index + 1, total: endAtom - startAtom });
   }
   throwIfAborted(signal);
-  onProgress({ phase: 'displacement', completed: count, total: count });
-  return { vectors, matched, unmatched: count - matched, referenceMapping, minimumImage, mappingMode };
+  onProgress({ phase: 'displacement', completed: endAtom - startAtom, total: endAtom - startAtom });
+  return { vectors, magnitudes, matched, unmatched: endAtom - startAtom - matched, referenceMapping: context.referenceMapping,
+    minimumImage: context.minimumImage, mappingMode: context.mappingMode, startAtom, endAtom };
+}
+
+function calculateDisplacementAtom(context, atom, vectors, offset) {
+  const { referenceMapping, currentPositions, referencePositions, change, minimumImage, frame, inverse, heights, orthogonal } = context;
+  const referenceAtom = referenceMapping[atom];
+  if (referenceAtom < 0) return false;
+  for (let axis = 0; axis < 3; axis += 1) {
+    change[axis] = currentPositions[atom * 3 + axis] - referencePositions[referenceAtom * 3 + axis];
+    if (!Number.isFinite(change[axis])) throw new Error('Displacement requires finite atom coordinates.');
+  }
+  if (minimumImage) resolveMinimumImage(change, frame.cell, inverse, heights, orthogonal);
+  vectors.set(change, offset);
+  return true;
 }
 
 function hasGeneratedIds(frame) {
@@ -91,10 +156,18 @@ function coordinateCount(frame) {
   return count;
 }
 
-function displacementPositions(frame, minimumImage) {
+function displacementPositions(frame, minimumImage, cacheDerivedPositions) {
   const count = coordinateCount(frame);
-  const positions = !minimumImage && frame.unwrappedPositions ? frame.unwrappedPositions
-    : frame.positions ?? fractionalToCartesian(frame.fractional, frame.cell, new Float64Array(count * 3));
+  let positions = !minimumImage && frame.unwrappedPositions ? frame.unwrappedPositions : frame.positions;
+  if (!positions) {
+    let derived = cacheDerivedPositions ? derivedCartesianPositions.get(frame) : null;
+    if (!derived || derived.fractional !== frame.fractional || derived.cell !== frame.cell) {
+      derived = { fractional: frame.fractional, cell: frame.cell,
+        positions: fractionalToCartesian(frame.fractional, frame.cell, new Float64Array(count * 3)) };
+      if (cacheDerivedPositions) derivedCartesianPositions.set(frame, derived);
+    }
+    positions = derived.positions;
+  }
   if (positions.length !== count * 3) throw new Error('Displacement coordinates do not match the atom count.');
   return positions;
 }

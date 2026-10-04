@@ -9,7 +9,8 @@ export function analysisProgressText(progress, { frameIndex = 0, kind = '' } = {
     if (phase === 'queued') return `Waiting for the GPU for ${frame}…`;
     if (phase === 'initializing') return 'Initializing WebGPU…';
     if (phase === 'preparing') return `Uploading ${frame} to the GPU…`;
-    if (phase === 'indexing') return `Building GPU neighbor search for ${frame}…`;
+    if (phase === 'indexing') return kind === 'displacement'
+      ? `Preparing GPU displacement data for ${frame}…` : `Building GPU neighbor search for ${frame}…`;
     return `Analyzing ${frame} with WebGPU…${atoms}`;
   }
   if (phase === 'queued') return `Waiting for available analysis Workers for ${frame}…`;

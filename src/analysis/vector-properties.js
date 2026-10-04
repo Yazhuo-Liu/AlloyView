@@ -23,13 +23,16 @@ export function vectorPropertyNames(mode) {
  * Modes retain their own fields; replacing one field never removes another.
  * Imported name collisions are saved by replaceAnalysisProperty for reset.
  */
-export function registerVectorProperties(frame, { mode, vectors, unit = '' }) {
+export function registerVectorProperties(frame, { mode, vectors, magnitudes, unit = '' }) {
   const names = vectorPropertyNames(mode);
   const count = frame.ids?.length ?? vectors?.length / 3;
   if (!Number.isInteger(count) || count < 0 || vectors?.length !== count * 3) {
     throw new Error('Vector values must contain three components per atom.');
   }
   if (typeof unit !== 'string') throw new Error('Vector property units must be a string.');
+  if (magnitudes !== undefined && magnitudes?.length !== count) {
+    throw new Error('Vector magnitudes must contain one value per atom.');
+  }
   unit = mode === 'displacement' ? 'Å' : unit.trim();
 
   // Double precision also keeps a finite magnitude when Math.hypot exceeds
@@ -40,8 +43,12 @@ export function registerVectorProperties(frame, { mode, vectors, unit = '' }) {
       const value = vectors[atom * 3 + axis];
       values[component][atom] = Number.isFinite(value) ? value : NaN;
     }
-    const magnitude = Math.hypot(values.x[atom], values.y[atom], values.z[atom]);
-    values.magnitude[atom] = Number.isFinite(magnitude) ? magnitude : NaN;
+    // GPU displacement already computes an overflow-safe double magnitude.
+    // Reuse it without repeating a CPU norm for every atom; invalid components
+    // still hide arrows and produce NaN, just as the CPU path does.
+    const finite = Number.isFinite(values.x[atom]) && Number.isFinite(values.y[atom]) && Number.isFinite(values.z[atom]);
+    const magnitude = magnitudes === undefined ? Math.hypot(values.x[atom], values.y[atom], values.z[atom]) : magnitudes[atom];
+    values.magnitude[atom] = finite && Number.isFinite(magnitude) && magnitude >= 0 ? magnitude : NaN;
   }
   const title = VECTOR_FAMILIES[mode].title;
   const properties = Object.entries(names).map(([component, name]) => ({

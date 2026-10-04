@@ -224,6 +224,75 @@ regression on this file: maximum absolute error `7.45e-9` and 4,627 matching
 NaN atoms. PTM preparation takes 2164 ms separately; tensor-only CPU first/
 subsequent times are 248.9/215.2 ms, and software GPU times are 224.6/109.9 ms.
 
+### GPU central symmetry and displacement
+
+Validated on 2026-10-04 with Node.js v24.19.0 and Chromium 151 using the
+Google SwiftShader software WebGPU adapter. The final Node suite passes
+635 tests with no failures or skips; the full normal browser smoke also passes
+CPU analysis, cancellation, configuration, mobile and large-structure checks.
+
+- The real WebGPU suite passes 193 comparison/recovery cases: 191 execute GPU
+  kernels and two explicitly unsupported inputs use CPU fallback. Eight
+  displacement input-validation checks reject invalid IDs, populations,
+  coordinates or options. Nineteen common pipelines are prepared.
+- Manual CSP covers every even shell from 2 to 32, FCC/BCC/HCP and primitive
+  images, defects, triclinic/mixed-PBC cells, nearly tied neighbors, radius
+  expansion and insufficient or zero-length environments. Auto checks fresh
+  and cached adaptive CNA, mixed-phase local settings, FCC/HCP voting,
+  unresolved ties and ICO. Structure labels, shell counts, summaries, NaN
+  masks and incomplete counts agree exactly with CPU; maximum scalar error is
+  `5.96e-8`, with no direct CSP CPU corrections. The integer IEEE64 arithmetic
+  helpers pass 61,719 exact comparisons across 8,817 operand pairs.
+- Displacement checks stable integer/string IDs, reordered and missing atoms,
+  generated row correspondence, wrapped/unwrapped positions, origin and cell
+  changes, triclinic and mixed-PBC minimum images, half-cell ties and wide
+  coordinates. Float32 components agree exactly with CPU. Ordinary magnitude
+  cases differ by at most `3.11e-15` Å; a separate overflow-sized case retains a
+  finite Float64 norm above the Float32 range. Genuine motion near `1e-8` Å
+  remains positive, while self-displacements stay exactly zero, including a
+  20,000-atom case spanning multiple dispatch batches.
+- Nine cancellation checks cover ID matching and GPU preparation/dispatched
+  analysis. Cancellation rejects with AbortError, preserves source inputs and
+  permits subsequent work through the same GPU Worker. Resident adaptive CNA
+  and current/reference Cartesian uploads are reused.
+- Native application checks cover manual 8/12 and Auto CSP GPU/CPU switching,
+  recognition reuse, legend quantities, displacement components/magnitude and
+  Float32 arrows, accepted-result cancellation and enabled-GPU JSON replay.
+  The versioned production build also executes manual 8/12, Auto and
+  displacement GPU kernels against CPU outputs on 108 atoms.
+
+The full 129,904-atom Ni grain boundary runs use genuine GPU CSP without
+fallback or direct CPU pairing corrections. Manual 8-neighbor error is
+`5.96e-8`; manual 12 and Auto errors are `2.98e-8`. Auto retains 124,810 FCC,
+140 BCC and 4,954 Other labels; all Other sites inherit a supported shell,
+and no environments remain unresolved. Its first call performs adaptive GPU
+CNA with 4,822 sparse CNA corrections; the subsequent call reuses recognition
+without repeating that classification.
+
+| Analysis | CPU first / subsequent (ms) | Software WebGPU first / subsequent (ms) |
+| --- | --- | --- |
+| Manual CSP, 8 neighbors | 835.5 / 547.1 | 56275.5 / 50421.4 |
+| Manual CSP, 12 neighbors | 821.5 / 536.9 | 58466.9 / 56233.2 |
+| Auto CSP | 932.0 / 625.1 | 62303.1 / 53690.8 |
+| Displacement, excluding ID preparation | 97.9 / 43.9 | 281.1 / 69.2 |
+
+Each CSP row comes from a separate first/subsequent benchmark using four CPU
+Workers and includes preparation/upload, shader execution, readback and
+assembly. Strict ordering uses integer-emulated IEEE64 arithmetic on this
+adapter, and software GPU CSP is substantially slower than CPU here. These
+results verify execution and numerical agreement; they do not establish
+performance on a physical GPU.
+
+The displacement run uses a synthetic Cartesian translation
+`[0.12, −0.08, 0.05]` Å with known same-row correspondence to the Ni reference,
+rather than trajectory motion. All 129,904 atoms match, all 389,712 Float32
+components agree exactly, and Float64 magnitude maximum absolute/relative
+errors are `1.3878e-16` Å / `9.09e-16`. The GPU uses no CPU corrections or
+fallback. Its CPU calculation uses three Workers; shared ID matching and
+coordinate preparation take 53.3 ms separately and are excluded from the
+table's displacement timings. The benchmark also reports workflow totals
+including that preparation cost.
+
 ## Atom selection groups and physical replication
 
 - The complete Node suite passes 431 tests. Numerical replication checks cover

@@ -1,4 +1,5 @@
-const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'strain', 'cna', 'referenceStrain']);
+const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'strain', 'cna', 'referenceStrain', 'centrosymmetry', 'displacement']);
+const REFERENCE_KINDS = new Set(['referenceStrain', 'displacement']);
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
   frameCount: 0, currentIndex: 0, budgetBytes: 0, allocatedBytes: 0, residentBytes: 0, frameBytes: 0, workspaceBytes: 0 };
@@ -19,6 +20,8 @@ export class GpuAnalysisClient {
     this.indexFrameIds = new Map();
     this.nextFrameId = 1;
     this.cachedFrameIds = new Set();
+    this.cachedCartesianFrames = new Map();
+    this.positionSources = new Map();
     this._cacheStatus = { ...EMPTY_CACHE };
     this.generation = 0;
     this.warmedUp = false;
@@ -68,7 +71,7 @@ export class GpuAnalysisClient {
     this.queue.length = 0;
     this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexFrameIds.clear();
     this.referenceFrames = new WeakMap();
-    this.cachedFrameIds.clear(); this._cacheStatus = { ...EMPTY_CACHE };
+    this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear(); this._cacheStatus = { ...EMPTY_CACHE };
     if (!this.worker || this.closed) return Promise.resolve(this.cacheStatus);
     return this.enqueue('clear-frames', {}, 0, { resume: false });
   }
@@ -111,6 +114,8 @@ export class GpuAnalysisClient {
       if (data.progress) { if (!task.settled) task.onProgress({ ...data.progress, backend: 'gpu', workerCount: 1 }); return; }
       if (task.generation === this.generation) {
         this.cachedFrameIds = new Set(data.cachedFrameIds ?? data.cacheStatus?.cachedFrameIds ?? []);
+        this.cachedCartesianFrames = new Map((data.cachedCartesianFrames ?? []).map(({ frameId, variants }) => [frameId, new Set(variants)]));
+        for (const frameId of this.positionSources.keys()) if (!this.cachedFrameIds.has(frameId)) this.positionSources.delete(frameId);
         if (data.cacheStatus) this._cacheStatus = { ...data.cacheStatus };
         if (data.ok && task.type === 'warmup') this.warmedUp = true;
       }
@@ -123,7 +128,8 @@ export class GpuAnalysisClient {
       const error = new Error(event.message || 'The GPU analysis worker failed.');
       if (this.current) this.settle(this.current, error);
       this.worker?.terminate(); this.worker = null; this.current = null;
-      this.cachedFrameIds.clear(); this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false; this.pump();
+      this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
+      this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false; this.pump();
     };
     this.worker.addEventListener('error', fail);
     this.worker.addEventListener('messageerror', fail);
@@ -149,7 +155,7 @@ export class GpuAnalysisClient {
       let frameId, frameIndex, frame, referenceFrameId, referenceFrameIndex, referenceFrame;
       let parameters = task.parameters;
       let referenceSource;
-      if (task.type === 'analyze' && parameters?.kind === 'referenceStrain') {
+      if (task.type === 'analyze' && REFERENCE_KINDS.has(parameters?.kind)) {
         referenceSource = this.referenceFrame(parameters);
         const mapping = parameters.referenceMapping;
         if (!ArrayBuffer.isView(mapping) || mapping instanceof DataView) throw new Error('GPU reference strain requires a typed referenceMapping array.');
@@ -185,7 +191,7 @@ export class GpuAnalysisClient {
         const current = await prepareFramePayload(task.frame);
         frameId = current.id; frameIndex = current.index; frame = current.payload;
       }
-      if (task.type === 'analyze' && parameters?.kind === 'referenceStrain') {
+      if (task.type === 'analyze' && REFERENCE_KINDS.has(parameters?.kind)) {
         const reference = await prepareFramePayload(referenceSource);
         referenceFrameId = reference.id; referenceFrameIndex = reference.index; referenceFrame = reference.payload;
         if (frameId === referenceFrameId && frameIndex !== undefined && referenceFrameIndex !== frameIndex) {
@@ -202,6 +208,36 @@ export class GpuAnalysisClient {
         delete parameters.referenceFractional;
         delete parameters.referenceCell;
       }
+      const positionSources = [];
+      if (task.type === 'analyze' && parameters?.kind === 'displacement') {
+        const variant = parameters.minimumImage === false ? 'unwrapped-cartesian' : 'cartesian';
+        const positions = {};
+        const prepared = new Map();
+        for (const [name, id] of [['currentPositions', frameId], ['referencePositions', referenceFrameId]]) {
+          const source = parameters[name];
+          if (!ArrayBuffer.isView(source) || source instanceof DataView) throw new Error(`GPU displacement requires typed ${name} coordinates.`);
+          const prior = prepared.get(id);
+          if (prior) {
+            if (prior.source !== source) throw new Error('The same GPU frame requires the same current and reference displacement coordinates.');
+            positions[name] = prior.payload; continue;
+          }
+          const reused = this.cachedCartesianFrames.get(id)?.has(variant) && this.positionSources.get(id)?.get(variant) === source;
+          if (!reused) {
+            positions[name] = await copyArray(source, task); transfer.push(positions[name].buffer);
+            positionSources.push({ id, variant, source });
+          } else positions[name] = undefined;
+          prepared.set(id, { source, payload: positions[name] });
+        }
+        parameters = { ...parameters, ...positions };
+      }
+      if (task.type === 'analyze' && parameters?.kind === 'centrosymmetry' && parameters.structureInput !== undefined) {
+        if (parameters.mode !== 'auto' || !(parameters.structureInput instanceof Uint8Array)
+            || parameters.structureInput.length !== task.frame.fractional.length / 3 || parameters.structureInput.some(type => type > 4)) {
+          throw new Error('GPU Auto central symmetry requires complete typed adaptive CNA structure IDs.');
+        }
+        const structureInput = await copyArray(parameters.structureInput, task); transfer.push(structureInput.buffer);
+        parameters = { ...parameters, structureInput };
+      }
       if (task.type === 'analyze' && parameters?.kind === 'strain' && parameters.ptmInput) {
         const ptmInput = {};
         for (const name of ['structures', 'scales', 'deformation']) {
@@ -217,6 +253,11 @@ export class GpuAnalysisClient {
       task.dispatched = true;
       worker.postMessage({ type: task.type, id: task.id, frameId, frameIndex, frame,
         referenceFrameId, referenceFrameIndex, referenceFrame, parameters, options: task.options }, transfer);
+      for (const { id, variant, source } of positionSources) {
+        let variants = this.positionSources.get(id);
+        if (!variants) { variants = new Map(); this.positionSources.set(id, variants); }
+        variants.set(variant, source);
+      }
     } catch (error) { this.settle(task, error); this.finishDispatch(task); }
   }
 
@@ -263,7 +304,8 @@ export class GpuAnalysisClient {
     this.generation++;
     for (const task of this.pending.values()) this.settle(task, abortError());
     this.queue.length = 0; this.worker?.terminate(); this.worker = null; this.current = null;
-    this.cachedFrameIds.clear(); this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false;
+    this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
+    this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false;
     this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexFrameIds.clear();
     this.referenceFrames = new WeakMap();
   }

@@ -52,6 +52,7 @@ export class GpuRuntime {
     this.residentBytes = 0;
     this.protectedFrameKey = null;
     this.analysisFramePins = new Map();
+    this.adaptiveCna = new Map();
     this.warmupPromise = null;
     this.memoryLimited = false;
   }
@@ -88,17 +89,19 @@ export class GpuRuntime {
     await this.initialize(signal);
     if (!this.warmupPromise) {
       this.warmupPromise = (async () => {
-        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference] = await Promise.all([
+        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement] = await Promise.all([
           import('./coordination.js'), import('./rdf.js'), import('./local-shear-shaders.js'),
           import('./bonds-shaders.js'), import('./atomic-strain-shaders.js'),
           import('./cna-shaders.js'), import('./reference-strain-shaders.js'),
+          import('./centrosymmetry-shaders.js'), import('./displacement-shaders.js'),
         ]);
         const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
           shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
           shear.SHEAR_CORRECTION_SHADER, shear.SHEAR_REDUCTION_SHADER, shear.SHEAR_FINALIZE_SHADER,
           bonds.BONDS_COUNT_SHADER, bonds.BONDS_WRITE_SHADER, strain.ATOMIC_STRAIN_SHADER,
           cna.CNA_FIXED_SHADER, cna.CNA_ADAPTIVE_SHADER,
-          reference.REFERENCE_STRAIN_CLEAR_SHADER, reference.REFERENCE_STRAIN_SHADER];
+          reference.REFERENCE_STRAIN_CLEAR_SHADER, reference.REFERENCE_STRAIN_SHADER,
+          csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER];
         for (const source of sources) await this.compilePipeline(source);
       })();
       this.warmupPromise.catch(() => { this.warmupPromise = null; });
@@ -149,10 +152,11 @@ export class GpuRuntime {
     checkSignal(signal);
     if (frameIndex !== undefined && (!Number.isInteger(frameIndex) || frameIndex < 0)) throw new Error('GPU frame index must be a nonnegative integer.');
     const frameKey = this.frameKey(frame), existing = this.frames.get(frameKey);
-    if (existing) {
+    if (existing?.positionsBuffer && existing?.typesBuffer) {
       if (frameIndex !== undefined) existing.frameIndex = frameIndex;
       return { frameKey, ...this.cacheStatus() };
     }
+    if (existing) this.protectedFrameKey = frameKey;
     const atomCount = frame.fractional.length / 3;
     if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
     if (atomCount > 4_000_000) throw new GpuUnavailableError('This frame exceeds the GPU precision or memory budget.');
@@ -162,7 +166,7 @@ export class GpuRuntime {
       throw new GpuUnavailableError('This analysis exceeds the GPU buffer limits; using CPU workers.');
     }
     const bytes = frameUploadBytes(frame);
-    const prospectiveLargestBytes = Math.max(this.frameBytes, bytes);
+    const prospectiveLargestBytes = Math.max(this.frameBytes, (existing?.bytes ?? 0) + bytes);
     if (bytes + gpuWorkspaceBytes(prospectiveLargestBytes) > this.budgetBytes) {
       throw new GpuUnavailableError('The current frame exceeds the GPU cache budget; using CPU workers.');
     }
@@ -197,7 +201,8 @@ export class GpuRuntime {
           checkSignal(signal);
           return { positionsBuffer, typesBuffer, frameIndex, bytes };
         });
-        this.frames.set(frameKey, buffers); this.residentBytes += bytes; this.inputUploads++;
+        this.frames.set(frameKey, { ...existing, ...buffers, frameIndex: frameIndex ?? existing?.frameIndex,
+          bytes: (existing?.bytes ?? 0) + bytes }); this.residentBytes += bytes; this.inputUploads++;
         return { frameKey, ...this.cacheStatus() };
       } catch (error) {
         this.disposeBuffers(owned);
@@ -214,6 +219,91 @@ export class GpuRuntime {
   async prepareFrameBuffers(frame, options) {
     await this.uploadFrame(frame, options);
     return this.frames.get(this.frameKey(frame));
+  }
+
+  /** Cartesian positions retain source origins, open boundaries and unwrapped
+   * image motion. Each variant is independent of neighbor fractional buffers.
+   */
+  async prepareCartesianFrame(frame, positions, { signal, frameIndex, variant = 'cartesian' } = {}) {
+    await this.initialize(signal); checkSignal(signal);
+    if (!['cartesian', 'unwrapped-cartesian'].includes(variant)) throw new Error('Unknown GPU Cartesian coordinate variant.');
+    if (frameIndex !== undefined && (!Number.isInteger(frameIndex) || frameIndex < 0)) throw new Error('GPU frame index must be a nonnegative integer.');
+    const frameKey = this.frameKey(frame), existing = this.frames.get(frameKey);
+    this.protectedFrameKey = frameKey;
+    const cached = existing?.cartesian?.get(variant);
+    if (cached?.source === positions) {
+      if (frameIndex !== undefined) existing.frameIndex = frameIndex;
+      return { positionsBuffer: cached.positionsBuffer, atomCount: cached.atomCount, anchor: cached.anchor };
+    }
+    const atomCount = frame.fractional.length / 3;
+    if (!Number.isInteger(atomCount) || atomCount < 1 || !ArrayBuffer.isView(positions) || positions instanceof DataView || positions.length !== atomCount * 3) {
+      throw new Error('GPU displacement requires complete typed Cartesian coordinates.');
+    }
+    if (atomCount > 4_000_000) throw new GpuUnavailableError('This frame exceeds the GPU precision or memory budget.');
+    const bytes = atomCount * 32, deltaBytes = cached ? 0 : bytes;
+    const bufferLimit = Math.min(this.device.limits.maxBufferSize, this.device.limits.maxStorageBufferBindingSize);
+    if (bytes > bufferLimit) throw new GpuUnavailableError('This analysis exceeds the GPU buffer limits; using CPU workers.');
+    const prospectiveLargestBytes = Math.max(this.frameBytes, (existing?.bytes ?? 0) + deltaBytes);
+    if ((existing?.bytes ?? 0) + deltaBytes + gpuWorkspaceBytes(prospectiveLargestBytes) > this.budgetBytes) {
+      throw new GpuUnavailableError('The current frame exceeds the GPU cache budget; using CPU workers.');
+    }
+    const packed = new Float32Array(atomCount * 8);
+    const anchor = Float64Array.from([0, 1, 2], axis => Number.isFinite(frame.cell?.origin?.[axis]) ? frame.cell.origin[axis] : 0);
+    for (let atom = 0; atom < atomCount; atom++) {
+      if ([0, 1, 2].every(axis => Number.isFinite(positions[atom * 3 + axis]))) {
+        anchor.set(positions.subarray(atom * 3, atom * 3 + 3)); break;
+      }
+    }
+    for (let atom = 0; atom < atomCount; atom++) {
+      let encodingError = 0;
+      for (let axis = 0; axis < 3; axis++) {
+        const source = positions[atom * 3 + axis];
+        const value = source - anchor[axis], high = Math.fround(value), low = Math.fround(value - high);
+        if (!Number.isFinite(value)) throw new GpuUnavailableError('Nonfinite Cartesian source coordinates require CPU displacement matching.');
+        if (!Number.isFinite(high) || !Number.isFinite(low) || (value !== 0 && Math.abs(high) < 1e-30)) {
+          throw new GpuUnavailableError('The Cartesian coordinates exceed the GPU numeric range.');
+        }
+        packed[atom * 8 + axis] = high; packed[atom * 8 + 4 + axis] = low;
+        const recoveredAnchor = source - value;
+        const subtractionError = (source - (value + recoveredAnchor)) + (recoveredAnchor - anchor[axis]);
+        encodingError = Math.max(encodingError, Math.abs(value - (high + low)) + Math.abs(subtractionError));
+      }
+      packed[atom * 8 + 3] = Math.fround(encodingError * 1.000001);
+      if (atom && atom % 65_536 === 0) { await yieldWorker(); checkSignal(signal); }
+    }
+    this.frameBytes = prospectiveLargestBytes;
+    for (let attempt = 0; ; attempt++) {
+      this.trimFrames({ incomingBytes: deltaBytes });
+      if (this.residentBytes + deltaBytes > this.cacheStatus().frameBudgetBytes) {
+        throw new GpuUnavailableError('The current frame exceeds the GPU cache budget; using CPU workers.');
+      }
+      let positionsBuffer;
+      try {
+        await this.withErrors(async () => {
+          positionsBuffer = this.storageBuffer(packed);
+          await this.device.queue.onSubmittedWorkDone?.(); checkSignal(signal);
+        });
+        const cartesian = existing?.cartesian ?? new Map();
+        cartesian.set(variant, { positionsBuffer, atomCount, source: positions, anchor });
+        this.frames.set(frameKey, { ...existing, cartesian, frameIndex: frameIndex ?? existing?.frameIndex,
+          bytes: (existing?.bytes ?? 0) + deltaBytes });
+        this.disposeBuffers([cached?.positionsBuffer]);
+        this.residentBytes += deltaBytes; this.inputUploads++;
+        return { positionsBuffer, atomCount, anchor };
+      } catch (error) {
+        this.disposeBuffers([positionsBuffer]);
+        if (!isGpuOutOfMemory(error) || attempt >= 1) throw error;
+        this.shrinkBudget(deltaBytes); checkSignal(signal);
+      }
+    }
+  }
+
+  getAdaptiveCna(frame) { return this.adaptiveCna.get(this.frameKey(frame)); }
+  cacheAdaptiveCna(frame, structures) {
+    const key = this.frameKey(frame), count = frame.fractional.length / 3;
+    if (!this.frames.has(key) || !(structures instanceof Uint8Array) || structures.length !== count) return false;
+    this.adaptiveCna.set(key, structures.slice());
+    return true;
   }
 
   shrinkBudget(incomingBytes = 0) {
@@ -490,6 +580,8 @@ export class GpuRuntime {
       this.disposeBuffers([index.configBuffer, index.headsBuffer, index.nextBuffer]); this.indexes.delete(indexKey);
     }
     this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer]);
+    this.disposeBuffers([...(frame.cartesian?.values() ?? [])].map(entry => entry.positionsBuffer));
+    this.adaptiveCna.delete(frameKey);
     this.residentBytes -= frame.bytes; this.frames.delete(frameKey);
   }
 
@@ -510,7 +602,9 @@ export class GpuRuntime {
   }
   releaseFrames() {
     this.clearIndexes();
-    for (const frame of this.frames.values()) this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer]);
+    for (const frame of this.frames.values()) this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer,
+      ...[...(frame.cartesian?.values() ?? [])].map(entry => entry.positionsBuffer)]);
+    this.adaptiveCna.clear();
     this.indexes.clear(); this.frames.clear(); this.residentBytes = 0; this.frameBytes = 0;
     this.frameCount = 0; this.currentIndex = 0; this.protectedFrameKey = null;
     this.analysisFramePins.clear();

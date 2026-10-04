@@ -8,8 +8,8 @@ class WorkerFixture {
   addEventListener(type, callback) { this.listeners.set(type, callback); }
   postMessage(data, transfer = []) { this.messages.push(structuredClone(data, { transfer })); }
   terminate() {}
-  answer(message) { this.listeners.get('message')({ data: { id: message.id, ok: true, result: { engine: 'webgpu' },
-    cachedFrameIds: [...new Set([message.frameId, message.referenceFrameId].filter(Number.isInteger))] } }); }
+  answer(message, extras = {}) { this.listeners.get('message')({ data: { id: message.id, ok: true, result: { engine: 'webgpu' },
+    cachedFrameIds: [...new Set([message.frameId, message.referenceFrameId].filter(Number.isInteger))], ...extras } }); }
 }
 async function until(predicate) {
   for (let attempt = 0; attempt < 100; attempt++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 2)); }
@@ -48,6 +48,149 @@ test('invalid cached GPU tensor inputs fail dispatch without sending a partial j
   try {
     await assert.rejects(client.analyze(frame, { kind: 'strain', ptmInput: { structures: new Uint8Array(4), scales: [2, 2, 2, 2] } }), /typed PTM scales/);
     assert.equal(worker.messages.length, 0); assert.deepEqual(frame.fractional, original);
+  } finally { client.close(); }
+});
+
+test('GPU Auto central symmetry privately copies reusable structure inputs and rejects untyped labels', async () => {
+  const worker = new WorkerFixture(), client = new GpuAnalysisClient({ environment: { navigator: { gpu: {} } }, workerFactory: () => worker });
+  const frame = crystalFrame('fcc', 2), structureInput = new Uint8Array(frame.types.length).fill(1);
+  try {
+    assert.equal(client.supports('centrosymmetry'), true);
+    const job = client.analyze(frame, { kind: 'centrosymmetry', mode: 'auto', structureInput });
+    await until(() => worker.messages.length === 1);
+    assert.deepEqual(worker.messages[0].parameters.structureInput, structureInput);
+    assert.equal(structureInput.byteLength, frame.types.length);
+    worker.answer(worker.messages[0]); await job;
+    await assert.rejects(client.analyze(frame, { kind: 'centrosymmetry', mode: 'auto', structureInput: [1, 1] }), /typed adaptive CNA/);
+    assert.equal(worker.messages.length, 1);
+  } finally { client.close(); }
+});
+
+test('GPU displacement preserves source precision and reuses only acknowledged Cartesian variants', async () => {
+  const worker = new WorkerFixture(), client = new GpuAnalysisClient({ environment: { navigator: { gpu: {} } }, workerFactory: () => worker });
+  const frame = crystalFrame('fcc', 1), reference = crystalFrame('fcc', 1);
+  const currentPositions = Float64Array.from(frame.positions, value => value + .123456789), referencePositions = Float32Array.from(reference.positions);
+  const referenceMapping = Int32Array.from({ length: frame.types.length }, (_, index) => index);
+  const parameters = { kind: 'displacement', minimumImage: true, mappingMode: 'id', referenceFrame: reference, referenceFrameIndex: 0,
+    referenceFractional: reference.fractional, referenceCell: reference.cell, referenceMapping, currentPositions, referencePositions };
+  const cached = [];
+  const answer = message => {
+    const variant = message.parameters.minimumImage ? 'cartesian' : 'unwrapped-cartesian';
+    for (const frameId of [message.frameId, message.referenceFrameId]) {
+      let entry = cached.find(value => value.frameId === frameId);
+      if (!entry) { entry = { frameId, variants: [] }; cached.push(entry); }
+      if (!entry.variants.includes(variant)) entry.variants.push(variant);
+    }
+    worker.answer(message, { cachedCartesianFrames: cached });
+  };
+  try {
+    assert.equal(client.supports('displacement'), true);
+    const first = client.analyze(frame, parameters, { frameIndex: 1 });
+    await until(() => worker.messages.length === 1);
+    const initial = worker.messages[0];
+    assert.equal(initial.parameters.currentPositions.constructor, Float64Array);
+    assert.equal(initial.parameters.referencePositions.constructor, Float32Array);
+    assert.deepEqual(initial.parameters.currentPositions, currentPositions);
+    assert.deepEqual(initial.parameters.referencePositions, referencePositions);
+    answer(initial); await first;
+    const second = client.analyze(frame, parameters, { frameIndex: 1 });
+    await until(() => worker.messages.length === 2);
+    assert.equal(worker.messages[1].frame, undefined); assert.equal(worker.messages[1].referenceFrame, undefined);
+    assert.equal(worker.messages[1].parameters.currentPositions, undefined);
+    assert.equal(worker.messages[1].parameters.referencePositions, undefined);
+    answer(worker.messages[1]); await second;
+    const unwrapped = { ...parameters, minimumImage: false,
+      currentPositions: Float64Array.from(currentPositions, value => value + 80), referencePositions: Float64Array.from(referencePositions, value => value + 40) };
+    const third = client.analyze(frame, unwrapped, { frameIndex: 1 });
+    await until(() => worker.messages.length === 3);
+    assert.deepEqual(worker.messages[2].parameters.currentPositions, unwrapped.currentPositions);
+    answer(worker.messages[2]); await third;
+    const back = client.analyze(frame, parameters, { frameIndex: 1 });
+    await until(() => worker.messages.length === 4);
+    assert.equal(worker.messages[3].parameters.currentPositions, undefined, 'returning to the wrapped mode reuses its own source');
+    answer(worker.messages[3]); await back;
+    const changed = currentPositions.slice(); changed[0] += .001;
+    const updated = client.analyze(frame, { ...parameters, currentPositions: changed }, { frameIndex: 1 });
+    await until(() => worker.messages.length === 5);
+    assert.deepEqual(worker.messages[4].parameters.currentPositions, changed, 'a replaced canonical source must be resent');
+    assert.equal(worker.messages[4].parameters.referencePositions, undefined);
+    answer(worker.messages[4]); await updated;
+    assert.equal(currentPositions.byteLength, frame.types.length * 24);
+    assert.equal(referencePositions.byteLength, reference.types.length * 12);
+    assert.ok(referenceMapping.every((value, index) => value === index));
+  } finally { client.close(); }
+});
+
+test('a self-reference displacement shares one private position upload without detaching canonical coordinates', async () => {
+  const worker = new WorkerFixture(), client = new GpuAnalysisClient({ environment: { navigator: { gpu: {} } }, workerFactory: () => worker });
+  const frame = crystalFrame('fcc', 1), positions = Float64Array.from(frame.positions);
+  try {
+    const pending = client.analyze(frame, { kind: 'displacement', minimumImage: true, mappingMode: 'id', referenceFrame: frame,
+      referenceFractional: frame.fractional, referenceCell: frame.cell,
+      referenceMapping: Int32Array.from({ length: frame.types.length }, (_, index) => index), currentPositions: positions, referencePositions: positions });
+    await until(() => worker.messages.length === 1);
+    const message = worker.messages[0];
+    assert.equal(message.referenceFrame, undefined);
+    assert.equal(message.parameters.currentPositions, message.parameters.referencePositions);
+    assert.equal(positions.byteLength, frame.types.length * 24);
+    worker.answer(message); await pending;
+  } finally { client.close(); }
+});
+
+test('eviction acknowledgements and source barriers release private Cartesian source references before reupload', async () => {
+  const worker = new WorkerFixture(), client = new GpuAnalysisClient({ environment: { navigator: { gpu: {} } }, workerFactory: () => worker });
+  const frame = crystalFrame('fcc', 1), reference = crystalFrame('fcc', 1);
+  const parameters = { kind: 'displacement', minimumImage: true, mappingMode: 'id', referenceFrame: reference, referenceFrameIndex: 0,
+    referenceFractional: reference.fractional, referenceCell: reference.cell,
+    referenceMapping: Int32Array.from({ length: frame.types.length }, (_, index) => index),
+    currentPositions: Float64Array.from(frame.positions), referencePositions: Float64Array.from(reference.positions) };
+  try {
+    const first = client.analyze(frame, parameters, { frameIndex: 1 });
+    await until(() => worker.messages.length === 1);
+    const message = worker.messages[0];
+    worker.answer(message, { cachedFrameIds: [message.frameId],
+      cachedCartesianFrames: [{ frameId: message.frameId, variants: ['cartesian'] }] });
+    await first;
+    assert.equal(client.positionSources.has(message.referenceFrameId), false);
+    assert.equal(client.positionSources.size, 1);
+    const second = client.analyze(frame, parameters, { frameIndex: 1 });
+    await until(() => worker.messages.length === 2);
+    assert.equal(worker.messages[1].parameters.currentPositions, undefined);
+    assert.deepEqual(worker.messages[1].parameters.referencePositions, parameters.referencePositions);
+    worker.answer(worker.messages[1]); await second;
+    const barrier = client.clearFrames();
+    assert.equal(client.positionSources.size, 0); assert.equal(client.cachedCartesianFrames.size, 0);
+    await until(() => worker.messages.length === 3);
+    assert.equal(worker.messages[2].type, 'clear-frames');
+    worker.answer(worker.messages[2]); await barrier;
+    const next = client.analyze(frame, parameters, { frameIndex: 1 });
+    await until(() => worker.messages.length === 4);
+    assert.deepEqual(worker.messages[3].parameters.currentPositions, parameters.currentPositions);
+    assert.deepEqual(worker.messages[3].parameters.referencePositions, parameters.referencePositions);
+    worker.answer(worker.messages[3]); await next;
+  } finally { client.close(); }
+  assert.equal(client.positionSources.size, 0);
+});
+
+test('cancelling a private Cartesian copy releases provisional source references and sends no partial displacement job', async () => {
+  const worker = new WorkerFixture(), client = new GpuAnalysisClient({ environment: { navigator: { gpu: {} } }, workerFactory: () => worker });
+  const controller = new AbortController(), atomCount = Math.floor(4 * 1024 ** 2 / Float64Array.BYTES_PER_ELEMENT / 3) + 1;
+  const reference = crystalFrame('fcc', 1), frame = { ...reference, fractional: new Float32Array(atomCount * 3), types: new Uint16Array(atomCount) };
+  let source, chunks = 0;
+  class CancelOnCopy extends Float64Array {
+    set(values, offset) { super.set(values, offset); if (source && this !== source) { chunks++; controller.abort(); } }
+  }
+  source = new CancelOnCopy(atomCount * 3);
+  const mapping = new Int32Array(atomCount).fill(-1);
+  try {
+    await assert.rejects(client.analyze(frame, { kind: 'displacement', minimumImage: true, mappingMode: 'id', referenceFrame: reference,
+      referenceFractional: reference.fractional, referenceCell: reference.cell, referenceMapping: mapping,
+      currentPositions: source, referencePositions: Float64Array.from(reference.positions) }, { signal: controller.signal }), { name: 'AbortError' });
+    await until(() => client.current === null);
+    assert.equal(chunks, 1); assert.equal(worker.messages.length, 0);
+    assert.equal(client.positionSources.size, 0, 'uncommitted source variants are not retained');
+    assert.equal(source.byteLength, atomCount * 24); assert.equal(mapping.byteLength, atomCount * 4);
+    assert.ok(source.every(value => value === 0));
   } finally { client.close(); }
 });
 

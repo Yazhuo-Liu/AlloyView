@@ -1,6 +1,8 @@
 import { crystalFrame } from '../tests/helpers/crystals.js';
 import { cartesianToFractional, createCell, fractionalToCartesian } from '../src/data/model.js';
 import { createReferenceMapping } from '../src/analysis/reference-strain.js';
+import { calculateCna } from '../src/analysis/cna.js';
+import { NeighborSearch } from '../src/analysis/neighbors.js';
 
 const IDENTITY = Object.freeze([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
@@ -291,5 +293,215 @@ export function referenceStrainFixtures() {
   const reflection = [-1, 0, 0, 0, 1, 0, 0, 0, 1];
   add('Nonpositive deformation volume', cloneFrame(fcc), transformFrame(fcc, reflection), 2.8,
     { expectedNaNAtoms: Array.from({ length: fcc.ids.length }, (_, atom) => atom) });
+  return fixtures;
+}
+
+/** Normalized AtomEye CSP has a finite intrinsic HCP baseline. Cached and fresh
+ * auto cases share a comparison group so a browser can check all classifications,
+ * inferred shell sizes and summaries, not just the scalar values. */
+export function cspFixtures() {
+  const fixtures = [];
+  const add = (label, frame, parameters = {}, expectations = {}) => fixtures.push({ label, frame,
+    parameters: { kind: 'centrosymmetry', mode: 'manual', neighbors: 12, ...parameters }, ...expectations });
+  const autoPair = (label, frame, expectations = {}) => {
+    const cacheComparisonGroup = label;
+    add(`${label} / fresh CNA`, cloneFrame(frame), { mode: 'auto' }, { ...expectations, cacheComparisonGroup });
+    add(`${label} / cached CNA`, cloneFrame(frame), { mode: 'auto', structureInput: calculateCna(frame).structures },
+      { ...expectations, cacheComparisonGroup });
+  };
+  for (const [kind, lattice, structure, neighbors] of [['fcc', 3.52, 1, 12], ['bcc', 2.86, 3, 8], ['hcp', 2.5, 2, 12]]) {
+    for (const repeat of [1, 2]) {
+      const frame = crystalFrame(kind, repeat, lattice);
+      const scalar = kind === 'hcp' ? { expectedFiniteBaseline: true } : { expectedValue: 0 };
+      const label = `${kind.toUpperCase()} ${repeat === 1 ? 'primitive periodic images' : 'ideal'}`;
+      add(`${label} manual CSP`, cloneFrame(frame), { neighbors }, scalar);
+      autoPair(`${label} auto CSP`, frame, { ...scalar, expectedStructure: structure, expectedNeighborCount: neighbors,
+        expectedSummaryEntries: { [kind]: frame.ids.length, inferred: 0, unresolved: 0 } });
+    }
+  }
+  for (let neighbors = 2; neighbors <= 32; neighbors += 2) {
+    add(`Primitive SC manual ${neighbors}-neighbor CSP`, crystalFrame('sc', 1, 2), { neighbors },
+      neighbors === 6 ? { expectedValue: 0 } : { expectedFiniteNormalized: true });
+  }
+  const ico = icosahedralFrame();
+  add('Icosahedral center manual CSP', cloneFrame(ico), { neighbors: 12 }, { expectedCenterValue: 0 });
+  autoPair('Icosahedral center auto CSP remains unresolved', ico,
+    { expectedNaNAtoms: Array.from({ length: ico.ids.length }, (_, atom) => atom), expectedCenterStructure: 4,
+      expectedCenterNeighborCount: 0, expectedSummaryEntries: { ico: 1, other: 12, inferred: 0, unresolved: 13 } });
+  autoPair('SC auto CSP remains Other', crystalFrame('sc', 1, 2),
+    { expectedNaNAtoms: [0], expectedStructure: 0, expectedNeighborCount: 0, expectedSummaryEntries: { other: 1, unresolved: 1 } });
+  add('Open ICO insufficient manual shell', cloneFrame(ico), { neighbors: 16 },
+    { expectedNaNAtoms: Array.from({ length: ico.ids.length }, (_, atom) => atom), expectedIncomplete: ico.ids.length });
+  const coincident = pointFrame([[6, 6, 6], [6, 6, 6], [6, 6, 6]]);
+  add('Coincident manual CSP has zero denominator', coincident, { neighbors: 2 },
+    { expectedNaNAtoms: [0, 1, 2], expectedIncomplete: 3 });
+  for (const [kind, lattice, neighbors] of [['fcc', 3.52, 12], ['bcc', 2.86, 8]]) {
+    const source = crystalFrame(kind, 3, lattice);
+    const vacancy = reorderFrame(source, Array.from({ length: source.ids.length - 1 }, (_, atom) => atom + 1));
+    add(`${kind.toUpperCase()} vacancy manual CSP`, cloneFrame(vacancy), { neighbors }, { expectedSomePositive: true });
+    autoPair(`${kind.toUpperCase()} vacancy inferred auto CSP`, vacancy,
+      { expectedSomePositive: true, expectedNeighborCount: neighbors, expectedMinimumInferred: 1, expectedSummaryEntries: { unresolved: 0 } });
+  }
+  const distorted = crystalFrame('fcc', 3, 3.52);
+  distorted.fractional[0] += .009;
+  distorted.fractional[4] -= .007;
+  distorted.positions = fractionalToCartesian(distorted.fractional, distorted.cell);
+  add('Distorted FCC manual CSP', cloneFrame(distorted), {}, { expectedSomePositive: true });
+  autoPair('Distorted FCC auto CSP', distorted, { expectedSomePositive: true });
+  const mixedPbc = crystalFrame('fcc', 3, 3.52);
+  mixedPbc.cell = createCell({ ...mixedPbc.cell, pbc: [true, false, true] });
+  add('Mixed periodic/open manual CSP', cloneFrame(mixedPbc));
+  autoPair('Mixed periodic/open auto CSP', mixedPbc);
+  const sheared = transformFrame(crystalFrame('fcc', 2, 3.52), [1.04, .12, .03, 0, .98, .05, 0, 0, 1.02]);
+  add('Triclinic sheared manual CSP', sheared, {}, { expectedValue: 0 });
+  const tie = crystalFrame('bcc', 2, 2.86);
+  tie.fractional[3] += 1e-10;
+  tie.positions = fractionalToCartesian(tie.fractional, tie.cell);
+  add('BCC nearly tied manual CSP shell', cloneFrame(tie), { neighbors: 8 }, { expectedFiniteNormalized: true });
+  autoPair('BCC nearly tied auto CSP shell', tie, { expectedStructure: 3, expectedNeighborCount: 8 });
+  const sparseSource = cnaFixtures().find(fixture => fixture.label === 'Sparse isolated center requires adaptive radius growth').frame;
+  add('Sparse center manual CSP requires radius growth', cloneFrame(sparseSource), { neighbors: 14 }, { expectedFiniteNormalized: true });
+  autoPair('Sparse center auto CSP', sparseSource);
+  const phases = [['fcc', 3.52, 4], ['bcc', 2.86, 22], ['hcp', 2.5, 44]];
+  const mixedPoints = [], phaseOffsets = [];
+  for (const [kind, lattice, offset] of phases) {
+    phaseOffsets.push(mixedPoints.length);
+    const phase = crystalFrame(kind, 3, lattice);
+    for (let atom = 0; atom < phase.ids.length; atom += 1) mixedPoints.push(
+      Array.from(phase.positions.subarray(atom * 3, atom * 3 + 3), (value, axis) => value + (axis === 0 ? offset : 4)));
+  }
+  const mixedPhases = pointFrame(mixedPoints, { cell: createCell({ vectors: [64, 0, 0, 0, 64, 0, 0, 0, 64], pbc: [false, false, false] }) });
+  autoPair('Coexisting FCC/BCC/HCP auto CSP', mixedPhases, {
+    expectedAtoms: [{ atom: phaseOffsets[0] + 52, structure: 1, neighbors: 12 },
+      { atom: phaseOffsets[1] + 26, structure: 3, neighbors: 8 }, { atom: phaseOffsets[2] + 26, structure: 2, neighbors: 12 }],
+  });
+  const votingFrame = crystalFrame('fcc', 3, 3.52);
+  const votingShell = new NeighborSearch(votingFrame).nearest(0, 14);
+  const sharedShellLabels = new Uint8Array(votingFrame.ids.length);
+  votingShell.forEach((neighbor, index) => { sharedShellLabels[neighbor.atom] = index < 7 ? 1 : 2; });
+  add('Cached FCC/HCP labels combine twelve-neighbor votes', cloneFrame(votingFrame), { mode: 'auto', structureInput: sharedShellLabels },
+    { expectedCenterStructure: 0, expectedCenterNeighborCount: 12, expectedCenterValue: 0, expectedMinimumInferred: 1 });
+  const tiedLabels = sharedShellLabels.slice();
+  votingShell.slice(7).forEach(neighbor => { tiedLabels[neighbor.atom] = 3; });
+  add('Cached FCC/BCC labels tie eight/twelve-neighbor votes', cloneFrame(votingFrame), { mode: 'auto', structureInput: tiedLabels },
+    { expectedCenterStructure: 0, expectedCenterNeighborCount: 0, expectedNaNAtoms: [0] });
+  return fixtures;
+}
+
+/** Expected Cartesian vectors are supplied explicitly, independent of the
+ * minimum-image implementation. Float64 magnitudes are evaluated from the
+ * application's rounded Float32 vectors, preserving zeros and unmatched NaNs
+ * even when their combined length exceeds the Float32 numeric range. */
+export function displacementFixtures() {
+  const fixtures = [];
+  const cell = createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10] });
+  const add = (label, reference, frame, expectedVectors, options = {}, expectations = {}) => {
+    const vectors = Float64Array.from(expectedVectors);
+    const expectedMapping = reference.idSource === 'row-order' && frame.idSource === 'row-order'
+      ? Int32Array.from({ length: frame.ids.length }, (_, atom) => atom) : createReferenceMapping(frame, reference);
+    const f32Vectors = Float32Array.from(vectors);
+    fixtures.push({ label, frame, reference, options: { minimumImage: true, ...options }, expectedVectors: vectors, expectedMapping,
+      expectedMappingMode: reference.idSource === 'row-order' ? 'row-order' : 'id',
+      expectedMagnitudes: Float64Array.from({ length: frame.ids.length }, (_, atom) => Math.hypot(...f32Vectors.subarray(atom * 3, atom * 3 + 3))),
+      ...expectations });
+  };
+  const reference = pointFrame([[1, 2, 3], [4, 5, 6]], { cell });
+  add('Matched zero displacements', cloneFrame(reference), cloneFrame(reference), [0, 0, 0, 0, 0, 0]);
+  add('Cartesian translation and origin change', cloneFrame(reference), transformFrame(reference, undefined, { translation: [.25, -.5, .125] }),
+    [.25, -.5, .125, .25, -.5, .125]);
+  const orderedReference = pointFrame([[1, 2, 3], [4, 5, 6], [7, 8, 9]], { cell, ids: [11, 22, 33] });
+  add('Stable IDs reordered with an unmatched added atom', orderedReference,
+    pointFrame([[8, 8, 9], [1, 3, 3], [0, 0, 0]], { cell, ids: [33, 11, 44] }), [1, 0, 0, 0, 1, 0, NaN, NaN, NaN]);
+  add('Deleted current atom retains surviving stable IDs', cloneFrame(orderedReference), reorderFrame(orderedReference, [0, 2]), [0, 0, 0, 0, 0, 0]);
+  add('Stable string IDs reorder displacements', pointFrame([[1, 2, 3], [4, 5, 6]], { cell, ids: ['Fe:a', 'Ni:b'] }),
+    pointFrame([[4.25, 5, 6], [1, 2.5, 3]], { cell, ids: ['Ni:b', 'Fe:a'] }), [.25, 0, 0, 0, .5, 0]);
+  const wrappedReference = pointFrame([[9.5, 2, 3]], { cell }), wrappedCurrent = pointFrame([[.5, 2, 3]], { cell });
+  add('Wrapped boundary crossing', cloneFrame(wrappedReference), cloneFrame(wrappedCurrent), [1, 0, 0]);
+  add('Wrapped positions without minimum images', cloneFrame(wrappedReference), cloneFrame(wrappedCurrent), [-9, 0, 0], { minimumImage: false });
+  wrappedReference.unwrappedPositions = Float64Array.from([19.5, 2, 3]);
+  wrappedCurrent.unwrappedPositions = Float64Array.from([30.5, 2, 3]);
+  add('Minimum images use wrapped positions despite unwrapped data', cloneFrame(wrappedReference), cloneFrame(wrappedCurrent), [1, 0, 0]);
+  add('Unwrapped positions preserve full image motion', wrappedReference, wrappedCurrent, [11, 0, 0], { minimumImage: false });
+  const referenceCell = createCell({ ...cell, origin: [10, 20, 30], pbc: [false, false, false] });
+  const currentCell = createCell({ ...cell, origin: [11, 22, 33], vectors: [12, 0, 0, 0, 10, 0, 0, 0, 10], pbc: [false, false, false] });
+  add('Cell deformation and origin displacement contribute directly', pointFrame([[12.5, 22.5, 32.5]], { cell: referenceCell }),
+    pointFrame([[14, 24.5, 35.5]], { cell: currentCell }), [1.5, 2, 3]);
+  add('Current cell determines periodic displacement image', pointFrame([[1, 1, 1]], { cell }),
+    pointFrame([[11, 1, 1]], { cell: createCell({ ...cell, vectors: [12, 0, 0, 0, 10, 0, 0, 0, 10] }) }), [-2, 0, 0]);
+  const skew = createCell({ vectors: [10, 0, 0, 9, 1, 0, 0, 0, 10], pbc: [true, true, false], triclinic: true });
+  add('Triclinic minimum image follows Cartesian distance', pointFrame([[0, 0, 0]], { cell: skew }),
+    pointFrame([[9.31, .49, 1]], { cell: skew }), [.31, -.51, 1]);
+  add('Changed triclinic cell uses current metric', pointFrame([[0, 0, 0]], { cell }),
+    pointFrame([[9.31, .49, 1]], { cell: skew }), [.31, -.51, 1]);
+  const mixed = createCell({ ...cell, pbc: [true, false, false] });
+  add('Mixed PBC retains open-axis motion', pointFrame([[1, 1, 1]], { cell: mixed }),
+    pointFrame([[10, 8, 9]], { cell: mixed }), [-1, 7, 8]);
+  const rotated = createCell({ vectors: [6, 8, 0, -8, 6, 0, 0, 0, 10], pbc: [true, false, true] });
+  add('Rotated orthogonal basis and mixed PBC', pointFrame([[-2, 5, 9]], { cell: rotated }),
+    pointFrame([[1.8, 13.4, 1]], { cell: rotated }), [-2.2, .4, 2]);
+  add('Positive half-box uses CPU rounding convention', pointFrame([[0, 0, 0]], { cell }), pointFrame([[5, 0, 0]], { cell }), [-5, 0, 0]);
+  add('Negative half-box uses CPU rounding convention', pointFrame([[5, 0, 0]], { cell }), pointFrame([[0, 0, 0]], { cell }), [-5, 0, 0]);
+  add('Half-box values around the rounding tie', pointFrame([[0, 0, 0], [0, 0, 0]], { cell }),
+    pointFrame([[5 - 1e-8, 0, 0], [5 + 1e-8, 0, 0]], { cell }), [5 - 1e-8, 0, 0, -5 + 1e-8, 0, 0]);
+  const generatedReference = pointFrame([[1, 0, 0], [4, 0, 0]], { cell });
+  generatedReference.idSource = 'row-order'; generatedReference.sourceFormat = 'cfg';
+  const generatedCurrent = pointFrame([[2, 0, 0], [4, 2, 0]], { cell, ids: [999, 998] });
+  generatedCurrent.idSource = 'row-order'; generatedCurrent.sourceFormat = 'xyz';
+  add('Generated IDs permit equal-count row-order matching', generatedReference, generatedCurrent, [1, 0, 0, 0, 2, 0]);
+  const largeOrigin = 1e8;
+  const largeCell = createCell({ ...cell, origin: [largeOrigin, largeOrigin, largeOrigin], pbc: [false, false, false] });
+  const tinyReference = pointFrame([[largeOrigin + 1, largeOrigin + 2, largeOrigin + 3]], { cell: largeCell });
+  const tinyCurrent = cloneFrame(tinyReference);
+  tinyCurrent.positions[0] += 1e-8;
+  tinyCurrent.fractional = cartesianToFractional(tinyCurrent.positions, tinyCurrent.cell, new Float64Array(3));
+  const representedShift = tinyCurrent.positions[0] - tinyReference.positions[0];
+  add('Large origin preserves a genuine tiny Cartesian displacement', tinyReference, tinyCurrent, [representedShift, 0, 0], {},
+    { requirePositiveTinyDisplacement: true, tinyRelativeTolerance: 1e-3 });
+  const hugeCell = createCell({ vectors: [3.3e38, 0, 0, 0, 3.3e38, 0, 0, 0, 3.3e38], pbc: [false, false, false] });
+  add('Finite Float32 displacement components retain a Float64 magnitude', pointFrame([[0, 0, 0]], { cell: hugeCell }),
+    pointFrame([[3e38, 3e38, 3e38]], { cell: hugeCell }), [3e38, 3e38, 3e38], { minimumImage: false },
+    { expectedMagnitudeExceedsFloat32: true });
+  const wideCell = createCell({ vectors: [1.1e6, 0, 0, 0, 1.1e6, 0, 0, 0, 1.1e6], pbc: [false, false, false] });
+  const wideSource = pointFrame([[0, 0, 0], [1e6 + .0123, 0, 0]], { cell: wideCell });
+  add('Million-Angstrom frame compared to itself preserves exact zeros', wideSource, wideSource, [0, 0, 0, 0, 0, 0],
+    { minimumImage: false }, { expectedCorrectionAtoms: 0 });
+  const wideCurrent = cloneFrame(wideSource);
+  wideCurrent.positions[3] += 1e-8;
+  wideCurrent.fractional = cartesianToFractional(wideCurrent.positions, wideCurrent.cell, new Float64Array(wideCurrent.positions.length));
+  const wideShift = wideCurrent.positions[3] - wideSource.positions[3];
+  add('Separate million-Angstrom frames preserve one tiny displacement', wideSource, wideCurrent, [0, 0, 0, wideShift, 0, 0],
+    { minimumImage: false }, { expectedCorrectionAtoms: 1, requirePositiveTinyDisplacement: true,
+      expectedTinyDisplacementAtom: 1, tinyRelativeTolerance: 1e-3 });
+  const batchedCount = 20_000;
+  const batchedSource = pointFrame(Array.from({ length: batchedCount }, (_, atom) => [atom === 0 ? 0 : 1e6 + .0123 + atom, 0, 0]),
+    { cell: wideCell });
+  add('Twenty-thousand wide-coordinate self displacements stay zero across batches', batchedSource, batchedSource,
+    new Float64Array(batchedCount * 3), { minimumImage: false },
+    { expectedCorrectionAtoms: 0, expectedProgressAtoms: [16_384, batchedCount] });
+  return fixtures;
+}
+
+/** Validation fixtures are kept out of the success list so GPU tests can demand
+ * an actual GPU backend for every supported scientific displacement case. */
+export function displacementValidationFixtures() {
+  const fixtures = [];
+  const cell = createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10] });
+  const reference = pointFrame([[1, 1, 1], [2, 2, 2]], { cell });
+  const add = (label, frame, old = cloneFrame(reference), expectedError, options = {}) => fixtures.push(
+    { label, frame, reference: old, options: { minimumImage: true, ...options }, expectedError });
+  const generated = cloneFrame(reference); generated.idSource = 'row-order';
+  add('Explicit and generated displacement IDs cannot mix', cloneFrame(generated), cloneFrame(reference), 'explicit atom IDs.*generated row IDs');
+  add('Generated displacement rows require equal atom counts', reorderFrame(generated, [0]), cloneFrame(generated), 'same atom count');
+  const duplicate = cloneFrame(reference); duplicate.ids[0] = duplicate.ids[1];
+  add('Duplicate explicit displacement IDs are rejected', duplicate, undefined, 'unique integer atom IDs');
+  const fractionalId = cloneFrame(reference); fractionalId.ids = Float64Array.from([1.5, 2]);
+  add('Fractional displacement IDs are rejected', fractionalId, undefined, 'unique integer atom IDs');
+  const missingIds = cloneFrame(reference); delete missingIds.ids;
+  add('Missing explicit displacement IDs are rejected', missingIds, undefined, 'an atom ID for every atom');
+  const nonfinite = cloneFrame(reference); nonfinite.positions[0] = NaN;
+  add('Nonfinite displacement positions are rejected', nonfinite, undefined, 'finite atom coordinates');
+  const shortCoordinates = cloneFrame(reference); shortCoordinates.positions = new Float64Array(2);
+  add('Incomplete displacement coordinate rows are rejected', shortCoordinates, undefined, 'atom count');
+  add('Displacement minimum-image option must be boolean', cloneFrame(reference), undefined, 'boolean', { minimumImage: 'yes' });
   return fixtures;
 }

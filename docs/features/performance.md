@@ -20,16 +20,18 @@ The **Enable GPU computing** switch beside **Light / Dark** is off by default. T
 | --- | --- |
 | Coordination number | WebGPU linked-cell neighbor search and atom counts |
 | Adaptive or fixed-cutoff CNA | WebGPU local neighbor graphs and crystal classification |
+| Manual or Auto central symmetry | WebGPU nearest-neighbor selection and normalized greedy pairing; Auto uses local CNA labels |
+| Displacement | WebGPU Cartesian differences, triclinic minimum images and vector magnitudes |
 | Reference-frame strain | WebGPU reference-neighbor deformation fit, tensor and invariants |
 | Total or element-pair RDF | WebGPU neighbor search and distance histogram |
 | Local geometric shear | WebGPU neighbor geometry and per-atom shear |
 | Bonds | WebGPU periodic neighbor counts and compact bond graph, including element-pair cutoffs |
 | Ideal lattice strain | CPU PTM fit, then WebGPU tensor and invariant calculations; compatible PTM fits are reused |
-| PTM fitting, central symmetry and displacement | Existing CPU implementation |
+| PTM fitting | Existing CPU Wasm implementation |
 
 Algorithms without a GPU version continue to use their CPU implementation. When WebGPU, a suitable adapter or the required device limits are unavailable, supported analyses also fall back to CPU. Cancelling a calculation stops the job and retains the usual cancellation behavior. WebGPU requires a secure browser context: HTTPS or localhost.
 
-Ideal lattice strain reports its CPU PTM and GPU tensor stages in the engine label. If its GPU stage fails, the CPU tensor calculation reuses the completed fit; it does not repeat PTM. GPU computing therefore accelerates the tensor stage when the device and workload favor it, while the template fit remains CPU work. [CNA](cna.md), [reference-frame strain](reference-strain.md), [bonds](bonds.md) and [ideal lattice strain](ideal-strain.md) document their cutoff, precision and reference conventions. Central symmetry remains CPU work, including Auto mode; a compatible CNA classification can still be reused.
+Ideal lattice strain reports its CPU PTM and GPU tensor stages in the engine label. If its GPU stage fails, the CPU tensor calculation reuses the completed fit; it does not repeat PTM. GPU computing therefore accelerates the tensor stage when the device and workload favor it, while the template fit remains CPU work. [CNA](cna.md), [central symmetry](centrosymmetry.md), [displacement](displacement.md), [reference-frame strain](reference-strain.md), [bonds](bonds.md) and [ideal lattice strain](ideal-strain.md) document their cutoff, precision and reference conventions.
 
 ## How the GPU backend works
 
@@ -39,15 +41,23 @@ A reusable GPU device and pipelines amortize initialization, while uploaded coor
 
 Reference-frame strain prepares both configurations and keeps their GPU buffers resident during the calculation. Atom-ID matching remains CPU work; the reference-neighbor search, deformation fit and output tensors run on GPU. Selecting another reference can reuse that frame's cached upload without changing the displayed frame's identity.
 
+Displacement also retains current/reference inputs, caching anchored Cartesian high/low buffers separately for wrapped and unwrapped coordinates. Its vector differences, current-cell minimum images and magnitudes run on GPU after CPU atom matching. A Cartesian-only upload does not need the neighbor grid, so open coordinates outside the fractional unit box are supported. Auto central symmetry reuses compatible adaptive-CNA labels or runs GPU adaptive CNA before nearest-shell voting and greedy pairing.
+
 Enabling GPU computing starts device initialization and common shader compilation in the background. Once a structure is loaded, the current frame's coordinates and element types are uploaded before background trajectory preparation. Preparation does not calculate analysis results. The renderer uses separate WebGL buffers, so displaying a structure and preparing WebGPU analysis are separate operations.
 
 The GPU cache estimates the resident frame size and reserves space for calculation buffers. If the complete sequence fits its conservative budget, all frames are uploaded in the background. Otherwise, it keeps a window around the current frame, preferring the next and previous frames. Moving through the trajectory updates this window; foreground calculations take priority over background uploads. CPU and GPU caches have independent capacities, and reparsing a frame after CPU eviction still reuses its resident GPU data.
 
 Standard WebGPU does not expose free VRAM. The cache starts with an allocation budget of 2 GiB for hardware or 128 MiB for a software adapter, including a calculation workspace reserve. This is a ceiling, not an upfront reservation: only the loaded frames and required calculation buffers consume memory. The cache checks individual buffer limits and, if an allocation runs out of memory, lowers its budget, evicts distant frames and retries once while protecting the current frame. Thus a GPU with less available memory can retain a smaller nearby-frame window. A frame that cannot be prepared safely uses the existing CPU fallback. Closing or changing the source clears structure buffers while retaining the GPU device and compiled pipelines; switching GPU computing off releases the GPU Worker after any accepted calculation finishes. A new cutoff can require a new neighbor index, and uncommon shader variants are still compiled on demand.
 
-GPU arithmetic uses 32-bit floating point. High and low input components retain coordinate and PTM fit precision; strain kernels use compensated matrix arithmetic and apply the CPU threshold for numerical zeros. Ambiguous neighbor cutoff or ordering decisions receive sparse CPU corrections. Continuous values can still differ slightly between backends, including small strain residuals, and inputs outside the supported precision range use CPU. In particular, GPU neighbor searches fall back when their padded search radius exceeds 32 times the face height along a periodic axis; small nonperiodic face heights do not trigger this limit.
+Most GPU kernels use 32-bit floating point. High and low input components retain coordinate and PTM fit precision; strain kernels use compensated matrix arithmetic and apply the CPU threshold for numerical zeros. Central symmetry additionally emulates IEEE 64-bit arithmetic in its shader to preserve strict nearest-neighbor and greedy-pair ordering; this does not rely on native GPU float64. Ambiguous neighbor cutoff or ordering decisions in other kernels receive sparse CPU corrections. Continuous values can still differ slightly between backends, including small strain residuals, and inputs outside the supported precision range use CPU. In particular, GPU neighbor searches fall back when their padded search radius exceeds 32 times the face height along a periodic axis; small nonperiodic face heights do not trigger this limit.
 
 Uploads, shader compilation, reductions and result readback all contribute to elapsed time. Small structures may finish sooner on CPU, and enabling GPU computing does not guarantee a speedup. Compare the same file, cutoff and analysis parameters, reporting cold initialization separately from subsequent runs and distinguishing hardware adapters from software adapters. See [validation](../VALIDATION.md) for executed checks rather than treating software-adapter timing as a physical GPU benchmark.
+
+## Analysis results and rendering
+
+The current renderer uses WebGL2. WebGPU analysis writes results to GPU buffers, copies them to a readable staging buffer, and returns typed arrays to the application. The color legend uses these scalar arrays, and vector display builds arrow data from the selected X, Y and Z fields. Drawing then uploads colors and vectors into separate WebGL buffers. Input uploads can be reused by subsequent WebGPU calculations, but the current rendering path still includes result readback and WebGL upload.
+
+Browsers provide no portable way to use a WebGPU `GPUBuffer` directly as a WebGL buffer. A future WebGPU renderer could draw from retained analysis buffers on the same `GPUDevice`, avoiding the full array round trip for supported displays. It would need to keep those buffers alive, map colors on GPU and write any CPU precision corrections back before drawing. The present analysis Worker owns its device and releases temporary output buffers after returning results, so this would require a change to device ownership and rendering. Legends, atom inspection and data export would still need summary statistics or selected values on the CPU.
 
 ## Compare CPU and GPU time
 
@@ -62,6 +72,11 @@ npm run benchmark:gpu -- --kernel=coordination --output=/tmp/alloyview-gpu.json
 npm run benchmark:gpu -- --kernel=cnaFixed
 npm run benchmark:gpu -- --kernel=cnaAdaptive
 npm run benchmark:gpu -- --kernel=referenceStrain
+# Compare manual/Auto symmetry or displacement:
+npm run benchmark:gpu -- --kernel=csp8
+npm run benchmark:gpu -- --kernel=csp12
+npm run benchmark:gpu -- --kernel=cspAuto
+npm run benchmark:gpu -- --kernel=displacement
 # Measure preparation separately, then calculate with preloaded inputs:
 npm run benchmark:gpu -- --hardware --preload
 # Explicit software execution checks when no physical adapter is available:
@@ -69,6 +84,8 @@ npm run benchmark:gpu -- --software
 ```
 
 The benchmark loads `NiGB_minimized.cfg`, bypasses application result caches, checks CPU/GPU output agreement, and reports cold and warm wall times, adapter details and CPU fallback reasons. Fixed CNA uses a 3.1 Å cutoff; adaptive CNA uses its local shell scales. The reference-strain benchmark creates a controlled affine copy of the same atoms and cell, with known correspondence, and compares it against the original reference; it does not read a trajectory. Its row-major deformation gradient is `F = [1.02, 0.12, 0.03; 0, 0.98, 0.05; 0, 0, 1.04]`.
+
+Central-symmetry benchmarks use either 8 or 12 neighbors or local Auto shells. The displacement benchmark creates a Cartesian copy translated by `[0.12, −0.08, 0.05]` Å, retaining known same-row correspondence to the source. It reports matching/preparation separately, compares all components and magnitudes, and does not infer trajectory motion from this single example.
 
 With `--preload`, preparation time is reported separately; the first calculation then uses the prepared device, common pipelines and resident frame. Its RDF cutoff respects the example's thin periodic Z cell. `test:gpu` uses a software adapter by default; pass `--hardware` to test a physical GPU. `benchmark:gpu` requests a hardware adapter by default. Hardware mode rejects software adapters; use `--software` explicitly for software execution checks.
 

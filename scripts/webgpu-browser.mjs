@@ -94,8 +94,8 @@ export async function withWebGpuBrowser(run, { software = true } = {}) {
         websocket.send(JSON.stringify({ id, method, params: parameters }));
       });
     }
-    async function evaluate(expression) {
-      const result = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+    async function evaluate(expression, { timeoutMs = 180_000 } = {}) {
+      const result = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, timeoutMs);
       assert.ok(!result.exceptionDetails, JSON.stringify(result.exceptionDetails));
       return result.result?.value;
     }

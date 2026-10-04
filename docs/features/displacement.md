@@ -22,12 +22,20 @@ With **Minimum image** enabled, periodic lattice translations in the current cel
 
 With correction disabled, the calculation uses available unwrapped positions and otherwise the coordinates supplied by the frame. Input that contains only wrapped coordinates cannot reconstruct missing image counts.
 
-Analysis uses source atoms before display filtering, slicing and replication. Arrow length, axis scales and glyph sizes do not change the physical components or magnitude.
+Analysis precedes display filtering, slicing and display-only replication. With **Replicate atoms for analysis** enabled, displacement uses the enlarged configurations and their stable copy IDs instead. Arrow length, axis scales and glyph sizes do not change the physical components or magnitude.
+
+## GPU computing
+
+With **Enable GPU computing** on, Cartesian subtraction, minimum-image selection and vector magnitudes prefer WebGPU. Stable-ID or row-order matching remains CPU work. The GPU kernel uses the selected Cartesian positions directly, including origin shifts, cell deformation and available unwrapped coordinates. It preserves the current cell's full triclinic metric and mixed periodic boundaries; open atoms outside the fractional unit box are supported because this calculation does not require a neighbor grid.
+
+Cartesian inputs retain their Float32 or Float64 source precision through an anchored high/low upload. Wrapped and unwrapped uploads are cached separately for the current and reference frames and can be reused across compatible calculations. Output components are Float32, as used by vector drawing. Magnitudes are evaluated from those final rounded components with scaled, compensated arithmetic and returned as Float64, so a finite vector norm larger than the Float32 range can remain finite.
+
+Ambiguous half-cell or tied-image choices receive exact CPU corrections. The GPU image search is bounded to 512 candidates per atom, and numerically ambiguous or over-budget image searches can correct up to 16,384 atoms before the whole calculation falls back to CPU Workers. Unsupported device, memory or precision limits also use CPU fallback. Unmatched atoms keep NaN components and magnitude, and cancellation stops either backend without retrying a cancelled GPU job on CPU. Coloring, arrow visibility, cached-frame invalidation and saved settings behave the same with either backend. See [performance](performance.md) for preparation, result readback and timing costs.
 
 ## Implementation and saved settings
 
 Calculated fields are tagged with the displacement analysis and cached by source frame and calculation parameters. A source change, cancellation or newer request invalidates pending publication. Configuration JSON stores the independent analysis under `extensions.displacement`, including its enabled state, zero-based reference frame and minimum-image option. Older configurations that used Displacement as a Vector source migrate to the independent analysis, including when their arrows were hidden.
 
-[Displacement calculation](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/displacement.js), [scalar property registration](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/vector-properties.js), [analysis lifecycle and controls](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/atomeye-tools.js).
+[Displacement calculation](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/displacement.js), [GPU displacement](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/gpu/displacement.js), [GPU displacement shader](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/gpu/displacement-shaders.js), [scalar property registration](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/vector-properties.js), [analysis lifecycle and controls](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/atomeye-tools.js).
 
 OVITO's [Displacement vectors documentation](https://www.ovito.org/manual/reference/pipelines/modifiers/displacement_vectors.html) explains the reference-frame and atom-correspondence concepts. The calculation and limitations described above are AlloyView's implementation.

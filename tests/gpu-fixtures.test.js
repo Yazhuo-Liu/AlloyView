@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cnaDirectFixtures, cnaFixtures, cloneFrame, pointFrame, referenceStrainFixtures, reorderFrame, transformFrame } from '../scripts/gpu-fixtures.js';
+import { cnaDirectFixtures, cnaFixtures, cloneFrame, cspFixtures, displacementFixtures, displacementValidationFixtures,
+  pointFrame, referenceStrainFixtures, reorderFrame, transformFrame } from '../scripts/gpu-fixtures.js';
 import { calculateCna } from '../src/analysis/cna.js';
+import { calculateCentrosymmetry } from '../src/analysis/centrosymmetry.js';
+import { calculatePreparedDisplacements, computeDisplacements, prepareDisplacements } from '../src/analysis/displacement.js';
 import { NeighborSearch } from '../src/analysis/neighbors.js';
 import { calculateReferenceStrain, REFERENCE_STRAIN_FIELDS } from '../src/analysis/reference-strain.js';
 import { fractionalToCartesian } from '../src/data/model.js';
@@ -144,5 +147,90 @@ for (const fixture of referenceStrainFixtures()) {
     }
     assert.equal(result.incomplete, nanAtoms.size);
     assert.equal(result.warning, null);
+  });
+}
+
+for (const fixture of cspFixtures()) {
+  test(`GPU scientific fixture: ${fixture.label} preserves normalized CSP and its shell selection`, () => {
+    const retainedLabels = fixture.parameters.structureInput?.slice();
+    const result = calculateCentrosymmetry(fixture.frame, fixture.parameters);
+    assert.equal(result.centrosymmetry.length, fixture.frame.ids.length);
+    for (const value of result.centrosymmetry) assert.ok(Number.isNaN(value) || (value >= 0 && value <= 1), 'Normalized CSP lies in [0,1] or is undefined.');
+    if (fixture.expectedValue !== undefined) for (const value of result.centrosymmetry) near(value, fixture.expectedValue, 1e-12);
+    if (fixture.expectedCenterValue !== undefined) near(result.centrosymmetry[0], fixture.expectedCenterValue, 1e-12);
+    if (fixture.expectedFiniteBaseline) assert.ok(result.centrosymmetry.every(value => value > .01 && value < 1), 'Ideal HCP retains its intrinsic positive CSP.');
+    if (fixture.expectedFiniteNormalized) assert.ok(result.centrosymmetry.every(Number.isFinite));
+    if (fixture.expectedSomePositive) assert.ok(result.centrosymmetry.some(value => value > .001), 'Defective environments retain elevated finite CSP.');
+    for (const atom of fixture.expectedNaNAtoms ?? []) assert.ok(Number.isNaN(result.centrosymmetry[atom]));
+    if (fixture.expectedIncomplete !== undefined) assert.equal(result.incomplete, fixture.expectedIncomplete);
+    if (fixture.parameters.mode === 'auto') {
+      if (fixture.expectedStructure !== undefined) assert.ok(result.cspStructureTypes.every(value => value === fixture.expectedStructure));
+      if (fixture.expectedNeighborCount !== undefined) assert.ok(result.cspNeighborCounts.every(value => value === fixture.expectedNeighborCount));
+      if (fixture.expectedCenterStructure !== undefined) assert.equal(result.cspStructureTypes[0], fixture.expectedCenterStructure);
+      if (fixture.expectedCenterNeighborCount !== undefined) assert.equal(result.cspNeighborCounts[0], fixture.expectedCenterNeighborCount);
+      for (const [name, value] of Object.entries(fixture.expectedSummaryEntries ?? {})) assert.equal(result.cspSummary[name], value);
+      for (const expected of fixture.expectedAtoms ?? []) {
+        assert.equal(result.cspStructureTypes[expected.atom], expected.structure);
+        assert.equal(result.cspNeighborCounts[expected.atom], expected.neighbors);
+      }
+      if (fixture.expectedMinimumInferred !== undefined) assert.ok(result.cspSummary.inferred >= fixture.expectedMinimumInferred);
+      assert.equal(['fcc', 'bcc', 'hcp', 'other', 'ico'].reduce((sum, name) => sum + result.cspSummary[name], 0), fixture.frame.ids.length);
+      assert.equal(result.cspSummary.unresolved, result.centrosymmetry.filter(Number.isNaN).length);
+      if (retainedLabels) assert.deepEqual(fixture.parameters.structureInput, retainedLabels);
+      if (retainedLabels && fixture.cacheComparisonGroup) {
+        const fresh = calculateCentrosymmetry(fixture.frame, { mode: 'auto' });
+        for (const name of ['centrosymmetry', 'cspStructureTypes', 'cspNeighborCounts', 'cspSummary', 'incomplete']) assert.deepEqual(result[name], fresh[name]);
+      }
+    }
+  });
+}
+
+for (const fixture of displacementFixtures()) {
+  test(`GPU scientific fixture: ${fixture.label} has its expected Cartesian displacement`, async () => {
+    const sourcePositions = fixture.frame.positions.slice(), referencePositions = fixture.reference.positions.slice();
+    const parameters = await prepareDisplacements(fixture.frame, fixture.reference, fixture.options);
+    const completedAtoms = [];
+    const result = calculatePreparedDisplacements(fixture.frame, parameters, { onProgress: ({ completed }) => completedAtoms.push(completed) });
+    assert.equal(result.vectors.length, fixture.expectedVectors.length);
+    for (let k = 0; k < result.vectors.length; k += 1) {
+      if (Number.isNaN(fixture.expectedVectors[k])) assert.ok(Number.isNaN(result.vectors[k]));
+      else near(result.vectors[k], Math.fround(fixture.expectedVectors[k]));
+    }
+    const magnitudes = result.magnitudes;
+    assert.ok(magnitudes instanceof Float64Array);
+    for (let atom = 0; atom < magnitudes.length; atom += 1) {
+      if (Number.isNaN(fixture.expectedMagnitudes[atom])) assert.ok(Number.isNaN(magnitudes[atom]));
+      else near(magnitudes[atom], fixture.expectedMagnitudes[atom]);
+    }
+    assert.deepEqual(result.referenceMapping, fixture.expectedMapping);
+    assert.equal(result.mappingMode, fixture.expectedMappingMode);
+    assert.equal(result.minimumImage, fixture.options.minimumImage);
+    assert.equal(result.matched, fixture.expectedMapping.filter(index => index >= 0).length);
+    assert.equal(result.unmatched, fixture.expectedMapping.filter(index => index < 0).length);
+    if (fixture.expectedVectors.every(value => value === 0)) {
+      assert.ok(result.vectors.every(value => value === 0), 'Matched unchanged positions retain exact zero vectors.');
+      assert.ok(magnitudes.every(value => value === 0), 'Matched unchanged positions retain exact zero magnitudes.');
+    }
+    for (const completed of fixture.expectedProgressAtoms ?? []) assert.ok(completedAtoms.includes(completed), `Progress includes ${completed} completed atoms.`);
+    if (fixture.requirePositiveTinyDisplacement) {
+      const atom = fixture.expectedTinyDisplacementAtom ?? 0, index = atom * 3;
+      assert.ok(result.vectors[index] > 0 && magnitudes[atom] > 0, 'Genuine tiny displacement and magnitude remain positive.');
+      assert.ok(Math.abs(result.vectors[index] - fixture.expectedVectors[index]) / fixture.expectedVectors[index] < fixture.tinyRelativeTolerance);
+      assert.ok(Math.abs(magnitudes[atom] - fixture.expectedMagnitudes[atom]) / fixture.expectedMagnitudes[atom] < fixture.tinyRelativeTolerance);
+    }
+    if (fixture.expectedMagnitudeExceedsFloat32) {
+      assert.ok(result.vectors.every(Number.isFinite), 'Every individual Float32 displacement component remains finite.');
+      assert.ok(Number.isFinite(magnitudes[0]), 'The combined displacement magnitude remains finite in Float64.');
+      assert.equal(Math.fround(magnitudes[0]), Infinity, 'The physical magnitude exceeds the Float32 numeric range.');
+      assert.equal(magnitudes[0], Math.hypot(...result.vectors));
+    }
+    assert.deepEqual(fixture.frame.positions, sourcePositions);
+    assert.deepEqual(fixture.reference.positions, referencePositions);
+  });
+}
+
+for (const fixture of displacementValidationFixtures()) {
+  test(`GPU scientific validation fixture: ${fixture.label}`, async () => {
+    await assert.rejects(computeDisplacements(fixture.frame, fixture.reference, fixture.options), new RegExp(fixture.expectedError));
   });
 }

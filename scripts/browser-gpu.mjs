@@ -9,12 +9,15 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { crystalFrame } = await import('./tests/helpers/crystals.js');
     const { createCell, fractionalToCartesian } = await import('./src/data/model.js');
-    const { compareGpuBonds, compareGpuFields, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
-    const { cnaFixtures, cnaDirectFixtures, referenceStrainFixtures } = await import('./scripts/gpu-fixtures.js');
+    const { compareGpuBonds, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
+    const { cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures } = await import('./scripts/gpu-fixtures.js');
+    const { prepareDisplacements } = await import('./src/analysis/displacement.js');
     const { STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
     const { REFERENCE_STRAIN_FIELDS } = await import('./src/analysis/reference-strain.js');
     window.gpuTests = { AnalysisPool, crystalFrame, createCell, fractionalToCartesian, compareGpuBonds, compareGpuFields,
-      snapshotGpuInputs, cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, STRAIN_FIELDS, REFERENCE_STRAIN_FIELDS, rows: [] };
+      compareGpuCentrosymmetry, compareGpuDisplacements, prepareDisplacements, snapshotGpuInputs,
+      cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures,
+      STRAIN_FIELDS, REFERENCE_STRAIN_FIELDS, rows: [] };
     window.gpuTests.cpu = new AnalysisPool();
     window.gpuTests.gpu = new AnalysisPool();
     window.gpuTests.gpu.setGpuEnabled(true);
@@ -38,14 +41,20 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
     window.gpuTests.run = async (label, frame, parameters, field, tolerance = 0, requireGpu = true) => {
       const assertInputsIntact = window.gpuTests.snapshotGpuInputs(frame, parameters);
       const expected = await window.gpuTests.cpu.analyze(frame, parameters);
-      const actual = await window.gpuTests.gpu.analyze(frame, parameters);
+      const progressAtoms = [];
+      const actual = await window.gpuTests.gpu.analyze(frame, parameters, { onProgress: progress => {
+        if (progress.backend === 'gpu' && progress.phase === 'analyzing' && progress.completedAtoms > 0) progressAtoms.push(progress.completedAtoms);
+      } });
       assertInputsIntact();
       if (requireGpu && !window.gpuTests.isGpu(actual)) throw new Error(label + ' silently fell back: ' + JSON.stringify({ engine: actual.engine, fallbackReason: actual.fallbackReason }));
       const tensorComparison = ['strain', 'referenceStrain'].includes(parameters.kind)
         ? window.gpuTests.compareGpuFields(actual, expected, parameters.kind === 'strain'
           ? window.gpuTests.STRAIN_FIELDS : window.gpuTests.REFERENCE_STRAIN_FIELDS, tolerance) : null;
+      const domainComparison = parameters.kind === 'centrosymmetry' ? window.gpuTests.compareGpuCentrosymmetry(actual, expected, tolerance)
+        : parameters.kind === 'displacement' ? window.gpuTests.compareGpuDisplacements(actual, expected, tolerance) : null;
       let maxAbsoluteError = parameters.kind === 'bonds' ? window.gpuTests.compareGpuBonds(actual, expected)
         : tensorComparison ? tensorComparison.maxAbsoluteError
+          : domainComparison ? domainComparison.maxAbsoluteError
           : window.gpuTests.compare(actual[field], expected[field], tolerance);
       if (parameters.kind === 'localShear') {
         window.gpuTests.compare(actual.coordination, expected.coordination);
@@ -58,6 +67,10 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
         correctedAtoms: actual.correctedAtoms ?? actual.gpuCorrectionAtoms ?? 0, inputReused: actual.inputReused ?? null,
         radiusAttempts: actual.gpuRadiusAttempts ?? null,
         gpuInputReused: actual.gpuInputReused ?? null, ...(parameters.kind === 'bonds' ? { edges: actual.count } : {}),
+        ...(parameters.kind === 'centrosymmetry' ? { incomplete: actual.incomplete, cspSummary: actual.cspSummary ?? null } : {}),
+        ...(parameters.kind === 'displacement' ? { matched: actual.matched, unmatched: actual.unmatched, mappingMode: actual.mappingMode,
+          vectorsType: actual.vectors.constructor.name, magnitudesType: actual.magnitudes.constructor.name, progressAtoms,
+          comparison: domainComparison } : {}),
         ...(tensorComparison ? { incomplete: actual.incomplete, fieldErrors: tensorComparison.fields } : {}) });
       return actual;
     };
@@ -164,6 +177,8 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
         const runtime = new GpuRuntime();
         try {
           await runtime.initialize();
+          const { checkGpuF64 } = await import('./scripts/gpu-f64-check.js');
+          window.gpuTests.exactArithmetic = await checkGpuF64(runtime.device);
           for (const fixture of window.gpuTests.cnaDirectFixtures()) {
             const assertInputsIntact = window.gpuTests.snapshotGpuInputs(fixture.frame, fixture.parameters);
             const expected = calculateCna(fixture.frame, fixture.parameters);
@@ -213,6 +228,75 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
         }
         if (fixture.allowFallback && !isGpu(result)) check(Boolean(result.fallbackReason), fixture.label + ' unsupported geometry needs an explicit CPU fallback reason.');
       }
+      const cspCacheGroups = new Map();
+      for (const fixture of window.gpuTests.cspFixtures()) {
+        let parameters = fixture.parameters;
+        if (fixture.cacheComparisonGroup && parameters.structureInput) {
+          const identified = await gpu.analyze(fixture.frame, { kind: 'cna', mode: 'adaptive' });
+          check(isGpu(identified), fixture.label + ' cached structure recognition must originate on GPU.');
+          parameters = { ...parameters, structureInput: identified.structures };
+        }
+        const result = await run(fixture.label, fixture.frame, parameters, 'centrosymmetry', 2e-6);
+        if (fixture.expectedValue !== undefined) check(result.centrosymmetry.every(value => fixture.expectedValue === 0 ? value === 0 : Math.abs(value - fixture.expectedValue) < 2e-6), fixture.label + ' wrong normalized CSP value.');
+        if (fixture.expectedCenterValue !== undefined) check(Math.abs(result.centrosymmetry[0] - fixture.expectedCenterValue) < 2e-6, fixture.label + ' wrong center CSP value.');
+        if (fixture.expectedFiniteBaseline) check(result.centrosymmetry.every(value => Number.isFinite(value) && value > 0), fixture.label + ' must preserve the finite HCP baseline.');
+        if (fixture.expectedFiniteNormalized) check(result.centrosymmetry.every(value => Number.isFinite(value) && value >= 0 && value <= 1), fixture.label + ' CSP must remain finite and normalized.');
+        if (fixture.expectedSomePositive) check(result.centrosymmetry.some(value => value > 0), fixture.label + ' defects must retain nonzero CSP.');
+        for (const atom of fixture.expectedNaNAtoms ?? []) check(Number.isNaN(result.centrosymmetry[atom]), fixture.label + ' undefined CSP atom ' + atom + ' must be NaN.');
+        if (fixture.expectedIncomplete !== undefined) check(result.incomplete === fixture.expectedIncomplete, fixture.label + ' incomplete count differs.');
+        if (fixture.expectedStructure !== undefined) check(result.cspStructureTypes.every(value => value === fixture.expectedStructure), fixture.label + ' local structure differs.');
+        if (fixture.expectedNeighborCount !== undefined) check(result.cspNeighborCounts.every(value => value === fixture.expectedNeighborCount), fixture.label + ' local shell selection differs.');
+        if (fixture.expectedCenterStructure !== undefined) check(result.cspStructureTypes[0] === fixture.expectedCenterStructure, fixture.label + ' center structure differs.');
+        if (fixture.expectedCenterNeighborCount !== undefined) check(result.cspNeighborCounts[0] === fixture.expectedCenterNeighborCount, fixture.label + ' center shell differs.');
+        for (const [name, value] of Object.entries(fixture.expectedSummaryEntries ?? {})) check(result.cspSummary[name] === value, fixture.label + ' summary differs for ' + name);
+        if (fixture.expectedMinimumInferred !== undefined) check(result.cspSummary.inferred >= fixture.expectedMinimumInferred, fixture.label + ' defect shell inference must occur.');
+        for (const { atom, structure, neighbors } of fixture.expectedAtoms ?? []) check(result.cspStructureTypes[atom] === structure && result.cspNeighborCounts[atom] === neighbors, fixture.label + ' mixed-phase atom ' + atom + ' differs.');
+        if (fixture.cacheComparisonGroup) {
+          const earlier = cspCacheGroups.get(fixture.cacheComparisonGroup);
+          if (earlier) window.gpuTests.compareGpuCentrosymmetry(result, earlier, 0);
+          else cspCacheGroups.set(fixture.cacheComparisonGroup, result);
+          rows.at(-1).classificationInput = parameters.structureInput ? 'cached-gpu-cna' : 'fresh-gpu-cna';
+        }
+      }
+      for (const fixture of window.gpuTests.displacementFixtures()) {
+        const prepared = await window.gpuTests.prepareDisplacements(fixture.frame, fixture.reference, fixture.options);
+        const result = await run(fixture.label, fixture.frame, { kind: 'displacement', ...prepared }, null, 2e-6);
+        window.gpuTests.compare(result.vectors, Float32Array.from(fixture.expectedVectors), 2e-6);
+        for (let atom = 0; atom < result.magnitudes.length; atom++) {
+          const expected = fixture.expectedMagnitudes[atom], actual = result.magnitudes[atom];
+          if (Number.isNaN(expected) && Number.isNaN(actual)) continue;
+          check(Number.isFinite(actual) && Math.abs(actual - expected) <= Math.max(2e-6, Math.abs(expected) * 5e-14), fixture.label + ' independent magnitude differs at ' + atom);
+        }
+        if (fixture.expectedMagnitudeExceedsFloat32) check(result.magnitudes[0] > 3.4028234663852886e38 && Number.isFinite(result.magnitudes[0]), fixture.label + ' Float64 norm must remain finite above Float32 range.');
+        window.gpuTests.compare(result.referenceMapping, fixture.expectedMapping);
+        if (fixture.expectedCorrectionAtoms !== undefined) check(result.gpuCorrectionAtoms === fixture.expectedCorrectionAtoms, fixture.label + ' sparse corrections differ: ' + result.gpuCorrectionAtoms);
+        for (const completed of fixture.expectedProgressAtoms ?? []) check(rows.at(-1).progressAtoms.includes(completed), fixture.label + ' missing GPU batch progress ' + completed);
+        check(result.mappingMode === fixture.expectedMappingMode, fixture.label + ' atom correspondence mode differs.');
+        if (fixture.expectedVectors.every(value => value === 0)) {
+          check(result.vectors.every(value => value === 0) && result.magnitudes.every(value => value === 0), fixture.label + ' matched zero displacement must remain exactly zero.');
+          rows.at(-1).zeroDisplacement = true;
+        }
+        if (fixture.requirePositiveTinyDisplacement) {
+          const tinyAtom = fixture.expectedTinyDisplacementAtom ?? 0;
+          const expected = fixture.expectedVectors[tinyAtom * 3], actual = result.vectors[tinyAtom * 3];
+          const relativeError = Math.abs(actual - expected) / expected;
+          check(actual > 0 && result.magnitudes[tinyAtom] > 0 && relativeError < fixture.tinyRelativeTolerance, fixture.label + ' must preserve a genuine tiny Cartesian shift.');
+          rows.at(-1).tinyDisplacement = { expected, actual, atom: tinyAtom, magnitude: result.magnitudes[tinyAtom], relativeError };
+        }
+      }
+      const displacementValidation = [];
+      for (const fixture of window.gpuTests.displacementValidationFixtures()) {
+        const checkInputs = window.gpuTests.snapshotGpuInputs(fixture.frame, { referenceFrame: fixture.reference });
+        let errorMessage = null;
+        try {
+          const prepared = await window.gpuTests.prepareDisplacements(fixture.frame, fixture.reference, fixture.options);
+          await gpu.analyze(fixture.frame, { kind: 'displacement', ...prepared });
+        } catch (error) { errorMessage = error.message; }
+        checkInputs();
+        check(errorMessage && new RegExp(fixture.expectedError, 'i').test(errorMessage), fixture.label + ' must reject: ' + errorMessage);
+        displacementValidation.push({ label: fixture.label, error: errorMessage, inputsIntact: true });
+      }
+      window.gpuTests.displacementValidation = displacementValidation;
       const controller = new AbortController();
       let cancelled = false;
       try {
@@ -239,9 +323,23 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
       check(observedGpuComputing && cancelledDuringComputing, 'An executing GPU job must cancel between batches.');
       await run('GPU recovery after cancelling dispatched work', fcc, { kind: 'coordination', cutoff: 2.8 }, 'coordination');
       const cancellationChecks = [];
-      for (const kind of ['cna', 'referenceStrain']) {
+      {
+        const frame = crystalFrame('fcc', 18, 3.52), matching = new AbortController();
+        const assertInputsIntact = window.gpuTests.snapshotGpuInputs(frame, { referenceFrame: frame });
+        let observed = false, aborted = false;
+        try { await window.gpuTests.prepareDisplacements(frame, frame, { signal: matching.signal, onProgress: progress => {
+          if (progress.phase === 'matching') { observed = true; matching.abort(); }
+        } }); } catch (error) { aborted = error.name === 'AbortError'; }
+        assertInputsIntact();
+        check(observed && aborted, 'Displacement ID preparation must cancel with AbortError.');
+        cancellationChecks.push({ kind: 'displacement', stage: 'matching', aborted, inputsIntact: true });
+      }
+      for (const kind of ['cna', 'referenceStrain', 'centrosymmetry', 'displacement']) {
         const cancellationFrame = crystalFrame('fcc', 18, 3.52);
+        const cancellationStructures = new Uint8Array(cancellationFrame.ids.length).fill(1);
         const parameters = kind === 'cna' ? { kind, mode: 'adaptive' }
+          : kind === 'centrosymmetry' ? { kind, mode: 'auto', structureInput: cancellationStructures }
+          : kind === 'displacement' ? { kind, ...await window.gpuTests.prepareDisplacements(cancellationFrame, cancellationFrame) }
           : { kind, cutoff: 2.8, referenceFractional: cancellationFrame.fractional, referenceCell: cancellationFrame.cell,
             referenceMapping: Int32Array.from(cancellationFrame.ids, (_, index) => index) };
         for (const stage of ['preparing', 'dispatched']) {
@@ -265,6 +363,8 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
           check(observedStage && aborted, kind + ' cancellation must stop at ' + stage + ' with AbortError.');
           const recovery = await run(kind + ' GPU recovery after ' + stage + ' cancellation', fcc,
             kind === 'cna' ? { kind, mode: 'adaptive' }
+              : kind === 'centrosymmetry' ? { kind, mode: 'auto', structureInput: new Uint8Array(fcc.ids.length).fill(1) }
+              : kind === 'displacement' ? { kind, ...await window.gpuTests.prepareDisplacements(fcc, fcc) }
               : { kind, cutoff: 2.8, referenceFractional: fcc.fractional, referenceCell: fcc.cell,
                 referenceMapping: Int32Array.from(fcc.ids, (_, index) => index) }, kind === 'cna' ? 'structures' : null, 2e-6);
           check(gpu.gpuBackend.worker === worker, 'Cancellation must retain the shared GPU worker.');
@@ -280,15 +380,18 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
   assert.ok(rows.some((row) => /webgpu/i.test(row.engine ?? '') || row.backend === 'gpu'), 'No real GPU analysis was performed.');
   const preload = await runGpuPreloadChecks({ evaluate });
   const cancellation = await evaluate('window.gpuTests.cancellationChecks');
-  const application = await runApplicationSmoke({ evaluate, call });
+  const displacementValidation = await evaluate('window.gpuTests.displacementValidation');
+  const exactArithmetic = await evaluate('window.gpuTests.exactArithmetic');
+  const application = process.argv.includes('--kernels-only') ? null : await runApplicationSmoke({ evaluate, call });
   return { adapter, softwareTiming: adapter.isFallbackAdapter || /swiftshader|software|llvmpipe/i.test(`${adapter.architecture} ${adapter.description}`),
-    checks: rows, cancellation, preload, application };
+    checks: rows, exactArithmetic, cancellation, displacementValidation, preload, application };
 }, { software: useSoftwareAdapter(true) });
 console.log(JSON.stringify(report, null, 2));
 
 async function runGpuPreloadChecks({ evaluate }) {
   return evaluate(`(async () => {
-    const { AnalysisPool, crystalFrame, check, compare, compareGpuFields, REFERENCE_STRAIN_FIELDS } = window.gpuTests;
+    const { AnalysisPool, crystalFrame, check, compare, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements,
+      prepareDisplacements, REFERENCE_STRAIN_FIELDS } = window.gpuTests;
     const gpu = new AnalysisPool(), cpu = new AnalysisPool();
     gpu.setGpuEnabled(true);
     try {
@@ -327,6 +430,22 @@ async function runGpuPreloadChecks({ evaluate }) {
       const referenceExpected = await cpu.analyze(reparsed, referenceParameters);
       check(reference.backend === 'gpu' && reference.inputReused && reference.gpuInputReused, 'Reference strain must reuse preloaded current geometry.');
       compareGpuFields(reference, referenceExpected, REFERENCE_STRAIN_FIELDS, 2e-6);
+      const cspParameters = { kind: 'centrosymmetry', mode: 'auto', structureInput: cna.structures };
+      const csp = await gpu.analyze(reparsed, cspParameters), cspExpected = await cpu.analyze(reparsed, cspParameters);
+      check(csp.backend === 'gpu' && csp.inputReused && csp.gpuInputReused && csp.gpuCnaReused, 'Auto CSP must share preloaded geometry and recognized GPU CNA.');
+      compareGpuCentrosymmetry(csp, cspExpected, 2e-6);
+      let classifiedAgain = false;
+      const cachedAutoCsp = await gpu.analyze(reparsed, { kind: 'centrosymmetry', mode: 'auto' }, { onProgress: progress => { classifiedAgain ||= progress.stage === 'classifying'; } });
+      check(cachedAutoCsp.backend === 'gpu' && cachedAutoCsp.gpuCnaReused && !classifiedAgain, 'Auto CSP must consume the runtime adaptive-CNA cache without dispatching classification again.');
+      compareGpuCentrosymmetry(cachedAutoCsp, cspExpected, 0);
+      const displacementParameters = { kind: 'displacement', ...await prepareDisplacements(reparsed, frames[0]), referenceFrameIndex: 0 };
+      const displacement = await gpu.analyze(reparsed, displacementParameters, { frameIndex: 2 });
+      const displacementExpected = await cpu.analyze(reparsed, displacementParameters);
+      check(displacement.backend === 'gpu' && displacement.inputReused, 'Displacement must reuse the private current source frame.');
+      compareGpuDisplacements(displacement, displacementExpected, 2e-6);
+      const displacementAgain = await gpu.analyze(reparsed, displacementParameters, { frameIndex: 2 });
+      check(displacementAgain.backend === 'gpu' && displacementAgain.gpuInputReused && displacementAgain.referenceInputReused, 'Displacement must reuse current and reference Cartesian uploads.');
+      compareGpuDisplacements(displacementAgain, displacementExpected, 2e-6);
       check(gpu.gpuBackend.worker === worker, 'Different GPU algorithms must share the warmed GPU worker.');
       const beforeClear = gpu.gpuCacheStatus;
       await gpu.clearGpuFrames();
@@ -352,7 +471,10 @@ async function runGpuPreloadChecks({ evaluate }) {
         sourceClearPreservedDevice: true, crossAlgorithmWorkerReuse: true,
         cnaInputReused: cna.inputReused && cna.gpuInputReused,
         referenceInputReused: reference.inputReused && reference.gpuInputReused,
-        referenceGpuInputReused: reference.referenceGpuInputReused ?? null };
+        referenceGpuInputReused: reference.referenceGpuInputReused ?? null,
+        cspInputReused: csp.inputReused && csp.gpuInputReused, cspCnaReused: csp.gpuCnaReused, runtimeCnaReusedWithoutReclassification: !classifiedAgain && cachedAutoCsp.gpuCnaReused,
+        displacementInputReused: displacementAgain.inputReused && displacementAgain.gpuInputReused,
+        displacementReferenceInputReused: displacementAgain.referenceInputReused && displacementAgain.gpuInputReused };
     } finally { gpu.close(); cpu.close(); }
   })()`);
 }
@@ -379,11 +501,20 @@ async function runApplicationSmoke({ evaluate, call }) {
   await evaluate(`(async () => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { calculateCna } = await import('./src/analysis/cna.js');
+    const { calculateCentrosymmetry } = await import('./src/analysis/centrosymmetry.js');
+    const { calculatePreparedDisplacements } = await import('./src/analysis/displacement.js');
+    const { WebGLRenderer } = await import('./src/render/webgl-renderer.js');
     const { calculateReferenceStrain, REFERENCE_STRAIN_FIELDS } = await import('./src/analysis/reference-strain.js');
-    const { compareGpuArrays, compareGpuFields, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
-    const analyze = AnalysisPool.prototype.analyze;
-    window.applicationGpuChecks = { rows: [], adaptive: null };
-    window.restoreApplicationGpuHooks = () => { AnalysisPool.prototype.analyze = analyze; };
+    const { compareGpuArrays, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
+    const analyze = AnalysisPool.prototype.analyze, setVectors = WebGLRenderer.prototype.setVectors;
+    window.applicationGpuChecks = { rows: [], adaptive: null, arrows: null };
+    window.restoreApplicationGpuHooks = () => { AnalysisPool.prototype.analyze = analyze; WebGLRenderer.prototype.setVectors = setVectors; };
+    WebGLRenderer.prototype.setVectors = function(vectors, options) {
+      const result = setVectors.call(this, vectors, options);
+      if (this.canvas.id === 'viewport') window.applicationGpuChecks.arrows = vectors ? { type: vectors.constructor.name, components: vectors.length,
+        primitives: this.primitiveLayer?.vectorInstances?.length ?? null, glError: this.gl.getError() } : null;
+      return result;
+    };
     AnalysisPool.prototype.analyze = async function(frame, parameters, options) {
       const checkInputs = snapshotGpuInputs(frame, parameters);
       const result = await analyze.call(this, frame, parameters, options);
@@ -400,15 +531,26 @@ async function runApplicationSmoke({ evaluate, call }) {
           atoms: frame.ids.length, maxAbsoluteError: comparison.maxAbsoluteError,
           inputReused: result.inputReused, gpuInputReused: result.gpuInputReused,
           referenceInputReused: result.referenceInputReused, referenceGpuInputReused: result.referenceGpuInputReused });
-      } else if (parameters.kind === 'centrosymmetry' && parameters.mode === 'auto') {
+      } else if (parameters.kind === 'centrosymmetry') {
         const adaptive = window.applicationGpuChecks.adaptive;
-        window.applicationGpuChecks.rows.push({ kind: 'autoCentrosymmetry', gpu: result.backend === 'gpu', engine: result.engine,
+        const comparison = compareGpuCentrosymmetry(result, calculateCentrosymmetry(frame, parameters), 2e-6);
+        window.applicationGpuChecks.rows.push({ kind: parameters.mode === 'auto' ? 'autoCentrosymmetry' : 'centrosymmetry', mode: parameters.mode,
+          neighbors: parameters.neighbors, gpu: result.backend === 'gpu', engine: result.engine, cspSummary: result.cspSummary ?? null,
+          maxAbsoluteError: comparison.maxAbsoluteError,
           reusedGpuCna: adaptive?.frame === frame && adaptive.backend === 'gpu' && adaptive.structures === parameters.structureInput });
+      } else if (parameters.kind === 'displacement') {
+        const comparison = compareGpuDisplacements(result, calculatePreparedDisplacements(frame, parameters), 2e-6);
+        window.applicationGpuChecks.rows.push({ kind: 'displacement', gpu: result.backend === 'gpu', engine: result.engine,
+          matched: result.matched, unmatched: result.unmatched, vectorsType: result.vectors.constructor.name,
+          magnitudesType: result.magnitudes.constructor.name, maxAbsoluteError: comparison.maxAbsoluteError,
+          inputReused: result.inputReused, gpuInputReused: result.gpuInputReused });
       }
       return result;
     };
   })()`);
   const cases = [
+    { tool: 'centrosymmetry', cspChoice: '8', button: 'run-csp', state: 'csp-state', status: 'metric-csp', color: 'property:centralSymmetry' },
+    { tool: 'centrosymmetry', cspChoice: '12', button: 'run-csp', state: 'csp-state', status: 'metric-csp', color: 'property:centralSymmetry' },
     { tool: 'coordination', button: 'run-analysis', state: 'analysis-state', status: 'metric-analysis', cutoff: 'cutoff', value: 3.1, color: 'property:coordination' },
     { tool: 'localShear', button: 'run-local-shear', state: 'local-shear-state', status: 'local-shear-status', cutoff: 'local-shear-cutoff', value: 3.1, color: 'property:localShear' },
     { tool: 'statistics', button: 'run-rdf', state: 'rdf-state', status: 'rdf-status', cutoff: 'rdf-cutoff', value: 3.9 },
@@ -420,6 +562,7 @@ async function runApplicationSmoke({ evaluate, call }) {
     await evaluate(`(() => {
       const button = document.querySelector('[data-tool-button="${test.tool}"]');
       if (button.getAttribute('aria-expanded') !== 'true') button.click();
+      ${test.cspChoice ? `document.getElementById('csp-neighbors').value = '${test.cspChoice}'; document.getElementById('csp-neighbors').dispatchEvent(new Event('change'));` : ''}
       ${test.cutoff ? `document.getElementById('${test.cutoff}').value = '${test.value}';` : ''}
       ${test.mode ? `document.getElementById('cna-mode').value = '${test.mode}'; document.getElementById('cna-mode').dispatchEvent(new Event('change'));` : ''}
     })()`);
@@ -429,8 +572,9 @@ async function runApplicationSmoke({ evaluate, call }) {
       await evaluate(`(() => {
         const toggle = document.getElementById('enable-gpu-computing');
         if (toggle.getAttribute('aria-pressed') !== '${enabled}') toggle.click();
-        document.getElementById('${test.button}').click();
-      })()`);
+        })()`);
+      await waitFor(`!document.getElementById('${test.button}').disabled`, `${test.tool} GPU preference update completed`);
+      await evaluate(`document.getElementById('${test.button}').click()`);
       const engine = enabled ? 'webgpu' : 'js-worker';
       await waitFor(`document.getElementById('${test.state}').textContent === 'Calculated' && document.getElementById('${test.status}').textContent.includes('${engine}')`, `${test.tool} ${engine}`);
       if (test.mode) await waitFor(`window.applicationGpuChecks.rows.slice(${before}).some(row => row.kind === 'cna' && row.mode === '${test.mode}' && row.gpu === ${enabled})`, `${test.mode} CNA reruns for GPU preference`);
@@ -453,8 +597,22 @@ async function runApplicationSmoke({ evaluate, call }) {
   })()`);
   await waitFor(`document.getElementById('csp-state').textContent === 'Calculated' && window.applicationGpuChecks.rows.some(row => row.kind === 'autoCentrosymmetry' && row.reusedGpuCna)`, 'Auto central symmetry reuses recognized GPU CNA');
   const autoCentrosymmetry = await evaluate('window.applicationGpuChecks.rows.find(row => row.kind === "autoCentrosymmetry" && row.reusedGpuCna)');
-  assert.equal(autoCentrosymmetry.gpu, false, 'Auto central symmetry retains its CPU pairing algorithm.');
+  assert.equal(autoCentrosymmetry.gpu, true, 'Auto central symmetry pairs neighbors on GPU.');
+  assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), 'property:centralSymmetry');
   results.push(autoCentrosymmetry);
+  const autoRouting = [];
+  for (const enabled of [false, true]) {
+    const before = await evaluate('window.applicationGpuChecks.rows.length');
+    await evaluate(`document.getElementById('enable-gpu-computing').click();`);
+    await waitFor(`!document.getElementById('run-csp').disabled`, 'Auto CSP GPU preference readiness');
+    await evaluate(`document.getElementById('run-csp').click()`);
+    await waitFor(`document.getElementById('csp-state').textContent === 'Calculated' && window.applicationGpuChecks.rows.slice(${before}).some(row => row.kind === 'autoCentrosymmetry' && row.gpu === ${enabled})`, 'Auto CSP GPU preference ' + enabled);
+    autoRouting.push(await evaluate('window.applicationGpuChecks.rows.filter(row => row.kind === "autoCentrosymmetry").at(-1)'));
+  }
+  assert.deepEqual(autoRouting[0].cspSummary, autoRouting[1].cspSummary);
+  await evaluate(`document.getElementById('cancel-csp').click();`);
+  assert.equal(await evaluate('document.getElementById("csp-state").textContent'), 'Not calculated', 'Cancel clears accepted CSP results.');
+  results.push({ autoRouting, acceptedCspResultsCleared: true });
   async function loadTrajectory(count, name) {
     await evaluate(`(async () => {
       const { crystalFrame } = await import('./tests/helpers/crystals.js');
@@ -503,6 +661,72 @@ async function runApplicationSmoke({ evaluate, call }) {
     assert.equal(legendChoice.value, 'property:referenceShearStrain', JSON.stringify({ enabled, result, legendChoice }));
     referenceRouting.push(result);
   }
+  const displacementRouting = [];
+  await evaluate(`(() => {
+    const button = document.querySelector('[data-tool-button="displacement"]');
+    if (button.getAttribute('aria-expanded') !== 'true') button.click();
+    document.getElementById('displacement-reference-frame').value = '1';
+  })()`);
+  for (const enabled of [true, false, true]) {
+    const before = await evaluate('window.applicationGpuChecks.rows.length');
+    await evaluate(`(() => {
+      const toggle = document.getElementById('enable-gpu-computing');
+      if (toggle.getAttribute('aria-pressed') !== '${enabled}') toggle.click();
+    })()`);
+    await waitFor(`!document.getElementById('run-displacement').disabled`, 'Displacement GPU preference readiness');
+    await evaluate(`document.getElementById('run-displacement').click()`);
+    await waitFor(`document.getElementById('displacement-state').textContent === 'Calculated' && window.applicationGpuChecks.rows.slice(${before}).some(row => row.kind === 'displacement' && row.gpu === ${enabled})`, 'Displacement GPU preference ' + enabled);
+    const result = await evaluate('window.applicationGpuChecks.rows.filter(row => row.kind === "displacement").at(-1)');
+    assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), 'property:displacementMagnitude');
+    displacementRouting.push(result);
+  }
+  await evaluate(`(() => {
+    const button = document.querySelector('[data-tool-button="vectors"]');
+    if (button.getAttribute('aria-expanded') !== 'true') button.click();
+    const mode = document.getElementById('vector-mode'); mode.value = 'displacement'; mode.dispatchEvent(new Event('change'));
+    const arrows = document.getElementById('show-vectors'); arrows.checked = true; arrows.dispatchEvent(new Event('change'));
+  })()`);
+  await waitFor(`window.applicationGpuChecks.arrows?.type === 'Float32Array'`, 'Displacement Float32 arrow readback');
+  const displacementArrows = await evaluate('window.applicationGpuChecks.arrows');
+  assert.equal(displacementArrows.glError, 0, 'GPU displacement vectors upload to WebGL without errors.');
+  assert.equal(displacementArrows.components, 32 * 3);
+  await evaluate(`(() => {
+    const button = document.querySelector('[data-tool-button="centrosymmetry"]');
+    if (button.getAttribute('aria-expanded') !== 'true') button.click();
+    document.getElementById('csp-neighbors').value = 'auto'; document.getElementById('run-csp').click();
+  })()`);
+  await waitFor(`document.getElementById('csp-state').textContent === 'Calculated'`, 'GPU CSP prerequisite for recipe replay');
+  const gpuRecipe = await evaluate(`(async () => {
+    const createUrl = URL.createObjectURL, anchorClick = HTMLAnchorElement.prototype.click;
+    let saved;
+    URL.createObjectURL = function(blob) { saved = blob; return createUrl.call(this, blob); };
+    HTMLAnchorElement.prototype.click = () => {};
+    try {
+      document.getElementById('export-configuration').click();
+      if (!saved) throw new Error('GPU recipe export did not create a Blob.');
+      window.gpuReplayRecipe = await saved.text(); return JSON.parse(window.gpuReplayRecipe);
+    } finally { URL.createObjectURL = createUrl; HTMLAnchorElement.prototype.click = anchorClick; }
+  })()`);
+  assert.equal(gpuRecipe.settings.compute.gpuEnabled, true);
+  assert.equal(gpuRecipe.settings.analyses.centrosymmetry.enabled, true);
+  assert.equal(gpuRecipe.settings.extensions.displacement.enabled, true);
+  const replayBefore = await evaluate('window.applicationGpuChecks.rows.length');
+  await evaluate(`document.getElementById('cancel-csp').click(); document.getElementById('cancel-displacement').click();`);
+  await evaluate(`(() => {
+    const transfer = new DataTransfer(); transfer.items.add(new File([window.gpuReplayRecipe], 'gpu-analysis-recipe.json', { type: 'application/json' }));
+    const input = document.getElementById('configuration-file'); input.files = transfer.files; input.dispatchEvent(new Event('change'));
+  })()`);
+  await waitFor(`document.getElementById('configuration-status').textContent.includes('restored') && document.getElementById('csp-state').textContent === 'Calculated' && document.getElementById('displacement-state').textContent === 'Calculated'`, 'GPU CSP and displacement recipe replay');
+  const replayRows = await evaluate(`window.applicationGpuChecks.rows.slice(${replayBefore})`);
+  assert.ok(replayRows.some(row => row.kind === 'autoCentrosymmetry' && row.gpu));
+  assert.ok(replayRows.some(row => row.kind === 'displacement' && row.gpu));
+  assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'true');
+  await waitFor(`window.applicationGpuChecks.arrows?.type === 'Float32Array'`, 'Recipe restores GPU displacement arrows');
+  await evaluate(`document.getElementById('cancel-csp').click();`);
+  await evaluate(`document.getElementById('cancel-displacement').click();`);
+  assert.equal(await evaluate('document.getElementById("displacement-state").textContent'), 'Not calculated', 'Cancel clears accepted displacement results.');
+  assert.equal(await evaluate('window.applicationGpuChecks.arrows'), null, 'Cancel clears dependent vector arrows.');
+  results.push({ displacementRouting, displacementArrows, gpuRecipeReplayed: true, replayRows, acceptedDisplacementResultsCleared: true });
   await evaluate(`document.getElementById('cancel-reference-strain').click();`);
   assert.equal(await evaluate('document.getElementById("reference-strain-state").textContent'), 'Not calculated', 'Cancel clears accepted reference-strain results.');
   await call('Emulation.setDeviceMetricsOverride', { width: 360, height: 780, deviceScaleFactor: 1, mobile: false });
@@ -601,7 +825,11 @@ async function runPhysicalReplicationGpuChecks({ evaluate, waitFor }) {
     const restored = await evaluate('window.physicalGpuChecks.rows.at(-1)');
     assert.equal(restored.atoms, 32); assert.equal(restored.cellA, 7.04);
     assert.ok(restored.cacheGeneration > expanded.cacheGeneration);
-    assert.equal(restored.cacheFrameBytes, raw.cacheFrameBytes);
+    // The earlier displacement checks add Cartesian residency to the raw
+    // frame; a source reset removes it and restores only fractional inputs.
+    assert.ok(restored.cacheFrameBytes >= restored.atoms * 36 && restored.cacheFrameBytes <= raw.cacheFrameBytes,
+      'Restored cache contains the original fractional geometry and releases added Cartesian buffers.');
+    assert.ok(restored.cacheFrameBytes < expanded.cacheFrameBytes);
     assert.equal(await evaluate('window.physicalGpuChecks.renderer.displayAtomCount'), 64, 'Disabling physical replication keeps display-only copies.');
     return { sourceAtoms: raw.atoms, expandedAtoms: expanded.atoms, displayAnalysisReused: true,
       expandedNextFrame: next.atoms, restoredAtoms: restored.atoms, geometryBuffers,

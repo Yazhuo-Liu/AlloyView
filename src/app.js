@@ -1787,7 +1787,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     elements[`run-${prefix}`].disabled = false;
   };
   const cached = frame.properties.find(property => property.name === name && property.analysisKey === key
-    && (!['strain', 'cna'].includes(kind) || Boolean(property.analysisGpuRequested) === gpuRequested));
+    && (!['strain', 'cna', 'centrosymmetry'].includes(kind) || Boolean(property.analysisGpuRequested) === gpuRequested));
   if (cached) {
     ready(cached); refreshColorOptions(); applyColors();
     analysisControllers.delete(kind);
@@ -1830,6 +1830,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       ...(kind === 'strain' && frame.ptm?.key === ptmKey ? { ptmInput: frame.ptm } : {}) };
     const task = analysisPool.analyze(frame, inputs, {
       signal: controller.signal,
+      frameIndex: state.frameIndex,
       onProgress: (progress) => {
         if (isCurrent()) elements[`${prefix}-status`].textContent = analysisProgressText(progress, kind);
       },
@@ -1838,7 +1839,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     const result = await task;
     if (!isCurrent()) return;
     const metadata = { unit: '', analysisKind: kind, analysisKey: key, analysisMs: result.elapsedMs,
-      analysisGpuRequested: gpuRequested,
+      analysisGpuRequested: result.gpuRequested ?? gpuRequested,
       analysisEngine: result.engine, analysisFallbackReason: result.fallbackReason, incomplete: result.incomplete ?? 0 };
     let properties;
     if (kind === 'ptm') {

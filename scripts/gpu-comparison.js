@@ -51,6 +51,49 @@ export function compareGpuFields(actual, expected, fields, tolerance = 0) {
   return { maxAbsoluteError: Math.max(...Object.values(errors).map(value => value.maxAbsoluteError)), fields: errors };
 }
 
+/** Auto CSP recognition/votes are categorical outputs, so scalar tolerance
+ * never excuses different shell selection or a different unresolved atom. */
+export function compareGpuCentrosymmetry(actual, expected, tolerance = 2e-6) {
+  const scalar = compareGpuArrays(actual.centrosymmetry, expected.centrosymmetry, tolerance, 'centrosymmetry');
+  if (actual.incomplete !== expected.incomplete) throw new Error('Central-symmetry incomplete counts differ.');
+  if (expected.cspStructureTypes) {
+    compareGpuArrays(actual.cspStructureTypes, expected.cspStructureTypes, 0, 'CSP structure types');
+    compareGpuArrays(actual.cspNeighborCounts, expected.cspNeighborCounts, 0, 'CSP neighbor counts');
+    for (const [name, count] of Object.entries(expected.cspSummary)) {
+      if (actual.cspSummary?.[name] !== count) throw new Error(`CSP ${name} summary differs: GPU ${actual.cspSummary?.[name]}, CPU ${count}.`);
+    }
+  }
+  return scalar;
+}
+
+/** Readback vectors feed the existing WebGL/vector-property pipeline. Compare
+ * magnitude after the same Float32 vector rounding used by the CPU UI. */
+export function compareGpuDisplacements(actual, expected, tolerance = 2e-6) {
+  if (!(actual.vectors instanceof Float32Array)) throw new Error('Displacement readback must use Float32 vectors for WebGL.');
+  const vectors = compareGpuArrays(actual.vectors, expected.vectors, tolerance, 'displacement vectors');
+  const count = expected.vectors.length / 3;
+  const expectedMagnitudes = expected.magnitudes ?? Float64Array.from({ length: count }, (_, atom) => Math.hypot(
+    expected.vectors[atom * 3], expected.vectors[atom * 3 + 1], expected.vectors[atom * 3 + 2]));
+  // Magnitudes may exceed Float32's range even when every vector component is finite.
+  if (!(actual.magnitudes instanceof Float64Array)) throw new Error('Displacement magnitudes must retain Float64 range.');
+  if (actual.magnitudes.length !== count) throw new Error('Displacement magnitude lengths differ.');
+  let magnitudeMaxError = 0, maxRelativeError = 0, nanAtoms = 0;
+  for (let atom = 0; atom < count; atom++) {
+    const observed = actual.magnitudes[atom], baseline = expectedMagnitudes[atom];
+    if (Number.isNaN(observed) && Number.isNaN(baseline)) { nanAtoms++; continue; }
+    const error = Math.abs(observed - baseline), permitted = Math.max(tolerance, Math.abs(baseline) * 5e-14);
+    if (!Number.isFinite(error) || error > permitted) throw new Error(`Displacement magnitude differs at ${atom}: GPU ${observed}, CPU ${baseline}.`);
+    magnitudeMaxError = Math.max(magnitudeMaxError, error);
+    if (baseline !== 0) maxRelativeError = Math.max(maxRelativeError, error / Math.abs(baseline));
+  }
+  const magnitudes = { maxAbsoluteError: magnitudeMaxError, maxRelativeError, nanAtoms };
+  compareGpuArrays(actual.referenceMapping, expected.referenceMapping, 0, 'displacement ID mapping');
+  for (const name of ['matched', 'unmatched', 'minimumImage', 'mappingMode']) {
+    if (actual[name] !== expected[name]) throw new Error(`Displacement ${name} differs: GPU ${actual[name]}, CPU ${expected[name]}.`);
+  }
+  return { maxAbsoluteError: Math.max(vectors.maxAbsoluteError, magnitudes.maxAbsoluteError), vectors, magnitudes };
+}
+
 /** GPU transfer paths must copy inputs rather than detach or rewrite source
  * arrays; compare raw bytes to preserve NaNs, -0, and original precision. */
 export function snapshotGpuInputs(frame, parameters = {}) {
@@ -58,11 +101,13 @@ export function snapshotGpuInputs(frame, parameters = {}) {
   const remember = (name, values) => {
     if (ArrayBuffer.isView(values)) arrays.push({ name, values, bytes: Uint8Array.from(new Uint8Array(values.buffer, values.byteOffset, values.byteLength)) });
   };
-  for (const name of ['fractional', 'positions', 'unwrapped', 'ids', 'types']) remember(name, frame[name]);
-  for (const name of ['referenceFractional', 'referenceMapping', 'structureInput']) remember(name, parameters[name]);
-  for (const name of ['fractional', 'positions', 'ids', 'types']) remember(`referenceFrame.${name}`, parameters.referenceFrame?.[name]);
+  for (const name of ['fractional', 'positions', 'unwrappedPositions', 'unwrapped', 'ids', 'types']) remember(name, frame[name]);
+  for (const name of ['referenceFractional', 'referenceMapping', 'structureInput', 'currentPositions', 'referencePositions']) remember(name, parameters[name]);
+  for (const name of ['fractional', 'positions', 'unwrappedPositions', 'ids', 'types']) remember(`referenceFrame.${name}`, parameters.referenceFrame?.[name]);
   for (const [name, values] of Object.entries(parameters.ptmInput ?? {})) remember(`ptmInput.${name}`, values);
   remember('cell vectors', frame.cell?.vectors);
+  remember('cell origin', frame.cell?.origin);
+  remember('reference cell origin', parameters.referenceCell?.origin ?? parameters.referenceFrame?.cell?.origin);
   remember('reference cell vectors', parameters.referenceCell?.vectors);
   return () => {
     for (const { name, values, bytes } of arrays) {

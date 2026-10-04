@@ -7,6 +7,7 @@ import { calculateBonds } from '../analysis/bonds.js';
 import { calculateRdf } from '../analysis/rdf.js';
 import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLocalShear } from '../analysis/local-shear.js';
 import { calculateReferenceStrain } from '../analysis/reference-strain.js';
+import { calculatePreparedDisplacements } from '../analysis/displacement.js';
 
 self.addEventListener('message', async ({ data }) => {
   const { id, fractional, cell, kind, types, ...parameters } = data;
@@ -41,6 +42,14 @@ self.addEventListener('message', async ({ data }) => {
       result = calculateRdf(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'referenceStrain') {
       result = calculateReferenceStrain(frame, { ...parameters, onPhase, onAtoms });
+    } else if (kind === 'displacement') {
+      onPhase('analyzing');
+      const calculated = calculatePreparedDisplacements(frame, parameters,
+        { onProgress: update => onAtoms(update.completed, update.total) });
+      // The pool already owns this immutable mapping. Returning a shared
+      // worker copy would duplicate it or transfer a SharedArrayBuffer.
+      const { referenceMapping: _mapping, ...partial } = calculated;
+      result = partial;
     } else if (kind === 'localShearCoordination') {
       result = calculateLocalShearCoordination(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'localShearMetrics') {

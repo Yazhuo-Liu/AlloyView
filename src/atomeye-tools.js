@@ -9,7 +9,7 @@ import { createReferenceMappingAsync, REFERENCE_STRAIN_FIELDS } from './analysis
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
 import { measureAtoms } from './measurements.js';
 import { createImageArchive, downloadBlob } from './export-archive.js';
-import { computeDisplacements } from './analysis/displacement.js';
+import { prepareDisplacements } from './analysis/displacement.js';
 import { registerVectorProperties, vectorPropertyNames } from './analysis/vector-properties.js';
 import { availableVectorSources, linkedArrowDimensions } from './vector-settings.js';
 
@@ -60,7 +60,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     displacement.request++; displacement.controller?.abort(); displacement.controller = null;
   }
   function resultKey(kind, parameters, gpuRequested = pool.gpuEnabled) {
-    return JSON.stringify(['rdf', 'localShear', 'bonds', 'referenceStrain'].includes(kind)
+    return JSON.stringify(['rdf', 'localShear', 'bonds', 'referenceStrain', 'displacement'].includes(kind)
       ? { ...parameters, gpuRequested } : parameters);
   }
   function cancel(kind, { redraw = true } = {}) {
@@ -323,6 +323,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     $('displacement-state').classList.toggle('ready', text === 'Calculated');
     $('run-displacement').disabled = !getFrame() || text === 'Calculating…';
     $('cancel-displacement').disabled = !getFrame() || !displacement.enabled;
+    if (text !== 'Calculated') $('displacement-status').removeAttribute('title');
     if (status) $('displacement-status').textContent = status;
   }
   function clearDisplacementResults() {
@@ -365,7 +366,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       const controller = new AbortController(), request = ++displacement.request;
       displacement.controller = controller;
       const source = getSourceVersion(), token = generation, colorChoice = getColorChoiceVersion();
-      const parameters = { ...displacement.parameters }, key = JSON.stringify(parameters);
+      const parameters = { ...displacement.parameters }, key = resultKey('displacement', parameters);
       const current = () => displacement.enabled && request === displacement.request && frame === getFrame()
         && source === getSourceVersion() && token === generation && !controller.signal.aborted;
       displacementState('Calculating…', `Calculating displacement from frame ${parameters.referenceFrame + 1}…`);
@@ -376,16 +377,23 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
           const reference = parameters.referenceFrame === getFrameIndex() ? frame : await getFrameAt(parameters.referenceFrame);
           if (!current()) return;
           if (!reference) throw new Error('The displacement reference frame is no longer available.');
-          const result = await computeDisplacements(frame, reference, { minimumImage: parameters.minimumImage, signal: controller.signal,
-            onProgress: ({ completed, total }) => { if (current()) $('displacement-status').textContent = `Calculating displacement… ${completed} / ${total} atoms`; } });
+          const prepared = await prepareDisplacements(frame, reference, { minimumImage: parameters.minimumImage, signal: controller.signal,
+            onProgress: ({ completed, total }) => { if (current()) $('displacement-status').textContent = `Matching atom IDs… ${completed} / ${total}`; } });
           if (!current()) return;
-          cached = { key, result }; frame.atomeyeResults ??= {}; frame.atomeyeResults.displacement = cached;
+          const result = await pool.analyze(frame, { kind: 'displacement', ...prepared, referenceFrameIndex: parameters.referenceFrame },
+            { signal: controller.signal, frameIndex: getFrameIndex(), onProgress: progress => {
+              if (current()) $('displacement-status').textContent = analysisProgressText(progress, { frameIndex: getFrameIndex(), kind: 'displacement' });
+            } });
+          if (!current()) return;
+          cached = { key: resultKey('displacement', parameters, result.gpuRequested), result };
+          frame.atomeyeResults ??= {}; frame.atomeyeResults.displacement = cached;
         }
         if (!current()) return;
-        const { vectors, unmatched = 0, mappingMode = 'id' } = cached.result;
-        registerVectorProperties(frame, { mode: 'displacement', vectors });
+        const { vectors, magnitudes, unmatched = 0, mappingMode = 'id' } = cached.result;
+        registerVectorProperties(frame, { mode: 'displacement', vectors, magnitudes });
         configureVectorSelectors(frame);
-        displacementState('Calculated', `${(frame.ids.length - unmatched).toLocaleString()} atoms calculated. Displacement X, Y, Z and magnitude are available in Color by and Vector arrows.${unmatched ? ` ${unmatched.toLocaleString()} unmatched IDs have NaN.` : ''}${mappingMode === 'row-order' ? ' No explicit IDs: matching by row order requires consistent atom ordering.' : ''}`);
+        displacementState('Calculated', `${(frame.ids.length - unmatched).toLocaleString()} atoms calculated · ${analysisBackendLabel(cached.result)}${Number.isFinite(cached.result.elapsedMs) ? ` · ${Math.round(cached.result.elapsedMs).toLocaleString()} ms` : ''}. Displacement X, Y, Z and magnitude are available in Color by and Vector arrows.${unmatched ? ` ${unmatched.toLocaleString()} unmatched IDs have NaN.` : ''}${mappingMode === 'row-order' ? ' No explicit IDs: matching by row order requires consistent atom ordering.' : ''}`);
+        $('displacement-status').title = analysisBackendDetails(cached.result);
         if (!automatic && colorChoice === getColorChoiceVersion()) chooseProperty('displacementMagnitude');
         else refresh();
         onMemoryChange(frame); updateVectors();

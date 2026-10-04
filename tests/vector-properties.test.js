@@ -73,9 +73,25 @@ test('invalid vector shapes and unsupported modes fail before modifying frame pr
   assert.throws(() => registerVectorProperties(frame, { mode: 'unknown', vectors: new Float32Array(6) }), /Unknown vector source/);
   assert.throws(() => vectorPropertyNames('constructor'), /Unknown vector source/);
   assert.throws(() => registerVectorProperties(frame, { mode: 'force', vectors: new Float32Array(6), unit: null }), /units must be a string/);
+  assert.throws(() => registerVectorProperties(frame, { mode: 'displacement', vectors: new Float32Array(6), magnitudes: [0] }), /one value per atom/);
   assert.deepEqual(frame.properties, []);
   assert.equal(frame.vectorPropertyResults, undefined);
   assert.deepEqual(vectorPropertyNames('generic'), { x: 'vectorX', y: 'vectorY', z: 'vectorZ', magnitude: 'vectorMagnitude' });
+});
+
+test('precomputed GPU magnitudes retain large finite values and invalid vector masks', () => {
+  const frame = frameWithAtoms(4);
+  const vectors = new Float32Array([3, -4, 12, 3e38, 3e38, 3e38, NaN, 1, 2, 0, 0, 0]);
+  const magnitudes = new Float64Array([13, Math.hypot(...vectors.subarray(3, 6)), 5, 0]);
+  const original = [...magnitudes];
+  registerVectorProperties(frame, { mode: 'displacement', vectors, magnitudes });
+  const values = property(frame, 'displacementMagnitude').data;
+  assert.equal(values[0], 13);
+  assert.equal(values[1], magnitudes[1]);
+  assert.ok(values[1] > 3.4028234663852886e38);
+  assert.ok(Number.isNaN(values[2]));
+  assert.equal(values[3], 0);
+  assert.deepEqual([...magnitudes], original);
 });
 
 test('frame memory estimates count derived Float64 fields and imported backups without retaining repeated results', () => {

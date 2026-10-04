@@ -22,7 +22,9 @@ function cacheState() {
   for (const frameId of frames.keys()) if (!resident.has(frameId)) frames.delete(frameId);
   // The client may omit a payload only if both its f64 input and GPU upload exist.
   const cachedFrameIds = cacheStatus.cachedFrameIds.filter(frameId => frames.has(frameId));
-  return { cacheStatus: { ...cacheStatus, cachedFrameIds }, cachedFrameIds };
+  const cachedCartesianFrames = [...runtime.frames].filter(([frameId]) => frames.has(frameId))
+    .map(([frameId, frame]) => ({ frameId, variants: [...(frame.cartesian?.keys() ?? [])] }));
+  return { cacheStatus: { ...cacheStatus, cachedFrameIds }, cachedFrameIds, cachedCartesianFrames };
 }
 
 async function run(data, controller) {
@@ -53,7 +55,7 @@ async function run(data, controller) {
     const frame = frames.get(data.frameId);
     if (!frame) throw new Error('The GPU frame cache was released; retry this request with its input frame.');
     let referenceFrame, parameters = data.parameters;
-    if (data.type === 'analyze' && parameters.kind === 'referenceStrain') {
+    if (data.type === 'analyze' && ['referenceStrain', 'displacement'].includes(parameters.kind)) {
       if (data.referenceFrame) frames.set(data.referenceFrameId, data.referenceFrame);
       referenceFrame = frames.get(data.referenceFrameId);
       if (!referenceFrame) throw new Error('The GPU reference frame cache was released; retry this request with its reference input.');
@@ -63,14 +65,40 @@ async function run(data, controller) {
     if (data.type === 'analyze' && Number.isInteger(data.frameIndex)) runtime.configureCache({ currentIndex: data.frameIndex });
     if (data.type === 'analyze') releasePins = runtime.pinFrames([frame, referenceFrame]);
     const previousUploads = runtime.inputUploads;
-    await runtime.uploadFrame(frame, { signal: controller.signal, frameIndex: data.frameIndex });
-    if (referenceFrame) await runtime.uploadFrame(referenceFrame, { signal: controller.signal, frameIndex: data.referenceFrameIndex });
+    if (parameters?.kind === 'displacement') {
+      const variant = parameters.minimumImage === false ? 'unwrapped-cartesian' : 'cartesian';
+      for (const [source, name] of [[frame, 'currentPositions'], [referenceFrame, 'referencePositions']]) {
+        source.cartesianPositions ??= new Map();
+        if (parameters[name] !== undefined) source.cartesianPositions.set(variant, parameters[name]);
+        const positions = source.cartesianPositions.get(variant);
+        if (!positions) throw new Error('The GPU Cartesian coordinate cache was released; retry with its source positions.');
+        parameters = { ...parameters, [name]: positions };
+      }
+      await runtime.prepareCartesianFrame(frame, parameters.currentPositions,
+        { signal: controller.signal, frameIndex: data.frameIndex, variant });
+      await runtime.prepareCartesianFrame(referenceFrame, parameters.referencePositions,
+        { signal: controller.signal, frameIndex: data.referenceFrameIndex, variant });
+    } else {
+      await runtime.uploadFrame(frame, { signal: controller.signal, frameIndex: data.frameIndex });
+      if (referenceFrame) await runtime.uploadFrame(referenceFrame, { signal: controller.signal, frameIndex: data.referenceFrameIndex });
+    }
     const analyze = () => runtime.withErrors(async () => {
       if (parameters.kind === 'coordination') return analyzeGpuCoordination(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
       if (parameters.kind === 'rdf') return analyzeGpuRdf(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
       if (parameters.kind === 'cna') {
         const { analyzeGpuCna } = await import('./cna.js');
-        return analyzeGpuCna(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+        const result = await analyzeGpuCna(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+        checkSignal(controller.signal);
+        if ((parameters.mode ?? 'adaptive') === 'adaptive') runtime.cacheAdaptiveCna(frame, result.structures);
+        return result;
+      }
+      if (parameters.kind === 'centrosymmetry') {
+        const { analyzeGpuCentrosymmetry } = await import('./centrosymmetry.js');
+        return analyzeGpuCentrosymmetry(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+      }
+      if (parameters.kind === 'displacement') {
+        const { analyzeGpuDisplacement } = await import('./displacement.js');
+        return analyzeGpuDisplacement(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
       }
       if (parameters.kind === 'referenceStrain') {
         const { analyzeGpuReferenceStrain } = await import('./reference-strain.js');
@@ -110,7 +138,9 @@ async function run(data, controller) {
     const buffers = [...new Set(Object.values(result).filter(ArrayBuffer.isView).map((value) => value.buffer))];
     self.postMessage({ id: data.id, ok: true, result: { ...result, backend: 'gpu',
       engine: parameters.kind === 'strain' ? 'webgpu-strain-tensor' : parameters.kind === 'cna' ? `webgpu-cna-${parameters.mode ?? 'adaptive'}`
-        : parameters.kind === 'referenceStrain' ? 'webgpu-reference-strain' : 'webgpu', workerCount: 1,
+        : parameters.kind === 'referenceStrain' ? 'webgpu-reference-strain'
+          : parameters.kind === 'centrosymmetry' ? `webgpu-centrosymmetry-${parameters.mode ?? 'manual'}`
+            : parameters.kind === 'displacement' ? 'webgpu-displacement' : 'webgpu', workerCount: 1,
       sharedMemory: false, elapsedMs: performance.now() - startedAt, adapter: runtime.adapterInfo,
       inputReused: !data.frame, ...(referenceFrame ? { referenceInputReused: !data.referenceFrame } : {}),
       gpuInputReused: runtime.inputUploads === previousUploads }, ...cacheState() }, buffers);

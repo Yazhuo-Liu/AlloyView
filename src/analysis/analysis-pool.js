@@ -12,7 +12,7 @@ const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1]
   deformation: [Float64Array, 9], distances: [Float32Array, 1] };
 const STRAIN_OUTPUT_FIELDS = Object.fromEntries(['atomicShearStrain', 'atomicHydrostaticStrain', 'atomicVolumeChange',
   'strainE11', 'strainE22', 'strainE33', 'strainE12', 'strainE13', 'strainE23'].map((name) => [name, [Float32Array, 1]]));
-const INPUT_ARRAY_FIELDS = ['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput'];
+const INPUT_ARRAY_FIELDS = ['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput', 'currentPositions', 'referencePositions'];
 const EXTRA_OUTPUT_FIELDS = {
   bonds: { coordination: [Uint32Array, 1] },
   rdf: {},
@@ -20,6 +20,7 @@ const EXTRA_OUTPUT_FIELDS = {
   localShearMetrics: { metrics: [Float64Array, 6] },
   localShearFinalize: { localShear: [Float32Array, 1] },
   referenceStrain: Object.fromEntries(REFERENCE_STRAIN_FIELDS.map((name) => [name, [Float32Array, 1]])),
+  displacement: { vectors: [Float32Array, 3], magnitudes: [Float64Array, 1] },
 };
 
 export function chooseWorkerCount(atomCount, coordinateBytes, environment = globalThis, targetAtoms = 50_000) {
@@ -136,6 +137,9 @@ export class AnalysisPool {
     // reference frame to every CPU worker would duplicate its cached arrays.
     delete inputs.referenceFrame;
     delete inputs.referenceFrameIndex;
+    // Prepared displacement uses authoritative Cartesian arrays and the
+    // current metric; reference fractions/cell only identify the GPU cache.
+    if (parameters.kind === 'displacement') { delete inputs.referenceFractional; delete inputs.referenceCell; }
     const autoCentrosymmetry = parameters.kind === 'centrosymmetry' && parameters.mode === 'auto';
     if (parameters.structureInput !== undefined) {
       if (!autoCentrosymmetry || !(parameters.structureInput instanceof Uint8Array)
@@ -149,7 +153,7 @@ export class AnalysisPool {
       if (!ArrayBuffer.isView(frame.types) || frame.types.length !== atomCount) throw new Error('Analysis requires one element type per atom.');
       extraBytes += frame.types.byteLength;
     }
-    for (const name of ['referenceFractional', 'referenceMapping', 'metricInput']) {
+    for (const name of ['referenceFractional', 'referenceMapping', 'metricInput', 'currentPositions', 'referencePositions']) {
       if (inputs[name]) {
         if (!ArrayBuffer.isView(inputs[name])) throw new Error(`Analysis ${name} must be a typed array.`);
         extraBytes += inputs[name].byteLength;
@@ -170,7 +174,7 @@ export class AnalysisPool {
     const outputBytesPerAtom = Object.values(outputFields).reduce((sum, [Type, stride]) => sum + Type.BYTES_PER_ELEMENT * stride, 0);
     const workerCount = Math.min(this.limit, chooseWorkerCount(atomCount,
       (sharedMemory ? 0 : frame.fractional.byteLength + extraBytes) + atomCount * (48 + outputBytesPerAtom), this.environment,
-      parameters.kind === 'coordination' || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000 : 4_096));
+      ['coordination', 'displacement'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000 : 4_096));
     const controller = new AbortController();
     this.controllers.add(controller);
     const abort = () => controller.abort();
@@ -275,6 +279,12 @@ export class AnalysisPool {
           for (const partial of partials) for (let component = 0; component < 6; component += 1) metricSum[component] += partial.metricSum[component];
           return { ...metadata, ...values, metricSum, normalizationSum: partials.reduce((sum, partial) => sum + partial.normalizationSum, 0),
             normalizationParticipants: partials.reduce((sum, partial) => sum + partial.normalizationParticipants, 0) };
+        }
+        if (parameters.kind === 'displacement') {
+          const matched = partials.reduce((sum, partial) => sum + partial.matched, 0);
+          return { ...metadata, ...values, matched, unmatched: atomCount - matched,
+            referenceMapping: parameters.referenceMapping, mappingMode: parameters.mappingMode,
+            minimumImage: parameters.minimumImage, warning: null };
         }
         return { ...metadata, ...values, incomplete: partials.reduce((sum, partial) => sum + (partial.incomplete ?? 0), 0), warning: null };
       }

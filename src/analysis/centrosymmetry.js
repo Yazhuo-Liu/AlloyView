@@ -95,7 +95,8 @@ export function calculateCentrosymmetry(frame, {
     incomplete, startAtom, endAtom, elapsedMs: performance.now() - startedAt };
 }
 
-function normalizedCentrosymmetry(shell) {
+/** Exact reference for a bounded GPU correction or standalone local shell. */
+export function normalizedCentrosymmetry(shell) {
   const denominator = 2 * shell.reduce((sum, n) => sum + n.distanceSquared, 0);
   if (denominator <= 0) return NaN;
   const used = new Uint8Array(shell.length);
