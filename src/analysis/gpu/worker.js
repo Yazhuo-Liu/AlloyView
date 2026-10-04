@@ -1,4 +1,4 @@
-import { GpuRuntime, checkSignal } from './runtime.js';
+import { GpuRuntime, checkSignal, GpuUnavailableError } from './runtime.js';
 import { analyzeGpuCoordination } from './coordination.js';
 import { analyzeGpuRdf } from './rdf.js';
 
@@ -24,12 +24,14 @@ function cacheState() {
   const cachedFrameIds = cacheStatus.cachedFrameIds.filter(frameId => frames.has(frameId));
   const cachedCartesianFrames = [...runtime.frames].filter(([frameId]) => frames.has(frameId))
     .map(([frameId, frame]) => ({ frameId, variants: [...(frame.cartesian?.keys() ?? [])] }));
-  return { cacheStatus: { ...cacheStatus, cachedFrameIds }, cachedFrameIds, cachedCartesianFrames };
+  const cachedPtmFits = [...runtime.frames].filter(([frameId, frame]) => frame.ptm?.fitId !== undefined
+    && frames.get(frameId)?.ptmFit?.id === frame.ptm.fitId).map(([frameId, frame]) => ({ frameId, fitId: frame.ptm.fitId }));
+  return { cacheStatus: { ...cacheStatus, cachedFrameIds }, cachedFrameIds, cachedCartesianFrames, cachedPtmFits };
 }
 
 async function run(data, controller) {
   const startedAt = performance.now();
-  let releasePins;
+  let releasePins, activeFrame, newPtmFitId;
   const progress = (update) => self.postMessage({ id: data.id, progress: { ...update, backend: 'gpu', workerCount: 1 } });
   try {
     checkSignal(controller.signal);
@@ -53,7 +55,9 @@ async function run(data, controller) {
     await runtime.initialize(controller.signal);
     if (data.frame) frames.set(data.frameId, data.frame);
     const frame = frames.get(data.frameId);
+    activeFrame = frame;
     if (!frame) throw new Error('The GPU frame cache was released; retry this request with its input frame.');
+    if (Number.isInteger(data.frameIndex)) frame.gpuFrameIndex = data.frameIndex;
     let referenceFrame, parameters = data.parameters;
     if (data.type === 'analyze' && ['referenceStrain', 'displacement'].includes(parameters.kind)) {
       if (data.referenceFrame) frames.set(data.referenceFrameId, data.referenceFrame);
@@ -64,6 +68,17 @@ async function run(data, controller) {
     }
     if (data.type === 'analyze' && Number.isInteger(data.frameIndex)) runtime.configureCache({ currentIndex: data.frameIndex });
     if (data.type === 'analyze') releasePins = runtime.pinFrames([frame, referenceFrame]);
+    if (parameters?.kind === 'strain' && parameters.ptmFitId !== undefined) {
+      if (!Number.isInteger(parameters.ptmFitId) || parameters.ptmFitId < 1) throw new Error('The GPU PTM fit identifier is invalid.');
+      if (parameters.ptmInput) {
+        if (parameters.ptmTypes) frame.types = parameters.ptmTypes;
+        if (frame.ptmFit?.id !== parameters.ptmFitId) newPtmFitId = parameters.ptmFitId;
+        frame.ptmFit = { id: parameters.ptmFitId, input: { ...parameters.ptmInput,
+          revision: parameters.ptmRevision, gpuFitId: parameters.ptmFitId } };
+      }
+      if (frame.ptmFit?.id !== parameters.ptmFitId) throw new GpuUnavailableError('The GPU PTM fit cache was released; retry with its source arrays.');
+      parameters = { ...parameters, ptmInput: frame.ptmFit.input };
+    }
     const previousUploads = runtime.inputUploads;
     if (parameters?.kind === 'displacement') {
       const variant = parameters.minimumImage === false ? 'unwrapped-cartesian' : 'cartesian';
@@ -78,13 +93,17 @@ async function run(data, controller) {
         { signal: controller.signal, frameIndex: data.frameIndex, variant });
       await runtime.prepareCartesianFrame(referenceFrame, parameters.referencePositions,
         { signal: controller.signal, frameIndex: data.referenceFrameIndex, variant });
-    } else {
+    } else if (parameters?.kind !== 'strain') {
       await runtime.uploadFrame(frame, { signal: controller.signal, frameIndex: data.frameIndex });
       if (referenceFrame) await runtime.uploadFrame(referenceFrame, { signal: controller.signal, frameIndex: data.referenceFrameIndex });
     }
     const analyze = () => runtime.withErrors(async () => {
       if (parameters.kind === 'coordination') return analyzeGpuCoordination(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
       if (parameters.kind === 'rdf') return analyzeGpuRdf(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+      if (parameters.kind === 'ptmNeighbors') {
+        const { analyzeGpuPtmNeighbors } = await import('./ptm-neighbors.js');
+        return analyzeGpuPtmNeighbors(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+      }
       if (parameters.kind === 'cna') {
         const { analyzeGpuCna } = await import('./cna.js');
         const result = await analyzeGpuCna(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
@@ -137,14 +156,19 @@ async function run(data, controller) {
     }
     const buffers = [...new Set(Object.values(result).filter(ArrayBuffer.isView).map((value) => value.buffer))];
     self.postMessage({ id: data.id, ok: true, result: { ...result, backend: 'gpu',
-      engine: parameters.kind === 'strain' ? 'webgpu-strain-tensor' : parameters.kind === 'cna' ? `webgpu-cna-${parameters.mode ?? 'adaptive'}`
+      engine: parameters.kind === 'strain' ? 'webgpu-strain-tensor' : parameters.kind === 'ptmNeighbors' ? 'webgpu-ptm-neighbors' : parameters.kind === 'cna' ? `webgpu-cna-${parameters.mode ?? 'adaptive'}`
         : parameters.kind === 'referenceStrain' ? 'webgpu-reference-strain'
           : parameters.kind === 'centrosymmetry' ? `webgpu-centrosymmetry-${parameters.mode ?? 'manual'}`
             : parameters.kind === 'displacement' ? 'webgpu-displacement' : 'webgpu', workerCount: 1,
       sharedMemory: false, elapsedMs: performance.now() - startedAt, adapter: runtime.adapterInfo,
       inputReused: !data.frame, ...(referenceFrame ? { referenceInputReused: !data.referenceFrame } : {}),
+      ...(parameters.kind === 'strain' ? { ptmInputReused: data.parameters.ptmFitId !== undefined && !data.parameters.ptmInput } : {}),
       gpuInputReused: runtime.inputUploads === previousUploads }, ...cacheState() }, buffers);
   } catch (error) {
+    if (error.name === 'AbortError' && newPtmFitId !== undefined && activeFrame) {
+      runtime.clearPtmBuffers(activeFrame, newPtmFitId);
+      if (activeFrame.ptmFit?.id === newPtmFitId) delete activeFrame.ptmFit;
+    }
     if (data.type === 'analyze') { releasePins?.(); releasePins = null; runtime.finishAnalysis(); }
     self.postMessage({ id: data.id, ok: false, error: error.message || String(error), name: error.name, ...cacheState() });
   } finally { releasePins?.(); controllers.delete(data.id); }

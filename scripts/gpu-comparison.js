@@ -94,6 +94,36 @@ export function compareGpuDisplacements(actual, expected, tolerance = 2e-6) {
   return { maxAbsoluteError: Math.max(vectors.maxAbsoluteError, magnitudes.maxAbsoluteError), vectors, magnitudes };
 }
 
+/** PTM consumes exact ordered Cartesian rows; compare every valid neighbor
+ * and all original source indices rather than accepting equivalent distances. */
+export function compareGpuPreparedNeighbors(actual, expected) {
+  if (!(actual.counts instanceof Uint8Array) || !(actual.indices instanceof Uint32Array)
+      || !(actual.vectors instanceof Float64Array) || actual.maxNeighbors !== 18) {
+    throw new Error('GPU PTM preparation must return Uint8 counts, Uint32 indices and Float64 Cartesian vectors.');
+  }
+  compareGpuArrays(actual.counts, expected.counts, 0, 'PTM neighbor counts');
+  if (actual.startAtom !== expected.startAtom || actual.endAtom !== expected.endAtom
+      || actual.indices.length !== actual.counts.length * 18 || actual.vectors.length !== actual.counts.length * 54) {
+    throw new Error('GPU PTM neighbor table range or lengths differ.');
+  }
+  let comparedNeighbors = 0;
+  for (let atom = 0; atom < actual.counts.length; atom++) for (let neighbor = 0; neighbor < actual.counts[atom]; neighbor++) {
+    const index = atom * 18 + neighbor;
+    if (actual.indices[index] !== expected.indices[index]) throw new Error(`PTM neighbor ordering differs at atom ${atom}, neighbor ${neighbor}.`);
+    for (let axis = 0; axis < 3; axis++) if (actual.vectors[index * 3 + axis] !== expected.vectors[index * 3 + axis]) {
+      throw new Error(`PTM Float64 neighbor vector differs at atom ${atom}, neighbor ${neighbor}, axis ${axis}.`);
+    }
+    comparedNeighbors++;
+  }
+  return { maxAbsoluteError: 0, comparedNeighbors };
+}
+
+export function compareGpuPtm(actual, expected, tolerance = 2e-12) {
+  const fields = Object.fromEntries(['structures', 'rmsd', 'scales', 'deformation', 'distances'].map(name => [name,
+    compareGpuArrays(actual[name], expected[name], name === 'structures' ? 0 : tolerance, `PTM ${name}`)]));
+  return { maxAbsoluteError: Math.max(...Object.values(fields).map(error => error.maxAbsoluteError)), fields };
+}
+
 /** GPU transfer paths must copy inputs rather than detach or rewrite source
  * arrays; compare raw bytes to preserve NaNs, -0, and original precision. */
 export function snapshotGpuInputs(frame, parameters = {}) {
@@ -105,6 +135,7 @@ export function snapshotGpuInputs(frame, parameters = {}) {
   for (const name of ['referenceFractional', 'referenceMapping', 'structureInput', 'currentPositions', 'referencePositions']) remember(name, parameters[name]);
   for (const name of ['fractional', 'positions', 'unwrappedPositions', 'ids', 'types']) remember(`referenceFrame.${name}`, parameters.referenceFrame?.[name]);
   for (const [name, values] of Object.entries(parameters.ptmInput ?? {})) remember(`ptmInput.${name}`, values);
+  for (const [name, values] of Object.entries(parameters.preparedNeighbors ?? {})) remember(`preparedNeighbors.${name}`, values);
   remember('cell vectors', frame.cell?.vectors);
   remember('cell origin', frame.cell?.origin);
   remember('reference cell origin', parameters.referenceCell?.origin ?? parameters.referenceFrame?.cell?.origin);

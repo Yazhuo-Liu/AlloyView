@@ -1,83 +1,145 @@
-import { STRAIN_FIELDS, referenceFactors } from '../atomic-strain.js';
+import { STRAIN_FIELDS } from '../atomic-strain.js';
 import { validateReferences } from '../lattice.js';
 import { atomRange } from '../neighbors.js';
 import { GpuUnavailableError, checkSignal, yieldWorker } from './runtime.js';
 import { ATOMIC_STRAIN_SHADER } from './atomic-strain-shaders.js';
 
-/** GPU elastic tensor evaluation from CPU PTM correspondences. PTM fitting
- * remains in the CPU worker pool; this kernel restores absolute lattice scale
- * and calculates E=(FᵀF-I)/2 plus its nine displayed fields.
+export const PTM_SCALE_INVALID = 1;
+export const PTM_DEFORMATION_INVALID = 2;
+export const PTM_SCALE_ENCODING_UNSUPPORTED = 4;
+export const PTM_DEFORMATION_ENCODING_UNSUPPORTED = 8;
+export const PTM_ENCODING_UNSUPPORTED = 12;
+const F32_MIN_NORMAL = 2 ** -126;
+
+/** The GPU selects the element reference, validates each PTM phase, restores
+ * its absolute lattice scale and evaluates E=(FᵀF-I)/2. PTM topology/fitting
+ * and source-array encoding remain separate stages.
  */
 export async function analyzeGpuAtomicStrain(runtime, frame, parameters = {}, { signal, onProgress = () => {} } = {}) {
   const atomCount = frame.fractional.length / 3;
   const { startAtom, endAtom } = atomRange(atomCount, parameters);
   const count = endAtom - startAtom;
   checkSignal(signal);
-  onProgress({ backend: 'gpu', stage: 'strain-tensor', phase: 'preparing', completedAtoms: 0, totalAtoms: count });
-  const inputs = await prepareGpuStrainInput(frame, parameters, { signal });
+  validateGpuPtmInput(frame, parameters);
+  onProgress({ backend: 'gpu', stage: 'strain-reference', phase: 'preparing', completedAtoms: 0, totalAtoms: count });
+  const referenceTable = prepareGpuReferenceTable(frame, parameters.references);
   await runtime.initialize(signal);
   const buffers = [];
   const own = buffer => { buffers.push(buffer); return buffer; };
+  const releasePins = runtime.pinFrames?.([frame]);
   try {
-    const config = own(runtime.storageBuffer(new Uint32Array([count, startAtom, 0x7fc00000, 0])));
-    const valid = own(runtime.storageBuffer(inputs.valid));
-    const factors = own(runtime.storageBuffer(inputs.factors));
-    const deformation = own(runtime.storageBuffer(inputs.deformation));
+    let ptm;
+    if (runtime.preparePtmBuffers) {
+      ptm = await runtime.preparePtmBuffers(frame, parameters.ptmInput, prepareGpuPtmInput, { signal });
+    } else {
+      const inputs = await prepareGpuPtmInput(frame, parameters.ptmInput, { signal });
+      ptm = { typesBuffer: own(runtime.storageBuffer(inputs.types)), metadataBuffer: own(runtime.storageBuffer(inputs.metadata)),
+        scalesBuffer: own(runtime.storageBuffer(inputs.scales)), deformationBuffer: own(runtime.storageBuffer(inputs.deformation)), reused: false };
+    }
+    checkSignal(signal);
+    const config = own(runtime.storageBuffer(new Uint32Array([count, startAtom, 0x7fc00000, referenceTable.length / 8])));
+    const references = own(runtime.storageBuffer(referenceTable));
     const output = own(runtime.createBuffer(count * STRAIN_FIELDS.length * Float32Array.BYTES_PER_ELEMENT));
     const diagnostics = own(runtime.createBuffer(8));
-    onProgress({ backend: 'gpu', stage: 'strain-tensor', phase: 'analyzing', completedAtoms: 0, totalAtoms: count });
-    await runtime.run(ATOMIC_STRAIN_SHADER, [config, valid, factors, deformation, output, diagnostics], count, { signal, batchSize: 0 });
+    onProgress({ backend: 'gpu', stage: 'strain-reference', phase: 'analyzing', completedAtoms: 0, totalAtoms: count });
+    await runtime.run(ATOMIC_STRAIN_SHADER,
+      [config, ptm.typesBuffer, ptm.metadataBuffer, ptm.scalesBuffer, ptm.deformationBuffer, references, output, diagnostics],
+      count, { signal, batchSize: 0 });
     const values = await runtime.read(output, Float32Array, count * STRAIN_FIELDS.length, { signal });
     const status = await runtime.read(diagnostics, Uint32Array, 2, { signal });
     checkSignal(signal);
-    if (status[1]) throw new GpuUnavailableError('The strain tensor exceeds the GPU floating-point range.');
-    onProgress({ backend: 'gpu', stage: 'strain-tensor', phase: 'complete', completedAtoms: count, totalAtoms: count });
+    if (status[1]) throw new GpuUnavailableError('The ideal lattice reference or PTM tensor exceeds the GPU floating-point precision range.');
+    onProgress({ backend: 'gpu', stage: 'strain-reference', phase: 'complete', completedAtoms: count, totalAtoms: count });
     return { ...Object.fromEntries(STRAIN_FIELDS.map((field, index) => [field, values.subarray(index * count, (index + 1) * count)])),
-      startAtom, endAtom, incomplete: status[0], warning: null, tensorBackend: 'gpu' };
-  } finally { runtime.disposeBuffers(buffers); }
+      startAtom, endAtom, incomplete: status[0], warning: null, referenceBackend: 'gpu', tensorBackend: 'gpu', gpuPtmInputReused: Boolean(ptm.reused) };
+  } finally { runtime.disposeBuffers(buffers); releasePins?.(); }
 }
 
-/** Reference conversion is identical to the CPU kernel. Encode, rather than
- * round away, Float64 residuals before doing the tensor arithmetic on GPU.
- */
-export async function prepareGpuStrainInput(frame, { references, ptmInput } = {}, { signal } = {}) {
+/** Validate scientific configuration before fitting/uploading any PTM data. */
+function validateGpuPtmInput(frame, { references, ptmInput }) {
   const count = frame.fractional.length / 3;
-  if (!ArrayBuffer.isView(frame.types) || frame.types.length !== count) throw new Error('Strain requires one element type per atom.');
+  if (!ArrayBuffer.isView(frame.types) || frame.types instanceof DataView || frame.types.length !== count) {
+    throw new Error('Strain requires one element type per atom.');
+  }
   validateReferences(references, frame.types);
+  validatePtmArrays(ptmInput, count);
+}
+
+function validatePtmArrays(ptmInput, count) {
   if (!ptmInput || !(ptmInput.structures instanceof Uint8Array) || ptmInput.structures.length !== count
     || !(ptmInput.scales instanceof Float64Array) || ptmInput.scales.length !== count
     || !(ptmInput.deformation instanceof Float64Array) || ptmInput.deformation.length !== count * 9) {
     throw new Error('GPU atomic strain requires complete cached PTM correspondences, scales, and deformation.');
   }
-  const valid = new Uint32Array(count), factors = new Float32Array(count * 4), deformation = new Float32Array(count * 18);
-  for (let atom = 0; atom < count; atom += 1) {
-    checkSignal(signal);
-    if (atom && atom % 16_384 === 0) { await yieldWorker(); checkSignal(signal); }
-    const structure = ptmInput.structures[atom], reference = references[frame.types[atom]], scale = ptmInput.scales[atom];
-    if (structure !== reference.structure || !Number.isFinite(scale) || scale === 0) continue;
-    const matrix = ptmInput.deformation.subarray(atom * 9, atom * 9 + 9);
-    if (matrix.some(value => !Number.isFinite(value))) continue;
-    const atomFactors = referenceFactors(structure, reference, scale);
-    // Bounded double-single arithmetic must not turn otherwise finite CPU
-    // tensors into a silently undefined GPU result.
-    for (let component = 0; component < 9; component += 1) {
-      const value = matrix[component] * atomFactors[component % 3];
-      if (!Number.isFinite(value) || Math.abs(value) > 1e8) {
-        throw new GpuUnavailableError('This PTM deformation exceeds the GPU strain precision range.');
-      }
-      encodeDouble(matrix[component], deformation, (atom * 9 + component) * 2);
-    }
-    encodeDouble(atomFactors[0], factors, atom * 4);
-    encodeDouble(atomFactors[2], factors, atom * 4 + 2);
-    valid[atom] = 1;
-  }
-  return { valid, factors, deformation };
 }
 
-function encodeDouble(value, destination, offset) {
+/** Pack immutable PTM sources only. Phase matching, reference selection, scale
+ * factors and absolute F are deliberately absent from this CPU upload step.
+ * Encoding flags let the shader distinguish undefined fits from valid inputs
+ * which require a CPU numeric-range fallback; original arrays stay intact.
+ */
+export async function prepareGpuPtmInput(frame, ptmInput, { signal } = {}) {
+  const count = frame.fractional.length / 3;
+  validatePtmArrays(ptmInput, count);
+  if (!ArrayBuffer.isView(frame.types) || frame.types instanceof DataView || frame.types.length !== count) {
+    throw new Error('Strain requires one element type per atom.');
+  }
+  checkSignal(signal);
+  const types = new Uint32Array(count), metadata = new Uint32Array(count * 2);
+  const scales = new Float32Array(count * 2), deformation = new Float32Array(count * 18);
+  for (let atom = 0; atom < count; atom += 1) {
+    if (atom && atom % 16_384 === 0) { await yieldWorker(); checkSignal(signal); }
+    const element = frame.types[atom];
+    if (!Number.isInteger(element) || element < 0 || element > 0xffff_ffff) {
+      throw new GpuUnavailableError('The strain element types cannot be represented exactly on this GPU backend.');
+    }
+    types[atom] = element;
+    metadata[atom * 2] = ptmInput.structures[atom];
+    let flags = encodeDouble(ptmInput.scales[atom], scales, atom * 2, PTM_SCALE_INVALID, PTM_SCALE_ENCODING_UNSUPPORTED);
+    for (let component = 0; component < 9; component += 1) {
+      flags |= encodeDouble(ptmInput.deformation[atom * 9 + component], deformation, (atom * 9 + component) * 2, PTM_DEFORMATION_INVALID, PTM_DEFORMATION_ENCODING_UNSUPPORTED);
+    }
+    metadata[atom * 2 + 1] = flags;
+  }
+  checkSignal(signal);
+  return { types, metadata, scales, deformation, bytes: types.byteLength + metadata.byteLength + scales.byteLength + deformation.byteLength };
+}
+
+/** Backward-compatible preparation entry point, now raw uploads plus a small
+ * per-element table rather than CPU-computed per-atom factors/validity masks.
+ */
+export async function prepareGpuStrainInput(frame, parameters = {}, options = {}) {
+  validateGpuPtmInput(frame, parameters);
+  return { ...await prepareGpuPtmInput(frame, parameters.ptmInput, options), referenceTable: prepareGpuReferenceTable(frame, parameters.references) };
+}
+
+/** Eight u32 words per entry: element, phase, encoding flags, padding, a high/
+ * low and c high/low. Sorted element IDs permit GPU binary reference lookup.
+ */
+export function prepareGpuReferenceTable(frame, references) {
+  const elements = [...new Set(frame.types)].sort((a, b) => a - b);
+  const table = new Uint32Array(elements.length * 8), floats = new Float32Array(table.buffer);
+  for (let index = 0; index < elements.length; index += 1) {
+    const element = elements[index], reference = references[element], offset = index * 8;
+    if (!Number.isInteger(element) || element < 0 || element > 0xffff_ffff) {
+      throw new GpuUnavailableError('The strain element types cannot be represented exactly on this GPU backend.');
+    }
+    table[offset] = element; table[offset + 1] = reference.structure;
+    table[offset + 2] = encodeDouble(reference.a, floats, offset + 4, PTM_SCALE_INVALID);
+    const hexagonal = reference.structure === 2 || reference.structure === 7;
+    table[offset + 2] |= encodeDouble(hexagonal ? reference.c : 1, floats, offset + 6, PTM_SCALE_INVALID);
+  }
+  return table;
+}
+
+function encodeDouble(value, destination, offset, invalidFlag, unsupportedFlag = PTM_SCALE_ENCODING_UNSUPPORTED) {
+  if (!Number.isFinite(value)) return invalidFlag;
   const high = Math.fround(value), low = Math.fround(value - high);
-  if (!Number.isFinite(high) || !Number.isFinite(low) || (value !== 0 && high === 0)) {
-    throw new GpuUnavailableError('This PTM input exceeds the GPU floating-point range.');
+  // Portable WGSL may flush f32 subnormals. Mark them unsupported instead of
+  // turning a finite CPU environment into an artificial zero/undefined fit.
+  if (!Number.isFinite(high) || !Number.isFinite(low) || (value !== 0 && Math.abs(high) < F32_MIN_NORMAL)) {
+    return unsupportedFlag;
   }
   destination[offset] = high; destination[offset + 1] = low;
+  return 0;
 }

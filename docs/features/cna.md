@@ -19,9 +19,9 @@ Fixed CNA requires exactly 12 or 14 neighbors inside the supplied cutoff. Adapti
 
 Other includes defective, surface, disordered or unsupported environments. CNA describes local geometry; it does not identify chemical ordering or uniquely determine crystal orientation.
 
-## GPU computing
+## GPU acceleration
 
-With **Enable GPU computing** on, both adaptive and fixed-cutoff CNA can run through WebGPU. The chosen shell convention, crystal labels, colors and visibility controls are the same as on CPU. GPU computing is off by default; unavailable or unsupported GPU execution falls back to the CPU Worker implementation. Switching the preference preserves completed results; click **Identify structure** again to calculate with the new preference.
+With **Enable GPU acceleration** on, both adaptive and fixed-cutoff CNA can run through WebGPU. The chosen shell convention, crystal labels, colors and visibility controls are the same as on CPU. GPU acceleration is on by default; unavailable or unsupported GPU execution falls back to the CPU Worker implementation. Switching the preference preserves completed results; click **Identify structure** again to calculate with the new preference.
 
 The GPU traverses linked-cell neighbors, keeps distinct periodic images and builds each atom's local common-neighbor graph. Fixed mode uses the supplied cutoff. Adaptive mode expands the search radius until its nearest-neighbor shell is complete, then evaluates the same twelve- and fourteen-neighbor shell formulas described above. Shell selection and graph classification run on the GPU; this includes adaptive CNA.
 

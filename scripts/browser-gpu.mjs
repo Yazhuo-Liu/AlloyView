@@ -3,22 +3,26 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { useSoftwareAdapter, withWebGpuBrowser } from './webgpu-browser.mjs';
 
 const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
+  if (process.argv.includes('--built-only')) return { adapter, scope: 'Versioned production ideal strain workers', builtIdeal: await runBuiltIdealChecks({ evaluate }) };
   if (process.argv.includes('--application-only')) return { adapter, scope: 'Application integration checks',
     application: await runApplicationSmoke({ evaluate, call }) };
   await evaluate(`(async () => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { crystalFrame } = await import('./tests/helpers/crystals.js');
     const { createCell, fractionalToCartesian } = await import('./src/data/model.js');
-    const { compareGpuBonds, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
-    const { cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures } = await import('./scripts/gpu-fixtures.js');
+    const { compareGpuBonds, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, compareGpuPreparedNeighbors, compareGpuPtm, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
+    const { cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures, idealStrainFixtures } = await import('./scripts/gpu-fixtures.js');
     const { prepareDisplacements } = await import('./src/analysis/displacement.js');
+    const { NeighborSearch } = await import('./src/analysis/neighbors.js');
+    const { calculatePtm } = await import('./src/analysis/ptm.js');
     const { STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
     const { REFERENCE_STRAIN_FIELDS } = await import('./src/analysis/reference-strain.js');
     window.gpuTests = { AnalysisPool, crystalFrame, createCell, fractionalToCartesian, compareGpuBonds, compareGpuFields,
-      compareGpuCentrosymmetry, compareGpuDisplacements, prepareDisplacements, snapshotGpuInputs,
-      cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures,
+      compareGpuCentrosymmetry, compareGpuDisplacements, compareGpuPreparedNeighbors, compareGpuPtm, prepareDisplacements, snapshotGpuInputs, NeighborSearch, calculatePtm,
+      cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures, idealStrainFixtures,
       STRAIN_FIELDS, REFERENCE_STRAIN_FIELDS, rows: [] };
     window.gpuTests.cpu = new AnalysisPool();
+    window.gpuTests.cpu.setGpuEnabled(false);
     window.gpuTests.gpu = new AnalysisPool();
     window.gpuTests.gpu.setGpuEnabled(true);
     window.gpuTests.check = (condition, message) => { if (!condition) throw new Error(message); };
@@ -38,9 +42,24 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
       }
       return maxAbsoluteError;
     };
+    window.gpuTests.cpuPreparedNeighbors = frame => {
+      const count = frame.fractional.length / 3, search = new NeighborSearch(frame);
+      const counts = new Uint8Array(count), indices = new Uint32Array(count * 18), vectors = new Float64Array(count * 54);
+      for (let atom = 0; atom < count; atom++) {
+        let neighbors = search.nearest(atom, 18);
+        if (neighbors.some(neighbor => neighbor.distanceSquared < 1e-20)) neighbors = [];
+        counts[atom] = neighbors.length;
+        neighbors.forEach((neighbor, index) => {
+          indices[atom * 18 + index] = neighbor.atom;
+          vectors.set([neighbor.x, neighbor.y, neighbor.z], (atom * 18 + index) * 3);
+        });
+      }
+      return { counts, indices, vectors, maxNeighbors: 18, startAtom: 0, endAtom: count };
+    };
     window.gpuTests.run = async (label, frame, parameters, field, tolerance = 0, requireGpu = true) => {
       const assertInputsIntact = window.gpuTests.snapshotGpuInputs(frame, parameters);
-      const expected = await window.gpuTests.cpu.analyze(frame, parameters);
+      const expected = parameters.kind === 'ptmNeighbors' ? window.gpuTests.cpuPreparedNeighbors(frame)
+        : await window.gpuTests.cpu.analyze(frame, parameters);
       const progressAtoms = [];
       const actual = await window.gpuTests.gpu.analyze(frame, parameters, { onProgress: progress => {
         if (progress.backend === 'gpu' && progress.phase === 'analyzing' && progress.completedAtoms > 0) progressAtoms.push(progress.completedAtoms);
@@ -50,7 +69,8 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
       const tensorComparison = ['strain', 'referenceStrain'].includes(parameters.kind)
         ? window.gpuTests.compareGpuFields(actual, expected, parameters.kind === 'strain'
           ? window.gpuTests.STRAIN_FIELDS : window.gpuTests.REFERENCE_STRAIN_FIELDS, tolerance) : null;
-      const domainComparison = parameters.kind === 'centrosymmetry' ? window.gpuTests.compareGpuCentrosymmetry(actual, expected, tolerance)
+      const domainComparison = parameters.kind === 'ptmNeighbors' ? window.gpuTests.compareGpuPreparedNeighbors(actual, expected)
+        : parameters.kind === 'centrosymmetry' ? window.gpuTests.compareGpuCentrosymmetry(actual, expected, tolerance)
         : parameters.kind === 'displacement' ? window.gpuTests.compareGpuDisplacements(actual, expected, tolerance) : null;
       let maxAbsoluteError = parameters.kind === 'bonds' ? window.gpuTests.compareGpuBonds(actual, expected)
         : tensorComparison ? tensorComparison.maxAbsoluteError
@@ -71,7 +91,10 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
         ...(parameters.kind === 'displacement' ? { matched: actual.matched, unmatched: actual.unmatched, mappingMode: actual.mappingMode,
           vectorsType: actual.vectors.constructor.name, magnitudesType: actual.magnitudes.constructor.name, progressAtoms,
           comparison: domainComparison } : {}),
-        ...(tensorComparison ? { incomplete: actual.incomplete, fieldErrors: tensorComparison.fields } : {}) });
+        ...(parameters.kind === 'ptmNeighbors' ? { comparedNeighbors: domainComparison.comparedNeighbors, arithmetic: actual.gpuArithmetic } : {}),
+        ...(tensorComparison ? { incomplete: actual.incomplete, fieldErrors: tensorComparison.fields, neighborBackend: actual.neighborBackend ?? null,
+          ptmBackend: actual.ptmBackend ?? null, referenceBackend: actual.referenceBackend ?? null, tensorBackend: actual.tensorBackend ?? null,
+          ptmInputReused: actual.ptmInputReused ?? null, gpuPtmInputReused: actual.gpuPtmInputReused ?? null } : {}) });
       return actual;
     };
   })()`);
@@ -80,7 +103,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
     try {
       const fcc = crystalFrame('fcc', 4, 3.52);
       const defaultResult = await cpu.analyze(fcc, { kind: 'coordination', cutoff: 2.8 });
-      check(!isGpu(defaultResult), 'GPU computing must default to disabled.');
+      check(!isGpu(defaultResult), 'The explicit CPU comparison pool must use CPU workers.');
       await run('FCC coordination', fcc, { kind: 'coordination', cutoff: 2.8 }, 'coordination');
       await run('BCC coordination', crystalFrame('bcc', 4, 2.86), { kind: 'coordination', cutoff: 2.6 }, 'coordination');
       const hcp = crystalFrame('hcp', 4, 2.5);
@@ -147,8 +170,10 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
       const ptmInput = await cpu.analyze(fcc, { kind: 'ptm', flags: 255 });
       const ideal = await run('Cached PTM ideal strain', fcc, { kind: 'strain', references, ptmInput }, null, 2e-6);
       for (const field of window.gpuTests.STRAIN_FIELDS) check(ideal[field].every(value => value === 0), 'Ideal GPU strain must be exactly zero: ' + field);
-      const fresh = await run('Fresh CPU PTM with GPU strain tensor', fcc, { kind: 'strain', references, flags: 255 }, null, 2e-6);
-      check(fresh.ptmBackend === 'cpu' && fresh.tensorBackend === 'gpu', 'Fresh strain must label its CPU/GPU stages accurately.');
+      const fresh = await run('Fresh GPU neighbors with CPU PTM and GPU ideal strain', fcc, { kind: 'strain', references, flags: 255 }, null, 2e-6);
+      check(fresh.neighborBackend === 'gpu' && fresh.ptmBackend === 'cpu' && fresh.referenceBackend === 'gpu' && fresh.tensorBackend === 'gpu', 'Fresh ideal strain must label GPU-neighbor, CPU-fit and GPU-reference/tensor stages accurately.');
+      const freshExpected = await cpu.analyze(fcc, { kind: 'ptm', flags: 255 });
+      window.gpuTests.compareGpuPtm(fresh, freshExpected);
       await run('Edited lattice strain from cached PTM', fcc, { kind: 'strain', references: [{ structure: 1, a: 3.4 }], ptmInput }, null, 2e-6);
       const affine = crystalFrame('fcc', 3, 3.52);
       affine.cell = createCell({ vectors: [10.56 * 1.02, .11, 0, 0, 10.56 * .99, .07, 0, 0, 10.56 * 1.03], triclinic: true });
@@ -159,11 +184,69 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
         references: [{ structure: 2, a: 2.45, c: Math.sqrt(8 / 3) * 2.6 }], ptmInput: hexPtm }, null, 2e-6);
       const mismatched = await run('Reference mismatch strain NaN', fcc, { kind: 'strain', references: [{ structure: 3, a: 3.52 }], ptmInput }, null, 2e-6);
       check(mismatched.warning === null && mismatched.atomicShearStrain.every(Number.isNaN), 'Rejected PTM/reference strain must remain NaN without warnings.');
+      const neighborFrames = [
+        ...['fcc', 'bcc', 'hcp', 'sc', 'diamond', 'hex-diamond'].map(kind => ({ label: kind + ' primitive exact PTM neighbors', frame: crystalFrame(kind, 1, 3) })),
+        { label: 'HCP triclinic exact PTM neighbors', frame: crystalFrame('hcp', 2, 2.5) },
+        { label: 'Sparse periodic exact PTM neighbors', frame: isolated },
+        { label: 'Nearest-distance ties exact PTM neighbors', frame: tie },
+      ];
+      const mixedNearest = crystalFrame('fcc', 2, 3.52);
+      mixedNearest.cell = createCell({ ...mixedNearest.cell, pbc: [true, false, true] });
+      neighborFrames.push({ label: 'Mixed PBC exact PTM neighbors', frame: mixedNearest });
+      const coincident = { fractional: Float64Array.from([.5, .5, .5, .5, .5, .5]), ids: Uint32Array.from([1, 2]), types: new Uint16Array(2),
+        cell: createCell({ vectors: [5, 0, 0, 0, 5, 0, 0, 0, 5], pbc: [false, false, false] }) };
+      neighborFrames.push({ label: 'Coincident PTM neighbors omit degenerate rows', frame: coincident });
+      const singleton = { ...coincident, fractional: Float64Array.from([.5, .5, .5]), ids: Uint32Array.from([1]), types: new Uint16Array(1) };
+      neighborFrames.push({ label: 'Single open atom has no prepared PTM neighbors', frame: singleton });
+      for (const { label, frame } of neighborFrames) {
+        const prepared = await run(label, frame, { kind: 'ptmNeighbors' });
+        const intact = window.gpuTests.snapshotGpuInputs(frame, { preparedNeighbors: prepared });
+        const cpuFit = await window.gpuTests.calculatePtm(frame, { flags: 255 });
+        const preparedFit = await window.gpuTests.calculatePtm(frame, { flags: 255, preparedNeighbors: prepared });
+        const comparison = window.gpuTests.compareGpuPtm(preparedFit, cpuFit);
+        intact(); rows.at(-1).preparedPtmComparison = comparison;
+      }
+      for (const fixture of await window.gpuTests.idealStrainFixtures()) {
+        const validate = result => {
+          if (fixture.expectedStructure !== undefined && result.structures) check(result.structures.every(type => type === fixture.expectedStructure), fixture.label + ' PTM structure differs.');
+          if (fixture.expectedZeroStrain) for (const field of window.gpuTests.STRAIN_FIELDS) check(result[field].every(value => value === 0), fixture.label + ' requires exact zero ' + field);
+          for (const atom of fixture.expectedZeroAtoms ?? []) for (const field of window.gpuTests.STRAIN_FIELDS) check(result[field][atom] === 0, fixture.label + ' zero atom differs: ' + atom + ' / ' + field);
+          for (const atom of fixture.expectedNaNAtoms ?? []) for (const field of window.gpuTests.STRAIN_FIELDS) check(Number.isNaN(result[field][atom]), fixture.label + ' undefined atom differs: ' + atom + ' / ' + field);
+          for (const [field, expected] of Object.entries(fixture.expectedFields ?? {})) check(result[field].every(value => Math.abs(value - expected) < 2e-6), fixture.label + ' analytic ' + field + ' differs.');
+          if (fixture.expectedFieldsByType) for (let atom = 0; atom < fixture.frame.ids.length; atom++) for (const [field, expected] of Object.entries(fixture.expectedFieldsByType[fixture.frame.types[atom]]))
+            check(Math.abs(result[field][atom] - expected) < 2e-6, fixture.label + ' per-element ' + field + ' differs.');
+          const tinyFields = {};
+          for (const [field, expected] of Object.entries(fixture.expectedTinyFields ?? {})) {
+            let maxRelativeError = 0;
+            for (const value of result[field]) { const error = Math.abs(value - expected) / expected;
+              check(value > 0 && error < fixture.tinyRelativeTolerance, fixture.label + ' must preserve tiny physical ' + field + ': ' + value);
+              maxRelativeError = Math.max(maxRelativeError, error);
+            }
+            tinyFields[field] = { expected, maxRelativeError };
+          }
+          if (fixture.expectedTinyFields) rows.at(-1).tinyIdealStrain = tinyFields;
+        };
+        const result = await run(fixture.label, fixture.frame, fixture.parameters, null, 2e-6, !fixture.allowGpuFallback);
+        validate(result);
+        if (fixture.allowGpuFallback) check(result.backend === 'cpu' && new RegExp(fixture.expectedFallbackReason, 'i').test(result.fallbackReason), fixture.label + ' requires an explicit numeric CPU fallback.');
+        else check(result.referenceBackend === 'gpu', fixture.label + ' reference conversion must execute on GPU.');
+        if (fixture.freshParameters) {
+          const freshResult = await run(fixture.label + ' / fresh GPU-neighbor CPU-fit pipeline', fixture.frame, fixture.freshParameters, null, 2e-6);
+          validate(freshResult);
+          check(freshResult.neighborBackend === 'gpu' && freshResult.ptmBackend === 'cpu' && freshResult.referenceBackend === 'gpu', fixture.label + ' fresh stages must use GPU neighbors, CPU PTM and GPU reference conversion.');
+          window.gpuTests.compareGpuPtm(freshResult, fixture.parameters.ptmInput);
+        }
+      }
       const outside = crystalFrame('fcc', 3, 3.52);
       outside.cell = createCell({ vectors: outside.cell.vectors, pbc: [false, true, true] });
       outside.fractional[0] = -0.1;
       await run('Unsupported open-cell positions CPU fallback', outside, { kind: 'coordination', cutoff: 2.8 }, 'coordination', 0, false);
       check(!isGpu(rows.at(-1)) && rows.at(-1).fallbackReason, 'Unsupported geometry must identify its CPU fallback.');
+      const stageFallback = await run('Unsupported GPU nearest geometry retains GPU ideal reference/tensors', outside,
+        { kind: 'strain', references, flags: 255, rmsdCutoff: .1 }, null, 2e-6);
+      check(stageFallback.neighborBackend === 'cpu' && stageFallback.ptmBackend === 'cpu' && stageFallback.referenceBackend === 'gpu' && stageFallback.tensorBackend === 'gpu' && stageFallback.neighborFallbackReason,
+        'Unsupported neighbor geometry must fall back only that stage and report the reason.');
+
       for (const fixture of window.gpuTests.cnaFixtures()) {
         const result = await run(fixture.label, fixture.frame, fixture.parameters, 'structures');
         if (fixture.expectedStructure !== undefined) check(result.structures.every(value => value === fixture.expectedStructure), fixture.label + ' wrong ideal CNA structure.');
@@ -373,6 +456,29 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
             engine: recovery.engine, inputsIntact: true });
         }
       }
+      {
+        const cancellationFrame = crystalFrame('fcc', 17, 3.52);
+        const parameters = { kind: 'strain', references: [{ structure: 1, a: 3.52 }], flags: 31, rmsdCutoff: .1 };
+        for (const stage of ['ptm-neighbors', 'ptm-fit', 'strain-tensor']) {
+          const inputsIntact = window.gpuTests.snapshotGpuInputs(cancellationFrame, parameters);
+          const controller = new AbortController(), worker = gpu.gpuBackend.worker;
+          let observed = null, aborted = false;
+          try {
+            await gpu.analyze(cancellationFrame, parameters, { signal: controller.signal, onProgress: progress => {
+              const localCompleted = progress.completedAtoms - (stage === 'ptm-fit' ? cancellationFrame.ids.length : stage === 'strain-tensor' ? cancellationFrame.ids.length * 2 : 0);
+              if (progress.stage === stage && (stage === 'strain-tensor' ? progress.phase === 'complete' : progress.phase === 'analyzing' && localCompleted > 0)) {
+                observed = { backend: progress.backend, phase: progress.phase, completedAtoms: progress.completedAtoms };
+                controller.abort();
+              }
+            } });
+          } catch (error) { aborted = error.name === 'AbortError'; }
+          inputsIntact();
+          check(observed && aborted, 'Fresh ideal strain must cancel after work at stage ' + stage);
+          const recovery = await run('Fresh ideal strain recovery after ' + stage + ' cancellation', crystalFrame('fcc', 2, 3.52), parameters, null, 2e-6);
+          check(gpu.gpuBackend.worker === worker && recovery.neighborBackend === 'gpu' && recovery.ptmBackend === 'cpu' && recovery.referenceBackend === 'gpu', 'Ideal strain cancellation must preserve its reusable GPU worker and recover all stages.');
+          cancellationChecks.push({ kind: 'strain', stage, aborted, observed, workerReused: true, inputsIntact: true });
+        }
+      }
       window.gpuTests.cancellationChecks = cancellationChecks;
       return rows;
     } finally { cpu.close(); gpu.close(); }
@@ -391,9 +497,9 @@ console.log(JSON.stringify(report, null, 2));
 async function runGpuPreloadChecks({ evaluate }) {
   return evaluate(`(async () => {
     const { AnalysisPool, crystalFrame, check, compare, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements,
-      prepareDisplacements, REFERENCE_STRAIN_FIELDS } = window.gpuTests;
+      prepareDisplacements, compareGpuPreparedNeighbors, REFERENCE_STRAIN_FIELDS } = window.gpuTests;
     const gpu = new AnalysisPool(), cpu = new AnalysisPool();
-    gpu.setGpuEnabled(true);
+    cpu.setGpuEnabled(false); gpu.setGpuEnabled(true);
     try {
       const started = performance.now();
       const warmed = await gpu.warmupGpu();
@@ -446,6 +552,28 @@ async function runGpuPreloadChecks({ evaluate }) {
       const displacementAgain = await gpu.analyze(reparsed, displacementParameters, { frameIndex: 2 });
       check(displacementAgain.backend === 'gpu' && displacementAgain.gpuInputReused && displacementAgain.referenceInputReused, 'Displacement must reuse current and reference Cartesian uploads.');
       compareGpuDisplacements(displacementAgain, displacementExpected, 2e-6);
+      const neighbors = await gpu.analyze(reparsed, { kind: 'ptmNeighbors' });
+      compareGpuPreparedNeighbors(neighbors, window.gpuTests.cpuPreparedNeighbors(reparsed));
+      check(neighbors.inputReused && neighbors.gpuInputReused, 'GPU PTM nearest preparation must reuse geometry already consumed by coordination/CNA.');
+      const fit = await cpu.analyze(frames[0], { kind: 'ptm', flags: 31 });
+      const initialParameters = { kind: 'strain', references: [{ structure: 1, a: 3.52 }], ptmInput: fit };
+      const firstStrain = await gpu.analyze(frames[0], initialParameters, { frameIndex: 0 });
+      check(firstStrain.backend === 'gpu' && !firstStrain.ptmInputReused && !firstStrain.gpuPtmInputReused, 'The first cached fit must be privately transferred and uploaded to GPU.');
+      const beforeReferenceEdit = gpu.gpuCacheStatus;
+      const editedParameters = { ...initialParameters, references: [{ structure: 1, a: 3.4 }] };
+      const editedStrain = await gpu.analyze(frames[0], editedParameters, { frameIndex: 0 });
+      const expectedEdited = await cpu.analyze(frames[0], editedParameters);
+      compareGpuFields(editedStrain, expectedEdited, window.gpuTests.STRAIN_FIELDS, 2e-6);
+      check(editedStrain.ptmInputReused && editedStrain.gpuPtmInputReused && editedStrain.referenceBackend === 'gpu', 'Reference edits must reuse privately cached and GPU-resident raw fits while converting references on GPU.');
+      check(gpu.gpuCacheStatus.uploadCount === beforeReferenceEdit.uploadCount, 'Edited lattice constants must not upload geometry or PTM fits again.');
+      const hexFrame = crystalFrame('hcp', 2, 2.5), hexFit = await cpu.analyze(hexFrame, { kind: 'ptm', flags: 255 });
+      const hexParameters = { kind: 'strain', ptmInput: hexFit, references: [{ structure: 2, a: 2.5, c: Math.sqrt(8 / 3) * 2.5 }] };
+      await gpu.analyze(hexFrame, hexParameters);
+      const hexUploads = gpu.gpuCacheStatus.uploadCount;
+      const editedHexParameters = { ...hexParameters, references: [{ structure: 2, a: 2.45, c: Math.sqrt(8 / 3) * 2.6 }] };
+      const editedHex = await gpu.analyze(hexFrame, editedHexParameters), expectedHex = await cpu.analyze(hexFrame, editedHexParameters);
+      compareGpuFields(editedHex, expectedHex, window.gpuTests.STRAIN_FIELDS, 2e-6);
+      check(editedHex.ptmInputReused && editedHex.gpuPtmInputReused && gpu.gpuCacheStatus.uploadCount === hexUploads, 'Hexagonal a/c edits must reuse immutable resident raw fits.');
       check(gpu.gpuBackend.worker === worker, 'Different GPU algorithms must share the warmed GPU worker.');
       const beforeClear = gpu.gpuCacheStatus;
       await gpu.clearGpuFrames();
@@ -469,6 +597,10 @@ async function runGpuPreloadChecks({ evaluate }) {
       return { warmupMs, pipelineCount: warmed.pipelineCount, fullTrajectoryFrames: full.cachedFrameIndexes.length,
         constrainedCapacity: windowCache.capacity, constrainedFrames: windowCache.cachedFrameIndexes, reparseReused: reused.gpuInputReused,
         sourceClearPreservedDevice: true, crossAlgorithmWorkerReuse: true,
+        ptmNeighborsInputReused: neighbors.inputReused && neighbors.gpuInputReused,
+        firstPtmInputReused: firstStrain.ptmInputReused, firstGpuPtmInputReused: firstStrain.gpuPtmInputReused,
+        editedPtmInputReused: editedStrain.ptmInputReused, editedGpuPtmInputReused: editedStrain.gpuPtmInputReused,
+        latticeEditUploadCountUnchanged: true, hexagonalAcFitReused: editedHex.ptmInputReused && editedHex.gpuPtmInputReused,
         cnaInputReused: cna.inputReused && cna.gpuInputReused,
         referenceInputReused: reference.inputReused && reference.gpuInputReused,
         referenceGpuInputReused: reference.referenceGpuInputReused ?? null,
@@ -481,7 +613,7 @@ async function runGpuPreloadChecks({ evaluate }) {
 
 async function runApplicationSmoke({ evaluate, call }) {
   async function waitFor(expression, label) {
-    for (let attempt = 0; attempt < 400; attempt += 1) {
+    for (let attempt = 0; attempt < 2_400; attempt += 1) {
       if (await evaluate(expression)) return;
       await delay(25);
     }
@@ -489,12 +621,12 @@ async function runApplicationSmoke({ evaluate, call }) {
       cna: document.getElementById('cna-state')?.textContent, cnaMetric: document.getElementById('metric-cna')?.textContent,
       cnaStatus: document.getElementById('cna-status')?.textContent, reference: document.getElementById('reference-strain-state')?.textContent,
       referenceStatus: document.getElementById('reference-strain-status')?.textContent,
-      gpu: document.getElementById('enable-gpu-computing')?.getAttribute('aria-pressed'), rows: window.applicationGpuChecks?.rows.slice(-4) })`);
+      gpu: document.getElementById('enable-gpu-computing')?.getAttribute('aria-pressed'), csp: document.getElementById('csp-state')?.textContent, cspMetric: document.getElementById('metric-csp')?.textContent, cspDisabled: document.getElementById('run-csp')?.disabled, loading: document.getElementById('loading-text')?.textContent, cache: document.getElementById('cache-label')?.textContent, rows: window.applicationGpuChecks?.rows.slice(-4) })`);
     throw new Error(`Timed out: ${label}; ${JSON.stringify(diagnostics)}`);
   }
   await evaluate('location.href = new URL("./index.html", location.href).href');
   await waitFor('document.readyState === "complete" && document.getElementById("enable-gpu-computing") && document.getElementById("open-examples")', 'homepage');
-  assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'false');
+  assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'true', 'GPU computation is enabled by default in the application.');
   await evaluate(`document.getElementById('open-examples').click();
     [...document.querySelectorAll('.source-option')].find(button => button.textContent.includes('fcc-vacancy.cfg')).click();`);
   await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden && !document.getElementById("run-analysis").disabled', 'FCC vacancy example');
@@ -505,6 +637,7 @@ async function runApplicationSmoke({ evaluate, call }) {
     const { calculatePreparedDisplacements } = await import('./src/analysis/displacement.js');
     const { WebGLRenderer } = await import('./src/render/webgl-renderer.js');
     const { calculateReferenceStrain, REFERENCE_STRAIN_FIELDS } = await import('./src/analysis/reference-strain.js');
+    const { calculateAtomicStrain, STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
     const { compareGpuArrays, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
     const analyze = AnalysisPool.prototype.analyze, setVectors = WebGLRenderer.prototype.setVectors;
     window.applicationGpuChecks = { rows: [], adaptive: null, arrows: null };
@@ -531,6 +664,14 @@ async function runApplicationSmoke({ evaluate, call }) {
           atoms: frame.ids.length, maxAbsoluteError: comparison.maxAbsoluteError,
           inputReused: result.inputReused, gpuInputReused: result.gpuInputReused,
           referenceInputReused: result.referenceInputReused, referenceGpuInputReused: result.referenceGpuInputReused });
+      } else if (parameters.kind === 'strain') {
+        const expected = await calculateAtomicStrain(frame, { ...parameters, ptmInput: parameters.ptmInput ?? result });
+        const comparison = compareGpuFields(result, { ...expected, warning: null }, STRAIN_FIELDS, 2e-6);
+        window.applicationGpuChecks.rows.push({ kind: 'strain', gpu: result.backend === 'gpu', engine: result.engine,
+          maxAbsoluteError: comparison.maxAbsoluteError, freshFit: !parameters.ptmInput,
+          neighborBackend: result.neighborBackend ?? null, ptmBackend: result.ptmBackend ?? null,
+          referenceBackend: result.referenceBackend ?? null, tensorBackend: result.tensorBackend ?? null,
+          ptmInputReused: result.ptmInputReused ?? null, gpuPtmInputReused: result.gpuPtmInputReused ?? null });
       } else if (parameters.kind === 'centrosymmetry') {
         const adaptive = window.applicationGpuChecks.adaptive;
         const comparison = compareGpuCentrosymmetry(result, calculateCentrosymmetry(frame, parameters), 2e-6);
@@ -587,6 +728,37 @@ async function runApplicationSmoke({ evaluate, call }) {
     }
     if (test.mode) assert.deepEqual(results.at(-1).counts, results.at(-2).counts, `${test.mode} CNA keeps legend structure counts across GPU preferences.`);
   }
+  assert.match(await evaluate('document.getElementById("enable-gpu-computing").textContent'), /GPU acceleration/);
+  await evaluate(`(() => {
+    const toggle = document.getElementById('enable-gpu-computing'); if (toggle.getAttribute('aria-pressed') !== 'true') toggle.click();
+    const button = document.querySelector('[data-tool-button="strain"]'); if (button.getAttribute('aria-expanded') !== 'true') button.click();
+    document.getElementById('run-strain').click();
+  })()`);
+  await waitFor(`document.getElementById('strain-state').textContent === 'Calculated' && window.applicationGpuChecks.rows.some(row => row.kind === 'strain' && row.freshFit && row.gpu)`, 'fresh ideal strain GPU neighbor/reference/tensor routing');
+  const idealRouting = [await evaluate('window.applicationGpuChecks.rows.filter(row => row.kind === "strain").at(-1)')];
+  assert.equal(idealRouting[0].neighborBackend, 'gpu'); assert.equal(idealRouting[0].ptmBackend, 'cpu');
+  assert.equal(idealRouting[0].referenceBackend, 'gpu'); assert.equal(idealRouting[0].tensorBackend, 'gpu');
+  assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), 'property:atomicShearStrain');
+  let beforeIdeal = await evaluate('window.applicationGpuChecks.rows.length');
+  await evaluate(`const input = document.querySelector('[data-lattice-a="0"]'); input.value = '3.4'; input.dispatchEvent(new Event('change'));`);
+  await waitFor(`document.getElementById('strain-state').textContent === 'Calculated' && window.applicationGpuChecks.rows.slice(${beforeIdeal}).some(row => row.kind === 'strain' && row.gpu)`, 'native editable reference GPU fit reuse');
+  const editedIdeal = await evaluate('window.applicationGpuChecks.rows.filter(row => row.kind === "strain").at(-1)');
+  assert.equal(editedIdeal.freshFit, false); assert.equal(editedIdeal.ptmInputReused, true); assert.equal(editedIdeal.gpuPtmInputReused, true);
+  idealRouting.push(editedIdeal);
+  for (const enabled of [false, true]) {
+    beforeIdeal = await evaluate('window.applicationGpuChecks.rows.length');
+    await evaluate(`document.getElementById('enable-gpu-computing').click();`);
+    await waitFor(`!document.getElementById('run-strain').disabled`, 'ideal strain GPU preference readiness');
+    await evaluate(`document.getElementById('run-strain').click();`);
+    await waitFor(`document.getElementById('strain-state').textContent === 'Calculated' && window.applicationGpuChecks.rows.slice(${beforeIdeal}).some(row => row.kind === 'strain' && row.gpu === ${enabled})`, 'ideal strain preference ' + enabled);
+    idealRouting.push(await evaluate('window.applicationGpuChecks.rows.filter(row => row.kind === "strain").at(-1)'));
+    assert.equal(idealRouting.at(-1).freshFit, false, 'GPU preference edits retain scientific PTM fits.');
+  }
+  await evaluate(`document.getElementById('cancel-strain').click();`);
+  assert.equal(await evaluate('document.getElementById("strain-state").textContent'), 'Not calculated');
+  results.push({ idealRouting, acceptedIdealResultsCleared: true });
+  // The following CNA scenario begins from CPU preference as the preceding cases did.
+  await evaluate(`document.getElementById('enable-gpu-computing').click();`);
   await evaluate(`document.getElementById('enable-gpu-computing').click(); document.getElementById('run-cna').click();`);
   await waitFor(`document.getElementById('cna-state').textContent === 'Calculated' && document.getElementById('metric-cna').textContent.includes('webgpu')`, 'adaptive GPU CNA prerequisite');
   await evaluate(`(() => {
@@ -835,4 +1007,36 @@ async function runPhysicalReplicationGpuChecks({ evaluate, waitFor }) {
       expandedNextFrame: next.atoms, restoredAtoms: restored.atoms, geometryBuffers,
       cacheGenerations: [raw.cacheGeneration, expanded.cacheGeneration, restored.cacheGeneration] };
   } finally { await evaluate('window.restorePhysicalGpuHooks()'); }
+}
+
+async function runBuiltIdealChecks({ evaluate }) {
+  return evaluate(`(async () => {
+    const html = await (await fetch('./dist/index.html')).text();
+    const entry = html.match(/src="(\\.\\/assets\\/[^" ]+\\/src\\/app\\.js)"/);
+    if (!entry) throw new Error('Run npm run build before the --built-only production check.');
+    const base = new URL(entry[1].replace(/app\\.js$/, ''), new URL('./dist/index.html', location.href));
+    const { AnalysisPool } = await import(new URL('analysis/analysis-pool.js', base).href);
+    const { crystalFrame } = await import('./tests/helpers/crystals.js');
+    const { STRAIN_FIELDS } = await import(new URL('analysis/atomic-strain.js', base).href);
+    const { compareGpuFields, compareGpuPtm } = await import('./scripts/gpu-comparison.js');
+    const NativeWorker = window.Worker, workerUrls = [];
+    window.Worker = class extends NativeWorker { constructor(url, options) { workerUrls.push(String(url)); super(url, options); } };
+    const cpu = new AnalysisPool(), gpu = new AnalysisPool(); cpu.setGpuEnabled(false); gpu.setGpuEnabled(true);
+    try {
+      const frame = crystalFrame('fcc', 3, 3.52), parameters = { kind: 'strain', references: [{ structure: 1, a: 3.52 }], flags: 255, rmsdCutoff: .1 };
+      const fresh = await gpu.analyze(frame, parameters), expected = await cpu.analyze(frame, parameters);
+      if (fresh.backend !== 'gpu' || fresh.neighborBackend !== 'gpu' || fresh.ptmBackend !== 'cpu' || fresh.referenceBackend !== 'gpu' || fresh.tensorBackend !== 'gpu') throw new Error('Production ideal strain stage routing differs.');
+      const fields = compareGpuFields(fresh, expected, STRAIN_FIELDS, 2e-6), ptm = compareGpuPtm(fresh, expected);
+      for (const name of STRAIN_FIELDS) if (!fresh[name].every(value => value === 0)) throw new Error('Production undeformed strain is not zero: ' + name);
+      const editedParameters = { ...parameters, references: [{ structure: 1, a: 3.4 }], ptmInput: fresh };
+      const before = gpu.gpuCacheStatus.uploadCount;
+      const edited = await gpu.analyze(frame, editedParameters), expectedEdited = await cpu.analyze(frame, editedParameters);
+      const editedFields = compareGpuFields(edited, expectedEdited, STRAIN_FIELDS, 2e-6);
+      if (!edited.ptmInputReused || !edited.gpuPtmInputReused || gpu.gpuCacheStatus.uploadCount !== before) throw new Error('Production reference edit did not retain raw fit residency.');
+      if (!workerUrls.length || workerUrls.some(url => !url.includes('/dist/assets/') || !url.includes('/src/'))) throw new Error('Production workers are not versioned: ' + JSON.stringify(workerUrls));
+      return { assetBase: base.pathname, atoms: frame.ids.length, freshEngine: fresh.engine, freshFields: fields, ptm,
+        editedFields, editedPtmInputReused: edited.ptmInputReused, editedGpuPtmInputReused: edited.gpuPtmInputReused,
+        uploadCountUnchanged: true, workerUrls, exactZero: true };
+    } finally { cpu.close(); gpu.close(); window.Worker = NativeWorker; }
+  })()`);
 }

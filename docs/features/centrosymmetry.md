@@ -14,9 +14,9 @@ This is AtomEye-style normalized greedy pairing. It differs from a conventional 
 
 Auto also exposes local structure and selected neighbor count as color properties. Inferred defect sites retain their raw Other classification. Undefined values are NaN and appear gray.
 
-## GPU computing
+## GPU acceleration
 
-With **Enable GPU computing** on, manual and Auto calculations prefer WebGPU. Nearest-neighbor selection, local Auto shell voting and normalized greedy pairing run on GPU. Auto reuses a compatible complete adaptive-CNA classification or calculates it with the GPU CNA kernel first; fixed-cutoff CNA labels are not a substitute for this local shell classification.
+With **Enable GPU acceleration** on, manual and Auto calculations prefer WebGPU. Nearest-neighbor selection, local Auto shell voting and normalized greedy pairing run on GPU. Auto reuses a compatible complete adaptive-CNA classification or calculates it with the GPU CNA kernel first; fixed-cutoff CNA labels are not a substitute for this local shell classification.
 
 Greedy pairing depends on the exact order of nearly equal neighbor distances and pair costs. The CSP shader emulates IEEE 64-bit arithmetic using integer words to retain the CPU distance/vector ordering and strict pairing comparisons, then returns the same Float32 scalar field. This does not require native GPU float64 support. Integer emulation can be expensive, particularly on a software adapter; compare timings on your device before assuming a speedup. The GPU kernel accepts all even manual counts from 2 to 32; the viewer exposes the usual 8- and 12-neighbor settings. Auto keeps the HCP baseline, raw structure labels, inferred neighbor counts, NaN values and recognition summary described above.
 

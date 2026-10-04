@@ -72,12 +72,13 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   settings for mixed structures, or manual 8/12 neighbors. All analyses share
   a bounded scheduler and retain per-frame results. CPU Workers
   and PTM kernels are reused, with preparation stages and PTM atom progress.
-- Optional **Enable GPU computing**, off by default beside the theme controls,
+- **Enable GPU acceleration**, on by default beside the theme controls,
   supports coordination, adaptive/fixed-cutoff CNA, manual/Auto central symmetry,
   displacement, reference-frame strain, RDF, local geometric shear and bonds
   with WebGPU.
-  Ideal lattice strain also supports GPU tensor evaluation after its CPU PTM
-  fit. Other analyses keep their CPU implementation; unavailable GPU support
+  Fresh ideal lattice strain uses GPU neighbor preparation, CPU Wasm fitting,
+  then GPU element-reference conversion and tensors, reusing cached fits and
+  uploads. Other analyses keep their CPU implementation; unavailable GPU support
   falls back to CPU. Completed results remain available when the preference changes.
 - Per-analysis Cancel controls stop computation and reset results and frame
   caches while keeping input settings and other analyses.
@@ -166,11 +167,12 @@ WebGL 2 support. No installation or account is needed.
    **Local shear** measures the current neighbor geometry without a reference.
    **Statistics** shows coordination distributions and calculates total or
    element-pair RDF curves on fully periodic cells.
-   **Enable GPU computing** in the top bar prefers WebGPU for coordination,
+   **Enable GPU acceleration** in the top bar prefers WebGPU for coordination,
    adaptive/fixed CNA, manual/Auto central symmetry, displacement,
-   reference-frame strain, RDF, local shear, bonds and ideal-strain tensors
+   reference-frame strain, RDF, local shear, bonds and ideal-strain
+   neighbor/reference/tensor stages
    on the next calculation.
-   PTM fitting still uses CPU Wasm. The switch starts off; CPU
+   PTM correspondence fitting still uses CPU Wasm. The switch starts on; CPU
    fallback keeps analyses available on browsers without suitable GPU support.
    See [performance](docs/features/performance.md) for backend choices and
    timing considerations.

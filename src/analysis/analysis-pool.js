@@ -5,11 +5,13 @@ import { modalCoordination, shearInvariant } from './local-shear.js';
 import { REFERENCE_STRAIN_FIELDS } from './reference-strain.js';
 import { GpuAnalysisClient } from './gpu/client.js';
 import { validateReferences } from './lattice.js';
+import { validatePtmParameters, validatePreparedPtmNeighbors } from './ptm.js';
 
 const MAX_WORKERS = 6;
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
   deformation: [Float64Array, 9], distances: [Float32Array, 1] };
+const PTM_NEIGHBOR_FIELDS = ['counts', 'indices', 'vectors'];
 const STRAIN_OUTPUT_FIELDS = Object.fromEntries(['atomicShearStrain', 'atomicHydrostaticStrain', 'atomicVolumeChange',
   'strainE11', 'strainE22', 'strainE33', 'strainE12', 'strainE13', 'strainE23'].map((name) => [name, [Float32Array, 1]]));
 const INPUT_ARRAY_FIELDS = ['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput', 'currentPositions', 'referencePositions'];
@@ -89,21 +91,44 @@ export class AnalysisPool {
       ...(fallbackReason ? { fallbackReason } : {}) };
   }
 
-  /** PTM correspondence fitting remains a CPU algorithm. When necessary, fit
-   * once, then route the elastic tensor stage to GPU or its cached-PTM CPU
-   * fallback without repeating the expensive template analysis.
+  /** Prepare exact neighbors on GPU, fit PTM topology once in CPU workers,
+   * then apply the ideal reference and elastic tensor on GPU. Cached fits skip
+   * both geometry stages; failed GPU stages retain independent CPU fallbacks.
    */
   async analyzeStrainWithGpu(frame, parameters, { onProgress, signal, frameIndex }) {
     const startedAt = performance.now(), atomCount = frame.fractional.length / 3;
     if (!ArrayBuffer.isView(frame.types) || frame.types.length !== atomCount) throw new Error('Analysis requires one element type per atom.');
     validateReferences(parameters.references, frame.types);
     const fresh = !parameters.ptmInput;
-    const ptm = fresh ? await this.analyzeCPU(frame, { ...parameters, kind: 'ptm' }, { signal,
-      onProgress: update => onProgress({ ...update, backend: 'cpu', stage: 'ptm-fit', totalAtoms: atomCount * 2 }) }) : null;
+    if (fresh) validatePtmParameters(parameters);
+    const prepareNeighbors = fresh && this.gpuBackend.supports('ptmNeighbors');
+    const stages = fresh ? prepareNeighbors ? 3 : 2 : 1;
+    const progress = (backend, stage, offset = 0) => update => onProgress({ ...update, backend, stage,
+      completedAtoms: offset + (update.completedAtoms ?? 0), totalAtoms: atomCount * stages });
+    let neighbors, neighborFallbackReason, neighborElapsedMs = 0;
+    if (prepareNeighbors) {
+      const started = performance.now();
+      try {
+        neighbors = await this.gpuBackend.analyze(frame, { kind: 'ptmNeighbors' },
+          { signal, frameIndex, onProgress: progress('gpu', 'ptm-neighbors') });
+        if (signal?.aborted || this.closed) throw abortError();
+        validatePreparedPtmNeighbors(frame, neighbors, { flags: parameters.flags, validateValues: false });
+      } catch (error) {
+        if (error.name === 'AbortError' || signal?.aborted || this.closed) throw abortError();
+        neighborFallbackReason = `GPU PTM neighbors: ${error.message || 'Preparation failed.'}`;
+        neighbors = null;
+      }
+      neighborElapsedMs = performance.now() - started;
+    }
+    const preparedNeighbors = neighbors ? Object.fromEntries([
+      ...PTM_NEIGHBOR_FIELDS, 'maxNeighbors', 'startAtom', 'endAtom', 'sourceAtomCount',
+    ].filter(field => neighbors[field] !== undefined).map(field => [field, neighbors[field]])) : null;
+    const ptm = fresh ? await this.analyzeCPU(frame, { ...parameters, kind: 'ptm',
+      ...(preparedNeighbors ? { preparedNeighbors } : {}) }, { signal,
+      onProgress: progress('cpu', 'ptm-fit', prepareNeighbors ? atomCount : 0) }) : null;
     if (signal?.aborted || this.closed) throw abortError();
     const tensorParameters = { ...parameters, ptmInput: parameters.ptmInput ?? ptm };
-    const report = backend => update => onProgress({ ...update, backend, stage: 'strain-tensor',
-      completedAtoms: (fresh ? atomCount : 0) + (update.completedAtoms ?? 0), totalAtoms: atomCount * (fresh ? 2 : 1) });
+    const report = backend => progress(backend, 'strain-tensor', fresh ? atomCount * (stages - 1) : 0);
     let tensor, fallbackReason;
     const tensorStartedAt = performance.now();
     try {
@@ -116,11 +141,15 @@ export class AnalysisPool {
         onProgress: update => report('cpu')({ ...update, fallbackReason }) });
     }
     const tensorBackend = fallbackReason ? 'cpu' : 'gpu';
+    const fallbacks = [neighborFallbackReason, fallbackReason].filter(Boolean);
     return { ...(ptm ?? {}), ...tensor, backend: tensorBackend, gpuRequested: true, tensorBackend,
-      engine: ptm ? `${ptm.engine}+${tensor.engine}` : tensor.engine,
-      ...(ptm ? { ptmBackend: 'cpu', ptmWorkerCount: ptm.workerCount, ptmElapsedMs: ptm.elapsedMs } : {}),
+      referenceBackend: tensor.referenceBackend ?? tensorBackend,
+      engine: [neighbors ? neighbors.engine ?? 'webgpu-ptm-neighbors' : null, ptm?.engine, tensor.engine].filter(Boolean).join('+'),
+      ...(ptm ? { ptmBackend: 'cpu', ptmWorkerCount: ptm.workerCount, ptmElapsedMs: ptm.elapsedMs,
+        neighborBackend: neighbors ? 'gpu' : 'cpu', neighborElapsedMs,
+        ...(neighborFallbackReason ? { neighborFallbackReason } : {}) } : {}),
       tensorElapsedMs: performance.now() - tensorStartedAt, elapsedMs: performance.now() - startedAt,
-      warning: null, ...(fallbackReason ? { fallbackReason } : {}) };
+      warning: null, ...(fallbacks.length ? { fallbackReason: fallbacks.join('; ') } : {}) };
   }
 
   async analyzeCPU(frame, parameters, { onProgress = () => {}, signal } = {}) {
@@ -167,14 +196,34 @@ export class AnalysisPool {
         }));
       }
     }
+    let neighborBytes = 0;
+    const sharedNeighborTable = parameters.preparedNeighbors;
+    const fullNeighborTable = Boolean((parameters.flags ?? 31) & 224);
+    if (sharedNeighborTable) {
+      if (!['ptm', 'strain'].includes(parameters.kind)) throw new Error('Prepared PTM neighbors require a template analysis.');
+      // Check transport shapes here; CPU workers validate scientific values
+      // before fitting, keeping a large nearest-18 scan off the UI thread.
+      validatePreparedPtmNeighbors(frame, sharedNeighborTable, { flags: parameters.flags, validateValues: false });
+      neighborBytes = PTM_NEIGHBOR_FIELDS.reduce((bytes, field) => bytes + sharedNeighborTable[field].byteLength, 0);
+      if (fullNeighborTable) extraBytes += neighborBytes;
+    }
     const outputFields = EXTRA_OUTPUT_FIELDS[parameters.kind] ?? (parameters.kind === 'ptm' ? PTM_OUTPUT_FIELDS
       : parameters.kind === 'strain' ? { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : PTM_OUTPUT_FIELDS) }
         : autoCentrosymmetry ? { centrosymmetry: [Float32Array, 1], cspStructureTypes: [Uint8Array, 1], cspNeighborCounts: [Uint8Array, 1] }
           : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] });
     const outputBytesPerAtom = Object.values(outputFields).reduce((sum, [Type, stride]) => sum + Type.BYTES_PER_ELEMENT * stride, 0);
-    const workerCount = Math.min(this.limit, chooseWorkerCount(atomCount,
-      (sharedMemory ? 0 : frame.fractional.byteLength + extraBytes) + atomCount * (48 + outputBytesPerAtom), this.environment,
+    const copyBytes = (sharedMemory ? 0 : frame.fractional.byteLength + extraBytes) + atomCount * (48 + outputBytesPerAtom);
+    let workerCount = Math.min(this.limit, chooseWorkerCount(atomCount,
+      copyBytes, this.environment,
       ['coordination', 'displacement'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000 : 4_096));
+    // Common PTM phases need only their central-atom rows. Their aggregate
+    // private tables occupy one table, while multishell templates need a full
+    // source table in each worker for neighbors-of-neighbors callbacks.
+    if (!sharedMemory && sharedNeighborTable && !fullNeighborTable) {
+      const heapLimit = Number(this.environment.performance?.memory?.jsHeapSizeLimit);
+      const copyBudget = Number.isFinite(heapLimit) ? heapLimit * .15 : 256 * 1024 ** 2;
+      while (workerCount > 1 && copyBytes * workerCount + neighborBytes > copyBudget) workerCount--;
+    }
     const controller = new AbortController();
     this.controllers.add(controller);
     const abort = () => controller.abort();
@@ -210,6 +259,7 @@ export class AnalysisPool {
         if (inputs.ptmInput) {
           inputs.ptmInput = await copyFields(inputs.ptmInput, controller.signal, true);
         }
+        if (inputs.preparedNeighbors) inputs.preparedNeighbors = await copyPtmNeighbors(inputs.preparedNeighbors, controller.signal, true);
       }
       if (controller.signal.aborted) throw abortError();
       const partials = await Promise.all(Array.from({ length: workerCount }, (_, index) => {
@@ -423,6 +473,11 @@ export class AnalysisPool {
           payload.ptmInput = await copyFields(payload.ptmInput, task.signal);
           transferables.push(...Object.values(payload.ptmInput).map((values) => values.buffer));
         }
+        if (payload.preparedNeighbors) {
+          payload.preparedNeighbors = await copyPtmNeighbors(payload.preparedNeighbors, task.signal, false,
+            (payload.flags ?? 31) & 224 ? {} : { startAtom: payload.startAtom, endAtom: payload.endAtom });
+          transferables.push(...PTM_NEIGHBOR_FIELDS.map(field => payload.preparedNeighbors[field].buffer));
+        }
       }
       if (task.done || task.signal.aborted || task.sourceSignal?.aborted) return;
       task.worker.postMessage({ id: task.id, ...payload }, transferables);
@@ -474,6 +529,18 @@ async function copyCoordinates(source, signal, sharedMemory = false) {
     if (offset + chunkLength < source.length) await yieldToMain();
   }
   return copy;
+}
+
+async function copyPtmNeighbors(table, signal, sharedMemory, range = {}) {
+  const tableStart = table.startAtom ?? 0;
+  const startAtom = range.startAtom ?? tableStart;
+  const endAtom = range.endAtom ?? tableStart + table.counts.length;
+  const count = endAtom - startAtom, offset = startAtom - tableStart;
+  const sources = { counts: table.counts.subarray(offset, offset + count),
+    indices: table.indices.subarray(offset * table.maxNeighbors, (offset + count) * table.maxNeighbors),
+    vectors: table.vectors.subarray(offset * table.maxNeighbors * 3, (offset + count) * table.maxNeighbors * 3) };
+  return { maxNeighbors: table.maxNeighbors, sourceAtomCount: table.sourceAtomCount ?? tableStart + table.counts.length,
+    startAtom, endAtom, ...await copyFields(sources, signal, sharedMemory) };
 }
 
 async function copyFields(fields, signal, sharedMemory = false) {

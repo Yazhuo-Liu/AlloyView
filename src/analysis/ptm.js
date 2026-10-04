@@ -1,6 +1,9 @@
 import createPtm from './ptm-kernel.mjs';
 import { NeighborSearch, atomRange } from './neighbors.js';
 import { STRUCTURE_TYPES } from './cna.js';
+import { cellFaceHeights } from '../data/model.js';
+
+export const PTM_MAX_NEIGHBORS = 18;
 
 export const PTM_TYPES = Object.freeze([...STRUCTURE_TYPES,
   { id: 5, label: 'SC', description: 'Simple cubic', color: [160, 20, 254] },
@@ -28,7 +31,15 @@ function getKernel() {
     kernelPromise = (async () => {
       let module;
       module = await createPtm({ ...await kernelOptions(), fetchNeighbors(atom, requested, points, indices) {
-        const { search, cache } = neighborContext;
+        const { search, cache, preparedNeighbors } = neighborContext;
+        if (preparedNeighbors) {
+          const localAtom = atom - (preparedNeighbors.startAtom ?? 0);
+          const count = Math.min(requested, preparedNeighbors.counts[localAtom]);
+          const row = localAtom * PTM_MAX_NEIGHBORS;
+          module.HEAPF64.set(preparedNeighbors.vectors.subarray(row * 3, (row + count) * 3), points >> 3);
+          module.HEAPU32.set(preparedNeighbors.indices.subarray(row, row + count), indices >> 2);
+          return count;
+        }
         let neighbors = cache.get(atom);
         if (!neighbors) {
           neighbors = search.nearest(atom, 18);
@@ -55,23 +66,25 @@ function getKernel() {
   return kernelPromise;
 }
 
-export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, onPhase = () => {}, onAtoms = () => {}, ...range } = {}) {
-  if (!Number.isFinite(rmsdCutoff) || rmsdCutoff < 0) throw new Error('PTM RMSD threshold must be finite and non-negative.');
-  if (!Number.isInteger(flags) || flags < 1 || flags > 255) throw new Error('Select at least one PTM template.');
+export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, preparedNeighbors,
+  onPhase = () => {}, onAtoms = () => {}, ...range } = {}) {
+  validatePtmParameters({ rmsdCutoff, flags });
+  const prepared = preparedNeighbors === undefined ? null : validatePreparedPtmNeighbors(frame, preparedNeighbors,
+    { ...range, flags, validateValues: true });
   const startedAt = performance.now();
   const kernelReused = Boolean(kernelPromise);
   onPhase('initializing');
   const module = await getKernel();
   onPhase('indexing');
-  const search = new NeighborSearch(frame);
-  const { startAtom, endAtom } = atomRange(search.count, range);
+  const search = prepared ? null : new NeighborSearch(frame);
+  const { startAtom, endAtom } = atomRange(prepared ? frame.fractional.length / 3 : search.count, range);
   const count = endAtom - startAtom;
   const result = Object.fromEntries(Object.entries(PTM_FIELDS).map(([name, [Type, stride]]) => [name,
     name === 'structures' ? new Type(count * stride) : new Type(count * stride).fill(NaN)]));
   const cache = new Map();
   const output = module._malloc(13 * 8);
   if (!output) throw new Error('PTM output allocation failed.');
-  neighborContext = { search, cache };
+  neighborContext = { search, cache, preparedNeighbors: prepared };
   try {
     onPhase('analyzing');
     onAtoms(0, count);
@@ -102,4 +115,52 @@ export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, onPhase
     neighborContext = null;
   }
   return { ...result, startAtom, endAtom, kernelReused, elapsedMs: performance.now() - startedAt };
+}
+
+export function validatePtmParameters({ rmsdCutoff = .1, flags = 31 } = {}) {
+  if (!Number.isFinite(rmsdCutoff) || rmsdCutoff < 0) throw new Error('PTM RMSD threshold must be finite and non-negative.');
+  if (!Number.isInteger(flags) || flags < 1 || flags > 255) throw new Error('Select at least one PTM template.');
+}
+
+/** Diamond and graphene request neighbors of neighbors outside a worker's
+ * atom range. Those flags require the full table; ordinary templates permit
+ * contiguous slices. Zero rows represent degenerate or isolated atoms.
+ * Trusted GPU results may receive schema-only preflight on the main thread;
+ * calculatePtm always validates scientific values in the fitting worker.
+ */
+export function validatePreparedPtmNeighbors(frame, table,
+  { startAtom, endAtom, flags = 31, validateValues = true } = {}) {
+  const count = frame.fractional?.length / 3;
+  if (!Number.isInteger(count) || count < 1) throw new Error('Analysis requires at least one atom.');
+  const tableStart = table?.startAtom ?? 0, tableEnd = table?.endAtom ?? tableStart + (table?.counts?.length ?? 0);
+  const fit = atomRange(count, { startAtom, endAtom });
+  if (table?.maxNeighbors !== PTM_MAX_NEIGHBORS || !(table.counts instanceof Uint8Array)
+      || !(table.indices instanceof Uint32Array) || !(table.vectors instanceof Float64Array)
+      || !Number.isInteger(tableStart) || !Number.isInteger(tableEnd) || tableStart < 0 || tableEnd > count || tableEnd < tableStart
+      || table.counts.length !== tableEnd - tableStart || table.indices.length !== table.counts.length * PTM_MAX_NEIGHBORS
+      || table.vectors.length !== table.counts.length * PTM_MAX_NEIGHBORS * 3
+      || (table.sourceAtomCount !== undefined && table.sourceAtomCount !== count)
+      || tableStart > fit.startAtom || tableEnd < fit.endAtom) {
+    throw new Error('PTM prepared neighbors must contain a complete typed nearest-18 table for the source frame.');
+  }
+  if ((flags & 224) && (tableStart !== 0 || tableEnd !== count)) {
+    throw new Error('Diamond and graphene PTM require the full source prepared-neighbor table.');
+  }
+  const heights = cellFaceHeights(frame.cell);
+  if (heights.some(height => !Number.isFinite(height) || height <= 0)) throw new Error('Neighbor search requires a finite, non-singular cell.');
+  if (!validateValues) return table;
+  for (const value of frame.fractional) if (!Number.isFinite(value)) throw new Error('PTM requires finite source coordinates.');
+  const required = frame.cell.pbc.some(Boolean) ? PTM_MAX_NEIGHBORS : Math.min(PTM_MAX_NEIGHBORS, count - 1);
+  for (let atom = 0; atom < table.counts.length; atom++) {
+    const length = table.counts[atom];
+    if (length !== 0 && length !== required) throw new Error('PTM prepared neighbors contain an incomplete nearest-neighbor row.');
+    for (let neighbor = 0; neighbor < length; neighbor++) {
+      const index = atom * PTM_MAX_NEIGHBORS + neighbor, offset = index * 3;
+      if (table.indices[index] >= count) throw new Error('PTM prepared-neighbor atom indices are outside the source frame.');
+      const x = table.vectors[offset], y = table.vectors[offset + 1], z = table.vectors[offset + 2];
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) throw new Error('PTM prepared neighbors require finite Cartesian vectors.');
+      if (x * x + y * y + z * z < 1e-20) throw new Error('PTM prepared neighbors must omit coincident environments.');
+    }
+  }
+  return table;
 }

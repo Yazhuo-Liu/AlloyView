@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { cnaDirectFixtures, cnaFixtures, cloneFrame, cspFixtures, displacementFixtures, displacementValidationFixtures,
-  pointFrame, referenceStrainFixtures, reorderFrame, transformFrame } from '../scripts/gpu-fixtures.js';
+  idealStrainFixtures, pointFrame, referenceStrainFixtures, reorderFrame, transformFrame } from '../scripts/gpu-fixtures.js';
 import { calculateCna } from '../src/analysis/cna.js';
+import { calculateAtomicStrain, STRAIN_FIELDS } from '../src/analysis/atomic-strain.js';
 import { calculateCentrosymmetry } from '../src/analysis/centrosymmetry.js';
 import { calculatePreparedDisplacements, computeDisplacements, prepareDisplacements } from '../src/analysis/displacement.js';
 import { NeighborSearch } from '../src/analysis/neighbors.js';
@@ -232,5 +233,36 @@ for (const fixture of displacementFixtures()) {
 for (const fixture of displacementValidationFixtures()) {
   test(`GPU scientific validation fixture: ${fixture.label}`, async () => {
     await assert.rejects(computeDisplacements(fixture.frame, fixture.reference, fixture.options), new RegExp(fixture.expectedError));
+  });
+}
+
+for (const fixture of await idealStrainFixtures()) {
+  test(`GPU scientific fixture: ${fixture.label} retains physical ideal-lattice strain`, async () => {
+    const retained = Object.fromEntries(Object.entries(fixture.parameters.ptmInput).filter(([, value]) => ArrayBuffer.isView(value))
+      .map(([name, value]) => [name, value.slice()]));
+    const result = await calculateAtomicStrain(fixture.frame, fixture.parameters);
+    assert.equal(result.incomplete, fixture.expectedNaNAtoms?.length ?? 0);
+    if (fixture.expectedStructure !== undefined) assert.ok(fixture.parameters.ptmInput.structures.every(type => type === fixture.expectedStructure));
+    if (fixture.expectedZeroStrain) for (const name of STRAIN_FIELDS) assert.ok(result[name].every(value => value === 0), `${name} preserves exact zero.`);
+    for (const atom of fixture.expectedZeroAtoms ?? []) for (const name of STRAIN_FIELDS) assert.equal(result[name][atom], 0);
+    for (const atom of fixture.expectedNaNAtoms ?? []) for (const name of STRAIN_FIELDS) assert.ok(Number.isNaN(result[name][atom]));
+    for (const [name, expected] of Object.entries(fixture.expectedFields ?? {})) for (const value of result[name]) near(value, expected);
+    if (fixture.expectedFieldsByType) for (let atom = 0; atom < fixture.frame.ids.length; atom += 1) {
+      for (const [name, expected] of Object.entries(fixture.expectedFieldsByType[fixture.frame.types[atom]])) near(result[name][atom], expected);
+    }
+    for (const [name, expected] of Object.entries(fixture.expectedTinyFields ?? {})) {
+      assert.ok(expected > 0);
+      for (const value of result[name]) {
+        assert.ok(value > 0, `${name} retains genuine tiny physical strain.`);
+        assert.ok(Math.abs(value - expected) / expected < fixture.tinyRelativeTolerance, `${name}: ${value} differs from ${expected}.`);
+      }
+    }
+    for (const [name, values] of Object.entries(retained)) assert.deepEqual(fixture.parameters.ptmInput[name], values);
+    if (fixture.freshParameters) {
+      const fresh = await calculateAtomicStrain(fixture.frame, fixture.freshParameters);
+      assert.equal(fresh.incomplete, 0);
+      assert.ok(fresh.structures.every(type => type === fixture.expectedStructure));
+      for (const name of STRAIN_FIELDS) assert.deepEqual(fresh[name], result[name], 'Fresh and cached physical tensor results agree.');
+    }
   });
 }

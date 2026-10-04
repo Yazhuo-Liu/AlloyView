@@ -51,6 +51,65 @@ test('invalid cached GPU tensor inputs fail dispatch without sending a partial j
   } finally { client.close(); }
 });
 
+test('GPU lattice edits reuse acknowledged immutable raw PTM fits and resend changed sources or revisions', async () => {
+  const worker = new WorkerFixture(), client = new GpuAnalysisClient({ environment: { navigator: { gpu: {} } }, workerFactory: () => worker });
+  const frame = crystalFrame('fcc', 1), count = frame.types.length;
+  const fit = { structures: new Uint8Array(count).fill(1), scales: new Float64Array(count).fill(2.8),
+    deformation: new Float64Array(count * 9).fill(1), revision: 0 };
+  const answer = message => worker.answer(message, { cachedPtmFits: [{ frameId: message.frameId, fitId: message.parameters.ptmFitId }] });
+  try {
+    assert.equal(client.supports('ptmNeighbors'), true);
+    const first = client.analyze(frame, { kind: 'strain', ptmInput: fit });
+    await until(() => worker.messages.length === 1);
+    const initial = worker.messages[0];
+    assert.deepEqual(initial.parameters.ptmTypes, frame.types);
+    answer(initial); await first;
+    const second = client.analyze(frame, { kind: 'strain', ptmInput: { ...fit }, references: [{ a: 3.6 }] });
+    await until(() => worker.messages.length === 2);
+    const edited = worker.messages[1];
+    assert.equal(edited.parameters.ptmInput, undefined); assert.equal(edited.parameters.ptmTypes, undefined);
+    assert.equal(edited.parameters.ptmFitId, initial.parameters.ptmFitId);
+    answer(edited); await second;
+    const changed = { ...fit, deformation: fit.deformation.slice() };
+    const third = client.analyze(frame, { kind: 'strain', ptmInput: changed });
+    await until(() => worker.messages.length === 3);
+    assert.notEqual(worker.messages[2].parameters.ptmFitId, edited.parameters.ptmFitId);
+    assert.deepEqual(worker.messages[2].parameters.ptmInput.deformation, changed.deformation);
+    answer(worker.messages[2]); await third;
+    const fourth = client.analyze(frame, { kind: 'strain', ptmInput: { ...changed, revision: 1 } });
+    await until(() => worker.messages.length === 4);
+    assert.notEqual(worker.messages[3].parameters.ptmFitId, worker.messages[2].parameters.ptmFitId);
+    assert.deepEqual(worker.messages[3].parameters.ptmInput.scales, changed.scales);
+    answer(worker.messages[3]); await fourth;
+    assert.ok(fit.structures.byteLength && fit.scales.byteLength && fit.deformation.byteLength && frame.types.byteLength);
+  } finally { client.close(); }
+});
+
+test('unacknowledged, cancelled and evicted GPU PTM fits never omit the next private upload', async () => {
+  const worker = new WorkerFixture(), client = new GpuAnalysisClient({ environment: { navigator: { gpu: {} } }, workerFactory: () => worker });
+  const frame = crystalFrame('fcc', 1), count = frame.types.length;
+  const fit = { structures: new Uint8Array(count).fill(1), scales: new Float64Array(count).fill(2.8), deformation: new Float64Array(count * 9).fill(1) };
+  try {
+    const first = client.analyze(frame, { kind: 'strain', ptmInput: fit });
+    await until(() => worker.messages.length === 1); worker.answer(worker.messages[0]); await first;
+    assert.equal(client.ptmSources.size, 0, 'raw arrays are not kept after an unacknowledged fit');
+    const controller = new AbortController(), pending = client.analyze(frame, { kind: 'strain', ptmInput: fit }, { signal: controller.signal });
+    const rejection = assert.rejects(pending, { name: 'AbortError' });
+    await until(() => worker.messages.length === 2);
+    assert.ok(worker.messages[1].parameters.ptmInput); controller.abort(); await rejection;
+    worker.answer(worker.messages[1], { ok: false, name: 'AbortError', error: 'Cancelled.', cachedPtmFits: [] });
+    const third = client.analyze(frame, { kind: 'strain', ptmInput: fit });
+    await until(() => worker.messages.some(message => message.type === 'analyze' && message.id !== worker.messages[0].id && message.id !== worker.messages[1].id));
+    const next = worker.messages.filter(message => message.type === 'analyze').at(-1);
+    assert.ok(next.parameters.ptmInput);
+    worker.answer(next, { cachedFrameIds: [], cachedPtmFits: [] }); await third;
+    assert.equal(client.ptmSources.size, 0); assert.equal(client.cachedPtmFits.size, 0);
+    const barrier = client.clearFrames();
+    await until(() => worker.messages.at(-1).type === 'clear-frames'); worker.answer(worker.messages.at(-1), { cachedFrameIds: [] }); await barrier;
+    assert.equal(client.ptmSources.size, 0); assert.equal(client.cachedPtmFits.size, 0);
+  } finally { client.close(); }
+});
+
 test('GPU Auto central symmetry privately copies reusable structure inputs and rejects untyped labels', async () => {
   const worker = new WorkerFixture(), client = new GpuAnalysisClient({ environment: { navigator: { gpu: {} } }, workerFactory: () => worker });
   const frame = crystalFrame('fcc', 2), structureInput = new Uint8Array(frame.types.length).fill(1);

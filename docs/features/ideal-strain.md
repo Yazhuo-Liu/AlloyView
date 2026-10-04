@@ -17,13 +17,13 @@ Tensor components are expressed in the local crystal reference axes, whose symme
 
 The phase must match its selected reference and pass the fit tolerance. Unsupported or invalid fits remain NaN. This measures local elastic deformation relative to an ideal lattice, including thermal displacements. It does not use another trajectory frame or calculate non-affine D²min.
 
-## GPU computing
+## GPU acceleration
 
-**Enable GPU computing** is off by default. When enabled, ideal lattice strain uses the GPU for the tensor and invariant calculations. PTM correspondence fitting still runs in the CPU WebAssembly Workers. A fresh calculation fits PTM once, then evaluates the nine strain fields on GPU; a compatible cached PTM fit goes directly to that tensor stage. Editing the lattice reference can reuse its geometric fit.
+**Enable GPU acceleration** is on by default. A fresh ideal-strain calculation prepares nearest-neighbor inputs on GPU, fits PTM correspondence in CPU WebAssembly Workers, then applies the ideal lattice reference and evaluates the nine strain fields on GPU. A compatible cached PTM fit skips neighbor preparation and fitting. Editing only the element reference, `a` or hexagonal `c` can reuse that geometric fit and its resident GPU upload.
 
-The engine label identifies both stages, for example `ptm-wasm-worker+webgpu-strain-tensor`. The GPU retains high and low parts of the Float64 fit data and reference factors during matrix arithmetic, preserving the numerical-zero convention for ideal crystals. The returned fields remain Float32, and the editable element-specific `a` and hexagonal `c` parameters apply to both backends.
+The reference shader selects each atom's element and crystal reference, checks its PTM phase and fit, restores absolute lattice scale with independent hexagonal `a`/`c`, then constructs `F` and the tensor invariants. CPU input preparation packs the original PTM structures, Float64 scales and deformation arrays; it no longer calculates per-atom reference factors or phase decisions. High/low fit and reference components retain precision during compensated matrix arithmetic and preserve the numerical-zero convention for ideal crystals. The returned fields remain Float32.
 
-Atoms that do not match their reference remain NaN without an unmatched-atom warning. If WebGPU, memory or the supported precision range is unavailable, the tensor stage uses CPU Workers and reuses any completed PTM fit. Cancel ends the job without requesting CPU fallback. See [performance](performance.md) for initialization, caching and timing limits; moving the tensor stage does not make PTM fitting a GPU algorithm.
+Atoms that do not match their reference remain NaN without an unmatched-atom warning. The status identifies GPU neighbor preparation, CPU PTM fitting and GPU reference/tensor evaluation. If WebGPU, memory or the supported precision range is unavailable, the affected stage uses CPU Workers and reuses any completed PTM fit. Cancel ends the job without requesting CPU fallback. See [PTM](ptm.md) for neighbor-table limits and [performance](performance.md) for initialization, caching and timing costs.
 
 ## Implementation
 

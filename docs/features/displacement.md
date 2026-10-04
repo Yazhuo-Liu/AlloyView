@@ -24,9 +24,9 @@ With correction disabled, the calculation uses available unwrapped positions and
 
 Analysis precedes display filtering, slicing and display-only replication. With **Replicate atoms for analysis** enabled, displacement uses the enlarged configurations and their stable copy IDs instead. Arrow length, axis scales and glyph sizes do not change the physical components or magnitude.
 
-## GPU computing
+## GPU acceleration
 
-With **Enable GPU computing** on, Cartesian subtraction, minimum-image selection and vector magnitudes prefer WebGPU. Stable-ID or row-order matching remains CPU work. The GPU kernel uses the selected Cartesian positions directly, including origin shifts, cell deformation and available unwrapped coordinates. It preserves the current cell's full triclinic metric and mixed periodic boundaries; open atoms outside the fractional unit box are supported because this calculation does not require a neighbor grid.
+With **Enable GPU acceleration** on, Cartesian subtraction, minimum-image selection and vector magnitudes prefer WebGPU. Stable-ID or row-order matching remains CPU work. The GPU kernel uses the selected Cartesian positions directly, including origin shifts, cell deformation and available unwrapped coordinates. It preserves the current cell's full triclinic metric and mixed periodic boundaries; open atoms outside the fractional unit box are supported because this calculation does not require a neighbor grid.
 
 Cartesian inputs retain their Float32 or Float64 source precision through an anchored high/low upload. Wrapped and unwrapped uploads are cached separately for the current and reference frames and can be reused across compatible calculations. Output components are Float32, as used by vector drawing. Magnitudes are evaluated from those final rounded components with scaled, compensated arithmetic and returned as Float64, so a finite vector norm larger than the Float32 range can remain finite.
 

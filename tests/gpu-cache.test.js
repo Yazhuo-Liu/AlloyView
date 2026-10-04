@@ -5,6 +5,7 @@ import { CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER } from '../src/analysis/gpu/cna-s
 import { REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER } from '../src/analysis/gpu/reference-strain-shaders.js';
 import { CSP_SHADER } from '../src/analysis/gpu/centrosymmetry-shaders.js';
 import { DISPLACEMENT_SHADER } from '../src/analysis/gpu/displacement-shaders.js';
+import { PTM_NEIGHBORS_SHADER } from '../src/analysis/gpu/ptm-neighbors-shaders.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, FALLBACK_GPU_BUDGET_BYTES,
   frameUploadBytes, gpuWorkspaceBytes, trajectoryCapacity } from '../src/analysis/gpu/cache-policy.js';
 import { crystalFrame } from './helpers/crystals.js';
@@ -206,8 +207,8 @@ test('clearing a source frees input and index buffers while retaining the device
   const state = fixture(), { runtime } = state;
   try {
     await runtime.warmup();
-    assert.equal(state.compiled, 19);
-    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER, CSP_SHADER, DISPLACEMENT_SHADER]) {
+    assert.equal(state.compiled, 20);
+    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER, CSP_SHADER, DISPLACEMENT_SHADER, PTM_NEIGHBORS_SHADER]) {
       assert.ok(runtime.pipelines.has(source), 'new analysis kernels compile during device warmup');
     }
     const pipelines = [...runtime.pipelines.values()], device = runtime.device;
@@ -223,6 +224,89 @@ test('clearing a source frees input and index buffers while retaining the device
     assert.ok(state.allocations.every(buffer => buffer.destroyed));
   } finally { runtime.close(); }
   assert.equal(state.destroyed, true);
+});
+
+function ptmFit(frame, revision = 0) {
+  const count = frame.types.length;
+  return { structures: new Uint8Array(count).fill(1), scales: new Float64Array(count).fill(2.823456789),
+    deformation: Float64Array.from({ length: count * 9 }, (_, component) => component % 4 ? 0 : 1), revision };
+}
+
+function ptmEncoder(counter) {
+  return async (frame, fit) => {
+    counter.count += 1;
+    const count = frame.types.length, metadata = new Uint32Array(count * 2);
+    fit.structures.forEach((structure, atom) => { metadata[atom * 2] = structure; });
+    return { types: Uint32Array.from(frame.types), metadata, scales: new Float32Array(count * 2), deformation: new Float32Array(count * 18) };
+  };
+}
+
+test('raw PTM fits cache 88 bytes per atom beyond shared types and survive edited lattice references', async () => {
+  const { runtime, allocations } = fixture(), frame = input(0), fit = ptmFit(frame), counter = { count: 0 };
+  try {
+    const first = await runtime.preparePtmBuffers(frame, fit, ptmEncoder(counter), { frameIndex: 0 });
+    assert.equal(first.reused, false); assert.equal(counter.count, 1);
+    assert.equal(runtime.frames.get(100).bytes, frame.types.length * 92);
+    assert.equal(runtime.allocatedBytes, frame.types.length * 92);
+    assert.equal(runtime.frames.get(100).positionsBuffer, undefined, 'tensor fits do not require a neighbor upload');
+    const second = await runtime.preparePtmBuffers(frame, { ...fit }, ptmEncoder(counter));
+    assert.equal(second.reused, true); assert.equal(counter.count, 1); assert.equal(allocations.length, 4);
+    assert.equal(second.metadataBuffer, first.metadataBuffer);
+    await runtime.uploadFrame(frame, { frameIndex: 0 });
+    assert.equal(runtime.frames.get(100).typesBuffer, first.typesBuffer);
+    assert.equal(runtime.frames.get(100).bytes, frame.types.length * 124);
+    assert.equal(runtime.allocatedBytes, frame.types.length * 124, 'lazy positions add 32N, without duplicating types');
+    runtime.clearFrames(); assert.equal(runtime.getPtmBuffers(frame), undefined); assert.equal(runtime.allocatedBytes, 0);
+    assert.ok(allocations.every(buffer => buffer.destroyed));
+    assert.ok(fit.scales.byteLength && fit.deformation.byteLength && fit.structures.byteLength);
+  } finally { runtime.close(); }
+});
+
+test('PTM fit revision and replaced element arrays refresh buffers atomically and invalidate old typed neighbor grids', async () => {
+  const { runtime } = fixture(), frame = input(0), fit = ptmFit(frame), counter = { count: 0 };
+  try {
+    await runtime.uploadFrame(frame);
+    const first = await runtime.preparePtmBuffers(frame, fit, ptmEncoder(counter));
+    const grid = await runtime.prepareNeighbors(frame, 3.1);
+    frame.types = new Uint16Array(frame.types.length).fill(2);
+    const revised = { ...fit, revision: 1 }, updated = await runtime.preparePtmBuffers(frame, revised, ptmEncoder(counter));
+    assert.equal(updated.reused, false); assert.equal(counter.count, 2);
+    assert.ok(first.typesBuffer.destroyed && first.metadataBuffer.destroyed && first.scalesBuffer.destroyed && first.deformationBuffer.destroyed);
+    assert.ok(grid.configBuffer.destroyed && grid.headsBuffer.destroyed && grid.nextBuffer.destroyed);
+    assert.equal(runtime.indexes.size, 0);
+    assert.ok(new Uint32Array(updated.typesBuffer.lastWrite.buffer).every(value => value === 2));
+    assert.equal(runtime.residentBytes, frame.types.length * 124);
+    assert.equal(runtime.allocatedBytes, frame.types.length * 124);
+    assert.equal(runtime.getPtmBuffers(frame, fit), undefined);
+    assert.equal((await runtime.preparePtmBuffers(frame, revised, ptmEncoder(counter))).reused, true);
+  } finally { runtime.close(); }
+});
+
+test('cached PTM tensor inputs accept outside-cell source geometry and release only their fit on cancellation invalidation', async () => {
+  const { runtime } = fixture(), frame = input(0), fit = ptmFit(frame), counter = { count: 0 };
+  frame.cell.pbc = [false, false, false]; frame.fractional[0] = 2; fit.gpuFitId = 7;
+  try {
+    const first = await runtime.preparePtmBuffers(frame, fit, ptmEncoder(counter));
+    assert.equal(first.reused, false);
+    await assert.rejects(runtime.uploadFrame(frame), /inside the cell/);
+    runtime.clearPtmBuffers(frame, 6); assert.equal(runtime.getPtmBuffers(frame).metadataBuffer, first.metadataBuffer);
+    runtime.clearPtmBuffers(frame, 7); assert.equal(runtime.getPtmBuffers(frame), undefined);
+    assert.ok(first.metadataBuffer.destroyed && first.scalesBuffer.destroyed && first.deformationBuffer.destroyed);
+    assert.equal(first.typesBuffer.destroyed, false); assert.equal(runtime.residentBytes, frame.types.length * 4);
+  } finally { runtime.close(); }
+});
+
+test('cancelled replacement PTM uploads preserve the preceding valid fit and free temporary allocations', async () => {
+  const { runtime, allocations } = fixture(), frame = input(0), fit = ptmFit(frame), counter = { count: 0 };
+  try {
+    const first = await runtime.preparePtmBuffers(frame, fit, ptmEncoder(counter));
+    const controller = new AbortController(), before = runtime.allocatedBytes;
+    runtime.device.queue.onSubmittedWorkDone = async () => controller.abort();
+    await assert.rejects(runtime.preparePtmBuffers(frame, { ...fit, revision: 1 }, ptmEncoder(counter), { signal: controller.signal }), { name: 'AbortError' });
+    assert.equal(runtime.allocatedBytes, before); assert.equal(first.metadataBuffer.destroyed, false);
+    assert.equal(runtime.getPtmBuffers(frame, fit).metadataBuffer, first.metadataBuffer);
+    assert.ok(allocations.slice(4).every(buffer => buffer.destroyed));
+  } finally { runtime.close(); }
 });
 
 test('Cartesian-only residency accepts open positions outside the box and anchors precise source coordinates', async () => {

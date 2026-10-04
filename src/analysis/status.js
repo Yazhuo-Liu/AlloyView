@@ -9,14 +9,18 @@ export function analysisProgressText(progress, { frameIndex = 0, kind = '' } = {
     if (phase === 'queued') return `Waiting for the GPU for ${frame}…`;
     if (phase === 'initializing') return 'Initializing WebGPU…';
     if (phase === 'preparing') return `Uploading ${frame} to the GPU…`;
-    if (phase === 'indexing') return kind === 'displacement'
-      ? `Preparing GPU displacement data for ${frame}…` : `Building GPU neighbor search for ${frame}…`;
+    if (phase === 'indexing') return progress.stage === 'ptm-neighbors'
+      ? `Preparing PTM neighbors with WebGPU for ${frame}…` : kind === 'displacement'
+        ? `Preparing GPU displacement data for ${frame}…` : `Building GPU neighbor search for ${frame}…`;
+    if (progress.stage === 'strain-tensor') return `Calculating lattice-reference strain with WebGPU for ${frame}…${atoms}`;
     return `Analyzing ${frame} with WebGPU…${atoms}`;
   }
   if (phase === 'queued') return `Waiting for available analysis Workers for ${frame}…`;
   if (phase === 'preparing') return `Preparing ${frame} data… ${prepared} / ${total} Worker inputs`;
   if (phase === 'initializing') return `Initializing ${kind === 'ptm' || kind === 'strain' ? 'PTM and ' : ''}Workers… ${initialized} / ${total}`;
-  if (phase === 'indexing') return `Building neighbor search for ${frame}…`;
+  if (phase === 'indexing') return progress.stage === 'ptm-fit'
+    ? `Preparing crystal template fitting for ${frame}…` : `Building neighbor search for ${frame}…`;
+  if (progress.stage === 'ptm-fit') return `Fitting crystal templates for ${frame} with ${workerCount} CPU Worker${workerCount > 1 ? 's' : ''}…${atoms}`;
   return `Analyzing ${frame} with ${workerCount} Worker${workerCount > 1 ? 's' : ''}…${atoms ? `${atoms} ·` : ''} ${completed} / ${total} completed`;
 }
 

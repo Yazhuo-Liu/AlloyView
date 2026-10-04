@@ -12,3 +12,14 @@ test('analysis status reports actual GPU phases and CPU fallback without calling
   assert.equal(analysisBackendDetails(fallback), 'CPU fallback: WebGPU is unavailable.');
   assert.match(analysisProgressText({ backend: 'cpu', phase: 'analyzing', workerCount: 6, total: 6 }), /6 Workers/);
 });
+
+test('ideal strain status distinguishes GPU neighbor preparation, CPU template fitting, and GPU reference tensors', () => {
+  assert.equal(analysisProgressText({ backend: 'gpu', phase: 'indexing', stage: 'ptm-neighbors' }),
+    'Preparing PTM neighbors with WebGPU for frame 1…');
+  assert.equal(analysisProgressText({ backend: 'cpu', phase: 'indexing', stage: 'ptm-fit' }),
+    'Preparing crystal template fitting for frame 1…');
+  assert.equal(analysisProgressText({ backend: 'cpu', phase: 'analyzing', stage: 'ptm-fit', workerCount: 2,
+    completedAtoms: 100, totalAtoms: 300 }), 'Fitting crystal templates for frame 1 with 2 CPU Workers… 100 / 300 atoms');
+  assert.equal(analysisProgressText({ backend: 'gpu', phase: 'analyzing', stage: 'strain-tensor',
+    completedAtoms: 300, totalAtoms: 300 }), 'Calculating lattice-reference strain with WebGPU for frame 1… 300 / 300 atoms');
+});

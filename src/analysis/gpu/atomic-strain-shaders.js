@@ -48,14 +48,67 @@ fn strainDeterminant(matrix: array<vec2f, 9>) -> vec2f {
 }
 `;
 
+// These are CPU referenceFactors' binary64 constants, encoded once per shader,
+// never precomputed per atom. Phase selection and all a/c/scale algebra run GPU.
+const splitConstant = value => {
+  const high = Math.fround(value), low = Math.fround(value - high);
+  const literal = number => Number.isInteger(number) ? `${number}.0` : String(number);
+  return `vec2f(${literal(high)}, ${literal(low)})`;
+};
+const radiusPerA = {
+  1: 1 / Math.SQRT2, 2: 1, 3: (4 * Math.sqrt(3) + 6) / 14,
+  5: 1, 6: (Math.sqrt(3) + 6 * Math.SQRT2) / 16, 7: (Math.sqrt(6) + 12) / 16,
+};
+
 export const ATOMIC_STRAIN_SHADER = `
+struct IdealReference {
+  element: u32, structure: u32, flags: u32, padding: u32,
+  a: vec2f, c: vec2f,
+}
 @group(0) @binding(0) var<storage, read> parameters: array<u32>;
-@group(0) @binding(1) var<storage, read> validAtoms: array<u32>;
-@group(0) @binding(2) var<storage, read> factors: array<vec4f>;
-@group(0) @binding(3) var<storage, read> deformation: array<vec2f>;
-@group(0) @binding(4) var<storage, read_write> strainValues: array<f32>;
-@group(0) @binding(5) var<storage, read_write> diagnostics: array<atomic<u32>>;
+@group(0) @binding(1) var<storage, read> atomElements: array<u32>;
+@group(0) @binding(2) var<storage, read> ptmMetadata: array<vec2u>;
+@group(0) @binding(3) var<storage, read> ptmScales: array<vec2f>;
+@group(0) @binding(4) var<storage, read> deformation: array<vec2f>;
+@group(0) @binding(5) var<storage, read> references: array<IdealReference>;
+@group(0) @binding(6) var<storage, read_write> strainValues: array<f32>;
+@group(0) @binding(7) var<storage, read_write> diagnostics: array<atomic<u32>>;
 ${DOUBLE_SINGLE_WGSL}
+fn supportedDs(value: vec2f) -> bool {
+  let highBits = bitcast<u32>(value.x) & 0x7fffffffu;
+  let lowBits = bitcast<u32>(value.y) & 0x7fffffffu;
+  // A nonzero high component must be a normal finite f32. GPU flushing of
+  // subnormal denominators/factors is an explicit fallback, never false NaN.
+  return highBits < 0x7f800000u && lowBits < 0x7f800000u
+    && (highBits >= 0x00800000u || (highBits == 0u && lowBits == 0u));
+}
+// Retain the divisor residual explicitly. Dividing a result of fused DS
+// expressions through dsSubtract(a, dsMultiply(q,b)) can let a shader compiler
+// reassociate away b.y, erasing real small hydrostatic strain. The high-only
+// product error and each source residual enter this correction independently.
+fn idealDivide(a: vec2f, b: vec2f) -> vec2f {
+  let quotient = a.x / b.x;
+  let highProduct = dsMultiply(vec2f(quotient, 0.0), vec2f(b.x, 0.0));
+  let remainder = ((a.x - highProduct.x) - highProduct.y) + a.y - quotient * b.y;
+  return vec2f(quotient, remainder / b.x);
+}
+fn referenceRadius(structure: u32) -> vec2f {
+  switch structure {
+    ${Object.entries(radiusPerA).map(([structure, radius]) => `case ${structure}u: { return ${splitConstant(radius)}; }`).join('\n    ')}
+    default: { return vec2f(0.0); }
+  }
+}
+fn referenceIndex(element: u32) -> u32 {
+  var lower = 0u;
+  var upper = parameters[3];
+  loop {
+    if (lower >= upper) { break; }
+    let middle = lower + (upper - lower) / 2u;
+    if (references[middle].element < element) { lower = middle + 1u; }
+    else { upper = middle; }
+  }
+  return lower;
+}
 @compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let index = gid.x;
@@ -64,13 +117,43 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let atom = index + parameters[1];
   let undefinedValue = bitcast<f32>(parameters[2]);
   for (var field = 0u; field < 9u; field += 1u) { strainValues[field * count + index] = undefinedValue; }
-  if (validAtoms[atom] == 0u) { atomicAdd(&diagnostics[0], 1u); return; }
-  let atomFactors = factors[atom];
+  let refIndex = referenceIndex(atomElements[atom]);
+  if (refIndex >= parameters[3]) { atomicStore(&diagnostics[1], 1u); return; }
+  let reference = references[refIndex];
+  if (reference.element != atomElements[atom]) { atomicStore(&diagnostics[1], 1u); return; }
+  let metadata = ptmMetadata[atom];
+  if (metadata.x != reference.structure || (metadata.y & 3u) != 0u) {
+    atomicAdd(&diagnostics[0], 1u); return;
+  }
+  // Encoding an otherwise valid source outside the portable f32/DS range
+  // requires a CPU fallback, including f64/f32 subnormal source scales.
+  let scale = ptmScales[atom];
+  if (all(scale == vec2f(0.0)) && (metadata.y & 4u) == 0u) { atomicAdd(&diagnostics[0], 1u); return; }
+  if ((metadata.y & 12u) != 0u || reference.flags != 0u) { atomicStore(&diagnostics[1], 1u); return; }
+  // Preserve CPU operation order: 1 / ((scale*a)*radius), then
+  // ((factor*sqrt(8/3))*a)/c for the third reference column of hexagonal phases.
+  let scaleA = dsMultiply(scale, reference.a);
+  let radius = referenceRadius(metadata.x);
+  let denominator = dsMultiply(scaleA, radius);
+  if (!supportedDs(scaleA) || !supportedDs(denominator) || all(denominator == vec2f(0.0))) {
+    atomicStore(&diagnostics[1], 1u); return;
+  }
+  let factor = idealDivide(vec2f(1.0, 0.0), denominator);
+  var zFactor = factor;
+  if (metadata.x == 2u || metadata.x == 7u) {
+    let hexagonalFactor = dsMultiply(factor, ${splitConstant(Math.sqrt(8 / 3))});
+    let scaledA = dsMultiply(hexagonalFactor, reference.a);
+    if (!supportedDs(hexagonalFactor) || !supportedDs(scaledA)) { atomicStore(&diagnostics[1], 1u); return; }
+    zFactor = idealDivide(scaledA, reference.c);
+  }
+  if (!supportedDs(factor) || !supportedDs(zFactor)) { atomicStore(&diagnostics[1], 1u); return; }
   var matrix: array<vec2f, 9>;
   for (var component = 0u; component < 9u; component += 1u) {
-    var factor = atomFactors.xy;
-    if (component % 3u == 2u) { factor = atomFactors.zw; }
-    matrix[component] = dsMultiply(deformation[atom * 9u + component], factor);
+    let columnFactor = select(factor, zFactor, component % 3u == 2u);
+    matrix[component] = dsMultiply(deformation[atom * 9u + component], columnFactor);
+    if (!supportedDs(matrix[component]) || abs(dsValue(matrix[component])) > 1e8) {
+      atomicStore(&diagnostics[1], 1u); return;
+    }
   }
   let volume = strainDeterminant(matrix);
   if (abs(dsValue(volume)) < 1e-10) { atomicStore(&diagnostics[1], 1u); return; }

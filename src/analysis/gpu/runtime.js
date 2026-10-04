@@ -89,11 +89,11 @@ export class GpuRuntime {
     await this.initialize(signal);
     if (!this.warmupPromise) {
       this.warmupPromise = (async () => {
-        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement] = await Promise.all([
+        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm] = await Promise.all([
           import('./coordination.js'), import('./rdf.js'), import('./local-shear-shaders.js'),
           import('./bonds-shaders.js'), import('./atomic-strain-shaders.js'),
           import('./cna-shaders.js'), import('./reference-strain-shaders.js'),
-          import('./centrosymmetry-shaders.js'), import('./displacement-shaders.js'),
+          import('./centrosymmetry-shaders.js'), import('./displacement-shaders.js'), import('./ptm-neighbors-shaders.js'),
         ]);
         const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
           shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
@@ -101,7 +101,7 @@ export class GpuRuntime {
           bonds.BONDS_COUNT_SHADER, bonds.BONDS_WRITE_SHADER, strain.ATOMIC_STRAIN_SHADER,
           cna.CNA_FIXED_SHADER, cna.CNA_ADAPTIVE_SHADER,
           reference.REFERENCE_STRAIN_CLEAR_SHADER, reference.REFERENCE_STRAIN_SHADER,
-          csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER];
+          csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER, ptm.PTM_NEIGHBORS_SHADER];
         for (const source of sources) await this.compilePipeline(source);
       })();
       this.warmupPromise.catch(() => { this.warmupPromise = null; });
@@ -165,7 +165,7 @@ export class GpuRuntime {
     if (atomCount * 32 > bufferLimit || atomCount * 4 > bufferLimit) {
       throw new GpuUnavailableError('This analysis exceeds the GPU buffer limits; using CPU workers.');
     }
-    const bytes = frameUploadBytes(frame);
+    const bytes = frameUploadBytes(frame) - (existing?.typesBuffer ? atomCount * 4 : 0);
     const prospectiveLargestBytes = Math.max(this.frameBytes, (existing?.bytes ?? 0) + bytes);
     if (bytes + gpuWorkspaceBytes(prospectiveLargestBytes) > this.budgetBytes) {
       throw new GpuUnavailableError('The current frame exceeds the GPU cache budget; using CPU workers.');
@@ -196,12 +196,13 @@ export class GpuRuntime {
       try {
         const buffers = await this.withErrors(async () => {
           const positionsBuffer = this.storageBuffer(uploaded); owned.push(positionsBuffer);
-          const typesBuffer = this.storageBuffer(types); owned.push(typesBuffer);
+          const typesBuffer = existing?.typesBuffer ?? this.storageBuffer(types);
+          if (!existing?.typesBuffer) owned.push(typesBuffer);
           await this.device.queue.onSubmittedWorkDone?.();
           checkSignal(signal);
           return { positionsBuffer, typesBuffer, frameIndex, bytes };
         });
-        this.frames.set(frameKey, { ...existing, ...buffers, frameIndex: frameIndex ?? existing?.frameIndex,
+        this.frames.set(frameKey, { ...existing, ...buffers, typesSource: frame.types, frameIndex: frameIndex ?? existing?.frameIndex,
           bytes: (existing?.bytes ?? 0) + bytes }); this.residentBytes += bytes; this.inputUploads++;
         return { frameKey, ...this.cacheStatus() };
       } catch (error) {
@@ -219,6 +220,86 @@ export class GpuRuntime {
   async prepareFrameBuffers(frame, options) {
     await this.uploadFrame(frame, options);
     return this.frames.get(this.frameKey(frame));
+  }
+
+  /** Immutable raw PTM fits survive edited reference lattices. Their buffers
+   * belong to the source frame, so eviction and source barriers free them.
+   * Cached fits need element IDs, but no periodic-neighbor geometry.
+   */
+  getPtmBuffers(frame, ptmInput) {
+    const resident = this.frames.get(this.frameKey(frame)), cached = resident?.ptm;
+    if (!cached) return undefined;
+    if (ptmInput && (cached.structures !== ptmInput.structures || cached.scales !== ptmInput.scales
+      || cached.deformation !== ptmInput.deformation || cached.types !== frame.types
+      || cached.revision !== ptmInput.revision || cached.fitId !== ptmInput.gpuFitId)) return undefined;
+    return { ...cached, typesBuffer: resident.typesBuffer, reused: true };
+  }
+
+  clearPtmBuffers(frame, fitId) {
+    const resident = this.frames.get(this.frameKey(frame)), cached = resident?.ptm;
+    if (!cached || (fitId !== undefined && cached.fitId !== fitId)) return;
+    this.disposeBuffers([cached.metadataBuffer, cached.scalesBuffer, cached.deformationBuffer]);
+    resident.bytes -= cached.bytes; this.residentBytes -= cached.bytes;
+    delete resident.ptm;
+  }
+
+  async preparePtmBuffers(frame, ptmInput, prepare, options = {}) {
+    if (typeof prepare !== 'function') { options = prepare ?? {}; prepare = options.prepare; }
+    const { signal, frameIndex = frame.gpuFrameIndex } = options;
+    await this.initialize(signal); checkSignal(signal);
+    const frameKey = this.frameKey(frame);
+    this.protectedFrameKey = frameKey;
+    const reused = this.getPtmBuffers(frame, ptmInput);
+    if (reused) return reused;
+    if (typeof prepare !== 'function') throw new Error('A GPU PTM input encoder is required.');
+    if (frameIndex !== undefined && (!Number.isInteger(frameIndex) || frameIndex < 0)) throw new Error('GPU frame index must be nonnegative.');
+    const count = frame.fractional.length / 3, existing = this.frames.get(frameKey), previous = existing?.ptm;
+    if (!Number.isInteger(count) || count < 1 || count > 4_000_000) throw new GpuUnavailableError('The PTM fit exceeds the GPU atom budget.');
+    const bufferLimit = Math.min(this.device.limits.maxBufferSize, this.device.limits.maxStorageBufferBindingSize);
+    if (count * 72 > bufferLimit) throw new GpuUnavailableError('The PTM fit exceeds the GPU buffer limits.');
+    const replaceTypes = !existing?.typesBuffer || existing.typesSource !== frame.types;
+    const bytes = count * 88, typesBytes = existing?.typesBuffer ? 0 : count * 4;
+    const deltaBytes = bytes - (previous?.bytes ?? 0) + typesBytes;
+    const prospectiveLargestBytes = Math.max(this.frameBytes, (existing?.bytes ?? 0) + deltaBytes);
+    if ((existing?.bytes ?? 0) + deltaBytes + gpuWorkspaceBytes(prospectiveLargestBytes) > this.budgetBytes) {
+      throw new GpuUnavailableError('The PTM fit exceeds the GPU cache budget.');
+    }
+    const input = await prepare(frame, ptmInput, { signal });
+    checkSignal(signal);
+    this.frameBytes = prospectiveLargestBytes;
+    for (let attempt = 0; ; attempt += 1) {
+      this.trimFrames({ incomingBytes: deltaBytes });
+      if (this.residentBytes + deltaBytes > this.cacheStatus().frameBudgetBytes) throw new GpuUnavailableError('The PTM fit exceeds the GPU cache budget.');
+      const owned = [];
+      try {
+        const buffers = await this.withErrors(async () => {
+          const own = buffer => { owned.push(buffer); return buffer; };
+          const typesBuffer = replaceTypes ? own(this.storageBuffer(input.types)) : existing.typesBuffer;
+          const metadataBuffer = own(this.storageBuffer(input.metadata));
+          const scalesBuffer = own(this.storageBuffer(input.scales));
+          const deformationBuffer = own(this.storageBuffer(input.deformation));
+          await this.device.queue.onSubmittedWorkDone?.(); checkSignal(signal);
+          return { typesBuffer, metadataBuffer, scalesBuffer, deformationBuffer };
+        });
+        const ptm = { ...buffers, structures: ptmInput.structures, scales: ptmInput.scales, deformation: ptmInput.deformation,
+          types: frame.types, revision: ptmInput.revision, fitId: ptmInput.gpuFitId, bytes, atomCount: count };
+        this.frames.set(frameKey, { ...existing, typesBuffer: buffers.typesBuffer, typesSource: frame.types, ptm,
+          frameIndex: frameIndex ?? existing?.frameIndex, bytes: (existing?.bytes ?? 0) + deltaBytes });
+        this.disposeBuffers([previous?.metadataBuffer, previous?.scalesBuffer, previous?.deformationBuffer]);
+        if (replaceTypes && existing?.typesBuffer) {
+          this.disposeBuffers([existing.typesBuffer]);
+          for (const [key, index] of this.indexes) if (index.frameKey === frameKey) {
+            this.disposeBuffers([index.configBuffer, index.headsBuffer, index.nextBuffer]); this.indexes.delete(key);
+          }
+        }
+        this.residentBytes += deltaBytes; this.inputUploads += 1;
+        return { ...ptm, reused: false };
+      } catch (error) {
+        this.disposeBuffers(owned);
+        if (!isGpuOutOfMemory(error) || attempt >= 1) throw error;
+        this.shrinkBudget(deltaBytes); checkSignal(signal);
+      }
+    }
   }
 
   /** Cartesian positions retain source origins, open boundaries and unwrapped
@@ -580,6 +661,7 @@ export class GpuRuntime {
       this.disposeBuffers([index.configBuffer, index.headsBuffer, index.nextBuffer]); this.indexes.delete(indexKey);
     }
     this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer]);
+    this.disposeBuffers([frame.ptm?.metadataBuffer, frame.ptm?.scalesBuffer, frame.ptm?.deformationBuffer]);
     this.disposeBuffers([...(frame.cartesian?.values() ?? [])].map(entry => entry.positionsBuffer));
     this.adaptiveCna.delete(frameKey);
     this.residentBytes -= frame.bytes; this.frames.delete(frameKey);
@@ -603,6 +685,7 @@ export class GpuRuntime {
   releaseFrames() {
     this.clearIndexes();
     for (const frame of this.frames.values()) this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer,
+      frame.ptm?.metadataBuffer, frame.ptm?.scalesBuffer, frame.ptm?.deformationBuffer,
       ...[...(frame.cartesian?.values() ?? [])].map(entry => entry.positionsBuffer)]);
     this.adaptiveCna.clear();
     this.indexes.clear(); this.frames.clear(); this.residentBytes = 0; this.frameBytes = 0;

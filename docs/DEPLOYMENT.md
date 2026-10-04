@@ -56,8 +56,8 @@ during the transition; newly generated HTML always uses the versioned tree.
 ## WebGPU on GitHub Pages
 
 The Pages build contains the GPU Worker and the same GPU preparation and cache
-code used locally. GPU computing is off by default. When a visitor enables
-**Enable GPU computing**, AlloyView initializes WebGPU in the background,
+code used locally. **Enable GPU acceleration** is on by default. AlloyView
+initializes WebGPU in the background,
 prepares the current frame, then loads the whole sequence if it fits or keeps
 nearby frames. The initial hardware budget is 2 GiB including calculation
 workspace; memory is allocated as needed, and allocation exhaustion reduces
@@ -81,7 +81,7 @@ not properties of the deployed website: a page cannot set a visitor's browser
 launch flags. A successful benchmark therefore does not establish availability
 in that visitor's ordinary browser.
 
-After deployment, enable GPU computing and wait for the cache indicator
+After deployment, leave GPU acceleration enabled and wait for the cache indicator
 (`GPU preparing`, then resident-frame counts). Run a supported analysis, such
 as coordination number, and confirm its timing reports `webgpu`. If the browser
 cannot provide a usable adapter, preparation reports `GPU unavailable` and

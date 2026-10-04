@@ -14,15 +14,15 @@ Periodic relative changes are resolved in the full triclinic metric while retain
 
 Reference-frame strain follows observed atom motion and has a different reference from ideal lattice strain. It does not perform a PTM phase classification or report non-affine D²min.
 
-## GPU computing
+## GPU acceleration
 
-With **Enable GPU computing** on, reference-frame strain can use WebGPU for its reference-neighbor search, local deformation fit, strain tensor and invariants. Stable atom IDs are matched on CPU before computation; both the current and reference coordinates are prepared and retained during the calculation. Compatible uploaded frames can be reused from the GPU cache. The neighbor cutoff still applies to the reference configuration, including distinct periodic and self images in primitive cells. Undefined fits remain NaN silently.
+With **Enable GPU acceleration** on, reference-frame strain can use WebGPU for its reference-neighbor search, local deformation fit, strain tensor and invariants. Stable atom IDs are matched on CPU before computation; both the current and reference coordinates are prepared and retained during the calculation. Compatible uploaded frames can be reused from the GPU cache. The neighbor cutoff still applies to the reference configuration, including distinct periodic and self images in primitive cells. Undefined fits remain NaN silently.
 
 The GPU accumulates covariance matrices with compensated arithmetic, solves the three-by-three fit and returns the same 18 fields as CPU. High/low coordinate components retain input precision, and the output applies the CPU `1e-12` threshold for numerical zeros. Small floating-point residuals can still occur. Periodic relative changes use the full triclinic closest-image metric while retaining each reference bond's image; independent rounding along fractional axes is insufficient for a skewed cell.
 
 Cutoff boundaries, ambiguous closest images and nearly singular fits receive exact CPU correction for the affected atoms, using one reusable reference-neighbor index. The closest-image GPU search has a 256-candidate bound per relative change; cases outside that bound also receive correction. Each atom can examine at most 50,000 reference image candidates and evaluate at most 50,000 current images on GPU. Corrections are limited to 16,384 atoms, after which the full analysis uses CPU. Unsupported geometry, precision or device-memory requirements likewise use CPU. Cancellation stops the job with the usual reset behavior and does not restart it through fallback.
 
-GPU computing is off by default. Switching the preference keeps completed results; calculate again to use the selected backend. See [performance](performance.md) for preparation, caching and timing considerations.
+GPU acceleration is on by default. Switching the preference keeps completed results; calculate again to use the selected backend. See [performance](performance.md) for preparation, caching and timing considerations.
 
 ## Implementation
 

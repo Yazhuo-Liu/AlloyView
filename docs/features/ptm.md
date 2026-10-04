@@ -12,6 +12,12 @@ The geometric fit can be reused by ideal lattice strain when template candidates
 
 Identification depends on enabled templates, local disorder and RMSD tolerance. A recognized crystal template does not establish composition, chemical ordering or a stress-free reference lattice.
 
+## Use in ideal lattice strain
+
+Standalone PTM uses CPU neighbor search and WebAssembly fitting. With **Enable GPU acceleration** on, fresh [ideal lattice strain](ideal-strain.md) uses a hybrid fit: WebGPU prepares each atom's nearest 18 source indices and Float64 Cartesian image vectors, then the existing CPU WebAssembly kernel performs Voronoi ordering, topology and template correspondence fitting. The GPU neighbor shader preserves strict IEEE64 distance/vector ordering through integer arithmetic. It reuses resident frame coordinates and the linked-cell index; this accelerates neighbor preparation when the adapter and workload favor it, while fitting remains CPU work.
+
+Neighbor results are read back in batches of at most 16,384 atoms. The complete host table uses 505 bytes per atom and is bounded to 256 MiB, roughly 531,000 atoms. Diamond and graphene templates require the complete table because fitting also queries neighboring atoms; ordinary templates can supply each CPU Worker with its own central range. Unsupported geometry, device limits or table size use the existing CPU neighbor search. Cancellation stops preparation and fitting without starting fallback work. See [performance](performance.md) for transfer costs and timing limits.
+
 ## Implementation
 
-[PTM wrapper and template parameters](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/ptm.js), [compiled kernel loader](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/ptm-kernel.mjs), [analysis implementation guide](../STRUCTURE_ANALYSIS.md).
+[PTM wrapper and template parameters](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/ptm.js), [GPU neighbor preparation](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/gpu/ptm-neighbors.js), [compiled kernel loader](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/ptm-kernel.mjs), [analysis implementation guide](../STRUCTURE_ANALYSIS.md).

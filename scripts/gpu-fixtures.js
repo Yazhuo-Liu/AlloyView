@@ -3,6 +3,7 @@ import { cartesianToFractional, createCell, fractionalToCartesian } from '../src
 import { createReferenceMapping } from '../src/analysis/reference-strain.js';
 import { calculateCna } from '../src/analysis/cna.js';
 import { NeighborSearch } from '../src/analysis/neighbors.js';
+import { calculatePtm } from '../src/analysis/ptm.js';
 
 const IDENTITY = Object.freeze([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
@@ -503,5 +504,127 @@ export function displacementValidationFixtures() {
   const shortCoordinates = cloneFrame(reference); shortCoordinates.positions = new Float64Array(2);
   add('Incomplete displacement coordinate rows are rejected', shortCoordinates, undefined, 'atom count');
   add('Displacement minimum-image option must be boolean', cloneFrame(reference), undefined, 'boolean', { minimumImage: 'yes' });
+  return fixtures;
+}
+
+function clonePtmInput(input) {
+  return Object.fromEntries(Object.entries(input).map(([name, value]) => [name, ArrayBuffer.isView(value) ? value.slice() : value]));
+}
+
+function diagonalElasticFields(x, y = x, z = x) {
+  const diagonal = [x, y, z].map(value => (value * value - 1) / 2);
+  const hydrostatic = diagonal.reduce((sum, value) => sum + value, 0) / 3;
+  return { atomicShearStrain: Math.sqrt(diagonal.reduce((sum, value) => sum + (value - hydrostatic) ** 2, 0) / 2),
+    atomicHydrostaticStrain: hydrostatic, atomicVolumeChange: x * y * z - 1,
+    strainE11: diagonal[0], strainE22: diagonal[1], strainE33: diagonal[2], strainE12: 0, strainE13: 0, strainE23: 0 };
+}
+
+/** Real CPU PTM fits provide cached tensor inputs. Analytic scalar invariants
+ * remain independent of the local PTM template orientation; individual tensor
+ * expectations are used only for isotropic or hexagonal-axis scaling. */
+export async function idealStrainFixtures() {
+  const fixtures = [], ideals = new Map();
+  const reference = (structure, a) => ({ structure, a, ...([2, 7].includes(structure) ? { c: Math.sqrt(8 / 3) * a } : {}) });
+  const add = async (label, frame, references, expectations = {}, { ptmInput, flags = 255, freshFlags } = {}) => {
+    const fitted = ptmInput ?? await calculatePtm(frame, { flags, rmsdCutoff: .1 });
+    const parameters = { kind: 'strain', references, flags, rmsdCutoff: .1, ptmInput: clonePtmInput(fitted) };
+    const fixture = { label, frame, parameters, ...expectations };
+    if (freshFlags !== undefined) fixture.freshParameters = { kind: 'strain', references, flags: freshFlags, rmsdCutoff: .1 };
+    fixtures.push(fixture);
+    return fixture;
+  };
+  for (const [kind, structure, lattice] of [['fcc', 1, 3.52], ['bcc', 3, 2.86], ['hcp', 2, 2.5], ['sc', 5, 2.4]]) {
+    for (const repeat of [1, 2]) {
+      const fixture = await add(`Exact-zero ${kind.toUpperCase()} ideal strain / repeat ${repeat}`, crystalFrame(kind, repeat, lattice),
+        [reference(structure, lattice)], { expectedZeroStrain: true, expectedStructure: structure }, { freshFlags: 31 });
+      ideals.set(`${kind}-${repeat}`, fixture);
+    }
+  }
+  for (const [kind, structure, lattice] of [['diamond', 6, 5.43], ['hex-diamond', 7, 2.5]]) {
+    await add(`Exact-zero ${kind} ideal strain`, crystalFrame(kind, 2, lattice), [reference(structure, lattice)],
+      { expectedZeroStrain: true, expectedStructure: structure }, { freshFlags: 255 });
+  }
+  const dilation = 1.04;
+  for (const kind of ['fcc', 'bcc', 'hcp', 'sc']) {
+    const ideal = ideals.get(`${kind}-2`);
+    await add(`Isotropic ${kind.toUpperCase()} lattice stretch`, transformFrame(ideal.frame, [dilation, 0, 0, 0, dilation, 0, 0, 0, dilation]),
+      ideal.parameters.references, { expectedStructure: ideal.expectedStructure, expectedFields: diagonalElasticFields(dilation) });
+  }
+  const angle = .71;
+  const rotation = [Math.cos(angle), -Math.sin(angle), 0, Math.sin(angle), Math.cos(angle), 0, 0, 0, 1];
+  for (const kind of ['fcc', 'hcp']) {
+    const ideal = ideals.get(`${kind}-2`);
+    await add(`Rigidly rotated ${kind.toUpperCase()} ideal lattice`, transformFrame(ideal.frame, rotation), ideal.parameters.references,
+      { expectedStructure: ideal.expectedStructure, expectedZeroStrain: true });
+  }
+  const gamma = .06;
+  for (const kind of ['fcc', 'hcp']) {
+    const ideal = ideals.get(`${kind}-2`);
+    await add(`Finite ${kind.toUpperCase()} simple-shear invariants`, transformFrame(ideal.frame, [1, gamma, 0, 0, 1, 0, 0, 0, 1]),
+      ideal.parameters.references, { expectedStructure: ideal.expectedStructure, expectedFields: {
+        atomicHydrostaticStrain: gamma ** 2 / 6,
+        atomicShearStrain: Math.sqrt(gamma ** 2 / 4 + gamma ** 4 / 12), atomicVolumeChange: 0,
+      } });
+  }
+  const bcc = ideals.get('bcc-2'), fcc = ideals.get('fcc-2'), hcp = ideals.get('hcp-2');
+  const tinyStretch = 1 + 1e-8, tinyE = (tinyStretch * tinyStretch - 1) / 2;
+  await add('Genuine tiny uniaxial ideal-lattice strain', transformFrame(bcc.frame, [tinyStretch, 0, 0, 0, 1, 0, 0, 0, 1]),
+    bcc.parameters.references, { expectedStructure: 3, tinyRelativeTolerance: 1e-3, expectedTinyFields: {
+      atomicHydrostaticStrain: tinyE / 3, atomicShearStrain: tinyE / Math.sqrt(3), atomicVolumeChange: tinyStretch - 1,
+    } });
+  const tinyGamma = 1e-8;
+  await add('Genuine tiny simple-shear ideal-lattice strain', transformFrame(fcc.frame, [1, tinyGamma, 0, 0, 1, 0, 0, 0, 1]),
+    fcc.parameters.references, { expectedStructure: 1, tinyRelativeTolerance: 1e-3,
+      expectedTinyFields: { atomicShearStrain: Math.sqrt(tinyGamma ** 2 / 4 + tinyGamma ** 4 / 12) } });
+  const mixedTypes = cloneFrame(fcc.frame);
+  mixedTypes.types = Uint16Array.from(mixedTypes.types, (_, atom) => atom % 2);
+  mixedTypes.typeLabels = ['Ni', 'X'];
+  const editedA = 3.4;
+  await add('Per-species edited reference lattice constant', mixedTypes, [reference(1, 3.52), reference(1, editedA)], {
+    expectedFieldsByType: { 0: diagonalElasticFields(1), 1: diagonalElasticFields(3.52 / editedA) },
+    expectedZeroAtoms: Array.from({ length: mixedTypes.ids.length }, (_, atom) => atom).filter(atom => atom % 2 === 0),
+  }, { ptmInput: fcc.parameters.ptmInput });
+  await add('Per-species mismatched structure leaves only those atoms undefined', cloneFrame(mixedTypes), [reference(1, 3.52), reference(3, 2.86)], {
+    expectedNaNAtoms: Array.from({ length: mixedTypes.ids.length }, (_, atom) => atom).filter(atom => atom % 2 === 1),
+    expectedZeroAtoms: Array.from({ length: mixedTypes.ids.length }, (_, atom) => atom).filter(atom => atom % 2 === 0),
+  }, { ptmInput: fcc.parameters.ptmInput });
+  const editedC = Math.sqrt(8 / 3) * 2.5 * 1.03;
+  await add('Edited hexagonal reference a and c', cloneFrame(hcp.frame), [{ structure: 2, a: 2.45, c: editedC }], {
+    expectedFields: diagonalElasticFields(2.5 / 2.45, 2.5 / 2.45, 1 / 1.03),
+  }, { ptmInput: hcp.parameters.ptmInput });
+  await add('Whole-frame reference structure mismatch stays NaN', cloneFrame(fcc.frame), [reference(3, 2.86)], {
+    expectedNaNAtoms: Array.from({ length: fcc.frame.ids.length }, (_, atom) => atom),
+  }, { ptmInput: fcc.parameters.ptmInput });
+  for (const [label, mutate] of [
+    ['Invalid cached structure', input => { input.structures[0] = 0; }],
+    ['Nonfinite cached PTM scale', input => { input.scales[0] = NaN; }],
+    ['Zero cached PTM scale', input => { input.scales[0] = 0; }],
+    ['Nonfinite cached PTM deformation', input => { input.deformation[0] = NaN; }],
+  ]) {
+    const cache = clonePtmInput(fcc.parameters.ptmInput);
+    mutate(cache);
+    await add(`${label} leaves only its atom NaN`, cloneFrame(fcc.frame), fcc.parameters.references,
+      { expectedNaNAtoms: [0], expectedZeroAtoms: Array.from({ length: fcc.frame.ids.length - 1 }, (_, atom) => atom + 1) },
+      { ptmInput: cache });
+  }
+  const negative = clonePtmInput(fcc.parameters.ptmInput);
+  negative.scales = Float64Array.from(negative.scales, value => -value);
+  negative.deformation = Float64Array.from(negative.deformation, value => -value);
+  await add('Signed PTM scale and deformation preserve a positive ideal fit', cloneFrame(fcc.frame), fcc.parameters.references,
+    { expectedZeroStrain: true }, { ptmInput: negative });
+  const undefinedWithHuge = clonePtmInput(fcc.parameters.ptmInput);
+  undefinedWithHuge.deformation[0] = NaN; undefinedWithHuge.deformation[1] = 1e40;
+  await add('Nonfinite cached fit remains NaN alongside an unsupported finite component', cloneFrame(fcc.frame), fcc.parameters.references,
+    { expectedNaNAtoms: [0], expectedZeroAtoms: Array.from({ length: fcc.frame.ids.length - 1 }, (_, atom) => atom + 1) },
+    { ptmInput: undefinedWithHuge });
+  const mismatchedWithHuge = clonePtmInput(fcc.parameters.ptmInput);
+  mismatchedWithHuge.deformation[0] = 1e40;
+  await add('Phase mismatch remains NaN alongside an unsupported finite component', cloneFrame(fcc.frame), [reference(3, 2.86)],
+    { expectedNaNAtoms: Array.from({ length: fcc.frame.ids.length }, (_, atom) => atom) }, { ptmInput: mismatchedWithHuge });
+  const subnormal = clonePtmInput(fcc.parameters.ptmInput);
+  subnormal.scales = Float64Array.from(subnormal.scales, value => value * 1e-40);
+  subnormal.deformation = Float64Array.from(subnormal.deformation, value => value * 1e-40);
+  await add('Valid subnormal PTM encoding uses explicit CPU numeric fallback', cloneFrame(fcc.frame), fcc.parameters.references,
+    { expectedZeroStrain: true, allowGpuFallback: true, expectedFallbackReason: 'precision|range|encoding|floating' }, { ptmInput: subnormal });
   return fixtures;
 }

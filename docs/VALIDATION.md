@@ -2,7 +2,91 @@
 
 Validation date: 2026-10-04 (UTC)
 
+## GPU ideal lattice reference and the enabled default
+
+The latest checks use Node.js v24.19.0 and Chromium 151 with Google SwiftShader.
+These are real WebGPU shader executions on a software adapter; physical GPU
+performance for the new ideal-strain stages remains unmeasured.
+
+- The full Node suite passes 692 tests, and the final integration checks pass.
+  The static build and full standard browser smoke pass, including the visible
+  and accessible **Enable GPU acceleration** label, its enabled default,
+  toggling, explicit saved off preferences and older configurations without a
+  GPU preference. An explicit off value stays off; a missing value restores on.
+  Existing CPU calculations, configuration, mobile gestures, selection,
+  replication, exports and 204,800-atom rendering remain covered.
+- The scientific GPU suite passes 251 comparisons: 248 execute GPU kernels and
+  three deliberately unsupported inputs use CPU fallback. Twenty common
+  pipelines are prepared. Twelve nearest-neighbor tables agree exactly with
+  CPU, including indices, counts and Float64 image vectors. Forty-two cached
+  and fresh ideal-strain cases cover six reference phases, rotations,
+  mixed elements, independent hexagonal `a`/`c`, reference edits, invalid and
+  mismatched fits and tiny genuine strain. Maximum strain-field difference is
+  `1.776e-15`; ideal zeros, NaN masks and the `1e-12` numerical-zero threshold
+  are retained. Subnormal input deliberately uses CPU fallback.
+- Fresh ideal strain uses GPU nearest-neighbor preparation, CPU WebAssembly
+  PTM correspondence fitting, then GPU element-reference conversion and all
+  nine tensor/invariant fields. The reference shader selects element/phase,
+  validates fits and restores absolute lattice scale; CPU upload preparation
+  does not calculate per-atom reference factors. Standalone PTM keeps its CPU
+  neighbor search and fitting path.
+- Compatible reference edits retain acknowledged private fit inputs and
+  resident GPU fit buffers. New fits, source/revision/type changes and frame
+  eviction invalidate the appropriate data. Results and source arrays retain
+  their precision and ownership.
+- Twelve cancellation checks cover preparation and publication across the
+  supported analyses, including fresh-strain GPU neighbors, CPU PTM fitting
+  and GPU reference/tensor completion. Cancelled requests reject with AbortError,
+  preserve source inputs and permit recovery through the same GPU Worker.
+- Native GPU application checks pass the enabled/renamed startup preference,
+  fresh strain, reference edits with both caches reused, CPU/GPU switches with
+  the same scientific fit, legend selection and cancellation. Existing CNA,
+  CSP, displacement, configuration and physical-replication checks also pass.
+  The production build loads its GPU and CPU Workers from versioned assets:
+  108 FCC atoms give exact zero for all nine fields, all five PTM arrays match
+  CPU, and a reference edit reuses both fit caches without another upload.
+
+GPU checks pass as separate kernel, native-application and production-build
+scopes. Their commands are:
+
+```bash
+npm run test:gpu -- --kernels-only
+npm run test:gpu -- --application-only
+npm run test:gpu -- --built-only
+```
+
+Both Ni benchmarks use every atom in `examples/NiGB_minimized.cfg` (129,904).
+Fresh calculation matches all five PTM arrays exactly on both calls. The nine
+strain fields have matching 4,627-atom NaN masks and maximum absolute difference
+`7.45e-9`, with no CPU neighbor corrections. The edited-reference run changes
+Ni's `a` from 3.52 to 3.4 Å, retains the same NaN masks/error bound and uses no
+CPU corrections. Both measured edited calls reuse private and GPU fit inputs;
+the fit upload count remains one.
+
+| Calculation | CPU first / subsequent (ms) | Software WebGPU first / subsequent (ms) |
+| --- | --- | --- |
+| Fresh ideal strain, complete hybrid pipeline | 2039.0 / 1640.9 | 54582.2 / 52781.0 |
+| Edited reference with resident PTM fit | 279.0 / 253.2 | 62.0 / 52.1 |
+
+Fresh GPU timing includes neighbors, CPU fitting, reference conversion, tensor
+evaluation, transfers and assembly, using four CPU fitting Workers. The edited
+row uses three CPU tensor Workers and starts with its fit already resident:
+CPU PTM preparation takes 1704.9 ms separately, and initial GPU upload/reference/
+tensor preparation takes 252.4 ms separately. Its first measured edit therefore
+does not include initial device or fitting cost. Integer-emulated IEEE64
+neighbor preparation makes the fresh software pipeline slower here; resident
+GPU reference edits are faster in this software run. These timings do not
+establish speedups on a physical GPU.
+
+Reproduce these scopes with `npm run benchmark:gpu -- --software --kernel=strainFresh`
+and `npm run benchmark:gpu -- --software --kernel=strainEdited`. The existing
+`--kernel=strain` mode measures reference conversion and tensor evaluation from
+a cached CPU PTM fit.
+
 ## Optional WebGPU analysis
+
+The following sections preserve earlier validation snapshots. Their feature
+scope and default-off checks describe the application at the time of each run.
 
 Validated with Node.js v24.19.0 and Chromium 151 using the Google SwiftShader
 software WebGPU adapter. These checks execute actual WGSL compute shaders;

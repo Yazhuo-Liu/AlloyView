@@ -57,6 +57,13 @@ RMSD and nearest-neighbor distance (Å) as scalar color properties. Rejected fit
 retain diagnostic RMSD but have undefined deformation/distance. The number of
 recognized atoms depends on the selected templates, threshold and local disorder.
 
+Standalone PTM uses CPU neighbor search and Wasm fitting. Fresh ideal lattice
+strain can prepare nearest-neighbor indices and Float64 image vectors on
+WebGPU before CPU Wasm Voronoi ordering, topology and template fitting. That
+GPU table retains strict distance/vector ordering; fitting uses the same PTM
+library and thresholds. See [PTM](features/ptm.md) for bounded preparation and
+CPU fallback in the strain workflow.
+
 ## Atomic elastic strain
 
 Under **Ideal lattice reference**, each input atom type has an element selector,
@@ -92,6 +99,13 @@ expansion is retained as strain. Results are dimensionless:
 The fit scale and deformation matrix retain double precision. Tensor components
 and volume changes below `1e-12` in absolute magnitude are treated as numerical
 zero, preventing roundoff from becoming a visible strain range in ideal crystals.
+
+GPU reference evaluation chooses each atom's element and phase, restores its
+absolute deformation using editable `a`/`c`, then calculates the strain fields.
+Raw PTM arrays retain their GPU upload across compatible reference edits;
+CPU preparation does not compute per-atom lattice factors. Fresh calculations
+can also use GPU neighbors before the CPU PTM fit. See
+[ideal lattice strain](features/ideal-strain.md) for backend stages and limits.
 
 The default scalar view is shear strain; choose hydrostatic strain, volume
 change or individual tensor components in **Color by**. Atoms whose best PTM
@@ -140,7 +154,7 @@ neighbor count** as color properties. The first retains raw CNA labels, so
 inferred Other sites remain Other; the second shows their selected 8/12 setting
 or 0 when no setting was selected.
 
-With GPU computing enabled, manual and Auto central symmetry run nearest-shell
+With GPU acceleration enabled, manual and Auto central symmetry run nearest-shell
 selection and greedy pairing on WebGPU. Auto can reuse adaptive-CNA labels or
 calculate them on GPU first. The pairing shader emulates IEEE 64-bit arithmetic
 to preserve the CPU's strict distance/vector ordering and pair comparisons,
@@ -206,12 +220,14 @@ not distinguish chemical ordering or crystal orientation.
 
 ## Parallel execution
 
-The default backend uses CPU Workers. With **Enable GPU computing** selected,
+GPU acceleration is enabled by default. With **Enable GPU acceleration** selected,
 adaptive/fixed-cutoff CNA, manual/Auto central symmetry, displacement and
 reference-frame strain can use WebGPU. The GPU kernels preserve the same
 crystal labels, central-symmetry normalization, atom correspondence,
 reference-neighbor convention and output fields, with CPU fallback for
-unsupported inputs or unavailable GPU support. PTM fitting remains CPU work.
+unsupported inputs or unavailable GPU support. Standalone PTM remains CPU work.
+Fresh ideal strain uses GPU neighbor preparation with CPU Wasm correspondence
+fitting, then applies its reference and tensor operations on GPU.
 See [CNA](features/cna.md), [central symmetry](features/centrosymmetry.md),
 [displacement](features/displacement.md),
 [reference-frame strain](features/reference-strain.md) and

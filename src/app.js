@@ -211,12 +211,12 @@ function setGpuComputing(enabled) {
 function updateGpuComputingTitle() {
   const status = gpuPreparationStatus;
   elements['enable-gpu-computing'].title = !analysisPool.gpuEnabled
-    ? 'GPU computing is off. Analyses use CPU Workers.'
+    ? 'GPU acceleration is off. Analyses use CPU Workers.'
     : status?.phase === 'unavailable'
       ? `GPU preparation unavailable: ${status.error} Supported analyses will use CPU Workers if needed.`
       : status?.phase === 'warming'
         ? 'Preparing the GPU device and analysis pipelines in the background.'
-        : 'GPU computing is on. Structure frames are prepared in the background; calculate again to use this preference.';
+        : 'GPU acceleration is on. Structure frames are prepared in the background; calculate again to use this preference.';
 }
 
 function scheduleGpuFramePrefetch() {
@@ -231,10 +231,10 @@ function scheduleGpuFramePrefetch() {
 }
 
 elements['enable-gpu-computing'].addEventListener('click', () => {
-  interruptConfigurationRestore('a computing preference change');
+  interruptConfigurationRestore('a GPU acceleration preference change');
   setGpuComputing(!analysisPool.gpuEnabled);
 });
-setGpuComputing(false);
+setGpuComputing(true);
 
 try {
   renderer = new WebGLRenderer(elements.viewport, {

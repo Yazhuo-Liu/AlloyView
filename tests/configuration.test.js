@@ -44,16 +44,22 @@ test('display-only recipes work without source files and use stable defaults', (
   assert.deepEqual(recipe.settings.slices.items, []);
   assert.equal(recipe.settings.slices.selectedId, null);
   assert.equal(recipe.settings.display.png.axes, false);
+  assert.equal(recipe.settings.compute.gpuEnabled, true);
   assert.deepEqual(recipe.settings.analyses.centrosymmetry, { enabled: false, mode: 'auto', neighbors: 12 });
   assert.equal(matchesSource(recipe, []), true);
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
 });
 
-test('GPU preference round-trips and older recipes default to CPU computing', () => {
+test('GPU acceleration defaults on while explicit saved off preferences round-trip', () => {
   const recipe = createConfiguration({ settings: { compute: { gpuEnabled: true } } });
   assert.equal(parseConfiguration(JSON.stringify(recipe)).settings.compute.gpuEnabled, true);
-  delete recipe.settings.compute;
+  recipe.settings.compute.gpuEnabled = false;
   assert.equal(parseConfiguration(JSON.stringify(recipe)).settings.compute.gpuEnabled, false);
+  assert.equal(createConfiguration({ settings: { compute: { gpuEnabled: false } } }).settings.compute.gpuEnabled, false);
+  delete recipe.settings.compute;
+  assert.equal(parseConfiguration(JSON.stringify(recipe)).settings.compute.gpuEnabled, true);
+  recipe.settings.compute = {};
+  assert.equal(parseConfiguration(JSON.stringify(recipe)).settings.compute.gpuEnabled, true);
   assert.throws(() => createConfiguration({ settings: { compute: { gpuEnabled: 'true' } } }), /settings\.compute\.gpuEnabled/);
   assert.throws(() => createConfiguration({ settings: { compute: { unknown: true } } }), /settings\.compute/);
 });

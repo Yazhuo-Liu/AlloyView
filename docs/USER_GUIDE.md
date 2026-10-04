@@ -286,21 +286,25 @@ shared pool, retaining the initialized PTM Wasm kernel for subsequent jobs;
 input preparation yields between large chunks so the status and **Cancel**
 controls can remain responsive.
 
-**Enable GPU computing** beside the Light/Dark buttons is off by default.
-Turn it on to prefer WebGPU for coordination, adaptive/fixed-cutoff CNA,
+**Enable GPU acceleration** beside the Light/Dark buttons is on by default.
+It prefers WebGPU for coordination, adaptive/fixed-cutoff CNA,
 manual/Auto central symmetry, displacement, reference-frame strain, RDF,
-local geometric shear, bonds and ideal lattice strain tensor evaluation.
-PTM correspondence fitting
-still uses CPU Wasm; strain can reuse that fit for its GPU tensor stage.
+local geometric shear, bonds and ideal lattice strain neighbor/reference/tensor
+stages. Fresh ideal strain prepares neighbors on GPU, then fits PTM correspondence
+with CPU Wasm. Standalone PTM remains a CPU calculation. Strain can reuse
+a compatible fit and its GPU upload;
+editing lattice parameters updates the element-reference table without
+repeating the geometric fit.
 Other analyses keep their existing CPU implementation, and unavailable or
 unsupported GPU execution falls back to CPU. The switch affects the next
 calculation; completed results remain available. Click **Calculate** again
 to rerun a supported analysis with the new preference. JSON configuration
-export/import saves the preference, while older configurations default to off.
+export/import saves the preference. An explicit saved off preference stays off;
+configurations without a GPU preference use the enabled default.
 WebGPU requires HTTPS or localhost. GPU buffers and pipelines are reusable,
 but JavaScript input arrays still need to be uploaded. GPU floating-point
 arithmetic, transfer overhead and hardware all affect results and elapsed time;
-enabling GPU computing does not guarantee a speedup. See
+enabling GPU acceleration does not guarantee a speedup. See
 [Performance](features/performance.md) for algorithm choices and the backend
 layout in `src/analysis/gpu/`.
 
@@ -333,7 +337,7 @@ Green–Lagrange shear and hydrostatic strain, volume change, six strain-tensor
 components and nine deformation-gradient components in Cartesian axes.
 This compares trajectory configurations; **Ideal lattice reference** instead
 uses PTM correspondence and editable perfect-lattice constants.
-With GPU computing enabled, **Frame strain** can use WebGPU; it keeps the same
+With GPU acceleration enabled, **Frame strain** can use WebGPU; it keeps the same
 reference-frame neighbors, atom-ID correspondence and strain definitions.
 
 Cross-frame correspondence requires explicit stable IDs: LAMMPS dump IDs, CFG
@@ -633,10 +637,10 @@ This is a provenance and risk statement, not legal advice.
 
 ## Known limits and next steps
 
-- WebGL 2 is required for rendering. Optional WebGPU computing accelerates
+- WebGL 2 is required for rendering. Optional WebGPU acceleration accelerates
   coordination, adaptive/fixed CNA, reference-frame strain, RDF, local geometric
   shear, manual/Auto central symmetry, displacement, bonds and ideal-strain
-  tensor evaluation; fallback Canvas rendering is
+  reference/tensor evaluation and fresh-strain neighbor preparation; fallback Canvas rendering is
   not implemented.
 - The parser currently indexes a dump in one Worker and does not stream partial
   atom rows into the renderer.
@@ -658,7 +662,7 @@ This is a provenance and risk statement, not legal advice.
   AtomEye snapshot. See `docs/ATOMEYE_REVIEW.md`.
 - Coordination, adaptive/fixed CNA, manual/Auto central symmetry, displacement,
   reference-frame strain, RDF, local geometric shear, bonds and ideal-strain
-  tensors can use optional WebGPU computing or Workers.
+  tensors can use optional WebGPU acceleration or Workers.
   PTM and its deformation fit use the included Wasm kernel. No Emscripten
   installation is needed unless rebuilding C++ with `npm run build:ptm`.
 
