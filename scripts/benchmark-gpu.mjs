@@ -12,6 +12,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
     const frame = parseCfg(await (await fetch('./examples/NiGB_minimized.cfg')).text(), 'NiGB_minimized.cfg');
     const cpu = new AnalysisPool(), gpu = new AnalysisPool();
     gpu.setGpuEnabled(true);
+    const preload = { enabled: ${JSON.stringify(process.argv.includes('--preload'))}, wallMs: 0 };
     const rows = [];
     const isGpu = result => result.backend === 'gpu' || /webgpu/i.test(result.engine ?? '');
     const timed = async (pool, parameters) => {
@@ -31,6 +32,14 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
       return maxAbsoluteError;
     };
     try {
+      if (preload.enabled) {
+        const started = performance.now();
+        await gpu.warmupGpu();
+        await gpu.configureGpuCache({ frameCount: 1, currentIndex: 0 });
+        await gpu.prepareGpuFrame(frame, { frameIndex: 0 });
+        preload.wallMs = performance.now() - started;
+        preload.cache = gpu.gpuCacheStatus;
+      }
       for (const kind of ${JSON.stringify(requested)}) {
         // This example has a 4.97773 Å periodic Z cell. RDF is limited to half
         // that face height; coordination/shear retain their image conventions.
@@ -57,7 +66,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
           gpuInputReused: gpuWarm.result.gpuInputReused ?? null, adapter: gpuWarm.result.adapter ?? null,
           warmWallTimeRatio: gpuActive ? cpuWarm.wallMs / gpuWarm.wallMs : null });
       }
-      return { file: 'examples/NiGB_minimized.cfg', atoms: frame.ids.length, rows };
+      return { file: 'examples/NiGB_minimized.cfg', atoms: frame.ids.length, preload, rows };
     } finally { cpu.close(); gpu.close(); }
   })()`);
   const software = adapter.isFallbackAdapter || /swiftshader|software|llvmpipe/i.test(`${adapter.architecture} ${adapter.description}`);

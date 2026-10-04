@@ -49,6 +49,85 @@ machine with a physical adapter and inspect the reported adapter to assess
 hardware acceleration; neither software timing nor atom count alone predicts
 a GPU speedup.
 
+### Linux NVIDIA hardware validation
+
+Validated on 2026-10-04 with Node.js v26.10.0, Chrome 144.0.7559.109,
+NVIDIA GeForce GTX 1080 Ti and driver 580.178.04. Chrome reports vendor
+`nvidia`, architecture `pascal` and `isFallbackAdapter: false`.
+
+The original hardware runner returned no adapter. Explicit Vulkan flags alone
+still failed with the inherited SSH display `127.0.0.1:857.0`; Chrome logged
+`DisplayVkXcb.cpp:62 (initialize): xcb_connect() failed, error 1` and EGL
+initialization errors. Removing `DISPLAY` alone selected SwiftShader instead.
+Enabling headless GPU/Vulkan and removing `DISPLAY` together selects NVIDIA.
+The runner now applies this configuration automatically and rejects software
+adapters in hardware mode, including Chrome initialization logs on failure.
+
+- `npm test`, `npm run test:gpu -- --hardware` and
+  `npm run test:gpu -- --software` passed. Both browser modes cover numerical
+  agreement, expected CPU fallbacks, cancellation/recovery and the application
+  GPU switch.
+- `npm run benchmark:gpu -- --hardware` passed for all 129,904 atoms with
+  `gpuActive: true` and no fallback for every kernel. Coordination and RDF
+  counts agree exactly with CPU. Local shear's maximum absolute error is
+  `2.147e-6`, below the `3e-5` tolerance, with 10 corrected atoms.
+
+Representative full-call hardware wall times from one run:
+
+| Analysis and parameters | CPU first / subsequent (ms) | GPU first / subsequent (ms) | Subsequent CPU / GPU ratio |
+| --- | --- | --- | --- |
+| Coordination, cutoff 3.1 Å | 272.3 / 222.9 | 669.4 / 46.7 | 4.77 |
+| RDF, cutoff 2.48 Å, 100 bins | 492.6 / 382.4 | 251.6 / 97.5 | 3.92 |
+| Local geometric shear, cutoff 3.1 Å | 953.4 / 961.1 | 494.7 / 154.3 | 6.23 |
+
+The same run order and full-call timing scope described above apply. CPU
+coordination uses three Workers; RDF and local shear use six. These ratios
+describe this file, parameters and one workstation run. Coordination's first
+GPU call includes initialization and takes longer than CPU.
+
+### GPU preparation and trajectory caching
+
+Validated on the same GTX 1080 Ti workstation with hardware and SwiftShader
+WebGPU. Enabling GPU computing prepares a device and 10 common pipelines,
+then uploads the displayed frame and fills either a complete trajectory cache
+or the nearest frame window within an allocation budget.
+
+- The Node suite passes, including GPU budget/allocation, source lifecycle,
+  foreground priority and scheduler cancellation regressions. Scoped
+  out-of-memory checks shrink residency and retry once; pure validation errors
+  do not shrink the cache. Oversized frames fail before host buffer packing.
+  Hardware starts with a 2 GiB ceiling independently of individual buffer
+  limits. A scoped out-of-memory regression starts at that default, verifies
+  that it is not reserved upfront, and reduces residency to the current frame
+  and one neighbor on a simulated smaller GPU.
+- `npm run test:gpu -- --hardware` and `--software` pass numerical and
+  application checks. Four prepared frames remain resident, subsequent
+  analyses avoid both input transfer and GPU upload, and a CPU-reparsed frame
+  reuses its stable GPU identity. Restricting the budget gives a two-frame
+  window containing the current frame and its neighbor.
+- Closing/changing a source preserves the same Worker/device and compiled
+  pipelines while releasing input/index buffers. The application uploads a
+  six-frame XYZ trajectory without calculating analysis results, switches to
+  three- and two-frame sources, and handles rapid GPU toggles without stale
+  residency. Disabling GPU lets accepted calculations finish before teardown.
+- `npm run benchmark:gpu -- --hardware --preload` checks all 129,904 atoms.
+  Preparation took 413.9 ms in one run, separately from calculation. GPU
+  first/subsequent wall times were 94.9/49.0 ms for coordination,
+  184.6/121.4 ms for RDF and 201.7/143.7 ms for local shear. All kernels report
+  GPU input reuse with no fallback; counts agree exactly and local shear's
+  maximum absolute error remains `2.147e-6`.
+- Repeating the hardware preload benchmark after raising the default reports
+  a 2,147,483,648-byte budget and only 4,676,544 bytes resident for the one
+  prepared frame. Coordination, RDF and local shear all execute on WebGPU,
+  reuse their prepared input and report no CPU fallback. All 52 Node test
+  files and the static build pass with this default.
+- A clean headless Chrome 144.0.7559.109 probe on this Linux NVIDIA workstation,
+  without the runner's unsafe-WebGPU or Vulkan overrides, has a secure context
+  and `navigator.gpu` but returns no adapter. The desktop browser could not be
+  checked through the SSH session. Hardware benchmark success with launch
+  overrides therefore must not be treated as verification of ordinary browser
+  support on GitHub Pages; see [deployment checks](DEPLOYMENT.md#webgpu-on-github-pages).
+
 ## Legend coloring quantity selector
 
 - `npm test`: 280 tests passed, none failed/skipped. Build

@@ -1,9 +1,24 @@
 import { cellFaceHeights } from '../../data/model.js';
 import { NEIGHBOR_BINDINGS_WGSL } from './neighbors.js';
+import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, frameUploadBytes, gpuWorkspaceBytes,
+  trajectoryCapacity, frameEvictionOrder } from './cache-policy.js';
 
 const MAX_INPUT_BYTES = 256 * 1024 ** 2;
 const CONFIG_BYTES = 128;
 const STORAGE = 128, COPY_SRC = 4, COPY_DST = 8, UNIFORM = 64, MAP_READ = 1;
+
+const CLEAR_NEIGHBORS_SHADER = `${NEIGHBOR_BINDINGS_WGSL}
+@compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid: vec3u) {
+  if (gid.x < config.dimX * config.dimY * config.dimZ) { atomicStore(&heads[gid.x], -1); }
+}`;
+const INDEX_NEIGHBORS_SHADER = `${NEIGHBOR_BINDINGS_WGSL.replace('@group(0) @binding(3) var<storage, read>', '@group(0) @binding(3) var<storage, read_write>')}
+@group(0) @binding(5) var<storage, read_write> occupancy: array<atomic<u32>>;
+@compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let atom = gid.x + config.startAtom; if (atom >= config.endAtom || atom >= config.count) { return; }
+  let bin = flattenBin(positionBin(fractionalHigh(atom)));
+  next[atom] = atomicExchange(&heads[bin], i32(atom));
+  if (atomicAdd(&occupancy[bin + 1u], 1u) >= config.padding.x) { atomicStore(&occupancy[0], 1u); }
+}`;
 
 export class GpuUnavailableError extends Error {
   constructor(message) { super(message); this.name = 'GpuUnavailableError'; }
@@ -28,6 +43,15 @@ export class GpuRuntime {
     this.inputUploads = 0;
     this.bufferSizes = new WeakMap();
     this.allocatedBytes = 0;
+    this.budgetBytes = DEFAULT_GPU_BUDGET_BYTES;
+    this.explicitBudget = false;
+    this.frameCount = 0;
+    this.currentIndex = 0;
+    this.frameBytes = 0;
+    this.residentBytes = 0;
+    this.protectedFrameKey = null;
+    this.warmupPromise = null;
+    this.memoryLimited = false;
   }
 
   async initialize(signal) {
@@ -46,6 +70,7 @@ export class GpuRuntime {
     if (!adapter) throw new GpuUnavailableError('No WebGPU adapter is available.');
     this.adapterInfo = adapter.info ? { vendor: adapter.info.vendor, architecture: adapter.info.architecture,
       device: adapter.info.device, description: adapter.info.description, isFallbackAdapter: Boolean(adapter.info.isFallbackAdapter) } : {};
+    if (!this.explicitBudget) this.budgetBytes = conservativeGpuBudget(adapter.limits, this.adapterInfo);
     this.device = await adapter.requestDevice({ requiredLimits: {
       maxStorageBuffersPerShaderStage: Math.min(10, adapter.limits.maxStorageBuffersPerShaderStage),
       maxStorageBufferBindingSize: Math.min(MAX_INPUT_BYTES, adapter.limits.maxStorageBufferBindingSize),
@@ -57,13 +82,165 @@ export class GpuRuntime {
     this.device.addEventListener('uncapturederror', (event) => { this.lost = event.error?.message || 'A WebGPU device error occurred.'; });
   }
 
+  async warmup({ signal } = {}) {
+    await this.initialize(signal);
+    if (!this.warmupPromise) {
+      this.warmupPromise = (async () => {
+        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear] = await Promise.all([
+          import('./coordination.js'), import('./rdf.js'), import('./local-shear-shaders.js'),
+        ]);
+        const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
+          shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
+          shear.SHEAR_CORRECTION_SHADER, shear.SHEAR_REDUCTION_SHADER, shear.SHEAR_FINALIZE_SHADER];
+        for (const source of sources) await this.compilePipeline(source);
+      })();
+      this.warmupPromise.catch(() => { this.warmupPromise = null; });
+    }
+    await this.warmupPromise;
+    checkSignal(signal);
+    return this.cacheStatus();
+  }
+
+  configureCache({ frameCount = this.frameCount, currentIndex = this.currentIndex, budgetBytes } = {}) {
+    if (!Number.isInteger(frameCount) || frameCount < 0) throw new Error('GPU frame count must be a nonnegative integer.');
+    if (!Number.isInteger(currentIndex) || currentIndex < 0) throw new Error('GPU current frame must be a nonnegative integer.');
+    if (budgetBytes !== undefined) {
+      if (!Number.isFinite(budgetBytes) || budgetBytes < 4) throw new Error('GPU cache budget must be a positive byte count.');
+      this.budgetBytes = Math.floor(budgetBytes); this.explicitBudget = true;
+    }
+    this.frameCount = frameCount; this.currentIndex = currentIndex;
+    // Jobs are serialized by the GPU worker. A new current index ends the
+    // preceding analysis's pin; the current trajectory frame remains pinned.
+    this.protectedFrameKey = null;
+    this.trimFrames();
+    return this.cacheStatus();
+  }
+
+  cacheStatus() {
+    const workspaceBytes = gpuWorkspaceBytes(this.frameBytes);
+    const capacity = trajectoryCapacity({ frameCount: this.frameCount, frameBytes: this.frameBytes,
+      budgetBytes: this.budgetBytes, workspaceBytes });
+    const cachedFrameIndexes = [...new Set([...this.frames.values()].map(frame => frame.frameIndex).filter(Number.isInteger))].sort((a, b) => a - b);
+    return { initialized: Boolean(this.device && !this.lost), pipelineCount: this.pipelines.size, uploadCount: this.inputUploads,
+      budgetBytes: this.budgetBytes, allocatedBytes: this.allocatedBytes, residentBytes: this.residentBytes, frameBytes: this.frameBytes,
+      workspaceBytes, frameBudgetBytes: Math.max(0, this.budgetBytes - workspaceBytes), capacity,
+      frameCount: this.frameCount, currentIndex: this.currentIndex,
+      cachedFrameIds: [...this.frames.keys()], cachedFrameIndexes,
+      fullTrajectory: this.frameCount > 0 && this.frameBytes > 0 && capacity >= this.frameCount,
+      fullyCached: this.frameCount > 0 && cachedFrameIndexes.length === this.frameCount
+        && cachedFrameIndexes[0] === 0 && cachedFrameIndexes.at(-1) === this.frameCount - 1,
+      memoryLimited: this.memoryLimited };
+  }
+
+  frameKey(frame) {
+    const frameId = frame.gpuFrameId ?? frame;
+    return typeof frameId === 'number' ? frameId : frameId.gpuKey ?? (frameId.gpuKey = ++GpuRuntime.frameSerial);
+  }
+
+  async uploadFrame(frame, { signal, frameIndex } = {}) {
+    await this.initialize(signal);
+    checkSignal(signal);
+    if (frameIndex !== undefined && (!Number.isInteger(frameIndex) || frameIndex < 0)) throw new Error('GPU frame index must be a nonnegative integer.');
+    const frameKey = this.frameKey(frame), existing = this.frames.get(frameKey);
+    if (existing) {
+      if (frameIndex !== undefined) existing.frameIndex = frameIndex;
+      return { frameKey, ...this.cacheStatus() };
+    }
+    const atomCount = frame.fractional.length / 3;
+    if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
+    if (atomCount > 4_000_000) throw new GpuUnavailableError('This frame exceeds the GPU precision or memory budget.');
+    const limits = this.device?.limits;
+    const bufferLimit = limits ? Math.min(limits.maxBufferSize, limits.maxStorageBufferBindingSize) : Infinity;
+    if (atomCount * 32 > bufferLimit || atomCount * 4 > bufferLimit) {
+      throw new GpuUnavailableError('This analysis exceeds the GPU buffer limits; using CPU workers.');
+    }
+    const bytes = frameUploadBytes(frame);
+    const prospectiveLargestBytes = Math.max(this.frameBytes, bytes);
+    if (bytes + gpuWorkspaceBytes(prospectiveLargestBytes) > this.budgetBytes) {
+      throw new GpuUnavailableError('The current frame exceeds the GPU cache budget; using CPU workers.');
+    }
+    const uploaded = new Float32Array(atomCount * 8);
+    for (let atom = 0; atom < atomCount; atom++) {
+      for (let axis = 0; axis < 3; axis++) {
+        let value = frame.fractional[atom * 3 + axis];
+        if (!Number.isFinite(value)) throw new Error(`Atom ${atom + 1} has a non-finite fractional coordinate.`);
+        if (frame.cell.pbc[axis]) value -= Math.floor(value);
+        else if (value < 0 || value > 1) throw new GpuUnavailableError('GPU neighbor analysis currently requires nonperiodic coordinates inside the cell.');
+        const high = Math.fround(value);
+        uploaded[atom * 8 + axis] = high; uploaded[atom * 8 + 4 + axis] = value - high;
+      }
+      if (atom && atom % 65_536 === 0) { await yieldWorker(); checkSignal(signal); }
+    }
+    if (frame.types && (frame.types.length !== atomCount || frame.types.some(type => !Number.isInteger(type) || type < 0 || type > 0xffff_ffff))) {
+      throw new GpuUnavailableError('The frame element types cannot be represented exactly on this GPU backend.');
+    }
+    this.frameBytes = prospectiveLargestBytes;
+    const types = frame.types ? Uint32Array.from(frame.types) : new Uint32Array(atomCount);
+    for (let attempt = 0; ; attempt++) {
+      this.trimFrames({ incomingBytes: bytes });
+      if (this.residentBytes + bytes > this.cacheStatus().frameBudgetBytes) {
+        throw new GpuUnavailableError('The current frame exceeds the GPU cache budget; using CPU workers.');
+      }
+      const owned = [];
+      try {
+        const buffers = await this.withErrors(async () => {
+          const positionsBuffer = this.storageBuffer(uploaded); owned.push(positionsBuffer);
+          const typesBuffer = this.storageBuffer(types); owned.push(typesBuffer);
+          await this.device.queue.onSubmittedWorkDone?.();
+          checkSignal(signal);
+          return { positionsBuffer, typesBuffer, frameIndex, bytes };
+        });
+        this.frames.set(frameKey, buffers); this.residentBytes += bytes; this.inputUploads++;
+        return { frameKey, ...this.cacheStatus() };
+      } catch (error) {
+        this.disposeBuffers(owned);
+        if (!isGpuOutOfMemory(error) || attempt >= 1) throw error;
+        this.shrinkBudget(bytes);
+        checkSignal(signal);
+      }
+    }
+  }
+
+  prepareFrame(frame, options) { return this.uploadFrame(frame, options); }
+
+  shrinkBudget(incomingBytes = 0) {
+    const workspaceBytes = gpuWorkspaceBytes(this.frameBytes);
+    const protectedKeys = this.protectedKeys();
+    const protectedBytes = [...this.frames].filter(([key, frame]) => protectedKeys.has(key) || frame.frameIndex === this.currentIndex)
+      .reduce((total, [, frame]) => total + frame.bytes, 0);
+    const lowerBound = workspaceBytes + Math.max(this.frameBytes, protectedBytes + incomingBytes);
+    this.budgetBytes = Math.min(this.budgetBytes, Math.max(lowerBound,
+      Math.min(Math.floor(this.budgetBytes * 0.75), workspaceBytes + this.residentBytes + incomingBytes - this.frameBytes)));
+    this.memoryLimited = true;
+    this.trimFrames({ incomingBytes });
+  }
+
+  recoverMemory(error) {
+    if (!isGpuOutOfMemory(error) || this.lost) return false;
+    // Computation may need more workspace than the estimate on a particular
+    // adapter. Release indexes and speculative trajectory inputs, then let
+    // the worker retry the complete analysis once with its active frame.
+    this.clearIndexes();
+    this.shrinkBudget();
+    for (const key of frameEvictionOrder(this.frames, this.currentIndex, this.protectedKeys())) this.evictFrame(key);
+    return true;
+  }
+
+  finishAnalysis() { this.protectedFrameKey = null; this.trimFrames(); }
+
   createBuffer(bytes, usage = STORAGE | COPY_SRC | COPY_DST) {
     if (!this.device || this.lost) throw new GpuUnavailableError(this.lost || 'WebGPU is not initialized.');
     const size = Math.max(4, Math.ceil(bytes / 4) * 4);
     if (size > this.device.limits.maxBufferSize || ((usage & STORAGE) && size > this.device.limits.maxStorageBufferBindingSize)) {
       throw new GpuUnavailableError('This analysis exceeds the GPU buffer limits; using CPU workers.');
     }
-    if (this.allocatedBytes + size > MAX_INPUT_BYTES) throw new GpuUnavailableError('This analysis exceeds the GPU memory budget; using CPU workers.');
+    if (this.allocatedBytes + size > this.budgetBytes) {
+      for (const key of frameEvictionOrder(this.frames, this.currentIndex, this.protectedKeys())) {
+        this.evictFrame(key);
+        if (this.allocatedBytes + size <= this.budgetBytes) break;
+      }
+      if (this.allocatedBytes + size > this.budgetBytes) throw new GpuUnavailableError('This analysis exceeds the GPU memory budget; using CPU workers.');
+    }
     const buffer = this.device.createBuffer({ size, usage });
     this.bufferSizes.set(buffer, size); this.allocatedBytes += size;
     return buffer;
@@ -86,13 +263,25 @@ export class GpuRuntime {
   }
 
   async withErrors(callback) {
+    // Lightweight tests can use a buffer-only fake device. Real WebGPU always
+    // supplies scopes, so allocation failures are captured before residency.
+    if (!this.device?.pushErrorScope) return callback();
     this.device.pushErrorScope('out-of-memory');
     this.device.pushErrorScope('validation');
     let result, failure;
     try { result = await callback(); } catch (error) { failure = error; }
     const validation = await this.device.popErrorScope(), memory = await this.device.popErrorScope();
-    if (failure) throw failure;
-    if (validation || memory) throw new GpuUnavailableError((validation || memory).message || 'The GPU could not allocate or execute this analysis.');
+    if (failure) {
+      if (memory && failure.name !== 'AbortError') failure.gpuOutOfMemory = true;
+      throw failure;
+    }
+    if (validation || memory) {
+      // An allocation OOM can also make a later write validate against an
+      // invalid buffer. Retain the original allocation cause for recovery.
+      const error = new GpuUnavailableError((memory || validation).message || 'The GPU could not allocate or execute this analysis.');
+      error.gpuOutOfMemory = Boolean(memory);
+      throw error;
+    }
     return result;
   }
 
@@ -106,8 +295,8 @@ export class GpuRuntime {
     if (!Number.isFinite(cutoff) || cutoff <= 0) throw new Error('The cutoff radius must be a finite value greater than zero.');
     const atomCount = frame.fractional.length / 3;
     if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
-    const frameId = frame.gpuFrameId ?? frame;
-    const frameKey = typeof frameId === 'number' ? frameId : frameId.gpuKey ?? (frameId.gpuKey = ++GpuRuntime.frameSerial);
+    const frameKey = this.frameKey(frame);
+    this.protectedFrameKey = frameKey;
     const key = `${frameKey}:${cutoff}`;
     if (this.indexes.has(key)) return this.indexes.get(key);
     const heights = Array.from(cellFaceHeights(frame.cell));
@@ -132,22 +321,7 @@ export class GpuRuntime {
       const axis = dimensions.indexOf(Math.max(...dimensions)); dimensions[axis] = Math.max(1, Math.floor(dimensions[axis] / 2));
     }
     const totalBins = dimensions.reduce((product, value) => product * value, 1);
-    let uploaded;
-    if (!this.frames.has(frameKey)) {
-      uploaded = new Float32Array(atomCount * 8);
-      for (let atom = 0; atom < atomCount; atom++) {
-        for (let axis = 0; axis < 3; axis++) {
-          let value = frame.fractional[atom * 3 + axis];
-          if (!Number.isFinite(value)) throw new Error(`Atom ${atom + 1} has a non-finite fractional coordinate.`);
-          if (frame.cell.pbc[axis]) value -= Math.floor(value);
-          else if (value < 0 || value > 1) throw new GpuUnavailableError('GPU neighbor analysis currently requires nonperiodic coordinates inside the cell.');
-          const high = Math.fround(value);
-          uploaded[atom * 8 + axis] = high;
-          uploaded[atom * 8 + 4 + axis] = value - high;
-        }
-        if (atom && atom % 65_536 === 0) { await yieldWorker(); checkSignal(signal); }
-      }
-    }
+    await this.uploadFrame(frame, { signal });
     const config = new ArrayBuffer(CONFIG_BYTES), ints = new Uint32Array(config), floats = new Float32Array(config);
     ints.set([atomCount, ...dimensions]);
     for (let axis = 0; axis < 3; axis++) {
@@ -158,21 +332,12 @@ export class GpuRuntime {
     floats[24] = cutoff * cutoff;
     floats[25] = distanceTolerance;
     ints[26] = 0; ints[27] = atomCount;
+    const maximumOccupancy = Math.max(32, Math.floor(50_000 / 27 / imageBudget));
+    ints[28] = maximumOccupancy;
     const owned = [];
     const own = (buffer) => { owned.push(buffer); return buffer; };
     try {
-      let frameBuffers = this.frames.get(frameKey);
-      if (!frameBuffers) {
-        const frameOwned = [];
-        try {
-          const positionsBuffer = this.storageBuffer(uploaded); frameOwned.push(positionsBuffer);
-          const typesBuffer = this.storageBuffer(frame.types ? Uint32Array.from(frame.types) : new Uint32Array(atomCount)); frameOwned.push(typesBuffer);
-          frameBuffers = { positionsBuffer, typesBuffer };
-          this.frames.set(frameKey, frameBuffers);
-          this.inputUploads++;
-          this.trimFrames();
-        } catch (error) { this.disposeBuffers(frameOwned); throw error; }
-      }
+      const frameBuffers = this.frames.get(frameKey);
       const context = { atomCount, dimensions, faceHeights: heights, cutoff, distanceTolerance: floats[25],
         frameKey, configBuffer: own(this.createBuffer(CONFIG_BYTES, UNIFORM | COPY_DST)), ...frameBuffers,
         headsBuffer: own(this.createBuffer(totalBins * 4)), nextBuffer: own(this.createBuffer(atomCount * 4)) };
@@ -180,20 +345,9 @@ export class GpuRuntime {
       this.configContexts.set(context.configBuffer, context);
       // Clearing bins and indexing atoms are GPU operations; no JS linked-cell
       // construction or quadratic all-pairs upload is required.
-      await this.run(`${NEIGHBOR_BINDINGS_WGSL}
-@compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid: vec3u) {
-  if (gid.x < config.dimX * config.dimY * config.dimZ) { atomicStore(&heads[gid.x], -1); }
-}`, this.neighborBindings(context), totalBins, { signal, batchSize: 0, updateRange: false });
+      await this.run(CLEAR_NEIGHBORS_SHADER, this.neighborBindings(context), totalBins, { signal, batchSize: 0, updateRange: false });
       const occupancyBuffer = own(this.createBuffer((totalBins + 1) * 4));
-      const maximumOccupancy = Math.max(32, Math.floor(50_000 / 27 / imageBudget));
-      await this.run(`${NEIGHBOR_BINDINGS_WGSL.replace('@group(0) @binding(3) var<storage, read>', '@group(0) @binding(3) var<storage, read_write>')}
-@group(0) @binding(5) var<storage, read_write> occupancy: array<atomic<u32>>;
-@compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let atom = gid.x + config.startAtom; if (atom >= config.endAtom || atom >= config.count) { return; }
-  let bin = flattenBin(positionBin(fractionalHigh(atom)));
-  next[atom] = atomicExchange(&heads[bin], i32(atom));
-  if (atomicAdd(&occupancy[bin + 1u], 1u) >= ${maximumOccupancy}u) { atomicStore(&occupancy[0], 1u); }
-}`, this.neighborBindings(context, [occupancyBuffer]), atomCount, { signal });
+      await this.run(INDEX_NEIGHBORS_SHADER, this.neighborBindings(context, [occupancyBuffer]), atomCount, { signal });
       const occupied = await this.read(occupancyBuffer, Uint32Array, 1, { signal });
       this.disposeBuffers([occupancyBuffer]); owned.splice(owned.indexOf(occupancyBuffer), 1);
       if (occupied[0]) throw new GpuUnavailableError('The neighbor cells are too densely occupied for a bounded GPU dispatch.');
@@ -203,8 +357,7 @@ export class GpuRuntime {
     } catch (error) { this.disposeBuffers(owned); throw error; }
   }
 
-  async run(source, bindings, invocations, { signal, startAtom = 0, endAtom = invocations, batchSize = 16_384, updateRange = true, onProgress } = {}) {
-    await this.initialize(signal);
+  async compilePipeline(source) {
     const device = this.device;
     let pipeline = this.pipelines.get(source);
     if (!pipeline) {
@@ -222,6 +375,13 @@ export class GpuRuntime {
       if (this.pipelines.size > 32) this.pipelines.delete(this.pipelines.keys().next().value);
       this.pipelines.set(source, pipeline);
     }
+    return pipeline;
+  }
+
+  async run(source, bindings, invocations, { signal, startAtom = 0, endAtom = invocations, batchSize = 16_384, updateRange = true, onProgress } = {}) {
+    await this.initialize(signal);
+    const device = this.device;
+    const pipeline = await this.compilePipeline(source);
     checkSignal(signal);
     const layout = pipeline.getBindGroupLayout(0);
     const entries = bindings.map((buffer, binding) => ({ binding, resource: { buffer } }));
@@ -268,13 +428,25 @@ export class GpuRuntime {
     } finally { this.disposeBuffers([staging]); }
   }
 
-  trimFrames() {
-    while (this.frames.size > 2) {
-      const [oldKey, old] = this.frames.entries().next().value;
-      for (const [indexKey, index] of this.indexes) if (index.frameKey === oldKey) {
-        this.disposeBuffers([index.configBuffer, index.headsBuffer, index.nextBuffer]); this.indexes.delete(indexKey);
-      }
-      this.disposeBuffers([old.positionsBuffer, old.typesBuffer]); this.frames.delete(oldKey);
+  protectedKeys() {
+    return this.protectedFrameKey === null ? new Set() : new Set([this.protectedFrameKey]);
+  }
+
+  evictFrame(frameKey) {
+    const frame = this.frames.get(frameKey);
+    if (!frame) return;
+    for (const [indexKey, index] of this.indexes) if (index.frameKey === frameKey) {
+      this.disposeBuffers([index.configBuffer, index.headsBuffer, index.nextBuffer]); this.indexes.delete(indexKey);
+    }
+    this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer]);
+    this.residentBytes -= frame.bytes; this.frames.delete(frameKey);
+  }
+
+  trimFrames({ incomingBytes = 0 } = {}) {
+    const { capacity, frameBudgetBytes } = this.cacheStatus();
+    for (const key of frameEvictionOrder(this.frames, this.currentIndex, this.protectedKeys())) {
+      if (this.frames.size + (incomingBytes > 0 ? 1 : 0) <= capacity && this.residentBytes + incomingBytes <= frameBudgetBytes) break;
+      this.evictFrame(key);
     }
   }
 
@@ -285,10 +457,19 @@ export class GpuRuntime {
       buffer.destroy();
     }
   }
-  close() {
-    for (const context of this.indexes.values()) this.disposeBuffers([context.configBuffer, context.headsBuffer, context.nextBuffer]);
+  releaseFrames() {
+    this.clearIndexes();
     for (const frame of this.frames.values()) this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer]);
-    this.indexes.clear(); this.frames.clear(); this.device?.destroy();
+    this.indexes.clear(); this.frames.clear(); this.residentBytes = 0; this.frameBytes = 0;
+    this.frameCount = 0; this.currentIndex = 0; this.protectedFrameKey = null;
+  }
+  clearFrames() { this.releaseFrames(); return this.cacheStatus(); }
+  clearIndexes() {
+    for (const context of this.indexes.values()) this.disposeBuffers([context.configBuffer, context.headsBuffer, context.nextBuffer]);
+    this.indexes.clear();
+  }
+  close() {
+    this.releaseFrames(); this.pipelines.clear(); this.device?.destroy(); this.device = null; this.warmupPromise = null;
   }
 }
 GpuRuntime.frameSerial = 0;
@@ -301,3 +482,7 @@ function bindingDeclarations(source) {
 }
 
 export function yieldWorker() { return new Promise((resolve) => setTimeout(resolve, 0)); }
+
+function isGpuOutOfMemory(error) {
+  return error?.gpuOutOfMemory || error?.name === 'GPUOutOfMemoryError';
+}

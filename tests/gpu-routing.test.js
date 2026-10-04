@@ -63,7 +63,8 @@ class FakeWorker {
   postMessage(data, transfer = []) { this.messages.push(structuredClone(data, { transfer })); }
   terminate() { this.terminated = true; }
   emit(name, data) { for (const listener of this.listeners.get(name) ?? []) listener(name === 'message' ? { data } : data); }
-  answer(message, extras = {}) { this.emit('message', { id: message.id, ok: true, result: { engine: 'webgpu' }, cachedFrameIds: [message.frameId], ...extras }); }
+  answer(message, extras = {}) { this.emit('message', { id: message.id, ok: true, result: { engine: 'webgpu' },
+    cachedFrameIds: message.frameId === undefined ? [] : [message.frameId], ...extras }); }
 }
 
 async function until(predicate) {
@@ -140,6 +141,130 @@ test('missing WebGPU is a recoverable backend failure and allocates no worker', 
   const client = new GpuAnalysisClient({ environment: {}, workerFactory: () => { workers++; return new FakeWorker(); } });
   await assert.rejects(client.analyze(frame(), { kind: 'coordination' }), /WebGPU is unavailable/);
   assert.equal(workers, 0); client.close();
+});
+
+test('warmup and a source reset preserve the same GPU worker while discarding frame payloads', async () => {
+  const { client, workers } = fakeClient();
+  try {
+    await client.clearFrames(); assert.equal(workers.length, 0, 'clearing an unused GPU does not start it');
+    const warmup = client.warmup();
+    await until(() => workers[0]?.messages.length === 1);
+    assert.equal(workers[0].messages[0].type, 'warmup');
+    workers[0].answer(workers[0].messages[0], { cacheStatus: { capacity: 10, budgetBytes: 1024, cachedFrameIndexes: [] } });
+    assert.equal((await warmup).capacity, 10);
+    await client.warmup(); assert.equal(workers[0].messages.length, 1, 'device/pipelines are already warm');
+    const reset = client.clearFrames();
+    await until(() => workers[0].messages.length === 2);
+    assert.equal(workers[0].messages[1].type, 'clear-frames');
+    workers[0].answer(workers[0].messages[1]); await reset;
+    await client.warmup();
+    assert.equal(workers.length, 1); assert.equal(workers[0].terminated, false);
+    assert.equal(workers[0].messages.length, 2, 'reset only releases frame resources');
+  } finally { client.close(); }
+});
+
+test('pre-uploaded trajectory frames survive CPU eviction and omit subsequent analysis input copies', async () => {
+  const { client, workers } = fakeClient(), data = frame();
+  try {
+    const original = data.fractional.slice();
+    const prepared = client.prepareFrame(data, { frameIndex: 8 });
+    await until(() => workers[0]?.messages.length === 1);
+    const upload = workers[0].messages[0];
+    assert.equal(upload.type, 'prepare-frame'); assert.equal(upload.frameIndex, 8);
+    workers[0].answer(upload, { cacheStatus: { capacity: 12, cachedFrameIds: [upload.frameId], cachedFrameIndexes: [8] } });
+    await prepared;
+    const reparsed = frame(); client.associateFrame(reparsed, 8);
+    const analysis = client.analyze(reparsed, { kind: 'coordination' });
+    await until(() => workers[0].messages.length === 2);
+    const request = workers[0].messages[1];
+    assert.equal(request.frameId, upload.frameId); assert.equal(request.frame, undefined);
+    assert.deepEqual(data.fractional, original);
+    const status = client.cacheStatus; status.cachedFrameIndexes.push(100);
+    assert.deepEqual(client.cacheStatus.cachedFrameIndexes, [8], 'callers cannot mutate client residency metadata');
+    workers[0].answer(request); await analysis;
+  } finally { client.close(); }
+});
+
+test('foreground analysis preempts background uploads and runs ahead of queued preparation', async () => {
+  const { client, workers } = fakeClient();
+  try {
+    const first = client.prepareFrame(frame(), { frameIndex: 1 });
+    const cancelled = assert.rejects(first, { name: 'AbortError' });
+    const queuedFrame = frame(), original = queuedFrame.fractional.slice();
+    const queued = client.prepareFrame(queuedFrame, { frameIndex: 2 });
+    await until(() => workers[0]?.messages.length === 1);
+    const upload = workers[0].messages[0];
+    const foreground = client.analyze(frame(), { kind: 'coordination' });
+    await cancelled;
+    assert.equal(workers[0].messages.at(-1).type, 'cancel');
+    assert.equal(workers[0].messages.filter(message => message.frame).length, 1, 'queued prefetch has no copied payload');
+    workers[0].answer(upload, { ok: false, name: 'AbortError', error: 'cancelled', cachedFrameIds: [] });
+    await until(() => workers[0].messages.some(message => message.type === 'analyze'));
+    const calculation = workers[0].messages.at(-1);
+    workers[0].answer(calculation); await foreground;
+    await until(() => workers[0].messages.filter(message => message.type === 'prepare-frame').length === 2);
+    assert.deepEqual(queuedFrame.fractional, original);
+    workers[0].answer(workers[0].messages.at(-1)); await queued;
+  } finally { client.close(); }
+});
+
+test('source reset cancels old work promptly and ignores stale resident IDs before new uploads', async () => {
+  const { client, workers } = fakeClient();
+  try {
+    const old = client.prepareFrame(frame(), { frameIndex: 0 });
+    const cancelled = assert.rejects(old, { name: 'AbortError' });
+    await until(() => workers[0]?.messages.length === 1);
+    const staleUpload = workers[0].messages[0];
+    const cleared = client.clearFrames(); await cancelled;
+    const next = client.prepareFrame(frame(), { frameIndex: 0 });
+    workers[0].answer(staleUpload);
+    assert.deepEqual(client.cacheStatus.cachedFrameIds, [], 'old source replies cannot restore residency');
+    await until(() => workers[0].messages.some(message => message.type === 'clear-frames'));
+    const reset = workers[0].messages.at(-1); workers[0].answer(reset); await cleared;
+    await until(() => workers[0].messages.filter(message => message.type === 'prepare-frame').length === 2);
+    const freshUpload = workers[0].messages.at(-1);
+    assert.ok(freshUpload.frame); assert.notEqual(freshUpload.frameId, staleUpload.frameId);
+    workers[0].answer(freshUpload); await next;
+    assert.equal(workers.length, 1); assert.equal(workers[0].terminated, false);
+  } finally { client.close(); }
+});
+
+test('disabling GPU releases background work while accepted calculations finish before device teardown', async () => {
+  const { client, workers } = fakeClient();
+  try {
+    const first = client.analyze(frame(), { kind: 'coordination' });
+    const second = client.analyze(frame(), { kind: 'rdf' });
+    const preparation = client.prepareFrame(frame(), { frameIndex: 1 });
+    const cancelledPreparation = assert.rejects(preparation, { name: 'AbortError' });
+    await until(() => workers[0]?.messages.length === 1);
+    client.release({ whenIdle: true }); await cancelledPreparation;
+    assert.equal(workers[0].terminated, false);
+    assert.equal(workers[0].messages.some(message => message.type === 'cancel'), false, 'foreground jobs retain their accepted preference');
+    workers[0].answer(workers[0].messages[0]); await first;
+    await until(() => workers[0].messages.length === 2);
+    assert.equal(workers[0].messages[1].type, 'analyze');
+    workers[0].answer(workers[0].messages[1]); await second;
+    assert.equal(workers[0].terminated, true, 'device teardown waits for the last calculation');
+    assert.equal(client.worker, null);
+  } finally { client.close(); }
+});
+
+test('rapid reenable cancels deferred teardown and reuses the worker after the running calculation', async () => {
+  const { client, workers } = fakeClient();
+  const pool = new AnalysisPool({ gpuBackend: client });
+  try {
+    pool.setGpuEnabled(true);
+    const first = pool.analyze(frame(), { kind: 'coordination' });
+    await until(() => workers[0]?.messages.length === 1);
+    pool.setGpuEnabled(false); pool.releaseGpuResources({ whenIdle: true });
+    pool.setGpuEnabled(true);
+    workers[0].answer(workers[0].messages[0]); await first;
+    assert.equal(workers[0].terminated, false);
+    const next = pool.analyze(frame(), { kind: 'coordination' });
+    await until(() => workers[0].messages.length === 2);
+    workers[0].answer(workers[0].messages[1]); await next;
+    assert.equal(workers.length, 1); assert.equal(workers[0].terminated, false);
+  } finally { pool.close(); }
 });
 
 test('GPU runtime frees partial allocations and bounds cached frame/index resources', async () => {

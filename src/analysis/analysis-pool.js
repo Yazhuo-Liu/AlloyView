@@ -50,10 +50,16 @@ export class AnalysisPool {
     this.gpuBackend = gpuBackend ?? new GpuAnalysisClient({ environment });
   }
 
-  setGpuEnabled(enabled) { this.gpuEnabled = Boolean(enabled); }
-  releaseGpuResources() { this.gpuBackend.release?.(); }
+  setGpuEnabled(enabled) { this.gpuEnabled = Boolean(enabled); if (this.gpuEnabled) this.gpuBackend.resume?.(); }
+  releaseGpuResources(options) { return this.gpuBackend.release?.(options); }
+  warmupGpu(options) { return this.gpuBackend.warmup?.(options) ?? Promise.resolve(this.gpuCacheStatus); }
+  configureGpuCache(options) { return this.gpuBackend.configureCache?.(options) ?? Promise.resolve(this.gpuCacheStatus); }
+  prepareGpuFrame(frame, options) { return this.gpuBackend.prepareFrame?.(frame, options) ?? Promise.resolve(this.gpuCacheStatus); }
+  associateGpuFrame(frame, frameIndex) { return this.gpuBackend.associateFrame?.(frame, frameIndex); }
+  clearGpuFrames() { return this.gpuBackend.clearFrames?.() ?? Promise.resolve(this.gpuCacheStatus); }
+  get gpuCacheStatus() { return this.gpuBackend.cacheStatus ?? null; }
 
-  async analyze(frame, parameters, { onProgress = () => {}, signal } = {}) {
+  async analyze(frame, parameters, { onProgress = () => {}, signal, frameIndex } = {}) {
     if (this.closed) throw new Error('The analysis pool is closed.');
     if (signal?.aborted) throw abortError();
     const analysisStartedAt = performance.now();
@@ -63,7 +69,7 @@ export class AnalysisPool {
       if (!this.gpuBackend.supports(parameters.kind)) fallbackReason = `The ${parameters.kind} analysis uses CPU workers; no GPU kernel is available.`;
       else {
         try {
-          const result = await this.gpuBackend.analyze(frame, parameters, { onProgress, signal });
+          const result = await this.gpuBackend.analyze(frame, parameters, { onProgress, signal, frameIndex });
           if (signal?.aborted || this.closed) throw abortError();
           return { ...result, backend: 'gpu', gpuRequested: true, elapsedMs: performance.now() - analysisStartedAt };
         } catch (error) {

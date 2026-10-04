@@ -47,12 +47,17 @@ export async function withWebGpuBrowser(run, { software = true } = {}) {
   });
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   const profile = await mkdtemp(resolve(tmpdir(), 'alloyview-webgpu-'));
+  // ANGLE can otherwise try to connect to an inherited SSH/X11 DISPLAY even
+  // with Ozone headless, preventing the Vulkan GPU process from initializing.
+  const { DISPLAY: ignoredDisplay, ...environment } = process.env;
   const chrome = spawn(chromePath, [
     '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--enable-unsafe-webgpu',
     '--remote-debugging-port=0', '--remote-allow-origins=*', '--ozone-platform=headless',
-    ...(software ? ['--enable-unsafe-swiftshader', '--use-angle=swiftshader'] : []),
+    ...(software ? ['--enable-unsafe-swiftshader', '--use-angle=swiftshader']
+      : process.platform === 'linux' ? ['--enable-gpu', '--use-angle=vulkan',
+        '--enable-features=Vulkan', '--disable-vulkan-surface'] : ['--enable-gpu']),
     ...additionalArguments, `--user-data-dir=${profile}`, 'about:blank',
-  ], { env: process.env, stdio: ['ignore', 'ignore', 'pipe'] });
+  ], { env: environment, stdio: ['ignore', 'ignore', 'pipe'] });
   let chromeErrors = '';
   chrome.stderr.on('data', (chunk) => { chromeErrors = (chromeErrors + chunk).slice(-8000); });
   let websocket;
@@ -110,7 +115,12 @@ export async function withWebGpuBrowser(run, { software = true } = {}) {
         limits: { maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
           maxComputeWorkgroupsPerDimension: adapter.limits.maxComputeWorkgroupsPerDimension } };
     })()`);
-    assert.ok(adapter.available, `${adapter.reason} Try --software to validate using SwiftShader.`);
+    const diagnostics = `Chrome: ${chromePath}\nGPU initialization log:\n${chromeErrors || '(no stderr output)'}`;
+    assert.ok(adapter.available, `${adapter.reason} Check the GPU driver and Vulkan support, or use --software to validate using SwiftShader.\n${diagnostics}`);
+    const softwareAdapter = adapter.isFallbackAdapter
+      || /swiftshader|software|llvmpipe/i.test(`${adapter.vendor} ${adapter.architecture} ${adapter.description}`);
+    assert.ok(software || !softwareAdapter,
+      `Hardware WebGPU requested, but Chrome selected a software adapter (${adapter.vendor} ${adapter.architecture}). Use --software for software validation.\n${diagnostics}`);
     const result = await run({ evaluate, call, adapter });
     assert.deepEqual(pageErrors, [], `Unhandled browser exceptions: ${JSON.stringify(pageErrors)}`);
     return result;

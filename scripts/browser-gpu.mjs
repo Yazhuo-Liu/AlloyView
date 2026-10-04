@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { useSoftwareAdapter, withWebGpuBrowser } from './webgpu-browser.mjs';
 
-const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
+const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
   await evaluate(`(async () => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { crystalFrame } = await import('./tests/helpers/crystals.js');
@@ -136,13 +136,70 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
     } finally { cpu.close(); gpu.close(); }
   })()`);
   assert.ok(rows.some((row) => /webgpu/i.test(row.engine ?? '') || row.backend === 'gpu'), 'No real GPU analysis was performed.');
-  const application = await runApplicationSmoke({ evaluate });
+  const preload = await runGpuPreloadChecks({ evaluate });
+  const application = await runApplicationSmoke({ evaluate, call });
   return { adapter, softwareTiming: adapter.isFallbackAdapter || /swiftshader|software|llvmpipe/i.test(`${adapter.architecture} ${adapter.description}`),
-    checks: rows, application };
+    checks: rows, preload, application };
 }, { software: useSoftwareAdapter(true) });
 console.log(JSON.stringify(report, null, 2));
 
-async function runApplicationSmoke({ evaluate }) {
+async function runGpuPreloadChecks({ evaluate }) {
+  return evaluate(`(async () => {
+    const { AnalysisPool, crystalFrame, check, compare } = window.gpuTests;
+    const gpu = new AnalysisPool(), cpu = new AnalysisPool();
+    gpu.setGpuEnabled(true);
+    try {
+      const started = performance.now();
+      const warmed = await gpu.warmupGpu();
+      const warmupMs = performance.now() - started;
+      check(warmed.initialized && warmed.pipelineCount > 0, 'Warmup must create the device and compile pipelines before analysis.');
+      const worker = gpu.gpuBackend.worker;
+      const frames = Array.from({ length: 4 }, (_, index) => crystalFrame('fcc', 4, 3.52 + index * .5));
+      await gpu.configureGpuCache({ frameCount: frames.length, currentIndex: 0 });
+      for (const [frameIndex, frame] of frames.entries()) await gpu.prepareGpuFrame(frame, { frameIndex });
+      const full = gpu.gpuCacheStatus;
+      check(full.fullTrajectory && full.cachedFrameIndexes.length === frames.length, 'A small complete trajectory must reside on GPU.');
+      for (const [frameIndex, frame] of frames.entries()) {
+        await gpu.configureGpuCache({ currentIndex: frameIndex });
+        const actual = await gpu.analyze(frame, { kind: 'coordination', cutoff: 2.8 });
+        const expected = await cpu.analyze(frame, { kind: 'coordination', cutoff: 2.8 });
+        check(actual.backend === 'gpu' && actual.inputReused && actual.gpuInputReused, 'Preloaded frames must avoid input transfer/upload on analysis.');
+        compare(actual.coordination, expected.coordination);
+      }
+      // A frame reparsed after CPU eviction retains its source index identity.
+      const reparsed = crystalFrame('fcc', 4, 4.52);
+      gpu.associateGpuFrame(reparsed, 2);
+      const reused = await gpu.analyze(reparsed, { kind: 'coordination', cutoff: 2.8 });
+      const expected = await cpu.analyze(reparsed, { kind: 'coordination', cutoff: 2.8 });
+      check(reused.inputReused && reused.gpuInputReused, 'CPU reparse must reuse its existing GPU frame.');
+      compare(reused.coordination, expected.coordination);
+      const beforeClear = gpu.gpuCacheStatus;
+      await gpu.clearGpuFrames();
+      const cleared = gpu.gpuCacheStatus;
+      check(gpu.gpuBackend.worker === worker && cleared.initialized && cleared.pipelineCount === beforeClear.pipelineCount,
+        'Source clear must preserve the device and compiled pipelines.');
+      check(cleared.cachedFrameIndexes.length === 0 && cleared.residentBytes === 0, 'Source clear must release all resident frame buffers.');
+      await gpu.configureGpuCache({ frameCount: 4, currentIndex: 2 });
+      await gpu.prepareGpuFrame(frames[2], { frameIndex: 2 });
+      const single = gpu.gpuCacheStatus;
+      const constrained = await gpu.configureGpuCache({ budgetBytes: single.workspaceBytes + single.frameBytes * 2 + 16, currentIndex: 2 });
+      check(constrained.capacity === 2 && !constrained.fullTrajectory, 'A constrained budget must select a bounded frame window.');
+      await gpu.prepareGpuFrame(frames[1], { frameIndex: 1 });
+      await gpu.prepareGpuFrame(frames[3], { frameIndex: 3 });
+      const windowCache = gpu.gpuCacheStatus;
+      check(windowCache.cachedFrameIndexes.length <= 2 && windowCache.cachedFrameIndexes.includes(2), 'Bounded cache must retain current frame and respect its capacity.');
+      check(windowCache.cachedFrameIndexes.every(index => Math.abs(index - 2) <= 1), 'Bounded cache must retain neighboring frames.');
+      const after = await gpu.analyze(frames[2], { kind: 'coordination', cutoff: 2.8 });
+      check(after.backend === 'gpu' && after.gpuInputReused, 'Cache eviction must keep the current frame usable for GPU analysis.');
+      compare(after.coordination, expected.coordination);
+      return { warmupMs, pipelineCount: warmed.pipelineCount, fullTrajectoryFrames: full.cachedFrameIndexes.length,
+        constrainedCapacity: windowCache.capacity, constrainedFrames: windowCache.cachedFrameIndexes, reparseReused: reused.gpuInputReused,
+        sourceClearPreservedDevice: true };
+    } finally { gpu.close(); cpu.close(); }
+  })()`);
+}
+
+async function runApplicationSmoke({ evaluate, call }) {
   async function waitFor(expression, label) {
     for (let attempt = 0; attempt < 400; attempt += 1) {
       if (await evaluate(expression)) return;
@@ -183,5 +240,45 @@ async function runApplicationSmoke({ evaluate }) {
       results.push(result);
     }
   }
+  async function loadTrajectory(count, name) {
+    await evaluate(`(async () => {
+      const { crystalFrame } = await import('./tests/helpers/crystals.js');
+      const texts = Array.from({ length: ${count} }, (_, index) => {
+        const frame = crystalFrame('fcc', 2, 3.52 + index * .02);
+        const rows = [];
+        for (let atom = 0; atom < frame.ids.length; atom++) rows.push('Ni ' + [...frame.positions.subarray(atom * 3, atom * 3 + 3)].join(' '));
+        return frame.ids.length + '\\nLattice="' + [...frame.cell.vectors].join(' ') + '" Properties=species:S:1:pos:R:3 pbc="T T T"\\n' + rows.join('\\n') + '\\n';
+      });
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([texts.join('')], ${JSON.stringify(name)}, { type: 'text/plain' }));
+      const input = document.getElementById('file-input');
+      input.files = transfer.files; input.dispatchEvent(new Event('change'));
+    })()`);
+    await waitFor(`document.getElementById('file-name').textContent === ${JSON.stringify(name)} && document.getElementById('loading').hidden`, name);
+    await waitFor(`document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && Number(document.getElementById('cache-label').dataset.gpuCachedFrames) === ${count}`, name + ' complete GPU preload');
+  }
+  await evaluate(`document.getElementById('close-file').click(); document.getElementById('enable-gpu-computing').click();`);
+  await loadTrajectory(6, 'gpu-preload.xyz');
+  assert.equal(await evaluate('document.getElementById("analysis-state").textContent'), 'Not calculated', 'Preloading must not calculate analysis results.');
+  await evaluate(`const slider = document.getElementById('frame-slider'); slider.value = '5'; slider.dispatchEvent(new Event('input'));`);
+  await waitFor(`document.getElementById('frame-label').textContent === '6 / 6' && document.getElementById('cache-label').dataset.gpuCacheState === 'ready'`, 'preloaded last frame');
+  const trajectoryPreload = await evaluate(`({ cachedFrames: Number(document.getElementById('cache-label').dataset.gpuCachedFrames),
+    capacity: Number(document.getElementById('cache-label').dataset.gpuCacheCapacity), label: document.getElementById('cache-label').textContent })`);
+  await call('Emulation.setDeviceMetricsOverride', { width: 360, height: 780, deviceScaleFactor: 1, mobile: false });
+  const mobileTrajectory = await evaluate(`(() => {
+    const bar = document.getElementById('trajectory-section');
+    return { width: bar.clientWidth, contentWidth: bar.scrollWidth };
+  })()`);
+  assert.ok(mobileTrajectory.contentWidth <= mobileTrajectory.width + 1, 'GPU residency labels must fit the mobile trajectory controls.');
+  await call('Emulation.clearDeviceMetricsOverride');
+  await loadTrajectory(3, 'gpu-replacement.xyz');
+  await evaluate(`(() => {
+    const toggle = document.getElementById('enable-gpu-computing');
+    toggle.click(); toggle.click(); toggle.click(); toggle.click();
+  })()`);
+  await loadTrajectory(2, 'gpu-final-source.xyz');
+  await evaluate(`document.getElementById('enable-gpu-computing').click();`);
+  await waitFor(`document.getElementById('cache-label').dataset.gpuCacheState === 'off' && document.getElementById('cache-label').dataset.gpuCachedFrames === '0'`, 'GPU cache cleared on disable');
+  results.push({ trajectoryPreload, sourceReplacementFrames: 3, rapidToggleSourceFrames: 2, disableReleasedFrames: true });
   return results;
 }

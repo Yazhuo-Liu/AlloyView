@@ -53,6 +53,42 @@ current loader also accepts the earlier single-file message format.
 Unversioned entrypoints remain available for an older cached HTML document
 during the transition; newly generated HTML always uses the versioned tree.
 
+## WebGPU on GitHub Pages
+
+The Pages build contains the GPU Worker and the same GPU preparation and cache
+code used locally. GPU computing is off by default. When a visitor enables
+**Enable GPU computing**, AlloyView initializes WebGPU in the background,
+prepares the current frame, then loads the whole sequence if it fits or keeps
+nearby frames. The initial hardware budget is 2 GiB including calculation
+workspace; memory is allocated as needed, and allocation exhaustion reduces
+the budget and window. All calculations and buffers belong to the visitor's
+browser and GPU. The benchmark command is a development tool and is not run by
+GitHub Pages or required from visitors. Refreshing the page creates a new GPU
+device and cache.
+
+Pages HTTPS meets WebGPU's secure-context requirement. WebGPU itself does not
+require the COOP/COEP headers used by the local development server. Availability
+still depends on browser version, graphics acceleration, GPU/driver support
+and browser blocklists. See Chrome's [WebGPU troubleshooting
+guide](https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips)
+and the current [GPUWeb implementation
+status](https://github.com/gpuweb/gpuweb/wiki/Implementation-Status), particularly
+for Linux GPU and display-system combinations.
+
+`npm run benchmark:gpu -- --hardware --preload` starts Chrome with
+`--enable-unsafe-webgpu` and, on Linux, explicit Vulkan flags. These options are
+not properties of the deployed website: a page cannot set a visitor's browser
+launch flags. A successful benchmark therefore does not establish availability
+in that visitor's ordinary browser.
+
+After deployment, enable GPU computing and wait for the cache indicator
+(`GPU preparing`, then resident-frame counts). Run a supported analysis, such
+as coordination number, and confirm its timing reports `webgpu`. If the browser
+cannot provide a usable adapter, preparation reports `GPU unavailable` and
+calculation falls back to CPU; the timing tooltip includes the fallback reason.
+For Chrome, `chrome://gpu` shows the browser's WebGPU status. These checks use
+the actual deployed application and browser settings.
+
 ## Other static hosts
 
 Serve the contents of `dist/` with correct MIME types, especially

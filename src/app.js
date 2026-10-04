@@ -1,5 +1,6 @@
 import { FrameCache } from './data/frame-cache.js';
 import { chooseFrameCachePolicy } from './data/cache-policy.js';
+import { GpuPrefetchScheduler } from './data/gpu-prefetch.js';
 import { DEFAULT_PLAYBACK_INTERVAL_MS, nextPlaybackFrame } from './data/playback.js';
 import { recommendCoordinationCutoff } from './analysis/cutoff.js';
 import { CoordinationPool } from './analysis/coordination-pool.js';
@@ -140,6 +141,16 @@ let pendingConfiguration = null;
 let configurationRequest = 0;
 let configurationReadRequest = 0;
 let restorationOwner = null;
+let gpuPreparationStatus = null;
+const gpuPrefetch = new GpuPrefetchScheduler({
+  pool: analysisPool,
+  getFrame: (index, { signal, sourceKey }) => getFrame(index, { background: true, cacheFrame: false, signal, sourceKey }),
+  onStatus: (status) => {
+    gpuPreparationStatus = status;
+    updateCacheLabel();
+    updateGpuComputingTitle();
+  },
+});
 
 initializeSidebarResize();
 const toolPanels = initializeToolPanels({
@@ -176,9 +187,33 @@ initializeTheme((theme) => {
 function setGpuComputing(enabled) {
   analysisPool.setGpuEnabled(enabled);
   elements['enable-gpu-computing'].setAttribute('aria-pressed', String(enabled));
-  elements['enable-gpu-computing'].title = enabled
-    ? 'Use WebGPU for supported analyses; other calculations use CPU Workers. Existing results are kept. Calculate again to use this preference.'
-    : 'GPU computing is off. Analyses use CPU Workers.';
+  if (enabled && state.frame && sourceLoadingOwner === null) scheduleGpuFramePrefetch();
+  void gpuPrefetch.setEnabled(enabled);
+  if (!enabled) analysisPool.releaseGpuResources({ whenIdle: true });
+  updateCacheLabel();
+  updateGpuComputingTitle();
+}
+
+function updateGpuComputingTitle() {
+  const status = gpuPreparationStatus;
+  elements['enable-gpu-computing'].title = !analysisPool.gpuEnabled
+    ? 'GPU computing is off. Analyses use CPU Workers.'
+    : status?.phase === 'unavailable'
+      ? `GPU preparation unavailable: ${status.error} Supported analyses will use CPU Workers if needed.`
+      : status?.phase === 'warming'
+        ? 'Preparing the GPU device and analysis pipelines in the background.'
+        : 'GPU computing is on. Structure frames are prepared in the background; calculate again to use this preference.';
+}
+
+function scheduleGpuFramePrefetch() {
+  if (!state.frame || sourceLoadingOwner !== null) return;
+  analysisPool.associateGpuFrame(state.frame, state.frameIndex);
+  void gpuPrefetch.setFrame({
+    sourceKey: `${state.sourceVersion}:${sourceOpenRequest}`,
+    frameCount: state.frameCount,
+    currentIndex: state.frameIndex,
+    frame: state.frame,
+  });
 }
 
 elements['enable-gpu-computing'].addEventListener('click', () => {
@@ -299,6 +334,7 @@ elements['open-examples'].addEventListener('click', showExampleChooser);
 elements['close-file'].addEventListener('click', closeSource);
 
 elements['frame-slider'].addEventListener('input', () => {
+  gpuPrefetch.cancel();
   atomEyeTools.cancelBatch({ restore: false });
   interruptConfigurationRestore('a frame change');
   stopFramePlayback();
@@ -436,6 +472,7 @@ const fileDrop = initializeFileDrop({
 
 for (const range of document.querySelectorAll('.range')) setRangeProgress(range);
 window.addEventListener('beforeunload', () => {
+  gpuPrefetch.cancel();
   bccLogo.dispose();
   renderer?.interactions?.dispose();
   fileDrop.dispose();
@@ -447,6 +484,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 function beginSourceOpen() {
+  gpuPrefetch.pause();
   interruptConfigurationRestore('a new source selection');
   sourceFetchController?.abort();
   sourceFetchController = null;
@@ -463,6 +501,7 @@ function finishSourceOpen(request) {
   sourceLoadingOwner = null;
   setControlsEnabled(Boolean(state.frame));
   syncSliceGizmo();
+  scheduleGpuFramePrefetch();
 }
 
 function closeSource() {
@@ -482,7 +521,7 @@ function closeSource() {
   clearTimeout(interactionHintFadeTimer);
   stopFramePlayback();
   abortAnalysisJobs();
-  analysisPool.releaseGpuResources();
+  void gpuPrefetch.clearSource();
   atomEyeTools.reset();
   worker.reset();
   state.pendingFrames.clear();
@@ -825,7 +864,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
   const selectionRequest = beginSourceOpen();
   clearTimeout(cutoffTimer);
   abortAnalysisJobs();
-  analysisPool.releaseGpuResources();
+  void gpuPrefetch.clearSource();
   stopFramePlayback();
   const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
   const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
@@ -855,6 +894,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     state.format = result.format;
     state.frameCount = result.frameCount;
     state.frameIndex = 0;
+    analysisPool.associateGpuFrame(result.frame, 0);
     state.selectedId = null;
     state.colorMode = 'type';
     state.coordinateMode = 'wrapped';
@@ -965,8 +1005,10 @@ async function showFrame(index) {
     elements['frame-label'].textContent = `${index + 1} / ${state.frameCount}`;
     setRangeProgress(elements['frame-slider']);
     setLoading(false);
+    scheduleGpuFramePrefetch();
     return true;
   }
+  gpuPrefetch.cancel();
   const requiresLoad = !cache.has(index);
   if (requiresLoad) setLoading(true, `Preparing frame ${index + 1}…`);
   try {
@@ -984,6 +1026,7 @@ async function showFrame(index) {
       if (requiresLoad) setLoading(false);
       elements['frame-slider'].value = String(state.frameIndex);
       showToast(error.message);
+      scheduleGpuFramePrefetch();
     }
     return false;
   }
@@ -1037,6 +1080,9 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   setRangeProgress(elements['frame-slider']);
   updateCnaMethodUi();
   updateCspMethodUi();
+  // Rendering remains independent of GPU preparation. Automatic foreground
+  // analyses take priority over these background uploads in the shared pool.
+  scheduleGpuFramePrefetch();
   const pending = [];
   const strainRequest = state.analysis.strain.request;
   for (const kind of Object.keys(ANALYSES)) {
@@ -1059,24 +1105,38 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   await Promise.all(pending);
 }
 
-async function getFrame(index, { background = false } = {}) {
-  const cached = cache.get(index);
-  if (cached) return cached;
+async function getFrame(index, { background = false, cacheFrame = true, signal, sourceKey } = {}) {
+  if (signal?.aborted || (sourceKey && sourceKey !== `${state.sourceVersion}:${sourceOpenRequest}`)) return null;
+  const cached = cacheFrame ? cache.get(index) : cache.frames.get(index);
+  if (cached) {
+    analysisPool.associateGpuFrame(cached, index);
+    return cached;
+  }
   const existing = state.pendingFrames.get(index);
-  if (existing) return existing;
+  if (existing) {
+    if (cacheFrame) existing.cacheFrame = true;
+    return existing.promise;
+  }
   const sourceVersion = state.sourceVersion;
-  const pending = worker.frame(index, { reportProgress: !background })
+  const pending = { cacheFrame, promise: null };
+  pending.promise = worker.frame(index, { reportProgress: !background })
     .then((result) => {
       if (sourceVersion !== state.sourceVersion) return null;
-      cache.set(index, result.frame);
-      updateCacheLabel();
+      if (!pending.cacheFrame && (signal?.aborted || (sourceKey && sourceKey !== `${state.sourceVersion}:${sourceOpenRequest}`))) return null;
+      analysisPool.associateGpuFrame(result.frame, index);
+      // GPU residency can extend beyond the CPU window without evicting the
+      // displayed frame or retaining the whole sequence twice in host memory.
+      if (pending.cacheFrame) {
+        cache.set(index, result.frame);
+        updateCacheLabel();
+      }
       return result.frame;
     })
     .finally(() => {
       if (state.pendingFrames.get(index) === pending) state.pendingFrames.delete(index);
     });
   state.pendingFrames.set(index, pending);
-  return pending;
+  return pending.promise;
 }
 
 function scheduleFramePrefetch(centerIndex) {
@@ -1199,16 +1259,27 @@ function updatePlaybackButton() {
 }
 
 function updateCacheLabel() {
-  if (!state.cachePlan) {
-    elements['cache-label'].textContent = `cached ${cache.size}`;
-    return;
-  }
-  elements['cache-label'].textContent = state.cachePlan.fullTrajectory
+  const label = elements['cache-label'];
+  const cpuLabel = !state.cachePlan ? `cached ${cache.size}` : state.cachePlan.fullTrajectory
     ? `cached ${cache.size} / ${state.frameCount} · lazy all-frame`
     : `cached ${cache.size} / ${state.cachePlan.limit} · adaptive window`;
+  const status = analysisPool.gpuEnabled ? gpuPreparationStatus : null;
+  const gpuCache = status?.cacheStatus ? analysisPool.gpuCacheStatus ?? status.cacheStatus : null;
+  const cachedFrames = gpuCache?.cachedFrameIndexes?.length ?? 0;
+  label.dataset.gpuCacheState = status?.phase ?? 'off';
+  label.dataset.gpuCachedFrames = String(cachedFrames);
+  label.dataset.gpuCacheCapacity = String(gpuCache?.capacity ?? 0);
+  label.dataset.gpuCacheIndexes = JSON.stringify(gpuCache?.cachedFrameIndexes ?? []);
+  const gpuLabel = status?.phase === 'warming' ? ' · GPU preparing'
+    : status?.phase === 'unavailable' ? ' · GPU unavailable'
+      : gpuCache && state.frameCount > 0
+        ? ` · GPU ${cachedFrames} / ${Math.min(state.frameCount, gpuCache.capacity)} ${gpuCache.fullTrajectory ? 'frames' : 'nearby frames'}${status.phase === 'preparing' ? ' · preparing' : ''}`
+        : '';
+  label.textContent = cpuLabel + gpuLabel;
 }
 
 function reassessFrameCache(frame) {
+  updateCacheLabel();
   if (!state.cachePlan || state.frameCount <= 1) return;
   const revised = chooseFrameCachePolicy(frame, state.frameCount, {
     heapLimit: performance.memory?.jsHeapSizeLimit,

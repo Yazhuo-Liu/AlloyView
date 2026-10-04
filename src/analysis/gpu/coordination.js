@@ -3,7 +3,7 @@ import { makeNeighborShader } from './neighbors.js';
 import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
 
 const CORRECTION_CAPACITY = 65_536;
-const SHADER = makeNeighborShader({
+export const COORDINATION_SHADER = makeNeighborShader({
   declarations: `
 @group(0) @binding(5) var<storage, read_write> coordination: array<u32>;
 @group(0) @binding(6) var<storage, read_write> candidates: array<u32>;
@@ -37,7 +37,7 @@ export async function analyzeGpuCoordination(runtime, frame, parameters, { signa
     const coordinationBuffer = create(atomCount * 4);
     const candidateBuffer = create(atomCount * 4);
     const correctionBuffer = create((4 + CORRECTION_CAPACITY * 3) * 4);
-    await runtime.run(SHADER, runtime.neighborBindings(context, [coordinationBuffer, candidateBuffer, correctionBuffer]), atomCount,
+    await runtime.run(COORDINATION_SHADER, runtime.neighborBindings(context, [coordinationBuffer, candidateBuffer, correctionBuffer]), atomCount,
       { signal, onProgress: (progress) => onProgress({ ...progress, phase: 'analyzing' }) });
     const coordination = await runtime.read(coordinationBuffer, Uint32Array, atomCount, { signal });
     const candidates = await runtime.read(candidateBuffer, Uint32Array, atomCount, { signal });
