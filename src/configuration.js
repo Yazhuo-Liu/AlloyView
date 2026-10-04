@@ -174,10 +174,12 @@ function normalizeSource(value) {
 }
 
 function normalizeSettings(value, fromSnapshot) {
-  const input = record(value, 'settings', ['display', 'analyses', 'extensions', 'replicate', 'slices', 'colors', 'camera', 'activeTool', 'selectedAtomId', 'theme']);
+  const input = record(value, 'settings', ['display', 'analyses', 'extensions', 'replicate', 'slices', 'colors', 'camera', 'activeTool', 'selectedAtomId', 'theme', 'compute']);
+  const compute = record(input.compute ?? {}, 'settings.compute', ['gpuEnabled']);
   const repetitions = vector(input.replicate ?? [1, 1, 1], 'settings.replicate', 1, 4096, true);
   if (repetitions.reduce((product, count) => product * count, 1) > 4096) fail('settings.replicate', 'exceeds 4096 displayed cells');
   return {
+    compute: { gpuEnabled: boolean(compute.gpuEnabled, 'settings.compute.gpuEnabled', false) },
     display: normalizeDisplay(input.display ?? {}),
     analyses: normalizeAnalyses(input.analyses ?? {}, fromSnapshot),
     extensions: normalizeExtensions(input.extensions ?? {}, fromSnapshot),

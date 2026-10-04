@@ -263,6 +263,12 @@ try {
   assert.notEqual(reducedFirst.data, reducedRotated.data, 'reduced-motion settings must not freeze the BCC model');
   await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }, { name: 'prefers-reduced-motion', value: 'no-preference' }] });
 
+  assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'false', 'GPU computing defaults to off');
+  await evaluate('document.getElementById("enable-gpu-computing").click()');
+  assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'true');
+  await evaluate('document.getElementById("enable-gpu-computing").click()');
+  assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'false');
+
   // Check initial and loaded views in both themes, including disabled controls.
   for (const theme of ['light', 'dark']) {
     await evaluate(`document.getElementById('theme-${theme}').click()`);
@@ -270,7 +276,7 @@ try {
     await delay(150); // Let the 120 ms button background transitions finish.
     assert.equal(await evaluate('document.querySelector(".empty-logo-fallback").hidden'), true);
     await checkTextContrast(['.empty-state h1', '.empty-copy', '.format-note', '.privacy-badge small', '.field > span:first-child', '.help', '.selection-empty']);
-    await checkTextContrast(['.view-presets > button', '.projection-switch button', '.viewport-toggle', '#coordinate-mode', '#cutoff', '#run-analysis', '#cna-mode', '#cna-cutoff', '#csp-neighbors', '#run-cna', '#run-csp', '#ptm-rmsd', '#run-ptm', '#run-strain', '#lattice-reset', '.analysis-state-controls .text-button', '.display-options label', '#empty-open'], 4.5);
+    await checkTextContrast(['.view-presets > button', '.projection-switch button', '.viewport-toggle', '#coordinate-mode', '#cutoff', '#run-analysis', '#cna-mode', '#cna-cutoff', '#csp-neighbors', '#run-cna', '#run-csp', '#ptm-rmsd', '#run-ptm', '#run-strain', '#lattice-reset', '.analysis-state-controls .text-button', '.display-options label', '#empty-open', '#enable-gpu-computing'], 4.5);
     await evaluate(`document.getElementById('open-examples').click()`);
     await checkTextContrast(['.source-dialog-summary', '.source-option small']);
     await checkTextContrast(['.source-option-kind'], 4.5);
@@ -324,6 +330,21 @@ try {
   await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden && document.getElementById("empty-state").hidden', 'homepage file drop');
   assert.equal(await evaluate('document.getElementById("frame-count").textContent'), '1');
   assert.equal(await evaluate('document.getElementById("close-file").hidden'), false);
+  // Configuration export needs an open source, while the compute preference
+  // itself can be changed on the homepage without initializing an adapter.
+  await evaluate('document.getElementById("enable-gpu-computing").click()');
+  const gpuRecipe = await exportConfiguration();
+  assert.equal(gpuRecipe.settings.compute.gpuEnabled, true, 'GPU preference is saved without requiring an adapter');
+  await evaluate('document.getElementById("enable-gpu-computing").click()');
+  assert.equal((await exportConfiguration()).settings.compute.gpuEnabled, false);
+  const gpuRecipePath = resolve(profile, 'gpu-recipe.json');
+  await writeFile(gpuRecipePath, JSON.stringify(gpuRecipe));
+  const { root: gpuDomRoot } = await call('DOM.getDocument');
+  const { nodeId: gpuConfigurationInput } = await call('DOM.querySelector', { nodeId: gpuDomRoot.nodeId, selector: '#configuration-file' });
+  await call('DOM.setFileInputFiles', { nodeId: gpuConfigurationInput, files: [gpuRecipePath] });
+  await waitFor('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed") === "true" && document.getElementById("configuration-status").textContent.includes("restored")', 'GPU preference replay');
+  assert.equal((await exportConfiguration()).settings.compute.gpuEnabled, true, 'GPU preference survives real JSON import');
+  await evaluate('document.getElementById("enable-gpu-computing").click()');
   const closedDraws = await evaluate('window.logoDraws');
   await evaluate('document.getElementById("close-file").click()');
   await checkHome();

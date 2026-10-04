@@ -1,6 +1,53 @@
 # Validation record
 
-Validation date: 2026-10-03 (America/New_York)
+Validation date: 2026-10-04 (UTC)
+
+## Optional WebGPU analysis
+
+Validated with Node.js v24.19.0 and Chromium 151 using the Google SwiftShader
+software WebGPU adapter. These checks execute actual WGSL compute shaders;
+they do not establish performance on a physical GPU.
+
+- The full Node suite, static build and complete browser smoke pass. Browser
+  checks cover the default-off header switch, configuration export/import,
+  light/dark contrast, mobile layout and all existing analysis workflows.
+- `npm run test:gpu` compares actual WebGPU and CPU results for FCC/BCC/HCP,
+  triclinic and mixed-periodic cells, thin boxes and repeated/self images,
+  RDF element filters, exact cutoff/bin boundaries, geometric distortions,
+  nearest-neighbor selection ties and undefined geometric shear. Unsupported
+  algorithms/inputs use CPU; cancellation during preparation and after a GPU
+  dispatch rejects with AbortError, and subsequent GPU work succeeds.
+- The dedicated GPU Worker reuses one device, pipelines and uploaded frame
+  buffers across analyses. Cached inputs are bounded; closing/changing the
+  source releases GPU resources. Source arrays remain intact. Continuous
+  arithmetic uses f32; high/low coordinate components retain input precision,
+  and ambiguous distance/selection decisions use bounded CPU correction.
+- `npm run benchmark:gpu -- --software` loads all 129,904 atoms of
+  `examples/NiGB_minimized.cfg` and bypasses application result caches. Both
+  first and subsequent results are checked. Coordination and RDF counts agree
+  exactly; local shear's maximum absolute difference is `2.081e-6`, its
+  coordination counts agree exactly, and 10 atoms require moment correction.
+
+Representative full-call wall times from this **software-adapter** run:
+
+| Analysis and parameters | CPU first / subsequent (ms) | WebGPU first / subsequent (ms) |
+| --- | --- | --- |
+| Coordination, cutoff 3.1 Å | 193.8 / 108.0 | 870.6 / 520.7 |
+| RDF, cutoff 2.48 Å, 100 bins | 480.4 / 312.9 | 686.5 / 545.7 |
+| Local geometric shear, cutoff 3.1 Å | 691.9 / 756.5 | 1878.3 / 1467.7 |
+
+Kernels run in the listed order through the same CPU/GPU pools. "First" means
+the first call of that kernel; earlier calls can already have initialized the
+device and Workers. Subsequent GPU calls reuse their uploaded input. Wall times
+include preparation/upload, execution, corrections, readback and assembly.
+CPU coordination uses three Workers; RDF and geometric shear use four on this
+machine. RDF corrects 38,552 pairs near bin/cutoff boundaries. Its cutoff stays
+below half the example's 4.97773 Å periodic Z face height.
+
+Software WebGPU is slower here. Run `npm run benchmark:gpu -- --hardware` on a
+machine with a physical adapter and inspect the reported adapter to assess
+hardware acceleration; neither software timing nor atom count alone predicts
+a GPU speedup.
 
 ## Legend coloring quantity selector
 

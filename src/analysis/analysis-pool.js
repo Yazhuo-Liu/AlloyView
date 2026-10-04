@@ -3,6 +3,7 @@ import { MAX_BONDS } from './bonds.js';
 import { finalizeRdf } from './rdf.js';
 import { modalCoordination, shearInvariant } from './local-shear.js';
 import { REFERENCE_STRAIN_FIELDS } from './reference-strain.js';
+import { GpuAnalysisClient } from './gpu/client.js';
 
 const MAX_WORKERS = 6;
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
@@ -33,7 +34,7 @@ export function chooseWorkerCount(atomCount, coordinateBytes, environment = glob
  * coordinate copies. Every task owns a disjoint central-atom range.
  */
 export class AnalysisPool {
-  constructor({ environment = globalThis, workerFactory = () => new Worker(
+  constructor({ environment = globalThis, gpuBackend, workerFactory = () => new Worker(
     new URL('../workers/analysis-worker.js', import.meta.url), { type: 'module' },
   ) } = {}) {
     this.environment = environment;
@@ -45,9 +46,39 @@ export class AnalysisPool {
     this.queue = [];
     this.nextId = 1;
     this.closed = false;
+    this.gpuEnabled = false;
+    this.gpuBackend = gpuBackend ?? new GpuAnalysisClient({ environment });
   }
 
+  setGpuEnabled(enabled) { this.gpuEnabled = Boolean(enabled); }
+  releaseGpuResources() { this.gpuBackend.release?.(); }
+
   async analyze(frame, parameters, { onProgress = () => {}, signal } = {}) {
+    if (this.closed) throw new Error('The analysis pool is closed.');
+    if (signal?.aborted) throw abortError();
+    const analysisStartedAt = performance.now();
+    const gpuRequested = this.gpuEnabled;
+    let fallbackReason;
+    if (gpuRequested) {
+      if (!this.gpuBackend.supports(parameters.kind)) fallbackReason = `The ${parameters.kind} analysis uses CPU workers; no GPU kernel is available.`;
+      else {
+        try {
+          const result = await this.gpuBackend.analyze(frame, parameters, { onProgress, signal });
+          if (signal?.aborted || this.closed) throw abortError();
+          return { ...result, backend: 'gpu', gpuRequested: true, elapsedMs: performance.now() - analysisStartedAt };
+        } catch (error) {
+          if (error.name === 'AbortError' || signal?.aborted || this.closed) throw abortError();
+          fallbackReason = error.message || 'The GPU calculation failed; using CPU workers.';
+        }
+      }
+    }
+    const result = await this.analyzeCPU(frame, parameters, { signal,
+      onProgress: (update) => onProgress({ ...update, backend: 'cpu', ...(fallbackReason ? { fallbackReason } : {}) }) });
+    return { ...result, backend: 'cpu', gpuRequested, elapsedMs: performance.now() - analysisStartedAt,
+      ...(fallbackReason ? { fallbackReason } : {}) };
+  }
+
+  async analyzeCPU(frame, parameters, { onProgress = () => {}, signal } = {}) {
     if (this.closed) throw new Error('The analysis pool is closed.');
     if (signal?.aborted) throw abortError();
     if (parameters.kind === 'localShear') return this.analyzeLocalShear(frame, parameters, { onProgress, signal });
@@ -244,16 +275,16 @@ export class AnalysisPool {
     const progress = (stage) => (update) => onProgress({ ...update, stage,
       completedAtoms: atomCount * stage + update.completedAtoms, totalAtoms: atomCount * 3 });
     try {
-      const coordination = await this.analyze(frame, { ...parameters, kind: 'localShearCoordination' }, {
+      const coordination = await this.analyzeCPU(frame, { ...parameters, kind: 'localShearCoordination' }, {
         signal: controller.signal, onProgress: progress(0),
       });
       const coordinationMode = modalCoordination(coordination.histogram);
-      const metrics = await this.analyze(frame, { ...parameters, kind: 'localShearMetrics', coordinationMode }, {
+      const metrics = await this.analyzeCPU(frame, { ...parameters, kind: 'localShearMetrics', coordinationMode }, {
         signal: controller.signal, onProgress: progress(1),
       });
       const normalization = metrics.normalizationParticipants ? metrics.normalizationSum / metrics.normalizationParticipants / 3 : NaN;
       const meanMetric = metrics.metricSum.map((value) => value / atomCount / normalization);
-      const result = await this.analyze(frame, { ...parameters, kind: 'localShearFinalize', metricInput: metrics.metrics,
+      const result = await this.analyzeCPU(frame, { ...parameters, kind: 'localShearFinalize', metricInput: metrics.metrics,
         normalization, meanMetric }, { signal: controller.signal, onProgress: progress(2) });
       return { ...result, elapsedMs: performance.now() - startedAt, coordination: coordination.coordination,
         coordinationMode, normalization, meanMetric, averageCoordination: coordination.coordinationSum / atomCount,
@@ -368,6 +399,7 @@ export class AnalysisPool {
 
   close() {
     this.closed = true;
+    this.gpuBackend.close();
     for (const controller of this.controllers) controller.abort();
     for (const task of [...this.active, ...this.queue]) this.finish(task, abortError());
     for (const slot of [...this.idle]) this.terminateWorker(slot);

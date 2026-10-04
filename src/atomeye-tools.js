@@ -1,6 +1,7 @@
 import { applyAppearance, hexColor, rgbHex } from './appearance.js';
 import { radiusForElement } from './render/atomic-radii.js';
 import { colorsByType } from './render/palette.js';
+import { analysisProgressText, analysisBackendLabel, analysisBackendDetails } from './analysis/status.js';
 import { WebGLRenderer } from './render/webgl-renderer.js';
 import { cameraViewPreset } from './render/camera-presets.js';
 import { replaceAnalysisProperty, clearAnalysisResults } from './analysis/results.js';
@@ -104,7 +105,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       const controller = new AbortController(), request = ++job.request;
       job.controller = controller;
       const source = getSourceVersion(), token = generation, colorChoice = getColorChoiceVersion(), parameters = { ...job.parameters };
-      const key = JSON.stringify(parameters);
+      const key = JSON.stringify(['rdf', 'localShear'].includes(kind)
+        ? { ...parameters, gpuRequested: pool.gpuEnabled } : parameters);
       const current = () => frame === getFrame() && source === getSourceVersion() && token === generation
         && request === job.request && job.enabled && !controller.signal.aborted;
       stateFor(kind, 'Calculating…', 'Waiting for available analysis Workers…');
@@ -133,11 +135,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
           }
           const result = await pool.analyze(frame, input, { signal: controller.signal, onProgress: progress => {
             if (!current()) return;
-            const { phase, prepared = 0, completed = 0, workerCount = 1, completedAtoms, totalAtoms } = progress;
-            $(`${JOBS[kind].prefix}-status`).textContent = phase === 'preparing'
-              ? `Preparing inputs… ${prepared} / ${workerCount} Workers`
-              : phase === 'queued' ? 'Waiting for available analysis Workers…'
-                : `Frame ${getFrameIndex() + 1} · ${workerCount} Workers · ${completed} complete${totalAtoms ? ` · ${completedAtoms ?? 0} / ${totalAtoms} atoms` : ''}`;
+            $(`${JOBS[kind].prefix}-status`).textContent = analysisProgressText(progress, { frameIndex: getFrameIndex(), kind });
           } });
           if (!current()) return;
           cached = { key, result };
@@ -159,7 +157,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         }
         if (!automatic && JOBS[kind].property && colorChoice === getColorChoiceVersion()) chooseProperty(JOBS[kind].property);
         else refresh();
-        stateFor(kind, 'Calculated', `${kind === 'bonds' ? `${result.count.toLocaleString()} bonds · ` : ''}${(result.elapsedMs / 1000).toFixed(2)} s · ${result.engine}`);
+        stateFor(kind, 'Calculated', `${kind === 'bonds' ? `${result.count.toLocaleString()} bonds · ` : ''}${(result.elapsedMs / 1000).toFixed(2)} s · ${analysisBackendLabel(result)}`);
+        $(`${JOBS[kind].prefix}-status`).title = analysisBackendDetails(result);
         onMemoryChange(frame); updateStatistics(); syncComparison();
       } catch (error) {
         if (current() && error.name !== 'AbortError') { stateFor(kind, 'Failed', error.message); notify(error.message); }

@@ -68,6 +68,10 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   settings for mixed structures, or manual 8/12 neighbors. All analyses share
   a bounded parallel Worker scheduler and retain per-frame results. Workers
   and PTM kernels are reused, with preparation stages and PTM atom progress.
+- Optional **Enable GPU computing**, off by default beside the theme controls,
+  accelerates coordination, RDF and local geometric shear with WebGPU. Other
+  analyses keep their CPU implementation; unavailable GPU support falls back
+  to CPU. Completed results remain available when the preference changes.
 - Per-analysis Cancel controls stop computation and reset results and frame
   caches while keeping input settings and other analyses.
 - A legend **Color by** selector for switching between available properties and
@@ -90,7 +94,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - JSON configuration export/import directly below Structure saves source file metadata, processing
   settings, camera and theme, then restores the view and recomputes enabled
   analyses after the matching local files are opened.
-- Bundled FCC, BCC trajectory and 40-image NEB examples.
+- Bundled FCC, BCC trajectory, 40-image NEB and 129,904-atom Ni grain-boundary
+  examples.
 - Contextual **?** help opens individual feature documentation; a static documentation
   website includes controls, algorithms, implementation links and deployment guides.
 
@@ -149,6 +154,11 @@ WebGL 2 support. No installation or account is needed.
    **Local shear** measures the current neighbor geometry without a reference.
    **Statistics** shows coordination distributions and calculates total or
    element-pair RDF curves on fully periodic cells.
+   **Enable GPU computing** in the top bar prefers WebGPU for coordination,
+   RDF and local shear on the next calculation. The switch starts off; CPU
+   fallback keeps analyses available on browsers without suitable GPU support.
+   See [performance](docs/features/performance.md) for backend choices and
+   timing considerations.
 5. **Export.** Choose **Include background in PNG** and **Include legend in
    PNG** independently, then click the download arrow in the viewport toolbar.
    Uncheck the background option for transparency, including around the legend.

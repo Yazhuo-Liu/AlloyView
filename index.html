@@ -52,9 +52,15 @@
             <span class="privacy-dot"></span>
             <span><strong>Local processing</strong><small>Structure data stays on this device</small></span>
           </div>
-          <div class="theme-switch" role="group" aria-label="Color theme">
-            <button id="theme-light" type="button" aria-pressed="false"><span aria-hidden="true">☀</span> Light</button>
-            <button id="theme-dark" type="button" aria-pressed="true"><span aria-hidden="true">☾</span> Dark</button>
+          <div class="compute-theme-controls">
+            <div class="theme-switch" role="group" aria-label="Color theme">
+              <button id="theme-light" type="button" aria-pressed="false"><span aria-hidden="true">☀</span> Light</button>
+              <button id="theme-dark" type="button" aria-pressed="true"><span aria-hidden="true">☾</span> Dark</button>
+            </div>
+            <button id="enable-gpu-computing" class="gpu-switch" type="button" aria-label="Enable GPU computing" aria-pressed="false" title="Use WebGPU for supported analyses; other calculations use CPU Workers">
+              <span class="gpu-switch-indicator" aria-hidden="true"></span>
+              <span><span class="gpu-switch-prefix">Enable </span>GPU computing</span>
+            </button>
           </div>
         </div>
       </header>

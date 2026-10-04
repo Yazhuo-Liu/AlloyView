@@ -48,6 +48,15 @@ test('display-only recipes work without source files and use stable defaults', (
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
 });
 
+test('GPU preference round-trips and older recipes default to CPU computing', () => {
+  const recipe = createConfiguration({ settings: { compute: { gpuEnabled: true } } });
+  assert.equal(parseConfiguration(JSON.stringify(recipe)).settings.compute.gpuEnabled, true);
+  delete recipe.settings.compute;
+  assert.equal(parseConfiguration(JSON.stringify(recipe)).settings.compute.gpuEnabled, false);
+  assert.throws(() => createConfiguration({ settings: { compute: { gpuEnabled: 'true' } } }), /settings\.compute\.gpuEnabled/);
+  assert.throws(() => createConfiguration({ settings: { compute: { unknown: true } } }), /settings\.compute/);
+});
+
 test('AtomEye extension recipes round-trip processing settings without computed data', () => {
   const extensions = extensionSnapshot();
   const recipe = createConfiguration({ settings: { extensions, activeTool: 'referenceStrain' } });

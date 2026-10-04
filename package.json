@@ -10,7 +10,9 @@
     "preview": "node scripts/serve.mjs dist 4173",
     "test": "node --test",
     "test:browser": "node scripts/browser-smoke.mjs",
+    "test:gpu": "node scripts/browser-gpu.mjs",
     "benchmark": "node scripts/benchmark.mjs",
+    "benchmark:gpu": "node scripts/benchmark-gpu.mjs",
     "build:wasm": "bash wasm/build.sh",
     "build:ptm": "bash wasm/build-ptm.sh"
   },

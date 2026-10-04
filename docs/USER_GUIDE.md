@@ -273,6 +273,20 @@ shared pool, retaining the initialized PTM Wasm kernel for subsequent jobs;
 input preparation yields between large chunks so the status and **Cancel**
 controls can remain responsive.
 
+**Enable GPU computing** beside the Light/Dark buttons is off by default.
+Turn it on to prefer WebGPU for coordination, RDF and local geometric shear.
+Other analyses keep their existing CPU implementation, and unavailable or
+unsupported GPU execution falls back to CPU. The switch affects the next
+calculation; completed results remain available. Click **Calculate** again
+to rerun a supported analysis with the new preference. JSON configuration
+export/import saves the preference, while older configurations default to off.
+WebGPU requires HTTPS or localhost. GPU buffers and pipelines are reusable,
+but JavaScript input arrays still need to be uploaded. GPU floating-point
+arithmetic, transfer overhead and hardware all affect results and elapsed time;
+enabling GPU computing does not guarantee a speedup. See
+[Performance](features/performance.md) for algorithm choices and the backend
+layout in `src/analysis/gpu/`.
+
 **Ideal lattice reference** calculates per-atom Green–Lagrange elastic strain
 from PTM correspondence. Recognized elements initialize editable phase and
 lattice parameters from ASE reference-state data; hexagonal phases expose
@@ -456,6 +470,9 @@ npm test
 npm run benchmark
 # With Node.js 24 and Chrome/Chromium, after npm run build:
 npm run test:browser
+# WebGPU execution checks and CPU/GPU timing (Node.js 24 and Chrome/Chromium):
+npm run test:gpu
+npm run benchmark:gpu
 ```
 
 The test suite checks CFG and orthogonal/restricted-triclinic LAMMPS parsing,
@@ -464,6 +481,11 @@ coordination, and bounded LRU caching. The benchmark separates text generation,
 parsing, and coordination analysis. Browser GPU upload/FPS/memory are measured in
 the in-app performance panel on the target workstation. The browser smoke test
 uses software WebGL to verify correctness, not to measure target GPU performance.
+The separate WebGPU checks exercise real compute shaders using a software
+adapter by default. The GPU benchmark loads `examples/NiGB_minimized.cfg`,
+checks result agreement, and reports full cold/warm analysis times and the
+actual adapter. See [Performance](features/performance.md#compare-cpu-and-gpu-time)
+for adapter options and timing interpretation.
 
 ## Supported scope
 
@@ -562,7 +584,9 @@ This is a provenance and risk statement, not legal advice.
 
 ## Known limits and next steps
 
-- WebGL 2 is required; WebGPU and fallback Canvas rendering are not implemented.
+- WebGL 2 is required for rendering. Optional WebGPU computing accelerates
+  coordination, RDF and local geometric shear; fallback Canvas rendering is
+  not implemented.
 - The parser currently indexes a dump in one Worker and does not stream partial
   atom rows into the renderer.
 - Very large text frames still require memory for the frame slice, parsed arrays,
@@ -581,10 +605,12 @@ This is a provenance and risk statement, not legal advice.
   Voronoi polycrystal construction are not implemented. DXA and defect lines
   also remain separate future modules; they are not attributed to the reviewed
   AtomEye snapshot. See `docs/ATOMEYE_REVIEW.md`.
-- CNA, normalized central symmetry and coordination use JavaScript Workers;
+- CNA and normalized central symmetry use JavaScript Workers; coordination,
+  RDF and local geometric shear can use optional WebGPU computing or Workers.
   PTM and its deformation fit use the included Wasm kernel. No Emscripten
   installation is needed unless rebuilding C++ with `npm run build:ptm`.
 
-Recommended next work is to benchmark real 100k/1M trajectories on target GPUs,
-then compile the isolated coordination ABI with Emscripten and compare it against
-the existing reference tests before considering Wasm threads.
+The bundled `NiGB_minimized.cfg` contains 129,904 atoms and can be used to
+compare CPU and GPU analysis with the same parameters. Measure cold and warm
+runs separately on the target device, including upload and readback time;
+software GPU adapters verify execution but do not establish hardware speedups.

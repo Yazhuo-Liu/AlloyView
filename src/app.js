@@ -4,6 +4,7 @@ import { DEFAULT_PLAYBACK_INTERVAL_MS, nextPlaybackFrame } from './data/playback
 import { recommendCoordinationCutoff } from './analysis/cutoff.js';
 import { CoordinationPool } from './analysis/coordination-pool.js';
 import { AnalysisPool } from './analysis/analysis-pool.js';
+import { analysisProgressText as formatAnalysisProgress, analysisBackendLabel, analysisBackendDetails } from './analysis/status.js';
 import { STRUCTURE_TYPES } from './analysis/cna.js';
 import { PTM_TYPES } from './analysis/ptm.js';
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
@@ -42,7 +43,7 @@ import { initializeAtomEyeTools } from './atomeye-tools.js';
 import { initializeFeatureHelp } from './feature-help.js';
 
 const elements = Object.fromEntries([
-  'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar',
+  'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar', 'enable-gpu-computing',
   'empty-state', 'file-name', 'file-meta', 'format-chip', 'close-file', 'file-drop-overlay', 'atom-count', 'frame-count',
   'cell-kind', 'pbc-flags', 'trajectory-section', 'frame-slider', 'frame-label', 'timestep-label',
   'cache-label', 'frame-first', 'frame-previous', 'frame-play', 'frame-next', 'frame-last', 'frame-ticks',
@@ -171,6 +172,20 @@ initializeTheme((theme) => {
     else elements.background.value = background;
   }
 });
+
+function setGpuComputing(enabled) {
+  analysisPool.setGpuEnabled(enabled);
+  elements['enable-gpu-computing'].setAttribute('aria-pressed', String(enabled));
+  elements['enable-gpu-computing'].title = enabled
+    ? 'Use WebGPU for supported analyses; other calculations use CPU Workers. Existing results are kept. Calculate again to use this preference.'
+    : 'GPU computing is off. Analyses use CPU Workers.';
+}
+
+elements['enable-gpu-computing'].addEventListener('click', () => {
+  interruptConfigurationRestore('a computing preference change');
+  setGpuComputing(!analysisPool.gpuEnabled);
+});
+setGpuComputing(false);
 
 try {
   renderer = new WebGLRenderer(elements.viewport, {
@@ -467,6 +482,7 @@ function closeSource() {
   clearTimeout(interactionHintFadeTimer);
   stopFramePlayback();
   abortAnalysisJobs();
+  analysisPool.releaseGpuResources();
   atomEyeTools.reset();
   worker.reset();
   state.pendingFrames.clear();
@@ -707,7 +723,7 @@ function showExampleChooser() {
   elements['source-dialog-title'].textContent = 'Choose an example';
   elements['source-dialog-summary'].textContent = 'Files and folders bundled under examples/.';
   const fragment = document.createDocumentFragment();
-  fragment.append(sourceListHeading('examples/', '3 items'));
+  fragment.append(sourceListHeading('examples/', '4 items'));
   fragment.append(exampleOption(
     'examples/fixed_end_climb/',
     'Folder',
@@ -725,6 +741,12 @@ function showExampleChooser() {
     'LAMMPS',
     'Multi-frame BCC text trajectory',
     () => loadExample('./examples/bcc-trajectory.dump', 'bcc-trajectory.dump'),
+  ));
+  fragment.append(exampleOption(
+    'examples/NiGB_minimized.cfg',
+    'CFG',
+    'Nickel grain boundary · 129,904 atoms · CPU/GPU benchmark',
+    () => loadExample('./examples/NiGB_minimized.cfg', 'NiGB_minimized.cfg'),
   ));
   elements['source-options'].replaceChildren(fragment);
   elements['source-dialog'].showModal();
@@ -803,6 +825,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
   const selectionRequest = beginSourceOpen();
   clearTimeout(cutoffTimer);
   abortAnalysisJobs();
+  analysisPool.releaseGpuResources();
   stopFramePlayback();
   const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
   const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
@@ -1528,7 +1551,8 @@ function storePtmResult(frame, result, parameters, expose = true) {
     structures: result.structures, rmsd: result.rmsd, scales: result.scales,
     deformation: result.deformation, distances: result.distances };
   if (!expose) return;
-  const metadata = { analysisKind: 'ptm', analysisMs: result.elapsedMs, analysisEngine: result.engine, analysisKey: frame.ptm.key, unit: '' };
+  const metadata = { analysisKind: 'ptm', analysisMs: result.elapsedMs, analysisEngine: result.engine,
+    analysisFallbackReason: result.fallbackReason, analysisKey: frame.ptm.key, unit: '' };
   const properties = [
     { ...metadata, name: 'ptmStructureType', displayName: 'Crystal structure (PTM)', data: result.structures, categories: PTM_TYPES },
     { ...metadata, name: 'ptmRmsd', displayName: 'PTM RMSD (best fit)', data: result.rmsd },
@@ -1596,7 +1620,9 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
           ? 'Local structure recognition selects 12 neighbors for FCC/HCP and 8 for BCC. Unresolved environments are gray.'
         : `Calculated with ${parameters.neighbors} neighbors.${property.incomplete ? ` ${property.incomplete} undefined environments are gray.` : ''}`;
     if (kind === 'centrosymmetry') updateCspMethodUi({ property });
-    elements[`metric-${prefix}`].textContent = `${formatDuration(property.analysisMs)} · ${property.analysisEngine}`;
+    const backend = { engine: property.analysisEngine, fallbackReason: property.analysisFallbackReason };
+    elements[`metric-${prefix}`].textContent = `${formatDuration(property.analysisMs)} · ${analysisBackendLabel(backend)}`;
+    elements[`metric-${prefix}`].title = analysisBackendDetails(backend);
     elements[`run-${prefix}`].disabled = false;
   };
   const cached = frame.properties.find(property => property.name === name && property.analysisKey === key);
@@ -1650,7 +1676,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     const result = await task;
     if (!isCurrent()) return;
     const metadata = { unit: '', analysisKind: kind, analysisKey: key, analysisMs: result.elapsedMs,
-      analysisEngine: result.engine, incomplete: result.incomplete ?? 0 };
+      analysisEngine: result.engine, analysisFallbackReason: result.fallbackReason, incomplete: result.incomplete ?? 0 };
     let properties;
     if (kind === 'ptm') {
       storePtmResult(frame, result, parameters);
@@ -1728,12 +1754,15 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
   const controller = new AbortController();
   analysisControllers.set('coordination', controller);
   const existing = frame.properties.find((property) => property.name === 'coordination');
-  if (existing?.analysisCutoff === cutoff) {
+  if (existing?.analysisCutoff === cutoff && Boolean(existing.analysisGpuRequested) === analysisPool.gpuEnabled) {
     if (frame === state.frame) {
       refreshColorOptions();
       applyColors();
       elements['analysis-state'].textContent = 'Calculated';
       elements['analysis-state'].classList.add('ready');
+      const backend = { engine: existing.analysisEngine, fallbackReason: existing.analysisFallbackReason };
+      elements['metric-analysis'].textContent = `${formatDuration(existing.analysisMs)} · ${analysisBackendLabel(backend)}`;
+      elements['metric-analysis'].title = analysisBackendDetails(backend);
       elements['run-analysis'].disabled = false;
       if (loadingOwner === 'coordination') setLoading(false);
     }
@@ -1764,7 +1793,9 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     if (!result || !isCurrent()) return;
     const property = { name: 'coordination', unit: '', data: result.coordination, analysisCutoff: cutoff,
       histogram: result.histogram, meanCoordination: result.meanCoordination,
-      analysisKind: 'coordination', analysisMs: result.elapsedMs, analysisEngine: result.engine };
+      analysisKind: 'coordination', analysisMs: result.elapsedMs, analysisEngine: result.engine,
+      analysisFallbackReason: result.fallbackReason,
+      analysisGpuRequested: result.gpuRequested ?? analysisPool.gpuEnabled };
     replaceAnalysisProperty(frame, property);
     reassessFrameCache(frame);
     if (frame !== state.frame || frameIndex !== state.frameIndex
@@ -1773,7 +1804,8 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     applyColors();
     elements['analysis-state'].textContent = 'Calculated';
     elements['analysis-state'].classList.add('ready');
-    elements['metric-analysis'].textContent = `${formatDuration(result.elapsedMs)} · ${result.engine}`;
+    elements['metric-analysis'].textContent = `${formatDuration(result.elapsedMs)} · ${analysisBackendLabel(result)}`;
+    elements['metric-analysis'].title = analysisBackendDetails(result);
     updateSelectionPanel();
     updateMemoryMetric();
     if (result.warning) showToast(result.warning);
@@ -2295,16 +2327,8 @@ function interruptConfigurationRestore(reason) {
   elements['configuration-status'].textContent = `Configuration restore interrupted by ${reason}.`;
 }
 
-function analysisProgressText({ phase, completed = 0, total = 1, workerCount = total,
-  prepared = 0, initialized = 0, completedAtoms, totalAtoms }, kind) {
-  const frame = `frame ${state.frameIndex + 1}`;
-  if (phase === 'queued') return `Waiting for available analysis Workers for ${frame}…`;
-  if (phase === 'preparing') return `Preparing ${frame} data… ${prepared} / ${total} Worker inputs`;
-  if (phase === 'initializing') return `Initializing ${kind === 'ptm' || kind === 'strain' ? 'PTM and ' : ''}Workers… ${initialized} / ${total}`;
-  if (phase === 'indexing') return `Building neighbor search for ${frame}…`;
-  const atoms = Number.isFinite(completedAtoms) && totalAtoms > 0
-    ? ` ${formatInteger(completedAtoms)} / ${formatInteger(totalAtoms)} atoms ·` : '';
-  return `Analyzing ${frame} with ${workerCount} Worker${workerCount > 1 ? 's' : ''}…${atoms} ${completed} / ${total} completed`;
+function analysisProgressText(progress, kind) {
+  return formatAnalysisProgress(progress, { frameIndex: state.frameIndex, kind });
 }
 
 function captureConfiguration() {
@@ -2320,6 +2344,7 @@ function captureConfiguration() {
         ...(file.webkitRelativePath ? { relativePath: file.webkitRelativePath } : {}) })),
     } : null,
     settings: {
+      compute: { gpuEnabled: analysisPool.gpuEnabled },
       display: { coordinateMode: state.coordinateMode, colorMode: state.colorMode,
         radiusPercent: state.radiusPercent, background: elements.background.value,
         showCell: elements['show-cell'].checked, showAxes: elements['show-axes'].checked,
@@ -2417,6 +2442,7 @@ async function restoreConfiguration(config) {
     if (!current()) return;
 
     document.getElementById(`theme-${saved.theme}`).click();
+    setGpuComputing(saved.compute.gpuEnabled);
     setBackgroundColor(saved.display.background);
     for (const [id, value] of [
       ['show-cell', saved.display.showCell], ['show-axes', saved.display.showAxes],
