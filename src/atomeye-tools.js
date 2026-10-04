@@ -33,7 +33,7 @@ const canvasBlob = (canvas, type = 'image/png') => new Promise((resolve, reject)
  * invalidate pending results on source/frame edits. */
 export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFrameAt,
   getFrameIndex, getFrameCount, getFrames, getSourceVersion, getSelectedIndex,
-  selectAtom, refresh, chooseProperty, getColorMode, getColorChoiceVersion = () => 0, getPendingAnalysisKinds = () => [], getAnalysisPropertyKind = () => null, getExportOptions, showFrame,
+  selectAtom, refresh, chooseProperty, getColorMode, getSelectionGroups = () => [], getColorChoiceVersion = () => 0, getPendingAnalysisKinds = () => [], getAnalysisPropertyKind = () => null, getExportOptions, showFrame,
   stopPlayback, getFileStem, notify = () => {}, onEdit = () => {}, onMemoryChange = () => {} }) {
   const jobs = Object.fromEntries(Object.keys(JOBS).map(kind => [kind, { enabled: false, parameters: null, controller: null, request: 0 }]));
   let generation = 0, measurements = [], appearance = { elements: [], atoms: [] };
@@ -58,6 +58,10 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   function abortJobs() {
     for (const job of Object.values(jobs)) { job.request++; job.controller?.abort(); job.controller = null; }
     displacement.request++; displacement.controller?.abort(); displacement.controller = null;
+  }
+  function resultKey(kind, parameters) {
+    return JSON.stringify(['rdf', 'localShear', 'bonds'].includes(kind)
+      ? { ...parameters, gpuRequested: pool.gpuEnabled } : parameters);
   }
   function cancel(kind, { redraw = true } = {}) {
     const job = jobs[kind];
@@ -105,8 +109,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       const controller = new AbortController(), request = ++job.request;
       job.controller = controller;
       const source = getSourceVersion(), token = generation, colorChoice = getColorChoiceVersion(), parameters = { ...job.parameters };
-      const key = JSON.stringify(['rdf', 'localShear'].includes(kind)
-        ? { ...parameters, gpuRequested: pool.gpuEnabled } : parameters);
+      const key = resultKey(kind, parameters);
       const current = () => frame === getFrame() && source === getSourceVersion() && token === generation
         && request === job.request && job.enabled && !controller.signal.aborted;
       stateFor(kind, 'Calculating…', 'Waiting for available analysis Workers…');
@@ -471,7 +474,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   function customizePalette(palette) {
     const frame = getFrame();
     if (!frame) return palette;
-    const result = applyAppearance(frame, palette.colors, null, appearance, { elementColors: getColorMode() === 'type' });
+    const result = applyAppearance(frame, palette.colors, null, appearance, { elementColors: getColorMode() === 'type', selectionGroups: getSelectionGroups() });
     if (getColorMode() === 'type') palette.legend.items = palette.legend.items.map(item => ({ ...item,
       color: appearance.elements.find(entry => entry.label === item.label)?.color ? hexColor(appearance.elements.find(entry => entry.label === item.label).color) : item.color }));
     colors = result.colors;
@@ -479,11 +482,11 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   }
   function filterVisibility(mask) {
     const frame = getFrame(); if (!frame) return mask;
-    return applyAppearance(frame, colors ?? colorsByType(frame).colors, mask, appearance, { elementColors: false }).visibility;
+    return applyAppearance(frame, colors ?? colorsByType(frame).colors, mask, appearance, { elementColors: false, selectionGroups: getSelectionGroups() }).visibility;
   }
   function applyRadii() {
     const frame = getFrame(); if (!frame) return;
-    renderer.setAtomRadii(applyAppearance(frame, colors ?? colorsByType(frame).colors, null, appearance).radii);
+    renderer.setAtomRadii(applyAppearance(frame, colors ?? colorsByType(frame).colors, null, appearance, { selectionGroups: getSelectionGroups() }).radii);
     updateAtomStyle(); syncComparison();
   }
   function updateStatistics() {
@@ -574,8 +577,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     else comparison.setSlices(renderer.slices);
     comparison.setBackground(rgbHex(renderer.background.map(value => value * 255)));
     comparison.setCellVisible(renderer.cellVisible); comparison.setRadiusScale(renderer.radiusScale);
-    const bond = frame.atomeyeResults?.bonds;
-    comparison.setBonds(jobs.bonds.enabled && bond?.key === JSON.stringify(jobs.bonds.parameters) ? bond.result : null,
+    comparison.setBonds(renderer.atomBonds ?? null,
       { visible: $('show-bonds').checked, radius: number('bonds-radius') });
     comparison.setVectors(renderer.atomVectors ?? null, renderer.vectorOptions);
     syncComparisonToolbar();

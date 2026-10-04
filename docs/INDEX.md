@@ -15,7 +15,8 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 | Task | Documentation |
 | --- | --- |
 | Adjust the view or compare two cameras | [Display](features/display.md) |
-| Show periodic copies or clip the view | [Replicate](features/replicate.md), [Slices](features/slices.md) |
+| Show or analyze periodic copies, or clip the view | [Replicate](features/replicate.md), [Slices](features/slices.md) |
+| Select, color or hide atom groups | [Atom selections](features/selection-groups.md) |
 | Draw neighbor bonds or vectors | [Bonds](features/bonds.md), [Vector arrows](features/vectors.md) |
 | Measure motion against a trajectory frame | [Displacement](features/displacement.md) |
 | Count and classify neighbor environments | [Coordination](features/coordination.md), [CNA](features/cna.md), [PTM](features/ptm.md) |

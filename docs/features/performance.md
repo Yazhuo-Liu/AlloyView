@@ -21,9 +21,13 @@ The **Enable GPU computing** switch beside **Light / Dark** is off by default. T
 | Coordination number | WebGPU linked-cell neighbor search and atom counts |
 | Total or element-pair RDF | WebGPU neighbor search and distance histogram |
 | Local geometric shear | WebGPU neighbor geometry and per-atom shear |
-| CNA, PTM, central symmetry, ideal/reference strain, bonds and displacement | Existing CPU implementation |
+| Bonds | WebGPU periodic neighbor counts and compact bond graph, including element-pair cutoffs |
+| Ideal lattice strain | CPU PTM fit, then WebGPU tensor and invariant calculations; compatible PTM fits are reused |
+| CNA, PTM fitting, central symmetry, reference-frame strain and displacement | Existing CPU implementation |
 
 Algorithms without a GPU version continue to use their CPU implementation. When WebGPU, a suitable adapter or the required device limits are unavailable, supported analyses also fall back to CPU. Cancelling a calculation stops the job and retains the usual cancellation behavior. WebGPU requires a secure browser context: HTTPS or localhost.
+
+Ideal lattice strain reports its CPU PTM and GPU tensor stages in the engine label. If its GPU stage fails, the CPU tensor calculation reuses the completed fit; it does not repeat PTM. GPU computing therefore accelerates the tensor stage when the device and workload favor it, while the template fit remains CPU work. [Bonds](bonds.md) and [ideal lattice strain](ideal-strain.md) document their cutoff, precision and reference conventions.
 
 ## How the GPU backend works
 
@@ -37,7 +41,7 @@ The GPU cache estimates the resident frame size and reserves space for calculati
 
 Standard WebGPU does not expose free VRAM. The cache starts with an allocation budget of 2 GiB for hardware or 128 MiB for a software adapter, including a calculation workspace reserve. This is a ceiling, not an upfront reservation: only the loaded frames and required calculation buffers consume memory. The cache checks individual buffer limits and, if an allocation runs out of memory, lowers its budget, evicts distant frames and retries once while protecting the current frame. Thus a GPU with less available memory can retain a smaller nearby-frame window. A frame that cannot be prepared safely uses the existing CPU fallback. Closing or changing the source clears structure buffers while retaining the GPU device and compiled pipelines; switching GPU computing off releases the GPU Worker after any accepted calculation finishes. A new cutoff can require a new neighbor index, and uncommon shader variants are still compiled on demand.
 
-GPU arithmetic uses 32-bit floating point. CPU calculations retain their existing precision, so small differences can appear in continuous values and near distance thresholds. Uploads, shader compilation, reductions and result readback all contribute to elapsed time. Small structures may finish sooner on CPU, and enabling GPU computing does not guarantee a speedup. Compare the same file, cutoff and analysis parameters, reporting cold initialization separately from subsequent runs and distinguishing hardware adapters from software adapters. See [validation](../VALIDATION.md) for executed checks rather than treating software-adapter timing as a physical GPU benchmark.
+GPU arithmetic uses 32-bit floating point. High and low input components retain coordinate and PTM fit precision; the strain kernel uses compensated matrix arithmetic so ideal structures keep the CPU numerical-zero convention. Ambiguous neighbor cutoff or ordering decisions receive sparse CPU corrections. Continuous values can still differ slightly between backends, and inputs outside the supported precision range use CPU. Uploads, shader compilation, reductions and result readback all contribute to elapsed time. Small structures may finish sooner on CPU, and enabling GPU computing does not guarantee a speedup. Compare the same file, cutoff and analysis parameters, reporting cold initialization separately from subsequent runs and distinguishing hardware adapters from software adapters. See [validation](../VALIDATION.md) for executed checks rather than treating software-adapter timing as a physical GPU benchmark.
 
 ## Compare CPU and GPU time
 

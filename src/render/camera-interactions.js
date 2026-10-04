@@ -10,7 +10,7 @@ export function installCameraInteractions(renderer) {
   const window = document?.defaultView;
   const touches = new Map();
   const listeners = [];
-  let drag = null, gesture = null;
+  let drag = null, gesture = null, marquee = null, selectionJob = 0;
 
   function listen(target, name, handler, options) {
     if (!target) return;
@@ -24,7 +24,49 @@ export function installCameraInteractions(renderer) {
     const ids = [...touches.keys(), ...(drag ? [drag.id] : [])];
     touches.clear();
     drag = gesture = null;
+    cancelBox();
     for (const id of ids) release(id);
+  }
+  function hideMarquee() { marquee?.remove(); marquee = null; }
+  function cancelBox() {
+    selectionJob += 1;
+    renderer.selectionController?.abort();
+    hideMarquee();
+  }
+  function showMarquee(pointer) {
+    const parent = canvas.parentElement;
+    if (!parent || !document?.createElement) return;
+    if (!marquee) {
+      marquee = document.createElement('div');
+      marquee.className = 'selection-marquee';
+      marquee.setAttribute('aria-hidden', 'true');
+      Object.assign(marquee.style, { position: 'absolute', pointerEvents: 'none', zIndex: '6', boxSizing: 'border-box',
+        border: '1px solid var(--cyan, #2bb8c7)', background: 'rgba(43, 184, 199, 0.15)' });
+      parent.append(marquee);
+    }
+    const bounds = parent.getBoundingClientRect();
+    const viewport = canvas.getBoundingClientRect();
+    const x0 = Math.max(viewport.left, Math.min(viewport.left + viewport.width, pointer.startX));
+    const y0 = Math.max(viewport.top, Math.min(viewport.top + viewport.height, pointer.startY));
+    const x1 = Math.max(viewport.left, Math.min(viewport.left + viewport.width, pointer.x));
+    const y1 = Math.max(viewport.top, Math.min(viewport.top + viewport.height, pointer.y));
+    Object.assign(marquee.style, { left: `${Math.min(x0, x1) - bounds.left - (parent.clientLeft ?? 0) + (parent.scrollLeft ?? 0)}px`,
+      top: `${Math.min(y0, y1) - bounds.top - (parent.clientTop ?? 0) + (parent.scrollTop ?? 0)}px`,
+      width: `${Math.abs(x1 - x0)}px`, height: `${Math.abs(y1 - y0)}px` });
+  }
+  function finishBox(pointer) {
+    const interaction = renderer.selectionInteraction;
+    const job = ++selectionJob;
+    void renderer.selectInRectangle({ left: pointer.startX, top: pointer.startY, right: pointer.x, bottom: pointer.y }).then(indices => {
+      if (job !== selectionJob) return;
+      if (interaction !== renderer.selectionInteraction) { hideMarquee(); return; }
+      hideMarquee();
+      return interaction.onBox?.(indices);
+    }).catch(error => {
+      if (job !== selectionJob) return;
+      hideMarquee();
+      if (error.name !== 'AbortError') interaction.onError?.(error);
+    });
   }
   function point(event) {
     return { id: event.pointerId, x: event.clientX, y: event.clientY,
@@ -79,15 +121,24 @@ export function installCameraInteractions(renderer) {
 
   listen(canvas, 'pointerdown', event => {
     if (!renderer.frame) return;
+    canvas.focus?.({ preventScroll: true });
     if (event.pointerType === 'touch') {
       event.preventDefault();
       if (drag) { const id = drag.id; drag = null; release(id); }
-      touches.set(event.pointerId, point(event));
-      if (touches.size >= 2) for (const pointer of touches.values()) pointer.multi = true;
+      touches.set(event.pointerId, { ...point(event), mode: renderer.selectionInteraction?.mode === 'box' ? 'box' : 'rotate' });
+      if (touches.size >= 2) {
+        cancelBox();
+        for (const pointer of touches.values()) { pointer.multi = true; pointer.mode = 'rotate'; }
+      } else if (renderer.selectionInteraction?.mode === 'box') {
+        cancelBox(); showMarquee(touches.get(event.pointerId));
+      }
       gesture = measure(); // Rebase when fingers are added; never move the camera here.
     } else {
-      if (touches.size || drag || (event.button !== 0 && event.button !== 2)) return;
-      drag = { ...point(event), mode: event.button === 2 || event.shiftKey ? 'pan' : 'rotate', button: event.button };
+      if (touches.size || drag || ![0, 1, 2].includes(event.button)) return;
+      cancelBox();
+      drag = { ...point(event), mode: event.button !== 0 || event.shiftKey ? 'pan'
+        : renderer.selectionInteraction?.mode === 'box' ? 'box' : 'rotate', button: event.button };
+      if (drag.mode === 'box') { event.preventDefault(); showMarquee(drag); }
     }
     canvas.setPointerCapture(event.pointerId);
   });
@@ -97,10 +148,12 @@ export function installCameraInteractions(renderer) {
       event.preventDefault();
       const [dx, dy] = update(pointer, event);
       if (touches.size >= 2) transformTouches(measure());
+      else if (pointer.mode === 'box') showMarquee(pointer);
       else rotate(dx, dy);
     } else if (drag?.id === event.pointerId) {
       const [dx, dy] = update(drag, event);
-      if (drag.mode === 'pan') pan(dx, dy);
+      if (drag.mode === 'box') { event.preventDefault(); showMarquee(drag); }
+      else if (drag.mode === 'pan') pan(dx, dy);
       else rotate(dx, dy);
     } else return;
     renderer.requestRender();
@@ -115,17 +168,27 @@ export function installCameraInteractions(renderer) {
     if (drag?.id === event.pointerId) drag = null;
     gesture = measure();
     release(event.pointerId);
-    if (select) renderer.onPick(renderer.pick(event.clientX, event.clientY));
+    if (pointer.mode === 'box') {
+      if (event.type === 'pointerup' && pointer.moved && !pointer.multi && renderer.selectionInteraction?.mode === 'box') finishBox(pointer);
+      else cancelBox();
+    } else if (select) {
+      const atom = renderer.pick(event.clientX, event.clientY);
+      if (renderer.selectionInteraction?.mode === 'click' && renderer.selectionInteraction.onPick) renderer.selectionInteraction.onPick(atom);
+      else renderer.onPick(atom);
+    }
   }
   for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) listen(canvas, name, end);
   listen(canvas, 'contextmenu', event => event.preventDefault());
   listen(canvas, 'wheel', event => {
     if (!renderer.frame) return;
     event.preventDefault();
+    if (drag?.mode === 'box' || [...touches.values()].some(pointer => pointer.mode === 'box')) reset();
+    else cancelBox();
     zoom(Math.exp(Math.max(-100, Math.min(100, event.deltaY)) * 0.0018));
     renderer.requestRender();
   }, { passive: false });
   listen(window, 'blur', reset);
+  listen(document, 'keydown', event => { if (event.key === 'Escape') reset(); });
   listen(document, 'visibilitychange', () => { if (document.hidden) reset(); });
 
   return { reset, dispose() { reset(); for (const remove of listeners) remove(); } };

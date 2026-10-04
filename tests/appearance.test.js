@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyAppearance } from '../src/appearance.js';
+import { normalizeSelectionGroups } from '../src/selection-groups.js';
 
 test('appearance follows IDs after reordering and combines visibility filters', () => {
   const frame = { ids: [42, 9, 10], types: [1, 0, 0], typeLabels: ['Fe', 'C'] };
@@ -24,4 +25,30 @@ test('scalar coloring preserves scalar colors and applies individual overrides',
     { elementColors: false });
   assert.deepEqual([...result.colors], [1, 2, 3, 255, 0, 0]);
   assert.deepEqual([...result.visibility], [0, 0]);
+});
+
+test('selection colors follow stable IDs and override scalar colors beneath individual atom colors', () => {
+  const groups = normalizeSelectionGroups({ groups: [
+    { id: 'left', name: 'Left', color: '#112233', visible: true, atomIds: [42, 9] },
+    { id: 'boundary', name: 'Boundary', color: '#abcdef', visible: true, atomIds: [9] },
+  ] }).groups;
+  const frame = { ids: [9, 10, 42], types: [0, 0, 0], typeLabels: ['Fe'] };
+  const colors = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const result = applyAppearance(frame, colors, null,
+    { atoms: [{ id: '42', color: '#ff0000' }], elements: [{ label: 'Fe', color: '#ffffff' }] },
+    { elementColors: false, selectionGroups: groups });
+  assert.deepEqual([...result.colors], [171, 205, 239, 4, 5, 6, 255, 0, 0]);
+  assert.deepEqual([...colors], [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+});
+
+test('hidden selections combine with existing visibility filters and cannot reveal filtered atoms', () => {
+  const groups = normalizeSelectionGroups({ groups: [
+    { id: 'hidden', name: 'Hidden', color: '#112233', visible: false, atomIds: [1, 2] },
+    { id: 'visible', name: 'Visible', color: '#abcdef', visible: true, atomIds: [2, 3] },
+  ] }).groups;
+  const frame = { ids: [1, 2, 3, 4], types: [0, 0, 0, 0], typeLabels: ['Fe'] };
+  const visibility = Uint8Array.from([255, 255, 0, 255]);
+  const result = applyAppearance(frame, new Uint8Array(12), visibility, {}, { selectionGroups: groups });
+  assert.deepEqual([...result.visibility], [0, 0, 0, 255]);
+  assert.deepEqual([...visibility], [255, 255, 0, 255]);
 });

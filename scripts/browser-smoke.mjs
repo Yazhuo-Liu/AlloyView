@@ -8,6 +8,7 @@ import { extname, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { crystalFrame } from '../tests/helpers/crystals.js';
 import { runAtomToolsSmoke } from './browser-atom-tools.mjs';
+import { runSelectionGroupsSmoke } from './browser-selection-groups.mjs';
 
 // No browser automation dependency: Node 24's WebSocket talks directly to CDP.
 const root = resolve(import.meta.dirname, '..');
@@ -2017,6 +2018,7 @@ try {
   };
   }
   await runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exportConfiguration, reloadPage, compareSettings, profile, screenshots: process.argv.includes('--structure-screenshot') });
+  await runSelectionGroupsSmoke({ call, evaluate, waitFor, showTool, exportConfiguration, reloadPage, compareSettings, profile, screenshots: process.argv.includes('--structure-screenshot') });
   assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors));
   assert.ok(requests.some(path => path.endsWith('ptm-kernel.wasm')), 'browser must load the real PTM kernel');
   assert.ok(requests.filter((path) => /\.(js|mjs|wasm)$/.test(path)).every((path) => /^\/AlloyView\/assets\/[a-f0-9]+\//.test(path)));

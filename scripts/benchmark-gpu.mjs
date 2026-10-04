@@ -2,18 +2,21 @@ import { writeFile } from 'node:fs/promises';
 import { useSoftwareAdapter, withWebGpuBrowser } from './webgpu-browser.mjs';
 
 const selected = process.argv.find((argument) => argument.startsWith('--kernel='))?.split('=')[1] ?? 'all';
-const supported = ['coordination', 'rdf', 'localShear'];
+const supported = ['coordination', 'rdf', 'localShear', 'bonds', 'strain'];
 if (selected !== 'all' && !supported.includes(selected)) throw new Error(`Choose --kernel=all or one of ${supported.join(', ')}.`);
 const requested = selected === 'all' ? supported : [selected];
 const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
   const results = await evaluate(`(async () => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { parseCfg } = await import('./src/io/cfg.js');
+    const { compareGpuBonds } = await import('./scripts/gpu-comparison.js');
+    const { STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
     const frame = parseCfg(await (await fetch('./examples/NiGB_minimized.cfg')).text(), 'NiGB_minimized.cfg');
     const cpu = new AnalysisPool(), gpu = new AnalysisPool();
     gpu.setGpuEnabled(true);
     const preload = { enabled: ${JSON.stringify(process.argv.includes('--preload'))}, wallMs: 0 };
-    const rows = [];
+    const rows = [], ptmPreparation = { wallMs: 0, engine: null };
+    let ptmInput;
     const isGpu = result => result.backend === 'gpu' || /webgpu/i.test(result.engine ?? '');
     const timed = async (pool, parameters) => {
       const started = performance.now();
@@ -43,20 +46,32 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
       for (const kind of ${JSON.stringify(requested)}) {
         // This example has a 4.97773 Å periodic Z cell. RDF is limited to half
         // that face height; coordination/shear retain their image conventions.
-        const parameters = kind === 'rdf' ? { kind, cutoff: 2.48, bins: 100 }
+        if (kind === 'strain' && !ptmInput) {
+          const preparation = await timed(cpu, { kind: 'ptm', flags: 31, rmsdCutoff: .1 });
+          ptmInput = preparation.result;
+          ptmPreparation.wallMs = preparation.wallMs;
+          ptmPreparation.engine = ptmInput.engine;
+        }
+        const parameters = kind === 'strain' ? { kind, references: frame.typeLabels.map(() => ({ structure: 1, a: 3.52 })), ptmInput }
+          : kind === 'rdf' ? { kind, cutoff: 2.48, bins: 100 }
           : { kind, cutoff: 3.1, ...(kind === 'localShear' ? { subtractMean: false } : {}) };
         const cpuCold = await timed(cpu, parameters), cpuWarm = await timed(cpu, parameters);
         const gpuCold = await timed(gpu, parameters), gpuWarm = await timed(gpu, parameters);
         const field = kind === 'coordination' ? 'coordination' : kind === 'rdf' ? 'counts' : 'localShear';
         const tolerance = kind === 'localShear' ? 3e-5 : 0;
-        const maxAbsoluteError = Math.max(compare(gpuCold.result[field], cpuCold.result[field], tolerance),
-          compare(gpuWarm.result[field], cpuWarm.result[field], tolerance));
+        const compareResults = (actual, expected) => kind === 'bonds' ? compareGpuBonds(actual, expected)
+          : kind === 'strain' ? Math.max(...STRAIN_FIELDS.map(name => compare(actual[name], expected[name], 2e-6)))
+            : compare(actual[field], expected[field], tolerance);
+        const maxAbsoluteError = Math.max(compareResults(gpuCold.result, cpuCold.result), compareResults(gpuWarm.result, cpuWarm.result));
         if (kind === 'localShear') {
           compare(gpuCold.result.coordination, cpuCold.result.coordination);
           compare(gpuWarm.result.coordination, cpuWarm.result.coordination);
         }
         const gpuActive = isGpu(gpuWarm.result);
-        rows.push({ kind, parameters, gpuActive, gpuEngine: gpuWarm.result.engine,
+        const { ptmInput: omittedFit, ...reportedParameters } = parameters;
+        rows.push({ kind, parameters: reportedParameters, ...(kind === 'strain' ? { input: 'Cached CPU PTM correspondences; tensor evaluation only',
+          incomplete: gpuWarm.result.incomplete } : {}), ...(kind === 'bonds' ? { edges: gpuWarm.result.count } : {}),
+          gpuActive, gpuEngine: gpuWarm.result.engine,
           cpuEngine: cpuWarm.result.engine, cpuWorkers: cpuWarm.result.workerCount,
           cpuWallMs: { cold: cpuCold.wallMs, warm: cpuWarm.wallMs },
           gpuWallMs: { cold: gpuCold.wallMs, warm: gpuWarm.wallMs },
@@ -66,7 +81,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
           gpuInputReused: gpuWarm.result.gpuInputReused ?? null, adapter: gpuWarm.result.adapter ?? null,
           warmWallTimeRatio: gpuActive ? cpuWarm.wallMs / gpuWarm.wallMs : null });
       }
-      return { file: 'examples/NiGB_minimized.cfg', atoms: frame.ids.length, preload, rows };
+      return { file: 'examples/NiGB_minimized.cfg', atoms: frame.ids.length, preload, ptmPreparation, rows };
     } finally { cpu.close(); gpu.close(); }
   })()`);
   const software = adapter.isFallbackAdapter || /swiftshader|software|llvmpipe/i.test(`${adapter.architecture} ${adapter.description}`);

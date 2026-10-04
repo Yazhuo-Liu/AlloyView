@@ -40,6 +40,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Wrapped and unwrapped trajectory views, atom-ID search/centering, and
   distance, bond-angle and dihedral measurements with optional periodic images.
 - Element and individual-atom color, radius and visibility overrides.
+- Named atom selection groups created by clicking, box selection or ID entry,
+  with editable membership, color and visibility that follow stable IDs across
+  frames and survive JSON configuration replay.
 - Periodic bond graphs with element-pair cutoff overrides and adjustable bond
   radius. Independent displacement analysis provides physical Cartesian components
   and magnitude for coloring against a selected reference frame.
@@ -49,8 +52,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   visible when atoms are hidden; display scales leave physical properties unchanged.
 - Up to 16 independent clipping planes with arbitrary Cartesian normals,
   editable names and positions, and draggable plane/normal controls.
-- Display-only replication along independent periodic cell vectors, including
-  triclinic tilts, without expanding or rerunning analysis.
+- Replication along independent periodic cell vectors, including triclinic
+  tilts. Display copies reuse analysis; optional **Replicate atoms for analysis**
+  creates real atoms in an enlarged cell and recalculates enabled analyses.
 - Periodic cutoff-based coordination analysis in browser Workers, with an
   editable cutoff suggestion for recognized metallic elements.
 - Adaptive/fixed-cutoff CNA for FCC, HCP, BCC and icosahedral environments,
@@ -69,9 +73,10 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   a bounded parallel Worker scheduler and retain per-frame results. Workers
   and PTM kernels are reused, with preparation stages and PTM atom progress.
 - Optional **Enable GPU computing**, off by default beside the theme controls,
-  accelerates coordination, RDF and local geometric shear with WebGPU. Other
-  analyses keep their CPU implementation; unavailable GPU support falls back
-  to CPU. Completed results remain available when the preference changes.
+  accelerates coordination, RDF, local geometric shear and bonds with WebGPU.
+  Ideal lattice strain also supports GPU tensor evaluation after its CPU PTM
+  fit. Other analyses keep their CPU implementation; unavailable GPU support
+  falls back to CPU. Completed results remain available when the preference changes.
 - Per-analysis Cancel controls stop computation and reset results and frame
   caches while keeping input settings and other analyses.
 - A legend **Color by** selector for switching between available properties and
@@ -121,7 +126,12 @@ WebGL 2 support. No installation or account is needed.
    viewport color with **BG**, or hide the cell and axes. Trajectories expose
    wrapped/unwrapped coordinates and frame controls below the viewport.
    Select **Replicate** to set total copies along periodic **a/b/c** directions
-   and click **Apply**. Under **Slice**, click **Add slice** and set a Cartesian
+   and click **Apply**. **Replicate atoms for analysis** is off by default;
+   enable it to analyze physical copies in an enlarged cell, using more memory
+   and computation. **Selections** creates named groups by clicking, dragging
+   a box or entering atom IDs. Edit each group's color and visibility, and use
+   Add/Remove/Replace to update members. Closing this tool keeps the groups.
+   Under **Slice**, click **Add slice** and set a Cartesian
    normal, position in Å and retained side. Drag the arrowhead to rotate the
    plane on a guide sphere, or its shaft to move it; the fields follow dragging.
    Multiple enabled slices keep the intersection of their retained sides.
@@ -155,7 +165,8 @@ WebGL 2 support. No installation or account is needed.
    **Statistics** shows coordination distributions and calculates total or
    element-pair RDF curves on fully periodic cells.
    **Enable GPU computing** in the top bar prefers WebGPU for coordination,
-   RDF and local shear on the next calculation. The switch starts off; CPU
+   RDF, local shear, bonds and ideal-strain tensors on the next calculation.
+   PTM fitting still uses CPU Wasm. The switch starts off; CPU
    fallback keeps analyses available on browsers without suitable GPU support.
    See [performance](docs/features/performance.md) for backend choices and
    timing considerations.

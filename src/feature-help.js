@@ -1,7 +1,7 @@
 /** The same descriptions power panel help and the documentation navigation. */
 export const FEATURE_HELP = Object.freeze({
   display: { title: 'Display', page: 'display', summary: 'Choose coordinates, atom colors and radii, image options, and an independent second camera. Display changes preserve the source data.' },
-  replicate: { title: 'Replicate', page: 'replicate', summary: 'Display copies along the actual periodic cell vectors. Copies reuse source atoms and do not change analysis input.' },
+  replicate: { title: 'Replicate', page: 'replicate', summary: 'Repeat along periodic cell vectors. Display copies reuse source atoms; optional Replicate atoms enlarges the cell and analyzes the additional atoms.' },
   slice: { title: 'Slices', page: 'slices', summary: 'Keep the intersection of up to 16 Cartesian half-spaces. Edit plane normals and positions numerically or with the viewport handles.' },
   coordination: { title: 'Coordination number', page: 'coordination', summary: 'Count unique neighboring atom IDs within a cutoff using the cell geometry and periodic boundaries.' },
   bonds: { title: 'Bonds', page: 'bonds', summary: 'Create periodic neighbor edges within a global or element-pair cutoff. Bond cylinders follow the selected periodic image.' },
@@ -14,6 +14,7 @@ export const FEATURE_HELP = Object.freeze({
   strain: { title: 'Ideal lattice strain', page: 'ideal-strain', summary: 'Restore the absolute ideal lattice scale to a PTM fit, then calculate Green–Lagrange strain and volume change.' },
   referenceStrain: { title: 'Reference frame strain', page: 'reference-strain', summary: 'Match stable atom IDs to a trajectory reference and fit a local deformation gradient from reference-frame neighbors.' },
   localShear: { title: 'Local shear', page: 'local-shear', summary: 'Measure the anisotropy of normalized neighbor second moments using AtomEye geometric shear. No reference frame is required.' },
+  selectionGroups: { title: 'Selections', page: 'selection-groups', summary: 'Create named atom groups by clicking, dragging a box or entering IDs. Edit each group\'s color, visibility and members; groups follow stable IDs across frames.' },
   selection: { title: 'Atom details and measurements', page: 'selection', summary: 'Inspect atoms by ID, override their appearance, and measure distance, angle or dihedral with optional periodic image correction.' },
   performance: { title: 'Performance', page: 'performance', summary: 'Inspect GPU and analysis timing, Worker concurrency, and the trajectory cache. Rendering and analysis remain on this device.' },
   configuration: { title: 'Configuration', page: 'configuration', summary: 'Save or restore source metadata and view/analysis settings as JSON. Reopen the matching original files to restore a session.' },

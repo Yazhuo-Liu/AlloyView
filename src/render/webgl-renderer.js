@@ -1,6 +1,7 @@
 import { cellVertices } from '../data/model.js';
 import { createReplication } from './replication.js';
 import { installCameraInteractions } from './camera-interactions.js';
+import { selectAtomsInRectangle } from './box-selection.js';
 import { VIEW_PRESETS } from './camera-presets.js';
 import { AtomPrimitiveLayer } from './atom-primitives.js';
 import { MAX_SLICES, SLICE_EPSILON, pointVisible, validateSlices } from './slicing.js';
@@ -161,6 +162,9 @@ export class WebGLRenderer {
     });
     if (!this.gl) throw new Error('WebGL 2 is not available in this browser or on this GPU.');
     this.onPick = onPick;
+    this.selectionInteraction = { mode: 'off' };
+    this.selectionRevision = 0;
+    this.selectionController = null;
     this.onStats = onStats;
     this.onCameraChange = onCameraChange;
     this.onProjectionChange = onProjectionChange;
@@ -281,6 +285,7 @@ export class WebGLRenderer {
   }
 
   setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions) {
+    this.cancelSelectionGesture();
     const startedAt = performance.now();
     const gl = this.gl;
     this.frame = frame;
@@ -297,9 +302,9 @@ export class WebGLRenderer {
     this.maximumAtomRadius = this.atomRadii.reduce((maximum, radius) => Math.max(maximum, radius), 0);
     this.visibility = new Uint8Array(this.atomCount).fill(255);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, displayPositions, gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, floatDisplayCoordinates(displayPositions), gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.fractionalBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, frame.fractional, gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, floatDisplayCoordinates(frame.fractional), gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
@@ -316,7 +321,8 @@ export class WebGLRenderer {
   }
 
   clearFrame() {
-    this.interactions?.reset();
+    this.cancelSelectionGesture();
+    this.selectionSourceBounds = null;
     this.frame = this.displayPositions = this.visibility = this.atomRadii = null;
     this.atomColors = null;
     this.atomBonds = this.atomVectors = null;
@@ -367,6 +373,7 @@ export class WebGLRenderer {
     if (values.length !== this.atomCount) {
       throw new Error('The visibility mask does not match the current frame.');
     }
+    this.cancelSelectionGesture();
     this.visibility = values;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
@@ -379,11 +386,12 @@ export class WebGLRenderer {
     if (!this.frame || positions.length !== this.atomCount * 3) {
       throw new Error('The display coordinate array does not match the current frame.');
     }
+    this.cancelSelectionGesture();
     const startedAt = performance.now();
     this.displayPositions = positions;
     this.updateSceneBounds();
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-    this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.STATIC_DRAW);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, floatDisplayCoordinates(positions), this.gl.STATIC_DRAW);
     this.primitiveLayer?.updatePositions(this);
     this.gl.finish();
     this.requestRender();
@@ -393,6 +401,7 @@ export class WebGLRenderer {
   setReplications(counts) {
     if (!this.frame) return;
     const replication = createReplication(this.frame.cell, counts);
+    this.cancelSelectionGesture();
     Object.assign(this, replication);
     this.displayAtomCount = this.atomCount * this.replicas.length;
     this.updateSceneBounds();
@@ -449,6 +458,7 @@ export class WebGLRenderer {
     this.requestRender();
   }
   setSlice(axis, maximum) {
+    this.cancelSelectionGesture();
     this.sliceMode = 'legacy';
     this.sliceAxis = axis;
     this.sliceMaximum = maximum;
@@ -456,6 +466,7 @@ export class WebGLRenderer {
   }
   setSlices(slices) {
     const normalized = validateSlices(slices);
+    this.cancelSelectionGesture();
     const values = new Float32Array(MAX_SLICES * 4);
     let count = 0;
     for (const slice of normalized) {
@@ -484,6 +495,7 @@ export class WebGLRenderer {
 
   centerOnPoint(point) {
     if (!point || point.length !== 3 || !Array.from(point).every(Number.isFinite)) throw new Error('The camera center requires three finite coordinates.');
+    this.cancelSelectionGesture();
     this.target = Array.from(point);
     this.pan = [0, 0, 0];
     this.requestRender();
@@ -495,6 +507,7 @@ export class WebGLRenderer {
   }
   setProjection(mode) {
     if (mode !== 'perspective' && mode !== 'orthographic') throw new Error(`Unknown projection mode “${mode}”.`);
+    this.cancelSelectionGesture();
     this.projectionMode = mode;
     this.onProjectionChange(mode);
     this.requestRender();
@@ -514,10 +527,15 @@ export class WebGLRenderer {
     const vertices = cellVertices(this.displayCell ?? this.frame.cell);
     const minimum = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
     const maximum = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
+    const sourceMinimum = [...minimum], sourceMaximum = [...maximum];
     for (const array of [vertices, this.displayPositions]) {
       for (let index = 0; index < array.length; index += 3) {
         for (let component = 0; component < 3; component += 1) {
           const isAtoms = array === this.displayPositions;
+          if (isAtoms) {
+            sourceMinimum[component] = Math.min(sourceMinimum[component], array[index + component]);
+            sourceMaximum[component] = Math.max(sourceMaximum[component], array[index + component]);
+          }
           minimum[component] = Math.min(minimum[component], array[index + component]
             + (isAtoms ? this.minimumOffset?.[component] ?? 0 : 0));
           maximum[component] = Math.max(maximum[component], array[index + component]
@@ -527,6 +545,7 @@ export class WebGLRenderer {
     }
     this.primitiveLayer?.extendBounds(this, minimum, maximum);
     this.sceneBounds = { minimum, maximum };
+    this.selectionSourceBounds = { minimum: sourceMinimum, maximum: sourceMaximum };
     return this.sceneBounds;
   }
 
@@ -542,6 +561,7 @@ export class WebGLRenderer {
 
   resetCamera() {
     if (!this.frame) return;
+    this.cancelSelectionGesture();
     const { minimum, maximum } = this.sceneBounds ?? this.updateSceneBounds();
     this.target = minimum.map((value, component) => (value + maximum[component]) / 2);
     this.pan = [0, 0, 0];
@@ -558,6 +578,7 @@ export class WebGLRenderer {
   setView(name) {
     const preset = VIEW_PRESETS[name];
     if (!preset) throw new Error(`Unknown camera view “${name}”.`);
+    this.cancelSelectionGesture();
     this.yaw = preset.yaw;
     this.pitch = preset.pitch;
     this.pan = [0, 0, 0];
@@ -682,6 +703,40 @@ export class WebGLRenderer {
   installInteractions() {
     this.interactions?.dispose();
     this.interactions = installCameraInteractions(this);
+  }
+
+  setSelectionInteraction({ mode = 'off', onPick, onBox, onError, context } = {}) {
+    if (!['off', 'click', 'box'].includes(mode)) throw new Error('Choose Click or Box selection, or turn selection off.');
+    for (const callback of [onPick, onBox, onError]) if (callback !== undefined && typeof callback !== 'function') throw new Error('Selection handlers must be functions.');
+    const previous = this.selectionInteraction;
+    if (previous?.mode === mode && previous.onPick === onPick && previous.onBox === onBox && previous.context === context) {
+      previous.onError = onError;
+      return;
+    }
+    this.cancelSelectionGesture();
+    this.selectionInteraction = { mode, onPick, onBox, onError, context };
+    if (this.canvas.style) this.canvas.style.cursor = mode === 'box' ? 'crosshair' : '';
+  }
+
+  cancelSelectionGesture() {
+    this.selectionRevision = (this.selectionRevision ?? 0) + 1;
+    this.selectionController?.abort();
+    this.selectionController = null;
+    this.interactions?.reset();
+  }
+
+  async selectInRectangle(rectangle, { signal, onProgress } = {}) {
+    this.selectionController?.abort();
+    const controller = new AbortController();
+    this.selectionController = controller;
+    const abort = () => controller.abort();
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
+    try { return await selectAtomsInRectangle(this, rectangle, { signal: controller.signal, onProgress }); }
+    finally {
+      signal?.removeEventListener('abort', abort);
+      if (this.selectionController === controller) this.selectionController = null;
+    }
   }
 
   cameraBasis() {
@@ -1009,4 +1064,10 @@ function createShader(gl, type, source) {
 
 function uniforms(gl, program, names) {
   return Object.fromEntries(names.map((name) => [name, gl.getUniformLocation(program, name)]));
+}
+
+// Analysis coordinates may be Float64 (e.g. divided supercell fractions).
+// WebGL vertex attributes consume Float32; keep that conversion at upload.
+function floatDisplayCoordinates(values) {
+  return values instanceof Float32Array ? values : Float32Array.from(values);
 }

@@ -143,17 +143,17 @@ export function validateFrame(frame) {
 
 export function frameTransferables(frame) {
   const transferables = [
-    frame.ids.buffer,
     frame.types.buffer,
     frame.positions.buffer,
     frame.fractional.buffer,
     frame.cell.origin.buffer,
     frame.cell.vectors.buffer,
   ];
+  if (ArrayBuffer.isView(frame.ids)) transferables.push(frame.ids.buffer);
   if (frame.unwrappedPositions) transferables.push(frame.unwrappedPositions.buffer);
   if (frame.imageFlags) transferables.push(frame.imageFlags.buffer);
-  for (const property of frame.properties) transferables.push(property.data.buffer);
-  return transferables;
+  for (const property of frame.properties) if (ArrayBuffer.isView(property.data)) transferables.push(property.data.buffer);
+  return [...new Set(transferables)];
 }
 
 function cross(left, right) {

@@ -54,7 +54,7 @@ export async function calculateAtomicStrain(frame, { references, ptmInput = null
   return { ...result, ...(ptmInput ? {} : ptm), incomplete, startAtom, endAtom, elapsedMs: performance.now() - startedAt };
 }
 
-function referenceFactors(type, reference, scale) {
+export function referenceFactors(type, reference, scale) {
   let radiusPerA;
   if (type === 1) radiusPerA = 1 / Math.SQRT2;
   else if (type === 2) radiusPerA = 1;

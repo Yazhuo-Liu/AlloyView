@@ -1,4 +1,4 @@
-const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear']);
+const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'strain']);
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
   frameCount: 0, currentIndex: 0, budgetBytes: 0, allocatedBytes: 0, residentBytes: 0, frameBytes: 0, workspaceBytes: 0 };
@@ -145,6 +145,7 @@ export class GpuAnalysisClient {
       await yieldToMain();
       if (task.settled) { this.finishDispatch(task); return; }
       let frameId, frameIndex, frame;
+      let parameters = task.parameters;
       const transfer = [];
       if (task.frame) {
         frameId = this.frameIds.get(task.frame);
@@ -158,11 +159,21 @@ export class GpuAnalysisClient {
           if (types) transfer.push(types.buffer);
         }
       }
+      if (task.type === 'analyze' && parameters?.kind === 'strain' && parameters.ptmInput) {
+        const ptmInput = {};
+        for (const name of ['structures', 'scales', 'deformation']) {
+          const source = parameters.ptmInput[name];
+          if (!ArrayBuffer.isView(source) || source instanceof DataView) throw new Error(`GPU strain requires a typed PTM ${name} array.`);
+          ptmInput[name] = await copyArray(source, task);
+          transfer.push(ptmInput[name].buffer);
+        }
+        parameters = { ...parameters, ptmInput };
+      }
       if (task.settled) { this.finishDispatch(task); return; }
       if (this.worker !== worker) throw abortError();
       task.dispatched = true;
       worker.postMessage({ type: task.type, id: task.id, frameId, frameIndex, frame,
-        parameters: task.parameters, options: task.options }, transfer);
+        parameters, options: task.options }, transfer);
     } catch (error) { this.settle(task, error); this.finishDispatch(task); }
   }
 

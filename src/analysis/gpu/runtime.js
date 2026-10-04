@@ -86,12 +86,14 @@ export class GpuRuntime {
     await this.initialize(signal);
     if (!this.warmupPromise) {
       this.warmupPromise = (async () => {
-        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear] = await Promise.all([
+        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain] = await Promise.all([
           import('./coordination.js'), import('./rdf.js'), import('./local-shear-shaders.js'),
+          import('./bonds-shaders.js'), import('./atomic-strain-shaders.js'),
         ]);
         const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
           shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
-          shear.SHEAR_CORRECTION_SHADER, shear.SHEAR_REDUCTION_SHADER, shear.SHEAR_FINALIZE_SHADER];
+          shear.SHEAR_CORRECTION_SHADER, shear.SHEAR_REDUCTION_SHADER, shear.SHEAR_FINALIZE_SHADER,
+          bonds.BONDS_COUNT_SHADER, bonds.BONDS_WRITE_SHADER, strain.ATOMIC_STRAIN_SHADER];
         for (const source of sources) await this.compilePipeline(source);
       })();
       this.warmupPromise.catch(() => { this.warmupPromise = null; });
@@ -202,6 +204,12 @@ export class GpuRuntime {
   }
 
   prepareFrame(frame, options) { return this.uploadFrame(frame, options); }
+
+  /** Resident inputs also serve atomwise kernels which need no neighbor grid. */
+  async prepareFrameBuffers(frame, options) {
+    await this.uploadFrame(frame, options);
+    return this.frames.get(this.frameKey(frame));
+  }
 
   shrinkBudget(incomingBytes = 0) {
     const workspaceBytes = gpuWorkspaceBytes(this.frameBytes);

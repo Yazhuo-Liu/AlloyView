@@ -4,6 +4,7 @@ import { finalizeRdf } from './rdf.js';
 import { modalCoordination, shearInvariant } from './local-shear.js';
 import { REFERENCE_STRAIN_FIELDS } from './reference-strain.js';
 import { GpuAnalysisClient } from './gpu/client.js';
+import { validateReferences } from './lattice.js';
 
 const MAX_WORKERS = 6;
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
@@ -64,6 +65,9 @@ export class AnalysisPool {
     if (signal?.aborted) throw abortError();
     const analysisStartedAt = performance.now();
     const gpuRequested = this.gpuEnabled;
+    if (gpuRequested && parameters.kind === 'strain' && this.gpuBackend.supports('strain')) {
+      return this.analyzeStrainWithGpu(frame, parameters, { onProgress, signal, frameIndex });
+    }
     let fallbackReason;
     if (gpuRequested) {
       if (!this.gpuBackend.supports(parameters.kind)) fallbackReason = `The ${parameters.kind} analysis uses CPU workers; no GPU kernel is available.`;
@@ -82,6 +86,40 @@ export class AnalysisPool {
       onProgress: (update) => onProgress({ ...update, backend: 'cpu', ...(fallbackReason ? { fallbackReason } : {}) }) });
     return { ...result, backend: 'cpu', gpuRequested, elapsedMs: performance.now() - analysisStartedAt,
       ...(fallbackReason ? { fallbackReason } : {}) };
+  }
+
+  /** PTM correspondence fitting remains a CPU algorithm. When necessary, fit
+   * once, then route the elastic tensor stage to GPU or its cached-PTM CPU
+   * fallback without repeating the expensive template analysis.
+   */
+  async analyzeStrainWithGpu(frame, parameters, { onProgress, signal, frameIndex }) {
+    const startedAt = performance.now(), atomCount = frame.fractional.length / 3;
+    if (!ArrayBuffer.isView(frame.types) || frame.types.length !== atomCount) throw new Error('Analysis requires one element type per atom.');
+    validateReferences(parameters.references, frame.types);
+    const fresh = !parameters.ptmInput;
+    const ptm = fresh ? await this.analyzeCPU(frame, { ...parameters, kind: 'ptm' }, { signal,
+      onProgress: update => onProgress({ ...update, backend: 'cpu', stage: 'ptm-fit', totalAtoms: atomCount * 2 }) }) : null;
+    if (signal?.aborted || this.closed) throw abortError();
+    const tensorParameters = { ...parameters, ptmInput: parameters.ptmInput ?? ptm };
+    const report = backend => update => onProgress({ ...update, backend, stage: 'strain-tensor',
+      completedAtoms: (fresh ? atomCount : 0) + (update.completedAtoms ?? 0), totalAtoms: atomCount * (fresh ? 2 : 1) });
+    let tensor, fallbackReason;
+    const tensorStartedAt = performance.now();
+    try {
+      tensor = await this.gpuBackend.analyze(frame, tensorParameters, { onProgress: report('gpu'), signal, frameIndex });
+      if (signal?.aborted || this.closed) throw abortError();
+    } catch (error) {
+      if (error.name === 'AbortError' || signal?.aborted || this.closed) throw abortError();
+      fallbackReason = error.message || 'The GPU strain tensor failed; using CPU workers.';
+      tensor = await this.analyzeCPU(frame, tensorParameters, { signal,
+        onProgress: update => report('cpu')({ ...update, fallbackReason }) });
+    }
+    const tensorBackend = fallbackReason ? 'cpu' : 'gpu';
+    return { ...(ptm ?? {}), ...tensor, backend: tensorBackend, gpuRequested: true, tensorBackend,
+      engine: ptm ? `${ptm.engine}+${tensor.engine}` : tensor.engine,
+      ...(ptm ? { ptmBackend: 'cpu', ptmWorkerCount: ptm.workerCount, ptmElapsedMs: ptm.elapsedMs } : {}),
+      tensorElapsedMs: performance.now() - tensorStartedAt, elapsedMs: performance.now() - startedAt,
+      warning: null, ...(fallbackReason ? { fallbackReason } : {}) };
   }
 
   async analyzeCPU(frame, parameters, { onProgress = () => {}, signal } = {}) {

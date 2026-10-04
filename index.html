@@ -221,6 +221,7 @@
               <button type="button" data-tool-button="strain" aria-controls="tool-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="referenceStrain" aria-controls="tool-reference-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Frame strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="localShear" aria-controls="tool-local-shear" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Local shear</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="selectionGroups" aria-controls="tool-selection-groups" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Selections</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="selection" aria-controls="tool-selection" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Atom details</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="performance" aria-controls="tool-performance" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Performance</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
             </div>
@@ -289,12 +290,14 @@
               <label class="field"><span>b vector</span><input id="replicate-b" type="number" value="1" min="1" max="4096" step="1" disabled></label>
               <label class="field"><span>c vector</span><input id="replicate-c" type="number" value="1" min="1" max="4096" step="1" disabled></label>
             </div>
+            <label class="slice-toggle"><input id="replicate-atoms" type="checkbox" disabled><span>Replicate atoms for analysis</span></label>
             <div class="replicate-actions">
               <button id="reset-replicate" class="button button-secondary" type="button" disabled>Original cell</button>
               <button id="apply-replicate" class="button button-accent" type="button" disabled>Apply</button>
             </div>
             <p id="replicate-summary" class="help" role="status" aria-live="polite">1 × 1 × 1 · Original cell</p>
-            <p class="help">Total copies along each periodic cell vector, including the original. A value of 1 keeps that direction unchanged. Triclinic cells follow their tilted vectors. Analysis uses the original atoms; only rendering is repeated.</p>
+            <p class="help">Total copies along each periodic cell vector, including the original. A value of 1 keeps that direction unchanged. Triclinic cells follow their tilted vectors.</p>
+            <p class="help">Replicate atoms enlarges the cell and creates real atoms for every analysis; uses more memory and computation. Off repeats only the display.</p>
           </section>
 
           <section id="tool-slice" class="side-section" data-tool-panel="slice" hidden>
@@ -523,6 +526,40 @@
             <button id="run-local-shear" class="button button-accent tool-run-button" type="button" disabled>Calculate local shear</button>
             <p class="help">AtomEye-style shear measures the shape of each local neighbor environment in this frame. It does not require a reference frame or a matched crystal template.</p>
             <p id="local-shear-status" class="help" role="status" aria-live="polite">Calculate a local geometric shear indicator.</p>
+          </section>
+
+          <section id="tool-selection-groups" class="side-section selection-groups-section" data-tool-panel="selectionGroups" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">ATOM GROUPS</p><h3>Selections</h3></div>
+              <button id="add-selection-group" class="text-button" type="button" disabled>Add group</button>
+            </div>
+            <div class="paired-fields selection-group-interaction">
+              <label class="field"><span>Pick mode</span><select id="selection-group-mode" disabled><option value="click">Click atoms</option><option value="box">Drag a box</option></select></label>
+              <label class="field"><span>Operation</span><select id="selection-group-operation" disabled><option value="add">Add atoms</option><option value="remove">Remove atoms</option><option value="replace">Replace atoms</option></select></label>
+            </div>
+            <p id="selection-group-hint" class="help">While this tool is open, click atoms to add them to a group. The first selection creates a group.</p>
+            <div id="selection-group-list" class="selection-group-list" role="group" aria-label="Atom selection groups"></div>
+            <p id="selection-group-empty" class="selection-empty">Add a group, click atoms, or choose Drag a box to select several atoms.</p>
+            <div id="selection-group-settings" hidden>
+              <label class="field"><span>Group name</span><input id="selection-group-name" type="text" maxlength="160" disabled></label>
+              <div class="paired-fields selection-group-appearance">
+                <label class="field"><span>Group color</span><input id="selection-group-color" type="color" value="#22c1c3" disabled></label>
+                <label class="slice-toggle"><input id="selection-group-visible" type="checkbox" checked disabled><span>Show group atoms</span></label>
+              </div>
+              <p id="selection-group-count" class="help"></p>
+              <details class="tool-details selection-group-members">
+                <summary>Member IDs and manual edits</summary>
+                <p id="selection-group-member-preview" class="help selection-group-member-preview"></p>
+                <label class="field"><span>Atom IDs, separated by spaces or commas</span><textarea id="selection-group-ids" rows="3" placeholder="1, 2, 3" disabled></textarea></label>
+                <button id="apply-selection-group-ids" class="button button-secondary tool-run-button" type="button" disabled>Add IDs</button>
+                <p class="help">Uses the selected Add, Remove or Replace operation. You can edit hidden atoms and IDs absent from this frame.</p>
+              </details>
+              <div class="paired-actions">
+                <button id="clear-selection-group" class="button button-secondary" type="button" disabled>Clear members</button>
+                <button id="delete-selection-group" class="button button-secondary" type="button" disabled>Delete group</button>
+              </div>
+            </div>
+            <p id="selection-group-status" class="help" role="status" aria-live="polite">Open a structure to create selections.</p>
           </section>
 
           <section id="tool-selection" class="side-section selection-section" data-tool-panel="selection" hidden>

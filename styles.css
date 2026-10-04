@@ -387,9 +387,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .field { display: grid; gap: 7px; margin-top: 13px; }
 .field > span, .field label > span, .analysis-controls label > span { color: var(--muted); font-size: 10px; }
 .range-field > span { display: flex; justify-content: space-between; }.range-field output { color: var(--cyan); }
-select, input[type="number"], .slice-settings input[type="text"] { width: 100%; height: 36px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--text-soft); padding: 0 10px; }
+select, input[type="number"], .slice-settings input[type="text"], .selection-groups-section input[type="text"] { width: 100%; height: 36px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--text-soft); padding: 0 10px; }
 select:disabled, input:disabled { cursor: not-allowed; opacity: 1; }
-select:disabled, input[type="number"]:disabled { color: var(--disabled-text); -webkit-text-fill-color: var(--disabled-text); background: var(--disabled-bg); }
+select:disabled, input[type="number"]:disabled, .selection-groups-section input[type="text"]:disabled { color: var(--disabled-text); -webkit-text-fill-color: var(--disabled-text); background: var(--disabled-bg); }
 input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); padding: 4px; }
 .background-custom input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 .background-custom input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 3px; }
@@ -462,6 +462,21 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
 .selection-empty { color: var(--subtle); font-size: 10px; line-height: 1.6; border: 1px dashed var(--line-strong); border-radius: 7px; padding: 13px; }
 .selection-data { display: grid; grid-template-columns: auto 1fr; gap: 7px 14px; margin: 0; font-size: 10px; }
 .selection-data dt { color: var(--muted); }.selection-data dd { margin: 0; color: var(--text-soft); text-align: right; word-break: break-word; }
+.selection-group-list { display: grid; gap: 7px; }
+.selection-group-list:empty { display: none; }
+.selection-group-list button { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--text-soft); text-align: left; }
+.selection-group-list button:hover:not(:disabled) { border-color: var(--cyan); background: var(--button-hover); }
+.selection-group-list button[aria-pressed="true"] { border-color: var(--cyan); background: var(--accent-soft); color: var(--accent-text); }
+.selection-group-swatch { width: 12px; height: 12px; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--group-color); }
+.selection-group-label { display: grid; gap: 3px; min-width: 0; }
+.selection-group-label strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.selection-group-label small, .selection-group-visibility { color: var(--muted); font-size: 10px; }
+.selection-group-appearance { align-items: center; }
+.selection-group-appearance .slice-toggle { margin-top: 14px; font-size: 10px; }
+.selection-group-interaction .field { margin-top: 0; }
+.selection-group-members textarea { width: 100%; min-height: 68px; resize: vertical; padding: 8px 9px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--text); font: inherit; font-size: 11px; }
+.selection-group-members textarea:disabled { color: var(--disabled-text); background: var(--disabled-bg); }
+.selection-group-member-preview { overflow-wrap: anywhere; }
 
 .paired-fields, .paired-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .paired-fields .field { min-width: 0; }
@@ -512,6 +527,10 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .comparison-toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
   .comparison-toolbar button { flex: 0 0 auto; min-height: 30px; }
   .element-style-row input, .bond-pair-cutoff-row input { min-height: 36px; }
+  .selection-group-list button, .selection-groups-section .paired-actions button, .selection-groups-section .tool-run-button { min-height: 42px; }
+  .selection-groups-section input, .selection-groups-section select { min-height: 36px; }
+  .selection-groups-section .slice-toggle input { min-height: 0; width: 17px; height: 17px; }
+  .selection-groups-section #add-selection-group { min-height: 38px; }
 }
 
 .performance-section details summary { display: flex; justify-content: space-between; cursor: pointer; list-style: none; color: var(--muted); font-size: 11px; }

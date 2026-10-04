@@ -110,7 +110,8 @@ actual cell vectors, including tilted or rotated vectors in a triclinic cell.
 The outline and camera expand to enclose the displayed supercell. **Original
 cell** or closing Replicate restores `1 × 1 × 1`.
 
-Replication reuses the original GPU atom buffers and all calculated properties.
+With **Replicate atoms for analysis** off (the default), replication reuses
+the original GPU atom buffers and all calculated properties.
 It does not add atoms to CNA, PTM, coordination or atomic-strain input, or rerun
 those calculations. Coloring and atom visibility apply to every copy; clicking
 an image shows the original atom's ID and properties. The structure summary and
@@ -119,6 +120,16 @@ displayed copies, and PNG exports include the copies. Counts follow trajectory f
 when a new source is opened. Up to 4,096 displayed cells are allowed; rendering
 and picking cost increase with the number of copies even though analysis cost
 does not.
+
+Enable **Replicate atoms for analysis** to enlarge the cell and create physical
+copies with independent atom IDs. All enabled analyses recalculate using the
+additional atoms and enlarged cell; this increases memory and calculation
+work. Copies still follow the actual cell vectors for triclinic geometry.
+The structure summary and crystal legend then report physical atom counts,
+and selection groups can edit different copies independently. Turning the
+checkbox off returns to analysis of the source atoms with display copies.
+Counts and this mode are saved in JSON; older configurations default to display
+replication. The original files remain unchanged.
 
 ## Arbitrary clipping planes
 
@@ -163,7 +174,8 @@ sizes, available relative paths and saved trajectory frame, together with the
 processing and view settings. The configuration includes enabled coordination,
 CNA, central symmetry, PTM, ideal-lattice/reference-frame strain, local shear,
 bonds, displacement and RDF analyses and their parameters, editable
-lattice references, replication, all slices and their names, color maps,
+lattice references, replication counts and physical/display mode, all slices
+and their names, named atom selection groups and their member IDs, color maps,
 per-property fixed ranges and Auto settings, visibility filters,
 wrapped/unwrapped mode, atom radius, cell/axis/background
 and PNG options, camera, selected atom, current tool and theme. Optional
@@ -186,6 +198,7 @@ folders when needed.
 
 The JSON contains metadata and settings. Source atom data and calculated result
 arrays are not packaged into it; analysis results are recreated from the source.
+Selection groups contain IDs and display settings, without embedding positions.
 The browser cannot reopen disk files automatically, so selecting the matching
 local source is required after starting a new session. Loading a different
 source leaves the configuration pending for the requested files.
@@ -274,7 +287,9 @@ input preparation yields between large chunks so the status and **Cancel**
 controls can remain responsive.
 
 **Enable GPU computing** beside the Light/Dark buttons is off by default.
-Turn it on to prefer WebGPU for coordination, RDF and local geometric shear.
+Turn it on to prefer WebGPU for coordination, RDF, local geometric shear,
+bonds and ideal lattice strain tensor evaluation. PTM correspondence fitting
+still uses CPU Wasm; strain can reuse that fit for its GPU tensor stage.
 Other analyses keep their existing CPU implementation, and unavailable or
 unsupported GPU execution falls back to CPU. The switch affects the next
 calculation; completed results remain available. Click **Calculate** again
@@ -390,10 +405,33 @@ distances, g(r) values and counts.
 
 Normalized RDF requires periodic boundaries along all three axes and a cutoff
 no greater than half the shortest cell face height. A nonperiodic structure
-needs a separate surface correction, which is not implemented. RDF uses source
-atoms before replication or display filtering. The graph and histogram use
-the source structure, rather than treating replicated display cells as extra
-samples.
+needs a separate surface correction, which is not implemented. RDF ignores
+display filtering and display copies. With physical atom replication enabled,
+it uses the enlarged cell and additional atoms as the analysis structure.
+
+## Named atom selection groups
+
+Open **Selections** and click **Add group**, or click atoms to create the first
+group. **Click atoms** picks individual atoms; **Drag a box** selects projected
+atom centers throughout the viewing depth while respecting visibility and
+slicing. **Add atoms** keeps existing members, **Remove atoms** subtracts picks,
+and **Replace atoms** replaces the current group's membership.
+
+Select a group to edit its name, color and **Show group atoms** checkbox.
+**Clear members** keeps an empty group, and **Delete group** removes it.
+**Member IDs and manual edits** accepts space- or comma-separated IDs with the
+same Add/Remove/Replace operation, including hidden atoms and IDs absent from
+the current frame. Counts show how many stored IDs are present in that frame.
+
+In Box mode, one-finger or primary mouse dragging draws a rectangle; right-drag,
+wheel and two-finger gestures navigate. **Escape** cancels the rectangle.
+Switching tools or closing Selections ends group picking while keeping group
+colors and visibility. Display copies share the original atom ID; physical
+copies have independent IDs. Groups follow stable IDs across reordered frames
+and are saved in JSON configuration exports. Later groups take color precedence
+over earlier groups; per-atom color overrides take precedence over group color.
+Any hidden group hides its members along with the other visibility filters.
+See [Selections](features/selection-groups.md) for detailed controls and limits.
 
 ## Measurements and appearance overrides
 
@@ -585,7 +623,8 @@ This is a provenance and risk statement, not legal advice.
 ## Known limits and next steps
 
 - WebGL 2 is required for rendering. Optional WebGPU computing accelerates
-  coordination, RDF and local geometric shear; fallback Canvas rendering is
+  coordination, RDF, local geometric shear, bonds and ideal-strain tensor
+  evaluation; fallback Canvas rendering is
   not implemented.
 - The parser currently indexes a dump in one Worker and does not stream partial
   atom rows into the renderer.
@@ -606,7 +645,8 @@ This is a provenance and risk statement, not legal advice.
   also remain separate future modules; they are not attributed to the reviewed
   AtomEye snapshot. See `docs/ATOMEYE_REVIEW.md`.
 - CNA and normalized central symmetry use JavaScript Workers; coordination,
-  RDF and local geometric shear can use optional WebGPU computing or Workers.
+  RDF, local geometric shear, bonds and ideal-strain tensors can use optional
+  WebGPU computing or Workers.
   PTM and its deformation fit use the included Wasm kernel. No Emscripten
   installation is needed unless rebuilding C++ with `npm run build:ptm`.
 

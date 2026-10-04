@@ -62,6 +62,26 @@ test('retained analysis buffers reduce trajectory cache capacity under the same 
   assert.ok(after.limit < before.limit);
 });
 
+test('physical replication accounts for compound IDs and retained source geometry', () => {
+  const frame = sampleFrame(3);
+  const typedBytes = estimateFrameBytes(frame) - frame.ids.byteLength;
+  frame.ids = [1, '@AlloyView:copy:1:0:0:1', '@AlloyView:copy:2:0:0:1'];
+  frame.processingSourceBytes = 128;
+  const idBytes = frame.ids.reduce((bytes, id) => bytes + 16 + (typeof id === 'string' ? id.length * 2 : 8), 0);
+  assert.equal(estimateFrameBytes(frame), typedBytes + idBytes + 128);
+});
+
+test('large string-ID expansions cannot use the tiny typed-buffer-only cache estimate', () => {
+  const frame = sampleFrame(1000);
+  const environment = { heapLimit: 1024 ** 3, deviceMemoryGiB: 8 };
+  const before = chooseFrameCachePolicy(frame, 3000, environment);
+  frame.ids = Array.from({ length: 1000 }, (_, atom) => `@AlloyView:copy:100:100:100:${atom}`);
+  frame.processingSourceBytes = 1_000_000;
+  const after = chooseFrameCachePolicy(frame, 3000, environment);
+  assert.ok(after.limit < before.limit);
+  assert.ok(after.estimatedFrameBytes > before.estimatedFrameBytes);
+});
+
 function sampleFrame(atomCount) {
   return {
     ids: new Float64Array(atomCount),

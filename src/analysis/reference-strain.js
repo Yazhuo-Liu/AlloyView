@@ -18,8 +18,8 @@ export function createReferenceMapping(currentFrame, referenceFrame) {
   const currentIds = checkedIds(currentFrame);
   const referenceIds = checkedIds(referenceFrame);
   const byId = new Map();
-  for (let atom = 0; atom < referenceIds.length; atom += 1) byId.set(referenceIds[atom], atom);
-  return Int32Array.from(currentIds, id => byId.get(id) ?? -1);
+  for (let atom = 0; atom < referenceIds.length; atom += 1) byId.set(String(referenceIds[atom]), atom);
+  return Int32Array.from(currentIds, id => byId.get(String(id)) ?? -1);
 }
 
 /** The same preparation with periodic browser yields, so matching large ID
@@ -40,16 +40,18 @@ export async function createReferenceMappingAsync(currentFrame, referenceFrame, 
   };
   for (let atom = 0; atom < referenceIds.length; atom += 1) {
     const id = referenceIds[atom];
-    assertUniqueId(id, byId.has(id));
-    byId.set(id, atom);
+    const key = String(id);
+    assertUniqueId(id, byId.has(key));
+    byId.set(key, atom);
     if ((atom + 1) % 65_536 === 0) await checkpoint(atom + 1);
   }
   if (referenceIds.length % 65_536 !== 0) await checkpoint(referenceIds.length);
   for (let atom = 0; atom < currentIds.length; atom += 1) {
     const id = currentIds[atom];
-    assertUniqueId(id, seen.has(id));
-    seen.add(id);
-    mapping[atom] = byId.get(id) ?? -1;
+    const key = String(id);
+    assertUniqueId(id, seen.has(key));
+    seen.add(key);
+    mapping[atom] = byId.get(key) ?? -1;
     if ((atom + 1) % 65_536 === 0) await checkpoint(referenceIds.length + atom + 1);
   }
   throwIfAborted(signal);
@@ -78,14 +80,17 @@ function checkedIds(frame) {
   const ids = idArray(frame);
   const seen = new Set();
   for (const id of ids) {
-    assertUniqueId(id, seen.has(id));
-    seen.add(id);
+    const key = String(id);
+    assertUniqueId(id, seen.has(key));
+    seen.add(key);
   }
   return ids;
 }
 
 function assertUniqueId(id, repeated) {
-  if (!Number.isSafeInteger(id) || repeated) throw new Error('Reference-frame strain requires unique integer atom IDs.');
+  const valid = typeof id === 'number' ? Number.isSafeInteger(id)
+    : typeof id === 'string' && id.length > 0 && !/[\x00-\x1f\x7f]/.test(id);
+  if (!valid || repeated) throw new Error('Reference-frame strain requires unique integer atom IDs or stable string IDs.');
 }
 
 function throwIfAborted(signal) {

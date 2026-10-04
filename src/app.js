@@ -1,5 +1,7 @@
 import { FrameCache } from './data/frame-cache.js';
-import { chooseFrameCachePolicy } from './data/cache-policy.js';
+import { chooseFrameCachePolicy, estimateFrameBytes } from './data/cache-policy.js';
+import { replicateFrame } from './data/replicate.js';
+import { normalizeRepetitions } from './render/replication.js';
 import { GpuPrefetchScheduler } from './data/gpu-prefetch.js';
 import { DEFAULT_PLAYBACK_INTERVAL_MS, nextPlaybackFrame } from './data/playback.js';
 import { recommendCoordinationCutoff } from './analysis/cutoff.js';
@@ -42,6 +44,8 @@ import { initializeSliceGizmo } from './render/slice-gizmo.js';
 import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './configuration.js';
 import { initializeAtomEyeTools } from './atomeye-tools.js';
 import { initializeFeatureHelp } from './feature-help.js';
+import { normalizeSelectionGroups } from './selection-groups.js';
+import { initializeSelectionGroupControls } from './selection-group-controls.js';
 
 const elements = Object.fromEntries([
   'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar', 'enable-gpu-computing',
@@ -61,7 +65,7 @@ const elements = Object.fromEntries([
   'axis-triad', 'axis-arrows', 'axis-x-line', 'axis-y-line', 'axis-z-line', 'axis-x-label', 'axis-y-label', 'axis-z-label',
   'metric-index', 'metric-parse', 'metric-upload', 'metric-analysis', 'metric-fps',
   'metric-memory',
-  'replicate-a', 'replicate-b', 'replicate-c', 'apply-replicate', 'reset-replicate', 'replicate-summary',
+  'replicate-a', 'replicate-b', 'replicate-c', 'replicate-atoms', 'apply-replicate', 'reset-replicate', 'replicate-summary',
   'export-configuration', 'import-configuration', 'configuration-file', 'configuration-status',
   'source-dialog', 'source-dialog-kicker', 'source-dialog-title', 'source-dialog-summary', 'source-dialog-close', 'source-options',
 ].map((id) => [id, document.getElementById(id)]));
@@ -92,10 +96,13 @@ const state = {
   frameIndex: 0,
   frame: null,
   selectedId: null,
+  selectionGroups: normalizeSelectionGroups(),
   frameRequest: 0,
   colorMode: 'type',
   coordinateMode: 'wrapped',
   repetitions: [1, 1, 1],
+  replicateAtoms: false,
+  processingRevision: 0,
   radiusPercent: 100,
   source: null,
   availableSources: [],
@@ -133,6 +140,7 @@ let sourceFetchController = null;
 let sourceLoadingOwner = null;
 let renderer;
 let atomEyeTools;
+let selectionGroupControls;
 let colorChoiceVersion = 0;
 let backgroundCustomized = false;
 let sliceControls;
@@ -142,6 +150,9 @@ let configurationRequest = 0;
 let configurationReadRequest = 0;
 let restorationOwner = null;
 let gpuPreparationStatus = null;
+let replicationController = null;
+let replicationRequest = 0;
+const analysisFrameSources = new WeakMap();
 const gpuPrefetch = new GpuPrefetchScheduler({
   pool: analysisPool,
   getFrame: (index, { signal, sourceKey }) => getFrame(index, { background: true, cacheFrame: false, signal, sourceKey }),
@@ -164,9 +175,12 @@ const toolPanels = initializeToolPanels({
     atomEyeTools?.deactivate(name);
     if (name === 'replicate') resetReplication();
     if (name === 'slice') toolPanels.setToolEnabled('slice', sliceControls.getState().slices.some(slice => slice.enabled));
+    if (name === 'selectionGroups') toolPanels.setToolEnabled(name, state.selectionGroups.groups.length > 0);
   },
   onSelectionChange: (name, { userInitiated = false } = {}) => {
     syncSliceGizmo();
+    selectionGroupControls?.setActive(name === 'selectionGroups');
+    syncSelectionGroupInteraction();
     if (name === 'vectors' && userInitiated && state.frame) atomEyeTools?.updateVectors();
     if (name === 'displacement' && userInitiated && state.frame && !toolPanels.isToolEnabled(name)) {
       interruptConfigurationRestore('a displacement calculation');
@@ -209,7 +223,7 @@ function scheduleGpuFramePrefetch() {
   if (!state.frame || sourceLoadingOwner !== null) return;
   analysisPool.associateGpuFrame(state.frame, state.frameIndex);
   void gpuPrefetch.setFrame({
-    sourceKey: `${state.sourceVersion}:${sourceOpenRequest}`,
+    sourceKey: processingSourceKey(),
     frameCount: state.frameCount,
     currentIndex: state.frameIndex,
     frame: state.frame,
@@ -224,10 +238,7 @@ setGpuComputing(false);
 
 try {
   renderer = new WebGLRenderer(elements.viewport, {
-    onPick: (index) => {
-      selectAtom(index);
-      if (index >= 0) toolPanels.selectTool('selection');
-    },
+    onPick: handleAtomPick,
     onStats: ({ fps }) => { elements['metric-fps'].textContent = `${fps.toFixed(1)} FPS`; },
     onCameraChange: updateAxisTriad,
     onProjectionChange: syncProjectionControls,
@@ -236,6 +247,49 @@ try {
 } catch (error) {
   showToast(error.message);
   throw error;
+}
+
+selectionGroupControls = initializeSelectionGroupControls({
+  getFrame: () => state.frame,
+  getState: () => state.selectionGroups,
+  setState: next => { state.selectionGroups = next; },
+  onEdit: () => interruptConfigurationRestore('an atom selection edit'),
+  onChange: (_next, { reason } = {}) => {
+    if (reason === 'interaction' || reason === 'selection') renderer.cancelSelectionGesture();
+    toolPanels.setToolEnabled('selectionGroups', state.selectionGroups.groups.length > 0);
+    syncSelectionGroupInteraction();
+    if (state.frame && reason !== 'interaction' && reason !== 'selection') { applyColors(); restoreSelection(); }
+  },
+  onError: error => showToast(error.message ?? String(error)),
+});
+
+function handleAtomPick(index) {
+  if (selectionGroupControls?.getInteractionState().enabled) {
+    if (state.frame && index >= 0 && index < state.frame.ids.length) {
+      selectionGroupControls.selectAtoms([state.frame.ids[index]]);
+    }
+    return;
+  }
+  selectAtom(index);
+  if (index >= 0) toolPanels.selectTool('selection');
+}
+
+function selectGroupAtomIndices(indices) {
+  const frame = state.frame;
+  if (!frame || !selectionGroupControls?.getInteractionState().enabled) return;
+  selectionGroupControls.selectAtoms(Array.from(indices, index => frame.ids[index]));
+}
+
+function syncSelectionGroupInteraction() {
+  if (!renderer || !selectionGroupControls) return;
+  const interaction = selectionGroupControls.getInteractionState();
+  renderer.setSelectionInteraction({
+    mode: state.frame && sourceLoadingOwner === null && interaction.enabled ? interaction.mode : 'off',
+    context: `${state.selectionGroups.selectedGroupId ?? ''}:${interaction.operation}`,
+    onPick: handleAtomPick,
+    onBox: selectGroupAtomIndices,
+    onError: error => showToast(error.message ?? String(error)),
+  });
 }
 
 sliceControls = initializeSliceControls({
@@ -278,7 +332,7 @@ atomEyeTools = initializeAtomEyeTools({
   getFrame: () => state.frame, getFrameAt: getFrame,
   getFrameIndex: () => state.frameIndex, getFrameCount: () => state.frameCount,
   getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
-  getSourceVersion: () => state.sourceVersion,
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
   getPendingAnalysisKinds: () => Object.entries(state.analysis).filter(([kind, analysis]) => {
     const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
     return analysis.enabled && !['Failed', 'Calculated'].includes(elements[`${prefix}-state`].textContent);
@@ -297,7 +351,8 @@ atomEyeTools = initializeAtomEyeTools({
     return null;
   },
   getSelectedIndex: () => state.selectedId === null || !state.frame ? -1 : state.frame.ids.findIndex(id => String(id) === String(state.selectedId)),
-  selectAtom,
+  selectAtom: handleAtomPick,
+  getSelectionGroups: () => state.selectionGroups.groups,
   refresh: () => { if (state.frame) { refreshColorOptions(); applyColors(); updateSelectionPanel(); } },
   chooseProperty: name => { state.colorMode = `property:${name}`; refreshColorOptions(); applyColors(); },
   getColorMode: () => state.colorMode,
@@ -375,6 +430,7 @@ elements['show-axes'].addEventListener('change', syncAxisVisibility);
 elements['show-cell'].addEventListener('change', () => { renderer.setCellVisible(elements['show-cell'].checked); atomEyeTools.syncComparison(); });
 elements['apply-replicate'].addEventListener('click', applyReplication);
 elements['reset-replicate'].addEventListener('click', resetReplication);
+elements['replicate-atoms'].addEventListener('change', applyReplication);
 elements['export-configuration'].addEventListener('click', exportConfiguration);
 elements['import-configuration'].addEventListener('click', () => elements['configuration-file'].click());
 elements['configuration-file'].addEventListener('change', importConfiguration);
@@ -484,6 +540,8 @@ window.addEventListener('beforeunload', () => {
 });
 
 function beginSourceOpen() {
+  replicationController?.abort();
+  replicationRequest++;
   gpuPrefetch.pause();
   interruptConfigurationRestore('a new source selection');
   sourceFetchController?.abort();
@@ -505,6 +563,8 @@ function finishSourceOpen(request) {
 }
 
 function closeSource() {
+  replicationController?.abort();
+  replicationRequest++;
   configurationRequest++;
   restorationOwner = null;
   sourceLoadingOwner = null;
@@ -529,11 +589,14 @@ function closeSource() {
   cache.setLimit(3);
   Object.assign(state, {
     file: null, files: [], frame: null, format: null, frameCount: 0, frameIndex: 0,
-    selectedId: null, colorMode: 'type', coordinateMode: 'wrapped', repetitions: [1, 1, 1],
+    selectedId: null, colorMode: 'type', coordinateMode: 'wrapped', repetitions: [1, 1, 1], replicateAtoms: false,
     source: null, availableSources: [], availableEntries: [], cachePlan: null,
     references: [], referenceLabels: [],
   });
   state.referenceByLabel.clear();
+  state.selectionGroups = normalizeSelectionGroups();
+  selectionGroupControls.refresh();
+  toolPanels.setToolEnabled('selectionGroups', false);
   scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear();
   hiddenStructureTypes.clear(); hiddenAtomTypes.clear(); hiddenCategories.clear();
   for (const [kind, analysis] of Object.entries(state.analysis)) {
@@ -896,9 +959,14 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     state.frameIndex = 0;
     analysisPool.associateGpuFrame(result.frame, 0);
     state.selectedId = null;
+    state.selectionGroups = normalizeSelectionGroups();
+    selectionGroupControls.refresh();
+    toolPanels.setToolEnabled('selectionGroups', false);
     state.colorMode = 'type';
     state.coordinateMode = 'wrapped';
     state.repetitions = [1, 1, 1];
+    state.replicateAtoms = false;
+    state.processingRevision++;
     sliceControls.reset();
     state.source = sourceDescriptor;
     state.analysis.coordination = { enabled: false, cutoff: null, request: 0 };
@@ -998,6 +1066,12 @@ function sourceFormatLabel(format) {
 async function showFrame(index) {
   if (sourceLoadingOwner !== null) return false;
   if (!Number.isInteger(index) || index < 0 || index >= state.frameCount) return false;
+  const interruptedReplication = Boolean(replicationController);
+  if (interruptedReplication) {
+    replicationController.abort();
+    replicationRequest++;
+    configureReplicationUi();
+  }
   const request = state.frameRequest + 1;
   state.frameRequest = request;
   if (index === state.frameIndex) {
@@ -1005,6 +1079,8 @@ async function showFrame(index) {
     elements['frame-label'].textContent = `${index + 1} / ${state.frameCount}`;
     setRangeProgress(elements['frame-slider']);
     setLoading(false);
+    if (interruptedReplication) await displayFrame(state.frame);
+    if (request !== state.frameRequest) return false;
     scheduleGpuFramePrefetch();
     return true;
   }
@@ -1035,6 +1111,8 @@ async function showFrame(index) {
 async function displayFrame(frame, { resetCamera = false } = {}) {
   abortAnalysisJobs();
   state.frame = frame;
+  selectionGroupControls.refresh();
+  syncSelectionGroupInteraction();
   // Previous-frame "Calculated" labels cannot describe pending outputs in the
   // newly selected frame. Keep chosen computed vector sources while replaying.
   for (const [kind, analysis] of Object.entries(state.analysis)) {
@@ -1048,7 +1126,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   configureCoordinateMode(frame);
   refreshColorOptions();
   const palette = atomEyeTools.customizePalette(paletteForCurrentMode());
-  const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), radiiByType(frame), state.repetitions);
+  const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), radiiByType(frame), displayRepetitions());
   configureReplicationUi();
   applyScalarVisibility(palette.legend);
   renderLegend(palette.legend);
@@ -1106,7 +1184,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
 }
 
 async function getFrame(index, { background = false, cacheFrame = true, signal, sourceKey } = {}) {
-  if (signal?.aborted || (sourceKey && sourceKey !== `${state.sourceVersion}:${sourceOpenRequest}`)) return null;
+  if (signal?.aborted || (sourceKey && sourceKey !== processingSourceKey())) return null;
   const cached = cacheFrame ? cache.get(index) : cache.frames.get(index);
   if (cached) {
     analysisPool.associateGpuFrame(cached, index);
@@ -1118,19 +1196,29 @@ async function getFrame(index, { background = false, cacheFrame = true, signal, 
     return existing.promise;
   }
   const sourceVersion = state.sourceVersion;
+  const processingRevision = state.processingRevision;
+  const physical = state.replicateAtoms, repetitions = [...state.repetitions];
   const pending = { cacheFrame, promise: null };
   pending.promise = worker.frame(index, { reportProgress: !background })
-    .then((result) => {
-      if (sourceVersion !== state.sourceVersion) return null;
-      if (!pending.cacheFrame && (signal?.aborted || (sourceKey && sourceKey !== `${state.sourceVersion}:${sourceOpenRequest}`))) return null;
-      analysisPool.associateGpuFrame(result.frame, index);
+    .then(async (result) => {
+      if (sourceVersion !== state.sourceVersion || processingRevision !== state.processingRevision) return null;
+      if (!pending.cacheFrame && (signal?.aborted || (sourceKey && sourceKey !== processingSourceKey()))) return null;
+      // A foreground request can promote a background load after its GPU
+      // prefetch signal was cancelled. Continue work needed by that request.
+      const preparationSignal = { get aborted() {
+        return sourceVersion !== state.sourceVersion || processingRevision !== state.processingRevision
+          || (!pending.cacheFrame && Boolean(signal?.aborted));
+      } };
+      const frame = physical ? await prepareAnalysisFrame(result.frame, repetitions, true, { signal: preparationSignal }) : result.frame;
+      if (preparationSignal.aborted) return null;
+      analysisPool.associateGpuFrame(frame, index);
       // GPU residency can extend beyond the CPU window without evicting the
       // displayed frame or retaining the whole sequence twice in host memory.
       if (pending.cacheFrame) {
-        cache.set(index, result.frame);
+        cache.set(index, frame);
         updateCacheLabel();
       }
-      return result.frame;
+      return frame;
     })
     .finally(() => {
       if (state.pendingFrames.get(index) === pending) state.pendingFrames.delete(index);
@@ -1622,8 +1710,9 @@ function storePtmResult(frame, result, parameters, expose = true) {
     structures: result.structures, rmsd: result.rmsd, scales: result.scales,
     deformation: result.deformation, distances: result.distances };
   if (!expose) return;
-  const metadata = { analysisKind: 'ptm', analysisMs: result.elapsedMs, analysisEngine: result.engine,
-    analysisFallbackReason: result.fallbackReason, analysisKey: frame.ptm.key, unit: '' };
+  const metadata = { analysisKind: 'ptm', analysisMs: result.ptmElapsedMs ?? result.elapsedMs,
+    analysisEngine: result.ptmBackend === 'cpu' ? result.engine.split('+')[0] : result.engine,
+    analysisFallbackReason: result.ptmBackend ? undefined : result.fallbackReason, analysisKey: frame.ptm.key, unit: '' };
   const properties = [
     { ...metadata, name: 'ptmStructureType', displayName: 'Crystal structure (PTM)', data: result.structures, categories: PTM_TYPES },
     { ...metadata, name: 'ptmRmsd', displayName: 'PTM RMSD (best fit)', data: result.rmsd },
@@ -1673,6 +1762,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
   if (!automatic) state.colorMode = `property:${name}`;
   refreshColorOptions();
   const key = analysis.key;
+  const gpuRequested = analysisPool.gpuEnabled;
   const request = ++analysis.request;
   const sourceVersion = state.sourceVersion;
   const isCurrent = () => frame === state.frame && sourceVersion === state.sourceVersion
@@ -1696,7 +1786,8 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     elements[`metric-${prefix}`].title = analysisBackendDetails(backend);
     elements[`run-${prefix}`].disabled = false;
   };
-  const cached = frame.properties.find(property => property.name === name && property.analysisKey === key);
+  const cached = frame.properties.find(property => property.name === name && property.analysisKey === key
+    && (kind !== 'strain' || Boolean(property.analysisGpuRequested) === gpuRequested));
   if (cached) {
     ready(cached); refreshColorOptions(); applyColors();
     analysisControllers.delete(kind);
@@ -1747,6 +1838,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     const result = await task;
     if (!isCurrent()) return;
     const metadata = { unit: '', analysisKind: kind, analysisKey: key, analysisMs: result.elapsedMs,
+      analysisGpuRequested: gpuRequested,
       analysisEngine: result.engine, analysisFallbackReason: result.fallbackReason, incomplete: result.incomplete ?? 0 };
     let properties;
     if (kind === 'ptm') {
@@ -2350,6 +2442,8 @@ function syncBackgroundControl(value) {
 
 function setControlsEnabled(enabled) {
   atomEyeTools?.setEnabled(enabled);
+  selectionGroupControls?.setEnabled(enabled);
+  syncSelectionGroupInteraction();
   for (const id of [
     'reset-camera', 'export-png', 'export-configuration', 'frame-slider',
     'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
@@ -2357,7 +2451,7 @@ function setControlsEnabled(enabled) {
     'slice-axis', 'slice-position', 'cutoff', 'run-analysis',
     'cna-mode', 'cna-cutoff', 'run-cna', 'csp-neighbors', 'run-csp',
     'ptm-rmsd', 'run-ptm', 'lattice-reset', 'run-strain',
-    'apply-replicate', 'reset-replicate',
+    'apply-replicate', 'reset-replicate', 'replicate-atoms',
   ]) {
     elements[id].disabled = !enabled;
   }
@@ -2415,6 +2509,7 @@ function captureConfiguration() {
         ...(file.webkitRelativePath ? { relativePath: file.webkitRelativePath } : {}) })),
     } : null,
     settings: {
+      selectionGroups: state.selectionGroups,
       compute: { gpuEnabled: analysisPool.gpuEnabled },
       display: { coordinateMode: state.coordinateMode, colorMode: state.colorMode,
         radiusPercent: state.radiusPercent, background: elements.background.value,
@@ -2430,6 +2525,7 @@ function captureConfiguration() {
         strain: { enabled: state.analysis.strain.enabled, references: state.references.map((reference, type) => ({ ...reference, label: state.referenceLabels[type] })) },
       },
       replicate: [...state.repetitions],
+      replicateAtoms: state.replicateAtoms,
       slices: { items: sliceState.slices, selectedId: sliceState.selectedId, showGizmo: true },
       colors: {
         ranges: [...scalarColorRanges].map(([property, range]) => ({ property, ...range })),
@@ -2485,6 +2581,8 @@ async function importConfiguration() {
 }
 
 async function restoreConfiguration(config) {
+  replicationController?.abort();
+  replicationRequest++;
   const request = configurationRequest, sourceVersion = state.sourceVersion, sourceRequest = sourceOpenRequest;
   const current = () => request === configurationRequest && sourceVersion === state.sourceVersion && sourceRequest === sourceOpenRequest;
   const saved = config.settings;
@@ -2493,7 +2591,10 @@ async function restoreConfiguration(config) {
   try {
     clearTimeout(frameTimer);
     if (config.source && targetIndex >= state.frameCount) throw new Error('The saved frame is not available in the loaded source.');
-    const targetFrame = state.frame ? await getFrame(targetIndex) : null;
+    const existingTarget = state.frame ? await getFrame(targetIndex) : null;
+    const repetitions = existingTarget ? normalizeRepetitions(saved.replicate, sourceFrame(existingTarget).cell.pbc) : saved.replicate;
+    const targetFrame = existingTarget ? await prepareAnalysisFrame(existingTarget, repetitions, saved.replicateAtoms,
+      { signal: { get aborted() { return !current(); } } }) : null;
     if (!current()) return;
     if (targetFrame && saved.display.coordinateMode === 'unwrapped' && !targetFrame.unwrappedPositions) {
       throw new Error('The saved unwrapped view requires coordinates that this source does not provide.');
@@ -2509,10 +2610,14 @@ async function restoreConfiguration(config) {
     clearTimeout(cutoffTimer);
     for (const kind of Object.keys(state.analysis)) cancelAnalysis(kind);
     atomEyeTools.reset();
-    if (targetFrame && !(await showFrame(targetIndex))) throw new Error('The saved frame could not be loaded.');
+    if (targetFrame) await commitReplicationFrame(targetFrame, repetitions, saved.replicateAtoms, targetIndex, { resetCamera: false });
+    else { state.repetitions = [...repetitions]; state.replicateAtoms = saved.replicateAtoms; }
     if (!current()) return;
 
     document.getElementById(`theme-${saved.theme}`).click();
+    state.selectionGroups = normalizeSelectionGroups(saved.selectionGroups);
+    selectionGroupControls.refresh();
+    toolPanels.setToolEnabled('selectionGroups', state.selectionGroups.groups.length > 0);
     setGpuComputing(saved.compute.gpuEnabled);
     setBackgroundColor(saved.display.background);
     for (const [id, value] of [
@@ -2526,9 +2631,8 @@ async function restoreConfiguration(config) {
     if (state.frame) {
       configureCoordinateMode(state.frame);
       renderer.setDisplayPositions(displayPositionsForFrame());
-      renderer.setReplications(saved.replicate);
+      renderer.setReplications(displayRepetitions());
     }
-    state.repetitions = [...saved.replicate];
     configureReplicationUi();
     sliceControls.setState({ slices: saved.slices.items.map(slice => ({ ...slice,
       showGizmo: saved.slices.showGizmo && slice.showGizmo })), selectedId: saved.slices.selectedId });
@@ -2583,6 +2687,7 @@ async function restoreConfiguration(config) {
     renderer.requestRender();
     if (saved.activeTool) toolPanels.selectTool(saved.activeTool);
     else toolPanels.closeTool(toolPanels.getActiveTool(), { deactivate: false });
+    syncSelectionGroupInteraction();
     syncSliceGizmo();
     if (state.frame) { refreshColorOptions(); applyColors(); restoreSelection(); }
     const tasks = Object.keys(state.analysis).filter(kind => state.analysis[kind].enabled).map(kind => kind === 'coordination'
@@ -2606,7 +2711,7 @@ async function restoreConfiguration(config) {
 }
 
 function configureReplicationUi(enabled = Boolean(state.frame)) {
-  if (state.frame && renderer.frame === state.frame) state.repetitions = [...renderer.repetitions];
+  if (!state.replicateAtoms && state.frame && renderer.frame === state.frame) state.repetitions = [...renderer.repetitions];
   for (const [axis, name] of ['a', 'b', 'c'].entries()) {
     const input = elements[`replicate-${name}`];
     input.value = String(state.repetitions[axis]);
@@ -2614,33 +2719,145 @@ function configureReplicationUi(enabled = Boolean(state.frame)) {
     input.title = state.frame?.cell.pbc[axis] ? `Total copies along cell vector ${name}` : 'This cell direction is not periodic.';
   }
   const copies = state.repetitions.reduce((product, count) => product * count, 1);
+  elements['replicate-atoms'].checked = state.replicateAtoms;
+  elements['replicate-atoms'].disabled = !enabled;
   atomEyeTools?.syncComparison();
-  toolPanels.setToolEnabled('replicate', copies > 1);
+  toolPanels.setToolEnabled('replicate', copies > 1 || state.replicateAtoms);
   elements['replicate-summary'].textContent = state.frame
-    ? `${formatInteger(copies)} cells · ${formatInteger(state.frame.ids.length * copies)} displayed atoms. Analysis uses the ${formatInteger(state.frame.ids.length)} source atoms.`
+    ? state.replicateAtoms
+      ? `${formatInteger(copies)} source cells · ${formatInteger(state.frame.ids.length)} atoms. All analyses use the enlarged structure and cell.`
+      : `${formatInteger(copies)} cells · ${formatInteger(state.frame.ids.length * copies)} displayed atoms. Analysis uses the ${formatInteger(state.frame.ids.length)} source atoms.`
     : 'Load a structure to enable its periodic directions.';
 }
 
-function applyReplication() {
+async function applyReplication() {
   if (!state.frame) return;
   try {
-    renderer.setReplications(['a', 'b', 'c'].map(name => elements[`replicate-${name}`].valueAsNumber));
-    configureReplicationUi();
-    restoreSelection();
-    renderer.resetCamera();
-    syncSliceGizmo();
+    interruptConfigurationRestore('a replication change');
+    const counts = normalizeRepetitions(['a', 'b', 'c'].map(name => elements[`replicate-${name}`].valueAsNumber), sourceFrame(state.frame).cell.pbc);
+    await changeReplication(counts, elements['replicate-atoms'].checked);
   } catch (error) {
-    showToast(error.message);
+    if (error.name !== 'AbortError') { showToast(error.message); configureReplicationUi(); }
   }
 }
 
-function resetReplication() {
-  state.repetitions = [1, 1, 1];
-  renderer?.setReplications(state.repetitions);
-  configureReplicationUi();
-  if (state.frame) restoreSelection();
-  renderer?.resetCamera();
-  syncSliceGizmo();
+async function resetReplication() {
+  if (!state.frame) { state.repetitions = [1, 1, 1]; state.replicateAtoms = false; configureReplicationUi(); return; }
+  try {
+    interruptConfigurationRestore('a replication reset');
+    await changeReplication([1, 1, 1], false);
+  } catch (error) {
+    if (error.name !== 'AbortError') { showToast(error.message); configureReplicationUi(); }
+  }
+}
+
+function processingSourceKey() {
+  return `${state.sourceVersion}:${sourceOpenRequest}:${state.processingRevision}`;
+}
+
+function displayRepetitions() {
+  return state.replicateAtoms ? [1, 1, 1] : state.repetitions;
+}
+
+function sourceFrame(frame) {
+  return analysisFrameSources.get(frame) ?? frame;
+}
+
+async function prepareAnalysisFrame(frame, counts, physical, { signal, onProgress } = {}) {
+  const raw = sourceFrame(frame);
+  // Retain only imported values, including ones temporarily replaced by an
+  // analysis. Source geometry is shared until physical copies are requested.
+  const source = { ...raw, properties: raw.properties.flatMap(property => {
+    if (!property.analysisKind) return [property];
+    const original = raw.analysisOriginalProperties?.get(property.name);
+    return original ? [original] : [];
+  }) };
+  delete source.ptm;
+  delete source.atomeyeResults;
+  delete source.analysisOriginalProperties;
+  delete source.processingSourceBytes;
+  const prepared = physical ? await replicateFrame(source, counts, { signal, onProgress }) : source;
+  analysisFrameSources.set(prepared, source);
+  if (prepared !== source) prepared.processingSourceBytes = estimateFrameBytes(source);
+  return prepared;
+}
+
+async function commitReplicationFrame(frame, counts, physical, index, { resetCamera = true } = {}) {
+  abortAnalysisJobs();
+  const processingChanged = Boolean(physical) !== state.replicateAtoms
+    || (physical && counts.some((count, axis) => count !== state.repetitions[axis]));
+  if (processingChanged) {
+    state.processingRevision++;
+    state.prefetchToken++;
+    state.pendingFrames.clear();
+    void gpuPrefetch.clearSource();
+    cache.clear();
+  }
+  const revision = state.processingRevision;
+  state.frameRequest++;
+  state.repetitions = [...counts];
+  state.replicateAtoms = Boolean(physical);
+  state.frameIndex = index;
+  state.cachePlan = chooseFrameCachePolicy(frame, state.frameCount, {
+    heapLimit: performance.memory?.jsHeapSizeLimit, heapUsed: performance.memory?.usedJSHeapSize,
+    deviceMemoryGiB: navigator.deviceMemory,
+  });
+  cache.setLimit(state.cachePlan.limit);
+  cache.set(index, frame);
+  await displayFrame(frame, { resetCamera });
+  if (state.frame === frame && revision === state.processingRevision) scheduleFramePrefetch(index);
+}
+
+async function changeReplication(counts, physical) {
+  const interrupted = replicationController;
+  interrupted?.abort();
+  replicationController = null;
+  if (interrupted && loadingOwner === interrupted) setLoading(false);
+  const request = ++replicationRequest;
+  const frame = state.frame, index = state.frameIndex, version = state.sourceVersion;
+  const current = () => request === replicationRequest && version === state.sourceVersion && sourceLoadingOwner === null;
+  if (!physical && !state.replicateAtoms) {
+    state.repetitions = [...counts];
+    renderer.setReplications(counts);
+    configureReplicationUi(); restoreSelection(); renderer.resetCamera(); syncSliceGizmo();
+    if (interrupted) await displayFrame(frame);
+    scheduleGpuFramePrefetch();
+    return;
+  }
+  if (physical === state.replicateAtoms && counts.every((value, axis) => value === state.repetitions[axis])) {
+    configureReplicationUi();
+    if (interrupted) await displayFrame(frame);
+    scheduleGpuFramePrefetch();
+    return;
+  }
+  const controller = new AbortController();
+  replicationController = controller;
+  stopFramePlayback();
+  clearTimeout(frameTimer);
+  state.frameRequest++;
+  abortAnalysisJobs();
+  gpuPrefetch.pause();
+  renderer.cancelSelectionGesture();
+  setLoading(true, 'Preparing replicated structure…', controller);
+  try {
+    const prepared = await prepareAnalysisFrame(frame, counts, physical, {
+      signal: controller.signal,
+      onProgress: ({ completedAtoms, totalAtoms }) => {
+        if (current() && loadingOwner === controller) elements['loading-text'].textContent = `Replicating atoms… ${formatInteger(completedAtoms)} / ${formatInteger(totalAtoms)}`;
+      },
+    });
+    if (!current() || controller.signal.aborted || state.frame !== frame || state.frameIndex !== index) return;
+    await commitReplicationFrame(prepared, counts, physical, index);
+  } catch (error) {
+    // A rejected expansion leaves the original structure usable, including
+    // analyses interrupted while its replacement was being prepared.
+    if (current() && state.frame === frame && error.name !== 'AbortError') await displayFrame(frame);
+    throw error;
+  } finally {
+    if (replicationController === controller) replicationController = null;
+    if (loadingOwner === controller) setLoading(false);
+    if (current()) scheduleGpuFramePrefetch();
+  }
 }
 
 function syncAxisVisibility() {

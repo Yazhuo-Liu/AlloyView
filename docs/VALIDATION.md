@@ -128,6 +128,72 @@ or the nearest frame window within an allocation budget.
   overrides therefore must not be treated as verification of ordinary browser
   support on GitHub Pages; see [deployment checks](DEPLOYMENT.md#webgpu-on-github-pages).
 
+### GPU bonds and ideal lattice strain tensor
+
+Additional real Chromium/SwiftShader checks execute the bond and ideal-strain
+WGSL kernels. Software-adapter measurements below do not measure physical
+GPU acceleration; the preceding GTX 1080 Ti results cover the earlier kernels.
+
+- GPU bonds preserve periodic and self-image edges, triclinic geometry,
+  element-pair cutoffs and exact cutoff decisions. On all 129,904 atoms in
+  `NiGB_minimized.cfg`, the 774,528-edge graph and coordination arrays agree
+  exactly with CPU for both first and subsequent calls. Bond-vector maximum
+  absolute error is `2.384e-7` Å, with no CPU fallback.
+- Cached and fresh ideal FCC strain produce exactly zero for all nine GPU
+  fields. Editable reference `a`, combined finite shear/dilation and
+  independent HCP `a`/`c` tests have maximum absolute errors `8.20e-8`,
+  `7.82e-8` and `1.49e-8`, respectively. Reference mismatches remain NaN
+  without warnings. Fresh strain identifies its CPU PTM and GPU tensor stages
+  as `ptm-wasm-worker+webgpu-strain-tensor`.
+- Cached PTM tensor evaluation on the complete Ni grain boundary matches all
+  nine CPU fields within `2.239e-7`; the NaN mask also agrees. Small PTM
+  off-diagonal noise remains a supported input rather than forcing fallback.
+  The CPU PTM preparation took 2023.5 ms in this run and is excluded from both
+  cached-tensor timings. This comparison measures tensor evaluation, including
+  input preparation, upload, readback and assembly; it does not measure GPU
+  PTM fitting.
+- GPU tensor failure reuses the completed CPU fit. Cancellation rejects with
+  `AbortError` and does not start CPU fallback. Private PTM transfers preserve
+  source fit buffers, and existing warmup, trajectory preload and source reset
+  behavior remains covered by the browser checks.
+
+| Software-adapter calculation | CPU first / subsequent (ms) | WebGPU first / subsequent (ms) |
+| --- | --- | --- |
+| Bonds, cutoff 3.1 Å | 838.1 / 521.3 | 2772.3 / 2399.3 |
+| Ideal strain tensor, cached PTM, Ni reference `a=3.52` Å | 244.9 / 195.8 | 289.1 / 88.0 |
+
+These kernels were benchmarked separately with
+`npm run benchmark:gpu -- --software --kernel=bonds` and
+`npm run benchmark:gpu -- --software --kernel=strain`. Each command reports its
+adapter and full-call timing scope. The strain report separately identifies
+the CPU PTM preparation engine and elapsed time.
+
+## Atom selection groups and physical replication
+
+- The complete Node suite passes 431 tests. Numerical replication checks cover
+  triclinic cell vectors, imported category/vector properties, stable copy IDs,
+  continuous periodic trajectories, reference strain and count/memory limits.
+  Float64 supercell fractions preserve sub-Float32 geometry and nonbinary
+  repeat counts; only the rendering upload converts coordinates to Float32.
+- Real Chromium pointer and phone-touch checks cover click and rectangle
+  selection, Escape cancellation, group names/colors/visibility, member edits,
+  deletion, missing/reordered frame IDs and JSON replay. Display copies share
+  source IDs; physical copies can be selected independently.
+- Physical replication defaults off. A primitive four-atom FCC frame retains
+  coordination 3 in display-only mode; doubling its physical cell creates eight
+  atoms and coordination 5. Restoring display mode recovers source geometry.
+  Rapidly enabling and cancelling a 64 × 64 × 1 expansion leaves the original
+  structure and enabled calculations usable. Non-periodic axes stay at one.
+- Actual WebGPU preparation follows physical frames across a six-frame
+  trajectory: 32 source atoms become 64 and return to 32 on disable, with GPU
+  cache generations changing each time. Both GL coordinate buffers contain
+  Float32 vertex attributes while analysis fractions remain Float64. All 39
+  GPU differential cases and 13 warmed pipelines pass on SwiftShader.
+- Recipe replay with unchanged analysis geometry preserves other cached
+  reference frames; changed physical geometry invalidates CPU/GPU inputs and
+  derived results. Both views inherit the displayed bond graph and vectors,
+  including when the preferred calculation backend changes.
+
 ## Legend coloring quantity selector
 
 - `npm test`: 280 tests passed, none failed/skipped. Build

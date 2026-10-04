@@ -153,3 +153,70 @@ test('desktop left drag, right/Shift drag, click and wheel retain their controls
   mouse('pointerdown', 1, 160, 220); mouse('pointermove', 1, 190, 220);
   assert.equal(r.yaw, before);
 });
+
+test('click selection routes taps to a group handler while keeping orbit drags', () => {
+  const { renderer: r, touch } = fixture();
+  const group = [];
+  r.setSelectionInteraction({ mode: 'click', onPick: atom => group.push(atom) });
+  touch('pointerdown', 1, 160, 220); touch('pointerup', 1, 160, 220);
+  assert.deepEqual(group, [7]); assert.deepEqual(r.picks, []);
+  touch('pointerdown', 1, 160, 220); touch('pointermove', 1, 180, 220); touch('pointerup', 1, 180, 220);
+  close(r.yaw, -.78); assert.deepEqual(group, [7]);
+  r.setSelectionInteraction({ mode: 'off' });
+  touch('pointerdown', 1, 160, 220); touch('pointerup', 1, 160, 220);
+  assert.deepEqual(r.picks, [7]);
+});
+
+test('box drag selects its screen rectangle without orbiting and retains right/middle pan', async () => {
+  const { renderer: r, touch } = fixture();
+  const rectangles = [], groups = [];
+  r.selectInRectangle = async rectangle => { rectangles.push(rectangle); return Uint32Array.of(1, 3); };
+  r.setSelectionInteraction({ mode: 'box', onBox: atoms => groups.push([...atoms]) });
+  touch('pointerdown', 1, 160, 220); touch('pointermove', 1, 260, 280); touch('pointerup', 1, 260, 280);
+  await Promise.resolve();
+  assert.deepEqual(rectangles, [{ left: 160, top: 220, right: 260, bottom: 280 }]);
+  assert.deepEqual(groups, [[1, 3]]); close(r.yaw, -.62); close(r.pitch, .38);
+  for (const button of [1, 2]) {
+    touch('pointerdown', 2, 160, 220, { pointerType: 'mouse', button });
+    touch('pointermove', 2, 180, 240, { pointerType: 'mouse', button });
+    touch('pointerup', 2, 180, 240, { pointerType: 'mouse', button });
+  }
+  assert.ok(r.pan.some(value => value !== 0)); assert.deepEqual(r.picks, []);
+});
+
+test('two fingers, Escape, pointer cancellation, and selection mode changes cancel box gestures', async () => {
+  for (const cancel of ['two-fingers', 'escape', 'pointercancel', 'mode']) {
+    const { renderer: r, touch, document } = fixture();
+    const groups = [];
+    r.selectInRectangle = async () => Uint32Array.of(1);
+    r.setSelectionInteraction({ mode: 'box', onBox: atoms => groups.push([...atoms]) });
+    touch('pointerdown', 1, 160, 220); touch('pointermove', 1, 200, 240);
+    if (cancel === 'two-fingers') {
+      touch('pointerdown', 2, 260, 220); touch('pointermove', 2, 300, 220); touch('pointerup', 2, 300, 220);
+      assert.ok(r.distance !== 10, 'two fingers resume pinch navigation');
+    } else if (cancel === 'escape') document.emit('keydown', { key: 'Escape' });
+    else if (cancel === 'pointercancel') touch('pointercancel', 1, 200, 240);
+    else r.setSelectionInteraction({ mode: 'off' });
+    touch('pointerup', 1, 200, 240); await Promise.resolve();
+    assert.deepEqual(groups, []);
+  }
+});
+
+test('unchanged group interaction preserves a pending rectangle; changed edit context discards it', async () => {
+  const { renderer: r, touch } = fixture();
+  const groups = [];
+  let resolve;
+  r.selectInRectangle = () => new Promise(done => { resolve = done; });
+  const onBox = atoms => groups.push([...atoms]);
+  r.setSelectionInteraction({ mode: 'box', onBox, context: 'group-a:add' });
+  const interaction = r.selectionInteraction;
+  touch('pointerdown', 1, 160, 220); touch('pointermove', 1, 260, 280); touch('pointerup', 1, 260, 280);
+  r.setSelectionInteraction({ mode: 'box', onBox, context: 'group-a:add', onError() {} });
+  assert.equal(r.selectionInteraction, interaction);
+  resolve(Uint32Array.of(1)); await Promise.resolve();
+  assert.deepEqual(groups, [[1]]);
+  touch('pointerdown', 1, 160, 220); touch('pointermove', 1, 260, 280); touch('pointerup', 1, 260, 280);
+  r.setSelectionInteraction({ mode: 'box', onBox, context: 'group-b:replace' });
+  resolve(Uint32Array.of(3)); await Promise.resolve();
+  assert.deepEqual(groups, [[1]], 'old rectangle cannot edit a new group or operation');
+});

@@ -7,7 +7,9 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { crystalFrame } = await import('./tests/helpers/crystals.js');
     const { createCell, fractionalToCartesian } = await import('./src/data/model.js');
-    window.gpuTests = { AnalysisPool, crystalFrame, createCell, fractionalToCartesian, rows: [] };
+    const { compareGpuBonds } = await import('./scripts/gpu-comparison.js');
+    const { STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
+    window.gpuTests = { AnalysisPool, crystalFrame, createCell, fractionalToCartesian, compareGpuBonds, STRAIN_FIELDS, rows: [] };
     window.gpuTests.cpu = new AnalysisPool();
     window.gpuTests.gpu = new AnalysisPool();
     window.gpuTests.gpu.setGpuEnabled(true);
@@ -32,7 +34,9 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
       const expected = await window.gpuTests.cpu.analyze(frame, parameters);
       const actual = await window.gpuTests.gpu.analyze(frame, parameters);
       if (requireGpu && !window.gpuTests.isGpu(actual)) throw new Error(label + ' silently fell back: ' + JSON.stringify({ engine: actual.engine, fallbackReason: actual.fallbackReason }));
-      const maxAbsoluteError = window.gpuTests.compare(actual[field], expected[field], tolerance);
+      let maxAbsoluteError = parameters.kind === 'bonds' ? window.gpuTests.compareGpuBonds(actual, expected)
+        : parameters.kind === 'strain' ? Math.max(...window.gpuTests.STRAIN_FIELDS.map(name => window.gpuTests.compare(actual[name], expected[name], tolerance)))
+          : window.gpuTests.compare(actual[field], expected[field], tolerance);
       if (parameters.kind === 'localShear') {
         window.gpuTests.compare(actual.coordination, expected.coordination);
         window.gpuTests.check(actual.coordinationMode === expected.coordinationMode, label + ' coordination mode differs.');
@@ -42,7 +46,8 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
         engine: actual.engine, maxAbsoluteError, fallbackReason: actual.fallbackReason ?? null,
         correctedPairs: actual.correctedPairs ?? actual.precisionCorrections ?? 0,
         correctedAtoms: actual.correctedAtoms ?? actual.gpuCorrectionAtoms ?? 0, inputReused: actual.inputReused ?? null,
-        gpuInputReused: actual.gpuInputReused ?? null });
+        gpuInputReused: actual.gpuInputReused ?? null, ...(parameters.kind === 'bonds' ? { edges: actual.count } : {}) });
+      return actual;
     };
   })()`);
   const rows = await evaluate(`(async () => {
@@ -74,6 +79,20 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
         ids: Uint32Array.from([1, 2]), types: Uint16Array.from([0, 0]),
         cell: createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10] }) };
       await run('RDF exact cutoff and opposite images', opposite, { kind: 'rdf', cutoff: 5, bins: 10 }, 'counts');
+      await run('FCC periodic bonds', fcc, { kind: 'bonds', cutoff: 2.8 });
+      await run('Triclinic periodic bonds', hcp, { kind: 'bonds', cutoff: 2.7 });
+      await run('Mixed PBC bonds', mixed, { kind: 'bonds', cutoff: 2.8 });
+      await run('Thin FCC repeated-image bonds', thin, { kind: 'bonds', cutoff: 2.8 });
+      await run('Single-site self-image bonds', crystalFrame('sc', 1, 2), { kind: 'bonds', cutoff: 2.1 });
+      await run('Pair override bonds', rdfFrame, { kind: 'bonds', cutoff: 4.8,
+        pairCutoffs: [{ first: 0, second: 0, cutoff: 0 }, { first: 0, second: 1, cutoff: 2.8 }, { first: 1, second: 1, cutoff: 3.6 }] });
+      await run('Exact cutoff bonds', boundary, { kind: 'bonds', cutoff: 1 });
+      for (const pool of [cpu, gpu]) {
+        let rejected = false;
+        try { await pool.analyze(fcc, { kind: 'bonds', cutoff: 2.8, maxBonds: 1 }); }
+        catch (error) { rejected = /exceeds|limited/i.test(error.message); }
+        check(rejected, 'Bond limits must reject rather than truncate output.');
+      }
       await run('Geometric shear', fcc, { kind: 'localShear', cutoff: 2.8 }, 'localShear', 2e-5);
       await run('Triclinic geometric shear', hcp, { kind: 'localShear', cutoff: 2.7 }, 'localShear', 3e-5);
       await run('Thin FCC repeated atom images', thin, { kind: 'localShear', cutoff: 2.8 }, 'localShear', 3e-5);
@@ -99,6 +118,22 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
         ids: Uint32Array.from([1, 2]), types: new Uint16Array(2),
         cell: createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10] }) };
       await run('Isolated geometric shear NaN', isolated, { kind: 'localShear', cutoff: .1 }, 'localShear');
+      const references = [{ structure: 1, a: 3.52 }];
+      const ptmInput = await cpu.analyze(fcc, { kind: 'ptm', flags: 255 });
+      const ideal = await run('Cached PTM ideal strain', fcc, { kind: 'strain', references, ptmInput }, null, 2e-6);
+      for (const field of window.gpuTests.STRAIN_FIELDS) check(ideal[field].every(value => value === 0), 'Ideal GPU strain must be exactly zero: ' + field);
+      const fresh = await run('Fresh CPU PTM with GPU strain tensor', fcc, { kind: 'strain', references, flags: 255 }, null, 2e-6);
+      check(fresh.ptmBackend === 'cpu' && fresh.tensorBackend === 'gpu', 'Fresh strain must label its CPU/GPU stages accurately.');
+      await run('Edited lattice strain from cached PTM', fcc, { kind: 'strain', references: [{ structure: 1, a: 3.4 }], ptmInput }, null, 2e-6);
+      const affine = crystalFrame('fcc', 3, 3.52);
+      affine.cell = createCell({ vectors: [10.56 * 1.02, .11, 0, 0, 10.56 * .99, .07, 0, 0, 10.56 * 1.03], triclinic: true });
+      const affinePtm = await cpu.analyze(affine, { kind: 'ptm', flags: 255 });
+      await run('Affine shear and dilation strain', affine, { kind: 'strain', references, ptmInput: affinePtm }, null, 2e-6);
+      const hexPtm = await cpu.analyze(hcp, { kind: 'ptm', flags: 255 });
+      await run('Hexagonal edited a/c strain', hcp, { kind: 'strain',
+        references: [{ structure: 2, a: 2.45, c: Math.sqrt(8 / 3) * 2.6 }], ptmInput: hexPtm }, null, 2e-6);
+      const mismatched = await run('Reference mismatch strain NaN', fcc, { kind: 'strain', references: [{ structure: 3, a: 3.52 }], ptmInput }, null, 2e-6);
+      check(mismatched.warning === null && mismatched.atomicShearStrain.every(Number.isNaN), 'Rejected PTM/reference strain must remain NaN without warnings.');
       const outside = crystalFrame('fcc', 3, 3.52);
       outside.cell = createCell({ vectors: outside.cell.vectors, pbc: [false, true, true] });
       outside.fractional[0] = -0.1;
@@ -271,6 +306,7 @@ async function runApplicationSmoke({ evaluate, call }) {
   })()`);
   assert.ok(mobileTrajectory.contentWidth <= mobileTrajectory.width + 1, 'GPU residency labels must fit the mobile trajectory controls.');
   await call('Emulation.clearDeviceMetricsOverride');
+  const physicalReplication = await runPhysicalReplicationGpuChecks({ evaluate, waitFor });
   await loadTrajectory(3, 'gpu-replacement.xyz');
   await evaluate(`(() => {
     const toggle = document.getElementById('enable-gpu-computing');
@@ -279,6 +315,88 @@ async function runApplicationSmoke({ evaluate, call }) {
   await loadTrajectory(2, 'gpu-final-source.xyz');
   await evaluate(`document.getElementById('enable-gpu-computing').click();`);
   await waitFor(`document.getElementById('cache-label').dataset.gpuCacheState === 'off' && document.getElementById('cache-label').dataset.gpuCachedFrames === '0'`, 'GPU cache cleared on disable');
-  results.push({ trajectoryPreload, sourceReplacementFrames: 3, rapidToggleSourceFrames: 2, disableReleasedFrames: true });
+  results.push({ trajectoryPreload, physicalReplication, sourceReplacementFrames: 3, rapidToggleSourceFrames: 2, disableReleasedFrames: true });
   return results;
+}
+
+async function runPhysicalReplicationGpuChecks({ evaluate, waitFor }) {
+  await evaluate(`(async () => {
+    const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
+    const { WebGLRenderer } = await import('./src/render/webgl-renderer.js');
+    const { calculateCoordination } = await import('./src/analysis/coordination.js');
+    const check = (condition, message) => { if (!condition) throw new Error(message); };
+    window.physicalGpuChecks = { rows: [], pool: null, renderer: null };
+    const analyze = AnalysisPool.prototype.analyze, render = WebGLRenderer.prototype.requestRender;
+    window.restorePhysicalGpuHooks = () => { AnalysisPool.prototype.analyze = analyze; WebGLRenderer.prototype.requestRender = render; };
+    AnalysisPool.prototype.analyze = async function(frame, parameters, options) {
+      window.physicalGpuChecks.pool = this;
+      const result = await analyze.call(this, frame, parameters, options);
+      if (parameters.kind === 'coordination') {
+        const expected = calculateCoordination(frame, parameters.cutoff);
+        check(result.backend === 'gpu', 'Physical replication coordination must execute on GPU.');
+        check(result.coordination.length === expected.coordination.length, 'GPU reused a frame with the wrong atom count.');
+        check(result.coordination.every((value, atom) => value === expected.coordination[atom]), 'Physical replication GPU/CPU coordination differs.');
+        window.physicalGpuChecks.rows.push({ atoms: frame.ids.length, cellA: Math.hypot(...frame.cell.vectors.subarray(0, 3)),
+          engine: result.engine, cacheGeneration: this.gpuBackend.generation, cacheFrameBytes: this.gpuCacheStatus.frameBytes,
+          outputAtoms: result.coordination.length });
+      }
+      return result;
+    };
+    WebGLRenderer.prototype.requestRender = function(...args) {
+      if (this.canvas.id === 'viewport') window.physicalGpuChecks.renderer = this;
+      return render.apply(this, args);
+    };
+    document.getElementById('cutoff').value = '3.1';
+    document.getElementById('run-analysis').click();
+  })()`);
+  try {
+    await waitFor(`window.physicalGpuChecks.rows.length === 1 && document.getElementById('analysis-state').textContent === 'Calculated'`, 'raw geometry GPU analysis');
+    const raw = await evaluate('window.physicalGpuChecks.rows[0]');
+    assert.equal(raw.atoms, 32);
+    await evaluate(`(() => {
+      document.querySelector('[data-tool-button="replicate"]').click();
+      document.getElementById('replicate-a').value = '2';
+      document.getElementById('apply-replicate').click();
+    })()`);
+    await waitFor(`window.physicalGpuChecks.renderer?.displayAtomCount === 64 && document.getElementById('atom-count').textContent === '32'`, 'display-only replication');
+    await evaluate(`document.getElementById('run-analysis').click();`);
+    assert.equal(await evaluate('window.physicalGpuChecks.rows.length'), 1, 'Display replication must reuse its original atom analysis.');
+    await evaluate(`(() => { const checkbox = document.getElementById('replicate-atoms'); checkbox.checked = true; checkbox.dispatchEvent(new Event('change')); })()`);
+    await waitFor(`document.getElementById('atom-count').textContent === '64' && document.getElementById('cache-label').dataset.gpuCachedFrames === '6' && document.getElementById('cache-label').dataset.gpuCacheState === 'ready'`, 'expanded geometry GPU preload');
+    await evaluate(`document.getElementById('run-analysis').click();`);
+    await waitFor(`window.physicalGpuChecks.rows.some(row => row.atoms === 64) && document.getElementById('analysis-state').textContent === 'Calculated'`, 'expanded GPU analysis');
+    const expanded = await evaluate('window.physicalGpuChecks.rows.find(row => row.atoms === 64)');
+    assert.equal(expanded.cellA, raw.cellA * 2);
+    assert.ok(expanded.cacheGeneration > raw.cacheGeneration, 'Physical replication invalidates the previous GPU source generation.');
+    assert.ok(expanded.cacheFrameBytes > raw.cacheFrameBytes, 'The GPU cache must reserve buffers for the expanded frame.');
+    const geometryBuffers = await evaluate(`(() => {
+      const renderer = window.physicalGpuChecks.renderer, gl = renderer.gl;
+      const previous = gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+      try {
+        const sizes = {};
+        for (const name of ['positionBuffer', 'fractionalBuffer']) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, renderer[name]);
+          sizes[name] = gl.getBufferParameter(gl.ARRAY_BUFFER, gl.BUFFER_SIZE);
+        }
+        return { atoms: renderer.atomCount, fractionalType: renderer.frame.fractional.constructor.name, sizes };
+      } finally { gl.bindBuffer(gl.ARRAY_BUFFER, previous); }
+    })()`);
+    assert.equal(geometryBuffers.fractionalType, 'Float64Array', 'Physical replication preserves canonical fractional precision for analysis.');
+    for (const bytes of Object.values(geometryBuffers.sizes)) assert.equal(bytes, geometryBuffers.atoms * 3 * Float32Array.BYTES_PER_ELEMENT,
+      'WebGL geometry uploads use Float32 stride while retaining Float64 analysis inputs.');
+    await evaluate(`(() => { const slider = document.getElementById('frame-slider'); slider.value = '0'; slider.dispatchEvent(new Event('input')); })()`);
+    await waitFor(`document.getElementById('frame-label').textContent === '1 / 6' && document.getElementById('atom-count').textContent === '64' && document.getElementById('analysis-state').textContent === 'Calculated' && window.physicalGpuChecks.rows.at(-1)?.cellA === ${7.04 * 2}`, 'expanded next frame');
+    const next = await evaluate('window.physicalGpuChecks.rows.at(-1)');
+    assert.equal(next.atoms, 64); assert.equal(next.cellA, 7.04 * 2);
+    await evaluate(`(() => { const checkbox = document.getElementById('replicate-atoms'); checkbox.checked = false; checkbox.dispatchEvent(new Event('change')); })()`);
+    await waitFor(`document.getElementById('atom-count').textContent === '32' && document.getElementById('cache-label').dataset.gpuCachedFrames === '6' && document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && document.getElementById('analysis-state').textContent === 'Calculated' && window.physicalGpuChecks.rows.at(-1)?.atoms === 32 && window.physicalGpuChecks.rows.at(-1)?.cellA === 7.04`, 'restored raw GPU preload');
+    const restored = await evaluate('window.physicalGpuChecks.rows.at(-1)');
+    assert.equal(restored.atoms, 32); assert.equal(restored.cellA, 7.04);
+    assert.ok(restored.cacheGeneration > expanded.cacheGeneration);
+    assert.equal(restored.cacheFrameBytes, raw.cacheFrameBytes);
+    assert.equal(await evaluate('window.physicalGpuChecks.renderer.displayAtomCount'), 64, 'Disabling physical replication keeps display-only copies.');
+    return { sourceAtoms: raw.atoms, expandedAtoms: expanded.atoms, displayAnalysisReused: true,
+      expandedNextFrame: next.atoms, restoredAtoms: restored.atoms, geometryBuffers,
+      cacheGenerations: [raw.cacheGeneration, expanded.cacheGeneration, restored.cacheGeneration] };
+  } finally { await evaluate('window.restorePhysicalGpuHooks()'); }
 }

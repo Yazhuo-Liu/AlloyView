@@ -57,6 +57,14 @@ async function run(data, controller) {
     const analyze = () => runtime.withErrors(async () => {
       if (data.parameters.kind === 'coordination') return analyzeGpuCoordination(runtime, frame, data.parameters, { signal: controller.signal, onProgress: progress });
       if (data.parameters.kind === 'rdf') return analyzeGpuRdf(runtime, frame, data.parameters, { signal: controller.signal, onProgress: progress });
+      if (data.parameters.kind === 'bonds') {
+        const { analyzeGpuBonds } = await import('./bonds.js');
+        return analyzeGpuBonds(runtime, frame, data.parameters, { signal: controller.signal, onProgress: progress });
+      }
+      if (data.parameters.kind === 'strain') {
+        const { analyzeGpuAtomicStrain } = await import('./atomic-strain.js');
+        return analyzeGpuAtomicStrain(runtime, frame, data.parameters, { signal: controller.signal, onProgress: progress });
+      }
       if (data.parameters.kind === 'localShear') {
         const { analyzeGpuLocalShear } = await import('./local-shear.js');
         return analyzeGpuLocalShear(runtime, frame, data.parameters, { signal: controller.signal, onProgress: progress });
@@ -81,7 +89,8 @@ async function run(data, controller) {
       return;
     }
     const buffers = [...new Set(Object.values(result).filter(ArrayBuffer.isView).map((value) => value.buffer))];
-    self.postMessage({ id: data.id, ok: true, result: { ...result, backend: 'gpu', engine: 'webgpu', workerCount: 1,
+    self.postMessage({ id: data.id, ok: true, result: { ...result, backend: 'gpu',
+      engine: data.parameters.kind === 'strain' ? 'webgpu-strain-tensor' : 'webgpu', workerCount: 1,
       sharedMemory: false, elapsedMs: performance.now() - startedAt, adapter: runtime.adapterInfo,
       inputReused: !data.frame, gpuInputReused: runtime.inputUploads === previousUploads }, ...cacheState() }, buffers);
   } catch (error) {

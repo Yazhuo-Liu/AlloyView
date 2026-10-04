@@ -12,6 +12,14 @@ The renderer draws instanced cylinders from these geometric endpoints. Coloring,
 
 The output is bounded to one million edges and the search bounds neighbors per atom. Excessive output produces an error instead of silently showing only part of the graph; reducing cutoffs lowers both memory and drawing cost.
 
+## GPU computing
+
+The default is CPU Workers. Turn on **Enable GPU computing** beside **Light / Dark** to use the WebGPU bond algorithm for the next calculation. The GPU reuses resident frame coordinates and its periodic linked-cell index, counts each atom's edges, then writes a compact graph. Element-pair cutoffs, disabled pairs, triclinic cells, repeated images and self-image edges keep the CPU conventions.
+
+Distance decisions close to a cutoff receive a sparse CPU correction before the graph is returned. The GPU implementation supports up to 256 pair overrides and 16,384 corrected atom environments; larger requests use CPU Workers. The one-million-edge output limit applies to both backends. Unavailable adapters, device limits and unsuitable precision also trigger CPU fallback. Cancel stops the calculation rather than starting a replacement CPU job.
+
+GPU preparation and graph readback contribute to elapsed time, so speed depends on the structure and device. See [performance](performance.md) for the switch, frame cache and benchmark commands.
+
 ## Implementation
 
-[Periodic bond graph](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/bonds.js), [bond and arrow primitives](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/atom-primitives.js).
+[Periodic bond graph](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/bonds.js), [GPU bond graph](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/gpu/bonds.js), [bond and arrow primitives](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/atom-primitives.js).

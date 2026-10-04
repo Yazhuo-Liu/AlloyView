@@ -1,6 +1,7 @@
-// Portable processing recipes deliberately contain no coordinates or atom data.
+// Portable processing recipes contain no coordinates or computed atom arrays.
 // Local files must be selected again; source metadata is only used to match them.
 import { SCALAR_COLOR_SCHEMES } from './render/palette.js';
+import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from './selection-groups.js';
 
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
@@ -8,9 +9,11 @@ export const MAX_CONFIGURATION_SLICES = 16;
 export const MAX_CONFIGURATION_PAIR_CUTOFFS = 1024;
 export const MAX_CONFIGURATION_ATOM_OVERRIDES = 100_000;
 export const MAX_CONFIGURATION_RDF_BINS = 4096;
+export const MAX_CONFIGURATION_SELECTION_GROUPS = MAX_SELECTION_GROUPS;
+export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
 
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
@@ -174,7 +177,7 @@ function normalizeSource(value) {
 }
 
 function normalizeSettings(value, fromSnapshot) {
-  const input = record(value, 'settings', ['display', 'analyses', 'extensions', 'replicate', 'slices', 'colors', 'camera', 'activeTool', 'selectedAtomId', 'theme', 'compute']);
+  const input = record(value, 'settings', ['display', 'analyses', 'extensions', 'replicate', 'replicateAtoms', 'slices', 'colors', 'camera', 'activeTool', 'selectedAtomId', 'theme', 'compute', 'selectionGroups']);
   const compute = record(input.compute ?? {}, 'settings.compute', ['gpuEnabled']);
   const repetitions = vector(input.replicate ?? [1, 1, 1], 'settings.replicate', 1, 4096, true);
   if (repetitions.reduce((product, count) => product * count, 1) > 4096) fail('settings.replicate', 'exceeds 4096 displayed cells');
@@ -184,13 +187,20 @@ function normalizeSettings(value, fromSnapshot) {
     analyses: normalizeAnalyses(input.analyses ?? {}, fromSnapshot),
     extensions: normalizeExtensions(input.extensions ?? {}, fromSnapshot),
     replicate: repetitions,
+    replicateAtoms: boolean(input.replicateAtoms, 'settings.replicateAtoms', false),
     slices: normalizeSlices(input.slices ?? {}),
+    selectionGroups: normalizeSelections(input.selectionGroups ?? {}),
     colors: normalizeColors(input.colors ?? {}),
     camera: normalizeCamera(input.camera ?? null),
     activeTool: input.activeTool === 'configuration' ? null : nullableChoice(input.activeTool === undefined ? 'display' : input.activeTool, 'settings.activeTool', TOOLS),
     selectedAtomId: identifier(input.selectedAtomId ?? null, 'settings.selectedAtomId', true),
     theme: choice(input.theme ?? 'dark', 'settings.theme', new Set(['light', 'dark'])),
   };
+}
+
+function normalizeSelections(value) {
+  try { return normalizeSelectionGroups(value, { path: 'settings.selectionGroups' }); }
+  catch (error) { throw new Error(error.message.replace(/^Invalid selection groups:/, 'Invalid AlloyView configuration:')); }
 }
 
 /** Optional version 1 additions keep older recipes disabled and data-free. */

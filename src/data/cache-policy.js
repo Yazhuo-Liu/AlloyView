@@ -4,6 +4,12 @@ const GIBIBYTE = 1024 ** 3;
 export function estimateFrameBytes(frame) {
   const buffers = new Set(), visited = new Set(), pending = [frame];
   let bytes = 0;
+  // Physical replication retains the parsed source for switching back, and
+  // uses stable compound IDs stored as strings rather than a typed ID buffer.
+  bytes += Math.max(0, Number(frame?.processingSourceBytes) || 0);
+  if (Array.isArray(frame?.ids)) {
+    for (const id of frame.ids) bytes += 16 + (typeof id === 'string' ? id.length * 2 : 8);
+  }
   const includeBuffer = (buffer) => {
     if (buffers.has(buffer)) return;
     buffers.add(buffer);

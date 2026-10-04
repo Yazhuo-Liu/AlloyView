@@ -10,6 +10,7 @@ import {
   MAX_CONFIGURATION_PAIR_CUTOFFS,
   MAX_CONFIGURATION_ATOM_OVERRIDES,
   MAX_CONFIGURATION_RDF_BINS,
+  MAX_CONFIGURATION_SELECTION_GROUPS,
   parseConfiguration,
 } from '../src/configuration.js';
 
@@ -55,6 +56,50 @@ test('GPU preference round-trips and older recipes default to CPU computing', ()
   assert.equal(parseConfiguration(JSON.stringify(recipe)).settings.compute.gpuEnabled, false);
   assert.throws(() => createConfiguration({ settings: { compute: { gpuEnabled: 'true' } } }), /settings\.compute\.gpuEnabled/);
   assert.throws(() => createConfiguration({ settings: { compute: { unknown: true } } }), /settings\.compute/);
+});
+
+test('named selection recipes restore stable IDs, styling, visibility and the selected editor', () => {
+  const selectionGroups = { groups: [
+    { id: 'boundary', name: 'Grain boundary', color: '#112233', visible: false, atomIds: [42, '9007199254740993'] },
+    { id: 'grain', name: 'Grain 2', color: '#abcdef', visible: true, atomIds: [9, 10] },
+  ], selectedGroupId: 'boundary' };
+  const recipe = createConfiguration({ settings: { selectionGroups, activeTool: 'selectionGroups' } });
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.deepEqual(restored.settings.selectionGroups, selectionGroups);
+  assert.equal(restored.settings.activeTool, 'selectionGroups');
+  selectionGroups.groups[0].atomIds.push(999);
+  assert.deepEqual(recipe.settings.selectionGroups.groups[0].atomIds, [42, '9007199254740993']);
+  delete recipe.settings.selectionGroups;
+  assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.selectionGroups, { groups: [], selectedGroupId: null });
+});
+
+test('named selection recipe validation rejects ambiguous IDs and malformed editor state before restoration', () => {
+  const recipe = createConfiguration({ settings: { selectionGroups: {
+    groups: [{ id: 'a', name: 'A', color: '#112233', visible: true, atomIds: [1] }], selectedGroupId: 'a',
+  } } });
+  for (const mutate of [
+    value => { value.groups[0].atomIds = [42, '42']; },
+    value => { value.groups[0].atomIds = [Number.MAX_SAFE_INTEGER + 1]; },
+    value => { value.groups[0].color = '#fff'; },
+    value => { value.groups[0].visible = 1; },
+    value => { value.selectedGroupId = 'missing'; },
+    value => { value.groups[0].positions = []; },
+    value => { value.groups = Array.from({ length: MAX_CONFIGURATION_SELECTION_GROUPS + 1 }, (_, i) => ({ id: `g${i}`, name: 'G', color: '#112233', atomIds: [] })); },
+  ]) {
+    const invalid = structuredClone(recipe);
+    mutate(invalid.settings.selectionGroups);
+    assert.throws(() => parseConfiguration(JSON.stringify(invalid)), /Invalid AlloyView configuration: settings\.selectionGroups/);
+  }
+});
+
+test('physical replication preference round-trips while older recipes retain display-only repeats', () => {
+  const recipe = createConfiguration({ settings: { replicate: [2, 3, 1], replicateAtoms: true } });
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.equal(restored.settings.replicateAtoms, true);
+  assert.deepEqual(restored.settings.replicate, [2, 3, 1]);
+  delete recipe.settings.replicateAtoms;
+  assert.equal(parseConfiguration(JSON.stringify(recipe)).settings.replicateAtoms, false);
+  assert.throws(() => createConfiguration({ settings: { replicateAtoms: 1 } }), /settings\.replicateAtoms/);
 });
 
 test('AtomEye extension recipes round-trip processing settings without computed data', () => {
