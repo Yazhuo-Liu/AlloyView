@@ -98,22 +98,33 @@ export const SCALAR_COLOR_SCHEMES = Object.freeze(Object.entries(COLOR_MAPS).map
   label: map.label,
 })));
 
-export function colorsByType(frame) {
+export function colorsByType(frame, hiddenLabels = new Set()) {
   const colors = new Uint8Array(frame.types.length * 3);
+  const counts = new Uint32Array(frame.typeLabels.length);
   const palette = frame.typeLabels.length === 1
     ? [DEFAULT_ATOM_COLOR]
     : frame.typeLabels.map((label, index) => ELEMENT_COLORS[label] ?? TYPE_COLORS[index % TYPE_COLORS.length]);
   for (let atom = 0; atom < frame.types.length; atom += 1) {
     colors.set(palette[frame.types[atom]], atom * 3);
+    counts[frame.types[atom]] += 1;
   }
   return {
     colors,
     legend: {
       kind: 'types',
       title: 'Atom type',
-      items: frame.typeLabels.map((label, index) => ({ label, color: palette[index] })),
+      atomTypes: true,
+      atomCount: frame.types.length,
+      items: frame.typeLabels.map((label, index) => ({ id: index, label, color: palette[index],
+        count: counts[index], visible: !hiddenLabels.has(label) })),
     },
   };
+}
+
+/** Label-based choices remain meaningful when a frame reorders its type IDs. */
+export function visibilityByType(frame, hiddenLabels) {
+  if (hiddenLabels.size === 0) return null;
+  return Uint8Array.from(frame.types, id => hiddenLabels.has(frame.typeLabels[id]) ? 0 : 255);
 }
 
 export function colorsByCategory(property, hiddenTypes = new Set()) {
@@ -127,6 +138,7 @@ export function colorsByCategory(property, hiddenTypes = new Set()) {
   }
   return { colors, legend: {
     kind: 'types', title: property.displayName ?? property.name, property,
+    atomCount: property.data.length,
     items: property.categories.map((item) => ({ ...item, count: counts.get(item.id) ?? 0,
       visible: !hiddenTypes.has(item.id) })),
   } };
@@ -134,10 +146,10 @@ export function colorsByCategory(property, hiddenTypes = new Set()) {
 
 export function visibilityByCategory(property, hiddenTypes) {
   if (hiddenTypes.size === 0) return null;
-  return Uint8Array.from(property.data, (id) => hiddenTypes.has(id) ? 0 : 255);
+  return Uint8Array.from(property.data, (id) => hiddenTypes.has(Number.isFinite(id) ? id : 'NaN') ? 0 : 255);
 }
 
-export function colorsByProperty(property, limits = null, scheme = 'atomeye') {
+export function colorsByProperty(property, limits = null, scheme = 'atomeye', hiddenCategories = new Set()) {
   const colorMap = COLOR_MAPS[scheme];
   if (!colorMap) throw new Error(`Unknown scalar color scheme “${scheme}”.`);
   let dataMinimum = Number.POSITIVE_INFINITY;
@@ -152,7 +164,9 @@ export function colorsByProperty(property, limits = null, scheme = 'atomeye') {
     // defects or for an unmatched reference. Display NaN without an error.
     const colors = new Uint8Array(property.data.length * 3).fill(130);
     return { colors, legend: { kind: 'types', title: property.displayName ?? property.name,
-      property, items: [{ label: 'NaN', color: [130, 130, 130] }] } };
+      property, atomCount: property.data.length,
+      items: [{ id: 'NaN', label: 'NaN', color: [130, 130, 130],
+        count: property.data.length, visible: !hiddenCategories.has('NaN') }] } };
   }
   const minimum = limits?.minimum ?? dataMinimum;
   const maximum = limits?.maximum ?? dataMaximum;
@@ -184,6 +198,19 @@ export function colorsByProperty(property, limits = null, scheme = 'atomeye') {
       customRange: Boolean(limits),
     },
   };
+}
+
+/** Intersect element, category and scalar masks before per-atom overrides. */
+export function combineVisibilityMasks(...masks) {
+  const active = masks.filter(mask => mask !== null && mask !== undefined);
+  if (active.length === 0) return null;
+  if (active.length === 1) return active[0];
+  const combined = new Uint8Array(active[0].length).fill(255);
+  for (const mask of active) {
+    if (mask.length !== combined.length) throw new Error('Visibility masks must have matching atom counts.');
+    for (let atom = 0; atom < combined.length; atom++) if (!mask[atom]) combined[atom] = 0;
+  }
+  return combined;
 }
 
 export function visibilityByProperty(property, limits, hideOutside = true) {

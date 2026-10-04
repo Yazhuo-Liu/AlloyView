@@ -30,6 +30,10 @@ uniform vec3 uVectorColor;
 uniform float uScale;
 uniform float uRadius;
 uniform vec2 uExtent;
+uniform float uAnchor;
+uniform float uHeadLength;
+uniform bool uArrowHead;
+uniform bool uFlatMode;
 out vec3 vNormal;
 out vec3 vWorld;
 out float vAlong;
@@ -56,13 +60,28 @@ void main() {
   vec3 direction = vectorLength > 1e-12 ? delta / vectorLength : vec3(0.0, 0.0, 1.0);
   vec3 reference = abs(direction.z) < 0.85 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
   vec3 across = normalize(cross(reference, direction));
+  if (uFlatMode) {
+    // Keep the complete world vector, including depth. Only the glyph's width
+    // faces the camera, so rotating the view projects the original 3D direction.
+    vec3 cameraBack = transpose(mat3(uView)) * vec3(0.0, 0.0, 1.0);
+    vec3 screenAcross = cross(cameraBack, direction);
+    across = length(screenAcross) > 1e-12 ? normalize(screenAcross)
+      : transpose(mat3(uView)) * vec3(1.0, 0.0, 0.0);
+  }
   vec3 up = cross(direction, across);
-  float segmentLength = max(1e-12, vectorLength * (uExtent.y - uExtent.x));
-  vAlong = mix(uExtent.x, uExtent.y, aMesh.z);
-  vWorld = start + delta * vAlong + (across * aMesh.x + up * aMesh.y) * uRadius;
+  vec2 extent = uExtent;
+  if (uVectorMode) {
+    float shaftFraction = 1.0 - min(1.0, uHeadLength / max(vectorLength, 1e-12));
+    extent = uArrowHead ? vec2(shaftFraction, 1.0) : vec2(0.0, shaftFraction);
+  }
+  float segmentLength = vectorLength * (extent.y - extent.x);
+  vAlong = mix(extent.x, extent.y, aMesh.z);
+  vWorld = start + delta * (vAlong + (uVectorMode ? uAnchor : 0.0))
+    + (across * aMesh.x + up * aMesh.y) * uRadius;
   // Inverse scale keeps the cone's surface normal correct for any vector length.
-  vec3 normal = vec3(aNormal.xy / max(uRadius, 1e-12), aNormal.z / segmentLength);
-  vNormal = mat3(uView) * normalize(across * normal.x + up * normal.y + direction * normal.z);
+  vec3 normal = vec3(aNormal.xy / max(uRadius, 1e-12), aNormal.z / max(segmentLength, 1e-12));
+  vNormal = uFlatMode ? vec3(0.0, 0.0, 1.0)
+    : mat3(uView) * normalize(across * normal.x + up * normal.y + direction * normal.z);
   gl_Position = uProjection * uView * vec4(vWorld, 1.0);
   vColorFirst = uVectorMode ? uVectorColor : texelFetch(uColors, first, 0).rgb;
   vColorSecond = uVectorMode ? uVectorColor : texelFetch(uColors, second, 0).rgb;
@@ -70,7 +89,10 @@ void main() {
   vec3 secondFractional = texelFetch(uFractional, second, 0).xyz;
   vec3 secondReplica = uReplicaIndex + aShift;
   bool endpointInDisplay = uVectorMode || (all(greaterThanEqual(secondReplica, vec3(0.0))) && all(lessThan(secondReplica, uRepetitions)));
-  bool shown = startData.w > 0.5 && (uVectorMode || endData.w > 0.5) && vectorLength > 1e-12 && endpointInDisplay;
+  // Atom appearance/category masks hide spheres and bonds. Arrows form an
+  // independent display layer, while retaining spatial slice clipping below.
+  bool shown = (uVectorMode || (startData.w > 0.5 && endData.w > 0.5))
+    && vectorLength > 1e-12 && segmentLength > 1e-12 && endpointInDisplay;
   shown = shown && sliceVisible(start, firstFractional, uReplicaIndex);
   if (!uVectorMode) shown = shown && sliceVisible(start + delta, secondFractional, secondReplica);
   vVisible = shown ? 1 : 0;
@@ -88,6 +110,7 @@ flat in int vVisible;
 uniform int uSliceMode;
 uniform int uSliceCount;
 uniform vec4 uSlicePlanes[${MAX_SLICES}];
+uniform bool uFlatMode;
 out vec4 outColor;
 void main() {
   if (vVisible == 0) discard;
@@ -99,6 +122,7 @@ void main() {
   }
   vec3 normal = normalize(vNormal);
   vec3 base = vAlong < 0.5 ? vColorFirst : vColorSecond;
+  if (uFlatMode) { outColor = vec4(base, 1.0); return; }
   vec3 key = normalize(vec3(-0.48, 0.62, 0.72));
   vec3 fill = normalize(vec3(0.68, -0.36, 0.48));
   float light = 0.30 + 0.64 * max(0.0, dot(normal, key)) + 0.16 * max(0.0, dot(normal, fill));
@@ -126,6 +150,51 @@ export function createPrimitiveMesh(cone = false, sides = 10) {
     vertex(0, 0, 0, 0, 0, -1); vertex(nextX, nextY, 0, 0, 0, -1); vertex(x, y, 0, 0, 0, -1);
   }
   return new Float32Array(vertices);
+}
+
+/** Flat rectangle/triangle meshes use the same across/up/along coordinates as
+ * cylinders. Their winding faces cameraBack after the billboard basis transform.
+ */
+export function createFlatArrowMesh(head = false) {
+  const points = head ? [[-1, 0], [0, 1], [1, 0]]
+    : [[-1, 0], [-1, 1], [1, 0], [1, 0], [-1, 1], [1, 1]];
+  return Float32Array.from(points.flatMap(([x, z]) => [x, 0, z, 0, 1, 0]));
+}
+
+export const DEFAULT_VECTOR_OPTIONS = Object.freeze({
+  visible: true, scale: 1, radius: 0.06, headRadius: 0.15, headLength: 0.3,
+  anchor: 'tail', dimension: '3d', color: Object.freeze([0.97, 0.65, 0.20]),
+});
+
+export function normalizeVectorOptions(options = {}, previous = {}) {
+  const values = Object.fromEntries(Object.entries(DEFAULT_VECTOR_OPTIONS)
+    .map(([name, fallback]) => [name, options[name] ?? previous[name] ?? fallback]));
+  for (const name of ['scale', 'radius', 'headRadius', 'headLength']) {
+    if (!Number.isFinite(values[name]) || values[name] <= 0) {
+      throw new Error('Vector scale, shaft radius, head radius and head length must be greater than zero.');
+    }
+  }
+  if (!['tail', 'head', 'center'].includes(values.anchor)) throw new Error('Arrow anchoring must be tail, head or center.');
+  if (!['3d', '2d'].includes(values.dimension)) throw new Error('Arrow geometry must be 3d or 2d.');
+  values.visible = Boolean(values.visible);
+  values.color = parsePrimitiveColor(values.color);
+  return values;
+}
+
+/** Physical endpoints shared with tests and scene-bound calculations. The head
+ * shrinks to the full arrow length for short vectors; it never reverses a shaft.
+ */
+export function vectorArrowEndpoints(position, vector, options = {}) {
+  if (position?.length !== 3 || vector?.length !== 3
+    || ![...position, ...vector].every(Number.isFinite)) throw new Error('Arrow endpoints require finite XYZ coordinates.');
+  const settings = normalizeVectorOptions(options), { scale, radius, headRadius, anchor } = settings;
+  const delta = Array.from(vector, value => value * scale), length = Math.hypot(...delta);
+  const headLength = Math.min(length, settings.headLength), shaftLength = length - headLength;
+  const shift = { tail: 0, head: -1, center: -0.5 }[anchor];
+  const tail = Array.from(position, (value, axis) => value + delta[axis] * shift);
+  const tip = tail.map((value, axis) => value + delta[axis]);
+  const headBase = tail.map((value, axis) => value + (length > 0 ? delta[axis] * shaftLength / length : 0));
+  return { tail, tip, headBase, length, shaftLength, headLength, radius, headRadius };
 }
 
 export function parsePrimitiveColor(value) {
@@ -173,7 +242,8 @@ export class AtomPrimitiveLayer {
     this.program = program(gl, VERTEX, FRAGMENT);
     this.uniforms = Object.fromEntries(['uPositions', 'uColors', 'uFractional', 'uTextureWidth', 'uView', 'uProjection',
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions', 'uSliceAxis', 'uSliceMaximum', 'uSliceMode', 'uSliceCount',
-      'uSlicePlanes[0]', 'uVectorMode', 'uVectorColor', 'uScale', 'uRadius', 'uExtent'].map(name => [name, gl.getUniformLocation(this.program, name)]));
+      'uSlicePlanes[0]', 'uVectorMode', 'uVectorColor', 'uScale', 'uRadius', 'uExtent',
+      'uAnchor', 'uHeadLength', 'uArrowHead', 'uFlatMode'].map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.textures = Array.from({ length: 3 }, () => {
       const texture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -186,15 +256,17 @@ export class AtomPrimitiveLayer {
     this.textureSizes = [null, null, null];
     this.cylinder = this.mesh(false);
     this.cone = this.mesh(true);
+    this.flatShaft = this.mesh(false, true);
+    this.flatHead = this.mesh(true, true);
     this.bondBuffers = this.instances();
     this.vectorBuffers = this.instances();
     this.bonds = this.vectors = null;
     this.bondOptions = { visible: true, radius: 0.08 };
-    this.vectorOptions = { visible: true, scale: 1, radius: 0.06, color: [0.97, 0.65, 0.20] };
+    this.vectorOptions = normalizeVectorOptions();
   }
 
-  mesh(cone) {
-    const gl = this.gl, values = createPrimitiveMesh(cone), buffer = gl.createBuffer();
+  mesh(cone, flat = false) {
+    const gl = this.gl, values = flat ? createFlatArrowMesh(cone) : createPrimitiveMesh(cone), buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
     return { buffer, count: values.length / 6 };
@@ -290,16 +362,13 @@ export class AtomPrimitiveLayer {
 
   setVectors(renderer, values, options = {}) {
     if (values && (!(values instanceof Float32Array) || values.length !== renderer.atomCount * 3)) throw new Error('The vector array does not match the current frame.');
-    const scale = options.scale ?? this.vectorOptions.scale, radius = options.radius ?? this.vectorOptions.radius;
-    if (!Number.isFinite(scale) || scale <= 0 || !Number.isFinite(radius) || radius <= 0) throw new Error('Vector scale and radius must be greater than zero.');
-    const color = options.color === undefined ? this.vectorOptions.color : parsePrimitiveColor(options.color);
-    this.vectorOptions = { visible: options.visible ?? this.vectorOptions.visible, scale, radius, color };
+    this.vectorOptions = normalizeVectorOptions(options, this.vectorOptions);
     const unchanged = values && values === this.vectors;
     this.vectors = values;
     if (values && !unchanged) {
       const indices = new Uint32Array(renderer.atomCount * 2);
       // Invalid/zero vectors produce no fragments in the shader. Keep source
-      // indexing so filters and repeated cells use the original atom directly.
+      // indexing so slices and repeated cells use the original atom directly.
       for (let atom = 0; atom < renderer.atomCount; atom += 1) {
         indices[atom * 2] = indices[atom * 2 + 1] = atom;
       }
@@ -331,7 +400,7 @@ export class AtomPrimitiveLayer {
     this.uploadTexture(2, new Float32Array(4), this.gl.RGBA32F, this.gl.FLOAT);
   }
 
-  drawMesh(buffers, mesh, radius, scale, extent, vectorMode) {
+  drawMesh(buffers, mesh, radius, scale, extent, vectorMode, arrowHead = false) {
     if (!buffers.count) return;
     const gl = this.gl, u = this.uniforms;
     gl.bindVertexArray(buffers.vao);
@@ -359,6 +428,8 @@ export class AtomPrimitiveLayer {
       gl.vertexAttribDivisor(4, 1);
     }
     gl.uniform1i(u.uVectorMode, vectorMode ? 1 : 0);
+    gl.uniform1i(u.uFlatMode, vectorMode && this.vectorOptions.dimension === '2d' ? 1 : 0);
+    gl.uniform1i(u.uArrowHead, arrowHead ? 1 : 0);
     gl.uniform1f(u.uRadius, radius);
     gl.uniform1f(u.uScale, scale);
     gl.uniform2f(u.uExtent, ...extent);
@@ -384,14 +455,17 @@ export class AtomPrimitiveLayer {
     gl.uniform1i(u.uSliceCount, renderer.sliceCount ?? 0);
     gl.uniform4fv(u['uSlicePlanes[0]'], renderer.slicePlaneValues);
     gl.uniform3f(u.uVectorColor, ...this.vectorOptions.color);
+    gl.uniform1f(u.uAnchor, { tail: 0, head: -1, center: -0.5 }[this.vectorOptions.anchor]);
+    gl.uniform1f(u.uHeadLength, this.vectorOptions.headLength);
     for (const replica of renderer.replicas) {
       gl.uniform3f(u.uReplicaOffset, ...replica.offset);
       gl.uniform3f(u.uReplicaIndex, ...replica.indices);
       if (this.bonds && this.bondOptions.visible) this.drawMesh(this.bondBuffers, this.cylinder, this.bondOptions.radius, 1, [0, 1], false);
       if (this.vectors && this.vectorOptions.visible) {
-        const { scale, radius } = this.vectorOptions;
-        this.drawMesh(this.vectorBuffers, this.cylinder, radius, scale, [0, 0.76], true);
-        this.drawMesh(this.vectorBuffers, this.cone, radius * 2.8, scale, [0.76, 1], true);
+        const { scale, radius, headRadius, dimension } = this.vectorOptions;
+        const flat = dimension === '2d';
+        this.drawMesh(this.vectorBuffers, flat ? this.flatShaft : this.cylinder, radius, scale, [0, 1], true);
+        this.drawMesh(this.vectorBuffers, flat ? this.flatHead : this.cone, headRadius, scale, [0, 1], true, true);
       }
     }
     gl.activeTexture(gl.TEXTURE0);
@@ -399,13 +473,15 @@ export class AtomPrimitiveLayer {
 
   extendBounds(renderer, minimum, maximum) {
     if (!this.vectors || !this.vectorOptions.visible) return;
-    const { scale, radius } = this.vectorOptions;
+    const { scale, radius, headRadius = DEFAULT_VECTOR_OPTIONS.headRadius, anchor = 'tail' } = this.vectorOptions;
+    const shift = { tail: 0, head: -1, center: -0.5 }[anchor], padding = Math.max(radius, headRadius);
     for (let offset = 0; offset < this.vectors.length; offset += 3) {
       if (!Number.isFinite(this.vectors[offset]) || !Number.isFinite(this.vectors[offset + 1]) || !Number.isFinite(this.vectors[offset + 2])) continue;
       for (let axis = 0; axis < 3; axis += 1) {
-        const tip = renderer.displayPositions[offset + axis] + this.vectors[offset + axis] * scale;
-        minimum[axis] = Math.min(minimum[axis], tip + (renderer.minimumOffset?.[axis] ?? 0) - radius * 2.8);
-        maximum[axis] = Math.max(maximum[axis], tip + (renderer.maximumOffset?.[axis] ?? 0) + radius * 2.8);
+        const delta = this.vectors[offset + axis] * scale;
+        const tail = renderer.displayPositions[offset + axis] + delta * shift, tip = tail + delta;
+        minimum[axis] = Math.min(minimum[axis], Math.min(tail, tip) + (renderer.minimumOffset?.[axis] ?? 0) - padding);
+        maximum[axis] = Math.max(maximum[axis], Math.max(tail, tip) + (renderer.maximumOffset?.[axis] ?? 0) + padding);
       }
     }
   }

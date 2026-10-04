@@ -7,6 +7,7 @@
 
 <p align="center">
   <a href="https://yazhuoliu.com/AlloyView/">Use online</a> ·
+  <a href="https://yazhuoliu.com/AlloyView/docs/">Documentation</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="docs/USER_GUIDE.md">User &amp; development guide</a> ·
   <a href="docs/FORMATS.md">Supported formats</a>
@@ -40,7 +41,12 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   distance, bond-angle and dihedral measurements with optional periodic images.
 - Element and individual-atom color, radius and visibility overrides.
 - Periodic bond graphs with element-pair cutoff overrides and adjustable bond
-  radius, plus force/velocity/other vector arrows from three scalar components.
+  radius. Independent displacement analysis provides physical Cartesian components
+  and magnitude for coloring against a selected reference frame.
+- Vector arrows draw available displacement, imported force/velocity and custom
+  XYZ data with per-component display scales, Tail/Head/Center anchors, linked or
+  independent arrow dimensions, and 3D or camera-facing 2D glyphs. Arrows remain
+  visible when atoms are hidden; display scales leave physical properties unchanged.
 - Up to 16 independent clipping planes with arbitrary Cartesian normals,
   editable names and positions, and draggable plane/normal controls.
 - Display-only replication along independent periodic cell vectors, including
@@ -70,7 +76,7 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   editable limits that stay fixed across frames, and optional filtering of
   out-of-range atoms.
 - PNG export with independent background, legend and XYZ-arrow controls,
-  JPG and raster EPS export, visible atom-ID lists, six-view contact sheets and cancellable
+  JPG export, visible atom-ID lists, six-view contact sheets and cancellable
   trajectory image sequences packaged as ZIP files.
   Exported arrows are optional and off by default. Transparent
   exports keep the legend labels and color keys without a filled legend panel.
@@ -80,11 +86,13 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Selectable tool settings and a phone layout with the viewport fixed above
   independently scrolling tools and collapsed camera/legend controls.
 - An optional simultaneous second view reuses the current frame and analysis
-  results, with its own camera orientation.
-- JSON configuration export/import saves source file metadata, processing
+  results, with its own camera and standard-view/projection toolbar.
+- JSON configuration export/import directly below Structure saves source file metadata, processing
   settings, camera and theme, then restores the view and recomputes enabled
   analyses after the matching local files are opened.
 - Bundled FCC, BCC trajectory and 40-image NEB examples.
+- Contextual **?** help opens individual feature documentation; a static documentation
+  website includes controls, algorithms, implementation links and deployment guides.
 
 ## Quick start
 
@@ -133,7 +141,10 @@ WebGL 2 support. No installation or account is needed.
    Under **Ideal lattice reference**, check the element, crystal phase and
    lattice constants before calculating atomic elastic strain.
    **Bonds** adds neighbor connections with optional element-pair cutoffs.
-   **Vector arrows** selects three Cartesian scalar components.
+   **Displacement** calculates Cartesian components and magnitude against a
+   reference frame for atom coloring, independently of arrows.
+   **Vector arrows** displays existing displacement, imported force/velocity,
+   other complete vector families, or custom Cartesian components.
    **Frame strain** compares against a chosen trajectory frame;
    **Local shear** measures the current neighbor geometry without a reference.
    **Statistics** shows coordination distributions and calculates total or
@@ -143,13 +154,13 @@ WebGL 2 support. No installation or account is needed.
    Uncheck the background option for transparency, including around the legend.
    **Include XYZ arrows in PNG** adds the current Cartesian orientation even
    when the screen's axes are hidden; it is unchecked by default. PNGs show
-   clipped atoms and omit slice editing overlays. Under **Configuration**,
+   clipped atoms and omit slice editing overlays. Directly below **Structure**,
    **Export JSON** saves the current processing and view. **Import JSON**
    restores settings immediately for a matching open source; otherwise use
    **Open local** to select the saved source files with matching names and sizes.
    Atom data and calculated results stay in the source/session and are not
    embedded in the JSON.
-   **Display → Export images and atom IDs** also offers JPG, raster EPS, six-view PNG,
+   **Display → Export images and atom IDs** also offers JPG, six-view PNG,
    visible atom-ID lists and a ZIP of selected trajectory-frame images.
 
 A single file picker cannot discover unselected sibling files. Select all
@@ -171,6 +182,8 @@ npm run preview
 ```
 
 Open <http://localhost:4173>. The deployable site is in `dist/`.
+Documentation is available at `/docs/` in development and preview; the build
+renders its Markdown sources into static HTML pages in `dist/docs/`.
 
 The compiled PTM kernel is included in the repository. Normal development and
 CI need no compiler. To change its C++ integration, install Emscripten and run

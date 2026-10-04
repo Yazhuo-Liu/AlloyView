@@ -1,8 +1,9 @@
-const ANALYSIS_TOOLS = new Set(['coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'bonds', 'statistics', 'referenceStrain', 'localShear']);
+const ANALYSIS_TOOLS = new Set(['coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'bonds', 'statistics', 'referenceStrain', 'localShear', 'displacement']);
 
 /**
  * Show one configuration panel while keeping independently enabled analyses.
- * Opening settings does not start computation. Closing an analysis explicitly
+ * User-selection metadata lets Displacement start when opened. Other panels
+ * wait for their calculation controls. Closing an analysis explicitly
  * deactivates it; switching settings leaves its computation and results intact.
  */
 export function initializeToolPanels({ onDeactivateAnalysis = () => {}, onDeactivateTool = () => {}, onSelectionChange = () => {} } = {}) {
@@ -37,11 +38,11 @@ export function initializeToolPanels({ onDeactivateAnalysis = () => {}, onDeacti
     }
   }
 
-  function selectTool(name, { focus = false } = {}) {
+  function selectTool(name, { focus = false, userInitiated = false } = {}) {
     if (!panels.has(name)) return false;
     activeTool = name;
     render();
-    onSelectionChange(activeTool);
+    onSelectionChange(activeTool, { userInitiated });
     if (focus) buttons.get(name)?.focus();
     return true;
   }
@@ -74,7 +75,7 @@ export function initializeToolPanels({ onDeactivateAnalysis = () => {}, onDeacti
   for (const [name, button] of buttons) {
     button.addEventListener('click', () => {
       if (activeTool === name) closeTool(name);
-      else selectTool(name);
+      else selectTool(name, { userInitiated: true });
     });
   }
   closeButton?.addEventListener('click', () => closeTool());

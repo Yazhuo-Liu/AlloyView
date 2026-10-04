@@ -1,9 +1,22 @@
 # GitHub Pages deployment
 
 `npm run build` creates `dist/`; no server-side code or upload endpoint exists.
-The production artifact contains only the browser application, examples, root
-license, and an optional prebuilt Wasm module. Tests, benchmarks, documentation,
-and native C++ sources are not copied into the web root.
+The production artifact contains the browser application, examples, documentation,
+root license, and an optional prebuilt Wasm module. Tests, benchmarks and native
+C++ sources are not copied into the web root.
+
+## Documentation website
+
+The build renders checked-in Markdown into `dist/docs/index.html`, guide pages,
+and `dist/docs/features/*.html`. Each feature page explains its controls,
+numerical definition and implementation. The top-bar Documentation link and
+panel **?** links point to this static website. The documentation follows the
+viewer theme and also has its own theme switch.
+
+`npm run dev` renders the same documentation routes on demand from their Markdown
+sources. No generated documentation files need to be committed. Production uses
+plain HTML and CSS and needs no server rendering. All navigation and viewer links
+are relative, including under a repository subpath such as `/AlloyView/docs/`.
 
 **Open local** offers a file picker and a read-only `webkitdirectory` folder
 picker. Individual files and multi-file selections load directly when they

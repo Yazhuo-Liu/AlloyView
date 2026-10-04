@@ -65,7 +65,7 @@ test('AtomEye extension recipes round-trip processing settings without computed 
   assert.equal(recipe.settings.extensions.appearance.atoms[0].visible, false);
   assert.equal(JSON.stringify(recipe).includes('positions'), false);
   assert.equal(JSON.stringify(recipe).includes('histogram'), false);
-  for (const activeTool of ['bonds', 'vectors', 'statistics', 'referenceStrain', 'localShear']) {
+  for (const activeTool of ['bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear']) {
     assert.equal(createConfiguration({ settings: { activeTool } }).settings.activeTool, activeTool);
   }
 });
@@ -76,13 +76,16 @@ test('older version 1 recipes disable every new computation and use portable def
   const extensions = parseConfiguration(JSON.stringify(recipe)).settings.extensions;
   assert.deepEqual(extensions, {
     bonds: { enabled: false, cutoff: null, pairCutoffs: [], radius: 0.12, visible: true },
-    vectors: { enabled: false, components: [null, null, null], scale: 1, color: '#f9ca57' },
+    vectors: { enabled: false, components: [null, null, null], mode: 'generic', componentScales: [1, 1, 1],
+      scale: 1, color: '#f9ca57', radius: .06, headRadius: .15,
+      headLength: .3, linkDimensions: true, anchor: 'tail', dimension: '3d' },
+    displacement: { enabled: false, referenceFrame: 0, minimumImage: true },
     referenceStrain: { enabled: false, cutoff: null, frameIndex: 0 },
     localShear: { enabled: false, cutoff: null, subtractMean: false },
     rdf: { enabled: false, cutoff: null, bins: 100, firstType: null, secondType: null },
     measurements: { enabled: false, minimumImage: true, atomIds: [] },
     appearance: { elements: [], atoms: [] },
-    comparison: { enabled: false, preset: 'top' },
+    comparison: { enabled: false, preset: 'top', projectionMode: 'orthographic', camera: null },
   });
   assert.deepEqual(createConfiguration().settings.extensions, extensions);
 });
@@ -180,15 +183,106 @@ test('XYZ and PDB recipes match either a trajectory or its corresponding numbere
 function extensionSnapshot() {
   return {
     bonds: { enabled: true, cutoff: 3.1, pairCutoffs: [{ first: 'Fe', second: 'C', cutoff: 2.4 }], radius: 0.18, visible: false },
-    vectors: { enabled: true, components: ['force_x', 'force_y', 'force_z'], scale: 2, color: '#ffb84a' },
+    vectors: { enabled: true, components: ['force_x', 'force_y', 'force_z'], mode: 'generic', componentScales: [1, 1, 1],
+      scale: 2, color: '#ffb84a', radius: .06, headRadius: .15,
+      headLength: .3, linkDimensions: true, anchor: 'tail', dimension: '3d' },
+    displacement: { enabled: false, referenceFrame: 0, minimumImage: true },
     referenceStrain: { enabled: true, cutoff: 3.1, frameIndex: 2 },
     localShear: { enabled: true, cutoff: 3.1, subtractMean: true },
     rdf: { enabled: true, cutoff: 8, bins: 256, firstType: 'Fe', secondType: 'C' },
     measurements: { enabled: true, minimumImage: true, atomIds: [1, 2, 3, 4] },
     appearance: { elements: [{ label: 'Fe', color: '#ff1122', radius: 1.5, visible: true }], atoms: [{ id: 2, color: null, radius: null, visible: false }] },
-    comparison: { enabled: true, preset: 'right' },
+    comparison: { enabled: true, preset: 'right', projectionMode: 'orthographic', camera: null },
   };
 }
+
+test('legacy displacement vector recipes migrate analysis settings and retain glyph settings', () => {
+  const vectors = { enabled: true, mode: 'displacement', referenceFrame: 1, minimumImage: false,
+    componentScales: [2, -3, 0], scale: 4, anchor: 'head', dimension: '2d',
+    radius: .2, headRadius: .6, headLength: .8, linkDimensions: false };
+  const recipe = createConfiguration({ settings: { extensions: { vectors }, activeTool: 'vectors' } });
+  const restored = parseConfiguration(JSON.stringify(recipe)).settings.extensions;
+  for (const [key, value] of Object.entries(vectors)) {
+    if (!['referenceFrame', 'minimumImage'].includes(key)) assert.deepEqual(restored.vectors[key], value);
+  }
+  assert.deepEqual(restored.displacement, { enabled: true, referenceFrame: 1, minimumImage: false });
+  assert.deepEqual(restored.vectors.components, [null, null, null]);
+  assert.equal(Object.hasOwn(restored.vectors, 'referenceFrame'), false);
+  assert.equal(Object.hasOwn(restored.vectors, 'minimumImage'), false);
+  for (const invalid of [{ mode: 'unknown' }, { referenceFrame: -1 }, { radius: 0 }, { headRadius: -1 },
+    { headLength: Infinity }, { dimension: '4d' }, { anchor: 'origin' }, { componentScales: [1, null, 1] }]) {
+    assert.throws(() => createConfiguration({ settings: { extensions: { vectors: { ...vectors, ...invalid } } } }), /settings\.extensions\.vectors/);
+  }
+});
+
+test('old displacement calculation survives migration when arrow visibility is disabled', () => {
+  const recipe = createConfiguration({ settings: { extensions: { vectors: {
+    mode: 'displacement', enabled: false, referenceFrame: 2, minimumImage: false,
+  } } } });
+  assert.equal(recipe.settings.extensions.vectors.enabled, false);
+  assert.deepEqual(recipe.settings.extensions.displacement, { enabled: true, referenceFrame: 2, minimumImage: false });
+  assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
+});
+
+test('independent displacement settings round-trip and override legacy vector calculation settings', () => {
+  const displacement = { enabled: false, referenceFrame: 4, minimumImage: true };
+  const recipe = createConfiguration({ settings: { activeTool: 'displacement', extensions: {
+    displacement, vectors: { mode: 'displacement', enabled: true, referenceFrame: 1, minimumImage: false },
+  } } });
+  assert.deepEqual(recipe.settings.extensions.displacement, displacement);
+  assert.equal(recipe.settings.activeTool, 'displacement');
+  assert.equal(recipe.settings.extensions.vectors.enabled, true);
+  assert.equal(recipe.settings.extensions.vectors.mode, 'displacement');
+  assert.equal(Object.hasOwn(recipe.settings.extensions.vectors, 'referenceFrame'), false);
+  assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
+  for (const invalid of [{ enabled: 1 }, { referenceFrame: -1 }, { referenceFrame: .5 }, { minimumImage: 'true' }]) {
+    assert.throws(() => createConfiguration({ settings: { extensions: { displacement: { ...displacement, ...invalid } } } }), /settings\.extensions\.displacement/);
+  }
+});
+
+test('displacement reference bounds are checked whenever the independent analysis is enabled', () => {
+  const source = { format: 'xyz', frameCount: 2, files: [{ name: 'frames.xyz', size: 42 }] };
+  const displacement = { enabled: true, referenceFrame: 1, minimumImage: false };
+  assert.deepEqual(createConfiguration({ source, settings: { extensions: { displacement } } }).settings.extensions.displacement, displacement);
+  assert.throws(() => createConfiguration({ source, settings: { extensions: { displacement: { ...displacement, referenceFrame: 2 } } } }), /settings\.extensions\.displacement\.referenceFrame/);
+  assert.equal(createConfiguration({ source, settings: { extensions: { displacement: { ...displacement, enabled: false, referenceFrame: 9 } } } }).settings.extensions.displacement.referenceFrame, 9);
+  assert.throws(() => createConfiguration({ source, settings: { extensions: { vectors: { mode: 'displacement', enabled: false, referenceFrame: 2 } } } }), /settings\.extensions\.displacement\.referenceFrame/);
+});
+
+test('discovered vector sources retain their stable family key without enabling an absent analysis', () => {
+  for (const mode of ['force', 'velocity', 'displacement', 'property:dipole', 'property:磁矩']) {
+    const recipe = createConfiguration({ settings: { extensions: {
+      vectors: { mode, enabled: false }, displacement: { enabled: false },
+    } } });
+    const restored = parseConfiguration(JSON.stringify(recipe));
+    assert.equal(restored.settings.extensions.vectors.mode, mode);
+    assert.equal(restored.settings.extensions.vectors.enabled, false);
+    assert.equal(restored.settings.extensions.displacement.enabled, false);
+    assert.deepEqual(restored.settings.extensions.vectors.components, [null, null, null]);
+  }
+  for (const mode of ['property:', 'property:  ', 'property:__proto__', 'property:constructor', 'unrecognized', `property:${'a'.repeat(250)}`]) {
+    assert.throws(() => createConfiguration({ settings: { extensions: { vectors: { mode } } } }), /settings\.extensions\.vectors\.mode/);
+  }
+});
+
+test('legacy configuration selection resolves outside Tools and old vector settings remain supported', () => {
+  const recipe = createConfiguration({ settings: { activeTool: 'configuration', extensions: {
+    vectors: { enabled: true, components: ['fx', 'fy', 'fz'], scale: 2, color: '#ffffff' },
+  } } });
+  assert.equal(recipe.settings.activeTool, null);
+  assert.equal(recipe.settings.extensions.vectors.mode, 'generic');
+  assert.deepEqual(recipe.settings.extensions.vectors.componentScales, [1, 1, 1]);
+  assert.equal(recipe.settings.extensions.vectors.linkDimensions, true);
+});
+
+test('custom second-view orientations round-trip without claiming a fixed direction', () => {
+  const comparison = { enabled: true, preset: 'custom', projectionMode: 'perspective', camera: {
+    yaw: -.7, pitch: .3, target: [1, 2, 3], pan: [.1, .2, .3], distance: 10,
+    orthographicScale: 5, projectionMode: 'perspective',
+  } };
+  const recipe = createConfiguration({ settings: { extensions: { comparison } } });
+  assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.extensions.comparison, comparison);
+});
 
 test('new scalar schemes round-trip with fixed ranges and automatic ranges remain absent', () => {
   for (const scheme of ['magma', 'inferno', 'cividis', 'turbo', 'spectral']) {
@@ -196,6 +290,7 @@ test('new scalar schemes round-trip with fixed ranges and automatic ranges remai
       schemes: [{ property: 'energy', scheme }, { property: 'coordination', scheme }],
       ranges: [{ property: 'energy', minimum: -2, maximum: 4 }],
       hideOutside: [], hiddenStructureTypes: [],
+      hiddenAtomTypes: [], hiddenCategories: [],
     };
     const recipe = createConfiguration({ settings: { colors } });
     assert.deepEqual(recipe.settings.colors, colors);
@@ -207,6 +302,56 @@ test('new scalar schemes round-trip with fixed ranges and automatic ranges remai
   const invalid = createConfiguration();
   invalid.settings.colors.schemes = [{ property: 'energy', scheme: 'unrecognized' }];
   assert.throws(() => parseConfiguration(JSON.stringify(invalid)), /settings\.colors\.schemes\[0\]\.scheme/);
+});
+
+test('legend visibility recipes keep element labels and category IDs scoped to their property', () => {
+  const colors = {
+    hiddenAtomTypes: ['Ni', 'Type 4'],
+    hiddenCategories: [
+      { property: 'structureType', ids: [0, 2] },
+      { property: 'ptmStructureType', ids: [1] },
+      { property: 'phase', ids: [0] },
+      { property: 'undefinedField', ids: ['NaN'] },
+    ],
+  };
+  const recipe = createConfiguration({ settings: { colors } });
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.deepEqual(restored.settings.colors.hiddenAtomTypes, colors.hiddenAtomTypes);
+  assert.deepEqual(restored.settings.colors.hiddenCategories, colors.hiddenCategories);
+  assert.deepEqual(restored.settings.colors.hiddenStructureTypes, []);
+  colors.hiddenAtomTypes.push('Fe');
+  colors.hiddenCategories[0].ids.push(3);
+  assert.deepEqual(restored.settings.colors.hiddenAtomTypes, ['Ni', 'Type 4']);
+  assert.deepEqual(restored.settings.colors.hiddenCategories[0].ids, [0, 2]);
+});
+
+test('old version 1 visibility recipes remain valid without new legend filter fields', () => {
+  const recipe = createConfiguration({ settings: { colors: { hiddenStructureTypes: [0, 3] } } });
+  delete recipe.settings.colors.hiddenAtomTypes;
+  delete recipe.settings.colors.hiddenCategories;
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.deepEqual(restored.settings.colors.hiddenStructureTypes, [0, 3]);
+  assert.deepEqual(restored.settings.colors.hiddenAtomTypes, []);
+  assert.deepEqual(restored.settings.colors.hiddenCategories, []);
+});
+
+test('legend filter validation rejects duplicate or malformed choices before restoration', () => {
+  const recipe = createConfiguration();
+  for (const colors of [
+    { hiddenAtomTypes: ['Ni', 'Ni'] },
+    { hiddenAtomTypes: [3] },
+    { hiddenAtomTypes: [''] },
+    { hiddenCategories: [{ property: 'phase', ids: [1, 1] }] },
+    { hiddenCategories: [{ property: 'phase', ids: [1.5] }] },
+    { hiddenCategories: [{ property: 'phase', ids: [true] }] },
+    { hiddenCategories: [{ property: 'phase', ids: [{}] }] },
+    { hiddenCategories: [{ property: 'phase', ids: [] }, { property: 'phase', ids: [0] }] },
+    { hiddenCategories: [{ property: '__proto__', ids: [0] }] },
+  ]) {
+    const malformed = structuredClone(recipe);
+    Object.assign(malformed.settings.colors, colors);
+    assert.throws(() => parseConfiguration(JSON.stringify(malformed)), /settings\.colors/);
+  }
 });
 
 test('central symmetry recipes retain Auto and manual neighbor settings', () => {
@@ -469,6 +614,8 @@ function fullSnapshot() {
         schemes: [{ property: 'atomicShearStrain', scheme: 'viridis' }],
         hideOutside: [{ property: 'atomicShearStrain', hide: false }],
         hiddenStructureTypes: [0, 2],
+        hiddenAtomTypes: ['Cu'],
+        hiddenCategories: [{ property: 'phase', ids: [1, 2] }],
       },
       camera: { yaw: 0.42, pitch: 0.38, target: [1, 2, 3], pan: [0.4, 0, -0.3], distance: 12, orthographicScale: 5, projectionMode: 'orthographic' },
       activeTool: 'slice', selectedAtomId: 43, theme: 'light',

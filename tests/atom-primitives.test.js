@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell } from '../src/data/model.js';
-import { AtomPrimitiveLayer, bondDisplayShifts, createPrimitiveMesh, parsePrimitiveColor, validateBonds } from '../src/render/atom-primitives.js';
+import { AtomPrimitiveLayer, bondDisplayShifts, createFlatArrowMesh, createPrimitiveMesh, normalizeVectorOptions,
+  parsePrimitiveColor, validateBonds, vectorArrowEndpoints } from '../src/render/atom-primitives.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 
 const cell = createCell({ vectors: [10, 0, 0, 3, 8, 0, -2, 1, 7] });
@@ -94,6 +95,64 @@ test('vector display retains source data and reuses instances when scaling', () 
   assert.equal(layer.vectorOptions.scale, 2);
   assert.deepEqual(layer.vectorOptions.color, [0, 1, 0]);
   assert.throws(() => layer.setVectors(renderer, values, { scale: -1 }), /greater/);
+  layer.setVectors(renderer, values, { headRadius: .4, headLength: .9, radius: .12, anchor: 'head', dimension: '2d' });
+  assert.equal(uploads.length, 2, 'arrow shape, anchoring and 2D mode are shader/mesh options');
+  assert.equal(layer.vectorOptions.headRadius, .4);
+  assert.equal(layer.vectorOptions.headLength, .9);
+  assert.equal(layer.vectorOptions.anchor, 'head');
+  assert.equal(layer.vectorOptions.dimension, '2d');
+  assert.equal(layer.vectorOptions.scale, 2);
+});
+
+test('arrow anchoring fixes the requested tail, head or center at each atom', () => {
+  const position = [2, 3, 4], vector = [1, -2, 3], options = { scale: 2, headLength: .8 };
+  const tail = vectorArrowEndpoints(position, vector, options);
+  assert.deepEqual(tail.tail, position);
+  assert.deepEqual(tail.tip, [4, -1, 10]);
+  const head = vectorArrowEndpoints(position, vector, { ...options, anchor: 'head' });
+  assert.deepEqual(head.tip, position);
+  assert.deepEqual(head.tail, [0, 7, -2]);
+  const center = vectorArrowEndpoints(position, vector, { ...options, anchor: 'center', dimension: '2d' });
+  assert.deepEqual(center.tail, [1, 5, 1]);
+  assert.deepEqual(center.tip, [3, 1, 7]);
+  assert.equal(center.headLength, .8);
+  assert.equal(center.shaftLength, Math.hypot(2, -4, 6) - .8);
+  const shortened = vectorArrowEndpoints(position, [.1, 0, 0], { headLength: 2 });
+  assert.equal(shortened.headLength, .1);
+  assert.equal(shortened.shaftLength, 0);
+  assert.deepEqual(shortened.headBase, position);
+  const zero = vectorArrowEndpoints(position, [0, 0, 0]);
+  assert.equal(zero.length, 0);
+  assert.deepEqual(zero.headBase, position);
+});
+
+test('flat arrow shaft and head are actual camera-facing planar triangles', () => {
+  for (const head of [false, true]) {
+    const values = createFlatArrowMesh(head);
+    assert.equal(values.length / 6, head ? 3 : 6);
+    for (let vertex = 0; vertex < values.length; vertex += 6) {
+      assert.equal(values[vertex + 1], 0);
+      assert.deepEqual([...values.subarray(vertex + 3, vertex + 6)], [0, 1, 0]);
+    }
+    for (let triangle = 0; triangle < values.length; triangle += 18) {
+      const ax = values[triangle], az = values[triangle + 2];
+      const bx = values[triangle + 6], bz = values[triangle + 8];
+      const cx = values[triangle + 12], cz = values[triangle + 14];
+      assert.ok((bz - az) * (cx - ax) - (bx - ax) * (cz - az) > 0);
+    }
+  }
+});
+
+test('arrow dimensions reject invalid values and preserve independent manual proportions', () => {
+  const options = normalizeVectorOptions({ radius: .1, headRadius: .7, headLength: .2, anchor: 'center', dimension: '2d' });
+  assert.equal(options.headRadius, .7);
+  assert.equal(options.headLength, .2);
+  assert.equal(normalizeVectorOptions({ scale: 4 }, options).headRadius, .7);
+  for (const name of ['radius', 'headRadius', 'headLength', 'scale']) {
+    for (const value of [0, -1, Infinity, NaN]) assert.throws(() => normalizeVectorOptions({ [name]: value }), /greater/);
+  }
+  assert.throws(() => normalizeVectorOptions({ anchor: 'tip' }), /anchoring/);
+  assert.throws(() => normalizeVectorOptions({ dimension: '1d' }), /geometry/);
 });
 
 test('multi-atom highlighting and atom centering preserve camera orientation and zoom', () => {
@@ -134,6 +193,38 @@ test('arrow bounds include tips across negative skew replication extents', () =>
   layer.extendBounds(renderer, minimum, maximum);
   assert.ok(minimum[0] < -1);
   assert.ok(maximum[2] > 22);
+});
+
+test('head and center anchoring extend bounds behind the atom across replicas', () => {
+  const { layer } = layerFixture();
+  layer.vectors = new Float32Array([0, 0, 6]);
+  const renderer = { displayPositions: new Float32Array([1, 2, 3]), minimumOffset: [-2, 0, -4], maximumOffset: [10, 8, 7] };
+  for (const anchor of ['head', 'center']) {
+    layer.vectorOptions = normalizeVectorOptions({ visible: true, scale: 2, radius: .1, headRadius: .5, anchor });
+    const minimum = [1, 2, 3], maximum = [1, 2, 3];
+    layer.extendBounds(renderer, minimum, maximum);
+    assert.equal(minimum[2], anchor === 'head' ? -13.5 : -7.5);
+    assert.equal(maximum[2], anchor === 'head' ? 10.5 : 16.5);
+    assert.equal(minimum[0], -1.5);
+    assert.equal(maximum[0], 11.5);
+  }
+});
+
+test('arrow bounds remain independent of hidden atoms and follow arrow-layer visibility', () => {
+  const { layer } = layerFixture();
+  layer.vectors = new Float32Array([12, 0, 0]);
+  layer.vectorOptions = normalizeVectorOptions({ radius: .1, headRadius: .5 });
+  const renderer = { displayPositions: new Float32Array([1, 2, 3]), visibility: new Uint8Array([0]),
+    minimumOffset: [0, 0, 0], maximumOffset: [10, 8, 7] };
+  const minimum = [1, 2, 3], maximum = [1, 2, 3];
+  layer.extendBounds(renderer, minimum, maximum);
+  assert.equal(maximum[0], 23.5, 'the hidden anchor atom does not remove its arrow tip from fit/clipping bounds');
+  assert.equal(minimum[0], .5);
+  layer.vectorOptions.visible = false;
+  const hiddenMinimum = [1, 2, 3], hiddenMaximum = [1, 2, 3];
+  layer.extendBounds(renderer, hiddenMinimum, hiddenMaximum);
+  assert.deepEqual(hiddenMinimum, [1, 2, 3]);
+  assert.deepEqual(hiddenMaximum, [1, 2, 3]);
 });
 
 test('JPEG export renders an opaque image while keeping legend and axis options', () => {

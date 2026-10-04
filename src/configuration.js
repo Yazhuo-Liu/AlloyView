@@ -10,7 +10,7 @@ export const MAX_CONFIGURATION_ATOM_OVERRIDES = 100_000;
 export const MAX_CONFIGURATION_RDF_BINS = 4096;
 
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'performance', 'configuration', 'bonds', 'vectors', 'statistics', 'referenceStrain', 'localShear']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
@@ -133,6 +133,11 @@ function normalizeConfiguration(value, fromSnapshot) {
     && reference.frameIndex >= configuration.source.frameCount) {
     fail('settings.extensions.referenceStrain.frameIndex', 'must be smaller than the source frame count');
   }
+  const displacement = configuration.settings.extensions.displacement;
+  if (displacement.enabled && configuration.source?.frameCount !== undefined
+    && displacement.referenceFrame >= configuration.source.frameCount) {
+    fail('settings.extensions.displacement.referenceFrame', 'must be smaller than the source frame count');
+  }
   return configuration;
 }
 
@@ -180,7 +185,7 @@ function normalizeSettings(value, fromSnapshot) {
     slices: normalizeSlices(input.slices ?? {}),
     colors: normalizeColors(input.colors ?? {}),
     camera: normalizeCamera(input.camera ?? null),
-    activeTool: nullableChoice(input.activeTool === undefined ? 'display' : input.activeTool, 'settings.activeTool', TOOLS),
+    activeTool: input.activeTool === 'configuration' ? null : nullableChoice(input.activeTool === undefined ? 'display' : input.activeTool, 'settings.activeTool', TOOLS),
     selectedAtomId: identifier(input.selectedAtomId ?? null, 'settings.selectedAtomId', true),
     theme: choice(input.theme ?? 'dark', 'settings.theme', new Set(['light', 'dark'])),
   };
@@ -189,15 +194,16 @@ function normalizeSettings(value, fromSnapshot) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
-  const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color']);
+  const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension']);
+  const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage']);
   const referenceStrain = record(input.referenceStrain ?? {}, `${path}.referenceStrain`, ['enabled', 'frameIndex', 'cutoff']);
   const localShear = record(input.localShear ?? {}, `${path}.localShear`, ['enabled', 'cutoff', 'subtractMean']);
   const rdf = record(input.rdf ?? {}, `${path}.rdf`, ['enabled', 'cutoff', 'bins', 'firstType', 'secondType']);
   const measurements = record(input.measurements ?? {}, `${path}.measurements`, ['enabled', 'minimumImage', 'atomIds']);
   const appearance = record(input.appearance ?? {}, `${path}.appearance`, ['elements', 'atoms']);
-  const comparison = record(input.comparison ?? {}, `${path}.comparison`, ['enabled', 'preset']);
+  const comparison = record(input.comparison ?? {}, `${path}.comparison`, ['enabled', 'preset', 'projectionMode', 'camera']);
   const pairCutoffs = list(bonds.pairCutoffs ?? [], `${path}.bonds.pairCutoffs`, MAX_CONFIGURATION_PAIR_CUTOFFS).map((value, index) => {
     const entryPath = `${path}.bonds.pairCutoffs[${index}]`;
     const entry = record(value, entryPath, ['first', 'second', 'cutoff']);
@@ -215,7 +221,13 @@ function normalizeExtensions(value, fromSnapshot) {
     return property;
   });
   const vectorsEnabled = boolean(vectors.enabled, `${path}.vectors.enabled`, false);
-  if (vectorsEnabled && components.includes(null)) fail(`${path}.vectors.components`, 'needs three properties for enabled vectors');
+  const vectorMode = normalizeVectorMode(vectors.mode ?? 'generic', `${path}.vectors.mode`);
+  if (vectorsEnabled && vectorMode === 'generic' && components.includes(null)) fail(`${path}.vectors.components`, 'needs three properties for enabled vectors');
+  // Legacy vector controls also computed displacements when arrow display was
+  // disabled. Preserve that computation once, without coupling the new tools.
+  const legacyDisplacement = input.displacement === undefined && vectorMode === 'displacement';
+  const legacyReferenceFrame = number(vectors.referenceFrame ?? 0, `${path}.vectors.referenceFrame`, 0, Number.MAX_SAFE_INTEGER, true);
+  const legacyMinimumImage = boolean(vectors.minimumImage, `${path}.vectors.minimumImage`, true);
   const atomIds = list(measurements.atomIds ?? [], `${path}.measurements.atomIds`, 4).map((value, index) => identifier(value, `${path}.measurements.atomIds[${index}]`));
   ensureUnique(atomIds.map(String), `${path}.measurements.atomIds`);
   const elements = list(appearance.elements ?? [], `${path}.appearance.elements`, MAX_PROPERTIES).map((value, index) => {
@@ -240,8 +252,21 @@ function normalizeExtensions(value, fromSnapshot) {
     vectors: {
       enabled: vectorsEnabled,
       components,
+      mode: vectorMode,
+      componentScales: vector(vectors.componentScales ?? [1, 1, 1], `${path}.vectors.componentScales`, -1e12, 1e12),
       scale: number(vectors.scale ?? 1, `${path}.vectors.scale`, 1e-12, 1e12),
       color: hexColor(vectors.color ?? '#f9ca57', `${path}.vectors.color`),
+      radius: number(vectors.radius ?? 0.06, `${path}.vectors.radius`, 1e-12, MAX_COORDINATE),
+      headRadius: number(vectors.headRadius ?? 0.15, `${path}.vectors.headRadius`, 1e-12, MAX_COORDINATE),
+      headLength: number(vectors.headLength ?? 0.3, `${path}.vectors.headLength`, 1e-12, MAX_COORDINATE),
+      linkDimensions: boolean(vectors.linkDimensions, `${path}.vectors.linkDimensions`, true),
+      anchor: choice(vectors.anchor ?? 'tail', `${path}.vectors.anchor`, new Set(['tail', 'head', 'center'])),
+      dimension: choice(vectors.dimension ?? '3d', `${path}.vectors.dimension`, new Set(['3d', '2d'])),
+    },
+    displacement: {
+      enabled: boolean(displacement.enabled, `${path}.displacement.enabled`, legacyDisplacement),
+      referenceFrame: number(displacement.referenceFrame ?? (legacyDisplacement ? legacyReferenceFrame : 0), `${path}.displacement.referenceFrame`, 0, Number.MAX_SAFE_INTEGER, true),
+      minimumImage: boolean(displacement.minimumImage, `${path}.displacement.minimumImage`, legacyDisplacement ? legacyMinimumImage : true),
     },
     referenceStrain: {
       ...normalizeCutoffAnalysis(referenceStrain, `${path}.referenceStrain`, fromSnapshot),
@@ -265,9 +290,23 @@ function normalizeExtensions(value, fromSnapshot) {
     appearance: { elements, atoms },
     comparison: {
       enabled: boolean(comparison.enabled, `${path}.comparison.enabled`, false),
-      preset: choice(comparison.preset ?? 'top', `${path}.comparison.preset`, new Set(['front', 'back', 'left', 'right', 'top', 'bottom'])),
+      preset: choice(comparison.preset ?? 'top', `${path}.comparison.preset`, new Set(['front', 'back', 'left', 'right', 'top', 'bottom', 'custom'])),
+      projectionMode: choice(comparison.projectionMode ?? 'orthographic', `${path}.comparison.projectionMode`, new Set(['orthographic', 'perspective'])),
+      camera: normalizeCamera(comparison.camera ?? null),
     },
   };
+}
+
+function normalizeVectorMode(value, path) {
+  const mode = string(value, path, 256);
+  if (['generic', 'displacement', 'force', 'velocity'].includes(mode)) return mode;
+  if (mode.startsWith('property:')) {
+    const family = mode.slice('property:'.length);
+    if (!family.trim()) fail(path, 'must identify a non-empty vector property family');
+    if (FORBIDDEN_KEYS.has(family)) fail(path, 'is reserved');
+    return mode;
+  }
+  fail(path, 'is unsupported');
 }
 
 function normalizeCutoffAnalysis(input, path, fromSnapshot) {
@@ -407,7 +446,7 @@ function normalizeSlices(value) {
 }
 
 function normalizeColors(value) {
-  const input = record(value, 'settings.colors', ['ranges', 'schemes', 'hideOutside', 'hiddenStructureTypes']);
+  const input = record(value, 'settings.colors', ['ranges', 'schemes', 'hideOutside', 'hiddenStructureTypes', 'hiddenAtomTypes', 'hiddenCategories']);
   const ranges = propertyEntries(input.ranges ?? [], 'settings.colors.ranges', ['property', 'minimum', 'maximum'], (entry, path) => {
     const minimum = number(entry.minimum, `${path}.minimum`, -MAX_COORDINATE, MAX_COORDINATE);
     const maximum = number(entry.maximum, `${path}.maximum`, -MAX_COORDINATE, MAX_COORDINATE);
@@ -423,7 +462,17 @@ function normalizeColors(value) {
   const hiddenStructureTypes = list(input.hiddenStructureTypes ?? [], 'settings.colors.hiddenStructureTypes', 9)
     .map((value, index) => number(value, `settings.colors.hiddenStructureTypes[${index}]`, 0, 8, true));
   if (new Set(hiddenStructureTypes).size !== hiddenStructureTypes.length) fail('settings.colors.hiddenStructureTypes', 'contains duplicates');
-  return { ranges, schemes, hideOutside, hiddenStructureTypes };
+  const hiddenAtomTypes = list(input.hiddenAtomTypes ?? [], 'settings.colors.hiddenAtomTypes', 65_536)
+    .map((value, index) => string(value, `settings.colors.hiddenAtomTypes[${index}]`, 256));
+  if (new Set(hiddenAtomTypes).size !== hiddenAtomTypes.length) fail('settings.colors.hiddenAtomTypes', 'contains duplicates');
+  const hiddenCategories = propertyEntries(input.hiddenCategories ?? [], 'settings.colors.hiddenCategories', ['property', 'ids'], (entry, path) => {
+    const ids = list(entry.ids, `${path}.ids`, 65_536).map((value, index) => typeof value === 'number'
+      ? number(value, `${path}.ids[${index}]`, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true)
+      : string(value, `${path}.ids[${index}]`, 256));
+    if (new Set(ids).size !== ids.length) fail(`${path}.ids`, 'contains duplicates');
+    return { ids };
+  });
+  return { ranges, schemes, hideOutside, hiddenStructureTypes, hiddenAtomTypes, hiddenCategories };
 }
 
 function propertyEntries(value, path, keys, normalize) {

@@ -1,6 +1,7 @@
 import { cellVertices } from '../data/model.js';
 import { createReplication } from './replication.js';
 import { installCameraInteractions } from './camera-interactions.js';
+import { VIEW_PRESETS } from './camera-presets.js';
 import { AtomPrimitiveLayer } from './atom-primitives.js';
 import { MAX_SLICES, SLICE_EPSILON, pointVisible, validateSlices } from './slicing.js';
 import {
@@ -141,14 +142,6 @@ const CELL_EDGES = [
 ];
 
 const SOURCE_REPLICA = [0, 0, 0];
-const VIEW_PRESETS = Object.freeze({
-  front: { yaw: 0, pitch: 0 },
-  back: { yaw: Math.PI, pitch: 0 },
-  left: { yaw: -Math.PI / 2, pitch: 0 },
-  right: { yaw: Math.PI / 2, pitch: 0 },
-  top: { yaw: 0, pitch: Math.PI / 2 },
-  bottom: { yaw: 0, pitch: -Math.PI / 2 },
-});
 
 export class WebGLRenderer {
   constructor(canvas, {

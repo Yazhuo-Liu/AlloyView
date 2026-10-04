@@ -3,10 +3,14 @@ import test from 'node:test';
 
 import {
   colorsByProperty,
+  colorsByCategory,
   colorsByType,
+  combineVisibilityMasks,
   coupleScalarRange,
   SCALAR_COLOR_SCHEMES,
   visibilityByProperty,
+  visibilityByType,
+  visibilityByCategory,
 } from '../src/render/palette.js';
 
 test('single-species default is AtomEye-style beige and alloys remain distinguishable', () => {
@@ -17,6 +21,53 @@ test('single-species default is AtomEye-style beige and alloys remain distinguis
 
   const alloy = colorsByType({ types: new Uint16Array([0, 1]), typeLabels: ['Ni', 'Al'] });
   assert.notDeepEqual([...alloy.colors.slice(0, 3)], [...alloy.colors.slice(3, 6)]);
+});
+
+test('atom type legend has counts and visibility choices keyed by labels across frames', () => {
+  const hidden = new Set(['Ni']);
+  const first = { types: new Uint16Array([0, 1, 0, 0]), typeLabels: ['Ni', 'Al', 'Cu'] };
+  const { legend } = colorsByType(first, hidden);
+  assert.equal(legend.atomTypes, true);
+  assert.equal(legend.atomCount, 4);
+  assert.deepEqual(legend.items.map(({ id, label, count, visible }) => ({ id, label, count, visible })), [
+    { id: 0, label: 'Ni', count: 3, visible: false },
+    { id: 1, label: 'Al', count: 1, visible: true },
+    { id: 2, label: 'Cu', count: 0, visible: true },
+  ]);
+  assert.deepEqual([...visibilityByType(first, hidden)], [0, 255, 0, 0]);
+  const second = { types: new Uint16Array([0, 1, 1]), typeLabels: ['Al', 'Ni'] };
+  assert.deepEqual([...visibilityByType(second, hidden)], [255, 0, 0]);
+  assert.equal(visibilityByType(second, new Set()), null);
+});
+
+test('categorical legend retains zero-count classes and applies its own hidden category IDs', () => {
+  const property = { name: 'phase', data: new Uint8Array([2, 1, 2]), categories: [
+    { id: 0, label: 'Unknown', color: [100, 100, 100] },
+    { id: 1, label: 'Solid', color: [0, 0, 255] },
+    { id: 2, label: 'Liquid', color: [255, 0, 0] },
+  ] };
+  const hidden = new Set([2]);
+  const { legend } = colorsByCategory(property, hidden);
+  assert.equal(legend.atomCount, 3);
+  assert.deepEqual(legend.items.map(({ id, count, visible }) => ({ id, count, visible })), [
+    { id: 0, count: 0, visible: true }, { id: 1, count: 1, visible: true }, { id: 2, count: 2, visible: false },
+  ]);
+  assert.deepEqual([...visibilityByCategory(property, hidden)], [0, 255, 0]);
+  assert.equal(visibilityByCategory(property, new Set()), null);
+});
+
+test('element, category and scalar visibility masks intersect without modifying their inputs', () => {
+  const element = Uint8Array.from([0, 255, 255, 255]);
+  const category = Uint8Array.from([255, 0, 255, 255]);
+  const scalar = Uint8Array.from([255, 255, 0, 255]);
+  const result = combineVisibilityMasks(null, element, category, scalar);
+  assert.deepEqual([...result], [0, 0, 0, 255]);
+  assert.deepEqual([...element], [0, 255, 255, 255]);
+  assert.deepEqual([...category], [255, 0, 255, 255]);
+  assert.deepEqual([...scalar], [255, 255, 0, 255]);
+  assert.equal(combineVisibilityMasks(null, undefined), null);
+  assert.equal(combineVisibilityMasks(null, scalar), scalar);
+  assert.throws(() => combineVisibilityMasks(element, new Uint8Array(3)), /matching atom counts/);
 });
 
 test('scalar coloring follows AtomEye-style jet endpoints', () => {
@@ -96,7 +147,7 @@ test('new palettes retain a NaN legend for entirely undefined fields', () => {
     const { colors, legend } = colorsByProperty({ name: 'strain', data: new Float32Array([NaN, NaN]) }, null, scheme);
     assert.deepEqual([...colors], [130, 130, 130, 130, 130, 130]);
     assert.equal(legend.kind, 'types');
-    assert.deepEqual(legend.items, [{ label: 'NaN', color: [130, 130, 130] }]);
+    assert.deepEqual(legend.items, [{ id: 'NaN', label: 'NaN', color: [130, 130, 130], count: 2, visible: true }]);
   }
 });
 
@@ -126,7 +177,15 @@ test('entirely NaN strain is gray with a NaN key instead of a numeric range or e
   assert.deepEqual([...colors], [130, 130, 130, 130, 130, 130]);
   assert.equal(legend.title, 'Atomic shear strain');
   assert.equal(legend.kind, 'types');
-  assert.deepEqual(legend.items, [{ label: 'NaN', color: [130, 130, 130] }]);
+  assert.deepEqual(legend.items, [{ id: 'NaN', label: 'NaN', color: [130, 130, 130], count: 2, visible: true }]);
+});
+
+test('undefined scalar categories can be hidden through their NaN legend key', () => {
+  const property = { name: 'displacementMagnitude', data: new Float64Array([NaN, Infinity]) };
+  const hidden = new Set(['NaN']);
+  const { legend } = colorsByProperty(property, null, 'atomeye', hidden);
+  assert.equal(legend.items[0].visible, false);
+  assert.deepEqual([...visibilityByCategory(property, hidden)], [0, 0]);
 });
 
 test('AtomEye-style scalar thresholds hide only values outside the inclusive range', () => {

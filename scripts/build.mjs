@@ -2,11 +2,18 @@ import { createHash } from 'node:crypto';
 import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildDocumentation } from './build-docs.mjs';
 
 const projectRoot = resolve(import.meta.dirname, '..');
 
 export async function buildSite(root = projectRoot, out = resolve(root, 'dist')) {
   const entries = ['src', 'examples', 'styles.css', 'licenses'];
+  let includeDocumentation = false;
+  try {
+    await access(resolve(root, 'docs/site.css'));
+    entries.push('docs');
+    includeDocumentation = true;
+  } catch (error) { if (error?.code !== 'ENOENT') throw error; }
   const wasmEntries = ['wasm/coordination.mjs', 'wasm/coordination.wasm'];
   try {
     await Promise.all(wasmEntries.map((entry) => access(resolve(root, entry))));
@@ -54,6 +61,7 @@ export async function buildSite(root = projectRoot, out = resolve(root, 'dist'))
     .replaceAll('./src/', `${assetPrefix}src/`)
     .replace('./styles.css', `${assetPrefix}styles.css`)
     .replace('</head>', `  <meta name="alloyview-build" content="${buildId}">\n  </head>`));
+  if (includeDocumentation) await buildDocumentation(root, resolve(out, 'docs'));
   return { out, buildId, assetPrefix };
 }
 

@@ -68,6 +68,17 @@ expand **Legend / atoms** to access it.
 Enabled analysis quantities remain selected while their results update for a
 different frame.
 
+Every categorical legend, including **Atom type**, has a visibility checkbox
+and count for each class. Element choices follow element labels across frames
+and also apply when coloring by a scalar property. Other category filters are
+saved separately per property: hiding a CNA class does not change PTM
+visibility. All filters synchronize to the second view and are saved in
+configuration JSON.
+
+**Select all** and **Unselect all** change every class represented in the current
+legend, including zero-count categories. They leave filters belonging to other
+properties unchanged. Counts and percentages update with the displayed population.
+
 For scalar properties, choose a palette below the quantity selector.
 The ten maps are AtomEye rainbow, Viridis, Plasma, Magma,
 Inferno, Cividis, Turbo, Spectral, Cool–warm and Grayscale. The selected colors
@@ -87,7 +98,7 @@ range padding so both limits remain editable.
 
 **Hide outside range** uses the displayed limits; PNG output uses the same
 limits and palette as the viewport. Range and palette changes apply immediately
-without rerunning an analysis. Crystal-structure legends retain their separate
+without rerunning an analysis. Categorical legends retain their separate
 class visibility checkboxes.
 
 ## Display replication
@@ -147,20 +158,23 @@ omits translucent editing planes, arrows and guide spheres.
 
 ## Save and restore a configuration
 
-Select **Configuration → Export JSON** to save the current source file names,
+Use **Export JSON** directly below **Structure** to save the current source file names,
 sizes, available relative paths and saved trajectory frame, together with the
 processing and view settings. The configuration includes enabled coordination,
 CNA, central symmetry, PTM, ideal-lattice/reference-frame strain, local shear,
-bonds and RDF analyses and their parameters, editable
+bonds, displacement and RDF analyses and their parameters, editable
 lattice references, replication, all slices and their names, color maps,
 per-property fixed ranges and Auto settings, visibility filters,
 wrapped/unwrapped mode, atom radius, cell/axis/background
 and PNG options, camera, selected atom, current tool and theme. Optional
-settings also retain element/atom appearance overrides, vector components and
-scale, measurement IDs and periodic-image mode, and the second view's enabled
+settings also retain element/atom appearance overrides, the displacement reference
+and minimum-image option, the vector display source,
+component and length scales, anchoring, linked arrow dimensions and 2D/3D mode,
+measurement IDs and periodic-image mode, and the second view's enabled
 state and direction. Bond visibility is saved independently from whether its
 graph analysis is enabled. Older version 1 configurations leave these additions
-disabled.
+disabled. Older configurations with Displacement selected as a Vector source
+migrate that calculation to the independent Displacement tool.
 
 Click **Import JSON** and choose a saved configuration. If the matching source
 is already open, the viewer returns to the saved frame, restores the settings
@@ -316,12 +330,40 @@ tool retains its convention of counting distinct atom IDs at their nearest
 qualifying image. Very large neighbor graphs fail explicitly rather than
 silently truncating connections.
 
-In **Vector arrows**, select X/Y/Z scalar properties, set **Length scale** and
-**Arrow color**, then enable **Show arrows**. Components describe Cartesian
-directions; the scale converts their values into arrow lengths in Å. Use force,
-velocity or another vector field already present in the source. Rendering
-settings reuse those values and do not run a neighbor analysis. Only one
-vector field is displayed at a time.
+Open **Displacement** to enable calculation against a selected reference frame.
+It uses stable atom IDs; equal-size frames without explicit IDs use row order
+with a warning that atom ordering must stay unchanged. Mixed ID schemes and
+unequal row counts are rejected. Minimum-image correction resolves periodic
+crossings in the full cell metric. Without correction, available unwrapped
+positions are used. The Cartesian current-minus-reference difference includes
+affine cell deformation. Its physical X, Y and Z components and magnitude in Å
+remain selectable in **Color by** independently of arrow drawing. While enabled,
+frame and reference changes recalculate them. **Cancel** removes the fields from
+current and cached frames and stops pending and subsequent calculations;
+**Calculate displacement** restarts the analysis. See the
+[displacement documentation](features/displacement.md) for the algorithm and
+atom-correspondence limitations.
+
+**Vector arrows** draws existing data without adding or modifying properties.
+New sources default to **Custom XYZ**, with three scalar-property selectors
+and signed component display scales. Force, Velocity and other named vector
+families appear only when all components are present; Displacement appears
+after its independent analysis has calculated results. Presets hide the custom
+menus. **Length scale** converts values to arrow lengths in Å.
+
+Calculated vector sources and Custom XYZ component choices persist while an
+enabled analysis recomputes for another frame. Cancelling any calculation used
+by an arrow component unchecks **Show arrows** and clears arrows in both views,
+including when results are pending. Recalculating leaves arrows off until you
+enable them again. Cancelling unrelated analyses leaves imported arrows enabled.
+
+**Show arrows** controls glyph visibility independently of atom legend filters
+and element or individual-atom visibility, so vectors can remain visible with
+all atoms hidden. Slices still clip arrows, and both views draw the same vector
+data. Choose Tail, Head or Center anchoring and 3D or camera-facing 2D glyphs.
+Shaft radius, head radius and head length are linked in proportion by default;
+disable the link to edit them separately. Only one vector field is displayed at
+a time. See the [vector documentation](features/vectors.md) for rendering details.
 
 **Statistics** shows the distribution and mean of calculated coordination
 numbers, using bond-cutoff coordination when bonds are calculated, otherwise
@@ -360,14 +402,20 @@ before the overall radius scale.
 
 ## Multiple views and image exports
 
-Enable **Display → Show a second view** and choose its direction to inspect
-the same frame from another angle. Both views share calculated results;
-camera movement does not launch another analysis. **Six-view PNG** exports
+Enable **Display → Show a second view** to inspect the same frame from another
+angle. Its own toolbar includes Top/Bottom/Front/Back/Left/Right and projection
+controls. A selected direction is highlighted until you rotate away from it,
+when the label becomes **Custom** and the direction highlight clears. Panning
+and zooming keep the selected direction; **Fit** preserves a custom orientation.
+The second view immediately inherits the main view's atom-radius scale,
+element and atom color/radius overrides, scalar palette and visibility filters,
+coordinates, slices, replication, bonds and vectors. Both views share calculated
+results; their cameras move independently, including after display edits or
+trajectory-frame changes. Configuration import restores custom camera angles.
+Camera movement does not launch another analysis. **Six-view PNG** exports
 a contact sheet of the six standard directions.
 
-**Export JPG** produces an opaque image. **Export EPS** embeds an opaque
-raster screenshot in an Encapsulated PostScript file; it is not a vector
-drawing of individual atoms. Both include the selected legend and XYZ-arrow
+**Export JPG** produces an opaque image with the selected legend and XYZ-arrow
 overlays. PNG retains the independent
 background/legend/XYZ-arrow controls described above. **Visible atom IDs**
 saves a list of source IDs that pass the current display filters, without
@@ -379,6 +427,17 @@ the enabled processing for each frame, and packages the PNG images in a ZIP.
 movie encoding and a general command-script interpreter are not included.
 Each archive is limited to 500 images and 256 MiB; the selected frame and
 camera are restored when traversal ends.
+
+## Feature help and documentation
+
+Hover or keyboard-focus the **?** beside a detailed settings heading to read a
+brief explanation. Click it to open that feature's documentation in a new tab,
+including its controls, algorithms, conventions and source links. Configuration
+is always visible below Structure and is independent of the selected tool.
+
+The top bar links to the GitHub repository and the [documentation website](INDEX.md).
+`npm run dev` serves documentation at `/docs/`; `npm run build` renders the same
+Markdown sources into a set of static pages in `dist/docs/` for deployment.
 
 ## Cancel an analysis
 

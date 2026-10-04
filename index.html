@@ -38,6 +38,16 @@
         </div>
 
         <div class="header-tools">
+          <nav class="project-links" aria-label="Project resources">
+            <a id="github-link" href="https://github.com/Yazhuo-Liu/AlloyView" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository (opens in a new window)">
+              <svg class="project-link-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .297C5.37.297 0 5.67 0 12.297c0 5.303 3.438 9.8 8.205 11.385.6.111.82-.258.82-.577 0-.285-.011-1.04-.017-2.04-3.338.724-4.043-1.61-4.043-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.835 2.809 1.305 3.495.998.108-.776.419-1.305.762-1.605-2.665-.3-5.466-1.332-5.466-5.931 0-1.31.469-2.381 1.236-3.221-.124-.303-.536-1.524.118-3.176 0 0 1.008-.322 3.301 1.23a11.5 11.5 0 0 1 3.003-.404c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.656 1.652.244 2.873.12 3.176.77.84 1.235 1.911 1.235 3.221 0 4.611-2.805 5.628-5.478 5.925.43.372.823 1.102.823 2.222 0 1.606-.014 2.898-.014 3.293 0 .322.216.694.825.576C20.565 22.092 24 17.592 24 12.297 24 5.67 18.627.297 12 .297Z"></path></svg>
+              <span>GitHub</span>
+            </a>
+            <a id="documentation-link" href="./docs/" target="_blank" rel="noopener noreferrer" aria-label="Documents (opens in a new window)">
+              <span>Documents</span>
+              <svg class="project-link-icon project-link-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg>
+            </a>
+          </nav>
           <div class="privacy-badge" title="Files are processed only in this browser">
             <span class="privacy-dot"></span>
             <span><strong>Local processing</strong><small>Structure data stays on this device</small></span>
@@ -174,6 +184,17 @@
             </div>
           </section>
 
+          <section id="configuration-section" class="side-section">
+            <div class="section-heading"><div><p class="section-kicker">SAVE / RESTORE</p><h3>Configuration</h3></div></div>
+            <div class="configuration-actions">
+              <button id="export-configuration" class="button button-secondary" type="button" disabled>Export JSON</button>
+              <button id="import-configuration" class="button button-accent" type="button">Import JSON</button>
+              <input id="configuration-file" type="file" accept=".json,application/json" hidden>
+            </div>
+            <p class="help">Save source file names, camera, display settings, slices, and enabled analyses. Reopen the original files on this device to restore a saved view.</p>
+            <p id="configuration-status" class="help" role="status" aria-live="polite">Export the current settings or import a saved configuration.</p>
+          </section>
+
           <section class="side-section tool-section">
             <div class="section-heading tool-selector-heading">
               <div><p class="section-kicker">TOOLS</p><h3>Choose a tool</h3></div>
@@ -186,6 +207,7 @@
               <button type="button" data-tool-button="coordination" aria-controls="tool-coordination" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Coordination</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="bonds" aria-controls="tool-bonds" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Bonds</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="vectors" aria-controls="tool-vectors" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Vectors</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="displacement" aria-controls="tool-displacement" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Displacement</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="statistics" aria-controls="tool-statistics" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Statistics</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="cna" aria-controls="tool-cna" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">CNA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="centrosymmetry" aria-controls="tool-centrosymmetry" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Symmetry</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
@@ -195,7 +217,6 @@
               <button type="button" data-tool-button="localShear" aria-controls="tool-local-shear" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Local shear</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="selection" aria-controls="tool-selection" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Atom details</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="performance" aria-controls="tool-performance" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Performance</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="configuration" aria-controls="tool-configuration" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Configuration</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
             </div>
             <p class="help tool-selector-help">Select a tool to show its settings. Close an analysis to cancel it and clear its results.</p>
           </section>
@@ -229,7 +250,7 @@
               <label><input id="png-legend" type="checkbox" disabled><span>Include legend in PNG</span></label>
               <label><input id="png-axes" type="checkbox" disabled><span>Include XYZ arrows in PNG</span></label>
             </div>
-            <label class="field"><span>Second view direction</span><select id="compare-preset" disabled><option value="front">Front</option><option value="back">Back</option><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option></select></label>
+            <label class="field"><span>Second view direction</span><select id="compare-preset" disabled><option value="front">Front</option><option value="back">Back</option><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option><option value="custom" disabled>Custom</option></select></label>
             <details class="tool-details">
               <summary>Element colors and radii</summary>
               <div id="element-style-controls" class="element-style-controls"></div>
@@ -238,7 +259,6 @@
               <summary>Export images and atom IDs</summary>
               <div class="export-actions">
                 <button id="export-jpg" class="button button-secondary" type="button" disabled>Export JPG</button>
-                <button id="export-eps" class="button button-secondary" type="button" disabled>Export EPS</button>
                 <button id="export-atom-indices" class="button button-secondary" type="button" disabled>Visible atom IDs</button>
                 <button id="export-multiview" class="button button-secondary" type="button" disabled>Six-view PNG</button>
                 <button id="export-frame-series" class="button button-secondary" type="button" disabled>Frame images</button>
@@ -337,19 +357,50 @@
             <p id="bonds-status" class="help" role="status" aria-live="polite">Calculate neighbor connections on the original structure.</p>
           </section>
 
+          <section id="tool-displacement" class="side-section analysis-section" data-tool-panel="displacement" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">TRAJECTORY MOTION</p><h3>Displacement</h3></div>
+              <div class="analysis-state-controls"><span id="displacement-state" class="state-pill">Not calculated</span><button id="cancel-displacement" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <label class="field"><span>Reference frame</span><input id="displacement-reference-frame" type="number" value="1" min="1" step="1" disabled></label>
+            <label class="slice-toggle"><input id="displacement-minimum-image" type="checkbox" checked disabled><span>Minimum image across periodic boundaries</span></label>
+            <button id="run-displacement" class="button button-accent tool-run-button" type="button" disabled>Calculate displacement</button>
+            <p class="help">Current position minus reference position, matched by atom ID. Components and magnitude become atom properties for Color by and Vector arrows. Turn off minimum image for continuous unwrapped motion beyond half a periodic cell.</p>
+            <p id="displacement-status" class="help" role="status" aria-live="polite">Open this tool to start calculating. Cancel clears its results and stops frame updates.</p>
+          </section>
+
           <section id="tool-vectors" class="side-section" data-tool-panel="vectors" hidden>
             <div class="section-heading"><div><p class="section-kicker">PER-ATOM DIRECTIONS</p><h3>Vector arrows</h3></div></div>
-            <div class="triple-fields">
+            <label class="field"><span>Vector source</span><select id="vector-mode" disabled>
+              <option value="generic">Custom XYZ properties</option>
+            </select></label>
+            <div id="vector-components" class="triple-fields">
               <label><span>X property</span><select id="vector-x" disabled><option value="">Choose X</option></select></label>
               <label><span>Y property</span><select id="vector-y" disabled><option value="">Choose Y</option></select></label>
               <label><span>Z property</span><select id="vector-z" disabled><option value="">Choose Z</option></select></label>
             </div>
+            <div id="vector-component-scales" class="triple-fields">
+              <label><span>X scale factor</span><input id="vector-scale-x" type="number" value="1" step="0.1" disabled></label>
+              <label><span>Y scale factor</span><input id="vector-scale-y" type="number" value="1" step="0.1" disabled></label>
+              <label><span>Z scale factor</span><input id="vector-scale-z" type="number" value="1" step="0.1" disabled></label>
+            </div>
             <div class="paired-fields">
-              <label class="field"><span>Length scale</span><input id="vector-scale" type="number" value="1" min="0.000001" step="0.1" disabled></label>
+              <label class="field"><span>Scale factor</span><input id="vector-scale" type="number" value="1" min="0.000001" step="0.1" disabled></label>
               <label class="field"><span>Arrow color</span><input id="vector-color" type="color" value="#f9ca57" disabled></label>
             </div>
+            <div class="paired-fields">
+              <label class="field"><span>Atom at arrow</span><select id="vector-anchor" disabled><option value="tail">Tail</option><option value="head">Head</option><option value="center">Center</option></select></label>
+              <label class="field"><span>Arrow style</span><select id="vector-dimension" disabled><option value="3d">3D solid</option><option value="2d">2D flat</option></select></label>
+            </div>
+            <div class="triple-fields vector-size-fields">
+              <label><span>Shaft radius (Å)</span><input id="vector-radius" type="number" value="0.06" min="0.000001" step="0.01" disabled></label>
+              <label><span>Head radius (Å)</span><input id="vector-head-radius" type="number" value="0.15" min="0.000001" step="0.01" disabled></label>
+              <label><span>Head length (Å)</span><input id="vector-head-length" type="number" value="0.3" min="0.000001" step="0.05" disabled></label>
+            </div>
+            <label class="slice-toggle"><input id="vector-link-dimensions" type="checkbox" checked disabled><span>Link shaft and head proportions</span></label>
             <label class="slice-toggle"><input id="show-vectors" type="checkbox" disabled><span>Show arrows</span></label>
-            <p class="help">Choose three scalar properties to display forces, velocities or other vectors in Cartesian XYZ. The scale converts property values to arrow lengths in Å.</p>
+            <p id="vector-source-help" class="help">Display existing numeric properties as arrows. Enable the Displacement tool to calculate motion; Force and Velocity require imported components.</p>
+            <p id="vector-status" class="help" role="status" aria-live="polite">Show arrows controls drawing independently of atom visibility.</p>
           </section>
 
           <section id="tool-statistics" class="side-section analysis-section" data-tool-panel="statistics" hidden>
@@ -517,16 +568,6 @@
                 <div><dt>JS memory</dt><dd id="metric-memory">Not exposed by browser</dd></div>
               </dl>
             </details>
-          </section>
-          <section id="tool-configuration" class="side-section" data-tool-panel="configuration" hidden>
-            <div class="section-heading"><div><p class="section-kicker">SAVE / RESTORE</p><h3>Configuration</h3></div></div>
-            <div class="configuration-actions">
-              <button id="export-configuration" class="button button-secondary" type="button" disabled>Export JSON</button>
-              <button id="import-configuration" class="button button-accent" type="button">Import JSON</button>
-              <input id="configuration-file" type="file" accept=".json,application/json" hidden>
-            </div>
-            <p class="help">Save source file names, camera, display settings, slices, and enabled analyses. Reopen the original files on this device to restore a saved view.</p>
-            <p id="configuration-status" class="help" role="status" aria-live="polite">Export the current settings or import a saved configuration.</p>
           </section>
           <footer class="sidebar-credits" aria-label="Project credits">
             <p>

@@ -1,0 +1,8 @@
+.feature-help { display: inline-block; position: relative; margin-left: 8px; vertical-align: middle; font-family: Inter, system-ui, sans-serif; font-weight: 400; line-height: 1.4; }
+.feature-help-heading { display: flex; align-items: center; gap: 8px; }
+.feature-help-heading > .feature-help { flex: 0 0 auto; margin-left: 0; }
+.feature-help-link { display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px; border: 1px solid var(--line-strong, #76909a); border-radius: 50%; color: var(--cyan, #32d8ce); font-size: 12px; text-decoration: none; }
+.feature-help-link:hover, .feature-help-link:focus-visible { background: var(--panel-raised, #17303c); outline: 2px solid var(--cyan, #32d8ce); outline-offset: 2px; }
+.feature-help-tooltip { display: none; position: fixed; z-index: 60; width: min(280px, 65vw); padding: 12px 14px; border: 1px solid var(--line-strong, #76909a); border-radius: 10px; background: var(--panel, #10212c); color: var(--text, #f0f7fa); box-shadow: 0 8px 24px #0003; font-size: 12px; font-weight: 400; line-height: 1.6; text-align: left; pointer-events: none; }
+.feature-help:hover .feature-help-tooltip, .feature-help:focus-within .feature-help-tooltip { display: block; }
+.feature-help.tooltip-dismissed .feature-help-tooltip { display: none; }

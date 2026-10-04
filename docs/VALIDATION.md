@@ -44,7 +44,7 @@ Validated on 2026-10-03 with Node.js v24.19.0 and Chromium software WebGL:
   exclusions, RDF CSV and coordination charts. Both real GPU views show the
   same bonds/arrows without GL errors. Separate pixel checks validate cylinder
   and cone rendering, filtering, clipping and skew periodic self-image edges.
-- JPG/EPS signatures, six-view PNG, visible IDs and selected-frame ZIP exports
+- JPG signatures, six-view PNG, visible IDs and selected-frame ZIP exports
   pass. Cancelling a ZIP creates no archive and restores the original frame
   and camera; a subsequent manual frame edit retains ownership. Recipe replay
   restores enabled analyses and appearance; importing disabled extensions

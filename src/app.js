@@ -23,6 +23,8 @@ import {
   SCALAR_COLOR_SCHEMES,
   visibilityByProperty,
   visibilityByCategory,
+  visibilityByType,
+  combineVisibilityMasks,
 } from './render/palette.js';
 import { normalizeRadiusPercent, radiiByType } from './render/atomic-radii.js';
 import { WebGLRenderer } from './render/webgl-renderer.js';
@@ -37,6 +39,7 @@ import { initializeSliceControls } from './slice-controls.js';
 import { initializeSliceGizmo } from './render/slice-gizmo.js';
 import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './configuration.js';
 import { initializeAtomEyeTools } from './atomeye-tools.js';
+import { initializeFeatureHelp } from './feature-help.js';
 
 const elements = Object.fromEntries([
   'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar',
@@ -66,6 +69,9 @@ const scalarColorRanges = new Map();
 const scalarColorSchemes = new Map();
 const scalarHideOutside = new Map();
 const hiddenStructureTypes = new Set();
+const hiddenAtomTypes = new Set();
+const hiddenCategories = new Map();
+const crystalCategoryProperties = new Set(['structureType', 'ptmStructureType', 'centralSymmetryStructureType']);
 const analysisPool = new AnalysisPool();
 const coordinationPool = new CoordinationPool(analysisPool);
 const analysisControllers = new Map();
@@ -138,7 +144,8 @@ initializeSidebarResize();
 const toolPanels = initializeToolPanels({
   onDeactivateAnalysis: (kind) => {
     interruptConfigurationRestore('an analysis change');
-    if (state.analysis[kind]) cancelAnalysis(kind);
+    if (kind === 'displacement') atomEyeTools?.cancelDisplacement();
+    else if (state.analysis[kind]) cancelAnalysis(kind);
     else atomEyeTools?.deactivate(kind);
   },
   onDeactivateTool: (name) => {
@@ -146,9 +153,17 @@ const toolPanels = initializeToolPanels({
     if (name === 'replicate') resetReplication();
     if (name === 'slice') toolPanels.setToolEnabled('slice', sliceControls.getState().slices.some(slice => slice.enabled));
   },
-  onSelectionChange: syncSliceGizmo,
+  onSelectionChange: (name, { userInitiated = false } = {}) => {
+    syncSliceGizmo();
+    if (name === 'vectors' && userInitiated && state.frame) atomEyeTools?.updateVectors();
+    if (name === 'displacement' && userInitiated && state.frame && !toolPanels.isToolEnabled(name)) {
+      interruptConfigurationRestore('a displacement calculation');
+      void atomEyeTools?.runDisplacement();
+    }
+  },
 });
 initializeMobileControls();
+initializeFeatureHelp();
 initializeTheme((theme) => {
   if (!backgroundCustomized) {
     const background = theme === 'light' ? '#ffffff' : '#000000';
@@ -214,6 +229,23 @@ atomEyeTools = initializeAtomEyeTools({
   getFrameIndex: () => state.frameIndex, getFrameCount: () => state.frameCount,
   getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
   getSourceVersion: () => state.sourceVersion,
+  getPendingAnalysisKinds: () => Object.entries(state.analysis).filter(([kind, analysis]) => {
+    const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
+    return analysis.enabled && !['Failed', 'Calculated'].includes(elements[`${prefix}-state`].textContent);
+  }).map(([kind]) => kind),
+  getAnalysisPropertyKind: name => {
+    for (const [kind, analysis] of Object.entries(state.analysis)) {
+      if (!analysis.enabled) continue;
+      const outputs = kind === 'coordination' ? ['coordination']
+        : kind === 'strain' ? STRAIN_FIELDS
+          : kind === 'ptm' ? [ANALYSES[kind].name, 'ptmRmsd', 'ptmDistance']
+            : kind === 'centrosymmetry' && analysis.parameters?.mode === 'auto'
+              ? [ANALYSES[kind].name, 'centralSymmetryStructureType', 'centralSymmetryNeighbors']
+              : [ANALYSES[kind].name];
+      if (outputs.includes(name)) return kind;
+    }
+    return null;
+  },
   getSelectedIndex: () => state.selectedId === null || !state.frame ? -1 : state.frame.ids.findIndex(id => String(id) === String(state.selectedId)),
   selectAtom,
   refresh: () => { if (state.frame) { refreshColorOptions(); applyColors(); updateSelectionPanel(); } },
@@ -447,7 +479,8 @@ function closeSource() {
     references: [], referenceLabels: [],
   });
   state.referenceByLabel.clear();
-  scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear(); hiddenStructureTypes.clear();
+  scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear();
+  hiddenStructureTypes.clear(); hiddenAtomTypes.clear(); hiddenCategories.clear();
   for (const [kind, analysis] of Object.entries(state.analysis)) {
     analysis.request++;
     analysis.enabled = false;
@@ -818,6 +851,8 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     state.referenceByLabel.clear();
     renderLatticeReferences(result.frame);
     hiddenStructureTypes.clear();
+    hiddenAtomTypes.clear();
+    hiddenCategories.clear();
     elements['metric-cna'].textContent = elements['metric-csp'].textContent = '—';
     elements['metric-ptm'].textContent = elements['metric-strain'].textContent = '—';
     scalarColorRanges.clear();
@@ -934,6 +969,14 @@ async function showFrame(index) {
 async function displayFrame(frame, { resetCamera = false } = {}) {
   abortAnalysisJobs();
   state.frame = frame;
+  // Previous-frame "Calculated" labels cannot describe pending outputs in the
+  // newly selected frame. Keep chosen computed vector sources while replaying.
+  for (const [kind, analysis] of Object.entries(state.analysis)) {
+    if (!analysis.enabled) continue;
+    const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
+    elements[`${prefix}-state`].textContent = 'Queued';
+    elements[`${prefix}-state`].classList.remove('ready');
+  }
   renderLatticeReferences(frame);
   syncAxisVisibility();
   configureCoordinateMode(frame);
@@ -1255,6 +1298,7 @@ function refreshColorOptions() {
   const available = [...elements['color-mode'].options].some((item) => item.value === previous);
   state.colorMode = available ? previous : 'type';
   elements['color-mode'].value = state.colorMode;
+  atomEyeTools?.updateVectors();
 }
 
 function applyColors() {
@@ -1272,34 +1316,39 @@ function applyColors() {
 }
 
 function applyScalarVisibility(legend) {
-  if (legend.kind === 'types' && legend.property?.categories) {
-    renderer.setVisibility(atomEyeTools.filterVisibility(visibilityByCategory(legend.property, hiddenStructureTypes)));
-    restoreSelection();
-    return;
+  let colorMask = null;
+  if (legend.kind === 'types' && legend.property) {
+    colorMask = visibilityByCategory(legend.property, hiddenCategoriesFor(legend.property.name));
+  } else if (legend.kind === 'scalar') {
+    colorMask = visibilityByProperty(
+      legend.property,
+      legend.customRange ? { minimum: legend.minimum, maximum: legend.maximum } : null,
+      scalarHideOutside.get(legend.property.name) !== false,
+    );
   }
-  if (legend.kind !== 'scalar') {
-    renderer.setVisibility(atomEyeTools.filterVisibility(null));
-    return;
-  }
-  renderer.setVisibility(atomEyeTools.filterVisibility(visibilityByProperty(
-    legend.property,
-    legend.customRange ? { minimum: legend.minimum, maximum: legend.maximum } : null,
-    scalarHideOutside.get(legend.property.name) !== false,
-  )));
+  const mask = combineVisibilityMasks(visibilityByType(state.frame, hiddenAtomTypes), colorMask);
+  renderer.setVisibility(atomEyeTools.filterVisibility(mask));
+  restoreSelection();
+}
+
+function hiddenCategoriesFor(name) {
+  if (!hiddenCategories.has(name)) hiddenCategories.set(name, new Set());
+  return hiddenCategories.get(name);
 }
 
 function paletteForCurrentMode() {
-  if (state.colorMode === 'type') return colorsByType(state.frame);
+  if (state.colorMode === 'type') return colorsByType(state.frame, hiddenAtomTypes);
   const propertyName = state.colorMode.slice('property:'.length);
   const property = state.frame.properties.find((candidate) => candidate.name === propertyName);
   if (!property) {
-    return colorsByType(state.frame);
+    return colorsByType(state.frame, hiddenAtomTypes);
   }
-  if (property.categories) return colorsByCategory(property, hiddenStructureTypes);
+  if (property.categories) return colorsByCategory(property, hiddenCategoriesFor(property.name));
   return colorsByProperty(
     property,
     scalarColorRanges.get(property.name),
     scalarColorSchemes.get(property.name) ?? 'atomeye',
+    hiddenCategoriesFor(property.name),
   );
 }
 
@@ -1317,6 +1366,7 @@ function syncCancelButton(kind) {
 }
 
 function cancelAnalysis(kind) {
+  atomEyeTools?.cancelVectorDependency?.(kind);
   const analysis = state.analysis[kind];
   // Invalidate results immediately, including work that has already completed
   // in a Worker but has not yet reached the UI.
@@ -1338,6 +1388,7 @@ function cancelAnalysis(kind) {
       scalarColorRanges.delete(name);
       scalarColorSchemes.delete(name);
       scalarHideOutside.delete(name);
+      hiddenCategories.delete(name);
     }
     if (['ptm', 'strain'].includes(kind) && !state.analysis.ptm.enabled && !state.analysis.strain.enabled) delete frame.ptm;
   }
@@ -1878,40 +1929,65 @@ function renderLegend(legend) {
   elements.legend.append(title);
   if (legend.kind === 'types') {
     const items = document.createElement('div');
-    items.className = 'legend-items';
-    if (legend.property?.categories) items.classList.add('crystal-items');
+    items.className = 'legend-items crystal-items';
+    const hidden = legend.atomTypes ? hiddenAtomTypes : hiddenCategoriesFor(legend.property.name);
+    const controls = [];
     for (const item of legend.items) {
-      const row = document.createElement(legend.property?.categories ? 'label' : 'span');
+      const row = document.createElement('label');
       row.className = 'legend-item';
       const swatch = document.createElement('i');
       swatch.className = 'legend-swatch';
       swatch.style.background = `rgb(${item.color.join(' ')})`;
-      if (legend.property?.categories) {
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = item.visible;
-        checkbox.dataset.structureType = String(item.id);
-        checkbox.setAttribute('aria-label', `Show ${item.label} atoms`);
-        row.title = item.description;
-        row.classList.toggle('is-hidden', !item.visible);
-        checkbox.addEventListener('change', () => {
-          if (checkbox.checked) hiddenStructureTypes.delete(item.id);
-          else hiddenStructureTypes.add(item.id);
-          row.classList.toggle('is-hidden', !checkbox.checked);
-          applyScalarVisibility(paletteForCurrentMode().legend);
-        });
-        row.append(checkbox);
-      }
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = item.visible;
+      checkbox.dataset.categoryId = String(item.id);
+      checkbox.dataset.categoryProperty = legend.property?.name ?? 'type';
+      if (legend.atomTypes) checkbox.dataset.atomType = item.label;
+      else if (crystalCategoryProperties.has(legend.property.name)) checkbox.dataset.structureType = String(item.id);
+      checkbox.setAttribute('aria-label', `Show ${item.label} atoms`);
+      row.title = item.description ?? `Show or hide ${item.label} atoms`;
+      row.classList.toggle('is-hidden', !item.visible);
+      checkbox.addEventListener('change', () => {
+        interruptConfigurationRestore('a category visibility change');
+        const key = legend.atomTypes ? item.label : item.id;
+        if (checkbox.checked) hidden.delete(key);
+        else hidden.add(key);
+        row.classList.toggle('is-hidden', !checkbox.checked);
+        applyScalarVisibility(paletteForCurrentMode().legend);
+        atomEyeTools.syncComparison();
+      });
+      row.append(checkbox);
       row.append(swatch, document.createTextNode(item.label));
-      if (legend.property?.categories) {
-        const count = document.createElement('span');
-        count.className = 'legend-count';
-        count.textContent = `${formatInteger(item.count)} · ${(100 * item.count / legend.property.data.length).toFixed(1)}%`;
-        row.append(count);
-      }
+      const count = document.createElement('span');
+      count.className = 'legend-count';
+      count.textContent = `${formatInteger(item.count)} · ${(legend.atomCount ? 100 * item.count / legend.atomCount : 0).toFixed(1)}%`;
+      row.append(count);
       items.append(row);
+      controls.push({ checkbox, row, key: legend.atomTypes ? item.label : item.id });
     }
-    elements.legend.append(items);
+    const actions = document.createElement('div');
+    actions.className = 'legend-category-actions';
+    for (const [name, text, checked] of [['select-all', 'Select all', true], ['unselect-all', 'Unselect all', false]]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.legendAction = name;
+      button.textContent = text;
+      button.setAttribute('aria-label', `${checked ? 'Show' : 'Hide'} every ${legend.title} category`);
+      button.addEventListener('click', () => {
+        interruptConfigurationRestore('a category visibility change');
+        for (const { checkbox, row, key } of controls) {
+          if (checked) hidden.delete(key);
+          else hidden.add(key);
+          checkbox.checked = checked;
+          row.classList.toggle('is-hidden', !checked);
+        }
+        applyScalarVisibility(paletteForCurrentMode().legend);
+        atomEyeTools.syncComparison();
+      });
+      actions.append(button);
+    }
+    elements.legend.append(actions, items);
   } else {
     const gradient = document.createElement('div');
     gradient.className = 'legend-gradient';
@@ -1971,11 +2047,12 @@ function renderLegend(legend) {
       return limits;
     };
     const applyRange = (limits) => {
-      const palette = colorsByProperty(legend.property, limits, legend.scheme);
+      const palette = atomEyeTools.customizePalette(colorsByProperty(legend.property, limits, legend.scheme));
       scalarColorRanges.set(legend.property.name, limits);
       scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
       renderer.setColors(palette.colors);
       applyScalarVisibility(palette.legend);
+      atomEyeTools.syncComparison();
       minimum.textContent = formatValue(limits.minimum);
       maximum.textContent = formatValue(limits.maximum);
       syncAutomatic();
@@ -2017,8 +2094,8 @@ function renderLegend(legend) {
     visibilityCheckbox.addEventListener('change', () => {
       interruptConfigurationRestore('a color visibility change');
       scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
-      const limits = scalarColorRanges.get(legend.property.name) ?? null;
-      renderer.setVisibility(visibilityByProperty(legend.property, limits, visibilityCheckbox.checked));
+      applyScalarVisibility(paletteForCurrentMode().legend);
+      atomEyeTools.syncComparison();
     });
     automatic.addEventListener('click', () => {
       interruptConfigurationRestore('a color range change');
@@ -2263,6 +2340,8 @@ function captureConfiguration() {
         schemes: [...scalarColorSchemes].map(([property, scheme]) => ({ property, scheme })),
         hideOutside: [...scalarHideOutside].map(([property, hide]) => ({ property, hide })),
         hiddenStructureTypes: [...hiddenStructureTypes],
+        hiddenAtomTypes: [...hiddenAtomTypes],
+        hiddenCategories: [...hiddenCategories].map(([property, ids]) => ({ property, ids: [...ids] })),
       },
       camera: { yaw: renderer.yaw, pitch: renderer.pitch, target: [...renderer.target], pan: [...renderer.pan],
         distance: renderer.distance, orthographicScale: renderer.orthographicScale, projectionMode: renderer.projectionMode },
@@ -2300,7 +2379,7 @@ async function importConfiguration() {
     if (sourceLoadingOwner === null && (!config.source || matchesSource(config, state.files, state.format))) await restoreConfiguration(config);
     else {
       pendingConfiguration = config;
-      toolPanels.selectTool('configuration');
+      document.getElementById('configuration-section').scrollIntoView({ block: 'nearest' });
       const names = config.source?.files.map(item => item.relativePath || item.name).join(', ') ?? 'the source currently loading';
       elements['configuration-status'].textContent = `Waiting for source files: ${names}. Use Open local to select them; matching file names and sizes will restore the saved operations automatically.`;
     }
@@ -2369,11 +2448,19 @@ async function restoreConfiguration(config) {
     state.referenceByLabel.clear();
     renderLatticeReferences();
     updateCnaMethodUi();
-    scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear(); hiddenStructureTypes.clear();
+    scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear();
+    hiddenStructureTypes.clear(); hiddenAtomTypes.clear(); hiddenCategories.clear();
     for (const { property, minimum, maximum } of saved.colors.ranges) scalarColorRanges.set(property, { minimum, maximum });
     for (const { property, scheme } of saved.colors.schemes) scalarColorSchemes.set(property, scheme);
     for (const { property, hide } of saved.colors.hideOutside) scalarHideOutside.set(property, hide);
     for (const id of saved.colors.hiddenStructureTypes) hiddenStructureTypes.add(id);
+    // Older version 1 recipes used one shared crystal-type filter. Apply it
+    // once to the crystal fields; new per-property choices override it below.
+    if (hiddenStructureTypes.size) {
+      for (const property of crystalCategoryProperties) hiddenCategories.set(property, new Set(hiddenStructureTypes));
+    }
+    for (const label of saved.colors.hiddenAtomTypes) hiddenAtomTypes.add(label);
+    for (const { property, ids } of saved.colors.hiddenCategories) hiddenCategories.set(property, new Set(ids));
 
     for (const [kind, parameters] of Object.entries(saved.analyses)) {
       const analysis = state.analysis[kind];
@@ -2403,7 +2490,7 @@ async function restoreConfiguration(config) {
     if (state.frame) { refreshColorOptions(); applyColors(); restoreSelection(); }
     const tasks = Object.keys(state.analysis).filter(kind => state.analysis[kind].enabled).map(kind => kind === 'coordination'
       ? runCoordination({ automatic: true }) : runStructureAnalysis(kind, { automatic: true }));
-    await Promise.all([...tasks, atomEyeTools.restore(saved.extensions)]);
+    await Promise.all([...tasks, atomEyeTools.restore(saved.extensions, { isCurrent: current })]);
     if (!current()) return;
     if (state.frame) {
       state.colorMode = saved.display.colorMode;

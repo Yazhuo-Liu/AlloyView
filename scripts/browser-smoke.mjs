@@ -23,7 +23,8 @@ const requests = [];
 const server = createServer(async (request, response) => {
   const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
   requests.push(pathname);
-  const path = resolve(dist, pathname.replace(/^\/AlloyView\//, '') || 'index.html');
+  const relativePath = pathname.replace(/^\/AlloyView\//, '');
+  const path = resolve(dist, relativePath.endsWith('/') ? `${relativePath}index.html` : relativePath || 'index.html');
   try {
     if (!pathname.startsWith('/AlloyView/') || !path.startsWith(`${dist}${sep}`)) throw new Error('Invalid path');
     const bytes = await readFile(path);
@@ -219,11 +220,18 @@ try {
   }
   await call('Page.enable');
   await call('Runtime.enable');
+  // A fresh headless tab can change :focus styles without delivering native
+  // focus events until its window is activated. Match an active browser tab so
+  // keyboard help positioning is exercised in focused and full runs alike.
+  await call('Emulation.setFocusEmulationEnabled', { enabled: true });
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }, { name: 'prefers-reduced-motion', value: 'reduce' }] });
   await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/AlloyView/` });
   await waitFor('document.readyState === "complete" && location.pathname === "/AlloyView/"', 'page load');
   await waitFor('document.getElementById("brand-logo").src.endsWith("AlloyView_logo_dark.svg")', 'app initialization');
+  const atomToolsOnly = process.argv.includes('--atom-tools-only');
+  let reportFullSmoke;
+  if (!atomToolsOnly) {
   assert.equal(await evaluate('crossOriginIsolated'), false);
   assert.equal(await evaluate('document.querySelector("[data-tool-panel=display]").hidden'), false);
   assert.equal(await evaluate('[...document.querySelectorAll("[data-tool-panel]")].filter(panel => !panel.hidden).length'), 1);
@@ -911,10 +919,13 @@ try {
     const capture = await call('Page.captureScreenshot', { format: 'png' });
     await writeFile('/tmp/alloyview-ptm.png', Buffer.from(capture.data, 'base64'));
   }
+  assert.equal(await evaluate('window.structureTestRenderer.visibility.every(value => value === 255)'), true, 'CNA category filters do not leak into the independent PTM field');
+  assert.equal(await evaluate('document.querySelector("[data-category-property=ptmStructureType][data-category-id=\\"0\\"]").checked'), true);
+  await evaluate(`document.querySelector('[data-structure-type="0"]').click()`);
   assert.equal(await evaluate(`(() => {
     const r = window.structureTestRenderer, types = r.frame.properties.find(p => p.name === 'ptmStructureType').data;
     return types.every((type, i) => r.visibility[i] === (type === 0 ? 0 : 255));
-  })()`), true);
+  })()`), true, 'PTM retains its own category visibility choices');
   await evaluate(`document.querySelector('[data-structure-type="1"]').click()`);
   assert.equal(await evaluate('window.structureTestRenderer.visibility.every(value => value === 0)'), true);
   await evaluate(`document.querySelector('[data-structure-type="1"]').click(); window.restorePtmPool();`);
@@ -924,7 +935,8 @@ try {
   assert.equal(await evaluate('window.structureTestRenderer.frame.properties.find(p => p.name === "atomicShearStrain").data.every(Number.isNaN)'), true);
   await evaluate(`(() => { const mode = document.getElementById('color-mode'); mode.value = 'property:atomicShearStrain'; mode.dispatchEvent(new Event('change')); })()`);
   assert.equal(await evaluate('window.structureTestColors.every(value => value === 130)'), true);
-  assert.equal(await evaluate('document.querySelector(".legend-items").textContent'), 'NaN');
+  assert.equal(await evaluate('document.querySelector("[data-category-id=\\"NaN\\"]").getAttribute("aria-label")'), 'Show NaN atoms');
+  assert.match(await evaluate('document.querySelector(".legend-count").textContent.trim()'), /^31\s*·\s*100\.0%$/, 'the all-NaN category reports its count and fraction');
   await evaluate(`(() => { const crystal = document.querySelector('[data-reference-structure]'); crystal.value = '1'; crystal.dispatchEvent(new Event('change')); })()`);
   await waitFor('document.getElementById("strain-state").textContent === "Calculated"', 'reference recovery');
   // A new source clears filters; enabled analysis follows trajectory frames.
@@ -1099,7 +1111,10 @@ try {
     await evaluate(`document.getElementById('${button}').click()`);
     await waitFor(`document.getElementById('frame-label').textContent === '${label}' && document.getElementById('loading').hidden`, 'frames after cancellation');
     for (const [, prefix] of cancelCases) assert.equal(await evaluate(`document.getElementById('${prefix}-state').textContent`), 'Not calculated');
-    assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(property => property.analysisKind)'), false);
+    for (const [kind] of cancelCases) {
+      assert.equal(await evaluate(`window.structureTestRenderer.frame.properties.some(property => property.analysisKind === ${JSON.stringify(kind)})`), false, `${kind} stays cleared after frame navigation`);
+    }
+    assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(property => property.analysisKind === "displacement")'), false, 'displacement remains uncomputed until its independent tool is enabled');
     assert.equal(await evaluate('window.structureTestRenderer.frame.ptm === undefined'), true);
   }
   await evaluate(`document.querySelector('[data-lattice-a]').dispatchEvent(new Event('change')); document.getElementById('ptm-rmsd').dispatchEvent(new Event('change')); document.getElementById('cna-mode').dispatchEvent(new Event('change'));`);
@@ -1446,7 +1461,8 @@ try {
     const selected = Array.from({ length: renderer.atomCount }, (_, atom) => atom).find(atom => renderer.isAtomVisible(atom));
     renderer.onPick(selected);
   })()`);
-  await showTool('configuration');
+  assert.equal(await evaluate('document.querySelector("[data-tool-button=configuration]")'), null, 'configuration is always available outside Tools');
+  assert.equal(await evaluate('document.getElementById("configuration-section").hidden'), false);
   const recipe = await exportConfiguration();
   assert.equal(recipe.app, 'AlloyView'); assert.equal(recipe.version, 1);
   assert.equal(recipe.source.files[0].name, 'partial-pbc.dump'); assert.equal(recipe.source.frameIndex, 1);
@@ -1768,14 +1784,20 @@ try {
   }
   await colorProperty('site_energy');
   assert.equal(await legendAuto(), true);
-  const phoneAutoPoint = await evaluate(`(() => {
-    const button = document.getElementById('legend-auto'); button.scrollIntoView({ block: 'nearest' });
-    const rect = button.getBoundingClientRect();
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-  })()`);
-  assert.ok(phoneAutoPoint.x > 0 && phoneAutoPoint.x < 390 && phoneAutoPoint.y > 0 && phoneAutoPoint.y < 844, 'phone Auto toggle is reachable');
   for (const expected of [false, true]) {
-    await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, ...phoneAutoPoint }] });
+    const phoneAutoPoint = await evaluate(`(async () => {
+      const button = document.getElementById('legend-auto'); button.scrollIntoView({ block: 'nearest' });
+      await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+      const rect = button.getBoundingClientRect(), legend = document.getElementById('legend').getBoundingClientRect();
+      const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return { x, y, hitButton: hit?.closest('button')?.id ?? null,
+        hit: hit?.outerHTML.slice(0, 240), rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        legend: { x: legend.x, y: legend.y, width: legend.width, height: legend.height } };
+    })()`);
+    assert.ok(phoneAutoPoint.x > 0 && phoneAutoPoint.x < 390 && phoneAutoPoint.y > 0 && phoneAutoPoint.y < 844, `phone Auto toggle is reachable: ${JSON.stringify(phoneAutoPoint)}`);
+    assert.equal(phoneAutoPoint.hitButton, 'legend-auto', `phone Auto hit target: ${JSON.stringify(phoneAutoPoint)}`);
+    await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: phoneAutoPoint.x, y: phoneAutoPoint.y }] });
     await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await waitFor(`document.getElementById('legend-auto').getAttribute('aria-pressed') === '${expected}'`, 'phone Auto tap');
   }
@@ -1967,13 +1989,18 @@ try {
   ]);
   assert.ok(largeSamples.draws.length >= 2 && largeSamples.draws.every(count => count === largeCount));
   assert.equal(largeSamples.glError, 0);
+  reportFullSmoke = () => {
+    console.log('Browser smoke passed: continuous 3D BCC logo including reduced-motion settings; Pages Wasm loading; trajectories; automatic cutoff/legend edits; highlighted legend Auto toggle, manual/incomplete/constant scalar bounds, stable ranges across fresh/cached frames, independent property maps/ranges, five new PNG palettes and fixed/Auto recipe replay; latest-result queueing; concurrent analyses; Auto central symmetry for FCC/HCP/BCC and local mixed-phase neighbor shells, trajectory/cache reuse, cancellation reset and Auto/legacy-manual recipe replay; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; startup preparation/Wasm/indexing/atom progress and warm Worker reuse; selectable tools; triclinic display replication and unchanged analysis inputs; intersecting arbitrary world-space slices, displayed/unwrapped coordinates, visible-copy GPU coverage/picking and real handle drags without camera motion; JSON configuration export/replay, local-source reselection, source-loading/preflight races and unchanged settings after rejected recipes; editable lattice references and PTM reuse; sidebar/themes; phone Auto tap, pinch zoom, two-finger pan, one-finger orbit, tap picking, fixed viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
+    console.log(JSON.stringify(exports));
+    console.log(`Large-structure clipping passed: ${largeCount} local CFG atoms; depth range ${largeDepths.minimum.toFixed(4)}..${largeDepths.maximum.toFixed(4)}; first/last atoms rendered and picked.`);
+  };
+  }
   await runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exportConfiguration, reloadPage, compareSettings, profile, screenshots: process.argv.includes('--structure-screenshot') });
   assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors));
   assert.ok(requests.some(path => path.endsWith('ptm-kernel.wasm')), 'browser must load the real PTM kernel');
   assert.ok(requests.filter((path) => /\.(js|mjs|wasm)$/.test(path)).every((path) => /^\/AlloyView\/assets\/[a-f0-9]+\//.test(path)));
-  console.log('Browser smoke passed: continuous 3D BCC logo including reduced-motion settings; Pages Wasm loading; trajectories; automatic cutoff/legend edits; highlighted legend Auto toggle, manual/incomplete/constant scalar bounds, stable ranges across fresh/cached frames, independent property maps/ranges, five new PNG palettes and fixed/Auto recipe replay; latest-result queueing; concurrent analyses; Auto central symmetry for FCC/HCP/BCC and local mixed-phase neighbor shells, trajectory/cache reuse, cancellation reset and Auto/legacy-manual recipe replay; silent NaN strain; real Worker cancellation/reset, cached-frame cleanup, independent jobs and dependency recovery; startup preparation/Wasm/indexing/atom progress and warm Worker reuse; selectable tools; triclinic display replication and unchanged analysis inputs; intersecting arbitrary world-space slices, displayed/unwrapped coordinates, visible-copy GPU coverage/picking and real handle drags without camera motion; JSON configuration export/replay, local-source reselection, source-loading/preflight races and unchanged settings after rejected recipes; editable lattice references and PTM reuse; sidebar/themes; phone Auto tap, pinch zoom, two-finger pan, one-finger orbit, tap picking, fixed viewport, touch scrolling and collapsed overlays; transparent PNG and optional XYZ arrows.');
-  console.log(JSON.stringify(exports));
-  console.log(`Large-structure clipping passed: ${largeCount} local CFG atoms; depth range ${largeDepths.minimum.toFixed(4)}..${largeDepths.maximum.toFixed(4)}; first/last atoms rendered and picked.`);
+  if (atomToolsOnly) console.log('Focused atom tools browser smoke passed, including shared page-error and versioned-module checks.');
+  else reportFullSmoke();
 } finally {
   websocket?.close();
   chrome.kill();
