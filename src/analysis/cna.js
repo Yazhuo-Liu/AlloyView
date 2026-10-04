@@ -48,7 +48,9 @@ export function classifyAdaptiveEnvironment(neighbors) {
   return classify(neighbors, bccRadius);
 }
 
-function classify(neighbors, radius) {
+/** Classify a complete fixed-radius local environment. GPU kernels use this
+ * exact double-precision reference only for numerically ambiguous atoms. */
+export function classify(neighbors, radius) {
   const count = neighbors.length;
   if ((count !== 12 && count !== 14) || radius <= 0) return 0;
   const cutoffSquared = radius * radius;

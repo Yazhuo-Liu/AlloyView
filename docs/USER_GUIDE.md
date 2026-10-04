@@ -287,8 +287,9 @@ input preparation yields between large chunks so the status and **Cancel**
 controls can remain responsive.
 
 **Enable GPU computing** beside the Light/Dark buttons is off by default.
-Turn it on to prefer WebGPU for coordination, RDF, local geometric shear,
-bonds and ideal lattice strain tensor evaluation. PTM correspondence fitting
+Turn it on to prefer WebGPU for coordination, adaptive/fixed-cutoff CNA,
+reference-frame strain, RDF, local geometric shear, bonds and ideal lattice
+strain tensor evaluation. PTM correspondence fitting
 still uses CPU Wasm; strain can reuse that fit for its GPU tensor stage.
 Other analyses keep their existing CPU implementation, and unavailable or
 unsupported GPU execution falls back to CPU. The switch affects the next
@@ -324,6 +325,8 @@ Green–Lagrange shear and hydrostatic strain, volume change, six strain-tensor
 components and nine deformation-gradient components in Cartesian axes.
 This compares trajectory configurations; **Ideal lattice reference** instead
 uses PTM correspondence and editable perfect-lattice constants.
+With GPU computing enabled, **Frame strain** can use WebGPU; it keeps the same
+reference-frame neighbors, atom-ID correspondence and strain definitions.
 
 Cross-frame correspondence requires explicit stable IDs: LAMMPS dump IDs, CFG
 `id` auxiliaries, Extended XYZ `id`, or PDB serial numbers. Generated row-order
@@ -623,7 +626,8 @@ This is a provenance and risk statement, not legal advice.
 ## Known limits and next steps
 
 - WebGL 2 is required for rendering. Optional WebGPU computing accelerates
-  coordination, RDF, local geometric shear, bonds and ideal-strain tensor
+  coordination, adaptive/fixed CNA, reference-frame strain, RDF, local geometric
+  shear, bonds and ideal-strain tensor
   evaluation; fallback Canvas rendering is
   not implemented.
 - The parser currently indexes a dump in one Worker and does not stream partial
@@ -644,9 +648,9 @@ This is a provenance and risk statement, not legal advice.
   Voronoi polycrystal construction are not implemented. DXA and defect lines
   also remain separate future modules; they are not attributed to the reviewed
   AtomEye snapshot. See `docs/ATOMEYE_REVIEW.md`.
-- CNA and normalized central symmetry use JavaScript Workers; coordination,
-  RDF, local geometric shear, bonds and ideal-strain tensors can use optional
-  WebGPU computing or Workers.
+- Normalized central symmetry uses JavaScript Workers; coordination,
+  adaptive/fixed CNA, reference-frame strain, RDF, local geometric shear,
+  bonds and ideal-strain tensors can use optional WebGPU computing or Workers.
   PTM and its deformation fit use the included Wasm kernel. No Emscripten
   installation is needed unless rebuilding C++ with `npm run build:ptm`.
 

@@ -2,15 +2,17 @@ import { writeFile } from 'node:fs/promises';
 import { useSoftwareAdapter, withWebGpuBrowser } from './webgpu-browser.mjs';
 
 const selected = process.argv.find((argument) => argument.startsWith('--kernel='))?.split('=')[1] ?? 'all';
-const supported = ['coordination', 'rdf', 'localShear', 'bonds', 'strain'];
+const supported = ['coordination', 'rdf', 'localShear', 'bonds', 'strain', 'cnaFixed', 'cnaAdaptive', 'referenceStrain'];
 if (selected !== 'all' && !supported.includes(selected)) throw new Error(`Choose --kernel=all or one of ${supported.join(', ')}.`);
 const requested = selected === 'all' ? supported : [selected];
 const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
   const results = await evaluate(`(async () => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { parseCfg } = await import('./src/io/cfg.js');
-    const { compareGpuBonds } = await import('./scripts/gpu-comparison.js');
+    const { compareGpuBonds, compareGpuFields, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
+    const { transformFrame } = await import('./scripts/gpu-fixtures.js');
     const { STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
+    const { REFERENCE_STRAIN_FIELDS } = await import('./src/analysis/reference-strain.js');
     const frame = parseCfg(await (await fetch('./examples/NiGB_minimized.cfg')).text(), 'NiGB_minimized.cfg');
     const cpu = new AnalysisPool(), gpu = new AnalysisPool();
     gpu.setGpuEnabled(true);
@@ -18,10 +20,13 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
     const rows = [], ptmPreparation = { wallMs: 0, engine: null };
     let ptmInput;
     const isGpu = result => result.backend === 'gpu' || /webgpu/i.test(result.engine ?? '');
-    const timed = async (pool, parameters) => {
+    const timed = async (pool, parameters, inputFrame = frame) => {
+      const assertInputsIntact = snapshotGpuInputs(inputFrame, parameters);
       const started = performance.now();
-      const result = await pool.analyze(frame, parameters);
-      return { result, wallMs: performance.now() - started };
+      const result = await pool.analyze(inputFrame, parameters);
+      const wallMs = performance.now() - started;
+      assertInputsIntact();
+      return { result, wallMs };
     };
     const compare = (actual, expected, tolerance = 0) => {
       if (actual.length !== expected.length) throw new Error('Result lengths differ.');
@@ -43,7 +48,8 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
         preload.wallMs = performance.now() - started;
         preload.cache = gpu.gpuCacheStatus;
       }
-      for (const kind of ${JSON.stringify(requested)}) {
+      for (const kernel of ${JSON.stringify(requested)}) {
+        const kind = kernel.startsWith('cna') ? 'cna' : kernel;
         // This example has a 4.97773 Å periodic Z cell. RDF is limited to half
         // that face height; coordination/shear retain their image conventions.
         if (kind === 'strain' && !ptmInput) {
@@ -52,15 +58,25 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
           ptmPreparation.wallMs = preparation.wallMs;
           ptmPreparation.engine = ptmInput.engine;
         }
+        // A synthetic affine current frame is copied from this one source, so
+        // correspondence is known directly even though CFG IDs are row-based.
+        const affineF = [1.02, .12, .03, 0, .98, .05, 0, 0, 1.04];
+        const inputFrame = kind === 'referenceStrain' ? transformFrame(frame, affineF) : frame;
         const parameters = kind === 'strain' ? { kind, references: frame.typeLabels.map(() => ({ structure: 1, a: 3.52 })), ptmInput }
+          : kind === 'cna' ? { kind, mode: kernel === 'cnaFixed' ? 'fixed' : 'adaptive', ...(kernel === 'cnaFixed' ? { cutoff: 3.1 } : {}) }
+          : kind === 'referenceStrain' ? { kind, cutoff: 3.1, referenceFrame: frame, referenceFractional: frame.fractional,
+            referenceCell: frame.cell, referenceMapping: Int32Array.from(frame.ids, (_, atom) => atom) }
           : kind === 'rdf' ? { kind, cutoff: 2.48, bins: 100 }
           : { kind, cutoff: 3.1, ...(kind === 'localShear' ? { subtractMean: false } : {}) };
-        const cpuCold = await timed(cpu, parameters), cpuWarm = await timed(cpu, parameters);
-        const gpuCold = await timed(gpu, parameters), gpuWarm = await timed(gpu, parameters);
-        const field = kind === 'coordination' ? 'coordination' : kind === 'rdf' ? 'counts' : 'localShear';
+        const cpuCold = await timed(cpu, parameters, inputFrame), cpuWarm = await timed(cpu, parameters, inputFrame);
+        const gpuCold = await timed(gpu, parameters, inputFrame), gpuWarm = await timed(gpu, parameters, inputFrame);
+        for (const measured of [gpuCold, gpuWarm]) if (!isGpu(measured.result))
+          throw new Error(kernel + ' must execute real GPU kernels: ' + (measured.result.fallbackReason ?? measured.result.engine));
+        const field = kind === 'coordination' ? 'coordination' : kind === 'rdf' ? 'counts' : kind === 'cna' ? 'structures' : 'localShear';
         const tolerance = kind === 'localShear' ? 3e-5 : 0;
         const compareResults = (actual, expected) => kind === 'bonds' ? compareGpuBonds(actual, expected)
-          : kind === 'strain' ? Math.max(...STRAIN_FIELDS.map(name => compare(actual[name], expected[name], 2e-6)))
+          : kind === 'strain' ? compareGpuFields(actual, expected, STRAIN_FIELDS, 2e-6).maxAbsoluteError
+            : kind === 'referenceStrain' ? compareGpuFields(actual, expected, REFERENCE_STRAIN_FIELDS, 2e-6).maxAbsoluteError
             : compare(actual[field], expected[field], tolerance);
         const maxAbsoluteError = Math.max(compareResults(gpuCold.result, cpuCold.result), compareResults(gpuWarm.result, cpuWarm.result));
         if (kind === 'localShear') {
@@ -68,17 +84,29 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
           compare(gpuWarm.result.coordination, cpuWarm.result.coordination);
         }
         const gpuActive = isGpu(gpuWarm.result);
-        const { ptmInput: omittedFit, ...reportedParameters } = parameters;
-        rows.push({ kind, parameters: reportedParameters, ...(kind === 'strain' ? { input: 'Cached CPU PTM correspondences; tensor evaluation only',
+        const { ptmInput: omittedFit, referenceFrame: omittedReference, referenceFractional: omittedCoordinates,
+          referenceCell: omittedCell, referenceMapping: omittedMapping, ...reportedParameters } = parameters;
+        const correctedAtoms = gpuWarm.result.correctedAtoms ?? gpuWarm.result.gpuCorrectionAtoms ?? 0;
+        if (['cna', 'referenceStrain'].includes(kind) && correctedAtoms >= frame.ids.length)
+          throw new Error(kernel + ' corrected the entire structure on CPU rather than using genuine GPU analysis.');
+        rows.push({ kernel, kind, parameters: reportedParameters, ...(kind === 'referenceStrain' ? {
+          input: 'Synthetic affine copy with known same-row correspondence to NiGB reference', deformationGradient: affineF,
+          incomplete: gpuWarm.result.incomplete, fieldErrors: compareGpuFields(gpuWarm.result, cpuWarm.result, REFERENCE_STRAIN_FIELDS, 2e-6).fields,
+        } : {}), ...(kind === 'strain' ? { input: 'Cached CPU PTM correspondences; tensor evaluation only',
           incomplete: gpuWarm.result.incomplete } : {}), ...(kind === 'bonds' ? { edges: gpuWarm.result.count } : {}),
+          ...(kind === 'cna' ? { structureHistogram: Array.from({ length: 5 }, (_, type) => gpuWarm.result.structures.reduce((sum, value) => sum + Number(value === type), 0)),
+            correctionReasons: gpuWarm.result.gpuCorrectionReasons ?? null, radiusAttempts: gpuWarm.result.gpuRadiusAttempts } : {}),
           gpuActive, gpuEngine: gpuWarm.result.engine,
           cpuEngine: cpuWarm.result.engine, cpuWorkers: cpuWarm.result.workerCount,
           cpuWallMs: { cold: cpuCold.wallMs, warm: cpuWarm.wallMs },
           gpuWallMs: { cold: gpuCold.wallMs, warm: gpuWarm.wallMs },
           fallbackReason: gpuWarm.result.fallbackReason ?? null, maxAbsoluteError,
           correctedPairs: gpuWarm.result.correctedPairs ?? gpuWarm.result.precisionCorrections ?? 0,
-          correctedAtoms: gpuWarm.result.correctedAtoms ?? gpuWarm.result.gpuCorrectionAtoms ?? 0, inputReused: gpuWarm.result.inputReused ?? null,
+          correctedAtoms, correctedAtomsCold: gpuCold.result.correctedAtoms ?? gpuCold.result.gpuCorrectionAtoms ?? 0,
+          correctedAtomFraction: correctedAtoms / frame.ids.length, inputReused: gpuWarm.result.inputReused ?? null,
           gpuInputReused: gpuWarm.result.gpuInputReused ?? null, adapter: gpuWarm.result.adapter ?? null,
+          referenceInputReused: gpuWarm.result.referenceInputReused ?? null,
+          referenceGpuInputReused: gpuWarm.result.referenceGpuInputReused ?? null,
           warmWallTimeRatio: gpuActive ? cpuWarm.wallMs / gpuWarm.wallMs : null });
       }
       return { file: 'examples/NiGB_minimized.cfg', atoms: frame.ids.length, preload, ptmPreparation, rows };

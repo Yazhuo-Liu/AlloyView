@@ -27,6 +27,7 @@ function cacheState() {
 
 async function run(data, controller) {
   const startedAt = performance.now();
+  let releasePins;
   const progress = (update) => self.postMessage({ id: data.id, progress: { ...update, backend: 'gpu', workerCount: 1 } });
   try {
     checkSignal(controller.signal);
@@ -51,25 +52,43 @@ async function run(data, controller) {
     if (data.frame) frames.set(data.frameId, data.frame);
     const frame = frames.get(data.frameId);
     if (!frame) throw new Error('The GPU frame cache was released; retry this request with its input frame.');
+    let referenceFrame, parameters = data.parameters;
+    if (data.type === 'analyze' && parameters.kind === 'referenceStrain') {
+      if (data.referenceFrame) frames.set(data.referenceFrameId, data.referenceFrame);
+      referenceFrame = frames.get(data.referenceFrameId);
+      if (!referenceFrame) throw new Error('The GPU reference frame cache was released; retry this request with its reference input.');
+      parameters = { ...parameters, referenceFrame, referenceFrameIndex: data.referenceFrameIndex,
+        referenceFractional: referenceFrame.fractional, referenceCell: referenceFrame.cell };
+    }
     if (data.type === 'analyze' && Number.isInteger(data.frameIndex)) runtime.configureCache({ currentIndex: data.frameIndex });
+    if (data.type === 'analyze') releasePins = runtime.pinFrames([frame, referenceFrame]);
     const previousUploads = runtime.inputUploads;
     await runtime.uploadFrame(frame, { signal: controller.signal, frameIndex: data.frameIndex });
+    if (referenceFrame) await runtime.uploadFrame(referenceFrame, { signal: controller.signal, frameIndex: data.referenceFrameIndex });
     const analyze = () => runtime.withErrors(async () => {
-      if (data.parameters.kind === 'coordination') return analyzeGpuCoordination(runtime, frame, data.parameters, { signal: controller.signal, onProgress: progress });
-      if (data.parameters.kind === 'rdf') return analyzeGpuRdf(runtime, frame, data.parameters, { signal: controller.signal, onProgress: progress });
-      if (data.parameters.kind === 'bonds') {
+      if (parameters.kind === 'coordination') return analyzeGpuCoordination(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+      if (parameters.kind === 'rdf') return analyzeGpuRdf(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+      if (parameters.kind === 'cna') {
+        const { analyzeGpuCna } = await import('./cna.js');
+        return analyzeGpuCna(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+      }
+      if (parameters.kind === 'referenceStrain') {
+        const { analyzeGpuReferenceStrain } = await import('./reference-strain.js');
+        return analyzeGpuReferenceStrain(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+      }
+      if (parameters.kind === 'bonds') {
         const { analyzeGpuBonds } = await import('./bonds.js');
-        return analyzeGpuBonds(runtime, frame, data.parameters, { signal: controller.signal, onProgress: progress });
+        return analyzeGpuBonds(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
       }
-      if (data.parameters.kind === 'strain') {
+      if (parameters.kind === 'strain') {
         const { analyzeGpuAtomicStrain } = await import('./atomic-strain.js');
-        return analyzeGpuAtomicStrain(runtime, frame, data.parameters, { signal: controller.signal, onProgress: progress });
+        return analyzeGpuAtomicStrain(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
       }
-      if (data.parameters.kind === 'localShear') {
+      if (parameters.kind === 'localShear') {
         const { analyzeGpuLocalShear } = await import('./local-shear.js');
-        return analyzeGpuLocalShear(runtime, frame, data.parameters, { signal: controller.signal, onProgress: progress });
+        return analyzeGpuLocalShear(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
       }
-      throw new Error(`The ${data.parameters.kind} analysis uses CPU workers.`);
+      throw new Error(`The ${parameters.kind} analysis uses CPU workers.`);
     });
     let result;
     if (data.type === 'analyze') {
@@ -82,7 +101,7 @@ async function run(data, controller) {
       }
     }
     checkSignal(controller.signal);
-    if (data.type === 'analyze') runtime.finishAnalysis();
+    if (data.type === 'analyze') { releasePins?.(); releasePins = null; runtime.finishAnalysis(); }
     progress({ phase: 'complete', completedAtoms: frame.fractional.length / 3, totalAtoms: frame.fractional.length / 3 });
     if (data.type === 'prepare-frame') {
       self.postMessage({ id: data.id, ok: true, ...cacheState() });
@@ -90,11 +109,13 @@ async function run(data, controller) {
     }
     const buffers = [...new Set(Object.values(result).filter(ArrayBuffer.isView).map((value) => value.buffer))];
     self.postMessage({ id: data.id, ok: true, result: { ...result, backend: 'gpu',
-      engine: data.parameters.kind === 'strain' ? 'webgpu-strain-tensor' : 'webgpu', workerCount: 1,
+      engine: parameters.kind === 'strain' ? 'webgpu-strain-tensor' : parameters.kind === 'cna' ? `webgpu-cna-${parameters.mode ?? 'adaptive'}`
+        : parameters.kind === 'referenceStrain' ? 'webgpu-reference-strain' : 'webgpu', workerCount: 1,
       sharedMemory: false, elapsedMs: performance.now() - startedAt, adapter: runtime.adapterInfo,
-      inputReused: !data.frame, gpuInputReused: runtime.inputUploads === previousUploads }, ...cacheState() }, buffers);
+      inputReused: !data.frame, ...(referenceFrame ? { referenceInputReused: !data.referenceFrame } : {}),
+      gpuInputReused: runtime.inputUploads === previousUploads }, ...cacheState() }, buffers);
   } catch (error) {
-    if (data.type === 'analyze') runtime.finishAnalysis();
+    if (data.type === 'analyze') { releasePins?.(); releasePins = null; runtime.finishAnalysis(); }
     self.postMessage({ id: data.id, ok: false, error: error.message || String(error), name: error.name, ...cacheState() });
-  } finally { controllers.delete(data.id); }
+  } finally { releasePins?.(); controllers.delete(data.id); }
 }

@@ -59,9 +59,9 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     for (const job of Object.values(jobs)) { job.request++; job.controller?.abort(); job.controller = null; }
     displacement.request++; displacement.controller?.abort(); displacement.controller = null;
   }
-  function resultKey(kind, parameters) {
-    return JSON.stringify(['rdf', 'localShear', 'bonds'].includes(kind)
-      ? { ...parameters, gpuRequested: pool.gpuEnabled } : parameters);
+  function resultKey(kind, parameters, gpuRequested = pool.gpuEnabled) {
+    return JSON.stringify(['rdf', 'localShear', 'bonds', 'referenceStrain'].includes(kind)
+      ? { ...parameters, gpuRequested } : parameters);
   }
   function cancel(kind, { redraw = true } = {}) {
     const job = jobs[kind];
@@ -122,6 +122,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
             if (!current()) return;
             if (!reference) throw new Error('The reference frame is no longer available.');
             input.referenceFractional = reference.fractional; input.referenceCell = reference.cell;
+            input.referenceFrame = reference;
+            input.referenceFrameIndex = parameters.frameIndex;
             input.referenceMapping = await createReferenceMappingAsync(frame, reference, { signal: controller.signal,
               onProgress: ({ completed, total }) => { if (current()) $('reference-strain-status').textContent = `Matching atom IDs… ${completed} / ${total}`; } });
             if (!current()) return;
@@ -136,12 +138,12 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
               }
             }
           }
-          const result = await pool.analyze(frame, input, { signal: controller.signal, onProgress: progress => {
+          const result = await pool.analyze(frame, input, { signal: controller.signal, frameIndex: getFrameIndex(), onProgress: progress => {
             if (!current()) return;
             $(`${JOBS[kind].prefix}-status`).textContent = analysisProgressText(progress, { frameIndex: getFrameIndex(), kind });
           } });
           if (!current()) return;
-          cached = { key, result };
+          cached = { key: resultKey(kind, parameters, result.gpuRequested), result };
           frame.atomeyeResults ??= {}; frame.atomeyeResults[kind] = cached;
         }
         if (!current()) return;

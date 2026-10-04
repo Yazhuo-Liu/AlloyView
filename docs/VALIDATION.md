@@ -168,6 +168,62 @@ These kernels were benchmarked separately with
 adapter and full-call timing scope. The strain report separately identifies
 the CPU PTM preparation engine and elapsed time.
 
+### GPU CNA and reference-frame strain
+
+Validated on 2026-10-04 with Node.js v24.19.0 and Chromium 151 using the
+Google SwiftShader software WebGPU adapter. These checks execute actual GPU
+shaders; they do not measure performance on a physical GPU.
+
+- The final Node suite passes 510 tests with no failures or skips.
+- The final GPU suite passes 101 comparison/recovery cases: 99 execute GPU
+  kernels and two explicitly unsupported open-coordinate cases use CPU.
+  Seventeen common pipelines are prepared, and both CNA modes retain exact
+  CPU crystal labels across crystal, triclinic, mixed-PBC, primitive-image,
+  cutoff/tie and overflow cases. A 4,394-atom BCC case uses genuine GPU
+  classification with no CPU corrections.
+- Twenty-seven reference-strain fixtures compare all 18 fields, including
+  reordered/missing IDs, affine deformation, rotations, primitive images,
+  triclinic cells, singular neighborhoods and undefined fits. NaN masks and
+  incomplete counts agree; maximum absolute error is `8.88e-15`.
+  Undeformed structures and rigid rotations retain exact zero strain. Real
+  `1e-8` strain remains positive, with relative error below `9e-7`.
+  Shared compensated multiplication uses bit-truncated Dekker arithmetic;
+  this avoids assuming WGSL `fma` supplies a fused product residual.
+- CNA and reference-strain cancellation during preparation and after dispatch
+  rejects with AbortError; subsequent work succeeds through the same GPU
+  Worker. Current/reference uploads are reused and retained during fitting.
+- Native application checks cover GPU/CPU recomputation, CNA legend counts,
+  reference-frame changes, cache reuse, cancellation and physical replication
+  from 32 to 64 atoms and back. Auto central symmetry remains CPU work and
+  reuses compatible adaptive CNA labels. The full normal browser smoke also
+  passes existing CPU, configuration, mobile and 204,800-atom rendering checks.
+
+Full `examples/NiGB_minimized.cfg` runs use all 129,904 atoms. Fixed CNA uses
+3.1 Å; adaptive CNA uses local shell scales. Reference strain uses 3.1 Å and
+a controlled affine copy with
+`F = [1.02, 0.12, 0.03; 0, 0.98, 0.05; 0, 0, 1.04]`, rather than a trajectory.
+All three analyses execute genuine GPU kernels without fallback and agree
+exactly with CPU, including all 18 reference-strain fields and zero incomplete
+reference fits. Adaptive CNA returns 4,954 Other, 124,810 FCC and 140 BCC atoms.
+
+| Analysis | CPU first / subsequent (ms) | Software WebGPU first / subsequent (ms) | Sparse CPU correction atoms |
+| --- | --- | --- | --- |
+| Fixed CNA | 791.8 / 435.0 | 1105.8 / 972.2 | 404 (0.3110%) |
+| Adaptive CNA | 938.2 / 611.8 | 2606.4 / 2080.9 | 4,822 (3.7120%) |
+| Reference-frame strain | 1765.7 / 1453.0 | 5323.5 / 4823.0 | 124 (0.0955%) |
+
+Each row comes from a separate cold/subsequent benchmark using four CPU
+Workers. Full-call time includes preparation/upload, shader execution,
+corrections, readback and assembly. Subsequent calls reuse inputs. More than
+96% of adaptive CNA atoms need no CPU classification; its correction limit is
+16,384 atoms, after which the complete calculation uses CPU. These software
+GPU timings are slower than CPU and do not establish hardware acceleration.
+
+The shared arithmetic change also passes the cached PTM/ideal-strain tensor
+regression on this file: maximum absolute error `7.45e-9` and 4,627 matching
+NaN atoms. PTM preparation takes 2164 ms separately; tensor-only CPU first/
+subsequent times are 248.9/215.2 ms, and software GPU times are 224.6/109.9 ms.
+
 ## Atom selection groups and physical replication
 
 - The complete Node suite passes 431 tests. Numerical replication checks cover

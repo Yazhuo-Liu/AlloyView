@@ -198,6 +198,15 @@ not distinguish chemical ordering or crystal orientation.
 
 ## Parallel execution
 
+The default backend uses CPU Workers. With **Enable GPU computing** selected,
+both adaptive and fixed-cutoff CNA and reference-frame strain can use WebGPU.
+The GPU kernels preserve the same crystal labels, reference-neighbor convention
+and output fields, with CPU fallback for unsupported inputs or unavailable GPU
+support. PTM fitting and central symmetry remain CPU calculations, including
+the Auto central-symmetry calculation. See [CNA](features/cna.md),
+[reference-frame strain](features/reference-strain.md) and
+[performance](features/performance.md) for backend and precision details.
+
 Successful Workers remain in a bounded idle pool, and PTM initializes its Wasm
 kernel once per Worker. Cancellation and failures terminate the affected Worker;
 later jobs create a replacement. Each task carries an ID, so late results or
@@ -275,5 +284,5 @@ compiling. Browser Workers fetch the versioned `.wasm` asset with relative URLs;
 Node scientific tests supply the same binary directly. No CDN or runtime package
 download is required.
 
-AtomEye reference-frame strain, its geometric local shear measure, partial radial
-distribution functions and bond visualization remain separate follow-up features.
+Reference-frame strain, local geometric shear, radial distribution functions and
+bond visualization are documented in their [feature guides](INDEX.md).

@@ -3,6 +3,7 @@ import test from 'node:test';
 import { AnalysisPool } from '../src/analysis/analysis-pool.js';
 import { GpuAnalysisClient } from '../src/analysis/gpu/client.js';
 import { GpuRuntime } from '../src/analysis/gpu/runtime.js';
+import { REFERENCE_STRAIN_FIELDS } from '../src/analysis/reference-strain.js';
 import { crystalFrame } from './helpers/crystals.js';
 
 const frame = () => crystalFrame('fcc', 2);
@@ -55,6 +56,43 @@ test('GPU cancellation never retries an expensive job on CPU', async () => {
   pool.setGpuEnabled(true);
   try { await assert.rejects(pool.analyze(frame(), { kind: 'coordination' }), { name: 'AbortError' }); assert.equal(calls.cpu, 0); }
   finally { pool.close(); }
+});
+
+test('CNA and complete reference tensors route through the GPU pool and retain scientific inputs on fallback', async () => {
+  const data = frame(), mapping = Int32Array.from({ length: data.types.length }, (_, index) => index);
+  const tensors = Object.fromEntries(REFERENCE_STRAIN_FIELDS.map((field, index) => [field, new Float32Array(data.types.length).fill(index)]));
+  const calls = [];
+  const gpuBackend = { supports: kind => ['cna', 'referenceStrain'].includes(kind), close() {},
+    async analyze(_frame, parameters, options) {
+      calls.push({ parameters, options });
+      if (parameters.fail) throw new Error('Reference cache cannot fit both frames');
+      if (parameters.cancel) throw abortError();
+      return parameters.kind === 'cna' ? { structures: new Uint8Array(data.types.length).fill(1), engine: `webgpu-cna-${parameters.mode}` }
+        : { ...tensors, engine: 'webgpu-reference-strain' };
+    } };
+  const pool = new AnalysisPool({ gpuBackend }), cpuInputs = [];
+  pool.analyzeCPU = async (_frame, parameters) => { cpuInputs.push(parameters); return { ...tensors, engine: 'js-worker' }; };
+  const parameters = { kind: 'referenceStrain', referenceFrame: data, referenceFrameIndex: 0,
+    referenceFractional: data.fractional, referenceCell: data.cell, referenceMapping: mapping };
+  pool.setGpuEnabled(true);
+  try {
+    for (const mode of ['fixed', 'adaptive']) {
+      const cna = await pool.analyze(data, { kind: 'cna', mode }, { frameIndex: 3 });
+      assert.equal(cna.backend, 'gpu'); assert.equal(cna.engine, `webgpu-cna-${mode}`);
+      assert.equal(cna.structures.length, data.types.length);
+    }
+    const result = await pool.analyze(data, parameters, { frameIndex: 1 });
+    assert.equal(result.backend, 'gpu'); assert.equal(result.engine, 'webgpu-reference-strain');
+    assert.equal(calls.at(-1).options.frameIndex, 1);
+    for (const field of REFERENCE_STRAIN_FIELDS) assert.strictEqual(result[field], tensors[field]);
+    const fallback = await pool.analyze(data, { ...parameters, fail: true });
+    assert.equal(fallback.backend, 'cpu'); assert.match(fallback.fallbackReason, /fit both frames/);
+    assert.strictEqual(cpuInputs[0].referenceFractional, data.fractional);
+    assert.strictEqual(cpuInputs[0].referenceCell, data.cell);
+    assert.strictEqual(cpuInputs[0].referenceMapping, mapping);
+    await assert.rejects(pool.analyze(data, { ...parameters, cancel: true }), { name: 'AbortError' });
+    assert.equal(cpuInputs.length, 1, 'GPU cancellation never queues reference CPU fallback');
+  } finally { pool.close(); }
 });
 
 class FakeWorker {

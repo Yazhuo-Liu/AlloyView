@@ -132,6 +132,10 @@ export class AnalysisPool {
     const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
     let extraBytes = 0;
     const inputs = { ...parameters };
+    // GPU residency metadata is not scientific input. Sending a complete
+    // reference frame to every CPU worker would duplicate its cached arrays.
+    delete inputs.referenceFrame;
+    delete inputs.referenceFrameIndex;
     const autoCentrosymmetry = parameters.kind === 'centrosymmetry' && parameters.mode === 'auto';
     if (parameters.structureInput !== undefined) {
       if (!autoCentrosymmetry || !(parameters.structureInput instanceof Uint8Array)

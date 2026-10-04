@@ -19,6 +19,14 @@ Fixed CNA requires exactly 12 or 14 neighbors inside the supplied cutoff. Adapti
 
 Other includes defective, surface, disordered or unsupported environments. CNA describes local geometry; it does not identify chemical ordering or uniquely determine crystal orientation.
 
+## GPU computing
+
+With **Enable GPU computing** on, both adaptive and fixed-cutoff CNA can run through WebGPU. The chosen shell convention, crystal labels, colors and visibility controls are the same as on CPU. GPU computing is off by default; unavailable or unsupported GPU execution falls back to the CPU Worker implementation. Switching the preference preserves completed results; click **Identify structure** again to calculate with the new preference.
+
+The GPU traverses linked-cell neighbors, keeps distinct periodic images and builds each atom's local common-neighbor graph. Fixed mode uses the supplied cutoff. Adaptive mode expands the search radius until its nearest-neighbor shell is complete, then evaluates the same twelve- and fourteen-neighbor shell formulas described above. Shell selection and graph classification run on the GPU; this includes adaptive CNA.
+
+Near a floating-point boundary, a cutoff, shell membership or neighbor-neighbor bond can be ambiguous. Those individual environments receive an exact CPU correction so the discrete crystal labels retain the CPU convention. This correction is bounded to 16,384 atoms. The GPU search also limits each atom to 50,000 image candidates and adaptive search to 24 radius attempts. Exceeding these limits, the geometry limits or available device memory uses the complete CPU calculation instead of returning an approximate classification. See [performance](performance.md) for shared input caching and timing considerations.
+
 ## Implementation
 
-[CNA signatures and adaptive shells](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/cna.js), [periodic neighbor search](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/neighbors.js). The [analysis implementation guide](../STRUCTURE_ANALYSIS.md) contains the full shell formulas and references.
+[CNA signatures and adaptive shells](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/cna.js), [periodic neighbor search](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/neighbors.js), [GPU CNA](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/gpu/cna.js), [CNA compute shaders](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/gpu/cna-shaders.js). The [analysis implementation guide](../STRUCTURE_ANALYSIS.md) contains the full shell formulas and references.

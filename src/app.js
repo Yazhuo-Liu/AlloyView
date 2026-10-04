@@ -1787,7 +1787,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     elements[`run-${prefix}`].disabled = false;
   };
   const cached = frame.properties.find(property => property.name === name && property.analysisKey === key
-    && (kind !== 'strain' || Boolean(property.analysisGpuRequested) === gpuRequested));
+    && (!['strain', 'cna'].includes(kind) || Boolean(property.analysisGpuRequested) === gpuRequested));
   if (cached) {
     ready(cached); refreshColorOptions(); applyColors();
     analysisControllers.delete(kind);

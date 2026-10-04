@@ -74,6 +74,9 @@ test('geometric shear global reductions reproduce a distorted triclinic frame in
 test('reference-strain Workers copy immutable mappings and reference coordinates in both memory modes', async () => {
   const reference = crystalFrame('fcc', 11), frame = { ...reference, fractional: reference.fractional.slice(),
     cell: { ...reference.cell, vectors: reference.cell.vectors.slice() } };
+  // Application frame metadata is GPU-cache-only. This deliberately cannot be
+  // structured-cloned, so CPU routing proves that metadata is stripped.
+  reference.displayOnlyCallback = () => {};
   frame.cell.vectors[0] *= 1.1;
   const mapping = Int32Array.from({ length: frame.types.length }, (_, index) => index);
   const parameters = { referenceFractional: reference.fractional, referenceCell: reference.cell, referenceMapping: mapping, cutoff: 3 };
@@ -82,7 +85,8 @@ test('reference-strain Workers copy immutable mappings and reference coordinates
     const pool = new AnalysisPool({ environment: { navigator: { hardwareConcurrency: 4 }, crossOriginIsolated: sharedMemory },
       workerFactory: workerFactory({ created: 0, active: 0, maximum: 0 }) });
     try {
-      const result = await pool.analyze(frame, { kind: 'referenceStrain', ...parameters });
+      const result = await pool.analyze(frame, { kind: 'referenceStrain', ...parameters,
+        referenceFrame: reference, referenceFrameIndex: 0 });
       assert.equal(result.workerCount, 2);
       assert.equal(result.sharedMemory, sharedMemory);
       for (const field of REFERENCE_STRAIN_FIELDS) assert.deepEqual(result[field], direct[field], field);

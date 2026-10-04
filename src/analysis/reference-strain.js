@@ -113,37 +113,19 @@ function yieldToMain() {
  */
 export function calculateReferenceStrain(frame, {
   referenceFractional, referenceCell, referenceMapping, cutoff,
-  onPhase = () => {}, onAtoms = () => {}, ...range
+  preparedContext = null, onPhase = () => {}, onAtoms = () => {}, ...range
 } = {}) {
   const startedAt = performance.now();
   if (!Number.isFinite(cutoff) || cutoff <= 0) throw new Error('Reference-strain cutoff must be positive and finite.');
   const count = frame.fractional.length / 3;
   const { startAtom, endAtom } = atomRange(count, range);
-  const referenceCount = referenceFractional?.length / 3;
-  if (!Number.isInteger(referenceCount) || referenceCount < 1 || referenceMapping?.length !== count) {
-    throw new Error('Reference-strain coordinates or atom mapping are incomplete.');
+  if (preparedContext && (preparedContext.frame !== frame || preparedContext.referenceFractional !== referenceFractional
+    || preparedContext.referenceCell !== referenceCell || preparedContext.referenceMapping !== referenceMapping)) {
+    throw new Error('Reference-strain prepared context does not match its inputs.');
   }
-  if (!referenceCell?.pbc || referenceCell.pbc.some((periodic, axis) => periodic !== frame.cell.pbc[axis])) {
-    throw new Error('Reference and current frames must use the same periodic boundary axes.');
-  }
-  const inverseMapping = new Int32Array(referenceCount).fill(-1);
-  for (let atom = 0; atom < count; atom += 1) {
-    const reference = referenceMapping[atom];
-    if (!Number.isInteger(reference) || reference < -1 || reference >= referenceCount
-        || (reference >= 0 && inverseMapping[reference] >= 0)) {
-      throw new Error('Reference-strain atom mapping must be one-to-one and within the reference frame.');
-    }
-    if (reference >= 0) inverseMapping[reference] = atom;
-  }
-
   onPhase('indexing');
-  const search = new NeighborSearch({ fractional: referenceFractional, cell: referenceCell });
-  const referenceInverse = invert3(referenceCell.vectors);
-  const currentHeights = cellFaceHeights(frame.cell);
-  const currentFractional = Float64Array.from(frame.fractional, (value, k) => {
-    if (!Number.isFinite(value)) throw new Error('Reference-frame strain requires finite current coordinates.');
-    return frame.cell.pbc[k % 3] ? value - Math.floor(value) : value;
-  });
+  const { inverseMapping, search, referenceInverse, currentHeights, currentFractional }
+    = preparedContext ?? prepareReferenceStrainContext(frame, { referenceFractional, referenceCell, referenceMapping });
   const length = endAtom - startAtom;
   const result = Object.fromEntries(REFERENCE_STRAIN_FIELDS.map(name => [name, new Float32Array(length).fill(NaN)]));
   const covariance = new Float64Array(9), crossCovariance = new Float64Array(9);
@@ -218,6 +200,38 @@ export function calculateReferenceStrain(frame, {
   }
   onAtoms(length, length);
   return { ...result, startAtom, endAtom, incomplete, warning: null, elapsedMs: performance.now() - startedAt };
+}
+
+/** Reuse the double-precision index and correspondence for sparse GPU
+ * corrections, instead of rebuilding the complete frame for each atom. */
+export function prepareReferenceStrainContext(frame, { referenceFractional, referenceCell, referenceMapping }) {
+  const count = frame.fractional.length / 3;
+  const referenceCount = referenceFractional?.length / 3;
+  if (!Number.isInteger(referenceCount) || referenceCount < 1 || referenceMapping?.length !== count) {
+    throw new Error('Reference-strain coordinates or atom mapping are incomplete.');
+  }
+  if (!referenceCell?.pbc || referenceCell.pbc.some((periodic, axis) => periodic !== frame.cell.pbc[axis])) {
+    throw new Error('Reference and current frames must use the same periodic boundary axes.');
+  }
+  const inverseMapping = new Int32Array(referenceCount).fill(-1);
+  for (let atom = 0; atom < count; atom += 1) {
+    const reference = referenceMapping[atom];
+    if (!Number.isInteger(reference) || reference < -1 || reference >= referenceCount
+        || (reference >= 0 && inverseMapping[reference] >= 0)) {
+      throw new Error('Reference-strain atom mapping must be one-to-one and within the reference frame.');
+    }
+    if (reference >= 0) inverseMapping[reference] = atom;
+  }
+
+  const search = new NeighborSearch({ fractional: referenceFractional, cell: referenceCell });
+  const referenceInverse = invert3(referenceCell.vectors);
+  const currentHeights = cellFaceHeights(frame.cell);
+  const currentFractional = Float64Array.from(frame.fractional, (value, k) => {
+    if (!Number.isFinite(value)) throw new Error('Reference-frame strain requires finite current coordinates.');
+    return frame.cell.pbc[k % 3] ? value - Math.floor(value) : value;
+  });
+  return { frame, referenceFractional, referenceCell, referenceMapping, inverseMapping, search,
+    referenceInverse, currentHeights, currentFractional };
 }
 
 // Scale first so the singularity threshold is independent of the input units.

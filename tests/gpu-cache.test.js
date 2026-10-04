@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GpuRuntime } from '../src/analysis/gpu/runtime.js';
+import { GpuRuntime, MAX_GPU_PERIODIC_RADIUS_FACES } from '../src/analysis/gpu/runtime.js';
+import { CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER } from '../src/analysis/gpu/cna-shaders.js';
+import { REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER } from '../src/analysis/gpu/reference-strain-shaders.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, FALLBACK_GPU_BUDGET_BYTES,
   frameUploadBytes, gpuWorkspaceBytes, trajectoryCapacity } from '../src/analysis/gpu/cache-policy.js';
 import { crystalFrame } from './helpers/crystals.js';
@@ -10,7 +12,8 @@ function fixture() {
   let destroyed = false, compiled = 0, allocationError = null;
   const device = {
     limits: { maxBufferSize: 256 * 1024 ** 2, maxStorageBufferBindingSize: 256 * 1024 ** 2 },
-    queue: { writeBuffer() {}, async onSubmittedWorkDone() {} },
+    queue: { writeBuffer(buffer, _offset, data) { buffer.lastWrite = new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength).slice(); },
+      async onSubmittedWorkDone() {} },
     createBuffer({ size }) {
       const buffer = { size, destroyed: false, destroy() { this.destroyed = true; } };
       allocations.push(buffer);
@@ -146,11 +149,65 @@ test('compute allocation protects both the displayed frame and the frame bound t
   } finally { runtime.close(); }
 });
 
+test('a dual-frame reference job retains both inputs during compute OOM recovery without relabeling the displayed frame', async () => {
+  const state = fixture(), { runtime } = state;
+  let unpin;
+  try {
+    const bytes = frameUploadBytes(input(0)), budgetBytes = gpuWorkspaceBytes(bytes) + bytes * 4;
+    runtime.configureCache({ frameCount: 4, currentIndex: 1, budgetBytes });
+    const frames = [input(0), input(1), input(2), input(3)];
+    for (let index = 0; index < frames.length; index++) await runtime.uploadFrame(frames[index], { frameIndex: index });
+    const referencePositions = runtime.frames.get(100).positionsBuffer, currentPositions = runtime.frames.get(101).positionsBuffer;
+    unpin = runtime.pinFrames([frames[1], frames[0]]);
+    await runtime.prepareNeighbors(frames[0], 3.1);
+    state.failNextAllocation();
+    const temporary = [];
+    let failure;
+    try { await runtime.withErrors(async () => { temporary.push(runtime.createBuffer(1024)); }); }
+    catch (error) { failure = error; }
+    finally { runtime.disposeBuffers(temporary); }
+    assert.equal(runtime.recoverMemory(failure), true);
+    assert.equal(runtime.cacheStatus().currentIndex, 1);
+    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [0, 1]);
+    assert.equal(referencePositions.destroyed, false);
+    assert.equal(currentPositions.destroyed, false);
+    unpin(); unpin = null; runtime.finishAnalysis();
+    runtime.configureCache({ currentIndex: 3 });
+    await runtime.uploadFrame(frames[3], { frameIndex: 3 });
+    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [1, 3]);
+    assert.equal(referencePositions.destroyed, true, 'the completed reference job no longer pins its input');
+  } finally { unpin?.(); runtime.close(); }
+});
+
+test('nested worker and kernel pins survive the outer release and a reference cannot be evicted before readback completes', async () => {
+  const { runtime } = fixture();
+  let outer, inner;
+  try {
+    const bytes = frameUploadBytes(input(0));
+    runtime.configureCache({ frameCount: 5, currentIndex: 1, budgetBytes: gpuWorkspaceBytes(bytes) + bytes * 2 });
+    const reference = input(0), current = input(1), background = input(2);
+    await runtime.uploadFrame(reference, { frameIndex: 0 });
+    await runtime.uploadFrame(current, { frameIndex: 1 });
+    outer = runtime.pinFrames([current, reference]);
+    inner = runtime.pinFrames([reference]);
+    outer(); outer = null;
+    runtime.configureCache({ currentIndex: 1 });
+    await assert.rejects(runtime.uploadFrame(background, { frameIndex: 2 }), /cache budget/);
+    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [0, 1]);
+    inner(); inner(); inner = null; runtime.finishAnalysis();
+    await runtime.uploadFrame(background, { frameIndex: 2 });
+    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [1, 2]);
+  } finally { outer?.(); inner?.(); runtime.close(); }
+});
+
 test('clearing a source frees input and index buffers while retaining the device and warmed pipelines', async () => {
   const state = fixture(), { runtime } = state;
   try {
     await runtime.warmup();
-    assert.ok(state.compiled >= 10);
+    assert.equal(state.compiled, 17);
+    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER]) {
+      assert.ok(runtime.pipelines.has(source), 'new analysis kernels compile during device warmup');
+    }
     const pipelines = [...runtime.pipelines.values()], device = runtime.device;
     runtime.configureCache({ frameCount: 2 });
     await runtime.uploadFrame(input(0), { frameIndex: 0 });
@@ -164,6 +221,60 @@ test('clearing a source frees input and index buffers while retaining the device
     assert.ok(state.allocations.every(buffer => buffer.destroyed));
   } finally { runtime.close(); }
   assert.equal(state.destroyed, true);
+});
+
+test('collapsed linked-cell dimensions use the unique stencil size when bounding adaptive search work', async () => {
+  const { runtime } = fixture();
+  try {
+    const frame = crystalFrame('fcc', 3);
+    frame.cell.pbc = [true, false, true];
+    const context = await runtime.prepareNeighbors(frame, 6.45);
+    assert.deepEqual(context.dimensions, [1, 1, 1]);
+    const config = new Uint32Array(context.configBuffer.lastWrite.buffer);
+    assert.equal(config[28], 2000);
+    assert.ok(config[28] >= frame.types.length, 'a 108-atom surface does not exceed its actual candidate-work budget');
+  } finally { runtime.close(); }
+});
+
+test('very large periodic image coefficients fall back before upload while thin open axes stay supported', async () => {
+  const { runtime, allocations } = fixture();
+  try {
+    assert.equal(MAX_GPU_PERIODIC_RADIUS_FACES, 32);
+    const frame = input(0);
+    frame.cell.vectors = new Float64Array([.05, 0, 0, 0, 8, 0, 0, 0, 8]);
+    frame.cell.pbc = [true, false, false];
+    await assert.rejects(runtime.prepareNeighbors(frame, 2), /distance precision budget/);
+    assert.equal(allocations.length, 0);
+    frame.cell.vectors[0] = 2 / MAX_GPU_PERIODIC_RADIUS_FACES;
+    await assert.rejects(runtime.prepareNeighbors(frame, 2), /padded periodic image geometry/);
+    assert.equal(allocations.length, 0, 'the shader search includes the padded, rather than just nominal, radius');
+    frame.cell.vectors[0] = .05;
+    frame.cell.pbc = [false, true, true];
+    const context = await runtime.prepareNeighbors(frame, 2);
+    assert.equal(context.dimensions[0], 1);
+    assert.equal(runtime.inputUploads, 1, 'an irrelevant nonperiodic aspect ratio does not force fallback');
+  } finally { runtime.close(); }
+});
+
+test('neighbor distance tolerance covers image cancellation coefficients and rejects padded-radius overflow', async () => {
+  const { runtime, allocations } = fixture();
+  try {
+    const frame = input(0);
+    frame.cell.vectors = new Float64Array([.25, 0, 0, 0, 8, 0, 0, 0, 8]);
+    frame.cell.pbc = [true, false, false];
+    const context = await runtime.prepareNeighbors(frame, 2);
+    const coefficientSum = 9 + 1 + 1;
+    const expected = Math.fround((2 * 8 * 32 * 2 ** -23 + 4 * 64 * 2 ** -23) * coefficientSum / 4);
+    assert.equal(context.distanceTolerance, expected);
+    runtime.clearFrames();
+    const before = allocations.length;
+    const cutoff = 1.84467e19;
+    frame.cell.vectors = new Float64Array([cutoff, 0, 0, 0, cutoff, 0, 0, 0, cutoff]);
+    frame.cell.pbc = [true, true, true];
+    assert.ok(Number.isFinite(Math.fround(cutoff * cutoff)), 'the unpadded cutoff is representable');
+    await assert.rejects(runtime.prepareNeighbors(frame, cutoff), /padded GPU neighbor radius/);
+    assert.equal(allocations.length, before, 'overflow fails before uploading or casting image bounds in WGSL');
+  } finally { runtime.close(); }
 });
 
 test('scoped GPU out-of-memory shrinks the cache, frees partial inputs and retries once', async () => {

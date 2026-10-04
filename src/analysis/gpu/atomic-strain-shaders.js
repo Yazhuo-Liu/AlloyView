@@ -2,14 +2,7 @@
  * Ordinary f32 matrix products create artificial strain in ideal crystals;
  * retaining the residual keeps the CPU's 1e-12 numerical-zero convention.
  */
-export const ATOMIC_STRAIN_SHADER = `
-@group(0) @binding(0) var<storage, read> parameters: array<u32>;
-@group(0) @binding(1) var<storage, read> validAtoms: array<u32>;
-@group(0) @binding(2) var<storage, read> factors: array<vec4f>;
-@group(0) @binding(3) var<storage, read> deformation: array<vec2f>;
-@group(0) @binding(4) var<storage, read_write> strainValues: array<f32>;
-@group(0) @binding(5) var<storage, read_write> diagnostics: array<atomic<u32>>;
-
+export const DOUBLE_SINGLE_WGSL = `
 fn dsAdd(a: vec2f, b: vec2f) -> vec2f {
   let sum = a.x + b.x;
   let recovered = sum - a.x;
@@ -20,11 +13,24 @@ fn dsAdd(a: vec2f, b: vec2f) -> vec2f {
 fn dsSubtract(a: vec2f, b: vec2f) -> vec2f { return dsAdd(a, -b); }
 fn dsMultiply(a: vec2f, b: vec2f) -> vec2f {
   let product = a.x * b.x;
-  let residual = fma(a.x, b.x, -product) + a.x * b.y + a.y * b.x + a.y * b.y;
+  // WGSL permits a non-fused fma, which can discard the entire product error.
+  // Split the significands instead. Bit truncation avoids the overflow of
+  // multiplying a large input by the conventional Dekker splitter (4097).
+  let aHigh = bitcast<f32>(bitcast<u32>(a.x) & 0xfffff000u);
+  let aLow = a.x - aHigh;
+  let bHigh = bitcast<f32>(bitcast<u32>(b.x) & 0xfffff000u);
+  let bLow = b.x - bHigh;
+  let productError = ((aHigh * bHigh - product) + aHigh * bLow + aLow * bHigh) + aLow * bLow;
+  let residual = productError + a.x * b.y + a.y * b.x + a.y * b.y;
   let high = product + residual;
   return vec2f(high, residual - (high - product));
 }
 fn dsValue(a: vec2f) -> f32 { return a.x + a.y; }
+fn dsDivide(a: vec2f, b: vec2f) -> vec2f {
+  let quotient = a.x / b.x;
+  let residual = dsSubtract(a, dsMultiply(vec2f(quotient, 0.0), b));
+  return dsAdd(vec2f(quotient, 0.0), vec2f((residual.x + residual.y) / b.x, 0.0));
+}
 fn numericalZero(a: vec2f) -> vec2f {
   if (abs(dsValue(a)) < 1e-12) { return vec2f(0.0); }
   return a;
@@ -40,6 +46,16 @@ fn strainDeterminant(matrix: array<vec2f, 9>) -> vec2f {
   let third = dsMultiply(matrix[2], dsSubtract(dsMultiply(matrix[3], matrix[7]), dsMultiply(matrix[4], matrix[6])));
   return dsAdd(dsSubtract(first, second), third);
 }
+`;
+
+export const ATOMIC_STRAIN_SHADER = `
+@group(0) @binding(0) var<storage, read> parameters: array<u32>;
+@group(0) @binding(1) var<storage, read> validAtoms: array<u32>;
+@group(0) @binding(2) var<storage, read> factors: array<vec4f>;
+@group(0) @binding(3) var<storage, read> deformation: array<vec2f>;
+@group(0) @binding(4) var<storage, read_write> strainValues: array<f32>;
+@group(0) @binding(5) var<storage, read_write> diagnostics: array<atomic<u32>>;
+${DOUBLE_SINGLE_WGSL}
 @compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let index = gid.x;

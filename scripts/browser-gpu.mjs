@@ -3,13 +3,18 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { useSoftwareAdapter, withWebGpuBrowser } from './webgpu-browser.mjs';
 
 const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
+  if (process.argv.includes('--application-only')) return { adapter, scope: 'Application integration checks',
+    application: await runApplicationSmoke({ evaluate, call }) };
   await evaluate(`(async () => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { crystalFrame } = await import('./tests/helpers/crystals.js');
     const { createCell, fractionalToCartesian } = await import('./src/data/model.js');
-    const { compareGpuBonds } = await import('./scripts/gpu-comparison.js');
+    const { compareGpuBonds, compareGpuFields, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
+    const { cnaFixtures, cnaDirectFixtures, referenceStrainFixtures } = await import('./scripts/gpu-fixtures.js');
     const { STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
-    window.gpuTests = { AnalysisPool, crystalFrame, createCell, fractionalToCartesian, compareGpuBonds, STRAIN_FIELDS, rows: [] };
+    const { REFERENCE_STRAIN_FIELDS } = await import('./src/analysis/reference-strain.js');
+    window.gpuTests = { AnalysisPool, crystalFrame, createCell, fractionalToCartesian, compareGpuBonds, compareGpuFields,
+      snapshotGpuInputs, cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, STRAIN_FIELDS, REFERENCE_STRAIN_FIELDS, rows: [] };
     window.gpuTests.cpu = new AnalysisPool();
     window.gpuTests.gpu = new AnalysisPool();
     window.gpuTests.gpu.setGpuEnabled(true);
@@ -31,11 +36,16 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
       return maxAbsoluteError;
     };
     window.gpuTests.run = async (label, frame, parameters, field, tolerance = 0, requireGpu = true) => {
+      const assertInputsIntact = window.gpuTests.snapshotGpuInputs(frame, parameters);
       const expected = await window.gpuTests.cpu.analyze(frame, parameters);
       const actual = await window.gpuTests.gpu.analyze(frame, parameters);
+      assertInputsIntact();
       if (requireGpu && !window.gpuTests.isGpu(actual)) throw new Error(label + ' silently fell back: ' + JSON.stringify({ engine: actual.engine, fallbackReason: actual.fallbackReason }));
+      const tensorComparison = ['strain', 'referenceStrain'].includes(parameters.kind)
+        ? window.gpuTests.compareGpuFields(actual, expected, parameters.kind === 'strain'
+          ? window.gpuTests.STRAIN_FIELDS : window.gpuTests.REFERENCE_STRAIN_FIELDS, tolerance) : null;
       let maxAbsoluteError = parameters.kind === 'bonds' ? window.gpuTests.compareGpuBonds(actual, expected)
-        : parameters.kind === 'strain' ? Math.max(...window.gpuTests.STRAIN_FIELDS.map(name => window.gpuTests.compare(actual[name], expected[name], tolerance)))
+        : tensorComparison ? tensorComparison.maxAbsoluteError
           : window.gpuTests.compare(actual[field], expected[field], tolerance);
       if (parameters.kind === 'localShear') {
         window.gpuTests.compare(actual.coordination, expected.coordination);
@@ -46,7 +56,9 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
         engine: actual.engine, maxAbsoluteError, fallbackReason: actual.fallbackReason ?? null,
         correctedPairs: actual.correctedPairs ?? actual.precisionCorrections ?? 0,
         correctedAtoms: actual.correctedAtoms ?? actual.gpuCorrectionAtoms ?? 0, inputReused: actual.inputReused ?? null,
-        gpuInputReused: actual.gpuInputReused ?? null, ...(parameters.kind === 'bonds' ? { edges: actual.count } : {}) });
+        radiusAttempts: actual.gpuRadiusAttempts ?? null,
+        gpuInputReused: actual.gpuInputReused ?? null, ...(parameters.kind === 'bonds' ? { edges: actual.count } : {}),
+        ...(tensorComparison ? { incomplete: actual.incomplete, fieldErrors: tensorComparison.fields } : {}) });
       return actual;
     };
   })()`);
@@ -139,9 +151,68 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
       outside.fractional[0] = -0.1;
       await run('Unsupported open-cell positions CPU fallback', outside, { kind: 'coordination', cutoff: 2.8 }, 'coordination', 0, false);
       check(!isGpu(rows.at(-1)) && rows.at(-1).fallbackReason, 'Unsupported geometry must identify its CPU fallback.');
-      // CNA remains a CPU algorithm even when the GPU preference is enabled.
-      await run('CNA CPU fallback', fcc, { kind: 'cna', mode: 'adaptive' }, 'structures', 0, false);
-      check(!isGpu(rows.at(-1)), 'CNA must use its existing CPU implementation.');
+      for (const fixture of window.gpuTests.cnaFixtures()) {
+        const result = await run(fixture.label, fixture.frame, fixture.parameters, 'structures');
+        if (fixture.expectedStructure !== undefined) check(result.structures.every(value => value === fixture.expectedStructure), fixture.label + ' wrong ideal CNA structure.');
+        if (fixture.expectedCenter !== undefined) check(result.structures[0] === fixture.expectedCenter, fixture.label + ' wrong central CNA structure.');
+        if (fixture.expectedMinimumRadiusAttempts !== undefined) check(result.gpuRadiusAttempts >= fixture.expectedMinimumRadiusAttempts, fixture.label + ' must expand its adaptive search radius.');
+      }
+      {
+        const { GpuRuntime } = await import('./src/analysis/gpu/runtime.js');
+        const { analyzeGpuCna } = await import('./src/analysis/gpu/cna.js');
+        const { calculateCna } = await import('./src/analysis/cna.js');
+        const runtime = new GpuRuntime();
+        try {
+          await runtime.initialize();
+          for (const fixture of window.gpuTests.cnaDirectFixtures()) {
+            const assertInputsIntact = window.gpuTests.snapshotGpuInputs(fixture.frame, fixture.parameters);
+            const expected = calculateCna(fixture.frame, fixture.parameters);
+            const actual = await runtime.withErrors(() => analyzeGpuCna(runtime, fixture.frame, fixture.parameters));
+            assertInputsIntact();
+            const maxAbsoluteError = window.gpuTests.compare(actual.structures, expected.structures);
+            check(runtime.pipelines.size > 0 && actual.structures[0] === fixture.expectedCenter, fixture.label + ' must execute GPU and retain its central structure.');
+            check(actual.gpuCorrectionAtoms === fixture.expectedCorrectionAtoms, fixture.label + ' must report its bounded overflow correction.');
+            rows.push({ label: fixture.label, kind: 'cna', atoms: fixture.frame.ids.length,
+              analyzedAtoms: actual.structures.length, backend: 'gpu', engine: 'webgpu-cna-adaptive-direct',
+              maxAbsoluteError, correctedAtoms: actual.gpuCorrectionAtoms, radiusAttempts: actual.gpuRadiusAttempts,
+              directShader: true, fallbackReason: null });
+          }
+        } finally { runtime.close(); }
+      }
+      for (const fixture of window.gpuTests.referenceStrainFixtures()) {
+        const result = await run(fixture.label, fixture.frame, fixture.parameters, null, 2e-6, !fixture.allowFallback);
+        if (fixture.expectedF) for (let k = 0; k < 9; k++) {
+          const values = result['referenceF' + (Math.floor(k / 3) + 1) + (k % 3 + 1)];
+          for (const value of values) if (Number.isFinite(value)) check(Math.abs(value - fixture.expectedF[k]) < 2e-6, fixture.label + ' affine F component ' + k + ' differs from prescribed deformation.');
+        }
+        if (fixture.expectedCenterF) for (let k = 0; k < 9; k++) check(Math.abs(result['referenceF' + (Math.floor(k / 3) + 1) + (k % 3 + 1)][0] - fixture.expectedCenterF[k]) < 2e-6,
+          fixture.label + ' central deformation component ' + k + ' differs from exact minimum-image fit.');
+        for (const atom of fixture.expectedNaNAtoms ?? []) for (const field of window.gpuTests.REFERENCE_STRAIN_FIELDS)
+          check(Number.isNaN(result[field][atom]), fixture.label + ' undefined atom ' + atom + ' / ' + field + ' must be NaN.');
+        const identityDeformation = fixture.expectedF?.every((value, k) => value === (k % 4 === 0 ? 1 : 0));
+        if (fixture.expectedZeroStrain || identityDeformation) for (const field of window.gpuTests.REFERENCE_STRAIN_FIELDS.filter(name => !name.startsWith('referenceF')))
+          check(result[field].every(value => value === 0), fixture.label + ' must preserve exact zero strain: ' + field);
+        if (identityDeformation) for (let k = 0; k < 9; k++) check(result['referenceF' + (Math.floor(k / 3) + 1) + (k % 3 + 1)].every(value => value === fixture.expectedF[k]),
+          fixture.label + ' must preserve exact identity F component ' + k);
+        if (fixture.expectedZeroStrain || identityDeformation) rows.at(-1).zeroStrain = true;
+        if (identityDeformation) rows.at(-1).identityF = true;
+        if (fixture.expectedTinyFields) {
+          const measured = {};
+          for (const [field, expected] of Object.entries(fixture.expectedTinyFields)) {
+            let minimum = Infinity, maximum = -Infinity, maxRelativeError = 0;
+            for (const value of result[field]) {
+              const relativeError = Math.abs(value - expected) / expected;
+              check(value > 0 && Number.isFinite(relativeError) && relativeError < fixture.tinyRelativeTolerance,
+                fixture.label + ' must preserve physical ' + field + ': ' + value + ' / expected ' + expected);
+              minimum = Math.min(minimum, value); maximum = Math.max(maximum, value);
+              maxRelativeError = Math.max(maxRelativeError, relativeError);
+            }
+            measured[field] = { expected, minimum, maximum, maxRelativeError };
+          }
+          rows.at(-1).tinyStrain = measured;
+        }
+        if (fixture.allowFallback && !isGpu(result)) check(Boolean(result.fallbackReason), fixture.label + ' unsupported geometry needs an explicit CPU fallback reason.');
+      }
       const controller = new AbortController();
       let cancelled = false;
       try {
@@ -167,20 +238,57 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
       } catch (error) { cancelledDuringComputing = error.name === 'AbortError'; }
       check(observedGpuComputing && cancelledDuringComputing, 'An executing GPU job must cancel between batches.');
       await run('GPU recovery after cancelling dispatched work', fcc, { kind: 'coordination', cutoff: 2.8 }, 'coordination');
+      const cancellationChecks = [];
+      for (const kind of ['cna', 'referenceStrain']) {
+        const cancellationFrame = crystalFrame('fcc', 18, 3.52);
+        const parameters = kind === 'cna' ? { kind, mode: 'adaptive' }
+          : { kind, cutoff: 2.8, referenceFractional: cancellationFrame.fractional, referenceCell: cancellationFrame.cell,
+            referenceMapping: Int32Array.from(cancellationFrame.ids, (_, index) => index) };
+        for (const stage of ['preparing', 'dispatched']) {
+          const assertInputsIntact = window.gpuTests.snapshotGpuInputs(cancellationFrame, parameters);
+          const cancellation = new AbortController();
+          const worker = gpu.gpuBackend.worker;
+          const pipelines = gpu.gpuCacheStatus.pipelineCount;
+          let aborted = false, observedStage = false;
+          try {
+            await gpu.analyze(cancellationFrame, parameters, {
+              signal: cancellation.signal,
+              onProgress: progress => {
+                if (stage === 'preparing' || (progress.backend === 'gpu' && progress.phase === 'analyzing' && progress.completedAtoms > 0)) {
+                  observedStage = true;
+                  cancellation.abort();
+                }
+              },
+            });
+          } catch (error) { aborted = error.name === 'AbortError'; }
+          assertInputsIntact();
+          check(observedStage && aborted, kind + ' cancellation must stop at ' + stage + ' with AbortError.');
+          const recovery = await run(kind + ' GPU recovery after ' + stage + ' cancellation', fcc,
+            kind === 'cna' ? { kind, mode: 'adaptive' }
+              : { kind, cutoff: 2.8, referenceFractional: fcc.fractional, referenceCell: fcc.cell,
+                referenceMapping: Int32Array.from(fcc.ids, (_, index) => index) }, kind === 'cna' ? 'structures' : null, 2e-6);
+          check(gpu.gpuBackend.worker === worker, 'Cancellation must retain the shared GPU worker.');
+          check(gpu.gpuCacheStatus.pipelineCount >= pipelines, 'Cancellation must retain compiled pipelines.');
+          cancellationChecks.push({ kind, stage, aborted, workerReused: true, pipelineCount: gpu.gpuCacheStatus.pipelineCount,
+            engine: recovery.engine, inputsIntact: true });
+        }
+      }
+      window.gpuTests.cancellationChecks = cancellationChecks;
       return rows;
     } finally { cpu.close(); gpu.close(); }
   })()`);
   assert.ok(rows.some((row) => /webgpu/i.test(row.engine ?? '') || row.backend === 'gpu'), 'No real GPU analysis was performed.');
   const preload = await runGpuPreloadChecks({ evaluate });
+  const cancellation = await evaluate('window.gpuTests.cancellationChecks');
   const application = await runApplicationSmoke({ evaluate, call });
   return { adapter, softwareTiming: adapter.isFallbackAdapter || /swiftshader|software|llvmpipe/i.test(`${adapter.architecture} ${adapter.description}`),
-    checks: rows, preload, application };
+    checks: rows, cancellation, preload, application };
 }, { software: useSoftwareAdapter(true) });
 console.log(JSON.stringify(report, null, 2));
 
 async function runGpuPreloadChecks({ evaluate }) {
   return evaluate(`(async () => {
-    const { AnalysisPool, crystalFrame, check, compare } = window.gpuTests;
+    const { AnalysisPool, crystalFrame, check, compare, compareGpuFields, REFERENCE_STRAIN_FIELDS } = window.gpuTests;
     const gpu = new AnalysisPool(), cpu = new AnalysisPool();
     gpu.setGpuEnabled(true);
     try {
@@ -208,6 +316,18 @@ async function runGpuPreloadChecks({ evaluate }) {
       const expected = await cpu.analyze(reparsed, { kind: 'coordination', cutoff: 2.8 });
       check(reused.inputReused && reused.gpuInputReused, 'CPU reparse must reuse its existing GPU frame.');
       compare(reused.coordination, expected.coordination);
+      const cna = await gpu.analyze(reparsed, { kind: 'cna', mode: 'adaptive' });
+      const cnaExpected = await cpu.analyze(reparsed, { kind: 'cna', mode: 'adaptive' });
+      check(cna.backend === 'gpu' && cna.inputReused && cna.gpuInputReused, 'CNA must reuse previously uploaded coordination geometry.');
+      compare(cna.structures, cnaExpected.structures);
+      const referenceParameters = { kind: 'referenceStrain', cutoff: 2.8,
+        referenceFrame: frames[0], referenceFrameIndex: 0, referenceFractional: frames[0].fractional,
+        referenceCell: frames[0].cell, referenceMapping: Int32Array.from(reparsed.ids, (_, atom) => atom) };
+      const reference = await gpu.analyze(reparsed, referenceParameters, { frameIndex: 2 });
+      const referenceExpected = await cpu.analyze(reparsed, referenceParameters);
+      check(reference.backend === 'gpu' && reference.inputReused && reference.gpuInputReused, 'Reference strain must reuse preloaded current geometry.');
+      compareGpuFields(reference, referenceExpected, REFERENCE_STRAIN_FIELDS, 2e-6);
+      check(gpu.gpuBackend.worker === worker, 'Different GPU algorithms must share the warmed GPU worker.');
       const beforeClear = gpu.gpuCacheStatus;
       await gpu.clearGpuFrames();
       const cleared = gpu.gpuCacheStatus;
@@ -229,7 +349,10 @@ async function runGpuPreloadChecks({ evaluate }) {
       compare(after.coordination, expected.coordination);
       return { warmupMs, pipelineCount: warmed.pipelineCount, fullTrajectoryFrames: full.cachedFrameIndexes.length,
         constrainedCapacity: windowCache.capacity, constrainedFrames: windowCache.cachedFrameIndexes, reparseReused: reused.gpuInputReused,
-        sourceClearPreservedDevice: true };
+        sourceClearPreservedDevice: true, crossAlgorithmWorkerReuse: true,
+        cnaInputReused: cna.inputReused && cna.gpuInputReused,
+        referenceInputReused: reference.inputReused && reference.gpuInputReused,
+        referenceGpuInputReused: reference.referenceGpuInputReused ?? null };
     } finally { gpu.close(); cpu.close(); }
   })()`);
 }
@@ -240,7 +363,12 @@ async function runApplicationSmoke({ evaluate, call }) {
       if (await evaluate(expression)) return;
       await delay(25);
     }
-    throw new Error(`Timed out: ${label}; ${await evaluate('document.getElementById("toast")?.textContent')}`);
+    const diagnostics = await evaluate(`({ toast: document.getElementById('toast')?.textContent,
+      cna: document.getElementById('cna-state')?.textContent, cnaMetric: document.getElementById('metric-cna')?.textContent,
+      cnaStatus: document.getElementById('cna-status')?.textContent, reference: document.getElementById('reference-strain-state')?.textContent,
+      referenceStatus: document.getElementById('reference-strain-status')?.textContent,
+      gpu: document.getElementById('enable-gpu-computing')?.getAttribute('aria-pressed'), rows: window.applicationGpuChecks?.rows.slice(-4) })`);
+    throw new Error(`Timed out: ${label}; ${JSON.stringify(diagnostics)}`);
   }
   await evaluate('location.href = new URL("./index.html", location.href).href');
   await waitFor('document.readyState === "complete" && document.getElementById("enable-gpu-computing") && document.getElementById("open-examples")', 'homepage');
@@ -248,19 +376,56 @@ async function runApplicationSmoke({ evaluate, call }) {
   await evaluate(`document.getElementById('open-examples').click();
     [...document.querySelectorAll('.source-option')].find(button => button.textContent.includes('fcc-vacancy.cfg')).click();`);
   await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden && !document.getElementById("run-analysis").disabled', 'FCC vacancy example');
+  await evaluate(`(async () => {
+    const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
+    const { calculateCna } = await import('./src/analysis/cna.js');
+    const { calculateReferenceStrain, REFERENCE_STRAIN_FIELDS } = await import('./src/analysis/reference-strain.js');
+    const { compareGpuArrays, compareGpuFields, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
+    const analyze = AnalysisPool.prototype.analyze;
+    window.applicationGpuChecks = { rows: [], adaptive: null };
+    window.restoreApplicationGpuHooks = () => { AnalysisPool.prototype.analyze = analyze; };
+    AnalysisPool.prototype.analyze = async function(frame, parameters, options) {
+      const checkInputs = snapshotGpuInputs(frame, parameters);
+      const result = await analyze.call(this, frame, parameters, options);
+      checkInputs();
+      if (parameters.kind === 'cna') {
+        const comparison = compareGpuArrays(result.structures, calculateCna(frame, parameters).structures);
+        window.applicationGpuChecks.rows.push({ kind: 'cna', mode: parameters.mode, gpu: result.backend === 'gpu',
+          atoms: frame.ids.length, engine: result.engine, maxAbsoluteError: comparison.maxAbsoluteError,
+          counts: Array.from({ length: 5 }, (_, type) => result.structures.reduce((sum, value) => sum + Number(value === type), 0)) });
+        if (parameters.mode === 'adaptive') window.applicationGpuChecks.adaptive = { frame, structures: result.structures, backend: result.backend };
+      } else if (parameters.kind === 'referenceStrain') {
+        const comparison = compareGpuFields(result, calculateReferenceStrain(frame, parameters), REFERENCE_STRAIN_FIELDS, 2e-6);
+        window.applicationGpuChecks.rows.push({ kind: 'referenceStrain', gpu: result.backend === 'gpu', engine: result.engine,
+          atoms: frame.ids.length, maxAbsoluteError: comparison.maxAbsoluteError,
+          inputReused: result.inputReused, gpuInputReused: result.gpuInputReused,
+          referenceInputReused: result.referenceInputReused, referenceGpuInputReused: result.referenceGpuInputReused });
+      } else if (parameters.kind === 'centrosymmetry' && parameters.mode === 'auto') {
+        const adaptive = window.applicationGpuChecks.adaptive;
+        window.applicationGpuChecks.rows.push({ kind: 'autoCentrosymmetry', gpu: result.backend === 'gpu', engine: result.engine,
+          reusedGpuCna: adaptive?.frame === frame && adaptive.backend === 'gpu' && adaptive.structures === parameters.structureInput });
+      }
+      return result;
+    };
+  })()`);
   const cases = [
     { tool: 'coordination', button: 'run-analysis', state: 'analysis-state', status: 'metric-analysis', cutoff: 'cutoff', value: 3.1, color: 'property:coordination' },
     { tool: 'localShear', button: 'run-local-shear', state: 'local-shear-state', status: 'local-shear-status', cutoff: 'local-shear-cutoff', value: 3.1, color: 'property:localShear' },
     { tool: 'statistics', button: 'run-rdf', state: 'rdf-state', status: 'rdf-status', cutoff: 'rdf-cutoff', value: 3.9 },
+    { tool: 'cna', mode: 'fixed', button: 'run-cna', state: 'cna-state', status: 'metric-cna', cutoff: 'cna-cutoff', value: 3.1, color: 'property:structureType' },
+    { tool: 'cna', mode: 'adaptive', button: 'run-cna', state: 'cna-state', status: 'metric-cna', color: 'property:structureType' },
   ];
   const results = [];
   for (const test of cases) {
     await evaluate(`(() => {
       const button = document.querySelector('[data-tool-button="${test.tool}"]');
       if (button.getAttribute('aria-expanded') !== 'true') button.click();
-      document.getElementById('${test.cutoff}').value = '${test.value}';
+      ${test.cutoff ? `document.getElementById('${test.cutoff}').value = '${test.value}';` : ''}
+      ${test.mode ? `document.getElementById('cna-mode').value = '${test.mode}'; document.getElementById('cna-mode').dispatchEvent(new Event('change'));` : ''}
     })()`);
+    await waitFor(`!document.getElementById('${test.button}').disabled`, `${test.tool} parameter update completed`);
     for (const enabled of [true, false]) {
+      const before = await evaluate('window.applicationGpuChecks.rows.length');
       await evaluate(`(() => {
         const toggle = document.getElementById('enable-gpu-computing');
         if (toggle.getAttribute('aria-pressed') !== '${enabled}') toggle.click();
@@ -268,21 +433,36 @@ async function runApplicationSmoke({ evaluate, call }) {
       })()`);
       const engine = enabled ? 'webgpu' : 'js-worker';
       await waitFor(`document.getElementById('${test.state}').textContent === 'Calculated' && document.getElementById('${test.status}').textContent.includes('${engine}')`, `${test.tool} ${engine}`);
+      if (test.mode) await waitFor(`window.applicationGpuChecks.rows.slice(${before}).some(row => row.kind === 'cna' && row.mode === '${test.mode}' && row.gpu === ${enabled})`, `${test.mode} CNA reruns for GPU preference`);
       const result = await evaluate(`({ tool: '${test.tool}', enabled: ${enabled},
+        ${test.mode ? `mode: '${test.mode}', counts: window.applicationGpuChecks.rows.filter(row => row.kind === 'cna' && row.mode === '${test.mode}' && row.gpu === ${enabled}).at(-1).counts,` : ''}
         status: document.getElementById('${test.status}').textContent,
         legend: document.getElementById('legend-color-mode')?.value })`);
       if (test.color) assert.equal(result.legend, test.color, `${test.tool} analysis updates the rendered color legend.`);
       results.push(result);
     }
+    if (test.mode) assert.deepEqual(results.at(-1).counts, results.at(-2).counts, `${test.mode} CNA keeps legend structure counts across GPU preferences.`);
   }
+  await evaluate(`document.getElementById('enable-gpu-computing').click(); document.getElementById('run-cna').click();`);
+  await waitFor(`document.getElementById('cna-state').textContent === 'Calculated' && document.getElementById('metric-cna').textContent.includes('webgpu')`, 'adaptive GPU CNA prerequisite');
+  await evaluate(`(() => {
+    const button = document.querySelector('[data-tool-button="centrosymmetry"]');
+    if (button.getAttribute('aria-expanded') !== 'true') button.click();
+    document.getElementById('csp-neighbors').value = 'auto';
+    document.getElementById('run-csp').click();
+  })()`);
+  await waitFor(`document.getElementById('csp-state').textContent === 'Calculated' && window.applicationGpuChecks.rows.some(row => row.kind === 'autoCentrosymmetry' && row.reusedGpuCna)`, 'Auto central symmetry reuses recognized GPU CNA');
+  const autoCentrosymmetry = await evaluate('window.applicationGpuChecks.rows.find(row => row.kind === "autoCentrosymmetry" && row.reusedGpuCna)');
+  assert.equal(autoCentrosymmetry.gpu, false, 'Auto central symmetry retains its CPU pairing algorithm.');
+  results.push(autoCentrosymmetry);
   async function loadTrajectory(count, name) {
     await evaluate(`(async () => {
       const { crystalFrame } = await import('./tests/helpers/crystals.js');
       const texts = Array.from({ length: ${count} }, (_, index) => {
         const frame = crystalFrame('fcc', 2, 3.52 + index * .02);
         const rows = [];
-        for (let atom = 0; atom < frame.ids.length; atom++) rows.push('Ni ' + [...frame.positions.subarray(atom * 3, atom * 3 + 3)].join(' '));
-        return frame.ids.length + '\\nLattice="' + [...frame.cell.vectors].join(' ') + '" Properties=species:S:1:pos:R:3 pbc="T T T"\\n' + rows.join('\\n') + '\\n';
+        for (let atom = 0; atom < frame.ids.length; atom++) rows.push('Ni ' + frame.ids[atom] + ' ' + [...frame.positions.subarray(atom * 3, atom * 3 + 3)].join(' '));
+        return frame.ids.length + '\\nStep=' + index + ' Lattice="' + [...frame.cell.vectors].join(' ') + '" Properties=species:S:1:id:I:1:pos:R:3 pbc="T T T"\\n' + rows.join('\\n') + '\\n';
       });
       const transfer = new DataTransfer();
       transfer.items.add(new File([texts.join('')], ${JSON.stringify(name)}, { type: 'text/plain' }));
@@ -292,13 +472,39 @@ async function runApplicationSmoke({ evaluate, call }) {
     await waitFor(`document.getElementById('file-name').textContent === ${JSON.stringify(name)} && document.getElementById('loading').hidden`, name);
     await waitFor(`document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && Number(document.getElementById('cache-label').dataset.gpuCachedFrames) === ${count}`, name + ' complete GPU preload');
   }
-  await evaluate(`document.getElementById('close-file').click(); document.getElementById('enable-gpu-computing').click();`);
+  await evaluate(`document.getElementById('close-file').click();`);
   await loadTrajectory(6, 'gpu-preload.xyz');
   assert.equal(await evaluate('document.getElementById("analysis-state").textContent'), 'Not calculated', 'Preloading must not calculate analysis results.');
   await evaluate(`const slider = document.getElementById('frame-slider'); slider.value = '5'; slider.dispatchEvent(new Event('input'));`);
-  await waitFor(`document.getElementById('frame-label').textContent === '6 / 6' && document.getElementById('cache-label').dataset.gpuCacheState === 'ready'`, 'preloaded last frame');
+  await waitFor(`document.getElementById('frame-label').textContent === '6 / 6' && document.getElementById('timestep-label').textContent.includes('5') && document.getElementById('cache-label').dataset.gpuCacheState === 'ready'`, 'rendered preloaded last frame');
   const trajectoryPreload = await evaluate(`({ cachedFrames: Number(document.getElementById('cache-label').dataset.gpuCachedFrames),
     capacity: Number(document.getElementById('cache-label').dataset.gpuCacheCapacity), label: document.getElementById('cache-label').textContent })`);
+  const referenceRouting = [];
+  await evaluate(`(() => {
+    const button = document.querySelector('[data-tool-button="referenceStrain"]');
+    if (button.getAttribute('aria-expanded') !== 'true') button.click();
+    document.getElementById('reference-frame').value = '1';
+    document.getElementById('reference-cutoff').value = '3.1';
+  })()`);
+  for (const enabled of [true, false, true]) {
+    const before = await evaluate('window.applicationGpuChecks.rows.length');
+    await evaluate(`(() => {
+      const toggle = document.getElementById('enable-gpu-computing');
+      if (toggle.getAttribute('aria-pressed') !== '${enabled}') toggle.click();
+    })()`);
+    if (enabled) await waitFor(`document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && document.getElementById('cache-label').dataset.gpuCachedFrames === '6'`, 'reference trajectory GPU preload');
+    await evaluate(`document.getElementById('run-reference-strain').click();`);
+    await waitFor(`document.getElementById('reference-strain-state').textContent === 'Calculated' && window.applicationGpuChecks.rows.slice(${before}).some(row => row.kind === 'referenceStrain' && row.gpu === ${enabled})`, 'reference strain GPU preference ' + enabled);
+    const result = await evaluate('window.applicationGpuChecks.rows.filter(row => row.kind === "referenceStrain").at(-1)');
+    const legendChoice = await evaluate(`({ value: document.getElementById('legend-color-mode').value,
+      options: [...document.getElementById('legend-color-mode').options].map(option => option.value),
+      state: document.getElementById('reference-strain-state').textContent,
+      status: document.getElementById('reference-strain-status').textContent })`);
+    assert.equal(legendChoice.value, 'property:referenceShearStrain', JSON.stringify({ enabled, result, legendChoice }));
+    referenceRouting.push(result);
+  }
+  await evaluate(`document.getElementById('cancel-reference-strain').click();`);
+  assert.equal(await evaluate('document.getElementById("reference-strain-state").textContent'), 'Not calculated', 'Cancel clears accepted reference-strain results.');
   await call('Emulation.setDeviceMetricsOverride', { width: 360, height: 780, deviceScaleFactor: 1, mobile: false });
   const mobileTrajectory = await evaluate(`(() => {
     const bar = document.getElementById('trajectory-section');
@@ -315,7 +521,9 @@ async function runApplicationSmoke({ evaluate, call }) {
   await loadTrajectory(2, 'gpu-final-source.xyz');
   await evaluate(`document.getElementById('enable-gpu-computing').click();`);
   await waitFor(`document.getElementById('cache-label').dataset.gpuCacheState === 'off' && document.getElementById('cache-label').dataset.gpuCachedFrames === '0'`, 'GPU cache cleared on disable');
-  results.push({ trajectoryPreload, physicalReplication, sourceReplacementFrames: 3, rapidToggleSourceFrames: 2, disableReleasedFrames: true });
+  results.push({ trajectoryPreload, referenceRouting, acceptedReferenceResultsCleared: true, physicalReplication,
+    sourceReplacementFrames: 3, rapidToggleSourceFrames: 2, disableReleasedFrames: true });
+  await evaluate('window.restoreApplicationGpuHooks()');
   return results;
 }
 

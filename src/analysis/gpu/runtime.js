@@ -6,6 +6,7 @@ import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, frameUploadBytes, gpuW
 const MAX_INPUT_BYTES = 256 * 1024 ** 2;
 const CONFIG_BYTES = 128;
 const STORAGE = 128, COPY_SRC = 4, COPY_DST = 8, UNIFORM = 64, MAP_READ = 1;
+export const MAX_GPU_PERIODIC_RADIUS_FACES = 32;
 
 const CLEAR_NEIGHBORS_SHADER = `${NEIGHBOR_BINDINGS_WGSL}
 @compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -50,6 +51,7 @@ export class GpuRuntime {
     this.frameBytes = 0;
     this.residentBytes = 0;
     this.protectedFrameKey = null;
+    this.analysisFramePins = new Map();
     this.warmupPromise = null;
     this.memoryLimited = false;
   }
@@ -86,14 +88,17 @@ export class GpuRuntime {
     await this.initialize(signal);
     if (!this.warmupPromise) {
       this.warmupPromise = (async () => {
-        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain] = await Promise.all([
+        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference] = await Promise.all([
           import('./coordination.js'), import('./rdf.js'), import('./local-shear-shaders.js'),
           import('./bonds-shaders.js'), import('./atomic-strain-shaders.js'),
+          import('./cna-shaders.js'), import('./reference-strain-shaders.js'),
         ]);
         const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
           shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
           shear.SHEAR_CORRECTION_SHADER, shear.SHEAR_REDUCTION_SHADER, shear.SHEAR_FINALIZE_SHADER,
-          bonds.BONDS_COUNT_SHADER, bonds.BONDS_WRITE_SHADER, strain.ATOMIC_STRAIN_SHADER];
+          bonds.BONDS_COUNT_SHADER, bonds.BONDS_WRITE_SHADER, strain.ATOMIC_STRAIN_SHADER,
+          cna.CNA_FIXED_SHADER, cna.CNA_ADAPTIVE_SHADER,
+          reference.REFERENCE_STRAIN_CLEAR_SHADER, reference.REFERENCE_STRAIN_SHADER];
         for (const source of sources) await this.compilePipeline(source);
       })();
       this.warmupPromise.catch(() => { this.warmupPromise = null; });
@@ -236,6 +241,24 @@ export class GpuRuntime {
 
   finishAnalysis() { this.protectedFrameKey = null; this.trimFrames(); }
 
+  /** Reference analyses bind two frames at once. Nested kernel/worker scopes
+   * keep both uploads resident without changing the displayed trajectory index.
+   */
+  pinFrames(frames) {
+    const keys = new Set(frames.filter(Boolean).map((frame) => this.frameKey(frame)));
+    for (const key of keys) this.analysisFramePins.set(key, (this.analysisFramePins.get(key) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      for (const key of keys) {
+        const count = this.analysisFramePins.get(key) ?? 0;
+        if (count > 1) this.analysisFramePins.set(key, count - 1);
+        else this.analysisFramePins.delete(key);
+      }
+    };
+  }
+
   createBuffer(bytes, usage = STORAGE | COPY_SRC | COPY_DST) {
     if (!this.device || this.lost) throw new GpuUnavailableError(this.lost || 'WebGPU is not initialized.');
     const size = Math.max(4, Math.ceil(bytes / 4) * 4);
@@ -312,8 +335,13 @@ export class GpuRuntime {
     if (vectors.some((value) => !Number.isFinite(value)) || heights.some((value) => !Number.isFinite(value) || value <= 0)) {
       throw new GpuUnavailableError('This cell geometry is unsuitable for GPU neighbor analysis.');
     }
-    const imageBudget = heights.reduce((product, height, axis) => product * (frame.cell.pbc[axis] ? 2 * Math.ceil(cutoff / height) + 3 : 1), 1);
+    let imageBudget = heights.reduce((product, height, axis) => product * (frame.cell.pbc[axis] ? 2 * Math.ceil(cutoff / height) + 3 : 1), 1);
     if (imageBudget > 4096) throw new GpuUnavailableError('The periodic image search exceeds the GPU budget.');
+    // Extremely long image translations amplify the shared f32 cell-matrix
+    // error beyond its distance tolerance. Open axes enumerate no images.
+    if (heights.some((height, axis) => frame.cell.pbc[axis] && cutoff / height > MAX_GPU_PERIODIC_RADIUS_FACES)) {
+      throw new GpuUnavailableError('The periodic image geometry exceeds the GPU distance precision budget.');
+    }
     const cellScale = Math.max(...[0, 3, 6].map((offset) => Math.hypot(...vectors.slice(offset, offset + 3))));
     if (cellScale / cutoff > 1e6 || atomCount > 4_000_000) throw new GpuUnavailableError('This frame exceeds the GPU precision or memory budget.');
     if (!Number.isFinite(Math.fround(cutoff * cutoff)) || Math.fround(cutoff * cutoff) <= 0
@@ -321,8 +349,20 @@ export class GpuRuntime {
         || heights.some((value) => Math.fround(value) <= 0)) {
       throw new GpuUnavailableError('The cell or cutoff exceeds the GPU numeric range.');
     }
-    const distanceTolerance = Math.max(1e-8, cutoff * cellScale * 32 * 2 ** -23 + cutoff * cutoff * 64 * 2 ** -23);
-    const queryRadius = Math.sqrt(cutoff * cutoff + distanceTolerance);
+    const coefficientSum = heights.reduce((sum, height, axis) => sum + (frame.cell.pbc[axis] ? Math.ceil(cutoff / height) + 1 : 1), 0);
+    const imagePrecisionFactor = Math.max(1, coefficientSum / 4);
+    const distanceTolerance = Math.max(1e-8, (cutoff * cellScale * 32 * 2 ** -23 + cutoff * cutoff * 64 * 2 ** -23) * imagePrecisionFactor);
+    const paddedSquared = Math.fround(Math.fround(cutoff * cutoff) + Math.fround(distanceTolerance));
+    if (!Number.isFinite(Math.fround(distanceTolerance)) || Math.fround(distanceTolerance) <= 0
+        || !Number.isFinite(paddedSquared) || paddedSquared <= 0) {
+      throw new GpuUnavailableError('The padded GPU neighbor radius exceeds the GPU numeric range.');
+    }
+    const queryRadius = Math.sqrt(paddedSquared);
+    imageBudget = heights.reduce((product, height, axis) => product * (frame.cell.pbc[axis] ? 2 * Math.ceil(queryRadius / height) + 3 : 1), 1);
+    if (imageBudget > 4096) throw new GpuUnavailableError('The padded periodic image search exceeds the GPU budget.');
+    if (heights.some((height, axis) => frame.cell.pbc[axis] && queryRadius / height > MAX_GPU_PERIODIC_RADIUS_FACES)) {
+      throw new GpuUnavailableError('The padded periodic image geometry exceeds the GPU distance precision budget.');
+    }
     const dimensions = heights.map((height) => Math.max(1, Math.min(256, Math.floor(height / queryRadius))));
     const maximumBins = Math.min(2_000_000, atomCount * 4);
     while (dimensions.reduce((product, value) => product * value, 1) > maximumBins) {
@@ -340,7 +380,8 @@ export class GpuRuntime {
     floats[24] = cutoff * cutoff;
     floats[25] = distanceTolerance;
     ints[26] = 0; ints[27] = atomCount;
-    const maximumOccupancy = Math.max(32, Math.floor(50_000 / 27 / imageBudget));
+    const stencilBins = dimensions.reduce((product, dimension) => product * Math.min(3, dimension), 1);
+    const maximumOccupancy = Math.max(32, Math.floor(50_000 / stencilBins / imageBudget));
     ints[28] = maximumOccupancy;
     const owned = [];
     const own = (buffer) => { owned.push(buffer); return buffer; };
@@ -437,7 +478,9 @@ export class GpuRuntime {
   }
 
   protectedKeys() {
-    return this.protectedFrameKey === null ? new Set() : new Set([this.protectedFrameKey]);
+    const keys = new Set(this.analysisFramePins.keys());
+    if (this.protectedFrameKey !== null) keys.add(this.protectedFrameKey);
+    return keys;
   }
 
   evictFrame(frameKey) {
@@ -470,6 +513,7 @@ export class GpuRuntime {
     for (const frame of this.frames.values()) this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer]);
     this.indexes.clear(); this.frames.clear(); this.residentBytes = 0; this.frameBytes = 0;
     this.frameCount = 0; this.currentIndex = 0; this.protectedFrameKey = null;
+    this.analysisFramePins.clear();
   }
   clearFrames() { this.releaseFrames(); return this.cacheStatus(); }
   clearIndexes() {

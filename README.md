@@ -70,10 +70,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   within half the shortest cell face height.
 - AtomEye normalized central symmetry with automatic local FCC/HCP/BCC
   settings for mixed structures, or manual 8/12 neighbors. All analyses share
-  a bounded parallel Worker scheduler and retain per-frame results. Workers
+  a bounded scheduler and retain per-frame results. CPU Workers
   and PTM kernels are reused, with preparation stages and PTM atom progress.
 - Optional **Enable GPU computing**, off by default beside the theme controls,
-  accelerates coordination, RDF, local geometric shear and bonds with WebGPU.
+  supports coordination, adaptive/fixed-cutoff CNA, reference-frame strain,
+  RDF, local geometric shear and bonds with WebGPU.
   Ideal lattice strain also supports GPU tensor evaluation after its CPU PTM
   fit. Other analyses keep their CPU implementation; unavailable GPU support
   falls back to CPU. Completed results remain available when the preference changes.
@@ -165,7 +166,8 @@ WebGL 2 support. No installation or account is needed.
    **Statistics** shows coordination distributions and calculates total or
    element-pair RDF curves on fully periodic cells.
    **Enable GPU computing** in the top bar prefers WebGPU for coordination,
-   RDF, local shear, bonds and ideal-strain tensors on the next calculation.
+   adaptive/fixed CNA, reference-frame strain, RDF, local shear, bonds and
+   ideal-strain tensors on the next calculation.
    PTM fitting still uses CPU Wasm. The switch starts off; CPU
    fallback keeps analyses available on browsers without suitable GPU support.
    See [performance](docs/features/performance.md) for backend choices and

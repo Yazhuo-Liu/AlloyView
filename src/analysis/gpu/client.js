@@ -1,4 +1,4 @@
-const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'strain']);
+const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'strain', 'cna', 'referenceStrain']);
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
   frameCount: 0, currentIndex: 0, budgetBytes: 0, allocatedBytes: 0, residentBytes: 0, frameBytes: 0, workspaceBytes: 0 };
@@ -15,6 +15,7 @@ export class GpuAnalysisClient {
     this.nextId = 1;
     this.frameIds = new WeakMap();
     this.frameIndexes = new WeakMap();
+    this.referenceFrames = new WeakMap();
     this.indexFrameIds = new Map();
     this.nextFrameId = 1;
     this.cachedFrameIds = new Set();
@@ -66,6 +67,7 @@ export class GpuAnalysisClient {
     for (const task of this.pending.values()) this.cancel(task);
     this.queue.length = 0;
     this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexFrameIds.clear();
+    this.referenceFrames = new WeakMap();
     this.cachedFrameIds.clear(); this._cacheStatus = { ...EMPTY_CACHE };
     if (!this.worker || this.closed) return Promise.resolve(this.cacheStatus);
     return this.enqueue('clear-frames', {}, 0, { resume: false });
@@ -144,20 +146,61 @@ export class GpuAnalysisClient {
         totalAtoms: task.frame.fractional.length / 3, workerCount: 1 });
       await yieldToMain();
       if (task.settled) { this.finishDispatch(task); return; }
-      let frameId, frameIndex, frame;
+      let frameId, frameIndex, frame, referenceFrameId, referenceFrameIndex, referenceFrame;
       let parameters = task.parameters;
+      let referenceSource;
+      if (task.type === 'analyze' && parameters?.kind === 'referenceStrain') {
+        referenceSource = this.referenceFrame(parameters);
+        const mapping = parameters.referenceMapping;
+        if (!ArrayBuffer.isView(mapping) || mapping instanceof DataView) throw new Error('GPU reference strain requires a typed referenceMapping array.');
+        const currentIndex = this.frameIndexes.get(task.frame);
+        const requestedIndex = parameters.referenceFrameIndex ?? this.frameIndexes.get(referenceSource);
+        if (referenceSource === task.frame && requestedIndex !== undefined && currentIndex !== undefined && requestedIndex !== currentIndex) {
+          throw new Error('The same GPU frame cannot have different current and reference indexes.');
+        }
+        if (requestedIndex !== undefined && currentIndex === requestedIndex
+            && (referenceSource.fractional !== task.frame.fractional || referenceSource.cell !== task.frame.cell)) {
+          throw new Error('GPU current and reference frames with the same index must identify the same coordinates and cell.');
+        }
+        if (parameters.referenceFrameIndex !== undefined) this.associateFrame(referenceSource, parameters.referenceFrameIndex);
+      }
       const transfer = [];
-      if (task.frame) {
-        frameId = this.frameIds.get(task.frame);
-        if (!frameId) { frameId = this.nextFrameId++; this.frameIds.set(task.frame, frameId); }
-        frameIndex = this.frameIndexes.get(task.frame);
-        if (!this.cachedFrameIds.has(frameId)) {
-          const fractional = await copyArray(task.frame.fractional, task);
-          const types = task.frame.types ? await copyArray(task.frame.types, task) : undefined;
-          frame = { fractional, types, cell: task.frame.cell, gpuFrameId: frameId };
+      const preparedIds = new Set();
+      const prepareFramePayload = async (source) => {
+        let id = this.frameIds.get(source);
+        if (!id) { id = this.nextFrameId++; this.frameIds.set(source, id); }
+        const index = this.frameIndexes.get(source);
+        let payload;
+        if (!this.cachedFrameIds.has(id) && !preparedIds.has(id)) {
+          const fractional = await copyArray(source.fractional, task);
+          const types = source.types ? await copyArray(source.types, task) : undefined;
+          payload = { fractional, types, cell: source.cell, gpuFrameId: id };
           transfer.push(fractional.buffer);
           if (types) transfer.push(types.buffer);
+          preparedIds.add(id);
         }
+        return { id, index, payload };
+      };
+      if (task.frame) {
+        const current = await prepareFramePayload(task.frame);
+        frameId = current.id; frameIndex = current.index; frame = current.payload;
+      }
+      if (task.type === 'analyze' && parameters?.kind === 'referenceStrain') {
+        const reference = await prepareFramePayload(referenceSource);
+        referenceFrameId = reference.id; referenceFrameIndex = reference.index; referenceFrame = reference.payload;
+        if (frameId === referenceFrameId && frameIndex !== undefined && referenceFrameIndex !== frameIndex) {
+          throw new Error('The same GPU frame cannot have different current and reference indexes.');
+        }
+        const mapping = parameters.referenceMapping;
+        const referenceMapping = await copyArray(mapping, task);
+        transfer.push(referenceMapping.buffer);
+        parameters = { ...parameters, referenceMapping };
+        // Reference coordinates travel in their private frame payload, or are
+        // already resident. Never clone the complete application frame or
+        // transfer cached CPU coordinates/mappings directly to the worker.
+        delete parameters.referenceFrame;
+        delete parameters.referenceFractional;
+        delete parameters.referenceCell;
       }
       if (task.type === 'analyze' && parameters?.kind === 'strain' && parameters.ptmInput) {
         const ptmInput = {};
@@ -173,11 +216,34 @@ export class GpuAnalysisClient {
       if (this.worker !== worker) throw abortError();
       task.dispatched = true;
       worker.postMessage({ type: task.type, id: task.id, frameId, frameIndex, frame,
-        parameters, options: task.options }, transfer);
+        referenceFrameId, referenceFrameIndex, referenceFrame, parameters, options: task.options }, transfer);
     } catch (error) { this.settle(task, error); this.finishDispatch(task); }
   }
 
   finishDispatch(task) { if (this.current === task) { this.current = null; this.pump(); } }
+
+  referenceFrame(parameters) {
+    // Legacy coordinate-only references have no species array. They may cache
+    // privately, but must not claim a trajectory index whose real frame can
+    // later be used for element-filtered RDF or bonds.
+    if (parameters.referenceFrameIndex !== undefined && parameters.referenceFrame === undefined) {
+      throw new Error('GPU reference frame indexes require an actual referenceFrame.');
+    }
+    const fractional = parameters.referenceFractional;
+    if (!ArrayBuffer.isView(fractional) || fractional instanceof DataView) throw new Error('GPU reference strain requires typed referenceFractional coordinates.');
+    const cell = parameters.referenceCell;
+    if (!cell || typeof cell !== 'object') throw new Error('GPU reference strain requires a reference cell.');
+    if (parameters.referenceFrame !== undefined) {
+      const frame = parameters.referenceFrame;
+      if (frame?.fractional !== fractional || frame.cell !== cell) throw new Error('GPU reference frame metadata must identify the supplied reference coordinates and cell.');
+      return frame;
+    }
+    let cells = this.referenceFrames.get(fractional);
+    if (!cells) { cells = new WeakMap(); this.referenceFrames.set(fractional, cells); }
+    let frame = cells.get(cell);
+    if (!frame) { frame = { fractional, cell }; cells.set(cell, frame); }
+    return frame;
+  }
 
   settle(task, error, result) {
     if (task.settled) return;
@@ -199,6 +265,7 @@ export class GpuAnalysisClient {
     this.queue.length = 0; this.worker?.terminate(); this.worker = null; this.current = null;
     this.cachedFrameIds.clear(); this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false;
     this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexFrameIds.clear();
+    this.referenceFrames = new WeakMap();
   }
 
   close() { this.closed = true; this.release(); }
