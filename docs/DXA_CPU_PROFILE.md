@@ -1,10 +1,12 @@
 # CPU DXA profile
 
-The current whole-frame CPU path already uses Wasm pthreads for local crystal
-identification, Delaunay construction, ghost-cell classification, and interface
-tetrahedron classification. On the actual Fe and NiGB examples, six computation
-threads provide about twice the throughput of one thread. These numbers are
-measurements in this cloud machine, not a browser or physical-core guarantee.
+The CPU path uses Wasm pthreads for local crystal identification, Delaunay
+construction, ghost-cell classification, and interface tetrahedron
+classification. It now also prepares interface boundary masks and GPU snapshot
+rows in parallel while retaining ordered topology and the existing heap/pool.
+The adopted changes and before/after measurements are recorded first below;
+historical baseline profiles and remaining candidates follow. All timings are
+cloud-machine measurements, not browser or physical-core guarantees.
 
 Run the retained-heap benchmark with:
 
@@ -23,7 +25,98 @@ Explicit sequences accept 1–64 requested threads; the runtime can clamp that
 request for smaller frames. The historical six-thread run above is a diagnostic
 oversubscription on this machine.
 
-## Current Wasm measurements
+## Adopted interface and GPU snapshot optimizations
+
+The current implementation adds two bounded parallel passes while retaining
+the existing pool and heap. Interface construction first validates wrapped
+edges and records four boundary-face bits for each filled local tetrahedron.
+It then creates vertices, faces and callbacks in the original cell/face order.
+Every filled interior cell is still validated, and wrapped-cell errors occur
+at the same first invalid cell. The mask needs one byte per filled local cell
+and is released after construction. Single-thread and small inputs use direct
+construction; allocation failure also selects that path.
+
+Both paths replace `mirrorFacet(...).first` with `cellAdjacent(...)` for
+neighbor-region checks. The reciprocal facet index was unused, so this removes
+an extra search without changing adjacency. The production source preserves
+the original wrapped-vector arithmetic and ordered topology creation.
+
+A native three-mode experiment isolates the direct lookup from the parallel
+prepass on each retained tessellation. All **54** complete network/region
+comparisons and **18** invalid-interior-cell checks pass. The table reports
+median facet-construction milliseconds; the prepass column includes its
+complete mask pass and ordered commit. These are native C++ timings, not Wasm
+or GPU hardware timings.
+
+| Case | Original | Direct lookup only | Adopted path |
+| --- | ---: | ---: | ---: |
+| Fe, 1 thread | 49 | 22 | 23 |
+| Fe, 2 threads | 50 | 25 | 21 |
+| Fe, 4 threads | 45 | 25 | 12 |
+| NiGB, 1 thread | 295 | 211 | 199 |
+| NiGB, 2 threads | 299 | 191 | 144 |
+| NiGB, 4 threads | 301 | 216 | 112 |
+
+The Fe mask occupies 361,194 bytes; NiGB uses about 1,519,000 bytes. Serial
+paths allocate no mask. Complete measurements, including the noisier total
+finish times, are in [dxa-native-facet-prepass.json](benchmarks/dxa-native-facet-prepass.json).
+
+GPU preparation also packs independent vertex and tetrahedron rows in parallel
+after the edge-index map is complete and immutable. Each worker writes its own
+fixed row. Array ordering, reference-frame indices, sentinels, budgets and
+CPU fallback topology stay unchanged. No snapshot is prepared for CPU-only
+extraction. Native comparisons of all four packed arrays pass byte-for-byte
+across **36** exports; a mid-packing cancellation test joins workers, clears the
+snapshot and retries exactly on the retained topology.
+
+| Snapshot packing | Original, 2 threads | Parallel, 2 threads | Original, 4 threads | Parallel, 4 threads |
+| --- | ---: | ---: | ---: | ---: |
+| Fe, ms | 273 | 179 | 258 | 151 |
+| Replicated NiGB, ms | 2,640 | 1,780 | 2,669 | 1,301 |
+
+These measure the CPU export stage before GPU upload, excluding geometry
+construction and JavaScript copies. They do not measure complete DXA or
+physical-GPU throughput. Raw measurements and cancellation evidence are in
+[dxa-native-snapshot-parallel.json](benchmarks/dxa-native-snapshot-parallel.json).
+
+Use `npm run benchmark:dxa-compare -- --baseline-ref d6f9010` for an alternating
+whole-frame comparison of the rebuilt Wasm with the earlier binaries. Each
+backend retains its own heap; each thread count gets an untimed warm run before
+timing. The benchmark checks exact atom labels and serial lengths, while
+allowing the existing 1% parallel length variation from Delaunay tie handling.
+
+An isolated run against `d6f9010` used Node 24.19.0 on the four-CPU cloud
+environment, alternating both versions three times per case. These are median
+milliseconds for the complete CPU analysis, including JavaScript overhead;
+the interface columns include classification and all mesh construction, not
+just facet creation.
+
+| Case | Whole, before | Whole, after | Whole reduction | Interface, before | Interface, after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fe, 1 thread | 2,321 | 2,358 | −1.6% | 726 | 689 |
+| Fe, 2 threads | 1,487 | 1,421 | 4.5% | 441 | 365 |
+| Fe, 4 threads | 1,118 | 861 | 23.0% | 322 | 227 |
+| NiGB, 1 thread | 15,480 | 15,132 | 2.2% | 4,861 | 4,801 |
+| NiGB, 2 threads | 10,500 | 10,256 | 2.3% | 3,340 | 2,678 |
+| NiGB, 4 threads | 7,772 | 7,259 | 6.6% | 2,346 | 1,767 |
+
+The complete Wasm interface stage falls by 17–29% in the threaded cases.
+Whole-frame measurements also vary in unchanged stages: notably Fe's
+four-thread Delaunay median falls from 420 to 292 ms, while NiGB's rises
+from 2,407 to 2,507 ms. Thus the observed 23% Fe whole-frame reduction cannot
+be attributed entirely to this facet change. Serial results do not establish
+a consistent whole-frame gain. The native retained-topology experiments above
+isolate the changed work more directly.
+
+All 48 warm/measured analyses preserve every atom label, and serial loop
+lengths match exactly. Fe retains one closed finite BCC half-111 loop; NiGB
+retains zero lines. Each version keeps one kernel generation, its cancellation
+pointer and its existing heap through concurrency/source changes, growing to
+480,641,024 bytes. Individual timings, binary hashes, stage comparisons and
+scientific signatures are in
+[dxa-wasm-interface-compare.json](benchmarks/dxa-wasm-interface-compare.json).
+
+## Baseline Wasm measurements
 
 Baseline: revision `5335a35`, Node 24.19.0, 2026-10-05. Node reports four
 available logical CPUs in this environment; six threads is an explicit
@@ -79,10 +172,11 @@ produced the same atom labels and zero dislocation segments.
 
 ## Which further parallel loops matter
 
+The following baseline breakdown predates the adopted boundary-mask change.
 A separate native Linux executable was compiled from temporary instrumented
-copies of the same headless C++ sources. It uses native pthreads, not Wasm, so
-its absolute timings cannot be substituted for the table above. Its mesh
-substeps identify where work remains:
+copies of the headless C++ sources. It uses native pthreads, not Wasm, so its
+absolute timings cannot be substituted for the Wasm measurements above. Its
+mesh substeps identify the cost of the original construction:
 
 | Mesh substep | Fe, 1 thread | Fe, 6 threads | NiGB, 1 thread | NiGB, 6 threads |
 | --- | ---: | ---: | ---: | ---: |
@@ -198,11 +292,11 @@ its six lookups per tetrahedron.
    index. Preserve first-seen edge orientation, graph transitions and ordered
    edge construction. The lookup experiment demonstrates a locality benefit,
    while also showing why an additional index does not justify its cost here.
-3. Separate immutable boundary-facet detection and wrapped-vector validation
-   from ordered topology creation. A parallel prepass could collect candidate
-   cells and retain their original cell/face order. Every filled local cell
-   must still receive the current wrapped-vector validation, including interior
-   cells; skipping that validation would change thin-cell error behavior.
+3. Continue reducing ordered topology-creation costs after the implemented
+   boundary/wrapped-vector prepass. Face and vertex numbering, callbacks,
+   halfedge linking and junction behavior must retain their ordering. Every
+   filled local cell still requires wrapped-vector validation, including
+   interior cells.
 4. Investigate the serial circuit search on the NiGB grain-boundary mesh.
    Its empty final network still costs about 0.9 seconds in Wasm. Any pruning
    or component-based concurrency must preserve visited state, junctions,

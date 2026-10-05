@@ -1,0 +1,924 @@
+{
+  "date": "2026-10-05",
+  "baselineRevision": "d6f9010",
+  "runtime": "native Linux g++ -O3 -std=c++17 -pthread -D__EMSCRIPTEN_PTHREADS__",
+  "availableLogicalCpus": 4,
+  "scope": "Production-based boundary mask implementation, profiled against original mirrorFacet-based neighboring-region checks and direct cellAdjacent checks on each identical retained topology. Each mode repeated3times, all same-tessellation network JSON and all tetrahedron regions must exactly match. Alpha cache and CSR index disabled.",
+  "modes": {
+    "0": "original mirrorFacet neighbor lookup, serial facet scan",
+    "1": "direct cellAdjacent neighbor lookup, serial facet scan",
+    "2": "direct cellAdjacent + parallel wrapped-vector/boundary mask prepass forthreads>1 and>=2048filledlocalcells; serialotherwise"
+  },
+  "scientificChecks": "54exactnetworkJSON+everytetregion checks and18invalidinteriorcell checks (same error message and same first invalid filled index). Invalid checks scale simulation-cell matrix after valid tessellation/mapping to force an interior filled cell to violate wrapped-vector validation. They are outside timed extraction.",
+  "memory": "One byte per filled local cell only, allocation released after facet construction; no allocation for serial/small paths. Allocation failure falls back to serial direct lookup.",
+  "timingLimit": "Native timings are not Wasm timings. Classification/tracing variability affects finish medians; facet medians include the entire mask pass and ordered commit. Root will compare realWasm before/after at1/2/4threads.",
+  "experiments": [
+    {
+      "dataset": "fe",
+      "threads": 1,
+      "runs": [
+        {
+          "run": 0,
+          "mode": 0,
+          "atoms": 60229,
+          "finishMs": 500.426,
+          "facetConstructionMs": 55.9758,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 1,
+          "mode": 1,
+          "atoms": 60229,
+          "finishMs": 479.47,
+          "facetConstructionMs": 29.4638,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 2,
+          "mode": 2,
+          "atoms": 60229,
+          "finishMs": 463.404,
+          "facetConstructionMs": 27.0457,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 3,
+          "mode": 0,
+          "atoms": 60229,
+          "finishMs": 460.713,
+          "facetConstructionMs": 48.7663,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 4,
+          "mode": 1,
+          "atoms": 60229,
+          "finishMs": 412.623,
+          "facetConstructionMs": 22.0043,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 5,
+          "mode": 2,
+          "atoms": 60229,
+          "finishMs": 415.783,
+          "facetConstructionMs": 22.8868,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 6,
+          "mode": 0,
+          "atoms": 60229,
+          "finishMs": 454.625,
+          "facetConstructionMs": 48.9659,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 7,
+          "mode": 1,
+          "atoms": 60229,
+          "finishMs": 418.944,
+          "facetConstructionMs": 19.9678,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 8,
+          "mode": 2,
+          "atoms": 60229,
+          "finishMs": 390.13,
+          "facetConstructionMs": 20.2426,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        }
+      ],
+      "invalidInteriorChecks": [
+        {
+          "mode": 0,
+          "firstInvalidCell": 0,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 1,
+          "firstInvalidCell": 0,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 2,
+          "firstInvalidCell": 0,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        }
+      ],
+      "mappingPreparationMs": 1030.04,
+      "originalMedianFacetMs": 48.9659,
+      "originalMedianFinishMs": 460.713,
+      "directAdjacencyMedianFacetMs": 22.0043,
+      "directAdjacencyMedianFinishMs": 418.944,
+      "parallelPrepassMedianFacetMs": 22.8868,
+      "parallelPrepassMedianFinishMs": 415.783,
+      "maskBytes": 0,
+      "directAdjacencyFacetGainPercent": 55.061992121047496,
+      "parallelPrepassFacetGainPercent": 53.25971747685634,
+      "prepassIncrementalFacetGainPercent": -4.01057975032153
+    },
+    {
+      "dataset": "fe",
+      "threads": 2,
+      "runs": [
+        {
+          "run": 0,
+          "mode": 0,
+          "atoms": 60229,
+          "finishMs": 331.64,
+          "facetConstructionMs": 48.4183,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 1,
+          "mode": 1,
+          "atoms": 60229,
+          "finishMs": 281.976,
+          "facetConstructionMs": 25.4486,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 2,
+          "mode": 2,
+          "atoms": 60229,
+          "finishMs": 257.232,
+          "facetConstructionMs": 27.3134,
+          "prepassMs": 17.0514,
+          "maskBytes": 361194,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 3,
+          "mode": 0,
+          "atoms": 60229,
+          "finishMs": 256.125,
+          "facetConstructionMs": 50.6679,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 4,
+          "mode": 1,
+          "atoms": 60229,
+          "finishMs": 292.186,
+          "facetConstructionMs": 25.0021,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 5,
+          "mode": 2,
+          "atoms": 60229,
+          "finishMs": 268.088,
+          "facetConstructionMs": 14.5789,
+          "prepassMs": 10.7314,
+          "maskBytes": 361194,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 6,
+          "mode": 0,
+          "atoms": 60229,
+          "finishMs": 283.678,
+          "facetConstructionMs": 50.4206,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 7,
+          "mode": 1,
+          "atoms": 60229,
+          "finishMs": 305.481,
+          "facetConstructionMs": 30.1736,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 8,
+          "mode": 2,
+          "atoms": 60229,
+          "finishMs": 293.779,
+          "facetConstructionMs": 20.8724,
+          "prepassMs": 17.3306,
+          "maskBytes": 361194,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        }
+      ],
+      "invalidInteriorChecks": [
+        {
+          "mode": 0,
+          "firstInvalidCell": 0,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 1,
+          "firstInvalidCell": 0,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 2,
+          "firstInvalidCell": 0,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        }
+      ],
+      "mappingPreparationMs": 728.567,
+      "originalMedianFacetMs": 50.4206,
+      "originalMedianFinishMs": 283.678,
+      "directAdjacencyMedianFacetMs": 25.4486,
+      "directAdjacencyMedianFinishMs": 292.186,
+      "parallelPrepassMedianFacetMs": 20.8724,
+      "parallelPrepassMedianFinishMs": 268.088,
+      "maskBytes": 361194,
+      "directAdjacencyFacetGainPercent": 49.52737571548137,
+      "parallelPrepassFacetGainPercent": 58.603427963967114,
+      "prepassIncrementalFacetGainPercent": 17.9821286829138
+    },
+    {
+      "dataset": "fe",
+      "threads": 4,
+      "runs": [
+        {
+          "run": 0,
+          "mode": 0,
+          "atoms": 60229,
+          "finishMs": 175.775,
+          "facetConstructionMs": 44.58,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 1,
+          "mode": 1,
+          "atoms": 60229,
+          "finishMs": 141.533,
+          "facetConstructionMs": 20.6706,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 2,
+          "mode": 2,
+          "atoms": 60229,
+          "finishMs": 117.859,
+          "facetConstructionMs": 12.8371,
+          "prepassMs": 8.95812,
+          "maskBytes": 361194,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 3,
+          "mode": 0,
+          "atoms": 60229,
+          "finishMs": 140.911,
+          "facetConstructionMs": 43.0701,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 4,
+          "mode": 1,
+          "atoms": 60229,
+          "finishMs": 130.751,
+          "facetConstructionMs": 25.3646,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 5,
+          "mode": 2,
+          "atoms": 60229,
+          "finishMs": 125.891,
+          "facetConstructionMs": 11.4048,
+          "prepassMs": 7.44961,
+          "maskBytes": 361194,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 6,
+          "mode": 0,
+          "atoms": 60229,
+          "finishMs": 153.477,
+          "facetConstructionMs": 45.028,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 7,
+          "mode": 1,
+          "atoms": 60229,
+          "finishMs": 135.841,
+          "facetConstructionMs": 24.6956,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 8,
+          "mode": 2,
+          "atoms": 60229,
+          "finishMs": 134.455,
+          "facetConstructionMs": 12.1892,
+          "prepassMs": 7.97824,
+          "maskBytes": 361194,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        }
+      ],
+      "invalidInteriorChecks": [
+        {
+          "mode": 0,
+          "firstInvalidCell": 0,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 1,
+          "firstInvalidCell": 0,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 2,
+          "firstInvalidCell": 0,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        }
+      ],
+      "mappingPreparationMs": 519.578,
+      "originalMedianFacetMs": 44.58,
+      "originalMedianFinishMs": 153.477,
+      "directAdjacencyMedianFacetMs": 24.6956,
+      "directAdjacencyMedianFinishMs": 135.841,
+      "parallelPrepassMedianFacetMs": 12.1892,
+      "parallelPrepassMedianFinishMs": 125.891,
+      "maskBytes": 361194,
+      "directAdjacencyFacetGainPercent": 44.603858232391204,
+      "parallelPrepassFacetGainPercent": 72.65769403319875,
+      "prepassIncrementalFacetGainPercent": 50.64221966666127
+    },
+    {
+      "dataset": "nigb",
+      "threads": 1,
+      "runs": [
+        {
+          "run": 0,
+          "mode": 0,
+          "atoms": 259808,
+          "finishMs": 3988.48,
+          "facetConstructionMs": 307.518,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 1,
+          "mode": 1,
+          "atoms": 259808,
+          "finishMs": 3886.65,
+          "facetConstructionMs": 227.226,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 2,
+          "mode": 2,
+          "atoms": 259808,
+          "finishMs": 3903.07,
+          "facetConstructionMs": 199.01,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 3,
+          "mode": 0,
+          "atoms": 259808,
+          "finishMs": 3920.89,
+          "facetConstructionMs": 281.858,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 4,
+          "mode": 1,
+          "atoms": 259808,
+          "finishMs": 4166.92,
+          "facetConstructionMs": 187.117,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 5,
+          "mode": 2,
+          "atoms": 259808,
+          "finishMs": 3809.45,
+          "facetConstructionMs": 204.972,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 6,
+          "mode": 0,
+          "atoms": 259808,
+          "finishMs": 4239.14,
+          "facetConstructionMs": 295.125,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 7,
+          "mode": 1,
+          "atoms": 259808,
+          "finishMs": 4218.32,
+          "facetConstructionMs": 210.982,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 8,
+          "mode": 2,
+          "atoms": 259808,
+          "finishMs": 4086.98,
+          "facetConstructionMs": 193.591,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        }
+      ],
+      "invalidInteriorChecks": [
+        {
+          "mode": 0,
+          "firstInvalidCell": 2,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 1,
+          "firstInvalidCell": 2,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 2,
+          "firstInvalidCell": 2,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        }
+      ],
+      "mappingPreparationMs": 5427.31,
+      "originalMedianFacetMs": 295.125,
+      "originalMedianFinishMs": 3988.48,
+      "directAdjacencyMedianFacetMs": 210.982,
+      "directAdjacencyMedianFinishMs": 4166.92,
+      "parallelPrepassMedianFacetMs": 199.01,
+      "parallelPrepassMedianFinishMs": 3903.07,
+      "maskBytes": 0,
+      "directAdjacencyFacetGainPercent": 28.51096992799661,
+      "parallelPrepassFacetGainPercent": 32.567556120288025,
+      "prepassIncrementalFacetGainPercent": 5.67441772283892
+    },
+    {
+      "dataset": "nigb",
+      "threads": 2,
+      "runs": [
+        {
+          "run": 0,
+          "mode": 0,
+          "atoms": 259808,
+          "finishMs": 2885.49,
+          "facetConstructionMs": 361.201,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 1,
+          "mode": 1,
+          "atoms": 259808,
+          "finishMs": 2564.5,
+          "facetConstructionMs": 190.754,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 2,
+          "mode": 2,
+          "atoms": 259808,
+          "finishMs": 2642.54,
+          "facetConstructionMs": 164.801,
+          "prepassMs": 117.147,
+          "maskBytes": 1519031,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 3,
+          "mode": 0,
+          "atoms": 259808,
+          "finishMs": 2651.57,
+          "facetConstructionMs": 299.258,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 4,
+          "mode": 1,
+          "atoms": 259808,
+          "finishMs": 2656.36,
+          "facetConstructionMs": 205.971,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 5,
+          "mode": 2,
+          "atoms": 259808,
+          "finishMs": 2365.89,
+          "facetConstructionMs": 143.799,
+          "prepassMs": 89.4849,
+          "maskBytes": 1519031,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 6,
+          "mode": 0,
+          "atoms": 259808,
+          "finishMs": 2457.8,
+          "facetConstructionMs": 285.879,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 7,
+          "mode": 1,
+          "atoms": 259808,
+          "finishMs": 2345.66,
+          "facetConstructionMs": 190.719,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 8,
+          "mode": 2,
+          "atoms": 259808,
+          "finishMs": 2223.44,
+          "facetConstructionMs": 122.925,
+          "prepassMs": 78.1854,
+          "maskBytes": 1519031,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        }
+      ],
+      "invalidInteriorChecks": [
+        {
+          "mode": 0,
+          "firstInvalidCell": 3,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 1,
+          "firstInvalidCell": 3,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 2,
+          "firstInvalidCell": 3,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        }
+      ],
+      "mappingPreparationMs": 4183.83,
+      "originalMedianFacetMs": 299.258,
+      "originalMedianFinishMs": 2651.57,
+      "directAdjacencyMedianFacetMs": 190.754,
+      "directAdjacencyMedianFinishMs": 2564.5,
+      "parallelPrepassMedianFacetMs": 143.799,
+      "parallelPrepassMedianFinishMs": 2365.89,
+      "maskBytes": 1519031,
+      "directAdjacencyFacetGainPercent": 36.25767732190952,
+      "parallelPrepassFacetGainPercent": 51.94815176202474,
+      "prepassIncrementalFacetGainPercent": 24.615473332145054
+    },
+    {
+      "dataset": "nigb",
+      "threads": 4,
+      "runs": [
+        {
+          "run": 0,
+          "mode": 0,
+          "atoms": 259808,
+          "finishMs": 2060.34,
+          "facetConstructionMs": 393.883,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 1,
+          "mode": 1,
+          "atoms": 259808,
+          "finishMs": 1944.61,
+          "facetConstructionMs": 244.817,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 2,
+          "mode": 2,
+          "atoms": 259808,
+          "finishMs": 1751.41,
+          "facetConstructionMs": 109.305,
+          "prepassMs": 62.3743,
+          "maskBytes": 1518957,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 3,
+          "mode": 0,
+          "atoms": 259808,
+          "finishMs": 1869.55,
+          "facetConstructionMs": 301.331,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 4,
+          "mode": 1,
+          "atoms": 259808,
+          "finishMs": 1737.18,
+          "facetConstructionMs": 183.037,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 5,
+          "mode": 2,
+          "atoms": 259808,
+          "finishMs": 1672.14,
+          "facetConstructionMs": 111.894,
+          "prepassMs": 64.8342,
+          "maskBytes": 1518957,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 6,
+          "mode": 0,
+          "atoms": 259808,
+          "finishMs": 1820.46,
+          "facetConstructionMs": 286.011,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 7,
+          "mode": 1,
+          "atoms": 259808,
+          "finishMs": 1883.8,
+          "facetConstructionMs": 215.784,
+          "prepassMs": 0,
+          "maskBytes": 0,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        },
+        {
+          "run": 8,
+          "mode": 2,
+          "atoms": 259808,
+          "finishMs": 1766.1,
+          "facetConstructionMs": 112.801,
+          "prepassMs": 64.779,
+          "maskBytes": 1518957,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true
+        }
+      ],
+      "invalidInteriorChecks": [
+        {
+          "mode": 0,
+          "firstInvalidCell": 2,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 1,
+          "firstInvalidCell": 2,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        },
+        {
+          "mode": 2,
+          "firstInvalidCell": 2,
+          "originalFilledIndex": 0,
+          "exactErrorMessage": true,
+          "originalFirstInvalidCellRetained": true,
+          "cellHasNoBoundaryFaces": true
+        }
+      ],
+      "mappingPreparationMs": 3066.31,
+      "originalMedianFacetMs": 301.331,
+      "originalMedianFinishMs": 1869.55,
+      "directAdjacencyMedianFacetMs": 215.784,
+      "directAdjacencyMedianFinishMs": 1883.8,
+      "parallelPrepassMedianFacetMs": 111.894,
+      "parallelPrepassMedianFinishMs": 1751.41,
+      "maskBytes": 1518957,
+      "directAdjacencyFacetGainPercent": 28.389710982275307,
+      "parallelPrepassFacetGainPercent": 62.86674786198565,
+      "prepassIncrementalFacetGainPercent": 48.145367589812025
+    }
+  ],
+  "helperSha256": "729f9fd21f12b33fc128fad0ce443cf136c3308a545c37c6ece89830382fff64"
+}

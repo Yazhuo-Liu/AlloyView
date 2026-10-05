@@ -350,6 +350,7 @@
               <label><span>Cutoff radius <small>Auto updates</small></span><span class="input-unit"><input id="cutoff" type="number" value="3.0" min="0.01" step="0.05" disabled><i>Å</i></span></label>
               <button id="run-analysis" class="button button-accent" type="button" disabled>Calculate</button>
             </div>
+            <label class="field"><span>Cutoff preset</span><select id="coordination-cutoff-preset" disabled><option value="custom">Custom</option></select></label>
             <p id="cutoff-help" class="help">A starting value will be suggested from recognized metallic elements.</p>
             <p id="analysis-help" class="help">Periodic axes use minimum images; non-periodic axes use direct distances. Camera movement does not rerun analysis.</p>
           </section>

@@ -5,7 +5,8 @@ import { normalizeRepetitions } from './render/replication.js';
 import { GpuPrefetchScheduler } from './data/gpu-prefetch.js';
 import { CpuPrefetchScheduler } from './data/cpu-prefetch.js';
 import { DEFAULT_PLAYBACK_INTERVAL_MS, nextPlaybackFrame } from './data/playback.js';
-import { recommendCoordinationCutoff } from './analysis/cutoff.js';
+import { recommendCoordinationCutoff, COORDINATION_CUTOFF_PRESETS,
+  coordinationCutoffPresetForElement, inferCoordinationCutoffPreset } from './analysis/cutoff.js';
 import { CoordinationPool } from './analysis/coordination-pool.js';
 import { AnalysisPool } from './analysis/analysis-pool.js';
 import { CpuBudget } from './analysis/cpu-budget.js';
@@ -61,7 +62,7 @@ const elements = Object.fromEntries([
   'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
   'background-picker', 'background-current', 'background', 'show-axes',
   'show-cell', 'png-background', 'png-legend', 'png-axes', 'slice-axis', 'slice-position', 'slice-value', 'cutoff', 'run-analysis',
-  'analysis-state', 'cutoff-help', 'analysis-help', 'selection-empty', 'selection-data', 'clear-selection', 'legend', 'color-legend',
+  'analysis-state', 'cutoff-help', 'coordination-cutoff-preset', 'analysis-help', 'selection-empty', 'selection-data', 'clear-selection', 'legend', 'color-legend',
   'cna-mode', 'cna-cutoff', 'cna-cutoff-field', 'run-cna', 'cna-state', 'cna-help', 'cna-status',
   'csp-neighbors', 'csp-auto-result', 'csp-help', 'run-csp', 'csp-state', 'csp-status', 'metric-cna', 'metric-csp',
   'ptm-rmsd', 'run-ptm', 'ptm-state', 'ptm-status', 'metric-ptm',
@@ -494,8 +495,21 @@ elements['run-analysis'].addEventListener('click', () => {
   clearTimeout(cutoffTimer);
   runCoordination({ automatic: false });
 });
-elements.cutoff.addEventListener('input', scheduleCutoffAnalysis);
-elements.cutoff.addEventListener('change', () => scheduleCutoffAnalysis({ immediate: true }));
+for (const preset of COORDINATION_CUTOFF_PRESETS) {
+  const item = document.createElement('option');
+  item.value = preset.symbol;
+  item.textContent = `${preset.symbol} · ${preset.name} — ${preset.cutoff.toFixed(2)} Å`;
+  elements['coordination-cutoff-preset'].append(item);
+}
+elements.cutoff.addEventListener('input', () => editCoordinationCutoff());
+elements.cutoff.addEventListener('change', () => editCoordinationCutoff({ immediate: true }));
+elements['coordination-cutoff-preset'].addEventListener('change', () => {
+  interruptConfigurationRestore('a cutoff preset change');
+  const preset = coordinationCutoffPresetForElement(elements['coordination-cutoff-preset'].value);
+  if (preset) elements.cutoff.value = preset.cutoff.toFixed(2);
+  updateCoordinationCutoffHelp();
+  if (preset) scheduleCutoffAnalysis({ immediate: true });
+});
 elements['run-cna'].addEventListener('click', () => runStructureAnalysis('cna'));
 elements['run-csp'].addEventListener('click', () => runStructureAnalysis('centrosymmetry'));
 elements['run-ptm'].addEventListener('click', () => runStructureAnalysis('ptm'));
@@ -1090,10 +1104,25 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
 }
 
 function configureSuggestedCutoff(frame) {
-  const recommendation = recommendCoordinationCutoff(frame);
+  const recommendation = inferCoordinationCutoffPreset(frame);
   elements.cutoff.value = recommendation.value.toFixed(2);
   elements['cna-cutoff'].value = recommendation.value.toFixed(2);
+  elements['coordination-cutoff-preset'].value = recommendation.symbol ?? 'custom';
   elements['cutoff-help'].textContent = `Suggested cutoff: ${recommendation.message}`;
+}
+
+function editCoordinationCutoff({ immediate = false } = {}) {
+  interruptConfigurationRestore('a cutoff edit');
+  elements['coordination-cutoff-preset'].value = 'custom';
+  updateCoordinationCutoffHelp();
+  scheduleCutoffAnalysis({ immediate });
+}
+
+function updateCoordinationCutoffHelp() {
+  const preset = coordinationCutoffPresetForElement(elements['coordination-cutoff-preset'].value);
+  elements['cutoff-help'].textContent = preset
+    ? `${preset.symbol} (${preset.name}): ${preset.cutoff.toFixed(2)} Å starting estimate. Verify against the first minimum of g(r); edit the radius for a custom value.`
+    : 'Custom cutoff: enter a positive radius in Å. Verify against the first minimum of g(r).';
 }
 
 function configureSourceUi(result) {
@@ -2681,7 +2710,7 @@ function setControlsEnabled(enabled) {
     'reset-camera', 'export-png', 'export-configuration', 'frame-slider',
     'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
     'background', 'show-axes', 'show-cell', 'png-background', 'png-legend', 'png-axes',
-    'slice-axis', 'slice-position', 'cutoff', 'run-analysis',
+    'slice-axis', 'slice-position', 'cutoff', 'coordination-cutoff-preset', 'run-analysis',
     'cna-mode', 'cna-cutoff', 'run-cna', 'csp-neighbors', 'run-csp',
     'ptm-rmsd', 'run-ptm', 'lattice-reset', 'lattice-estimate', 'run-strain',
     'apply-replicate', 'reset-replicate', 'replicate-atoms',
@@ -2752,7 +2781,8 @@ function captureConfiguration() {
         projectionMode: renderer.projectionMode,
         png: { background: elements['png-background'].checked, legend: elements['png-legend'].checked, axes: elements['png-axes'].checked } },
       analyses: {
-        coordination: { enabled: state.analysis.coordination.enabled, cutoff: elements.cutoff.valueAsNumber },
+        coordination: { enabled: state.analysis.coordination.enabled, cutoff: elements.cutoff.valueAsNumber,
+          preset: elements['coordination-cutoff-preset'].value },
         cna: { enabled: state.analysis.cna.enabled, mode: elements['cna-mode'].value, cutoff: elements['cna-cutoff'].valueAsNumber },
         centrosymmetry: { enabled: state.analysis.centrosymmetry.enabled, ...cspParameters(),
           neighbors: elements['csp-neighbors'].value === 'auto' ? 12 : Number(elements['csp-neighbors'].value) },
@@ -2877,6 +2907,12 @@ async function restoreConfiguration(config) {
     updateSlices();
 
     elements.cutoff.value = String(saved.analyses.coordination.cutoff);
+    const savedCutoffPreset = coordinationCutoffPresetForElement(saved.analyses.coordination.preset);
+    // The saved numeric radius is authoritative, including recipes made before
+    // presets existed or with an older recommendation for the same element.
+    elements['coordination-cutoff-preset'].value = savedCutoffPreset?.cutoff === saved.analyses.coordination.cutoff
+      ? savedCutoffPreset.symbol : 'custom';
+    updateCoordinationCutoffHelp();
     elements['cna-mode'].value = saved.analyses.cna.mode;
     elements['cna-cutoff'].value = String(saved.analyses.cna.cutoff);
     elements['csp-neighbors'].value = saved.analyses.centrosymmetry.mode === 'auto' ? 'auto' : String(saved.analyses.centrosymmetry.neighbors);

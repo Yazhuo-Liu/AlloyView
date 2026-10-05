@@ -148,7 +148,9 @@ WebGL 2 support. No installation or account is needed.
    Select a tool button to open its settings; switch tools
    to keep analyses running, or close an analysis to cancel it and reset results.
 4. **Analyze.** Check the suggested cutoff under **Coordination number** and
-   click **Calculate**. Use **Color by** in the viewport legend to switch
+   click **Calculate**. **Cutoff preset** offers Custom and 35 common metals,
+   automatically selecting a recognized element from the file. Editing the
+   radius keeps a custom value. Use **Color by** in the viewport legend to switch
    between available quantities without recalculating. The scalar legend also
    lets you choose a color map and
    adjust the visible range. Highlighted **Auto** follows the current frame;

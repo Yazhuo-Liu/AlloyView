@@ -59,6 +59,11 @@ This limit does not pin or reserve particular OS cores. The actual thread count
 depends on atom count and memory limits, and DXA shares the active concurrency
 budget with ordinary CPU analyses. Local crystal identification, robust periodic Delaunay
 tessellation and independent cell classification run in parallel in one heap.
+Large interfaces also prepare boundary-face masks and validate wrapped edges
+in parallel. The final mesh is created in its original cell and face order,
+including validation of filled interior tetrahedra. The small optional mask
+workspace falls back to direct construction if allocation fails; single-thread
+and small inputs use the direct path without that workspace.
 Small structures and static hosts without the required headers use the complete
 serial kernel.
 
@@ -80,6 +85,11 @@ The retained-heap comparison `npm run benchmark:dxa-cpu -- --dataset all
 --threads 1,2,4,1 --repetitions 2` records stage timings and label/topology
 checks across thread-count changes. See the [CPU profile](../DXA_CPU_PROFILE.md)
 for measured bottlenecks and the constraints on further parallelization.
+For an alternating comparison with the earlier binaries, run
+`npm run benchmark:dxa-compare -- --baseline-ref d6f9010`. The script reads
+the baseline into a temporary directory, retains each backend's heap, and
+checks atom labels and the physical network while reporting complete pipeline
+and phase timings.
 
 **Enable GPU acceleration** selects a hybrid DXA path for all five reference
 crystals. WebGPU first searches periodic nearest-neighbor shells, computes the
@@ -99,6 +109,9 @@ rotation compatibility. These passes run independently per tetrahedron. Vertex,
 edge and transition tables upload once; intermediate alpha labels stay on GPU,
 and only the final region labels return to the same Wasm session. CPU mesh
 construction and Burgers-circuit tracing then produce the complete network.
+Vertex and tetrahedron snapshot rows are packed in parallel using the retained
+CPU pool before upload. Their order and bytes stay unchanged, and this packing
+adds no work to CPU-only extraction.
 The status identifies CPU/GPU stages and reports the actual backend and timings.
 
 The shaders emulate IEEE-754 binary64, including square root and division for

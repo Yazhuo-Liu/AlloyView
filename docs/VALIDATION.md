@@ -2,6 +2,73 @@
 
 Validation date: 2026-10-05 (UTC)
 
+## Parallel DXA preparation and coordination cutoff presets
+
+- Both serial and threaded DXA Wasm kernels were rebuilt with Emscripten
+  3.1.69, and the pinned native source checksums pass. All **871 Node tests**
+  pass, including real shared-kernel snapshot parity, tilted geometry,
+  workspace budgets, cancellation/retry and retained CPU fallback topology.
+- The interface optimization records boundary bits and wrapped-cell errors
+  in parallel, then commits topology in its original order. Native retained-
+  topology probes pass **54 exact network/region comparisons** and **18
+  invalid-interior-cell checks**. Parallel snapshot packing preserves all four
+  arrays byte-for-byte in **36 exports** and recovers from cancellation during
+  packing. The existing thread pool and Wasm memory are reused.
+- An isolated, alternating old/new Wasm comparison covers the 60,229-atom Fe
+  loop and physically replicated 259,808-atom NiGB, with 1/2/4 threads and three
+  timed repetitions. All 48 warm/measured analyses preserve atom labels,
+  Burgers family and network connectivity. Threaded interface-stage median
+  time falls **17–29%**; four-thread whole-analysis medians change
+  **1,118 → 861 ms** for Fe and **7,772 → 7,259 ms** for NiGB. Unchanged stages
+  also fluctuate, so whole-frame gains are measurements of this cloud run,
+  not isolated attribution or physical-GPU performance claims. Serial whole-
+  frame gains are not consistent. Protocol, stage timings, hashes and raw
+  results are retained in the [CPU profile](DXA_CPU_PROFILE.md).
+- The cutoff list covers **35 metal elements**, retains Custom as its first
+  option and keeps the numeric input above it. Automatic selection uses only
+  element labels actually present in the loaded frame. Mixed known elements
+  use the largest constituent preset with an explicit explanation; numeric
+  or unknown labels retain Custom and the 3.00 Å fallback. Existing element
+  defaults are unchanged, and all values remain editable starting estimates.
+  Recipe checks preserve exact saved numeric values, including older presets
+  and recipes made before presets existed.
+- Final production Chromium checks pass **18 CPU Worker/JavaScript cutoff
+  parity cases**, seven source imports, unused type metadata, manual element
+  selection, incomplete numeric typing, legacy/custom/preset recipes,
+  trajectory and replication persistence, cancellation, and the 390-pixel
+  phone layout. Opening a source suggests a radius without starting analysis;
+  selecting Custom alone also leaves analysis unchanged.
+- The production Fe visual regression with the rebuilt native kernels retains
+  **60,007 BCC / 222 Other**, one closed finite BCC **½⟨111⟩** loop of
+  **104.166673865 Å**, reciprocal junctions and unchanged source coordinates.
+  The display remains a connected tube with 88 rings and a shared closing
+  seam. Crystal/scalar filters, independent line visibility and PNG export
+  pass on the real dump.
+- The full production browser smoke passes, including configuration replay,
+  manual/automatic legends, Auto CSP, strain, selections, physical replication,
+  trajectories, phone gestures, PNG and the 204,800-atom rendering/picking case.
+  Its selection-group setup now dispatches the numeric input event before
+  Calculate, exercising the same Custom transition as a real radius edit.
+- The real Chromium/SwiftShader GPU integration passes all five DXA stages:
+  CPU and hybrid extraction retain the same FCC screw labels, Burgers vector
+  and **14.934458956 Å** line. Thin-cell failure, unavailable-device CPU
+  fallback, cancellation after a submitted alpha batch, native workspace
+  overlap rejection and asynchronous-callback abort all recover on kernel
+  generation 1 with the retained workers. This validates GPU correctness,
+  not hardware GPU speed.
+- Actual browser pthread checks pass serial fallback without COOP/COEP and
+  parallel extraction with isolation. Pool growth **2 → 3 → 4 → 1**, then a
+  new source at two threads, retains generation 1, the grown three-worker pool
+  and the 33,554,432-byte heap. Cooperative cancellation keeps the coordinator
+  and pool alive; recovery restores the correct winding and network, and
+  explicit shutdown closes every worker.
+
+Reproduce with `npm test`, `npm run build`, `npm run test:browser`,
+`npm run test:browser:coordination-presets`,
+`npm run test:browser:dxa-visual -- --software`,
+`npm run test:browser:dxa-gpu -- --software --integration-only` and
+`npm run test:browser:dxa-parallel -- --software`.
+
 ## Continuous DXA tubes and independent crystal visibility
 
 - All **862 Node tests** pass. The new checks cover shared-ring closed tubes,

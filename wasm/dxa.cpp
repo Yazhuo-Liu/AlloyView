@@ -154,11 +154,12 @@ struct DxaSession {
         tetData.resize(tets * 16);
         edgeData.resize(edges * 8);
         transitionData.resize(transitions * 20);
-        for (size_t vertex = 0; vertex < vertices; ++vertex) {
-            if ((vertex & 1023) == 0) requireStage(true);
+        // Pack independent rows with the already configured, reusable pthread
+        // pool. No scientific topology or reference-frame indices are changed.
+        requireStage(parallelForWithProgress(vertices, [&](size_t vertex) {
             const Point3& point = tessellation.vertexPosition(vertex);
             for (int axis = 0; axis < 3; ++axis) vertexData[vertex * 3 + axis] = point[axis];
-        }
+        }));
         // Slot zero is the self-transition. Other slots are graph transitions
         // in their original order, including separately represented reverses.
         for (int axis = 0; axis < 3; ++axis) {
@@ -207,8 +208,11 @@ struct DxaSession {
         });
         if (edgeIndex != edges)
             throw std::runtime_error("DXA immutable edge count is inconsistent.");
-        for (size_t tet = 0; tet < tets; ++tet) {
-            if ((tet & 1023) == 0) requireStage(true);
+        // The key map is complete and immutable before any worker reads it.
+        // Each worker writes only its own fixed tetrahedron row; exceptions
+        // and cancellation join every worker before snapshot cleanup/fallback.
+        const auto& packedEdgeIndices = edgeIndices;
+        requireStage(parallelForWithProgress(tets, [&](size_t tet) {
             uint32_t* row = tetData.data() + tet * 16;
             const bool finite = tessellation.isFiniteCell(tet);
             row[14] = finite ? 1 : 0;
@@ -218,16 +222,16 @@ struct DxaSession {
                 if (row[4 + vertex] >= tets || (finite && row[vertex] >= vertices))
                     throw std::runtime_error("DXA snapshot contains an invalid tessellation index.");
             }
-            if (!finite) continue;
+            if (!finite) return;
             for (int edge = 0; edge < 6; ++edge) {
                 const uint32_t first = static_cast<uint32_t>(tessellation.vertexIndex(row[edgeVertices[edge][0]]));
                 const uint32_t second = static_cast<uint32_t>(tessellation.vertexIndex(row[edgeVertices[edge][1]]));
                 const uint64_t key = (uint64_t(std::min(first, second)) << 32) | std::max(first, second);
-                const auto found = edgeIndices.find(key);
-                if (found != edgeIndices.end())
+                const auto found = packedEdgeIndices.find(key);
+                if (found != packedEdgeIndices.end())
                     row[8 + edge] = found->second ^ (first > second ? reversedEdge : 0);
             }
-        }
+        }));
         exported = true;
     }
 

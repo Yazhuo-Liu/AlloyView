@@ -50,6 +50,22 @@ test('display-only recipes work without source files and use stable defaults', (
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
 });
 
+test('coordination recipes save elemental cutoff choices while preserving legacy numeric values', () => {
+  for (const [preset, cutoff] of [['custom', 3.17], ['Ni', 2.85], ['Al', 3.3], ['Ta', 3.3]]) {
+    const coordination = { enabled: true, cutoff, preset };
+    const recipe = createConfiguration({ settings: { analyses: { coordination } } });
+    assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.analyses.coordination, coordination);
+  }
+  const oldRecipe = createConfiguration({ settings: { analyses: { coordination: { enabled: true, cutoff: 3.17 } } } });
+  assert.deepEqual(parseConfiguration(JSON.stringify(oldRecipe)).settings.analyses.coordination, { enabled: true, cutoff: 3.17 });
+  assert.equal(Object.hasOwn(oldRecipe.settings.analyses.coordination, 'preset'), false);
+  for (const preset of ['Type 1', 'Fe.cfg', 'ni', '__proto__', null, 3]) {
+    const invalid = structuredClone(oldRecipe);
+    invalid.settings.analyses.coordination.preset = preset;
+    assert.throws(() => parseConfiguration(JSON.stringify(invalid)), /settings\.analyses\.coordination\.preset/);
+  }
+});
+
 test('GPU acceleration defaults on while explicit saved off preferences round-trip', () => {
   const recipe = createConfiguration({ settings: { compute: { gpuEnabled: true } } });
   assert.equal(parseConfiguration(JSON.stringify(recipe)).settings.compute.gpuEnabled, true);

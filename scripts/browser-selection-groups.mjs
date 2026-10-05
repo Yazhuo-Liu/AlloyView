@@ -78,7 +78,9 @@ export async function runSelectionGroupsSmoke({ call, evaluate, waitFor, showToo
   await load(trajectoryPath, 'selection-groups.dump');
   assert.equal(await evaluate('document.getElementById("replicate-atoms").checked'), false, 'physical replication defaults off');
   await showTool('coordination');
-  await evaluate(`document.getElementById('cutoff').value = '3.1'; document.getElementById('run-analysis').click();`);
+  await evaluate(`(() => { const cutoff = document.getElementById('cutoff'); cutoff.value = '3.1';
+    cutoff.dispatchEvent(new Event('input')); document.getElementById('run-analysis').click(); })()`);
+  assert.equal(await evaluate('document.getElementById("coordination-cutoff-preset").value'), 'custom', 'editing the radius selects Custom');
   await waitFor('document.getElementById("analysis-state").textContent === "Calculated"', 'initial thin-cell coordination');
   assert.deepEqual(await evaluate('Array.from(selectionGroupsRenderer.frame.properties.find(p=>p.name==="coordination").data)'), [3, 3, 3, 3]);
   await evaluate('window.groupOriginalCoordination = selectionGroupsRenderer.frame.properties.find(p=>p.name==="coordination").data');

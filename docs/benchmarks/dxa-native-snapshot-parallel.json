@@ -1,0 +1,514 @@
+{
+  "benchmark": "DXA immutable GPU snapshot row packing",
+  "environment": {
+    "runtime": "native Linux C++17 pthreads",
+    "compiler": "g++ -O3 -std=c++17 -fexceptions -pthread -D__EMSCRIPTEN_PTHREADS__",
+    "cpuAffinityCount": 5,
+    "nodeAvailableParallelism": 4
+  },
+  "method": "Each dataset prepares one serial topology then alternates original and parallel snapshot packing three times per 1/2/4 thread setting. Every vertex, tetrahedron, edge, and transition array is compared byte-for-byte with memcmp against first original export. Native input/geometry construction and JavaScript copies/GPU upload are outside export timing. Cancellation/recovery tested separately.",
+  "datasets": [
+    {
+      "name": "fe",
+      "source": "examples/Fe_disloc_loop.dump",
+      "realReplication": [
+        1,
+        1,
+        1
+      ],
+      "allSnapshotsByteIdentical": true,
+      "summary": [
+        {
+          "threads": 1,
+          "originalMedianMs": 246.501,
+          "parallelMedianMs": 249.056,
+          "gainPercent": -1.0365069512902612
+        },
+        {
+          "threads": 2,
+          "originalMedianMs": 272.528,
+          "parallelMedianMs": 179.259,
+          "gainPercent": 34.223639405859224
+        },
+        {
+          "threads": 4,
+          "originalMedianMs": 257.873,
+          "parallelMedianMs": 150.556,
+          "gainPercent": 41.61622193870625
+        }
+      ],
+      "runs": [
+        {
+          "threads": 1,
+          "parallel": 0,
+          "run": 0,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 246.501,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 1,
+          "parallel": 1,
+          "run": 1,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 300.929,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 1,
+          "parallel": 0,
+          "run": 2,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 295.752,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 1,
+          "parallel": 1,
+          "run": 3,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 247.105,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 1,
+          "parallel": 0,
+          "run": 4,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 242.164,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 1,
+          "parallel": 1,
+          "run": 5,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 249.056,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 0,
+          "run": 0,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 247.714,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 1,
+          "run": 1,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 179.259,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 0,
+          "run": 2,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 288.414,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 1,
+          "run": 3,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 211.683,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 0,
+          "run": 4,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 272.528,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 1,
+          "run": 5,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 174.762,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 0,
+          "run": 0,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 257.873,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 1,
+          "run": 1,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 134.368,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 0,
+          "run": 2,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 289.762,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 1,
+          "run": 3,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 150.556,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 0,
+          "run": 4,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 253.509,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 1,
+          "run": 5,
+          "atoms": 60229,
+          "tets": 760983,
+          "edges": 421604,
+          "vertices": 126334,
+          "snapshotBytes": 65226416,
+          "exportMs": 156.123,
+          "exactArrayParity": true
+        }
+      ]
+    },
+    {
+      "name": "nigb",
+      "source": "examples/NiGB_minimized.cfg",
+      "realReplication": [
+        1,
+        1,
+        2
+      ],
+      "allSnapshotsByteIdentical": true,
+      "summary": [
+        {
+          "threads": 1,
+          "originalMedianMs": 2958.75,
+          "parallelMedianMs": 2817.29,
+          "gainPercent": 4.781073088297424
+        },
+        {
+          "threads": 2,
+          "originalMedianMs": 2639.97,
+          "parallelMedianMs": 1780.18,
+          "gainPercent": 32.56817312317942
+        },
+        {
+          "threads": 4,
+          "originalMedianMs": 2668.75,
+          "parallelMedianMs": 1300.94,
+          "gainPercent": 51.252833723653396
+        }
+      ],
+      "runs": [
+        {
+          "threads": 1,
+          "parallel": 0,
+          "run": 0,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 2465.78,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 1,
+          "parallel": 1,
+          "run": 1,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 2803.5,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 1,
+          "parallel": 0,
+          "run": 2,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 3006.57,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 1,
+          "parallel": 1,
+          "run": 3,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 2817.29,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 1,
+          "parallel": 0,
+          "run": 4,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 2958.75,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 1,
+          "parallel": 1,
+          "run": 5,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 3081.49,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 0,
+          "run": 0,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 2639.97,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 1,
+          "run": 1,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 1780.18,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 0,
+          "run": 2,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 2869.29,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 1,
+          "run": 3,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 1949.62,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 0,
+          "run": 4,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 2470.11,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 2,
+          "parallel": 1,
+          "run": 5,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 1587.61,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 0,
+          "run": 0,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 2726.36,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 1,
+          "run": 1,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 1397.65,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 0,
+          "run": 2,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 2384.23,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 1,
+          "run": 3,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 1120.77,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 0,
+          "run": 4,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 2668.75,
+          "exactArrayParity": true
+        },
+        {
+          "threads": 4,
+          "parallel": 1,
+          "run": 5,
+          "atoms": 259808,
+          "tets": 5162144,
+          "edges": 1820319,
+          "vertices": 857324,
+          "snapshotBytes": 409203360,
+          "exportMs": 1300.94,
+          "exactArrayParity": true
+        }
+      ]
+    }
+  ],
+  "baselineRevision": "d6f9010fc955e402c5d6503e40f09124cf70800b",
+  "cancellationTest": {
+    "canceledDuringParallelTetrahedronPacking": true,
+    "joinedWorkersAndClearedSnapshot": true,
+    "retainedTopologyRetryByteExact": true
+  }
+}

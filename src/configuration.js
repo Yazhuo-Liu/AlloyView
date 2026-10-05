@@ -4,6 +4,7 @@ import { SCALAR_COLOR_SCHEMES } from './render/palette.js';
 import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from './selection-groups.js';
 import { DXA_DEFAULTS, DXA_FAMILIES } from './analysis/dxa.js';
 import { CRYSTAL_VISIBILITY_SOURCE_NAMES } from './crystal-visibility-controls.js';
+import { COORDINATION_CUTOFF_PRESETS } from './analysis/cutoff.js';
 
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
@@ -17,6 +18,7 @@ export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence']);
 const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
+const COORDINATION_CUTOFF_CHOICES = new Set(['custom', ...COORDINATION_CUTOFF_PRESETS.map(preset => preset.symbol)]);
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const MAX_FILES = 20_000;
@@ -408,7 +410,7 @@ function normalizeDisplay(value) {
 
 function normalizeAnalyses(value, fromSnapshot) {
   const input = record(value, 'settings.analyses', ['coordination', 'cna', 'centrosymmetry', 'ptm', 'strain']);
-  const coordination = record(input.coordination ?? {}, 'settings.analyses.coordination', ['enabled', 'cutoff']);
+  const coordination = record(input.coordination ?? {}, 'settings.analyses.coordination', ['enabled', 'cutoff', 'preset']);
   const cna = record(input.cna ?? {}, 'settings.analyses.cna', ['enabled', 'mode', 'cutoff']);
   const centrosymmetry = record(input.centrosymmetry ?? {}, 'settings.analyses.centrosymmetry', ['enabled', 'mode', 'neighbors']);
   const ptm = record(input.ptm ?? {}, 'settings.analyses.ptm', ['enabled', 'flags', 'rmsdCutoff']);
@@ -441,7 +443,10 @@ function normalizeAnalyses(value, fromSnapshot) {
   if (cnaEnabled && cnaMode === 'fixed' && cnaCutoff === null) fail('settings.analyses.cna.cutoff', 'is required for fixed CNA');
   const ptmEnabled = boolean(ptm.enabled, 'settings.analyses.ptm.enabled', false);
   return {
-    coordination: { enabled: coordinationEnabled, cutoff },
+    coordination: { enabled: coordinationEnabled, cutoff,
+      ...(coordination.preset === undefined ? {} : {
+        preset: choice(coordination.preset, 'settings.analyses.coordination.preset', COORDINATION_CUTOFF_CHOICES),
+      }) },
     cna: { enabled: cnaEnabled, mode: cnaMode, cutoff: cnaCutoff },
     centrosymmetry: {
       enabled: boolean(centrosymmetry.enabled, 'settings.analyses.centrosymmetry.enabled', false),

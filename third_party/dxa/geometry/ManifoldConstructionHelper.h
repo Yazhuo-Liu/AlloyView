@@ -141,6 +141,42 @@ private:
     template<typename PrepareMeshFaceFunc, typename PrepareMeshVertexFunc>
     bool createInterfaceFacets(PrepareMeshFaceFunc&& prepareMeshFaceFunc, PrepareMeshVertexFunc&& prepareMeshVertexFunc, ProgressingTask& operation)
     {
+        // Regions and coordinates are complete and immutable at this point.
+        // Parallel work records decisions only; mesh numbering and callbacks
+        // remain in the original cell/face order below.
+        constexpr uint8_t invalidWrappedCell = 1 << 4;
+        bool prepareFacetsInParallel = dxaThreadCount() > 1 && _numFilledCells >= 2048;
+        std::vector<uint8_t> facetMasks;
+        if(prepareFacetsInParallel) {
+            if(operation.isCanceled()) return false;
+            try {
+                // Filled indices are unique and exclude ghost/empty cells.
+                facetMasks.resize(_numFilledCells);
+            }
+            catch(const std::bad_alloc&) {
+                // This optional workspace must not make an otherwise valid
+                // serial topology construction require additional memory.
+                prepareFacetsInParallel = false;
+            }
+        }
+        if(prepareFacetsInParallel) {
+            if(!parallelForWithProgress(_tessellation.numberOfTetrahedra(), [&](size_t cell) {
+                const auto filledIndex = _tessellation.getCellIndex(cell);
+                if(filledIndex == -1) return;
+                if(cellHasWrappedEdge(cell)) {
+                    facetMasks[filledIndex] = invalidWrappedCell;
+                    return;
+                }
+                const auto filledRegion = _tessellation.getUserField(cell);
+                uint8_t mask = 0;
+                for(int face = 0; face < 4; ++face)
+                    if(_tessellation.getUserField(_tessellation.cellAdjacent(cell, face)) != filledRegion)
+                        mask |= uint8_t(1 << face);
+                facetMasks[filledIndex] = mask;
+            })) return false;
+            if(operation.isCanceled()) return false;
+        }
+
         // Stores the triangle mesh vertices created for the vertices of the tetrahedral mesh.
         std::vector<SurfaceMesh::vertex_index> vertexMap(_positions.size(), SurfaceMesh::InvalidIndex);
         _tetrahedraFaceList.clear();
@@ -168,16 +204,12 @@ private:
             if(!operation.setProgressValueIntermittent(_tessellation.getCellIndex(cell)))
                 return false;
 
-            Point3 unwrappedVerts[4];
-            for(int i = 0; i < 4; i++)
-                unwrappedVerts[i] = _tessellation.vertexPosition(_tessellation.cellVertex(cell, i));
-
-            // Check validity of tessellation.
-            // Delaunay edges (of filled tetrahedro) should never span more than half of the simulation box in periodic directions.
-            Vector3 ad = unwrappedVerts[0] - unwrappedVerts[3];
-            Vector3 bd = unwrappedVerts[1] - unwrappedVerts[3];
-            Vector3 cd = unwrappedVerts[2] - unwrappedVerts[3];
-            if(_tessellation.simCell()->isWrappedVector(ad) || _tessellation.simCell()->isWrappedVector(bd) || _tessellation.simCell()->isWrappedVector(cd))
+            const uint8_t boundaryMask = prepareFacetsInParallel
+                ? facetMasks[_tessellation.getCellIndex(cell)] : 0;
+            // Validate every filled local cell, including interior cells.
+            // Delay errors until this ordered loop to retain the first failing
+            // cell and all preceding topology/callback behavior.
+            if(prepareFacetsInParallel ? bool(boundaryMask & invalidWrappedCell) : cellHasWrappedEdge(cell))
                 throw Exception("Cannot construct manifold. Simulation cell length is too small for the given probe sphere radius parameter.");
 
             // Iterate over the four faces of the tetrahedron cell.
@@ -185,9 +217,10 @@ private:
             for(int f = 0; f < 4; f++) {
 
                 // Check if the adjacent tetrahedron belongs to a different region.
-                std::pair<DelaunayTessellation::CellHandle,int> mirrorFacet = _tessellation.mirrorFacet(cell, f);
-                DelaunayTessellation::CellHandle adjacentCell = mirrorFacet.first;
-                if(_tessellation.getUserField(adjacentCell) == filledRegion)
+                if(prepareFacetsInParallel) {
+                    if(!(boundaryMask & uint8_t(1 << f))) continue;
+                }
+                else if(_tessellation.getUserField(_tessellation.cellAdjacent(cell, f)) == filledRegion)
                     continue;
 
                 // Create the three vertices of the face or use existing output vertices.
@@ -236,6 +269,21 @@ private:
         _mesh.setFaceRegions(std::move(faceRegions));
 
         return !operation.isCanceled();
+    }
+
+    bool cellHasWrappedEdge(DelaunayTessellation::CellHandle cell) const
+    {
+        Point3 vertices[4];
+        for(int i = 0; i < 4; ++i)
+            vertices[i] = _tessellation.vertexPosition(_tessellation.cellVertex(cell, i));
+        // Keep the original arithmetic and short-circuit order. These edges
+        // must not span half a periodic cell even when no facet is emitted.
+        const Vector3 ad = vertices[0] - vertices[3];
+        const Vector3 bd = vertices[1] - vertices[3];
+        const Vector3 cd = vertices[2] - vertices[3];
+        return _tessellation.simCell()->isWrappedVector(ad) ||
+            _tessellation.simCell()->isWrappedVector(bd) ||
+            _tessellation.simCell()->isWrappedVector(cd);
     }
 
     SurfaceMesh::face_index findAdjacentFace(DelaunayTessellation::CellHandle cell, int f, int e, bool reverse = false)

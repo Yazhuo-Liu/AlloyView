@@ -59,6 +59,15 @@ a short typing pause, or immediately on committing the field. Rapid edits keep
 one analysis active and use the latest requested cutoff. The Calculate button
 is available to run the suggested cutoff without editing it.
 
+**Cutoff preset** places **Custom** first and lists 35 common metals. A file
+with recognized chemical elements selects the corresponding preset; alloys
+start with the largest constituent estimate and list the elements in the help
+text. Numeric atom types keep Custom. Choosing a preset applies its radius;
+editing the numeric field switches back to Custom. Frame changes and
+replication preserve the chosen value. JSON recipes save the choice, while
+older recipes restore their exact numeric cutoff as Custom. The presets are
+starting estimates; check the structure's first minimum of g(r).
+
 ## Scalar color legends
 
 Use **Color by** at the top of the viewport legend to switch between atom
