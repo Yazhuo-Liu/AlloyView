@@ -8,6 +8,8 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await reloadPage();
   await waitFor('document.readyState === "complete" && !document.getElementById("export-configuration").hidden', 'fresh atom tools page');
   assert.equal(await evaluate('document.querySelector("[data-tool-button=configuration]")'), null);
+  assert.equal(await evaluate('document.querySelector("[data-tool-button=selection]")'), null, 'Atom details is a viewport overlay rather than a sidebar tool');
+  assert.equal(await evaluate('document.getElementById("tool-selection")'), null);
   assert.equal(await evaluate('document.getElementById("configuration-section").hidden'), false, 'configuration import is available before opening a structure');
   assert.equal(await evaluate('document.getElementById("export-eps")'), null, 'raster EPS export is removed');
   const configurationPlacement = await evaluate(`(() => {
@@ -23,7 +25,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   const documentation = await evaluate(`(async () => {
     const github = document.getElementById('github-link');
     const overview = document.getElementById('documentation-link');
-    const panels = [...document.querySelectorAll('[data-tool-panel]'), document.getElementById('configuration-section')];
+    const panels = [...document.querySelectorAll('[data-tool-panel], [data-feature-help]'), document.getElementById('configuration-section')];
     const links = panels.map(panel => panel.querySelector('.feature-help-link'));
     const urls = [...new Set([overview.href, ...links.map(link => link?.href)])];
     const pages = await Promise.all(urls.map(async url => {
@@ -37,7 +39,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
     };
   })()`);
   assert.match(documentation.github, /^https:\/\/github\.com\/Yazhuo-Liu\/AlloyView\/?$/);
-  assert.equal(documentation.panelLinks, true, 'each detailed tool and configuration panel opens its own help page');
+  assert.equal(documentation.panelLinks, true, 'each tool, Atom details overlay, and configuration panel opens its own help page');
   assert.ok(documentation.pages.every(page => page.status === 200 && page.isPage), JSON.stringify(documentation.pages));
   assert.ok(documentation.pages.every(page => new URL(page.url).pathname.startsWith('/AlloyView/docs/')), 'documentation links retain the GitHub Pages project prefix');
   await evaluate(`document.querySelector('#configuration-section .feature-help-link').focus()`);
@@ -93,6 +95,15 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
     await evaluate(`(() => { const field = document.getElementById(${JSON.stringify(id)}); ${typeof value === 'boolean' ? `field.checked = ${value}` : `field.value = ${JSON.stringify(String(value))}`}; field.dispatchEvent(new Event(${JSON.stringify(event)}, { bubbles: true })); })()`);
   }
   async function click(id) { await evaluate(`document.getElementById(${JSON.stringify(id)}).click()`); }
+  async function openAtomDetails() {
+    const activeTool = await evaluate('document.querySelector("[data-tool-button][aria-expanded=true]")?.dataset.toolButton');
+    await evaluate(`if (document.getElementById('toggle-atom-details').getAttribute('aria-expanded') !== 'true') document.getElementById('toggle-atom-details').click()`);
+    await waitFor('document.getElementById("toggle-atom-details").getAttribute("aria-expanded") === "true" && !document.getElementById("atom-details").inert', 'Atom details overlay');
+    assert.equal(await evaluate('document.querySelector("[data-tool-button][aria-expanded=true]")?.dataset.toolButton'), activeTool, 'opening Atom details preserves the active sidebar tool');
+  }
+  async function openAtomAppearance() {
+    await evaluate(`if (!document.getElementById('selected-atom-appearance').open) document.querySelector('#selected-atom-appearance summary').click()`);
+  }
   async function assertVectorGroups(expected) {
     const groups = await evaluate(`(() => {
       const ids = ['vector-components', 'vector-component-scales'];
@@ -211,7 +222,8 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
     assert.equal(await evaluate('[...document.querySelectorAll("[data-tool-panel]")].filter(panel => !panel.hidden).length'), 1);
   }
 
-  await showTool('selection');
+  await openAtomDetails();
+  assert.equal(await evaluate('document.getElementById("selected-atom-appearance").open'), false, 'selected atom appearance starts collapsed');
   await change('atom-search-id', 2);
   await click('find-atom');
   assert.match(await evaluate('document.getElementById("selection-data").textContent'), /2/);
@@ -225,6 +237,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   const measurementSettings = (await exportConfiguration()).settings.extensions.measurements;
   assert.equal(measurementSettings.enabled, true);
   assert.deepEqual(measurementSettings.atomIds, [1, 2, 3, 4]);
+  await openAtomAppearance();
   await change('selected-atom-color', '#ff0088');
   await change('selected-atom-radius', .4);
   await click('apply-atom-style');
@@ -594,13 +607,19 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await change('compare-preset', 'top');
   await change('compare-view', true);
   await waitFor('Boolean(document.querySelector(".comparison-view canvas"))', 'simultaneous second view');
+  // Both overlays occupy the right of the viewport. Collapse Atom details
+  // before exercising the second canvas with genuine mouse gestures.
+  await evaluate(`if (document.getElementById('toggle-atom-details').getAttribute('aria-expanded') === 'true') document.getElementById('toggle-atom-details').click()`);
+  await waitFor('document.getElementById("atom-details").hidden && document.getElementById("atom-details").inert', 'second viewport available after collapsing Atom details');
   const secondRenderer = 'window.atomToolsRenderers.find(view => view.frame && view.canvas.id !== "viewport")';
   const cameraFields = ['yaw', 'pitch', 'distance', 'orthographicScale', 'projectionMode', 'target', 'pan'];
   const cameraSnapshot = renderer => `Object.fromEntries(${JSON.stringify(cameraFields)}.map(key => [key, ${renderer}[key]]))`;
   async function secondCanvasPoint() {
     return evaluate(`(() => {
-      const rect = document.querySelector('.comparison-view canvas').getBoundingClientRect();
-      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      const canvas = document.querySelector('.comparison-view canvas'), rect = canvas.getBoundingClientRect();
+      const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+      if (document.elementFromPoint(x, y) !== canvas) throw new Error('The second-view pointer target is covered by another control.');
+      return { x, y };
     })()`);
   }
   async function dragSecondView(button, dx, dy) {
@@ -798,7 +817,8 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   assert.ok(await evaluate(`${secondRenderer}.atomRadii.every(value => Math.abs(value - 1.1) < 1e-6)`));
   assert.deepEqual(await evaluate(`Array.from(${secondRenderer}.atomColors.slice(0, 3))`), [51, 136, 255]);
   await assertInheritedAppearance('element radius and color overrides immediately update the second view');
-  await showTool('selection');
+  await openAtomDetails();
+  await openAtomAppearance();
   await change('atom-search-id', 2);
   await click('find-atom');
   await change('selected-atom-color', '#ff0088');

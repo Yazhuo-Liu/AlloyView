@@ -2,6 +2,51 @@
 
 Validation date: 2026-10-05 (UTC)
 
+## Viewport atom details and measurement vectors
+
+- All **872 Node tests** pass, including signed distance components,
+  triclinic minimum images, mixed/non-periodic directions, displayed coordinate
+  overrides and old Atom details recipe migration. The static production build
+  passes. Distance vectors reuse the same shortest-image calculation as the
+  existing distance, angle and dihedral.
+- Atom details is a viewport window with no sidebar tool button or panel.
+  Desktop starts expanded; phones start collapsed and inert. Picking atoms,
+  finding by ID, frame changes and completed analyses preserve the current
+  sidebar tool and window expansion choice. Selected atom appearance remains
+  initially collapsed. Closing a source restores the device default for the
+  next source; legacy `activeTool: "selection"` restores Display while retaining
+  selected IDs, appearance and measurement settings.
+- Real production Chromium pointer checks on a 108-atom FCC trajectory cover
+  all **23 imported** and **29 combined imported/calculated** property rows,
+  including category names and NaN fields. Coordination remains 12 and CNA
+  remains FCC; every displayed value updates on the next frame without losing
+  the selected atom ID. Clearing inspection and clearing measurements affect
+  their respective selections independently.
+- A four-atom periodic fixture displays first-to-second components
+  **[1, −2, 3] Å**, distance **√14 Å**. Disabling periodic image correction gives
+  **[−9, −2, 3] Å**, distance **√94 Å**; reversing picks gives **[−1, 2, −3] Å**.
+  Both direction and distance use the same coordinate/image convention.
+- Actual **390 × 844** phone touch checks pass default collapse, keyboard
+  exclusion, View/Legend/details switching, Escape focus return and independent
+  window scrolling. Camera, fixed viewport bounds and page scroll stay exactly
+  unchanged. The window leaves the Legend entry reachable, including with
+  trajectory controls visible. Desktop and phone screenshots were inspected.
+- Compact **390 × 640**, **320 × 568** and landscape **640 × 400** touch
+  checks also pass. Their windows retain respectively **123, 82 and 41 px**
+  of visible content with independent scrolling and reachable View/Legend
+  buttons. Short screens let the expanded window occupy trajectory space;
+  collapsing it restores the normal layout. Camera and viewport remain fixed.
+- Actual **1,090 × 928 PNG** exports with the same selection, camera and
+  measurement state are pixel-identical with the window expanded or collapsed:
+  **zero changed RGBA pixels**. The existing exporter captures WebGL pixels and
+  explicit legend/axes, so inspection controls are omitted.
+- The full production browser smoke passes, including ID lookup, measurements,
+  appearance edits, two-view camera controls, analysis/legend interactions,
+  configuration replay, phone gestures and 204,800-atom rendering/picking.
+
+Reproduce with `npm test`, `npm run build`,
+`npm run test:browser:atom-details` and `npm run test:browser`.
+
 ## Parallel DXA preparation and coordination cutoff presets
 
 - Both serial and threaded DXA Wasm kernels were rebuilt with Emscripten

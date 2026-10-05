@@ -62,7 +62,7 @@ const elements = Object.fromEntries([
   'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
   'background-picker', 'background-current', 'background', 'show-axes',
   'show-cell', 'png-background', 'png-legend', 'png-axes', 'slice-axis', 'slice-position', 'slice-value', 'cutoff', 'run-analysis',
-  'analysis-state', 'cutoff-help', 'coordination-cutoff-preset', 'analysis-help', 'selection-empty', 'selection-data', 'clear-selection', 'legend', 'color-legend',
+  'analysis-state', 'cutoff-help', 'coordination-cutoff-preset', 'analysis-help', 'atom-details-overlay', 'selection-empty', 'selection-data', 'clear-selection', 'legend', 'color-legend',
   'cna-mode', 'cna-cutoff', 'cna-cutoff-field', 'run-cna', 'cna-state', 'cna-help', 'cna-status',
   'csp-neighbors', 'csp-auto-result', 'csp-help', 'run-csp', 'csp-state', 'csp-status', 'metric-cna', 'metric-csp',
   'ptm-rmsd', 'run-ptm', 'ptm-state', 'ptm-status', 'metric-ptm',
@@ -290,7 +290,6 @@ function handleAtomPick(index) {
     return;
   }
   selectAtom(index);
-  if (index >= 0) toolPanels.selectTool('selection');
 }
 
 function selectGroupAtomIndices(indices) {
@@ -2702,6 +2701,7 @@ function syncBackgroundControl(value) {
 }
 
 function setControlsEnabled(enabled) {
+  elements['atom-details-overlay'].hidden = !state.frame;
   atomEyeTools?.setEnabled(enabled);
   dxaTools?.setEnabled(enabled);
   selectionGroupControls?.setEnabled(enabled);

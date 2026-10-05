@@ -11,6 +11,7 @@
     "test": "node --test",
     "test:browser": "node scripts/browser-smoke.mjs",
     "test:browser:coordination-presets": "node scripts/browser-coordination-presets.mjs",
+    "test:browser:atom-details": "node scripts/browser-atom-details.mjs",
     "test:browser:fe-input": "node scripts/browser-fe-input.mjs",
     "test:browser:fe-loop": "node scripts/browser-fe-loop.mjs",
     "test:browser:fe-lattice-gpu": "node scripts/browser-fe-lattice-gpu.mjs",

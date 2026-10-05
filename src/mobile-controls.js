@@ -12,13 +12,20 @@ export function initializeMobileControls() {
       button: document.getElementById('toggle-legend'),
       panel: document.getElementById('legend'),
     },
+    {
+      wrapper: document.getElementById('atom-details-overlay'),
+      button: document.getElementById('toggle-atom-details'),
+      panel: document.getElementById('atom-details'),
+      desktopCollapsible: true,
+    },
   ].filter(({ wrapper, button, panel }) => wrapper && button && panel);
 
   function setExpanded(overlay, expanded) {
     overlay.wrapper.classList.toggle('is-expanded', expanded);
     overlay.button.setAttribute('aria-expanded', String(expanded));
-    // A closed mobile menu must also be absent from keyboard navigation.
-    overlay.panel.inert = narrow.matches && !expanded;
+    // Collapsed content must also be absent from keyboard navigation.
+    overlay.panel.inert = (narrow.matches || overlay.desktopCollapsible) && !expanded;
+    if (overlay.desktopCollapsible) overlay.panel.hidden = !expanded;
   }
 
   function syncLayout() {
@@ -28,8 +35,11 @@ export function initializeMobileControls() {
 
   for (const overlay of overlays) {
     overlay.button.addEventListener('click', () => {
-      if (!narrow.matches) return;
       const expanded = overlay.button.getAttribute('aria-expanded') !== 'true';
+      if (!narrow.matches) {
+        if (overlay.desktopCollapsible) setExpanded(overlay, expanded);
+        return;
+      }
       for (const other of overlays) setExpanded(other, other === overlay && expanded);
     });
   }
@@ -55,6 +65,15 @@ export function initializeMobileControls() {
       attributeFilter: ['hidden'],
     });
     syncLegendAvailability();
+  }
+
+  const details = overlays.find(({ panel }) => panel.id === 'atom-details');
+  if (details) {
+    // Closing a source restores the device default for the next structure;
+    // frame/analysis updates preserve the user's current expansion choice.
+    new MutationObserver(() => {
+      if (details.wrapper.hidden) setExpanded(details, !narrow.matches);
+    }).observe(details.wrapper, { attributes: true, attributeFilter: ['hidden'] });
   }
 
   narrow.addEventListener('change', syncLayout);

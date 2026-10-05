@@ -341,6 +341,17 @@ test('discovered vector sources retain their stable family key without enabling 
   }
 });
 
+test('legacy atom-details tools migrate to Display while retaining selected atoms and measurements', () => {
+  const recipe = createConfiguration({ settings: {
+    activeTool: 'selection', selectedAtomId: 42,
+    extensions: { measurements: { enabled: true, minimumImage: false, atomIds: [42, 43] } },
+  } });
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.equal(restored.settings.activeTool, 'display');
+  assert.equal(restored.settings.selectedAtomId, 42);
+  assert.deepEqual(restored.settings.extensions.measurements, { enabled: true, minimumImage: false, atomIds: [42, 43] });
+});
+
 test('legacy configuration selection resolves outside Tools and old vector settings remain supported', () => {
   const recipe = createConfiguration({ settings: { activeTool: 'configuration', extensions: {
     vectors: { enabled: true, components: ['fx', 'fy', 'fz'], scale: 2, color: '#ffffff' },

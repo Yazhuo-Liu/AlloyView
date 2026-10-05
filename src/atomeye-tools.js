@@ -475,7 +475,10 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     try {
       const result = measureAtoms(frame, indices, { minimumImage: $('measure-pbc').checked, positions: renderer.displayPositions });
       const rows = [`Atoms: ${indices.map(index => frame.ids[index]).join(' → ')}`];
-      if (indices.length >= 2) rows.push(`Distance: ${result.distance.toPrecision(7)} Å`);
+      if (indices.length >= 2) {
+        rows.push(`Distance: ${result.distance.toPrecision(7)} Å`);
+        rows.push(`Distance vector: ${result.displacement.map((value, axis) => `Δ${'xyz'[axis]} = ${value.toPrecision(7)} Å`).join(', ')}`);
+      }
       if (indices.length >= 3) rows.push(`Angle: ${result.angle.toPrecision(7)}°`);
       if (indices.length >= 4) rows.push(`Dihedral: ${result.dihedral.toPrecision(7)}°`);
       for (const row of rows) { const item = document.createElement('p'); item.textContent = row; container.append(item); }
@@ -793,7 +796,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   $('find-atom').addEventListener('click', () => {
     const frame = getFrame(), index = frame?.ids.findIndex(id => String(id) === $('atom-search-id').value.trim()) ?? -1;
     if (index < 0) { notify('No atom has that ID in this frame.'); return; }
-    selectAtom(index); renderer.centerOnAtom(index); tools.selectTool('selection');
+    selectAtom(index); renderer.centerOnAtom(index);
   });
   $('atom-search-id').addEventListener('keydown', event => { if (event.key === 'Enter') $('find-atom').click(); });
   $('center-atom').addEventListener('click', () => { const index = getSelectedIndex(); if (index >= 0) renderer.centerOnAtom(index); });

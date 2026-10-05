@@ -16,7 +16,7 @@ export const MAX_CONFIGURATION_SELECTION_GROUPS = MAX_SELECTION_GROUPS;
 export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
 
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const COORDINATION_CUTOFF_CHOICES = new Set(['custom', ...COORDINATION_CUTOFF_PRESETS.map(preset => preset.symbol)]);
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
@@ -196,7 +196,8 @@ function normalizeSettings(value, fromSnapshot) {
     selectionGroups: normalizeSelections(input.selectionGroups ?? {}),
     colors: normalizeColors(input.colors ?? {}),
     camera: normalizeCamera(input.camera ?? null),
-    activeTool: input.activeTool === 'configuration' ? null : nullableChoice(input.activeTool === undefined ? 'display' : input.activeTool, 'settings.activeTool', TOOLS),
+    activeTool: input.activeTool === 'configuration' ? null : nullableChoice(
+      input.activeTool === undefined || input.activeTool === 'selection' ? 'display' : input.activeTool, 'settings.activeTool', TOOLS),
     selectedAtomId: identifier(input.selectedAtomId ?? null, 'settings.selectedAtomId', true),
     theme: choice(input.theme ?? 'dark', 'settings.theme', new Set(['light', 'dark'])),
   };

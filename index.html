@@ -145,6 +145,41 @@
               <section id="crystal-visibility" class="crystal-visibility" aria-label="Crystal structure visibility" hidden></section>
             </div>
           </div>
+          <div id="atom-details-overlay" class="atom-details-overlay" hidden>
+            <button id="toggle-atom-details" class="mobile-overlay-toggle atom-details-toggle" type="button" aria-controls="atom-details" aria-expanded="true">Atom details</button>
+            <section id="atom-details" class="atom-details selection-section" data-feature-help="selection" aria-label="Atom details and measurements">
+              <div class="section-heading">
+                <div><p class="section-kicker">SELECTION</p><h3>Atom details</h3></div>
+                <button id="clear-selection" class="text-button" type="button" hidden>Clear</button>
+              </div>
+              <div class="atom-search-row">
+                <label class="field"><span>Atom ID</span><input id="atom-search-id" type="number" step="1" placeholder="Enter ID" disabled></label>
+                <button id="find-atom" class="button button-secondary" type="button" disabled>Find</button>
+                <button id="center-atom" class="button button-secondary" type="button" disabled>Center</button>
+              </div>
+              <div id="selection-empty" class="selection-empty">Click an atom to inspect its ID, type, coordinates, and properties.</div>
+              <dl id="selection-data" class="selection-data" hidden></dl>
+              <div class="measurement-controls">
+                <label class="slice-toggle"><input id="measure-mode" type="checkbox" disabled><span>Measure selected atoms</span></label>
+                <label class="slice-toggle"><input id="measure-pbc" type="checkbox" checked disabled><span>Use nearest periodic images</span></label>
+                <p class="help">Select 2 atoms for distance and its vector components (first → second), 3 for angle or 4 for dihedral. Turn off periodic images to measure the displayed coordinates directly.</p>
+                <dl id="measurement-data" class="selection-data measurement-data" aria-live="polite"></dl>
+                <button id="clear-measurements" class="text-button" type="button" disabled>Clear measurements</button>
+              </div>
+              <details id="selected-atom-appearance" class="tool-details">
+                <summary>Selected atom appearance</summary>
+                <div class="paired-fields">
+                  <label class="field"><span>Color</span><input id="selected-atom-color" type="color" value="#ffffff" disabled></label>
+                  <label class="field"><span>Radius</span><span class="input-unit"><input id="selected-atom-radius" type="number" value="1" min="0.01" step="0.05" disabled><i>Å</i></span></label>
+                </div>
+                <label class="slice-toggle"><input id="selected-atom-visible" type="checkbox" checked disabled><span>Show this atom</span></label>
+                <div class="paired-actions">
+                  <button id="apply-atom-style" class="button button-accent" type="button" disabled>Apply</button>
+                  <button id="reset-atom-style" class="button button-secondary" type="button" disabled>Reset</button>
+                </div>
+              </details>
+            </section>
+          </div>
           <div id="loading" class="loading" role="status" aria-live="polite" hidden>
             <span class="spinner"></span>
             <span id="loading-text">Reading…</span>
@@ -226,7 +261,6 @@
               <button type="button" data-tool-button="referenceStrain" aria-controls="tool-reference-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Frame strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="localShear" aria-controls="tool-local-shear" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Local shear</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="selectionGroups" aria-controls="tool-selection-groups" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Selections</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="selection" aria-controls="tool-selection" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Atom details</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="performance" aria-controls="tool-performance" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Performance</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
             </div>
             <p class="help tool-selector-help">Select a tool to show its settings. Close an analysis to cancel it and clear its results.</p>
@@ -593,39 +627,6 @@
               </div>
             </div>
             <p id="selection-group-status" class="help" role="status" aria-live="polite">Open a structure to create selections.</p>
-          </section>
-
-          <section id="tool-selection" class="side-section selection-section" data-tool-panel="selection" hidden>
-            <div class="section-heading">
-              <div><p class="section-kicker">SELECTION</p><h3>Atom details</h3></div>
-              <button id="clear-selection" class="text-button" type="button" hidden>Clear</button>
-            </div>
-            <div class="atom-search-row">
-              <label class="field"><span>Atom ID</span><input id="atom-search-id" type="number" step="1" placeholder="Enter ID" disabled></label>
-              <button id="find-atom" class="button button-secondary" type="button" disabled>Find</button>
-              <button id="center-atom" class="button button-secondary" type="button" disabled>Center</button>
-            </div>
-            <div id="selection-empty" class="selection-empty">Click an atom to inspect its ID, type, coordinates, and properties.</div>
-            <dl id="selection-data" class="selection-data" hidden></dl>
-            <div class="measurement-controls">
-              <label class="slice-toggle"><input id="measure-mode" type="checkbox" disabled><span>Measure selected atoms</span></label>
-              <label class="slice-toggle"><input id="measure-pbc" type="checkbox" checked disabled><span>Use nearest periodic images</span></label>
-              <p class="help">Select 2 atoms for distance, 3 for angle or 4 for dihedral. Turn off periodic images to measure the displayed coordinates directly.</p>
-              <dl id="measurement-data" class="selection-data measurement-data" aria-live="polite"></dl>
-              <button id="clear-measurements" class="text-button" type="button" disabled>Clear measurements</button>
-            </div>
-            <details class="tool-details">
-              <summary>Selected atom appearance</summary>
-              <div class="paired-fields">
-                <label class="field"><span>Color</span><input id="selected-atom-color" type="color" value="#ffffff" disabled></label>
-                <label class="field"><span>Radius</span><span class="input-unit"><input id="selected-atom-radius" type="number" value="1" min="0.01" step="0.05" disabled><i>Å</i></span></label>
-              </div>
-              <label class="slice-toggle"><input id="selected-atom-visible" type="checkbox" checked disabled><span>Show this atom</span></label>
-              <div class="paired-actions">
-                <button id="apply-atom-style" class="button button-accent" type="button" disabled>Apply</button>
-                <button id="reset-atom-style" class="button button-secondary" type="button" disabled>Reset</button>
-              </div>
-            </details>
           </section>
 
           <section id="tool-performance" class="side-section performance-section" data-tool-panel="performance" hidden>

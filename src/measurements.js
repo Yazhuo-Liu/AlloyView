@@ -85,7 +85,9 @@ export function minimumImageVector(displacement, cell) {
   return result;
 }
 
-/** Measure 2–4 ordered atom picks. Lengths are Å, angles are degrees.
+/** Measure 2–4 ordered atom picks. Lengths and displacement components are Å,
+ * angles are degrees. Displacements point from each pick to the next pick;
+ * displacement and distance refer to the first pair.
  * positions may override the full frame's flat coordinate array, supply a flat
  * array of selected XYZ values, or supply one XYZ tuple per pick. For explicit
  * replica positions, minimumImage: false measures exactly what is displayed.
@@ -116,10 +118,12 @@ export function measureAtoms(frame, indices, { minimumImage = true, positions } 
   }
   const unwrapped = [[...points[0]]];
   const distances = [];
+  const displacements = [];
   for (let index = 1; index < points.length; index += 1) {
     const direct = subtract(points[index], points[index - 1]);
     const vector = minimumImage ? minimumImageVector(direct, frame.cell) : direct;
     distances.push(length(vector));
+    displacements.push(vector);
     unwrapped.push(unwrapped[index - 1].map((value, axis) => value + vector[axis]));
   }
   let angle = NaN;
@@ -150,6 +154,8 @@ export function measureAtoms(frame, indices, { minimumImage = true, positions } 
     positions: unwrapped,
     distances,
     distance: distances[0],
+    displacements,
+    displacement: displacements[0],
     angle,
     dihedral,
   };

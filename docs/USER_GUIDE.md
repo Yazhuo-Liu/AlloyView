@@ -45,12 +45,14 @@ current tool again or **Close / cancel** to cancel that analysis and clear its
 results. **Cancel** clears the result while leaving the settings open to retry.
 
 On phones, the viewport stays above an independently scrolling tools panel.
-**View** and **Legend / atoms** start collapsed; tap to open camera controls or
-the legend's atom filters. Collapsing a legend preserves its filters and the
+**View**, **Legend / atoms** and **Atom details** start collapsed; tap to open
+camera controls, the legend's atom filters or the inspection window.
+Collapsing a legend preserves its filters and the
 separate PNG legend option. Drag one finger over the structure to rotate it;
 spread or pinch two fingers to zoom in or out, and move both fingers together
-to pan. These gestures work in both Perspective and Ortho. Tap an atom to open
-its details in the tools panel.
+to pan. These gestures work in both Perspective and Ortho. Tap an atom to
+update its details, then expand **Atom details** in the viewport to inspect
+them. Selecting an atom preserves the current sidebar tool and window state.
 
 Display options, color maps and legend limits apply as you edit them. Incomplete
 or empty numeric input keeps the last valid result instead of becoming zero.
@@ -517,10 +519,13 @@ See [Selections](features/selection-groups.md) for detailed controls and limits.
 
 ## Measurements and appearance overrides
 
-Open **Atom details** and use **Atom ID → Find** to select an atom by its
-identifier. **Center** makes the selected atom the camera target. Enable
-**Measure selected atoms** and select two atoms for a distance, three for a
-bond angle, or four for a dihedral. **Use nearest periodic images** applies
+The **Atom details** window floats over the viewport, opens by default on
+desktop, and starts collapsed on phones. Its button expands or collapses it;
+the window does not appear in PNG exports. Use **Atom ID → Find** to select an
+atom by its identifier. **Center** makes the selected atom the camera target. Enable
+**Measure selected atoms** and select two atoms for a distance and its
+**Δx, Δy, Δz** components in Å, directed from the first pick to the second.
+Three atoms add a bond angle; four add a dihedral. **Use nearest periodic images** applies
 the cell's PBC flags; turn it off to measure the source atoms' displayed
 wrapped/unwrapped coordinates directly. Measurements track source atom IDs;
 selecting different display replicas does not create separate measurement
@@ -528,8 +533,9 @@ points. **Clear measurements** clears that selection.
 
 Under **Display → Element colors and radii**, change an element's appearance
 or visibility. **Atom details → Selected atom appearance** overrides a
-specific atom's color, radius or visibility; **Reset** returns it to element
-settings. Overrides follow the original atom IDs across frames and displayed
+specific atom's color, radius or visibility. This appearance section starts
+collapsed; **Reset** returns the atom to element settings. Overrides follow
+the original atom IDs across frames and displayed
 replicas. Element colors apply to atom-type coloring, while single-atom colors
 override the selected scalar/structure palette too. Radius values are in Å
 before the overall radius scale.

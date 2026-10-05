@@ -14,6 +14,8 @@ test('ordered picks measure distance, bond angle and signed dihedral in degrees'
   const result = measureAtoms(source, [0, 1, 2, 3]);
   assert.deepEqual(result.atomIds, [10, 11, 12, 13]);
   assert.deepEqual(result.distances, [1, 1, 1]);
+  assert.deepEqual(result.displacements, [[0, -1, 0], [1, 0, 0], [0, 0, 1]]);
+  assert.deepEqual(result.displacement, [0, -1, 0]);
   near(result.angle, 90);
   near(result.dihedral, 90);
   near(measureAtoms(frame([[0, 1, 0], [0, 0, 0], [1, 0, 0], [1, 0, -1]]), [0, 1, 2, 3]).dihedral, -90);
@@ -23,9 +25,14 @@ test('periodic measurements follow nearest adjacent images and honor each PBC fl
   const source = frame([[9.5, 0, 0], [.5, 0, 0], [.5, 2, 0]], [true, false, true]);
   const result = measureAtoms(source, [0, 1, 2]);
   near(result.distance, 1);
+  assert.deepEqual(result.displacement, [1, 0, 0]);
+  assert.deepEqual(measureAtoms(source, [1, 0]).displacement, [-1, 0, 0]);
   near(result.angle, 90);
   assert.deepEqual(result.positions, [[9.5, 0, 0], [10.5, 0, 0], [10.5, 2, 0]]);
-  near(measureAtoms(source, [0, 1], { minimumImage: false }).distance, 9);
+  const direct = measureAtoms(source, [0, 1], { minimumImage: false });
+  near(direct.distance, 9);
+  assert.deepEqual(direct.displacement, [-9, 0, 0]);
+  assert.deepEqual(measureAtoms(frame([[0, 0, 0], [9, 11, -9]], [true, false, true]), [0, 1]).displacement, [-1, 11, 1]);
   assert.deepEqual(minimumImageVector([9, 11, 0], source.cell), [-1, 11, 0]);
 });
 
@@ -36,6 +43,12 @@ test('exact triclinic image search corrects the failure of fractional rounding',
   near(result[0], .31);
   near(result[1], -.51);
   near(result[2], 0);
+  const source = { ...frame([[0, 0, 0], Array.from(displacement)]), cell };
+  const measured = measureAtoms(source, [0, 1]);
+  measured.displacement.forEach((value, axis) => near(value, result[axis]));
+  near(measured.distance, Math.hypot(...measured.displacement));
+  measureAtoms(source, [1, 0]).displacement.forEach((value, axis) => near(value, -result[axis]));
+  assert.deepEqual(measureAtoms(source, [0, 1], { minimumImage: false }).displacement, Array.from(displacement));
 });
 
 test('an exact lattice displacement is resolved directly even in a very thin skew cell', () => {
@@ -65,7 +78,10 @@ test('triclinic closest images agree with exhaustive image search, including mix
 
 test('explicit picked replica coordinates and full-frame overrides are measured directly', () => {
   const source = frame([[1, 0, 0], [2, 0, 0], [3, 0, 0]], [true, true, true]);
-  near(measureAtoms(source, [0, 1], { positions: [[1, 0, 0], [12, 0, 0]], minimumImage: false }).distance, 11);
+  const replicas = measureAtoms(source, [0, 1], { positions: [[1, 0, 0], [12, 0, 0]], minimumImage: false });
+  near(replicas.distance, 11);
+  assert.deepEqual(replicas.displacement, [11, 0, 0]);
+  assert.deepEqual(measureAtoms(source, [0, 1], { positions: [[1, 0, 0], [12, 0, 0]] }).displacement, [1, 0, 0]);
   near(measureAtoms(source, [1, 2], { positions: new Float64Array([2, 0, 0, 23, 0, 0]), minimumImage: false }).distance, 21);
   near(measureAtoms(source, [0, 2], { positions: [0, 0, 0, 2, 0, 0, 40, 0, 0], minimumImage: false }).distance, 40);
 });
@@ -74,6 +90,7 @@ test('coincident points and collinear dihedrals produce NaN rather than spurious
   const source = frame([[0, 0, 0], [0, 0, 0], [1, 0, 0], [2, 0, 0]]);
   const result = measureAtoms(source, [0, 1, 2, 3]);
   assert.equal(result.distance, 0);
+  assert.deepEqual(result.displacement, [0, 0, 0]);
   assert.ok(Number.isNaN(result.angle));
   assert.ok(Number.isNaN(result.dihedral));
   near(measureAtoms(source, [1, 2, 3]).angle, 180);
