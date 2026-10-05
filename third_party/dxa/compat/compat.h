@@ -208,10 +208,20 @@ private:
     bool _empty = true;
 };
 
+// JavaScript may request cancellation while the coordinating Worker is inside
+// a synchronous Wasm call. The word lives in the shared heap for the lifetime
+// of the module, and every local task observes it without a message roundtrip.
+inline std::atomic<int32_t>& dxaCancellationWord() {
+    static std::atomic<int32_t> canceled{0};
+    return canceled;
+}
 class Task {
 public:
     virtual ~Task() = default;
-    bool isCanceled() const { return _canceled.load(std::memory_order_relaxed); }
+    bool isCanceled() const {
+        return _canceled.load(std::memory_order_relaxed) ||
+            dxaCancellationWord().load(std::memory_order_relaxed) != 0;
+    }
     bool isProgressingTask() const { return true; }
     static Task* current();
     void cancel() { _canceled.store(true, std::memory_order_relaxed); }
@@ -248,7 +258,7 @@ inline std::atomic<int>& dxaRequestedThreads() {
 }
 inline void configureDxaThreads(int count) {
 #ifdef __EMSCRIPTEN_PTHREADS__
-    dxaRequestedThreads().store(std::max(1, std::min(count, 32)), std::memory_order_relaxed);
+    dxaRequestedThreads().store(std::max(1, count), std::memory_order_relaxed);
 #else
     (void)count;
     dxaRequestedThreads().store(1, std::memory_order_relaxed);

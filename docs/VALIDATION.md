@@ -2,6 +2,57 @@
 
 Validation date: 2026-10-05 (UTC)
 
+## Dynamic CPU prewarming and one DXA heap
+
+The application now uses one active CPU budget of
+`max(1, navigator.hardwareConcurrency - 2)` across ordinary analyses and DXA.
+Actual parallelism also depends on atom count, analysis type and memory limits.
+Idle prewarmed Workers hold no CPU permit. Ordinary heavy-analysis prewarming
+includes the PTM module's initial 16 MiB heap in its memory estimate.
+
+File indexing overlaps module initialization, then the parsed atom count grows
+the existing pools. Physical replication validates its projected atom count
+and starts additional prewarming during coordinate generation. Display copies
+do not change the analysis pool target. Frame visits check actual pool health
+so a previously terminated ordinary analysis Worker can be prepared again.
+
+DXA creates one shared Wasm module even when only one computation thread is
+needed on an isolated host. Higher thread counts asynchronously load additional
+pthread Workers into that same module and shared memory; lower counts retain
+the unused slots. Normal source changes and shared-memory cancellation keep
+the heap. The host sets a shared cancellation word without a receive-side reset
+that could erase a racing abort. The client retains its CPU lease until native
+work acknowledges cancellation. PDEL insertion currently acknowledges only
+after its current stage completes. Static hosts cannot interrupt synchronous
+Wasm through a shared word, so running serial cancellation still terminates and
+replaces its Worker. Asynchronous module prewarming is retained on both hosts.
+
+- All 758 Node tests pass, covering the weighted global budget, foreground priority,
+  cancelled reservations, coalesced prewarming, ready acknowledgements and
+  real PTM reuse with zero new kernel initializations. Real DXA tests retain the
+  same shared memory and kernel generation through 1→4→1, cancellation/recovery,
+  perfect-crystal classification and screw-dislocation extraction.
+- The real browser DXA check passes source reset, adjacent pool growth
+  2→3→4→1 and cooperative cancellation/recovery without recreating a coordinator
+  or discarding child Workers. Explicit close still removes all nested Workers.
+  The original no-isolation fallback and scientific winding/Burgers checks pass.
+- The production CPU prewarming check simulates browser reports of 8 and 16
+  logical processors, giving limits of 6 and 14. Loading a 3,072-atom crystal
+  warms one analysis Worker and one DXA module. Display Z×20 leaves the pools
+  unchanged; real Z×20 (61,440 atoms) starts growth before expanded rendering and
+  prepares 6/14 ordinary Workers plus 5/13 DXA children. DXA kernel generation
+  and its 32 MiB shared heap remain unchanged during this preparation. Reloading
+  preserves both pools, and a subsequent coordination calculation reuses them.
+- The full standard browser smoke and production DXA checks pass, covering
+  existing analyses, configuration replay, image export, trajectories and mobile
+  controls. Chromium/SwiftShader verifies execution and rendering; these are
+  not physical GPU performance measurements.
+
+Reproduce with `npm test`, `npm run build`,
+`npm run test:browser:cpu-warmup -- --software`,
+`npm run test:browser:dxa-parallel -- --software`,
+`npm run test:browser:dxa -- --software` and `npm run test:browser`.
+
 ## Shared-memory DXA
 
 The CPU backend now has separate serial and pthread Wasm artifacts built with

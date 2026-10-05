@@ -12,6 +12,7 @@
     "test:browser": "node scripts/browser-smoke.mjs",
     "test:browser:dxa": "node scripts/browser-dxa.mjs",
     "test:browser:dxa-parallel": "node scripts/browser-dxa-parallel.mjs",
+    "test:browser:cpu-warmup": "node scripts/browser-cpu-warmup.mjs",
     "test:gpu": "node scripts/browser-gpu.mjs",
     "benchmark": "node scripts/benchmark.mjs",
     "benchmark:gpu": "node scripts/benchmark-gpu.mjs",

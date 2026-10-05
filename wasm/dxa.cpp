@@ -33,7 +33,7 @@ void pointJson(std::ostream& out, const Point3& p) {
     out << '[' << p.x() << ',' << p.y() << ',' << p.z() << ']';
 }
 void requireStage(bool success) {
-    if (!success) throw std::runtime_error("DXA analysis was canceled.");
+    if (!success || Task::current()->isCanceled()) throw std::runtime_error("DXA analysis was canceled.");
 }
 }
 
@@ -41,6 +41,14 @@ extern "C" {
 const char* alloy_dxa_last_error() { return lastError.c_str(); }
 void alloy_dxa_set_threads(int count) { configureDxaThreads(count); }
 int alloy_dxa_thread_count() { return dxaThreadCount(); }
+int32_t* alloy_dxa_cancel_ptr() {
+    static_assert(sizeof(std::atomic<int32_t>) == sizeof(int32_t), "DXA cancel flag requires a 32-bit atomic word.");
+    return reinterpret_cast<int32_t*>(&dxaCancellationWord());
+}
+void alloy_dxa_reset_cancel() {
+    dxaCancellationWord().store(0, std::memory_order_relaxed);
+    Task::current()->resetCancellation();
+}
 
 // Vectors are column vectors; cell[9..11] is the Cartesian origin. Periodicity
 // is encoded in bits 0, 1 and 2, including for a tilted simulation cell.
@@ -51,6 +59,7 @@ const char* alloy_dxa_analyze(const double* coordinates, int count,
     lastError.clear();
     resultJson.clear();
     try {
+        requireStage(true);
         if (!coordinates || !cellData || count < 1)
             throw std::runtime_error("DXA requires a non-empty three-dimensional structure.");
         if (lattice < 1 || lattice > 5)
@@ -69,6 +78,7 @@ const char* alloy_dxa_analyze(const double* coordinates, int count,
         auto positions = std::make_shared<PropertyStorage>(count, sizeof(Point3));
         BufferWriteAccess<Point3> positionAccess(positions);
         for (int i = 0; i < count; ++i) {
+            if ((i & 1023) == 0) requireStage(true);
             const double* p = coordinates + static_cast<size_t>(i) * 3;
             if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
                 throw std::runtime_error("DXA atom coordinates must be finite.");
@@ -114,6 +124,7 @@ const char* alloy_dxa_analyze(const double* coordinates, int count,
         requireStage(tracer.traceDislocationSegments(operation));
         alloy_dxa_progress("Connect dislocation junctions", 9, 11);
         tracer.finishDislocationSegments(lattice);
+        requireStage(true);
         alloy_dxa_progress("Smooth and coarsen dislocation lines", 10, 11);
         if (smoothing > 0 || coarsening > 0)
             requireStage(tracer.network()->smoothDislocationLines(smoothing, coarsening, operation));
@@ -126,6 +137,7 @@ const char* alloy_dxa_analyze(const double* coordinates, int count,
             << ",\"volume\":" << cell.volume3D() << ",\"segments\":[";
         bool firstSegment = true;
         for (const DislocationSegment* segment : tracer.network()->segments()) {
+            requireStage(true);
             if (segment->isDegenerate()) continue;
             if (!firstSegment) out << ',';
             firstSegment = false;
@@ -167,6 +179,7 @@ const char* alloy_dxa_analyze(const double* coordinates, int count,
         out << "],\"totalLength\":" << totalLength << ",\"atomStructureTypes\":[";
         BufferReadAccess<int32_t> structureAccess(structures);
         for (int i = 0; i < count; ++i) {
+            if ((i & 1023) == 0) requireStage(true);
             if (i) out << ',';
             out << structureAccess[i];
         }

@@ -18,7 +18,7 @@ cutoffs. Increasing them can find more complex dislocations but increases work.
 Each Burgers-vector family has an independent visibility checkbox and color.
 Line radius controls the drawn cylinders. These display changes reuse the
 computed network. Atom coloring and visibility remain available independently.
-**Cancel** stops the Worker and clears this tool's calculated network without
+**Cancel** stops extraction and clears this tool's calculated network without
 removing other analyses. Configuration export/import includes DXA processing
 and display settings; restoring an enabled tool recomputes its network.
 
@@ -43,15 +43,27 @@ clipped against enabled slices for drawing and image export.
 
 The numerical algorithm runs in a dedicated CPU WebAssembly Worker. On hosts
 with cross-origin isolation and SharedArrayBuffer, large frames automatically
-use up to six shared-memory computation threads, reserving one hardware thread
-for the interface. Local crystal identification, robust periodic Delaunay
+use shared-memory computation threads. The application concurrency limit is
+`max(1, navigator.hardwareConcurrency - 2)`; the browser reports available
+logical processors, which may differ from physical cores or the host total.
+This limit does not pin or reserve particular OS cores. The actual thread count
+depends on atom count and memory limits, and DXA shares the active concurrency
+budget with ordinary CPU analyses. Local crystal identification, robust periodic Delaunay
 tessellation and independent cell classification run in parallel in one heap.
 Small structures and static hosts without the required headers use the complete
-serial kernel. Cancellation terminates the coordinator and its child Workers.
+serial kernel.
 
 The progress text and final status show the selected thread count. Hover over
-the final status to see individual phase timings. Repeated calculations reuse
-the initialized pool; cancel or source reset releases its heap and Workers.
+the final status to see individual phase timings. File loading prewarms analysis
+modules while the parser works, then grows the reusable pools to suit the parsed
+atom count. Physical replication prewarms additional threads while generating
+the larger structure; display-only replication adds no analysis threads.
+Repeated calculations and ordinary source changes reuse the initialized pools
+and Wasm memory. The shared-memory backend cancels cooperatively and retains its
+threads; cancelling a running serial kernel requires terminating its Worker.
+The interface clears a cancelled result immediately. Parallel Delaunay
+insertion finishes its current stage before acknowledging cancellation, so the
+CPU reservation remains held until its threads have joined safely.
 For a controlled CPU timing comparison, run `npm run benchmark:dxa -- --workers
 1` and repeat with `--workers 2` or `--workers 4`. This benchmark physically
 replicates the NiGB example twice along Z and reports cold and warm phase times.
@@ -60,7 +72,8 @@ replicates the NiGB example twice along Z and reports cold and warm phase times.
 GPU extraction backend needs new robust geometry and graph kernels. Its large
 intermediate arrays can remain on the GPU, with one final network readback for
 the current WebGL2 renderer. The [GPU design](../DXA_REVIEW.md) describes the
-resident pipeline, numerical requirements and a route to GPU rendering.
+resident pipeline and numerical requirements. WebGPU rendering is not required
+for this analysis path.
 
 ## Limitations
 
@@ -80,7 +93,8 @@ The initial memory preflight estimates 32 MiB plus 3 KiB per atom against a
 1.5 GiB job budget, independently of the renderer and GPU cache. This is a
 conservative estimate, not a measured peak-memory guarantee; jobs exceeding it
 are rejected before extraction rather than analyzed partially. Only the latest
-DXA network is cached. Cancel and source reset release its Worker and Wasm heap.
+DXA network is cached. Idle pools and Wasm heap capacity remain available for
+reuse until backend shutdown or page closure.
 
 ## Implementation
 

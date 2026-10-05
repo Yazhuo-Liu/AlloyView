@@ -1,12 +1,15 @@
 import { FrameCache } from './data/frame-cache.js';
 import { chooseFrameCachePolicy, estimateFrameBytes } from './data/cache-policy.js';
-import { replicateFrame } from './data/replicate.js';
+import { physicalReplicationPlan, replicateFrame } from './data/replicate.js';
 import { normalizeRepetitions } from './render/replication.js';
 import { GpuPrefetchScheduler } from './data/gpu-prefetch.js';
+import { CpuPrefetchScheduler } from './data/cpu-prefetch.js';
 import { DEFAULT_PLAYBACK_INTERVAL_MS, nextPlaybackFrame } from './data/playback.js';
 import { recommendCoordinationCutoff } from './analysis/cutoff.js';
 import { CoordinationPool } from './analysis/coordination-pool.js';
 import { AnalysisPool } from './analysis/analysis-pool.js';
+import { CpuBudget } from './analysis/cpu-budget.js';
+import { DxaClient } from './analysis/dxa-client.js';
 import { analysisProgressText as formatAnalysisProgress, analysisBackendLabel, analysisBackendDetails } from './analysis/status.js';
 import { STRUCTURE_TYPES } from './analysis/cna.js';
 import { PTM_TYPES } from './analysis/ptm.js';
@@ -79,7 +82,9 @@ const hiddenStructureTypes = new Set();
 const hiddenAtomTypes = new Set();
 const hiddenCategories = new Map();
 const crystalCategoryProperties = new Set(['structureType', 'ptmStructureType', 'centralSymmetryStructureType']);
-const analysisPool = new AnalysisPool();
+const cpuBudget = new CpuBudget({ environment: globalThis });
+const analysisPool = new AnalysisPool({ cpuBudget });
+const dxaClient = new DxaClient({ cpuBudget });
 const coordinationPool = new CoordinationPool(analysisPool);
 const analysisControllers = new Map();
 const analysisTasks = new Map();
@@ -155,6 +160,7 @@ let gpuPreparationStatus = null;
 let replicationController = null;
 let replicationRequest = 0;
 const analysisFrameSources = new WeakMap();
+const cpuPrefetch = new CpuPrefetchScheduler({ pool: analysisPool, dxaClient });
 const gpuPrefetch = new GpuPrefetchScheduler({
   pool: analysisPool,
   getFrame: (index, { signal, sourceKey }) => getFrame(index, { background: true, cacheFrame: false, signal, sourceKey }),
@@ -368,7 +374,7 @@ atomEyeTools = initializeAtomEyeTools({
 });
 
 dxaTools = initializeDxaTools({
-  renderer, tools: toolPanels, getFrame: () => state.frame,
+  renderer, tools: toolPanels, client: dxaClient, getFrame: () => state.frame,
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
   getGpuEnabled: () => analysisPool.gpuEnabled,
   onEdit: () => interruptConfigurationRestore('a DXA settings edit'),
@@ -540,6 +546,7 @@ const fileDrop = initializeFileDrop({
 
 for (const range of document.querySelectorAll('.range')) setRangeProgress(range);
 window.addEventListener('beforeunload', () => {
+  cpuPrefetch.cancel();
   gpuPrefetch.cancel();
   bccLogo.dispose();
   renderer?.interactions?.dispose();
@@ -548,12 +555,14 @@ window.addEventListener('beforeunload', () => {
   clearTimeout(cutoffTimer);
   worker.close();
   coordinationPool.close();
+  void dxaClient.close();
   sliceGizmo.dispose();
 });
 
 function beginSourceOpen() {
   replicationController?.abort();
   replicationRequest++;
+  cpuPrefetch.cancel();
   gpuPrefetch.pause();
   interruptConfigurationRestore('a new source selection');
   sourceFetchController?.abort();
@@ -571,6 +580,7 @@ function finishSourceOpen(request) {
   sourceLoadingOwner = null;
   setControlsEnabled(Boolean(state.frame));
   syncSliceGizmo();
+  if (state.frame) void cpuPrefetch.setFrame({ sourceKey: state.sourceVersion, frame: state.frame });
   scheduleGpuFramePrefetch();
 }
 
@@ -593,6 +603,7 @@ function closeSource() {
   clearTimeout(interactionHintFadeTimer);
   stopFramePlayback();
   abortAnalysisJobs();
+  cpuPrefetch.clearSource();
   void gpuPrefetch.clearSource();
   atomEyeTools.reset();
   dxaTools.reset();
@@ -946,6 +957,9 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
   const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
   const sourceVersion = state.sourceVersion + 1;
   state.sourceVersion = sourceVersion;
+  // Module initialization overlaps file indexing. The parsed atom count grows
+  // these same pools before the user starts an analysis.
+  void cpuPrefetch.warmModules({ sourceKey: sourceVersion });
   state.prefetchToken += 1;
   state.pendingFrames.clear();
   const request = state.frameRequest + 1;
@@ -1172,6 +1186,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   setRangeProgress(elements['frame-slider']);
   updateCnaMethodUi();
   updateCspMethodUi();
+  void cpuPrefetch.setFrame({ sourceKey: state.sourceVersion, frame });
   // Rendering remains independent of GPU preparation. Automatic foreground
   // analyses take priority over these background uploads in the shared pool.
   scheduleGpuFramePrefetch();
@@ -2796,6 +2811,12 @@ async function prepareAnalysisFrame(frame, counts, physical, { signal, onProgres
   delete source.atomeyeResults;
   delete source.analysisOriginalProperties;
   delete source.processingSourceBytes;
+  if (physical && !signal?.aborted) {
+    // Validate expansion first, then grow reusable pools while replication
+    // yields to the browser. Display-only copies never enter this branch.
+    const plan = physicalReplicationPlan(source, counts);
+    void cpuPrefetch.setAtomCount({ sourceKey: state.sourceVersion, atomCount: plan.atomCount, signal });
+  }
   const prepared = physical ? await replicateFrame(source, counts, { signal, onProgress }) : source;
   analysisFrameSources.set(prepared, source);
   if (prepared !== source) prepared.processingSourceBytes = estimateFrameBytes(source);

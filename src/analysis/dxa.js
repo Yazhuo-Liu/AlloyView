@@ -1,4 +1,5 @@
 import { cartesianToFractional, determinant3, fractionalToCartesian } from '../data/model.js';
+import { cpuWorkerLimit } from './cpu-budget.js';
 
 export const DXA_LATTICES = Object.freeze([
   { id: 'fcc', label: 'FCC', kernelId: 1 },
@@ -131,78 +132,177 @@ export function dxaCartesianCoordinates(frame) {
 }
 
 const DXA_STAGES = 11;
-const kernelPromises = new Map();
-let kernelProgress;
+let kernelPromise, kernelProgress, poolGrowth = Promise.resolve();
+let kernelGeneration = 0, kernelThreadingFallback;
 
-/** Shared Wasm requires isolation in browsers. Node's opt-in path is useful
- * for scientific parity checks; normal Node calls retain the serial kernel.
- * Reserve one hardware thread for the interface and cap the geometry pool.
+function sharedDxaAvailable(environment = globalThis) {
+  return typeof environment.SharedArrayBuffer === 'function'
+    && (Boolean(environment.process?.versions?.node) || environment.crossOriginIsolated === true);
+}
+
+/** Leave two reported logical processors available for the interface and host.
+ * Explicit Node requests are useful for scientific parity checks. Browsers use
+ * only the concurrency they expose; the actual number of physical cores may
+ * differ from that privacy-sensitive value.
  */
 export function dxaWorkerCount(count, requested, environment = globalThis) {
-  if (requested !== undefined && (!Number.isInteger(requested) || requested < 1 || requested > 6)) {
-    throw new Error('DXA worker count must be an integer between 1 and 6.');
+  if (requested !== undefined && (!Number.isSafeInteger(requested) || requested < 1)) {
+    throw new Error('DXA worker count must be a positive integer.');
   }
+  if (!sharedDxaAvailable(environment) || count < 2048) return 1;
   const node = Boolean(environment.process?.versions?.node);
-  const available = typeof environment.SharedArrayBuffer === 'function'
-    && (node || environment.crossOriginIsolated === true);
-  if (!available || count < 2048) return 1;
-  const hardware = Math.max(1, Number(environment.navigator?.hardwareConcurrency) || 2);
-  const threads = requested ?? (node ? 1 : Math.min(6, Math.max(1, hardware - 1)));
-  return Math.min(threads, Math.max(1, Math.floor(count / 1024)));
+  // A client supplies its already resolved global budget. A Worker may report
+  // a different privacy-limited core count, so do not clamp that budget again.
+  const maximum = requested ?? cpuWorkerLimit(environment);
+  const threads = requested ?? (node ? 1 : Math.min(maximum, Math.ceil(count / 4096)));
+  return Math.min(threads, maximum, Math.max(1, Math.floor(count / 1024)));
 }
 
-async function getKernel(workerCount) {
-  if (!kernelPromises.has(workerCount)) {
-    const promise = (async () => {
-      const threaded = workerCount > 1;
-      const { default: createDxa } = threaded
-        ? await import('./dxa-kernel-threaded.mjs') : await import('./dxa-kernel.mjs');
-      let options = {};
-      if (typeof process === 'object' && process.versions?.node) {
-        const { readFile } = await import('node:fs/promises');
-        options.wasmBinary = await readFile(new URL(threaded ? './dxa-kernel-threaded.wasm' : './dxa-kernel.wasm', import.meta.url));
+async function getKernel() {
+  if (!kernelPromise) {
+    kernelPromise = (async () => {
+      const wantsThreading = sharedDxaAvailable();
+      async function initialize(threaded) {
+        const { default: createDxa } = threaded
+          ? await import('./dxa-kernel-threaded.mjs') : await import('./dxa-kernel.mjs');
+        let options = {};
+        if (typeof process === 'object' && process.versions?.node) {
+          const { readFile } = await import('node:fs/promises');
+          options.wasmBinary = await readFile(new URL(threaded ? './dxa-kernel-threaded.wasm' : './dxa-kernel.wasm', import.meta.url));
+        }
+        const moduleOptions = { ...options, dxaPoolSize: 0,
+          onDxaProgress: (...update) => kernelProgress?.(...update) };
+        try {
+          const module = await createDxa(moduleOptions);
+          module.dxaShared = threaded;
+          kernelGeneration++;
+          return module;
+        } catch (error) {
+          moduleOptions.PThread?.terminateAllThreads();
+          throw error;
+        }
       }
-      const moduleOptions = { ...options, dxaPoolSize: threaded ? workerCount - 1 : 0,
-        onDxaProgress: (...update) => kernelProgress?.(...update) };
-      try { return await createDxa(moduleOptions); }
-      catch (error) { moduleOptions.PThread?.terminateAllThreads(); throw error; }
-    })().catch(error => { kernelPromises.delete(workerCount); throw error; });
-    kernelPromises.set(workerCount, promise);
+      try { return await initialize(wantsThreading); }
+      catch (error) {
+        if (!wantsThreading) throw error;
+        // Only startup may fall back: an established module is never replaced
+        // merely because the requested parallelism changes.
+        kernelThreadingFallback = error.message || String(error);
+        return initialize(false);
+      }
+    })().catch(error => { kernelPromise = undefined; throw error; });
   }
-  return kernelPromises.get(workerCount);
+  return kernelPromise;
 }
 
-/** Explicit cleanup for Node benchmarks and direct kernel consumers. The UI
- * owns these heaps through its dedicated Worker and releases that Worker.
+function cancellationControl(module) {
+  if (!module.dxaShared) return undefined;
+  return { cancelBuffer: module.HEAPU8.buffer, cancelPointer: module._alloy_dxa_cancel_ptr() };
+}
+
+function checkDxaCancellation(module) {
+  const pointer = module._alloy_dxa_cancel_ptr();
+  const canceled = module.dxaShared ? Atomics.load(module.HEAP32, pointer / 4) : module.HEAP32[pointer / 4];
+  if (canceled) throw new DOMException('The DXA calculation was cancelled.', 'AbortError');
+}
+
+function kernelMetadata(module, workerCount) {
+  return { workerCount, poolSize: module.dxaShared
+    ? module.PThread.unusedWorkers.length + module.PThread.runningWorkers.length : 0,
+  kernelGeneration, wasmMemoryBytes: module.HEAPU8.byteLength,
+  sharedMemory: Boolean(module.dxaShared), threadingFallback: kernelThreadingFallback };
+}
+
+async function growPool(module, workerCount) {
+  if (!module.dxaShared || workerCount < 2) return;
+  const growth = poolGrowth.then(async () => {
+    const pool = module.PThread;
+    const pending = [];
+    while (pool.unusedWorkers.length + pool.runningWorkers.length < workerCount - 1) {
+      pool.allocateUnusedWorker();
+      const worker = pool.unusedWorkers.at(-1);
+      // Emscripten's loader resolves only on success; reject startup errors as
+      // well, and remove a failed slot so a future request can retry growth.
+      pending.push(new Promise((resolve, reject) => {
+        const loaded = pool.loadWasmModuleToWorker(worker);
+        const runtimeErrorHandler = worker.onerror;
+        worker.onerror = event => {
+          worker.terminate();
+          const index = pool.unusedWorkers.indexOf(worker);
+          if (index >= 0) pool.unusedWorkers.splice(index, 1);
+          reject(new Error(event.message || 'The DXA pthread worker could not start.'));
+        };
+        loaded.then(value => {
+          // Once started, preserve Emscripten's fatal runtime handling rather
+          // than mistaking a crashed numerical thread for a startup failure.
+          worker.onerror = runtimeErrorHandler;
+          resolve(value);
+        }, reject);
+      }));
+    }
+    const outcomes = await Promise.allSettled(pending);
+    const failed = outcomes.find(outcome => outcome.status === 'rejected');
+    if (failed) throw failed.reason;
+  });
+  poolGrowth = growth.catch(() => {});
+  return growth;
+}
+
+/** Initialize the one persistent kernel and grow its existing pthread pool.
+ * The returned diagnostics describe the same heap on later calculations.
+ * Callers may share its cancellation word, but never transfer the shared heap.
+ */
+export async function warmupDxa({ atomCount = 1, workerCount: requestedWorkers,
+  memoryBudgetBytes, onProgress = () => {}, onControl = () => {}, resetCancellation = true } = {}) {
+  if (!Number.isSafeInteger(atomCount) || atomCount < 1) throw new Error('DXA warmup requires a valid atom count.');
+  const estimateBytes = preflightDxaMemory(atomCount, memoryBudgetBytes);
+  let workerCount = dxaWorkerCount(atomCount, requestedWorkers);
+  // Pthreads share the large scientific workspace but each slot needs a
+  // two-MiB stack. Keep that incremental allocation inside the same budget.
+  const stackSlots = Math.floor(((memoryBudgetBytes ?? 1.5 * 1024 ** 3) - estimateBytes) / (2 * 1024 ** 2));
+  workerCount = Math.min(workerCount, Math.max(1, stackSlots + 1));
+  onProgress({ phase: 'initializing', completedStages: 0, totalStages: DXA_STAGES,
+    backend: 'cpu', workerCount, totalAtoms: atomCount });
+  const module = await getKernel();
+  if (resetCancellation) module._alloy_dxa_reset_cancel();
+  const control = cancellationControl(module);
+  if (control) onControl(control);
+  if (!module.dxaShared) workerCount = 1;
+  checkDxaCancellation(module);
+  onProgress({ phase: 'warming', completedStages: 0, totalStages: DXA_STAGES,
+    backend: 'cpu', workerCount, totalAtoms: atomCount });
+  await growPool(module, workerCount);
+  checkDxaCancellation(module);
+  return kernelMetadata(module, workerCount);
+}
+
+/** Explicit shutdown for benchmarks and clients that are themselves closing.
+ * Frame changes, replication and normal cancellation retain this one heap.
  */
 export async function releaseDxaKernels() {
-  const pending = [...kernelPromises.values()];
-  kernelPromises.clear();
-  for (const promise of pending) {
-    try { (await promise).PThread?.terminateAllThreads(); } catch { /* Failed startup already cleaned up. */ }
+  const pending = kernelPromise;
+  kernelPromise = undefined;
+  await poolGrowth;
+  poolGrowth = Promise.resolve();
+  if (pending) {
+    try { (await pending).PThread?.terminateAllThreads(); } catch { /* Failed startup already cleaned up. */ }
   }
+  kernelThreadingFallback = undefined;
 }
 
 /** Executes the complete native DXA algorithm. Browser callers should use
  * DxaClient so synchronous Wasm work and cancellation stay off the UI thread.
  */
-export async function calculateDxa(frame, parameters = {}, { onProgress = () => {}, memoryBudgetBytes, workerCount: requestedWorkers } = {}) {
+export async function calculateDxa(frame, parameters = {}, { onProgress = () => {}, onControl = () => {}, resetCancellation = true, memoryBudgetBytes, workerCount: requestedWorkers } = {}) {
   const settings = validateDxaParameters(parameters), count = validateDxaFrame(frame);
   const memoryEstimateBytes = preflightDxaMemory(count, memoryBudgetBytes);
-  let workerCount = dxaWorkerCount(count, requestedWorkers), threadingFallback;
+  let workerCount = dxaWorkerCount(count, requestedWorkers);
   const startedAt = performance.now();
   const report = update => onProgress({ ...update, backend: 'cpu', workerCount });
-  report({ phase: 'initializing', completedStages: 0, totalStages: DXA_STAGES, totalAtoms: count });
-  let module;
-  try { module = await getKernel(workerCount); }
-  catch (error) {
-    if (workerCount === 1) throw error;
-    // A host can expose SAB but block the extra module/Worker. Restart before
-    // any numerical work; never return a partially calculated topology.
-    threadingFallback = error.message || String(error);
-    workerCount = 1;
-    module = await getKernel(1);
-  }
+  const ready = await warmupDxa({ atomCount: count, workerCount: requestedWorkers,
+    memoryBudgetBytes, onProgress: report, onControl, resetCancellation });
+  workerCount = ready.workerCount;
+  const module = await getKernel();
   module._alloy_dxa_set_threads(workerCount);
   report({ phase: 'indexing', completedStages: 0, totalStages: DXA_STAGES, totalAtoms: count });
   const positions = dxaCartesianCoordinates(frame);
@@ -233,12 +333,16 @@ export async function calculateDxa(frame, parameters = {}, { onProgress = () => 
       settings.lineSmoothingIterations, settings.linePointInterval);
     if (!output) {
       const errorPointer = module._alloy_dxa_last_error();
-      throw new Error(errorPointer ? module.UTF8ToString(errorPointer) : 'DXA analysis failed.');
+      const message = errorPointer ? module.UTF8ToString(errorPointer) : 'DXA analysis failed.';
+      if (module.HEAP32[module._alloy_dxa_cancel_ptr() / 4] || /was canceled/.test(message)) {
+        throw new DOMException('The DXA calculation was cancelled.', 'AbortError');
+      }
+      throw new Error(message);
     }
     report({ phase: 'collecting', completedStages: DXA_STAGES, totalStages: DXA_STAGES, totalAtoms: count });
     const result = normalizeDxaResult(JSON.parse(module.UTF8ToString(output)), frame.cell, settings, count);
     return { ...result, elapsedMs: performance.now() - startedAt, memoryEstimateBytes,
-      stageTimings, workerCount, threaded: workerCount > 1, threadingFallback,
+      stageTimings, ...kernelMetadata(module, workerCount), threaded: Boolean(module.dxaShared),
       engine: workerCount > 1 ? `Wasm CPU · ${workerCount} threads` : 'Wasm CPU',
       backend: 'cpu', gpuFallback: Boolean(parameters.gpuEnabled) };
   } finally {

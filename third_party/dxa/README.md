@@ -20,8 +20,9 @@ compatibility headers; their GUI and dataset lifecycle are not part of the port.
 property storage. Upstream double-precision mathematical and nearest
 neighbor routines are kept where possible. `geometry/` contains the periodic
 Delaunay/Geogram and half-edge mesh functionality required by DXA. The browser
-entry point is `wasm/dxa.cpp`, executed in a dedicated Worker. Cancellation
-terminates that Worker, so static hosting does not require shared Wasm memory.
+entry point is `wasm/dxa.cpp`, executed in a dedicated Worker. Isolated hosts
+cancel through a shared atomic word, retaining the kernel and pthread pool.
+Static hosting without shared memory uses Worker termination for cancellation.
 
 The optional `dxa-kernel-threaded` binary restores shared-memory parallel loops
 through a bounded `std::thread` adapter. Independent atoms use dynamically
@@ -32,8 +33,14 @@ The geometry adapter selects Geogram's robust parallel PDEL tessellator and
 provides a bounded thread manager: large sorting groups reuse the same slots,
 and nested groups remain serial. Ghost-cell and interface-cell classifications
 also run in parallel, with shared topology/index updates reduced sequentially.
-The module factory preloads only the runtime-requested pthread pool, sharing one
-Wasm heap across its Workers. This backend requires cross-origin isolation and
+The module factory starts one shared heap even for one-thread calculations.
+Prewarming asynchronously adds Workers to this same module, loading its existing
+compiled Wasm module and memory into each new slot before numerical work begins.
+Changing active thread counts never creates another kernel or heap. The pool
+grows to the needed capacity and reuses its idle Workers on subsequent analyses.
+The browser reserves two reported logical processors, and the client additionally
+limits activity according to structure size and the global CPU/memory budget.
+This backend requires cross-origin isolation and
 SharedArrayBuffer; static hosts without the required headers retain the complete
 serial implementation. Build it with `bash wasm/build-dxa-threaded.sh`.
 

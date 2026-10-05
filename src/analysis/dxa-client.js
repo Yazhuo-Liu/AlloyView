@@ -1,21 +1,26 @@
-import { preflightDxaMemory, validateDxaFrame, validateDxaParameters } from './dxa.js';
+import { dxaWorkerCount, preflightDxaMemory, validateDxaFrame, validateDxaParameters } from './dxa.js';
+import { CpuBudget } from './cpu-budget.js';
 
 const COPY_CHUNK_VALUES = 512 * 1024;
 const abortError = () => new DOMException('The DXA calculation was cancelled.', 'AbortError');
 
-/** DXA is a whole-frame topology calculation, rather than atom-range work.
- * Its synchronous Wasm call cannot receive a cancel message while executing.
- * Terminating this dedicated Worker makes cancellation immediate and releases
- * its global graph workspace; the next request creates a fresh Worker.
+/** One coordinator and one growable Wasm heap per client. Shared-memory jobs
+ * cancel cooperatively and keep their pool; static-host jobs must terminate
+ * synchronous native work. Warmups prepare modules without copying a frame.
  */
 export class DxaClient {
   constructor({ workerFactory = () => new Worker(new URL('../workers/dxa-worker.js', import.meta.url), { type: 'module' }),
-    memoryBudgetBytes, workerCount, yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
+    memoryBudgetBytes, workerCount, environment = globalThis, cpuBudget,
+    yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
     this.workerFactory = workerFactory;
     this.memoryBudgetBytes = memoryBudgetBytes;
     this.workerCount = workerCount;
+    this.environment = environment;
+    this.cpuBudget = cpuBudget ?? new CpuBudget({ environment });
     this.yieldToMain = yieldToMain;
     this.worker = null;
+    this.control = null;
+    this.ready = null;
     this.pending = new Map();
     this.queue = [];
     this.current = null;
@@ -23,20 +28,49 @@ export class DxaClient {
     this.closed = false;
   }
 
-  analyze(frame, parameters = {}, { signal, onProgress = () => {} } = {}) {
+  get cpuWarmupStatus() { return this.ready; }
+
+  requestedWorkers(count, requested) {
+    return Math.min(this.cpuBudget.limit, dxaWorkerCount(count, requested, this.environment));
+  }
+
+  warmup({ atomCount = 1, workerCount = this.workerCount, signal, onProgress = () => {} } = {}) {
     if (signal?.aborted || this.closed) return Promise.reject(abortError());
-    let settings, count;
+    let count;
+    try {
+      if (!Number.isSafeInteger(atomCount) || atomCount < 1) throw new Error('DXA warmup requires a positive atom count.');
+      preflightDxaMemory(atomCount, this.memoryBudgetBytes);
+      count = this.requestedWorkers(atomCount, workerCount);
+    } catch (error) { return Promise.reject(error); }
+    if (this.worker && this.ready && this.ready.poolSize >= count - 1) {
+      return Promise.resolve({ ...this.ready, workerCount: count });
+    }
+    const prepared = [this.current, ...this.queue].find(task => task?.type === 'warmup' && !task.settled && task.workerCount >= count);
+    if (prepared && prepared.signal === signal) return prepared.promise;
+    return this.enqueue({ type: 'warmup', count: atomCount, workerCount: count, signal, onProgress });
+  }
+
+  analyze(frame, parameters = {}, { signal, onProgress = () => {}, workerCount = this.workerCount } = {}) {
+    if (signal?.aborted || this.closed) return Promise.reject(abortError());
+    let settings, count, workers;
     try {
       settings = validateDxaParameters(parameters);
       count = validateDxaFrame(frame, { validateCoordinates: false });
       preflightDxaMemory(count, this.memoryBudgetBytes);
+      workers = this.requestedWorkers(count, workerCount);
     } catch (error) { return Promise.reject(error); }
-    return new Promise((resolve, reject) => {
-      const task = { id: this.nextId++, frame, parameters: settings, count, signal, onProgress, resolve, reject, settled: false };
-      task.abort = () => this.cancel(task);
-      signal?.addEventListener('abort', task.abort, { once: true });
-      this.pending.set(task.id, task); this.queue.push(task); this.pump();
-    });
+    return this.enqueue({ type: 'analyze', frame, parameters: settings, count, workerCount: workers, signal, onProgress });
+  }
+
+  enqueue(values) {
+    const task = { id: this.nextId++, ...values, controller: new AbortController(), settled: false, dispatched: false };
+    task.promise = new Promise((resolve, reject) => { task.resolve = resolve; task.reject = reject; });
+    task.abort = () => this.cancel(task);
+    task.signal?.addEventListener('abort', task.abort, { once: true });
+    this.pending.set(task.id, task); this.queue.push(task);
+    if (task.type === 'analyze' && this.current?.type === 'warmup' && !this.current.settled) this.cancel(this.current);
+    this.pump();
+    return task.promise;
   }
 
   ensureWorker() {
@@ -46,22 +80,36 @@ export class DxaClient {
     worker.addEventListener('message', ({ data }) => {
       if (this.worker !== worker) return;
       const task = this.current;
-      if (!task || task.id !== data.id || task.settled) return;
-      if (data.progress) {
-        try { task.onProgress({ backend: 'cpu', workerCount: 1, ...data.progress }); }
-        catch (error) { this.settle(task, error); this.terminateWorker(); this.current = null; this.pump(); }
+      if (!task || task.id !== data.id) return;
+      if (data.control) {
+        this.control = data.control;
+        if (task.settled) this.setCancellation(1);
         return;
       }
-      if (data.ok) this.settle(task, null, data.result);
-      else { const error = new Error(data.error || 'DXA calculation failed.'); error.name = data.name || 'Error'; this.settle(task, error); }
+      if (data.progress) {
+        if (task.settled) return;
+        try { task.onProgress({ backend: 'cpu', workerCount: task.workerCount, ...data.progress }); }
+        catch (error) { this.cancel(task, error); }
+        return;
+      }
+      if (data.ok) {
+        const { workerCount, poolSize, kernelGeneration, wasmMemoryBytes } = data.result;
+        const threaded = data.result.threaded ?? data.result.sharedMemory;
+        if (Number.isInteger(poolSize)) this.ready = { workerCount, poolSize, kernelGeneration, wasmMemoryBytes, threaded };
+        this.settle(task, null, data.result);
+      } else {
+        const error = new Error(data.error || 'DXA calculation failed.'); error.name = data.name || 'Error';
+        this.settle(task, error);
+      }
       if (data.fatal) this.terminateWorker();
-      this.current = null; this.pump();
+      this.retire(task);
     });
     const fail = event => {
       if (this.worker !== worker) return;
       const error = new Error(event.message || 'The DXA worker failed.');
       if (this.current) this.settle(this.current, error);
-      this.terminateWorker(); this.current = null; this.pump();
+      this.terminateWorker();
+      if (this.current) this.retire(this.current);
     };
     worker.addEventListener('error', fail); worker.addEventListener('messageerror', fail);
     return worker;
@@ -69,7 +117,8 @@ export class DxaClient {
 
   pump() {
     if (this.current || this.closed) return;
-    const task = this.queue.shift();
+    const foreground = this.queue.findIndex(task => task.type === 'analyze');
+    const task = this.queue.splice(foreground < 0 ? 0 : foreground, 1)[0];
     if (!task) return;
     if (task.settled) { this.pump(); return; }
     this.current = task;
@@ -78,29 +127,48 @@ export class DxaClient {
 
   async dispatch(task) {
     try {
-      task.onProgress({ phase: 'preparing', completedAtoms: 0, totalAtoms: task.count, backend: 'cpu', workerCount: 1 });
+      task.lease = await this.cpuBudget.acquire(task.workerCount, {
+        signal: task.controller.signal, priority: task.type === 'warmup' ? -1 : 0,
+      });
+      if (task.settled || this.current !== task) { task.lease.release(); return; }
+      task.onProgress({ phase: task.type === 'warmup' ? 'initializing' : 'preparing',
+        completedAtoms: 0, totalAtoms: task.count, backend: 'cpu', workerCount: task.workerCount });
       await this.yieldToMain();
-      if (task.settled || this.current !== task) return;
-      const source = task.frame.fractional ?? task.frame.positions;
-      const coordinates = new Float64Array(source.length);
-      for (let offset = 0; offset < source.length; offset += COPY_CHUNK_VALUES) {
-        coordinates.set(source.subarray ? source.subarray(offset, offset + COPY_CHUNK_VALUES) : source.slice(offset, offset + COPY_CHUNK_VALUES), offset);
-        if (offset + COPY_CHUNK_VALUES < source.length) {
-          await this.yieldToMain();
-          if (task.settled || this.current !== task) return;
+      if (task.settled || this.current !== task) { this.retire(task); return; }
+      let frame;
+      const transfer = [];
+      if (task.type === 'analyze') {
+        const source = task.frame.fractional ?? task.frame.positions;
+        const coordinates = new Float64Array(source.length);
+        for (let offset = 0; offset < source.length; offset += COPY_CHUNK_VALUES) {
+          coordinates.set(source.subarray ? source.subarray(offset, offset + COPY_CHUNK_VALUES) : source.slice(offset, offset + COPY_CHUNK_VALUES), offset);
+          if (offset + COPY_CHUNK_VALUES < source.length) {
+            await this.yieldToMain();
+            if (task.settled || this.current !== task) { this.retire(task); return; }
+          }
         }
+        frame = { [task.frame.fractional ? 'fractional' : 'positions']: coordinates,
+          cell: { vectors: Float64Array.from(task.frame.cell.vectors), origin: Float64Array.from(task.frame.cell.origin), pbc: Array.from(task.frame.cell.pbc, Boolean) } };
+        transfer.push(coordinates.buffer, frame.cell.vectors.buffer, frame.cell.origin.buffer);
       }
-      const frame = { [task.frame.fractional ? 'fractional' : 'positions']: coordinates,
-        cell: { vectors: Float64Array.from(task.frame.cell.vectors), origin: Float64Array.from(task.frame.cell.origin), pbc: Array.from(task.frame.cell.pbc, Boolean) } };
       const worker = this.ensureWorker();
-      if (task.settled || this.current !== task) return;
-      worker.postMessage({ id: task.id, frame, parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes, workerCount: this.workerCount },
-        [coordinates.buffer, frame.cell.vectors.buffer, frame.cell.origin.buffer]);
+      // Only the host clears the retained cancellation word. Resetting it in
+      // the receiving Worker could erase an abort that raced with delivery.
+      this.setCancellation(0);
+      worker.postMessage({ id: task.id, type: task.type, frame, atomCount: task.count,
+        parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes, workerCount: task.workerCount }, transfer);
       task.dispatched = true;
     } catch (error) {
-      if (task.settled || this.current !== task) return;
-      this.settle(task, error); this.current = null; this.pump();
+      if (!task.settled) this.settle(task, error);
+      this.retire(task);
     }
+  }
+
+  setCancellation(value) {
+    const buffer = this.control?.cancelBuffer;
+    if (!buffer || Object.prototype.toString.call(buffer) !== '[object SharedArrayBuffer]') return false;
+    Atomics.store(new Int32Array(buffer, this.control.cancelPointer, 1), 0, value);
+    return true;
   }
 
   settle(task, error, result) {
@@ -110,28 +178,43 @@ export class DxaClient {
     if (error) task.reject(error); else task.resolve(result);
   }
 
-  cancel(task = this.current) {
+  retire(task) {
+    task.lease?.release(); task.lease = null;
+    if (this.current === task) { this.current = null; this.pump(); }
+  }
+
+  cancel(task = this.current, error = abortError()) {
     if (!task || task.settled) return;
-    this.settle(task, abortError());
+    this.settle(task, error); task.controller.abort();
     if (this.current === task) {
-      this.terminateWorker(); this.current = null; this.pump();
+      if (!task.dispatched) { this.retire(task); return; }
+      const shared = this.setCancellation(1);
+      if (task.type === 'warmup' || shared || (this.environment.crossOriginIsolated && typeof this.environment.SharedArrayBuffer === 'function')) {
+        // Reject/clear the UI immediately, but retain the lease until native
+        // work acknowledges cancellation and every pthread has joined.
+        return;
+      }
+      this.terminateWorker(); this.retire(task);
     } else {
       const index = this.queue.indexOf(task); if (index >= 0) this.queue.splice(index, 1);
     }
   }
 
-  terminateWorker() { this.worker?.terminate(); this.worker = null; }
+  terminateWorker() { this.worker?.terminate(); this.worker = null; this.control = null; this.ready = null; }
 
   clearFrames() {
-    // A source reset aborts queued work as well as the running source before a
-    // new structure can be accepted. Do not accidentally pump the old queue.
     const tasks = [...this.pending.values()]; this.queue.length = 0;
-    for (const task of tasks) this.settle(task, abortError());
-    this.current = null; this.terminateWorker();
+    for (const task of tasks) this.cancel(task);
     return Promise.resolve();
   }
 
   reset() { return this.clearFrames(); }
   release() { return this.clearFrames(); }
-  close() { this.closed = true; return this.clearFrames(); }
+  close() {
+    this.closed = true;
+    this.clearFrames();
+    this.terminateWorker();
+    if (this.current) this.retire(this.current);
+    return Promise.resolve();
+  }
 }

@@ -5,10 +5,9 @@ thread_flags=()
 output_name=dxa-kernel
 runtime_methods='["UTF8ToString"]'
 if [[ "${1:-}" == --threaded ]]; then
-  # Preload the requested pool before resolving the module factory. Loading
-  # pthread Workers lazily while the coordinator is in a synchronous join
-  # would deadlock the browser Worker event loop. All pool Workers share the
-  # same Wasm memory; the module caller supplies the bounded dxaPoolSize.
+  # The module starts with an empty pool. JavaScript preloads new Workers into
+  # this same module/heap asynchronously before entering synchronous C++ work,
+  # so growing the pool never depends on a blocked coordinator event loop.
   thread_flags=(-pthread '-sPTHREAD_POOL_SIZE=Module.dxaPoolSize || 0'
     -sPTHREAD_POOL_SIZE_STRICT=2 -sDEFAULT_PTHREAD_STACK_SIZE=2097152)
   output_name=dxa-kernel-threaded
@@ -37,7 +36,7 @@ mapfile -t sources < <(find "$dxa_root/upstream" "$dxa_root/compat" "$dxa_root/g
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node \
   -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2147483648 -sINITIAL_MEMORY=33554432 \
   -sSTACK_SIZE=2097152 -sFILESYSTEM=0 -sDISABLE_EXCEPTION_CATCHING=0 \
-  -sEXPORTED_FUNCTIONS='["_malloc","_free","_alloy_dxa_analyze","_alloy_dxa_last_error","_alloy_dxa_set_threads","_alloy_dxa_thread_count"]' \
+  -sEXPORTED_FUNCTIONS='["_malloc","_free","_alloy_dxa_analyze","_alloy_dxa_last_error","_alloy_dxa_set_threads","_alloy_dxa_thread_count","_alloy_dxa_cancel_ptr","_alloy_dxa_reset_cancel"]' \
   "-sEXPORTED_RUNTIME_METHODS=$runtime_methods" \
   -o "$project_root/src/analysis/$output_name.mjs"
 chmod 644 "$project_root/src/analysis/$output_name.mjs" "$project_root/src/analysis/$output_name.wasm"

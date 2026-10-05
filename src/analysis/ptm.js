@@ -66,6 +66,14 @@ function getKernel() {
   return kernelPromise;
 }
 
+/** Initialize the resident module without inventing a frame or running a fit. */
+export async function warmupPtm({ onPhase = () => {} } = {}) {
+  const kernelReused = Boolean(kernelPromise);
+  onPhase('initializing');
+  await getKernel();
+  return { warmed: true, kernelReused };
+}
+
 export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, preparedNeighbors,
   onPhase = () => {}, onAtoms = () => {}, ...range } = {}) {
   validatePtmParameters({ rmsdCutoff, flags });

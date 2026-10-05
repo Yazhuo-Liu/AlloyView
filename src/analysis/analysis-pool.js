@@ -6,8 +6,9 @@ import { REFERENCE_STRAIN_FIELDS } from './reference-strain.js';
 import { GpuAnalysisClient } from './gpu/client.js';
 import { validateReferences } from './lattice.js';
 import { validatePtmParameters, validatePreparedPtmNeighbors } from './ptm.js';
+import { CpuBudget, cpuWorkerLimit } from './cpu-budget.js';
 
-const MAX_WORKERS = 6;
+const PTM_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
   deformation: [Float64Array, 9], distances: [Float32Array, 1] };
@@ -26,8 +27,7 @@ const EXTRA_OUTPUT_FIELDS = {
 };
 
 export function chooseWorkerCount(atomCount, coordinateBytes, environment = globalThis, targetAtoms = 50_000) {
-  const hardware = Math.max(1, Number(environment.navigator?.hardwareConcurrency) || 2);
-  let count = Math.min(Math.max(1, Math.ceil(atomCount / targetAtoms)), Math.max(1, hardware - 1), MAX_WORKERS);
+  let count = Math.min(Math.max(1, Math.ceil(atomCount / targetAtoms)), cpuWorkerLimit(environment));
   const heapLimit = Number(environment.performance?.memory?.jsHeapSizeLimit);
   const copyBudget = Number.isFinite(heapLimit) ? heapLimit * 0.15 : 256 * 1024 ** 2;
   while (count > 1 && coordinateBytes * count > copyBudget) count -= 1;
@@ -38,17 +38,20 @@ export function chooseWorkerCount(atomCount, coordinateBytes, environment = glob
  * coordinate copies. Every task owns a disjoint central-atom range.
  */
 export class AnalysisPool {
-  constructor({ environment = globalThis, gpuBackend, workerFactory = () => new Worker(
+  constructor({ environment = globalThis, gpuBackend, cpuBudget, workerFactory = () => new Worker(
     new URL('../workers/analysis-worker.js', import.meta.url), { type: 'module' },
   ) } = {}) {
     this.environment = environment;
     this.workerFactory = workerFactory;
-    this.limit = Math.min(MAX_WORKERS, Math.max(1, (Number(environment.navigator?.hardwareConcurrency) || 2) - 1));
+    this.cpuBudget = cpuBudget ?? new CpuBudget({ environment });
+    this.limit = this.cpuBudget.limit;
     this.active = new Set();
     this.idle = [];
     this.controllers = new Set();
     this.queue = [];
     this.nextId = 1;
+    this.slots = new Set();
+    this.cpuWarmup = null;
     this.closed = false;
     this.gpuEnabled = false;
     this.gpuBackend = gpuBackend ?? new GpuAnalysisClient({ environment });
@@ -62,6 +65,84 @@ export class AnalysisPool {
   associateGpuFrame(frame, frameIndex) { return this.gpuBackend.associateFrame?.(frame, frameIndex); }
   clearGpuFrames() { return this.gpuBackend.clearFrames?.() ?? Promise.resolve(this.gpuCacheStatus); }
   get gpuCacheStatus() { return this.gpuBackend.cacheStatus ?? null; }
+
+  get cpuWarmupStatus() {
+    return { readyWorkers: [...this.slots].filter(slot => slot.ptmWarmed).length,
+      workerCount: this.slots.size, targetWorkers: this.cpuWarmup?.target ?? 0, maximumWorkers: this.limit };
+  }
+
+  /** Preheat the heavy-analysis pool while a source is loading or expanding.
+   * Multiple callers share a growing request; initialized modules survive it.
+   * Cancelling one caller leaves the others' warmup intact.
+   */
+  warmupCpu({ atomCount, coordinateBytes = atomCount * 3 * Float64Array.BYTES_PER_ELEMENT,
+    signal, onProgress = () => {} } = {}) {
+    if (this.closed) return Promise.reject(new Error('The analysis pool is closed.'));
+    if (signal?.aborted) return Promise.reject(abortError());
+    if (!Number.isInteger(atomCount) || atomCount < 1 || !Number.isFinite(coordinateBytes) || coordinateBytes < 0) {
+      return Promise.reject(new Error('CPU warmup requires a positive atom count and valid coordinate size.'));
+    }
+    const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
+    const bytes = (sharedMemory ? 0 : coordinateBytes) + atomCount * 48 + PTM_INITIAL_HEAP_BYTES;
+    const target = Math.min(this.limit, chooseWorkerCount(atomCount, bytes, this.environment, 4_096));
+    if (this.cpuWarmupStatus.readyWorkers >= target) {
+      const status = { ...this.cpuWarmupStatus, targetWorkers: target };
+      return Promise.resolve().then(() => { if (signal?.aborted) throw abortError(); onProgress(status); return status; });
+    }
+    let session = this.cpuWarmup;
+    if (!session || session.controller.signal.aborted) {
+      const controller = new AbortController();
+      session = { controller, target, subscribers: new Set(), promise: null };
+      this.cpuWarmup = session;
+      this.controllers.add(controller);
+      session.promise = Promise.resolve().then(() => this.prepareCpuWorkers(session)).finally(() => {
+        this.controllers.delete(controller);
+        if (this.cpuWarmup === session) this.cpuWarmup = null;
+      });
+    }
+    session.target = Math.max(session.target, target);
+    return new Promise((resolve, reject) => {
+      const subscriber = { target, onProgress };
+      session.subscribers.add(subscriber);
+      let settled = false;
+      const finish = (error, status) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener('abort', abort);
+        session.subscribers.delete(subscriber);
+        if (!session.subscribers.size) session.controller.abort();
+        else session.target = Math.max(...[...session.subscribers].map(item => item.target));
+        if (error) reject(error); else resolve(status);
+      };
+      const abort = () => finish(abortError());
+      signal?.addEventListener('abort', abort, { once: true });
+      session.promise.then(status => finish(null, status), error => finish(error));
+      try { onProgress({ ...this.cpuWarmupStatus, targetWorkers: session.target }); }
+      catch (error) { finish(error); }
+    });
+  }
+
+  async prepareCpuWorkers(session) {
+    const { signal } = session.controller;
+    const report = () => {
+      const status = { ...this.cpuWarmupStatus, targetWorkers: session.target };
+      for (const subscriber of session.subscribers) subscriber.onProgress(status);
+      return status;
+    };
+    try {
+      while (this.cpuWarmupStatus.readyWorkers < session.target) {
+        if (signal.aborted || this.closed) throw abortError();
+        const missing = session.target - this.cpuWarmupStatus.readyWorkers;
+        await Promise.all(Array.from({ length: missing }, () => this.runTask({ kind: 'warmup' }, signal,
+          signal, () => {}, true).then(report)));
+        // An already warm idle slot may stand in while all other resident
+        // slots are busy. Wait for them instead of creating extra modules.
+        if (this.cpuWarmupStatus.readyWorkers < session.target) await yieldToMain();
+      }
+      if (signal.aborted || this.closed) throw abortError();
+      return report();
+    } catch (error) { session.controller.abort(); throw error; }
+  }
 
   async analyze(frame, parameters, { onProgress = () => {}, signal, frameIndex } = {}) {
     if (this.closed) throw new Error('The analysis pool is closed.');
@@ -212,7 +293,8 @@ export class AnalysisPool {
         : autoCentrosymmetry ? { centrosymmetry: [Float32Array, 1], cspStructureTypes: [Uint8Array, 1], cspNeighborCounts: [Uint8Array, 1] }
           : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] });
     const outputBytesPerAtom = Object.values(outputFields).reduce((sum, [Type, stride]) => sum + Type.BYTES_PER_ELEMENT * stride, 0);
-    const copyBytes = (sharedMemory ? 0 : frame.fractional.byteLength + extraBytes) + atomCount * (48 + outputBytesPerAtom);
+    const copyBytes = (sharedMemory ? 0 : frame.fractional.byteLength + extraBytes) + atomCount * (48 + outputBytesPerAtom)
+      + (parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput) ? PTM_INITIAL_HEAP_BYTES : 0);
     let workerCount = Math.min(this.limit, chooseWorkerCount(atomCount,
       copyBytes, this.environment,
       ['coordination', 'displacement'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000 : 4_096));
@@ -406,8 +488,16 @@ export class AnalysisPool {
   runTask(payload, signal, sourceSignal, onPhase = () => {}, sharedMemory = false) {
     return new Promise((resolve, reject) => {
       const task = { id: this.nextId++, payload, signal, sourceSignal, resolve, reject, onPhase,
-        sharedMemory, worker: null, slot: null, done: false };
-      task.abort = () => this.finish(task, abortError());
+        sharedMemory, worker: null, slot: null, done: false, lease: null, posted: false };
+      task.abort = () => {
+        if (task.payload.kind === 'warmup' && task.posted && !this.closed) {
+          // Module initialization is asynchronous. Let its ACK return the
+          // useful module to the pool even when this subscriber went away.
+          if (!task.cancelledWarmup) { task.cancelledWarmup = true; task.reject(abortError()); }
+          return;
+        }
+        this.finish(task, abortError());
+      };
       signal.addEventListener('abort', task.abort, { once: true });
       this.queue.push(task);
       if (signal.aborted) task.abort();
@@ -416,30 +506,59 @@ export class AnalysisPool {
   }
 
   pump() {
-    while (!this.closed && this.active.size < this.limit && this.queue.length) {
+    // Admission belongs to the shared budget. Keeping warmup lease waiters
+    // behind a separate local limit would prevent foreground jobs from ever
+    // entering its priority queue.
+    while (!this.closed && this.queue.length) {
       const task = this.queue.shift();
       if (task.done) continue;
       // A caller's abort listeners run one at a time. Its original signal may
       // already be aborted before another job's internal controller sees it.
       if (task.signal.aborted || task.sourceSignal?.aborted) { this.finish(task, abortError()); continue; }
       this.active.add(task);
-      try {
-        const slot = this.idle.pop() ?? this.createWorker();
-        slot.task = task;
-        task.slot = slot;
-        task.worker = slot.worker;
-        task.onPhase('preparing');
-        void this.dispatch(task);
-      } catch (error) { this.finish(task, error); }
+      void this.startTask(task);
     }
   }
 
+  async startTask(task) {
+    try {
+      const lease = await this.cpuBudget.acquire(1, { signal: task.signal,
+        priority: task.payload.kind === 'warmup' ? -1 : 0 });
+      if (task.done || task.signal.aborted || task.sourceSignal?.aborted || this.closed) {
+        lease.release();
+        this.finish(task, abortError());
+        return;
+      }
+      task.lease = lease;
+      // Warm each resident slot once, then grow the pool. Repeated prefetches
+      // must never reinstantiate a kernel already available in another slot.
+      let slot;
+      if (task.payload.kind === 'warmup') {
+        const cold = this.idle.findIndex(candidate => !candidate.ptmWarmed);
+        if (cold >= 0) slot = this.idle.splice(cold, 1)[0];
+        else if (this.slots.size < this.limit) slot = this.createWorker();
+      }
+      slot ??= this.idle.pop() ?? this.createWorker();
+      slot.task = task;
+      task.slot = slot;
+      task.worker = slot.worker;
+      if (task.payload.kind === 'warmup' && slot.ptmWarmed) {
+        this.finish(task, null, { warmed: true, kernelReused: true });
+        return;
+      }
+      task.onPhase('preparing');
+      void this.dispatch(task);
+    } catch (error) { this.finish(task, error); }
+  }
+
   createWorker() {
-    const slot = { worker: this.workerFactory(), task: null, terminated: false };
+    const slot = { worker: this.workerFactory(), task: null, terminated: false, ptmWarmed: false };
+    this.slots.add(slot);
     slot.worker.addEventListener('message', ({ data }) => {
       const task = slot.task;
       if (!task || task.done || data.id !== task.id) return;
-      if (data.phase) task.onPhase(data.phase, data);
+      if (data.phase && !task.cancelledWarmup) task.onPhase(data.phase, data);
+      else if (data.phase) return;
       else this.finish(task, data.ok ? null : new Error(data.error), data.result);
     });
     const fail = (error) => {
@@ -460,7 +579,7 @@ export class AnalysisPool {
       if (task.done) return;
       let payload = task.payload;
       const transferables = [];
-      if (!task.sharedMemory) {
+      if (!task.sharedMemory && payload.kind !== 'warmup') {
         payload = { ...payload, fractional: await copyCoordinates(payload.fractional, task.signal) };
         transferables.push(payload.fractional.buffer);
         for (const name of INPUT_ARRAY_FIELDS) if (payload[name]) {
@@ -480,6 +599,7 @@ export class AnalysisPool {
         }
       }
       if (task.done || task.signal.aborted || task.sourceSignal?.aborted) return;
+      task.posted = true;
       task.worker.postMessage({ id: task.id, ...payload }, transferables);
       if (!task.done) task.onPhase('prepared');
     } catch (error) { this.finish(task, error); }
@@ -489,6 +609,7 @@ export class AnalysisPool {
     if (slot.terminated) return;
     slot.terminated = true;
     slot.worker.terminate();
+    this.slots.delete(slot);
     const index = this.idle.indexOf(slot);
     if (index >= 0) this.idle.splice(index, 1);
   }
@@ -500,13 +621,21 @@ export class AnalysisPool {
     if (task.slot) {
       task.slot.task = null;
       if (error || this.closed) this.terminateWorker(task.slot);
-      else this.idle.push(task.slot);
+      else {
+        if (task.payload.kind === 'warmup' || task.payload.kind === 'ptm'
+          || (task.payload.kind === 'strain' && !task.payload.ptmInput)) task.slot.ptmWarmed = true;
+        this.idle.push(task.slot);
+      }
     }
+    task.lease?.release();
+    task.lease = null;
     this.active.delete(task);
     const queued = this.queue.indexOf(task);
     if (queued >= 0) this.queue.splice(queued, 1);
-    if (error) task.reject(error);
-    else task.resolve(result);
+    if (!task.cancelledWarmup) {
+      if (error) task.reject(error);
+      else task.resolve(result);
+    }
     this.pump();
   }
 

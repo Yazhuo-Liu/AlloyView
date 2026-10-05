@@ -1,7 +1,7 @@
 import { calculateCoordination } from '../analysis/coordination.js';
 import { calculateCna } from '../analysis/cna.js';
 import { calculateCentrosymmetry } from '../analysis/centrosymmetry.js';
-import { calculatePtm } from '../analysis/ptm.js';
+import { calculatePtm, warmupPtm } from '../analysis/ptm.js';
 import { calculateAtomicStrain } from '../analysis/atomic-strain.js';
 import { calculateBonds } from '../analysis/bonds.js';
 import { calculateRdf } from '../analysis/rdf.js';
@@ -24,7 +24,8 @@ self.addEventListener('message', async ({ data }) => {
       self.postMessage({ id, phase: 'analyzing', processedAtoms, totalAtoms });
     };
     let result;
-    if (kind === 'ptm') result = await calculatePtm(frame, { ...parameters, onPhase, onAtoms });
+    if (kind === 'warmup') result = await warmupPtm({ onPhase });
+    else if (kind === 'ptm') result = await calculatePtm(frame, { ...parameters, onPhase, onAtoms });
     else if (kind === 'strain') {
       if (parameters.ptmInput) onPhase('analyzing');
       result = await calculateAtomicStrain(frame, { ...parameters, onPhase, onAtoms });

@@ -1,10 +1,45 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { calculateDxa, releaseDxaKernels } from '../src/analysis/dxa.js';
+import { calculateDxa, releaseDxaKernels, warmupDxa } from '../src/analysis/dxa.js';
 import { crystalFrame } from './helpers/crystals.js';
 import { fccScrewFrame } from './helpers/dislocations.js';
 
 after(releaseDxaKernels);
+
+test('DXA prewarming grows one existing pthread pool without replacing its shared heap', async () => {
+  const controls = [];
+  const collect = control => controls.push(control);
+  const initial = await warmupDxa({ atomCount: 4096, workerCount: 1, onControl: collect });
+  assert.equal(initial.sharedMemory, true);
+  assert.equal(initial.poolSize, 0);
+  const grown = await warmupDxa({ atomCount: 8192, workerCount: 4, onControl: collect });
+  assert.equal(grown.poolSize, 3);
+  assert.equal(grown.kernelGeneration, initial.kernelGeneration);
+  assert.equal(controls[0].cancelPointer, controls[1].cancelPointer);
+  assert.equal(controls[0].cancelBuffer, controls[1].cancelBuffer, 'pool growth uses the identical shared-memory object');
+  const reduced = await warmupDxa({ atomCount: 4096, workerCount: 1 });
+  assert.equal(reduced.poolSize, 3, 'inactive slots stay available for the next larger structure');
+  assert.equal(reduced.kernelGeneration, initial.kernelGeneration);
+});
+
+test('DXA cancellation observes the shared word and retains the warmed module for recovery', async () => {
+  let control;
+  const initial = await warmupDxa({ atomCount: 8640, workerCount: 4, onControl: value => { control = value; } });
+  await assert.rejects(calculateDxa(fccScrewFrame(), {}, {
+    workerCount: 4,
+    onControl: value => { control = value; },
+    onProgress: progress => {
+      if (progress.phase === 'Periodic Delaunay tessellation') {
+        Atomics.store(new Int32Array(control.cancelBuffer), control.cancelPointer / 4, 1);
+      }
+    },
+  }), { name: 'AbortError' });
+  const recovered = await calculateDxa(crystalFrame('fcc', 4), {}, { workerCount: 1 });
+  assert.equal(recovered.segments.length, 0);
+  assert.equal(recovered.kernelGeneration, initial.kernelGeneration);
+  assert.equal(recovered.poolSize, initial.poolSize);
+  assert.equal(recovered.sharedMemory, true);
+});
 
 for (const [kind, lattice, type] of [
   ['fcc', 'fcc', 1], ['bcc', 'bcc', 3], ['hcp', 'hcp', 2],

@@ -246,6 +246,7 @@ test('cancelling preparation prevents input transfer and terminates the allocate
   const controller = new AbortController();
   const pending = pool.analyze(crystalFrame('fcc', 2), { kind: 'ptm' }, { signal: controller.signal });
   const outcome = assert.rejects(pending, { name: 'AbortError' });
+  await Promise.resolve(); // The shared CPU lease is acquired before allocation.
   controller.abort();
   await outcome;
   await new Promise((resolve) => setTimeout(resolve, 5));
@@ -342,6 +343,7 @@ test('cancelling running and queued tasks rejects promptly and releases all slot
   const first = pool.analyze(frame, { kind: 'cna' }, { signal: controller.signal });
   const second = pool.analyze(frame, { kind: 'centrosymmetry' }, { signal: controller.signal });
   const outcomes = Promise.allSettled([first, second]);
+  await Promise.resolve(); // Cancel an allocated task and its lease waiter together.
   controller.abort();
   const results = await outcomes;
   assert.ok(results.every((result) => result.status === 'rejected' && result.reason.name === 'AbortError'));
