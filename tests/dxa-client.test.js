@@ -39,6 +39,84 @@ const topologySnapshot = () => ({ vertexCount: 4, tetrahedronCount: 2, edgeCount
   alpha: 3, vertices: new Float64Array(12), tetrahedra: new Uint32Array(32),
   edges: new Uint32Array(8), transitions: new Float64Array(20) });
 
+const localInput = () => ({ coordinates: new Float64Array(12), templates: new Uint32Array(165),
+  inverse: new Float64Array(9), lattice: 1, identifyPlanarDefects: true, atomCount: 4, neighborWidth: 12 });
+
+test('DXA local correspondence uses the shared GPU backend with the original frame identity', async () => {
+  const calls = [], progress = [], frame = source();
+  const { client, workers } = setup({ gpuBackend: {
+    async identifyDxa(actualFrame, input, options) {
+      assert.equal(actualFrame, frame, 'resident GPU frame cache identity is preserved');
+      const owned = structuredClone(input, { transfer: [input.coordinates.buffer, input.templates.buffer, input.inverse.buffer] });
+      calls.push({ input: owned, signal: options.signal });
+      options.onProgress({ phase: 'GPU local correspondence', completedAtoms: 2, totalAtoms: 4 });
+      return { structures: new Int32Array(4), neighbors: new Int32Array(48).fill(-1),
+        neighborWidth: 12, maxNeighborDistance: 0, gpuStages: ['local-neighbors', 'local-structures', 'local-correspondence'] };
+    },
+    async classifyDxa() { return { regions: new Int32Array([-1, 0]) }; },
+  } });
+  const request = client.analyze(frame, { gpuEnabled: true }, { onProgress: event => progress.push(event) });
+  await flush();
+  const worker = workers[0], task = worker.messages[0], input = localInput();
+  assert.equal(task.gpuLocalAvailable, true); assert.equal(task.gpuAvailable, true);
+  worker.emit({ id: task.id, gpuRequest: { requestId: 5, stage: 'local', input } });
+  await flush();
+  assert.equal(calls.length, 1); assert.equal(calls[0].input.coordinates.length, 12);
+  assert.equal(input.coordinates.byteLength, 0); assert.equal(frame.fractional.byteLength, 96);
+  const localReply = worker.messages.at(-1);
+  assert.equal(localReply.requestId, 5); assert.equal(localReply.ok, true);
+  assert.deepEqual(localReply.result.structures, new Int32Array(4));
+  assert.equal(localReply.result.neighbors.length, 48);
+  assert.equal(progress.at(-1).completedStages, 0); assert.equal(progress.at(-1).completedAtoms, 2);
+  assert.equal(progress.at(-1).totalTetrahedra, undefined);
+  worker.emit({ id: task.id, gpuRequest: { requestId: 6, stage: 'tetrahedra', snapshot: topologySnapshot() } });
+  await flush();
+  assert.equal(worker.messages.at(-1).requestId, 6); assert.equal(worker.messages.at(-1).ok, true);
+  assert.equal(client.cpuBudget.active, 1);
+  worker.emit({ id: task.id, ok: true, result: { backend: 'hybrid' } });
+  assert.equal((await request).backend, 'hybrid'); assert.equal(client.cpuBudget.active, 0);
+  await client.close();
+});
+
+test('GPU local support is independent of tetrahedron support and local failures retain the paused session', async () => {
+  const { client, workers } = setup({ gpuBackend: {
+    identifyDxa: async () => { throw new Error('GPU local neighbor occupancy limit'); },
+  } });
+  const request = client.analyze(source(), { gpuEnabled: true });
+  await flush();
+  const worker = workers[0], task = worker.messages[0];
+  assert.equal(task.gpuLocalAvailable, true); assert.equal(task.gpuAvailable, false);
+  worker.emit({ id: task.id, gpuRequest: { requestId: 8, stage: 'local', input: localInput() } });
+  await flush();
+  const reply = worker.messages.at(-1);
+  assert.equal(reply.ok, false); assert.match(reply.error, /occupancy limit/);
+  assert.equal(workers.length, 1); assert.equal(client.cpuBudget.active, 1); assert.equal(client.pending.size, 1);
+  worker.emit({ id: task.id, ok: true, result: { backend: 'cpu', gpuFallback: true } });
+  assert.equal((await request).gpuFallback, true);
+  await client.close();
+});
+
+test('cancellation before the local GPU RPC keeps the serial kernel and skips the local computation', async () => {
+  const controller = new AbortController(); let calls = 0;
+  const { client, workers } = setup({ gpuBackend: {
+    identifyDxa: async () => { calls++; return {}; },
+  } });
+  const request = client.analyze(source(), { gpuEnabled: true }, { signal: controller.signal,
+    onProgress: progress => { if (progress.backend === 'gpu') controller.abort(); } });
+  const rejected = assert.rejects(request, { name: 'AbortError' });
+  await flush(); const worker = workers[0], id = worker.messages[0].id;
+  worker.emit({ id, progress: { phase: 'GPU local neighbors and crystal correspondence', backend: 'gpu' } });
+  await rejected;
+  assert.equal(worker.terminated, false); assert.equal(worker.messages.at(-1).type, 'cancel');
+  worker.emit({ id, gpuRequest: { requestId: 9, stage: 'local', input: localInput() } });
+  await flush();
+  assert.equal(calls, 0); assert.equal(worker.messages.at(-1).name, 'AbortError');
+  assert.equal(client.cpuBudget.active, 1);
+  worker.emit({ id, ok: false, name: 'AbortError', error: 'Cancelled at GPU local checkpoint' });
+  assert.equal(client.cpuBudget.active, 0);
+  await client.close();
+});
+
 test('DXA routes owned native topology through the existing GPU backend and returns its regions', async () => {
   const calls = [], progress = [];
   const { client, workers } = setup({ gpuBackend: {

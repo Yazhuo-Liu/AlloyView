@@ -290,10 +290,12 @@ controls can remain responsive.
 It prefers WebGPU for coordination, adaptive/fixed-cutoff CNA,
 manual/Auto central symmetry, displacement, reference-frame strain, RDF,
 local geometric shear, bonds and ideal lattice strain neighbor/reference/tensor
-stages, and DXA tetrahedron geometry/elastic-compatibility classification.
-DXA remains a hybrid CPU/GPU pipeline with CPU periodic tessellation and line
-tracing. Fresh ideal strain prepares neighbors on GPU, then fits PTM correspondence
-with CPU Wasm. Standalone PTM remains a CPU calculation. Strain can reuse
+stages, and DXA nearest-neighbor search, local crystal correspondence and
+tetrahedron geometry/elastic-compatibility classification.
+DXA remains a hybrid CPU/GPU pipeline with CPU crystal mapping, periodic
+tessellation, mesh construction and line tracing. Fresh ideal strain prepares
+neighbors on GPU, then fits PTM correspondence with CPU Wasm. Standalone PTM
+remains a CPU calculation. Strain can reuse
 a compatible fit and its GPU upload;
 editing lattice parameters updates the element-reference table without
 repeating the geometric fit.
@@ -377,9 +379,15 @@ an enabled DXA tool when restored.
 
 DXA requires sufficient periodic cell thickness. For `NiGB_minimized.cfg`,
 repeat Z twice with **Replicate atoms for analysis** enabled; display copies
-alone do not enlarge the analyzed cell. The global GPU switch currently falls
-back to CPU for DXA. This version awaits broader scientific validation and does
-not include newer HCP low-c/a treatment. See [DXA](features/dislocations.md) for
+alone do not enlarge the analyzed cell. With GPU acceleration enabled, WebGPU
+performs nearest-neighbor search, local common-neighbor analysis and ordered
+ideal-crystal correspondence for FCC, BCC, HCP, cubic diamond and hexagonal
+diamond, followed later by tetrahedron classification. CPU Wasm builds crystal
+clusters, maps the lattice, constructs the periodic tessellation and interface,
+and traces the dislocation lines. Each GPU stage can fall back to CPU without
+restarting the complete analysis. This version awaits broader scientific
+validation and does not include newer HCP low-c/a treatment.
+See [DXA](features/dislocations.md) for
 the algorithm, search settings and limitations.
 
 ## Bonds, vector arrows and structure statistics
@@ -687,8 +695,9 @@ This is a provenance and risk statement, not legal advice.
   tensors can use optional WebGPU acceleration or Workers.
   PTM and its deformation fit and DXA use included Wasm kernels. No Emscripten
   installation is needed unless rebuilding C++ with `npm run build:ptm` or
-  `npm run build:dxa`. GPU-enabled DXA classifies its mapped tetrahedra with
-  WebGPU, then completes extraction in the same CPU Wasm session.
+  `npm run build:dxa`. GPU-enabled DXA computes local crystal correspondence
+  and classifies its mapped tetrahedra with WebGPU, completing extraction in
+  the same CPU Wasm session.
 
 The bundled `NiGB_minimized.cfg` contains 129,904 atoms and can be used to
 compare CPU and GPU analysis with the same parameters. Measure cold and warm

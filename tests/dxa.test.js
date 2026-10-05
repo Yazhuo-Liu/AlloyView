@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 import { DXA_DEFAULTS, DXA_FAMILIES, classifyBurgersVector, dxaCartesianCoordinates,
-  dxaWorkerCount, estimateDxaMemory, normalizeDxaResult, preflightDxaMemory, splitPeriodicPolyline,
+  calculateDxa, dxaWorkerCount, estimateDxaMemory, normalizeDxaResult, preflightDxaMemory, releaseDxaKernels, splitPeriodicPolyline,
   validateDxaFrame, validateDxaParameters } from '../src/analysis/dxa.js';
+import { crystalFrame } from './helpers/crystals.js';
 
 const close = (actual, expected, tolerance = 1e-9) => {
   assert.equal(actual.length, expected.length);
@@ -119,4 +120,74 @@ test('periodic splitting handles negative multi-image lines, corner crossings an
   close(splitPeriodicPolyline(multi, open)[0], multi);
   const zero = fractionalToCartesian([.2, .2, .2, .2, .2, .2], cell, new Float64Array(6));
   assert.deepEqual(splitPeriodicPolyline(zero, cell), []);
+});
+
+test('staged DXA imports local GPU correspondence and records per-stage fallback without reinitializing its kernel', async () => {
+  const frame = crystalFrame('fcc', 4);
+  let reference, localCalls = 0;
+  try {
+    const verified = await calculateDxa(frame, { gpuEnabled: true }, {
+      verifyGpuLocalStructures: true,
+      identifyDxa: async (input, options) => {
+        assert.equal(input.coordinates.length, frame.ids.length * 3);
+        assert.equal(input.templates.length, 165); assert.equal(input.inverse.length, 9);
+        assert.equal(input.lattice, 1); assert.equal(input.identifyPlanarDefects, true);
+        assert.ok(options.referenceStructures.every(value => value === 1));
+        reference = { structures: options.referenceStructures, neighbors: options.referenceNeighbors,
+          neighborWidth: input.neighborWidth, maxNeighborDistance: options.referenceMaxNeighborDistance,
+          elapsedMs: 3, uploadedBytes: 48, readbackBytes: 24, arithmetic: 'ieee754-f64' };
+        localCalls++;
+        return reference;
+      },
+      classifyDxa: async () => { throw new Error('tetrahedron GPU budget unavailable'); },
+    });
+    assert.equal(verified.backend, 'hybrid'); assert.equal(verified.gpuFallback, false);
+    assert.deepEqual(verified.gpuStages, ['local-neighbors', 'local-structures', 'local-correspondence']);
+    assert.deepEqual(verified.stageFallbacks, [{ stage: 'tetrahedra', reason: 'tetrahedron GPU budget unavailable' }]);
+    assert.equal(verified.gpuElapsedMs, 3); assert.equal(verified.gpuUploadedBytes, 48); assert.equal(verified.gpuReadbackBytes, 24);
+    assert.equal(verified.segments.length, 0);
+    const withoutCpuOracle = await calculateDxa(frame, { gpuEnabled: true }, { identifyDxa: async (_input, options) => {
+      assert.equal(options.referenceStructures, undefined); localCalls++;
+      return reference;
+    } });
+    assert.equal(withoutCpuOracle.kernelGeneration, verified.kernelGeneration);
+    assert.equal(withoutCpuOracle.backend, 'hybrid'); assert.equal(withoutCpuOracle.gpuFallback, false);
+    assert.equal(withoutCpuOracle.segments.length, 0);
+    assert.ok(!withoutCpuOracle.stageTimings.some(stage => /Identify local crystal/.test(stage.phase)),
+      'the production GPU local path does not repeat native crystal identification');
+    assert.equal(localCalls, 2);
+    const localFailure = await calculateDxa(frame, { gpuEnabled: true }, {
+      identifyDxa: async () => { throw new Error('local GPU occupancy exceeded'); },
+      verifyGpuClassification: true,
+      classifyDxa: async (_snapshot, options) => ({ regions: options.referenceRegions,
+        elapsedMs: 7, uploadedBytes: 16, readbackBytes: 8, arithmetic: 'ieee754-f64' }),
+    });
+    assert.equal(localFailure.kernelGeneration, verified.kernelGeneration);
+    assert.equal(localFailure.backend, 'hybrid'); assert.equal(localFailure.gpuFallback, false);
+    assert.deepEqual(localFailure.gpuStages, ['tetrahedron-alpha', 'elastic-compatibility']);
+    assert.deepEqual(localFailure.stageFallbacks, [{ stage: 'local', reason: 'local GPU occupancy exceeded' }]);
+    assert.equal(localFailure.segments.length, 0);
+    const invalid = { ...reference, neighbors: reference.neighbors.slice() };
+    invalid.neighbors[0] = 0;
+    const rejectedImport = await calculateDxa(frame, { gpuEnabled: true }, { identifyDxa: async () => invalid });
+    assert.equal(rejectedImport.backend, 'cpu'); assert.equal(rejectedImport.gpuFallback, true);
+    assert.equal(rejectedImport.segments.length, 0);
+    assert.ok(rejectedImport.stageFallbacks.some(entry => entry.stage === 'local' && /neighbor|correspondence/i.test(entry.reason)));
+    assert.equal(rejectedImport.kernelGeneration, verified.kernelGeneration);
+    for (const metrics of [{ elapsedMs: -1 }, { uploadedBytes: Infinity }, { readbackBytes: 1.5 }]) {
+      const invalidMetrics = await calculateDxa(frame, { gpuEnabled: true }, {
+        identifyDxa: async () => ({ ...reference, ...metrics }),
+      });
+      assert.equal(invalidMetrics.backend, 'cpu'); assert.equal(invalidMetrics.gpuFallback, true);
+      assert.equal(invalidMetrics.segments.length, 0);
+      assert.ok(invalidMetrics.stageFallbacks.some(entry => entry.stage === 'local' && /performance metrics/.test(entry.reason)));
+      assert.equal(invalidMetrics.kernelGeneration, verified.kernelGeneration);
+    }
+    const controller = new AbortController();
+    await assert.rejects(calculateDxa(frame, { gpuEnabled: true }, { signal: controller.signal,
+      identifyDxa: async () => { controller.abort(); return reference; } }), { name: 'AbortError' });
+    const resumed = await calculateDxa(frame);
+    assert.equal(resumed.kernelGeneration, verified.kernelGeneration);
+    assert.equal(resumed.segments.length, 0);
+  } finally { await releaseDxaKernels(); }
 });

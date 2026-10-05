@@ -307,13 +307,14 @@ async function runClientChecks() {
   check(recovery.segments.length === 0 && recovery.backend === 'hybrid', 'Thin error poisoned GPU DXA');
   check(recovery.kernelGeneration === accelerated.kernelGeneration, 'Thin failure replaced the native heap');
   const originalClassify = state.gpu.classifyDxa.bind(state.gpu);
-  state.gpu.classifyDxa = () => {
+  const originalIdentify = state.gpu.identifyDxa.bind(state.gpu);
+  state.gpu.classifyDxa = state.gpu.identifyDxa = () => {
     const error = new Error('GPU validation injected unavailable device.');
     error.name = 'GpuUnavailableError'; return Promise.reject(error);
   };
   let fallback;
   try { fallback = await state.client.analyze(frame, { gpuEnabled: true }); }
-  finally { state.gpu.classifyDxa = originalClassify; }
+  finally { state.gpu.classifyDxa = originalClassify; state.gpu.identifyDxa = originalIdentify; }
   check(fallback.backend === 'cpu' && fallback.gpuFallback, 'Unavailable GPU must fall back to actual CPU DXA');
   check(fallback.segments.length === 1, 'Fallback lost the real dislocation');
   check(fallback.kernelGeneration === accelerated.kernelGeneration, 'Fallback replaced native heap');

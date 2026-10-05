@@ -125,7 +125,9 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     const length = Number(result.totalLength ?? 0), density = Number(result.density ?? 0);
     $('dxa-summary').textContent = `${integer(count)} segments · ${length.toPrecision(5)} Å total length · ${density.toExponential(3)} Å⁻² density`;
     $('dxa-status').textContent = `${result.engine ?? 'CPU / Wasm'} · ${duration(result.elapsedMs ?? 0)}${result.gpuFallback ? ' · CPU fallback' : ''}`;
-    $('dxa-status').title = [result.fallbackReason ?? result.gpuFallbackReason,
+    $('dxa-status').title = [...(result.stageFallbacks?.length
+      ? result.stageFallbacks.map(entry => `${entry.stage} CPU fallback: ${entry.reason}`)
+      : [result.fallbackReason ?? result.gpuFallbackReason]),
       ...(result.stageTimings ?? []).map(stage => `${stage.phase}: ${duration(stage.elapsedMs)}`),
       ...(result.gpuStages?.length ? [`GPU stages: ${result.gpuStages.join(', ')}`] : []),
     ].filter(Boolean).join('\n');
@@ -169,6 +171,8 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
           const threads = backend === 'CPU' && progress.workerCount > 1 ? ` · ${progress.workerCount} threads` : '';
           const completion = Number.isFinite(progress.totalTetrahedra) && progress.totalTetrahedra > 0
             ? `${integer(progress.completedTetrahedra ?? 0)} / ${integer(progress.totalTetrahedra)} tetrahedra`
+            : progress.backend === 'gpu' && String(progress.phase).startsWith('dxa-local') && progress.totalAtoms > 0
+              ? `${integer(progress.processedAtoms ?? progress.completedAtoms ?? 0)} / ${integer(progress.totalAtoms)} atoms`
             : `${done} / ${total} stages`;
           $('dxa-status').textContent = `${stage} · ${backend}${threads} · ${completion}`;
         },

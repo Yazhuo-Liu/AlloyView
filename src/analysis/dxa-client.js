@@ -168,7 +168,9 @@ export class DxaClient {
         parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes, workerCount: task.workerCount,
         gpuSnapshotBudgetBytes: Number.isSafeInteger(gpuBudgetBytes) && gpuBudgetBytes > 0 ? Math.min(512 * 1024 ** 2, gpuBudgetBytes) : undefined,
         gpuAvailable: Boolean(task.parameters?.gpuEnabled && this.environment.navigator?.gpu
-          && typeof this.gpuBackend?.classifyDxa === 'function') }, transfer);
+          && typeof this.gpuBackend?.classifyDxa === 'function'),
+        gpuLocalAvailable: Boolean(task.parameters?.gpuEnabled && this.environment.navigator?.gpu
+          && typeof this.gpuBackend?.identifyDxa === 'function') }, transfer);
       task.dispatched = true;
     } catch (error) {
       if (!task.settled) this.settle(task, error);
@@ -176,31 +178,37 @@ export class DxaClient {
     }
   }
 
-  async classifyGpu(task, worker, { requestId, snapshot }) {
+  async classifyGpu(task, worker, { requestId, stage = 'tetrahedra', snapshot, input }) {
     task.gpuPending = requestId;
     task.gpuWaiting = true;
     const reply = message => {
       if (this.worker !== worker || this.current !== task) return;
+      const arrays = stage === 'local' ? [message.result?.structures, message.result?.neighbors] : [message.result?.regions];
       worker.postMessage({ type: 'gpu-result', id: task.id, requestId, ...message },
-        message.result?.regions instanceof Int32Array ? [message.result.regions.buffer] : []);
+        [...new Set(arrays.filter(array => array instanceof Int32Array).map(array => array.buffer))]);
     };
     try {
       if (task.settled || task.controller.signal.aborted) throw abortError();
-      if (typeof this.gpuBackend?.classifyDxa !== 'function') throw new Error('WebGPU DXA is unavailable in this browser or context.');
+      const local = stage === 'local';
+      if (!local && stage !== 'tetrahedra') throw new Error('Unknown WebGPU DXA computation stage.');
+      const method = local ? this.gpuBackend?.identifyDxa : this.gpuBackend?.classifyDxa;
+      if (typeof method !== 'function') throw new Error('WebGPU DXA is unavailable in this browser or context.');
       // The existing GPU client serializes these kernels with all other GPU
       // analyses and reuses its device. No second GPU device is created here.
-      const result = await this.gpuBackend.classifyDxa(snapshot, {
+      const options = {
         signal: task.controller.signal,
         onProgress: progress => {
           if (task.settled) return;
           try {
-            task.onProgress({ completedStages: 7, totalStages: 11, ...progress, backend: 'gpu',
+            task.onProgress({ completedStages: local ? 0 : 7, totalStages: 11, ...progress, backend: 'gpu',
               totalAtoms: task.count, workerCount: task.workerCount,
-              totalTetrahedra: progress.totalTetrahedra ?? progress.totalAtoms ?? snapshot.tetrahedronCount,
-              completedTetrahedra: progress.completedTetrahedra ?? progress.completedAtoms ?? 0 });
+              ...(!local ? { totalTetrahedra: progress.totalTetrahedra ?? progress.totalAtoms ?? snapshot.tetrahedronCount,
+                completedTetrahedra: progress.completedTetrahedra ?? progress.completedAtoms ?? 0 } : {}) });
           } catch (error) { this.cancel(task, error); }
         },
-      });
+      };
+      const result = local ? await method.call(this.gpuBackend, task.frame, input, options)
+        : await method.call(this.gpuBackend, snapshot, options);
       if (task.settled || task.controller.signal.aborted) throw abortError();
       reply({ ok: true, result });
     } catch (error) {

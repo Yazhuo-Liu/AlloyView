@@ -105,6 +105,17 @@ public:
     /// Identifies the atomic structures.
     bool identifyStructures();
 
+    /// Imports already identified structures and ideal-ordered neighbors.
+    /// The headless GPU adapter supplies the same information produced by
+    /// identifyStructures(); graph construction and symmetry handling retain
+    /// their original implementation.
+    bool importLocalStructures(const int32_t* structureTypes, const int32_t* neighbors,
+            size_t particleCount, size_t neighborWidth, FloatType maximumDistance);
+
+    /// Read-only access for the staged headless adapter and scientific checks.
+    size_t neighborListWidth() const { return _neighborListsSize; }
+    const int* neighborListData() const { return _neighborLists.empty() ? nullptr : _neighborLists.data(); }
+
     /// Combines adjacent atoms to clusters.
     bool buildClusters();
 

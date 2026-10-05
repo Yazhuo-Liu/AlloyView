@@ -1,4 +1,4 @@
-const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'strain', 'cna', 'referenceStrain', 'centrosymmetry', 'displacement', 'ptmNeighbors']);
+const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'strain', 'cna', 'referenceStrain', 'centrosymmetry', 'displacement', 'ptmNeighbors', 'dxaLocal']);
 const REFERENCE_KINDS = new Set(['referenceStrain', 'displacement']);
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
@@ -60,6 +60,10 @@ export class GpuAnalysisClient {
   classifyDxa(snapshot, { signal, onProgress = () => {} } = {}) {
     if (this.current?.type === 'prepare-frame') this.cancel(this.current);
     return this.enqueue('classify-dxa', { snapshot, signal, onProgress }, 1);
+  }
+
+  identifyDxa(frame, input, options = {}) {
+    return this.analyze(frame, { ...input, kind: 'dxaLocal' }, options);
   }
 
   warmup({ signal, onProgress = () => {} } = {}) {
@@ -235,6 +239,16 @@ export class GpuAnalysisClient {
         delete parameters.referenceCell;
       }
       const positionSources = [];
+      if (task.type === 'analyze' && parameters?.kind === 'dxaLocal') {
+        const { validateGpuDxaLocalInput } = await import('./dxa-local.js');
+        validateGpuDxaLocalInput(task.frame, parameters);
+        const input = {};
+        for (const name of ['coordinates', 'templates', 'inverse']) {
+          input[name] = await copyArray(parameters[name], task);
+          transfer.push(input[name].buffer);
+        }
+        parameters = { ...parameters, ...input };
+      }
       if (task.type === 'analyze' && parameters?.kind === 'displacement') {
         const variant = parameters.minimumImage === false ? 'unwrapped-cartesian' : 'cartesian';
         const positions = {};

@@ -133,16 +133,21 @@ test('same-frame results can be reused, while Cancel removes all cached DXA netw
 
 test('DXA displays the actual GPU stage and mixed backend without claiming CPU fallback', async t => {
   const h = harness(t), task = h.tools.run();
+  h.pending[0].options.onProgress({ phase: 'dxa-local-neighbors', backend: 'gpu', workerCount: 1,
+    completedStages: 0, totalStages: 11, completedAtoms: 0, processedAtoms: 2048, totalAtoms: 4096 });
+  assert.match(h.fields['dxa-status'].textContent, /GPU.*2,048 \/ 4,096 atoms/);
   h.pending[0].options.onProgress({ phase: 'tetrahedron-alpha', backend: 'gpu', workerCount: 4,
     completedStages: 7, totalStages: 11, completedTetrahedra: 400, totalTetrahedra: 1200 });
   assert.match(h.fields['dxa-status'].textContent, /GPU.*400 \/ 1,200 tetrahedra/);
   assert.doesNotMatch(h.fields['dxa-status'].textContent, /CPU|threads/);
   h.pending[0].resolve({ ...network(), backend: 'hybrid', engine: 'Wasm CPU + WebGPU',
-    gpuFallback: false, gpuStages: ['tetrahedron-alpha', 'elastic-compatibility'] });
+    gpuFallback: false, gpuStages: ['tetrahedron-alpha', 'elastic-compatibility'],
+    stageFallbacks: [{ stage: 'local', reason: 'GPU local precision limit' }] });
   await task;
   assert.match(h.fields['dxa-status'].textContent, /Wasm CPU \+ WebGPU/);
   assert.doesNotMatch(h.fields['dxa-status'].textContent, /fallback/);
   assert.match(h.fields['dxa-status'].title, /elastic-compatibility/);
+  assert.match(h.fields['dxa-status'].title, /local CPU fallback: GPU local precision limit/);
 });
 
 test('changing GPU preference reruns DXA on the same frame instead of reusing the other backend', async t => {

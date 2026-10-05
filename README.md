@@ -78,9 +78,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   with WebGPU.
   Fresh ideal lattice strain uses GPU neighbor preparation, CPU Wasm fitting,
   then GPU element-reference conversion and tensors, reusing cached fits and
-  uploads. DXA uses GPU tetrahedron geometry and lattice-compatibility checks
-  with CPU periodic tessellation and dislocation tracing. Other analyses keep their CPU implementation; unavailable GPU support
-  falls back to CPU. Completed results remain available when the preference changes.
+  uploads. DXA uses GPU nearest-neighbor search, local crystal correspondence,
+  tetrahedron geometry and lattice-compatibility checks, with CPU crystal
+  mapping, periodic tessellation and dislocation tracing. Other analyses keep
+  their CPU implementation; unavailable GPU support falls back to CPU.
+  Completed results remain available when the preference changes.
 - Per-analysis Cancel controls stop computation and reset results and frame
   caches while keeping input settings and other analyses.
 - A legend **Color by** selector for switching between available properties and
@@ -171,7 +173,8 @@ WebGL 2 support. No installation or account is needed.
    **Enable GPU acceleration** in the top bar prefers WebGPU for coordination,
    adaptive/fixed CNA, manual/Auto central symmetry, displacement,
    reference-frame strain, RDF, local shear, bonds and ideal-strain
-   neighbor/reference/tensor stages
+   neighbor/reference/tensor stages, plus DXA local crystal correspondence
+   and tetrahedron classification
    on the next calculation.
    PTM correspondence fitting still uses CPU Wasm. The switch starts on; CPU
    fallback keeps analyses available on browsers without suitable GPU support.

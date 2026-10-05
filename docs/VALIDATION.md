@@ -2,13 +2,78 @@
 
 Validation date: 2026-10-05 (UTC)
 
+## GPU local DXA correspondence
+
+The next DXA stage runs nearest-shell search, local CNA and ordered ideal-bond
+graph matching on the existing WebGPU device. Neighbor vectors remain resident
+between kernels. Structure types and ordered neighbor indices return to the
+retained native session; cluster construction, periodic Delaunay, mapping,
+interface construction and line tracing still run on CPU/Wasm.
+
+- All **810 Node tests** pass. New cases cover all five native lattice imports,
+  complete screw extraction after injection, retained-session recovery,
+  independent local/tetrahedron fallback, source ownership, periodic image
+  aliases, workspace preflight, all allocation/read failure points and
+  cancellation cleanup. Serial and threaded Wasm modules were rebuilt, and
+  the vendored source checksum manifest passes.
+- Actual Chromium/SwiftShader checks validate seven perfect-crystal cases:
+  FCC, BCC, HCP, cubic diamond and hexagonal diamond, with additional
+  perfect-dislocation-only HCP/hexagonal-diamond cases. Local types, neighbor
+  sets, template signatures and every ideal-template bond agree with native
+  results. Symmetry-equivalent neighbor permutations are accepted. Cutoff
+  comparisons use a rounding bound; the FCC cutoff is bitwise equal after
+  preserving the native binary32 constant before binary64 arithmetic.
+- Eight defect/geometry cases cover a translated triclinic cell and unwrapped
+  images, a vacancy, free surfaces, FCC/HCP stacking faults with and without
+  perfect-only selection, and rotated perfect/screw controls. The 8,640-atom
+  screw returns one perfect periodic line of **14.934458956039819 Å**, with
+  matching physical Burgers vector, winding and junction connectivity.
+- Exact and near-coincident coordinates are distinguished: the 257-atom
+  fixtures recognize 245 and 243 crystalline atoms respectively. An unsupported
+  large Cartesian origin requests CPU fallback rather than losing candidates.
+- Standalone resident-neighbor checks compare **10,908** ordered indices and
+  all three binary64 vector components against Cartesian brute force across
+  five lattices, translated triclinic origins and unwrapped source coordinates.
+  Radius expansion retains the same neighbor table and reads only a 16-byte
+  completion record per attempt. The final local result reads 80 bytes per atom;
+  common linked-cell indexing also reads its small occupancy control record.
+- Real WGSL square-root/division checks pass **29,472** binary64 comparisons,
+  including subnormals, last-ULP rounding, underflow/overflow and special values.
+  Local lattice decisions use these integer-based operations without native
+  GPU float64 or CPU per-atom fitting.
+- End-to-end checks execute all five GPU stages on positive screw networks.
+  The production local path skips CPU identification. Independent stage failure,
+  thin-cell rejection and cancellation after submitted neighbor/classification
+  batches recover with the same kernel generation and coordinator/device
+  Workers. Existing tetrahedron cancellation and full CPU fallback checks pass.
+  These checks pass both with cross-origin isolation and in an ordinary static
+  browser context without SharedArrayBuffer, including serial heap reuse after
+  cancelling neighbor batch 4,096 and local-correspondence batch 2,048.
+- Seven full hybrid perfect-crystal runs additionally compare **260,522**
+  tetrahedron region labels against the native oracle after importing GPU
+  correspondence, with no differences. The production application passes
+  extraction, line/atom coloring, PNG, recipe replay, physical replication,
+  frame changes and mobile layout. CPU parallel/pool-reuse checks also pass.
+- Versioned production ideal-strain GPU checks continue to pass after the
+  shared runtime adds the two optional local DXA pipelines. Ordinary analyses
+  become ready before optional DXA compilation completes.
+
+Reproduce with `npm test`, `npm run test:browser:dxa-local-gpu`,
+`npm run test:browser:dxa-f64` and `npm run test:browser:dxa-gpu`.
+These are software-adapter correctness checks, not hardware speed measurements.
+Cold compilation and execution on the software adapter can exceed
+the production smoke test's initial 60-second extraction timeout. The test now
+allows 180 seconds for extraction and passed on a separate run; this changes
+the validation deadline, not product behavior.
+
 ## Hybrid GPU DXA
 
-DXA now runs tetrahedron alpha filtering and elastic-compatibility checks on
+The preceding migration ran tetrahedron alpha filtering and elastic-compatibility checks on
 the existing WebGPU device, then continues interface construction and tracing
 in its retained CPU/Wasm session. The final backend is reported as `hybrid`;
 CPU local correspondence, crystal mapping, robust periodic Delaunay and line
-tracing have not been replaced with GPU algorithms.
+tracing were retained in that stage; local correspondence has since migrated
+as described above.
 
 - The full Node suite passes **783 tests**. New cases cover the staged native
   session, exact CPU-region injection, export memory limits, temporary snapshot

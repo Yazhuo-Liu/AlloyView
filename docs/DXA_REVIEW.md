@@ -3,8 +3,9 @@
 Research date: 2026-10-05 UTC. An initial CPU/Wasm port is now described in
 [Dislocation analysis](features/dislocations.md). This review preserves the
 source inspection and feasibility findings that preceded it. The current
-hybrid accelerator implements GPU tetrahedron alpha filtering and elastic
-compatibility; the full resident geometry/tracing design below remains proposed.
+hybrid accelerator implements GPU nearest-neighbor search, local crystal
+correspondence, tetrahedron alpha filtering and elastic compatibility; the full
+resident geometry/tracing design below remains proposed.
 
 ## Conclusion
 
@@ -76,24 +77,36 @@ junctions must retain their supported crystallographic transformations.
 
 ## CPU and GPU allocation
 
-| Stage | Initial implementation | GPU migration opportunity |
+| Stage | Current implementation | Remaining GPU migration opportunity |
 | --- | --- | --- |
-| Periodic neighbor search and local structure correspondence | CPU Wasm baseline | Strong candidate: independent central atoms; extend existing GPU CNA/nearest-shell kernels |
+| Periodic neighbor search and local structure correspondence | Optional WebGPU, with CPU Wasm reference/fallback | Implemented per central atom for all five supported crystals, including ordered bond-graph matching |
 | Crystal clusters and inter-cluster transformations | CPU Wasm | Later graph algorithms with explicit synchronization and symmetry handling |
 | Robust periodic Delaunay tetrahedra | CPU Wasm / Geogram | Substantial separate project; dynamic topology and robust geometric predicates |
 | Ideal vectors for unique tessellation edges | CPU Wasm baseline | Bounded per-edge path search once cluster transforms and adjacency are fixed |
-| Tetrahedron Burgers/Frank consistency and candidate faces | CPU baseline | Fixed-size independent tests, counting and compact output |
+| Tetrahedron alpha and Burgers/Frank consistency | Optional WebGPU, with CPU reference/fallback | Implemented independent tests; alpha labels remain resident between passes |
 | Manifold mesh construction and repair | CPU Wasm | GPU face filtering can assist; preserve CPU topology construction initially |
 | Adaptive Burgers circuits, curve tracing and junction merging | CPU Wasm | Shared ownership and irregular searches require a dedicated parallel design |
 | Smoothing a fixed curve/mesh graph | CPU baseline | Independent vertices with ping-pong updates; junction constraints must remain fixed |
 | Curve coarsening | CPU baseline | Possible later compaction with endpoint and topology invariants |
 
-AlloyView's current GPU CNA returns structure labels. DXA additionally needs
-ordered ideal bond vectors, local permutations, crystal frames and transitions
-between clusters. Likewise, the current PTM API exports structures, RMSD,
-scale, deformation and distance, but not the full DXA correspondence contract.
-Reuse verified neighbor infrastructure and device resources; labels or strain
-tensors alone cannot supply the required elastic mapping.
+AlloyView's ordinary GPU CNA returns structure labels. The dedicated DXA local
+stage also reconstructs the neighbor bond graph and finds its first matching
+ordered correspondence to the native ideal template. FCC/HCP use twelve
+neighbors, BCC fourteen, and the two diamond structures sixteen including their
+second shell. The cutoff arithmetic, bond signatures and graph constraints
+follow the native algorithm using shader-emulated IEEE-754 binary64, including
+square root and division. Crystal clusters and their inter-frame transitions
+are then constructed by the retained CPU session. Ordinary CNA labels or PTM
+strain tensors alone cannot supply this elastic mapping.
+
+The full nearest-shell table remains on GPU between neighbor discovery and
+local correspondence. Only one 80-byte local-result record per atom and a
+16-byte completion record per shell-radius attempt are read back; the host
+passes the smaller structure/ordered-index arrays into Wasm. This is a staged
+hybrid pipeline: topology is subsequently exported for the existing GPU alpha
+and elastic-compatibility passes. Both GPU stages can fall back independently
+within the retained native session, and cancellation preserves the reusable
+worker, heap and device whenever it occurs between native calls.
 
 WebGPU does not provide portable native float64. The existing shader-emulated
 IEEE64 machinery preserves nearest-neighbor ordering, but does not already
@@ -110,10 +123,12 @@ local stage does not imply a comparable speedup of the entire algorithm.
 ## A GPU-resident DXA backend
 
 A complete WebGPU extraction backend is technically possible, but it requires
-new geometry and graph kernels. The current DXA backend is CPU Wasm; enabling
-GPU acceleration does not make any part of that extraction run on the GPU.
-This section is a design proposal, not an implemented backend or a speedup
-claim. CPU Wasm remains the reference and the fallback for unsupported inputs.
+new geometry and graph kernels. The current backend is the hybrid implementation
+above: its local correspondence and tetrahedron classification run on WebGPU,
+while crystal mapping, robust periodic geometry, interface construction and
+tracing still run in CPU Wasm. This section proposes their migration into a
+fully resident pipeline; it is not an implemented complete GPU backend or a
+speedup claim. CPU Wasm remains the reference and fallback for unsupported inputs.
 
 Here, GPU-resident extraction means uploading the source coordinates and cell
 once, keeping all large intermediate arrays on one WebGPU device, and reading
@@ -220,8 +235,9 @@ loop already has independent output slots and an atomic maximum-neighbor
 distance; tessellation, cluster construction and tracing have global state.
 Do not run several complete DXA copies and concatenate their results.
 
-For GPU migration, first define/test the full local-correspondence contract,
-then prove robust periodic geometry and its adjacency invariants independently.
+The local-correspondence contract is now implemented in the hybrid pipeline.
+Further migration needs robust periodic geometry and its adjacency invariants
+proved independently.
 Only after these foundations pass should crystal-graph mapping, interface
 construction and circuit tracing form one resident pipeline. A staged hybrid
 prototype can validate kernels against CPU snapshots, but its measured
@@ -259,10 +275,13 @@ atom**. NiGB's 129,904 atoms therefore suggest roughly 130 MB of native working
 memory; a million atoms suggests about 1 GB. These are upstream estimates, not
 measured browser requirements. Include JS arrays, Wasm heap, periodic ghosts,
 GPU graphs, staging and readback in a separate peak-memory reservation. Thin
-periodic cells can greatly increase ghost-image storage. The current full
-GPU-produced nearest-18 host table alone uses another 505 bytes per atom, about
-65.6 MB for NiGB. GPU scratch for this stage is separately batch-bounded; avoid
-redundant complete-table readback and upload round trips.
+periodic cells can greatly increase ghost-image storage. The DXA local nearest
+table uses 456 device bytes per atom and is not copied to the host. Its local
+result uses 80 bytes per atom, with another equally sized GPU staging buffer
+for readback, plus source coordinates, settings and cached frame/index buffers.
+This differs from PTM's 505-byte-per-atom nearest-18 host table. Check complete
+workspace and individual storage-buffer limits before dispatch; batching
+invocations alone does not reduce these full-frame table allocations.
 
 Keep only the final network and requested atom fields in the frame cache.
 Release tessellation, interface meshes and temporary graph arrays after
@@ -325,9 +344,10 @@ connectivity for reuse without another extraction.
    equivalent reversed line direction and reparameterized vertex sequences.
 3. Integrate a CPU DXA tool, independent curve layer, family legend, cancellation,
    source/frame cleanup, settings replay and source-volume statistics.
-4. Add GPU local structure/correspondence with exact CPU fallback and parity.
-   Then migrate edge mapping, tetrahedron classification and fixed-network
-   smoothing one stage at a time, measuring transfers and peak memory.
+4. GPU local structure/correspondence and tetrahedron classification now have
+   independent CPU fallbacks. Continue migrating edge mapping, periodic
+   geometry and fixed-network smoothing one stage at a time, measuring
+   transfers and peak memory and validating the physical network.
 5. Expand tested coverage to HCP and diamond families and any later algorithm
    improvements. Treat heterogeneous crystal interfaces and trajectory tracking
    as explicit additional work rather than extrapolating from local CSP Auto.
@@ -404,6 +424,7 @@ for a successful calculation.
 The initial research change vendored no upstream algorithm. The subsequent CPU
 port includes pinned, adapted DXA and Geogram sources with their license notices
 under `third_party/dxa/` and a prebuilt Wasm module. Current executed checks are
-recorded in [Validation](VALIDATION.md). GPU tetrahedron classification now
-accelerates the CPU extraction through a staged Wasm/WebGPU interface. Fully
-GPU-resident periodic geometry, mesh construction and tracing remain future work.
+recorded in [Validation](VALIDATION.md). GPU local crystal correspondence and
+tetrahedron classification accelerate extraction through a staged Wasm/WebGPU
+interface. Fully GPU-resident periodic geometry, mesh construction and tracing
+remain future work.

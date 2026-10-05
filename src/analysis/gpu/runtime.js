@@ -91,12 +91,13 @@ export class GpuRuntime {
     await this.initialize(signal);
     if (!this.warmupPromise) {
       this.warmupPromise = (async () => {
-        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm, dxa] = await Promise.all([
+        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm, dxa, dxaNeighbors, dxaLocal] = await Promise.all([
           import('./coordination.js'), import('./rdf.js'), import('./local-shear-shaders.js'),
           import('./bonds-shaders.js'), import('./atomic-strain-shaders.js'),
           import('./cna-shaders.js'), import('./reference-strain-shaders.js'),
           import('./centrosymmetry-shaders.js'), import('./displacement-shaders.js'), import('./ptm-neighbors-shaders.js'),
           import('./dxa-shaders.js'),
+          import('./dxa-local-neighbor-shaders.js'), import('./dxa-local-shaders.js'),
         ]);
         const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
           shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
@@ -112,7 +113,8 @@ export class GpuRuntime {
         if (!this.dxaWarmupPromise) {
           const device = this.device;
           this.dxaWarmupPromise = (async () => {
-            for (const source of [dxa.DXA_ALPHA_SHADER, dxa.DXA_REGION_SHADER]) {
+            for (const source of [dxa.DXA_ALPHA_SHADER, dxa.DXA_REGION_SHADER,
+              dxaNeighbors.DXA_LOCAL_NEIGHBORS_SHADER, dxaLocal.DXA_LOCAL_SHADER]) {
               if (this.device !== device) return;
               try { await this.compilePipeline(source); }
               catch (error) { if (this.device === device) this.dxaWarmupError = error.message || String(error); }

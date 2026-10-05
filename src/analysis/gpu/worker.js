@@ -117,6 +117,10 @@ async function run(data, controller) {
     const analyze = () => runtime.withErrors(async () => {
       if (parameters.kind === 'coordination') return analyzeGpuCoordination(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
       if (parameters.kind === 'rdf') return analyzeGpuRdf(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+      if (parameters.kind === 'dxaLocal') {
+        const { analyzeGpuDxaLocalStructures } = await import('./dxa-local.js');
+        return analyzeGpuDxaLocalStructures(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+      }
       if (parameters.kind === 'ptmNeighbors') {
         const { analyzeGpuPtmNeighbors } = await import('./ptm-neighbors.js');
         return analyzeGpuPtmNeighbors(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
@@ -173,7 +177,7 @@ async function run(data, controller) {
     }
     const buffers = [...new Set(Object.values(result).filter(ArrayBuffer.isView).map((value) => value.buffer))];
     self.postMessage({ id: data.id, ok: true, result: { ...result, backend: 'gpu',
-      engine: parameters.kind === 'strain' ? 'webgpu-strain-tensor' : parameters.kind === 'ptmNeighbors' ? 'webgpu-ptm-neighbors' : parameters.kind === 'cna' ? `webgpu-cna-${parameters.mode ?? 'adaptive'}`
+      engine: parameters.kind === 'dxaLocal' ? 'webgpu-dxa-local-structures' : parameters.kind === 'strain' ? 'webgpu-strain-tensor' : parameters.kind === 'ptmNeighbors' ? 'webgpu-ptm-neighbors' : parameters.kind === 'cna' ? `webgpu-cna-${parameters.mode ?? 'adaptive'}`
         : parameters.kind === 'referenceStrain' ? 'webgpu-reference-strain'
           : parameters.kind === 'centrosymmetry' ? `webgpu-centrosymmetry-${parameters.mode ?? 'manual'}`
             : parameters.kind === 'displacement' ? 'webgpu-displacement' : 'webgpu', workerCount: 1,

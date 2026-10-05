@@ -9,7 +9,7 @@ const controllers = new Map();
 const gpuRequests = new Map();
 let nextGpuRequestId = 1;
 
-function requestGpuClassification(id, snapshot, { signal } = {}) {
+function requestGpuStage(id, stage, payload, { signal } = {}) {
   if (signal?.aborted) return Promise.reject(new DOMException('The DXA calculation was cancelled.', 'AbortError'));
   const requestId = nextGpuRequestId++;
   return new Promise((resolve, reject) => {
@@ -25,8 +25,10 @@ function requestGpuClassification(id, snapshot, { signal } = {}) {
     gpuRequests.set(requestId, { id, finish });
     signal?.addEventListener('abort', abort, { once: true });
     try {
-      const transfer = ['vertices', 'tetrahedra', 'edges', 'transitions'].map(key => snapshot[key].buffer);
-      self.postMessage({ id, gpuRequest: { requestId, snapshot } }, [...new Set(transfer)]);
+      const keys = stage === 'local' ? ['coordinates', 'templates', 'inverse'] : ['vertices', 'tetrahedra', 'edges', 'transitions'];
+      const transfer = keys.map(key => payload[key].buffer);
+      const data = stage === 'local' ? { input: payload } : { snapshot: payload };
+      self.postMessage({ id, gpuRequest: { requestId, stage, ...data } }, [...new Set(transfer)]);
     } catch (error) { finish(error); }
   });
 }
@@ -46,7 +48,8 @@ async function handleRequest(data) {
       onControl: control => self.postMessage({ id, control }),
       onProgress: progress => self.postMessage({ id, progress }),
       signal: controller.signal,
-      classifyDxa: data.gpuAvailable ? (snapshot, options) => requestGpuClassification(id, snapshot, options) : undefined,
+      classifyDxa: data.gpuAvailable ? (snapshot, options) => requestGpuStage(id, 'tetrahedra', snapshot, options) : undefined,
+      identifyDxa: data.gpuLocalAvailable ? (input, options) => requestGpuStage(id, 'local', input, options) : undefined,
     };
     if (type === 'warmup') {
       const result = await warmupDxa({ ...options, atomCount: data.atomCount });

@@ -133,6 +133,7 @@ export function dxaCartesianCoordinates(frame) {
 
 const DXA_STAGES = 11;
 const DXA_GPU_STAGES = Object.freeze(['tetrahedron-alpha', 'elastic-compatibility']);
+const DXA_GPU_LOCAL_STAGES = Object.freeze(['local-neighbors', 'local-structures', 'local-correspondence']);
 const DXA_GPU_SNAPSHOT_LIMIT = 512 * 1024 ** 2;
 let kernelPromise, kernelProgress, poolGrowth = Promise.resolve();
 let kernelGeneration = 0, kernelThreadingFallback;
@@ -299,8 +300,8 @@ export async function releaseDxaKernels() {
   kernelThreadingFallback = undefined;
 }
 
-/** Executes full DXA, optionally dispatching immutable tetrahedron
- * classification to WebGPU between native topology and tracing stages.
+/** Executes full DXA, optionally dispatching local crystal correspondence
+ * and immutable tetrahedron classification to the shared WebGPU backend.
  * Browser callers should use DxaClient to keep synchronous work off the UI.
  */
 export async function calculateDxa(frame, parameters = {}, options = {}) {
@@ -312,7 +313,7 @@ export async function calculateDxa(frame, parameters = {}, options = {}) {
 
 async function performDxaCalculation(frame, parameters = {}, { onProgress = () => {}, onControl = () => {}, resetCancellation = true,
   memoryBudgetBytes, workerCount: requestedWorkers, classifyDxa, signal, gpuSnapshotBudgetBytes,
-  verifyGpuClassification = false } = {}) {
+  verifyGpuClassification = false, identifyDxa, verifyGpuLocalStructures = false } = {}) {
   checkSignal(signal);
   const settings = validateDxaParameters(parameters), count = validateDxaFrame(frame);
   const memoryEstimateBytes = preflightDxaMemory(count, memoryBudgetBytes);
@@ -344,8 +345,9 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
     report({ phase, completedStages, totalStages, totalAtoms: count, backend });
   };
   kernelProgress = beginStage;
-  let gpuResult, gpuSnapshotBytes = 0, fallbackReason;
-  let regionsPointer = 0, stagedSession = false;
+  let gpuResult, gpuLocalResult, gpuSnapshotBytes = 0, gpuLocalInputBytes = 0, fallbackReason;
+  const stageFallbacks = [];
+  let regionsPointer = 0, localStructuresPointer = 0, localNeighborsPointer = 0, stagedSession = false;
   try {
     module.HEAPF64.set(positions, coordinates / 8);
     module.HEAPF64.set(frame.cell.vectors, cellPointer / 8);
@@ -357,14 +359,91 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       settings.trialCircuitLength, settings.circuitStretchability, settings.onlyPerfectDislocations ? 1 : 0,
       settings.lineSmoothingIterations, settings.linePointInterval];
     let output;
-    if (settings.gpuEnabled && typeof classifyDxa === 'function') {
+    if (settings.gpuEnabled && (typeof classifyDxa === 'function' || typeof identifyDxa === 'function')) {
       stagedSession = true;
-      if (!module._alloy_dxa_begin(...argumentsList)) throw nativeDxaError(module);
+      const budgetBytes = gpuSnapshotBudgetBytes ?? Math.min(DXA_GPU_SNAPSHOT_LIMIT,
+        Math.floor((memoryBudgetBytes ?? 1.5 * 1024 ** 3) * .35));
+      if (typeof identifyDxa === 'function') {
+        if (!module._alloy_dxa_prepare(...argumentsList)) throw nativeDxaError(module);
+        try {
+          const input = exportDxaLocalInput(module, count, argumentsList[4], !settings.onlyPerfectDislocations, budgetBytes);
+          gpuLocalInputBytes = input.coordinates.byteLength + input.templates.byteLength + input.inverse.byteLength;
+          let referenceStructures, referenceNeighbors, referenceMaxNeighborDistance, verificationInput;
+          if (verifyGpuLocalStructures) {
+            if (!module._alloy_dxa_identify_local_cpu()) throw nativeDxaError(module);
+            const types = module._alloy_dxa_local_types_ptr(), neighbors = module._alloy_dxa_local_neighbors_ptr();
+            if (!types || !neighbors) throw nativeDxaError(module);
+            referenceStructures = module.HEAP32.slice(types / 4, types / 4 + count);
+            referenceNeighbors = module.HEAP32.slice(neighbors / 4, neighbors / 4 + count * input.neighborWidth);
+            referenceMaxNeighborDistance = module._alloy_dxa_local_max_distance();
+            verificationInput = { neighborWidth: input.neighborWidth, templates: input.templates.slice() };
+          }
+          checkSignal(signal);
+          checkDxaCancellation(module);
+          // This progress is posted before the RPC. The host can therefore
+          // cancel a serial Wasm session while it awaits the GPU checkpoint.
+          beginStage('GPU local neighbors and crystal correspondence', 0, DXA_STAGES, 'gpu');
+          const local = await withSignal(identifyDxa(input, { signal, referenceStructures, referenceNeighbors, referenceMaxNeighborDistance,
+            referenceWidth: referenceNeighbors ? input.neighborWidth : undefined,
+            onProgress: progress => report({ completedStages: 0, totalStages: DXA_STAGES,
+              ...progress, backend: 'gpu', totalAtoms: count }) }), signal);
+          checkSignal(signal);
+          checkDxaCancellation(module);
+          validateDxaLocalResult(local, count, input.neighborWidth);
+          if (referenceStructures) verifyDxaLocalResult(local, verificationInput, referenceStructures,
+            referenceNeighbors, referenceMaxNeighborDistance);
+          localStructuresPointer = module._malloc(local.structures.byteLength);
+          localNeighborsPointer = module._malloc(local.neighbors.byteLength);
+          if (!localStructuresPointer || !localNeighborsPointer) throw new Error('DXA could not allocate the GPU crystal correspondence.');
+          module.HEAP32.set(local.structures, localStructuresPointer / 4);
+          module.HEAP32.set(local.neighbors, localNeighborsPointer / 4);
+          gpuLocalResult = local;
+        } catch (error) {
+          if (error?.name === 'AbortError' || signal?.aborted) throw error;
+          checkDxaCancellation(module);
+          fallbackReason = error?.message || String(error);
+          stageFallbacks.push({ stage: 'local', reason: fallbackReason });
+          report({ phase: 'GPU local analysis unavailable; continuing crystal identification on CPU', completedStages: 0,
+            totalStages: DXA_STAGES, totalAtoms: count, fallbackReason });
+        } finally {
+          // Packing arrays are independent of the persistent native session.
+          // Their owned JS copies were transferred without exposing its heap.
+          module._alloy_dxa_release_local_input();
+        }
+        try {
+          checkSignal(signal);
+          checkDxaCancellation(module);
+          let mapped = module._alloy_dxa_build_mapping(gpuLocalResult ? localStructuresPointer : 0,
+            gpuLocalResult ? localNeighborsPointer : 0, gpuLocalResult?.neighborWidth ?? 0,
+            gpuLocalResult?.maxNeighborDistance ?? 0);
+          if (!mapped && gpuLocalResult) {
+            const error = nativeDxaError(module);
+            if (error.name === 'AbortError') throw error;
+            // Import validation happens before changing native structures.
+            // Only that failure retains a prepared local session; failures
+            // during topology construction dispose it and remain fatal.
+            if (module._alloy_dxa_local_neighbor_width() > 0) {
+              gpuLocalResult = undefined;
+              fallbackReason = error.message;
+              stageFallbacks.push({ stage: 'local', reason: fallbackReason });
+              report({ phase: 'GPU local correspondence rejected; continuing crystal identification on CPU', completedStages: 0,
+                totalStages: DXA_STAGES, totalAtoms: count, fallbackReason });
+              mapped = module._alloy_dxa_build_mapping(0, 0, 0, 0);
+            }
+          }
+          if (!mapped) throw nativeDxaError(module);
+        } finally {
+          if (localStructuresPointer) module._free(localStructuresPointer);
+          if (localNeighborsPointer) module._free(localNeighborsPointer);
+          localStructuresPointer = localNeighborsPointer = 0;
+        }
+      } else {
+        if (!module._alloy_dxa_begin(...argumentsList)) throw nativeDxaError(module);
+      }
       checkSignal(signal);
       checkDxaCancellation(module);
       try {
-        const budgetBytes = gpuSnapshotBudgetBytes ?? Math.min(DXA_GPU_SNAPSHOT_LIMIT,
-          Math.floor((memoryBudgetBytes ?? 1.5 * 1024 ** 3) * .35));
+        if (typeof classifyDxa !== 'function') throw new Error('WebGPU tetrahedron classification is unavailable in this browser or context.');
         const snapshot = exportDxaSnapshot(module, budgetBytes);
         gpuSnapshotBytes = snapshot.vertices.byteLength + snapshot.tetrahedra.byteLength
           + snapshot.edges.byteLength + snapshot.transitions.byteLength;
@@ -400,13 +479,14 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
         if (error?.name === 'AbortError' || signal?.aborted) throw error;
         checkDxaCancellation(module);
         fallbackReason = error?.message || String(error);
+        stageFallbacks.push({ stage: 'tetrahedra', reason: fallbackReason });
         report({ phase: 'GPU unavailable; continuing DXA on CPU', completedStages: 7,
           totalStages: DXA_STAGES, totalAtoms: count, fallbackReason });
       }
       checkSignal(signal);
       checkDxaCancellation(module);
-      // A failed GPU dispatch reuses the already mapped native topology. It
-      // does not re-run crystal identification or Delaunay tessellation.
+      // A failed GPU dispatch reuses the already mapped native topology and
+      // any successful GPU local correspondence, without restarting DXA.
       output = module._alloy_dxa_finish(gpuResult ? regionsPointer : 0,
         gpuResult ? gpuResult.regions.length : 0);
     } else {
@@ -419,18 +499,24 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
     checkSignal(signal);
     report({ phase: 'collecting', completedStages: DXA_STAGES, totalStages: DXA_STAGES, totalAtoms: count });
     const result = normalizeDxaResult(JSON.parse(module.UTF8ToString(output)), frame.cell, settings, count);
+    const usedGpu = Boolean(gpuLocalResult || gpuResult);
+    const gpuResults = [gpuLocalResult, gpuResult].filter(Boolean);
+    const gpuTotal = key => gpuResults.length ? gpuResults.reduce((sum, value) => sum + (value[key] ?? 0), 0) : undefined;
     return { ...result, elapsedMs: performance.now() - startedAt, memoryEstimateBytes,
       stageTimings, ...kernelMetadata(module, workerCount), threaded: Boolean(module.dxaShared),
-      engine: `${workerCount > 1 ? `Wasm CPU · ${workerCount} threads` : 'Wasm CPU'}${gpuResult ? ' + WebGPU' : ''}`,
-      backend: gpuResult ? 'hybrid' : 'cpu', gpuStages: gpuResult ? [...DXA_GPU_STAGES] : [],
-      gpuElapsedMs: gpuResult?.elapsedMs, gpuArithmetic: gpuResult?.arithmetic,
-      gpuUploadedBytes: gpuResult?.uploadedBytes, gpuReadbackBytes: gpuResult?.readbackBytes,
-      gpuSnapshotBytes, gpuFallback: Boolean(settings.gpuEnabled && !gpuResult),
-      gpuFallbackReason: fallbackReason, fallbackReason };
+      engine: `${workerCount > 1 ? `Wasm CPU · ${workerCount} threads` : 'Wasm CPU'}${usedGpu ? ' + WebGPU' : ''}`,
+      backend: usedGpu ? 'hybrid' : 'cpu',
+      gpuStages: [...(gpuLocalResult ? DXA_GPU_LOCAL_STAGES : []), ...(gpuResult ? DXA_GPU_STAGES : [])],
+      gpuElapsedMs: gpuTotal('elapsedMs'), gpuArithmetic: gpuResult?.arithmetic ?? gpuLocalResult?.arithmetic,
+      gpuUploadedBytes: gpuTotal('uploadedBytes'), gpuReadbackBytes: gpuTotal('readbackBytes'),
+      gpuSnapshotBytes, gpuLocalInputBytes, gpuFallback: Boolean(settings.gpuEnabled && !usedGpu),
+      stageFallbacks, gpuFallbackReason: !usedGpu ? fallbackReason : undefined, fallbackReason };
   } finally {
     kernelProgress = null;
     if (stagedSession) module._alloy_dxa_dispose();
     if (regionsPointer) module._free(regionsPointer);
+    if (localStructuresPointer) module._free(localStructuresPointer);
+    if (localNeighborsPointer) module._free(localNeighborsPointer);
     module._free(coordinates);
     module._free(cellPointer);
   }
@@ -443,6 +529,68 @@ function nativeDxaError(module) {
     return new DOMException('The DXA calculation was cancelled.', 'AbortError');
   }
   return new Error(message);
+}
+
+function exportDxaLocalInput(module, count, lattice, identifyPlanarDefects, budgetBytes) {
+  const inputBytes = count * 3 * 8 + 5 * 33 * 4 + 9 * 8;
+  if (!Number.isSafeInteger(budgetBytes) || budgetBytes < 1 || budgetBytes > 0xffff_ffff) {
+    throw new Error('The WebGPU DXA snapshot budget must be a positive 32-bit byte count.');
+  }
+  if (inputBytes > budgetBytes) throw new Error('The DXA local input exceeds the WebGPU snapshot memory budget.');
+  const positions = module._alloy_dxa_local_positions_ptr();
+  const templates = module._alloy_dxa_local_templates_ptr();
+  const inverse = module._alloy_dxa_local_inverse_ptr();
+  if (!positions || !templates || !inverse) throw nativeDxaError(module);
+  return { coordinates: module.HEAPF64.slice(positions / 8, positions / 8 + count * 3),
+    templates: module.HEAPU32.slice(templates / 4, templates / 4 + 5 * 33),
+    inverse: module.HEAPF64.slice(inverse / 8, inverse / 8 + 9), atomCount: count, lattice,
+    identifyPlanarDefects, neighborWidth: module._alloy_dxa_local_neighbor_width() };
+}
+
+function validateDxaLocalResult(result, count, width) {
+  if (!(result?.structures instanceof Int32Array) || result.structures.length !== count
+    || result.structures.some(value => value < 0 || value > 5)
+    || !(result.neighbors instanceof Int32Array) || result.neighbors.length !== count * width
+    || result.neighborWidth !== width || result.neighbors.some(value => value < -1 || value >= count)
+    || !Number.isFinite(result.maxNeighborDistance) || result.maxNeighborDistance < 0
+    || (result.structures.some(value => value !== 0) ? result.maxNeighborDistance === 0 : result.maxNeighborDistance !== 0)) {
+    throw new Error('WebGPU DXA returned invalid local crystal correspondence.');
+  }
+  if ((result.elapsedMs !== undefined && (!Number.isFinite(result.elapsedMs) || result.elapsedMs < 0))
+    || ['uploadedBytes', 'readbackBytes'].some(key => result[key] !== undefined
+      && (!Number.isSafeInteger(result[key]) || result[key] < 0))) {
+    throw new Error('WebGPU DXA returned invalid local performance metrics.');
+  }
+}
+
+function verifyDxaLocalResult(result, input, structures, neighbors, maximumDistance) {
+  const fail = () => { throw new Error('WebGPU DXA local correspondence differs from the native numerical reference.'); };
+  if (!result.structures.every((type, index) => type === structures[index])
+    || Math.abs(result.maxNeighborDistance - maximumDistance) > 8 * Number.EPSILON * Math.max(1, maximumDistance)) fail();
+  const permutation = new Int32Array(16), width = input.neighborWidth;
+  for (let atom = 0; atom < structures.length; atom++) {
+    const type = structures[atom];
+    if (!type) continue;
+    const template = (type - 1) * 33, count = input.templates[template], row = atom * width;
+    for (let index = 0; index < count; index++) {
+      const id = result.neighbors[row + index];
+      let mapped = -1;
+      for (let reference = 0; reference < count; reference++) if (neighbors[row + reference] === id) { mapped = reference; break; }
+      if (mapped < 0) fail();
+      for (let previous = 0; previous < index; previous++) if (permutation[previous] === mapped) fail();
+      permutation[index] = mapped;
+    }
+    // Exactly degenerate neighbor distances can choose a different ideal
+    // crystal orientation. Accept template automorphisms, while requiring
+    // the same atom set, CNA signatures and every ideal adjacency relation.
+    for (let index = 0; index < count; index++) {
+      if (input.templates[template + 1 + index] !== input.templates[template + 1 + permutation[index]]) fail();
+      const actualMask = input.templates[template + 17 + index], referenceMask = input.templates[template + 17 + permutation[index]];
+      for (let other = 0; other < count; other++) {
+        if (((actualMask >>> other) & 1) !== ((referenceMask >>> permutation[other]) & 1)) fail();
+      }
+    }
+  }
 }
 
 function exportDxaSnapshot(module, budgetBytes) {

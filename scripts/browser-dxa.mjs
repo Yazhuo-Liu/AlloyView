@@ -96,7 +96,9 @@ try {
     }
     const extract = async () => {
       await evaluate('dxaChecks.showTool("dxa"); document.getElementById("run-dxa").click()');
-      await waitFor('document.getElementById("dxa-state").textContent === "Calculated"', 'Complete native DXA extraction');
+      // Software adapters can spend over a minute compiling DXA's exact
+      // binary64 kernels on the first run. This is a correctness smoke check.
+      await waitFor('document.getElementById("dxa-state").textContent === "Calculated"', 'Complete native DXA extraction', 180_000);
     };
     await openFile(source); await extract();
     const initial = await evaluate(`(() => {

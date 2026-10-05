@@ -468,6 +468,65 @@ bool StructureAnalysis::identifyStructures()
 }
 
 /******************************************************************************
+* Imports the immutable output of the headless GPU local-structure stage.
+******************************************************************************/
+bool StructureAnalysis::importLocalStructures(const int32_t* structureTypes,
+        const int32_t* neighbors, size_t particleCount, size_t neighborWidth,
+        FloatType maximumDistance)
+{
+    if(!structureTypes || !neighbors || particleCount != positions()->size() ||
+            neighborWidth != _neighborListsSize || !std::isfinite(maximumDistance) ||
+            maximumDistance < 0)
+        throw Exception("DXA GPU local structures have inconsistent dimensions or cutoff.");
+
+    bool anyCrystal = false;
+    // Validate the complete borrowed input before changing native arrays.
+    // Image/half-cell checks belong to the GPU stage, which retains its exact
+    // selected vectors; atom indices alone cannot identify periodic images.
+    for(size_t atom = 0; atom < particleCount; ++atom) {
+        if((atom & 1023) == 0 && Task::current()->isCanceled()) return false;
+        const int type = structureTypes[atom];
+        bool allowed = type == LATTICE_OTHER || type == _inputCrystalType;
+        if(_identifyPlanarDefects) {
+            if(_inputCrystalType == LATTICE_FCC || _inputCrystalType == LATTICE_HCP)
+                allowed = type == LATTICE_OTHER || type == LATTICE_FCC || type == LATTICE_HCP;
+            else if(_inputCrystalType == LATTICE_CUBIC_DIAMOND || _inputCrystalType == LATTICE_HEX_DIAMOND)
+                allowed = type == LATTICE_OTHER || type == LATTICE_CUBIC_DIAMOND || type == LATTICE_HEX_DIAMOND;
+        }
+        if(!allowed)
+            throw Exception("DXA GPU local structures contain an invalid crystal type.");
+        const int32_t* row = neighbors + atom * neighborWidth;
+        if(type == LATTICE_OTHER) {
+            for(size_t index = 0; index < neighborWidth; ++index)
+                if(row[index] != -1)
+                    throw Exception("DXA GPU unmatched atoms must have empty neighbor rows.");
+            continue;
+        }
+        anyCrystal = true;
+        if(size_t(_coordinationStructures[type].numNeighbors) != neighborWidth)
+            throw Exception("DXA GPU local structures have an inconsistent neighbor width.");
+        for(size_t index = 0; index < neighborWidth; ++index) {
+            if(row[index] < 0 || size_t(row[index]) >= particleCount || size_t(row[index]) == atom)
+                throw Exception("DXA GPU local structures contain an invalid neighbor index.");
+            for(size_t previous = 0; previous < index; ++previous)
+                if(row[index] == row[previous])
+                    throw Exception("DXA GPU local structures contain duplicate neighbors.");
+        }
+    }
+    if((anyCrystal && maximumDistance <= 0) || (!anyCrystal && maximumDistance != 0))
+        throw Exception("DXA GPU local structures have an inconsistent crystal cutoff.");
+
+    for(size_t atom = 0; atom < particleCount; ++atom) {
+        if((atom & 1023) == 0 && Task::current()->isCanceled()) return false;
+        _structureTypesArray[atom] = structureTypes[atom];
+        std::copy_n(neighbors + atom * neighborWidth, neighborWidth,
+            _neighborLists.data() + atom * neighborWidth);
+    }
+    _maximumNeighborDistance.store(maximumDistance, std::memory_order_relaxed);
+    return true;
+}
+
+/******************************************************************************
 * Determines the coordination structure of a particle.
 ******************************************************************************/
 void StructureAnalysis::determineLocalStructure(NearestNeighborFinder& neighList, size_t particleIndex)

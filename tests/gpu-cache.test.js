@@ -7,6 +7,8 @@ import { CSP_SHADER } from '../src/analysis/gpu/centrosymmetry-shaders.js';
 import { DISPLACEMENT_SHADER } from '../src/analysis/gpu/displacement-shaders.js';
 import { PTM_NEIGHBORS_SHADER } from '../src/analysis/gpu/ptm-neighbors-shaders.js';
 import { DXA_ALPHA_SHADER, DXA_REGION_SHADER } from '../src/analysis/gpu/dxa-shaders.js';
+import { DXA_LOCAL_NEIGHBORS_SHADER } from '../src/analysis/gpu/dxa-local-neighbor-shaders.js';
+import { DXA_LOCAL_SHADER } from '../src/analysis/gpu/dxa-local-shaders.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, FALLBACK_GPU_BUDGET_BYTES,
   frameUploadBytes, gpuWorkspaceBytes, trajectoryCapacity } from '../src/analysis/gpu/cache-policy.js';
 import { crystalFrame } from './helpers/crystals.js';
@@ -209,8 +211,8 @@ test('clearing a source frees input and index buffers while retaining the device
   try {
     await runtime.warmup();
     await runtime.dxaWarmupPromise;
-    assert.equal(state.compiled, 22);
-    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER, CSP_SHADER, DISPLACEMENT_SHADER, PTM_NEIGHBORS_SHADER, DXA_ALPHA_SHADER, DXA_REGION_SHADER]) {
+    assert.equal(state.compiled, 24);
+    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER, CSP_SHADER, DISPLACEMENT_SHADER, PTM_NEIGHBORS_SHADER, DXA_ALPHA_SHADER, DXA_REGION_SHADER, DXA_LOCAL_NEIGHBORS_SHADER, DXA_LOCAL_SHADER]) {
       assert.ok(runtime.pipelines.has(source), 'new analysis kernels compile during device warmup');
     }
     const pipelines = [...runtime.pipelines.values()], device = runtime.device;
@@ -232,7 +234,7 @@ test('an optional DXA pipeline compilation failure leaves other GPU analyses war
   const state = fixture(), { runtime } = state;
   const compile = runtime.compilePipeline.bind(runtime);
   runtime.compilePipeline = source => {
-    if (source === DXA_ALPHA_SHADER || source === DXA_REGION_SHADER) throw new Error('Unsupported DXA shader.');
+    if ([DXA_ALPHA_SHADER, DXA_REGION_SHADER, DXA_LOCAL_NEIGHBORS_SHADER, DXA_LOCAL_SHADER].includes(source)) throw new Error('Unsupported DXA shader.');
     return compile(source);
   };
   try {
@@ -268,7 +270,7 @@ test('ordinary GPU warmup returns while DXA compiles in the background and on-de
     const [a, b] = await Promise.all([first, second, runtime.dxaWarmupPromise]);
     assert.equal(a, b); assert.equal(alphaCalls, 1);
     assert.ok(runtime.pipelines.has(DXA_ALPHA_SHADER)); assert.ok(runtime.pipelines.has(DXA_REGION_SHADER));
-    assert.equal(runtime.pipelineCompilations.size, 0); assert.equal(state.compiled, 23);
+    assert.equal(runtime.pipelineCompilations.size, 0); assert.equal(state.compiled, 25);
   } finally { releaseAlpha(); await runtime.dxaWarmupPromise; runtime.close(); }
 });
 
