@@ -1,5 +1,19 @@
 import { DxaClient } from './analysis/dxa-client.js';
-import { DXA_DEFAULTS, DXA_FAMILIES, validateDxaParameters } from './analysis/dxa.js';
+import { DXA_DEFAULTS, DXA_FAMILIES, DXA_LATTICES, validateDxaParameters } from './analysis/dxa.js';
+import { clearAnalysisResults, replaceAnalysisProperty } from './analysis/results.js';
+
+export const DXA_STRUCTURE_PROPERTY = 'dxaStructureType';
+export const DXA_STRUCTURE_LABEL = 'Crystal structure (DXA)';
+// DXA's native lattice IDs differ from CNA/PTM for the diamond classes.
+// Keep this vocabulary tied to the same lattice IDs used by the DXA kernel.
+const structureColors = { 0: [160, 160, 160], 1: [102, 255, 102], 2: [255, 102, 102],
+  3: [102, 102, 255], 4: [19, 160, 254], 5: [254, 137, 0] };
+export const DXA_STRUCTURE_TYPES = Object.freeze([
+  { id: 0, label: 'Other', description: 'Unresolved local crystal structure' },
+  ...DXA_LATTICES.toSorted((a, b) => a.kernelId - b.kernelId).map(lattice => ({
+    id: lattice.kernelId, label: lattice.label, description: lattice.label,
+  })),
+].map(type => Object.freeze({ ...type, color: Object.freeze(structureColors[type.id]) })));
 
 const $ = id => document.getElementById(id);
 const PARAMETER_FIELDS = {
@@ -11,14 +25,16 @@ const toHex = color => `#${Array.from(color, value => Math.round(value).toString
 const duration = ms => ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 const integer = value => Number(value).toLocaleString('en-US');
 
-/** DXA owns one whole-frame Worker job and a line network, separately from
- * per-atom color analyses. Frame edits invalidate in-flight Worker replies. */
+/** DXA owns one whole-frame Worker job, its line network and the existing
+ * per-atom structure output. Frame edits invalidate in-flight Worker replies. */
 export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion,
   getGpuEnabled = () => false, onEdit = () => {}, onDisplayChange = () => {},
+  getColorMode = () => 'type', getColorChoiceVersion = () => 0, onResultsChange = () => {},
   onMemoryChange = () => {}, notify = () => {}, client = new DxaClient() }) {
   let enabled = false, controlsEnabled = false, controller = null, request = 0;
   let network = null, failure = false, radius = 0.25;
   let visibleFamilies = new Set(), familyColors = new Map(), cachedResult = null;
+  let atomStructureFrame = null, colorDefaultPending = true;
 
   function parameters() {
     return validateDxaParameters(Object.fromEntries(Object.entries(PARAMETER_FIELDS).map(([key, id]) => {
@@ -91,13 +107,16 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     updateControls();
   }
 
-  function clearNetwork() {
+  function clearNetwork({ clearSettings = false } = {}) {
     network = null;
+    if (atomStructureFrame) clearAnalysisResults(atomStructureFrame, 'dxa');
+    atomStructureFrame = null;
     $('dxa-results').hidden = true;
     $('dxa-summary').textContent = '';
     $('dxa-status').title = '';
+    onResultsChange({ clearSettings });
     draw();
-    onMemoryChange();
+    onMemoryChange(getFrame());
   }
 
   function abortJobs() {
@@ -107,18 +126,27 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     updateControls();
   }
 
-  function cancel() {
+  function cancel({ clearSettings = true } = {}) {
     abortJobs(); enabled = false; failure = false;
     // Stop the job and clear its display while retaining reusable backend memory.
     void client.release?.();
     cachedResult = null;
+    colorDefaultPending = true;
     tools.setToolEnabled('dxa', false);
-    clearNetwork(); state('Not calculated');
+    clearNetwork({ clearSettings }); state('Not calculated');
     $('dxa-status').textContent = 'Extract lines and Burgers vectors from the complete structure.';
   }
 
-  function showResult(result) {
+  function showResult(result, frame, key, selectStructures = false) {
     network = result; failure = false;
+    if (result.atomStructureTypes) {
+      replaceAnalysisProperty(frame, { name: DXA_STRUCTURE_PROPERTY, displayName: DXA_STRUCTURE_LABEL,
+        data: result.atomStructureTypes, categories: DXA_STRUCTURE_TYPES, unit: '',
+        analysisKind: 'dxa', analysisKey: key, analysisMs: result.elapsedMs,
+        analysisEngine: result.engine, analysisGpuRequested: Boolean(getGpuEnabled()) });
+      atomStructureFrame = frame;
+      colorDefaultPending = false;
+    }
     $('dxa-results').hidden = false;
     state('Calculated', true);
     const count = result.segments?.length ?? 0;
@@ -131,7 +159,8 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
       ...(result.stageTimings ?? []).map(stage => `${stage.phase}: ${duration(stage.elapsedMs)}`),
       ...(result.gpuStages?.length ? [`GPU stages: ${result.gpuStages.join(', ')}`] : []),
     ].filter(Boolean).join('\n');
-    renderFamilies(); draw(); onMemoryChange();
+    onResultsChange({ selectProperty: selectStructures && atomStructureFrame ? DXA_STRUCTURE_PROPERTY : null });
+    renderFamilies(); draw(); onMemoryChange(frame);
   }
 
   async function run({ automatic = false } = {}) {
@@ -146,6 +175,9 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
       return false;
     }
     if (!automatic) onEdit();
+    const colorChoice = getColorChoiceVersion();
+    const selectStructures = !automatic && colorDefaultPending && getColorMode() === 'type';
+    const shouldSelectStructures = () => selectStructures && colorChoice === getColorChoiceVersion() && getColorMode() === 'type';
     abortJobs(); enabled = true; failure = false;
     tools.setToolEnabled('dxa', true);
     clearNetwork();
@@ -153,7 +185,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     const current = () => serial === request && frame === getFrame() && sourceVersion === getSourceVersion() && enabled;
     const gpuEnabled = Boolean(getGpuEnabled());
     const key = JSON.stringify({ ...settings, gpuEnabled }), cached = cachedResult;
-    if (cached?.frame === frame && cached.key === key) { showResult(cached.result); return true; }
+    if (cached?.frame === frame && cached.key === key) { showResult(cached.result, frame, key, shouldSelectStructures()); return true; }
     // Global line graphs can be large. Keep only the latest frame/result,
     // rather than adding unaccounted graph arrays to the trajectory cache.
     cachedResult = null;
@@ -179,7 +211,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
       });
       if (!current() || job.signal.aborted) return false;
       cachedResult = { frame, key, result };
-      controller = null; showResult(result); return true;
+      controller = null; showResult(result, frame, key, shouldSelectStructures()); return true;
     } catch (error) {
       if (!current() || job.signal.aborted || error.name === 'AbortError') return false;
       controller = null; failure = true; clearNetwork(); state('Failed');
@@ -206,7 +238,9 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
 
   async function restore(saved, { isCurrent = () => true } = {}) {
     if (!saved || !isCurrent()) return;
-    cancel(); writeParameters(saved); radius = saved.radius;
+    // Configuration color filters have already been restored by the caller.
+    // Replace DXA's computed result without discarding those saved choices.
+    cancel({ clearSettings: false }); writeParameters(saved); radius = saved.radius;
     $('dxa-line-radius').value = String(radius);
     resetFamilies();
     visibleFamilies = new Set(saved.visibleFamilies);
@@ -234,6 +268,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   });
   reset();
   return Object.freeze({ run, onFrame, cancel, abortJobs, reset, serialize, restore,
+    pendingColorProperties: () => enabled && !failure ? [{ name: DXA_STRUCTURE_PROPERTY, label: DXA_STRUCTURE_LABEL }] : [],
     setEnabled(value) { controlsEnabled = Boolean(value); updateControls(); },
     failed: () => enabled && failure,
   });

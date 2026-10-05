@@ -1,0 +1,948 @@
+{
+  "runtime": "native Linux g++ with __EMSCRIPTEN_PTHREADS__ adapter and -pthread -O3 -std=c++17",
+  "availableLogicalCpus": 4,
+  "recordedAt": "2026-10-05",
+  "sourceRevision": "5335a35",
+  "scope": "Temporary CSR edge-index experiment only; alpha cache disabled. Each case builds one topology then alternates linked-list/indexed extraction3times. Complete network JSON and every tetrahedron region checked against same-topology original CPU regions.",
+  "lookupEquality": "Identical hit counts and aggregate pointer-sum checksum across1M deterministic mixed finite-tet edge queries. Individual per-query pointers were not asserted.",
+  "nativeAndWasmTimings": "Native Linux timings and layout estimates are not measurements of Wasm performance.",
+  "prototypeSourceSha256": {
+    "dxa-profile.cpp": "56a9b67d22fcceb2f468f272f63cd4e30fc8cc10a49a3e0e540c5782e111a8a9",
+    "profile.h": "51166b5ec0efcd2e4cdb63d4b9e4c33f3547d474f3bb9d8dc947d06664ade2f5",
+    "dxa/upstream/ovito/crystalanalysis/modifier/dxa/ElasticMapping.h": "99df554dbe2bd6398403cac02f4747e966f6f8ca261090008b3f5386f0907969",
+    "dxa/upstream/ovito/crystalanalysis/modifier/dxa/ElasticMapping.cpp": "049f7084c64ea7cf7da24bfda959f0dae977851bbd369fcfad768374e6819508"
+  },
+  "decision": "Do not adopt: build+finish savings vary by dataset/threadcount; Fe4 regresses, Fe2 is marginal, and additional memory is required. No production C++/checksum/Wasm changes. GPU snapshot packing uses a separate unordered edge-key map and is not accelerated by this index.",
+  "experiments": [
+    {
+      "dataset": "fe",
+      "threadCount": 1,
+      "mappingPreparationMs": 1007.35,
+      "indexBuildMs": 45.163,
+      "nativeIndexBytes": 13973136,
+      "wasm32IndexBytesFromLayout": 6986568,
+      "uniqueEdges": 421603,
+      "runs": [
+        {
+          "run": 0,
+          "edgeIndex": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 450.802,
+          "substageMs": {
+            "manifold classification": 405.06,
+            "manifold ordered reduction": 2.14615,
+            "manifold create facets": 41.0103,
+            "manifold link halfedges": 0.707497,
+            "mesh makeManifold": 0.01325,
+            "mesh payload conversion": 0.011617
+          }
+        },
+        {
+          "run": 1,
+          "edgeIndex": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 342.588,
+          "substageMs": {
+            "manifold classification": 299.348,
+            "manifold ordered reduction": 2.30462,
+            "manifold create facets": 38.5209,
+            "manifold link halfedges": 0.700858,
+            "mesh makeManifold": 0.014251,
+            "mesh payload conversion": 0.012559
+          }
+        },
+        {
+          "run": 2,
+          "edgeIndex": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 428.311,
+          "substageMs": {
+            "manifold classification": 383.466,
+            "manifold ordered reduction": 2.12518,
+            "manifold create facets": 40.2706,
+            "manifold link halfedges": 0.732976,
+            "mesh makeManifold": 0.01307,
+            "mesh payload conversion": 0.012699
+          }
+        },
+        {
+          "run": 3,
+          "edgeIndex": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 344.865,
+          "substageMs": {
+            "manifold classification": 301.364,
+            "manifold ordered reduction": 2.55604,
+            "manifold create facets": 38.5506,
+            "manifold link halfedges": 0.711313,
+            "mesh makeManifold": 0.012518,
+            "mesh payload conversion": 0.013741
+          }
+        },
+        {
+          "run": 4,
+          "edgeIndex": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 416.054,
+          "substageMs": {
+            "manifold classification": 370.969,
+            "manifold ordered reduction": 2.16126,
+            "manifold create facets": 40.4839,
+            "manifold link halfedges": 0.773457,
+            "mesh makeManifold": 0.014812,
+            "mesh payload conversion": 0.014673
+          }
+        },
+        {
+          "run": 5,
+          "edgeIndex": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 346.576,
+          "substageMs": {
+            "manifold classification": 304.124,
+            "manifold ordered reduction": 2.1573,
+            "manifold create facets": 37.8802,
+            "manifold link halfedges": 0.740177,
+            "mesh makeManifold": 0.014202,
+            "mesh payload conversion": 0.013351
+          }
+        }
+      ],
+      "lookupRuns": [
+        {
+          "edgeIndex": false,
+          "elapsedMs": 175.726,
+          "queries": 1000000,
+          "hits": 965202,
+          "pointerSumChecksum": "17591821956192662352"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 44.1943,
+          "queries": 1000000,
+          "hits": 965202,
+          "pointerSumChecksum": "17591821956192662352"
+        },
+        {
+          "edgeIndex": false,
+          "elapsedMs": 207.912,
+          "queries": 1000000,
+          "hits": 965202,
+          "pointerSumChecksum": "17591821956192662352"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 61.1282,
+          "queries": 1000000,
+          "hits": 965202,
+          "pointerSumChecksum": "17591821956192662352"
+        }
+      ],
+      "originalMedianFinishMs": 428.311,
+      "originalMedianClassificationMs": 383.466,
+      "originalMedianLookupMs": 191.81900000000002,
+      "indexedMedianFinishMs": 344.865,
+      "indexedMedianClassificationMs": 301.364,
+      "indexedMedianLookupMs": 52.661249999999995,
+      "indexedMedianFinishIncludingBuildMs": 390.028,
+      "finishGainIncludingBuildPercent": 8.938131404516803,
+      "estimatedOriginalSinglePipelineMs": 1435.661,
+      "estimatedIndexedSinglePipelineMs": 1397.3780000000002,
+      "estimatedSinglePipelineGainPercent": 2.666576580404423,
+      "lookupSpeedup": 3.6425075363763684
+    },
+    {
+      "dataset": "fe",
+      "threadCount": 2,
+      "mappingPreparationMs": 726.694,
+      "indexBuildMs": 32.4288,
+      "nativeIndexBytes": 13973136,
+      "wasm32IndexBytesFromLayout": 6986568,
+      "uniqueEdges": 421603,
+      "runs": [
+        {
+          "run": 0,
+          "edgeIndex": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 291.586,
+          "substageMs": {
+            "manifold classification": 245.455,
+            "manifold ordered reduction": 2.17302,
+            "manifold create facets": 41.2231,
+            "manifold link halfedges": 0.809771,
+            "mesh makeManifold": 0.012999,
+            "mesh payload conversion": 0.012338
+          }
+        },
+        {
+          "run": 1,
+          "edgeIndex": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 233.173,
+          "substageMs": {
+            "manifold classification": 187.003,
+            "manifold ordered reduction": 2.41312,
+            "manifold create facets": 41.2805,
+            "manifold link halfedges": 0.810612,
+            "mesh makeManifold": 0.016034,
+            "mesh payload conversion": 0.0196
+          }
+        },
+        {
+          "run": 2,
+          "edgeIndex": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 244.173,
+          "substageMs": {
+            "manifold classification": 200.51,
+            "manifold ordered reduction": 2.23639,
+            "manifold create facets": 38.771,
+            "manifold link halfedges": 0.765505,
+            "mesh makeManifold": 0.014502,
+            "mesh payload conversion": 0.012239
+          }
+        },
+        {
+          "run": 3,
+          "edgeIndex": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 202.795,
+          "substageMs": {
+            "manifold classification": 159.777,
+            "manifold ordered reduction": 2.22252,
+            "manifold create facets": 38.226,
+            "manifold link halfedges": 0.863853,
+            "mesh makeManifold": 0.015644,
+            "mesh payload conversion": 0.012078
+          }
+        },
+        {
+          "run": 4,
+          "edgeIndex": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 245.591,
+          "substageMs": {
+            "manifold classification": 201.799,
+            "manifold ordered reduction": 2.12165,
+            "manifold create facets": 39.1246,
+            "manifold link halfedges": 0.80234,
+            "mesh makeManifold": 0.014752,
+            "mesh payload conversion": 0.011698
+          }
+        },
+        {
+          "run": 5,
+          "edgeIndex": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 208.899,
+          "substageMs": {
+            "manifold classification": 165.017,
+            "manifold ordered reduction": 2.21009,
+            "manifold create facets": 38.9432,
+            "manifold link halfedges": 0.932647,
+            "mesh makeManifold": 0.015633,
+            "mesh payload conversion": 0.011678
+          }
+        }
+      ],
+      "lookupRuns": [
+        {
+          "edgeIndex": false,
+          "elapsedMs": 189.235,
+          "queries": 1000000,
+          "hits": 965396,
+          "pointerSumChecksum": "16979352169834665696"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 46.4032,
+          "queries": 1000000,
+          "hits": 965396,
+          "pointerSumChecksum": "16979352169834665696"
+        },
+        {
+          "edgeIndex": false,
+          "elapsedMs": 183.694,
+          "queries": 1000000,
+          "hits": 965396,
+          "pointerSumChecksum": "16979352169834665696"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 47.0163,
+          "queries": 1000000,
+          "hits": 965396,
+          "pointerSumChecksum": "16979352169834665696"
+        }
+      ],
+      "originalMedianFinishMs": 245.591,
+      "originalMedianClassificationMs": 201.799,
+      "originalMedianLookupMs": 186.4645,
+      "indexedMedianFinishMs": 208.899,
+      "indexedMedianClassificationMs": 165.017,
+      "indexedMedianLookupMs": 46.70975,
+      "indexedMedianFinishIncludingBuildMs": 241.3278,
+      "finishGainIncludingBuildPercent": 1.73589423065178,
+      "estimatedOriginalSinglePipelineMs": 972.285,
+      "estimatedIndexedSinglePipelineMs": 968.0218,
+      "estimatedSinglePipelineGainPercent": 0.43847225864843686,
+      "lookupSpeedup": 3.9919824019610464
+    },
+    {
+      "dataset": "fe",
+      "threadCount": 4,
+      "mappingPreparationMs": 498.798,
+      "indexBuildMs": 17.9653,
+      "nativeIndexBytes": 13973136,
+      "wasm32IndexBytesFromLayout": 6986568,
+      "uniqueEdges": 421603,
+      "runs": [
+        {
+          "run": 0,
+          "edgeIndex": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 160.681,
+          "substageMs": {
+            "manifold classification": 114.146,
+            "manifold ordered reduction": 2.95259,
+            "manifold create facets": 41.1451,
+            "manifold link halfedges": 0.720637,
+            "mesh makeManifold": 0.014252,
+            "mesh payload conversion": 0.012609
+          }
+        },
+        {
+          "run": 1,
+          "edgeIndex": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 145.87,
+          "substageMs": {
+            "manifold classification": 99.0838,
+            "manifold ordered reduction": 2.88606,
+            "manifold create facets": 41.2815,
+            "manifold link halfedges": 0.724804,
+            "mesh makeManifold": 0.013721,
+            "mesh payload conversion": 0.010566
+          }
+        },
+        {
+          "run": 2,
+          "edgeIndex": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 156.375,
+          "substageMs": {
+            "manifold classification": 112.281,
+            "manifold ordered reduction": 2.7103,
+            "manifold create facets": 38.9861,
+            "manifold link halfedges": 0.749911,
+            "mesh makeManifold": 0.015513,
+            "mesh payload conversion": 0.012329
+          }
+        },
+        {
+          "run": 3,
+          "edgeIndex": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 142.76,
+          "substageMs": {
+            "manifold classification": 100.171,
+            "manifold ordered reduction": 2.17512,
+            "manifold create facets": 38.0173,
+            "manifold link halfedges": 0.721288,
+            "mesh makeManifold": 0.014863,
+            "mesh payload conversion": 0.01349
+          }
+        },
+        {
+          "run": 4,
+          "edgeIndex": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 169.647,
+          "substageMs": {
+            "manifold classification": 108.156,
+            "manifold ordered reduction": 2.19348,
+            "manifold create facets": 56.5728,
+            "manifold link halfedges": 0.929231,
+            "mesh makeManifold": 0.0199,
+            "mesh payload conversion": 0.015103
+          }
+        },
+        {
+          "run": 5,
+          "edgeIndex": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 151.14,
+          "substageMs": {
+            "manifold classification": 107.994,
+            "manifold ordered reduction": 2.12437,
+            "manifold create facets": 38.5437,
+            "manifold link halfedges": 0.788469,
+            "mesh makeManifold": 0.016945,
+            "mesh payload conversion": 0.013491
+          }
+        }
+      ],
+      "lookupRuns": [
+        {
+          "edgeIndex": false,
+          "elapsedMs": 237.729,
+          "queries": 1000000,
+          "hits": 965219,
+          "pointerSumChecksum": "17469694810160897296"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 53.0744,
+          "queries": 1000000,
+          "hits": 965219,
+          "pointerSumChecksum": "17469694810160897296"
+        },
+        {
+          "edgeIndex": false,
+          "elapsedMs": 214.506,
+          "queries": 1000000,
+          "hits": 965219,
+          "pointerSumChecksum": "17469694810160897296"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 52.7413,
+          "queries": 1000000,
+          "hits": 965219,
+          "pointerSumChecksum": "17469694810160897296"
+        }
+      ],
+      "originalMedianFinishMs": 160.681,
+      "originalMedianClassificationMs": 112.281,
+      "originalMedianLookupMs": 226.1175,
+      "indexedMedianFinishMs": 145.87,
+      "indexedMedianClassificationMs": 100.171,
+      "indexedMedianLookupMs": 52.907849999999996,
+      "indexedMedianFinishIncludingBuildMs": 163.83530000000002,
+      "finishGainIncludingBuildPercent": -1.963082131677063,
+      "estimatedOriginalSinglePipelineMs": 659.479,
+      "estimatedIndexedSinglePipelineMs": 662.6333,
+      "estimatedSinglePipelineGainPercent": -0.47830181097501256,
+      "lookupSpeedup": 4.273798689608443
+    },
+    {
+      "dataset": "nigb",
+      "threadCount": 1,
+      "mappingPreparationMs": 5996.32,
+      "indexBuildMs": 244.874,
+      "nativeIndexBytes": 60328648,
+      "wasm32IndexBytesFromLayout": 30164324,
+      "uniqueEdges": 1820318,
+      "runs": [
+        {
+          "run": 0,
+          "edgeIndex": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 4579.47,
+          "substageMs": {
+            "manifold classification": 3389.46,
+            "manifold ordered reduction": 16.687,
+            "manifold create facets": 345.32,
+            "manifold link halfedges": 27.2389,
+            "mesh makeManifold": 1.71854,
+            "mesh payload conversion": 0.574186
+          }
+        },
+        {
+          "run": 1,
+          "edgeIndex": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 3887.38,
+          "substageMs": {
+            "manifold classification": 2748.58,
+            "manifold ordered reduction": 16.7193,
+            "manifold create facets": 285.507,
+            "manifold link halfedges": 27.0529,
+            "mesh makeManifold": 1.72039,
+            "mesh payload conversion": 0.661077
+          }
+        },
+        {
+          "run": 2,
+          "edgeIndex": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 4501.34,
+          "substageMs": {
+            "manifold classification": 3387.2,
+            "manifold ordered reduction": 16.0482,
+            "manifold create facets": 278.943,
+            "manifold link halfedges": 28.0682,
+            "mesh makeManifold": 1.79984,
+            "mesh payload conversion": 0.700347
+          }
+        },
+        {
+          "run": 3,
+          "edgeIndex": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 3435.01,
+          "substageMs": {
+            "manifold classification": 2394.5,
+            "manifold ordered reduction": 18.6592,
+            "manifold create facets": 268.222,
+            "manifold link halfedges": 25.5143,
+            "mesh makeManifold": 1.46123,
+            "mesh payload conversion": 0.890423
+          }
+        },
+        {
+          "run": 4,
+          "edgeIndex": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 3898.36,
+          "substageMs": {
+            "manifold classification": 2850.25,
+            "manifold ordered reduction": 15.7363,
+            "manifold create facets": 280.266,
+            "manifold link halfedges": 23.7918,
+            "mesh makeManifold": 1.47332,
+            "mesh payload conversion": 0.601066
+          }
+        },
+        {
+          "run": 5,
+          "edgeIndex": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 3460.49,
+          "substageMs": {
+            "manifold classification": 2465.04,
+            "manifold ordered reduction": 15.9679,
+            "manifold create facets": 247.691,
+            "manifold link halfedges": 24.3446,
+            "mesh makeManifold": 1.46963,
+            "mesh payload conversion": 0.58734
+          }
+        }
+      ],
+      "lookupRuns": [
+        {
+          "edgeIndex": false,
+          "elapsedMs": 434.628,
+          "queries": 1000000,
+          "hits": 961019,
+          "pointerSumChecksum": "16432927968494517328"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 82.8577,
+          "queries": 1000000,
+          "hits": 961019,
+          "pointerSumChecksum": "16432927968494517328"
+        },
+        {
+          "edgeIndex": false,
+          "elapsedMs": 427.338,
+          "queries": 1000000,
+          "hits": 961019,
+          "pointerSumChecksum": "16432927968494517328"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 82.9432,
+          "queries": 1000000,
+          "hits": 961019,
+          "pointerSumChecksum": "16432927968494517328"
+        }
+      ],
+      "originalMedianFinishMs": 4501.34,
+      "originalMedianClassificationMs": 3387.2,
+      "originalMedianLookupMs": 430.983,
+      "indexedMedianFinishMs": 3460.49,
+      "indexedMedianClassificationMs": 2465.04,
+      "indexedMedianLookupMs": 82.90045,
+      "indexedMedianFinishIncludingBuildMs": 3705.3639999999996,
+      "finishGainIncludingBuildPercent": 17.68308992433365,
+      "estimatedOriginalSinglePipelineMs": 10497.66,
+      "estimatedIndexedSinglePipelineMs": 9701.684,
+      "estimatedSinglePipelineGainPercent": 7.582413604555683,
+      "lookupSpeedup": 5.198801695286334
+    },
+    {
+      "dataset": "nigb",
+      "threadCount": 2,
+      "mappingPreparationMs": 3911.96,
+      "indexBuildMs": 133.855,
+      "nativeIndexBytes": 60328648,
+      "wasm32IndexBytesFromLayout": 30164324,
+      "uniqueEdges": 1820318,
+      "runs": [
+        {
+          "run": 0,
+          "edgeIndex": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2515.66,
+          "substageMs": {
+            "manifold classification": 1505.39,
+            "manifold ordered reduction": 16.0515,
+            "manifold create facets": 267.819,
+            "manifold link halfedges": 22.0973,
+            "mesh makeManifold": 1.30482,
+            "mesh payload conversion": 0.495338
+          }
+        },
+        {
+          "run": 1,
+          "edgeIndex": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2372.2,
+          "substageMs": {
+            "manifold classification": 1387.68,
+            "manifold ordered reduction": 15.8722,
+            "manifold create facets": 245.554,
+            "manifold link halfedges": 22.688,
+            "mesh makeManifold": 1.37863,
+            "mesh payload conversion": 0.526354
+          }
+        },
+        {
+          "run": 2,
+          "edgeIndex": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2593.82,
+          "substageMs": {
+            "manifold classification": 1608.35,
+            "manifold ordered reduction": 16.2165,
+            "manifold create facets": 255.435,
+            "manifold link halfedges": 24.7587,
+            "mesh makeManifold": 1.34884,
+            "mesh payload conversion": 0.522328
+          }
+        },
+        {
+          "run": 3,
+          "edgeIndex": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2225.57,
+          "substageMs": {
+            "manifold classification": 1235.6,
+            "manifold ordered reduction": 16.0879,
+            "manifold create facets": 236.822,
+            "manifold link halfedges": 22.8108,
+            "mesh makeManifold": 1.38384,
+            "mesh payload conversion": 0.516449
+          }
+        },
+        {
+          "run": 4,
+          "edgeIndex": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2579.04,
+          "substageMs": {
+            "manifold classification": 1588.6,
+            "manifold ordered reduction": 16.1112,
+            "manifold create facets": 256.277,
+            "manifold link halfedges": 22.2963,
+            "mesh makeManifold": 1.34831,
+            "mesh payload conversion": 0.493104
+          }
+        },
+        {
+          "run": 5,
+          "edgeIndex": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2314.43,
+          "substageMs": {
+            "manifold classification": 1339.52,
+            "manifold ordered reduction": 16.1676,
+            "manifold create facets": 236.666,
+            "manifold link halfedges": 22.2816,
+            "mesh makeManifold": 1.3378,
+            "mesh payload conversion": 0.565783
+          }
+        }
+      ],
+      "lookupRuns": [
+        {
+          "edgeIndex": false,
+          "elapsedMs": 421.093,
+          "queries": 1000000,
+          "hits": 961472,
+          "pointerSumChecksum": "17269484087356232640"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 82.7168,
+          "queries": 1000000,
+          "hits": 961472,
+          "pointerSumChecksum": "17269484087356232640"
+        },
+        {
+          "edgeIndex": false,
+          "elapsedMs": 410.626,
+          "queries": 1000000,
+          "hits": 961472,
+          "pointerSumChecksum": "17269484087356232640"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 82.2314,
+          "queries": 1000000,
+          "hits": 961472,
+          "pointerSumChecksum": "17269484087356232640"
+        }
+      ],
+      "originalMedianFinishMs": 2579.04,
+      "originalMedianClassificationMs": 1588.6,
+      "originalMedianLookupMs": 415.8595,
+      "indexedMedianFinishMs": 2314.43,
+      "indexedMedianClassificationMs": 1339.52,
+      "indexedMedianLookupMs": 82.47409999999999,
+      "indexedMedianFinishIncludingBuildMs": 2448.285,
+      "finishGainIncludingBuildPercent": 5.069909733854461,
+      "estimatedOriginalSinglePipelineMs": 6491.0,
+      "estimatedIndexedSinglePipelineMs": 6360.245,
+      "estimatedSinglePipelineGainPercent": 2.014404560160221,
+      "lookupSpeedup": 5.042304190042693
+    },
+    {
+      "dataset": "nigb",
+      "threadCount": 4,
+      "mappingPreparationMs": 3613.32,
+      "indexBuildMs": 98.2239,
+      "nativeIndexBytes": 60328648,
+      "wasm32IndexBytesFromLayout": 30164324,
+      "uniqueEdges": 1820318,
+      "runs": [
+        {
+          "run": 0,
+          "edgeIndex": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1956.72,
+          "substageMs": {
+            "manifold classification": 927.429,
+            "manifold ordered reduction": 21.7687,
+            "manifold create facets": 278.963,
+            "manifold link halfedges": 22.7235,
+            "mesh makeManifold": 1.3854,
+            "mesh payload conversion": 0.50346
+          }
+        },
+        {
+          "run": 1,
+          "edgeIndex": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1793.09,
+          "substageMs": {
+            "manifold classification": 788.593,
+            "manifold ordered reduction": 16.1576,
+            "manifold create facets": 252.047,
+            "manifold link halfedges": 23.4056,
+            "mesh makeManifold": 1.64113,
+            "mesh payload conversion": 0.49189
+          }
+        },
+        {
+          "run": 2,
+          "edgeIndex": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2060.33,
+          "substageMs": {
+            "manifold classification": 962.403,
+            "manifold ordered reduction": 17.5441,
+            "manifold create facets": 301.981,
+            "manifold link halfedges": 24.3624,
+            "mesh makeManifold": 1.48153,
+            "mesh payload conversion": 0.51849
+          }
+        },
+        {
+          "run": 3,
+          "edgeIndex": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1723.46,
+          "substageMs": {
+            "manifold classification": 706.427,
+            "manifold ordered reduction": 16.7571,
+            "manifold create facets": 266.071,
+            "manifold link halfedges": 22.8535,
+            "mesh makeManifold": 1.3882,
+            "mesh payload conversion": 0.471522
+          }
+        },
+        {
+          "run": 4,
+          "edgeIndex": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1883.32,
+          "substageMs": {
+            "manifold classification": 925.003,
+            "manifold ordered reduction": 15.8125,
+            "manifold create facets": 251.478,
+            "manifold link halfedges": 20.9472,
+            "mesh makeManifold": 1.44869,
+            "mesh payload conversion": 0.542809
+          }
+        },
+        {
+          "run": 5,
+          "edgeIndex": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1605.78,
+          "substageMs": {
+            "manifold classification": 659.414,
+            "manifold ordered reduction": 16.1879,
+            "manifold create facets": 237.934,
+            "manifold link halfedges": 22.8061,
+            "mesh makeManifold": 1.49543,
+            "mesh payload conversion": 0.57007
+          }
+        }
+      ],
+      "lookupRuns": [
+        {
+          "edgeIndex": false,
+          "elapsedMs": 431.626,
+          "queries": 1000000,
+          "hits": 961327,
+          "pointerSumChecksum": "16746364539208854512"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 84.2063,
+          "queries": 1000000,
+          "hits": 961327,
+          "pointerSumChecksum": "16746364539208854512"
+        },
+        {
+          "edgeIndex": false,
+          "elapsedMs": 412.659,
+          "queries": 1000000,
+          "hits": 961327,
+          "pointerSumChecksum": "16746364539208854512"
+        },
+        {
+          "edgeIndex": true,
+          "elapsedMs": 87.0049,
+          "queries": 1000000,
+          "hits": 961327,
+          "pointerSumChecksum": "16746364539208854512"
+        }
+      ],
+      "originalMedianFinishMs": 1956.72,
+      "originalMedianClassificationMs": 927.429,
+      "originalMedianLookupMs": 422.1425,
+      "indexedMedianFinishMs": 1723.46,
+      "indexedMedianClassificationMs": 706.427,
+      "indexedMedianLookupMs": 85.60560000000001,
+      "indexedMedianFinishIncludingBuildMs": 1821.6839,
+      "finishGainIncludingBuildPercent": 6.901145795003883,
+      "estimatedOriginalSinglePipelineMs": 5570.04,
+      "estimatedIndexedSinglePipelineMs": 5435.0039,
+      "estimatedSinglePipelineGainPercent": 2.4243290891986513,
+      "lookupSpeedup": 4.931248656629939
+    }
+  ]
+}

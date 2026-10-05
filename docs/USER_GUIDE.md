@@ -77,6 +77,17 @@ saved separately per property: hiding a CNA class does not change PTM
 visibility. All filters synchronize to the second view and are saved in
 configuration JSON.
 
+After CNA, PTM, Auto central symmetry, ideal lattice strain or DXA identifies
+crystal types, **Crystal visibility** lets you hide FCC, BCC, HCP and other
+classes independently of **Color by**. For example, keep CSP colors and hide
+bulk BCC atoms to inspect the defect core. When several classifiers are
+available, choose which result supplies the visibility classes. Existing
+classification arrays are reused; changing a checkbox starts no analysis.
+If that result is still being calculated for a new frame, its filter waits for
+the new labels. The source and its per-class choices are saved in configuration
+JSON. Coloring by that same classification uses the categorical legend's
+checkboxes, so there is one set of controls for its classes.
+
 **Select all** and **Unselect all** change every class represented in the current
 legend, including zero-count categories. They leave filters belonging to other
 properties unchanged. Counts and percentages update with the displayed population.
@@ -385,6 +396,11 @@ This initial version uses the actual OVITO v3.9.4 dislocation extraction core in
 a dedicated CPU/Wasm Worker. Its Burgers-family checkboxes and colors control
 the extracted lines independently of atom colors. Line radius, family visibility
 and slice/display replication redraw the network without recalculation.
+Lines use connected tube surfaces with smooth display interpolation, including
+closed loops and periodic joins. This drawing step preserves the computed
+points, line lengths, Burgers vectors and junctions. Completed DXA also adds
+**Crystal structure (DXA)** to **Color by** and to **Crystal visibility**;
+these atom controls remain available when extraction finds no lines.
 The summary reports source line count, length and length-per-cell-volume density.
 **Cancel** stops extraction and clears this tool; other analyses remain available.
 Configurations preserve parameters and line-display preferences and recompute

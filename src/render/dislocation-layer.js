@@ -1,55 +1,31 @@
 import { invert3 } from '../data/model.js';
 import { DXA_FAMILIES, splitPeriodicPolyline } from '../analysis/dxa.js';
-import { createPrimitiveMesh, parsePrimitiveColor } from './atom-primitives.js';
+import { parsePrimitiveColor } from './atom-primitives.js';
+import { appendDislocationTube, createDislocationCurve } from './dislocation-curves.js';
 import { MAX_SLICES, SLICE_EPSILON } from './slicing.js';
 
 // A dislocation is a geometric curve, not a bond between two atom indices.
-// Keep the source-cell line pieces in one instance buffer. Periodic display
+// Keep the connected source-cell tube pieces in one indexed buffer. Periodic display
 // images and slice planes are uniforms, so neither repeats nor dragging a
 // slice reconstructs the full dislocation network.
 const VERTEX = `#version 300 es
 precision highp float;
 precision highp int;
-layout(location=0) in vec3 aMesh;
-layout(location=1) in vec3 aNormal;
-layout(location=2) in vec3 aStart;
-layout(location=3) in vec3 aEnd;
-layout(location=4) in vec3 aColor;
+layout(location=0) in vec3 aCenter;
+layout(location=1) in vec3 aRadial;
+layout(location=2) in vec3 aNormal;
+layout(location=3) in vec3 aColor;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform vec3 uReplicaOffset;
 uniform float uRadius;
-uniform int uSliceCount;
-uniform vec4 uSlicePlanes[${MAX_SLICES}];
 out vec3 vNormal;
 out vec3 vWorld;
 flat out vec3 vColor;
-flat out int vVisible;
 void main() {
-  vec3 start = aStart + uReplicaOffset, delta = aEnd - aStart;
-  float lower = 0.0, upper = 1.0;
-  bool visible = length(delta) > 1e-12;
-  for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
-    if (plane >= uSliceCount) break;
-    float distance = dot(uSlicePlanes[plane].xyz, start) - uSlicePlanes[plane].w;
-    float slope = dot(uSlicePlanes[plane].xyz, delta);
-    if (abs(slope) < 1e-12) {
-      if (distance > ${SLICE_EPSILON}) visible = false;
-    } else {
-      float boundary = (${SLICE_EPSILON} - distance) / slope;
-      if (slope > 0.0) upper = min(upper, boundary);
-      else lower = max(lower, boundary);
-    }
-  }
-  visible = visible && upper > lower;
-  vec3 direction = length(delta) > 1e-12 ? normalize(delta) : vec3(0.0, 0.0, 1.0);
-  vec3 reference = abs(direction.z) < 0.85 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
-  vec3 across = normalize(cross(reference, direction)), up = cross(direction, across);
-  float along = mix(lower, max(lower, upper), aMesh.z);
-  vWorld = start + delta * along + (across * aMesh.x + up * aMesh.y) * uRadius;
-  vNormal = mat3(uView) * (across * aNormal.x + up * aNormal.y + direction * aNormal.z);
+  vWorld = aCenter + uReplicaOffset + aRadial * uRadius;
+  vNormal = mat3(uView) * aNormal;
   vColor = aColor;
-  vVisible = visible ? 1 : 0;
   gl_Position = uProjection * uView * vec4(vWorld, 1.0);
 }`;
 
@@ -59,12 +35,10 @@ precision highp int;
 in vec3 vNormal;
 in vec3 vWorld;
 flat in vec3 vColor;
-flat in int vVisible;
 uniform int uSliceCount;
 uniform vec4 uSlicePlanes[${MAX_SLICES}];
 out vec4 outColor;
 void main() {
-  if (vVisible == 0) discard;
   for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
     if (plane >= uSliceCount) break;
     if (dot(uSlicePlanes[plane].xyz, vWorld) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) discard;
@@ -116,7 +90,9 @@ function pointArray(points) {
   return points;
 }
 
-/** Build source-cell cylinders. Never mutate topology, lengths or statistics. */
+/** Source-cell edge data retained for consumers of the original display helper.
+ * The renderer uses the continuous tube mesh below, rather than these edges.
+ */
 export function createDislocationInstances(network, cell, options = {}) {
   const settings = normalizeDislocationOptions(options), values = [];
   const families = DXA_FAMILIES[network?.parameters?.lattice ?? 'fcc'] ?? [];
@@ -143,6 +119,33 @@ export function createDislocationInstances(network, cell, options = {}) {
     }
   }
   return { values: Float32Array.from(values), count: values.length / 9, minimum, maximum };
+}
+
+/** Build smooth, connected source-cell tubes without altering analysis data. */
+export function createDislocationTubeGeometry(network, cell, options = {}) {
+  const settings = normalizeDislocationOptions(options), values = [], indices = [], curves = [];
+  const families = DXA_FAMILIES[network?.parameters?.lattice ?? 'fcc'] ?? [];
+  const colors = new Map(families.map(family => [family.id, normalizedColor(family.color)]));
+  const selected = settings.visibleFamilies === null ? null : new Set(settings.visibleFamilies);
+  if (!network || !Array.isArray(network.segments)) throw new Error('A dislocation network requires a segment list.');
+  const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
+  for (const segment of network.segments) {
+    const family = segment.familyId ?? segment.family ?? 'other';
+    if ((selected && !selected.has(family)) || settings.familyVisibility[family] === false) continue;
+    const color = settings.familyColors[family] ?? colors.get(family) ?? [0.88, 0.34, 0.34];
+    for (const curve of createDislocationCurve(pointArray(segment.points), cell, segment.closed ?? null)) {
+      const mesh = appendDislocationTube(values, indices, curve, color);
+      curves.push({ segmentId: segment.id, familyId: family, ...mesh });
+      for (let index = 0; index < mesh.points.length; index += 3) {
+        for (let axis = 0; axis < 3; axis += 1) {
+          minimum[axis] = Math.min(minimum[axis], mesh.points[index + axis]);
+          maximum[axis] = Math.max(maximum[axis], mesh.points[index + axis]);
+        }
+      }
+    }
+  }
+  return { values: Float32Array.from(values), indices: Uint32Array.from(indices), curves, count: curves.length,
+    vertexCount: values.length / 12, indexCount: indices.length, minimum, maximum };
 }
 
 /** Centerline/half-space intersection, including segments whose endpoints are
@@ -188,51 +191,59 @@ export class DislocationLayer {
       .map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.vao = gl.createVertexArray();
     this.meshBuffer = gl.createBuffer();
-    this.instanceBuffer = gl.createBuffer();
-    const mesh = createPrimitiveMesh(false, 10);
-    this.vertexCount = mesh.length / 6;
+    this.indexBuffer = gl.createBuffer();
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
-    for (let attribute = 0; attribute < 2; attribute += 1) {
+    for (let attribute = 0; attribute < 4; attribute += 1) {
       gl.enableVertexAttribArray(attribute);
-      gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 24, attribute * 12);
+      gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 48, attribute * 12);
       gl.vertexAttribDivisor(attribute, 0);
     }
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
-    for (let attribute = 2; attribute < 5; attribute += 1) {
-      gl.enableVertexAttribArray(attribute);
-      gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 36, (attribute - 2) * 12);
-      gl.vertexAttribDivisor(attribute, 1);
-    }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
     gl.bindVertexArray(null);
     this.options = normalizeDislocationOptions();
     this.network = null;
     this.count = 0;
+    this.vertexCount = this.indexCount = 0;
+    this.geometry = null;
   }
 
   setNetwork(renderer, network, options = {}) {
     const normalized = normalizeDislocationOptions(options, this.options);
     const appearanceKey = JSON.stringify([normalized.visibleFamilies, normalized.familyVisibility, normalized.familyColors]);
-    if (network && (this.network !== network || this.appearanceKey !== appearanceKey)) {
-      const geometry = createDislocationInstances(network, renderer.frame.cell, normalized);
+    if (network && (this.network !== network || this.cell !== renderer.frame.cell || this.appearanceKey !== appearanceKey)) {
+      const geometry = createDislocationTubeGeometry(network, renderer.frame.cell, normalized);
       this.minimum = geometry.minimum;
       this.maximum = geometry.maximum;
       this.count = geometry.count;
-      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instanceBuffer);
+      this.vertexCount = geometry.vertexCount;
+      this.indexCount = geometry.indexCount;
+      this.geometry = { curves: geometry.curves, vertexCount: geometry.vertexCount, indexCount: geometry.indexCount };
+      this.gl.bindVertexArray(this.vao);
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.meshBuffer);
       this.gl.bufferData(this.gl.ARRAY_BUFFER, geometry.values, this.gl.STATIC_DRAW);
+      this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+      this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, geometry.indices, this.gl.STATIC_DRAW);
+      this.gl.bindVertexArray(null);
     } else if (!network) this.clear();
     this.options = normalized;
     this.network = network;
+    this.cell = renderer.frame?.cell ?? null;
     this.appearanceKey = appearanceKey;
   }
 
   clear() {
     this.network = null;
     this.count = 0;
+    this.vertexCount = this.indexCount = 0;
+    this.geometry = null;
     this.minimum = this.maximum = null;
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instanceBuffer);
+    this.gl.bindVertexArray(this.vao);
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.meshBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, 0, this.gl.STATIC_DRAW);
+    this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+    this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, 0, this.gl.STATIC_DRAW);
+    this.gl.bindVertexArray(null);
   }
 
   render(renderer) {
@@ -247,7 +258,7 @@ export class DislocationLayer {
     gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
     for (const replica of renderer.replicas) {
       gl.uniform3f(u.uReplicaOffset, ...replica.offset);
-      gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vertexCount, this.count);
+      gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_INT, 0);
     }
   }
 

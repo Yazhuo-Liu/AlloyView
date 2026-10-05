@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCell, fractionalToCartesian } from '../src/data/model.js';
+import { cartesianToFractional, createCell, fractionalToCartesian } from '../src/data/model.js';
 import { DXA_FAMILIES } from '../src/analysis/dxa.js';
 import {
-  DislocationLayer, clipDislocationSegment, createDislocationInstances,
+  DislocationLayer, clipDislocationSegment, createDislocationInstances, createDislocationTubeGeometry,
   dislocationSlicePlanes, normalizeDislocationOptions,
 } from '../src/render/dislocation-layer.js';
 import { validateSlices } from '../src/render/slicing.js';
@@ -14,6 +14,18 @@ const cell = createCell({ vectors: [10, 0, 0, 4, 8, 0, 0, 0, 12], origin: [4, 5,
 const family = DXA_FAMILIES.fcc[0].id;
 const network = points => ({ parameters: { lattice: 'fcc' }, segments: [{ id: 1, familyId: family, points }], totalLength: 2, density: 2 / 960 });
 const near = (first, last, tolerance = 1e-6) => assert.ok(Math.abs(first - last) < tolerance, `${first} != ${last}`);
+const vectorNear = (first, last, tolerance = 1e-6) => first.forEach((value, axis) => near(value, last[axis], tolerance));
+const openCell = createCell({ vectors: [20, 0, 0, 0, 20, 0, 0, 0, 20], pbc: [false, false, false] });
+
+function assertFrames(curve) {
+  for (let index = 0; index < curve.ringCount * 3; index += 3) {
+    const tangent = curve.tangents.slice(index, index + 3), normal = curve.normals.slice(index, index + 3);
+    assert.ok([...tangent, ...normal].every(Number.isFinite));
+    near(Math.hypot(...tangent), 1);
+    near(Math.hypot(...normal), 1);
+    near(tangent.reduce((sum, value, axis) => sum + value * normal[axis], 0), 0);
+  }
+}
 
 test('dislocation curves split at triclinic periodic faces without a cell-spanning connector', () => {
   const points = fractionalToCartesian(new Float64Array([0.9, 0.3, 0.4, 1.1, 0.3, 0.4]), cell, new Float64Array(6));
@@ -45,6 +57,151 @@ test('dislocation family filtering and coloring are independent of atom visibili
   assert.equal(all.visibleFamilies, null);
   assert.throws(() => normalizeDislocationOptions({ radius: 0 }), /radius/);
   assert.throws(() => createDislocationInstances(network([7, 7, 8, NaN, 7, 8]), cell), /finite/);
+  assert.equal(createDislocationTubeGeometry(result, cell, { visibleFamilies: [] }).indexCount, 0);
+  assert.equal(createDislocationTubeGeometry(result, cell, { familyVisibility: { [family]: false } }).count, 0);
+  const tube = createDislocationTubeGeometry(result, cell, { familyColors: { [family]: '#ff8000' } });
+  vectorNear(tube.values.slice(9, 12), [1, 128 / 255, 0]);
+  assert.throws(() => createDislocationTubeGeometry(network([7, 7, 8, NaN, 7, 8]), cell), /finite/);
+});
+
+test('connected tube interpolation preserves native knots, caps only open ends, and shares every interior ring', () => {
+  const points = new Float64Array([0, 0, 0, 2, 0, 0, 2, 2, 0]), result = network(points);
+  Object.assign(result.segments[0], { burgersVector: [0.5, 0, 0.5], length: 4, junctions: [[], [{ segmentId: 2, end: 0 }]] });
+  const original = structuredClone(result), geometry = createDislocationTubeGeometry(result, openCell), curve = geometry.curves[0];
+  assert.ok(curve.ringCount > 3, 'bends receive render-only samples');
+  assert.equal(curve.closed, false);
+  assert.equal(curve.capStart, true); assert.equal(curve.capEnd, true);
+  vectorNear(curve.points.slice(0, 3), [0, 0, 0]);
+  vectorNear(curve.points.slice(-3), [2, 2, 0]);
+  assert.ok(Array.from({ length: curve.ringCount }, (_, ring) => curve.points.slice(ring * 3, ring * 3 + 3))
+    .some(point => point[0] === 2 && point[1] === 0 && point[2] === 0), 'native bend point is retained');
+  assert.ok(curve.points.some((value, index) => index % 3 === 1 && value < 0), 'restrained interpolation rounds the bend');
+  assertFrames(curve);
+  const bodyIndices = geometry.indices.slice(0, (curve.ringCount - 1) * curve.radialSegments * 6);
+  for (let ring = 1; ring < curve.ringCount - 1; ring += 1) {
+    for (let side = 0; side < curve.radialSegments; side += 1) {
+      const vertex = ring * curve.radialSegments + side;
+      assert.equal(bodyIndices.filter(index => index === vertex).length, 6, 'both neighboring bands use one shared vertex');
+    }
+  }
+  for (let vertex = 0; vertex < curve.ringCount * curve.radialSegments; vertex += 1) {
+    const radial = geometry.values.slice(vertex * 12 + 3, vertex * 12 + 6);
+    const tangent = curve.tangents.slice(Math.floor(vertex / curve.radialSegments) * 3, Math.floor(vertex / curve.radialSegments) * 3 + 3);
+    near(Math.hypot(...radial), 1);
+    near(radial.reduce((sum, value, axis) => sum + value * tangent[axis], 0), 0);
+  }
+  assert.deepEqual(result, original, 'coordinates, Burgers vectors, junctions, lengths and statistics stay scientific source data');
+});
+
+test('nonplanar closed loops use a shared first ring and correct transported frame twist', () => {
+  const points = new Float64Array([0, 0, 0, 3, 0, 1, 4, 2, -1, 1, 4, 2, -1, 2, -0.5, 0, 0, 0]);
+  const result = network(points);
+  result.segments[0].closed = true;
+  const geometry = createDislocationTubeGeometry(result, openCell), curve = geometry.curves[0];
+  assert.equal(curve.closed, true);
+  assert.equal(curve.capStart, false); assert.equal(curve.capEnd, false);
+  assert.equal(curve.vertexCount, curve.ringCount * curve.radialSegments);
+  assert.equal(curve.indexCount, curve.ringCount * curve.radialSegments * 6);
+  assert.notDeepEqual(Array.from(curve.points.slice(0, 3)), Array.from(curve.points.slice(-3)), 'the duplicate terminal ring is removed');
+  vectorNear(curve.seam.start.center, curve.seam.end.center);
+  vectorNear(curve.seam.start.tangent, curve.seam.end.tangent, 1e-12);
+  vectorNear(curve.seam.start.normal, curve.seam.end.normal, 1e-12);
+  assertFrames(curve);
+  const edges = new Map();
+  for (let index = 0; index < geometry.indices.length; index += 3) {
+    const triangle = geometry.indices.slice(index, index + 3);
+    for (let side = 0; side < 3; side += 1) {
+      const ends = [triangle[side], triangle[(side + 1) % 3]].sort((a, b) => a - b), key = ends.join(',');
+      edges.set(key, (edges.get(key) ?? 0) + 1);
+    }
+  }
+  assert.ok([...edges.values()].every(count => count === 2), 'closed mesh has no unjoined seam or exposed edge');
+});
+
+test('native closed loops with numerical endpoint residuals snap only the display copy', () => {
+  for (const residual of [2.3429572948430177e-8, 1e-7]) {
+    const result = network(new Float64Array([0, 0, 0, 3, 0, 1, 4, 2, -1, 1, 4, 2, -1, 2, -0.5, residual, -residual / 2, 0]));
+    result.segments[0].closed = true;
+    const original = structuredClone(result), geometry = createDislocationTubeGeometry(result, openCell), curve = geometry.curves[0];
+    assert.equal(curve.closed, true);
+    assert.equal(curve.capStart, false); assert.equal(curve.capEnd, false);
+    vectorNear(curve.seam.start.center, curve.seam.end.center, 1e-12);
+    vectorNear(curve.seam.start.tangent, curve.seam.end.tangent, 1e-12);
+    vectorNear(curve.seam.start.normal, curve.seam.end.normal, 1e-12);
+    assert.equal(curve.indexCount, curve.ringCount * curve.radialSegments * 6);
+    assert.deepEqual(result, original, 'native endpoints and measured length remain untouched');
+  }
+});
+
+test('triclinic periodic tube cuts retain matching frames without caps or cell-spanning triangles', () => {
+  const points = fractionalToCartesian([0.8, 0.8, 0.4, 1.2, 1.2, 0.4, 1.3, 1.3, 0.6], cell, new Float64Array(9));
+  const result = network(points), original = structuredClone(result), geometry = createDislocationTubeGeometry(result, cell);
+  assert.equal(geometry.curves.length, 2, 'simultaneous periodic face crossings produce two pieces');
+  const [first, last] = geometry.curves;
+  assert.equal(first.capStart, true); assert.equal(first.capEnd, false);
+  assert.equal(last.capStart, false); assert.equal(last.capEnd, true);
+  vectorNear(first.tangents.slice(-3), last.tangents.slice(0, 3), 1e-12);
+  vectorNear(first.normals.slice(-3), last.normals.slice(0, 3), 1e-12);
+  vectorNear(first.points.slice(-3).map((value, axis) => value - last.points[axis]), [14, 8, 0]);
+  for (const curve of geometry.curves) {
+    assertFrames(curve);
+    const fractional = cartesianToFractional(curve.points, cell, new Float64Array(curve.points.length));
+    assert.ok(fractional.every(value => value >= -1e-9 && value <= 1 + 1e-9));
+    const curveIndices = geometry.indices.slice(curve.indexStart, curve.indexStart + curve.indexCount);
+    assert.ok(curveIndices.every(index => index >= curve.vertexStart && index < curve.vertexStart + curve.vertexCount), 'faces stay within one periodic piece');
+  }
+  const firstRing = first.vertexStart + (first.ringCount - 1) * first.radialSegments;
+  for (let side = 0; side < first.radialSegments; side += 1) {
+    vectorNear(geometry.values.slice((firstRing + side) * 12 + 3, (firstRing + side) * 12 + 9),
+      geometry.values.slice((last.vertexStart + side) * 12 + 3, (last.vertexStart + side) * 12 + 9), 1e-12);
+  }
+  assert.deepEqual(result, original);
+});
+
+test('closed periodic winding lines keep their lattice displacement instead of adding a closing connector', () => {
+  const points = fractionalToCartesian([0.2, 0.3, 0.1, 0.2, 0.3, 1.1], cell, new Float64Array(6));
+  const result = network(points); result.segments[0].closed = true; result.segments[0].isInfinite = true;
+  const geometry = createDislocationTubeGeometry(result, cell), curve = geometry.curves[0];
+  assert.equal(curve.closed, false, 'periodic continuation joins translated replicas rather than different cell faces');
+  assert.equal(curve.capStart, false); assert.equal(curve.capEnd, false);
+  vectorNear(curve.tangents.slice(0, 3), curve.tangents.slice(-3), 1e-12);
+  vectorNear(curve.normals.slice(0, 3), curve.normals.slice(-3), 1e-12);
+  let displayedLength = 0;
+  for (let index = 3; index < curve.points.length; index += 3) {
+    displayedLength += Math.hypot(...[0, 1, 2].map(axis => curve.points[index + axis] - curve.points[index - 3 + axis]));
+  }
+  near(displayedLength, 12);
+  assert.deepEqual(Array.from(result.segments[0].points), Array.from(points));
+  points[points.length - 1] += 1e-7;
+  const residualGeometry = createDislocationTubeGeometry(result, cell), residualCurve = residualGeometry.curves[0];
+  assert.equal(residualCurve.closed, false);
+  assert.equal(residualCurve.capStart, false); assert.equal(residualCurve.capEnd, false);
+  near(residualCurve.points.at(-1) - residualCurve.points[2], 12, 1e-12);
+  vectorNear(residualCurve.tangents.slice(0, 3), residualCurve.tangents.slice(-3), 1e-12);
+  vectorNear(residualCurve.normals.slice(0, 3), residualCurve.normals.slice(-3), 1e-12);
+  near(result.segments[0].points.at(-1), points[2] + 12 + 1e-7, 1e-12);
+});
+
+test('repeated knots, reversals and uneven spans produce finite tube frames', () => {
+  for (const points of [
+    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 5, 0],
+    [0, 0, 0, 0.00001, 0, 0, 1, 2, 0, 1, 2, 0, 1, 9, 3],
+  ]) {
+    const geometry = createDislocationTubeGeometry(network(points), openCell);
+    assert.ok(geometry.values.every(Number.isFinite));
+    geometry.curves.forEach(assertFrames);
+  }
+  assert.equal(createDislocationTubeGeometry(network([1, 1, 1, 1, 1, 1]), openCell).count, 0);
+});
+
+test('coincident open junction endpoints retain their native open topology', () => {
+  const result = network([0, 0, 0, 2, 0, 0, 2, 2, 0, 0, 0, 0]);
+  Object.assign(result.segments[0], { closed: false, junctions: [[{ segmentId: 2, end: 0 }], [{ segmentId: 3, end: 1 }]] });
+  const curve = createDislocationTubeGeometry(result, openCell).curves[0];
+  assert.equal(curve.closed, false);
+  assert.equal(curve.capStart, true); assert.equal(curve.capEnd, true);
+  vectorNear(curve.points.slice(0, 3), curve.points.slice(-3));
+  assert.notDeepEqual(Array.from(curve.tangents.slice(0, 3)), Array.from(curve.tangents.slice(-3)), 'branches are not smoothed into a fictitious closed loop');
 });
 
 test('multiple slice intersections retain the visible middle of a dislocation segment', () => {
@@ -75,6 +232,7 @@ function mockGl() {
   const calls = { data: [], draws: [], shaders: [] };
   const gl = {
     ARRAY_BUFFER: 1, STATIC_DRAW: 2, FLOAT: 3, VERTEX_SHADER: 4, FRAGMENT_SHADER: 5, COMPILE_STATUS: 6, LINK_STATUS: 7, TRIANGLES: 8,
+    ELEMENT_ARRAY_BUFFER: 9, UNSIGNED_INT: 10,
     createProgram: () => ({}), createShader: () => ({}), shaderSource(shader, source) { calls.shaders.push(source); },
     compileShader() {}, getShaderParameter: () => true, attachShader() {}, deleteShader() {}, linkProgram() {}, getProgramParameter: () => true,
     getUniformLocation: (program, name) => name, createVertexArray: () => ({}), createBuffer: () => ({ id: next++ }),
@@ -82,7 +240,7 @@ function mockGl() {
     enableVertexAttribArray() {}, vertexAttribPointer() {}, vertexAttribDivisor() {}, useProgram() {},
     uniformMatrix4fv() {}, uniform1f() {}, uniform1i() {}, uniform4fv() {},
     uniform3f(location, ...value) { if (location === 'uReplicaOffset') offset = value; },
-    drawArraysInstanced(mode, first, count, instances) { calls.draws.push({ count, instances, offset }); },
+    drawElements(mode, count, type, first) { calls.draws.push({ count, type, first, offset }); },
   };
   return { gl, calls };
 }
@@ -96,12 +254,16 @@ test('display replication and slicing reuse dislocation source geometry and expo
   const uploads = calls.data.length;
   layer.render(renderer);
   assert.equal(calls.draws.length, 2);
-  assert.ok(calls.draws.every(draw => draw.instances === 1));
+  assert.ok(calls.draws.every(draw => draw.count === layer.indexCount && draw.type === gl.UNSIGNED_INT));
   assert.deepEqual(calls.draws.map(draw => draw.offset), [[0, 0, 0], [10, 0, 0]]);
   renderer.sliceCount = 1;
   layer.render(renderer);
   layer.setNetwork(renderer, result, { radius: 0.4 });
   assert.equal(calls.data.length, uploads, 'changing slices, radius or display repeats must not upload a network again');
+  const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
+  layer.extendBounds(renderer, minimum, maximum);
+  vectorNear(minimum, [6.6, 6.6, 7.6]);
+  vectorNear(maximum, [18.4, 7.4, 8.4]);
   assert.equal(result.totalLength, 2);
   layer.setNetwork(renderer, result, { enabled: false });
   const draws = calls.draws.length;
@@ -110,7 +272,10 @@ test('display replication and slicing reuse dislocation source geometry and expo
   layer.clear();
   assert.equal(layer.count, 0);
   assert.equal(calls.data.at(-1), 0);
-  assert.ok(calls.shaders.every(shader => shader.includes('uSlicePlanes')), 'cylinder endpoints and surfaces are clipped');
+  layer.setNetwork({ frame: null }, null);
+  assert.equal(layer.geometry, null, 'clearing an already closed frame remains valid');
+  assert.ok(calls.shaders[1].includes('uSlicePlanes'), 'tube surfaces use Cartesian half-space clipping');
+  assert.ok(calls.shaders[0].includes('uProjection * uView'), 'tube vertices use the same camera and projection as atoms and exports');
 });
 
 test('clearing the dislocation renderer API retains the loaded analysis frame', () => {

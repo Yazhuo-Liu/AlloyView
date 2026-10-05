@@ -140,7 +140,10 @@
           <div id="interaction-hint" class="interaction-hint" hidden>Drag to rotate · Shift/right-drag to pan · Scroll to zoom · Click to select</div>
           <div id="legend-overlay" class="legend-overlay">
             <button id="toggle-legend" class="mobile-overlay-toggle" type="button" aria-controls="legend" aria-expanded="false">Legend / atoms</button>
-            <div id="legend" class="legend" hidden></div>
+            <div id="legend" class="legend" hidden>
+              <div id="color-legend"></div>
+              <section id="crystal-visibility" class="crystal-visibility" aria-label="Crystal structure visibility" hidden></section>
+            </div>
           </div>
           <div id="loading" class="loading" role="status" aria-live="polite" hidden>
             <span class="spinner"></span>

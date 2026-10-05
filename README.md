@@ -91,6 +91,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   Atom-type colors and ten scalar color maps, with an Auto range toggle,
   editable limits that stay fixed across frames, and optional filtering of
   out-of-range atoms.
+- Independent crystal visibility from CNA, PTM, Auto central symmetry, ideal
+  lattice strain or DXA, including when coloring by a scalar quantity. DXA
+  lines use continuous tube surfaces while retaining the scientific network.
 - PNG export with independent background, legend and XYZ-arrow controls,
   JPG export, visible atom-ID lists, six-view contact sheets and cancellable
   trajectory image sequences packaged as ZIP files.
@@ -157,6 +160,8 @@ WebGL 2 support. No installation or account is needed.
    your structure's neighbor shells.
    Use **Common neighbor analysis** or **Polyhedral template matching** for
    crystal identification, then the legend checkboxes to show/hide each class.
+   **Crystal visibility** also filters those classes while **Color by** shows
+   CSP, strain or another quantity, using existing identification results.
    **Central symmetry → Auto** identifies FCC/HCP/BCC locally and selects 12
    neighbors for FCC/HCP or 8 for BCC, including mixed structures. Its summary
    shows the recognized phases; ideal HCP has a finite symmetry value.

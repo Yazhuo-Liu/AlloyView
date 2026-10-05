@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initializeDxaTools } from '../src/dxa-tools.js';
+import { initializeDxaTools, DXA_STRUCTURE_PROPERTY, DXA_STRUCTURE_TYPES } from '../src/dxa-tools.js';
 import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+import { colorsByCategory, combineVisibilityMasks, visibilityByCategory, visibilityByType } from '../src/render/palette.js';
 
 class Element {
   constructor(tagName = 'div') {
@@ -30,8 +31,8 @@ function harness(t) {
   globalThis.document = { getElementById: id => fields[id], createElement: tag => new Element(tag) };
   t.after(() => { globalThis.document = previousDocument; });
   let frame = { ids: new Uint32Array([1, 2, 3, 4]), properties: [{ name: 'coordination', data: new Uint8Array([12, 12, 12, 12]) }] };
-  let version = 'source:0', gpuEnabled = true;
-  const pending = [], enabledTools = new Set(), draws = [], notifications = [];
+  let version = 'source:0', gpuEnabled = true, colorMode = 'type', colorChoiceVersion = 0;
+  const pending = [], enabledTools = new Set(), draws = [], notifications = [], resultChanges = [];
   const client = {
     releases: 0,
     analyze(inputFrame, parameters, options) {
@@ -44,11 +45,18 @@ function harness(t) {
   const tools = initializeDxaTools({ renderer, client,
     tools: { setToolEnabled(name, enabled) { if (enabled) enabledTools.add(name); else enabledTools.delete(name); } },
     getFrame: () => frame, getSourceVersion: () => version, getGpuEnabled: () => gpuEnabled,
+    getColorMode: () => colorMode, getColorChoiceVersion: () => colorChoiceVersion,
+    onResultsChange(change) {
+      resultChanges.push(change);
+      if (change.selectProperty) colorMode = `property:${change.selectProperty}`;
+    },
     notify: message => notifications.push(message),
   });
   tools.setEnabled(true);
-  return { tools, client, pending, enabledTools, draws, renderer, fields, notifications,
+  return { tools, client, pending, enabledTools, draws, renderer, fields, notifications, resultChanges,
     getFrame: () => frame,
+    getColorMode: () => colorMode,
+    setColorMode(value) { colorMode = value; colorChoiceVersion++; },
     setGpuEnabled(value) { gpuEnabled = value; },
     setFrame(value, sourceVersion = version) { frame = value; version = sourceVersion; },
   };
@@ -59,6 +67,91 @@ function network(length = 4) {
     counts: { perfect: 1 }, totalLength: length, density: length / 1000, elapsedMs: 16, engine: 'Wasm CPU',
     backend: 'cpu', gpuFallback: true };
 }
+
+function structureNetwork(values = [0, 1, 2, 3], segments = []) {
+  return { ...network(), atomStructureTypes: new Uint8Array(values), segments };
+}
+
+test('DXA exposes native crystal classes without copying atom structures or requiring dislocation lines', async t => {
+  const h = harness(t), frame = h.getFrame(), originalProperty = frame.properties[0];
+  frame.types = new Uint8Array([0, 0, 1, 0]); frame.typeLabels = ['Type 1', 'Fe'];
+  const task = h.tools.run(), accepted = structureNetwork();
+  assert.deepEqual(h.tools.pendingColorProperties(), [{ name: DXA_STRUCTURE_PROPERTY, label: 'Crystal structure (DXA)' }]);
+  h.pending[0].resolve(accepted); await task;
+  const property = frame.properties.find(item => item.name === DXA_STRUCTURE_PROPERTY);
+  assert.equal(property.data, accepted.atomStructureTypes);
+  assert.equal(property.analysisKind, 'dxa');
+  assert.equal(property.displayName, 'Crystal structure (DXA)');
+  assert.equal(frame.properties[0], originalProperty);
+  assert.equal(h.getColorMode(), 'property:dxaStructureType');
+  assert.deepEqual(DXA_STRUCTURE_TYPES.map(item => [item.id, item.label]), [
+    [0, 'Other'], [1, 'FCC'], [2, 'HCP'], [3, 'BCC'], [4, 'Cubic diamond'], [5, 'Hexagonal diamond'],
+  ]);
+  const hidden = new Set([3]), palette = colorsByCategory(property, hidden);
+  assert.deepEqual(palette.legend.items.map(item => item.count), [1, 1, 1, 1, 0, 0]);
+  assert.equal(palette.legend.items[3].visible, false);
+  assert.deepEqual([...visibilityByCategory(property, hidden)], [255, 255, 255, 0]);
+  assert.deepEqual([...combineVisibilityMasks(visibilityByCategory(property, hidden),
+    visibilityByType(frame, new Set(['Fe'])))], [255, 255, 0, 0]);
+  assert.equal(h.renderer.network, accepted);
+  assert.match(h.fields['dxa-summary'].textContent, /^0 segments/);
+  assert.equal(h.pending.length, 1);
+});
+
+test('DXA default crystal color respects other choices, edits during calculation, reruns and automatic frames', async t => {
+  const h = harness(t);
+  const first = h.tools.run();
+  h.setColorMode('type'); // A user change during the job must win, even to the same value.
+  h.pending[0].resolve(structureNetwork()); await first;
+  assert.equal(h.getColorMode(), 'type');
+  assert.equal(await h.tools.run(), true);
+  assert.equal(h.getColorMode(), 'type');
+  h.setColorMode('property:coordination');
+  assert.equal(await h.tools.run(), true);
+  assert.equal(h.getColorMode(), 'property:coordination');
+  h.setFrame({ ids: new Uint32Array([1, 2, 3, 4]), properties: [] });
+  const next = h.tools.onFrame();
+  h.pending[1].resolve(structureNetwork()); await next;
+  assert.equal(h.getColorMode(), 'property:coordination');
+  h.tools.cancel();
+  const restarted = h.tools.run();
+  h.pending[2].resolve(structureNetwork()); await restarted;
+  assert.equal(h.getColorMode(), 'property:coordination');
+});
+
+test('DXA frame invalidation and Cancel remove only its own crystal result and reject late atom outputs', async t => {
+  const h = harness(t), oldFrame = h.getFrame();
+  const cna = { name: 'structureType', analysisKind: 'cna', data: new Uint8Array([1, 1, 1, 1]) };
+  oldFrame.properties.push(cna);
+  const first = h.tools.run();
+  h.pending[0].resolve(structureNetwork()); await first;
+  const replacement = { ids: new Uint32Array([1, 2, 3, 4]), properties: [cna] };
+  h.setFrame(replacement);
+  const obsolete = h.tools.onFrame();
+  assert.equal(oldFrame.properties.some(item => item.analysisKind === 'dxa'), false);
+  assert.equal(oldFrame.properties.includes(cna), true);
+  h.tools.cancel();
+  h.pending[1].resolve(structureNetwork());
+  assert.equal(await obsolete, undefined);
+  assert.deepEqual(replacement.properties, [cna]);
+  assert.deepEqual(h.tools.pendingColorProperties(), []);
+  const restarted = h.tools.run();
+  h.pending[2].resolve(structureNetwork()); await restarted;
+  h.tools.cancel();
+  assert.deepEqual(replacement.properties, [cna]);
+  assert.equal(h.resultChanges.at(-1).clearSettings, true);
+});
+
+test('DXA cancellation restores an imported property with the same output name', async t => {
+  const h = harness(t), frame = h.getFrame();
+  const imported = { name: DXA_STRUCTURE_PROPERTY, data: new Uint8Array([3, 3, 3, 3]) };
+  frame.properties.push(imported);
+  const task = h.tools.run();
+  h.pending[0].resolve(structureNetwork()); await task;
+  assert.notEqual(frame.properties.find(item => item.name === DXA_STRUCTURE_PROPERTY), imported);
+  h.tools.cancel();
+  assert.equal(frame.properties.find(item => item.name === DXA_STRUCTURE_PROPERTY), imported);
+});
 
 test('DXA Cancel aborts and releases work, rejects late networks, and preserves atom analyses', async t => {
   const h = harness(t), originalProperties = h.getFrame().properties, atomColors = h.renderer.atomColors;
@@ -186,19 +279,24 @@ test('portable DXA recipes restore settings and replay calculation without stori
   const text = JSON.stringify(recipe);
   assert.doesNotMatch(text, /segments|burgersVector|atomStructureTypes/);
   const saved = parseConfiguration(text).settings.extensions.dxa;
+  const priorChanges = h.resultChanges.length;
   const restored = h.tools.restore(saved);
   assert.equal(h.pending.length, 1);
   assert.equal(h.pending[0].parameters.lattice, 'bcc');
   assert.equal(h.pending[0].parameters.trialCircuitLength, 18);
-  const accepted = network(); accepted.segments[0].familyId = 'half111'; accepted.counts = { half111: 1 };
+  const accepted = structureNetwork([3, 3, 0, 3], network().segments); accepted.segments[0].familyId = 'half111'; accepted.counts = { half111: 1 };
   h.pending[0].resolve(accepted); await restored;
   assert.deepEqual(h.renderer.settings.visibleFamilies, ['half111']);
   assert.equal(h.renderer.settings.radius, .35);
   assert.equal(h.renderer.settings.familyColors.half111, '#778899');
+  assert.equal(h.getFrame().properties.find(item => item.name === DXA_STRUCTURE_PROPERTY).data, accepted.atomStructureTypes);
+  assert.equal(h.getColorMode(), 'type');
+  assert.equal(h.resultChanges.slice(priorChanges).some(change => change.clearSettings), false);
   assert.deepEqual(h.tools.serialize(), saved);
   h.tools.reset();
   assert.equal(h.enabledTools.has('dxa'), false);
   assert.equal(h.renderer.network, null);
+  assert.equal(h.getFrame().properties.some(item => item.analysisKind === 'dxa'), false);
   assert.equal(h.tools.serialize().lattice, 'fcc');
 });
 

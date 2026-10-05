@@ -18,10 +18,11 @@ test('reset restores imported properties overwritten by repeat analysis', () => 
 
 test('reset removes only its own outputs while independent analysis results remain', () => {
   const frame = { properties: [] };
-  for (const [name, analysisKind] of [['ptmStructureType', 'ptm'], ['atomicShearStrain', 'strain'], ['strainE11', 'strain']]) {
+  for (const [name, analysisKind] of [['ptmStructureType', 'ptm'], ['dxaStructureType', 'dxa'],
+    ['idealStrainStructureType', 'strain'], ['atomicShearStrain', 'strain'], ['strainE11', 'strain']]) {
     replaceAnalysisProperty(frame, { name, analysisKind, data: new Float32Array([0]) });
   }
   clearAnalysisResults(frame, 'strain');
-  assert.deepEqual(frame.properties.map(property => property.name), ['ptmStructureType']);
+  assert.deepEqual(frame.properties.map(property => property.name), ['ptmStructureType', 'dxaStructureType']);
   assert.equal(clearAnalysisResults(frame, 'strain').size, 0);
 });

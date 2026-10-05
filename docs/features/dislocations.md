@@ -16,8 +16,16 @@ cutoffs. Increasing them can find more complex dislocations but increases work.
 2.5 nearest-neighbor spacings and controls line coarsening.
 
 Each Burgers-vector family has an independent visibility checkbox and color.
-Line radius controls the drawn cylinders. These display changes reuse the
-computed network. Atom coloring and visibility remain available independently.
+Line radius controls a connected tube surface, with shared rings and smooth
+display interpolation at bends. Closed loops share their closing ring;
+periodic joins use matching frames in the full triclinic cell. These display
+changes reuse the computed network and preserve its coordinates, measured
+length, Burgers vectors and junction topology.
+Extraction adds **Crystal structure (DXA)** to **Color by**, including when no
+lines are found. Its crystal-class checkboxes control atom visibility; the
+separate **Crystal visibility** selector also applies those labels while
+coloring by CSP, strain or another quantity. Burgers-family controls affect
+lines independently of these atom filters.
 **Cancel** stops extraction and clears this tool's calculated network without
 removing other analyses. Configuration export/import includes DXA processing
 and display settings; restoring an enabled tool recomputes its network.
@@ -68,6 +76,10 @@ CPU reservation remains held until its threads have joined safely.
 For a controlled CPU timing comparison, run `npm run benchmark:dxa -- --workers
 1` and repeat with `--workers 2` or `--workers 4`. This benchmark physically
 replicates the NiGB example twice along Z and reports cold and warm phase times.
+The retained-heap comparison `npm run benchmark:dxa-cpu -- --dataset all
+--threads 1,2,4,1 --repetitions 2` records stage timings and label/topology
+checks across thread-count changes. See the [CPU profile](../DXA_CPU_PROFILE.md)
+for measured bottlenecks and the constraints on further parallelization.
 
 **Enable GPU acceleration** selects a hybrid DXA path for all five reference
 crystals. WebGPU first searches periodic nearest-neighbor shells, computes the

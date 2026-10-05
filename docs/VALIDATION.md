@@ -2,6 +2,51 @@
 
 Validation date: 2026-10-05 (UTC)
 
+## Continuous DXA tubes and independent crystal visibility
+
+- All **862 Node tests** pass. The new checks cover shared-ring closed tubes,
+  transported frames, triclinic periodic winding, open junctions, slice and
+  radius buffer reuse, render-only endpoint snapping, classifier-specific
+  category IDs, pending frames, cancellation and recipe compatibility.
+- The production Chromium check uses the actual 60,229-atom Fe dump with CPU
+  computing and SwiftShader WebGL rendering. It identifies **60,007 BCC** and
+  **222 Other** atoms and one closed finite BCC **½⟨111⟩** loop. The final run's
+  parallel native length is **104.293802536 Å**, within 1% of the retained
+  serial reference; parallel Delaunay tie ordering can change its smoothed
+  representative. The new tube has 88 shared rings, 1,056 vertices and 6,336
+  indices, a shared closing seam, no end caps and one connected surface.
+  Source coordinates, Burgers vectors, lengths and junction topology remain
+  unchanged by rendering. Native endpoints differing by about 10⁻⁸ Å close
+  correctly in the drawing copy. Actual PNG exports were inspected alongside
+  the old cylinder renderer using the same native result, view and radius.
+- DXA colors and counts remain available for perfect crystals with zero lines.
+  With CSP scalar colors, hiding BCC leaves exactly 222 Other atoms. A live
+  custom scalar upper limit then combines with this filter to leave 112 atoms;
+  changing crystal checkboxes never restores atoms excluded by the scalar
+  range. Switching between PTM and CNA filters on a nonconstant input scalar
+  preserves the selected quantity and range, with visible counts 65 → 0 → 65.
+  These edits trigger no analysis calls. Hiding all atoms leaves the complete
+  line network visible, and Burgers-family toggles affect only its lines.
+- JSON replay restores the independent classifier source, per-class choices,
+  CSP range and line settings. DXA cancellation removes only its classification
+  and network while retaining completed CNA/PTM results; a color choice made
+  during extraction survives its reply. Explicit cancellation removes obsolete
+  classifier options while normal frame changes retain pending filter choices.
+- The complete production browser smoke passes, including Auto CSP mixed
+  phases, strain, trajectory caches, comparison views, selections, physical
+  replication, PNG transparency and phone interaction. The existing DXA browser
+  check also passes without isolation headers: serial Worker extraction,
+  periodic screw lines, slicing, line styles, PNG and recipe replay, cooperative
+  cancellation/recovery, physical replication and trajectory updates.
+- The [CPU profile](DXA_CPU_PROFILE.md) records retained-heap Wasm stage timings
+  on Fe and physically replicated NiGB, a 1/2/4-thread sweep, and temporary
+  native optimization experiments. This environment exposes four logical CPUs;
+  six-thread diagnostic runs oversubscribe it. Existing native parallelism and
+  scientific kernels remain unchanged in this update.
+
+Run `npm run test:browser:dxa-visual -- --software`; add `--capture-baseline`
+before committing to compare with the renderer at the current Git HEAD.
+
 ## Fe dump, geometry references and automatic examples
 
 The new `examples/Fe_disloc_loop.dump` is a supported LAMMPS text dump with

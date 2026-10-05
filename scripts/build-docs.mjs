@@ -10,6 +10,7 @@ export const DOC_GUIDES = Object.freeze([
   { source: 'DEPLOYMENT.md', page: 'deployment.html', title: 'Deployment' },
   { source: 'ATOMEYE_REVIEW.md', page: 'atomeye-review.html', title: 'AtomEye implementation review' },
   { source: 'DXA_REVIEW.md', page: 'dxa-review.html', title: 'DXA implementation review' },
+  { source: 'DXA_CPU_PROFILE.md', page: 'dxa-cpu-profile.html', title: 'DXA CPU profile' },
 ]);
 
 function escapeHtml(value) {

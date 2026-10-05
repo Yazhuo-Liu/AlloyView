@@ -47,10 +47,11 @@ import { initializeSliceControls } from './slice-controls.js';
 import { initializeSliceGizmo } from './render/slice-gizmo.js';
 import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './configuration.js';
 import { initializeAtomEyeTools } from './atomeye-tools.js';
-import { initializeDxaTools } from './dxa-tools.js';
+import { initializeDxaTools, DXA_STRUCTURE_PROPERTY } from './dxa-tools.js';
 import { initializeFeatureHelp } from './feature-help.js';
 import { normalizeSelectionGroups } from './selection-groups.js';
 import { initializeSelectionGroupControls } from './selection-group-controls.js';
+import { initializeCrystalVisibilityControls, isCrystalStructureProperty } from './crystal-visibility-controls.js';
 
 const elements = Object.fromEntries([
   'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar', 'enable-gpu-computing',
@@ -60,7 +61,7 @@ const elements = Object.fromEntries([
   'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
   'background-picker', 'background-current', 'background', 'show-axes',
   'show-cell', 'png-background', 'png-legend', 'png-axes', 'slice-axis', 'slice-position', 'slice-value', 'cutoff', 'run-analysis',
-  'analysis-state', 'cutoff-help', 'analysis-help', 'selection-empty', 'selection-data', 'clear-selection', 'legend',
+  'analysis-state', 'cutoff-help', 'analysis-help', 'selection-empty', 'selection-data', 'clear-selection', 'legend', 'color-legend',
   'cna-mode', 'cna-cutoff', 'cna-cutoff-field', 'run-cna', 'cna-state', 'cna-help', 'cna-status',
   'csp-neighbors', 'csp-auto-result', 'csp-help', 'run-csp', 'csp-state', 'csp-status', 'metric-cna', 'metric-csp',
   'ptm-rmsd', 'run-ptm', 'ptm-state', 'ptm-status', 'metric-ptm',
@@ -83,7 +84,8 @@ const scalarHideOutside = new Map();
 const hiddenStructureTypes = new Set();
 const hiddenAtomTypes = new Set();
 const hiddenCategories = new Map();
-const crystalCategoryProperties = new Set(['structureType', 'ptmStructureType', 'centralSymmetryStructureType']);
+const crystalCategoryProperties = new Set(['structureType', 'ptmStructureType', 'centralSymmetryStructureType',
+  'idealStrainStructureType', DXA_STRUCTURE_PROPERTY]);
 const cpuBudget = new CpuBudget({ environment: globalThis });
 const analysisPool = new AnalysisPool({ cpuBudget });
 const dxaClient = new DxaClient({ cpuBudget, gpuBackend: analysisPool.gpuBackend });
@@ -152,6 +154,8 @@ let latticeEstimateRequest = 0;
 let renderer;
 let atomEyeTools;
 let dxaTools;
+let crystalVisibility;
+let currentColorLegend = null;
 let selectionGroupControls;
 let colorChoiceVersion = 0;
 let backgroundCustomized = false;
@@ -378,10 +382,36 @@ atomEyeTools = initializeAtomEyeTools({
   notify: showToast, onEdit: () => interruptConfigurationRestore('a settings edit'), onMemoryChange: reassessFrameCache,
 });
 
+crystalVisibility = initializeCrystalVisibilityControls({
+  getFrame: () => state.frame,
+  getColorMode: () => state.colorMode.startsWith('property:') ? state.colorMode.slice(9) : 'type',
+  getHiddenCategories: hiddenCategoriesFor,
+  onChange: () => {
+    interruptConfigurationRestore('a crystal visibility change');
+    if (!state.frame) return;
+    applyScalarVisibility(currentColorLegend ?? paletteForCurrentMode().legend);
+    atomEyeTools.syncComparison();
+  },
+});
+
 dxaTools = initializeDxaTools({
   renderer, tools: toolPanels, client: dxaClient, getFrame: () => state.frame,
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
   getGpuEnabled: () => analysisPool.gpuEnabled,
+  getColorMode: () => state.colorMode,
+  getColorChoiceVersion: () => colorChoiceVersion,
+  onResultsChange: ({ selectProperty, clearSettings }) => {
+    if (clearSettings) {
+      hiddenCategories.delete(DXA_STRUCTURE_PROPERTY);
+      crystalVisibility.forgetSource(DXA_STRUCTURE_PROPERTY);
+    }
+    if (!state.frame) return;
+    if (selectProperty) {
+      state.colorMode = `property:${selectProperty}`;
+      crystalVisibility.restore({ source: selectProperty });
+    }
+    refreshColorOptions(); applyColors(); restoreSelection(); updateMemoryMetric();
+  },
   onEdit: () => interruptConfigurationRestore('a DXA settings edit'),
   onDisplayChange: () => atomEyeTools.syncComparison(),
   onMemoryChange: reassessFrameCache, notify: showToast,
@@ -639,6 +669,8 @@ function closeSource() {
   toolPanels.setToolEnabled('selectionGroups', false);
   scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear();
   hiddenStructureTypes.clear(); hiddenAtomTypes.clear(); hiddenCategories.clear();
+  crystalVisibility.reset();
+  currentColorLegend = null;
   for (const [kind, analysis] of Object.entries(state.analysis)) {
     analysis.request++;
     analysis.enabled = false;
@@ -672,7 +704,7 @@ function closeSource() {
   elements['selection-data'].replaceChildren();
   updateSelectionPanel();
   elements.legend.hidden = true;
-  elements.legend.replaceChildren();
+  elements['color-legend'].replaceChildren();
   elements['slice-position'].value = '100';
   sliceControls.reset();
   updateSlices();
@@ -1011,6 +1043,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     hiddenStructureTypes.clear();
     hiddenAtomTypes.clear();
     hiddenCategories.clear();
+    crystalVisibility.reset();
     elements['metric-cna'].textContent = elements['metric-csp'].textContent = '—';
     elements['metric-ptm'].textContent = elements['metric-strain'].textContent = '—';
     scalarColorRanges.clear();
@@ -1471,6 +1504,7 @@ function selectColorMode(value) {
   atomEyeTools.cancelBatch({ restore: false });
   colorChoiceVersion++;
   state.colorMode = value;
+  if (isCrystalStructureProperty(value.slice(9))) crystalVisibility.restore({ source: value.slice(9) });
   elements['color-mode'].value = value;
   applyColors();
 }
@@ -1507,6 +1541,9 @@ function refreshColorOptions() {
   for (const { name, label } of atomEyeTools.pendingColorProperties()) {
     if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
   }
+  for (const { name, label } of dxaTools?.pendingColorProperties() ?? []) {
+    if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
+  }
   const available = [...elements['color-mode'].options].some((item) => item.value === previous);
   state.colorMode = available ? previous : 'type';
   elements['color-mode'].value = state.colorMode;
@@ -1528,6 +1565,7 @@ function applyColors() {
 }
 
 function applyScalarVisibility(legend) {
+  currentColorLegend = legend;
   let colorMask = null;
   if (legend.kind === 'types' && legend.property) {
     colorMask = visibilityByCategory(legend.property, hiddenCategoriesFor(legend.property.name));
@@ -1538,7 +1576,9 @@ function applyScalarVisibility(legend) {
       scalarHideOutside.get(legend.property.name) !== false,
     );
   }
-  const mask = combineVisibilityMasks(visibilityByType(state.frame, hiddenAtomTypes), colorMask);
+  const mask = combineVisibilityMasks(
+    visibilityByType(state.frame, hiddenAtomTypes), colorMask, crystalVisibility?.getMask(),
+  );
   renderer.setVisibility(atomEyeTools.filterVisibility(mask));
   restoreSelection();
 }
@@ -1597,6 +1637,13 @@ function cancelAnalysis(kind) {
   analysisControllers.delete(kind);
   analysisTasks.delete(kind);
   const frames = new Set([state.frame, ...cache.frames.values()]);
+  const removedCrystalSources = new Set();
+  const canceledCrystalSource = { cna: 'structureType', ptm: 'ptmStructureType',
+    centrosymmetry: 'centralSymmetryStructureType', strain: 'idealStrainStructureType' }[kind];
+  if (canceledCrystalSource) {
+    removedCrystalSources.add(canceledCrystalSource);
+    hiddenCategories.delete(canceledCrystalSource);
+  }
   for (const frame of frames) {
     if (!frame) continue;
     for (const name of clearAnalysisResults(frame, kind)) {
@@ -1604,9 +1651,11 @@ function cancelAnalysis(kind) {
       scalarColorSchemes.delete(name);
       scalarHideOutside.delete(name);
       hiddenCategories.delete(name);
+      if (isCrystalStructureProperty(name)) removedCrystalSources.add(name);
     }
     if (['ptm', 'strain'].includes(kind) && !state.analysis.ptm.enabled && !state.analysis.strain.enabled) delete frame.ptm;
   }
+  for (const name of removedCrystalSources) crystalVisibility.forgetSource(name);
   if (!state.analysis.cna.enabled && !state.analysis.ptm.enabled
       && !(state.analysis.centrosymmetry.enabled && state.analysis.centrosymmetry.parameters?.mode === 'auto')) hiddenStructureTypes.clear();
   const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
@@ -1929,7 +1978,13 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
   analysis.parameters = parameters;
   analysis.key = JSON.stringify(parameters);
   syncCancelButton(kind);
-  if (!automatic) state.colorMode = `property:${name}`;
+  if (!automatic) {
+    state.colorMode = `property:${name}`;
+    const crystalSource = kind === 'strain' ? 'idealStrainStructureType'
+      : kind === 'centrosymmetry' && parameters.mode === 'auto' ? 'centralSymmetryStructureType'
+        : isCrystalStructureProperty(name) ? name : null;
+    if (crystalSource) crystalVisibility.restore({ source: crystalSource });
+  }
   refreshColorOptions();
   const key = analysis.key;
   const gpuRequested = analysisPool.gpuEnabled;
@@ -2022,6 +2077,9 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
         atomicVolumeChange: 'Atomic volume change' };
       properties = STRAIN_FIELDS.map(field => ({ ...metadata, name: field,
         displayName: labels[field] ?? `${field.replace('strain', '')} (crystal frame)`, data: result[field] }));
+      const structures = result.structures ?? frame.ptm?.structures;
+      if (structures) properties.push({ ...metadata, name: 'idealStrainStructureType',
+        displayName: 'Crystal structure (Ideal strain)', data: structures, categories: PTM_TYPES });
     } else {
       if (kind === 'centrosymmetry' && parameters.mode !== 'auto' && !result.centrosymmetry.some(Number.isFinite)) throw new Error('No valid central-symmetry environments: too few neighbors or coincident atoms.');
       properties = [{ ...metadata, name, displayName: label, data: result.structures ?? result.centrosymmetry,
@@ -2036,6 +2094,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       }
     }
     for (const property of properties) replaceAnalysisProperty(frame, property);
+    if (kind === 'centrosymmetry' && !result.cspStructureTypes) crystalVisibility.forgetSource('centralSymmetryStructureType');
     reassessFrameCache(frame); ready(properties[0]);
     refreshColorOptions(); applyColors(); restoreSelection(); updateMemoryMetric();
     if (result.warning) showToast(result.warning);
@@ -2261,7 +2320,9 @@ function updateSelectionPanel(index = null) {
 }
 
 function renderLegend(legend) {
-  elements.legend.replaceChildren();
+  currentColorLegend = legend;
+  crystalVisibility?.refresh();
+  elements['color-legend'].replaceChildren();
   const propertyControl = document.createElement('label');
   propertyControl.className = 'legend-property';
   const propertyLabel = document.createElement('span');
@@ -2281,7 +2342,7 @@ function renderLegend(legend) {
     if (focused) document.getElementById('legend-color-mode')?.focus({ preventScroll: true });
   });
   propertyControl.append(propertyLabel, propertySelect);
-  elements.legend.append(propertyControl);
+  elements['color-legend'].append(propertyControl);
   const title = document.createElement('div');
   title.className = 'legend-title';
   const label = document.createElement('strong');
@@ -2292,7 +2353,7 @@ function renderLegend(legend) {
     unit.textContent = legend.unit;
     title.append(unit);
   }
-  elements.legend.append(title);
+  elements['color-legend'].append(title);
   if (legend.kind === 'types') {
     const items = document.createElement('div');
     items.className = 'legend-items crystal-items';
@@ -2353,7 +2414,7 @@ function renderLegend(legend) {
       });
       actions.append(button);
     }
-    elements.legend.append(actions, items);
+    elements['color-legend'].append(actions, items);
   } else {
     const gradient = document.createElement('div');
     gradient.className = 'legend-gradient';
@@ -2469,7 +2530,7 @@ function renderLegend(legend) {
       else freezeCurrentRange();
       applyColors();
     });
-    elements.legend.append(gradient, range, controls);
+    elements['color-legend'].append(gradient, range, controls);
   }
   elements.legend.hidden = false;
 }
@@ -2702,6 +2763,7 @@ function captureConfiguration() {
       replicateAtoms: state.replicateAtoms,
       slices: { items: sliceState.slices, selectedId: sliceState.selectedId, showGizmo: true },
       colors: {
+        crystalVisibilitySource: crystalVisibility.serialize().source,
         ranges: [...scalarColorRanges].map(([property, range]) => ({ property, ...range })),
         schemes: [...scalarColorSchemes].map(([property, scheme]) => ({ property, scheme })),
         hideOutside: [...scalarHideOutside].map(([property, hide]) => ({ property, hide })),
@@ -2834,10 +2896,14 @@ async function restoreConfiguration(config) {
     // Older version 1 recipes used one shared crystal-type filter. Apply it
     // once to the crystal fields; new per-property choices override it below.
     if (hiddenStructureTypes.size) {
-      for (const property of crystalCategoryProperties) hiddenCategories.set(property, new Set(hiddenStructureTypes));
+      for (const property of crystalCategoryProperties) {
+        // DXA has its own lattice IDs; old shared CNA/PTM filters do not apply.
+        if (property !== DXA_STRUCTURE_PROPERTY) hiddenCategories.set(property, new Set(hiddenStructureTypes));
+      }
     }
     for (const label of saved.colors.hiddenAtomTypes) hiddenAtomTypes.add(label);
     for (const { property, ids } of saved.colors.hiddenCategories) hiddenCategories.set(property, new Set(ids));
+    crystalVisibility.restore({ source: saved.colors.crystalVisibilitySource ?? null });
 
     for (const [kind, parameters] of Object.entries(saved.analyses)) {
       const analysis = state.analysis[kind];

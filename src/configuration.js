@@ -3,6 +3,7 @@
 import { SCALAR_COLOR_SCHEMES } from './render/palette.js';
 import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from './selection-groups.js';
 import { DXA_DEFAULTS, DXA_FAMILIES } from './analysis/dxa.js';
+import { CRYSTAL_VISIBILITY_SOURCE_NAMES } from './crystal-visibility-controls.js';
 
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
@@ -487,7 +488,7 @@ function normalizeSlices(value) {
 }
 
 function normalizeColors(value) {
-  const input = record(value, 'settings.colors', ['ranges', 'schemes', 'hideOutside', 'hiddenStructureTypes', 'hiddenAtomTypes', 'hiddenCategories']);
+  const input = record(value, 'settings.colors', ['ranges', 'schemes', 'hideOutside', 'hiddenStructureTypes', 'hiddenAtomTypes', 'hiddenCategories', 'crystalVisibilitySource']);
   const ranges = propertyEntries(input.ranges ?? [], 'settings.colors.ranges', ['property', 'minimum', 'maximum'], (entry, path) => {
     const minimum = number(entry.minimum, `${path}.minimum`, -MAX_COORDINATE, MAX_COORDINATE);
     const maximum = number(entry.maximum, `${path}.maximum`, -MAX_COORDINATE, MAX_COORDINATE);
@@ -513,7 +514,10 @@ function normalizeColors(value) {
     if (new Set(ids).size !== ids.length) fail(`${path}.ids`, 'contains duplicates');
     return { ids };
   });
-  return { ranges, schemes, hideOutside, hiddenStructureTypes, hiddenAtomTypes, hiddenCategories };
+  return { ranges, schemes, hideOutside, hiddenStructureTypes, hiddenAtomTypes, hiddenCategories,
+    ...(input.crystalVisibilitySource === undefined ? {} : {
+      crystalVisibilitySource: nullableChoice(input.crystalVisibilitySource, 'settings.colors.crystalVisibilitySource', new Set(CRYSTAL_VISIBILITY_SOURCE_NAMES)),
+    }) };
 }
 
 function propertyEntries(value, path, keys, normalize) {

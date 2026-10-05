@@ -1,0 +1,724 @@
+{
+  "runtime": "native Linux g++ with __EMSCRIPTEN_PTHREADS__ adapter and -pthread -O3 -std=c++17",
+  "availableLogicalCpus": 4,
+  "recordedAt": "2026-10-05",
+  "sourceRevision": "5335a35",
+  "scope": "Temporary alpha-cache experiment; build each topology once, alternate original/cached extraction3times and require exact complete JSON and every tetrahedron region against same-topology original CPU regions. Native timings are not Wasm timings. May include other CPU contention.",
+  "decision": "Do not adopt alpha caching: small and inconsistent gain, including regressions; classification dominated by elastic edge lookups.",
+  "experiments": [
+    {
+      "dataset": "fe",
+      "threadCount": 1,
+      "runs": [
+        {
+          "run": 0,
+          "alphaCache": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 557.363,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001582,
+            "manifold classification": 481.69,
+            "manifold ordered reduction": 3.4739,
+            "manifold create facets": 68.388,
+            "manifold link halfedges": 1.18046,
+            "mesh makeManifold": 0.025238,
+            "mesh payload conversion": 0.014813
+          }
+        },
+        {
+          "run": 1,
+          "alphaCache": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 718.281,
+          "substageMs": {
+            "alpha immutable cache preparation": 25.8437,
+            "manifold classification": 613.372,
+            "manifold ordered reduction": 2.54099,
+            "manifold create facets": 73.8811,
+            "manifold link halfedges": 0.730251,
+            "mesh makeManifold": 0.015343,
+            "mesh payload conversion": 0.010926
+          }
+        },
+        {
+          "run": 2,
+          "alphaCache": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 726.697,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001022,
+            "manifold classification": 649.223,
+            "manifold ordered reduction": 3.56537,
+            "manifold create facets": 70.2005,
+            "manifold link halfedges": 1.08067,
+            "mesh makeManifold": 0.021783,
+            "mesh payload conversion": 0.01351
+          }
+        },
+        {
+          "run": 3,
+          "alphaCache": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 710.274,
+          "substageMs": {
+            "alpha immutable cache preparation": 25.5526,
+            "manifold classification": 599.913,
+            "manifold ordered reduction": 2.72647,
+            "manifold create facets": 78.0771,
+            "manifold link halfedges": 1.11246,
+            "mesh makeManifold": 0.025719,
+            "mesh payload conversion": 0.038288
+          }
+        },
+        {
+          "run": 4,
+          "alphaCache": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 744.093,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001753,
+            "manifold classification": 665.014,
+            "manifold ordered reduction": 3.49242,
+            "manifold create facets": 71.7543,
+            "manifold link halfedges": 1.11418,
+            "mesh makeManifold": 0.022824,
+            "mesh payload conversion": 0.013851
+          }
+        },
+        {
+          "run": 5,
+          "alphaCache": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 659.786,
+          "substageMs": {
+            "alpha immutable cache preparation": 27.5703,
+            "manifold classification": 569.025,
+            "manifold ordered reduction": 3.56114,
+            "manifold create facets": 56.9615,
+            "manifold link halfedges": 0.720246,
+            "mesh makeManifold": 0.015844,
+            "mesh payload conversion": 0.010967
+          }
+        }
+      ],
+      "originalMedianFinishMs": 726.697,
+      "originalMedianClassificationMs": 649.224022,
+      "cachedMedianFinishMs": 710.274,
+      "cachedMedianClassificationMs": 625.4656,
+      "medianFinishGainPercent": 2.259951534133209
+    },
+    {
+      "dataset": "fe",
+      "threadCount": 2,
+      "runs": [
+        {
+          "run": 0,
+          "alphaCache": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 356.7,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.027782,
+            "manifold classification": 294.821,
+            "manifold ordered reduction": 3.18341,
+            "manifold create facets": 54.9243,
+            "manifold link halfedges": 1.06744,
+            "mesh makeManifold": 0.019189,
+            "mesh payload conversion": 0.012188
+          }
+        },
+        {
+          "run": 1,
+          "alphaCache": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 398.264,
+          "substageMs": {
+            "alpha immutable cache preparation": 31.5867,
+            "manifold classification": 320.681,
+            "manifold ordered reduction": 2.56865,
+            "manifold create facets": 40.8434,
+            "manifold link halfedges": 0.727097,
+            "mesh makeManifold": 0.014241,
+            "mesh payload conversion": 0.023125
+          }
+        },
+        {
+          "run": 2,
+          "alphaCache": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 374.015,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001142,
+            "manifold classification": 328.899,
+            "manifold ordered reduction": 2.50753,
+            "manifold create facets": 38.811,
+            "manifold link halfedges": 0.685804,
+            "mesh makeManifold": 0.014372,
+            "mesh payload conversion": 0.011969
+          }
+        },
+        {
+          "run": 3,
+          "alphaCache": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 396.044,
+          "substageMs": {
+            "alpha immutable cache preparation": 18.5702,
+            "manifold classification": 310.882,
+            "manifold ordered reduction": 2.21279,
+            "manifold create facets": 61.6865,
+            "manifold link halfedges": 0.812195,
+            "mesh makeManifold": 0.01271,
+            "mesh payload conversion": 0.010476
+          }
+        },
+        {
+          "run": 4,
+          "alphaCache": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 415.051,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.000901,
+            "manifold classification": 335.779,
+            "manifold ordered reduction": 2.41322,
+            "manifold create facets": 73.0087,
+            "manifold link halfedges": 1.17844,
+            "mesh makeManifold": 0.02672,
+            "mesh payload conversion": 0.015694
+          }
+        },
+        {
+          "run": 5,
+          "alphaCache": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 381.118,
+          "substageMs": {
+            "alpha immutable cache preparation": 15.9448,
+            "manifold classification": 298.819,
+            "manifold ordered reduction": 3.47242,
+            "manifold create facets": 58.8201,
+            "manifold link halfedges": 1.09884,
+            "mesh makeManifold": 0.022244,
+            "mesh payload conversion": 0.014141
+          }
+        }
+      ],
+      "originalMedianFinishMs": 374.015,
+      "originalMedianClassificationMs": 328.900142,
+      "cachedMedianFinishMs": 396.044,
+      "cachedMedianClassificationMs": 329.4522,
+      "medianFinishGainPercent": -5.889870727109869
+    },
+    {
+      "dataset": "fe",
+      "threadCount": 4,
+      "runs": [
+        {
+          "run": 0,
+          "alphaCache": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 226.19,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001973,
+            "manifold classification": 160.968,
+            "manifold ordered reduction": 2.72947,
+            "manifold create facets": 60.0774,
+            "manifold link halfedges": 0.723311,
+            "mesh makeManifold": 0.015513,
+            "mesh payload conversion": 0.010696
+          }
+        },
+        {
+          "run": 1,
+          "alphaCache": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 211.782,
+          "substageMs": {
+            "alpha immutable cache preparation": 8.64903,
+            "manifold classification": 161.103,
+            "manifold ordered reduction": 2.24851,
+            "manifold create facets": 37.2382,
+            "manifold link halfedges": 0.715619,
+            "mesh makeManifold": 0.016946,
+            "mesh payload conversion": 0.021693
+          }
+        },
+        {
+          "run": 2,
+          "alphaCache": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 259.578,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.000851,
+            "manifold classification": 194.237,
+            "manifold ordered reduction": 2.38675,
+            "manifold create facets": 60.5881,
+            "manifold link halfedges": 0.740978,
+            "mesh makeManifold": 0.02021,
+            "mesh payload conversion": 0.011517
+          }
+        },
+        {
+          "run": 3,
+          "alphaCache": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 205.259,
+          "substageMs": {
+            "alpha immutable cache preparation": 11.0022,
+            "manifold classification": 131.492,
+            "manifold ordered reduction": 2.61498,
+            "manifold create facets": 57.6678,
+            "manifold link halfedges": 0.695199,
+            "mesh makeManifold": 0.014582,
+            "mesh payload conversion": 0.026089
+          }
+        },
+        {
+          "run": 4,
+          "alphaCache": false,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 242.07,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.000931,
+            "manifold classification": 202.302,
+            "manifold ordered reduction": 2.2793,
+            "manifold create facets": 35.1387,
+            "manifold link halfedges": 0.663471,
+            "mesh makeManifold": 0.015844,
+            "mesh payload conversion": 0.010676
+          }
+        },
+        {
+          "run": 5,
+          "alphaCache": true,
+          "atoms": 60229,
+          "tetrahedra": 760983,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 225.792,
+          "substageMs": {
+            "alpha immutable cache preparation": 11.3724,
+            "manifold classification": 175.154,
+            "manifold ordered reduction": 2.33854,
+            "manifold create facets": 34.4543,
+            "manifold link halfedges": 0.729872,
+            "mesh makeManifold": 0.015774,
+            "mesh payload conversion": 0.010767
+          }
+        }
+      ],
+      "originalMedianFinishMs": 242.07,
+      "originalMedianClassificationMs": 194.237851,
+      "cachedMedianFinishMs": 211.782,
+      "cachedMedianClassificationMs": 169.75203000000002,
+      "medianFinishGainPercent": 12.512083281695375
+    },
+    {
+      "dataset": "nigb",
+      "threadCount": 1,
+      "runs": [
+        {
+          "run": 0,
+          "alphaCache": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 3723.27,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001252,
+            "manifold classification": 2684.04,
+            "manifold ordered reduction": 16.4039,
+            "manifold create facets": 258.78,
+            "manifold link halfedges": 23.1744,
+            "mesh makeManifold": 1.45315,
+            "mesh payload conversion": 0.769561
+          }
+        },
+        {
+          "run": 1,
+          "alphaCache": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 4023.39,
+          "substageMs": {
+            "alpha immutable cache preparation": 138.37,
+            "manifold classification": 2874.7,
+            "manifold ordered reduction": 16.2604,
+            "manifold create facets": 256.925,
+            "manifold link halfedges": 23.8152,
+            "mesh makeManifold": 1.43246,
+            "mesh payload conversion": 0.768729
+          }
+        },
+        {
+          "run": 2,
+          "alphaCache": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 3744.2,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001492,
+            "manifold classification": 2745.88,
+            "manifold ordered reduction": 16.936,
+            "manifold create facets": 252.025,
+            "manifold link halfedges": 22.912,
+            "mesh makeManifold": 1.43495,
+            "mesh payload conversion": 0.723361
+          }
+        },
+        {
+          "run": 3,
+          "alphaCache": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 3854.32,
+          "substageMs": {
+            "alpha immutable cache preparation": 130.0,
+            "manifold classification": 2596.94,
+            "manifold ordered reduction": 19.331,
+            "manifold create facets": 295.887,
+            "manifold link halfedges": 30.0568,
+            "mesh makeManifold": 1.5408,
+            "mesh payload conversion": 0.969823
+          }
+        },
+        {
+          "run": 4,
+          "alphaCache": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 4083.51,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001241,
+            "manifold classification": 3000.78,
+            "manifold ordered reduction": 17.97,
+            "manifold create facets": 276.34,
+            "manifold link halfedges": 26.8311,
+            "mesh makeManifold": 1.62814,
+            "mesh payload conversion": 0.96797
+          }
+        },
+        {
+          "run": 5,
+          "alphaCache": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 4326.57,
+          "substageMs": {
+            "alpha immutable cache preparation": 140.376,
+            "manifold classification": 3086.07,
+            "manifold ordered reduction": 20.3457,
+            "manifold create facets": 297.351,
+            "manifold link halfedges": 24.1226,
+            "mesh makeManifold": 1.5182,
+            "mesh payload conversion": 0.731433
+          }
+        }
+      ],
+      "originalMedianFinishMs": 3744.2,
+      "originalMedianClassificationMs": 2745.881492,
+      "cachedMedianFinishMs": 4023.39,
+      "cachedMedianClassificationMs": 3013.0699999999997,
+      "medianFinishGainPercent": -7.4565995406228325
+    },
+    {
+      "dataset": "nigb",
+      "threadCount": 2,
+      "runs": [
+        {
+          "run": 0,
+          "alphaCache": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2747.91,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001172,
+            "manifold classification": 1591.33,
+            "manifold ordered reduction": 17.0819,
+            "manifold create facets": 309.986,
+            "manifold link halfedges": 26.3476,
+            "mesh makeManifold": 1.57118,
+            "mesh payload conversion": 0.564131
+          }
+        },
+        {
+          "run": 1,
+          "alphaCache": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 3015.98,
+          "substageMs": {
+            "alpha immutable cache preparation": 117.773,
+            "manifold classification": 1591.08,
+            "manifold ordered reduction": 25.3997,
+            "manifold create facets": 367.462,
+            "manifold link halfedges": 27.063,
+            "mesh makeManifold": 1.46261,
+            "mesh payload conversion": 0.607447
+          }
+        },
+        {
+          "run": 2,
+          "alphaCache": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 3507.08,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001161,
+            "manifold classification": 1878.96,
+            "manifold ordered reduction": 29.3087,
+            "manifold create facets": 510.161,
+            "manifold link halfedges": 22.3711,
+            "mesh makeManifold": 1.36883,
+            "mesh payload conversion": 0.524561
+          }
+        },
+        {
+          "run": 3,
+          "alphaCache": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2417.33,
+          "substageMs": {
+            "alpha immutable cache preparation": 89.9827,
+            "manifold classification": 1332.06,
+            "manifold ordered reduction": 16.5826,
+            "manifold create facets": 256.257,
+            "manifold link halfedges": 22.0252,
+            "mesh makeManifold": 1.37248,
+            "mesh payload conversion": 0.506172
+          }
+        },
+        {
+          "run": 4,
+          "alphaCache": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2661.1,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001111,
+            "manifold classification": 1605.7,
+            "manifold ordered reduction": 16.0092,
+            "manifold create facets": 250.729,
+            "manifold link halfedges": 22.1593,
+            "mesh makeManifold": 1.3862,
+            "mesh payload conversion": 0.731253
+          }
+        },
+        {
+          "run": 5,
+          "alphaCache": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 2948.02,
+          "substageMs": {
+            "alpha immutable cache preparation": 120.154,
+            "manifold classification": 1734.47,
+            "manifold ordered reduction": 16.9982,
+            "manifold create facets": 286.617,
+            "manifold link halfedges": 26.6308,
+            "mesh makeManifold": 1.52445,
+            "mesh payload conversion": 0.532372
+          }
+        }
+      ],
+      "originalMedianFinishMs": 2747.91,
+      "originalMedianClassificationMs": 1605.701111,
+      "cachedMedianFinishMs": 2948.02,
+      "cachedMedianClassificationMs": 1708.8529999999998,
+      "medianFinishGainPercent": -7.28226179168896
+    },
+    {
+      "dataset": "nigb",
+      "threadCount": 4,
+      "runs": [
+        {
+          "run": 0,
+          "alphaCache": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1917.08,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.000991,
+            "manifold classification": 895.08,
+            "manifold ordered reduction": 16.381,
+            "manifold create facets": 269.301,
+            "manifold link halfedges": 21.6992,
+            "mesh makeManifold": 1.49745,
+            "mesh payload conversion": 0.651442
+          }
+        },
+        {
+          "run": 1,
+          "alphaCache": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1932.97,
+          "substageMs": {
+            "alpha immutable cache preparation": 72.3486,
+            "manifold classification": 853.116,
+            "manifold ordered reduction": 16.3927,
+            "manifold create facets": 265.237,
+            "manifold link halfedges": 21.7813,
+            "mesh makeManifold": 1.35654,
+            "mesh payload conversion": 0.584282
+          }
+        },
+        {
+          "run": 2,
+          "alphaCache": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1851.37,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.001102,
+            "manifold classification": 846.637,
+            "manifold ordered reduction": 16.292,
+            "manifold create facets": 255.391,
+            "manifold link halfedges": 24.6288,
+            "mesh makeManifold": 1.42659,
+            "mesh payload conversion": 0.619474
+          }
+        },
+        {
+          "run": 3,
+          "alphaCache": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1781.05,
+          "substageMs": {
+            "alpha immutable cache preparation": 56.3508,
+            "manifold classification": 728.458,
+            "manifold ordered reduction": 16.0425,
+            "manifold create facets": 259.711,
+            "manifold link halfedges": 23.4906,
+            "mesh makeManifold": 1.6581,
+            "mesh payload conversion": 0.585984
+          }
+        },
+        {
+          "run": 4,
+          "alphaCache": false,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1789.83,
+          "substageMs": {
+            "alpha immutable cache preparation": 0.000972,
+            "manifold classification": 785.371,
+            "manifold ordered reduction": 17.6074,
+            "manifold create facets": 262.817,
+            "manifold link halfedges": 22.7785,
+            "mesh makeManifold": 1.63485,
+            "mesh payload conversion": 0.57059
+          }
+        },
+        {
+          "run": 5,
+          "alphaCache": true,
+          "atoms": 259808,
+          "tetrahedra": 5162144,
+          "exactNetworkJsonParity": true,
+          "exactEveryTetRegionParity": true,
+          "finishMs": 1751.01,
+          "substageMs": {
+            "alpha immutable cache preparation": 50.4562,
+            "manifold classification": 726.699,
+            "manifold ordered reduction": 16.1603,
+            "manifold create facets": 249.678,
+            "manifold link halfedges": 22.7264,
+            "mesh makeManifold": 1.37568,
+            "mesh payload conversion": 0.596499
+          }
+        }
+      ],
+      "originalMedianFinishMs": 1851.37,
+      "originalMedianClassificationMs": 846.6381019999999,
+      "cachedMedianFinishMs": 1781.05,
+      "cachedMedianClassificationMs": 784.8088,
+      "medianFinishGainPercent": 3.79826830941411
+    }
+  ]
+}

@@ -393,6 +393,33 @@ test('old version 1 visibility recipes remain valid without new legend filter fi
   assert.deepEqual(restored.settings.colors.hiddenStructureTypes, [0, 3]);
   assert.deepEqual(restored.settings.colors.hiddenAtomTypes, []);
   assert.deepEqual(restored.settings.colors.hiddenCategories, []);
+  assert.equal(Object.hasOwn(restored.settings.colors, 'crystalVisibilitySource'), false);
+});
+
+test('independent crystal visibility restores its source while keeping classifier vocabularies separate', () => {
+  const colors = {
+    crystalVisibilitySource: 'dxaStructureType',
+    hiddenCategories: [
+      { property: 'dxaStructureType', ids: [3, 4] },
+      { property: 'ptmStructureType', ids: [4, 6] },
+    ],
+  };
+  const recipe = createConfiguration({ settings: {
+    display: { colorMode: 'property:centralSymmetry' }, colors,
+  } });
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.equal(restored.settings.display.colorMode, 'property:centralSymmetry');
+  assert.equal(restored.settings.colors.crystalVisibilitySource, 'dxaStructureType');
+  assert.deepEqual(restored.settings.colors.hiddenCategories, colors.hiddenCategories);
+  for (const source of [null, 'structureType', 'ptmStructureType', 'centralSymmetryStructureType',
+    'idealStrainStructureType', 'dxaStructureType']) {
+    recipe.settings.colors.crystalVisibilitySource = source;
+    assert.equal(parseConfiguration(JSON.stringify(recipe)).settings.colors.crystalVisibilitySource, source);
+  }
+  for (const source of ['centralSymmetry', 'phase', '__proto__', 3, false]) {
+    recipe.settings.colors.crystalVisibilitySource = source;
+    assert.throws(() => parseConfiguration(JSON.stringify(recipe)), /settings\.colors\.crystalVisibilitySource/);
+  }
 });
 
 test('legend filter validation rejects duplicate or malformed choices before restoration', () => {

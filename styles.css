@@ -309,6 +309,19 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .legend-actions .legend-auto.active { color: var(--primary-text); background: var(--cyan); border-color: var(--cyan); font-weight: 700; }
 .legend-actions .legend-auto.active:hover { color: var(--primary-text); background: var(--cyan); border-color: var(--cyan); }
 .legend-actions button:disabled { cursor: not-allowed; color: var(--disabled-text); background: var(--disabled-bg); }
+.crystal-visibility { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.crystal-visibility[hidden], .crystal-visibility-source[hidden], .crystal-visibility-source-name[hidden] { display: none; }
+.crystal-visibility-title { display: block; margin-bottom: 9px; color: var(--text-soft); font-size: 11px; }
+.crystal-visibility-source-name { margin-bottom: 7px; color: var(--muted); font-size: 10px; }
+.crystal-visibility-help { margin: 0 0 9px; max-width: 260px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.crystal-visibility-items { display: grid; gap: 7px; }
+.crystal-visibility-item { display: flex; align-items: center; gap: 6px; color: var(--text-soft); font-size: 10px; cursor: pointer; }
+.crystal-visibility-item input { flex: 0 0 auto; width: 13px; height: 13px; margin: 0; accent-color: var(--cyan); }
+.crystal-visibility-item .legend-swatch { flex: 0 0 auto; }
+.crystal-visibility-item.is-hidden { opacity: .55; }
+.crystal-visibility-count { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.legend:has(.crystal-visibility:not([hidden])) { max-height: calc(100% - 36px); overflow-y: auto; }
+.viewport-panel.trajectory-visible .legend:has(.crystal-visibility:not([hidden])) { max-height: calc(100% - 130px); }
 
 .loading { position: absolute; z-index: 5; top: 68px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; max-width: calc(100% - 36px); padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 99px; background: var(--overlay); box-shadow: var(--shadow); color: var(--text-soft); font-size: 11px; white-space: nowrap; pointer-events: none; }
 .loading[hidden], .toast[hidden] { display: none; }
@@ -584,6 +597,9 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .legend-items.crystal-items { gap: 3px; }
   .crystal-items .legend-item { min-height: 30px; font-size: 11px; }
   .crystal-items input { width: 16px; height: 16px; }
+  .crystal-visibility-items { gap: 3px; }
+  .crystal-visibility-item { min-height: 30px; font-size: 11px; }
+  .crystal-visibility-item input { width: 16px; height: 16px; }
   .legend-controls input, .legend-scheme select, .legend-property select { height: 34px; }
   .tool-selector button[data-tool-button] { min-height: 42px; font-size: 11px; }
   .structure-summary { padding: 12px 16px; }
