@@ -2,6 +2,60 @@
 
 Validation date: 2026-10-05 (UTC)
 
+## Hybrid GPU DXA
+
+DXA now runs tetrahedron alpha filtering and elastic-compatibility checks on
+the existing WebGPU device, then continues interface construction and tracing
+in its retained CPU/Wasm session. The final backend is reported as `hybrid`;
+CPU local correspondence, crystal mapping, robust periodic Delaunay and line
+tracing have not been replaced with GPU algorithms.
+
+- The full Node suite passes **783 tests**. New cases cover the staged native
+  session, exact CPU-region injection, export memory limits, temporary snapshot
+  release, shared GPU routing, cancellation races, source ownership and fallback.
+- Real Chromium/SwiftShader runs compare **480,890 tetrahedron region labels**
+  against the native implementation, with no differences, across perfect FCC,
+  BCC, HCP, cubic/hexagonal diamond, a strained translated triclinic frame and its vacancy,
+  a rotated perfect control and the 8,640-atom FCC screw fixture.
+- Actual compute shaders pass **813 binary64 quotient comparisons** including
+  last-ULP thresholds, subnormals, overflow and special values, plus synthetic
+  alpha, degenerate-neighbor, reverse-edge, Burgers and nonself Frank-rotation
+  checks. The shader does not use a float32 approximation for classification.
+- The screw returns one perfect segment with the CPU Burgers vector, periodic
+  winding and 14.934458956039819 Å source length. Its immutable upload is
+  10,498,560 bytes; the one final GPU region readback is 504,276 bytes. Alpha
+  labels remain on GPU between passes. This hybrid path still uploads mapped
+  CPU geometry and completes extraction on CPU.
+- GPU alpha-batch cancellation rejects with `AbortError`, retains the same
+  native kernel generation and both coordinator/device Workers, and permits
+  a valid subsequent screw extraction. GPU failure, CPU/GPU toggles and a thin
+  cell error also preserve the healthy backend. Overlapping direct native API
+  calls are rejected while a GPU callback holds the session.
+- Production browser checks pass hybrid extraction without isolation headers,
+  independent atom coloring, line colors/visibility/radius, PNG output, recipe
+  replay, physical replication, frame transitions and mobile layout. The
+  isolated CPU parallel/reuse browser checks also pass.
+- Deferred pipeline checks verify that ordinary GPU warmup can finish while
+  DXA compiles in the background, a foreground DXA call shares that compilation,
+  error scopes remain separate and a closed device cannot receive stale cache
+  entries. Final production DXA also exercises this shared initialization path.
+- The existing WebGPU regression suite passes 251 comparisons, together with
+  native application integration and versioned production Worker checks.
+
+Parallel Delaunay insertion can change which representative atom anchors a
+circuit center. The upstream uses perturbed edge vectors with unperturbed
+anchors, so periodic endpoint residuals are bounded by four times its
+`epsilon = 1e-10 * |a+b+c|`, plus arithmetic rounding. Winding tests now check
+all three components against the integer cell-vector winding with that derived
+bound; Burgers vectors, connectivity and relative arc-length checks remain.
+For the screw this bound is about 4.55e-8 Å, rather than an arbitrary 1e-8 Å.
+
+Reproduce with `npm test`, `npm run test:browser:dxa-gpu`,
+`npm run test:browser:dxa` and `npm run test:browser:dxa-parallel` after
+`npm run build`. GPU checks use a software adapter by default; `-- --hardware`
+requires a real hardware adapter. No physical-GPU speedup is established by
+these correctness checks.
+
 ## Dynamic CPU prewarming and one DXA heap
 
 The application now uses one active CPU budget of
@@ -103,9 +157,10 @@ The observed warm whole-frame speedup is about 2.08×. RSS includes Node,
 input/replicated JS arrays and retained Wasm capacity; it is not a sampled peak
 or an isolated kernel allocation measurement. Shared-memory execution requires
 an isolated host; GitHub Pages without these headers uses the serial kernel.
-There is still no GPU DXA backend. The [resident GPU design](DXA_REVIEW.md)
-records how to avoid intermediate readbacks and why WebGL2 needs one final
-network transfer until a same-device WebGPU renderer exists.
+These CPU measurements predate the hybrid classifier described above. The
+[resident GPU design](DXA_REVIEW.md) records the remaining periodic geometry
+and tracing work for a fully GPU extraction. WebGL2 drawing requires final
+network transfer; changing the renderer is not a prerequisite for that work.
 
 Reproduce with `npm test`, `npm run test:browser:dxa-parallel -- --software`,
 `npm run test:browser:dxa -- --software` and the benchmark commands above.

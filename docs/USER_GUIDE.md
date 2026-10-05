@@ -290,7 +290,9 @@ controls can remain responsive.
 It prefers WebGPU for coordination, adaptive/fixed-cutoff CNA,
 manual/Auto central symmetry, displacement, reference-frame strain, RDF,
 local geometric shear, bonds and ideal lattice strain neighbor/reference/tensor
-stages. Fresh ideal strain prepares neighbors on GPU, then fits PTM correspondence
+stages, and DXA tetrahedron geometry/elastic-compatibility classification.
+DXA remains a hybrid CPU/GPU pipeline with CPU periodic tessellation and line
+tracing. Fresh ideal strain prepares neighbors on GPU, then fits PTM correspondence
 with CPU Wasm. Standalone PTM remains a CPU calculation. Strain can reuse
 a compatible fit and its GPU upload;
 editing lattice parameters updates the element-reference table without
@@ -685,7 +687,8 @@ This is a provenance and risk statement, not legal advice.
   tensors can use optional WebGPU acceleration or Workers.
   PTM and its deformation fit and DXA use included Wasm kernels. No Emscripten
   installation is needed unless rebuilding C++ with `npm run build:ptm` or
-  `npm run build:dxa`. DXA currently uses CPU regardless of the GPU preference.
+  `npm run build:dxa`. GPU-enabled DXA classifies its mapped tetrahedra with
+  WebGPU, then completes extraction in the same CPU Wasm session.
 
 The bundled `NiGB_minimized.cfg` contains 129,904 atoms and can be used to
 compare CPU and GPU analysis with the same parameters. Measure cold and warm

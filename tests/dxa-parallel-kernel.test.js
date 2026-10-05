@@ -60,6 +60,15 @@ for (const [kind, lattice, type] of [
 
 test('parallel DXA preserves FCC screw Burgers vector, winding, connectivity and every atom label', async () => {
   const frame = fccScrewFrame();
+  const vectors = frame.cell.vectors;
+  // Upstream perturbs each tessellation point by epsilon = 1e-10*|a+b+c|.
+  // A circuit center anchors at an unperturbed atom and integrates perturbed
+  // edges, so each center differs by at most 2*epsilon per component. Two
+  // periodic endpoint centers may differ by 4*epsilon; PDEL can change their
+  // representative anchors. Include a small arithmetic-rounding allowance.
+  const closureTolerance = 4e-10 * Math.hypot(...[0, 1, 2].map(axis =>
+    vectors[axis] + vectors[axis + 3] + vectors[axis + 6]))
+    + 32 * Number.EPSILON * Math.hypot(...vectors);
   const serial = await calculateDxa(frame, {}, { workerCount: 1 });
   for (const workerCount of [2, 4]) {
     const result = await calculateDxa(frame, {}, { workerCount });
@@ -73,12 +82,18 @@ test('parallel DXA preserves FCC screw Burgers vector, winding, connectivity and
     }
     assert.deepEqual(line.junctions, reference.junctions);
     assert.equal(line.isInfinite, true);
+    const direction = Math.sign(line.points.at(-1) - line.points[2]);
+    for (let axis = 0; axis < 3; axis++) {
+      const delta = line.points[line.points.length - 3 + axis] - line.points[axis];
+      assert.ok(Math.abs(delta - direction * vectors[6 + axis]) <= closureTolerance,
+        JSON.stringify({ workerCount, axis, delta, expected: direction * vectors[6 + axis], closureTolerance }));
+    }
     const winding = Math.abs(line.points.at(-1) - line.points[2]);
-    assert.ok(Math.abs(winding - frame.expected.totalLength) < 1e-8);
+    assert.ok(Math.abs(winding - frame.expected.totalLength) <= closureTolerance);
     // Parallel insertion can choose a different core polyline. Preserve the
-    // exact physical winding and bound the added curvature, rather than
+    // physical winding within its perturbation bound and bound added curvature, rather than
     // requiring arc length to equal a perfectly straight analytic line.
-    assert.ok(result.totalLength >= winding - 1e-8);
+    assert.ok(result.totalLength >= winding - closureTolerance);
     assert.ok(result.totalLength < 1.001 * winding);
     assert.ok(Math.abs(result.totalLength - serial.totalLength) / winding < 1e-3);
   }

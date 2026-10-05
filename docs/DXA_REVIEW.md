@@ -2,8 +2,9 @@
 
 Research date: 2026-10-05 UTC. An initial CPU/Wasm port is now described in
 [Dislocation analysis](features/dislocations.md). This review preserves the
-source inspection and feasibility findings that preceded it; proposed GPU
-stages are not yet implemented.
+source inspection and feasibility findings that preceded it. The current
+hybrid accelerator implements GPU tetrahedron alpha filtering and elastic
+compatibility; the full resident geometry/tracing design below remains proposed.
 
 ## Conclusion
 
@@ -403,4 +404,6 @@ for a successful calculation.
 The initial research change vendored no upstream algorithm. The subsequent CPU
 port includes pinned, adapted DXA and Geogram sources with their license notices
 under `third_party/dxa/` and a prebuilt Wasm module. Current executed checks are
-recorded in [Validation](VALIDATION.md). WebGPU DXA remains future work.
+recorded in [Validation](VALIDATION.md). GPU tetrahedron classification now
+accelerates the CPU extraction through a staged Wasm/WebGPU interface. Fully
+GPU-resident periodic geometry, mesh construction and tracing remain future work.

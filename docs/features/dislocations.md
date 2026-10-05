@@ -68,12 +68,32 @@ For a controlled CPU timing comparison, run `npm run benchmark:dxa -- --workers
 1` and repeat with `--workers 2` or `--workers 4`. This benchmark physically
 replicates the NiGB example twice along Z and reports cold and warm phase times.
 
-**Enable GPU acceleration** currently uses this CPU path for DXA. A complete
-GPU extraction backend needs new robust geometry and graph kernels. Its large
-intermediate arrays can remain on the GPU, with one final network readback for
-the current WebGL2 renderer. The [GPU design](../DXA_REVIEW.md) describes the
-resident pipeline and numerical requirements. WebGPU rendering is not required
-for this analysis path.
+**Enable GPU acceleration** selects a hybrid DXA path. After CPU crystal
+mapping and periodic tessellation, WebGPU classifies tetrahedra with the alpha
+criterion, resolves degenerate cells and checks lattice closure and crystal-frame
+rotation compatibility. These passes run independently per tetrahedron. Vertex,
+edge and transition tables upload once; intermediate alpha labels stay on GPU,
+and only the final region labels return to the same Wasm session. CPU mesh
+construction and Burgers-circuit tracing then produce the complete network.
+The status identifies CPU/GPU stages and reports the actual backend and timings.
+
+The shaders emulate double precision for geometric and lattice decisions; they
+do not require native GPU float64. GPU device, pipelines, Wasm memory and CPU
+thread pools are shared with other analyses and reused across calls. DXA shaders
+precompile in the background after the ordinary GPU kernels are ready; other
+analyses do not wait for this optional compilation. A first DXA dispatch reuses
+any compilation already in progress. Unavailable
+WebGPU or a classification workspace that exceeds device/memory limits uses CPU
+classification on the already prepared tessellation, without repeating the
+earlier stages. Cancellation while waiting for GPU results retains the session's
+backend memory, including on hosts without shared memory.
+
+This is GPU acceleration of a complete DXA analysis, with CPU geometry and
+tracing still required. A fully GPU-resident extraction needs new robust
+periodic geometry and graph algorithms; see the [GPU design](../DXA_REVIEW.md).
+The output continues to use the existing WebGL2 line renderer. Transfers and
+double-precision emulation can outweigh GPU parallelism on some devices; the
+switch does not guarantee a faster run.
 
 ## Limitations
 

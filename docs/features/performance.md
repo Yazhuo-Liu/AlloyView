@@ -28,6 +28,7 @@ The **Enable GPU acceleration** switch beside **Light / Dark** is on by default 
 | Bonds | WebGPU periodic neighbor counts and compact bond graph, including element-pair cutoffs |
 | Ideal lattice strain | WebGPU neighbors, CPU PTM fit, then WebGPU ideal-reference conversion and tensor invariants; compatible PTM fits/uploads are reused |
 | Standalone PTM | Existing CPU neighbor search and Wasm correspondence fit |
+| DXA | Hybrid: WebGPU tetrahedron alpha and elastic-compatibility classification, CPU periodic tessellation and Burgers-circuit tracing |
 
 Algorithms without a GPU version continue to use their CPU implementation. When WebGPU, a suitable adapter or the required device limits are unavailable, supported analyses also fall back to CPU. Cancelling a calculation stops the job and retains the usual cancellation behavior. WebGPU requires a secure browser context: HTTPS or localhost.
 
@@ -40,6 +41,14 @@ GPU code lives in **`src/analysis/gpu/`**, separate from the CPU kernels. Both b
 A reusable GPU device and pipelines amortize initialization, while uploaded coordinate buffers can be reused across compatible analyses. GPU buffers are shared by GPU passes after an upload; JavaScript arrays and SharedArrayBuffer are not automatically the same memory as GPU buffers. Workgroup memory is local to a GPU workgroup. WebGPU is a cross-vendor API and does not require CUDA or an NVIDIA GPU.
 
 Reference-frame strain prepares both configurations and keeps their GPU buffers resident during the calculation. Atom-ID matching remains CPU work; the reference-neighbor search, deformation fit and output tensors run on GPU. Selecting another reference can reuse that frame's cached upload without changing the displayed frame's identity.
+
+DXA uploads a deduplicated snapshot of the completed tessellation and ideal
+edge mapping to the shared GPU device. Alpha filtering and elastic compatibility
+run there in two passes with intermediate labels kept on the device. One region
+array returns to the existing Wasm session before interface construction and
+line tracing. The reported backend is hybrid; a failed GPU stage reuses the
+prepared CPU state. This does not yet implement GPU Delaunay or GPU line tracing.
+See [DXA](dislocations.md) for settings and scientific limitations.
 
 Displacement also retains current/reference inputs, caching anchored Cartesian high/low buffers separately for wrapped and unwrapped coordinates. Its vector differences, current-cell minimum images and magnitudes run on GPU after CPU atom matching. A Cartesian-only upload does not need the neighbor grid, so open coordinates outside the fractional unit box are supported. Auto central symmetry reuses compatible adaptive-CNA labels or runs GPU adaptive CNA before nearest-shell voting and greedy pairing.
 

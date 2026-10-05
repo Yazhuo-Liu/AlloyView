@@ -113,6 +113,15 @@ public:
     /// Determines the ideal vector corresponding to each edge of the tessellation.
     bool assignIdealVectorsToEdges(int crystalPathSteps, ProgressingTask& operation);
 
+    // AlloyView's immutable GPU snapshot adapter. This exposes existing edge
+    // records without changing their construction, mapping, or ownership.
+    size_t tessellationEdgeCount() const { return _edgeCount; }
+    template<class Function> void visitTessellationEdges(Function&& function) const {
+        for(const auto& firstEdge : _vertexEdges)
+            for(const TessellationEdge* edge = firstEdge.first; edge; edge = edge->nextLeavingEdge)
+                function(*edge);
+    }
+
     /// Determines whether the elastic mapping from the physical configuration
     /// of the crystal to the imaginary, stress-free configuration is compatible
     /// within the given tessellation cell. Returns false if the mapping is incompatible

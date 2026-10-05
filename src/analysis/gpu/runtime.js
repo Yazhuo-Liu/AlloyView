@@ -36,6 +36,7 @@ export class GpuRuntime {
     this.device = null;
     this.adapterInfo = null;
     this.pipelines = new Map();
+    this.pipelineCompilations = new Map();
     this.frames = new Map();
     this.indexes = new Map();
     this.configContexts = new WeakMap();
@@ -54,6 +55,7 @@ export class GpuRuntime {
     this.analysisFramePins = new Map();
     this.adaptiveCna = new Map();
     this.warmupPromise = null;
+    this.dxaWarmupPromise = null;
     this.memoryLimited = false;
   }
 
@@ -89,11 +91,12 @@ export class GpuRuntime {
     await this.initialize(signal);
     if (!this.warmupPromise) {
       this.warmupPromise = (async () => {
-        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm] = await Promise.all([
+        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm, dxa] = await Promise.all([
           import('./coordination.js'), import('./rdf.js'), import('./local-shear-shaders.js'),
           import('./bonds-shaders.js'), import('./atomic-strain-shaders.js'),
           import('./cna-shaders.js'), import('./reference-strain-shaders.js'),
           import('./centrosymmetry-shaders.js'), import('./displacement-shaders.js'), import('./ptm-neighbors-shaders.js'),
+          import('./dxa-shaders.js'),
         ]);
         const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
           shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
@@ -103,6 +106,19 @@ export class GpuRuntime {
           reference.REFERENCE_STRAIN_CLEAR_SHADER, reference.REFERENCE_STRAIN_SHADER,
           csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER, ptm.PTM_NEIGHBORS_SHADER];
         for (const source of sources) await this.compilePipeline(source);
+        // Optional binary64 DXA kernels can compile slowly on some adapters.
+        // Ordinary analyses are ready now; DXA's first dispatch shares these
+        // background compilations instead of delaying the whole worker queue.
+        if (!this.dxaWarmupPromise) {
+          const device = this.device;
+          this.dxaWarmupPromise = (async () => {
+            for (const source of [dxa.DXA_ALPHA_SHADER, dxa.DXA_REGION_SHADER]) {
+              if (this.device !== device) return;
+              try { await this.compilePipeline(source); }
+              catch (error) { if (this.device === device) this.dxaWarmupError = error.message || String(error); }
+            }
+          })();
+        }
       })();
       this.warmupPromise.catch(() => { this.warmupPromise = null; });
     }
@@ -448,6 +464,24 @@ export class GpuRuntime {
     return buffer;
   }
 
+  /** Reserve a complete temporary job before any of its buffers are allocated.
+   * The displayed frame and active analyses keep their existing cache pins.
+   */
+  reserveWorkspace(bytes) {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.budgetBytes) {
+      throw new GpuUnavailableError('The DXA tables exceed the GPU memory budget; using CPU workers.');
+    }
+    if (this.allocatedBytes + bytes > this.budgetBytes) {
+      for (const key of frameEvictionOrder(this.frames, this.currentIndex, this.protectedKeys())) {
+        this.evictFrame(key);
+        if (this.allocatedBytes + bytes <= this.budgetBytes) break;
+      }
+      if (this.allocatedBytes + bytes > this.budgetBytes) {
+        throw new GpuUnavailableError('The DXA workspace exceeds the available GPU memory budget; using CPU workers.');
+      }
+    }
+  }
+
   storageBuffer(values) {
     const buffer = this.createBuffer(values.byteLength);
     try { this.write(buffer, values); } catch (error) { this.disposeBuffers([buffer]); throw error; }
@@ -577,32 +611,53 @@ export class GpuRuntime {
     } catch (error) { this.disposeBuffers(owned); throw error; }
   }
 
-  async compilePipeline(source) {
+  compilePipeline(source) {
     const device = this.device;
-    let pipeline = this.pipelines.get(source);
-    if (!pipeline) {
+    if (this.pipelines.has(source)) return Promise.resolve(this.pipelines.get(source));
+    const existing = this.pipelineCompilations.get(source);
+    if (existing) return existing;
+    const compilation = (async () => {
+      let pendingPipeline, scopedValidation, failure;
       device.pushErrorScope('validation');
       try {
         const module = device.createShaderModule({ code: source });
         const layout = device.createBindGroupLayout({ entries: bindingDeclarations(source).map(({ binding, access }) => ({
           binding, visibility: 4, buffer: { type: access.includes('uniform') ? 'uniform' : access.includes('read_write') ? 'storage' : 'read-only-storage' },
         })) });
-        pipeline = await device.createComputePipelineAsync({ layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+        pendingPipeline = device.createComputePipelineAsync({ layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
           compute: { module, entryPoint: 'main' } });
-      } finally {
-        const error = await device.popErrorScope(); if (error) throw new GpuUnavailableError(error.message);
-      }
+      } catch (error) { failure = error; }
+      // Remove the scope from the device stack before yielding. Background
+      // compilation must not consume a foreground dispatch's error scope.
+      finally { scopedValidation = device.popErrorScope(); }
+      // Handle both promises immediately, including device-loss rejection of
+      // popErrorScope while a slow native compilation is still pending.
+      const [compiled, scoped] = await Promise.allSettled([pendingPipeline, scopedValidation]);
+      if (compiled.status === 'rejected') failure ??= compiled.reason;
+      if (scoped.status === 'rejected') failure ??= scoped.reason;
+      const validation = scoped.status === 'fulfilled' ? scoped.value : null;
+      if (validation) throw new GpuUnavailableError(validation.message);
+      if (failure) throw failure;
+      const pipeline = compiled.value;
+      if (this.device !== device || this.lost) throw new GpuUnavailableError(this.lost || 'The WebGPU device was released during compilation.');
       if (this.pipelines.size > 32) this.pipelines.delete(this.pipelines.keys().next().value);
       this.pipelines.set(source, pipeline);
-    }
-    return pipeline;
+      return pipeline;
+    })();
+    this.pipelineCompilations.set(source, compilation);
+    const retire = () => { if (this.pipelineCompilations.get(source) === compilation) this.pipelineCompilations.delete(source); };
+    compilation.then(retire, retire);
+    return compilation;
   }
 
-  async run(source, bindings, invocations, { signal, startAtom = 0, endAtom = invocations, batchSize = 16_384, updateRange = true, onProgress } = {}) {
+  async run(source, bindings, invocations, { signal, startAtom = 0, endAtom = invocations, batchSize = 16_384, updateRange = true, workgroupSize = 128, onProgress } = {}) {
     await this.initialize(signal);
     const device = this.device;
     const pipeline = await this.compilePipeline(source);
     checkSignal(signal);
+    if (!Number.isInteger(workgroupSize) || workgroupSize < 1 || workgroupSize > (device.limits.maxComputeInvocationsPerWorkgroup ?? 256)) {
+      throw new GpuUnavailableError('The GPU kernel workgroup size exceeds device limits.');
+    }
     const layout = pipeline.getBindGroupLayout(0);
     const entries = bindings.map((buffer, binding) => ({ binding, resource: { buffer } }));
     device.pushErrorScope('validation');
@@ -615,12 +670,12 @@ export class GpuRuntime {
         // Standalone kernels own their indexing and run as a single dispatch.
         batchSize = 0;
       }
-      const step = context ? Math.max(128, Math.ceil(size / 128) * 128) : endAtom - startAtom;
+      const step = context ? Math.max(workgroupSize, Math.ceil(size / workgroupSize) * workgroupSize) : endAtom - startAtom;
       for (let offset = startAtom; offset < endAtom; offset += step) {
         checkSignal(signal);
         const end = Math.min(endAtom, offset + step);
         if (context) this.write(bindings[0], new Uint32Array([offset, end]), 104);
-        const workgroups = Math.ceil((end - offset) / 128);
+        const workgroups = Math.ceil((end - offset) / workgroupSize);
         if (workgroups > device.limits.maxComputeWorkgroupsPerDimension) throw new GpuUnavailableError('The GPU dispatch exceeds device limits.');
         const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
         pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(workgroups); pass.end();
@@ -698,7 +753,8 @@ export class GpuRuntime {
     this.indexes.clear();
   }
   close() {
-    this.releaseFrames(); this.pipelines.clear(); this.device?.destroy(); this.device = null; this.warmupPromise = null;
+    this.releaseFrames(); this.pipelines.clear(); this.pipelineCompilations.clear();
+    this.device?.destroy(); this.device = null; this.warmupPromise = null; this.dxaWarmupPromise = null;
   }
 }
 GpuRuntime.frameSerial = 0;

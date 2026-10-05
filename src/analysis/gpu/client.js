@@ -54,6 +54,14 @@ export class GpuAnalysisClient {
     return this.enqueue('analyze', { frame, parameters, signal, onProgress }, 1);
   }
 
+  /** Transfer an owned native DXA snapshot through the existing device queue.
+   * These tables are temporary exports, never application frame coordinates.
+   */
+  classifyDxa(snapshot, { signal, onProgress = () => {} } = {}) {
+    if (this.current?.type === 'prepare-frame') this.cancel(this.current);
+    return this.enqueue('classify-dxa', { snapshot, signal, onProgress }, 1);
+  }
+
   warmup({ signal, onProgress = () => {} } = {}) {
     if (signal?.aborted || this.closed) return Promise.reject(abortError());
     this.resume();
@@ -126,7 +134,7 @@ export class GpuAnalysisClient {
         if (data.cacheStatus) this._cacheStatus = { ...data.cacheStatus };
         if (data.ok && task.type === 'warmup') this.warmedUp = true;
       }
-      if (data.ok) this.settle(task, null, task.type === 'analyze' ? data.result : this.cacheStatus);
+      if (data.ok) this.settle(task, null, ['analyze', 'classify-dxa'].includes(task.type) ? data.result : this.cacheStatus);
       else { const error = new Error(data.error || 'GPU analysis failed.'); error.name = data.name || 'Error'; this.settle(task, error); }
       if (this.current === task) { this.current = null; this.pump(); }
     });
@@ -160,6 +168,16 @@ export class GpuAnalysisClient {
         totalAtoms: task.frame.fractional.length / 3, workerCount: 1 });
       await yieldToMain();
       if (task.settled) { this.finishDispatch(task); return; }
+      if (task.type === 'classify-dxa') {
+        const { validateGpuDxaSnapshot } = await import('./dxa.js');
+        validateGpuDxaSnapshot(task.snapshot, { validateValues: false });
+        const transfer = [...new Set(['vertices', 'tetrahedra', 'edges', 'transitions'].map(name => task.snapshot[name].buffer))];
+        if (task.settled) { this.finishDispatch(task); return; }
+        if (this.worker !== worker) throw abortError();
+        task.dispatched = true;
+        worker.postMessage({ type: task.type, id: task.id, snapshot: task.snapshot }, transfer);
+        return;
+      }
       let frameId, frameIndex, frame, referenceFrameId, referenceFrameIndex, referenceFrame;
       let parameters = task.parameters;
       let referenceSource;
@@ -317,7 +335,7 @@ export class GpuAnalysisClient {
     if (keepDevice) { this.resume(); return this.clearFrames(); }
     if (whenIdle) {
       this.releaseWhenIdle = true;
-      for (const task of this.pending.values()) if (task.type !== 'analyze') this.cancel(task);
+      for (const task of this.pending.values()) if (!['analyze', 'classify-dxa'].includes(task.type)) this.cancel(task);
       this.pump();
       return;
     }

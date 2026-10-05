@@ -30,7 +30,7 @@ function harness(t) {
   globalThis.document = { getElementById: id => fields[id], createElement: tag => new Element(tag) };
   t.after(() => { globalThis.document = previousDocument; });
   let frame = { ids: new Uint32Array([1, 2, 3, 4]), properties: [{ name: 'coordination', data: new Uint8Array([12, 12, 12, 12]) }] };
-  let version = 'source:0';
+  let version = 'source:0', gpuEnabled = true;
   const pending = [], enabledTools = new Set(), draws = [], notifications = [];
   const client = {
     releases: 0,
@@ -43,19 +43,21 @@ function harness(t) {
     setDislocationNetwork(network, settings) { this.network = network; this.settings = settings; draws.push({ network, settings }); } };
   const tools = initializeDxaTools({ renderer, client,
     tools: { setToolEnabled(name, enabled) { if (enabled) enabledTools.add(name); else enabledTools.delete(name); } },
-    getFrame: () => frame, getSourceVersion: () => version, getGpuEnabled: () => true,
+    getFrame: () => frame, getSourceVersion: () => version, getGpuEnabled: () => gpuEnabled,
     notify: message => notifications.push(message),
   });
   tools.setEnabled(true);
   return { tools, client, pending, enabledTools, draws, renderer, fields, notifications,
     getFrame: () => frame,
+    setGpuEnabled(value) { gpuEnabled = value; },
     setFrame(value, sourceVersion = version) { frame = value; version = sourceVersion; },
   };
 }
 
 function network(length = 4) {
   return { segments: [{ id: 0, familyId: 'perfect', points: new Float64Array([0, 0, 0, length, 0, 0]) }],
-    counts: { perfect: 1 }, totalLength: length, density: length / 1000, elapsedMs: 16, engine: 'Wasm CPU' };
+    counts: { perfect: 1 }, totalLength: length, density: length / 1000, elapsedMs: 16, engine: 'Wasm CPU',
+    backend: 'cpu', gpuFallback: true };
 }
 
 test('DXA Cancel aborts and releases work, rejects late networks, and preserves atom analyses', async t => {
@@ -127,6 +129,33 @@ test('same-frame results can be reused, while Cancel removes all cached DXA netw
   assert.equal(h.pending.length, 2);
   h.pending[1].resolve(network(8)); await repeated;
   assert.equal(h.renderer.network.totalLength, 8);
+});
+
+test('DXA displays the actual GPU stage and mixed backend without claiming CPU fallback', async t => {
+  const h = harness(t), task = h.tools.run();
+  h.pending[0].options.onProgress({ phase: 'tetrahedron-alpha', backend: 'gpu', workerCount: 4,
+    completedStages: 7, totalStages: 11, completedTetrahedra: 400, totalTetrahedra: 1200 });
+  assert.match(h.fields['dxa-status'].textContent, /GPU.*400 \/ 1,200 tetrahedra/);
+  assert.doesNotMatch(h.fields['dxa-status'].textContent, /CPU|threads/);
+  h.pending[0].resolve({ ...network(), backend: 'hybrid', engine: 'Wasm CPU + WebGPU',
+    gpuFallback: false, gpuStages: ['tetrahedron-alpha', 'elastic-compatibility'] });
+  await task;
+  assert.match(h.fields['dxa-status'].textContent, /Wasm CPU \+ WebGPU/);
+  assert.doesNotMatch(h.fields['dxa-status'].textContent, /fallback/);
+  assert.match(h.fields['dxa-status'].title, /elastic-compatibility/);
+});
+
+test('changing GPU preference reruns DXA on the same frame instead of reusing the other backend', async t => {
+  const h = harness(t), initial = h.tools.run();
+  h.pending[0].resolve(network()); await initial;
+  h.setGpuEnabled(false);
+  const cpu = h.tools.run();
+  assert.equal(h.pending.length, 2);
+  assert.equal(h.pending[1].parameters.gpuEnabled, false);
+  h.pending[1].resolve({ ...network(), gpuFallback: false }); await cpu;
+  assert.doesNotMatch(h.fields['dxa-status'].textContent, /fallback/);
+  assert.equal(await h.tools.run(), true);
+  assert.equal(h.pending.length, 2);
 });
 
 test('DXA retains only the latest result rather than caching line graphs across a trajectory', async t => {

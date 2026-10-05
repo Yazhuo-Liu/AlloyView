@@ -44,8 +44,29 @@ This backend requires cross-origin isolation and
 SharedArrayBuffer; static hosts without the required headers retain the complete
 serial implementation. Build it with `bash wasm/build-dxa-threaded.sh`.
 
-The initial backend is CPU/Wasm. GPU acceleration requests deliberately use this
-complete CPU implementation until scientifically equivalent GPU stages exist.
+The reference backend is CPU/Wasm. The staged C ABI additionally retains one
+whole-frame pipeline in that same heap while JavaScript dispatches an immutable
+GPU classifier. The snapshot contains perturbed tessellation vertices, cell
+adjacency, deduplicated original-atom-pair edges, and directed cluster transition
+matrices. An optional region import replaces only independent alpha/elastic
+classification; manifold construction, robust tessellation and dislocation
+tracing retain the original CPU algorithm. This is a hybrid backend, not a
+complete GPU-resident DXA. Failed GPU allocation or dispatch can finish the same
+prepared pipeline with the original CPU classifier, avoiding repeated geometry.
+
+The only additional upstream numerical-header hook is a read-only edge visitor
+and count in `ElasticMapping.h`; it does not change edge generation, mapping,
+reference frames or lifetime. The geometry adapter exposes immutable vertex
+counts and optionally borrows validated `-1/0` region labels for synchronous
+manifold construction. All existing ordered reductions, topology repair,
+Burgers-circuit search, line tracing and junction operations remain unchanged.
+Native export rejects its snapshot and temporary-map memory budget before
+allocating arrays. The host releases native snapshot copies immediately after
+copying their data for GPU dispatch; finishing also clears them before building
+the manifold. The retained scientific session and imported labels have separate
+lifetimes. Export, snapshot release and session disposal do not replace the
+Wasm module, shared memory or warmed pthread Workers.
+
 It does not classify defective atoms and substitute their bonds for dislocation
 lines. Defect surface output is not currently returned by the entry point.
 

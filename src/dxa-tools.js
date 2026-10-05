@@ -109,8 +109,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
 
   function cancel() {
     abortJobs(); enabled = false; failure = false;
-    // A completed synchronous kernel can retain its enlarged Wasm heap. The
-    // explicit Cancel action releases that Worker as well as visible results.
+    // Stop the job and clear its display while retaining reusable backend memory.
     void client.release?.();
     cachedResult = null;
     tools.setToolEnabled('dxa', false);
@@ -125,8 +124,11 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     const count = result.segments?.length ?? 0;
     const length = Number(result.totalLength ?? 0), density = Number(result.density ?? 0);
     $('dxa-summary').textContent = `${integer(count)} segments · ${length.toPrecision(5)} Å total length · ${density.toExponential(3)} Å⁻² density`;
-    $('dxa-status').textContent = `${result.engine ?? 'CPU / Wasm'} · ${duration(result.elapsedMs ?? 0)}${getGpuEnabled() ? ' · DXA uses the CPU fallback.' : ''}`;
-    $('dxa-status').title = (result.stageTimings ?? []).map(stage => `${stage.phase}: ${duration(stage.elapsedMs)}`).join('\n');
+    $('dxa-status').textContent = `${result.engine ?? 'CPU / Wasm'} · ${duration(result.elapsedMs ?? 0)}${result.gpuFallback ? ' · CPU fallback' : ''}`;
+    $('dxa-status').title = [result.fallbackReason ?? result.gpuFallbackReason,
+      ...(result.stageTimings ?? []).map(stage => `${stage.phase}: ${duration(stage.elapsedMs)}`),
+      ...(result.gpuStages?.length ? [`GPU stages: ${result.gpuStages.join(', ')}`] : []),
+    ].filter(Boolean).join('\n');
     renderFamilies(); draw(); onMemoryChange();
   }
 
@@ -147,23 +149,28 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     clearNetwork();
     const serial = request, sourceVersion = getSourceVersion();
     const current = () => serial === request && frame === getFrame() && sourceVersion === getSourceVersion() && enabled;
-    const key = JSON.stringify(settings), cached = cachedResult;
+    const gpuEnabled = Boolean(getGpuEnabled());
+    const key = JSON.stringify({ ...settings, gpuEnabled }), cached = cachedResult;
     if (cached?.frame === frame && cached.key === key) { showResult(cached.result); return true; }
     // Global line graphs can be large. Keep only the latest frame/result,
     // rather than adding unaccounted graph arrays to the trajectory cache.
     cachedResult = null;
     const job = new AbortController(); controller = job;
     state('Calculating…');
-    $('dxa-status').textContent = `Preparing CPU DXA for frame atoms: ${integer(frame.ids.length)}…`;
+    $('dxa-status').textContent = `Preparing ${gpuEnabled ? 'GPU-accelerated' : 'CPU'} DXA for ${integer(frame.ids.length)} atoms…`;
     try {
-      const result = await client.analyze(frame, { ...settings, gpuEnabled: getGpuEnabled() }, {
+      const result = await client.analyze(frame, { ...settings, gpuEnabled }, {
         signal: job.signal,
         onProgress: progress => {
           if (!current() || job.signal.aborted) return;
           const stage = String(progress.phase ?? 'Analyzing').replace(/[-_]/g, ' ');
           const done = progress.completedStages ?? 0, total = progress.totalStages ?? 12;
-          const threads = progress.workerCount > 1 ? ` · ${progress.workerCount} threads` : '';
-          $('dxa-status').textContent = `${stage} · CPU${threads} · ${done} / ${total} stages`;
+          const backend = progress.backend === 'gpu' ? 'GPU' : progress.backend === 'hybrid' ? 'CPU + GPU' : 'CPU';
+          const threads = backend === 'CPU' && progress.workerCount > 1 ? ` · ${progress.workerCount} threads` : '';
+          const completion = Number.isFinite(progress.totalTetrahedra) && progress.totalTetrahedra > 0
+            ? `${integer(progress.completedTetrahedra ?? 0)} / ${integer(progress.totalTetrahedra)} tetrahedra`
+            : `${done} / ${total} stages`;
+          $('dxa-status').textContent = `${stage} · ${backend}${threads} · ${completion}`;
         },
       });
       if (!current() || job.signal.aborted) return false;

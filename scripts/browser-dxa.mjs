@@ -110,7 +110,8 @@ try {
     assert.equal(initial.atoms, screw.ids.length); assert.equal(initial.segments, 1); assert.equal(initial.family, 'perfect');
     assert.ok(Math.abs(initial.length - screw.expected.totalLength) < lengthTolerance, JSON.stringify({ initial, expected: screw.expected }));
     assert.ok(Math.abs(initial.burgersMagnitude - screw.expected.burgersMagnitude) < 1e-3, JSON.stringify({ initial, expected: screw.expected }));
-    assert.equal(initial.backend, 'cpu'); assert.equal(initial.gpuFallback, true); assert.match(initial.status, /CPU fallback/);
+    assert.equal(initial.backend, 'hybrid'); assert.equal(initial.gpuFallback, false);
+    assert.match(initial.status, /WebGPU/); assert.doesNotMatch(initial.status, /fallback/);
 
     const appearance = await evaluate(`(() => {
       const checks = dxaChecks, renderer = checks.renderer, atoms = renderer.atomColors, before = checks.analyses;

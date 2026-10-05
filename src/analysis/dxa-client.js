@@ -10,13 +10,14 @@ const abortError = () => new DOMException('The DXA calculation was cancelled.', 
  */
 export class DxaClient {
   constructor({ workerFactory = () => new Worker(new URL('../workers/dxa-worker.js', import.meta.url), { type: 'module' }),
-    memoryBudgetBytes, workerCount, environment = globalThis, cpuBudget,
+    memoryBudgetBytes, workerCount, environment = globalThis, cpuBudget, gpuBackend,
     yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
     this.workerFactory = workerFactory;
     this.memoryBudgetBytes = memoryBudgetBytes;
     this.workerCount = workerCount;
     this.environment = environment;
     this.cpuBudget = cpuBudget ?? new CpuBudget({ environment });
+    this.gpuBackend = gpuBackend;
     this.yieldToMain = yieldToMain;
     this.worker = null;
     this.control = null;
@@ -88,8 +89,15 @@ export class DxaClient {
       }
       if (data.progress) {
         if (task.settled) return;
+        // This progress precedes the GPU RPC in Worker message order. Mark
+        // the asynchronous checkpoint before a user's callback may cancel.
+        task.gpuWaiting = data.progress.backend === 'gpu';
         try { task.onProgress({ backend: 'cpu', workerCount: task.workerCount, ...data.progress }); }
         catch (error) { this.cancel(task, error); }
+        return;
+      }
+      if (data.gpuRequest) {
+        void this.classifyGpu(task, worker, data.gpuRequest);
         return;
       }
       if (data.ok) {
@@ -101,13 +109,13 @@ export class DxaClient {
         const error = new Error(data.error || 'DXA calculation failed.'); error.name = data.name || 'Error';
         this.settle(task, error);
       }
-      if (data.fatal) this.terminateWorker();
+      if (data.fatal) { task.controller.abort(); this.terminateWorker(); }
       this.retire(task);
     });
     const fail = event => {
       if (this.worker !== worker) return;
       const error = new Error(event.message || 'The DXA worker failed.');
-      if (this.current) this.settle(this.current, error);
+      if (this.current) { this.current.controller.abort(); this.settle(this.current, error); }
       this.terminateWorker();
       if (this.current) this.retire(this.current);
     };
@@ -152,15 +160,53 @@ export class DxaClient {
         transfer.push(coordinates.buffer, frame.cell.vectors.buffer, frame.cell.origin.buffer);
       }
       const worker = this.ensureWorker();
+      const gpuBudgetBytes = this.gpuBackend?.cacheStatus?.budgetBytes;
       // Only the host clears the retained cancellation word. Resetting it in
       // the receiving Worker could erase an abort that raced with delivery.
       this.setCancellation(0);
       worker.postMessage({ id: task.id, type: task.type, frame, atomCount: task.count,
-        parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes, workerCount: task.workerCount }, transfer);
+        parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes, workerCount: task.workerCount,
+        gpuSnapshotBudgetBytes: Number.isSafeInteger(gpuBudgetBytes) && gpuBudgetBytes > 0 ? Math.min(512 * 1024 ** 2, gpuBudgetBytes) : undefined,
+        gpuAvailable: Boolean(task.parameters?.gpuEnabled && this.environment.navigator?.gpu
+          && typeof this.gpuBackend?.classifyDxa === 'function') }, transfer);
       task.dispatched = true;
     } catch (error) {
       if (!task.settled) this.settle(task, error);
       this.retire(task);
+    }
+  }
+
+  async classifyGpu(task, worker, { requestId, snapshot }) {
+    task.gpuPending = requestId;
+    task.gpuWaiting = true;
+    const reply = message => {
+      if (this.worker !== worker || this.current !== task) return;
+      worker.postMessage({ type: 'gpu-result', id: task.id, requestId, ...message },
+        message.result?.regions instanceof Int32Array ? [message.result.regions.buffer] : []);
+    };
+    try {
+      if (task.settled || task.controller.signal.aborted) throw abortError();
+      if (typeof this.gpuBackend?.classifyDxa !== 'function') throw new Error('WebGPU DXA is unavailable in this browser or context.');
+      // The existing GPU client serializes these kernels with all other GPU
+      // analyses and reuses its device. No second GPU device is created here.
+      const result = await this.gpuBackend.classifyDxa(snapshot, {
+        signal: task.controller.signal,
+        onProgress: progress => {
+          if (task.settled) return;
+          try {
+            task.onProgress({ completedStages: 7, totalStages: 11, ...progress, backend: 'gpu',
+              totalAtoms: task.count, workerCount: task.workerCount,
+              totalTetrahedra: progress.totalTetrahedra ?? progress.totalAtoms ?? snapshot.tetrahedronCount,
+              completedTetrahedra: progress.completedTetrahedra ?? progress.completedAtoms ?? 0 });
+          } catch (error) { this.cancel(task, error); }
+        },
+      });
+      if (task.settled || task.controller.signal.aborted) throw abortError();
+      reply({ ok: true, result });
+    } catch (error) {
+      reply({ ok: false, error: error?.message || String(error), name: error?.name || 'Error' });
+    } finally {
+      if (task.gpuPending === requestId) task.gpuPending = undefined;
     }
   }
 
@@ -189,7 +235,11 @@ export class DxaClient {
     if (this.current === task) {
       if (!task.dispatched) { this.retire(task); return; }
       const shared = this.setCancellation(1);
-      if (task.type === 'warmup' || shared || (this.environment.crossOriginIsolated && typeof this.environment.SharedArrayBuffer === 'function')) {
+      // An asynchronous GPU checkpoint can acknowledge cancellation even on
+      // a static host. Unblock its RPC before releasing the native CPU lease.
+      const gpuWaiting = task.gpuWaiting || task.gpuPending !== undefined;
+      if (gpuWaiting) this.worker?.postMessage({ type: 'cancel', id: task.id });
+      if (task.type === 'warmup' || gpuWaiting || shared || (this.environment.crossOriginIsolated && typeof this.environment.SharedArrayBuffer === 'function')) {
         // Reject/clear the UI immediately, but retain the lease until native
         // work acknowledges cancellation and every pthread has joined.
         return;

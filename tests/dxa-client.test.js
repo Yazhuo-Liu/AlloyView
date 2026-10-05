@@ -12,8 +12,9 @@ class FakeWorker {
 }
 const source = () => ({ fractional: new Float64Array([0, 0, 0, .5, .5, 0, .5, 0, .5, 0, .5, .5]),
   cell: createCell({ vectors: [4, 0, 0, 1, 4, 0, 0, 0, 4] }) });
-const setup = () => {
-  const workers = [], client = new DxaClient({ workerFactory: () => { const worker = new FakeWorker(); workers.push(worker); return worker; }, yieldToMain: async () => {} });
+const setup = (options = {}) => {
+  const workers = [], client = new DxaClient({ workerFactory: () => { const worker = new FakeWorker(); workers.push(worker); return worker; },
+    yieldToMain: async () => {}, environment: options.gpuBackend ? { navigator: { gpu: {} } } : globalThis, ...options });
   return { client, workers };
 };
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -32,6 +33,125 @@ test('DXA client transfers owned coordinate copies without detaching the display
   worker.emit({ id: task.id, ok: true, result: { segments: [], engine: 'Wasm CPU' } });
   assert.equal((await request).engine, 'Wasm CPU'); assert.equal(client.pending.size, 0);
   client.close();
+});
+
+const topologySnapshot = () => ({ vertexCount: 4, tetrahedronCount: 2, edgeCount: 1, transitionCount: 1,
+  alpha: 3, vertices: new Float64Array(12), tetrahedra: new Uint32Array(32),
+  edges: new Uint32Array(8), transitions: new Float64Array(20) });
+
+test('DXA routes owned native topology through the existing GPU backend and returns its regions', async () => {
+  const calls = [], progress = [];
+  const { client, workers } = setup({ gpuBackend: {
+    async classifyDxa(snapshot, options) {
+      const owned = structuredClone(snapshot, { transfer: ['vertices', 'tetrahedra', 'edges', 'transitions'].map(key => snapshot[key].buffer) });
+      calls.push({ snapshot: owned, signal: options.signal });
+      options.onProgress({ phase: 'GPU alpha classification', totalAtoms: 2, completedAtoms: 1 });
+      return { regions: new Int32Array([-1, 0]), gpuStages: ['tetrahedron-alpha', 'elastic-compatibility'],
+        arithmetic: 'ieee754-f64', elapsedMs: 5 };
+    },
+  } });
+  const frame = source(), request = client.analyze(frame, { gpuEnabled: true }, { onProgress: event => progress.push(event) });
+  await flush();
+  const worker = workers[0], task = worker.messages[0], snapshot = topologySnapshot();
+  assert.equal(task.gpuAvailable, true);
+  worker.emit({ id: task.id, gpuRequest: { requestId: 7, snapshot } });
+  await flush();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].snapshot.vertices.length, 12);
+  assert.equal(snapshot.vertices.byteLength, 0, 'the copied native snapshot transfers ownership');
+  assert.equal(frame.fractional.byteLength, 96, 'rendered coordinates remain owned by the caller');
+  const reply = worker.messages.at(-1);
+  assert.equal(reply.type, 'gpu-result'); assert.equal(reply.requestId, 7);
+  assert.equal(reply.ok, true); assert.deepEqual(reply.result.regions, new Int32Array([-1, 0]));
+  assert.equal(progress.at(-1).backend, 'gpu');
+  assert.equal(progress.at(-1).totalAtoms, 4);
+  assert.equal(progress.at(-1).totalTetrahedra, 2); assert.equal(progress.at(-1).completedTetrahedra, 1);
+  assert.equal(client.cpuBudget.active, 1, 'the native session retains its global CPU lease');
+  worker.emit({ id: task.id, ok: true, result: { segments: [], backend: 'hybrid', engine: 'Wasm CPU + WebGPU' } });
+  assert.equal((await request).backend, 'hybrid'); assert.equal(client.cpuBudget.active, 0);
+  await client.close();
+});
+
+test('GPU memory failure returns to the paused native session without rejecting or restarting DXA', async () => {
+  const { client, workers } = setup({ gpuBackend: { classifyDxa: async () => { throw new Error('GPU memory budget exceeded'); } } });
+  const request = client.analyze(source(), { gpuEnabled: true });
+  await flush();
+  const worker = workers[0], task = worker.messages[0];
+  worker.emit({ id: task.id, gpuRequest: { requestId: 4, snapshot: topologySnapshot() } });
+  await flush();
+  const reply = worker.messages.at(-1);
+  assert.equal(reply.type, 'gpu-result'); assert.equal(reply.ok, false); assert.match(reply.error, /memory budget/);
+  assert.equal(client.pending.size, 1); assert.equal(client.cpuBudget.active, 1);
+  assert.equal(workers.length, 1); assert.equal(worker.messages.filter(message => message.type === 'analyze').length, 1);
+  worker.emit({ id: task.id, ok: true, result: { backend: 'cpu', gpuFallback: true, fallbackReason: reply.error } });
+  assert.equal((await request).gpuFallback, true);
+  await client.close();
+});
+
+test('cancelling a GPU checkpoint keeps a serial native heap and ignores its late GPU reply', async () => {
+  let finishGpu, gpuSignal;
+  const { client, workers } = setup({ gpuBackend: {
+    classifyDxa: (_snapshot, { signal }) => { gpuSignal = signal; return new Promise(resolve => { finishGpu = resolve; }); },
+  } });
+  const controller = new AbortController(), first = client.analyze(source(), { gpuEnabled: true }, { signal: controller.signal });
+  const rejected = assert.rejects(first, { name: 'AbortError' });
+  await flush();
+  const worker = workers[0], firstId = worker.messages[0].id;
+  worker.emit({ id: firstId, gpuRequest: { requestId: 10, snapshot: topologySnapshot() } });
+  const next = client.analyze(source());
+  controller.abort(); await rejected;
+  assert.equal(gpuSignal.aborted, true);
+  assert.equal(worker.terminated, false);
+  assert.equal(client.cpuBudget.active, 1);
+  assert.equal(worker.messages.at(-1).type, 'cancel');
+  worker.emit({ id: firstId, ok: false, name: 'AbortError', error: 'Cancelled at GPU checkpoint' });
+  await flush();
+  const nextTask = worker.messages.at(-1);
+  assert.equal(nextTask.type, 'analyze'); assert.notEqual(nextTask.id, firstId);
+  finishGpu({ regions: new Int32Array([-1, 0]) }); await flush();
+  assert.equal(worker.messages.at(-1), nextTask, 'a stale GPU reply cannot reach the next native calculation');
+  assert.equal(workers.length, 1);
+  worker.emit({ id: nextTask.id, ok: true, result: { segments: [] } });
+  await next; assert.equal(client.cpuBudget.active, 0);
+  await client.close();
+});
+
+test('cancellation in the first GPU progress callback retains a serial heap before its RPC arrives', async () => {
+  const controller = new AbortController(); let calls = 0;
+  const { client, workers } = setup({ gpuBackend: { classifyDxa: async () => { calls++; return { regions: new Int32Array(2) }; } } });
+  const first = client.analyze(source(), { gpuEnabled: true }, { signal: controller.signal,
+    onProgress: progress => { if (progress.backend === 'gpu') controller.abort(); } });
+  const rejected = assert.rejects(first, { name: 'AbortError' });
+  await flush(); const worker = workers[0], id = worker.messages[0].id;
+  worker.emit({ id, progress: { phase: 'GPU tetrahedron and elastic classification', backend: 'gpu' } });
+  await rejected;
+  assert.equal(worker.terminated, false); assert.equal(worker.messages.at(-1).type, 'cancel');
+  worker.emit({ id, gpuRequest: { requestId: 11, snapshot: topologySnapshot() } });
+  await flush();
+  assert.equal(calls, 0); assert.equal(worker.messages.at(-1).name, 'AbortError');
+  worker.emit({ id, ok: false, name: 'AbortError', error: 'Cancelled' });
+  assert.equal(client.cpuBudget.active, 0);
+  await client.close();
+});
+
+test('DXA preflights snapshot export against the warmed shared GPU memory budget', async () => {
+  const { client, workers } = setup({ gpuBackend: { cacheStatus: { budgetBytes: 128 * 1024 ** 2 },
+    classifyDxa: async () => { throw new Error('not called'); } } });
+  const request = client.analyze(source(), { gpuEnabled: true });
+  await flush(); const worker = workers[0], task = worker.messages[0];
+  assert.equal(task.gpuSnapshotBudgetBytes, 128 * 1024 ** 2);
+  worker.emit({ id: task.id, ok: true, result: { segments: [] } }); await request;
+  await client.close();
+});
+
+test('GPU enabled without browser WebGPU support skips native snapshot preparation', async () => {
+  const { client, workers } = setup({ environment: {}, gpuBackend: { classifyDxa: async () => { throw new Error('not called'); } } });
+  const request = client.analyze(source(), { gpuEnabled: true });
+  await flush(); const worker = workers[0], task = worker.messages[0];
+  assert.equal(task.gpuAvailable, false);
+  worker.emit({ id: task.id, ok: true, result: { backend: 'cpu', gpuFallback: true } });
+  assert.equal((await request).gpuFallback, true);
+  await client.close();
 });
 
 test('running DXA cancellation terminates native work, ignores stale output and creates a fresh worker', async () => {

@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { useSoftwareAdapter, withWebGpuBrowser } from './webgpu-browser.mjs';
+import { fccScrewFrame } from '../tests/helpers/dislocations.js';
 
 // Run source modules in actual browser Workers: Node worker_threads do not
 // exercise nested browser Worker ownership or COOP/COEP deployment behavior.
 const software = useSoftwareAdapter(true);
 const serialLengthTolerance = 1e-3;
-const windingTolerance = 1e-8;
+const fixtureVectors = fccScrewFrame().cell.vectors;
+// Two circuit centers can differ by four times the upstream Delaunay
+// perturbation epsilon because they anchor at unperturbed atom positions.
+const windingTolerance = 4e-10 * Math.hypot(...[0, 1, 2].map(axis =>
+  fixtureVectors[axis] + fixtureVectors[axis + 3] + fixtureVectors[axis + 6]))
+  + 32 * Number.EPSILON * Math.hypot(...fixtureVectors);
 const arcRelativeTolerance = 1e-3;
 
 async function checkDeployment(isolated) {
@@ -110,9 +116,15 @@ async function checkDeployment(isolated) {
       JSON.stringify({ serialLength: baseline.totalLength, parallelLength: threaded.totalLength, arcRelativeTolerance }));
     // Parallel Delaunay can choose a different valid triangulation of the
     // degenerate ideal FCC sites. Its line can have a small transverse wiggle,
-    // so compare the exact periodic winding to the analytic straight length.
+    // so compare periodic winding within the source's perturbation bound.
     const points = threaded.segments[0].points;
     const periodicWindingZ = Math.abs(points.at(-1) - points[2]);
+    const direction = Math.sign(points.at(-1) - points[2]);
+    for (let axis = 0; axis < 3; axis++) {
+      const delta = points[points.length - 3 + axis] - points[axis];
+      assert.ok(Math.abs(delta - direction * fixtureVectors[6 + axis]) < windingTolerance,
+        JSON.stringify({ axis, delta, expected: direction * fixtureVectors[6 + axis], windingTolerance }));
+    }
     assert.ok(Math.abs(periodicWindingZ - 6 * 3.52 / Math.sqrt(2)) < windingTolerance,
       JSON.stringify({ periodicWindingZ, analyticLength: 6 * 3.52 / Math.sqrt(2), windingTolerance }));
     assert.ok(threaded.totalLength >= periodicWindingZ - windingTolerance && threaded.totalLength / periodicWindingZ < 1 + arcRelativeTolerance,
