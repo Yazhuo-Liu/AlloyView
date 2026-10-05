@@ -2,11 +2,13 @@
 
 ## Using the analyses
 
-The initial [DXA tool](features/dislocations.md) extracts an independent
+The [DXA tool](features/dislocations.md) extracts an independent
 dislocation line network with Burgers vectors and junction connectivity. Its
-full CPU/Wasm topology calculation uses a dedicated Worker rather than the
-atom-range analysis pool described below; the global GPU switch falls back to
-CPU for this first version.
+retained CPU/Wasm topology session uses a dedicated Worker rather than the
+atom-range analysis pool described below. With GPU acceleration enabled,
+nearest-neighbor search, local crystal correspondence and tetrahedron
+classification can run on GPU; crystal mapping, periodic tessellation and
+line tracing remain on CPU, with independent fallback for GPU stages.
 
 Load a structure and open **Common neighbor analysis** in the right panel.
 **Identify structure** runs adaptive CNA by default and selects **Crystal
@@ -63,12 +65,13 @@ RMSD and nearest-neighbor distance (Å) as scalar color properties. Rejected fit
 retain diagnostic RMSD but have undefined deformation/distance. The number of
 recognized atoms depends on the selected templates, threshold and local disorder.
 
-Standalone PTM uses CPU neighbor search and Wasm fitting. Fresh ideal lattice
-strain can prepare nearest-neighbor indices and Float64 image vectors on
-WebGPU before CPU Wasm Voronoi ordering, topology and template fitting. That
-GPU table retains strict distance/vector ordering; fitting uses the same PTM
-library and thresholds. See [PTM](features/ptm.md) for bounded preparation and
-CPU fallback in the strain workflow.
+With GPU acceleration enabled and supported, PTM identification, lattice estimation and
+fresh ideal lattice strain prepare nearest-neighbor indices and Float64 image
+vectors on WebGPU before CPU Wasm Voronoi ordering, topology and template fitting
+in the shared Worker pool. The GPU table retains strict distance/vector ordering;
+the CPU fitting stage uses the same PTM library and thresholds. Unavailable or
+unsupported GPU preparation falls back to CPU neighbor search. See
+[PTM](features/ptm.md) for preparation bounds and fallback details.
 
 ## Atomic elastic strain
 
@@ -76,19 +79,46 @@ Under **Ideal lattice reference**, each input atom type has an element selector,
 reference crystal and editable `a` in Å; HCP and hexagonal diamond also expose
 `c`. Recognized source labels initialize presets for 37 elements, including
 common FCC/BCC/HCP metals and diamond C/Si/Ge. Numeric types and unsupported
-elements have an empty `a` until the user supplies a reference. No element is
-inferred from a LAMMPS numeric type ID. **Element defaults** resets values from
-the source's element labels. The approximate reference-state numbers are from
+elements begin with an empty `a`. **Estimate from structure** fills missing
+values, and the first **Calculate strain** does so automatically when needed.
+Numeric sources keep their **Type N** labels and empty element selectors: no element
+is inferred from a numeric type ID, filename or geometric classification.
+Existing presets and manually entered lattice values are preserved.
+**Element defaults** resets values from the source's element labels. The approximate reference-state numbers are from
 [ASE 3.26.0](https://gitlab.com/ase/ase/-/blob/3.26.0/ase/data/__init__.py);
 hexagonal `c` is `a × (c/a)`. They are starting values, not stress-free lattice
 predictions for an alloy, finite temperature or a particular potential.
 
+Estimation requests a complete PTM geometry fit with FCC/HCP/BCC/ICO/SC/cubic
+diamond/hexagonal diamond candidates (`flags = 127`) and RMSD cutoff 0.1. CNA
+classification alone cannot determine a lattice length. For each numeric type,
+the estimator restores the absolute lengths removed by PTM normalization and
+takes the median of matched atoms in the dominant supported phase. Cubic `a`
+uses the cube root of the local lattice volume; hexagonal `a` uses the square
+root of the fitted basal-plane area and `c` uses the fitted axial length. These
+metrics are invariant under rigid rotation and preserve independent hexagonal
+`a` and `c`, including nonideal `c/a`.
+
+A reference requires at least four usable matches, recognition of at least 10%
+of that type's atoms and a phase containing at least 80% of its recognized atoms.
+Phase counts include recognized unsupported environments; Other, ICO and
+graphene do not supply 3D strain reference values. A mixed phase population is
+reported as ambiguous rather than averaging unlike lattice parameters, and
+insufficient or unsupported fits require manual input.
+
+The inferred constants describe the current frame's bulk geometry, including
+bulk strain; they are not a prediction of a stress-free material lattice.
+Edit them when a known reference for the composition, temperature or potential
+is available. Once filled, estimated values stay fixed across trajectory frames
+and configuration export/restore, just as manually entered references do.
+
 **Calculate strain** fits PTM correspondence and computes local elastic strain
 relative to that ideal lattice. The selected reference phase is automatically
 included in the strain fit even if its PTM template checkbox is off. A previously
-calculated PTM result is reused when the template mask and RMSD threshold match.
-Editing only the lattice reference reuses its geometry fit. An explicitly
-restricted PTM display keeps its own selected classification.
+calculated PTM result is reused when it contains the requested templates and has
+the same RMSD threshold. A compatible complete geometry fit from estimation is
+reused by strain. Editing only the lattice reference reuses its geometry fit.
+An explicitly restricted PTM display keeps its own selected classification.
 
 PTM removes scale during template fitting. AlloyView restores the absolute
 reference lattice scale before calculating the deformation gradient `F`,
@@ -231,9 +261,11 @@ adaptive/fixed-cutoff CNA, manual/Auto central symmetry, displacement and
 reference-frame strain can use WebGPU. The GPU kernels preserve the same
 crystal labels, central-symmetry normalization, atom correspondence,
 reference-neighbor convention and output fields, with CPU fallback for
-unsupported inputs or unavailable GPU support. Standalone PTM remains CPU work.
-Fresh ideal strain uses GPU neighbor preparation with CPU Wasm correspondence
-fitting, then applies its reference and tensor operations on GPU.
+unsupported inputs or unavailable GPU support. PTM identification and lattice estimation
+can use GPU neighbor preparation followed by CPU Wasm correspondence fitting in
+the shared pool. Fresh ideal strain uses the same hybrid fit, then applies its
+reference and tensor operations on GPU. Compatible cached fits skip neighbor
+preparation and correspondence fitting.
 See [CNA](features/cna.md), [central symmetry](features/centrosymmetry.md),
 [displacement](features/displacement.md),
 [reference-frame strain](features/reference-strain.md) and

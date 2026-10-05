@@ -1,0 +1,6 @@
+{
+  "fixed_end_climb/": "{count} numbered CFG files · NEB sequence",
+  "fcc-vacancy.cfg": "FCC crystal with one vacancy",
+  "bcc-trajectory.dump": "Multi-frame BCC text trajectory",
+  "NiGB_minimized.cfg": "Nickel grain boundary · 129,904 atoms · CPU/GPU benchmark"
+}

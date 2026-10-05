@@ -62,7 +62,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Real polyhedral template matching (PTM) in Wasm Workers, with eight crystal
   templates, an adjustable RMSD threshold and the same crystal visibility controls.
 - Atomic elastic strain relative to an ideal lattice, with editable element-based
-  lattice constants, shear/hydrostatic strain, volume change and tensor components.
+  or geometry-estimated lattice constants, shear/hydrostatic strain, volume change
+  and tensor components. Missing numeric-type references can be estimated with PTM.
 - Reference-frame least-squares strain using stable atom IDs, plus AtomEye-style
   single-frame local geometric shear with optional mean-tensor subtraction.
 - Coordination histograms and total/element-pair radial distribution functions
@@ -74,8 +75,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   and PTM kernels are reused, with preparation stages and PTM atom progress.
 - **Enable GPU acceleration**, on by default beside the theme controls,
   supports coordination, adaptive/fixed-cutoff CNA, manual/Auto central symmetry,
-  displacement, reference-frame strain, RDF, local geometric shear and bonds
-  with WebGPU.
+  displacement, reference-frame strain, RDF, local geometric shear, bonds
+  and PTM neighbor preparation with WebGPU.
   Fresh ideal lattice strain uses GPU neighbor preparation, CPU Wasm fitting,
   then GPU element-reference conversion and tensors, reusing cached fits and
   uploads. DXA uses GPU nearest-neighbor search, local crystal correspondence,
@@ -161,6 +162,9 @@ WebGL 2 support. No installation or account is needed.
    shows the recognized phases; ideal HCP has a finite symmetry value.
    Under **Ideal lattice reference**, check the element, crystal phase and
    lattice constants before calculating atomic elastic strain.
+   **Estimate from structure** fills missing values from crystal geometry;
+   first-time strain calculation also fills missing references automatically.
+   Existing values stay fixed, and estimates describe the current bulk lattice.
    **Bonds** adds neighbor connections with optional element-pair cutoffs.
    **Displacement** calculates Cartesian components and magnitude against a
    reference frame for atom coloring, independently of arrows.

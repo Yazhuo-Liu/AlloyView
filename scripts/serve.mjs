@@ -2,6 +2,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, resolve, sep } from 'node:path';
 import { createDocumentationPages } from './build-docs.mjs';
+import { createExampleCatalog, serializeExampleCatalog } from './example-catalog.mjs';
 
 const root = resolve(process.argv[2] ?? '.');
 const port = Number(process.argv[3] ?? 5173);
@@ -18,7 +19,7 @@ const mime = {
   '.wasm': 'application/wasm',
 };
 
-createServer(async (request, response) => {
+const server = createServer(async (request, response) => {
   let pathname;
   try { pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname); }
   catch {
@@ -36,6 +37,21 @@ createServer(async (request, response) => {
   response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
   response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
   response.setHeader('X-Content-Type-Options', 'nosniff');
+
+  // Development discovers new examples on every request; preview uses the
+  // manifest generated alongside its immutable production assets.
+  if (pathname === '/examples/manifest.json' && !existsSync(requested)) {
+    try {
+      const manifest = serializeExampleCatalog(await createExampleCatalog(root));
+      response.writeHead(200, { 'Content-Type': mime['.json'], 'Cache-Control': 'no-store' });
+      response.end(manifest);
+    } catch (error) {
+      console.error('Example catalog failed:', error.message);
+      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Example catalog failed');
+    }
+    return;
+  }
 
   // The development tree keeps Markdown sources; render exactly the pages the
   // production build writes instead of committing duplicated generated HTML.
@@ -74,6 +90,7 @@ createServer(async (request, response) => {
     'Cache-Control': 'no-store',
   });
   createReadStream(target).pipe(response);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`AlloyView: http://localhost:${port}`);
+});
+server.listen(port, '127.0.0.1', () => {
+  console.log(`AlloyView: http://localhost:${server.address().port}`);
 });

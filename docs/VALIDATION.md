@@ -2,6 +2,57 @@
 
 Validation date: 2026-10-05 (UTC)
 
+## Fe dump, geometry references and automatic examples
+
+The new `examples/Fe_disloc_loop.dump` is a supported LAMMPS text dump with
+60,229 atoms, unsorted stable IDs, triclinic periodic geometry, image flags,
+and 14 scalar properties. It has no element column: input and legend retain
+`Type 1` rather than inferring Fe from a filename. Numeric type identifiers
+also retain safe integers beyond the signed 32-bit range.
+
+- All **842 Node tests** pass, including the actual dump/native DXA fixture,
+  robust PTM reference estimation, public hybrid PTM routing, and automatic
+  example/build/development discovery. The catalog includes five options and
+  all 40 NEB sequence frames, encodes asset paths, ignores unsupported and
+  symlink entries, and participates in content-versioned build hashing.
+- Actual adaptive CNA finds 60,019 BCC atoms and 210 Other atoms. PTM finds
+  60,033 BCC atoms and 196 Other atoms. Geometry references infer
+  **a = 2.8365753478 Å**, leave the element unknown, and preserve existing
+  reference values. This measures current bulk geometry, including bulk strain.
+  Real PTM tests cover all six supported reference phases, rotations, unequal
+  hexagonal stretches, shear, separate types, phase ambiguity and defects.
+- Native DXA extracts one closed finite BCC **½⟨111⟩** loop, 23 smoothed points,
+  length **103.961820921 Å**, with reciprocal endpoint connectivity. A real
+  Chromium/SwiftShader run executes all five GPU stages without fallback:
+  all 60,229 local/final crystal types and **760,983 tetrahedron labels** match
+  native results. The physical Burgers vector, line length and connectivity
+  also match exactly. This full-stage correctness check uses an explicit
+  512 MiB GPU test budget; production memory limits may select CPU fallback.
+- Production browser checks open the discovered Fe example, verify numeric
+  labels, infer references explicitly and automatically, calculate finite
+  strain for 60,033 bulk atoms, and reuse the same PTM fit. Saved JSON contains
+  reference values rather than estimator diagnostics and replays those values
+  exactly. Manual values survive estimation; partial HCP references stay missing
+  until estimated. Cancellation and reference/source edits reject late fits,
+  including results arriving during the next source's download. Standalone PTM
+  reruns on CPU/GPU preference changes and retains accurate fallback/timing details.
+- A versioned production GPU check with the default 128 MiB budget prepares
+  Fe neighbors on GPU and fits PTM in two shared Wasm Workers. All five complete
+  PTM arrays match the native CPU oracle exactly, including NaN masks, and the
+  same lattice estimate is recovered. Cached GPU strain and an edited reference
+  match all nine CPU fields within **7.451e-9**, with the same NaN mask. The check
+  records one neighbor preparation, one fit and two tensor evaluations; editing
+  the reference retains private CPU and resident GPU fits without another upload.
+- The complete production smoke test passes examples, existing analysis tools,
+  recipes, trajectories, PNG, mobile controls and the 204,800-atom render/pick
+  check. Its first run hit a CDP timeout during concurrent CPU-heavy validation;
+  an isolated rerun passed without a timeout or product change.
+
+Reproduce with `npm test`, `npm run build`, `npm run test:browser`,
+`npm run test:browser:fe-input`, `npm run test:browser:fe-loop` and
+`npm run test:browser:fe-lattice-gpu`.
+GPU results here use a software adapter and do not establish hardware speed.
+
 ## GPU local DXA correspondence
 
 The next DXA stage runs nearest-shell search, local CNA and ordered ideal-bond

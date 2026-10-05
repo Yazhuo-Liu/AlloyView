@@ -4,6 +4,20 @@
 
 For each atom type, choose the element and reference crystal, then set the ideal lattice parameter `a` in Å. Hexagonal references also require `c`. Element presets are editable starting values; numeric LAMMPS type labels do not imply an element.
 
+**Estimate from structure** fills missing values from a robust PTM geometry fit,
+and **Calculate strain** performs this step automatically when a reference is
+missing. Unknown elements remain empty and the legend keeps `Type N` labels.
+Existing values are preserved; references remain fixed across frames and are
+included in configuration export/import. Mixed phases without a clear majority
+or insufficient crystalline geometry require a manual reference.
+
+The estimate measures the current frame's bulk lattice spacing, including its
+bulk strain. Use a known stress-free lattice constant when absolute expansion
+must be measured against an independent reference. Cubic lengths use the median
+volume-equivalent `a`; hexagonal references estimate basal `a` and axial `c`
+separately. Geometry estimation reuses the shared parallel PTM pipeline and its
+compatible cached fit for subsequent strain calculation.
+
 ## Algorithm
 
 The analysis uses PTM neighbor correspondence and restores the absolute ideal lattice scale that the template fit normalizes away. Independent hexagonal `a` and `c` scaling is preserved. The resulting deformation gradient `F` gives

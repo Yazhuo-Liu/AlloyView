@@ -3,11 +3,17 @@ import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/pro
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDocumentation } from './build-docs.mjs';
+import { createExampleCatalog, serializeExampleCatalog } from './example-catalog.mjs';
 
 const projectRoot = resolve(import.meta.dirname, '..');
 
 export async function buildSite(root = projectRoot, out = resolve(root, 'dist')) {
-  const entries = ['src', 'examples', 'styles.css', 'licenses'];
+  const entries = ['src', 'styles.css', 'licenses'];
+  try {
+    await access(resolve(root, 'examples'));
+    entries.push('examples');
+  } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  const exampleManifest = serializeExampleCatalog(await createExampleCatalog(root));
   let includeDocumentation = false;
   try {
     await access(resolve(root, 'docs/site.css'));
@@ -40,6 +46,7 @@ export async function buildSite(root = projectRoot, out = resolve(root, 'dist'))
     }
   }
   for (const entry of [...entries, 'index.html']) await hashEntry(entry);
+  hash.update('examples/manifest.json').update('\0').update(exampleManifest).update('\0');
   const buildId = hash.digest('hex').slice(0, 16);
   const assetPrefix = `./assets/${buildId}/`;
   const runtimeRoot = resolve(out, 'assets', buildId);
@@ -54,6 +61,10 @@ export async function buildSite(root = projectRoot, out = resolve(root, 'dist'))
       await mkdir(resolve(target, '..'), { recursive: true });
       await cp(resolve(root, entry), target, { recursive: true });
     }
+  }
+  for (const destination of [runtimeRoot, out]) {
+    await mkdir(resolve(destination, 'examples'), { recursive: true });
+    await writeFile(resolve(destination, 'examples/manifest.json'), exampleManifest);
   }
   await cp(resolve(root, 'LICENSE'), resolve(out, 'LICENSE'));
   const html = await readFile(resolve(root, 'index.html'), 'utf8');

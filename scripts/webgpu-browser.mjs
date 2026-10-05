@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createExampleCatalog, serializeExampleCatalog } from './example-catalog.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -36,6 +37,18 @@ export async function withWebGpuBrowser(run, { software = true, isolated = false
     if (pathname === '/AlloyView/__gpu_test__.html') {
       response.writeHead(200, { 'Content-Type': 'text/html' });
       response.end('<!doctype html><title>AlloyView WebGPU validation</title>');
+      return;
+    }
+    if (pathname === '/AlloyView/examples/manifest.json') {
+      try {
+        const manifest = serializeExampleCatalog(await createExampleCatalog(root));
+        response.writeHead(200, { 'Content-Type': mime['.json'], 'Cache-Control': 'no-store' });
+        response.end(manifest);
+      } catch (error) {
+        console.error('Example catalog failed:', error.message);
+        response.writeHead(500, { 'Content-Type': 'text/plain' });
+        response.end('Example catalog failed');
+      }
       return;
     }
     const relative = pathname.replace(/^\/AlloyView\//, '');

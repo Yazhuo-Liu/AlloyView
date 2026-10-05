@@ -16,9 +16,11 @@ The viewer supports this workflow:
 5. save the processing and view as a JSON configuration and restore it with the
    matching source files.
 
-The single **Examples** button opens an in-app listing of the bundled
-`examples/` files and the `fixed_end_climb/` sequence folder; examples are not
-split into separate top-bar actions.
+The single **Examples** button opens an in-app listing generated from supported
+structure files and numbered sequence folders under `examples/`. Add a file or
+sequence and rebuild to include it automatically; optional descriptions live in
+`examples/metadata.json`. Development discovers additions when the chooser opens.
+See [Deployment](DEPLOYMENT.md#bundled-examples) for discovery rules and metadata.
 
 Drop a CFG, LAMMPS, XYZ or PDB file anywhere on the page, including the homepage, header
 or controls panel, to open it directly. Dropping multiple files opens a chooser
@@ -289,14 +291,13 @@ controls can remain responsive.
 **Enable GPU acceleration** beside the Light/Dark buttons is on by default.
 It prefers WebGPU for coordination, adaptive/fixed-cutoff CNA,
 manual/Auto central symmetry, displacement, reference-frame strain, RDF,
-local geometric shear, bonds and ideal lattice strain neighbor/reference/tensor
-stages, and DXA nearest-neighbor search, local crystal correspondence and
+local geometric shear, bonds, PTM neighbor preparation and ideal lattice strain
+neighbor/reference/tensor stages, and DXA nearest-neighbor search, local crystal correspondence and
 tetrahedron geometry/elastic-compatibility classification.
 DXA remains a hybrid CPU/GPU pipeline with CPU crystal mapping, periodic
-tessellation, mesh construction and line tracing. Fresh ideal strain prepares
-neighbors on GPU, then fits PTM correspondence with CPU Wasm. Standalone PTM
-remains a CPU calculation. Strain can reuse
-a compatible fit and its GPU upload;
+tessellation, mesh construction and line tracing. PTM and fresh ideal strain
+prepare neighbors on GPU when supported, then fit PTM correspondence with the
+shared CPU Wasm Worker pool. Strain can reuse a compatible fit and its GPU upload;
 editing lattice parameters updates the element-reference table without
 repeating the geometric fit.
 Other analyses keep their existing CPU implementation, and unavailable or
@@ -322,13 +323,25 @@ require a WebGPU renderer sharing the same device; see
 **Ideal lattice reference** calculates per-atom Green–Lagrange elastic strain
 from PTM correspondence. Recognized elements initialize editable phase and
 lattice parameters from ASE reference-state data; hexagonal phases expose
-both `a` and `c`. Numeric/unknown types require selecting an element or entering
-a reference explicitly. **Element defaults** restores presets from the source
-labels. Edit them for your alloy, temperature or model potential. Results include
+both `a` and `c`. For numeric or unknown types, **Estimate from structure** fills
+missing reference values using matched crystal geometry. The first
+**Calculate strain** also estimates missing values automatically. Numeric labels
+stay **Type N**, with the element selector empty; geometry does not identify an
+element. Existing element presets and manually entered values are kept.
+**Element defaults** restores presets from the source labels.
+
+Estimation uses robust bulk lattice lengths from the current frame. Cubic `a`
+is volume-equivalent; hexagonal references have separate basal `a` and axial `c`.
+Mixed phases without a clear majority or too few reliable crystal fits require a
+reference entered manually. Estimates include the frame's bulk strain, so edit
+them for a known stress-free lattice, alloy, temperature or model potential.
+Estimated and manually entered references remain fixed across trajectory frames
+and are saved and restored in configuration JSON. Results include
 shear strain, hydrostatic strain, volume change and six tensor components in the
 local crystal frame. Undefined fits are NaN/gray. This measures strain relative
 to an ideal lattice, not displacement relative to another trajectory frame.
-Changing only the reference constants reuses PTM fits where possible.
+Changing only the reference constants reuses PTM fits where possible. A compatible
+geometry fit produced by estimation is also reused for the strain calculation.
 Unmatched atoms, including an entirely NaN frame, do not trigger warnings.
 
 ## Reference-frame strain and local geometric shear

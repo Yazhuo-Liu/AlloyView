@@ -523,9 +523,12 @@
             <div class="strain-actions">
               <button id="lattice-reset" class="button button-secondary" type="button" disabled>Element defaults</button>
               <button id="run-strain" class="button button-accent" type="button" disabled>Calculate strain</button>
+              <button id="lattice-estimate" class="button button-secondary" type="button" disabled>Estimate from structure</button>
+              <button id="lattice-estimate-cancel" class="text-button" type="button" disabled hidden>Cancel estimation</button>
             </div>
+            <p id="lattice-estimate-status" class="help" role="status" aria-live="polite">Missing references can be estimated from PTM geometry. Existing values are kept. Estimates include the current frame’s bulk strain; edit them to use a known stress-free lattice.</p>
             <p class="help">PTM correspondence gives Green–Lagrange elastic strain relative to the reference crystal, including absolute lattice expansion. Tensor components use local crystal axes.</p>
-            <p id="strain-status" class="help" role="status" aria-live="polite">Unknown numeric atom types need an element or explicit lattice parameters. This is not displacement strain between trajectory frames.</p>
+            <p id="strain-status" class="help" role="status" aria-live="polite">Missing lattice references are estimated from the current structure. Editable references stay fixed across frames. This is not displacement strain between trajectory frames.</p>
           </section>
 
           <section id="tool-reference-strain" class="side-section analysis-section" data-tool-panel="referenceStrain" hidden>

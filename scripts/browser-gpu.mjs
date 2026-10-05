@@ -627,8 +627,9 @@ async function runApplicationSmoke({ evaluate, call }) {
   await evaluate('location.href = new URL("./index.html", location.href).href');
   await waitFor('document.readyState === "complete" && document.getElementById("enable-gpu-computing") && document.getElementById("open-examples")', 'homepage');
   assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'true', 'GPU computation is enabled by default in the application.');
-  await evaluate(`document.getElementById('open-examples').click();
-    [...document.querySelectorAll('.source-option')].find(button => button.textContent.includes('fcc-vacancy.cfg')).click();`);
+  await evaluate(`document.getElementById('open-examples').click()`);
+  await waitFor(`document.getElementById('source-dialog').open && [...document.querySelectorAll('#source-options .source-option')].some(button => !button.disabled && button.textContent.includes('fcc-vacancy.cfg'))`, 'example catalog');
+  await evaluate(`[...document.querySelectorAll('#source-options .source-option')].find(button => !button.disabled && button.textContent.includes('fcc-vacancy.cfg')).click()`);
   await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden && !document.getElementById("run-analysis").disabled', 'FCC vacancy example');
   await evaluate(`(async () => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');

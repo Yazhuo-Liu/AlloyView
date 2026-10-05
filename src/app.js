@@ -15,6 +15,7 @@ import { STRUCTURE_TYPES } from './analysis/cna.js';
 import { PTM_TYPES } from './analysis/ptm.js';
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
 import { ELEMENT_LATTICES, STRAIN_STRUCTURES, referenceForElement, validateReferences } from './analysis/lattice.js';
+import { estimateLatticeReferences } from './analysis/lattice-estimate.js';
 import { clearAnalysisResults, replaceAnalysisProperty } from './analysis/results.js';
 import {
   catalogLocalSources,
@@ -64,7 +65,8 @@ const elements = Object.fromEntries([
   'csp-neighbors', 'csp-auto-result', 'csp-help', 'run-csp', 'csp-state', 'csp-status', 'metric-cna', 'metric-csp',
   'ptm-rmsd', 'run-ptm', 'ptm-state', 'ptm-status', 'metric-ptm',
   'cancel-analysis', 'cancel-cna', 'cancel-csp', 'cancel-ptm', 'cancel-strain',
-  'lattice-references', 'lattice-reset', 'run-strain', 'strain-state', 'strain-status', 'metric-strain',
+  'lattice-references', 'lattice-reset', 'lattice-estimate', 'lattice-estimate-cancel', 'lattice-estimate-status',
+  'run-strain', 'strain-state', 'strain-status', 'metric-strain',
   'reset-camera', 'export-png', 'loading', 'loading-text', 'toast', 'interaction-hint',
   'axis-triad', 'axis-arrows', 'axis-x-line', 'axis-y-line', 'axis-z-line', 'axis-x-label', 'axis-y-label', 'axis-z-label',
   'metric-index', 'metric-parse', 'metric-upload', 'metric-analysis', 'metric-fps',
@@ -92,7 +94,7 @@ const ANALYSES = {
   cna: { prefix: 'cna', name: 'structureType', label: 'Crystal structure (CNA)', help: 'Calculate to color by crystal structure. The legend checkboxes control visibility.' },
   centrosymmetry: { prefix: 'csp', name: 'centralSymmetry', label: 'Central symmetry (normalized)', help: 'Runs on the complete structure, including hidden atoms.' },
   ptm: { prefix: 'ptm', name: 'ptmStructureType', label: 'Crystal structure (PTM)', help: 'Results include structure type, RMSD and nearest-neighbor distance.' },
-  strain: { prefix: 'strain', name: 'atomicShearStrain', label: 'Atomic shear strain', help: 'Unknown numeric atom types need an element or explicit lattice parameters. This is not displacement strain between trajectory frames.' },
+  strain: { prefix: 'strain', name: 'atomicShearStrain', label: 'Atomic shear strain', help: 'Missing lattice references are estimated from the current structure. Editable references stay fixed across frames. This is not displacement strain between trajectory frames.' },
 };
 const state = {
   file: null,
@@ -144,6 +146,9 @@ let loadingOwner = null;
 let sourceOpenRequest = 0;
 let sourceFetchController = null;
 let sourceLoadingOwner = null;
+let exampleCatalog = null;
+let exampleCatalogPromise = null;
+let latticeEstimateRequest = 0;
 let renderer;
 let atomEyeTools;
 let dxaTools;
@@ -383,6 +388,7 @@ dxaTools = initializeDxaTools({
 });
 
 const bccLogo = initializeBccLogo(elements['empty-state']);
+void loadExampleCatalog().catch(() => {});
 
 elements['open-local'].addEventListener('click', showLocalPicker);
 elements['empty-open'].addEventListener('click', showLocalPicker);
@@ -474,9 +480,18 @@ for (const kind of Object.keys(state.analysis)) {
 elements['ptm-rmsd'].addEventListener('change', updatePtmSettings);
 for (const checkbox of document.querySelectorAll('[data-ptm-template]')) checkbox.addEventListener('change', updatePtmSettings);
 elements['lattice-reset'].addEventListener('click', () => {
+  cancelLatticeEstimation();
   state.references = state.references.map((reference, type) => referenceForElement(reference.element || state.frame.typeLabels[type]));
   renderLatticeReferences();
   if (state.analysis.strain.enabled) runStructureAnalysis('strain');
+});
+elements['lattice-estimate'].addEventListener('click', () => {
+  interruptConfigurationRestore('a lattice reference change');
+  void estimateMissingReferences();
+});
+elements['lattice-estimate-cancel'].addEventListener('click', () => {
+  if (state.analysis.strain.enabled && elements['strain-state'].textContent === 'Estimating reference…') cancelAnalysis('strain');
+  else cancelLatticeEstimation('Estimation cancelled.');
 });
 elements['cna-mode'].addEventListener('change', () => {
   updateCnaMethodUi();
@@ -560,6 +575,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 function beginSourceOpen() {
+  cancelLatticeEstimation();
   replicationController?.abort();
   replicationRequest++;
   cpuPrefetch.cancel();
@@ -848,34 +864,44 @@ function showExampleChooser() {
   elements['source-dialog-kicker'].textContent = 'EXAMPLES';
   elements['source-dialog-title'].textContent = 'Choose an example';
   elements['source-dialog-summary'].textContent = 'Files and folders bundled under examples/.';
+  if (exampleCatalog) renderExampleCatalog(exampleCatalog);
+  else {
+    elements['source-options'].replaceChildren();
+    elements['source-dialog-summary'].textContent = 'Loading bundled examples…';
+  }
+  void loadExampleCatalog({ refresh: true }).then(catalog => {
+    if (elements['source-dialog'].open && elements['source-dialog-kicker'].textContent === 'EXAMPLES') renderExampleCatalog(catalog);
+  }).catch(error => {
+    if (!elements['source-dialog'].open || elements['source-dialog-kicker'].textContent !== 'EXAMPLES') return;
+    elements['source-dialog-summary'].textContent = error.message;
+    if (!exampleCatalog) elements['source-options'].replaceChildren(exampleOption('Retry loading examples', 'Retry', '', showExampleChooser));
+  });
+  elements['source-dialog'].showModal();
+}
+
+function loadExampleCatalog({ refresh = false } = {}) {
+  if (exampleCatalog && !refresh) return Promise.resolve(exampleCatalog);
+  if (exampleCatalogPromise) return exampleCatalogPromise;
+  exampleCatalogPromise = fetch(new URL('../examples/manifest.json', import.meta.url), { cache: 'no-cache' }).then(async response => {
+    if (!response.ok) throw new Error(`Example list request failed: HTTP ${response.status}`);
+    const catalog = await response.json();
+    if (catalog.version !== 1 || !Array.isArray(catalog.examples)) throw new Error('Invalid example list.');
+    exampleCatalog = catalog;
+    return catalog;
+  }).finally(() => { exampleCatalogPromise = null; });
+  return exampleCatalogPromise;
+}
+
+function renderExampleCatalog(catalog) {
+  elements['source-dialog-summary'].textContent = catalog.examples.length
+    ? 'Files and folders bundled under examples/.' : 'No supported structure files are bundled under examples/.';
   const fragment = document.createDocumentFragment();
-  fragment.append(sourceListHeading('examples/', '4 items'));
-  fragment.append(exampleOption(
-    'examples/fixed_end_climb/',
-    'Folder',
-    '40 numbered CFG files · NEB sequence',
-    loadNebExample,
-  ));
-  fragment.append(exampleOption(
-    'examples/fcc-vacancy.cfg',
-    'CFG',
-    'FCC crystal with one vacancy',
-    () => loadExample('./examples/fcc-vacancy.cfg', 'fcc-vacancy.cfg'),
-  ));
-  fragment.append(exampleOption(
-    'examples/bcc-trajectory.dump',
-    'LAMMPS',
-    'Multi-frame BCC text trajectory',
-    () => loadExample('./examples/bcc-trajectory.dump', 'bcc-trajectory.dump'),
-  ));
-  fragment.append(exampleOption(
-    'examples/NiGB_minimized.cfg',
-    'CFG',
-    'Nickel grain boundary · 129,904 atoms · CPU/GPU benchmark',
-    () => loadExample('./examples/NiGB_minimized.cfg', 'NiGB_minimized.cfg'),
+  fragment.append(sourceListHeading('examples/', `${catalog.examples.length} items`));
+  for (const entry of catalog.examples) fragment.append(exampleOption(
+    entry.label, entry.kind === 'sequence' ? 'Folder' : sourceFormatLabel(entry.format),
+    entry.detail, () => loadCatalogExample(entry),
   ));
   elements['source-options'].replaceChildren(fragment);
-  elements['source-dialog'].showModal();
 }
 
 function exampleOption(labelText, kindLabel, detailText, action) {
@@ -895,47 +921,20 @@ function fileEntries(files) {
   }));
 }
 
-async function loadExample(url, name) {
+async function loadCatalogExample(entry) {
   const request = beginSourceOpen();
   const controller = new AbortController();
   sourceFetchController = controller;
   try {
     setLoading(true, 'Loading example…');
-    const response = await fetch(new URL(`../${url}`, import.meta.url), { signal: controller.signal });
-    if (!response.ok) throw new Error(`Example request failed: HTTP ${response.status}`);
-    const blob = await response.blob();
-    if (request !== sourceOpenRequest) return;
-    await loadFiles([new File([blob], name, { type: 'text/plain' })]);
-  } catch (error) {
-    if (request !== sourceOpenRequest) return;
-    setLoading(false);
-    elements['close-file'].hidden = !state.frame;
-    showToast(error.message);
-  } finally {
-    if (sourceFetchController === controller) sourceFetchController = null;
-    finishSourceOpen(request);
-  }
-}
-
-async function loadNebExample() {
-  const request = beginSourceOpen();
-  const controller = new AbortController();
-  sourceFetchController = controller;
-  try {
-    setLoading(true, 'Loading NEB example images…');
-    const files = await Promise.all(Array.from({ length: 40 }, async (_, index) => {
-      const name = `replica.${index}.cfg`;
-      const response = await fetch(new URL(`../examples/fixed_end_climb/${name}`, import.meta.url), { signal: controller.signal });
-      if (!response.ok) throw new Error(`NEB example request failed for ${name}: HTTP ${response.status}`);
-      return new File([await response.blob()], name, { type: 'text/plain' });
+    const files = await Promise.all(entry.files.map(async file => {
+      const response = await fetch(new URL(file.url, import.meta.url), { signal: controller.signal });
+      if (!response.ok) throw new Error(`Example request failed for ${file.name}: HTTP ${response.status}`);
+      return new File([await response.blob()], file.name, { type: 'text/plain' });
     }));
     if (request !== sourceOpenRequest) return;
-    await loadFiles(files, {
-      kind: 'sequence',
-      detected: true,
-      label: 'examples/fixed_end_climb/',
-      format: 'cfg',
-    });
+    await loadFiles(files, entry.kind === 'sequence'
+      ? { kind: 'sequence', detected: true, label: entry.label, format: entry.format } : null);
   } catch (error) {
     if (request !== sourceOpenRequest) return;
     setLoading(false);
@@ -1094,6 +1093,7 @@ function sourceFormatLabel(format) {
 async function showFrame(index) {
   if (sourceLoadingOwner !== null) return false;
   if (!Number.isInteger(index) || index < 0 || index >= state.frameCount) return false;
+  if (index !== state.frameIndex) cancelLatticeEstimation();
   const interruptedReplication = Boolean(replicationController);
   if (interruptedReplication) {
     replicationController.abort();
@@ -1565,6 +1565,7 @@ function paletteForCurrentMode() {
 }
 
 function abortAnalysisJobs() {
+  cancelLatticeEstimation();
   atomEyeTools?.abortJobs();
   dxaTools?.abortJobs();
   for (const controller of analysisControllers.values()) controller.abort();
@@ -1579,6 +1580,7 @@ function syncCancelButton(kind) {
 }
 
 function cancelAnalysis(kind) {
+  if (kind === 'strain') cancelLatticeEstimation();
   atomEyeTools?.cancelVectorDependency?.(kind);
   const analysis = state.analysis[kind];
   // Invalidate results immediately, including work that has already completed
@@ -1672,6 +1674,115 @@ function updatePtmSettings() {
   if (state.analysis.strain.enabled) runStructureAnalysis('strain');
 }
 
+const LATTICE_ESTIMATE_HELP = 'Missing references can be estimated from PTM geometry. Existing values are kept. Estimates include the current frame’s bulk strain; edit them to use a known stress-free lattice.';
+
+function missingReferenceTypes(frame = state.frame) {
+  if (!frame) return [];
+  return [...new Set(frame.types)].filter(type => {
+    const reference = state.references[type];
+    return !reference || !Number.isFinite(reference.a)
+      || ([2, 7].includes(reference.structure) && !Number.isFinite(reference.c));
+  });
+}
+
+function compatiblePtm(frame, flags, rmsdCutoff) {
+  if (!frame.ptm) return null;
+  try {
+    const cached = JSON.parse(frame.ptm.key);
+    return cached.rmsdCutoff === rmsdCutoff && (cached.flags & flags) === flags ? cached : null;
+  } catch { return null; }
+}
+
+function cancelLatticeEstimation(message = LATTICE_ESTIMATE_HELP) {
+  latticeEstimateRequest += 1;
+  analysisControllers.get('lattice-reference')?.abort();
+  analysisControllers.delete('lattice-reference');
+  elements['lattice-estimate'].disabled = !state.frame || sourceLoadingOwner !== null;
+  elements['lattice-estimate-cancel'].disabled = true;
+  elements['lattice-estimate-cancel'].hidden = true;
+  elements['lattice-estimate-status'].textContent = message;
+}
+
+async function estimateMissingReferences({ frame = state.frame, forStrain = false } = {}) {
+  if (!frame) return false;
+  const missing = missingReferenceTypes(frame);
+  if (!missing.length) {
+    elements['lattice-estimate-status'].textContent = 'Existing reference values kept. Clear a lattice value to estimate it from this structure.';
+    return true;
+  }
+  cancelLatticeEstimation();
+  const request = latticeEstimateRequest;
+  const sourceVersion = state.sourceVersion;
+  const controller = new AbortController();
+  analysisControllers.set('lattice-reference', controller);
+  const isCurrent = () => request === latticeEstimateRequest && !controller.signal.aborted
+    && frame === state.frame && sourceVersion === state.sourceVersion;
+  elements['lattice-estimate'].disabled = true;
+  elements['lattice-estimate-cancel'].disabled = false;
+  elements['lattice-estimate-cancel'].hidden = false;
+  const progressText = text => {
+    if (!isCurrent()) return;
+    elements['lattice-estimate-status'].textContent = text;
+    if (forStrain) elements['strain-status'].textContent = text;
+  };
+  const parameters = { flags: 127, rmsdCutoff: .1 };
+  try {
+    if (!compatiblePtm(frame, parameters.flags, parameters.rmsdCutoff)) {
+      progressText('Identifying reference crystals and fitting their lattice geometry…');
+      const result = await analysisPool.analyze(frame, { kind: 'ptm', ...parameters }, {
+        frameIndex: state.frameIndex, signal: controller.signal,
+        onProgress: progress => progressText(analysisProgressText(progress, 'ptm')),
+      });
+      if (!isCurrent()) return false;
+      storePtmResult(frame, result, parameters, false);
+      reassessFrameCache(frame);
+    }
+    const estimates = await estimateLatticeReferences(frame, frame.ptm, {
+      signal: controller.signal,
+      onProgress: (completed, total) => progressText(`Estimating lattice references… ${formatInteger(completed)} / ${formatInteger(total)}`),
+    });
+    if (!isCurrent()) return false;
+    const details = [];
+    for (const type of missing) {
+      const estimate = estimates[type];
+      const reference = state.references[type] ?? referenceForElement(frame.typeLabels[type]);
+      const label = frame.typeLabels[type];
+      if (estimate?.status !== 'estimated') {
+        details.push(`${label}: ${estimate?.status === 'ambiguous' ? 'mixed crystal phases; choose a reference manually' : 'no reliable crystal reference; enter lattice values manually'}`);
+        continue;
+      }
+      if (!Number.isFinite(reference.a)) {
+        reference.structure = estimate.structure;
+        reference.a = estimate.a;
+        if (estimate.c !== undefined && !Number.isFinite(reference.c)) reference.c = estimate.c;
+      } else if (reference.structure === estimate.structure && [2, 7].includes(reference.structure)
+          && !Number.isFinite(reference.c)) reference.c = estimate.c;
+      else {
+        details.push(`${label}: detected ${PTM_TYPES.find(item => item.id === estimate.structure).label}; selected reference kept, enter its missing values manually`);
+        continue;
+      }
+      state.references[type] = reference;
+      details.push(`${label}: ${PTM_TYPES.find(item => item.id === reference.structure).label}, a = ${reference.a.toFixed(6)} Å${[2, 7].includes(reference.structure) && Number.isFinite(reference.c) ? `, c = ${reference.c.toFixed(6)} Å` : ''}`);
+    }
+    renderLatticeReferences(frame);
+    elements['lattice-estimate-status'].textContent = `${details.join('; ')}. Estimated from the current frame; existing values kept.`;
+    if (!forStrain && state.analysis.strain.enabled) void runStructureAnalysis('strain');
+    return true;
+  } catch (error) {
+    if (!isCurrent() || error.name === 'AbortError') return false;
+    progressText(error.message);
+    if (!forStrain) showToast(error.message);
+    return false;
+  } finally {
+    if (request === latticeEstimateRequest) {
+      analysisControllers.delete('lattice-reference');
+      elements['lattice-estimate'].disabled = !state.frame || sourceLoadingOwner !== null;
+      elements['lattice-estimate-cancel'].disabled = true;
+      elements['lattice-estimate-cancel'].hidden = true;
+    }
+  }
+}
+
 function renderLatticeReferences(frame = state.frame) {
   if (!frame) return;
   if (state.referenceLabels.join('\0') !== frame.typeLabels.join('\0')) {
@@ -1707,6 +1818,7 @@ function renderLatticeReferences(frame = state.frame) {
       input.placeholder = 'Enter reference';
       input.dataset[`lattice${axis.toUpperCase()}`] = String(type);
       input.setAttribute('aria-label', `Reference ${axis} in angstroms for ${label}`);
+      input.addEventListener('input', () => cancelLatticeEstimation());
       input.addEventListener('change', () => {
         reference[axis] = input.valueAsNumber;
         if (state.analysis.strain.enabled) runStructureAnalysis('strain');
@@ -1716,15 +1828,18 @@ function renderLatticeReferences(frame = state.frame) {
     const a = number('a'), c = number('c');
     const cField = field('c (Å)', c);
     cField.hidden = ![2, 7].includes(reference.structure);
-    row.append(field(`Type ${label} · Element`, element), field('Reference crystal', structure), field('a (Å)', a), cField);
+    row.append(field(`${label} · Element`, element), field('Reference crystal', structure), field('a (Å)', a), cField);
     element.addEventListener('change', () => {
+      cancelLatticeEstimation();
       state.references[type] = referenceForElement(element.value);
       renderLatticeReferences(frame);
       if (state.analysis.strain.enabled) runStructureAnalysis('strain');
     });
     structure.addEventListener('change', () => {
+      cancelLatticeEstimation();
       reference.structure = Number(structure.value);
-      if ([2, 7].includes(reference.structure) && !Number.isFinite(reference.c)) {
+      if ([2, 7].includes(reference.structure) && !Number.isFinite(reference.c)
+          && Number.isFinite(reference.a) && reference.a > 0) {
         reference.c = reference.a * Math.sqrt(8 / 3);
         c.value = Number.isFinite(reference.c) ? String(reference.c) : '';
       }
@@ -1741,9 +1856,13 @@ function storePtmResult(frame, result, parameters, expose = true) {
     structures: result.structures, rmsd: result.rmsd, scales: result.scales,
     deformation: result.deformation, distances: result.distances };
   if (!expose) return;
-  const metadata = { analysisKind: 'ptm', analysisMs: result.ptmElapsedMs ?? result.elapsedMs,
-    analysisEngine: result.ptmBackend === 'cpu' ? result.engine.split('+')[0] : result.engine,
-    analysisFallbackReason: result.ptmBackend ? undefined : result.fallbackReason, analysisKey: frame.ptm.key, unit: '' };
+  const fromStrain = Boolean(result.atomicShearStrain);
+  const metadata = { analysisKind: 'ptm', analysisMs: fromStrain ? (result.ptmElapsedMs ?? result.elapsedMs) : result.elapsedMs,
+    analysisGpuRequested: result.gpuRequested ?? analysisPool.gpuEnabled,
+    analysisEngine: result.ptmBackend === 'cpu' && fromStrain
+      ? (result.ptmEngine ?? result.engine.split('+')[0]) : result.engine,
+    analysisFallbackReason: fromStrain ? result.neighborFallbackReason : result.fallbackReason,
+    analysisKey: frame.ptm.key, unit: '' };
   const properties = [
     { ...metadata, name: 'ptmStructureType', displayName: 'Crystal structure (PTM)', data: result.structures, categories: PTM_TYPES },
     { ...metadata, name: 'ptmRmsd', displayName: 'PTM RMSD (best fit)', data: result.rmsd },
@@ -1757,6 +1876,8 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
   if (!frame) return;
   const analysis = state.analysis[kind];
   const { prefix, name, label } = ANALYSES[kind];
+  const invocation = ++analysis.request;
+  analysisControllers.get(kind)?.abort();
   let parameters = analysis.parameters;
   try {
     if (!automatic) {
@@ -1766,10 +1887,28 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       else parameters = ptmParameters();
     }
     if (kind === 'strain') {
+      if (missingReferenceTypes(frame).length) {
+        analysis.enabled = true;
+        analysis.parameters = parameters;
+        toolPanels.setToolEnabled(kind, true, { reveal: !automatic });
+        elements['strain-state'].textContent = 'Estimating reference…';
+        elements['strain-state'].classList.remove('ready');
+        elements['run-strain'].disabled = true;
+        syncCancelButton(kind);
+        const estimated = await estimateMissingReferences({ frame, forStrain: true });
+        if (frame !== state.frame || analysis !== state.analysis.strain || invocation !== analysis.request) return;
+        if (!estimated) {
+          elements['strain-state'].textContent = 'Not calculated';
+          elements['run-strain'].disabled = false;
+          return;
+        }
+      }
       parameters = { ...parameters, references: state.references.map(reference => ({ ...reference })) };
       validateReferences(parameters.references, frame.types);
       // Always include the templates needed by the selected reference phases.
       parameters.flags |= parameters.references.reduce((mask, reference) => mask | (1 << (reference.structure - 1)), 0);
+      const fitted = compatiblePtm(frame, parameters.flags, parameters.rmsdCutoff);
+      if (fitted) parameters.flags = fitted.flags;
     }
     if (parameters.mode === 'fixed' && (!Number.isFinite(parameters.cutoff) || parameters.cutoff <= 0)) {
       throw new Error('CNA cutoff must be greater than zero.');
@@ -1818,7 +1957,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     elements[`run-${prefix}`].disabled = false;
   };
   const cached = frame.properties.find(property => property.name === name && property.analysisKey === key
-    && (!['strain', 'cna', 'centrosymmetry'].includes(kind) || Boolean(property.analysisGpuRequested) === gpuRequested));
+    && (!['strain', 'cna', 'centrosymmetry', 'ptm'].includes(kind) || Boolean(property.analysisGpuRequested) === gpuRequested));
   if (cached) {
     ready(cached); refreshColorOptions(); applyColors();
     analysisControllers.delete(kind);
@@ -2483,12 +2622,14 @@ function setControlsEnabled(enabled) {
     'background', 'show-axes', 'show-cell', 'png-background', 'png-legend', 'png-axes',
     'slice-axis', 'slice-position', 'cutoff', 'run-analysis',
     'cna-mode', 'cna-cutoff', 'run-cna', 'csp-neighbors', 'run-csp',
-    'ptm-rmsd', 'run-ptm', 'lattice-reset', 'run-strain',
+    'ptm-rmsd', 'run-ptm', 'lattice-reset', 'lattice-estimate', 'run-strain',
     'apply-replicate', 'reset-replicate', 'replicate-atoms',
   ]) {
     elements[id].disabled = !enabled;
   }
   for (const button of document.querySelectorAll('[data-view]')) button.disabled = !enabled;
+  elements['lattice-estimate'].disabled = !enabled || analysisControllers.has('lattice-reference');
+  elements['lattice-estimate-cancel'].disabled = !enabled || !analysisControllers.has('lattice-reference');
   for (const input of document.querySelectorAll('[data-ptm-template], #lattice-references input, #lattice-references select')) input.disabled = !enabled;
   for (const button of document.querySelectorAll('[data-background]')) button.disabled = !enabled;
   for (const kind of Object.keys(state.analysis)) {
@@ -2614,6 +2755,7 @@ async function importConfiguration() {
 }
 
 async function restoreConfiguration(config) {
+  cancelLatticeEstimation();
   replicationController?.abort();
   replicationRequest++;
   const request = configurationRequest, sourceVersion = state.sourceVersion, sourceRequest = sourceOpenRequest;

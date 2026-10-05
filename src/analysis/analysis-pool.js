@@ -149,6 +149,9 @@ export class AnalysisPool {
     if (signal?.aborted) throw abortError();
     const analysisStartedAt = performance.now();
     const gpuRequested = this.gpuEnabled;
+    if (gpuRequested && parameters.kind === 'ptm') {
+      return this.analyzePtmWithGpu(frame, parameters, { onProgress, signal, frameIndex });
+    }
     if (gpuRequested && parameters.kind === 'strain' && this.gpuBackend.supports('strain')) {
       return this.analyzeStrainWithGpu(frame, parameters, { onProgress, signal, frameIndex });
     }
@@ -172,6 +175,55 @@ export class AnalysisPool {
       ...(fallbackReason ? { fallbackReason } : {}) };
   }
 
+  /** GPU prepares geometry; the resident CPU pool remains the PTM fitter. */
+  async analyzePtmWithGpu(frame, parameters, { onProgress, signal, frameIndex }) {
+    const startedAt = performance.now(), atomCount = frame.fractional.length / 3;
+    if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
+    validatePtmParameters(parameters);
+    const suppliedNeighbors = parameters.preparedNeighbors !== undefined;
+    const prepareNeighbors = !suppliedNeighbors && this.gpuBackend.supports('ptmNeighbors');
+    const stages = prepareNeighbors ? 2 : 1;
+    const progress = (backend, stage, offset = 0) => update => onProgress({ ...update, backend, stage,
+      completedAtoms: offset + (update.completedAtoms ?? 0), totalAtoms: atomCount * stages });
+    let neighbors, preparedNeighbors = parameters.preparedNeighbors, neighborFallbackReason, neighborElapsedMs = 0;
+    if (prepareNeighbors) {
+      ({ neighbors, preparedNeighbors, neighborFallbackReason, neighborElapsedMs } = await this.preparePtmNeighborsWithGpu(
+        frame, parameters, { signal, frameIndex, onProgress: progress('gpu', 'ptm-neighbors') }));
+    } else if (!suppliedNeighbors) {
+      neighborFallbackReason = 'The ptm analysis uses CPU workers; no GPU kernel is available for PTM neighbors.';
+    }
+    const ptm = await this.analyzeCPU(frame, { ...parameters, ...(preparedNeighbors ? { preparedNeighbors } : {}) },
+      { signal, onProgress: update => progress('cpu', 'ptm-fit', prepareNeighbors ? atomCount : 0)({ ...update,
+        ...(neighborFallbackReason ? { fallbackReason: neighborFallbackReason, neighborFallbackReason } : {}) }) });
+    if (signal?.aborted || this.closed) throw abortError();
+    return { ...ptm, backend: neighbors ? 'hybrid' : 'cpu', gpuRequested: true, ptmBackend: 'cpu', ptmEngine: ptm.engine,
+      neighborBackend: neighbors ? 'gpu' : suppliedNeighbors ? 'prepared' : 'cpu', neighborElapsedMs,
+      ptmWorkerCount: ptm.workerCount, ptmElapsedMs: ptm.elapsedMs, elapsedMs: performance.now() - startedAt,
+      engine: [neighbors ? neighbors.engine ?? 'webgpu-ptm-neighbors' : null, ptm.engine].filter(Boolean).join('+'),
+      ...(neighborFallbackReason ? { neighborFallbackReason, fallbackReason: neighborFallbackReason } : {}) };
+  }
+
+  /** Schema preflight stays on the main thread; value validation stays in the
+   * fitting workers. Strip GPU result metadata without copying its tables.
+   */
+  async preparePtmNeighborsWithGpu(frame, parameters, { onProgress, signal, frameIndex }) {
+    const startedAt = performance.now();
+    let neighbors, neighborFallbackReason;
+    try {
+      neighbors = await this.gpuBackend.analyze(frame, { kind: 'ptmNeighbors' }, { signal, frameIndex, onProgress });
+      if (signal?.aborted || this.closed) throw abortError();
+      validatePreparedPtmNeighbors(frame, neighbors, { flags: parameters.flags, validateValues: false });
+    } catch (error) {
+      if (error.name === 'AbortError' || signal?.aborted || this.closed) throw abortError();
+      neighborFallbackReason = `GPU PTM neighbors: ${error.message || 'Preparation failed.'}`;
+      neighbors = null;
+    }
+    const preparedNeighbors = neighbors ? Object.fromEntries([
+      ...PTM_NEIGHBOR_FIELDS, 'maxNeighbors', 'startAtom', 'endAtom', 'sourceAtomCount',
+    ].filter(field => neighbors[field] !== undefined).map(field => [field, neighbors[field]])) : null;
+    return { neighbors, preparedNeighbors, neighborFallbackReason, neighborElapsedMs: performance.now() - startedAt };
+  }
+
   /** Prepare exact neighbors on GPU, fit PTM topology once in CPU workers,
    * then apply the ideal reference and elastic tensor on GPU. Cached fits skip
    * both geometry stages; failed GPU stages retain independent CPU fallbacks.
@@ -186,24 +238,11 @@ export class AnalysisPool {
     const stages = fresh ? prepareNeighbors ? 3 : 2 : 1;
     const progress = (backend, stage, offset = 0) => update => onProgress({ ...update, backend, stage,
       completedAtoms: offset + (update.completedAtoms ?? 0), totalAtoms: atomCount * stages });
-    let neighbors, neighborFallbackReason, neighborElapsedMs = 0;
+    let neighbors, preparedNeighbors, neighborFallbackReason, neighborElapsedMs = 0;
     if (prepareNeighbors) {
-      const started = performance.now();
-      try {
-        neighbors = await this.gpuBackend.analyze(frame, { kind: 'ptmNeighbors' },
-          { signal, frameIndex, onProgress: progress('gpu', 'ptm-neighbors') });
-        if (signal?.aborted || this.closed) throw abortError();
-        validatePreparedPtmNeighbors(frame, neighbors, { flags: parameters.flags, validateValues: false });
-      } catch (error) {
-        if (error.name === 'AbortError' || signal?.aborted || this.closed) throw abortError();
-        neighborFallbackReason = `GPU PTM neighbors: ${error.message || 'Preparation failed.'}`;
-        neighbors = null;
-      }
-      neighborElapsedMs = performance.now() - started;
+      ({ neighbors, preparedNeighbors, neighborFallbackReason, neighborElapsedMs } = await this.preparePtmNeighborsWithGpu(
+        frame, parameters, { signal, frameIndex, onProgress: progress('gpu', 'ptm-neighbors') }));
     }
-    const preparedNeighbors = neighbors ? Object.fromEntries([
-      ...PTM_NEIGHBOR_FIELDS, 'maxNeighbors', 'startAtom', 'endAtom', 'sourceAtomCount',
-    ].filter(field => neighbors[field] !== undefined).map(field => [field, neighbors[field]])) : null;
     const ptm = fresh ? await this.analyzeCPU(frame, { ...parameters, kind: 'ptm',
       ...(preparedNeighbors ? { preparedNeighbors } : {}) }, { signal,
       onProgress: progress('cpu', 'ptm-fit', prepareNeighbors ? atomCount : 0) }) : null;
@@ -226,7 +265,7 @@ export class AnalysisPool {
     return { ...(ptm ?? {}), ...tensor, backend: tensorBackend, gpuRequested: true, tensorBackend,
       referenceBackend: tensor.referenceBackend ?? tensorBackend,
       engine: [neighbors ? neighbors.engine ?? 'webgpu-ptm-neighbors' : null, ptm?.engine, tensor.engine].filter(Boolean).join('+'),
-      ...(ptm ? { ptmBackend: 'cpu', ptmWorkerCount: ptm.workerCount, ptmElapsedMs: ptm.elapsedMs,
+      ...(ptm ? { ptmBackend: 'cpu', ptmEngine: ptm.engine, ptmWorkerCount: ptm.workerCount, ptmElapsedMs: ptm.elapsedMs,
         neighborBackend: neighbors ? 'gpu' : 'cpu', neighborElapsedMs,
         ...(neighborFallbackReason ? { neighborFallbackReason } : {}) } : {}),
       tensorElapsedMs: performance.now() - tensorStartedAt, elapsedMs: performance.now() - startedAt,

@@ -19,7 +19,7 @@ const chromePath = process.env.CHROME_PATH ?? [
 ].find(existsSync);
 assert.ok(chromePath, 'Install Chrome/Chromium or set CHROME_PATH.');
 assert.ok(existsSync(resolve(dist, 'index.html')), 'Run npm run build first.');
-const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.cfg': 'text/plain', '.dump': 'text/plain', '.wasm': 'application/wasm', '.mjs': 'text/javascript' };
+const mime = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.cfg': 'text/plain', '.dump': 'text/plain', '.wasm': 'application/wasm', '.mjs': 'text/javascript' };
 const requests = [];
 const server = createServer(async (request, response) => {
   const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
@@ -94,6 +94,14 @@ try {
       await delay(50);
     }
     throw new Error(`Timed out waiting for ${label}: ${await evaluate('document.getElementById("toast")?.textContent')} ${JSON.stringify(pageErrors)}`);
+  }
+  async function openExampleChooser(expectedLabel = 'fcc-vacancy.cfg') {
+    await evaluate(`document.getElementById('open-examples').click()`);
+    await waitFor(`document.getElementById('source-dialog').open && [...document.querySelectorAll('#source-options .source-option')].some(button => !button.disabled && button.textContent.includes(${JSON.stringify(expectedLabel)}))`, 'example catalog');
+  }
+  async function chooseExample(name) {
+    await openExampleChooser(name);
+    await evaluate(`[...document.querySelectorAll('#source-options .source-option')].find(button => !button.disabled && button.textContent.includes(${JSON.stringify(name)})).click()`);
   }
   async function showTool(name) {
     await evaluate(`(() => {
@@ -283,7 +291,7 @@ try {
     assert.equal(await evaluate('document.querySelector(".empty-logo-fallback").hidden'), true);
     await checkTextContrast(['.empty-state h1', '.empty-copy', '.format-note', '.privacy-badge small', '.field > span:first-child', '.help', '.selection-empty']);
     await checkTextContrast(['.view-presets > button', '.projection-switch button', '.viewport-toggle', '#coordinate-mode', '#cutoff', '#run-analysis', '#cna-mode', '#cna-cutoff', '#csp-neighbors', '#run-cna', '#run-csp', '#ptm-rmsd', '#run-ptm', '#run-strain', '#lattice-reset', '.analysis-state-controls .text-button', '.display-options label', '#empty-open', '#enable-gpu-computing'], 4.5);
-    await evaluate(`document.getElementById('open-examples').click()`);
+    await openExampleChooser();
     await checkTextContrast(['.source-dialog-summary', '.source-option small']);
     await checkTextContrast(['.source-option-kind'], 4.5);
     await evaluate(`document.getElementById('source-dialog-close').click()`);
@@ -400,9 +408,8 @@ try {
         window.releaseExampleFetch = async () => resolve(await window.sourceOriginalFetch(url));
       });
     };
-    document.getElementById('open-examples').click();
-    [...document.querySelectorAll('.source-option')].find(button => button.textContent.includes('fcc-vacancy.cfg')).click();
   })()`);
+  await chooseExample('fcc-vacancy.cfg');
   await waitFor('Boolean(window.releaseExampleFetch)', 'held example request');
   await evaluate('document.getElementById("close-file").click()');
   assert.equal(await evaluate('window.heldFetchSignal.aborted'), true);
@@ -413,7 +420,7 @@ try {
 
   // Load all bundled sources through the actual Examples UI.
   for (const [name, frames] of [['fcc-vacancy.cfg', 1], ['bcc-trajectory.dump', 2], ['fixed_end_climb/', 40]]) {
-    await evaluate(`document.getElementById('open-examples').click(); [...document.querySelectorAll('.source-option')].find(button => button.textContent.includes(${JSON.stringify(name)})).click();`);
+    await chooseExample(name);
     await waitFor(`document.getElementById('empty-state').hidden && document.getElementById('loading').hidden && document.getElementById('file-name').textContent.includes(${JSON.stringify(name)})`, name);
     assert.equal(await evaluate('Number(document.getElementById("frame-count").textContent)'), frames);
     if (frames > 1) {
@@ -982,7 +989,7 @@ try {
   await evaluate(`(() => { const crystal = document.querySelector('[data-reference-structure]'); crystal.value = '1'; crystal.dispatchEvent(new Event('change')); })()`);
   await waitFor('document.getElementById("strain-state").textContent === "Calculated"', 'reference recovery');
   // A new source clears filters; enabled analysis follows trajectory frames.
-  await evaluate(`document.getElementById('open-examples').click(); [...document.querySelectorAll('.source-option')].find(b => b.textContent.includes('bcc-trajectory.dump')).click();`);
+  await chooseExample('bcc-trajectory.dump');
   await waitFor('document.getElementById("file-name").textContent.includes("bcc-trajectory.dump") && document.getElementById("loading").hidden', 'BCC source');
   await evaluate(`document.getElementById('run-cna').click()`);
   await waitFor('document.getElementById("cna-state").textContent === "Calculated"', 'BCC classification');
@@ -1026,8 +1033,8 @@ try {
   assert.equal(await evaluate('document.getElementById("cna-mode").value'), 'adaptive');
   assert.equal(await evaluate('document.getElementById("run-cna").disabled'), false);
   await evaluate('window.restoreAnalysisPool()');
-  // An anonymous numeric species needs an explicit reference, and selecting
-  // an element populates both its crystal phase and editable lattice defaults.
+  // An anonymous numeric species receives a geometric reference from PTM;
+  // selecting an element then supplies its editable material defaults.
   const numericPath = resolve(profile, 'numeric-bcc.dump');
   await writeFile(numericPath, (await readFile(resolve(root, 'examples/bcc-trajectory.dump'), 'utf8'))
     .replaceAll(' type element ', ' type ').replaceAll(' Fe ', ' '));
@@ -1035,8 +1042,10 @@ try {
   await waitFor('document.getElementById("file-name").textContent === "numeric-bcc.dump" && document.getElementById("loading").hidden', 'numeric species source');
   assert.equal(await evaluate('document.querySelector("[data-lattice-a]").value'), '');
   await evaluate(`document.getElementById('run-strain').click()`);
-  await waitFor('document.getElementById("strain-state").textContent === "Failed"', 'missing lattice rejection');
-  assert.ok((await evaluate('document.getElementById("strain-status").textContent')).includes('positive reference lattice'));
+  await waitFor('document.getElementById("strain-state").textContent === "Calculated"', 'automatic numeric species reference');
+  assert.equal(await evaluate('document.querySelector("[data-reference-element]").value'), '');
+  assert.equal(await evaluate('document.querySelector("[data-reference-structure]").value'), '3');
+  assert.ok(Math.abs(await evaluate('document.querySelector("[data-lattice-a]").valueAsNumber') - 3.3) < 1e-5);
   await evaluate(`(() => { const element = document.querySelector('[data-reference-element]'); element.value = 'Fe'; element.dispatchEvent(new Event('change')); document.getElementById('run-ptm').click(); document.getElementById('run-strain').click(); })()`);
   await waitFor('document.getElementById("ptm-state").textContent === "Calculated" && document.getElementById("strain-state").textContent === "Calculated"', 'explicit numeric species reference');
   assert.equal(await evaluate('document.querySelector("[data-lattice-a]").valueAsNumber'), 2.87);
@@ -1781,7 +1790,7 @@ try {
   assert.equal(await evaluate('document.getElementById("toggle-view-controls").getAttribute("aria-expanded")'), 'true');
   assert.notEqual(await evaluate('getComputedStyle(document.getElementById("view-controls")).display'), 'none');
   await evaluate('document.getElementById("toggle-view-controls").click()');
-  await evaluate(`document.getElementById('open-examples').click(); [...document.querySelectorAll('.source-option')].find(button => button.textContent.includes('fcc-vacancy.cfg')).click();`);
+  await chooseExample('fcc-vacancy.cfg');
   await waitFor('document.getElementById("file-name").textContent.includes("fcc-vacancy.cfg") && document.getElementById("loading").hidden', 'phone structure');
   await showTool('cna');
   await evaluate(`(async () => {

@@ -145,7 +145,7 @@ export function parseLammpsFrame(text, sourceName = 'trajectory.dump') {
 
   const propertyNames = columns.filter((name) => !RESERVED_COLUMNS.has(name));
   const ids = new Float64Array(count);
-  const rawTypes = new Int32Array(count);
+  const rawTypes = new Float64Array(count);
   const types = new Uint16Array(count);
   const wrappedValues = wrappedCoordinateSet ? new Float32Array(count * 3) : null;
   const unwrappedValues = unwrappedCoordinateSet ? new Float32Array(count * 3) : null;
@@ -163,8 +163,9 @@ export function parseLammpsFrame(text, sourceName = 'trajectory.dump') {
     if (idSet.has(id)) throw dumpError(`Line ${cursor + 1}: atom ID ${id} is duplicated.`);
     idSet.add(id);
     ids[atom] = id;
-    rawTypes[atom] = integerValue(tokens[columnIndex.get('type')], cursor, 'type');
-    if (rawTypes[atom] <= 0) throw dumpError(`Line ${cursor + 1}: type must be a positive integer.`);
+    const rawType = integerValue(tokens[columnIndex.get('type')], cursor, 'type');
+    if (rawType <= 0) throw dumpError(`Line ${cursor + 1}: type must be a positive integer.`);
+    rawTypes[atom] = rawType;
     if (elements) elements[atom] = tokens[columnIndex.get('element')];
     for (const [coordinateSet, values] of [
       [wrappedCoordinateSet, wrappedValues],

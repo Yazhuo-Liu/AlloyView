@@ -73,7 +73,8 @@ changing IDs, and missing IDs are rejected explicitly.
 Supported:
 
 - `ITEM: TIMESTEP`, `NUMBER OF ATOMS`, `BOX BOUNDS`, and named `ATOMS` blocks;
-- positive numeric `type`, unique integer `id`, optional consistent `element`;
+- positive safe-integer numeric `type`, unique integer `id`, optional consistent
+  `element`;
 - one complete coordinate set: `x/y/z`, `xs/ys/zs`, `xu/yu/zu`, or
   `xsu/ysu/zsu`;
 - optional complete `ix/iy/iz` image flags;
@@ -97,6 +98,12 @@ The filename extension does not select the parser. Files named `.dump`, `.lmp`,
 `.lammpstrj`, or `.lammpstraj` are recognized as LAMMPS trajectories only when
 their content contains native `ITEM: TIMESTEP` dump blocks. One file may contain
 one or many frames.
+
+Without an `element` column, atom types and their legend entries use the original
+numeric identifiers as `Type N` (for example, `Type 1`). AlloyView does not infer
+elements from the filename or interpret type numbers as atomic numbers. An
+explicit `element` column supplies element labels and must be consistent for
+every atom of the same numeric type.
 
 When wrapped columns are present, they define the canonical in-cell positions.
 Otherwise, explicit unwrapped columns are wrapped only on periodic axes to build
