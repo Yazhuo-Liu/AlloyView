@@ -6,7 +6,7 @@ export const DXA_STRUCTURE_PROPERTY = 'dxaStructureType';
 export const DXA_STRUCTURE_LABEL = 'Crystal structure (DXA)';
 // DXA's native lattice IDs differ from CNA/PTM for the diamond classes.
 // Keep this vocabulary tied to the same lattice IDs used by the DXA kernel.
-const structureColors = { 0: [160, 160, 160], 1: [102, 255, 102], 2: [255, 102, 102],
+const structureColors = { 0: [242, 242, 242], 1: [102, 255, 102], 2: [255, 102, 102],
   3: [102, 102, 255], 4: [19, 160, 254], 5: [254, 137, 0] };
 export const DXA_STRUCTURE_TYPES = Object.freeze([
   { id: 0, label: 'Other', description: 'Unresolved local crystal structure' },
