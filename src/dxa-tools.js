@@ -95,6 +95,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     network = null;
     $('dxa-results').hidden = true;
     $('dxa-summary').textContent = '';
+    $('dxa-status').title = '';
     draw();
     onMemoryChange();
   }
@@ -125,6 +126,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     const length = Number(result.totalLength ?? 0), density = Number(result.density ?? 0);
     $('dxa-summary').textContent = `${integer(count)} segments · ${length.toPrecision(5)} Å total length · ${density.toExponential(3)} Å⁻² density`;
     $('dxa-status').textContent = `${result.engine ?? 'CPU / Wasm'} · ${duration(result.elapsedMs ?? 0)}${getGpuEnabled() ? ' · DXA uses the CPU fallback.' : ''}`;
+    $('dxa-status').title = (result.stageTimings ?? []).map(stage => `${stage.phase}: ${duration(stage.elapsedMs)}`).join('\n');
     renderFamilies(); draw(); onMemoryChange();
   }
 
@@ -160,7 +162,8 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
           if (!current() || job.signal.aborted) return;
           const stage = String(progress.phase ?? 'Analyzing').replace(/[-_]/g, ' ');
           const done = progress.completedStages ?? 0, total = progress.totalStages ?? 12;
-          $('dxa-status').textContent = `${stage} · CPU · ${done} / ${total} stages`;
+          const threads = progress.workerCount > 1 ? ` · ${progress.workerCount} threads` : '';
+          $('dxa-status').textContent = `${stage} · CPU${threads} · ${done} / ${total} stages`;
         },
       });
       if (!current() || job.signal.aborted) return false;

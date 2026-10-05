@@ -39,6 +39,8 @@ void requireStage(bool success) {
 
 extern "C" {
 const char* alloy_dxa_last_error() { return lastError.c_str(); }
+void alloy_dxa_set_threads(int count) { configureDxaThreads(count); }
+int alloy_dxa_thread_count() { return dxaThreadCount(); }
 
 // Vectors are column vectors; cell[9..11] is the Cartesian origin. Periodicity
 // is encoded in bits 0, 1 and 2, including for a tilted simulation cell.
@@ -116,6 +118,7 @@ const char* alloy_dxa_analyze(const double* coordinates, int count,
         if (smoothing > 0 || coarsening > 0)
             requireStage(tracer.network()->smoothDislocationLines(smoothing, coarsening, operation));
 
+        alloy_dxa_progress("Serialize dislocation network", 10, 11);
         std::ostringstream out;
         out << std::setprecision(17);
         double totalLength = 0;

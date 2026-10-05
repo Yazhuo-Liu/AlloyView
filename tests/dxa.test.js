@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 import { DXA_DEFAULTS, DXA_FAMILIES, classifyBurgersVector, dxaCartesianCoordinates,
-  estimateDxaMemory, normalizeDxaResult, preflightDxaMemory, splitPeriodicPolyline,
+  dxaWorkerCount, estimateDxaMemory, normalizeDxaResult, preflightDxaMemory, splitPeriodicPolyline,
   validateDxaFrame, validateDxaParameters } from '../src/analysis/dxa.js';
 
 const close = (actual, expected, tolerance = 1e-9) => {
@@ -11,6 +11,18 @@ const close = (actual, expected, tolerance = 1e-9) => {
     `${actual[index]} != ${expected[index]} at ${index}`);
 };
 const cell = createCell({ origin: [4, -3, 7], vectors: [10, 0, 0, 3, 8, 0, 1, 2, 6] });
+
+test('DXA threads require shared memory and isolation, with a bounded hardware budget', () => {
+  const browser = { SharedArrayBuffer, crossOriginIsolated: true, navigator: { hardwareConcurrency: 16 } };
+  assert.equal(dxaWorkerCount(10000, undefined, browser), 6);
+  assert.equal(dxaWorkerCount(10000, 2, browser), 2);
+  assert.equal(dxaWorkerCount(10000, 2, { ...browser, crossOriginIsolated: false }), 1);
+  assert.equal(dxaWorkerCount(10000, 2, { ...browser, SharedArrayBuffer: undefined }), 1);
+  assert.equal(dxaWorkerCount(256, 2, browser), 1);
+  assert.equal(dxaWorkerCount(10000, undefined, { ...browser, navigator: { hardwareConcurrency: 2 } }), 1);
+  assert.equal(dxaWorkerCount(10000, undefined, { process: { versions: { node: '24' } }, SharedArrayBuffer }), 1);
+  for (const request of [0, 7, 2.5, NaN]) assert.throws(() => dxaWorkerCount(10000, request, browser), /worker count/);
+});
 
 test('DXA parameters validate supported phases and native algorithm limits', () => {
   assert.deepEqual(validateDxaParameters(), DXA_DEFAULTS);

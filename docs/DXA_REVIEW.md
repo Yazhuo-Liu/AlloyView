@@ -106,6 +106,135 @@ metadata should identify which stages actually ran on GPU. Benchmark whole
 DXA and its individual stages on physical hardware; accelerating only a small
 local stage does not imply a comparable speedup of the entire algorithm.
 
+## A GPU-resident DXA backend
+
+A complete WebGPU extraction backend is technically possible, but it requires
+new geometry and graph kernels. The current DXA backend is CPU Wasm; enabling
+GPU acceleration does not make any part of that extraction run on the GPU.
+This section is a design proposal, not an implemented backend or a speedup
+claim. CPU Wasm remains the reference and the fallback for unsupported inputs.
+
+Here, GPU-resident extraction means uploading the source coordinates and cell
+once, keeping all large intermediate arrays on one WebGPU device, and reading
+back the final network once. JavaScript still submits command buffers and may
+read small counts, overflow flags and convergence status between dispatches.
+CPU orchestration does not require transferring the tetrahedralization or mesh
+back to the CPU. A workgroup barrier synchronizes only that workgroup; global
+graph updates need separate dispatches with explicit stage boundaries.
+
+Use the existing dedicated GPU worker and `GpuRuntime` device, pipeline cache,
+frame identity and cancellation conventions. GPU buffers belong to their
+creating device: creating a second device for DXA would prevent direct reuse
+of the existing resident position and neighbor-index buffers. DXA needs its
+own workspace reservation; the current scalar-analysis memory estimate does
+not account for tetrahedra, half-edges, periodic images or circuit queues.
+
+### Resident data and dispatch sequence
+
+Replace pointer-linked C++ objects with indexed, structure-of-arrays buffers.
+Keep explicit image offsets for periodic vertices and edges, using the full
+triclinic cell throughout. Storage limits apply to each buffer and binding,
+not only to total VRAM: the current runtime requests at most 256 MiB per
+storage-buffer binding. A large geometry workspace therefore needs a planned
+segmented layout and must also fit the device's binding-count limits.
+
+| Phase | Device-resident output | Parallel work and synchronization |
+| --- | --- | --- |
+| Local crystal correspondence | Ordered atom neighbors, ideal-vector indices, structure IDs and symmetry permutations | Central atoms are independent once the neighbor index is fixed; compact unresolved environments into another GPU pass |
+| Crystal graph | Cluster membership, crystal-frame transformations and inter-cluster transitions | Build compatibility edges, then propagate labels and symmetry relationships over repeated dispatches; reduce orientation data per cluster |
+| Periodic Delaunay | Primary/ghost vertices, tetrahedra and reciprocal cell adjacency | Generate ghost counts and prefix offsets; use a parallel insertion/repair algorithm with conflict ownership and certified geometric predicates |
+| Unique edges and elastic mapping | Deduplicated edge keys, CSR adjacency, ideal vectors and transition indices | Sort/unique edge keys; bounded per-edge path searches after reference-frame transitions are resolved |
+| Interface mesh | Tetrahedron labels, oriented faces, half-edge opposites and component IDs | Independent four-face consistency tests; count/scan/write candidate faces, then construct and validate manifold adjacency |
+| Burgers circuits and tracing | Circuit queues, edge ownership, unwrapped curves and junction records | Search independent candidates/components in parallel; resolve overlapping ownership before committing updates, and merge junctions between rounds |
+| Fixed-network processing | Smoothed/coarsened polylines, family IDs, lengths and density | Ping-pong vertex updates with fixed junction constraints; topology-aware compaction and reductions |
+
+The crystal graph needs more than ordinary connected components: neighbor
+compatibility includes symmetry permutations and changes of reference frame.
+A label-propagation implementation must transport those relationships
+consistently and detect conflicting cycles. Choosing cluster IDs in a different
+order is acceptable; changing physical Burgers vectors or junctions is not.
+
+For edge mapping, the current `CrystalPathFinder` contains mutable search
+workspace, and `ClusterGraph::determineClusterTransition()` creates cached
+transitions during lookup. A parallel implementation first resolves/freezes
+the required transition graph, then gives each edge search independent scratch
+space. Simply parallelizing the existing loop would introduce shared writes.
+
+Circuit search has a similar constraint: the current tracer writes visited
+vertices, claimed edges and shared junction rings. Starting a workgroup at
+every mesh vertex without ownership rules can produce duplicate segments or
+lose junctions. Component-level work is a useful first partition, but a single
+connected grain-boundary interface can remain large. Within it, candidate
+search needs conflict detection, a deterministic commit/retry policy and
+explicit handling of circuits crossing any spatial partition boundary.
+
+### Robust geometry is the main new numerical requirement
+
+Perfect lattices contain many coplanar or cospherical tuples. The existing
+CPU code applies tiny seeded perturbations and uses Geogram's robust
+orientation and in-sphere tests. Rounding coordinates to f32 or increasing an
+epsilon can change the tetrahedralization, the interface and ultimately the
+dislocation network. The shader-emulated IEEE64 distance arithmetic already
+used by other analyses does not supply these predicates or certify topology.
+
+A GPU implementation needs either certified floating-point filters with a
+GPU exact-predicate slow path, or exact predicates throughout. One possible
+slow path evaluates determinant signs using multiword integer arithmetic on
+the original finite IEEE coordinate bits. This requires explicit range and
+capacity checks and reproducible degeneracy handling; it is a substantial
+kernel rather than a cast to a larger shader type. WGSL has no portable native
+f64. Test the numeric contract on different real adapters, including ideal
+crystals, strained cells, extreme aspect ratios and near-degenerate tuples.
+
+If any GPU workspace overflows, a convergence bound is reached, a predicate
+cannot be certified, or the device is lost, discard the partial network and
+restart the whole frame on CPU. This preserves a simple independent backend
+contract and avoids introducing repeated GPU/CPU stage transfers. Report this
+fallback accurately; a run with CPU geometry or CPU tracing is a hybrid run,
+not a fully GPU extraction.
+
+### Readback and rendering
+
+Large intermediate meshes do not need host readback. Prefix-sum/compaction
+passes can leave candidate counts and indirect dispatch arguments on the
+device; where allocation or termination requires host information, copy only
+small control records. Avoid reading every atom's full neighbor table just to
+discover that another shell-search pass is needed. Per-atom labels are an
+optional final output, separate from the compact dislocation network.
+
+AlloyView currently renders atoms and dislocation cylinders with WebGL2.
+WebGL2 cannot bind a WebGPU `GPUBuffer` as a vertex buffer. With this renderer,
+a fully GPU extraction still needs one final network readback followed by a
+WebGL upload. Color/visibility changes can use the cached final network and
+do not require extraction again. Eliminating even this final transfer requires
+a WebGPU rendering path on the same device, plus GPU periodic splitting and
+slice/display-replication support. That is a separate renderer migration, not
+a prerequisite for GPU-resident analysis.
+
+### Order of work and evidence
+
+First measure each existing CPU phase and restore safe per-atom parallelism
+where the deployment permits shared-memory Wasm. The upstream local-structure
+loop already has independent output slots and an atomic maximum-neighbor
+distance; tessellation, cluster construction and tracing have global state.
+Do not run several complete DXA copies and concatenate their results.
+
+For GPU migration, first define/test the full local-correspondence contract,
+then prove robust periodic geometry and its adjacency invariants independently.
+Only after these foundations pass should crystal-graph mapping, interface
+construction and circuit tracing form one resident pipeline. A staged hybrid
+prototype can validate kernels against CPU snapshots, but its measured
+readback/upload costs must be included and its backend labeled honestly.
+
+Validate the final GPU network against CPU Wasm and an independent OVITO
+oracle using known perfect crystals, dislocations, partials, loops, junctions,
+surfaces, triclinic PBC and the physically replicated NiGB example. Check
+physical Burgers vectors, total source length, periodic winding and junction
+conservation rather than requiring identical line IDs or vertex ordering.
+Benchmark cold and warm whole-frame time, phase time, transfer bytes and peak
+workspace on physical GPUs. Software adapters verify execution and output;
+they cannot establish a GPU acceleration factor.
+
 ## AlloyView integration
 
 ### Whole-frame scheduler and memory

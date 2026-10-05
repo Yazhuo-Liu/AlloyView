@@ -11,12 +11,15 @@
     "test": "node --test",
     "test:browser": "node scripts/browser-smoke.mjs",
     "test:browser:dxa": "node scripts/browser-dxa.mjs",
+    "test:browser:dxa-parallel": "node scripts/browser-dxa-parallel.mjs",
     "test:gpu": "node scripts/browser-gpu.mjs",
     "benchmark": "node scripts/benchmark.mjs",
     "benchmark:gpu": "node scripts/benchmark-gpu.mjs",
+    "benchmark:dxa": "node scripts/benchmark-dxa.mjs",
     "build:wasm": "bash wasm/build.sh",
     "build:ptm": "bash wasm/build-ptm.sh",
-    "build:dxa": "bash wasm/build-dxa.sh"
+    "build:dxa": "bash wasm/build-dxa.sh",
+    "build:dxa:threaded": "bash wasm/build-dxa-threaded.sh"
   },
   "engines": {
     "node": ">=20"

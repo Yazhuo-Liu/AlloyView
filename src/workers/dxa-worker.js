@@ -4,10 +4,11 @@ import { calculateDxa } from '../analysis/dxa.js';
 // topology calculation is synchronous, so its client cancels by terminating
 // this Worker instead of queuing an unreadable cancellation message.
 self.addEventListener('message', async ({ data }) => {
-  const { id, frame, parameters, memoryBudgetBytes } = data;
+  const { id, frame, parameters, memoryBudgetBytes, workerCount } = data;
   try {
     const result = await calculateDxa(frame, parameters, {
       memoryBudgetBytes,
+      workerCount,
       onProgress: progress => self.postMessage({ id, progress }),
     });
     const buffers = result.segments.map(segment => segment.points.buffer);

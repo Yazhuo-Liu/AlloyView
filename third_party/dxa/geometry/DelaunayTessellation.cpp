@@ -25,6 +25,98 @@
 
 #include <random>
 #include <cstdlib>
+#ifdef __EMSCRIPTEN_PTHREADS__
+#include <condition_variable>
+#endif
+
+namespace {
+#ifdef __EMSCRIPTEN_PTHREADS__
+// The upstream pthread manager starts every member of a ThreadGroup even when
+// its configured maximum is smaller. BRIO/Hilbert sorting creates groups of
+// eight, so a two-thread browser pool needs a manager that honors the limit.
+class BoundedDxaThreadManager : public GEO::ThreadManager {
+public:
+    GEO::index_t maximum_concurrent_threads() override { return Ovito::dxaThreadCount(); }
+    void enter_critical_section() override { _criticalSection.lock(); }
+    void leave_critical_section() override { _criticalSection.unlock(); }
+protected:
+    void run_concurrent_threads(GEO::ThreadGroup& threads, GEO::index_t maxThreads) override {
+        if(threads.empty()) return;
+        if(GEO::Thread::current()) {
+            // Geogram's parallel helpers already serialize nested groups.
+            // Keep the same rule here so a child never waits for another pool
+            // Worker while the coordinator is blocked joining its parent.
+            for(auto& thread : threads) thread->run();
+            return;
+        }
+        const size_t concurrency = std::min<size_t>(threads.size(), maxThreads);
+        for(size_t index = 0; index < threads.size(); ++index)
+            set_thread_id(threads[index], index);
+
+        std::atomic<bool> failed{false};
+        std::exception_ptr error;
+        std::mutex errorMutex;
+        auto run = [&](size_t slot) {
+            GEO::Thread* previous = GEO::Thread::current();
+            try {
+                // PDEL's group has exactly 'concurrency' members, allowing all
+                // mutually dependent insertion workers to run simultaneously.
+                // Larger independent sorting groups reuse these bounded slots.
+                for(size_t index = slot; index < threads.size() && !failed.load(); index += concurrency) {
+                    set_current_thread(threads[index]);
+                    threads[index]->run();
+                }
+            }
+            catch(...) {
+                std::lock_guard<std::mutex> lock(errorMutex);
+                if(!error) error = std::current_exception();
+                failed.store(true);
+            }
+            set_current_thread(previous);
+        };
+
+        std::mutex startMutex;
+        std::condition_variable startCondition;
+        bool start = false;
+        std::vector<std::thread> workers;
+        workers.reserve(concurrency - 1);
+        auto releaseWorkers = [&] {
+            {
+                std::lock_guard<std::mutex> lock(startMutex);
+                start = true;
+            }
+            startCondition.notify_all();
+        };
+        try {
+            for(size_t slot = 1; slot < concurrency; ++slot) {
+                workers.emplace_back([&, slot] {
+                    {
+                        std::unique_lock<std::mutex> lock(startMutex);
+                        startCondition.wait(lock, [&] { return start; });
+                    }
+                    run(slot);
+                });
+            }
+        }
+        catch(...) {
+            // Start no insertion work until every required pthread exists.
+            // This also lets a pool/allocation failure release and join the
+            // successfully created workers without a missing-worker barrier.
+            failed.store(true);
+            releaseWorkers();
+            for(auto& worker : workers) worker.join();
+            throw;
+        }
+        releaseWorkers();
+        run(0);
+        for(auto& worker : workers) worker.join();
+        if(error) std::rethrow_exception(error);
+    }
+private:
+    std::mutex _criticalSection;
+};
+#endif
+}
 
 namespace Ovito::Delaunay {
 
@@ -38,6 +130,14 @@ bool DelaunayTessellation::generateTessellation(const SimulationCellObject* simC
     // Initialize the Geogram library.
     GEO::initialize(GEO::GEOGRAM_NO_HANDLER);
     GEO::set_assert_mode(GEO::ASSERT_ABORT);
+#ifdef __EMSCRIPTEN_PTHREADS__
+    GEO::Process::set_thread_manager(new BoundedDxaThreadManager);
+#endif
+    // The browser preallocates a bounded pthread pool. Geogram otherwise uses
+    // the machine's full logical core count, which could exhaust that pool
+    // while the coordinating Worker waits for its threads to finish.
+    GEO::Process::set_max_threads(dxaThreadCount());
+    GEO::Process::enable_multithreading(dxaThreadCount() > 1);
 
     // Make the magnitude of the randomly perturbed particle positions dependent on the size of the system.
     double lengthScale;
@@ -158,7 +258,7 @@ bool DelaunayTessellation::generateTessellation(const SimulationCellObject* simC
     }
 
     // Create the internal Delaunay generator object.
-    _dt = GEO::Delaunay::create(3, "BDEL");
+    _dt = GEO::Delaunay::create(3, dxaThreadCount() > 1 ? "PDEL" : "BDEL");
     _dt->set_keeps_infinite(true);
     _dt->set_reorder(true);
 
@@ -177,14 +277,17 @@ bool DelaunayTessellation::generateTessellation(const SimulationCellObject* simC
     // Classify tessellation cells as ghost or local cells.
     _numPrimaryTetrahedra = 0;
     _cellInfo.resize(_dt->nb_cells());
+    parallelFor(_cellInfo.size(), [this](size_t index) {
+        _cellInfo[index].isGhost = classifyGhostCell(index);
+    });
+    // Retain the original cell ordering and numbering independently of the
+    // order in which the classification threads finish.
     for(CellIterator cellIter = begin_cells(); cellIter != end_cells(); ++cellIter) {
         CellHandle cell = *cellIter;
-        if(classifyGhostCell(cell)) {
-            _cellInfo[cell].isGhost = true;
+        if(_cellInfo[cell].isGhost) {
             _cellInfo[cell].index = -1;
         }
         else {
-            _cellInfo[cell].isGhost = false;
             _cellInfo[cell].index = _numPrimaryTetrahedra++;
         }
     }

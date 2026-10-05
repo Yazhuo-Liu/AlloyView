@@ -41,12 +41,26 @@ clipped against enabled slices for drawing and image export.
 
 ## CPU and GPU
 
-This first version runs the full numerical algorithm in one dedicated CPU
-WebAssembly Worker. The interface remains responsive and cancellation terminates
-that Worker. It works on static hosts without shared-memory headers.
-**Enable GPU acceleration** currently uses this CPU path for DXA. There is no
-DXA GPU speedup claim; local correspondence, edge tests and smoothing remain
-future GPU migration stages.
+The numerical algorithm runs in a dedicated CPU WebAssembly Worker. On hosts
+with cross-origin isolation and SharedArrayBuffer, large frames automatically
+use up to six shared-memory computation threads, reserving one hardware thread
+for the interface. Local crystal identification, robust periodic Delaunay
+tessellation and independent cell classification run in parallel in one heap.
+Small structures and static hosts without the required headers use the complete
+serial kernel. Cancellation terminates the coordinator and its child Workers.
+
+The progress text and final status show the selected thread count. Hover over
+the final status to see individual phase timings. Repeated calculations reuse
+the initialized pool; cancel or source reset releases its heap and Workers.
+For a controlled CPU timing comparison, run `npm run benchmark:dxa -- --workers
+1` and repeat with `--workers 2` or `--workers 4`. This benchmark physically
+replicates the NiGB example twice along Z and reports cold and warm phase times.
+
+**Enable GPU acceleration** currently uses this CPU path for DXA. A complete
+GPU extraction backend needs new robust geometry and graph kernels. Its large
+intermediate arrays can remain on the GPU, with one final network readback for
+the current WebGL2 renderer. The [GPU design](../DXA_REVIEW.md) describes the
+resident pipeline, numerical requirements and a route to GPU rendering.
 
 ## Limitations
 

@@ -15,7 +15,7 @@ const mime = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/jav
 /** Launch a secure localhost page and exercise the real browser WebGPU API.
  * Software mode is explicit: its timings never represent physical GPU speed.
  */
-export async function withWebGpuBrowser(run, { software = true } = {}) {
+export async function withWebGpuBrowser(run, { software = true, isolated = false } = {}) {
   const chromePath = process.env.CHROME_PATH ?? [
     '/opt/google/chrome/chrome', '/usr/bin/google-chrome', '/usr/bin/chromium',
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -26,6 +26,12 @@ export async function withWebGpuBrowser(run, { software = true } = {}) {
   assert.ok(Array.isArray(additionalArguments) && additionalArguments.every((argument) => typeof argument === 'string'),
     'ALLOYVIEW_CHROME_ARGS must be a JSON array of Chromium flags.');
   const server = createServer(async (request, response) => {
+    // Most browser checks deliberately reproduce GitHub Pages, which does not
+    // provide isolation headers. Opt in only for shared-memory Wasm checks.
+    if (isolated) {
+      response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+      response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+    }
     const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
     if (pathname === '/AlloyView/__gpu_test__.html') {
       response.writeHead(200, { 'Content-Type': 'text/html' });
@@ -37,7 +43,6 @@ export async function withWebGpuBrowser(run, { software = true } = {}) {
     try {
       if (!pathname.startsWith('/AlloyView/') || !path.startsWith(`${root}${sep}`)) throw new Error('Invalid path');
       const bytes = await readFile(path);
-      // No COOP/COEP headers: preserve the GitHub Pages deployment conditions.
       response.writeHead(200, { 'Content-Type': mime[extname(path)] ?? 'application/octet-stream' });
       response.end(bytes);
     } catch {

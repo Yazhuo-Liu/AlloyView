@@ -2,6 +2,65 @@
 
 Validation date: 2026-10-05 (UTC)
 
+## Shared-memory DXA
+
+The CPU backend now has separate serial and pthread Wasm artifacts built with
+Emscripten 3.1.69. Local structure identification, periodic PDEL tessellation,
+ghost-cell classification and elastic/alpha tetrahedron tests share one heap.
+A bounded adapter also caps Geogram's eight-task Hilbert groups to the requested
+computation threads; it does not modify Geogram's robust predicates. Global
+numbering, ideal-edge mapping and dislocation tracing retain their coordinator.
+
+- All 736 Node tests pass, including six additional real threaded-kernel tests.
+  Perfect FCC, BCC, HCP and both diamond phases have no false lines. Two- and
+  four-thread screw extraction preserves every atom label, signed Burgers
+  vectors, junctions and periodic winding within `1e-8 Å`. PDEL insertion order
+  can change the estimated core polyline: arc curvature and the difference from
+  serial arc length are bounded to 0.1% of the analytic winding, rather than
+  equating a curved trace to a perfectly straight line. Additional direct Wasm
+  checks passed with 2, 3, 4 and 6 threads, including thin-cell error propagation
+  from a child and successful reuse of that same pool afterwards.
+- The real Chromium parallel check passes both deployment cases: no COOP/COEP
+  selects serial even when two threads are requested; an isolated host starts
+  the coordinator and actual child Worker. Cancellation during the local
+  identification phase of a 110,592-atom frame closes every nested Worker,
+  leaves no pending job, and a fresh pool recomputes successfully. The phase
+  includes serial neighbor-index preparation, so this test does not claim to
+  observe the exact instruction executing on each pthread at cancellation.
+- The production DXA browser check still passes without isolation headers,
+  including WebGL lines, image export, configuration replay and mobile layout.
+
+`npm run benchmark:dxa -- --workers 1` and the corresponding `--workers 4`
+command analyze real Z×2 replication of NiGB: 259,808 atoms, 249,620 FCC and
+10,188 Other, zero dislocation segments in both runs. Node v24.19.0 in this
+cloud container reports five available processors with a four-CPU cgroup quota.
+One cold and one warm extraction were measured per backend; parsing and real
+replication are outside these timings. Cold includes Wasm/pool initialization;
+warm reuses the module. These CPU observations are not a general scaling
+guarantee or a physical GPU benchmark.
+
+| Measurement | Serial | Four computation threads |
+| --- | ---: | ---: |
+| Cold whole extraction | 17.64 s | 8.05 s |
+| Warm whole extraction | 15.06 s | 7.23 s |
+| Warm local identification | 1.52 s | 0.40 s |
+| Warm periodic tessellation | 6.43 s | 2.47 s |
+| Warm interface construction | 4.84 s | 2.05 s |
+| Process RSS after warm run | 701.9 MiB | 759.7 MiB |
+
+The observed warm whole-frame speedup is about 2.08×. RSS includes Node,
+input/replicated JS arrays and retained Wasm capacity; it is not a sampled peak
+or an isolated kernel allocation measurement. Shared-memory execution requires
+an isolated host; GitHub Pages without these headers uses the serial kernel.
+There is still no GPU DXA backend. The [resident GPU design](DXA_REVIEW.md)
+records how to avoid intermediate readbacks and why WebGL2 needs one final
+network transfer until a same-device WebGPU renderer exists.
+
+Reproduce with `npm test`, `npm run test:browser:dxa-parallel -- --software`,
+`npm run test:browser:dxa -- --software` and the benchmark commands above.
+Rebuild both artifacts with `npm run build:dxa` and
+`npm run build:dxa:threaded` after numerical source changes.
+
 ## Initial CPU DXA
 
 The initial DXA module ports the actual OVITO v3.9.4 numerical core with a

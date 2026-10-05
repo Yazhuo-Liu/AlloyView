@@ -16,12 +16,26 @@ adaptive Burgers circuits, dislocation tracing and junctions, and line smoothing
 and coarsening. The Qt pipeline engine and modifier are replaced by tiny include
 compatibility headers; their GUI and dataset lifecycle are not part of the port.
 
-`compat/` replaces OVITO's Qt/property/task glue with a headless sequential task
-and typed property storage. Upstream double-precision mathematical and nearest
+`compat/` replaces OVITO's Qt/property/task glue with headless tasks and typed
+property storage. Upstream double-precision mathematical and nearest
 neighbor routines are kept where possible. `geometry/` contains the periodic
 Delaunay/Geogram and half-edge mesh functionality required by DXA. The browser
 entry point is `wasm/dxa.cpp`, executed in a dedicated Worker. Cancellation
 terminates that Worker, so static hosting does not require shared Wasm memory.
+
+The optional `dxa-kernel-threaded` binary restores shared-memory parallel loops
+through a bounded `std::thread` adapter. Independent atoms use dynamically
+scheduled chunks; the coordinator also computes, all workers are joined before
+returning, and the first original exception is rethrown on the coordinator.
+Task cancellation and progress counters are atomic. Small loops remain serial.
+The geometry adapter selects Geogram's robust parallel PDEL tessellator and
+provides a bounded thread manager: large sorting groups reuse the same slots,
+and nested groups remain serial. Ghost-cell and interface-cell classifications
+also run in parallel, with shared topology/index updates reduced sequentially.
+The module factory preloads only the runtime-requested pthread pool, sharing one
+Wasm heap across its Workers. This backend requires cross-origin isolation and
+SharedArrayBuffer; static hosts without the required headers retain the complete
+serial implementation. Build it with `bash wasm/build-dxa-threaded.sh`.
 
 The initial backend is CPU/Wasm. GPU acceleration requests deliberately use this
 complete CPU implementation until scientifically equivalent GPU stages exist.

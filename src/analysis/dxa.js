@@ -131,30 +131,80 @@ export function dxaCartesianCoordinates(frame) {
 }
 
 const DXA_STAGES = 11;
-let kernelPromise, kernelProgress;
-async function getKernel() {
-  if (!kernelPromise) kernelPromise = (async () => {
-    const { default: createDxa } = await import('./dxa-kernel.mjs');
-    let options = {};
-    if (typeof process === 'object' && process.versions?.node) {
-      const { readFile } = await import('node:fs/promises');
-      options.wasmBinary = await readFile(new URL('./dxa-kernel.wasm', import.meta.url));
-    }
-    return createDxa({ ...options, onDxaProgress: (...update) => kernelProgress?.(...update) });
-  })().catch(error => { kernelPromise = undefined; throw error; });
-  return kernelPromise;
+const kernelPromises = new Map();
+let kernelProgress;
+
+/** Shared Wasm requires isolation in browsers. Node's opt-in path is useful
+ * for scientific parity checks; normal Node calls retain the serial kernel.
+ * Reserve one hardware thread for the interface and cap the geometry pool.
+ */
+export function dxaWorkerCount(count, requested, environment = globalThis) {
+  if (requested !== undefined && (!Number.isInteger(requested) || requested < 1 || requested > 6)) {
+    throw new Error('DXA worker count must be an integer between 1 and 6.');
+  }
+  const node = Boolean(environment.process?.versions?.node);
+  const available = typeof environment.SharedArrayBuffer === 'function'
+    && (node || environment.crossOriginIsolated === true);
+  if (!available || count < 2048) return 1;
+  const hardware = Math.max(1, Number(environment.navigator?.hardwareConcurrency) || 2);
+  const threads = requested ?? (node ? 1 : Math.min(6, Math.max(1, hardware - 1)));
+  return Math.min(threads, Math.max(1, Math.floor(count / 1024)));
+}
+
+async function getKernel(workerCount) {
+  if (!kernelPromises.has(workerCount)) {
+    const promise = (async () => {
+      const threaded = workerCount > 1;
+      const { default: createDxa } = threaded
+        ? await import('./dxa-kernel-threaded.mjs') : await import('./dxa-kernel.mjs');
+      let options = {};
+      if (typeof process === 'object' && process.versions?.node) {
+        const { readFile } = await import('node:fs/promises');
+        options.wasmBinary = await readFile(new URL(threaded ? './dxa-kernel-threaded.wasm' : './dxa-kernel.wasm', import.meta.url));
+      }
+      const moduleOptions = { ...options, dxaPoolSize: threaded ? workerCount - 1 : 0,
+        onDxaProgress: (...update) => kernelProgress?.(...update) };
+      try { return await createDxa(moduleOptions); }
+      catch (error) { moduleOptions.PThread?.terminateAllThreads(); throw error; }
+    })().catch(error => { kernelPromises.delete(workerCount); throw error; });
+    kernelPromises.set(workerCount, promise);
+  }
+  return kernelPromises.get(workerCount);
+}
+
+/** Explicit cleanup for Node benchmarks and direct kernel consumers. The UI
+ * owns these heaps through its dedicated Worker and releases that Worker.
+ */
+export async function releaseDxaKernels() {
+  const pending = [...kernelPromises.values()];
+  kernelPromises.clear();
+  for (const promise of pending) {
+    try { (await promise).PThread?.terminateAllThreads(); } catch { /* Failed startup already cleaned up. */ }
+  }
 }
 
 /** Executes the complete native DXA algorithm. Browser callers should use
  * DxaClient so synchronous Wasm work and cancellation stay off the UI thread.
  */
-export async function calculateDxa(frame, parameters = {}, { onProgress = () => {}, memoryBudgetBytes } = {}) {
+export async function calculateDxa(frame, parameters = {}, { onProgress = () => {}, memoryBudgetBytes, workerCount: requestedWorkers } = {}) {
   const settings = validateDxaParameters(parameters), count = validateDxaFrame(frame);
   const memoryEstimateBytes = preflightDxaMemory(count, memoryBudgetBytes);
+  let workerCount = dxaWorkerCount(count, requestedWorkers), threadingFallback;
   const startedAt = performance.now();
-  onProgress({ phase: 'initializing', completedStages: 0, totalStages: DXA_STAGES, totalAtoms: count });
-  const module = await getKernel();
-  onProgress({ phase: 'indexing', completedStages: 0, totalStages: DXA_STAGES, totalAtoms: count });
+  const report = update => onProgress({ ...update, backend: 'cpu', workerCount });
+  report({ phase: 'initializing', completedStages: 0, totalStages: DXA_STAGES, totalAtoms: count });
+  let module;
+  try { module = await getKernel(workerCount); }
+  catch (error) {
+    if (workerCount === 1) throw error;
+    // A host can expose SAB but block the extra module/Worker. Restart before
+    // any numerical work; never return a partially calculated topology.
+    threadingFallback = error.message || String(error);
+    workerCount = 1;
+    module = await getKernel(1);
+  }
+  module._alloy_dxa_set_threads(workerCount);
+  report({ phase: 'indexing', completedStages: 0, totalStages: DXA_STAGES, totalAtoms: count });
   const positions = dxaCartesianCoordinates(frame);
   const coordinates = module._malloc(positions.byteLength), cellPointer = module._malloc(12 * 8);
   if (!coordinates || !cellPointer) {
@@ -162,13 +212,21 @@ export async function calculateDxa(frame, parameters = {}, { onProgress = () => 
     if (cellPointer) module._free(cellPointer);
     throw new Error('DXA could not allocate its input; reduce the analyzed structure or real replication.');
   }
-  kernelProgress = (phase, completedStages, totalStages = DXA_STAGES) => onProgress({ phase, completedStages, totalStages, totalAtoms: count });
+  const stageTimings = [];
+  let stagePhase, stageStarted;
+  kernelProgress = (phase, completedStages, totalStages = DXA_STAGES) => {
+    const now = performance.now();
+    if (stagePhase) stageTimings.push({ phase: stagePhase, elapsedMs: now - stageStarted });
+    stagePhase = completedStages < totalStages ? phase : undefined;
+    stageStarted = now;
+    report({ phase, completedStages, totalStages, totalAtoms: count });
+  };
   try {
     module.HEAPF64.set(positions, coordinates / 8);
     module.HEAPF64.set(frame.cell.vectors, cellPointer / 8);
     module.HEAPF64.set(frame.cell.origin, cellPointer / 8 + 9);
     const pbc = frame.cell.pbc.reduce((bits, enabled, axis) => bits | (enabled ? 1 << axis : 0), 0);
-    onProgress({ phase: 'analyzing', completedStages: 0, totalStages: DXA_STAGES, totalAtoms: count });
+    report({ phase: 'analyzing', completedStages: 0, totalStages: DXA_STAGES, totalAtoms: count });
     const output = module._alloy_dxa_analyze(coordinates, count, cellPointer, pbc,
       DXA_LATTICES.find(lattice => lattice.id === settings.lattice).kernelId,
       settings.trialCircuitLength, settings.circuitStretchability, settings.onlyPerfectDislocations ? 1 : 0,
@@ -177,10 +235,12 @@ export async function calculateDxa(frame, parameters = {}, { onProgress = () => 
       const errorPointer = module._alloy_dxa_last_error();
       throw new Error(errorPointer ? module.UTF8ToString(errorPointer) : 'DXA analysis failed.');
     }
-    onProgress({ phase: 'collecting', completedStages: DXA_STAGES, totalStages: DXA_STAGES, totalAtoms: count });
+    report({ phase: 'collecting', completedStages: DXA_STAGES, totalStages: DXA_STAGES, totalAtoms: count });
     const result = normalizeDxaResult(JSON.parse(module.UTF8ToString(output)), frame.cell, settings, count);
     return { ...result, elapsedMs: performance.now() - startedAt, memoryEstimateBytes,
-      engine: 'Wasm CPU', backend: 'cpu', gpuFallback: Boolean(parameters.gpuEnabled) };
+      stageTimings, workerCount, threaded: workerCount > 1, threadingFallback,
+      engine: workerCount > 1 ? `Wasm CPU · ${workerCount} threads` : 'Wasm CPU',
+      backend: 'cpu', gpuFallback: Boolean(parameters.gpuEnabled) };
   } finally {
     kernelProgress = null;
     module._free(coordinates);

@@ -63,16 +63,13 @@ private:
         operation.setProgressMaximum(_tessellation.numberOfTetrahedra());
 
         _numFilledCells = 0;
-        size_t progressCounter = 0;
         _mesh.setSpaceFillingRegion(SurfaceMesh::InvalidIndex);
         bool spaceFillingRegionUndetermined = true;
         bool isSpaceFilling = true;
-        for(DelaunayTessellation::CellIterator cellIter = _tessellation.begin_cells(); cellIter != _tessellation.end_cells(); ++cellIter) {
-            DelaunayTessellation::CellHandle cell = *cellIter;
-
-            // Update progress indicator.
-            if(!operation.setProgressValueIntermittent(progressCounter++))
-                return false;
+        // Alpha tests and DXA's elastic-compatibility callback only read the
+        // completed tessellation/edge mapping. Each thread owns one cell's
+        // region field; numbering and mesh-wide reductions stay in cell order.
+        if(!parallelForWithProgress(_tessellation.numberOfTetrahedra(), [&](size_t cell) {
 
             // Alpha-shape criterion: This determines whether the Delaunay tetrahedron is part of a filled region.
             bool isFilledTetrehedron = false;
@@ -106,6 +103,12 @@ private:
                 OVITO_ASSERT(region < _mesh.regionCount() || region == SurfaceMesh::InvalidIndex);
             }
             _tessellation.setUserField(cell, region);
+        })) return false;
+
+        for(DelaunayTessellation::CellIterator cellIter = _tessellation.begin_cells(); cellIter != _tessellation.end_cells(); ++cellIter) {
+            DelaunayTessellation::CellHandle cell = *cellIter;
+            if(operation.isCanceled()) return false;
+            SurfaceMesh::region_index region = _tessellation.getUserField(cell);
 
             if(!_tessellation.isGhostCell(cell)) {
                 if(spaceFillingRegionUndetermined) {

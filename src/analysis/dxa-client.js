@@ -10,9 +10,10 @@ const abortError = () => new DOMException('The DXA calculation was cancelled.', 
  */
 export class DxaClient {
   constructor({ workerFactory = () => new Worker(new URL('../workers/dxa-worker.js', import.meta.url), { type: 'module' }),
-    memoryBudgetBytes, yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
+    memoryBudgetBytes, workerCount, yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
     this.workerFactory = workerFactory;
     this.memoryBudgetBytes = memoryBudgetBytes;
+    this.workerCount = workerCount;
     this.yieldToMain = yieldToMain;
     this.worker = null;
     this.pending = new Map();
@@ -47,7 +48,7 @@ export class DxaClient {
       const task = this.current;
       if (!task || task.id !== data.id || task.settled) return;
       if (data.progress) {
-        try { task.onProgress({ ...data.progress, backend: 'cpu', workerCount: 1 }); }
+        try { task.onProgress({ backend: 'cpu', workerCount: 1, ...data.progress }); }
         catch (error) { this.settle(task, error); this.terminateWorker(); this.current = null; this.pump(); }
         return;
       }
@@ -93,7 +94,7 @@ export class DxaClient {
         cell: { vectors: Float64Array.from(task.frame.cell.vectors), origin: Float64Array.from(task.frame.cell.origin), pbc: Array.from(task.frame.cell.pbc, Boolean) } };
       const worker = this.ensureWorker();
       if (task.settled || this.current !== task) return;
-      worker.postMessage({ id: task.id, frame, parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes },
+      worker.postMessage({ id: task.id, frame, parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes, workerCount: this.workerCount },
         [coordinates.buffer, frame.cell.vectors.buffer, frame.cell.origin.buffer]);
       task.dispatched = true;
     } catch (error) {

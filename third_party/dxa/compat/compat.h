@@ -2,6 +2,11 @@
 #pragma once
 #include <ovito/core/Core.h>
 #include <ovito/core/utilities/linalg/AffineTransformation.h>
+#ifdef __EMSCRIPTEN_PTHREADS__
+#include <exception>
+#include <mutex>
+#include <thread>
+#endif
 
 namespace Ovito {
 using Color = Vector3;
@@ -206,19 +211,23 @@ private:
 class Task {
 public:
     virtual ~Task() = default;
-    bool isCanceled() const { return _canceled; }
+    bool isCanceled() const { return _canceled.load(std::memory_order_relaxed); }
     bool isProgressingTask() const { return true; }
     static Task* current();
-    void cancel() { _canceled = true; }
+    void cancel() { _canceled.store(true, std::memory_order_relaxed); }
+    void resetCancellation() { _canceled.store(false, std::memory_order_relaxed); }
 protected:
-    bool _canceled = false;
+    std::atomic<bool> _canceled{false};
 };
 class ProgressingTask : public Task {
 public:
-    void setProgressMaximum(size_t value) { _maximum = value; }
+    void setProgressMaximum(size_t value) { _maximum.store(value, std::memory_order_relaxed); }
     void setProgressMaximum(size_t value, bool) { setProgressMaximum(value); }
-    bool setProgressValue(size_t value) { _value = value; return !isCanceled(); }
-    bool incrementProgressValue(size_t value = 1) { return setProgressValue(_value + value); }
+    bool setProgressValue(size_t value) { _value.store(value, std::memory_order_relaxed); return !isCanceled(); }
+    bool incrementProgressValue(size_t value = 1) {
+        _value.fetch_add(value, std::memory_order_relaxed);
+        return !isCanceled();
+    }
     bool setProgressValueIntermittent(size_t value) { return setProgressValue(value); }
     void setProgressText(const QString&) {}
     void beginProgressSubSteps(size_t) {}
@@ -227,18 +236,89 @@ public:
     void nextProgressSubStep() {}
     void endProgressSubSteps() {}
 private:
-    size_t _maximum = 0, _value = 0;
+    std::atomic<size_t> _maximum{0}, _value{0};
 };
 inline Task* Task::current() { static ProgressingTask task; return &task; }
-template<class Function> bool parallelForWithProgress(size_t count, Function function) {
+
+// The same adapter is compiled into the static-hosting serial binary and an
+// optional shared-memory binary. Configure it only between complete analyses.
+inline std::atomic<int>& dxaRequestedThreads() {
+    static std::atomic<int> count{1};
+    return count;
+}
+inline void configureDxaThreads(int count) {
+#ifdef __EMSCRIPTEN_PTHREADS__
+    dxaRequestedThreads().store(std::max(1, std::min(count, 32)), std::memory_order_relaxed);
+#else
+    (void)count;
+    dxaRequestedThreads().store(1, std::memory_order_relaxed);
+#endif
+}
+inline int dxaThreadCount() { return dxaRequestedThreads().load(std::memory_order_relaxed); }
+
+template<class Function> bool dxaParallelFor(size_t count, Function& function, bool checkCancellation) {
+    Task* const task = Task::current();
+#ifdef __EMSCRIPTEN_PTHREADS__
+    // Neighbor matching has irregular per-atom work. Small dynamic chunks avoid
+    // leaving one worker with a costly boundary/defect region. The coordinator
+    // runs the same loop, so N threads need only N-1 preloaded pthread Workers.
+    const size_t threadCount = count < 2048 ? 1 : std::min<size_t>(dxaThreadCount(), count / 256);
+    if(threadCount > 1) {
+        constexpr size_t chunkSize = 32;
+        std::atomic<size_t> next{0};
+        std::atomic<bool> failed{false};
+        std::exception_ptr error;
+        std::mutex errorMutex;
+        auto run = [&] {
+            try {
+                while(!failed.load(std::memory_order_relaxed) &&
+                        !(checkCancellation && task->isCanceled())) {
+                    const size_t first = next.fetch_add(chunkSize, std::memory_order_relaxed);
+                    if(first >= count) break;
+                    const size_t last = std::min(first + chunkSize, count);
+                    for(size_t index = first; index < last; ++index) {
+                        if(failed.load(std::memory_order_relaxed) ||
+                                (checkCancellation && task->isCanceled())) break;
+                        function(index);
+                    }
+                }
+            }
+            catch(...) {
+                // Preserve the original scientific error (for example a cell
+                // too thin for the selected neighbor shell) and join every
+                // worker before its captured objects leave scope.
+                std::lock_guard<std::mutex> lock(errorMutex);
+                if(!error) error = std::current_exception();
+                failed.store(true, std::memory_order_relaxed);
+            }
+        };
+        std::vector<std::thread> workers;
+        workers.reserve(threadCount - 1);
+        try {
+            for(size_t index = 1; index < threadCount; ++index) workers.emplace_back(run);
+            run();
+        }
+        catch(...) {
+            failed.store(true, std::memory_order_relaxed);
+            for(auto& worker : workers) worker.join();
+            throw;
+        }
+        for(auto& worker : workers) worker.join();
+        if(error) std::rethrow_exception(error);
+        return !(checkCancellation && task->isCanceled());
+    }
+#endif
     for(size_t index = 0; index < count; ++index) {
-        if(Task::current()->isCanceled()) return false;
+        if(checkCancellation && task->isCanceled()) return false;
         function(index);
     }
     return true;
 }
+template<class Function> bool parallelForWithProgress(size_t count, Function function) {
+    return dxaParallelFor(count, function, true);
+}
 template<class Function> void parallelFor(size_t count, Function function) {
-    for(size_t index = 0; index < count; ++index) function(index);
+    dxaParallelFor(count, function, false);
 }
 
 namespace CrystalAnalysis {
