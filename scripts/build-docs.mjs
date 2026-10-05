@@ -9,6 +9,7 @@ export const DOC_GUIDES = Object.freeze([
   { source: 'VALIDATION.md', page: 'validation.html', title: 'Validation' },
   { source: 'DEPLOYMENT.md', page: 'deployment.html', title: 'Deployment' },
   { source: 'ATOMEYE_REVIEW.md', page: 'atomeye-review.html', title: 'AtomEye implementation review' },
+  { source: 'DXA_REVIEW.md', page: 'dxa-review.html', title: 'DXA implementation review' },
 ]);
 
 function escapeHtml(value) {

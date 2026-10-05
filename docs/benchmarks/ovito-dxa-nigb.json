@@ -1,0 +1,153 @@
+{
+  "ovitoVersion": "3.10.6",
+  "ovitoDistributionVersion": "3.10.6.post2",
+  "pysideVersion": "6.6.3.1",
+  "pythonVersion": "3.12.14",
+  "numpyVersion": "1.26.4",
+  "machine": "x86_64",
+  "cpus": 5,
+  "file": "/workspace/AlloyView/examples/NiGB_minimized.cfg",
+  "units": "angstrom",
+  "cases": [
+    {
+      "repeat": [
+        1,
+        1,
+        1
+      ],
+      "rssBeforeMiB": 111.1640625,
+      "sourceAtoms": 129904,
+      "cellVectorsRows": [
+        [
+          1435.51,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          240.509,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          4.97773
+        ]
+      ],
+      "pbc": [
+        true,
+        true,
+        true
+      ],
+      "inputPreparationSeconds": 0.032788201002404094,
+      "settings": {
+        "input_crystal_structure": "Lattice.FCC",
+        "trial_circuit_length": 14,
+        "circuit_stretchability": 9,
+        "line_smoothing_level": 1,
+        "line_point_separation": 2.5,
+        "only_perfect_dislocations": false,
+        "defect_mesh_smoothing_level": 8
+      },
+      "rssBeforeAnalysisMiB": 119.40234375,
+      "status": "error",
+      "error": "Simulation box is too short along cell vector 3 (Z) to perform analysis. Please extend it first using the 'Replicate' modifier.",
+      "dxaSeconds": 5.024110373982694,
+      "rssAfterMiB": 130.8515625,
+      "processPeakRssMiB": 578.125
+    },
+    {
+      "repeat": [
+        1,
+        1,
+        2
+      ],
+      "rssBeforeMiB": 130.875,
+      "sourceAtoms": 129904,
+      "cellVectorsRows": [
+        [
+          1435.51,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          240.509,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          4.97773
+        ]
+      ],
+      "pbc": [
+        true,
+        true,
+        true
+      ],
+      "inputPreparationSeconds": 0.030147546000080183,
+      "settings": {
+        "input_crystal_structure": "Lattice.FCC",
+        "trial_circuit_length": 14,
+        "circuit_stretchability": 9,
+        "line_smoothing_level": 1,
+        "line_point_separation": 2.5,
+        "only_perfect_dislocations": false,
+        "defect_mesh_smoothing_level": 8
+      },
+      "rssBeforeAnalysisMiB": 136.48046875,
+      "status": "success",
+      "dxaSeconds": 7.956892745976802,
+      "atoms": 259808,
+      "segments": 0,
+      "totalLengthAngstrom": 0,
+      "familiesAndAttributes": {
+        "DislocationAnalysis.counts.OTHER": 10188.0,
+        "DislocationAnalysis.counts.FCC": 249620.0,
+        "DislocationAnalysis.counts.HCP": 0.0,
+        "DislocationAnalysis.counts.BCC": 0.0,
+        "DislocationAnalysis.counts.CubicDiamond": 0.0,
+        "DislocationAnalysis.counts.HexagonalDiamond": 0.0,
+        "DislocationAnalysis.cell_volume": 3437153.1739577614,
+        "DislocationAnalysis.total_line_length": 0.0,
+        "DislocationAnalysis.length.other": 0.0,
+        "DislocationAnalysis.length.1/2<110>": 0.0,
+        "DislocationAnalysis.length.1/6<112>": 0.0,
+        "DislocationAnalysis.length.1/6<110>": 0.0,
+        "DislocationAnalysis.length.1/3<100>": 0.0,
+        "DislocationAnalysis.length.1/3<111>": 0.0
+      },
+      "structureHistogramById": {
+        "0": 10188,
+        "1": 249620
+      },
+      "burgersVectorHistogramLocalCrystal": [],
+      "segmentsSample": [],
+      "expandedCellVectorsRows": [
+        [
+          1435.51,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          240.509,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          9.95546
+        ]
+      ],
+      "rssAfterMiB": 326.296875,
+      "processPeakRssMiB": 758.9765625
+    }
+  ],
+  "sourceSha256": "0880fd1f65cd00e7a95ffab7b0a833e7a43a3387fbab87cfc641fa6bd0adb086",
+  "memoryDefinition": "Linux process RSS, including Python/Qt, source and output. Peak RSS is cumulative across cases, not DXA scratch alone.",
+  "timingDefinition": "Source loading is separately timed. Analysis time includes physical replication in the second case and result assembly; one uncached modifier computation per case.",
+  "cpuModel": "AMD EPYC 9V74 80-Core Processor",
+  "processExitCode": 0
+}

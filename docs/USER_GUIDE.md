@@ -659,7 +659,8 @@ This is a provenance and risk statement, not legal advice.
   of growing files, atom color/radius file imports, color tiling blocks and
   Voronoi polycrystal construction are not implemented. DXA and defect lines
   also remain separate future modules; they are not attributed to the reviewed
-  AtomEye snapshot. See `docs/ATOMEYE_REVIEW.md`.
+  AtomEye snapshot. See [DXA implementation review](DXA_REVIEW.md) for the
+  source-backed CPU/Wasm and GPU plan, and `docs/ATOMEYE_REVIEW.md` for AtomEye.
 - Coordination, adaptive/fixed CNA, manual/Auto central symmetry, displacement,
   reference-frame strain, RDF, local geometric shear, bonds and ideal-strain
   tensors can use optional WebGPU acceleration or Workers.

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { buildDocumentation, createDocumentationPages, renderMarkdown } from '../scripts/build-docs.mjs';
+import { buildDocumentation, createDocumentationPages, DOC_GUIDES, renderMarkdown } from '../scripts/build-docs.mjs';
 import { FEATURE_HELP } from '../src/feature-help.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -49,7 +49,8 @@ test('build writes standalone documentation pages, stylesheet and relative viewe
   const out = await mkdtemp(join(tmpdir(), 'alloyview-docs-'));
   try {
     const result = await buildDocumentation(root, out);
-    assert.equal(result.pages, Object.keys(FEATURE_HELP).length + 7);
+    assert.equal(result.pages, Object.keys(FEATURE_HELP).length + DOC_GUIDES.length + 1);
+    assert.ok((await readFile(join(out, 'dxa-review.html'), 'utf8')).includes('DXA is not yet implemented in AlloyView.'));
     assert.ok((await readFile(join(out, 'index.html'), 'utf8')).includes('href="../"'));
     assert.ok((await readFile(join(out, 'features/vectors.html'), 'utf8')).includes('href="../../"'));
     assert.ok((await readFile(join(out, 'features/vectors.html'), 'utf8')).includes('display tool'));

@@ -28,4 +28,8 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 
 [Analysis implementation](STRUCTURE_ANALYSIS.md) explains crystal classification, ideal lattice strain and the Worker scheduler. [Validation](VALIDATION.md) describes tests and comparisons. [Deployment](DEPLOYMENT.md) explains the static build, including these documentation pages.
 
+[DXA implementation review](DXA_REVIEW.md) records the source, licensing,
+CPU/Wasm and WebGPU plan for future dislocation extraction. DXA is not yet an
+available analysis tool.
+
 The source is available in the [GitHub repository](https://github.com/Yazhuo-Liu/AlloyView). AlloyView is inspired by [OVITO](https://www.ovito.org/) and [AtomEye](http://li.mit.edu/Archive/Graphics/A/).
