@@ -212,9 +212,11 @@ Open <http://localhost:4173>. The deployable site is in `dist/`.
 Documentation is available at `/docs/` in development and preview; the build
 renders its Markdown sources into static HTML pages in `dist/docs/`.
 
-The compiled PTM kernel is included in the repository. Normal development and
-CI need no compiler. To change its C++ integration, install Emscripten and run
-`npm run build:ptm`; see [Structure analysis](docs/STRUCTURE_ANALYSIS.md).
+The compiled PTM and CPU DXA kernels are included in the repository. Normal
+development and CI need no compiler. To rebuild their C++ integration, install
+Emscripten and run `npm run build:ptm` or `npm run build:dxa`; see
+[Structure analysis](docs/STRUCTURE_ANALYSIS.md) and
+[Dislocation analysis](docs/features/dislocations.md).
 
 ## Tests and deployment
 

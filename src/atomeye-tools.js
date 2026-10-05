@@ -590,6 +590,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     comparison.setBonds(renderer.atomBonds ?? null,
       { visible: $('show-bonds').checked, radius: number('bonds-radius') });
     comparison.setVectors(renderer.atomVectors ?? null, renderer.vectorOptions);
+    comparison.setDislocationNetwork(renderer.dislocationNetwork, renderer.dislocationOptions);
     syncComparisonToolbar();
   }
   function syncComparisonToolbar() {

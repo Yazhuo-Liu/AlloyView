@@ -2,6 +2,7 @@
 // Local files must be selected again; source metadata is only used to match them.
 import { SCALAR_COLOR_SCHEMES } from './render/palette.js';
 import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from './selection-groups.js';
+import { DXA_DEFAULTS, DXA_FAMILIES } from './analysis/dxa.js';
 
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
@@ -13,7 +14,7 @@ export const MAX_CONFIGURATION_SELECTION_GROUPS = MAX_SELECTION_GROUPS;
 export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
 
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selection', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
@@ -206,7 +207,7 @@ function normalizeSelections(value) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
   const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension']);
   const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage']);
@@ -255,6 +256,9 @@ function normalizeExtensions(value, fromSnapshot) {
   });
   ensureUnique(atoms.map(({ id }) => String(id)), `${path}.appearance.atoms`);
   return {
+    // Keep older version 1 recipes unchanged. DXA contains parameters and
+    // display choices only; its network is recalculated after import.
+    ...(input.dxa === undefined ? {} : { dxa: normalizeDxa(input.dxa, `${path}.dxa`) }),
     bonds: {
       ...normalizeCutoffAnalysis(bonds, `${path}.bonds`, fromSnapshot),
       pairCutoffs,
@@ -306,6 +310,31 @@ function normalizeExtensions(value, fromSnapshot) {
       projectionMode: choice(comparison.projectionMode ?? 'orthographic', `${path}.comparison.projectionMode`, new Set(['orthographic', 'perspective'])),
       camera: normalizeCamera(comparison.camera ?? null),
     },
+  };
+}
+
+function normalizeDxa(value, path) {
+  const input = record(value, path, ['enabled', 'lattice', 'trialCircuitLength', 'circuitStretchability',
+    'onlyPerfectDislocations', 'lineSmoothingIterations', 'linePointInterval', 'radius', 'visibleFamilies', 'familyColors']);
+  const lattice = choice(input.lattice ?? DXA_DEFAULTS.lattice, `${path}.lattice`, new Set(Object.keys(DXA_FAMILIES)));
+  const families = new Set(DXA_FAMILIES[lattice].map(family => family.id));
+  const visibleFamilies = list(input.visibleFamilies ?? [...families], `${path}.visibleFamilies`, 32)
+    .map((family, index) => choice(family, `${path}.visibleFamilies[${index}]`, families));
+  ensureUnique(visibleFamilies, `${path}.visibleFamilies`);
+  const familyColors = list(input.familyColors ?? [], `${path}.familyColors`, 32).map((value, index) => {
+    const entryPath = `${path}.familyColors[${index}]`, entry = record(value, entryPath, ['family', 'color']);
+    return { family: choice(entry.family, `${entryPath}.family`, families), color: hexColor(entry.color, `${entryPath}.color`) };
+  });
+  ensureUnique(familyColors.map(entry => entry.family), `${path}.familyColors`);
+  return {
+    enabled: boolean(input.enabled, `${path}.enabled`, false), lattice,
+    trialCircuitLength: number(input.trialCircuitLength ?? DXA_DEFAULTS.trialCircuitLength, `${path}.trialCircuitLength`, 3, 100, true),
+    circuitStretchability: number(input.circuitStretchability ?? DXA_DEFAULTS.circuitStretchability, `${path}.circuitStretchability`, 0, 100, true),
+    onlyPerfectDislocations: boolean(input.onlyPerfectDislocations, `${path}.onlyPerfectDislocations`, false),
+    lineSmoothingIterations: number(input.lineSmoothingIterations ?? DXA_DEFAULTS.lineSmoothingIterations, `${path}.lineSmoothingIterations`, 0, 100, true),
+    linePointInterval: number(input.linePointInterval ?? DXA_DEFAULTS.linePointInterval, `${path}.linePointInterval`, 0, 1e6),
+    radius: number(input.radius ?? 0.25, `${path}.radius`, 1e-12, MAX_COORDINATE),
+    visibleFamilies, familyColors,
   };
 }
 

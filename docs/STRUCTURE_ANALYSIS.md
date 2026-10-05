@@ -2,6 +2,12 @@
 
 ## Using the analyses
 
+The initial [DXA tool](features/dislocations.md) extracts an independent
+dislocation line network with Burgers vectors and junction connectivity. Its
+full CPU/Wasm topology calculation uses a dedicated Worker rather than the
+atom-range analysis pool described below; the global GPU switch falls back to
+CPU for this first version.
+
 Load a structure and open **Common neighbor analysis** in the right panel.
 **Identify structure** runs adaptive CNA by default and selects **Crystal
 structure (CNA)** in **Color by**. No element-specific cutoff is needed in

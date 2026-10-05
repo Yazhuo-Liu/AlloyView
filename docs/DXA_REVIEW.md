@@ -1,8 +1,9 @@
 # Dislocation extraction: implementation review
 
-Research date: 2026-10-05 UTC. **DXA is not yet implemented in AlloyView.**
-This review inspects OVITO's actual source and the existing AlloyView pipeline;
-it separates reusable code, proposed implementation and executed experiments.
+Research date: 2026-10-05 UTC. An initial CPU/Wasm port is now described in
+[Dislocation analysis](features/dislocations.md). This review preserves the
+source inspection and feasibility findings that preceded it; proposed GPU
+stages are not yet implemented.
 
 ## Conclusion
 
@@ -270,5 +271,7 @@ for a successful calculation.
   and [Emscripten build branches](https://gitlab.com/stuko/ovito/-/blob/939f5d909ea3b0fd0dd6695494da8f8d03821c2e/src/3rdparty/geogram/CMakeLists.txt).
 - [Network rendering and periodic clipping](https://gitlab.com/stuko/ovito/-/blob/81d76297a22ba00793b16487e821884e3c77028a/src/ovito/crystalanalysis/objects/DislocationVis.cpp).
 
-No upstream DXA source, binary or documentation is vendored by this research
-change. No browser CPU DXA or WebGPU DXA benchmark has been completed yet.
+The initial research change vendored no upstream algorithm. The subsequent CPU
+port includes pinned, adapted DXA and Geogram sources with their license notices
+under `third_party/dxa/` and a prebuilt Wasm module. Current executed checks are
+recorded in [Validation](VALIDATION.md). WebGPU DXA remains future work.

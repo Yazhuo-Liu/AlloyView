@@ -4,6 +4,7 @@ import { installCameraInteractions } from './camera-interactions.js';
 import { selectAtomsInRectangle } from './box-selection.js';
 import { VIEW_PRESETS } from './camera-presets.js';
 import { AtomPrimitiveLayer } from './atom-primitives.js';
+import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
 import { MAX_SLICES, SLICE_EPSILON, pointVisible, validateSlices } from './slicing.js';
 import {
   add,
@@ -191,6 +192,9 @@ export class WebGLRenderer {
     this.selectedAtoms = new Int32Array(16).fill(-1);
     this.atomColors = null;
     this.primitiveLayer = null;
+    this.dislocationLayer = null;
+    this.dislocationNetwork = null;
+    this.dislocationOptions = normalizeDislocationOptions();
     this.atomBonds = this.atomVectors = null;
     this.bondOptions = { visible: true, radius: 0.08 };
     this.vectorOptions = { visible: true, scale: 1, radius: 0.06, color: '#f7a633' };
@@ -293,6 +297,8 @@ export class WebGLRenderer {
     this.atomCount = frame.ids.length;
     this.atomColors = colors;
     this.atomBonds = this.atomVectors = null;
+    this.dislocationNetwork = null;
+    this.dislocationLayer?.clear();
     this.selected = -1;
     this.selectedAtoms?.fill(-1);
     Object.assign(this, createReplication(frame.cell, repetitions));
@@ -327,6 +333,8 @@ export class WebGLRenderer {
     this.atomColors = null;
     this.atomBonds = this.atomVectors = null;
     this.primitiveLayer?.clear();
+    this.dislocationNetwork = null;
+    this.dislocationLayer?.clear();
     this.displayCell = this.sceneBounds = this.minimumOffset = this.maximumOffset = null;
     this.atomCount = this.displayAtomCount = 0;
     this.repetitions = [1, 1, 1];
@@ -457,6 +465,25 @@ export class WebGLRenderer {
     this.updateSceneBounds();
     this.requestRender();
   }
+
+  setDislocationNetwork(network, options = {}) {
+    if (!network && !this.dislocationLayer) {
+      this.dislocationNetwork = null;
+      this.dislocationOptions = normalizeDislocationOptions(options, this.dislocationOptions);
+      this.requestRender();
+      return;
+    }
+    if (network && !this.frame) throw new Error('Load a structure before displaying a dislocation network.');
+    if (!this.dislocationLayer) this.dislocationLayer = new DislocationLayer(this.gl);
+    this.dislocationLayer.setNetwork(this, network, options);
+    this.dislocationNetwork = network;
+    this.dislocationOptions = { ...this.dislocationLayer.options };
+    if (this.frame) this.updateSceneBounds();
+    this.requestRender();
+  }
+
+  setDislocations(network, options = {}) { this.setDislocationNetwork(network, options); }
+
   setSlice(axis, maximum) {
     this.cancelSelectionGesture();
     this.sliceMode = 'legacy';
@@ -544,6 +571,7 @@ export class WebGLRenderer {
       }
     }
     this.primitiveLayer?.extendBounds(this, minimum, maximum);
+    this.dislocationLayer?.extendBounds(this, minimum, maximum);
     this.sceneBounds = { minimum, maximum };
     this.selectionSourceBounds = { minimum: sourceMinimum, maximum: sourceMaximum };
     return this.sceneBounds;
@@ -631,6 +659,7 @@ export class WebGLRenderer {
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.atomCount);
     }
     this.primitiveLayer?.render(this);
+    this.dislocationLayer?.render(this);
 
     if (this.cellVisible) {
       gl.enable(gl.BLEND);

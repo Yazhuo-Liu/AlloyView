@@ -216,6 +216,7 @@
               <button type="button" data-tool-button="displacement" aria-controls="tool-displacement" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Displacement</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="statistics" aria-controls="tool-statistics" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Statistics</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="cna" aria-controls="tool-cna" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">CNA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="dxa" aria-controls="tool-dxa" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">DXA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="centrosymmetry" aria-controls="tool-centrosymmetry" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Symmetry</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="ptm" aria-controls="tool-ptm" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">PTM</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="strain" aria-controls="tool-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
@@ -448,6 +449,31 @@
             </div>
             <p id="cna-help" class="help">Adaptive CNA chooses a local cutoff for each atom. Identifies FCC, HCP, BCC and icosahedral environments; other environments are marked Other.</p>
             <p id="cna-status" class="help" role="status" aria-live="polite">Calculate to color by crystal structure. The legend checkboxes control visibility.</p>
+          </section>
+
+          <section id="tool-dxa" class="side-section analysis-section" data-tool-panel="dxa" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">DISLOCATION NETWORK</p><h3>Dislocation analysis</h3></div>
+              <div class="analysis-state-controls"><span id="dxa-state" class="state-pill">Not calculated</span><button id="cancel-dxa" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <label class="field"><span>Reference crystal</span><select id="dxa-lattice" disabled><option value="fcc">FCC</option><option value="bcc">BCC</option><option value="hcp">HCP</option><option value="cubicDiamond">Cubic diamond</option><option value="hexDiamond">Hexagonal diamond</option></select></label>
+            <div class="paired-fields">
+              <label class="field"><span>Trial circuit length</span><input id="dxa-trial-length" type="number" value="14" min="3" max="100" step="1" disabled></label>
+              <label class="field"><span>Circuit stretchability</span><input id="dxa-stretchability" type="number" value="9" min="0" max="100" step="1" disabled></label>
+              <label class="field"><span>Line smoothing</span><input id="dxa-smoothing" type="number" value="1" min="0" max="100" step="1" disabled></label>
+              <label class="field"><span>Point spacing · neighbor units</span><input id="dxa-point-interval" type="number" value="2.5" min="0" step="0.1" disabled></label>
+            </div>
+            <label class="slice-toggle"><input id="dxa-perfect-only" type="checkbox" disabled><span>Perfect dislocations only</span></label>
+            <button id="run-dxa" class="button button-accent tool-run-button" type="button" disabled>Extract dislocations</button>
+            <p class="help">Experimental. Select the crystal surrounding the defects. Thin periodic cells may require Replicate atoms for analysis.</p>
+            <p id="dxa-status" class="help" role="status" aria-live="polite">Extract lines and Burgers vectors from the complete structure.</p>
+            <div id="dxa-results" hidden>
+              <div class="section-heading statistics-subheading"><h3>Burgers vector families</h3></div>
+              <label class="field"><span>Line radius</span><span class="input-unit"><input id="dxa-line-radius" type="number" value="0.25" min="0.001" step="0.05" disabled><i>Å</i></span></label>
+              <div id="dxa-families" class="legend-items crystal-items" role="group" aria-label="Dislocation line colors and visibility"></div>
+              <p id="dxa-summary" class="help"></p>
+              <p class="help">Line visibility is independent of atom visibility. Length and density describe the analyzed cell before display replication or slicing.</p>
+            </div>
           </section>
 
           <section id="tool-centrosymmetry" class="side-section analysis-section" data-tool-panel="centrosymmetry" hidden>

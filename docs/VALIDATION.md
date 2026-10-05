@@ -1,6 +1,54 @@
 # Validation record
 
-Validation date: 2026-10-04 (UTC)
+Validation date: 2026-10-05 (UTC)
+
+## Initial CPU DXA
+
+The initial DXA module ports the actual OVITO v3.9.4 numerical core with a
+dedicated, non-shared CPU/Wasm Worker. The checked-in factory and binary build
+with Emscripten 3.1.69 / LLVM 19; the build verifies 58 vendored/adapted source
+files. The per-file MIT option, Geogram BSD notice and source pin are retained.
+FCC/BCC/cubic-diamond preferred crystal orientations match the upstream defaults.
+GPU-enabled requests explicitly use CPU for this version.
+
+- The full Node suite passes 729 tests. Eight tests execute the real DXA Wasm
+  core: perfect FCC, BCC, HCP, cubic/hexagonal diamond; an FCC screw line and
+  its rotated perfect control; thin-cell rejection and recovery; and a strained,
+  translated triclinic FCC cell with an isolated vacancy. Perfect crystals and
+  the vacancy do not create false lines.
+- The independent screw fixture has 8,640 atoms, free X/Y boundaries and
+  periodic Z. OVITO 3.10.6.post2 extracts one perfect `1/2<110>` line with a
+  spatial Burgers-vector magnitude of 2.4890158698 Å. The port returns the same
+  line count, family, periodic winding and Burgers vector; its local vector
+  `[0.5, 0, -0.5]` also matches the reference. Traced/coarsened arc length is
+  compared within 0.001 Å for Float64 input rather than requiring an exactly
+  straight curve. The XYZ browser fixture passes through the existing Float32
+  parser and uses 0.002 Å arc-length tolerance. Replication checks periodic
+  winding and Burgers vectors separately from the slightly curved arc length.
+- The full standard browser smoke passes with Chromium 151. The additional
+  production DXA check, without COOP/COEP, runs actual Wasm in a Worker and
+  actual WebGL line shaders. It covers family color/radius/visibility without
+  another calculation, lines with all atoms hidden, PNG line pixels, recipe
+  export/import with recomputation, termination during a native analysis stage
+  while retaining coordination, Worker recovery, display versus physical
+  replication, source/frame cleanup and a 390px phone layout. No page exceptions
+  or GL errors occur. SwiftShader validates drawing, not hardware GPU speed.
+- NiGB's original 129,904-atom thin Z cell produces the expected upstream
+  rejection. Physical Z×2 replication produces 259,808 atoms and completes
+  through the new Wasm bridge in one measured Node call of about 14.94 seconds,
+  with zero lines and volume 3,437,153.1739577614 Å³, matching the native OVITO
+  result. This is a CPU/Wasm observation, not a browser/GPU speedup benchmark.
+
+Reproduce with `npm test`, `npm run build`, `npm run test:browser` and
+`npm run test:browser:dxa -- --software`. Rebuild the numerical artifact only
+when needed with `npm run build:dxa`. The generated screw fixture is in
+`tests/helpers/dislocations.js`; the optional native OVITO oracle remains
+research tooling outside the application's dependencies.
+
+This is initial validation, not broad parity across realistic networks. Edge
+dislocations, partials, loops, junctions, complicated interfaces and newer HCP
+low-c/a behavior still need independent fixtures. The source review and first
+native NiGB record remain in [DXA review](DXA_REVIEW.md).
 
 ## GPU ideal lattice reference and the enabled default
 

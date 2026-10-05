@@ -9,6 +9,7 @@ export const FEATURE_HELP = Object.freeze({
   vectors: { title: 'Vector arrows', page: 'vectors', summary: 'Display imported or calculated vector properties without starting analyses. Choose arrow scale, anchor and proportions; atom visibility does not hide arrows.' },
   statistics: { title: 'Statistics and RDF', page: 'statistics', summary: 'Inspect coordination populations and a normalized radial distribution. RDF requires a fully periodic cell and a bounded cutoff.' },
   cna: { title: 'Common neighbor analysis', page: 'cna', summary: 'Classify FCC, HCP, BCC and ICO environments from common-neighbor bond signatures, with adaptive or fixed neighbor shells.' },
+  dxa: { title: 'Dislocation analysis', page: 'dislocations', summary: 'Extract dislocation lines and Burgers vectors relative to a selected crystal lattice. This initial experimental version runs in a dedicated CPU Worker; line colors and visibility are independent of atom colors.' },
   centrosymmetry: { title: 'Central symmetry', page: 'centrosymmetry', summary: 'Measure AtomEye-style dimensionless opposite-neighbor symmetry. Auto selects an 8- or 12-neighbor shell from the local structure.' },
   ptm: { title: 'Polyhedral template matching', page: 'ptm', summary: 'Fit local neighbor topology to selected crystal templates. The RMSD threshold controls classification rejection.' },
   strain: { title: 'Ideal lattice strain', page: 'ideal-strain', summary: 'Restore the absolute ideal lattice scale to a PTM fit, then calculate Green–Lagrange strain and volume change.' },

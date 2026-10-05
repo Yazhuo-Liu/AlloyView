@@ -1,0 +1,7 @@
+# Retain pinned upstream bytes for the DXA build's SHA256 verification.
+# Upstream spacing and line endings are part of those recorded artifacts.
+third_party/dxa/** -text whitespace=-trailing-space,-blank-at-eof
+
+# Emscripten emits a whitespace-only line in its generated module wrapper.
+src/analysis/dxa-kernel.mjs whitespace=-trailing-space
+src/analysis/dxa-kernel.wasm -text

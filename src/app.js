@@ -43,6 +43,7 @@ import { initializeSliceControls } from './slice-controls.js';
 import { initializeSliceGizmo } from './render/slice-gizmo.js';
 import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './configuration.js';
 import { initializeAtomEyeTools } from './atomeye-tools.js';
+import { initializeDxaTools } from './dxa-tools.js';
 import { initializeFeatureHelp } from './feature-help.js';
 import { normalizeSelectionGroups } from './selection-groups.js';
 import { initializeSelectionGroupControls } from './selection-group-controls.js';
@@ -140,6 +141,7 @@ let sourceFetchController = null;
 let sourceLoadingOwner = null;
 let renderer;
 let atomEyeTools;
+let dxaTools;
 let selectionGroupControls;
 let colorChoiceVersion = 0;
 let backgroundCustomized = false;
@@ -167,7 +169,8 @@ initializeSidebarResize();
 const toolPanels = initializeToolPanels({
   onDeactivateAnalysis: (kind) => {
     interruptConfigurationRestore('an analysis change');
-    if (kind === 'displacement') atomEyeTools?.cancelDisplacement();
+    if (kind === 'dxa') dxaTools?.cancel();
+    else if (kind === 'displacement') atomEyeTools?.cancelDisplacement();
     else if (state.analysis[kind]) cancelAnalysis(kind);
     else atomEyeTools?.deactivate(kind);
   },
@@ -362,6 +365,15 @@ atomEyeTools = initializeAtomEyeTools({
   showFrame, stopPlayback: stopFramePlayback,
   getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
   notify: showToast, onEdit: () => interruptConfigurationRestore('a settings edit'), onMemoryChange: reassessFrameCache,
+});
+
+dxaTools = initializeDxaTools({
+  renderer, tools: toolPanels, getFrame: () => state.frame,
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  getGpuEnabled: () => analysisPool.gpuEnabled,
+  onEdit: () => interruptConfigurationRestore('a DXA settings edit'),
+  onDisplayChange: () => atomEyeTools.syncComparison(),
+  onMemoryChange: reassessFrameCache, notify: showToast,
 });
 
 const bccLogo = initializeBccLogo(elements['empty-state']);
@@ -583,6 +595,7 @@ function closeSource() {
   abortAnalysisJobs();
   void gpuPrefetch.clearSource();
   atomEyeTools.reset();
+  dxaTools.reset();
   worker.reset();
   state.pendingFrames.clear();
   cache.clear();
@@ -975,6 +988,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     state.analysis.ptm = { enabled: false, parameters: null, key: null, request: 0 };
     state.analysis.strain = { enabled: false, parameters: null, key: null, request: 0 };
     atomEyeTools.reset();
+    dxaTools.reset();
     for (const kind of Object.keys(state.analysis)) toolPanels.setToolEnabled(kind, false);
     toolPanels.setToolEnabled('replicate', false);
     state.references = result.frame.typeLabels.map(referenceForElement);
@@ -1179,6 +1193,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   }
   if (state.analysis.coordination.enabled) pending.push(runCoordination({ automatic: true, frame, frameIndex: state.frameIndex }));
   pending.push(atomEyeTools.onFrame({ suggestedCutoff: recommendCoordinationCutoff(frame).value }));
+  pending.push(dxaTools.onFrame());
   syncCancelButton('coordination');
   await Promise.all(pending);
 }
@@ -1536,6 +1551,7 @@ function paletteForCurrentMode() {
 
 function abortAnalysisJobs() {
   atomEyeTools?.abortJobs();
+  dxaTools?.abortJobs();
   for (const controller of analysisControllers.values()) controller.abort();
   analysisControllers.clear();
   analysisTasks.clear();
@@ -2443,6 +2459,7 @@ function syncBackgroundControl(value) {
 
 function setControlsEnabled(enabled) {
   atomEyeTools?.setEnabled(enabled);
+  dxaTools?.setEnabled(enabled);
   selectionGroupControls?.setEnabled(enabled);
   syncSelectionGroupInteraction();
   for (const id of [
@@ -2539,7 +2556,7 @@ function captureConfiguration() {
       camera: { yaw: renderer.yaw, pitch: renderer.pitch, target: [...renderer.target], pan: [...renderer.pan],
         distance: renderer.distance, orthographicScale: renderer.orthographicScale, projectionMode: renderer.projectionMode },
       activeTool: toolPanels.getActiveTool(), selectedAtomId: state.selectedId,
-      extensions: atomEyeTools.serialize(),
+      extensions: { ...atomEyeTools.serialize(), dxa: dxaTools.serialize() },
       theme: document.documentElement.dataset.theme,
     },
   });
@@ -2611,6 +2628,7 @@ async function restoreConfiguration(config) {
     clearTimeout(cutoffTimer);
     for (const kind of Object.keys(state.analysis)) cancelAnalysis(kind);
     atomEyeTools.reset();
+    dxaTools.reset();
     if (targetFrame) await commitReplicationFrame(targetFrame, repetitions, saved.replicateAtoms, targetIndex, { resetCamera: false });
     else { state.repetitions = [...repetitions]; state.replicateAtoms = saved.replicateAtoms; }
     if (!current()) return;
@@ -2693,7 +2711,8 @@ async function restoreConfiguration(config) {
     if (state.frame) { refreshColorOptions(); applyColors(); restoreSelection(); }
     const tasks = Object.keys(state.analysis).filter(kind => state.analysis[kind].enabled).map(kind => kind === 'coordination'
       ? runCoordination({ automatic: true }) : runStructureAnalysis(kind, { automatic: true }));
-    await Promise.all([...tasks, atomEyeTools.restore(saved.extensions, { isCurrent: current })]);
+    await Promise.all([...tasks, atomEyeTools.restore(saved.extensions, { isCurrent: current }),
+      dxaTools.restore(saved.extensions.dxa, { isCurrent: current })]);
     if (!current()) return;
     if (state.frame) {
       state.colorMode = saved.display.colorMode;
@@ -2702,7 +2721,7 @@ async function restoreConfiguration(config) {
     const failed = [...Object.keys(state.analysis).filter(kind => {
       const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
       return state.analysis[kind].enabled && elements[`${prefix}-state`].textContent === 'Failed';
-    }), ...atomEyeTools.failed()];
+    }), ...atomEyeTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
     elements['configuration-status'].textContent = failed.length
       ? `Configuration restored; these analyses could not complete: ${failed.join(', ')}.`
       : 'Configuration restored. Enabled analyses and saved display settings are ready.';

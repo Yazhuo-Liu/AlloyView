@@ -550,7 +550,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
     const scheme = document.querySelector('.legend-scheme select'); scheme.value = 'coolwarm'; scheme.dispatchEvent(new Event('change'));
   })()`);
   await change('legend-color-mode', 'property:ptmStructureType');
-  assert.equal(await evaluate('document.querySelectorAll(".crystal-items input[type=checkbox]").length'), 9);
+  assert.equal(await evaluate('document.querySelectorAll("#legend .crystal-items input[type=checkbox]").length'), 9);
   await change('legend-color-mode', 'property:referenceHydrostaticStrain');
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".legend-controls input[type=number]"), input => input.valueAsNumber)'), [-.05, .1]);
   assert.equal(await evaluate('document.querySelector(".legend-scheme select").value'), 'coolwarm');

@@ -861,7 +861,7 @@ try {
   })()`);
   await waitFor('document.getElementById("cna-state").textContent === "Calculated"', 'CNA classification');
   assert.equal(await evaluate('document.getElementById("color-mode").value'), 'property:structureType');
-  assert.equal(await evaluate('document.querySelectorAll(".crystal-items input[type=checkbox]").length'), 5);
+  assert.equal(await evaluate('document.querySelectorAll("#legend .crystal-items input[type=checkbox]").length'), 5);
   const fccCounts = await evaluate(`(() => {
     const frame = window.structureTestRenderer.frame;
     return [...frame.properties.find(p => p.name === 'structureType').data].reduce((counts, id) => {
@@ -954,7 +954,7 @@ try {
     await writeFile('/tmp/alloyview-strain.png', Buffer.from(capture.data, 'base64'));
   }
   await evaluate(`(() => { const mode = document.getElementById('color-mode'); mode.value = 'property:ptmStructureType'; mode.dispatchEvent(new Event('change')); })()`);
-  assert.equal(await evaluate('document.querySelectorAll(".crystal-items input[type=checkbox]").length'), 9);
+  assert.equal(await evaluate('document.querySelectorAll("#legend .crystal-items input[type=checkbox]").length'), 9);
   if (process.argv.includes('--structure-screenshot')) {
     await showTool('ptm');
     await evaluate(`document.getElementById('ptm-state').closest('section').scrollIntoView({ block: 'center' })`);
@@ -978,7 +978,7 @@ try {
   await evaluate(`(() => { const mode = document.getElementById('color-mode'); mode.value = 'property:atomicShearStrain'; mode.dispatchEvent(new Event('change')); })()`);
   assert.equal(await evaluate('window.structureTestColors.every(value => value === 130)'), true);
   assert.equal(await evaluate('document.querySelector("[data-category-id=\\"NaN\\"]").getAttribute("aria-label")'), 'Show NaN atoms');
-  assert.match(await evaluate('document.querySelector(".legend-count").textContent.trim()'), /^31\s*·\s*100\.0%$/, 'the all-NaN category reports its count and fraction');
+  assert.match(await evaluate('document.querySelector("#legend .legend-count").textContent.trim()'), /^31\s*·\s*100\.0%$/, 'the all-NaN category reports its count and fraction');
   await evaluate(`(() => { const crystal = document.querySelector('[data-reference-structure]'); crystal.value = '1'; crystal.dispatchEvent(new Event('change')); })()`);
   await waitFor('document.getElementById("strain-state").textContent === "Calculated"', 'reference recovery');
   // A new source clears filters; enabled analysis follows trajectory frames.
@@ -1800,7 +1800,7 @@ try {
   await evaluate('document.getElementById("toggle-legend").click()');
   assert.equal(await evaluate('document.getElementById("toggle-legend").getAttribute("aria-expanded")'), 'true');
   assert.notEqual(await evaluate('getComputedStyle(document.getElementById("legend")).display'), 'none');
-  assert.equal(await evaluate('document.querySelectorAll(".crystal-items input[type=checkbox]").length'), 5);
+  assert.equal(await evaluate('document.querySelectorAll("#legend .crystal-items input[type=checkbox]").length'), 5);
   const phoneQuantity = await evaluate(`(() => {
     const select = document.getElementById('legend-color-mode'); select.scrollIntoView({ block: 'nearest' });
     const rect = select.getBoundingClientRect();

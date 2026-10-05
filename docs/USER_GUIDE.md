@@ -361,6 +361,25 @@ uses parallel stages with global reductions for its modal coordination,
 normalization and mean tensor. They retain per-frame results and support the
 same cancellation/reset behavior as the other analyses.
 
+## Dislocation analysis (DXA)
+
+Open **DXA**, choose a reference crystal and click **Extract dislocations**.
+This initial version uses the actual OVITO v3.9.4 dislocation extraction core in
+a dedicated CPU/Wasm Worker. Its Burgers-family checkboxes and colors control
+the extracted lines independently of atom colors. Line radius, family visibility
+and slice/display replication redraw the network without recalculation.
+The summary reports source line count, length and length-per-cell-volume density.
+**Cancel** stops extraction and clears this tool; other analyses remain available.
+Configurations preserve parameters and line-display preferences and recompute
+an enabled DXA tool when restored.
+
+DXA requires sufficient periodic cell thickness. For `NiGB_minimized.cfg`,
+repeat Z twice with **Replicate atoms for analysis** enabled; display copies
+alone do not enlarge the analyzed cell. The global GPU switch currently falls
+back to CPU for DXA. This version awaits broader scientific validation and does
+not include newer HCP low-c/a treatment. See [DXA](features/dislocations.md) for
+the algorithm, search settings and limitations.
+
 ## Bonds, vector arrows and structure statistics
 
 Open **Bonds**, set **Default cutoff**, and optionally override individual
@@ -657,15 +676,16 @@ This is a provenance and risk statement, not legal advice.
   to detect sibling sequences automatically, or select several files together.
 - NetCDF, Python/ASE integration, arbitrary command scripts, live monitoring
   of growing files, atom color/radius file imports, color tiling blocks and
-  Voronoi polycrystal construction are not implemented. DXA and defect lines
-  also remain separate future modules; they are not attributed to the reviewed
-  AtomEye snapshot. See [DXA implementation review](DXA_REVIEW.md) for the
-  source-backed CPU/Wasm and GPU plan, and `docs/ATOMEYE_REVIEW.md` for AtomEye.
+  Voronoi polycrystal construction are not implemented. The initial DXA module
+  comes from the separately reviewed OVITO core, not the reviewed AtomEye
+  snapshot. See [DXA implementation review](DXA_REVIEW.md) for the source-backed
+  CPU/Wasm and GPU plan, and `docs/ATOMEYE_REVIEW.md` for AtomEye.
 - Coordination, adaptive/fixed CNA, manual/Auto central symmetry, displacement,
   reference-frame strain, RDF, local geometric shear, bonds and ideal-strain
   tensors can use optional WebGPU acceleration or Workers.
-  PTM and its deformation fit use the included Wasm kernel. No Emscripten
-  installation is needed unless rebuilding C++ with `npm run build:ptm`.
+  PTM and its deformation fit and DXA use included Wasm kernels. No Emscripten
+  installation is needed unless rebuilding C++ with `npm run build:ptm` or
+  `npm run build:dxa`. DXA currently uses CPU regardless of the GPU preference.
 
 The bundled `NiGB_minimized.cfg` contains 129,904 atoms and can be used to
 compare CPU and GPU analysis with the same parameters. Measure cold and warm

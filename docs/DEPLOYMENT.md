@@ -97,6 +97,9 @@ Serve the contents of `dist/` with correct MIME types, especially
 The verified default uses JavaScript module Workers; the optional Wasm build
 also uses non-shared memory and is not currently selected by the range-partitioned
 analysis pool. Cross-origin isolation is therefore not mandatory.
+PTM and the initial CPU DXA tool load their checked-in Wasm modules from the
+same versioned runtime tree. DXA owns a dedicated whole-frame Worker and
+cancels by terminating it; neither native module requires Emscripten pthreads.
 `npm run dev` and `npm run preview` nevertheless send:
 
 ```text
