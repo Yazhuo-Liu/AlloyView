@@ -3,9 +3,9 @@ import { dislocationSlicePlanes } from './dislocation-layer.js';
 import { MAX_SLICES, SLICE_EPSILON } from './slicing.js';
 
 export function normalizeVoronoiCellOptions(options = {}, previous = {}) {
-  const color = options.color ?? previous.color ?? '#008b95';
+  const color = options.color ?? previous.color ?? '#3b82f6';
   parsePrimitiveColor(color);
-  const opacity = Number(options.opacity ?? previous.opacity ?? 0.22);
+  const opacity = Number(options.opacity ?? previous.opacity ?? 0.5);
   if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) throw new Error('Voronoi cell opacity must be between zero and one.');
   return { enabled: Boolean(options.enabled ?? previous.enabled ?? false),
     allEnabled: Boolean(options.allEnabled ?? previous.allEnabled ?? false), color, opacity };
@@ -69,10 +69,14 @@ export function createVoronoiCellBatch(cells) {
   const indexCount = meshes.reduce((sum, mesh) => sum + mesh.indexCount, 0);
   const values = new Float32Array((vertexCount + edgeCount) * 6);
   const indices = new Uint32Array(indexCount), atomIndices = new Uint32Array(vertexCount + edgeCount);
-  const bounds = new Float64Array(cells.length * 7);
+  const bounds = new Float64Array(cells.length * 7), cellRanges = new Uint32Array(cells.length * 5);
   let vertex = 0, edge = vertexCount, index = 0;
   cells.forEach((cell, cellIndex) => {
     const mesh = meshes[cellIndex];
+    // Faces and edges for a cell are contiguous. Preserve their draw ranges
+    // so selecting an atom can emphasize its existing mesh without extracting
+    // geometry, uploading buffers or drawing the whole tessellation again.
+    cellRanges.set([cell.atomIndex, index, mesh.indexCount, edge, mesh.edgeCount], cellIndex * 5);
     values.set(mesh.values.subarray(0, mesh.vertexCount * 6), vertex * 6);
     values.set(mesh.values.subarray(mesh.vertexCount * 6), edge * 6);
     atomIndices.fill(cell.atomIndex, vertex, vertex + mesh.vertexCount);
@@ -86,7 +90,7 @@ export function createVoronoiCellBatch(cells) {
     bounds.set([cell.atomIndex, ...minimum, ...maximum], cellIndex * 7);
     vertex += mesh.vertexCount; edge += mesh.edgeCount;
   });
-  return { values, indices, atomIndices, bounds, vertexCount, indexCount, edgeCount, cellCount: cells.length };
+  return { values, indices, atomIndices, bounds, cellRanges, vertexCount, indexCount, edgeCount, cellCount: cells.length };
 }
 
 const VERTEX = `#version 300 es
@@ -102,6 +106,7 @@ uniform sampler2D uAtoms;
 uniform int uAtomTextureWidth;
 out vec3 vWorld;
 out vec3 vNormal;
+out vec3 vView;
 flat out float vVisible;
 void main() {
   vec4 atom = vec4(0.0, 0.0, 0.0, 1.0);
@@ -109,15 +114,19 @@ void main() {
   vVisible = atom.w;
   vWorld = uCenter + atom.xyz + aPosition;
   vNormal = mat3(uView) * aNormal;
-  gl_Position = uProjection * uView * vec4(vWorld, 1.0);
+  vec4 view = uView * vec4(vWorld, 1.0);
+  vView = view.xyz;
+  gl_Position = uProjection * view;
 }`;
 const FRAGMENT = `#version 300 es
 precision highp float;
 precision highp int;
 in vec3 vWorld;
 in vec3 vNormal;
+in vec3 vView;
 flat in float vVisible;
 uniform vec3 uColor;
+uniform mat4 uProjection;
 uniform float uOpacity;
 uniform bool uEdges;
 uniform int uSliceCount;
@@ -129,9 +138,67 @@ void main() {
     if (plane >= uSliceCount) break;
     if (dot(uSlicePlanes[plane].xyz, vWorld) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) discard;
   }
-  float light = uEdges ? 1.0 : 0.6 + 0.4 * abs(dot(normalize(vNormal), normalize(vec3(-0.48, 0.62, 0.72))));
-  outColor = vec4(uColor * light, uOpacity);
+  if (uEdges) {
+    outColor = vec4(uColor, uOpacity);
+    return;
+  }
+  // Flat, outward face normals retain the physical facets. Distinct key and
+  // fill lights make opposite faces read differently, including the rear
+  // surfaces of translucent cells. Use the same view-space studio as atoms.
+  vec3 normal = normalize(vNormal);
+  vec3 key = normalize(vec3(-0.48, 0.62, 0.72));
+  vec3 fill = normalize(vec3(0.68, -0.36, 0.48));
+  float ambient = mix(0.18, 0.29, normal.y * 0.5 + 0.5);
+  float light = ambient + 0.72 * max(0.0, dot(normal, key))
+    + 0.18 * max(0.0, dot(normal, fill));
+  vec3 base = pow(uColor, vec3(2.2));
+  vec3 viewDirection = uProjection[3][3] > 0.5 ? vec3(0.0, 0.0, 1.0) : normalize(-vView);
+  vec3 halfDirection = normalize(key + viewDirection);
+  float specular = pow(max(0.0, dot(normal, halfDirection)), 28.0) * 0.16;
+  vec3 shaded = base * light + vec3(1.0, 0.96, 0.88) * specular;
+  outColor = vec4(pow(clamp(shaded, 0.0, 1.0), vec3(1.0 / 2.2)), uOpacity);
 }`;
+
+function outlineColor(renderer, color) {
+  const background = renderer.background ?? [1, 1, 1];
+  const dark = background[0] * 0.2126 + background[1] * 0.7152 + background[2] * 0.0722 < 0.4;
+  return parsePrimitiveColor(color).map(value => dark ? value * 0.35 + 0.58 : value * 0.28);
+}
+
+function selectedCellAtoms(renderer) {
+  const atoms = new Set([renderer.selected, ...(renderer.getSelectionHighlightAtoms?.() ?? renderer.selectedAtoms ?? []),
+    ...(renderer.sliceSelectedAtoms ?? [])]);
+  for (const atom of atoms) if (!Number.isInteger(atom) || atom < 0 || atom >= renderer.atomCount
+    || !renderer.visibility?.[atom]) atoms.delete(atom);
+  return atoms;
+}
+
+// Normal batches have explicit cell ranges. Deriving them once also supports
+// meshes retained by another view from before the range metadata was added.
+function cellDrawRanges(mesh) {
+  const ranges = new Map();
+  if (mesh.cellRanges) {
+    for (let entry = 0; entry < mesh.cellRanges.length; entry += 5) {
+      const [atom, firstIndex, indexCount, firstEdge, edgeCount] = mesh.cellRanges.subarray(entry, entry + 5);
+      const atomRanges = ranges.get(atom) ?? [];
+      atomRanges.push({ firstIndex, indexCount, firstEdge, edgeCount }); ranges.set(atom, atomRanges);
+    }
+    return ranges;
+  }
+  for (let index = 0; index < mesh.indexCount;) {
+    const firstIndex = index, atom = mesh.atomIndices[mesh.indices[index]];
+    while (index < mesh.indexCount && mesh.atomIndices[mesh.indices[index]] === atom) index += 3;
+    const atomRanges = ranges.get(atom) ?? [];
+    atomRanges.push({ firstIndex, indexCount: index - firstIndex, firstEdge: 0, edgeCount: 0 }); ranges.set(atom, atomRanges);
+  }
+  for (let edge = mesh.vertexCount; edge < mesh.vertexCount + mesh.edgeCount;) {
+    const firstEdge = edge, atom = mesh.atomIndices[edge];
+    while (edge < mesh.vertexCount + mesh.edgeCount && mesh.atomIndices[edge] === atom) edge += 2;
+    const atomRanges = ranges.get(atom);
+    if (atomRanges?.length) { atomRanges[0].firstEdge = firstEdge; atomRanges[0].edgeCount = edge - firstEdge; }
+  }
+  return ranges;
+}
 
 export class VoronoiCellLayer {
   constructor(gl) {
@@ -184,13 +251,14 @@ export class VoronoiCellLayer {
     gl.uniform1i(u.uBatched, 0);
     gl.vertexAttribI4ui(2, 0, 0, 0, 0);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
-    gl.uniform3f(u.uColor, ...parsePrimitiveColor(this.options.color));
+    const color = parsePrimitiveColor(this.options.color), edges = outlineColor(renderer, this.options.color);
     gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
     gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.CULL_FACE); gl.depthMask(false);
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -1);
     for (const replica of renderer.replicas) {
       gl.uniform3f(u.uCenter, ...replica.offset.map((value, axis) => value + renderer.displayPositions[atom * 3 + axis]));
+      gl.uniform3f(u.uColor, ...color);
       gl.uniform1i(u.uEdges, 0); gl.uniform1f(u.uOpacity, this.options.opacity);
       // A convex cell has one rear and one front surface along each ray.
       // Draw those in order so translucent shading is independent of the
@@ -199,6 +267,7 @@ export class VoronoiCellLayer {
       gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_INT, 0);
       gl.cullFace(gl.BACK);
       gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_INT, 0);
+      gl.uniform3f(u.uColor, ...edges);
       gl.uniform1i(u.uEdges, 1); gl.uniform1f(u.uOpacity, 0.9);
       gl.drawArrays(gl.LINES, this.vertexCount, this.edgeCount);
       this.renderedReplicaCount++;
@@ -217,6 +286,7 @@ export class VoronoiAllCellLayer {
     this.texture = gl.createTexture(); this.textureValues = null; this.textureWidth = 0;
     this.options = normalizeVoronoiCellOptions(); this.geometry = null; this.chunks = [];
     this.cellCount = this.renderedReplicaCount = this.renderedChunkCount = 0;
+    this.highlightedCellCount = this.renderedHighlightReplicaCount = 0;
     this.positionRevision = this.positions = this.visibility = null;
   }
 
@@ -238,10 +308,11 @@ export class VoronoiAllCellLayer {
       gl.enableVertexAttribArray(2); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 0, 0);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
-      this.chunks.push({ mesh, vao, buffer, indexBuffer, atomBuffer });
+      this.chunks.push({ mesh, vao, buffer, indexBuffer, atomBuffer, cellRanges: cellDrawRanges(mesh) });
     }
     this.cellCount = geometry?.cellCount ?? 0;
     this.renderedReplicaCount = this.renderedChunkCount = 0;
+    this.highlightedCellCount = this.renderedHighlightReplicaCount = 0;
   }
 
   clearBuffers() {
@@ -251,6 +322,7 @@ export class VoronoiAllCellLayer {
       gl.deleteBuffer(chunk.indexBuffer); gl.deleteBuffer(chunk.atomBuffer);
     }
     this.chunks = []; this.cellCount = 0;
+    this.highlightedCellCount = this.renderedHighlightReplicaCount = 0;
   }
 
   clear() {
@@ -301,13 +373,14 @@ export class VoronoiAllCellLayer {
 
   render(renderer) {
     this.renderedReplicaCount = this.renderedChunkCount = 0;
+    this.highlightedCellCount = this.renderedHighlightReplicaCount = 0;
     if (!this.options.allEnabled || !this.cellCount || !renderer.frame) return;
     this.updatePositions(renderer);
     const gl = this.gl, u = this.uniforms, planes = dislocationSlicePlanes(renderer);
     gl.useProgram(this.program); gl.uniform1i(u.uBatched, 1); gl.uniform1i(u.uAtoms, 5);
     gl.uniform1i(u.uAtomTextureWidth, this.textureWidth); gl.activeTexture(gl.TEXTURE0 + 5); gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
-    gl.uniform3f(u.uColor, ...parsePrimitiveColor(this.options.color));
+    const color = parsePrimitiveColor(this.options.color), edges = outlineColor(renderer, this.options.color);
     gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
     gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.CULL_FACE); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -1);
@@ -315,13 +388,45 @@ export class VoronoiAllCellLayer {
       gl.uniform3f(u.uCenter, ...replica.offset);
       for (const chunk of this.chunks) {
         gl.bindVertexArray(chunk.vao); gl.uniform1i(u.uEdges, 0); gl.uniform1f(u.uOpacity, this.options.opacity);
+        gl.uniform3f(u.uColor, ...color);
         gl.cullFace(gl.FRONT); gl.drawElements(gl.TRIANGLES, chunk.mesh.indexCount, gl.UNSIGNED_INT, 0);
         gl.cullFace(gl.BACK); gl.drawElements(gl.TRIANGLES, chunk.mesh.indexCount, gl.UNSIGNED_INT, 0);
+        gl.uniform3f(u.uColor, ...edges);
         gl.uniform1i(u.uEdges, 1); gl.uniform1f(u.uOpacity, 0.9);
         gl.drawArrays(gl.LINES, chunk.mesh.vertexCount, chunk.mesh.edgeCount);
         this.renderedChunkCount++;
       }
       this.renderedReplicaCount++;
+    }
+    // The all-cell mesh already contains the selected polyhedron. Draw only
+    // its contiguous triangle/edge ranges after the base tessellation, so the
+    // highlight stays legible regardless of chunk order and does not depend
+    // on the separate "Show selected cell" preview setting.
+    const selected = selectedCellAtoms(renderer), highlights = [], highlightedAtoms = new Set();
+    for (const chunk of this.chunks) for (const atom of selected) {
+      const ranges = chunk.cellRanges.get(atom);
+      if (!ranges) continue;
+      highlights.push({ chunk, ranges }); highlightedAtoms.add(atom);
+    }
+    this.highlightedCellCount = highlightedAtoms.size;
+    if (highlights.length) {
+      gl.polygonOffset(-2, -2);
+      for (const replica of renderer.replicas) {
+        gl.uniform3f(u.uCenter, ...replica.offset);
+        for (const { chunk, ranges } of highlights) {
+          gl.bindVertexArray(chunk.vao);
+          for (const range of ranges) {
+            gl.uniform3f(u.uColor, 1, 0.68, 0.16);
+            gl.uniform1i(u.uEdges, 0); gl.uniform1f(u.uOpacity, Math.max(0.62, this.options.opacity));
+            gl.cullFace(gl.FRONT); gl.drawElements(gl.TRIANGLES, range.indexCount, gl.UNSIGNED_INT, range.firstIndex * 4);
+            gl.cullFace(gl.BACK); gl.drawElements(gl.TRIANGLES, range.indexCount, gl.UNSIGNED_INT, range.firstIndex * 4);
+            gl.uniform3f(u.uColor, 1, 0.44, 0.06);
+            gl.uniform1i(u.uEdges, 1); gl.uniform1f(u.uOpacity, 1);
+            gl.drawArrays(gl.LINES, range.firstEdge, range.edgeCount);
+          }
+        }
+        this.renderedHighlightReplicaCount++;
+      }
     }
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
     gl.activeTexture(gl.TEXTURE0);

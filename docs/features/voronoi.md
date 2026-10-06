@@ -98,6 +98,18 @@ start off. Color and opacity are adjustable. All-cell display builds additional
 polygonal geometry and uses more memory; the single-cell preview constructs
 only the inspected cell.
 
+The default cell color is blue (`#3b82f6`), with opacity 0.5. Lit faces and
+outlined edges make neighboring cells easier to distinguish. While all-cell
+display is enabled, clicking an included atom highlights its associated cell,
+even when **Show the selected atom's cell** is unchecked. Measurement picks
+also highlight their associated cells, using the already constructed geometry.
+
+**Atom radius** in this section controls the same percentage as **Display →
+Atom radius**. Its slider and numeric input synchronize in both directions and
+affect atoms in both views. For example, reducing the value to 50% can reveal
+faces otherwise covered by atom spheres. Radius edits leave the tessellation
+and its statistics unchanged.
+
 The relative volume error is
 `(sum of atomic volumes − simulation-cell volume) / simulation-cell volume`.
 For a complete, nondegenerate tessellation it should be close to floating-point
@@ -121,7 +133,8 @@ Configuration export retains type labels in
 string list selects those labels. Older recipes without this field include all
 types. Selected-cell visibility, all-cell visibility, color and opacity are
 stored in `settings.extensions.voronoiDisplay`; polygon arrays are regenerated
-when the corresponding display option is enabled.
+when the corresponding display option is enabled. Atom radius remains one
+global value at `settings.display.radiusPercent`, shared with the Display tool.
 
 ## Implementation
 

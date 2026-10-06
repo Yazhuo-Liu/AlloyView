@@ -130,8 +130,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   contain replication and external properties, with a registry for future atom
   editors. Phones keep the viewport above independently scrolling tools and
   collapsed camera/legend controls.
-- An optional simultaneous second view reuses the current frame and analysis
-  results, with its own camera and standard-view/projection toolbar.
+- An optional movable, resizable second view reuses the current frame and
+  analysis results, with its own camera, PNG export and **Apply to main**
+  control. Configuration saves its camera and portable viewport-relative layout.
 - JSON configuration export/import directly below Structure saves source file metadata, processing
   settings, camera and theme, then restores the view and recomputes enabled
   analyses after the matching local files are opened.

@@ -12,6 +12,7 @@ import { createImageArchive, downloadBlob } from './export-archive.js';
 import { prepareDisplacements } from './analysis/displacement.js';
 import { registerVectorProperties, vectorPropertyNames } from './analysis/vector-properties.js';
 import { availableVectorSources, createVectorField, linkedArrowDimensions, renameVectorFieldProperty, vectorFieldData } from './vector-settings.js';
+import { initializeFloatingWindow } from './floating-window.js';
 
 const JOBS = {
   bonds: { prefix: 'bonds', tool: 'bonds', property: 'bondCoordination' },
@@ -39,6 +40,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   const jobs = Object.fromEntries(Object.keys(JOBS).map(kind => [kind, { enabled: false, parameters: null, controller: null, request: 0 }]));
   let generation = 0, measurements = [], appearance = { elements: [], atoms: [] };
   let pairCutoffs = [], currentFrame = null, comparison = null, comparisonContainer = null;
+  let comparisonWindow = null;
+  const comparisonRestore = createPendingComparisonRestore();
   let colors = null, batch = null;
   const displacement = { enabled: false, parameters: null, controller: null, request: 0 };
   let preferredVectorSource = 'generic';
@@ -609,12 +612,28 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     const frame = getFrame();
     if (!frame || !$('compare-view').checked) { if (comparisonContainer) comparisonContainer.hidden = true; tools.setToolEnabled('display', false); return; }
     if (!comparison) {
-      comparisonContainer = document.createElement('div'); comparisonContainer.className = 'comparison-view';
+      comparisonContainer = document.createElement('section'); comparisonContainer.className = 'comparison-view';
+      comparisonContainer.id = 'comparison-view'; comparisonContainer.setAttribute('aria-label', 'Second view');
       const canvas = document.createElement('canvas'), label = document.createElement('span'), close = document.createElement('button');
       canvas.addEventListener('pointerdown', changed);
       canvas.addEventListener('wheel', changed, { passive: true });
       label.className = 'comparison-label'; close.className = 'comparison-close'; close.type = 'button'; close.textContent = '×'; close.setAttribute('aria-label', 'Close comparison view');
       close.addEventListener('click', () => { $('compare-view').checked = false; changed(); syncComparison(); });
+      const header = document.createElement('header'); header.className = 'comparison-header'; header.id = 'comparison-drag-handle'; header.tabIndex = 0;
+      header.setAttribute('aria-label', 'Move second view. Drag or use arrow keys; Home resets the window.');
+      const title = document.createElement('strong'); title.textContent = 'Second view';
+      const actions = document.createElement('div'); actions.className = 'comparison-actions';
+      const exportPng = document.createElement('button'); exportPng.id = 'export-comparison-png'; exportPng.type = 'button'; exportPng.textContent = 'PNG';
+      exportPng.setAttribute('aria-label', 'Export second view as PNG'); exportPng.title = 'Export this view as PNG';
+      exportPng.addEventListener('click', () => {
+        if (!comparison?.frame) return;
+        try { comparison.exportPng(`${getFileStem()}-frame-${getFrameIndex() + 1}-second-view.png`, getExportOptions()); }
+        catch (error) { notify(error.message); }
+      });
+      const applyCamera = document.createElement('button'); applyCamera.id = 'apply-comparison-camera'; applyCamera.type = 'button'; applyCamera.textContent = 'Apply to main';
+      applyCamera.setAttribute('aria-label', 'Apply second-view camera to the main view'); applyCamera.title = 'Apply this camera to the main view';
+      applyCamera.addEventListener('click', () => { if (comparison?.frame) { changed(); copyRendererCamera(comparison, renderer); } });
+      actions.append(exportPng, applyCamera, close); header.append(title, actions);
       const toolbar = document.createElement('div'); toolbar.className = 'comparison-toolbar'; toolbar.setAttribute('role', 'group'); toolbar.setAttribute('aria-label', 'Second view camera controls');
       for (const [view, text] of [['top', 'Top'], ['bottom', 'Bottom'], ['front', 'Front'], ['back', 'Back'], ['left', 'Left'], ['right', 'Right']]) {
         const button = document.createElement('button'); button.type = 'button'; button.dataset.compareView = view; button.textContent = text;
@@ -628,8 +647,14 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       }
       const fit = document.createElement('button'); fit.type = 'button'; fit.textContent = 'Fit'; fit.dataset.compareReset = ''; fit.setAttribute('aria-label', 'Fit second view to structure');
       fit.addEventListener('click', () => { changed(); const { yaw, pitch, roll, constrainUp } = comparison; comparison.resetCamera(); Object.assign(comparison, { yaw, pitch, roll, constrainUp }); syncComparisonToolbar(); }); toolbar.append(fit);
-      comparisonContainer.append(canvas, label, toolbar, close); renderer.canvas.parentElement.append(comparisonContainer);
+      const surface = document.createElement('div'); surface.className = 'comparison-surface'; surface.append(canvas, label);
+      const resizeHandle = document.createElement('button'); resizeHandle.id = 'comparison-resize-handle'; resizeHandle.className = 'comparison-resize'; resizeHandle.type = 'button';
+      resizeHandle.setAttribute('aria-label', 'Resize second view. Drag or use arrow keys.'); resizeHandle.title = 'Resize second view';
+      resizeHandle.textContent = '◢';
+      comparisonContainer.append(header, toolbar, surface, resizeHandle); renderer.canvas.parentElement.append(comparisonContainer);
       comparison = new WebGLRenderer(canvas, { onPick: index => selectAtom(index), onProjectionChange: syncComparisonToolbar, onCameraChange: syncComparisonToolbar });
+      comparisonWindow = initializeFloatingWindow({ element: comparisonContainer, dragHandle: header, resizeHandle,
+        onEdit: changed, onChange: () => comparison.requestRender() });
     }
     comparisonContainer.hidden = false;
     const positions = renderer.rawDisplayPositions ?? renderer.displayPositions;
@@ -647,6 +672,9 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     const origin = renderer.periodicOrigin ?? [0, 0, 0];
     if (origin.some((value, axis) => value !== (comparison.periodicOrigin?.[axis] ?? 0))) comparison.setPeriodicOrigin(origin, { coordinateMode });
     comparison.setVisibility(renderer.visibility, { selectionVisibility: renderer.selectionVisibility });
+    comparison.setSelected(renderer.selected);
+    comparison.setSelectedAtoms(Array.from(renderer.selectedAtoms ?? []).filter(index => index >= 0));
+    comparison.setSliceSelectedAtoms(Array.from(renderer.sliceSelectedAtoms ?? []).filter(index => index >= 0));
     if (renderer.sliceMode === 'legacy') comparison.setSlice(renderer.sliceAxis, renderer.sliceMaximum);
     else comparison.setSlices(renderer.slices);
     comparison.setBackground(rgbHex(renderer.background.map(value => value * 255)));
@@ -658,6 +686,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     comparison.setDislocationNetwork(renderer.dislocationNetwork, renderer.dislocationOptions);
     comparison.setVoronoiCellGeometry(renderer.voronoiCellGeometry, renderer.voronoiCellOptions);
     comparison.setVoronoiAllCellGeometry(renderer.voronoiAllCellGeometry, renderer.voronoiCellOptions);
+    comparisonRestore.apply(comparison, comparisonWindow);
     syncComparisonToolbar();
   }
   function syncComparisonToolbar() {
@@ -696,6 +725,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     $('export-series-first').value = '1'; $('export-series-last').value = String(getFrameCount() || 1);
     renderer.setBonds(null); renderer.setVectorFields([]); renderer.setSelectedAtoms([]);
     comparison?.clearFrame(); if (comparisonContainer) comparisonContainer.hidden = true;
+    comparisonWindow?.reset();
+    comparisonRestore.reset();
     updateMeasurements(); syncVectorSourceUi();
   }
   function serialize() {
@@ -712,8 +743,9 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       rdf: { enabled: jobs.rdf.enabled, cutoff: cutoff('rdf-cutoff'), bins: Number($('rdf-bins').value), firstType: $('rdf-first-type').value || null, secondType: $('rdf-second-type').value || null },
       measurements: { enabled: $('measure-mode').checked, minimumImage: $('measure-pbc').checked, atomIds: [...measurements] },
       appearance: { elements: appearance.elements.map(entry => ({ ...entry })), atoms: appearance.atoms.map(entry => ({ ...entry })) },
-      comparison: { enabled: $('compare-view').checked && Boolean(frame), preset: $('compare-view').checked && frame && comparison?.frame === frame ? cameraViewPreset(comparison) : $('compare-preset').value,
-        projectionMode: comparison?.projectionMode ?? 'orthographic', camera: frame && comparison?.frame === frame ? cameraSnapshot(comparison) : null },
+      comparison: comparisonRestore.snapshot({ enabled: $('compare-view').checked && Boolean(frame), preset: $('compare-view').checked && frame && comparison?.frame === frame ? cameraViewPreset(comparison) : $('compare-preset').value,
+        projectionMode: comparison?.projectionMode ?? 'orthographic', camera: frame && comparison?.frame === frame ? cameraSnapshot(comparison) : null,
+        ...(comparisonWindow ? { layout: comparisonWindow.serialize() } : {}) }),
     };
   }
   async function restore(saved, { isCurrent = () => true } = {}) {
@@ -729,6 +761,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       return [name, property ? property.analysisKind ?? null : vectorComponentKinds.get(name)];
     }));
     reset(); appearance = saved.appearance; pairCutoffs = saved.bonds.pairCutoffs.map(entry => ({ ...entry }));
+    comparisonRestore.restore(saved.comparison, comparisonWindow);
     vectorFields = restoredFields; selectedVectorId = vectorFields.some(field => field.id === saved.vectors.selectedId) ? saved.vectors.selectedId : vectorFields[0].id;
     vectorSequence = Math.max(vectorFields.length, ...vectorFields.map(field => {
       const suffix = Number(field.id.match(/^vector-(\d+)$/)?.[1]);
@@ -767,10 +800,6 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       $('rdf-first-type').value = saved.rdf.firstType ?? ''; $('rdf-second-type').value = saved.rdf.secondType ?? '';
       await onFrame();
       if (!current()) return;
-      if (comparison && saved.comparison.enabled) {
-        if (saved.comparison.camera) restoreCamera(comparison, saved.comparison.camera);
-        comparison.setProjection(saved.comparison.projectionMode); syncComparisonToolbar();
-      }
       refresh();
     }
   }
@@ -939,5 +968,43 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
 
 function cameraSnapshot(renderer) {
   return Object.fromEntries(['yaw', 'pitch', 'roll', 'fov', 'constrainUp', 'distance', 'orthographicScale', 'projectionMode', 'target', 'pan'].map(name => [name, Array.isArray(renderer[name]) ? [...renderer[name]] : renderer[name]]));
+}
+/** Hidden windows and fresh sessions retain imported settings until the second
+ * renderer has a frame. Exporting again in between must preserve that recipe. */
+export function createPendingComparisonRestore() {
+  let saved = null, layoutPending = false, cameraPending = false;
+  return {
+    reset() { saved = null; layoutPending = cameraPending = false; },
+    restore(settings, window) {
+      saved = structuredClone({ camera: settings.camera ?? null, projectionMode: settings.projectionMode,
+        ...(settings.layout ? { layout: settings.layout } : {}) });
+      layoutPending = true; cameraPending = true;
+      if (window) { window.restore(saved.layout); layoutPending = false; }
+    },
+    apply(renderer, window) {
+      if (!saved) return;
+      if (layoutPending && window) { window.restore(saved.layout); layoutPending = false; }
+      if (cameraPending && renderer?.frame) {
+        if (saved.camera) restoreCamera(renderer, saved.camera);
+        renderer.setProjection(saved.projectionMode); cameraPending = false;
+      }
+      if (!layoutPending && !cameraPending) saved = null;
+    },
+    snapshot(current) {
+      return { ...current, ...(cameraPending ? { camera: structuredClone(saved.camera), projectionMode: saved.projectionMode } : {}),
+        ...(layoutPending && saved.layout ? { layout: { ...saved.layout } } : {}) };
+    },
+  };
+}
+/** Copy physical eye/orientation and field width between different viewport
+ * aspect ratios, retaining the orbit target/pan decomposition as well. */
+export function copyRendererCamera(source, destination) {
+  source.resize?.(); destination.resize?.();
+  const { yaw, pitch, roll, constrainUp, distance, fov, fieldWidth, projectionMode } = source.getCameraState();
+  // Raw orbit angles also preserve free rotations beyond a pole. Reconstructing
+  // yaw/pitch from a direction would fold the hemisphere and change screen up.
+  destination.setCameraState({ yaw, pitch, roll, constrainUp, distance, fov, fieldWidth, projectionMode });
+  destination.target = [...source.target]; destination.pan = [...source.pan];
+  destination.requestRender();
 }
 function restoreCamera(renderer, camera) { Object.assign(renderer, camera); renderer.setProjection(camera.projectionMode); renderer.requestRender(); }

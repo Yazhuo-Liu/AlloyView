@@ -64,7 +64,7 @@ const elements = Object.fromEntries([
   'empty-state', 'file-name', 'file-meta', 'format-chip', 'close-file', 'file-drop-overlay', 'atom-count', 'frame-count',
   'cell-kind', 'pbc-flags', 'trajectory-section', 'frame-slider', 'frame-label', 'timestep-label',
   'cache-label', 'frame-first', 'frame-previous', 'frame-play', 'frame-next', 'frame-last', 'frame-ticks',
-  'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
+  'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'voronoi-radius-scale', 'voronoi-radius-percent', 'projection-perspective', 'projection-orthographic',
   'background-picker', 'background-current', 'background', 'show-axes',
   'show-cell', 'png-background', 'png-legend', 'png-axes', 'slice-axis', 'slice-position', 'slice-value', 'cutoff', 'run-analysis',
   'analysis-state', 'cutoff-help', 'coordination-cutoff-preset', 'analysis-help', 'atom-details-overlay', 'selection-empty', 'selection-data', 'clear-selection', 'legend', 'color-legend',
@@ -360,6 +360,13 @@ sliceControls = initializeSliceControls({
   getSelectedPoint: () => displayedAtomPoint(state.selectedId),
   getPickedPoints: () => atomEyeTools?.serialize().measurements.atomIds.map(id => ({ id, position: displayedAtomPoint(id) }))
     .filter(point => point.position) ?? [],
+  onPickedAtomsChange: (ids) => {
+    const frame = state.frame;
+    const indices = frame && renderer.frame === frame ? ids.map(id => frame.ids.findIndex(value => value === id))
+      .filter(index => index >= 0) : [];
+    renderer.setSliceSelectedAtoms(indices);
+    atomEyeTools?.syncComparison();
+  },
   onPickModeChange: () => { syncSliceGizmo(); renderer.cancelSelectionGesture(); },
   getDefaultSlice: () => {
     const bounds = renderer.getDisplayBounds();
@@ -574,11 +581,13 @@ for (const axis of ['a', 'b', 'c']) {
 }
 document.getElementById('origin-reset').addEventListener('click', () => setPeriodicOrigin([0, 0, 0]));
 document.getElementById('origin-center-selected').addEventListener('click', centerPeriodicOriginOnSelected);
-elements['radius-scale'].addEventListener('input', () => setRadiusPercent(elements['radius-scale'].value, { source: 'slider' }));
-elements['radius-percent'].addEventListener('input', () => setRadiusPercent(elements['radius-percent'].value, { source: 'number' }));
-elements['radius-percent'].addEventListener('blur', () => {
-  if (elements['radius-percent'].value.trim() === '') setRadiusPercent(state.radiusPercent);
-});
+for (const prefix of ['', 'voronoi-']) {
+  elements[`${prefix}radius-scale`].addEventListener('input', () => setRadiusPercent(elements[`${prefix}radius-scale`].value, { source: 'slider' }));
+  elements[`${prefix}radius-percent`].addEventListener('input', () => setRadiusPercent(elements[`${prefix}radius-percent`].value, { source: 'number' }));
+  elements[`${prefix}radius-percent`].addEventListener('blur', () => {
+    if (elements[`${prefix}radius-percent`].value.trim() === '') setRadiusPercent(state.radiusPercent);
+  });
+}
 elements['projection-perspective'].addEventListener('click', () => renderer.setProjection('perspective'));
 elements['projection-orthographic'].addEventListener('click', () => renderer.setProjection('orthographic'));
 elements.background.addEventListener('input', () => setBackgroundColor(elements.background.value));
@@ -1621,9 +1630,11 @@ function setRadiusPercent(rawValue, { source = 'number' } = {}) {
   if (!normalized) return;
   const { percentage, sliderPercentage } = normalized;
   state.radiusPercent = percentage;
-  elements['radius-scale'].value = String(sliderPercentage);
-  elements['radius-percent'].value = String(percentage);
-  setRangeProgress(elements['radius-scale']);
+  for (const prefix of ['', 'voronoi-']) {
+    elements[`${prefix}radius-scale`].value = String(sliderPercentage);
+    elements[`${prefix}radius-percent`].value = String(percentage);
+    setRangeProgress(elements[`${prefix}radius-scale`]);
+  }
   renderer.setRadiusScale(percentage / 100);
   atomEyeTools?.syncComparison();
 }
@@ -2987,7 +2998,7 @@ function setControlsEnabled(enabled) {
   syncSelectionGroupInteraction();
   for (const id of [
     'reset-camera', 'export-png', 'export-configuration', 'frame-slider',
-    'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'projection-perspective', 'projection-orthographic',
+    'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'voronoi-radius-scale', 'voronoi-radius-percent', 'projection-perspective', 'projection-orthographic',
     'background', 'show-axes', 'show-cell', 'png-background', 'png-legend', 'png-axes',
     'slice-axis', 'slice-position', 'cutoff', 'coordination-cutoff-preset', 'run-analysis',
     'cna-mode', 'cna-cutoff', 'run-cna', 'csp-neighbors', 'run-csp',

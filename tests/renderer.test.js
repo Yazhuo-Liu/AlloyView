@@ -18,12 +18,34 @@ test('cell box visibility is renderer state and requests a redraw', () => {
   assert.equal(redraws, 2);
 });
 
+test('slice picks and measurement picks retain independent highlights without dropping a full measurement selection', () => {
+  const renderer = Object.create(WebGLRenderer.prototype);
+  let redraws = 0;
+  Object.assign(renderer, {atomCount:30,requestRender() { redraws++; }});
+  renderer.setSelectedAtoms(Array.from({length:16}, (_,index) => index));
+  renderer.setSliceSelectedAtoms([16,17,18]);
+  assert.deepEqual([...renderer.getSelectionHighlightAtoms()], Array.from({length:19}, (_,index) => index));
+  assert.equal(renderer.selectedAtoms.length,16); assert.equal(renderer.sliceSelectedAtoms.length,3);
+  renderer.setSliceSelectedAtoms([15,16,16]);
+  assert.deepEqual([...renderer.getSelectionHighlightAtoms()].filter(index => index>=0),Array.from({length:17}, (_,index) => index));
+  renderer.setSliceSelectedAtoms([]);
+  assert.deepEqual([...renderer.getSelectionHighlightAtoms()].filter(index => index>=0),Array.from({length:16}, (_,index) => index));
+  renderer.setSliceSelectedAtoms([20,21,22]); renderer.setSelectedAtoms([]);
+  assert.deepEqual([...renderer.getSelectionHighlightAtoms()].filter(index => index>=0),[20,21,22]);
+  assert.throws(() => renderer.setSliceSelectedAtoms([1,2,3,4]),/three slice-plane atoms/);
+  assert.throws(() => renderer.setSliceSelectedAtoms([30]),/current frame/);
+  assert.throws(() => renderer.setSliceSelectedAtoms([-1]),/current frame/);
+  assert.deepEqual([...renderer.sliceSelectedAtoms],[20,21,22],'invalid changes preserve the valid slice channel');
+  assert.equal(redraws,6);
+});
+
 test('closing a frame releases atom data and GPU buffers while retaining the renderer', () => {
   const r = Object.create(WebGLRenderer.prototype), sizes = new Map();
   Object.assign(r, { frame: {}, displayPositions: new Float32Array(300), atomCount: 100,
     displayAtomCount: 400, atomRadii: new Float32Array(100), visibility: new Uint8Array(100),
     selectionVisibility: new Uint8Array(100),
-    sceneBounds: {}, displayCell: {}, selected: 9, requestRender() {}, onProjectionChange() {},
+    sceneBounds: {}, displayCell: {}, selected: 9, selectedAtoms:Int32Array.from([9]),sliceSelectedAtoms:Int32Array.from([0,1,2]),
+    requestRender() {}, onProjectionChange() {},
     interactions: { reset() {} } });
   let bound;
   r.gl = { ARRAY_BUFFER: 1, STATIC_DRAW: 2, bindBuffer(target, buffer) { bound = buffer; },
@@ -34,6 +56,7 @@ test('closing a frame releases atom data and GPU buffers while retaining the ren
   assert.equal(r.selectionVisibility, null);
   assert.equal(r.atomCount, 0); assert.equal(r.displayAtomCount, 0); assert.equal(r.sceneBounds, null);
   assert.equal(r.selected, -1); assert.equal(r.projectionMode, 'perspective');
+  assert.ok(r.selectedAtoms.every(index=>index===-1)); assert.ok(r.sliceSelectedAtoms.every(index=>index===-1));
   assert.equal(sizes.size, 6); assert.ok([...sizes.values()].every(size => size === 0));
 });
 

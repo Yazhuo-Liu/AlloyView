@@ -105,6 +105,67 @@ test('three picks finish picking and can move a renamed selected slice without r
   });
 });
 
+test('slice highlights retain every ordered pick after automatic finish and plane creation', () => {
+  const changes = [];
+  const measurementPoints = [{ id: 90, position: [4, 0, 0] }, { id: 91, position: [6, 0, 0] }];
+  withControls({ getPickedPoints: () => measurementPoints,
+    onPickedAtomsChange: ids => changes.push(ids) }, (controls, elements) => {
+    assert.deepEqual(changes.at(-1), [], 'measurement fallback does not claim slice highlights');
+    controls.setPicking(true);
+    controls.addPickedAtom({ id: 7, position: [0, 0, 2] });
+    assert.deepEqual(changes.at(-1), [7]);
+    controls.addPickedAtom({ id: 11, position: [1, 0, 2] });
+    assert.deepEqual(changes.at(-1), [7, 11]);
+    controls.setPicking(false);
+    assert.deepEqual(changes.at(-1), [7, 11], 'manual finish retains the plane anchors');
+    controls.setPicking(true);
+    assert.equal(controls.addPickedAtom({ id: 7, position: [0, 0, 2] }), false);
+    assert.deepEqual(changes.at(-1), [7, 11], 'a duplicate cannot remove an earlier highlight');
+    controls.addPickedAtom({ id: 42, position: [0, 1, 2] });
+    assert.equal(controls.isPicking(), false);
+    assert.deepEqual(changes.at(-1), [7, 11, 42], 'the third atom must remain highlighted after automatic finish');
+    assert.equal(controls.createFromPickedAtoms(3).position, 2);
+    assert.deepEqual(changes.at(-1), [7, 11, 42], 'reusable retained anchors stay highlighted');
+    changes.at(-1).push(999);
+    assert.deepEqual(controls.getPickedAtomIds(), [7, 11, 42], 'observers receive detached IDs');
+    elements.get('slice-clear-picks').listeners.click();
+    assert.deepEqual(changes.at(-1), []);
+    assert.deepEqual(controls.getPickedAtomIds(), []);
+    assert.deepEqual(measurementPoints.map(atom => atom.id), [90, 91], 'clearing slice picks leaves measurements alone');
+  });
+});
+
+test('slice highlight updates resolve present frame IDs and clear on deletion or source reset', () => {
+  const positions = new Map([[7, [0, 0, 1]], [11, [2, 0, 1]]]);
+  let highlighted;
+  withControls({ resolveAtomPoint: id => positions.get(id) ?? null,
+    onPickedAtomsChange: ids => { highlighted = ids; } }, (controls, elements) => {
+    controls.addSlice(); controls.setPicking(true);
+    for (const [id, position] of positions) controls.addPickedAtom({ id, position });
+    assert.deepEqual(highlighted, [7, 11]);
+    positions.delete(7);
+    controls.refreshPickedAtoms();
+    assert.deepEqual(highlighted, [11], 'a missing atom is not highlighted at an unrelated current-frame index');
+    assert.deepEqual(controls.getPickedAtomIds(), [7, 11], 'the absent stable ID remains an anchor for later frames');
+    positions.set(7, [1, 0, 1]);
+    controls.refreshPickedAtoms();
+    assert.deepEqual(highlighted, [7, 11]);
+    controls.setEnabled(false);
+    assert.deepEqual(highlighted, []);
+    controls.setEnabled(true);
+    assert.deepEqual(highlighted, [7, 11]);
+    elements.get('delete-slice').listeners.click();
+    assert.deepEqual(highlighted, []);
+    assert.deepEqual(controls.getPickedAtomIds(), []);
+    controls.setPicking(true);
+    controls.addPickedAtom({ id: 7, position: positions.get(7) });
+    controls.reset();
+    assert.deepEqual(highlighted, []);
+    assert.deepEqual(controls.getPickedAtomIds(), []);
+    assert.equal(controls.isPicking(), false);
+  });
+});
+
 test('slice picks preserve the clicked replica while refreshing the same stable atom IDs', () => {
   let positions = new Map([[7, [1, 2, 3]], [11, [5, 2, 3]]]);
   withControls({ resolveAtomPoint: (id, atom) => positions.get(id)?.map((value, axis) =>

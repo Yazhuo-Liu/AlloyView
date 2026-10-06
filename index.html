@@ -528,12 +528,19 @@
                 <label class="slice-toggle"><input id="show-voronoi-cell" type="checkbox" disabled><span>Show the selected atom's cell</span></label>
                 <label class="slice-toggle"><input id="show-all-voronoi-cells" type="checkbox" disabled><span>Show all analyzed cells</span></label>
                 <div class="paired-fields">
-                  <label class="field"><span>Cell color</span><input id="voronoi-cell-color" type="color" value="#008b95" disabled></label>
-                  <label class="field"><span>Opacity</span><input id="voronoi-cell-opacity" type="range" min="0" max="1" step="0.01" value="0.22" disabled></label>
+                  <label class="field"><span>Cell color</span><input id="voronoi-cell-color" type="color" value="#3b82f6" disabled></label>
+                  <label class="field"><span>Opacity</span><input id="voronoi-cell-opacity" type="range" min="0" max="1" step="0.01" value="0.5" disabled></label>
                 </div>
+                <label class="field radius-field">
+                  <span>Atom radius <small>Shared with Display</small></span>
+                  <span class="range-number-row">
+                    <input id="voronoi-radius-scale" class="range" type="range" min="20" max="200" value="100" step="1" title="Drag from 20% to 200%" disabled>
+                    <span class="input-unit percent-input"><input id="voronoi-radius-percent" type="number" min="5" max="500" value="100" step="1" title="Type a value from 5% to 500%" disabled><i>%</i></span>
+                  </span>
+                </label>
                 <output id="voronoi-cell-status" class="help" role="status" aria-live="polite">Select an atom to inspect its cell.</output>
                 <output id="voronoi-all-cells-status" class="help" role="status" aria-live="polite">All-cell display is off.</output>
-                <p class="help">Click an atom in the viewport, or select its ID in Atom details, to inspect its cell. Showing all cells builds additional display geometry and uses more memory.</p>
+                <p class="help">Click an atom in the viewport, or select its ID in Atom details, to highlight its cell. Reduce the atom radius to see the faces and edges more clearly. Showing all cells builds additional display geometry and uses more memory.</p>
               </details>
               <details id="voronoi-distributions" class="tool-details">
                 <summary>Distributions</summary>

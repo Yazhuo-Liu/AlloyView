@@ -8,11 +8,19 @@ Every categorical legend has a visibility checkbox for each class, including eac
 
 **Selections → Hide selected atoms** also hides their connected bonds and attached arrows. Hidden selection members are excluded from scalar **Auto** color limits. Showing the group again restores its values to the automatic range; fixed manual limits stay unchanged across hiding and frame changes. If every finite value is hidden, the legend reports **No visible finite values**. Calculations and statistical CSV exports still include the full analysis frame.
 
-Atom radius scales element defaults; element and per-atom overrides can set absolute radii. **Show cell box** controls the outline. Background and XYZ axes are independent display controls.
+**Atom radius** scales element defaults; 100% uses their normal size. Drag its slider from 20% to 200%, or enter 5% to 500% numerically. The same control appears in **Voronoi → Cell display**, where reducing atom size reveals cell faces. Both copies stay synchronized and change one global radius percentage for both views. Element and per-atom overrides can set absolute radii before this overall scale. **Show cell box** controls the outline. Background and XYZ axes are independent display controls.
 
-**Show a second view** creates another camera looking at the same data. Its own toolbar provides Top, Bottom, Front, Back, Left, Right, Perspective and Ortho. Choosing a standard direction highlights its button. Rotating away from it clears the highlight and changes the direction label to **Custom**; panning or zooming retains the current direction. **Fit** frames the structure while retaining a custom orientation.
+## Floating second view
 
-Rotate, pan and zoom either viewport independently. The second view inherits the main view's atom-radius scale, element and per-atom radius/color overrides, scalar palettes and visibility filters immediately. Both also share coordinates, slices, replication, cell/background settings, bonds and vectors. Display edits and trajectory-frame changes preserve the second camera's orientation; exported configurations save and restore custom orientations as well.
+**Show a second view** opens a movable, resizable window looking at the same data. It starts on the left on desktop and on the right on phones, keeping the Atom details button accessible. Drag the window header to move it, or its resize corner to change its size. Focus either handle and use arrow keys for keyboard adjustment; Shift makes a larger step. Home restores the default layout, and Escape cancels an active drag or resize. Position and size remain bounded by the viewport.
+
+Its own toolbar provides Top, Bottom, Front, Back, Left, Right, Perspective and Ortho. Choosing a standard direction highlights its button. Rotating away from it clears the highlight and changes the direction label to **Custom**; panning or zooming retains the current direction. **Fit** frames the structure while retaining a custom orientation. **Apply to main** copies the second camera's position, orientation, projection and zoom to the main view.
+
+Rotate, pan and zoom inside either viewport independently. The second view inherits the main view's atom-radius scale, element and per-atom radius/color overrides, scalar palettes and visibility filters immediately. Both also share coordinates, slices, replication, cell/background settings, bonds, vectors and Voronoi cells. Display edits and trajectory-frame changes preserve the second camera's orientation.
+
+The second view's PNG button exports that camera independently. It uses the shared PNG background, legend and XYZ-arrow settings. Window controls, toolbars and Atom details stay out of the image. Saving the second view does not replace the main camera.
+
+Configuration JSON saves the second camera and its viewport-relative layout in `settings.extensions.comparison.layout`, with `left`, `top`, `width` and `height` fractions. Restoring the recipe on a different screen adapts the window to the current viewport.
 
 ## Periodic display origin
 

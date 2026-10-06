@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCell } from '../src/data/model.js';
 import { calculateVoronoiGeometry } from '../src/analysis/voronoi.js';
-import { createVoronoiCellBatch, VoronoiAllCellLayer } from '../src/render/voronoi-cell-layer.js';
+import { createVoronoiCellBatch, normalizeVoronoiCellOptions, VoronoiAllCellLayer } from '../src/render/voronoi-cell-layer.js';
 
 async function cube(atomIndex = 0) {
   const geometry = await calculateVoronoiGeometry({ fractional: new Float64Array(3),
@@ -39,6 +39,8 @@ test('packed cell groups retain physical polygons, integer source IDs and local 
   assert.equal(batch.indexCount, 72);
   assert.equal(batch.edgeCount, 48);
   assert.deepEqual([...new Set(batch.atomIndices)], [3,16777217], 'source atom IDs survive beyond Float32 integer precision');
+  assert.deepEqual([...batch.cellRanges], [3,0,36,48,24, 16777217,36,36,72,24],
+    'each source cell has complete, contiguous face and edge draw ranges');
   const expectedBounds = [3,-1,-1,-1,1,1,1, 16777217,-1,-1,-1,1,1,1];
   batch.bounds.forEach((value, index) => assert.ok(Math.abs(value - expectedBounds[index]) < 1e-12));
   const volume = new Map();
@@ -53,6 +55,12 @@ test('packed cell groups retain physical polygons, integer source IDs and local 
   }
   for (const value of volume.values()) assert.ok(Math.abs(value - 8) < 1e-12, 'closed outward triangles preserve the exact cube volume');
   assert.deepEqual(cells[0].vertices, snapshot, 'render packing leaves scientific cell data untouched');
+});
+
+test('Voronoi defaults use translucent blue faces and preserve explicit appearance settings', () => {
+  assert.deepEqual(normalizeVoronoiCellOptions(), { enabled:false, allEnabled:false, color:'#3b82f6', opacity:0.5 });
+  assert.deepEqual(normalizeVoronoiCellOptions({color:'#ff6600',opacity:0}, {allEnabled:true}),
+    { enabled:false, allEnabled:true, color:'#ff6600', opacity:0 });
 });
 
 test('all-cell rendering appends/reuses bounded GPU buffers and shares dynamic coordinates and visibility', async () => {
@@ -87,4 +95,60 @@ test('all-cell rendering appends/reuses bounded GPU buffers and shares dynamic c
   layer.render(renderer); assert.equal(layer.renderedChunkCount, 0);
   layer.clear(); assert.equal(layer.chunks.length, 0); assert.equal(layer.textureValues, null);
   assert.equal(calls.filter(call => call.name === 'deleteBuffer').length, 6, 'old-frame meshes release all GPU buffer groups');
+});
+
+test('selection highlights only existing source-cell triangles and edges in every replica without a preview or mesh upload', async () => {
+  const { gl, calls } = mockGl(), layer = new VoronoiAllCellLayer(gl);
+  const mesh = createVoronoiCellBatch([await cube(1), await cube(3)]);
+  layer.setGeometry({ chunks:[mesh], cellCount:2, complete:true }, {allEnabled:true, enabled:false});
+  const renderer = { frame:{}, atomCount:4, selected:3, selectedAtoms:Int32Array.from([-1,3,-1]),
+    displayPositions:Float64Array.from([0,0,0, 2,0,0, 4,0,0, 6,0,0]),
+    visibility:Uint8Array.from([255,255,255,255]), voronoiDisplayRevision:1,
+    replicas:[{offset:[0,0,0]},{offset:[0,4,0]}], viewMatrix:new Float32Array(16), projectionMatrix:new Float32Array(16),
+    sliceMode:'planes', sliceCount:1, slicePlaneValues:Float32Array.from([1,0,0,7]), background:[1,1,1] };
+  const uploads = calls.filter(call => call.name === 'bufferData').length;
+  layer.render(renderer);
+  assert.equal(layer.highlightedCellCount, 1);
+  assert.equal(layer.renderedHighlightReplicaCount, 2);
+  const triangles = calls.filter(call => call.name === 'drawElements');
+  assert.deepEqual(triangles.slice(-4).map(call => call.arguments),
+    Array.from({length:4}, () => [gl.TRIANGLES,36,gl.UNSIGNED_INT,36*4]),
+    'highlight draws the complete selected cell range from the original element buffer');
+  const lines = calls.filter(call => call.name === 'drawArrays');
+  assert.deepEqual(lines.slice(-2).map(call => call.arguments),
+    Array.from({length:2}, () => [gl.LINES,72,24]), 'highlight reuses the selected source cell outline');
+  assert.ok(calls.some(call => call.name === 'uniform1i' && call.arguments[0] === 'uSliceCount' && call.arguments[1] === 1),
+    'the common clipping shader applies equally to base cells and selected ranges');
+  assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uColor' && call.arguments[1] < 0.1),
+    'base outlines use a contrasting dark color on the light background');
+  assert.equal(calls.filter(call => call.name === 'bufferData').length, uploads, 'selection needs no mesh extraction or upload');
+
+  renderer.visibility[3] = 0; renderer.voronoiDisplayRevision++;
+  layer.render(renderer);
+  assert.equal(layer.highlightedCellCount, 0, 'hiding an atom hides its attached highlight');
+  assert.equal(layer.renderedHighlightReplicaCount, 0);
+  assert.equal(layer.textureValues[3*4+3], 0);
+  renderer.selected = 0; renderer.selectedAtoms.fill(-1);
+  layer.render(renderer);
+  assert.equal(layer.highlightedCellCount, 0, 'an omitted tessellation site never highlights another atom');
+
+  renderer.selected = 1; renderer.background = [.02,.03,.04];
+  layer.render(renderer);
+  assert.equal(layer.highlightedCellCount, 1);
+  assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uColor'
+    && call.arguments.slice(1).every(channel => channel >= 0.58 && channel < 1)), 'dark backgrounds receive contrasting light outlines');
+  layer.clear();
+  assert.equal(layer.highlightedCellCount, 0); assert.equal(layer.renderedHighlightReplicaCount, 0);
+});
+
+test('retained meshes without cell ranges still support exact selected-cell draw ranges', async () => {
+  const { gl, calls } = mockGl(), layer = new VoronoiAllCellLayer(gl);
+  const mesh = createVoronoiCellBatch([await cube(2)]);
+  delete mesh.cellRanges;
+  layer.setGeometry({chunks:[mesh],cellCount:1},{allEnabled:true});
+  layer.render({frame:{},atomCount:3,selected:2,displayPositions:new Float64Array(9),visibility:Uint8Array.from([255,255,255]),
+    voronoiDisplayRevision:1,replicas:[{offset:[0,0,0]}],viewMatrix:new Float32Array(16),projectionMatrix:new Float32Array(16),sliceMode:'planes',sliceCount:0});
+  assert.equal(layer.highlightedCellCount, 1);
+  assert.deepEqual(calls.filter(call => call.name === 'drawElements').at(-1).arguments,[gl.TRIANGLES,36,gl.UNSIGNED_INT,0]);
+  assert.deepEqual(calls.filter(call => call.name === 'drawArrays').at(-1).arguments,[gl.LINES,24,24]);
 });

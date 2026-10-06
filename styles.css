@@ -628,18 +628,29 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
 .atom-search-row button { padding-inline: 10px; }
 .measurement-controls { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
 .measurement-data { margin: 12px 0; }
-.comparison-view { position: absolute; z-index: 2; top: 56px; right: 12px; width: 42%; height: 40%; min-width: 140px; min-height: 120px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); }
+.comparison-view { position: absolute; z-index: 3; display: grid; grid-template-rows: auto auto minmax(0, 1fr); top: 56px; left: 12px; width: 42%; height: 42%; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); }
+.comparison-view:focus-within, .comparison-view.is-interacting { z-index: 6; }
+.comparison-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; min-height: 34px; padding: 4px 6px 4px 9px; color: var(--text-soft); background: var(--overlay); border-bottom: 1px solid var(--line); cursor: grab; user-select: none; touch-action: none; }
+.comparison-header:focus-visible, .comparison-resize:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+.comparison-header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.comparison-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 3px; }
+.comparison-actions button { min-height: 25px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--panel); color: var(--text-soft); font-size: 10px; cursor: pointer; }
+.comparison-actions button:hover { background: var(--accent-soft); color: var(--accent-text); }
+.comparison-surface { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 .comparison-view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .comparison-view .comparison-label { position: absolute; left: 8px; bottom: 8px; z-index: 1; padding: 3px 6px; border-radius: 4px; background: var(--overlay); color: var(--text-soft); font-size: 10px; pointer-events: none; }
-.comparison-toolbar { position: absolute; top: 6px; left: 6px; right: 40px; z-index: 1; display: flex; flex-wrap: wrap; gap: 2px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--overlay); backdrop-filter: blur(12px); }
+.comparison-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-width: 0; padding: 3px; border-bottom: 1px solid var(--line-strong); background: var(--overlay); backdrop-filter: blur(12px); }
 .comparison-toolbar button { min-height: 25px; padding: 0 7px; border: 0; border-radius: 3px; background: transparent; color: var(--text-soft); font-size: 10px; }
 .comparison-toolbar button:hover, .comparison-toolbar button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); }
-.comparison-view .comparison-close { position: absolute; right: 6px; top: 6px; z-index: 1; width: 28px; height: 28px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--overlay); color: var(--text-soft); cursor: pointer; }
+.comparison-view .comparison-close { width: 25px; padding: 0; font-size: 17px; line-height: 1; }
+.comparison-resize { position: absolute; right: 1px; bottom: 1px; z-index: 2; width: 24px; height: 24px; min-height: 0; padding: 0; border: 0; border-radius: 3px; color: var(--text-soft); background: var(--overlay); cursor: nwse-resize; touch-action: none; user-select: none; font-size: 19px; line-height: 1; }
 
 @media (max-width: 920px) {
-  .comparison-view { top: 50px; right: 8px; width: 38%; height: 38%; min-width: 110px; min-height: 85px; }
   .comparison-toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
   .comparison-toolbar button { flex: 0 0 auto; min-height: 30px; }
+  .comparison-header { min-height: 36px; }
+  .comparison-actions button { min-height: 29px; }
+  .comparison-resize { width: 30px; height: 30px; }
   .element-style-row input, .bond-pair-cutoff-row input { min-height: 36px; }
   .selection-group-list button, .selection-groups-section .paired-actions button, .selection-groups-section .tool-run-button { min-height: 42px; }
   .selection-groups-section input, .selection-groups-section select { min-height: 36px; }

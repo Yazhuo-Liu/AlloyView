@@ -2,6 +2,44 @@
 
 Validation date: 2026-10-06 (UTC)
 
+## Floating views and Voronoi display
+
+- All **1,114 Node tests** pass (`npm test`). New checks cover bounded
+  pointer/keyboard window movement and resizing, portable layouts, camera
+  transfer between different viewport aspects and across free-orbit poles,
+  all-cell highlight draw ranges, independent slice/measurement selections,
+  and retaining a closed second view's imported layout and camera until opened.
+  Log: `/tmp/alloyview-view-voronoi-node.log`.
+- `npm run build` passes. `npm run test:browser:advanced-tools` passes on
+  production bundle **b51a0eed885997c1**,
+  including real two/three-atom slice picks, camera controls, independent
+  second-view gestures, configuration restore and responsive tools. Report:
+  `/tmp/alloyview-advanced-tools/report.json`.
+- `npm run test:browser:view-voronoi` passes on production bundle
+  **eaeae767f7593015**, using a real 32-atom CPU Voronoi calculation and
+  SwiftShader graphics. It verifies blue lit faces, contrasting selected-cell
+  pixels with the single-cell preview off, synchronized radius controls,
+  replicas, hidden selections and slices, and unchanged scientific arrays.
+- Real pointer gestures move/resize the window and independently orbit, pan
+  and zoom its camera. PNG exports use the comparison renderer's actual
+  camera and the chosen background/legend/XYZ options, excluding DOM controls.
+  Perspective and parallel camera transfer retain position, direction, roll,
+  distance and field width. Enabled and closed-window recipes restore camera
+  and layout, including export before reopening the closed window.
+- **390 × 640** phone touch movement, resizing, PNG and camera application
+  pass. **320 × 640** defaults stay bounded, avoid the folded Atom details
+  toggle, and leave PNG/Apply controls reachable. Two/three-atom Slice picks
+  retain visible amber selection rings after automatic picking completion
+  and after measurement selections are cleared. Clearing slice picks leaves
+  measurement selections intact.
+- PNG comparisons use the actual export canvas and a bounded pixel tolerance:
+  a standalone 2D-canvas check reproduced one-level RGB readback differences
+  in this Chromium environment. The final export comparison differs in
+  **601 channels by at most 1/255**; camera, renderer, options and dimensions
+  are checked independently. These checks do not measure GPU performance.
+  Log: `/tmp/alloyview-view-voronoi-browser.log`; report and screenshots:
+  `/tmp/alloyview-floating-voronoi/report.json`.
+
 ## Voronoi element subsets and full-cell display
 
 - All **1,102 Node tests** pass. Coverage includes true CPU/GPU input

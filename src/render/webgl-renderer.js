@@ -22,6 +22,10 @@ import {
   transformPoint,
 } from './math.js';
 
+// Measurement picks and the three slice-plane picks have independent
+// lifecycles. Their union fits in one small shader uniform array.
+const SELECTION_HIGHLIGHT_COUNT = 19;
+
 const SPHERE_VERTEX = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aCorner;
@@ -39,7 +43,7 @@ uniform int uSliceMode;
 uniform int uSliceCount;
 uniform vec4 uSlicePlanes[${MAX_SLICES}];
 uniform int uSelected;
-uniform int uSelectedAtoms[16];
+uniform int uSelectedAtoms[${SELECTION_HIGHLIGHT_COUNT}];
 uniform vec3 uReplicaOffset;
 uniform vec3 uReplicaIndex;
 uniform vec3 uRepetitions;
@@ -73,7 +77,7 @@ void main() {
   }
   vVisible = aVisible > 0.5 && sliceVisible ? 1 : 0;
   bool selected = gl_InstanceID == uSelected;
-  for (int item = 0; item < 16; item++) selected = selected || gl_InstanceID == uSelectedAtoms[item];
+  for (int item = 0; item < ${SELECTION_HIGHLIGHT_COUNT}; item++) selected = selected || gl_InstanceID == uSelectedAtoms[item];
   vSelected = selected ? 1 : 0;
   vRadius = radius;
 }`;
@@ -214,6 +218,7 @@ export class WebGLRenderer {
     this.sliceCount = 0;
     this.selected = -1;
     this.selectedAtoms = new Int32Array(16).fill(-1);
+    this.sliceSelectedAtoms = new Int32Array(3).fill(-1);
     this.atomColors = null;
     this.primitiveLayer = null;
     this.dislocationLayer = null;
@@ -335,6 +340,7 @@ export class WebGLRenderer {
     this.dislocationLayer?.clear();
     this.selected = -1;
     this.selectedAtoms?.fill(-1);
+    this.sliceSelectedAtoms?.fill(-1);
     Object.assign(this, createReplication(frame.cell, repetitions));
     this.displayAtomCount = this.atomCount * this.replicas.length;
     this.atomRadii = atomRadii ?? new Float32Array(this.atomCount).fill(0.7);
@@ -389,6 +395,7 @@ export class WebGLRenderer {
     this.replicas = [{ indices: [0, 0, 0], offset: [0, 0, 0] }];
     this.selected = -1;
     this.selectedAtoms?.fill(-1);
+    this.sliceSelectedAtoms?.fill(-1);
     this.sliceMode = 'legacy';
     this.slices = [];
     this.sliceCount = 0;
@@ -650,6 +657,24 @@ export class WebGLRenderer {
     this.requestRender();
   }
 
+  setSliceSelectedAtoms(indices = []) {
+    const values = Array.from(new Set(indices));
+    if (values.length > 3 || values.some(index => !Number.isSafeInteger(index) || index < 0 || index >= this.atomCount)) {
+      throw new Error('Select up to three slice-plane atoms from the current frame.');
+    }
+    this.sliceSelectedAtoms = new Int32Array(3).fill(-1);
+    this.sliceSelectedAtoms.set(values);
+    this.requestRender();
+  }
+
+  getSelectionHighlightAtoms() {
+    const values = Array.from(new Set([...(this.selectedAtoms ?? []), ...(this.sliceSelectedAtoms ?? [])]))
+      .filter(index => Number.isSafeInteger(index) && index >= 0 && index < this.atomCount);
+    const combined = new Int32Array(SELECTION_HIGHLIGHT_COUNT).fill(-1);
+    combined.set(values);
+    return combined;
+  }
+
   centerOnPoint(point) {
     if (!point || point.length !== 3 || !Array.from(point).every(Number.isFinite)) throw new Error('The camera center requires three finite coordinates.');
     this.cancelSelectionGesture();
@@ -906,7 +931,7 @@ export class WebGLRenderer {
     gl.uniform1i(this.sphereUniforms.uSliceCount, this.sliceCount ?? 0);
     gl.uniform4fv(this.sphereUniforms['uSlicePlanes[0]'], this.slicePlaneValues ?? new Float32Array(MAX_SLICES * 4));
     gl.uniform1i(this.sphereUniforms.uSelected, this.selected);
-    if (this.sphereUniforms['uSelectedAtoms[0]'] != null) gl.uniform1iv(this.sphereUniforms['uSelectedAtoms[0]'], this.selectedAtoms);
+    if (this.sphereUniforms['uSelectedAtoms[0]'] != null) gl.uniform1iv(this.sphereUniforms['uSelectedAtoms[0]'], this.getSelectionHighlightAtoms());
     gl.uniform3f(this.sphereUniforms.uRepetitions, ...this.repetitions);
     // Reuse the same atom buffers for every image. Analysis, color updates and
     // visibility masks still have exactly one entry per original atom.

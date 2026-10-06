@@ -425,6 +425,19 @@ test('custom second-view orientations round-trip without claiming a fixed direct
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.extensions.comparison, comparison);
 });
 
+test('floating second-view layouts round-trip portably and reject offscreen or invalid rectangles', () => {
+  const layout = { left: .1, top: .2, width: .4, height: .5 };
+  const recipe = createConfiguration({ settings: { extensions: { comparison: { enabled: true, layout } } } });
+  assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.extensions.comparison.layout, layout);
+  assert.equal(Object.hasOwn(createConfiguration().settings.extensions.comparison, 'layout'), false);
+  for (const patch of [{ left: -.1 }, { top: Infinity }, { width: 0 }, { height: 1.1 },
+    { left: .8 }, { top: .8 }, { width: '40%' }, { arbitrary: true }]) {
+    const invalid = structuredClone(recipe);
+    Object.assign(invalid.settings.extensions.comparison.layout, patch);
+    assert.throws(() => parseConfiguration(JSON.stringify(invalid)), /comparison.layout/);
+  }
+});
+
 test('new scalar schemes round-trip with fixed ranges and automatic ranges remain absent', () => {
   for (const scheme of ['magma', 'inferno', 'cividis', 'turbo', 'spectral']) {
     const colors = {

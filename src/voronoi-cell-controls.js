@@ -6,7 +6,7 @@ export function initializeVoronoiCellControls({ renderer, pool, getFrame, getSel
   getSourceVersion, getResult, onEdit = () => {}, onChange = () => {}, root = document }) {
   const elements = Object.fromEntries(['show-voronoi-cell', 'show-all-voronoi-cells', 'voronoi-cell-color',
     'voronoi-cell-opacity', 'voronoi-cell-status', 'voronoi-all-cells-status'].map(id => [id, root.getElementById(id)]));
-  const defaults = () => ({ enabled: false, allEnabled: false, color: '#008b95', opacity: 0.22 });
+  const defaults = () => ({ enabled: false, allEnabled: false, color: '#3b82f6', opacity: 0.5 });
   let options = defaults(), controlsEnabled = true, cache = null, request = null, allRequest = null;
   const allStatus = message => { if (elements['voronoi-all-cells-status']) elements['voronoi-all-cells-status'].textContent = message; };
   function clearSelected() { renderer.setVoronoiCellGeometry(null, options); }

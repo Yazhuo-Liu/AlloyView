@@ -12,6 +12,7 @@ export function initializeSliceControls({
   onChange = () => {},
   onSelectionChange = () => {},
   onPickModeChange = () => {},
+  onPickedAtomsChange = () => {},
 } = {}) {
   const element = (id) => document.getElementById(id);
   const controls = {
@@ -92,6 +93,11 @@ export function initializeSliceControls({
           ? 'Click up to three atoms in order. Drag the view to rotate it.'
           : 'Pick two atoms for a bisector or three atoms for a plane through them.'}`);
     }
+    // Slice picks have their own highlight channel. The measurement fallback
+    // can define a plane too, but does not become a retained slice selection.
+    onPickedAtomsChange(frameLoaded && pickedAtoms.length ? points.filter((atom) =>
+      atom?.position?.length === 3 && Array.from(atom.position).every(Number.isFinite))
+      .map((atom) => atom.id) : []);
   }
 
   function setPicking(active) {
@@ -319,6 +325,7 @@ export function initializeSliceControls({
     const index = slices.findIndex((slice) => slice.id === selectedId);
     slices.splice(index, 1);
     selectedId = slices[Math.min(index, slices.length - 1)]?.id ?? null;
+    clearPickedAtoms();
     render();
     notify({ selectionChanged: true });
   });

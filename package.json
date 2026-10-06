@@ -13,6 +13,7 @@
     "test:browser:coordination-presets": "node scripts/browser-coordination-presets.mjs",
     "test:browser:atom-details": "node scripts/browser-atom-details.mjs",
     "test:browser:advanced-tools": "node scripts/browser-advanced-tools.mjs",
+    "test:browser:view-voronoi": "node scripts/browser-view-voronoi.mjs",
     "test:browser:topology-tools": "node scripts/browser-topology-tools.mjs",
     "test:browser:voronoi": "node scripts/browser-voronoi-tools.mjs",
     "test:gpu:voronoi": "node scripts/browser-voronoi-gpu.mjs",

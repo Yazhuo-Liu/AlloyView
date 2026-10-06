@@ -249,7 +249,7 @@ settings also retain element/atom appearance overrides, the displacement referen
 and minimum-image option, the vector display source,
 component and length scales, anchoring, linked arrow dimensions and 2D/3D mode,
 measurement IDs and periodic-image mode, and the second view's enabled
-state and direction. Bond visibility is saved independently from whether its
+state, camera and viewport-relative window layout. Bond visibility is saved independently from whether its
 graph analysis is enabled. Older version 1 configurations leave these additions
 disabled. Older configurations with Displacement selected as a Vector source
 migrate that calculation to the independent Displacement tool.
@@ -582,6 +582,12 @@ options default off; all-cell display needs additional memory and mesh
 construction time. Color and opacity are adjustable. Cell geometry follows
 display origin, periodic replication, visibility and slices, appears in PNG
 exports and leaves the analyzed statistics unchanged.
+Cells default to blue (`#3b82f6`) at opacity 0.5, with lit faces and clear edges.
+Picking an included atom highlights its cell while all-cell display is on,
+including when the selected-cell preview is off; measurement picks highlight
+their cells as well. **Atom radius** here and in Display edits the same global
+percentage through synchronized slider/number controls, affecting both views.
+Reducing atom size exposes the faces without recalculating the tessellation.
 Its optional absolute face-area
 and relative surface-fraction thresholds remove small neighbor faces from
 coordination and index statistics while preserving the tessellated volumes
@@ -715,7 +721,10 @@ before the overall radius scale.
 ## Multiple views and image exports
 
 Enable **Display → Show a second view** to inspect the same frame from another
-angle. Its own toolbar includes Top/Bottom/Front/Back/Left/Right and projection
+angle in a movable, resizable floating window. It starts on the left on desktop
+and the right on phones, keeping the Atom details button accessible. Drag its header to
+move it or its corner handle to resize it; keyboard adjustment is also
+available. Its own toolbar includes Top/Bottom/Front/Back/Left/Right and projection
 controls. A selected direction is highlighted until you rotate away from it,
 when the label becomes **Custom** and the direction highlight clears. Panning
 and zooming keep the selected direction; **Fit** preserves a custom orientation.
@@ -724,6 +733,12 @@ element and atom color/radius overrides, scalar palette and visibility filters,
 coordinates, slices, replication, bonds and vectors. Both views share calculated
 results; their cameras move independently, including after display edits or
 trajectory-frame changes. Configuration import restores custom camera angles.
+The **Apply to main** button copies this camera's position, orientation,
+projection and zoom to the main view. The second view's PNG button saves its
+own camera with the shared background, legend and XYZ-arrow export options,
+excluding window controls, toolbars and Atom details. Its position and size
+are stored as viewport-relative fractions in
+`settings.extensions.comparison.layout` and adapt to another screen on import.
 Camera movement does not launch another analysis. **Six-view PNG** exports
 a contact sheet of the six standard directions.
 

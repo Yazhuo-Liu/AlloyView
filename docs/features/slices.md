@@ -10,6 +10,11 @@ With this panel open, the selected plane and its editing arrow appear in the vie
 
 Open **Build a plane from atoms**, press **Pick atoms**, and click or tap up to three distinct atom IDs in order. Their IDs appear below the buttons. Dragging still rotates the view. **Finish picking** ends picking without clearing the IDs; picking also ends automatically after the third atom. **Clear picks** starts a new selection. Switching tools ends picking and keeps the existing clipping planes.
 
+Every picked atom remains highlighted while its ID is retained, including after
+the third pick and plane creation. Slice picks and measurement picks have
+independent highlights; clearing slice picks leaves measurement selections
+intact. The second view shows the same highlights.
+
 - **Between 2 atoms** creates the perpendicular bisector of the first two picks. Its normal points from the first atom to the second, and its positive retained side contains the second atom.
 - **Through 3 atoms** creates a plane through the first three picks. Their order sets the right-hand normal `(r₂ − r₁) × (r₃ − r₁)` and the positive retained side.
 - **Move to atom** moves the selected plane through the last picked atom, preserving its normal and retained side. With no slice picks, it uses the currently selected atom. This requires an existing selected plane.

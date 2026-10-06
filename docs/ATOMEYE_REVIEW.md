@@ -135,7 +135,7 @@ documented separately in [Structure analysis](STRUCTURE_ANALYSIS.md).
 | Extended XYZ and PDB input; optional NetCDF | Plain/Extended XYZ and fixed-width PDB, including indexed trajectories and numbered sequences, are implemented independently. NetCDF remains unsupported. |
 | Element/single-atom colors, radii and hiding | Editable type and atom overrides are implemented and saved in recipes. External color/radius-file import and color tiling blocks remain unsupported. |
 | Find an atom and anchor the camera | ID lookup and selected-atom camera centering are implemented. Crystal-origin manipulation and the native command interface are not reproduced. |
-| Multiple viewports | An optional simultaneous second view shares frame/results with an independent camera, and six-view PNG contact sheets provide export. This is not the native arbitrary-window/thread model. |
+| Multiple viewports | A movable, resizable second view shares frame/results with an independent camera, its own PNG export and an Apply to main control. Recipes retain its viewport-relative layout; six-view PNG contact sheets are also available. The native arbitrary-window/thread model remains separate. |
 | Screenshots and animation scripts | PNG/JPG and cancellable selected-frame PNG ZIP export are implemented. JSON recipes restore processing, but do not interpret arbitrary AtomEye commands or encode movies. |
 | Save atom indices | Visible source-ID list export is implemented; display replicas do not duplicate IDs. |
 | Python/ASE/Jupyter bridge and live reload of growing trajectories | Not implemented; selected browser File objects remain static local inputs. |

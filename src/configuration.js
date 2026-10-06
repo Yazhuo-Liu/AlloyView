@@ -237,7 +237,8 @@ function normalizeExtensions(value, fromSnapshot) {
   }
   const measurements = record(input.measurements ?? {}, `${path}.measurements`, ['enabled', 'minimumImage', 'atomIds']);
   const appearance = record(input.appearance ?? {}, `${path}.appearance`, ['elements', 'atoms']);
-  const comparison = record(input.comparison ?? {}, `${path}.comparison`, ['enabled', 'preset', 'projectionMode', 'camera']);
+  const comparison = record(input.comparison ?? {}, `${path}.comparison`, ['enabled', 'preset', 'projectionMode', 'camera', 'layout']);
+  const comparisonLayout = normalizeComparisonLayout(comparison.layout, `${path}.comparison.layout`);
   const pairCutoffs = list(bonds.pairCutoffs ?? [], `${path}.bonds.pairCutoffs`, MAX_CONFIGURATION_PAIR_CUTOFFS).map((value, index) => {
     const entryPath = `${path}.bonds.pairCutoffs[${index}]`;
     const entry = record(value, entryPath, ['first', 'second', 'cutoff']);
@@ -297,8 +298,8 @@ function normalizeExtensions(value, fromSnapshot) {
     ...(voronoiDisplay === null ? {} : { voronoiDisplay: {
       enabled: boolean(voronoiDisplay.enabled, `${path}.voronoiDisplay.enabled`, false),
       allEnabled: boolean(voronoiDisplay.allEnabled, `${path}.voronoiDisplay.allEnabled`, false),
-      color: hexColor(voronoiDisplay.color ?? '#008b95', `${path}.voronoiDisplay.color`),
-      opacity: number(voronoiDisplay.opacity ?? 0.22, `${path}.voronoiDisplay.opacity`, 0, 1),
+      color: hexColor(voronoiDisplay.color ?? '#3b82f6', `${path}.voronoiDisplay.color`),
+      opacity: number(voronoiDisplay.opacity ?? 0.5, `${path}.voronoiDisplay.opacity`, 0, 1),
     } }),
     bonds: {
       ...normalizeCutoffAnalysis(bonds, `${path}.bonds`, fromSnapshot),
@@ -353,8 +354,24 @@ function normalizeExtensions(value, fromSnapshot) {
       preset: choice(comparison.preset ?? 'top', `${path}.comparison.preset`, new Set(['front', 'back', 'left', 'right', 'top', 'bottom', 'custom'])),
       projectionMode: choice(comparison.projectionMode ?? 'orthographic', `${path}.comparison.projectionMode`, new Set(['orthographic', 'perspective'])),
       camera: normalizeCamera(comparison.camera ?? null),
+      ...(comparisonLayout ? { layout: comparisonLayout } : {}),
     },
   };
+}
+
+function normalizeComparisonLayout(value, path) {
+  if (value == null) return null;
+  const input = record(value, path, ['left', 'top', 'width', 'height']);
+  const layout = {
+    left: number(input.left, `${path}.left`, 0, 1),
+    top: number(input.top, `${path}.top`, 0, 1),
+    width: number(input.width, `${path}.width`, Number.EPSILON, 1),
+    height: number(input.height, `${path}.height`, Number.EPSILON, 1),
+  };
+  if (layout.left + layout.width > 1 + 1e-9 || layout.top + layout.height > 1 + 1e-9) {
+    fail(path, 'must fit within the viewport');
+  }
+  return layout;
 }
 
 function normalizeDxa(value, path) {
