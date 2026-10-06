@@ -149,36 +149,52 @@ export function visibilityByCategory(property, hiddenTypes) {
   return Uint8Array.from(property.data, (id) => hiddenTypes.has(Number.isFinite(id) ? id : 'NaN') ? 0 : 255);
 }
 
-export function colorsByProperty(property, limits = null, scheme = 'atomeye', hiddenCategories = new Set()) {
+/** Optional rangeVisibility excludes atoms from range estimates, without changing their colors or source data. */
+export function colorsByProperty(property, limits = null, scheme = 'atomeye', hiddenCategories = new Set(), rangeVisibility = null) {
   const colorMap = COLOR_MAPS[scheme];
   if (!colorMap) throw new Error(`Unknown scalar color scheme “${scheme}”.`);
+  if (rangeVisibility !== null && rangeVisibility !== undefined && rangeVisibility.length !== property.data.length) {
+    throw new Error('Scalar range visibility must match the property atom count.');
+  }
   let dataMinimum = Number.POSITIVE_INFINITY;
   let dataMaximum = Number.NEGATIVE_INFINITY;
-  for (const value of property.data) {
-    if (!Number.isFinite(value)) continue;
+  let hasFiniteSource = false;
+  let undefinedCount = 0;
+  for (let atom = 0; atom < property.data.length; atom += 1) {
+    const value = property.data[atom];
+    const eligible = !rangeVisibility || Boolean(rangeVisibility[atom]);
+    if (!Number.isFinite(value)) {
+      if (eligible) undefinedCount += 1;
+      continue;
+    }
+    hasFiniteSource = true;
+    if (!eligible) continue;
     dataMinimum = Math.min(dataMinimum, value);
     dataMaximum = Math.max(dataMaximum, value);
   }
-  if (!Number.isFinite(dataMinimum) || !Number.isFinite(dataMaximum)) {
+  const hasFiniteRange = Number.isFinite(dataMinimum) && Number.isFinite(dataMaximum);
+  if (!hasFiniteSource && undefinedCount > 0) {
     // An entirely undefined strain field is a valid result, including at
     // defects or for an unmatched reference. Display NaN without an error.
     const colors = new Uint8Array(property.data.length * 3).fill(130);
     return { colors, legend: { kind: 'types', title: property.displayName ?? property.name,
       property, atomCount: property.data.length,
       items: [{ id: 'NaN', label: 'NaN', color: [130, 130, 130],
-        count: property.data.length, visible: !hiddenCategories.has('NaN') }] } };
+        count: undefinedCount, visible: !hiddenCategories.has('NaN') }] } };
   }
+  if (!hasFiniteRange) dataMinimum = dataMaximum = null;
+  const emptyRange = !hasFiniteRange && !limits;
   const minimum = limits?.minimum ?? dataMinimum;
   const maximum = limits?.maximum ?? dataMaximum;
-  if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || (limits && maximum <= minimum)) {
+  if (!emptyRange && (!Number.isFinite(minimum) || !Number.isFinite(maximum) || (limits && maximum <= minimum))) {
     throw new Error('The scalar color maximum must be greater than its minimum.');
   }
-  const span = maximum - minimum;
+  const span = emptyRange ? 0 : maximum - minimum;
   // Avoid amplifying double-precision roundoff into apparent defects in an
   // otherwise uniform field (for example, perfect-crystal Voronoi volumes).
   // Keep source values and range bounds exact; an explicit range still maps
   // every requested difference, even at this scale.
-  const uniform = !limits && span <= 32 * Number.EPSILON * Math.max(Math.abs(minimum), Math.abs(maximum));
+  const uniform = !limits && !emptyRange && span <= 32 * Number.EPSILON * Math.max(Math.abs(minimum), Math.abs(maximum));
   const colors = new Uint8Array(property.data.length * 3);
   for (let atom = 0; atom < property.data.length; atom += 1) {
     const value = property.data[atom];
@@ -201,6 +217,7 @@ export function colorsByProperty(property, limits = null, scheme = 'atomeye', hi
       colorStops: colorMap.stops,
       gradient: colorMapGradient(colorMap.stops),
       customRange: Boolean(limits),
+      ...(emptyRange ? { emptyRange: true } : {}),
     },
   };
 }

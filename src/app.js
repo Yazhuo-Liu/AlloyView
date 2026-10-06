@@ -54,7 +54,7 @@ import { createConfiguration, parseConfiguration, matchesSource, downloadConfigu
 import { initializeAtomEyeTools } from './atomeye-tools.js';
 import { initializeDxaTools, DXA_STRUCTURE_PROPERTY } from './dxa-tools.js';
 import { initializeFeatureHelp } from './feature-help.js';
-import { normalizeSelectionGroups } from './selection-groups.js';
+import { normalizeSelectionGroups, selectionGroupVisibility } from './selection-groups.js';
 import { initializeSelectionGroupControls } from './selection-group-controls.js';
 import { initializeCrystalVisibilityControls, isCrystalStructureProperty } from './crystal-visibility-controls.js';
 
@@ -1824,7 +1824,9 @@ function applyScalarVisibility(legend) {
   const mask = combineVisibilityMasks(
     visibilityByType(state.frame, hiddenAtomTypes), colorMask, crystalVisibility?.getMask(),
   );
-  renderer.setVisibility(atomEyeTools.filterVisibility(mask));
+  renderer.setVisibility(atomEyeTools.filterVisibility(mask), {
+    selectionVisibility: selectionGroupVisibility(state.frame, state.selectionGroups.groups),
+  });
   restoreSelection();
 }
 
@@ -1846,6 +1848,7 @@ function paletteForCurrentMode() {
     scalarColorRanges.get(property.name),
     scalarColorSchemes.get(property.name) ?? 'atomeye',
     hiddenCategoriesFor(property.name),
+    selectionGroupVisibility(state.frame, state.selectionGroups.groups),
   );
 }
 
@@ -2604,6 +2607,24 @@ function renderLegend(legend) {
     title.append(unit);
   }
   elements['color-legend'].append(title);
+  if (legend.kind === 'scalar' && legend.emptyRange) {
+    const message = document.createElement('p');
+    message.id = 'legend-empty-range';
+    message.className = 'help';
+    message.textContent = 'No visible finite values';
+    const automatic = document.createElement('button');
+    automatic.type = 'button';
+    automatic.id = 'legend-auto';
+    automatic.className = 'legend-auto active';
+    automatic.textContent = 'Auto';
+    automatic.disabled = true;
+    automatic.setAttribute('aria-pressed', 'true');
+    automatic.setAttribute('aria-label', 'Automatic color range on');
+    automatic.title = 'Show group atoms to fit an automatic color range.';
+    elements['color-legend'].append(message, automatic);
+    elements.legend.hidden = false;
+    return;
+  }
   if (legend.kind === 'types') {
     const items = document.createElement('div');
     items.className = 'legend-items crystal-items';
@@ -2724,7 +2745,8 @@ function renderLegend(legend) {
       return limits;
     };
     const applyRange = (limits) => {
-      const palette = atomEyeTools.customizePalette(colorsByProperty(legend.property, limits, legend.scheme));
+      const palette = atomEyeTools.customizePalette(colorsByProperty(legend.property, limits, legend.scheme,
+        hiddenCategoriesFor(legend.property.name), selectionGroupVisibility(state.frame, state.selectionGroups.groups)));
       scalarColorRanges.set(legend.property.name, limits);
       scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
       renderer.setColors(palette.colors);

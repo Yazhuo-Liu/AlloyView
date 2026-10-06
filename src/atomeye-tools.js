@@ -646,7 +646,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     }
     const origin = renderer.periodicOrigin ?? [0, 0, 0];
     if (origin.some((value, axis) => value !== (comparison.periodicOrigin?.[axis] ?? 0))) comparison.setPeriodicOrigin(origin, { coordinateMode });
-    comparison.setVisibility(renderer.visibility);
+    comparison.setVisibility(renderer.visibility, { selectionVisibility: renderer.selectionVisibility });
     if (renderer.sliceMode === 'legacy') comparison.setSlice(renderer.sliceAxis, renderer.sliceMaximum);
     else comparison.setSlices(renderer.slices);
     comparison.setBackground(rgbHex(renderer.background.map(value => value * 255)));

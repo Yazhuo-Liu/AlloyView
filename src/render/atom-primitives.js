@@ -91,9 +91,10 @@ void main() {
   vec3 secondFractional = texelFetch(uFractional, second, 0).xyz;
   vec3 secondReplica = uReplicaIndex + aShift;
   bool endpointInDisplay = uVectorMode || (all(greaterThanEqual(secondReplica, vec3(0.0))) && all(lessThan(secondReplica, uRepetitions)));
-  // Atom appearance/category masks hide spheres and bonds. Arrows form an
-  // independent display layer, while retaining spatial slice clipping below.
-  bool shown = (uVectorMode || (startData.w > 0.5 && endData.w > 0.5))
+  // Ordinary atom/category filters leave the independent arrow layer visible.
+  // Selection hiding uses a negative flag to hide the atom's attached arrows.
+  bool shown = (uVectorMode ? (startData.w >= 0.0 && endData.w >= 0.0)
+      : (startData.w > 0.5 && endData.w > 0.5))
     && vectorLength > 1e-12 && segmentLength > 1e-12 && endpointInDisplay;
   shown = shown && sliceVisible(start, firstFractional, uReplicaIndex);
   if (!uVectorMode) shown = shown && sliceVisible(start + delta, secondFractional, secondReplica);
@@ -319,7 +320,8 @@ export class AtomPrimitiveLayer {
       this.positionValues[target] = renderer.displayPositions[index];
       this.positionValues[target + 1] = renderer.displayPositions[index + 1];
       this.positionValues[target + 2] = renderer.displayPositions[index + 2];
-      this.positionValues[target + 3] = renderer.visibility?.[atom] === 0 ? 0 : 1;
+      this.positionValues[target + 3] = renderer.selectionVisibility?.[atom] === 0
+        ? -1 : renderer.visibility?.[atom] === 0 ? 0 : 1;
       if (this.fractionalValues) {
         this.fractionalValues[target] = fractional[index];
         this.fractionalValues[target + 1] = fractional[index + 1];
@@ -519,6 +521,7 @@ export class AtomPrimitiveLayer {
       const { scale, radius, headRadius = DEFAULT_VECTOR_OPTIONS.headRadius, anchor = 'tail' } = options;
       const shift = { tail: 0, head: -1, center: -0.5 }[anchor], padding = Math.max(radius, headRadius);
       for (let offset = 0; offset < vectors.length; offset += 3) {
+        if (renderer.selectionVisibility?.[offset / 3] === 0) continue;
         if (!Number.isFinite(vectors[offset]) || !Number.isFinite(vectors[offset + 1]) || !Number.isFinite(vectors[offset + 2])) continue;
         for (let axis = 0; axis < 3; axis += 1) {
           const delta = vectors[offset + axis] * scale;

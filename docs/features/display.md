@@ -6,6 +6,8 @@ Choose wrapped coordinates to place periodic atoms inside the simulation cell, o
 
 Every categorical legend has a visibility checkbox for each class, including each element in **Atom type**. Element choices are stored by label and continue to apply after switching color quantities or trajectory frames. Other categorical filters belong to their own property, so hiding a CNA class does not hide a PTM class with the same numeric ID. These display filters intersect with appearance and scalar-range filters, synchronize to the second view, and are saved in configuration JSON.
 
+**Selections → Hide selected atoms** also hides their connected bonds and attached arrows. Hidden selection members are excluded from scalar **Auto** color limits. Showing the group again restores its values to the automatic range; fixed manual limits stay unchanged across hiding and frame changes. If every finite value is hidden, the legend reports **No visible finite values**. Calculations and statistical CSV exports still include the full analysis frame.
+
 Atom radius scales element defaults; element and per-atom overrides can set absolute radii. **Show cell box** controls the outline. Background and XYZ axes are independent display controls.
 
 **Show a second view** creates another camera looking at the same data. Its own toolbar provides Top, Bottom, Front, Back, Left, Right, Perspective and Ortho. Choosing a standard direction highlights its button. Rotating away from it clears the highlight and changes the direction label to **Custom**; panning or zooming retains the current direction. **Fit** frames the structure while retaining a custom orientation.

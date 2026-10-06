@@ -14,6 +14,7 @@
     "test:browser:atom-details": "node scripts/browser-atom-details.mjs",
     "test:browser:advanced-tools": "node scripts/browser-advanced-tools.mjs",
     "test:browser:topology-tools": "node scripts/browser-topology-tools.mjs",
+    "test:browser:selection-hide": "node scripts/browser-selection-hide.mjs",
     "test:gpu:bond-statistics": "node scripts/browser-bond-statistics-gpu.mjs",
     "test:browser:fe-input": "node scripts/browser-fe-input.mjs",
     "test:browser:fe-loop": "node scripts/browser-fe-loop.mjs",

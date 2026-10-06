@@ -2,6 +2,29 @@
 
 Validation date: 2026-10-06 (UTC)
 
+## Hidden selections and automatic color ranges
+
+- All **1,043 Node tests** pass. Focused regressions cover immutable ID masks,
+  overlapping groups, independent physical replica IDs, hide/show controls,
+  masked scalar extrema, fixed manual ranges, full-hidden/NaN cases, actual
+  primitive texture uploads and empty-range PNG legends.
+- `npm run test:browser:selection-hide` passes on the production build with
+  real desktop and phone input. Hiding a selected outlier changes Auto limits
+  from **[0, 1000]** to **[0, 2]**. A fixed **[-5, 50]** range stays unchanged
+  through hide/show and frame changes; after row reordering, Auto excludes the
+  same atom ID and reports **[10, 12]**.
+- Display edits preserve source arrays, calculated properties, analysis caches,
+  bond arrays and vector arrays. New CPU and actual WebGPU coordination jobs
+  with a hidden atom both return **[2, 2, 2, 2]**, including its contributions
+  to neighbors. Scientific CSV still contains all four atoms and the hidden
+  value **1000**.
+- Selected hidden atoms and their bonds/arrows disappear from both viewports
+  and real PNG exports. With all atoms hidden, transparent captures have
+  **zero nontransparent pixels** and Auto reports **No visible finite values**.
+  Normal atom-type filtering continues to leave independent arrows visible.
+  Overlap precedence, showing/deleting groups, JSON replay, missing IDs and a
+  **390 × 844** phone touch check with a fixed viewport all pass.
+
 ## Bond statistics, Voronoi analysis and CSV exports
 
 - All **1,025 Node tests** pass, and the production static build passes. The

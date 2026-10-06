@@ -17,6 +17,7 @@ export function initializeSelectionGroupControls({
     mode: element('selection-group-mode'), operation: element('selection-group-operation'),
     name: element('selection-group-name'), color: element('selection-group-color'),
     visible: element('selection-group-visible'), count: element('selection-group-count'),
+    toggleVisibility: element('toggle-selection-group-visibility'),
     ids: element('selection-group-ids'), applyIds: element('apply-selection-group-ids'),
     preview: element('selection-group-member-preview'), clear: element('clear-selection-group'),
     remove: element('delete-selection-group'), hint: element('selection-group-hint'),
@@ -25,7 +26,7 @@ export function initializeSelectionGroupControls({
   let localState = normalizeSelectionGroups({});
   let enabled = false, active = false, mode = 'click', operation = 'add';
   let editorGroupId = null;
-  let summaryFrame = null, summaryMembers = [], summaries = new Map();
+  let summaryFrame = null, summaryIds = null, summaryMembers = [], summaries = new Map();
   const readState = () => getState ? getState() : localState;
   const selected = state => state.groups.find(group => group.id === state.selectedGroupId);
   const snapshot = () => normalizeSelectionGroups(readState());
@@ -58,9 +59,10 @@ export function initializeSelectionGroupControls({
 
   function render({ editor = true, force = false } = {}) {
     const state = readState(), group = selected(state), frame = getFrame();
-    if (summaryFrame !== frame || summaryMembers.length !== state.groups.length
+    if (summaryFrame !== frame || summaryIds !== frame?.ids || summaryMembers.length !== state.groups.length
       || state.groups.some((item, index) => summaryMembers[index]?.id !== item.id || summaryMembers[index]?.atomIds !== item.atomIds)) {
       summaryFrame = frame;
+      summaryIds = frame?.ids;
       summaryMembers = state.groups.map(item => ({ id: item.id, atomIds: item.atomIds }));
       summaries = new Map((frame && state.groups.length ? summarizeSelectionGroups(frame, state) : []).map(summary => [summary.id, summary]));
     }
@@ -100,6 +102,8 @@ export function initializeSelectionGroupControls({
     for (const input of [controls.name, controls.color, controls.visible,
       controls.ids, controls.applyIds, controls.remove]) input.disabled = !enabled || !group;
     controls.clear.disabled = !enabled || !group?.atomIds.length;
+    controls.toggleVisibility.disabled = !enabled || !frame || !group || !(summaries.get(group.id)?.matchedCount);
+    controls.toggleVisibility.textContent = group?.visible === false ? 'Show selected atoms' : 'Hide selected atoms';
     controls.applyIds.textContent = operation === 'remove' ? 'Remove IDs' : operation === 'replace' ? 'Replace IDs' : 'Add IDs';
     const groupChanged = editorGroupId !== (group?.id ?? null);
     if (groupChanged) { controls.ids.value = ''; controls.name.setCustomValidity(''); controls.name.removeAttribute('aria-invalid'); }
@@ -171,6 +175,10 @@ export function initializeSelectionGroupControls({
   controls.name.addEventListener('change', () => render());
   for (const event of ['input', 'change']) controls.color.addEventListener(event, () => updateGroup({ color: controls.color.value }));
   controls.visible.addEventListener('change', () => updateGroup({ visible: controls.visible.checked }));
+  controls.toggleVisibility.addEventListener('click', () => {
+    const group = selected(readState());
+    if (enabled && getFrame() && group && summaries.get(group.id)?.matchedCount) updateGroup({ visible: !group.visible });
+  });
   for (const [input, kind] of [[controls.mode, 'mode'], [controls.operation, 'operation']]) {
     input.addEventListener('change', () => {
       if (!enabled) return;

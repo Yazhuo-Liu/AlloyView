@@ -22,6 +22,7 @@ test('closing a frame releases atom data and GPU buffers while retaining the ren
   const r = Object.create(WebGLRenderer.prototype), sizes = new Map();
   Object.assign(r, { frame: {}, displayPositions: new Float32Array(300), atomCount: 100,
     displayAtomCount: 400, atomRadii: new Float32Array(100), visibility: new Uint8Array(100),
+    selectionVisibility: new Uint8Array(100),
     sceneBounds: {}, displayCell: {}, selected: 9, requestRender() {}, onProjectionChange() {},
     interactions: { reset() {} } });
   let bound;
@@ -30,6 +31,7 @@ test('closing a frame releases atom data and GPU buffers while retaining the ren
   for (const name of ['positionBuffer', 'colorBuffer', 'fractionalBuffer', 'visibilityBuffer', 'radiusBuffer', 'cellBuffer']) r[name] = {};
   r.clearFrame();
   assert.equal(r.frame, null); assert.equal(r.displayPositions, null); assert.equal(r.atomRadii, null);
+  assert.equal(r.selectionVisibility, null);
   assert.equal(r.atomCount, 0); assert.equal(r.displayAtomCount, 0); assert.equal(r.sceneBounds, null);
   assert.equal(r.selected, -1); assert.equal(r.projectionMode, 'perspective');
   assert.equal(sizes.size, 6); assert.ok([...sizes.values()].every(size => size === 0));
@@ -80,6 +82,31 @@ test('per-atom visibility mask uploads without replacing the analysis frame', ()
   assert.equal(renderer.visibility, mask);
   assert.equal(uploads[1][2], mask);
   assert.throws(() => renderer.setVisibility(new Uint8Array(2)), /does not match/);
+});
+
+test('selection visibility reaches attached primitives while malformed masks leave renderer state unchanged', () => {
+  const renderer = Object.create(WebGLRenderer.prototype), uploads = [], primitiveMasks = [];
+  const frame = { properties: { energy: new Float64Array([1, 2, 100]) } };
+  Object.assign(renderer, { frame, atomCount: 3, visibilityBuffer: {}, requestRender() {},
+    gl: { ARRAY_BUFFER: 1, DYNAMIC_DRAW: 2, bindBuffer() {}, bufferData(target, data) { uploads.push(data); } },
+    primitiveLayer: { updatePositions(owner, regenerateShifts) {
+      primitiveMasks.push([owner.visibility, owner.selectionVisibility, regenerateShifts]);
+    } },
+  });
+  const mask = new Uint8Array([255, 0, 0]), selections = new Uint8Array([255, 255, 0]);
+  renderer.setVisibility(mask, { selectionVisibility: selections });
+  assert.equal(renderer.frame, frame);
+  assert.deepEqual([...frame.properties.energy], [1, 2, 100]);
+  assert.equal(renderer.selectionVisibility, selections);
+  assert.deepEqual(primitiveMasks, [[mask, selections, false]]);
+  assert.deepEqual(uploads, [mask]);
+  assert.throws(() => renderer.setVisibility(null, { selectionVisibility: new Uint8Array(2) }), /selection visibility mask/);
+  assert.equal(renderer.visibility, mask);
+  assert.equal(renderer.selectionVisibility, selections);
+  assert.equal(uploads.length, 1, 'invalid masks do not change GPU buffers');
+  renderer.setVisibility(mask);
+  assert.equal(renderer.selectionVisibility, null, 'a regular visibility update clears selection-specific hiding');
+  assert.deepEqual(primitiveMasks[1], [mask, null, false]);
 });
 
 test('transparent PNG export uses a transparent render and restores the viewport', () => {
@@ -192,6 +219,22 @@ test('PNG atom-type legend overlay draws the current type swatches', () => {
 
   assert.deepEqual(texts, ['Atom type', 'Al', 'Ni']);
   assert.equal(arcs.length, 2);
+});
+
+test('empty scalar PNG legends keep their title, unit and palette without inventing a gradient or numeric range', () => {
+  for (const includeBackground of [true, false]) {
+    const texts = [], rectangles = [];
+    const context = { save() {}, restore() {}, strokeRect() {},
+      fillRect(...values) { rectangles.push(values); },
+      fillText(value) { texts.push(value); },
+      createLinearGradient() { assert.fail('a scalar without visible finite values has no color gradient'); },
+    };
+    drawLegendOverlay(context, { kind: 'scalar', title: 'atomicVolume', unit: 'Å³',
+      minimum: null, maximum: null, emptyRange: true, schemeLabel: 'Viridis',
+      colorStops: [[0, 68, 1, 84], [1, 253, 231, 37]] }, 640, 480, 1, { includeBackground });
+    assert.deepEqual(texts, ['atomicVolume [Å³]', 'Viridis', 'No visible finite values']);
+    assert.equal(rectangles.length, includeBackground ? 1 : 0, 'only the optional panel background is painted');
+  }
 });
 
 test('transparent PNG legends keep text and color keys without a panel background', () => {

@@ -84,6 +84,27 @@ test('bond display options reuse analysis arrays and instance uploads', () => {
   assert.ok(uploads.slice(3).every(upload => upload.values === 0), 'cancel releases GPU bond data');
 });
 
+test('position texture keeps selection hiding distinct from ordinary atom hiding without copying source positions', () => {
+  const { layer } = layerFixture(), textures = [];
+  layer.positionValues = new Float32Array(12);
+  layer.fractionalValues = new Float32Array(12);
+  layer.uploadTexture = (index, values) => textures.push({ index, values: [...values] });
+  layer.gl.RGBA32F = 3; layer.gl.FLOAT = 4;
+  const positions = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const fractional = new Float32Array([.1, .2, .3, .4, .5, .6, .7, .8, .9]);
+  const renderer = { atomCount: 3, displayPositions: positions, frame: { fractional },
+    visibility: new Uint8Array([255, 0, 0]), selectionVisibility: new Uint8Array([255, 255, 0]) };
+  layer.updatePositions(renderer, false);
+  assert.equal(textures.length, 1, 'filter edits update only the existing position texture');
+  assert.deepEqual(textures[0], { index: 0, values: [1, 2, 3, 1, 4, 5, 6, 0, 7, 8, 9, -1] });
+  assert.deepEqual([...positions], [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const storage = layer.positionValues;
+  renderer.selectionVisibility = null;
+  layer.updatePositions(renderer, false);
+  assert.equal(layer.positionValues, storage, 'unhiding reuses the resident texture staging array');
+  assert.deepEqual(textures[1].values, [1, 2, 3, 1, 4, 5, 6, 0, 7, 8, 9, 0]);
+});
+
 test('vector display retains source data and reuses instances when scaling', () => {
   const { layer, uploads } = layerFixture(), renderer = { atomCount: 3 };
   const values = new Float32Array([1, 2, 3, NaN, 2, 3, 0, 0, 0]);
@@ -281,6 +302,26 @@ test('arrow bounds remain independent of hidden atoms and follow arrow-layer vis
   layer.extendBounds(renderer, hiddenMinimum, hiddenMaximum);
   assert.deepEqual(hiddenMinimum, [1, 2, 3]);
   assert.deepEqual(hiddenMaximum, [1, 2, 3]);
+});
+
+test('selection-hidden anchors exclude every attached vector field from bounds across replicas', () => {
+  const { layer } = layerFixture();
+  layer.vectorFields = [
+    { vectors: new Float32Array([100, 0, 0, 2, 0, 0]), options: normalizeVectorOptions({ headRadius: .5 }) },
+    { vectors: new Float32Array([0, 200, 0, 0, 3, 0]), options: normalizeVectorOptions({ headRadius: .5 }) },
+  ];
+  const renderer = { displayPositions: new Float32Array([1, 2, 3, 4, 5, 6]),
+    visibility: new Uint8Array([0, 0]), selectionVisibility: new Uint8Array([0, 255]),
+    minimumOffset: [-10, -2, 0], maximumOffset: [5, 3, 0] };
+  const minimum = [4, 5, 6], maximum = [4, 5, 6];
+  layer.extendBounds(renderer, minimum, maximum);
+  assert.deepEqual(minimum, [-6.5, 2.5, 5.5]);
+  assert.deepEqual(maximum, [11.5, 11.5, 6.5], 'ordinary hidden atoms still contribute their independent arrows');
+  renderer.selectionVisibility[1] = 0;
+  const allHiddenMinimum = [4, 5, 6], allHiddenMaximum = [4, 5, 6];
+  layer.extendBounds(renderer, allHiddenMinimum, allHiddenMaximum);
+  assert.deepEqual(allHiddenMinimum, [4, 5, 6]);
+  assert.deepEqual(allHiddenMaximum, [4, 5, 6]);
 });
 
 test('JPEG export renders an opaque image while keeping legend and axis options', () => {

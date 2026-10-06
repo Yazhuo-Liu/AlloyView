@@ -48,6 +48,122 @@ test('automatic uniform-color tolerance is relative and preserves small physical
   }
 });
 
+test('hidden scalar outliers are excluded from automatic bounds while all atom colors and source values remain', () => {
+  const data = Float64Array.of(-100, 1, 2, 100, NaN);
+  const original = data.slice();
+  const visibility = Uint8Array.of(0, 255, 255, 0, 255);
+  const result = colorsByProperty({ name: 'energy', data }, null, 'viridis', new Set(), visibility);
+  assert.equal(result.legend.minimum, 1);
+  assert.equal(result.legend.maximum, 2);
+  assert.equal(result.legend.dataMinimum, 1);
+  assert.equal(result.legend.dataMaximum, 2);
+  assert.equal(result.legend.customRange, false);
+  assert.equal(result.colors.length, data.length * 3);
+  assert.deepEqual([...result.colors], [68, 1, 84, 68, 1, 84, 253, 231, 37, 253, 231, 37, 130, 130, 130]);
+  assert.deepEqual(data, original);
+  assert.deepEqual([...visibility], [0, 255, 255, 0, 255]);
+});
+
+test('overlapping visibility exclusions produce the range of their visible intersection', () => {
+  const first = Uint8Array.of(0, 255, 255, 255, 255);
+  const second = Uint8Array.of(255, 0, 255, 255, 0);
+  const visibility = combineVisibilityMasks(first, second);
+  const result = colorsByProperty({ name: 'value', data: Float64Array.of(-10, -5, 3, 8, 100) }, null,
+    'atomeye', new Set(), visibility);
+  assert.equal(result.legend.minimum, 3);
+  assert.equal(result.legend.maximum, 8);
+  assert.deepEqual([...visibility], [0, 0, 255, 255, 0]);
+});
+
+test('fixed scalar bounds stay exact across visibility changes and frames, including all-hidden frames', () => {
+  const limits = { minimum: 2, maximum: 4 };
+  const first = colorsByProperty({ name: 'energy', data: Float64Array.of(-100, 3, 100) }, limits,
+    'atomeye', new Set(), Uint8Array.of(0, 255, 0));
+  const next = colorsByProperty({ name: 'energy', data: Float64Array.of(1000, 2000) }, limits,
+    'atomeye', new Set(), Uint8Array.of(0, 0));
+  for (const result of [first, next]) {
+    assert.equal(result.legend.kind, 'scalar');
+    assert.equal(result.legend.minimum, limits.minimum);
+    assert.equal(result.legend.maximum, limits.maximum);
+    assert.equal(result.legend.customRange, true);
+    assert.notEqual(result.legend.emptyRange, true);
+  }
+  assert.equal(first.legend.dataMinimum, 3);
+  assert.equal(first.legend.dataMaximum, 3);
+  assert.equal(next.legend.dataMinimum, null);
+  assert.equal(next.legend.dataMaximum, null);
+  assert.deepEqual([...next.colors], [128, 0, 0, 128, 0, 0]);
+  assert.deepEqual(limits, { minimum: 2, maximum: 4 });
+});
+
+test('an entirely hidden automatic scalar range is empty rather than a NaN category', () => {
+  const result = colorsByProperty({ name: 'energy', unit: 'eV', data: Float64Array.of(-2, 9, NaN) }, null,
+    'viridis', new Set(), Uint8Array.of(0, 0, 0));
+  assert.equal(result.legend.kind, 'scalar');
+  assert.equal(result.legend.emptyRange, true);
+  assert.equal(result.legend.minimum, null);
+  assert.equal(result.legend.maximum, null);
+  assert.equal(result.legend.dataMinimum, null);
+  assert.equal(result.legend.dataMaximum, null);
+  assert.equal(result.legend.unit, 'eV');
+  assert.equal(result.legend.scheme, 'viridis');
+  assert.equal(result.legend.customRange, false);
+  assert.equal(result.legend.items, undefined);
+  assert.deepEqual([...result.colors], [33, 145, 140, 33, 145, 140, 130, 130, 130]);
+});
+
+test('visible undefined values do not label hidden finite scalar values as NaN', () => {
+  const result = colorsByProperty({ name: 'strain', data: Float64Array.of(7, NaN, Infinity) }, null,
+    'viridis', new Set(), Uint8Array.of(0, 255, 255));
+  assert.equal(result.legend.kind, 'scalar');
+  assert.equal(result.legend.emptyRange, true);
+  assert.equal(result.legend.minimum, null);
+  assert.equal(result.legend.maximum, null);
+  assert.equal(result.legend.items, undefined);
+  assert.deepEqual([...result.colors], [33, 145, 140, 130, 130, 130, 130, 130, 130]);
+});
+
+test('entirely undefined fields retain eligible NaN keys and fixed bounds remain scalar if every atom is hidden', () => {
+  const property = { name: 'strain', data: Float64Array.of(NaN, NaN) };
+  const eligible = colorsByProperty(property, null, 'atomeye', new Set(['NaN']), Uint8Array.of(255, 0));
+  assert.equal(eligible.legend.kind, 'types');
+  assert.equal(eligible.legend.atomCount, 2);
+  assert.deepEqual(eligible.legend.items, [{ id: 'NaN', label: 'NaN', color: [130, 130, 130], count: 1, visible: false }]);
+  const fixed = colorsByProperty(property, { minimum: 0, maximum: 1 }, 'atomeye', new Set(), Uint8Array.of(0, 0));
+  assert.equal(fixed.legend.kind, 'scalar');
+  assert.equal(fixed.legend.minimum, 0);
+  assert.equal(fixed.legend.maximum, 1);
+  assert.equal(fixed.legend.dataMinimum, null);
+  assert.equal(fixed.legend.dataMaximum, null);
+  assert.deepEqual([...fixed.colors], [130, 130, 130, 130, 130, 130]);
+});
+
+test('masked automatic ranges retain exact precision and uniform-roundoff handling', () => {
+  const data = Float64Array.of(16 - 8 * Number.EPSILON * 16, 16 + 8 * Number.EPSILON * 16, 1000);
+  const mask = Uint8Array.of(255, 255, 0);
+  const automatic = colorsByProperty({ name: 'atomicVolume', data }, null, 'atomeye', new Set(), mask);
+  assert.equal(automatic.legend.minimum, data[0]);
+  assert.equal(automatic.legend.maximum, data[1]);
+  assert.deepEqual(automatic.colors.slice(0, 3), automatic.colors.slice(3, 6));
+  const manual = colorsByProperty({ name: 'atomicVolume', data }, { minimum: data[0], maximum: data[1] },
+    'atomeye', new Set(), mask);
+  assert.notDeepEqual(manual.colors.slice(0, 3), manual.colors.slice(3, 6));
+  const small = colorsByProperty({ name: 'strain', data: Float64Array.of(1e-30, 2e-30, 9) }, null,
+    'atomeye', new Set(), mask);
+  assert.equal(small.legend.minimum, 1e-30);
+  assert.equal(small.legend.maximum, 2e-30);
+  assert.notDeepEqual(small.colors.slice(0, 3), small.colors.slice(3, 6));
+});
+
+test('scalar range visibility rejects mismatched atom counts before processing undefined data', () => {
+  for (const data of [Float64Array.of(1, 2), Float64Array.of(NaN, NaN)]) {
+    assert.throws(() => colorsByProperty({ name: 'value', data }, null, 'atomeye', new Set(), new Uint8Array(1)),
+      /visibility must match the property atom count/);
+  }
+  assert.throws(() => colorsByProperty({ name: 'value', data: Float64Array.of(1) }, { minimum: 4, maximum: 2 },
+    'atomeye', new Set(), Uint8Array.of(0)), /maximum must be greater/);
+});
+
 test('atom type legend has counts and visibility choices keyed by labels across frames', () => {
   const hidden = new Set(['Ni']);
   const first = { types: new Uint16Array([0, 1, 0, 0]), typeLabels: ['Ni', 'Al', 'Cu'] };

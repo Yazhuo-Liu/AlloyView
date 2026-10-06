@@ -4,6 +4,8 @@
 
 Open **Selections** and click **Add group**, or select atoms to create the first group automatically. Choose **Click atoms** to pick individual atoms or **Drag a box** to select atom centers inside a rectangle. Changes apply immediately; no separate save step is needed. Each group has an editable name, color and **Show group atoms** checkbox.
 
+After selecting atoms, click **Hide selected atoms** to hide the current group's atoms together with their attached bonds and arrows. The button changes to **Show selected atoms** to restore them. Hidden atoms continue to participate in analyses and remain in exported CSV data. Automatic scalar color limits exclude atoms hidden by a selection group; manually fixed limits remain unchanged. The button is available when the current group contains atoms present in the open frame.
+
 Select a group in the list to edit it. **Add atoms** retains its existing members, **Remove atoms** subtracts the picked IDs, and **Replace atoms** replaces all members with the new selection. **Clear members** keeps an empty editable group; **Delete group** removes the group and its display overrides. Up to 64 groups and 1,000,000 stored member IDs are supported.
 
 **Member IDs and manual edits** shows a preview of the group's IDs and accepts space- or comma-separated IDs. The selected Add, Remove or Replace operation also applies to these entries. This allows editing hidden atoms and IDs absent from the current frame. Alternatively, check **Show group atoms** before picking members again. Group counts distinguish IDs present in the current frame from absent IDs.
@@ -18,7 +20,7 @@ A box selects projected atom centers throughout the viewing depth, including ato
 
 Groups store stable atom IDs rather than row indices. They therefore follow reordered trajectory frames; IDs absent from a frame remain in the group for later frames. Display replicas refer to their source atom, so selecting several copies adds that ID once. With **Replicate atoms for analysis** enabled, physical copies have independent IDs and can belong to different groups.
 
-Group colors override the selected element/scalar/crystal palette. Later groups take color precedence when an atom belongs to several groups; a specific per-atom appearance override takes precedence over group color. Membership in any hidden group hides the atom, and existing legend filters, individual visibility settings and clipping planes also apply. A group's color does not change the underlying analysis values or legend ranges.
+Group colors override the selected element/scalar/crystal palette. Later groups take color precedence when an atom belongs to several groups; a specific per-atom appearance override takes precedence over group color. Membership in any hidden group hides the atom, even if another group containing it is visible. Existing legend filters, individual visibility settings and clipping planes also apply. A group's color does not change the underlying analysis values or legend ranges.
 
 JSON configuration export/import saves group names, colors, visibility, member IDs and the selected group. Click/Box mode and Add/Remove/Replace are temporary editing controls. A new source clears groups; importing its saved configuration restores them after the matching files are opened. Older configurations start with no groups.
 

@@ -11,6 +11,7 @@ const GROUP_KEYS = new Set(['id', 'name', 'color', 'visible', 'atomIds']);
 const PATCH_KEYS = new Set(['name', 'color', 'visible']);
 const stylesCache = new WeakMap();
 const frameIdsCache = new WeakMap();
+const visibilityCache = new WeakMap();
 
 export function normalizeSelectionGroups(value = {}, { path = 'selectionGroups' } = {}) {
   record(value, path, STATE_KEYS);
@@ -132,6 +133,34 @@ export function selectionGroupStyles(groups = []) {
   }
   if (Object.isFrozen(groups)) stylesCache.set(groups, styles);
   return styles;
+}
+
+/** Source-row visibility for automatic color limits; analyses retain every atom.
+ * Frame IDs and normalized groups are immutable between source/group edits.
+ * Cache masks by both identities so camera and palette edits never rescan IDs.
+ */
+export function selectionGroupVisibility(frame, groups = []) {
+  if (!frame?.ids?.length || !groups.length) return null;
+  let entry = visibilityCache.get(groups);
+  if (!entry) {
+    const hiddenIds = new Set();
+    for (const group of groups) {
+      if (!group.visible) for (const atomId of group.atomIds) hiddenIds.add(String(atomId));
+    }
+    entry = { hiddenIds, masks: new WeakMap() };
+    if (Object.isFrozen(groups)) visibilityCache.set(groups, entry);
+  }
+  if (!entry.hiddenIds.size) return null;
+  const cached = entry.masks.get(frame.ids);
+  if (cached?.length === frame.ids.length) return cached.mask;
+  let mask = null;
+  for (let index = 0; index < frame.ids.length; index += 1) {
+    if (!entry.hiddenIds.has(String(frame.ids[index]))) continue;
+    if (!mask) { mask = new Uint8Array(frame.ids.length); mask.fill(255); }
+    mask[index] = 0;
+  }
+  entry.masks.set(frame.ids, { length: frame.ids.length, mask });
+  return mask;
 }
 
 export function summarizeSelectionGroups(frame, state) {

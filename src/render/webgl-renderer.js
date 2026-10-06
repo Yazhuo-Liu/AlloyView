@@ -194,6 +194,7 @@ export class WebGLRenderer {
     this.periodicOrigin = [0, 0, 0];
     this.coordinateMode = 'wrapped';
     this.visibility = null;
+    this.selectionVisibility = null;
     this.atomCount = 0;
     this.repetitions = [1, 1, 1];
     this.replicas = [{ indices: [0, 0, 0], offset: [0, 0, 0] }];
@@ -333,6 +334,7 @@ export class WebGLRenderer {
     if (this.atomRadii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
     this.maximumAtomRadius = this.atomRadii.reduce((maximum, radius) => Math.max(maximum, radius), 0);
     this.visibility = new Uint8Array(this.atomCount).fill(255);
+    this.selectionVisibility = null;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, floatDisplayCoordinates(this.displayPositions), gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.fractionalBuffer);
@@ -355,7 +357,7 @@ export class WebGLRenderer {
   clearFrame() {
     this.cancelSelectionGesture();
     this.selectionSourceBounds = null;
-    this.frame = this.displayPositions = this.visibility = this.atomRadii = null;
+    this.frame = this.displayPositions = this.visibility = this.selectionVisibility = this.atomRadii = null;
     this.rawDisplayPositions = this.displayFractional = null;
     this.periodicOrigin = [0, 0, 0];
     this.coordinateMode = 'wrapped';
@@ -409,14 +411,18 @@ export class WebGLRenderer {
     this.requestRender();
   }
 
-  setVisibility(visibility = null) {
+  setVisibility(visibility = null, { selectionVisibility = null } = {}) {
     if (!this.frame) return;
     const values = visibility ?? new Uint8Array(this.atomCount).fill(255);
     if (values.length !== this.atomCount) {
       throw new Error('The visibility mask does not match the current frame.');
     }
+    if (selectionVisibility !== null && selectionVisibility.length !== this.atomCount) {
+      throw new Error('The selection visibility mask does not match the current frame.');
+    }
     this.cancelSelectionGesture();
     this.visibility = values;
+    this.selectionVisibility = selectionVisibility;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, values, gl.DYNAMIC_DRAW);
@@ -1178,6 +1184,12 @@ function drawScalarLegend(context, legend, x, y, panelWidth, padding, scale, tex
   const gradientX = x + padding;
   const gradientY = y + 34 * scale;
   const gradientWidth = panelWidth - padding * 2;
+  if (legend.emptyRange) {
+    context.fillStyle = textColors.label;
+    context.font = `${9 * scale}px system-ui, sans-serif`;
+    context.fillText('No visible finite values', gradientX, gradientY + 15 * scale, gradientWidth);
+    return;
+  }
   const gradientHeight = 10 * scale;
   const gradient = context.createLinearGradient(gradientX, 0, gradientX + gradientWidth, 0);
   for (const [position, red, green, blue] of legend.colorStops) {
