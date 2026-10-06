@@ -61,6 +61,15 @@ also be run manually. The workflow:
 4. uploads the Pages artifact;
 5. deploys it to the protected `github-pages` environment.
 
+Both jobs use the explicit `ubuntu-24.04` runner to avoid automatic operating
+system changes. The test step prints `node --version`, making the build runtime
+visible in the Actions log. `setup-node` selects Node.js 24 for shell commands;
+JavaScript actions have their own runtime declared in their `action.yml`.
+The workflow uses `configure-pages@v6`, `upload-pages-artifact@v5` and
+`deploy-pages@v5`, which use Node.js 24 directly or through their upload action.
+Updating Node.js locally does not change these action versions. The deployed
+website runs JavaScript and WebAssembly in the browser, without a Node.js server.
+
 In the repository on GitHub, select **Settings → Pages → Build and deployment →
 Source → GitHub Actions**. No branch containing generated files, personal access
 token, deployment secret, or custom base-path setting is required.
