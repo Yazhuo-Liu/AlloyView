@@ -17,6 +17,9 @@ async function runVoronoiChecks() {
   const compare = (actual, expected, tolerance, label) => {
     check(actual.length === expected.length, label + ' array length'); let error = 0;
     for (let index = 0; index < actual.length; index++) {
+      if (!Number.isFinite(actual[index]) || !Number.isFinite(expected[index])) {
+        check(Object.is(actual[index], expected[index]), label + ' excluded/nonfinite row ' + index); continue;
+      }
       error = Math.max(error, Math.abs(actual[index] - expected[index]));
       check(Math.abs(actual[index] - expected[index]) <= tolerance * Math.max(1, Math.abs(expected[index])),
         label + ' atom ' + index + ': GPU ' + actual[index] + ', CPU ' + expected[index]);
@@ -25,7 +28,8 @@ async function runVoronoiChecks() {
   };
   const run = async (label, frame, options = {}, { requireGpu = true, allowPrecisionFallback = false } = {}) => {
     const parameters = { kind: 'voronoi', ...options }, source = frame.fractional.slice();
-    const expected = options.startAtom !== undefined || options.endAtom !== undefined ? await calculateVoronoi(frame, parameters) : await cpu.analyze(frame, parameters), progress = [];
+    const expected = options.startAtom !== undefined || options.endAtom !== undefined || options.selectedTypes != null
+      ? await calculateVoronoi(frame, parameters) : await cpu.analyze(frame, parameters), progress = [];
     let actual;
     try {
       actual = await (options.startAtom !== undefined || options.endAtom !== undefined
@@ -58,8 +62,16 @@ async function runVoronoiChecks() {
       }
     }
     check(actual.summary.volumeError === null || Math.abs(actual.summary.volumeError) < 5e-5, label + ' volume conservation');
+    if (options.selectedTypes != null) {
+      check(JSON.stringify(actual.selectedTypes) === JSON.stringify(expected.selectedTypes), label + ' selected type metadata');
+      compare(actual.analyzedAtomIndices, expected.analyzedAtomIndices, 0, label + ' original analyzed atom identities');
+      check(actual.tessellationAtomCount === expected.tessellationAtomCount && actual.summary.atomCount === expected.summary.atomCount,
+        label + ' subset-only population');
+      check(actual.coordinationHistogram.reduce((sum, bin) => sum + bin.count, 0) === actual.summary.atomCount,
+        label + ' histogram excludes omitted source atoms');
+    }
     if (actual.backend === 'gpu') check(progress.some(value => value.phase === 'analyzing' && value.completedAtoms > 0), label + ' incremental progress');
-    rows.push({ label, atoms: frame.fractional.length / 3, analyzedAtoms: actual.atomicVolume.length, backend: actual.backend, engine: actual.engine, errors,
+    rows.push({ label, atoms: frame.fractional.length / 3, analyzedAtoms: actual.summary.atomCount, backend: actual.backend, engine: actual.engine, errors,
       cpuMs: expected.elapsedMs, gpuMs: actual.elapsedMs, gpuDispatches: actual.gpuDispatches,
       kernelReused: actual.kernelReused, inputReused: actual.inputReused, gpuInputReused: actual.gpuInputReused,
       correctionAtoms: actual.gpuCorrectionAtoms ?? 0, correctionReasons: actual.gpuCorrectionReasons,
@@ -68,6 +80,36 @@ async function runVoronoiChecks() {
   };
   try {
     await run('SC self-image cube', crystalFrame('sc', 1, 2));
+    // Included types are the tessellation's sites, not a mask applied after a
+    // full-source calculation. Checkerboard SC splits into two FCC lattices.
+    const binary = crystalFrame('sc', 2, 2); binary.typeLabels = ['Ni', 'Cu'];
+    for (let atom = 0; atom < binary.types.length; atom++) {
+      binary.types[atom] = Math.round(2 * (binary.fractional[atom * 3] + binary.fractional[atom * 3 + 1] + binary.fractional[atom * 3 + 2])) % 2;
+    }
+    const nickel = await run('Binary Ni subset genuinely tessellates FCC sites', binary, { selectedTypes: ['Ni'] });
+    for (let atom = 0; atom < binary.types.length; atom++) {
+      check(binary.types[atom] === 0 ? Math.abs(nickel.atomicVolume[atom] - 16) < 5e-5 && nickel.voronoiCoordination[atom] === 12
+        : Number.isNaN(nickel.atomicVolume[atom]) && Number.isNaN(nickel.voronoiCoordination[atom]), 'Subset FCC analytic volume/CN and NaN exclusions');
+    }
+    check(nickel.faceNeighbors.some(atom => atom > 3) && nickel.faceNeighbors.every(atom => atom < 0 || binary.types[atom] === 0),
+      'GPU compact neighbor IDs must map back to original selected source atoms');
+    const binaryAll = await run('Switch subset to all restores SC sites', binary);
+    check(binaryAll.voronoiCoordination.every(value => value === 6) && binaryAll.atomicVolume.every(value => Math.abs(value - 8) < 5e-5),
+      'All-site SC analytic volume/CN');
+    const nickelReused = await run('Switch all back to unchanged subset reuses compact GPU input', binary, { selectedTypes: ['Ni'] });
+    check(nickelReused.inputReused && nickelReused.gpuInputReused && nickelReused.kernelReused, 'Subset/all caches remain distinct and reusable');
+    await run('Binary Cu subset remaps complementary original atom IDs', binary, { selectedTypes: ['Cu'] });
+    await run('Selected original center range keeps all included neighbors', binary, { selectedTypes: ['Cu'], startAtom: 2, endAtom: 7 });
+    const ternary = { ...binary, fractional: Float64Array.from([...binary.fractional, ...binary.fractional.slice(0, 12)]),
+      types: Uint16Array.from([...binary.types, 2, 2, 2, 2]), typeLabels: ['Ni', 'Cu', 'Zn'] };
+    const multi = await run('Multiple included elements exclude coincident Zn sites from GPU indices', ternary, { selectedTypes: ['Cu', 'Ni'] });
+    check(multi.selectedTypes.join(',') === 'Cu,Ni' && multi.tessellationAtomCount === 8, 'Multi-element selection canonical metadata');
+    check(multi.atomicVolume.slice(8).every(Number.isNaN) && multi.faceNeighbors.every(atom => atom < 8), 'Excluded coincident atoms never become neighbors');
+    const exactSubset = await run('Subset exact-threshold recovery retains source scattering', binary,
+      { selectedTypes: ['Ni'], faceAreaThreshold: 2 * Math.SQRT2 });
+    check(exactSubset.gpuCorrectionAtoms > 0, 'Selected exact face threshold must use exact recovery when ambiguous');
+    const unknownLabels = { ...binary, typeLabels: ['Type 1', 'Type 2'] };
+    await run('Numeric source type labels select GPU sites without inferred elements', unknownLabels, { selectedTypes: ['Type 2'] });
     const fcc = crystalFrame('fcc', 2, 3.52);
     await run('Periodic FCC', fcc);
     const reused = await run('FCC device/frame/workspace reused', fcc, { bins: 37 });

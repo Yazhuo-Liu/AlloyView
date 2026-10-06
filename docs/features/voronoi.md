@@ -1,9 +1,30 @@
 # Voronoi analysis
 
-Open **Visualization tools → Voronoi** and run the analysis. Each atom owns the
-region closer to it than to any other atomic site or periodic image. The
-analysis constructs the actual convex polyhedron, including its polygonal
+Open **Visualization tools → Voronoi** and run the analysis. By default, each
+atom owns the region closer to it than to any other atomic site or periodic
+image. The analysis constructs the actual convex polyhedron, including its polygonal
 faces; it does not estimate a volume from a nearest-neighbor sphere.
+
+## Choose input atom types
+
+The **Element types** checkboxes select which atomic sites define the
+tessellation. All types are included initially. For example, selecting Fe in
+an Fe–Ni structure constructs cells using only Fe sites and their periodic
+images. Ni sites contribute neither cells nor bisector planes, so the Fe cells
+divide the complete simulation-cell domain among themselves. Volumes,
+neighbors and face-order indices can therefore change when a type is excluded.
+
+This selection controls the Voronoi input sites independently of display
+visibility. Hidden atoms of an included type still participate. Displaying an
+excluded type does not add it to the tessellation. The loaded physical frame
+and other analyses retain their original atom population.
+
+Analysis properties remain aligned with the original frame: excluded sites
+have `NaN` numerical Voronoi values and no face rows. Summary cards, histogram
+populations and Voronoi CSV tables cover only the included sites. Changing the
+input types recalculates an enabled analysis.
+
+## Per-atom quantities
 
 The resulting quantities can be selected in **Color by**:
 
@@ -57,8 +78,9 @@ boundary-atom population, and the complete-domain volume check. Color shortcuts
 select volume, neighbors, surface area, maximum face order, or boundary faces
 directly in the viewport's **Color by** legend.
 
-The six most common indices appear as population bars. **All face-order
-indices** opens the complete table, with 50 rows per page; its contents are
+Expand **Distributions** to see the six most common indices as population
+bars, together with the histograms. **All face-order indices** opens the
+complete table, with 50 rows per page; its contents are
 built only when opened. An index describes topology and is not a unique
 crystal identification.
 
@@ -69,10 +91,12 @@ sample count and percentage. **View binned values** opens the corresponding
 numerical table. Constant-valued populations retain their actual coordinate,
 and neighbor-count distributions report integer coordination values.
 
-**Inspect a selected cell** controls the optional cell display. Enable it and
-select an atom in the viewport, or by ID in Atom details, to examine that cell's
-faces. Color and opacity are adjustable. This preview draws one selected cell,
-so inspecting a large structure does not build geometry for every atom.
+Expand **Cell display** and enable **Show the selected atom's cell** to inspect
+an atom picked in the viewport or by ID in Atom details. **Show all analyzed
+cells** optionally draws the cells of every included input site. Both options
+start off. Color and opacity are adjustable. All-cell display builds additional
+polygonal geometry and uses more memory; the single-cell preview constructs
+only the inspected cell.
 
 The relative volume error is
 `(sum of atomic volumes − simulation-cell volume) / simulation-cell volume`.
@@ -86,7 +110,18 @@ The face table retains face area, edge count, neighboring atom, boundary flag,
 and whether the chosen thresholds retained that face. Shared interior faces
 appear once for each adjacent cell, so face-area distributions count directed
 faces. Boundary faces are excluded from neighbor-face distributions. Filtering
-atom visibility does not change these tables.
+atom visibility does not change these tables. Type-selected exports contain
+only included cells and their faces, using the original source atom IDs for
+both central atoms and neighbors. The summary records the chosen type labels,
+and the original frame atom count remains separately available in the complete
+statistical summary.
+
+Configuration export retains type labels in
+`settings.extensions.voronoi.selectedTypes`: `null` means all types, and a
+string list selects those labels. Older recipes without this field include all
+types. Selected-cell visibility, all-cell visibility, color and opacity are
+stored in `settings.extensions.voronoiDisplay`; polygon arrays are regenerated
+when the corresponding display option is enabled.
 
 ## Implementation
 
@@ -143,11 +178,13 @@ allocating a full mesh for every atom in the structure. Hardware adapters can
 process up to 2,048 cells per batch, and software adapters up to 512; device
 buffer limits and the shared memory budget can reduce these capacities.
 
-Most geometry uses 32-bit floating-point arithmetic. Near contacts and short
-edges use higher-precision filtered predicates assembled from paired 32-bit
-values, together with the three source planes defining each vertex. This
-allows exactly coplanar FCC and HCP configurations to remain on the GPU while
-detecting ambiguous tiny faces and face-area threshold decisions.
+Most geometry uses 32-bit floating-point arithmetic. Near-plane signs and
+duplicate-vertex checks use higher-precision filtered predicates assembled
+from paired 32-bit values, together with the three source planes defining each
+vertex. This allows exactly coplanar FCC and HCP configurations to remain on the GPU while
+detecting ambiguous tiny faces and face-area threshold decisions. Independently
+different intersections inside the 32-bit uncertainty band require exact-cell
+recovery instead of being merged into one vertex.
 
 An isolated ambiguous cell is recalculated by Voro++ inside the existing GPU
 Worker. That recovery reuses one Wasm kernel and a complete-source CPU neighbor
@@ -165,12 +202,19 @@ Voro++ CPU path. The Backend status identifies that fallback. Cells are never
 silently truncated to fit the GPU buffers. Disabling GPU acceleration always
 selects the CPU implementation.
 
+Relaxed configurations with many microscopic faces, extreme thin directions,
+or large vacuum regions can exceed the bounded precision-recovery or neighbor
+coverage budget. Such structures can use the parallel CPU path even with GPU
+acceleration enabled. The bundled relaxed Ni grain-boundary example exercises
+this conservative fallback; it is not evidence of GPU acceleration for that
+structure.
+
 The Auto color range treats volume and surface-area variations at GPU rounding
 precision as uniform, so tiny numerical differences in an ideal crystal do not
 become apparent defects. The actual range extrema, scientific arrays, CSV
 values and manually chosen color ranges retain the calculated values.
 
-### Selected-cell display
+### Cell display
 
 The optional selected-cell mesh is constructed by one Voro++ Worker, regardless
 of the backend used for whole-structure statistics. This constructs the
@@ -182,9 +226,18 @@ display replicas follow the same coordinates as the atom. Slices clip the
 preview, and hiding the atom hides its cell. An enabled preview appears in PNG
 exports with the chosen cell color and opacity.
 
+All-cell display uses the resident parallel CPU pool to build meshes only for
+the analyzed input sites. Color and opacity are shared with the selected-cell
+preview. Completed meshes remain cached after the display is turned off, until
+the source or analyzed result changes. Its display
+geometry follows the same periodic-origin, replication, slice and atom
+visibility rules. The scientific statistics remain cached while mesh
+construction runs separately; changing cell appearance does not recalculate
+the tessellation.
+
 This analysis uses an **unweighted** tessellation. It does not
 assign element-dependent radii or construct a radical/power diagram, and it
-constructs viewport geometry only for the selected cell when requested.
+constructs viewport geometry only when a cell display option is enabled.
 Voronoi polycrystal construction is a separate future structure-editing feature.
 
 ## Sources

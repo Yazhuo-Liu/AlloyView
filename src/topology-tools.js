@@ -24,8 +24,8 @@ const DEFINITIONS = {
     defaults: { lengthBins: 100, angleBins: 180 }, help: 'Uses the default and element-pair bond cutoffs above.' },
   voronoi: { prefix: 'voronoi', tool: 'voronoi', property: 'atomicVolume',
     fields: { faceAreaThreshold: 'voronoi-face-area-threshold', relativeFaceAreaThreshold: 'voronoi-relative-face-area-threshold' },
-    defaults: { faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50 },
-    help: 'Calculate on the complete structure, including atoms hidden in the display.' },
+    defaults: { faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50, selectedTypes: null },
+    help: 'Calculate using the checked element types, including their atoms hidden in the display.' },
 };
 
 const format = value => value !== null && value !== undefined && Number.isFinite(Number(value))
@@ -45,6 +45,38 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
       settings: { ...DEFINITIONS[kind].defaults } }]));
   let controlsEnabled = false;
   let generation = 0;
+  let typeFrame = null, typeChoices = [];
+
+  function updateTypeControls() {
+    const container = $('voronoi-type-options'), frame = getFrame(), selected = jobs.voronoi.settings.selectedTypes;
+    const available = controlsEnabled && Boolean(frame);
+    if (container && typeFrame !== frame) {
+      typeFrame = frame; typeChoices = [];
+      const root = container.ownerDocument;
+      const counts = new Uint32Array(frame?.typeLabels?.length ?? 0);
+      for (const type of frame?.types ?? []) counts[type]++;
+      for (const [type, label] of (frame?.typeLabels ?? []).entries()) {
+        const row = root.createElement('label'), input = root.createElement('input'), text = root.createElement('span');
+        row.className = 'slice-toggle'; input.type = 'checkbox'; input.setAttribute('data-voronoi-type', label);
+        text.textContent = `${label} · ${counts[type].toLocaleString('en-US')} atoms`;
+        input.addEventListener('change', () => {
+          const labels = typeChoices.filter(choice => choice.input.checked).map(choice => choice.label).sort();
+          jobs.voronoi.settings.selectedTypes = labels.length === typeChoices.length ? null : labels;
+          onEdit(); updateTypeControls();
+          if (jobs.voronoi.enabled) void run('voronoi', { automatic: true });
+        });
+        row.append(input, text); typeChoices.push({ label, input, row });
+      }
+      container.replaceChildren(...typeChoices.map(choice => choice.row));
+    }
+    for (const choice of typeChoices) {
+      choice.input.checked = selected === null || selected.includes(choice.label);
+      choice.input.disabled = !available;
+    }
+    if ($('voronoi-type-summary')) $('voronoi-type-summary').textContent = selected === null ? 'All atoms'
+      : selected.length ? selected.join(', ') : 'No types selected';
+    for (const id of ['voronoi-select-all-types', 'voronoi-clear-types']) if ($(id)) $(id).disabled = !available;
+  }
 
   function updateControls(kind) {
     const job = jobs[kind], definition = DEFINITIONS[kind], { prefix } = definition;
@@ -52,7 +84,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     for (const id of Object.values(definition.fields)) if ($(id)) $(id).disabled = !available;
     if ($(`run-${prefix}`)) $(`run-${prefix}`).disabled = !available || Boolean(job.controller) || job.queued;
     if ($(`cancel-${prefix}`)) $(`cancel-${prefix}`).disabled = !available || (!job.enabled && !job.failed);
-    if (kind === 'voronoi') voronoiView.setEnabled(available && Boolean(job.result));
+    if (kind === 'voronoi') { voronoiView.setEnabled(available && Boolean(job.result)); updateTypeControls(); }
   }
 
   function state(kind, label, text = '') {
@@ -96,6 +128,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     if (!Number.isInteger(result.bins) || result.bins < 1 || result.bins > 4096) {
       throw new Error('Use between 1 and 4096 bins for Voronoi distributions.');
     }
+    if (result.selectedTypes !== null && !result.selectedTypes.length) throw new Error('Select at least one element type for Voronoi analysis.');
     return result;
   }
 
@@ -191,6 +224,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     try { settings = parameters(kind); }
     catch (error) {
       abort(kind); job.failed = true;
+      if (kind === 'voronoi') { clearFrames(kind); clearView(kind); onResultsChange({ kind, clearSettings: false }); }
       state(kind, 'Failed', error.message);
       if (!automatic) notify(error.message);
       return false;
@@ -282,6 +316,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
   function serialize() {
     return Object.fromEntries(Object.entries(DEFINITIONS).map(([kind, definition]) => [kind,
       { enabled: jobs[kind].enabled, ...Object.fromEntries(Object.entries(definition.defaults).map(([name, fallback]) => {
+        if (name === 'selectedTypes') return [name, jobs[kind].settings.selectedTypes?.slice() ?? null];
         const input = $(definition.fields[name]);
         const value = input ? input.valueAsNumber : jobs[kind].settings[name];
         const valid = name.endsWith('Bins') || name === 'bins'
@@ -307,6 +342,14 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
 
   function refreshBondParameters() {
     return jobs.bondStatistics.enabled ? run('bondStatistics', { automatic: true }) : Promise.resolve(false);
+  }
+
+  for (const [id, selection] of [['voronoi-select-all-types', null], ['voronoi-clear-types', []]]) {
+    $(id)?.addEventListener('click', () => {
+      jobs.voronoi.settings.selectedTypes = selection?.slice() ?? null;
+      onEdit(); updateTypeControls();
+      if (jobs.voronoi.enabled) void run('voronoi', { automatic: true });
+    });
   }
 
   for (const [kind, definition] of Object.entries(DEFINITIONS)) {

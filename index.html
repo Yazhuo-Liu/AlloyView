@@ -487,6 +487,15 @@
               <div class="analysis-state-controls"><span id="voronoi-state" class="state-pill">Not calculated</span><button id="cancel-voronoi" class="text-button" type="button" disabled>Cancel</button></div>
             </div>
             <p class="help">Calculate each atom's cell volume, surface area, neighbor count and face-order index. Periodic directions use periodic images; other directions are clipped at the simulation cell boundary.</p>
+            <details id="voronoi-type-selection" class="tool-details">
+              <summary>Element types · <span id="voronoi-type-summary">All atoms</span></summary>
+              <div class="paired-actions">
+                <button id="voronoi-select-all-types" class="button button-secondary" type="button" disabled>Select all</button>
+                <button id="voronoi-clear-types" class="button button-secondary" type="button" disabled>Unselect all</button>
+              </div>
+              <div id="voronoi-type-options" class="legend-items" role="group" aria-label="Element types included in Voronoi analysis"></div>
+              <p class="help">Only checked types contribute atoms and neighbors to the tessellation. Unchecked types keep their atoms in the structure, with no Voronoi values. Display hiding does not affect this selection.</p>
+            </details>
             <details class="tool-details voronoi-face-filter-controls">
               <summary>Small-face filters</summary>
               <label class="field"><span>Minimum face area</span><span class="input-unit"><input id="voronoi-face-area-threshold" type="number" value="0" min="0" step="0.001" disabled><i>Å²</i></span></label>
@@ -515,20 +524,22 @@
                 <button id="export-voronoi-distributions" class="button button-secondary" type="button" disabled>Statistics CSV</button>
               </div>
               <details id="voronoi-cell-display" class="tool-details">
-                <summary>Inspect a selected cell</summary>
+                <summary>Cell display</summary>
                 <label class="slice-toggle"><input id="show-voronoi-cell" type="checkbox" disabled><span>Show the selected atom's cell</span></label>
+                <label class="slice-toggle"><input id="show-all-voronoi-cells" type="checkbox" disabled><span>Show all analyzed cells</span></label>
                 <div class="paired-fields">
                   <label class="field"><span>Cell color</span><input id="voronoi-cell-color" type="color" value="#008b95" disabled></label>
                   <label class="field"><span>Opacity</span><input id="voronoi-cell-opacity" type="range" min="0" max="1" step="0.01" value="0.22" disabled></label>
                 </div>
                 <output id="voronoi-cell-status" class="help" role="status" aria-live="polite">Select an atom to inspect its cell.</output>
-                <p class="help">Click an atom in the viewport, or select its ID in Atom details. Only that cell is drawn.</p>
+                <output id="voronoi-all-cells-status" class="help" role="status" aria-live="polite">All-cell display is off.</output>
+                <p class="help">Click an atom in the viewport, or select its ID in Atom details, to inspect its cell. Showing all cells builds additional display geometry and uses more memory.</p>
               </details>
-              <div class="statistics-result-heading"><h4>Most common face-order indices</h4></div>
-              <div id="voronoi-topology-populations" class="voronoi-topology-populations" aria-label="Most common Voronoi indices"></div>
-              <p class="help">Indices describe face topology, not a unique crystal type. Use CNA or PTM to identify crystal structures.</p>
               <details id="voronoi-distributions" class="tool-details">
                 <summary>Distributions</summary>
+                <div class="statistics-result-heading"><h4>Most common face-order indices</h4></div>
+                <div id="voronoi-topology-populations" class="voronoi-topology-populations" aria-label="Most common Voronoi indices"></div>
+                <p class="help">Indices describe face topology, not a unique crystal type. Use CNA or PTM to identify crystal structures.</p>
                 <div id="voronoi-histogram">
                 <div class="statistics-result-heading"><h4>Atomic volumes</h4></div>
                 <div id="voronoi-volume-chart" class="statistics-chart" role="group" aria-label="Voronoi atomic volume distribution"></div>

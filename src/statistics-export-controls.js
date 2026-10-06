@@ -70,9 +70,9 @@ export function initializeStatisticsExports({ getFrame, getFileName = () => 'str
     const exportResults = Object.fromEntries(Object.entries(results).map(([name, result]) => {
       if (['localShear', 'displacement', 'referenceStrain'].includes(name)) return [name, pick(result, metadata)];
       if (name === 'bonds') return [name, pick(result, [...metadata, 'count'])];
-      if (name === 'voronoi') return [name, pick(result, [...metadata, 'statistics', 'summary', 'coordinationHistogram', 'volumeHistogram', 'faceAreaHistogram', 'indexCounts',
-        ...(domain === 'voronoi-atoms' ? ['atomicVolume', 'voronoiSurfaceArea', 'voronoiCoordination', 'voronoiBoundaryFaces', 'voronoiMaxFaceOrder', 'voronoiIndices'] : []),
-        ...(domain === 'voronoi-faces' ? ['faceOffsets', 'faceAreas', 'faceOrders', 'faceNeighbors', 'faceBoundary', 'faceAccepted'] : [])])];
+      if (name === 'voronoi') return [name, pick(result, [...metadata, 'selectedTypes', 'statistics', 'summary', 'coordinationHistogram', 'volumeHistogram', 'faceAreaHistogram', 'indexCounts',
+        ...(domain === 'voronoi-atoms' ? ['analyzedAtomIndices', 'atomicVolume', 'voronoiSurfaceArea', 'voronoiCoordination', 'voronoiBoundaryFaces', 'voronoiMaxFaceOrder', 'voronoiIndices'] : []),
+        ...(domain === 'voronoi-faces' ? ['analyzedAtomIndices', 'faceOffsets', 'faceAreas', 'faceOrders', 'faceNeighbors', 'faceBoundary', 'faceAccepted'] : [])])];
       if (name === 'bondStatistics' && domain === 'bond-distributions') return [name, pick(result, ['lengthDistribution', 'angleDistribution'])];
       return [name, result];
     }).filter(([name]) => domain === 'statistics' || domain.startsWith('voronoi-') && name === 'voronoi'

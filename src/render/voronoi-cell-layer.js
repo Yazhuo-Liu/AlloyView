@@ -7,10 +7,11 @@ export function normalizeVoronoiCellOptions(options = {}, previous = {}) {
   parsePrimitiveColor(color);
   const opacity = Number(options.opacity ?? previous.opacity ?? 0.22);
   if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) throw new Error('Voronoi cell opacity must be between zero and one.');
-  return { enabled: Boolean(options.enabled ?? previous.enabled ?? false), color, opacity };
+  return { enabled: Boolean(options.enabled ?? previous.enabled ?? false),
+    allEnabled: Boolean(options.allEnabled ?? previous.allEnabled ?? false), color, opacity };
 }
 
-/** One inspected cell only. Local Cartesian vertices remain independent of
+/** Local Cartesian vertices remain independent of
  * display wrapping, periodic origin, replication and scientific atom arrays. */
 export function createVoronoiCellMesh(cell) {
   if (!Number.isInteger(cell?.atomIndex) || cell.atomIndex < 0) throw new Error('A Voronoi cell needs a valid atom index.');
@@ -59,17 +60,54 @@ export function createVoronoiCellMesh(cell) {
     vertexCount: faceVertexCount, indexCount: indices.length, edgeCount: edges.size * 2 };
 }
 
+/** Pack a bounded group of cells into one face/outline draw buffer. Atom IDs
+ * stay integer attributes so display transforms and masks need no mesh rebuild. */
+export function createVoronoiCellBatch(cells) {
+  const meshes = cells.map(createVoronoiCellMesh);
+  const vertexCount = meshes.reduce((sum, mesh) => sum + mesh.vertexCount, 0);
+  const edgeCount = meshes.reduce((sum, mesh) => sum + mesh.edgeCount, 0);
+  const indexCount = meshes.reduce((sum, mesh) => sum + mesh.indexCount, 0);
+  const values = new Float32Array((vertexCount + edgeCount) * 6);
+  const indices = new Uint32Array(indexCount), atomIndices = new Uint32Array(vertexCount + edgeCount);
+  const bounds = new Float64Array(cells.length * 7);
+  let vertex = 0, edge = vertexCount, index = 0;
+  cells.forEach((cell, cellIndex) => {
+    const mesh = meshes[cellIndex];
+    values.set(mesh.values.subarray(0, mesh.vertexCount * 6), vertex * 6);
+    values.set(mesh.values.subarray(mesh.vertexCount * 6), edge * 6);
+    atomIndices.fill(cell.atomIndex, vertex, vertex + mesh.vertexCount);
+    atomIndices.fill(cell.atomIndex, edge, edge + mesh.edgeCount);
+    for (const value of mesh.indices) indices[index++] = value + vertex;
+    const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
+    for (let point = 0; point < cell.vertices.length; point += 3) for (let axis = 0; axis < 3; axis++) {
+      minimum[axis] = Math.min(minimum[axis], cell.vertices[point + axis]);
+      maximum[axis] = Math.max(maximum[axis], cell.vertices[point + axis]);
+    }
+    bounds.set([cell.atomIndex, ...minimum, ...maximum], cellIndex * 7);
+    vertex += mesh.vertexCount; edge += mesh.edgeCount;
+  });
+  return { values, indices, atomIndices, bounds, vertexCount, indexCount, edgeCount, cellCount: cells.length };
+}
+
 const VERTEX = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPosition;
 layout(location=1) in vec3 aNormal;
+layout(location=2) in uint aAtomIndex;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform vec3 uCenter;
+uniform bool uBatched;
+uniform sampler2D uAtoms;
+uniform int uAtomTextureWidth;
 out vec3 vWorld;
 out vec3 vNormal;
+flat out float vVisible;
 void main() {
-  vWorld = uCenter + aPosition;
+  vec4 atom = vec4(0.0, 0.0, 0.0, 1.0);
+  if (uBatched) atom = texelFetch(uAtoms, ivec2(int(aAtomIndex) % uAtomTextureWidth, int(aAtomIndex) / uAtomTextureWidth), 0);
+  vVisible = atom.w;
+  vWorld = uCenter + atom.xyz + aPosition;
   vNormal = mat3(uView) * aNormal;
   gl_Position = uProjection * uView * vec4(vWorld, 1.0);
 }`;
@@ -78,6 +116,7 @@ precision highp float;
 precision highp int;
 in vec3 vWorld;
 in vec3 vNormal;
+flat in float vVisible;
 uniform vec3 uColor;
 uniform float uOpacity;
 uniform bool uEdges;
@@ -85,6 +124,7 @@ uniform int uSliceCount;
 uniform vec4 uSlicePlanes[${MAX_SLICES}];
 out vec4 outColor;
 void main() {
+  if (vVisible < 0.5) discard;
   for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
     if (plane >= uSliceCount) break;
     if (dot(uSlicePlanes[plane].xyz, vWorld) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) discard;
@@ -97,7 +137,7 @@ export class VoronoiCellLayer {
   constructor(gl) {
     this.gl = gl;
     this.program = createProgram(gl);
-    this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uCenter', 'uColor', 'uOpacity', 'uEdges', 'uSliceCount', 'uSlicePlanes[0]']
+    this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uCenter', 'uColor', 'uOpacity', 'uEdges', 'uSliceCount', 'uSlicePlanes[0]', 'uBatched', 'uAtoms', 'uAtomTextureWidth']
       .map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.vao = gl.createVertexArray(); this.buffer = gl.createBuffer(); this.indexBuffer = gl.createBuffer();
     gl.bindVertexArray(this.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
@@ -141,6 +181,8 @@ export class VoronoiCellLayer {
     if (!this.options.enabled || !this.indexCount || !renderer.frame || atom >= renderer.atomCount || !renderer.visibility?.[atom]) return;
     const gl = this.gl, u = this.uniforms, planes = dislocationSlicePlanes(renderer);
     gl.useProgram(this.program); gl.bindVertexArray(this.vao);
+    gl.uniform1i(u.uBatched, 0);
+    gl.vertexAttribI4ui(2, 0, 0, 0, 0);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
     gl.uniform3f(u.uColor, ...parsePrimitiveColor(this.options.color));
     gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
@@ -162,6 +204,127 @@ export class VoronoiCellLayer {
       this.renderedReplicaCount++;
     }
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
+  }
+}
+
+/** Full tessellations use one GPU buffer group per bounded worker chunk,
+ * rather than a draw call and uniform upload for every atom. */
+export class VoronoiAllCellLayer {
+  constructor(gl) {
+    this.gl = gl; this.program = createProgram(gl);
+    this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uCenter', 'uColor', 'uOpacity', 'uEdges', 'uSliceCount', 'uSlicePlanes[0]', 'uBatched', 'uAtoms', 'uAtomTextureWidth']
+      .map(name => [name, gl.getUniformLocation(this.program, name)]));
+    this.texture = gl.createTexture(); this.textureValues = null; this.textureWidth = 0;
+    this.options = normalizeVoronoiCellOptions(); this.geometry = null; this.chunks = [];
+    this.cellCount = this.renderedReplicaCount = this.renderedChunkCount = 0;
+    this.positionRevision = this.positions = this.visibility = null;
+  }
+
+  setGeometry(geometry, options = {}) {
+    this.options = normalizeVoronoiCellOptions(options, this.options);
+    // Streaming appends preserve all uploaded buffers. Replacing the scientific
+    // result removes old groups immediately, including incomplete requests.
+    if (geometry !== this.geometry || (geometry?.chunks.length ?? 0) < this.chunks.length) this.clearBuffers();
+    this.geometry = geometry;
+    for (let index = this.chunks.length; index < (geometry?.chunks.length ?? 0); index++) {
+      const mesh = geometry.chunks[index], gl = this.gl;
+      const vao = gl.createVertexArray(), buffer = gl.createBuffer(), indexBuffer = gl.createBuffer(), atomBuffer = gl.createBuffer();
+      gl.bindVertexArray(vao); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, mesh.values, gl.STATIC_DRAW);
+      for (let attribute = 0; attribute < 2; attribute++) {
+        gl.enableVertexAttribArray(attribute); gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 24, attribute * 12);
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, atomBuffer); gl.bufferData(gl.ARRAY_BUFFER, mesh.atomIndices, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(2); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 0, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+      gl.bindVertexArray(null);
+      this.chunks.push({ mesh, vao, buffer, indexBuffer, atomBuffer });
+    }
+    this.cellCount = geometry?.cellCount ?? 0;
+    this.renderedReplicaCount = this.renderedChunkCount = 0;
+  }
+
+  clearBuffers() {
+    const gl = this.gl;
+    for (const chunk of this.chunks) {
+      gl.deleteVertexArray(chunk.vao); gl.deleteBuffer(chunk.buffer);
+      gl.deleteBuffer(chunk.indexBuffer); gl.deleteBuffer(chunk.atomBuffer);
+    }
+    this.chunks = []; this.cellCount = 0;
+  }
+
+  clear() {
+    this.setGeometry(null);
+    const gl = this.gl; gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    // Release the previous frame's large atom texture while retaining objects.
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, null);
+    this.textureValues = this.positions = this.visibility = this.positionRevision = null;
+    this.textureWidth = 0;
+  }
+
+  updatePositions(renderer) {
+    if (renderer.displayPositions === this.positions && renderer.visibility === this.visibility
+      && renderer.voronoiDisplayRevision === this.positionRevision) return;
+    const gl = this.gl, maximum = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    const width = Math.max(1, Math.min(renderer.atomCount, 2048, maximum));
+    const height = Math.max(1, Math.ceil(renderer.atomCount / width));
+    if (height > maximum) throw new Error('The Voronoi display exceeds this GPU’s atom-texture capacity.');
+    if (this.textureValues?.length !== width * height * 4) this.textureValues = new Float32Array(width * height * 4);
+    const values = this.textureValues;
+    for (let atom = 0; atom < renderer.atomCount; atom++) {
+      for (let axis = 0; axis < 3; axis++) values[atom * 4 + axis] = renderer.displayPositions[atom * 3 + axis];
+      values[atom * 4 + 3] = renderer.visibility?.[atom] ? 1 : 0;
+    }
+    gl.activeTexture(gl.TEXTURE0 + 5); gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, values);
+    this.textureWidth = width; this.positions = renderer.displayPositions;
+    this.visibility = renderer.visibility; this.positionRevision = renderer.voronoiDisplayRevision;
+  }
+
+  extendBounds(renderer, minimum, maximum, startChunk = 0) {
+    if (!this.options.allEnabled || !this.geometry) return;
+    for (let index = startChunk; index < this.geometry.chunks.length; index++) {
+      const chunk = this.geometry.chunks[index];
+      for (let cell = 0; cell < chunk.bounds.length; cell += 7) {
+        const atom = chunk.bounds[cell];
+        if (atom >= renderer.atomCount) continue;
+        for (let axis = 0; axis < 3; axis++) {
+          const center = renderer.displayPositions[atom * 3 + axis];
+          minimum[axis] = Math.min(minimum[axis], center + chunk.bounds[cell + 1 + axis] + (renderer.minimumOffset?.[axis] ?? 0));
+          maximum[axis] = Math.max(maximum[axis], center + chunk.bounds[cell + 4 + axis] + (renderer.maximumOffset?.[axis] ?? 0));
+        }
+      }
+    }
+  }
+
+  render(renderer) {
+    this.renderedReplicaCount = this.renderedChunkCount = 0;
+    if (!this.options.allEnabled || !this.cellCount || !renderer.frame) return;
+    this.updatePositions(renderer);
+    const gl = this.gl, u = this.uniforms, planes = dislocationSlicePlanes(renderer);
+    gl.useProgram(this.program); gl.uniform1i(u.uBatched, 1); gl.uniform1i(u.uAtoms, 5);
+    gl.uniform1i(u.uAtomTextureWidth, this.textureWidth); gl.activeTexture(gl.TEXTURE0 + 5); gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
+    gl.uniform3f(u.uColor, ...parsePrimitiveColor(this.options.color));
+    gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
+    gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.CULL_FACE); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -1);
+    for (const replica of renderer.replicas) {
+      gl.uniform3f(u.uCenter, ...replica.offset);
+      for (const chunk of this.chunks) {
+        gl.bindVertexArray(chunk.vao); gl.uniform1i(u.uEdges, 0); gl.uniform1f(u.uOpacity, this.options.opacity);
+        gl.cullFace(gl.FRONT); gl.drawElements(gl.TRIANGLES, chunk.mesh.indexCount, gl.UNSIGNED_INT, 0);
+        gl.cullFace(gl.BACK); gl.drawElements(gl.TRIANGLES, chunk.mesh.indexCount, gl.UNSIGNED_INT, 0);
+        gl.uniform1i(u.uEdges, 1); gl.uniform1f(u.uOpacity, 0.9);
+        gl.drawArrays(gl.LINES, chunk.mesh.vertexCount, chunk.mesh.edgeCount);
+        this.renderedChunkCount++;
+      }
+      this.renderedReplicaCount++;
+    }
+    gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
+    gl.activeTexture(gl.TEXTURE0);
   }
 }
 

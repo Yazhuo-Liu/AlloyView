@@ -143,6 +143,52 @@ test('Voronoi exports complete indices, physical units, distributions and face C
   assert.ok(rows(data, 'summary').some(row => row[3] === 'voronoi' && row[4] === 'meanVolume' && row[6] === 20));
 });
 
+test('type-filtered Voronoi CSV keeps selected source IDs and original neighbor IDs with compact statistics', () => {
+  const data = snapshot();
+  data.frame.types = Uint16Array.from([0, 1, 0]);
+  const voronoi = data.results.voronoi = {
+    selectedTypes: ['Fe'], analyzedAtomIndices: Uint32Array.of(0, 2),
+    atomicVolume: Float64Array.of(25, NaN, 35), voronoiSurfaceArea: Float64Array.of(20, NaN, 30),
+    voronoiCoordination: Float64Array.of(6, NaN, 8), voronoiBoundaryFaces: Float64Array.of(1, NaN, 0),
+    voronoiMaxFaceOrder: Float64Array.of(4, NaN, 6), voronoiIndices: ['<0,6,0,0>', '', '<0,6,0,2>'],
+    faceOffsets: Uint32Array.of(0, 2, 2, 4), faceAreas: Float64Array.of(2, 3, 4, 5),
+    faceOrders: Uint32Array.of(4, 4, 6, 6), faceNeighbors: Int32Array.of(-1, 2, 0, 2),
+    faceBoundary: Uint8Array.of(1, 0, 0, 0), faceAccepted: Uint8Array.of(0, 1, 1, 1),
+    summary: { atomCount: 2, totalVolume: 60, cellVolume: 60, volumeError: 0, meanVolume: 30 },
+    coordinationHistogram: [{ value: 6, count: 1, fraction: .5 }, { value: 8, count: 1, fraction: .5 }],
+    volumeHistogram: [{ lower: 25, upper: 35, count: 2, fraction: 1 }],
+    faceAreaHistogram: [{ lower: 3, upper: 5, count: 3, fraction: 1 }],
+    indexCounts: [{ index: '<0,6,0,0>', count: 1, fraction: .5 }, { index: '<0,6,0,2>', count: 1, fraction: .5 }],
+  };
+  data.frame.properties.push({ name: 'voronoiCoordination', analysisKind: 'voronoi', data: voronoi.voronoiCoordination });
+  const cells = rows(data, 'voronoi-atoms').map(payload);
+  assert.deepEqual(cells, [['9007199254740993', 'Fe', 25, 20, 6, 1, 4, '<0,6,0,0>'], [33, 'Fe', 35, 30, 8, 0, 6, '<0,6,0,2>']]);
+  const faces = rows(data, 'voronoi-faces').map(payload);
+  assert.deepEqual(faces.map(row => row[0]), ['9007199254740993', '9007199254740993', 33, 33]);
+  assert.deepEqual(faces.map(row => row[4]), ['', 33, '9007199254740993', 33]);
+  const coordination = rows(data, 'coordination').map(payload).filter(row => row[0] === 'voronoi');
+  assert.deepEqual(coordination, [['voronoi', 'voronoiCoordination', 6, 1, .5], ['voronoi', 'voronoiCoordination', 8, 1, .5]]);
+  const summary = rows(data, 'summary').map(payload);
+  assert.ok(summary.some(row => row[0] === 'input' && row[1] === 'atom_count' && row[3] === 3));
+  assert.ok(summary.some(row => row[0] === 'voronoi' && row[1] === 'atomCount' && row[3] === 2));
+  assert.ok(summary.some(row => row[0] === 'voronoi' && row[1] === 'selected_types' && row[3] === 'Fe'));
+  assert.equal(rows(data, 'voronoi-distributions').map(payload).filter(row => row[0] === 'voronoi_index').reduce((sum, row) => sum + row[4], 0), 2);
+  assert.deepEqual(Array.from(voronoi.analyzedAtomIndices), [0, 2]);
+  assert.ok(Number.isNaN(voronoi.atomicVolume[1]));
+});
+
+test('explicit all-site Voronoi index mapping preserves legacy CSV exactly and invalid maps fail', () => {
+  const data = snapshot(); addVoronoi(data);
+  const original = ['voronoi-atoms', 'voronoi-faces', 'voronoi-distributions', 'summary'].map(kind => serializeCsv(buildStatisticsTable(data, kind)));
+  data.results.voronoi.analyzedAtomIndices = Uint32Array.of(0, 1, 2);
+  data.results.voronoi.selectedTypes = null;
+  const mapped = ['voronoi-atoms', 'voronoi-faces', 'voronoi-distributions', 'summary'].map(kind => serializeCsv(buildStatisticsTable(data, kind)));
+  assert.deepEqual(mapped, original);
+  data.results.voronoi.analyzedAtomIndices = Uint32Array.of(3);
+  assert.throws(() => serializeCsv(buildStatisticsTable(data, 'voronoi-atoms')), /source atom population/);
+  assert.throws(() => serializeCsv(buildStatisticsTable(data, 'voronoi-faces')), /source atom population/);
+});
+
 test('overall summary includes selections, all classifiers, scalar uncertainties and topology', () => {
   const data = snapshot(); addBondStatistics(data); addVoronoi(data);
   data.frame.properties.push({ name: 'centralSymmetry', unit: '', data: Float32Array.from([0, .2, NaN]), analysisKind: 'centrosymmetry', cspSummary: { bcc: 2, inferred: 1, unresolved: 1 } });

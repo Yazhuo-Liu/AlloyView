@@ -96,12 +96,12 @@ export function buildStatisticsTable(snapshot, kind = 'summary') {
   if (kind === 'voronoi-distributions') return table(['distribution', 'lower', 'upper', 'category', 'count', 'fraction', 'unit'], voronoiDistributionRows(voronoi));
   if (kind === 'voronoi-atoms') return table(['atom_id', 'type', 'volume [Å³]', 'surface_area [Å²]', 'coordination',
     'boundary_faces', 'maximum_face_order', 'voronoi_index'], (function* () {
-    for (let atom = 0; atom < frame.ids.length; atom++) yield [frame.ids[atom], frame.typeLabels?.[frame.types[atom]], voronoi.atomicVolume[atom],
+    for (const atom of voronoiAtomIndices(voronoi, frame.ids.length)) yield [frame.ids[atom], frame.typeLabels?.[frame.types[atom]], voronoi.atomicVolume[atom],
       voronoi.voronoiSurfaceArea[atom], voronoi.voronoiCoordination[atom], voronoi.voronoiBoundaryFaces[atom], voronoi.voronoiMaxFaceOrder[atom], voronoi.voronoiIndices[atom]];
   })());
   required(voronoi.faceOffsets, 'Calculate Voronoi tessellation before exporting its faces.');
   return table(['atom_id', 'face_number', 'face_area [Å²]', 'face_order', 'neighbor_atom_id', 'boundary_face', 'accepted_face'], (function* () {
-    for (let atom = 0; atom < frame.ids.length; atom++) {
+    for (const atom of voronoiAtomIndices(voronoi, frame.ids.length)) {
       for (let face = voronoi.faceOffsets[atom]; face < voronoi.faceOffsets[atom + 1]; face++) {
         const neighbor = voronoi.faceNeighbors[face];
         yield [frame.ids[atom], face - voronoi.faceOffsets[atom] + 1, voronoi.faceAreas[face], voronoi.faceOrders[face],
@@ -109,6 +109,20 @@ export function buildStatisticsTable(snapshot, kind = 'summary') {
       }
     }
   })());
+}
+
+/** Subset arrays stay aligned with the physical frame. Included central cells
+ * and face-neighbor indices therefore both address original source atom IDs.
+ * Legacy all-site results contain no explicit index map. */
+function* voronoiAtomIndices(result, sourceAtomCount) {
+  if (result.analyzedAtomIndices === undefined || result.analyzedAtomIndices === null) {
+    for (let atom = 0; atom < sourceAtomCount; atom++) yield atom;
+    return;
+  }
+  for (const atom of result.analyzedAtomIndices) {
+    if (!Number.isInteger(atom) || atom < 0 || atom >= sourceAtomCount) throw new Error('Voronoi cell indices do not match the source atom population.');
+    yield atom;
+  }
 }
 
 function* propertyRows(properties) {
@@ -143,9 +157,13 @@ function* categoryRows(frame, properties) {
 function* coordinationRows(properties) {
   for (const property of properties) {
     if (!['coordination', 'bondCoordination', 'voronoiCoordination', 'bondOrderCoordination', 'bondStatisticsCoordination'].includes(property.name)) continue;
-    const histogram = property.histogram?.length ? property.histogram.map(entry => [entry.coordination ?? entry.value, entry.count])
+    let histogram = property.histogram?.length ? property.histogram.map(entry => [entry.coordination ?? entry.value, entry.count])
       : [...countsFor(property.data)].sort(([first], [second]) => first - second);
-    for (const [value, count] of histogram) yield [property.analysisKind ?? property.name, property.name, value, count, count / property.data.length];
+    // Type-filtered Voronoi fields mark excluded input sites as NaN. Those
+    // atoms are outside this tessellation's statistical population.
+    if (property.name === 'voronoiCoordination') histogram = histogram.filter(([value]) => Number.isFinite(value));
+    const population = property.name === 'voronoiCoordination' ? histogram.reduce((sum, [, count]) => sum + count, 0) : property.data.length;
+    for (const [value, count] of histogram) yield [property.analysisKind ?? property.name, property.name, value, count, count / population];
   }
 }
 
@@ -220,6 +238,7 @@ function* summaryRows(snapshot, properties) {
   }
   const voronoi = completedResult(snapshot, 'voronoi');
   if (voronoi) {
+    if (Array.isArray(voronoi.selectedTypes)) yield ['voronoi', 'selected_types', '', voronoi.selectedTypes.join('; '), ''];
     for (const [name, value] of Object.entries(voronoi.summary ?? voronoi.statistics?.summary ?? {})) yield ['voronoi', name, '', value,
       name === 'volumeError' ? '' : /volume/i.test(name) ? 'Å³' : /area/i.test(name) ? 'Å²' : ''];
     for (const [distribution, lower, upper, category, count, fraction, unit] of voronoiDistributionRows(voronoi)) {

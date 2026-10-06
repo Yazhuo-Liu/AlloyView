@@ -138,6 +138,7 @@ test('plane uniforms match the kept sides and never duplicate atom buffers', () 
   let renderNotifications = 0;
   Object.assign(r, {
     resize() {}, updateMatrices() {}, background: [0, 0, 0], cellVisible: false,
+    voronoiCellOptions: { enabled: false, allEnabled: false },
     onRender(renderer) { assert.equal(renderer, r); renderNotifications += 1; },
     sphereUniforms: Object.fromEntries(['uView', 'uProjection', 'uRadiusScale', 'uSliceAxis', 'uSliceMaximum',
       'uSliceMode', 'uSliceCount', 'uSlicePlanes[0]', 'uSelected', 'uRepetitions', 'uReplicaOffset', 'uReplicaIndex']

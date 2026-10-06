@@ -5,7 +5,7 @@ import { calculatePtm, warmupPtm } from '../analysis/ptm.js';
 import { calculateAtomicStrain } from '../analysis/atomic-strain.js';
 import { calculateBonds } from '../analysis/bonds.js';
 import { calculateBondStatistics } from '../analysis/bond-statistics.js';
-import { calculateVoronoi, calculateVoronoiGeometry, mergeVoronoiPartials } from '../analysis/voronoi.js';
+import { calculateVoronoi, calculateVoronoiGeometry, calculateVoronoiGeometryBatch, mergeVoronoiPartials } from '../analysis/voronoi.js';
 import { calculateRdf } from '../analysis/rdf.js';
 import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLocalShear } from '../analysis/local-shear.js';
 import { calculateReferenceStrain } from '../analysis/reference-strain.js';
@@ -20,7 +20,7 @@ self.addEventListener('message', async ({ data }) => {
   const { id, fractional, cell, kind, types, residentFrameKey, ...parameters } = data;
   try {
     let frame = { fractional, cell, types }, frameUploaded = false;
-    if ((kind === 'voronoi' || kind === 'voronoiGeometry') && residentFrameKey !== undefined) {
+    if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'].includes(kind) && residentFrameKey !== undefined) {
       if (fractional) {
         voronoiResident = { key: residentFrameKey, frame, context: null };
         frameUploaded = true;
@@ -63,6 +63,9 @@ self.addEventListener('message', async ({ data }) => {
     } else if (kind === 'voronoiGeometry') {
       result = await calculateVoronoiGeometry(frame, { ...parameters, onPhase, onAtoms });
       result.frameUploaded = frameUploaded;
+    } else if (kind === 'voronoiGeometryBatch') {
+      result = await calculateVoronoiGeometryBatch(frame, { ...parameters, onPhase, onAtoms });
+      result.frameUploaded = frameUploaded;
     } else if (kind === 'voronoiFinalize') {
       onPhase('finalizing');
       result = mergeVoronoiPartials(parameters.partials, parameters.atomCount, { bins: parameters.bins, consumePartials: true });
@@ -88,7 +91,8 @@ self.addEventListener('message', async ({ data }) => {
       const metrics = parameters.metricInput.subarray(offset, offset + (parameters.endAtom - parameters.startAtom) * 6);
       result = finalizeLocalShear(metrics, { ...parameters, onAtoms });
     } else throw new Error(`Unknown analysis kind: ${kind}`);
-    const buffers = [...new Set(Object.values(result).filter(ArrayBuffer.isView).map((value) => value.buffer))];
+    const fields = [...Object.values(result), ...(kind === 'voronoiGeometryBatch' ? result.cells.flatMap(cell => Object.values(cell)) : [])];
+    const buffers = [...new Set(fields.filter(ArrayBuffer.isView).map((value) => value.buffer))];
     self.postMessage({ id, ok: true, result }, buffers);
   } catch (error) {
     self.postMessage({ id, ok: false, error: error instanceof Error ? error.message : String(error) });

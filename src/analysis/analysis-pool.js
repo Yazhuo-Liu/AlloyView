@@ -2,6 +2,8 @@ import { CSP_SUMMARY_FIELDS } from './centrosymmetry.js';
 import { MAX_BONDS } from './bonds.js';
 import { mergeBondStatisticsPartials } from './bond-statistics.js';
 import { VORONOI_FIELDS, mergeVoronoiPartials } from './voronoi.js';
+import { prepareVoronoiSelection, expandVoronoiResult, mapVoronoiGeometry,
+  compactVoronoiAtomIndices } from './voronoi-selection.js';
 import { finalizeRdf } from './rdf.js';
 import { modalCoordination, shearInvariant } from './local-shear.js';
 import { REFERENCE_STRAIN_FIELDS } from './reference-strain.js';
@@ -291,12 +293,12 @@ export class AnalysisPool {
       warning: null, ...(fallbacks.length ? { fallbackReason: fallbacks.join('; ') } : {}) };
   }
 
-  async analyzeCPU(frame, parameters, { onProgress = () => {}, signal } = {}) {
+  async analyzeCPU(frame, parameters, { onProgress = () => {}, signal, onGeometryChunk, retainCells = true } = {}) {
     if (this.closed) throw new Error('The analysis pool is closed.');
     if (signal?.aborted) throw abortError();
     if (parameters.kind === 'localShear') return this.analyzeLocalShear(frame, parameters, { onProgress, signal });
-    if (parameters.kind === 'voronoi' || parameters.kind === 'voronoiGeometry') {
-      return this.analyzeVoronoiCPU(frame, parameters, { onProgress, signal });
+    if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'].includes(parameters.kind)) {
+      return this.analyzeVoronoiCPU(frame, parameters, { onProgress, signal, onGeometryChunk, retainCells });
     }
     const startedAt = performance.now();
     const atomCount = frame.fractional.length / 3;
@@ -531,21 +533,23 @@ export class AnalysisPool {
    * chunk, without rebuilding its source index or Wasm module. The final CSR
    * merge and histogram scans also run in a Worker, keeping the UI responsive.
    */
-  async analyzeVoronoiCPU(frame, parameters, { onProgress = () => {}, signal } = {}) {
-    const startedAt = performance.now(), atomCount = frame.fractional.length / 3;
+  async analyzeVoronoiCPU(sourceFrame, parameters, { onProgress = () => {}, signal, onGeometryChunk, retainCells = true } = {}) {
+    const startedAt = performance.now(), selection = prepareVoronoiSelection(sourceFrame, parameters.selectedTypes),
+      frame = selection.frame, atomCount = frame.fractional.length / 3;
     if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
     const geometryOnly = parameters.kind === 'voronoiGeometry';
-    if (geometryOnly && (!Number.isInteger(parameters.atomIndex) || parameters.atomIndex < 0 || parameters.atomIndex >= atomCount)) {
-      throw new Error('Voronoi geometry requires a valid atom index.');
-    }
+    const geometryBatch = parameters.kind === 'voronoiGeometryBatch';
+    const geometryIndices = geometryOnly || geometryBatch
+      ? compactVoronoiAtomIndices(selection, geometryOnly ? [parameters.atomIndex] : parameters.atomIndices) : null;
+    const workCount = geometryIndices?.length ?? atomCount;
     const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
     // Coordinate snapshot, linked index, per-worker output, and resident Wasm
     // buffers. Face CSR is streamed in bounded chunks rather than a full
     // frame-sized private output in each Worker.
     const workerBytes = frame.fractional.byteLength * (sharedMemory ? 1 : 2) + atomCount * 16 + 2 * 1024 ** 2;
-    const workerCount = geometryOnly ? 1 : Math.min(this.limit, chooseWorkerCount(atomCount, workerBytes, this.environment, 512));
-    const chunkSize = geometryOnly ? 1 : Math.max(32, Math.min(256, Math.ceil(atomCount / (workerCount * 8))));
-    const chunkCount = geometryOnly ? 1 : Math.ceil(atomCount / chunkSize);
+    const workerCount = geometryOnly ? 1 : Math.min(this.limit, chooseWorkerCount(workCount, workerBytes, this.environment, geometryBatch ? 256 : 512));
+    const chunkSize = geometryOnly ? 1 : Math.max(32, Math.min(geometryBatch ? 128 : 256, Math.ceil(workCount / (workerCount * 8))));
+    const chunkCount = Math.ceil(workCount / chunkSize);
     const controller = new AbortController();
     this.controllers.add(controller);
     const abort = () => controller.abort();
@@ -568,8 +572,8 @@ export class AnalysisPool {
       onProgress({ completed: completedChunks === chunkCount ? workerCount : 0, total: workerCount, workerCount,
         phase: currentPhase, prepared: phases.filter(value => !['queued', 'preparing'].includes(value)).length,
         initialized: phases.filter(value => ['indexing', 'analyzing', 'complete'].includes(value)).length,
-        completedAtoms: Math.min(geometryOnly ? 1 : atomCount, completedAtoms + processed.reduce((sum, count) => sum + count, 0)),
-        totalAtoms: geometryOnly ? 1 : atomCount, completedChunks, totalChunks: chunkCount });
+        completedAtoms: Math.min(workCount, completedAtoms + processed.reduce((sum, count) => sum + count, 0)),
+        totalAtoms: workCount, completedChunks, totalChunks: chunkCount });
     };
     try {
       report(null, 'preparing', undefined, true);
@@ -580,31 +584,43 @@ export class AnalysisPool {
         while (nextChunk < chunkCount) {
           if (controller.signal.aborted) throw abortError();
           const chunk = nextChunk++;
-          const startAtom = geometryOnly ? parameters.atomIndex : chunk * chunkSize,
-            endAtom = geometryOnly ? startAtom + 1 : Math.min(atomCount, startAtom + chunkSize);
+          const startAtom = geometryOnly ? geometryIndices[0] : chunk * chunkSize,
+            endAtom = geometryOnly ? startAtom + 1 : Math.min(workCount, startAtom + chunkSize);
           processed[index] = 0;
-          const partial = await this.runTask({ ...parameters, fractional: snapshot.coordinates, cell: snapshot.cell,
-            residentFrameKey: snapshot.key, startAtom, endAtom, ...(!geometryOnly ? { skipStatistics: true } : {}) },
+          const partial = await this.runTask({ ...parameters, selectedTypes: null, fractional: snapshot.coordinates, cell: snapshot.cell,
+            residentFrameKey: snapshot.key, startAtom, endAtom,
+            ...(geometryOnly ? { atomIndex: geometryIndices[0] } : geometryBatch
+              ? { atomIndices: Array.from(geometryIndices.subarray(startAtom, endAtom)) } : { skipStatistics: true }) },
           controller.signal, signal, (phase, progress) => report(index, phase, progress), sharedMemory);
           if (controller.signal.aborted) throw abortError();
-          partials[chunk] = partial;
           completedChunks++; completedAtoms += endAtom - startAtom; processed[index] = 0;
+          if (geometryBatch) {
+            const cells = partial.cells.map(cell => mapVoronoiGeometry(cell, selection));
+            if (onGeometryChunk) await onGeometryChunk(cells, { completedAtoms, totalAtoms: workCount, chunkIndex: chunk });
+            if (controller.signal.aborted) throw abortError();
+            partials[chunk] = { ...partial, cells: retainCells ? cells : [] };
+          } else partials[chunk] = partial;
           report(index, 'complete', undefined, completedChunks === chunkCount);
         }
       })());
       await Promise.all(runners);
       if (controller.signal.aborted) throw abortError();
       let output;
-      if (geometryOnly) output = partials[0];
+      if (geometryOnly) output = { ...mapVoronoiGeometry(partials[0], selection), selectedTypes: selection.selectedTypes };
+      else if (geometryBatch) output = { cells: retainCells ? partials.flatMap(partial => partial.cells) : [],
+        analyzedAtomIndices: Uint32Array.from(geometryIndices, index => selection.isAll ? index : selection.atomIndices[index]),
+        selectedTypes: selection.selectedTypes, kernelInitializations: partials.filter(partial => !partial.kernelReused).length,
+        indexBuilds: partials.filter(partial => !partial.indexReused).length, frameUploads: partials.filter(partial => partial.frameUploaded).length };
       else {
         report(null, 'finalizing', undefined, true);
         output = await this.runTask({ kind: 'voronoiFinalize', partials, atomCount, bins: parameters.bins ?? 50 },
           controller.signal, signal, phase => report(null, phase), true);
+        output = expandVoronoiResult(output, selection);
       }
       if (controller.signal.aborted) throw abortError();
       report(null, 'complete', undefined, true);
       return { ...output, workerCount, sharedMemory, chunkCount, chunkSize, scheduling: 'dynamic',
-        engine: `voro++-wasm-worker${workerCount === 1 ? '' : `-pool×${workerCount}`}${geometryOnly ? '-geometry' : ''}`,
+        engine: `voro++-wasm-worker${workerCount === 1 ? '' : `-pool×${workerCount}`}${geometryOnly ? '-geometry' : geometryBatch ? '-geometry-batch' : ''}`,
         elapsedMs: performance.now() - startedAt };
     } catch (error) {
       controller.abort();
@@ -762,7 +778,7 @@ export class AnalysisPool {
       // Give the status text and Cancel button a paint before copying large
       // inputs. Transfer private copies instead of synchronously cloning the
       // complete frame in each of six consecutive postMessage calls.
-      const residentChunk = (task.payload.kind === 'voronoi' || task.payload.kind === 'voronoiGeometry')
+      const residentChunk = ['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'].includes(task.payload.kind)
         && task.payload.residentFrameKey !== undefined && task.slot.voronoiFrameKey === task.payload.residentFrameKey;
       if (!residentChunk) await yieldToMain();
       if (task.done) return;
@@ -772,7 +788,7 @@ export class AnalysisPool {
         for (const partial of payload.partials) for (const value of Object.values(partial)) {
           if (ArrayBuffer.isView(value) && value.buffer instanceof ArrayBuffer) transferables.push(value.buffer);
         }
-      } else if ((payload.kind === 'voronoi' || payload.kind === 'voronoiGeometry')
+      } else if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'].includes(payload.kind)
           && payload.residentFrameKey !== undefined
           && task.slot.voronoiFrameKey === payload.residentFrameKey) {
         payload = { ...payload };
@@ -822,7 +838,7 @@ export class AnalysisPool {
       else {
         if (task.payload.kind === 'warmup' || task.payload.kind === 'ptm'
           || (task.payload.kind === 'strain' && !task.payload.ptmInput)) task.slot.ptmWarmed = true;
-        if (task.payload.kind === 'voronoi' || task.payload.kind === 'voronoiGeometry') {
+        if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'].includes(task.payload.kind)) {
           task.slot.voronoiFrameKey = task.payload.residentFrameKey;
         }
         if (task.slot.voronoiReleasePending) this.releaseVoronoiFrame(task.slot);

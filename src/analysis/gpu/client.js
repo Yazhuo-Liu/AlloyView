@@ -51,6 +51,18 @@ export class GpuAnalysisClient {
     if (frameIndex !== undefined) this.associateFrame(frame, frameIndex);
     // A user calculation takes the next slot, even when prefetch is uploading.
     if (this.current?.type === 'prepare-frame') this.cancel(this.current);
+    if (parameters.kind === 'voronoi' && parameters.selectedTypes != null) {
+      try {
+        const selection = prepareVoronoiSelection(frame, parameters.selectedTypes), compactFrame = selection.frame,
+          range = voronoiSelectionRange(selection, parameters), index = this.frameIndexes.get(frame);
+        // A type subset has independent coordinates/index buffers. Keep its own
+        // input ID; sharing the trajectory's source ID would reuse wrong sites.
+        if (index !== undefined) this.frameIndexes.set(compactFrame, index);
+        return this.enqueue('analyze', { frame: compactFrame,
+          parameters: { ...parameters, ...range, selectedTypes: null }, signal, onProgress }, 1)
+          .then(result => expandVoronoiResult(result, selection));
+      } catch (error) { return Promise.reject(error); }
+    }
     return this.enqueue('analyze', { frame, parameters, signal, onProgress }, 1);
   }
 
@@ -210,7 +222,7 @@ export class GpuAnalysisClient {
         if (!this.cachedFrameIds.has(id) && !preparedIds.has(id)) {
           const fractional = await copyArray(source.fractional, task);
           const types = source.types ? await copyArray(source.types, task) : undefined;
-          payload = { fractional, types, cell: source.cell, gpuFrameId: id };
+          payload = { fractional, types, typeLabels: source.typeLabels, cell: source.cell, gpuFrameId: id };
           transfer.push(fractional.buffer);
           if (types) transfer.push(types.buffer);
           preparedIds.add(id);
@@ -378,3 +390,4 @@ async function copyArray(source, task) {
 }
 function yieldToMain() { return new Promise((resolve) => setTimeout(resolve, 0)); }
 function abortError() { return new DOMException('Analysis cancelled.', 'AbortError'); }
+import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult } from '../voronoi-selection.js';

@@ -8,6 +8,7 @@ import { analyzeGpuVoronoi, prepareGpuVoronoi, voronoiGpuWorkspaceBytes, voronoi
 import { GPU_VORONOI_MAX_FACES, GPU_VORONOI_MAX_FACE_VERTICES, GPU_VORONOI_STATE_WORDS,
   VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER } from '../src/analysis/gpu/voronoi-shaders.js';
 import { GpuAnalysisClient } from '../src/analysis/gpu/client.js';
+import { prepareVoronoiSelection, expandVoronoiResult } from '../src/analysis/voronoi-selection.js';
 
 // These tests exercise host assembly/lifecycle, not numerical shader claims.
 // scripts/browser-voronoi-gpu.mjs independently runs real WGSL and compares
@@ -22,7 +23,7 @@ async function hostFixture(frame, { flags = 0, onRun, onRead } = {}) {
     createBuffer(bytes) { const buffer = { bytes, values: new Uint8Array(bytes), destroyed: false }; allocations.push(buffer); return buffer; },
     disposeBuffers(buffers) { for (const buffer of buffers) buffer.destroyed = true; },
     write(buffer, values) { buffer.values.set(new Uint8Array(values.buffer, values.byteOffset, values.byteLength)); },
-    async prepareNeighbors(_frame, cutoff) { const context = { cutoff }; contexts.push(context); return context; },
+    async prepareNeighbors(frame, cutoff) { const context = { cutoff, frame }; contexts.push(context); return context; },
     neighborBindings(context, extra) { return [context, null, null, null, null, ...extra]; },
     async run(source, bindings, count, options) {
       runs.push({ source, count, options }); pendingSignal = options.signal;
@@ -186,4 +187,60 @@ test('precision recovery replaces whole flagged cells, retaining complete scalar
 test('excessive precision recovery explicitly falls back to the parallel CPU pool', async () => {
   const frame = crystalFrame('fcc', 3, 3.52), fixture = await hostFixture(frame, { flags: 4 });
   await assert.rejects(analyzeGpuVoronoi(fixture.runtime, frame), error => error.name === 'GpuUnavailableError' && /Too many/.test(error.message));
+});
+
+function checkerboardFrame() {
+  const frame = crystalFrame('sc', 2, 2); frame.typeLabels = ['Ni', 'Cu'];
+  for (let atom = 0; atom < frame.types.length; atom++) {
+    const sum = frame.fractional[atom * 3] + frame.fractional[atom * 3 + 1] + frame.fractional[atom * 3 + 2];
+    frame.types[atom] = Math.round(sum * 2) % 2;
+  }
+  return frame;
+}
+
+test('direct GPU subsets construct indices from included sites and scatter full-source results', async () => {
+  const frame = checkerboardFrame(), selection = prepareVoronoiSelection(frame, ['Ni']),
+    fixture = await hostFixture(selection.frame), expected = expandVoronoiResult(fixture.expected, selection);
+  const result = await analyzeGpuVoronoi(fixture.runtime, frame, { selectedTypes: ['Ni'] });
+  assert.ok(fixture.contexts.every(context => context.frame === selection.frame));
+  assert.equal(selection.frame.fractional.length / 3, 4); assert.equal(result.sourceAtomCount, 8);
+  assert.equal(result.summary.atomCount, 4); assert.equal(result.tessellationAtomCount, 4);
+  assert.deepEqual(result.selectedTypes, ['Ni']); assert.deepEqual(result.analyzedAtomIndices, selection.atomIndices);
+  for (const name of ['voronoiCoordination', 'faceOffsets', 'faceOrders', 'faceNeighbors', 'voronoiIndices']) assert.deepEqual(result[name], expected[name]);
+  assert.ok(result.atomicVolume.some(Number.isNaN));
+  assert.ok(Math.abs(result.summary.totalVolume - 64) < 1e-4, 'the included sites tessellate the complete original cell');
+});
+
+test('GPU exact-cell recovery uses only included sites, honoring original central ranges and neighbor IDs', async () => {
+  const frame = checkerboardFrame(), selection = prepareVoronoiSelection(frame, ['Cu']), fixture = await hostFixture(selection.frame, { flags: 4 });
+  const result = await analyzeGpuVoronoi(fixture.runtime, frame, { selectedTypes: ['Cu'], startAtom: 2, endAtom: 7 });
+  const expected = await calculateVoronoi(frame, { selectedTypes: ['Cu'], startAtom: 2, endAtom: 7 });
+  assert.equal(fixture.runtime.voronoiCpuContext.context.frame, selection.frame);
+  assert.deepEqual(result.atomicVolume, expected.atomicVolume); assert.deepEqual(result.faceNeighbors, expected.faceNeighbors);
+  assert.deepEqual(result.analyzedAtomIndices, expected.analyzedAtomIndices); assert.equal(result.gpuCorrectionAtoms, result.summary.atomCount);
+});
+
+test('GPU client transfers compact sites with an independent ID and restores source mappings', async () => {
+  const frame = checkerboardFrame(), selection = prepareVoronoiSelection(frame, ['Ni']), compactResult = await calculateVoronoi(selection.frame),
+    allResult = await calculateVoronoi(frame), messages = [], listeners = new Map(), resident = new Set();
+  const worker = { addEventListener(type, callback) { listeners.set(type, callback); }, terminate() {},
+    postMessage(data, transfer = []) {
+      if (data.type !== 'analyze') return;
+      const message = structuredClone(data, { transfer }); messages.push(message); resident.add(message.frameId);
+      setTimeout(() => listeners.get('message')({ data: { id: message.id, ok: true,
+        result: structuredClone(message.frameId === messages[0].frameId ? compactResult : allResult),
+        cachedFrameIds: [...resident] } }), 0);
+    } };
+  const client = new GpuAnalysisClient({ environment: { navigator: { gpu: {} } }, workerFactory: () => worker });
+  try {
+    const subset = await client.analyze(frame, { kind: 'voronoi', selectedTypes: ['Ni'] }, { frameIndex: 0 });
+    await client.analyze(frame, { kind: 'voronoi' }, { frameIndex: 0 });
+    const reused = await client.analyze(frame, { kind: 'voronoi', selectedTypes: ['Ni'] }, { frameIndex: 0 });
+    assert.equal(messages[0].frame.fractional.length, 12); assert.deepEqual(messages[0].frame.typeLabels, ['Ni', 'Cu']);
+    assert.equal(messages[0].parameters.selectedTypes, null); assert.equal(messages[1].frame.fractional.length, 24);
+    assert.notEqual(messages[0].frameId, messages[1].frameId); assert.equal(messages[2].frameId, messages[0].frameId);
+    assert.equal(messages[2].frame, undefined, 'unchanged subset reuses its acknowledged compact input');
+    assert.deepEqual(subset.selectedTypes, ['Ni']); assert.deepEqual(reused.faceNeighbors, subset.faceNeighbors);
+    assert.equal(frame.fractional.length, 24); assert.ok(subset.atomicVolume.some(Number.isNaN));
+  } finally { client.close(); }
 });

@@ -140,3 +140,29 @@ test('distribution exports avoid copying unrelated atom arrays and face geometry
   assert.ok(serializeCsv(buildStatisticsTable(faces, 'voronoi-faces')).includes('11,1,100,4,22,0,1'));
   h.controls.dispose();
 });
+
+test('Voronoi export snapshots preserve subset source mapping only for detailed cell and face tables', async () => {
+  const h = controlsFixture();
+  const analyzedAtomIndices = Uint32Array.of(1);
+  h.setResults({ voronoi: { result: {
+    selectedTypes: ['Fe'], analyzedAtomIndices,
+    summary: { atomCount: 1, meanVolume: 1000 }, atomicVolume: Float64Array.of(NaN, 1000),
+    voronoiSurfaceArea: Float64Array.of(NaN, 600), voronoiCoordination: Float64Array.of(NaN, 6),
+    voronoiBoundaryFaces: Float64Array.of(NaN, 0), voronoiMaxFaceOrder: Float64Array.of(NaN, 4), voronoiIndices: ['', '<0,6,0,0>'],
+    faceOffsets: Uint32Array.of(0, 0, 1), faceAreas: Float64Array.of(100), faceOrders: Uint32Array.of(4),
+    faceNeighbors: Int32Array.of(1), faceBoundary: Uint8Array.of(0), faceAccepted: Uint8Array.of(1),
+  } } });
+  await h.controls.exportTable('voronoi-atoms'); await h.controls.exportTable('voronoi-faces');
+  for (const { snapshot } of h.exports) {
+    assert.equal(snapshot.results.voronoi.analyzedAtomIndices, analyzedAtomIndices);
+    assert.deepEqual(snapshot.results.voronoi.selectedTypes, ['Fe']);
+  }
+  const cells = [...buildStatisticsTable(h.exports[0].snapshot, 'voronoi-atoms').rows];
+  assert.equal(cells.length, 1); assert.equal(cells[0][3], 22); assert.equal(cells[0][5], 1000);
+  const faces = [...buildStatisticsTable(h.exports[1].snapshot, 'voronoi-faces').rows];
+  assert.equal(faces.length, 1); assert.equal(faces[0][3], 22); assert.equal(faces[0][7], 22);
+  await h.controls.exportTable('voronoi-distributions');
+  assert.equal(h.exports[2].snapshot.results.voronoi.analyzedAtomIndices, undefined, 'histogram snapshots do not copy a per-atom map');
+  assert.deepEqual(h.exports[2].snapshot.results.voronoi.selectedTypes, ['Fe']);
+  h.controls.dispose();
+});

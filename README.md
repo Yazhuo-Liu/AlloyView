@@ -84,8 +84,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Voronoi tessellation in Visualization tools, using dynamically scheduled
   CPU/Wasm Workers or WebGPU for periodic or finite-cell geometry. Results include atomic
   volume, surface area, coordination, full Voronoi indices and population
-  distributions, with optional neighbor-face area filters, interactive histograms,
-  quantity-color shortcuts and a selected-cell polygon preview.
+  distributions, with optional input-type selection, neighbor-face area filters,
+  folded interactive histograms and quantity-color shortcuts. Cell display
+  optionally draws the selected cell or all analyzed cells; both default off.
 - CSV export for the complete statistical summary, scalar statistics,
   categorical populations, coordination/RDF and bond distributions, Q4/Q6,
   Voronoi cells/faces, DXA families/lines and per-atom properties. A persistent
@@ -207,6 +208,9 @@ WebGL 2 support. No installation or account is needed.
    Its folded statistics section calculates bond-length/angle distributions
    and local Q4/Q6 using those same cutoffs. **Voronoi** measures atomic volumes,
    surface areas and neighbor-face topology with periodic or finite-cell bounds.
+   Its type checkboxes choose the input sites for the tessellation. Optional
+   selected-cell or all-cell display adds polygonal geometry independently of
+   the analysis; all-cell display uses additional memory.
    **Displacement** calculates Cartesian components and magnitude against a
    reference frame for atom coloring, independently of arrows.
    **Vector arrows** displays existing displacement, imported force/velocity,

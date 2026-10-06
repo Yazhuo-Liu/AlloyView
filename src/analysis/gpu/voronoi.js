@@ -1,7 +1,8 @@
 import { determinant3 } from '../../data/model.js';
 import { atomRange } from '../neighbors.js';
 import { VORONOI_FIELDS, validateVoronoiParameters, initialGeometry, finalizeVoronoiStatistics, calculateVoronoi, createVoronoiContext } from '../voronoi.js';
-import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
+import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult } from '../voronoi-selection.js';
+import { GpuRuntime, checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
 import { GPU_VORONOI_MAX_FACES, GPU_VORONOI_MAX_FACE_VERTICES, GPU_VORONOI_STATE_WORDS, GPU_VORONOI_MAX_PLANES,
   VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER } from './voronoi-shaders.js';
 
@@ -90,6 +91,21 @@ export function prepareGpuVoronoi(frame, parameters = {}) {
  * Six rigorous seed bounds and twice-farthest-vertex coverage prove that no
  * relevant atomic plane is omitted. Resource/numeric failures are explicit. */
 export async function analyzeGpuVoronoi(runtime, frame, parameters = {}, { signal, onProgress = () => {} } = {}) {
+  checkSignal(signal);
+  const selection = prepareVoronoiSelection(frame, parameters.selectedTypes);
+  if (selection.isAll) return expandVoronoiResult(await analyzeGpuVoronoiCells(runtime, frame, parameters, { signal, onProgress }), selection);
+  // The normal client compacts before transferring input. Direct/runtime users
+  // receive the same scientific behavior, with a separate resident cache key.
+  if (selection.frame.gpuFrameId === undefined) selection.frame.gpuFrameId = -++GpuRuntime.frameSerial;
+  const release = runtime.pinFrames?.([selection.frame]);
+  try {
+    const result = await analyzeGpuVoronoiCells(runtime, selection.frame,
+      { ...parameters, ...voronoiSelectionRange(selection, parameters), selectedTypes: null }, { signal, onProgress });
+    return expandVoronoiResult(result, selection);
+  } finally { release?.(); }
+}
+
+async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal, onProgress = () => {} } = {}) {
   checkSignal(signal);
   const prepared = prepareGpuVoronoi(frame, parameters);
   const { count, startAtom, endAtom, cellVolume, scale, geometry, exactSingleSite,

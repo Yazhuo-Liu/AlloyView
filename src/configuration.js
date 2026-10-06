@@ -229,9 +229,9 @@ function normalizeExtensions(value, fromSnapshot) {
   const bondStatistics = input.bondStatistics === undefined ? null
     : record(input.bondStatistics, `${path}.bondStatistics`, ['enabled', 'lengthBins', 'angleBins']);
   const voronoi = input.voronoi === undefined ? null
-    : record(input.voronoi, `${path}.voronoi`, ['enabled', 'faceAreaThreshold', 'relativeFaceAreaThreshold', 'bins']);
+    : record(input.voronoi, `${path}.voronoi`, ['enabled', 'faceAreaThreshold', 'relativeFaceAreaThreshold', 'bins', 'selectedTypes']);
   const voronoiDisplay = input.voronoiDisplay === undefined ? null
-    : record(input.voronoiDisplay, `${path}.voronoiDisplay`, ['enabled', 'color', 'opacity']);
+    : record(input.voronoiDisplay, `${path}.voronoiDisplay`, ['enabled', 'allEnabled', 'color', 'opacity']);
   if (bondStatistics?.enabled === true && nullablePositive(bonds.cutoff, `${path}.bonds.cutoff`, fromSnapshot) === null) {
     fail(`${path}.bonds.cutoff`, 'is required for enabled bond statistics');
   }
@@ -291,9 +291,12 @@ function normalizeExtensions(value, fromSnapshot) {
       faceAreaThreshold: number(voronoi.faceAreaThreshold ?? 0, `${path}.voronoi.faceAreaThreshold`, 0, MAX_COORDINATE),
       relativeFaceAreaThreshold: number(voronoi.relativeFaceAreaThreshold ?? 0, `${path}.voronoi.relativeFaceAreaThreshold`, 0, 1),
       bins: number(voronoi.bins ?? 50, `${path}.voronoi.bins`, 1, 4096, true),
+      selectedTypes: voronoi.selectedTypes == null ? null : [...new Set(list(voronoi.selectedTypes, `${path}.voronoi.selectedTypes`, 65535)
+        .map((label, index) => string(label, `${path}.voronoi.selectedTypes[${index}]`, 256)))].sort(),
     } }),
     ...(voronoiDisplay === null ? {} : { voronoiDisplay: {
       enabled: boolean(voronoiDisplay.enabled, `${path}.voronoiDisplay.enabled`, false),
+      allEnabled: boolean(voronoiDisplay.allEnabled, `${path}.voronoiDisplay.allEnabled`, false),
       color: hexColor(voronoiDisplay.color ?? '#008b95', `${path}.voronoiDisplay.color`),
       opacity: number(voronoiDisplay.opacity ?? 0.22, `${path}.voronoiDisplay.opacity`, 0, 1),
     } }),

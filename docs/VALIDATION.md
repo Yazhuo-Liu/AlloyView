@@ -2,6 +2,51 @@
 
 Validation date: 2026-10-06 (UTC)
 
+## Voronoi element subsets and full-cell display
+
+- All **1,102 Node tests** pass. Coverage includes true CPU/GPU input
+  compaction, source-index result mapping, immutable/mutated input snapshots,
+  parallel geometry streaming, cancellation, retained Worker/Wasm instances,
+  bounded mesh uploads, CSV and optional recipe settings.
+- Independent analytical checks use an eight-site Ni/Cu periodic checkerboard.
+  All sites form SC cells with **8 Å³ / coordination 6**; either four-site
+  element subset forms FCC cells with **16 Å³ / coordination 12**. Neighbor
+  faces have the expected area **2√2 Å²**, and both subsets conserve the full
+  **64 Å³** domain. Omitted types are absent as neighbors, with NaN scalar
+  rows and empty face CSR in the full-source result. Reordered type indices
+  follow their element labels, and explicitly including all types preserves
+  every scientific array from the default analysis.
+- `npm run test:gpu:voronoi` passes **34 actual WebGPU browser checks**, including
+  all prior geometry/fallback cases and eight new subset cases. Real GPU
+  kernels agree with CPU volumes, surfaces, complete face topology and original
+  source-neighbor mappings; excluded coincident sites do not enter the GPU
+  index. New subset fixtures have maximum absolute volume/surface differences
+  of **1.91 × 10⁻⁶ Å³ / 5.19 × 10⁻⁷ Å²**. Subset/all cache switching and
+  exact-threshold recovery pass. SwiftShader validates correctness only;
+  these timings do not measure hardware acceleration.
+- `npm run test:browser:voronoi` passes on the production build with real CPU
+  and GPU Workers. It checks actual 8-cell/full and 4-cell/subset viewport
+  meshes, PNG pixels, picking, replicas, comparison, hidden atoms and slices.
+  Switching type selections replaces old geometry; cancelling a pending batch
+  prevents late publication. Empty selections release old results, and recipe
+  replay restores type labels and both independent display switches.
+- The Element types and Distributions disclosures start closed. Common
+  face-order bars are inside Distributions. All-cell rendering starts off;
+  a **390 × 640** phone check also verifies touch toggles and these choices.
+  Existing selected-cell, finite-boundary, camera-bounds and configuration
+  regressions pass.
+- Optional display geometry uses native CPU Workers for both statistics
+  backends. One dynamically scheduled batch request reuses resident indices
+  and Wasm memory, awaits consumer backpressure and streams at most **128 cells**
+  per work chunk. WebGL buffers are appended per bounded group, with shared
+  source-position/visibility textures and no per-cell draw calls. All cells
+  are retained without truncation; complete display still requires memory
+  proportional to the included mesh and is deliberately disabled by default.
+- Cell and face CSV emit only participating original atom IDs, retain original
+  neighbor IDs and include the type selection in metadata. Coordination
+  summaries exclude NaN placeholders. All-type CSV remains byte-for-byte
+  compatible with the previous format.
+
 ## Parallel Voronoi and selected-cell geometry
 
 - All **1,080 Node tests** pass, including CPU scheduling/cache lifecycle,

@@ -6,7 +6,7 @@ import { VIEW_PRESETS } from './camera-presets.js';
 import { AtomPrimitiveLayer } from './atom-primitives.js';
 import { effectivePeriodicOrigin, normalizePeriodicOrigin, periodicDisplayCoordinates } from './periodic-origin.js';
 import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
-import { VoronoiCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
+import { VoronoiCellLayer, VoronoiAllCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
 import { MAX_SLICES, SLICE_EPSILON, pointVisible, validateSlices } from './slicing.js';
 import {
   add,
@@ -222,6 +222,9 @@ export class WebGLRenderer {
     this.voronoiCellLayer = null;
     this.voronoiCellGeometry = null;
     this.voronoiCellOptions = normalizeVoronoiCellOptions();
+    this.voronoiAllCellLayer = null;
+    this.voronoiAllCellGeometry = null;
+    this.voronoiDisplayRevision = 0;
     this.atomBonds = this.atomVectors = null;
     this.atomVectorFields = [];
     this.bondOptions = { visible: true, radius: 0.08 };
@@ -354,6 +357,8 @@ export class WebGLRenderer {
     this.primitiveLayer?.setFrame(this, colors);
     this.voronoiCellGeometry = null;
     this.voronoiCellLayer?.clear();
+    this.voronoiAllCellGeometry = null;
+    this.voronoiAllCellLayer?.clear();
     this.updateSceneBounds();
     gl.finish();
     this.requestRender();
@@ -376,6 +381,8 @@ export class WebGLRenderer {
     this.dislocationLayer?.clear();
     this.voronoiCellGeometry = null;
     this.voronoiCellLayer?.clear();
+    this.voronoiAllCellGeometry = null;
+    this.voronoiAllCellLayer?.clear();
     this.displayCell = this.sceneBounds = this.minimumOffset = this.maximumOffset = null;
     this.atomCount = this.displayAtomCount = 0;
     this.repetitions = [1, 1, 1];
@@ -430,6 +437,7 @@ export class WebGLRenderer {
     }
     this.cancelSelectionGesture();
     this.visibility = values;
+    this.voronoiDisplayRevision++;
     this.selectionVisibility = selectionVisibility;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
@@ -439,6 +447,7 @@ export class WebGLRenderer {
   }
 
   processDisplayCoordinates(positions, coordinateMode = positions === this.frame.positions ? 'wrapped' : 'unwrapped') {
+    this.voronoiDisplayRevision++;
     if (!['wrapped', 'unwrapped'].includes(coordinateMode)) throw new Error('Unknown display coordinate mode.');
     this.rawDisplayPositions = positions;
     this.coordinateMode = coordinateMode;
@@ -585,6 +594,23 @@ export class WebGLRenderer {
     this.voronoiCellGeometry = geometry;
     this.voronoiCellOptions = settings;
     if (boundsChanged && this.frame) this.updateSceneBounds();
+    this.requestRender();
+  }
+
+  setVoronoiAllCellGeometry(geometry, options = {}) {
+    if (geometry && !this.frame) throw new Error('Load a structure before displaying Voronoi cells.');
+    const settings = normalizeVoronoiCellOptions(options, this.voronoiCellOptions);
+    const oldChunks = this.voronoiAllCellLayer?.chunks.length ?? 0;
+    const replaceBounds = geometry !== this.voronoiAllCellGeometry
+      || settings.allEnabled !== (this.voronoiAllCellLayer?.options.allEnabled ?? false);
+    if (geometry && !this.voronoiAllCellLayer) this.voronoiAllCellLayer = new VoronoiAllCellLayer(this.gl);
+    this.voronoiAllCellLayer?.setGeometry(geometry, settings);
+    this.voronoiAllCellGeometry = geometry;
+    this.voronoiCellOptions = settings;
+    if (this.frame) {
+      if (replaceBounds || !this.sceneBounds) this.updateSceneBounds();
+      else this.voronoiAllCellLayer?.extendBounds(this, this.sceneBounds.minimum, this.sceneBounds.maximum, oldChunks);
+    }
     this.requestRender();
   }
 
@@ -798,6 +824,7 @@ export class WebGLRenderer {
     this.primitiveLayer?.extendBounds(this, minimum, maximum);
     this.dislocationLayer?.extendBounds(this, minimum, maximum);
     this.voronoiCellLayer?.extendBounds(this, minimum, maximum);
+    this.voronoiAllCellLayer?.extendBounds(this, minimum, maximum);
     this.sceneBounds = { minimum, maximum };
     this.selectionSourceBounds = { minimum: sourceMinimum, maximum: sourceMaximum };
     return this.sceneBounds;
@@ -890,7 +917,9 @@ export class WebGLRenderer {
     }
     this.primitiveLayer?.render(this);
     this.dislocationLayer?.render(this);
-    this.voronoiCellLayer?.render(this);
+    if (!(this.voronoiCellOptions.allEnabled && this.voronoiAllCellGeometry?.complete)) this.voronoiCellLayer?.render(this);
+    else if (this.voronoiCellLayer) this.voronoiCellLayer.renderedReplicaCount = 0;
+    this.voronoiAllCellLayer?.render(this);
 
     if (this.cellVisible) {
       gl.enable(gl.BLEND);

@@ -1,6 +1,8 @@
 import createVoronoi from './voronoi-kernel.mjs';
 import { determinant3, invert3 } from '../data/model.js';
 import { NeighborSearch, atomRange } from './neighbors.js';
+import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult,
+  mapVoronoiGeometry, compactVoronoiAtomIndices } from './voronoi-selection.js';
 
 export const VORONOI_FIELDS = Object.freeze({
   atomicVolume: [Float64Array, 1],
@@ -89,7 +91,16 @@ export function validateVoronoiParameters({ faceAreaThreshold = 0, relativeFaceA
  * changes this geometry: a search completes only once it covers twice the
  * farthest remaining cell vertex, so any omitted bisector lies outside it.
  */
-export async function calculateVoronoi(frame, { faceAreaThreshold = 0, relativeFaceAreaThreshold = 0,
+export async function calculateVoronoi(frame, options = {}) {
+  if (options.selectedTypes != null) {
+    const selection = prepareVoronoiSelection(frame, options.selectedTypes), range = voronoiSelectionRange(selection, options);
+    const result = await calculateVoronoiCore(selection.frame, { ...options, selectedTypes: null, ...range });
+    return expandVoronoiResult(result, selection);
+  }
+  return calculateVoronoiCore(frame, options);
+}
+
+async function calculateVoronoiCore(frame, { faceAreaThreshold = 0, relativeFaceAreaThreshold = 0,
   bins = 50, onPhase = () => {}, onAtoms = () => {}, context, onContext = () => {}, skipStatistics = false, ...range } = {}) {
   validateVoronoiParameters({ faceAreaThreshold, relativeFaceAreaThreshold, bins });
   const startedAt = performance.now(), kernelReused = Boolean(kernelPromise);
@@ -160,7 +171,16 @@ export async function calculateVoronoi(frame, { faceAreaThreshold = 0, relativeF
  * or retaining all atoms' vertex meshes. Vertices are Cartesian offsets from
  * the wrapped atom center; faces retain their polygon boundaries for outlines.
  */
-export async function calculateVoronoiGeometry(frame, { atomIndex, context,
+export async function calculateVoronoiGeometry(frame, options = {}) {
+  if (options.selectedTypes != null) {
+    const selection = prepareVoronoiSelection(frame, options.selectedTypes),
+      atomIndex = compactVoronoiAtomIndices(selection, [options.atomIndex])[0];
+    return mapVoronoiGeometry(await calculateVoronoiGeometryCore(selection.frame, { ...options, atomIndex, selectedTypes: null }), selection);
+  }
+  return calculateVoronoiGeometryCore(frame, options);
+}
+
+async function calculateVoronoiGeometryCore(frame, { atomIndex, context,
   onPhase = () => {}, onAtoms = () => {}, onContext = () => {} } = {}) {
   const startedAt = performance.now(), kernelReused = Boolean(kernelPromise);
   onPhase('initializing');
@@ -199,6 +219,28 @@ export async function calculateVoronoiGeometry(frame, { atomIndex, context,
   onAtoms(1, 1);
   return { atomIndex, center, vertices, faceOffsets, faceVertices, faceNeighbors, faceBoundary,
     candidateCount, kernelReused, indexReused: Boolean(context), engine: 'voro++-wasm-geometry',
+    elapsedMs: performance.now() - startedAt };
+}
+
+/** One Worker chunk of selected polygon cells sharing a source index/kernel. */
+export async function calculateVoronoiGeometryBatch(frame, { atomIndices = null, selectedTypes = null, context,
+  onPhase = () => {}, onAtoms = () => {}, onContext = () => {} } = {}) {
+  const startedAt = performance.now(), kernelReused = Boolean(kernelPromise), indexReused = Boolean(context),
+    selection = prepareVoronoiSelection(frame, selectedTypes), indices = compactVoronoiAtomIndices(selection, atomIndices);
+  if (!kernelReused) onPhase('initializing');
+  await getKernel();
+  if (!context) onPhase('indexing');
+  const prepared = resolveContext(selection.frame, context);
+  onContext(prepared); onPhase('analyzing'); onAtoms(0, indices.length);
+  const cells = [];
+  let candidateCount = 0;
+  for (let index = 0; index < indices.length; index++) {
+    const cell = await calculateVoronoiGeometryCore(selection.frame, { atomIndex: indices[index], context: prepared });
+    cells.push(mapVoronoiGeometry(cell, selection)); candidateCount += cell.candidateCount;
+    if (index && index % 64 === 0) onAtoms(index, indices.length);
+  }
+  onAtoms(indices.length, indices.length);
+  return { cells, candidateCount, kernelReused, indexReused, engine: 'voro++-wasm-geometry-batch',
     elapsedMs: performance.now() - startedAt };
 }
 

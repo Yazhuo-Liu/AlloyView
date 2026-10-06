@@ -22,9 +22,13 @@ const idealPositions = positions.map(point => [...point]);
 // Small, nonsymmetric distortion provides a meaningful volume distribution
 // and avoids using a rounded constant-volume display to verify GPU parity.
 positions[0] = [.12, .07, .09]; positions[7][1] += .06;
-function xyz(points, step, { lattice = [8, 0, 0, 0, 8, 0, 0, 0, 8], pbc = 'T T T' } = {}) {
+const binaryPositions = [], binarySpecies = [];
+for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) for (let c = 0; c < 2; c++) {
+  binaryPositions.push([a * 2, b * 2, c * 2]); binarySpecies.push((a + b + c) % 2 ? 'Cu' : 'Ni');
+}
+function xyz(points, step, { lattice = [8, 0, 0, 0, 8, 0, 0, 0, 8], pbc = 'T T T', species = null } = {}) {
   return [String(points.length), `Lattice="${lattice.join(' ')}" pbc="${pbc}" Properties=species:S:1:pos:R:3:id:I:1 Step=${step}`,
-    ...points.map((point, index) => `Ni ${point.join(' ')} ${101 + index}`), ''].join('\n');
+    ...points.map((point, index) => `${species?.[index] ?? 'Ni'} ${point.join(' ')} ${101 + index}`), ''].join('\n');
 }
 await Promise.all([
   writeFile(resolve(fixtures, 'voronoi-two-frames.xyz'), xyz(positions, 17)
@@ -36,6 +40,10 @@ await Promise.all([
     { lattice: [2, 0, 0, 0, 2, 0, 0, 0, 2] })),
   writeFile(resolve(fixtures, 'wall-voronoi.xyz'), xyz([[0, 1, 1]], 22,
     { lattice: [2, 0, 0, 0, 2, 0, 0, 0, 2], pbc: 'F F F' })),
+  writeFile(resolve(fixtures, 'binary-voronoi.xyz'), xyz(binaryPositions, 23,
+    { lattice: [4, 0, 0, 0, 4, 0, 0, 0, 4], species: binarySpecies })
+    + xyz(binaryPositions, 24, { lattice: [4, 0, 0, 0, 4, 0, 0, 0, 4],
+      species: binarySpecies.map(label => label === 'Ni' ? 'Cu' : 'Ni') })),
 ]);
 
 try {
@@ -117,6 +125,8 @@ try {
     const result = () => evaluate('voronoiChecks.result()');
 
     assert.equal(await evaluate('document.getElementById("show-voronoi-cell").disabled'), true, 'cell display requires calculated topology');
+    assert.equal(await evaluate('document.getElementById("show-all-voronoi-cells").checked'), false, 'all-cell drawing is optional and initially off');
+    assert.equal(await evaluate('document.getElementById("voronoi-type-selection").open'), false, 'element selection starts folded');
     await load('voronoi-two-frames.xyz', 32); await run();
     const cpuResult = await result();
     close([cpuResult.summary.totalVolume], [512], 1e-9);
@@ -124,12 +134,14 @@ try {
     assert.equal(await evaluate('document.querySelectorAll("#voronoi-stat-cards [data-voronoi-stat]").length'), 6);
     assert.equal(await evaluate('document.getElementById("voronoi-distributions").open'), false, 'long charts start folded');
     assert.equal(await evaluate('document.getElementById("voronoi-topology-details").open'), false, 'complete index table starts folded');
-    assert.ok(await evaluate('document.querySelectorAll("#voronoi-topology-populations [data-voronoi-index]").length>0 || document.getElementById("voronoi-topology-populations").textContent.includes("<")'), 'topological populations are visible without opening the table');
+    assert.equal(await evaluate('document.getElementById("voronoi-topology-populations").closest("details").id'), 'voronoi-distributions', 'common indices belong to the folded distributions');
+    assert.equal(await evaluate('document.getElementById("voronoi-topology-populations").checkVisibility()'), false, 'common indices are folded initially');
     for (const [id, property] of [['volume', 'atomicVolume'], ['coordination', 'voronoiCoordination'], ['surface', 'voronoiSurfaceArea'], ['face-order', 'voronoiMaxFaceOrder'], ['boundary', 'voronoiBoundaryFaces']]) {
       await press(`#voronoi-color-${id}`);
       assert.equal(await evaluate('document.getElementById("color-mode").value'), `property:${property}`);
     }
     await press('#voronoi-color-volume'); await expand('#voronoi-distributions');
+    assert.ok(await evaluate('document.querySelectorAll("#voronoi-topology-populations [data-voronoi-index]").length>0 || document.getElementById("voronoi-topology-populations").textContent.includes("<")'), 'opening distributions exposes common topological populations');
     const volumeChart = '#voronoi-volume-chart';
     assert.equal(await evaluate(`document.querySelectorAll('${volumeChart} svg path.chart-bar').length`), 1, 'one bar path avoids excessive DOM');
     await press(`${volumeChart} .voronoi-chart-modes button:last-child`);
@@ -265,6 +277,116 @@ try {
     assert.ok(await evaluate('document.querySelector("[data-voronoi-stat=boundary]").textContent.includes("2")'));
     console.log('Voronoi UI: cancel, late results, frame/source transitions and finite-domain cells passed.');
 
+    // A binary SC crystal becomes FCC after either checkerboard element is
+    // removed from both the centers and the neighbor search. A display-only
+    // filter would leave volume 8 and CN 6 rather than volume 16 and CN 12.
+    await load('binary-voronoi.xyz', 8); await run();
+    const binaryFull = await result(); close(binaryFull.atomicVolume, Array(8).fill(8), 1e-9);
+    assert.deepEqual(binaryFull.voronoiCoordination, Array(8).fill(6));
+    await change('show-voronoi-cell', false, { checkbox: true });
+    await expand('#voronoi-cell-display');
+    assert.equal(await evaluate('document.getElementById("show-all-voronoi-cells").checked'), false);
+    const withoutAll = await pixels();
+    await evaluate('voronoiChecks.holdKind="voronoiGeometryBatch"');
+    await change('show-all-voronoi-cells', true, { checkbox: true });
+    await waitFor('voronoiChecks.held?.kind==="voronoiGeometryBatch"', 'hold an active all-cell display request');
+    await change('show-all-voronoi-cells', false, { checkbox: true });
+    assert.equal(await evaluate('voronoiChecks.held.signal.aborted'), true, 'turning all-cell display off aborts its pending extraction');
+    await evaluate('voronoiChecks.release()'); await delay(120);
+    assert.equal(await evaluate('voronoiChecks.allGeometry()'), null, 'late all-cell extraction cannot restore canceled display geometry');
+    await change('show-all-voronoi-cells', true, { checkbox: true });
+    await waitFor('voronoiChecks.allGeometry()?.cellCount===8 && voronoiChecks.allGeometry()?.complete', 'all binary-crystal cell meshes');
+    assert.deepEqual((await evaluate('voronoiChecks.allGeometry()')).atomIndices, [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert.equal(await evaluate('voronoiChecks.renderer.voronoiAllCellLayer.cellCount'), 8);
+    assert.notEqual((await pixels()).hash, withoutAll.hash, 'all-cell drawing changes real viewport pixels');
+    const allPng = await download('#export-png');
+    await change('show-all-voronoi-cells', false, { checkbox: true });
+    assert.notEqual((await download('#export-png')).hash, allPng.hash, 'PNG includes all requested cell faces and edges');
+    await change('show-all-voronoi-cells', true, { checkbox: true });
+    await waitFor('voronoiChecks.allGeometry()?.cellCount===8', 're-enable all binary cells');
+    await pointerPick();
+    await evaluate('voronoiChecks.saveAllGeometry()');
+    await expand('#voronoi-type-selection'); await press('[data-voronoi-type="Cu"]');
+    await waitFor('document.getElementById("voronoi-state").textContent==="Calculated" && voronoiChecks.renderer.frame.atomeyeResults?.voronoi?.result.selectedTypes?.join(",")==="Ni"', 'Ni-only CPU tessellation');
+    const niIndices = [0, 3, 5, 6], niCpu = await result();
+    assert.equal(niCpu.backend, 'cpu'); assert.deepEqual(niCpu.analyzedAtomIndices, niIndices);
+    close(niIndices.map(index => niCpu.atomicVolume[index]), Array(4).fill(16), 1e-9);
+    assert.ok(niIndices.every(index => niCpu.voronoiCoordination[index] === 12 && niCpu.voronoiIndices[index] === '<0,12,0,0>'));
+    assert.equal(niCpu.summary.atomCount, 4); close([niCpu.summary.totalVolume], [64], 1e-9);
+    assert.equal(await evaluate('(() => {const r=voronoiChecks.renderer.frame.atomeyeResults.voronoi.result;return [1,2,4,7].every(atom=>["atomicVolume","voronoiSurfaceArea","voronoiCoordination","voronoiBoundaryFaces","voronoiMaxFaceOrder"].every(name=>Number.isNaN(r[name][atom])) && r.faceOffsets[atom]===r.faceOffsets[atom+1]);})()'), true, 'excluded atoms have NaN fields and no central faces');
+    assert.ok(niCpu.faceNeighbors.every(index => niIndices.includes(index)), 'excluded Cu sites are absent from the neighbor tessellation');
+    await waitFor('voronoiChecks.allGeometry()?.cellCount===4', 'Ni-only cell mesh replaces all-site mesh');
+    assert.equal(await evaluate('voronoiChecks.allGeometryChanged()'), true, 'changing scientific selection invalidates the complete mesh cache');
+    assert.deepEqual((await evaluate('voronoiChecks.allGeometry()')).atomIndices, niIndices);
+    const niCsv = await download('#export-voronoi-csv');
+    const niRows = niCsv.text.trim().split(/\r?\n/).slice(1);
+    assert.equal(niRows.length, 4); assert.ok(niRows.every(row => row.includes(',Ni,')), 'atom CSV exports only tessellated element sites');
+    await run({ gpu: true });
+    const niGpu = await result(); assert.deepEqual(niGpu.analyzedAtomIndices, niIndices);
+    close(niIndices.map(index => niGpu.atomicVolume[index]), niIndices.map(index => niCpu.atomicVolume[index]), 2e-5);
+    assert.deepEqual(niGpu.voronoiCoordination, niCpu.voronoiCoordination);
+    assert.deepEqual(niGpu.voronoiIndices, niCpu.voronoiIndices);
+    await waitFor('voronoiChecks.allGeometry()?.cellCount===4', 'Ni-only GPU results and native display mesh');
+
+    await evaluate('voronoiChecks.saveSource();voronoiChecks.saveAllGeometry()');
+    await showTool('replicate'); await change('replicate-a', '2'); await press('#apply-replicate');
+    await waitFor('voronoiChecks.renderer.repetitions[0]===2', 'replicate all Ni cells in display'); await pixels();
+    assert.equal(await evaluate('voronoiChecks.renderer.voronoiAllCellLayer.renderedReplicaCount'), 2);
+    assert.equal(await evaluate('voronoiChecks.sourceUnchanged()'), true, 'all-cell display copies leave subset scientific results unchanged');
+    assert.equal(await evaluate('voronoiChecks.allGeometryChanged()'), false, 'display copies reuse the same complete scientific mesh');
+    await pointerPick([1, 0, 0]);
+    await showTool('display'); await change('compare-view', true, { checkbox: true });
+    await waitFor('voronoiChecks.allGeometry("comparison")?.cellCount===4', 'comparison view displays all selected-element cells');
+    const allSecond = await pixels('comparison');
+    await showTool('voronoi'); await change('show-all-voronoi-cells', false, { checkbox: true });
+    assert.notEqual((await pixels('comparison')).hash, allSecond.hash, 'all-cell switch changes the second-view pixels');
+    await change('show-all-voronoi-cells', true, { checkbox: true });
+    await showTool('display'); await change('compare-view', false, { checkbox: true });
+    await showTool('replicate'); await press('#reset-replicate');
+
+    await showTool('selectionGroups'); await press('#add-selection-group');
+    await expand('#selection-group-settings .selection-group-members'); await change('selection-group-operation', 'replace');
+    await change('selection-group-ids', niIndices.map(index => 101 + index).join(' '), { event: 'input' }); await press('#apply-selection-group-ids');
+    await press('#toggle-selection-group-visibility');
+    const hiddenAllOn = await pixels();
+    await showTool('voronoi'); await change('show-all-voronoi-cells', false, { checkbox: true });
+    assert.deepEqual(await pixels(), hiddenAllOn, 'hidden owners suppress all their cell faces and edges');
+    await change('show-all-voronoi-cells', true, { checkbox: true });
+    await showTool('selectionGroups'); await press('#toggle-selection-group-visibility');
+    await showTool('slice'); await press('#add-slice'); await change('slice-offset', '-1000'); await change('slice-show-gizmo', false, { checkbox: true });
+    const slicedAllOn = await pixels();
+    await showTool('voronoi'); await change('show-all-voronoi-cells', false, { checkbox: true });
+    assert.deepEqual(await pixels(), slicedAllOn, 'sliced-out cells leave no displayed faces or edges');
+    await change('show-all-voronoi-cells', true, { checkbox: true });
+    await showTool('slice'); await press('#delete-slice');
+
+    await showTool('voronoi'); await evaluate('voronoiChecks.saveAllGeometry()');
+    await change('frame-slider', '1', { event: 'input' });
+    await waitFor('voronoiChecks.renderer.frame.timestep===24 && document.getElementById("voronoi-state").textContent==="Calculated"', 'selected element survives reordered frame labels');
+    const niReordered = await result(), reorderedIndices = [1, 2, 4, 7];
+    assert.deepEqual(niReordered.selectedTypes, ['Ni']); assert.deepEqual(niReordered.analyzedAtomIndices, reorderedIndices);
+    close(reorderedIndices.map(index => niReordered.atomicVolume[index]), Array(4).fill(16), 2e-5);
+    await waitFor('voronoiChecks.allGeometry()?.atomIndices.join(",")==="1,2,4,7"', 'frame change rebuilds all cells with original source indices');
+    assert.equal(await evaluate('voronoiChecks.allGeometryChanged()'), true);
+    assert.equal(await evaluate('document.querySelector("[data-voronoi-type=Ni]").checked && !document.querySelector("[data-voronoi-type=Cu]").checked'), true);
+    const subsetRecipe = JSON.parse((await download('#export-configuration')).text);
+    assert.deepEqual(subsetRecipe.settings.extensions.voronoi.selectedTypes, ['Ni']);
+    assert.equal(subsetRecipe.settings.extensions.voronoiDisplay.allEnabled, true);
+    await writeFile(resolve(fixtures, 'voronoi-subset-recipe.json'), JSON.stringify(subsetRecipe));
+    await press('#close-file'); await inputFile('#configuration-file', 'voronoi-subset-recipe.json');
+    await waitFor('document.getElementById("configuration-status").textContent.includes("Waiting for source files")', 'subset recipe waits for original source');
+    await load('binary-voronoi.xyz', 8);
+    await waitFor('document.getElementById("configuration-status").textContent.includes("restored") && voronoiChecks.allGeometry()?.atomIndices.join(",")==="1,2,4,7"', 'recipe restores selected types, saved frame and all-cell mesh');
+    assert.equal(await evaluate('document.getElementById("show-all-voronoi-cells").checked'), true);
+    await showTool('voronoi'); await expand('#voronoi-type-selection'); await press('#voronoi-clear-types');
+    await waitFor('voronoiChecks.allGeometry()===null && document.getElementById("voronoi-results").hidden', 'empty element selection clears previous results and cells');
+    assert.equal(await evaluate('document.getElementById("export-voronoi-csv").disabled'), true);
+    await press('#voronoi-select-all-types');
+    await waitFor('document.getElementById("voronoi-state").textContent==="Calculated" && voronoiChecks.allGeometry()?.cellCount===8', 'select all recovers full SC tessellation');
+    close((await result()).atomicVolume, Array(8).fill(8), 2e-5);
+    await change('show-all-voronoi-cells', false, { checkbox: true });
+    console.log('Voronoi UI: true CPU/GPU element subsets, all-cell rendering, cache/frame lifecycle, CSV and recipe replay passed.');
+
     await load('ideal-fcc.xyz', 32); await run({ gpu: true });
     const ideal = await result(); close(ideal.atomicVolume, Array(32).fill(16), 2e-5);
     const idealColorCount = await evaluate('(() => {const r=voronoiChecks.renderer;return new Set(Array.from({length:r.atomCount},(_unused,index)=>Array.from(r.atomColors.subarray(index*3,index*3+3)).join(","))).size;})()');
@@ -313,6 +435,14 @@ try {
     await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 640, deviceScaleFactor: 1, mobile });
     await call('Emulation.setTouchEmulationEnabled', { enabled: true });
     await showTool('voronoi'); await press('#voronoi-color-coordination');
+    await expand('#voronoi-cell-display');
+    const phoneBare = await pixels();
+    await press('#show-all-voronoi-cells');
+    await waitFor('voronoiChecks.allGeometry()?.cellCount===32 && voronoiChecks.allGeometry()?.complete', 'phone enables all analyzed cell meshes');
+    assert.notEqual((await pixels()).hash, phoneBare.hash, 'touch-enabled all-cell switch updates phone viewport');
+    await press('#show-all-voronoi-cells');
+    await expand('#voronoi-type-selection');
+    assert.equal(await evaluate('document.querySelector("[data-voronoi-type=Ni]").checked'), true, 'phone type choices agree with the restored all-site analysis');
     await expand('#voronoi-distributions');
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'), true, 'result cards and interactive charts fit the phone');
     await press('#voronoi-coordination-chart .voronoi-chart-modes button:last-child');
@@ -325,6 +455,7 @@ try {
       atoms: positions.length, cpuMs: cpuResult.elapsedMs, gpuMs: gpuResult.elapsedMs,
       cpuWorkers: cpuResult.workerCount, gpuEngine: gpuResult.engine,
       idealColorCount, previewRecipeRestored: true, wallCellOutward: true,
+      trueElementSubsets: true, allCellDrawing: true, subsetRecipeRestored: true,
       maximumVolumeDifference: Math.max(...gpuResult.atomicVolume.map((value, index) => Math.abs(value - cpuResult.atomicVolume[index]))),
       screenshots: [desktopScreenshot, phoneScreenshot], artifacts };
   }, { software: true });
@@ -364,7 +495,7 @@ async function initializeChecks() {
   // A single inspected cell intentionally uses the resident CPU engine even
   // after full analysis on GPU. This is separate from whole-frame dispatch.
   AnalysisPool.prototype.analyzeCPU = async function(frame, parameters, options) {
-    if (parameters.kind !== 'voronoiGeometry') return analyzeCPU.call(this, frame, parameters, options);
+    if (!['voronoiGeometry', 'voronoiGeometryBatch'].includes(parameters.kind)) return analyzeCPU.call(this, frame, parameters, options);
     const entry = { frame, kind: parameters.kind, parameters, signal: options?.signal };
     checks.history.push(entry);
     const hold = checks.holdKind === parameters.kind; if (hold) checks.holdKind = null;
@@ -378,6 +509,14 @@ async function initializeChecks() {
   // must be available to both the main viewport and comparison view.
   checks.geometry = (kind = 'renderer') => plain(checks[kind]?.voronoiCellGeometry ?? null);
   checks.mesh = () => plain(createVoronoiCellMesh(checks.renderer.voronoiCellGeometry));
+  checks.allGeometry = (kind = 'renderer') => {
+    const geometry = checks[kind]?.voronoiAllCellGeometry;
+    if (!geometry) return null;
+    return { cellCount: geometry.cellCount, complete: Boolean(geometry.complete), chunks: geometry.chunks.length,
+      atomIndices: [...new Set(geometry.chunks.flatMap(chunk => Array.from(chunk.atomIndices)))].sort((a, b) => a - b) };
+  };
+  checks.saveAllGeometry = () => { checks.previousAllGeometry = checks.renderer.voronoiAllCellGeometry; };
+  checks.allGeometryChanged = () => checks.previousAllGeometry !== checks.renderer.voronoiAllCellGeometry;
   checks.pickablePoint = (requestedReplica = null) => {
     const r = checks.renderer; r.updateMatrices(); const box = r.canvas.getBoundingClientRect();
     const replicas = r.replicas.filter(replica => !requestedReplica || replica.indices.every((value, axis) => value === requestedReplica[axis]));

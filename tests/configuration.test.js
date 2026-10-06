@@ -756,14 +756,31 @@ test('bond statistics and Voronoi recipes restore independent analysis settings 
   assert.equal(restored.settings.activeTool, 'voronoi');
   assert.equal(restored.settings.extensions.bonds.enabled, false);
   assert.deepEqual(restored.settings.extensions.bondStatistics, extensions.bondStatistics);
-  assert.deepEqual(restored.settings.extensions.voronoi, extensions.voronoi);
+  assert.deepEqual(restored.settings.extensions.voronoi, { ...extensions.voronoi, selectedTypes: null });
   assert.equal(restored.settings.extensions.bonds.cutoff, extensions.bonds.cutoff);
   const defaults = createConfiguration({ settings: { extensions: { bondStatistics: {}, voronoi: {} } } });
   assert.deepEqual(defaults.settings.extensions.bondStatistics, { enabled: false, lengthBins: 100, angleBins: 180 });
-  assert.deepEqual(defaults.settings.extensions.voronoi, { enabled: false, faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50 });
+  assert.deepEqual(defaults.settings.extensions.voronoi, { enabled: false, faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50, selectedTypes: null });
   const legacy = createConfiguration();
   assert.equal(Object.hasOwn(legacy.settings.extensions, 'bondStatistics'), false);
   assert.equal(Object.hasOwn(legacy.settings.extensions, 'voronoi'), false);
+});
+
+test('Voronoi recipes preserve type labels and independent selected/all-cell display without geometry payloads', () => {
+  const recipe = createConfiguration({ settings: { extensions: {
+    voronoi: { enabled: true, selectedTypes: ['Ni', 'Cu', 'Ni'] },
+    voronoiDisplay: { enabled: false, allEnabled: true, color: '#123456', opacity: .3 },
+  } } });
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.deepEqual(restored.settings.extensions.voronoi.selectedTypes, ['Cu', 'Ni']);
+  assert.deepEqual(restored.settings.extensions.voronoiDisplay, { enabled: false, allEnabled: true, color: '#123456', opacity: .3 });
+  const old = createConfiguration({ settings: { extensions: { voronoi: {}, voronoiDisplay: {} } } });
+  assert.equal(old.settings.extensions.voronoi.selectedTypes, null);
+  assert.equal(old.settings.extensions.voronoiDisplay.allEnabled, false);
+  for (const patch of [{ allEnabled: 'yes' }, { chunks: [] }]) {
+    const invalid = structuredClone(recipe); Object.assign(invalid.settings.extensions.voronoiDisplay, patch);
+    assert.throws(() => parseConfiguration(JSON.stringify(invalid)), /voronoiDisplay/);
+  }
 });
 
 test('topology recipes reject invalid histograms, face filters and missing shared bond cutoff before restore', () => {
@@ -781,6 +798,10 @@ test('topology recipes reject invalid histograms, face filters and missing share
     value => { value.voronoi.relativeFaceAreaThreshold = 1.01; },
     value => { value.voronoi.bins = 1.2; },
     value => { value.voronoi.atomicVolume = [1, 2]; },
+    value => { value.voronoi.selectedTypes = 'Ni'; },
+    value => { value.voronoi.selectedTypes = [0]; },
+    value => { value.voronoi.selectedTypes = ['']; },
+    value => { value.voronoi.selectedTypes = ['Ni\u0000']; },
   ]) {
     const invalid = structuredClone(recipe);
     mutate(invalid.settings.extensions);

@@ -257,13 +257,16 @@ migrate that calculation to the independent Displacement tool.
 Bond statistics save their enabled state and histogram bin counts in
 `settings.extensions.bondStatistics`. Their cutoff and element-pair overrides
 come from `settings.extensions.bonds`, even when bond cylinders are disabled.
-Voronoi saves its enabled state, histogram bins and absolute/relative face-area
-thresholds in `settings.extensions.voronoi`. Restoring either enabled analysis
+Voronoi saves its enabled state, histogram bins, absolute/relative face-area
+thresholds and input type labels in `settings.extensions.voronoi`.
+`selectedTypes: null` includes all atom types; a string list selects those
+labels as tessellation sites. Restoring either enabled analysis
 recalculates its arrays and distributions from the saved physical frame;
 CSV files and computed arrays are not embedded in the recipe. Older recipes
 without these extensions leave both analyses off.
-Selected-cell visibility, color and opacity are saved separately in
-`settings.extensions.voronoiDisplay`, without polygon arrays.
+Selected-cell visibility, all-cell visibility, color and opacity are saved
+separately in `settings.extensions.voronoiDisplay`, without polygon arrays.
+Both cell-display options default off; older recipes include all input types.
 
 Click **Import JSON** and choose a saved configuration. If the matching source
 is already open, the viewer returns to the saved frame, restores the settings
@@ -558,15 +561,27 @@ number of edges. Boundary faces are recorded separately and do not contribute
 to neighbor coordination or the index. This implementation is unweighted;
 species-dependent radius weighting is not applied.
 
-The Voronoi tool provides summary cards, leading topology populations and
-interactive distributions of volume, coordination and neighbor face area.
+The **Element types** checkboxes choose the sites used to construct the
+tessellation. Excluding a type removes its cells and bisector planes, so the
+included sites divide the complete domain among themselves. This changes
+volumes and neighbor topology independently of display hiding, while the
+physical frame and other analyses keep all atoms. Excluded sites receive
+`NaN` Voronoi properties; Voronoi statistics and detailed CSV rows include only
+the selected input sites and retain original atom IDs.
+
+The Voronoi tool provides summary cards and folded **Distributions** containing
+leading topology populations and histograms of volume, coordination and
+neighbor face area.
 Expand the distributions to inspect bins by pointer, touch or keyboard and
 switch between count and probability; the complete index table is paginated.
 Quantity buttons apply atomic-volume, surface-area or coordination coloring.
-Expand **Inspect a selected cell**, enable its preview and click an atom to see its
-transparent polyhedron and edges; color and opacity are adjustable. This
-single-cell geometry follows display origin, periodic replication, visibility
-and slices, appears in PNG exports and does not rerun the full analysis.
+Expand **Cell display**, enable **Show the selected atom's cell** and click an
+included atom to see its transparent polyhedron and edges. Alternatively,
+**Show all analyzed cells** builds geometry for all included input sites. Both
+options default off; all-cell display needs additional memory and mesh
+construction time. Color and opacity are adjustable. Cell geometry follows
+display origin, periodic replication, visibility and slices, appears in PNG
+exports and leaves the analyzed statistics unchanged.
 Its optional absolute face-area
 and relative surface-fraction thresholds remove small neighbor faces from
 coordination and index statistics while preserving the tessellated volumes
@@ -642,7 +657,10 @@ their stored precision, including literal `NaN`; scalar statistics report
 finite counts and missing/infinite counts separately and use population
 standard deviation. Slicing, hidden atoms, display copies and periodic display
 origin do not change exported populations. **Replicate atoms** includes the
-additional physical atoms. A persistent Worker formats existing results in
+additional physical atoms. Voronoi's input type selection determines its
+tessellation population; its cell and face tables include only those input
+sites, and its histogram fractions use the included population. A persistent
+Worker formats existing results in
 chunks, reusing snapshots and avoiding another analysis; if the frame changes
 during formatting, the obsolete download is discarded. See
 [Statistics](features/statistics.md) for table contents and CSV conventions.

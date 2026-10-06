@@ -8,12 +8,15 @@ class Element {
     this.value = String(value); this.textContent = ''; this.hidden = false;
     this.disabled = false; this.listeners = new Map(); this.attributes = new Map();
     this.classList = { toggle() {} };
+    this.children = [];
   }
   get valueAsNumber() { return this.value.trim() === '' ? NaN : Number(this.value); }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   removeAttribute(name) { this.attributes.delete(name); }
   dispatch(name) { this.listeners.get(name)?.({ target: this }); }
+  append(...children) { this.children.push(...children); }
+  replaceChildren(...children) { this.children = children; }
 }
 
 function frame(count = 3) {
@@ -44,7 +47,10 @@ function harness(t) {
   }
   for (const [id, value] of Object.entries({ 'bond-statistics-length-bins': 100, 'bond-statistics-angle-bins': 180,
     'voronoi-face-area-threshold': 0, 'voronoi-relative-face-area-threshold': 0 })) fields[id] = new Element(value);
-  globalThis.document = { getElementById: id => fields[id] ?? null };
+  for (const id of ['voronoi-type-options', 'voronoi-type-summary', 'voronoi-select-all-types', 'voronoi-clear-types']) fields[id] = new Element();
+  globalThis.document = { getElementById: id => fields[id] ?? null,
+    createElement() { const element = new Element(); element.ownerDocument = this; return element; } };
+  for (const element of Object.values(fields)) element.ownerDocument = globalThis.document;
   t.after(() => { globalThis.document = previousDocument; });
   let currentFrame = frame(), version = 'source-a', frameIndex = 0, bondCutoff = 3, graphEnabled = false, colorVersion = 0;
   const frames = new Set([currentFrame]), pending = [], changes = [], pendingSnapshots = [], selected = [], notifications = [], beforeClear = [], toolFlags = new Map();
@@ -193,6 +199,37 @@ test('GPU Voronoi publishes display precision bounds without changing scientific
   assert.equal(Object.hasOwn(h.getFrame().properties.find(value => value.name === 'voronoiCoordination'), 'autoRangeRelativeTolerance'), false);
 });
 
+test('Voronoi type checkboxes follow labels across frames, invalidate old requests and clear empty selections', async t => {
+  const h = harness(t), first = { ...frame(), types: Uint16Array.from([0, 1, 0]), typeLabels: ['Ni', 'Cu'] };
+  h.setFrame(first); h.tools.setEnabled(true);
+  const choices = () => h.fields['voronoi-type-options'].children.map(row => row.children[0]);
+  const choice = label => choices().find(input => input.attributes.get('data-voronoi-type') === label);
+  assert.ok(choices().every(input => input.checked));
+  choice('Cu').checked = false; choice('Cu').dispatch('change');
+  const oldRequest = h.tools.run('voronoi');
+  assert.deepEqual(h.pending[0].settings.selectedTypes, ['Ni']);
+  const next = { ...frame(), types: Uint16Array.from([1, 0, 1]), typeLabels: ['Cu', 'Ni'] };
+  h.setFrame(next); const newRequest = h.tools.onFrame();
+  assert.equal(h.pending[0].options.signal.aborted, true);
+  assert.deepEqual(h.pending[1].settings.selectedTypes, ['Ni']);
+  assert.equal(choice('Ni').checked, true); assert.equal(choice('Cu').checked, false);
+  h.pending[0].resolve(voronoiResult()); assert.equal(await oldRequest, false);
+  const subset = voronoiResult(); subset.atomicVolume = Float64Array.from([16, NaN, 16]);
+  h.pending[1].resolve(subset); await newRequest;
+  assert.equal(first.atomeyeResults?.voronoi, undefined);
+  assert.equal(next.properties.find(property => property.name === 'atomicVolume').data, subset.atomicVolume);
+  assert.deepEqual(h.tools.serialize().voronoi.selectedTypes, ['Ni']);
+  h.fields['voronoi-select-all-types'].dispatch('click');
+  assert.equal(h.pending[2].settings.selectedTypes, null);
+  h.pending[2].resolve(voronoiResult()); await new Promise(resolve => setImmediate(resolve));
+  assert.ok(choices().every(input => input.checked));
+  h.fields['voronoi-clear-types'].dispatch('click');
+  assert.equal(h.pending.length, 3, 'an empty selection never reaches CPU or GPU workers');
+  assert.equal(h.tools.getResult('voronoi'), null);
+  assert.equal(next.properties.some(property => property.analysisKind === 'voronoi'), false);
+  assert.match(h.fields['voronoi-status'].textContent, /Select at least one element type/);
+});
+
 test('restore honors settings and its freshness guard while avoiding automatic color selection', async t => {
   const h = harness(t);
   let current = true;
@@ -209,7 +246,7 @@ test('restore honors settings and its freshness guard while avoiding automatic c
   assert.equal(h.tools.serialize().voronoi.bins, 20);
   h.tools.reset();
   assert.deepEqual(h.tools.serialize(), { bondStatistics: { enabled: false, lengthBins: 100, angleBins: 180 },
-    voronoi: { enabled: false, faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50 } });
+    voronoi: { enabled: false, faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50, selectedTypes: null } });
 });
 
 test('invalid input keeps valid saved parameters and failures cannot publish malformed atom arrays', async t => {
