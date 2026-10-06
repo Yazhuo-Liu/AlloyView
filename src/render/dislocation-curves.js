@@ -179,7 +179,7 @@ function splitSamples(samples, cell, closed, tolerance) {
 /** Render-only interpolation and frames. Native XYZ coordinates and topology
  * remain untouched. Frames follow the unwrapped curve before periodic cuts.
  */
-export function createDislocationCurve(points, cell, requestedClosed = null) {
+export function createDislocationCurve(points, cell, requestedClosed = null, { wrap = true } = {}) {
   const extent = Math.max(1, ...Array.from(cell.vectors, Math.abs));
   const tolerance = extent * 1e-10;
   const knots = [];
@@ -189,7 +189,7 @@ export function createDislocationCurve(points, cell, requestedClosed = null) {
   }
   if (knots.length < 2) return [];
   const { closed, winding } = closure(knots, cell, requestedClosed, tolerance);
-  return splitSamples(sampleCurve(knots, closed, winding), cell, closed, tolerance);
+  return splitSamples(sampleCurve(knots, closed, winding), wrap ? cell : { ...cell, pbc: [false, false, false] }, closed, tolerance);
 }
 
 /** Append a connected indexed surface. Radius is a draw-time uniform, so

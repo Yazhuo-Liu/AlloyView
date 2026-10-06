@@ -2,11 +2,14 @@
 export const FEATURE_HELP = Object.freeze({
   display: { title: 'Display', page: 'display', summary: 'Choose coordinates, atom colors and radii, image options, and an independent second camera. Display changes preserve the source data.' },
   replicate: { title: 'Replicate', page: 'replicate', summary: 'Repeat along periodic cell vectors. Display copies reuse source atoms; optional Replicate atoms enlarges the cell and analyzes the additional atoms.' },
+  externalProperties: { title: 'External properties', page: 'external-properties', summary: 'Attach numeric per-atom columns from CSV or AUX files by stable ID or row order. Imported values are available for colors, atom details and vector fields; coordinates remain unchanged.' },
   slice: { title: 'Slices', page: 'slices', summary: 'Keep the intersection of up to 16 Cartesian half-spaces. Edit plane normals and positions numerically or with the viewport handles.' },
   coordination: { title: 'Coordination number', page: 'coordination', summary: 'Count unique neighboring atom IDs within a cutoff using the cell geometry and periodic boundaries.' },
   bonds: { title: 'Bonds', page: 'bonds', summary: 'Create periodic neighbor edges within a global or element-pair cutoff. Bond cylinders follow the selected periodic image.' },
+  bondStatistics: { title: 'Bond distributions and Q4/Q6', page: 'bond-statistics', summary: 'Measure bond lengths, angles between neighbors, and local Steinhardt Q4/Q6 using bond cutoffs. Export distributions or atom values as CSV; display visibility does not change the analyzed population.' },
+  voronoi: { title: 'Voronoi analysis', page: 'voronoi', summary: 'Partition the simulation cell into atomic Voronoi cells. Inspect volumes, surface areas, neighbor counts, face orders and boundary faces. Tiny-face filters affect counts and indices while preserving cell geometry.' },
   displacement: { title: 'Displacement', page: 'displacement', summary: 'Calculate current minus reference positions as per-atom components and magnitude. Opening enables frame updates; Cancel stops calculation and clears results.' },
-  vectors: { title: 'Vector arrows', page: 'vectors', summary: 'Display imported or calculated vector properties without starting analyses. Choose arrow scale, anchor and proportions; atom visibility does not hide arrows.' },
+  vectors: { title: 'Vector arrows', page: 'vectors', summary: 'Display multiple named vector fields with independent sources, colors and arrow sizes. Choose camera-facing or fixed 2D planes; atom visibility does not hide arrows.' },
   statistics: { title: 'Statistics and RDF', page: 'statistics', summary: 'Inspect coordination populations and a normalized radial distribution. RDF requires a fully periodic cell and a bounded cutoff.' },
   cna: { title: 'Common neighbor analysis', page: 'cna', summary: 'Classify FCC, HCP, BCC and ICO environments from common-neighbor bond signatures, with adaptive or fixed neighbor shells.' },
   dxa: { title: 'Dislocation analysis', page: 'dislocations', summary: 'Extract dislocation lines and Burgers vectors relative to a selected crystal lattice. This initial experimental version runs in a dedicated CPU Worker; line colors and visibility are independent of atom colors.' },
@@ -55,6 +58,8 @@ export function initializeFeatureHelp(root = document) {
     // Performance uses a collapsible details summary rather than an h3.
     if (!headings.length) { const summaryLabel = panel.querySelector('summary > span'); if (summaryLabel) headings.push(summaryLabel); }
     for (const [index, heading] of headings.entries()) {
+      const owner = heading.closest?.('[data-tool-panel], [data-feature-help]');
+      if (owner && owner !== panel) continue;
       if (heading.querySelector('.feature-help')) continue;
       const wrapper = root.createElement('span');
       wrapper.className = 'feature-help';

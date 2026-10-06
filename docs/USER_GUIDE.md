@@ -38,9 +38,14 @@ file.
 On desktop, drag the divider between the viewport and the right controls panel
 to adjust its width. The browser saves the chosen width. Double-click the
 divider or press Enter while it is focused to reset it; Left/Right arrow keys
-also adjust it. Select a button under **Tools** to show that tool's settings.
+also adjust it. **Tools** has two tabs side by side: **Visualization tools**
+contains Display, Slice, Vectors, selections and the analysis tools;
+**Modification tools** contains Replicate and External properties.
+Select a button in either category to show that tool's settings.
 Only one configuration panel is shown at a time. A dot marks an enabled
-analysis; opening another tool keeps existing analyses running. Click the
+analysis; opening another tool or category keeps existing analyses running.
+Each category remembers its last open settings panel. Use Left/Right, Home or
+End while a category tab has focus to switch categories. Click the
 current tool again or **Close / cancel** to cancel that analysis and clear its
 results. **Cancel** clears the result while leaving the settings open to retry.
 
@@ -125,9 +130,27 @@ limits and palette as the viewport. Range and palette changes apply immediately
 without rerunning an analysis. Categorical legends retain their separate
 class visibility checkboxes.
 
+## Periodic display origin
+
+Expand **Visualization tools → Display → Periodic display origin** to shift
+the wrapping boundary along the periodic cell vectors. The **a/b/c fraction**
+fields take fractional offsets, including negative values; a value of `0.5`
+shifts atoms by half that cell vector before wrapping. Nonperiodic directions
+are disabled. Actual cell vectors determine the shift in triclinic cells.
+
+Select an atom and press **Center selected atom** to place it at fractional
+coordinate `0.5` in each periodic direction. This brings a defect split by
+periodic boundaries into the center of the displayed cell. **Reset origin**
+sets all offsets to zero. Wrapped mode shifts and rewraps the coordinates;
+unwrapped mode applies the same translation without wrapping, preserving
+continuous motion. Both views and their bonds,
+vectors, slices, picking and image exports use the adjusted display.
+Source coordinates, cell geometry and analysis results remain unchanged.
+Configurations save the fractional origin.
+
 ## Display replication
 
-Select **Replicate**, enter independent total copy counts along **a**, **b** and
+Select **Modification tools → Replicate**, enter independent total copy counts along **a**, **b** and
 **c**, then click **Apply**. Each count includes the original cell: `2 × 3 × 1`
 displays six cells. Only periodic directions are editable. Copies follow the
 actual cell vectors, including tilted or rotated vectors in a triclinic cell.
@@ -171,6 +194,24 @@ selects `n · r ≤ d` for the negative side or `n · r ≥ d` for the positive 
 All enabled planes apply together, so only atoms in the intersection of the
 retained half-spaces remain visible and selectable.
 
+Expand **Build a plane from atoms**, click **Pick atoms**, and select two or
+three distinct atoms in order. **Between 2 atoms** creates their perpendicular
+bisector and keeps the side containing the second atom. **Through 3 atoms**
+creates their common plane; the pick order sets its right-hand normal.
+**Move to atom** places the current slice through the last pick, preserving
+its normal and retained side. With no slice picks, it uses the currently selected
+atom. **Clear picks** starts a new selection; **Finish picking** restores
+normal atom picking. Dragging the viewport still rotates it while picking.
+
+Atom-defined planes use the atoms' displayed coordinates directly, without
+nearest-periodic-image correction. Picking a display replica includes that
+replica's cell translation. Adjust the periodic display origin or pick
+neighboring replicas when the chosen atoms straddle a cell boundary.
+Picks must have distinct atom IDs. Coincident or collinear picks show a geometry
+error and keep the existing planes. Constructed planes keep their numerical
+position across frames; use **Move to atom** to place one through an updated
+atom position. See [Slices](features/slices.md#build-a-plane-from-atoms).
+
 Clipping uses the atom's actual displayed Cartesian position. Switching from
 wrapped to unwrapped coordinates can therefore change which atoms a plane
 keeps. Each replicated image is tested at its translated position along the
@@ -197,7 +238,8 @@ Use **Export JSON** directly below **Structure** to save the current source file
 sizes, available relative paths and saved trajectory frame, together with the
 processing and view settings. The configuration includes enabled coordination,
 CNA, central symmetry, PTM, ideal-lattice/reference-frame strain, local shear,
-bonds, displacement and RDF analyses and their parameters, editable
+bonds, bond distributions and Q4/Q6, Voronoi tessellation, displacement and RDF
+analyses and their parameters, editable
 lattice references, replication counts and physical/display mode, all slices
 and their names, named atom selection groups and their member IDs, color maps,
 per-property fixed ranges and Auto settings, visibility filters,
@@ -211,6 +253,15 @@ state and direction. Bond visibility is saved independently from whether its
 graph analysis is enabled. Older version 1 configurations leave these additions
 disabled. Older configurations with Displacement selected as a Vector source
 migrate that calculation to the independent Displacement tool.
+
+Bond statistics save their enabled state and histogram bin counts in
+`settings.extensions.bondStatistics`. Their cutoff and element-pair overrides
+come from `settings.extensions.bonds`, even when bond cylinders are disabled.
+Voronoi saves its enabled state, histogram bins and absolute/relative face-area
+thresholds in `settings.extensions.voronoi`. Restoring either enabled analysis
+recalculates its arrays and distributions from the saved physical frame;
+CSV files and computed arrays are not embedded in the recipe. Older recipes
+without these extensions leave both analyses off.
 
 Click **Import JSON** and choose a saved configuration. If the matching source
 is already open, the viewer returns to the saved frame, restores the settings
@@ -258,6 +309,34 @@ npm run preview
 The deployable files are in `dist/`. Any static server can host them. No backend
 API is used. A deployment only needs COOP/COEP headers if a future pthreads Wasm
 build is enabled; see [docs/DEPLOYMENT.md](DEPLOYMENT.md).
+
+## Extend the modification tools
+
+[The tool registry](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/tool-registry.js)
+stores each tool's stable ID, label, category and analysis flag. Modification
+tools can also declare `changesStructure` or `changesProperties` metadata.
+Future editors for adding, deleting or moving atoms selected by clicking or
+box selection belong in the `modification` category.
+
+Mount a future editor's button and settings panel through the object returned
+by `initializeToolPanels()`:
+
+```js
+toolPanels.registerTool({
+  id: 'moveAtoms',
+  label: 'Move selected atoms',
+  category: 'modification',
+  changesStructure: true,
+}, { button, panel });
+```
+
+Registration connects the button, panel visibility and category navigation.
+`selectTool(id)` opens the tool's category; `getActiveCategory()` and
+`setActiveCategory(category)` expose category state. Explicit closure calls
+the host's `onDeactivateTool` callback. The editor controller supplies the atom
+operations, selection handling and undo behavior, and coordinates source
+changes with cached data and analysis recalculation. The current built-in
+modification tools provide replication and external attribute attachment.
 
 ## Deploy to GitHub Pages
 
@@ -313,7 +392,8 @@ controls can remain responsive.
 **Enable GPU acceleration** beside the Light/Dark buttons is on by default.
 It prefers WebGPU for coordination, adaptive/fixed-cutoff CNA,
 manual/Auto central symmetry, displacement, reference-frame strain, RDF,
-local geometric shear, bonds, PTM neighbor preparation and ideal lattice strain
+local geometric shear, bonds, bond-length/angle distributions, local Q4/Q6,
+PTM neighbor preparation and ideal lattice strain
 neighbor/reference/tensor stages, and DXA nearest-neighbor search, local crystal correspondence and
 tetrahedron geometry/elastic-compatibility classification.
 DXA remains a hybrid CPU/GPU pipeline with CPU crystal mapping, periodic
@@ -334,6 +414,11 @@ arithmetic, transfer overhead and hardware all affect results and elapsed time;
 enabling GPU acceleration does not guarantee a speedup. See
 [Performance](features/performance.md) for algorithm choices and the backend
 layout in `src/analysis/gpu/`.
+
+Bond statistics have both a pure CPU Worker path and a WebGPU path, sharing
+cutoff conventions and histogram normalization. Voronoi tessellation currently
+uses the CPU Worker pool with a reusable Voro++ Wasm kernel, regardless of the
+GPU preference.
 
 Rendering currently uses WebGL2: calculated scalar and vector arrays return to
 the application before colors and arrows are uploaded for drawing. Reusing
@@ -443,6 +528,43 @@ tool retains its convention of counting distinct atom IDs at their nearest
 qualifying image. Very large neighbor graphs fail explicitly rather than
 silently truncating connections.
 
+Expand **Bond distributions and Q4/Q6** in Bonds to calculate
+bond-length and bond-angle distributions and local Steinhardt **Q4/Q6**. This
+uses the Default cutoff and element-pair overrides above; displaying cylinders
+is optional. Choose 1–4,096 bins independently for lengths and angles, then
+calculate. Lengths count unique undirected periodic edges, including valid
+self-image edges. Angles count each unordered pair of qualifying neighbors
+around a central atom once, over 0–180°. Q4/Q6 are dimensionless and invariant
+under rigid rotation; they describe neighbor orientation rather than chemical
+bond multiplicity. Atoms without qualifying neighbors receive `NaN`.
+
+The charts show counts and normalized probabilities. CSVs retain the bin
+edges, centers, raw counts, probabilities and probability densities; density
+uses Å⁻¹ for length and °⁻¹ for angle. Q4/Q6 statistics and individual atom
+values have separate CSV buttons. **Color by** can use Q4, Q6 or their neighbor
+counts. While enabled, frame or cutoff changes recalculate the statistics.
+**Cancel** clears these results independently of the bond cylinders. See
+[Bonds](features/bonds.md) for the definitions and CPU/GPU paths.
+
+**Voronoi**, in Visualization tools, partitions the physical simulation cell
+into nearest-atom regions using actual periodic images and triclinic cell
+geometry. Nonperiodic directions use the finite simulation-cell boundary.
+Results include atomic volume, surface area, neighbor coordination and the
+full Voronoi index `<n3,n4,n5,n6,…>`, which counts neighbor faces with each
+number of edges. Boundary faces are recorded separately and do not contribute
+to neighbor coordination or the index. This implementation is unweighted;
+species-dependent radius weighting is not applied.
+
+The Voronoi tool provides distributions of volume, coordination and neighbor
+face area, plus a frequency table of indices. Its optional absolute face-area
+and relative surface-fraction thresholds remove small neighbor faces from
+coordination and index statistics while preserving the tessellated volumes
+and surface areas. Atomic volumes and other numeric outputs are available
+for coloring. Export per-atom cells, distributions or individual faces as CSV;
+face rows include accepted/boundary flags and neighbor atom IDs. The CPU/Wasm
+Worker pool retains its kernel and memory between calculations. See
+[Voronoi](features/voronoi.md) for interpretation and boundary conventions.
+
 Open **Displacement** to enable calculation against a selected reference frame.
 It uses stable atom IDs; equal-size frames without explicit IDs use row order
 with a warning that atom ordering must stay unchanged. Mixed ID schemes and
@@ -475,8 +597,10 @@ and element or individual-atom visibility, so vectors can remain visible with
 all atoms hidden. Slices still clip arrows, and both views draw the same vector
 data. Choose Tail, Head or Center anchoring and 3D or camera-facing 2D glyphs.
 Shaft radius, head radius and head length are linked in proportion by default;
-disable the link to edit them separately. Only one vector field is displayed at
-a time. See the [vector documentation](features/vectors.md) for rendering details.
+disable the link to edit them separately. Up to 16 named fields can be displayed
+together, with independent sources, colors, sizes and visibility. Fixed 2D
+planes can use an editable up direction. See the
+[vector documentation](features/vectors.md) for rendering details.
 
 **Statistics** shows the distribution and mean of calculated coordination
 numbers, using bond-cutoff coordination when bonds are calculated, otherwise
@@ -485,13 +609,32 @@ the original global-cutoff coordination result. For **Radial distribution g(r)**
 the total distribution; selecting elements produces partial distributions.
 The Worker pool accumulates histograms and combines them using exact spherical
 shell volumes and a finite-population correction. **Export CSV** saves the
-distances, g(r) values and counts.
+bin edges, distances, g(r) values and raw directed counts.
 
 Normalized RDF requires periodic boundaries along all three axes and a cutoff
 no greater than half the shortest cell face height. A nonperiodic structure
 needs a separate surface correction, which is not implemented. RDF ignores
 display filtering and display copies. With physical atom replication enabled,
 it uses the enlarged cell and additional atoms as the analysis structure.
+
+Expand the CSV section in Statistics to export the current frame's complete
+summary, scalar-property statistics, populations from every available crystal
+classifier and atom type, all coordination distributions, or individual atom
+properties. The summary also includes selection-group matched/absent IDs,
+RDF normalization, bond and Voronoi statistics, and DXA family lengths and
+density when those results are available. DXA also provides separate family
+and line tables with Burgers-vector components.
+
+Every CSV records the source filename, one-based frame number and timestep
+when available. Units appear in headings or dedicated columns. Numbers retain
+their stored precision, including literal `NaN`; scalar statistics report
+finite counts and missing/infinite counts separately and use population
+standard deviation. Slicing, hidden atoms, display copies and periodic display
+origin do not change exported populations. **Replicate atoms** includes the
+additional physical atoms. A persistent Worker formats existing results in
+chunks, reusing snapshots and avoiding another analysis; if the frame changes
+during formatting, the obsolete download is discarded. See
+[Statistics](features/statistics.md) for table contents and CSV conventions.
 
 ## Named atom selection groups
 
@@ -596,6 +739,8 @@ npm test
 npm run benchmark
 # With Node.js 24 and Chrome/Chromium, after npm run build:
 npm run test:browser
+# Bond/Voronoi reference structures, CSV downloads and configuration replay:
+npm run test:browser:topology-tools
 # WebGPU execution checks and CPU/GPU timing (Node.js 24 and Chrome/Chromium):
 npm run test:gpu
 npm run benchmark:gpu
@@ -712,7 +857,7 @@ This is a provenance and risk statement, not legal advice.
 
 - WebGL 2 is required for rendering. Optional WebGPU acceleration accelerates
   coordination, adaptive/fixed CNA, reference-frame strain, RDF, local geometric
-  shear, manual/Auto central symmetry, displacement, bonds and ideal-strain
+  shear, manual/Auto central symmetry, displacement, bonds, bond statistics and ideal-strain
   reference/tensor evaluation and fresh-strain neighbor preparation; fallback Canvas rendering is
   not implemented.
 - The parser currently indexes a dump in one Worker and does not stream partial
@@ -735,11 +880,12 @@ This is a provenance and risk statement, not legal advice.
   snapshot. See [DXA implementation review](DXA_REVIEW.md) for the source-backed
   CPU/Wasm and GPU plan, and `docs/ATOMEYE_REVIEW.md` for AtomEye.
 - Coordination, adaptive/fixed CNA, manual/Auto central symmetry, displacement,
-  reference-frame strain, RDF, local geometric shear, bonds and ideal-strain
+  reference-frame strain, RDF, local geometric shear, bonds, bond statistics and ideal-strain
   tensors can use optional WebGPU acceleration or Workers.
-  PTM and its deformation fit and DXA use included Wasm kernels. No Emscripten
-  installation is needed unless rebuilding C++ with `npm run build:ptm` or
-  `npm run build:dxa`. GPU-enabled DXA computes local crystal correspondence
+  PTM and its deformation fit, DXA and Voronoi use included Wasm kernels. Voronoi
+  currently runs in CPU Workers. No Emscripten
+  installation is needed unless rebuilding C++ with `npm run build:ptm`,
+  `npm run build:dxa` or `npm run build:voronoi`. GPU-enabled DXA computes local crystal correspondence
   and classifies its mapped tetrahedra with WebGPU, completing extraction in
   the same CPU Wasm session.
 

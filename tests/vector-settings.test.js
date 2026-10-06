@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { availableVectorSources, findVectorComponents, importedVectorComponents, linkedArrowDimensions } from '../src/vector-settings.js';
+import { availableVectorSources, createVectorField, findVectorComponents, importedVectorComponents, linkedArrowDimensions, renameVectorFieldProperty, vectorFieldData } from '../src/vector-settings.js';
 import { registerVectorProperties } from '../src/analysis/vector-properties.js';
 
 test('presets select a complete numeric family without mixing vector sources', () => {
@@ -109,4 +109,76 @@ test('imported presets remain selectable through legacy calculated name collisio
   assert.deepEqual(source(sources, 'force').components, imported.slice(0, 3));
   assert.deepEqual(source(sources, 'velocity').components, imported.slice(3, 6));
   assert.equal(source(availableVectorSources({ properties: ['forceX', 'forceY', 'forceZ'].map(name => field(name, { analysisKind: 'other' })) }), 'force'), undefined);
+});
+
+test('multiple fields independently read existing forces and displacement without computing or mutating data', () => {
+  const frame = { ids: new Uint32Array([1, 2]), properties: ['fx', 'fy', 'fz'].map((name, axis) => field(name, { data: Float32Array.of(axis + 1, axis + 2) })) };
+  registerVectorProperties(frame, { mode: 'displacement', vectors: [4, 5, 6, 7, 8, 9] });
+  const original = [...frame.properties], data = frame.properties.map(property => [...property.data]);
+  const forces = createVectorField({ id: 'force', name: 'Forces', enabled: true, mode: 'force', scale: 2, color: '#ff0000' });
+  const displacement = createVectorField({ id: 'displacement', enabled: true, mode: 'displacement', anchor: 'center', dimension: '2d', upMode: 'fixed', up: [0, 0, 1] });
+  assert.deepEqual([...vectorFieldData(frame, forces).vectors], [1, 2, 3, 2, 3, 4]);
+  assert.equal(vectorFieldData(frame, forces).options.scale, 2);
+  assert.equal(vectorFieldData(frame, displacement), null, 'arrows cannot enable displacement calculations');
+  const result = vectorFieldData(frame, displacement, { displacementEnabled: true });
+  assert.deepEqual([...result.vectors], [4, 5, 6, 7, 8, 9]);
+  assert.equal(result.options.anchor, 'center');
+  assert.equal(result.options.upMode, 'fixed');
+  assert.deepEqual(result.options.up, [0, 0, 1]);
+  assert.deepEqual(frame.properties, original);
+  assert.deepEqual(frame.properties.map(property => [...property.data]), data);
+});
+
+test('custom fields retain their settings when hidden or temporarily missing on another frame', () => {
+  const frame = { ids: new Uint32Array(2), properties: [field('a'), field('b'), field('c')] };
+  const settings = { enabled: true, components: ['a', 'b', 'c'], componentScales: [2, 0, -3] };
+  const first = createVectorField(settings), second = createVectorField(settings, 'vector-2');
+  first.components[0] = 'c'; first.componentScales[0] = 4;
+  assert.deepEqual(second.components, ['a', 'b', 'c']);
+  assert.deepEqual(second.componentScales, [2, 0, -3]);
+  assert.deepEqual([...vectorFieldData(frame, second).vectors], [2, 0, -3, 4, 0, -6]);
+  assert.equal(vectorFieldData({ ...frame, properties: [field('a'), field('b')] }, second), null);
+  assert.deepEqual(second.components, ['a', 'b', 'c']);
+  assert.deepEqual([...vectorFieldData(frame, second).vectors], [2, 0, -3, 4, 0, -6]);
+  second.enabled = false;
+  assert.equal(vectorFieldData(frame, second), null);
+  assert.equal(first.enabled, true);
+});
+
+test('arrow appearance and display-origin edits reuse data while source and signed component-scale changes rebuild it', () => {
+  const frame = { ids: new Uint32Array(2), properties: ['x', 'y', 'z'].map(name => field(name)) };
+  const settings = createVectorField({ enabled: true, components: ['x', 'y', 'z'] }), cache = new Map();
+  const first = vectorFieldData(frame, settings, { cache });
+  settings.scale = 10; settings.color = '#00ff00'; settings.anchor = 'head';
+  frame.displayPositions = new Float32Array([1, 2, 3, 4, 5, 6]);
+  const appearance = vectorFieldData(frame, settings, { cache });
+  assert.equal(appearance.vectors, first.vectors);
+  assert.equal(appearance.options.scale, 10);
+  settings.componentScales[0] = -1;
+  const componentEdit = vectorFieldData(frame, settings, { cache });
+  assert.notEqual(componentEdit.vectors, first.vectors);
+  assert.deepEqual([...componentEdit.vectors], [-1, 1, 1, -2, 2, 2]);
+  frame.properties[0] = field('x', { data: Float32Array.of(10, 20) });
+  const propertyEdit = vectorFieldData(frame, settings, { cache });
+  assert.deepEqual([...propertyEdit.vectors], [-10, 1, 1, -20, 2, 2]);
+  assert.notEqual(propertyEdit.vectors, componentEdit.vectors);
+});
+
+test('renaming a source property preserves custom and preset arrows, keeping their original display scale and style', () => {
+  const frame = { ids: new Uint32Array(2), properties: ['fx', 'fy', 'fz'].map(name => field(name)) };
+  const custom = createVectorField({ enabled: true, components: ['fx', 'fy', 'fz'], componentScales: [2, -3, 4], scale: 5, color: '#12abef' });
+  const preset = createVectorField({ enabled: true, mode: 'force', componentScales: [9, 8, 7], scale: 6, color: '#abcdef', anchor: 'head' });
+  const customBefore = vectorFieldData(frame, custom), presetBefore = vectorFieldData(frame, preset);
+  frame.properties[0] = { ...frame.properties[0], name: 'appliedForceX' };
+  assert.equal(renameVectorFieldProperty(custom, 'fx', 'appliedForceX'), true);
+  assert.equal(renameVectorFieldProperty(preset, 'fx', 'appliedForceX', ['fx', 'fy', 'fz']), true);
+  const customAfter = vectorFieldData(frame, custom), presetAfter = vectorFieldData(frame, preset);
+  assert.deepEqual(customAfter.vectors, customBefore.vectors);
+  assert.deepEqual(customAfter.options, customBefore.options);
+  assert.deepEqual(presetAfter.vectors, presetBefore.vectors);
+  assert.deepEqual(presetAfter.options, presetBefore.options);
+  assert.equal(preset.mode, 'generic');
+  assert.deepEqual(preset.componentScales, [1, 1, 1]);
+  assert.equal(renameVectorFieldProperty(custom, 'unrelated', 'other'), false);
+  assert.equal(custom.mode, 'generic');
 });

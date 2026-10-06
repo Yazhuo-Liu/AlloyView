@@ -4,6 +4,8 @@ import { calculateCentrosymmetry } from '../analysis/centrosymmetry.js';
 import { calculatePtm, warmupPtm } from '../analysis/ptm.js';
 import { calculateAtomicStrain } from '../analysis/atomic-strain.js';
 import { calculateBonds } from '../analysis/bonds.js';
+import { calculateBondStatistics } from '../analysis/bond-statistics.js';
+import { calculateVoronoi } from '../analysis/voronoi.js';
 import { calculateRdf } from '../analysis/rdf.js';
 import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLocalShear } from '../analysis/local-shear.js';
 import { calculateReferenceStrain } from '../analysis/reference-strain.js';
@@ -39,6 +41,10 @@ self.addEventListener('message', async ({ data }) => {
       result = calculateCentrosymmetry(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'bonds') {
       result = calculateBonds(frame, { ...parameters, onPhase, onAtoms });
+    } else if (kind === 'bondStatistics') {
+      result = calculateBondStatistics(frame, { ...parameters, onPhase, onAtoms });
+    } else if (kind === 'voronoi') {
+      result = await calculateVoronoi(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'rdf') {
       result = calculateRdf(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'referenceStrain') {

@@ -244,12 +244,16 @@
               <div><p class="section-kicker">TOOLS</p><h3>Choose a tool</h3></div>
               <button id="close-tool" class="text-button" type="button" hidden>Close</button>
             </div>
-            <div class="tool-selector" role="group" aria-label="Choose a tool to configure">
+            <div class="tool-category-tabs" role="tablist" aria-label="Tool categories">
+              <button id="tool-category-visualization" type="button" role="tab" data-tool-category="visualization" aria-controls="visualization-tools" aria-selected="true" tabindex="0">Visualization tools</button>
+              <button id="tool-category-modification" type="button" role="tab" data-tool-category="modification" aria-controls="modification-tools" aria-selected="false" tabindex="-1">Modification tools</button>
+            </div>
+            <div id="visualization-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="visualization" aria-labelledby="tool-category-visualization">
               <button type="button" data-tool-button="display" aria-controls="tool-display" aria-pressed="true" aria-expanded="true"><span class="tool-button-label">Display</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="replicate" aria-controls="tool-replicate" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Replicate</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="slice" aria-controls="tool-slice" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Slice</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="coordination" aria-controls="tool-coordination" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Coordination</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="bonds" aria-controls="tool-bonds" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Bonds</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="voronoi" aria-controls="tool-voronoi" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Voronoi</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="vectors" aria-controls="tool-vectors" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Vectors</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="displacement" aria-controls="tool-displacement" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Displacement</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="statistics" aria-controls="tool-statistics" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Statistics</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
@@ -263,7 +267,11 @@
               <button type="button" data-tool-button="selectionGroups" aria-controls="tool-selection-groups" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Selections</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="performance" aria-controls="tool-performance" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Performance</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
             </div>
-            <p class="help tool-selector-help">Select a tool to show its settings. Close an analysis to cancel it and clear its results.</p>
+            <div id="modification-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="modification" aria-labelledby="tool-category-modification" hidden>
+              <button type="button" data-tool-button="replicate" aria-controls="tool-replicate" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Replicate</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="externalProperties" aria-controls="tool-external-properties" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">External properties</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+            </div>
+            <p class="help tool-selector-help">Select a tool to show its settings. Switching categories keeps analyses enabled. Close an analysis to cancel it and clear its results.</p>
           </section>
 
           <section id="tool-display" class="side-section" data-tool-panel="display">
@@ -277,6 +285,19 @@
                 <option value="unwrapped" disabled>Unwrapped coordinates</option>
               </select>
             </label>
+            <details class="tool-details periodic-origin-controls">
+              <summary>Periodic display origin</summary>
+              <div class="triple-fields">
+                <label><span>a fraction</span><input id="display-origin-a" type="number" value="0" step="0.05" disabled></label>
+                <label><span>b fraction</span><input id="display-origin-b" type="number" value="0" step="0.05" disabled></label>
+                <label><span>c fraction</span><input id="display-origin-c" type="number" value="0" step="0.05" disabled></label>
+              </div>
+              <div class="periodic-origin-actions">
+                <button id="origin-center-selected" class="button button-secondary" type="button" disabled>Center selected atom</button>
+                <button id="origin-reset" class="button button-secondary" type="button" disabled>Reset origin</button>
+              </div>
+              <p class="help">Shift the display origin along periodic cell vectors. Wrapped atoms rewrap into the cell; unwrapped positions translate continuously. Source coordinates and analyses stay unchanged.</p>
+            </details>
             <label class="field">
               <span>Color by</span>
               <select id="color-mode" disabled><option value="type">Atom type</option></select>
@@ -338,11 +359,38 @@
             <p class="help">Replicate atoms enlarges the cell and creates real atoms for every analysis; uses more memory and computation. Off repeats only the display.</p>
           </section>
 
+          <section id="tool-external-properties" class="side-section external-property-section" data-tool-panel="externalProperties" hidden>
+            <div class="section-heading"><div><p class="section-kicker">ATTACH ATOM DATA</p><h3>External properties</h3></div></div>
+            <label class="field"><span>Match values to atoms</span><select id="external-property-mapping" disabled>
+              <option value="auto">Auto · use IDs when available</option>
+              <option value="id">Atom ID</option>
+              <option value="row-order">Row order in current frame</option>
+            </select></label>
+            <button id="import-external-property" class="button button-accent tool-run-button" type="button" disabled>Import properties</button>
+            <input id="external-property-file" type="file" accept=".aux,.csv,.txt,.tsv,text/plain,text/csv,text/tab-separated-values" multiple hidden>
+            <p class="help">Attach .aux numeric columns or CSV/TSV headers to a loaded structure. Explicit atom IDs preserve the mapping across frames; without stable IDs, values apply only to the import frame. Coordinate columns remain attributes.</p>
+            <div id="external-property-list" class="external-property-list" aria-label="Imported atom properties"></div>
+            <p id="external-property-status" class="help" role="status" aria-live="polite">Load a structure to attach external atom properties.</p>
+          </section>
+
           <section id="tool-slice" class="side-section" data-tool-panel="slice" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">CLIPPING PLANES</p><h3>Slices</h3></div>
               <button id="add-slice" class="button button-secondary" type="button" disabled>Add slice</button>
             </div>
+            <details class="tool-details slice-atom-controls">
+              <summary>Build a plane from atoms</summary>
+              <div class="slice-pick-actions">
+                <button id="slice-pick-atoms" class="button button-secondary" type="button" aria-pressed="false" disabled>Pick atoms</button>
+                <button id="slice-clear-picks" class="button button-secondary" type="button" disabled>Clear picks</button>
+              </div>
+              <div class="slice-from-atoms-actions">
+                <button id="slice-from-two" class="button button-secondary" type="button" disabled>Between 2 atoms</button>
+                <button id="slice-from-three" class="button button-secondary" type="button" disabled>Through 3 atoms</button>
+                <button id="slice-to-atom" class="button button-secondary" type="button" disabled>Move to atom</button>
+              </div>
+              <p id="slice-pick-help" class="help" role="status" aria-live="polite">Pick atoms in the viewport to build a plane, or move the current slice to an atom.</p>
+            </details>
             <div id="slice-list" class="slice-list" role="group" aria-label="Slices"></div>
             <p id="slice-empty" class="selection-empty">Add a slice to cut the displayed structure with a plane.</p>
             <div id="slice-settings" class="slice-settings" hidden>
@@ -403,6 +451,74 @@
             <button id="run-bonds" class="button button-accent tool-run-button" type="button" disabled>Calculate bonds</button>
             <p class="help">Use different cutoffs for different element pairs. Periodic connections follow the cell vectors, including tilted cells; display replication reuses the calculated connections.</p>
             <p id="bonds-status" class="help" role="status" aria-live="polite">Calculate neighbor connections on the original structure.</p>
+            <details class="tool-details bond-statistics-section">
+              <summary>Bond distributions and Q4/Q6</summary>
+              <div data-feature-help="bondStatistics">
+                <div class="section-heading advanced-analysis-heading">
+                  <div><h3>Bond statistics</h3></div>
+                  <div class="analysis-state-controls"><span id="bond-statistics-state" class="state-pill">Not calculated</span><button id="cancel-bond-statistics" class="text-button" type="button" disabled>Cancel</button></div>
+                </div>
+                <div class="paired-fields">
+                  <label class="field"><span>Length bins</span><input id="bond-statistics-length-bins" type="number" value="100" min="1" max="4096" step="1" disabled></label>
+                  <label class="field"><span>Angle bins</span><input id="bond-statistics-angle-bins" type="number" value="180" min="1" max="4096" step="1" disabled></label>
+                </div>
+                <button id="run-bond-statistics" class="button button-accent tool-run-button" type="button" disabled>Calculate distributions and Q4/Q6</button>
+                <div class="analysis-backend-row"><span>Backend</span><output id="bond-statistics-backend">—</output></div>
+                <progress id="bond-statistics-progress" class="analysis-progress" max="1" value="0" aria-label="Bond statistics calculation progress" hidden></progress>
+                <p id="bond-statistics-status" class="help" role="status" aria-live="polite">Uses the default and element-pair bond cutoffs above.</p>
+                <p class="help">Lengths span 0 to the largest bond cutoff; angles span 0–180°. Local Steinhardt Q4/Q6 describe neighbor orientation. Statistics include hidden atoms and can be calculated without drawing bonds.</p>
+                <div id="bond-statistics-results" class="analysis-statistics-results" hidden>
+                  <p id="bond-statistics-summary" class="help"></p>
+                  <div class="statistics-result-heading"><h4>Bond lengths</h4><button id="export-bond-length-distribution" class="button button-secondary statistics-export-button" type="button" disabled>Length CSV</button></div>
+                  <div id="bond-length-chart" class="statistics-chart" role="group" aria-label="Bond length distribution"></div>
+                  <div class="statistics-result-heading"><h4>Bond angles</h4><button id="export-bond-angle-distribution" class="button button-secondary statistics-export-button" type="button" disabled>Angle CSV</button></div>
+                  <div id="bond-angle-chart" class="statistics-chart" role="group" aria-label="Bond angle distribution"></div>
+                  <div class="statistics-result-heading"><h4>Local Q4/Q6</h4><button id="export-bond-order-statistics" class="button button-secondary statistics-export-button" type="button" disabled>Q4/Q6 stats CSV</button></div>
+                  <div id="bond-order-chart" class="statistics-chart" role="group" aria-label="Local Steinhardt Q4 and Q6 statistics"></div>
+                  <button id="export-bond-order-atoms" class="button button-secondary tool-run-button" type="button" disabled>Atom Q4/Q6 CSV</button>
+                </div>
+              </div>
+            </details>
+          </section>
+
+          <section id="tool-voronoi" class="side-section analysis-section voronoi-section" data-tool-panel="voronoi" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">ATOMIC CELL GEOMETRY</p><h3>Voronoi analysis</h3></div>
+              <div class="analysis-state-controls"><span id="voronoi-state" class="state-pill">Not calculated</span><button id="cancel-voronoi" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <p class="help">Calculate each atom's cell volume, surface area, neighbor count and face-order index. Periodic directions use periodic images; other directions are clipped at the simulation cell boundary.</p>
+            <details class="tool-details voronoi-face-filter-controls">
+              <summary>Small-face filters</summary>
+              <label class="field"><span>Minimum face area</span><span class="input-unit"><input id="voronoi-face-area-threshold" type="number" value="0" min="0" step="0.001" disabled><i>Å²</i></span></label>
+              <label class="field"><span>Minimum fraction of cell surface</span><input id="voronoi-relative-face-area-threshold" type="number" value="0" min="0" max="1" step="0.005" disabled></label>
+              <p class="help">Count faces only when they exceed both thresholds. Filters change neighbor counts and indices; volumes and surface areas retain the full geometry. Cell boundary faces are reported separately from neighbors.</p>
+            </details>
+            <button id="run-voronoi" class="button button-accent tool-run-button" type="button" disabled>Calculate Voronoi cells</button>
+            <div class="analysis-backend-row"><span>Backend</span><output id="voronoi-backend">—</output></div>
+            <progress id="voronoi-progress" class="analysis-progress" max="1" value="0" aria-label="Voronoi calculation progress" hidden></progress>
+            <p id="voronoi-status" class="help" role="status" aria-live="polite">Calculate on the complete structure, including atoms hidden in the display.</p>
+            <div id="voronoi-results" class="analysis-statistics-results" hidden>
+              <p id="voronoi-summary" class="help"></p>
+              <div class="paired-actions statistics-export-actions">
+                <button id="export-voronoi-csv" class="button button-secondary" type="button" disabled>Atom data CSV</button>
+                <button id="export-voronoi-distributions" class="button button-secondary" type="button" disabled>Statistics CSV</button>
+              </div>
+              <div id="voronoi-histogram">
+                <div class="statistics-result-heading"><h4>Atomic volumes</h4></div>
+                <div id="voronoi-volume-chart" class="statistics-chart" role="group" aria-label="Voronoi atomic volume distribution"></div>
+                <div class="statistics-result-heading"><h4>Neighbor counts</h4></div>
+                <div id="voronoi-coordination-chart" class="statistics-chart" role="group" aria-label="Voronoi coordination distribution"></div>
+                <div class="statistics-result-heading"><h4>Face areas</h4></div>
+                <div id="voronoi-face-chart" class="statistics-chart" role="group" aria-label="Voronoi neighbor face area distribution"></div>
+                <div class="statistics-result-heading"><h4>Face-order indices</h4></div>
+                <div id="voronoi-index-frequency" class="statistics-chart" role="group" aria-label="Voronoi index populations"></div>
+              </div>
+              <details class="tool-details">
+                <summary>Individual face data</summary>
+                <p class="help">Export every cell face with its atom ID, neighbor or boundary label, area and edge count.</p>
+                <button id="export-voronoi-faces" class="button button-secondary tool-run-button" type="button" disabled>Face data CSV</button>
+              </details>
+            </div>
           </section>
 
           <section id="tool-displacement" class="side-section analysis-section" data-tool-panel="displacement" hidden>
@@ -419,6 +535,15 @@
 
           <section id="tool-vectors" class="side-section" data-tool-panel="vectors" hidden>
             <div class="section-heading"><div><p class="section-kicker">PER-ATOM DIRECTIONS</p><h3>Vector arrows</h3></div></div>
+            <div class="vector-field-controls">
+              <label class="field"><span>Vector field</span><select id="vector-field-list" disabled><option value="">Vector 1</option></select></label>
+              <div class="vector-field-actions">
+                <button id="add-vector-field" class="button button-secondary" type="button" disabled>Add field</button>
+                <button id="delete-vector-field" class="button button-secondary" type="button" disabled>Delete field</button>
+              </div>
+              <label class="field"><span>Field name</span><input id="vector-field-name" type="text" value="Vector 1" maxlength="80" autocomplete="off" disabled></label>
+              <p class="help">Each field has its own source, color and arrow settings. Enabled fields are drawn together.</p>
+            </div>
             <label class="field"><span>Vector source</span><select id="vector-mode" disabled>
               <option value="generic">Custom XYZ properties</option>
             </select></label>
@@ -440,13 +565,19 @@
               <label class="field"><span>Atom at arrow</span><select id="vector-anchor" disabled><option value="tail">Tail</option><option value="head">Head</option><option value="center">Center</option></select></label>
               <label class="field"><span>Arrow style</span><select id="vector-dimension" disabled><option value="3d">3D solid</option><option value="2d">2D flat</option></select></label>
             </div>
+            <label class="field"><span>Flat arrow plane</span><select id="vector-up-mode" disabled><option value="camera">Camera-facing</option><option value="fixed">Fixed plane</option></select></label>
+            <div id="vector-up-controls" class="triple-fields" hidden>
+              <label><span>Up X</span><input id="vector-up-x" type="number" value="0" step="0.1" disabled></label>
+              <label><span>Up Y</span><input id="vector-up-y" type="number" value="1" step="0.1" disabled></label>
+              <label><span>Up Z</span><input id="vector-up-z" type="number" value="0" step="0.1" disabled></label>
+            </div>
             <div class="triple-fields vector-size-fields">
               <label><span>Shaft radius (Å)</span><input id="vector-radius" type="number" value="0.06" min="0.000001" step="0.01" disabled></label>
               <label><span>Head radius (Å)</span><input id="vector-head-radius" type="number" value="0.15" min="0.000001" step="0.01" disabled></label>
               <label><span>Head length (Å)</span><input id="vector-head-length" type="number" value="0.3" min="0.000001" step="0.05" disabled></label>
             </div>
             <label class="slice-toggle"><input id="vector-link-dimensions" type="checkbox" checked disabled><span>Link shaft and head proportions</span></label>
-            <label class="slice-toggle"><input id="show-vectors" type="checkbox" disabled><span>Show arrows</span></label>
+            <label class="slice-toggle"><input id="show-vectors" type="checkbox" disabled><span>Show this field</span></label>
             <p id="vector-source-help" class="help">Display existing numeric properties as arrows. Enable the Displacement tool to calculate motion; Force and Velocity require imported components.</p>
             <p id="vector-status" class="help" role="status" aria-live="polite">Show arrows controls drawing independently of atom visibility.</p>
           </section>
@@ -471,6 +602,18 @@
             <div id="rdf-chart" class="statistics-chart" role="img" aria-label="Radial distribution function"></div>
             <p class="help">Normalized g(r) requires a fully periodic three-dimensional cell. Element filters calculate partial pair distributions. Statistics use the original structure before display replication.</p>
             <p id="rdf-status" class="help" role="status" aria-live="polite">Choose a distance range and calculate the pair distribution.</p>
+            <details class="tool-details statistics-csv-section">
+              <summary>Export statistics as CSV</summary>
+              <div class="statistics-csv-actions">
+                <button id="export-statistics-summary" class="button button-secondary" type="button" disabled>Structure summary</button>
+                <button id="export-property-statistics" class="button button-secondary" type="button" disabled>Scalar statistics</button>
+                <button id="export-categorical-populations" class="button button-secondary" type="button" disabled>Category counts</button>
+                <button id="export-coordination-distribution" class="button button-secondary" type="button" disabled>Coordination distribution</button>
+                <button id="export-atom-properties" class="button button-secondary statistics-csv-all-atoms" type="button" disabled>Atom properties CSV</button>
+              </div>
+              <p class="help">Export the complete current structure and available analysis results. Scalar statistics include finite-value counts and missing values; atom tables include IDs, types, coordinates and properties.</p>
+              <p id="statistics-export-status" class="help" role="status" aria-live="polite">Open a structure to export statistics. Distribution exports become available when their analysis is complete.</p>
+            </details>
           </section>
 
           <section id="tool-cna" class="side-section analysis-section" data-tool-panel="cna" hidden>
@@ -511,6 +654,10 @@
               <label class="field"><span>Line radius</span><span class="input-unit"><input id="dxa-line-radius" type="number" value="0.25" min="0.001" step="0.05" disabled><i>Å</i></span></label>
               <div id="dxa-families" class="legend-items crystal-items" role="group" aria-label="Dislocation line colors and visibility"></div>
               <p id="dxa-summary" class="help"></p>
+              <div class="paired-actions statistics-export-actions">
+                <button id="export-dxa-summary" class="button button-secondary" type="button" disabled>Family statistics CSV</button>
+                <button id="export-dxa-lines" class="button button-secondary" type="button" disabled>Dislocation lines CSV</button>
+              </div>
               <p class="help">Line visibility is independent of atom visibility. Length and density describe the analyzed cell before display replication or slicing.</p>
             </div>
           </section>

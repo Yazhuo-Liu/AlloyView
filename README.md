@@ -39,19 +39,31 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   perspective/orthographic projection, cell outlines and Cartesian axes.
 - Wrapped and unwrapped trajectory views, atom-ID search/centering, and
   distance, bond-angle and dihedral measurements with optional periodic images.
+- Fractional periodic display origins along triclinic cell vectors, with
+  selected-atom centering and synchronized atoms, bonds, vectors and DXA lines.
+- A folded **Adjust view** panel beside download provides precise camera
+  position/direction, roll, projection and field of view, plus a draggable
+  orientation globe and sliders that follow viewport gestures.
 - Element and individual-atom color, radius and visibility overrides.
 - Named atom selection groups created by clicking, box selection or ID entry,
   with editable membership, color and visibility that follow stable IDs across
   frames and survive JSON configuration replay.
 - Periodic bond graphs with element-pair cutoff overrides and adjustable bond
-  radius. Independent displacement analysis provides physical Cartesian components
+  radius. The same cutoffs drive bond-length and bond-angle distributions and
+  local Steinhardt Q4/Q6 orientational order, using parallel CPU Workers or WebGPU.
+  Independent displacement analysis provides physical Cartesian components
   and magnitude for coloring against a selected reference frame.
-- Vector arrows draw available displacement, imported force/velocity and custom
-  XYZ data with per-component display scales, Tail/Head/Center anchors, linked or
-  independent arrow dimensions, and 3D or camera-facing 2D glyphs. Arrows remain
+- Up to 16 named vector fields draw displacement, imported force/velocity and
+  custom XYZ data simultaneously, with independent colors, visibility and sizes,
+  per-component scales, Tail/Head/Center anchors, and 3D or camera-facing/fixed-plane
+  2D glyphs. Arrows remain
   visible when atoms are hidden; display scales leave physical properties unchanged.
 - Up to 16 independent clipping planes with arbitrary Cartesian normals,
-  editable names and positions, and draggable plane/normal controls.
+  editable names and positions, draggable plane/normal controls, and two- or
+  three-atom plane construction using the clicked periodic image.
+- External numeric CSV/AUX properties mapped by stable atom ID or row order,
+  parsed and expanded in a persistent Worker, with rename/removal and access
+  from colors, atom details and vector fields.
 - Replication along independent periodic cell vectors, including triclinic
   tilts. Display copies reuse analysis; optional **Replicate atoms for analysis**
   creates real atoms in an enlarged cell and recalculates enabled analyses.
@@ -69,13 +81,22 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Coordination histograms and total/element-pair radial distribution functions
   with CSV export. Normalized RDF requires three periodic axes and a cutoff
   within half the shortest cell face height.
+- Voronoi tessellation in Visualization tools, using reusable CPU/Wasm Workers
+  and Voro++ for periodic or finite-cell geometry. Results include atomic
+  volume, surface area, coordination, full Voronoi indices and population
+  distributions, with optional neighbor-face area filters.
+- CSV export for the complete statistical summary, scalar statistics,
+  categorical populations, coordination/RDF and bond distributions, Q4/Q6,
+  Voronoi cells/faces, DXA families/lines and per-atom properties. A persistent
+  export Worker formats completed results without rerunning analyses.
 - AtomEye normalized central symmetry with automatic local FCC/HCP/BCC
   settings for mixed structures, or manual 8/12 neighbors. All analyses share
   a bounded scheduler and retain per-frame results. CPU Workers
   and PTM kernels are reused, with preparation stages and PTM atom progress.
 - **Enable GPU acceleration**, on by default beside the theme controls,
   supports coordination, adaptive/fixed-cutoff CNA, manual/Auto central symmetry,
-  displacement, reference-frame strain, RDF, local geometric shear, bonds
+  displacement, reference-frame strain, RDF, local geometric shear, bonds,
+  bond-length/angle distributions and local Q4/Q6,
   and PTM neighbor preparation with WebGPU.
   Fresh ideal lattice strain uses GPU neighbor preparation, CPU Wasm fitting,
   then GPU element-reference conversion and tensors, reusing cached fits and
@@ -102,8 +123,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Light and dark themes with matching project logos and a saved preference.
 - A resizable controls panel with saved width, plus live display and legend
   edits and automatic coordination updates when the cutoff changes.
-- Selectable tool settings and a phone layout with the viewport fixed above
-  independently scrolling tools and collapsed camera/legend controls.
+- Side-by-side **Visualization tools** and **Modification tools** tabs preserve
+  enabled analyses and remember their settings panels. Modification tools
+  contain replication and external properties, with a registry for future atom
+  editors. Phones keep the viewport above independently scrolling tools and
+  collapsed camera/legend controls.
 - An optional simultaneous second view reuses the current frame and analysis
   results, with its own camera and standard-view/projection toolbar.
 - JSON configuration export/import directly below Structure saves source file metadata, processing
@@ -138,8 +162,11 @@ WebGL 2 support. No installation or account is needed.
 3. **Adjust the view.** Choose colors and atom size in **Display**, change the
    viewport color with **BG**, or hide the cell and axes. Trajectories expose
    wrapped/unwrapped coordinates and frame controls below the viewport.
-   Select **Replicate** to set total copies along periodic **a/b/c** directions
-   and click **Apply**. **Replicate atoms for analysis** is off by default;
+   Under **Tools**, use **Visualization tools** for display and analysis and
+   **Modification tools** for Replicate and External properties. Categories
+   remember their last settings panel and keep enabled analyses running.
+   Select **Modification tools → Replicate** to set total copies along periodic
+   **a/b/c** directions and click **Apply**. **Replicate atoms for analysis** is off by default;
    enable it to analyze physical copies in an enlarged cell, using more memory
    and computation. **Selections** creates named groups by clicking, dragging
    a box or entering atom IDs. Edit each group's color and visibility, and use
@@ -176,6 +203,9 @@ WebGL 2 support. No installation or account is needed.
    first-time strain calculation also fills missing references automatically.
    Existing values stay fixed, and estimates describe the current bulk lattice.
    **Bonds** adds neighbor connections with optional element-pair cutoffs.
+   Its folded statistics section calculates bond-length/angle distributions
+   and local Q4/Q6 using those same cutoffs. **Voronoi** measures atomic volumes,
+   surface areas and neighbor-face topology with periodic or finite-cell bounds.
    **Displacement** calculates Cartesian components and magnitude against a
    reference frame for atom coloring, independently of arrows.
    **Vector arrows** displays existing displacement, imported force/velocity,
@@ -183,10 +213,12 @@ WebGL 2 support. No installation or account is needed.
    **Frame strain** compares against a chosen trajectory frame;
    **Local shear** measures the current neighbor geometry without a reference.
    **Statistics** shows coordination distributions and calculates total or
-   element-pair RDF curves on fully periodic cells.
+   element-pair RDF curves on fully periodic cells. Its CSV section exports
+   current-frame summaries, every available classifier and scalar property,
+   and per-atom values; Bonds, Voronoi and DXA also offer specific CSV tables.
    **Enable GPU acceleration** in the top bar prefers WebGPU for coordination,
    adaptive/fixed CNA, manual/Auto central symmetry, displacement,
-   reference-frame strain, RDF, local shear, bonds and ideal-strain
+   reference-frame strain, RDF, local shear, bonds, bond statistics and ideal-strain
    neighbor/reference/tensor stages, plus DXA local crystal correspondence
    and tetrahedron classification
    on the next calculation.
@@ -230,11 +262,13 @@ Open <http://localhost:4173>. The deployable site is in `dist/`.
 Documentation is available at `/docs/` in development and preview; the build
 renders its Markdown sources into static HTML pages in `dist/docs/`.
 
-The compiled PTM and CPU DXA kernels are included in the repository. Normal
+The compiled PTM, CPU DXA and Voronoi kernels are included in the repository. Normal
 development and CI need no compiler. To rebuild their C++ integration, install
-Emscripten and run `npm run build:ptm` or `npm run build:dxa`; see
+Emscripten and run `npm run build:ptm`, `npm run build:dxa` or
+`npm run build:voronoi`; see
 [Structure analysis](docs/STRUCTURE_ANALYSIS.md) and
-[Dislocation analysis](docs/features/dislocations.md).
+[Dislocation analysis](docs/features/dislocations.md), or
+[Voronoi analysis](docs/features/voronoi.md).
 
 ## Tests and deployment
 
@@ -242,6 +276,7 @@ Emscripten and run `npm run build:ptm` or `npm run build:dxa`; see
 npm test
 npm run build
 npm run test:browser
+npm run test:browser:advanced-tools
 ```
 
 The browser regression requires Node.js 24 and Chrome/Chromium; set
@@ -249,6 +284,9 @@ The browser regression requires Node.js 24 and Chrome/Chromium; set
 without isolation headers, loads local files and all examples, checks themes
 and trajectory frames, exercises CNA/CSP/PTM/strain and crystal visibility
 filters, and decodes PNG exports to verify transparency and optional axes.
+The advanced tools regression exercises real pointer/touch controls, periodic
+copies, external-file mapping and replay, multiple vector fields, precise camera
+edits and PNG exclusion of the camera panel.
 
 The included GitHub Actions workflow tests, builds and deploys on pushes to
 `main`. Set **Settings → Pages → Source → GitHub Actions** in the repository.
@@ -271,6 +309,9 @@ WebGL 2 is required. Compressed/binary dumps, LAMMPS data/input files and
 LAMMPS general triclinic `abc origin` dumps and NetCDF are not supported.
 Coordination uses one global cutoff; bond graphs have separate element-pair
 overrides. Reference-frame strain requires explicit stable atom IDs.
+Voronoi currently uses CPU/Wasm; GPU acceleration still leaves this analysis
+available through the CPU backend. Q4/Q6 describe bond orientation rather than
+chemical bond multiplicity.
 Million-atom interactive performance has
 not been verified; see the guide for memory and trajectory limitations.
 
@@ -287,4 +328,5 @@ AlloyView is distributed under the [MIT License](LICENSE). AtomEye informed
 format conventions and neighbor-search design; no AtomEye C source or asset
 is copied into this repository. The vendored PTM library is MIT licensed and
 its embedded Voro++ code is BSD licensed; [third-party notices](licenses/)
-ship with the static build. See the [provenance review](docs/ATOMEYE_REVIEW.md).
+ship with the static build. Voro++ also supplies the per-atom Voronoi clipping
+kernel. See the [provenance review](docs/ATOMEYE_REVIEW.md).

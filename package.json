@@ -12,6 +12,9 @@
     "test:browser": "node scripts/browser-smoke.mjs",
     "test:browser:coordination-presets": "node scripts/browser-coordination-presets.mjs",
     "test:browser:atom-details": "node scripts/browser-atom-details.mjs",
+    "test:browser:advanced-tools": "node scripts/browser-advanced-tools.mjs",
+    "test:browser:topology-tools": "node scripts/browser-topology-tools.mjs",
+    "test:gpu:bond-statistics": "node scripts/browser-bond-statistics-gpu.mjs",
     "test:browser:fe-input": "node scripts/browser-fe-input.mjs",
     "test:browser:fe-loop": "node scripts/browser-fe-loop.mjs",
     "test:browser:fe-lattice-gpu": "node scripts/browser-fe-lattice-gpu.mjs",
@@ -30,6 +33,7 @@
     "benchmark:dxa-compare": "node scripts/benchmark-dxa-compare.mjs",
     "build:wasm": "bash wasm/build.sh",
     "build:ptm": "bash wasm/build-ptm.sh",
+    "build:voronoi": "bash wasm/build-voronoi.sh",
     "build:dxa": "bash wasm/build-dxa.sh",
     "build:dxa:threaded": "bash wasm/build-dxa-threaded.sh"
   },

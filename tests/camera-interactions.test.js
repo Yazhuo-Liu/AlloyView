@@ -40,6 +40,18 @@ function fixture(mode = 'perspective') {
 function close(a, b) { assert.ok(Math.abs(a - b) < 1e-10, `${a} != ${b}`); }
 function closeVector(a, b) { a.forEach((value, axis) => close(value, b[axis])); }
 
+test('wheel zoom preserves narrow numeric parallel views and clamps at the same minimum field width', () => {
+  const { renderer: r, canvas } = fixture('orthographic');
+  canvas.width = 800; canvas.height = 400;
+  r.orthographicScale = .0004;
+  canvas.emit('wheel', { deltaY: -100 });
+  close(r.orthographicScale, .0004 * Math.exp(-.18));
+  canvas.emit('wheel', { deltaY: 100 });
+  close(r.orthographicScale, .0004);
+  for (let step = 0; step < 10; step++) canvas.emit('wheel', { deltaY: -100 });
+  close(2 * r.orthographicScale * 2, .001);
+});
+
 for (const mode of ['perspective', 'orthographic']) {
   test(`${mode}: opening and closing two fingers zooms without orbiting or selecting`, () => {
     const { renderer: r, touch, amount } = fixture(mode);

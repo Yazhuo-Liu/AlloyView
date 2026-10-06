@@ -1,3 +1,5 @@
+import { normalizeVectorOptions } from './render/atom-primitives.js';
+
 /** Match a complete imported vector family; never mix force and velocity axes. */
 export function findVectorComponents(properties, mode) {
   const families = mode === 'force' ? ['force', 'forces', 'f'] : mode === 'velocity' ? ['velocity', 'velocities', 'vel', 'v'] : [];
@@ -103,4 +105,56 @@ export function linkedArrowDimensions(previous, changed, value) {
   const factor = value / previous[changed];
   if (!Number.isFinite(factor) || factor <= 0) throw new Error('Arrow dimensions must be positive finite lengths.');
   return Object.fromEntries(['radius', 'headRadius', 'headLength'].map(name => [name, previous[name] * factor]));
+}
+
+/** A serializable independent arrow layer; also accepts legacy single fields. */
+export function createVectorField(settings = {}, id = 'vector-1') {
+  return {
+    id: settings.id ?? id, name: settings.name ?? 'Vector 1', enabled: Boolean(settings.enabled),
+    mode: settings.mode ?? 'generic', components: [...(settings.components ?? [null, null, null])],
+    componentScales: [...(settings.componentScales ?? [1, 1, 1])],
+    scale: settings.scale ?? 1, color: settings.color ?? '#f7a633', radius: settings.radius ?? .06,
+    headRadius: settings.headRadius ?? .15, headLength: settings.headLength ?? .3,
+    linkDimensions: settings.linkDimensions ?? true, anchor: settings.anchor ?? 'tail', dimension: settings.dimension ?? '3d',
+    upMode: settings.upMode ?? 'camera', up: [...(settings.up ?? [0, 1, 0])],
+  };
+}
+
+/** Keep custom arrows attached to a renamed column. A preset whose family is
+ * broken by a component rename becomes the same XYZ field with unit factors. */
+export function renameVectorFieldProperty(field, oldName, name, resolvedComponents = []) {
+  let changed = false;
+  if (field.mode !== 'generic' && resolvedComponents.includes(oldName)) {
+    field.mode = 'generic'; field.components = resolvedComponents.map(component => component === oldName ? name : component);
+    field.componentScales = [1, 1, 1]; changed = true;
+  } else {
+    field.components = field.components.map(component => {
+      if (component !== oldName) return component;
+      changed = true; return name;
+    });
+    if (field.mode === `property:${oldName}`) { field.mode = `property:${name}`; changed = true; }
+  }
+  return changed;
+}
+
+/** Build arrows from existing properties only. Missing sources wait for data. */
+export function vectorFieldData(frame, field, { displacementEnabled = false, sources = availableVectorSources(frame, { displacementEnabled }), cache } = {}) {
+  if (!frame || !field.enabled) { cache?.delete(field.id); return null; }
+  const source = sources.find(source => source.value === field.mode);
+  if (!source) { cache?.delete(field.id); return null; }
+  const properties = source.value === 'generic'
+    ? field.components.map(name => frame.properties.find(property => property.name === name)) : source.components;
+  if (!properties || properties.length !== 3 || !properties.every(property => numericProperty(property, frame.ids.length))) { cache?.delete(field.id); return null; }
+  const scales = source.value === 'generic' ? field.componentScales : [1, 1, 1];
+  if (scales?.length !== 3 || !scales.every(Number.isFinite)) throw new Error('Component scale factors must be finite numbers.');
+  const options = normalizeVectorOptions({ ...field, visible: true });
+  const data = properties.map(property => property.data), previous = cache?.get(field.id);
+  if (previous?.frame === frame && previous.vectors.length === frame.ids.length * 3
+    && data.every((values, axis) => values === previous.data[axis] && scales[axis] === previous.scales[axis])) {
+    return { id: field.id, vectors: previous.vectors, options };
+  }
+  const vectors = new Float32Array(frame.ids.length * 3);
+  for (let atom = 0; atom < frame.ids.length; atom++) for (let axis = 0; axis < 3; axis++) vectors[atom * 3 + axis] = properties[axis].data[atom] * scales[axis];
+  cache?.set(field.id, { frame, vectors, data, scales: [...scales] });
+  return { id: field.id, vectors, options };
 }

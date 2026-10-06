@@ -23,6 +23,31 @@ test('single-species default is AtomEye-style beige and alloys remain distinguis
   assert.notDeepEqual([...alloy.colors.slice(0, 3)], [...alloy.colors.slice(3, 6)]);
 });
 
+test('automatic colors keep roundoff-level crystal volumes uniform while retaining exact data and manual limits', () => {
+  const data = Float64Array.of(16 - 8 * Number.EPSILON * 16, 16, 16 + 8 * Number.EPSILON * 16, NaN);
+  const original = data.slice(), property = { name: 'atomicVolume', data };
+  const automatic = colorsByProperty(property);
+  assert.deepEqual(automatic.colors.slice(0, 3), automatic.colors.slice(3, 6));
+  assert.deepEqual(automatic.colors.slice(3, 6), automatic.colors.slice(6, 9));
+  assert.deepEqual([...automatic.colors.slice(9)], [130, 130, 130]);
+  assert.equal(automatic.legend.minimum, data[0]);
+  assert.equal(automatic.legend.maximum, data[2]);
+  assert.equal(automatic.legend.customRange, false);
+  assert.deepEqual(data, original);
+  const manual = colorsByProperty(property, { minimum: data[0], maximum: data[2] });
+  assert.notDeepEqual(manual.colors.slice(0, 3), manual.colors.slice(6, 9));
+  assert.equal(manual.legend.customRange, true);
+});
+
+test('automatic uniform-color tolerance is relative and preserves small physical differences', () => {
+  for (const data of [Float64Array.of(1, 1 + 1e-12), Float64Array.of(-1e-30, 1e-30), Float64Array.of(1e-30, 2e-30)]) {
+    const result = colorsByProperty({ name: 'strain', data });
+    assert.notDeepEqual(result.colors.slice(0, 3), result.colors.slice(3, 6));
+    assert.equal(result.legend.minimum, data[0]);
+    assert.equal(result.legend.maximum, data[1]);
+  }
+});
+
 test('atom type legend has counts and visibility choices keyed by labels across frames', () => {
   const hidden = new Set(['Ni']);
   const first = { types: new Uint16Array([0, 1, 0, 0]), typeLabels: ['Ni', 'Al', 'Cu'] };

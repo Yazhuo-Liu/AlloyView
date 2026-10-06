@@ -1,20 +1,23 @@
-import { cellVertices } from '../data/model.js';
+import { cartesianToFractional, cellVertices } from '../data/model.js';
 import { createReplication } from './replication.js';
 import { installCameraInteractions } from './camera-interactions.js';
 import { selectAtomsInRectangle } from './box-selection.js';
 import { VIEW_PRESETS } from './camera-presets.js';
 import { AtomPrimitiveLayer } from './atom-primitives.js';
+import { effectivePeriodicOrigin, normalizePeriodicOrigin, periodicDisplayCoordinates } from './periodic-origin.js';
 import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
 import { MAX_SLICES, SLICE_EPSILON, pointVisible, validateSlices } from './slicing.js';
 import {
   add,
   cross,
+  dot,
   lookAt,
   multiply4,
   normalize,
   orthographic,
   perspective,
   scale,
+  subtract,
   transformPoint,
 } from './math.js';
 
@@ -139,9 +142,23 @@ out vec4 outColor;
 void main() { outColor = vec4(uColor, 0.92); }`;
 
 const CELL_EDGES = [
-  0, 1, 0, 2, 0, 4, 1, 3, 1, 5, 2, 3,
-  2, 6, 4, 5, 4, 6, 3, 7, 5, 7, 6, 7,
+  // Eight vertices per basis direction, with the origin edge first.
+  0, 1, 2, 3, 4, 5, 6, 7,
+  0, 2, 1, 3, 4, 6, 5, 7,
+  0, 4, 1, 5, 2, 6, 3, 7,
 ];
+
+const CELL_BASIS_COLORS = [[0.96, 0.25, 0.28], [0.25, 0.85, 0.35], [0.28, 0.52, 1]];
+
+export function cellWireframeDraws(mode = 'mono', color = [0.62, 0.78, 0.81]) {
+  if (!['mono', 'rgb', 'rgb-origin', 'rgb-black'].includes(mode)) throw new Error('Unknown cell wireframe mode.');
+  if (mode === 'mono') return [{ first: 0, count: 24, color }];
+  const draws = CELL_BASIS_COLORS.map((basisColor, axis) => ({ first: axis * 8, count: mode === 'rgb' ? 8 : 2, color: basisColor }));
+  if (mode === 'rgb-black') {
+    for (let axis = 0; axis < 3; axis += 1) draws.push({ first: axis * 8 + 2, count: 6, color: [0, 0, 0] });
+  }
+  return draws;
+}
 
 const SOURCE_REPLICA = [0, 0, 0];
 
@@ -172,6 +189,10 @@ export class WebGLRenderer {
     this.onRender = onRender;
     this.frame = null;
     this.displayPositions = null;
+    this.rawDisplayPositions = null;
+    this.displayFractional = null;
+    this.periodicOrigin = [0, 0, 0];
+    this.coordinateMode = 'wrapped';
     this.visibility = null;
     this.atomCount = 0;
     this.repetitions = [1, 1, 1];
@@ -182,6 +203,7 @@ export class WebGLRenderer {
     this.background = [0, 0, 0];
     this.cellColor = [0.62, 0.78, 0.81];
     this.cellVisible = true;
+    this.cellWireframeMode = 'mono';
     this.sliceAxis = 2;
     this.sliceMaximum = 1;
     this.sliceMode = 'legacy';
@@ -196,12 +218,15 @@ export class WebGLRenderer {
     this.dislocationNetwork = null;
     this.dislocationOptions = normalizeDislocationOptions();
     this.atomBonds = this.atomVectors = null;
+    this.atomVectorFields = [];
     this.bondOptions = { visible: true, radius: 0.08 };
     this.vectorOptions = { visible: true, scale: 1, radius: 0.06, color: '#f7a633' };
     this.projectionMode = 'perspective';
     this.fov = 40 * Math.PI / 180;
     this.yaw = -0.62;
     this.pitch = 0.38;
+    this.roll = 0;
+    this.constrainUp = true;
     this.target = [0, 0, 0];
     this.pan = [0, 0, 0];
     this.distance = 10;
@@ -288,15 +313,16 @@ export class WebGLRenderer {
     gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
   }
 
-  setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions) {
+  setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions, { coordinateMode } = {}) {
     this.cancelSelectionGesture();
     const startedAt = performance.now();
     const gl = this.gl;
     this.frame = frame;
-    this.displayPositions = displayPositions;
+    this.processDisplayCoordinates(displayPositions, coordinateMode);
     this.atomCount = frame.ids.length;
     this.atomColors = colors;
     this.atomBonds = this.atomVectors = null;
+    this.atomVectorFields = [];
     this.dislocationNetwork = null;
     this.dislocationLayer?.clear();
     this.selected = -1;
@@ -308,9 +334,9 @@ export class WebGLRenderer {
     this.maximumAtomRadius = this.atomRadii.reduce((maximum, radius) => Math.max(maximum, radius), 0);
     this.visibility = new Uint8Array(this.atomCount).fill(255);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, floatDisplayCoordinates(displayPositions), gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, floatDisplayCoordinates(this.displayPositions), gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.fractionalBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, floatDisplayCoordinates(frame.fractional), gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, floatDisplayCoordinates(this.displayFractional), gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
@@ -330,8 +356,13 @@ export class WebGLRenderer {
     this.cancelSelectionGesture();
     this.selectionSourceBounds = null;
     this.frame = this.displayPositions = this.visibility = this.atomRadii = null;
+    this.rawDisplayPositions = this.displayFractional = null;
+    this.periodicOrigin = [0, 0, 0];
+    this.coordinateMode = 'wrapped';
+    this.cellWireframeMode = 'mono';
     this.atomColors = null;
     this.atomBonds = this.atomVectors = null;
+    this.atomVectorFields = [];
     this.primitiveLayer?.clear();
     this.dislocationNetwork = null;
     this.dislocationLayer?.clear();
@@ -353,6 +384,9 @@ export class WebGLRenderer {
     this.maximumAtomRadius = 0.7;
     this.yaw = -0.62;
     this.pitch = 0.38;
+    this.roll = 0;
+    this.constrainUp = true;
+    this.fov = 40 * Math.PI / 180;
     this.frameTimes = [];
     this.projectionMode = 'perspective';
     this.onProjectionChange(this.projectionMode);
@@ -390,17 +424,49 @@ export class WebGLRenderer {
     this.requestRender();
   }
 
-  setDisplayPositions(positions) {
+  processDisplayCoordinates(positions, coordinateMode = positions === this.frame.positions ? 'wrapped' : 'unwrapped') {
+    if (!['wrapped', 'unwrapped'].includes(coordinateMode)) throw new Error('Unknown display coordinate mode.');
+    this.rawDisplayPositions = positions;
+    this.coordinateMode = coordinateMode;
+    const origin = effectivePeriodicOrigin(this.periodicOrigin, this.frame.cell);
+    if (origin.every(value => value === 0)) {
+      this.displayPositions = positions;
+      this.displayFractional = coordinateMode === 'wrapped' && this.frame.fractional
+        ? this.frame.fractional : cartesianToFractional(positions, this.frame.cell, new Float64Array(positions.length));
+    } else {
+      const display = periodicDisplayCoordinates(positions, this.frame.cell, origin, { wrap: coordinateMode === 'wrapped' });
+      this.displayPositions = display.positions;
+      this.displayFractional = display.fractional;
+    }
+  }
+
+  setPeriodicOrigin(origin, { coordinateMode } = {}) {
+    const normalized = normalizePeriodicOrigin(origin);
+    this.periodicOrigin = normalized;
+    if (!this.frame) {
+      if (coordinateMode) this.coordinateMode = coordinateMode;
+      this.requestRender(); return 0;
+    }
+    return this.setDisplayPositions(this.rawDisplayPositions ?? this.displayPositions ?? this.frame.positions,
+      { coordinateMode: coordinateMode ?? this.coordinateMode ?? 'wrapped' });
+  }
+
+  setDisplayPositions(positions, { coordinateMode } = {}) {
     if (!this.frame || positions.length !== this.atomCount * 3) {
       throw new Error('The display coordinate array does not match the current frame.');
     }
     this.cancelSelectionGesture();
     const startedAt = performance.now();
-    this.displayPositions = positions;
-    this.updateSceneBounds();
+    this.processDisplayCoordinates(positions, coordinateMode);
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-    this.gl.bufferData(this.gl.ARRAY_BUFFER, floatDisplayCoordinates(positions), this.gl.STATIC_DRAW);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, floatDisplayCoordinates(this.displayPositions), this.gl.STATIC_DRAW);
+    if (this.displayFractional && this.fractionalBuffer) {
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.fractionalBuffer);
+      this.gl.bufferData(this.gl.ARRAY_BUFFER, floatDisplayCoordinates(this.displayFractional), this.gl.STATIC_DRAW);
+    }
     this.primitiveLayer?.updatePositions(this);
+    if (this.dislocationNetwork) this.dislocationLayer?.setNetwork(this, this.dislocationNetwork, this.dislocationOptions);
+    this.updateSceneBounds();
     this.gl.finish();
     this.requestRender();
     return performance.now() - startedAt;
@@ -457,9 +523,21 @@ export class WebGLRenderer {
   }
 
   setVectors(vectors, options = {}) {
-    if (!vectors && (!this.frame || !this.primitiveLayer)) { this.atomVectors = null; return; }
+    if (!vectors && (!this.frame || !this.primitiveLayer)) { this.atomVectors = null; this.atomVectorFields = []; return; }
     const layer = this.ensurePrimitiveLayer();
     layer.setVectors(this, vectors, options);
+    this.atomVectors = layer.vectors;
+    this.atomVectorFields = layer.vectorFields.map(({ id, vectors: values, options: settings }) => ({ id, vectors: values, options: { ...settings } }));
+    this.vectorOptions = { ...layer.vectorOptions };
+    this.updateSceneBounds();
+    this.requestRender();
+  }
+
+  setVectorFields(fields = []) {
+    if (!fields.length && (!this.frame || !this.primitiveLayer)) { this.atomVectors = null; this.atomVectorFields = []; return; }
+    const layer = this.ensurePrimitiveLayer();
+    layer.setVectorFields(this, fields);
+    this.atomVectorFields = layer.vectorFields.map(({ id, vectors, options }) => ({ id, vectors, options: { ...options } }));
     this.atomVectors = layer.vectors;
     this.vectorOptions = { ...layer.vectorOptions };
     this.updateSceneBounds();
@@ -539,7 +617,128 @@ export class WebGLRenderer {
     this.onProjectionChange(mode);
     this.requestRender();
   }
+
+  /** The orbit eye, target, and unit directions use the structure's Cartesian units. */
+  getCameraState() {
+    const center = add(this.target, this.pan);
+    const { offsetDirection } = this.cameraOrientation();
+    const { up } = this.cameraBasis();
+    const aspect = Math.max(1, this.canvas.width || this.canvas.clientWidth || 1)
+      / Math.max(1, this.canvas.height || this.canvas.clientHeight || 1);
+    return { position: add(center, scale(offsetDirection, this.distance)), direction: scale(offsetDirection, -1),
+      up, center, yaw: this.yaw, pitch: this.pitch, roll: this.roll ?? 0,
+      constrainUp: this.constrainUp !== false, distance: this.distance, fov: this.fov,
+      fieldWidth: 2 * this.orthographicScale * aspect, projectionMode: this.projectionMode };
+  }
+
+  /** Validate the entire edit before mutating so invalid inputs cannot partly move the view. */
+  setCameraState(patch = {}) {
+    const state = this.getCameraState();
+    const vector = (value, name) => {
+      if (!value || value.length !== 3 || !Array.from(value).every(Number.isFinite)) {
+        throw new Error(`${name} requires three finite coordinates.`);
+      }
+      return Array.from(value);
+    };
+    const scalar = (key, minimum, maximum = Infinity) => {
+      if (patch[key] !== undefined && (!Number.isFinite(patch[key]) || patch[key] < minimum || patch[key] > maximum)) {
+        throw new Error(`${key} must be between ${minimum} and ${maximum}.`);
+      }
+    };
+    scalar('yaw', -Infinity); scalar('pitch', -Infinity); scalar('roll', -Infinity);
+    scalar('distance', .02); scalar('fov', Math.PI / 180, 175 * Math.PI / 180); scalar('fieldWidth', .001);
+    if (patch.projectionMode !== undefined && !['perspective', 'orthographic'].includes(patch.projectionMode)) {
+      throw new Error('Choose Perspective or Parallel projection.');
+    }
+    if (patch.constrainUp !== undefined && typeof patch.constrainUp !== 'boolean') throw new Error('Choose whether to keep Z upright.');
+    const position = patch.position !== undefined ? vector(patch.position, 'Camera position') : null;
+    const direction = patch.direction !== undefined ? vector(patch.direction, 'View direction') : null;
+    if (direction && Math.hypot(...direction) < 1e-12) throw new Error('The view direction must have a nonzero length.');
+    let yaw = patch.yaw ?? state.yaw, pitch = patch.pitch ?? state.pitch;
+    if (direction) {
+      const offset = scale(normalize(direction), -1);
+      pitch = Math.asin(Math.max(-1, Math.min(1, offset[2])));
+      yaw = Math.hypot(offset[0], offset[1]) < 1e-12 ? yaw : Math.atan2(offset[0], -offset[1]);
+    }
+    const constrainUp = patch.constrainUp ?? state.constrainUp;
+    if (constrainUp && !state.constrainUp && patch.pitch === undefined && !direction) {
+      const offset = [Math.cos(pitch) * Math.sin(yaw), -Math.cos(pitch) * Math.cos(yaw), Math.sin(pitch)];
+      pitch = Math.asin(Math.max(-1, Math.min(1, offset[2])));
+      if (Math.hypot(offset[0], offset[1]) > 1e-12) yaw = Math.atan2(offset[0], -offset[1]);
+    }
+    if (constrainUp && Math.abs(pitch) > Math.PI / 2 + 1e-12) {
+      throw new Error('Elevation must be between −90° and 90° while Z stays upright.');
+    }
+    let roll = patch.roll ?? state.roll;
+    // Releasing the upright constraint preserves the current screen-up direction.
+    if (!constrainUp && state.constrainUp && patch.roll === undefined) {
+      const right = [Math.cos(yaw), Math.sin(yaw), 0];
+      const up = [-Math.sin(pitch) * Math.sin(yaw), Math.sin(pitch) * Math.cos(yaw), Math.cos(pitch)];
+      roll = Math.atan2(state.up.reduce((sum, value, axis) => sum + value * right[axis], 0),
+        state.up.reduce((sum, value, axis) => sum + value * up[axis], 0));
+    }
+    if (constrainUp) roll = 0;
+    const distance = patch.distance ?? state.distance;
+    this.cancelSelectionGesture();
+    Object.assign(this, { yaw, pitch, roll, constrainUp, distance });
+    if (position || direction) {
+      // Position edits translate the orbit center. Direction edits rotate about
+      // the eye, which is stable even in parallel projection's virtual clip view.
+      const eye = position ?? state.position;
+      this.target = subtract(eye, scale(this.cameraOrientation().offsetDirection, distance));
+      this.pan = [0, 0, 0];
+    }
+    if (patch.fov !== undefined) this.fov = patch.fov;
+    if (patch.fieldWidth !== undefined) {
+      const aspect = Math.max(1, this.canvas.width || this.canvas.clientWidth || 1)
+        / Math.max(1, this.canvas.height || this.canvas.clientHeight || 1);
+      this.orthographicScale = patch.fieldWidth / (2 * aspect);
+    }
+    if (patch.projectionMode !== undefined) {
+      this.projectionMode = patch.projectionMode;
+      this.onProjectionChange(this.projectionMode);
+    }
+    this.requestRender();
+  }
+
+  orbitCamera(horizontal, vertical) {
+    if (this.constrainUp !== false) {
+      this.yaw += horizontal;
+      this.pitch = Math.max(-Math.PI / 2 + .008, Math.min(Math.PI / 2 - .008, this.pitch + vertical));
+      return;
+    }
+    const angle = Math.hypot(horizontal, vertical);
+    if (!angle) return;
+    const { offsetDirection } = this.cameraOrientation(), { right, up } = this.cameraBasis();
+    // In a rolled view the gesture axes must rotate with the screen. Apply one
+    // rigid rotation to both the eye offset and up vector; this also crosses
+    // poles without changing the camera's screen orientation discontinuously.
+    const axis = scale(add(scale(up, horizontal), scale(right, -vertical)), 1 / angle);
+    const cosine = Math.cos(angle), sine = Math.sin(angle);
+    const rotate = vector => add(add(scale(vector, cosine), scale(cross(axis, vector), sine)),
+      scale(axis, dot(axis, vector) * (1 - cosine)));
+    const offset = normalize(rotate(offsetDirection)), nextUp = normalize(rotate(up));
+    const principalPitch = Math.atan2(offset[2], Math.hypot(offset[0], offset[1]));
+    const principalYaw = Math.hypot(offset[0], offset[1]) < 1e-12 ? this.yaw : Math.atan2(offset[0], -offset[1]);
+    const nearestAngle = (value, previous) => value + Math.round((previous - value) / (2 * Math.PI)) * 2 * Math.PI;
+    // Equivalent Euler branches let elevation pass through ±90° continuously
+    // instead of flipping azimuth by 180° at every crossing.
+    const candidates = [[principalYaw, principalPitch], [principalYaw + Math.PI, Math.PI - principalPitch]]
+      .map(([yaw, pitch]) => ({ yaw: nearestAngle(yaw, this.yaw), pitch: nearestAngle(pitch, this.pitch) }));
+    const score = candidate => (candidate.yaw - this.yaw) ** 2 + (candidate.pitch - this.pitch) ** 2;
+    const chosen = score(candidates[0]) <= score(candidates[1]) ? candidates[0] : candidates[1];
+    const baseRight = [Math.cos(chosen.yaw), Math.sin(chosen.yaw), 0];
+    const baseUp = [-Math.sin(chosen.pitch) * Math.sin(chosen.yaw), Math.sin(chosen.pitch) * Math.cos(chosen.yaw), Math.cos(chosen.pitch)];
+    this.roll = nearestAngle(Math.atan2(dot(nextUp, baseRight), dot(nextUp, baseUp)), this.roll ?? 0);
+    this.yaw = chosen.yaw; this.pitch = chosen.pitch;
+  }
   setCellVisible(visible) { this.cellVisible = Boolean(visible); this.requestRender(); }
+
+  setCellWireframeMode(mode) {
+    cellWireframeDraws(mode, this.cellColor);
+    this.cellWireframeMode = mode;
+    this.requestRender();
+  }
 
   setBackground(hex) {
     const value = hex.replace('#', '');
@@ -600,6 +799,8 @@ export class WebGLRenderer {
     this.orthographicScale = this.modelRadius * 1.25;
     this.yaw = -0.62;
     this.pitch = 0.38;
+    this.roll = 0;
+    this.constrainUp = true;
     this.requestRender();
   }
 
@@ -609,6 +810,8 @@ export class WebGLRenderer {
     this.cancelSelectionGesture();
     this.yaw = preset.yaw;
     this.pitch = preset.pitch;
+    this.roll = 0;
+    this.constrainUp = true;
     this.pan = [0, 0, 0];
     this.projectionMode = 'orthographic';
     this.onProjectionChange(this.projectionMode);
@@ -667,8 +870,10 @@ export class WebGLRenderer {
       gl.useProgram(this.lineProgram);
       gl.bindVertexArray(this.cellVao);
       gl.uniformMatrix4fv(this.lineUniforms.uViewProjection, false, this.viewProjectionMatrix);
-      gl.uniform3f(this.lineUniforms.uColor, ...this.cellColor);
-      gl.drawArrays(gl.LINES, 0, CELL_EDGES.length);
+      for (const draw of cellWireframeDraws(this.cellWireframeMode, this.cellColor)) {
+        gl.uniform3f(this.lineUniforms.uColor, ...draw.color);
+        gl.drawArrays(gl.LINES, draw.first, draw.count);
+      }
     }
     gl.disable(gl.BLEND);
     gl.bindVertexArray(null);
@@ -784,7 +989,12 @@ export class WebGLRenderer {
     ];
     // At the exact top/bottom presets global Z is parallel to the viewing
     // direction, so global Y provides a deterministic screen-up direction.
-    const upHint = Math.abs(cosinePitch) < 1e-7 ? [0, 1, 0] : [0, 0, 1];
+    let upHint = Math.abs(cosinePitch) < 1e-7 ? [0, 1, 0] : [0, 0, 1];
+    if (this.constrainUp === false) {
+      const right = [Math.cos(this.yaw), Math.sin(this.yaw), 0];
+      const up = [-Math.sin(this.pitch) * Math.sin(this.yaw), Math.sin(this.pitch) * Math.cos(this.yaw), cosinePitch];
+      upHint = add(scale(up, Math.cos(this.roll ?? 0)), scale(right, Math.sin(this.roll ?? 0)));
+    }
     return { offsetDirection, upHint };
   }
 
@@ -798,7 +1008,7 @@ export class WebGLRenderer {
       return pointVisible(position, this.slices);
     }
     return this.visibility?.[atom] !== 0
-      && (this.frame.fractional[atom * 3 + this.sliceAxis] + replicaIndices[this.sliceAxis])
+      && ((this.displayFractional ?? this.frame.fractional)[atom * 3 + this.sliceAxis] + replicaIndices[this.sliceAxis])
         / (this.repetitions?.[this.sliceAxis] ?? 1) <= this.sliceMaximum;
   }
 
@@ -807,6 +1017,7 @@ export class WebGLRenderer {
   }
 
   pick(clientX, clientY) {
+    this.lastPick = null;
     if (!this.frame) return -1;
     this.updateMatrices();
     const rectangle = this.canvas.getBoundingClientRect();
@@ -833,6 +1044,11 @@ export class WebGLRenderer {
         if (distanceSquared <= radiusPixels ** 2 && view[2] > closestDepth) {
           closest = atom;
           closestDepth = view[2];
+          this.lastPick = {
+            index: atom,
+            replica: Array.from(replica.indices),
+            position: [positions[index] + replica.offset[0], positions[index + 1] + replica.offset[1], positions[index + 2] + replica.offset[2]],
+          };
         }
       }
     }

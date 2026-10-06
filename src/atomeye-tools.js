@@ -11,7 +11,7 @@ import { measureAtoms } from './measurements.js';
 import { createImageArchive, downloadBlob } from './export-archive.js';
 import { prepareDisplacements } from './analysis/displacement.js';
 import { registerVectorProperties, vectorPropertyNames } from './analysis/vector-properties.js';
-import { availableVectorSources, linkedArrowDimensions } from './vector-settings.js';
+import { availableVectorSources, createVectorField, linkedArrowDimensions, renameVectorFieldProperty, vectorFieldData } from './vector-settings.js';
 
 const JOBS = {
   bonds: { prefix: 'bonds', tool: 'bonds', property: 'bondCoordination' },
@@ -20,7 +20,7 @@ const JOBS = {
   localShear: { prefix: 'local-shear', tool: 'localShear', property: 'localShear' },
 };
 const $ = id => document.getElementById(id);
-const VECTOR_SIZE_IDS = { radius: 'vector-radius', headRadius: 'vector-head-radius', headLength: 'vector-head-length' };
+  const VECTOR_SIZE_IDS = { radius: 'vector-radius', headRadius: 'vector-head-radius', headLength: 'vector-head-length' };
 const number = id => {
   const value = $(id).valueAsNumber;
   if (!Number.isFinite(value) || value <= 0) throw new Error('Enter a positive, finite value.');
@@ -34,7 +34,8 @@ const canvasBlob = (canvas, type = 'image/png') => new Promise((resolve, reject)
 export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFrameAt,
   getFrameIndex, getFrameCount, getFrames, getSourceVersion, getSelectedIndex,
   selectAtom, refresh, chooseProperty, getColorMode, getSelectionGroups = () => [], getColorChoiceVersion = () => 0, getPendingAnalysisKinds = () => [], getAnalysisPropertyKind = () => null, getExportOptions, showFrame,
-  stopPlayback, getFileStem, notify = () => {}, onEdit = () => {}, onMemoryChange = () => {} }) {
+  stopPlayback, getFileStem, notify = () => {}, onEdit = () => {}, onMemoryChange = () => {},
+  onBondParametersChange = () => {}, onBondStateChange = () => {}, getBondStatisticsEnabled = () => false }) {
   const jobs = Object.fromEntries(Object.keys(JOBS).map(kind => [kind, { enabled: false, parameters: null, controller: null, request: 0 }]));
   let generation = 0, measurements = [], appearance = { elements: [], atoms: [] };
   let pairCutoffs = [], currentFrame = null, comparison = null, comparisonContainer = null;
@@ -45,6 +46,43 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   let preferredVectorComponents = ['', '', ''];
   const vectorComponentKinds = new Map();
   let vectorDimensions = { radius: .06, headRadius: .15, headLength: .3 };
+  let vectorFields = [createVectorField()], selectedVectorId = vectorFields[0].id, vectorSequence = 1;
+  const vectorSourceKinds = new Map();
+  const vectorDataCache = new Map();
+  const vectorResolvedComponents = new Map();
+
+  function selectedVectorField() { return vectorFields.find(field => field.id === selectedVectorId) ?? vectorFields[0]; }
+  function saveVectorEditor() {
+    const field = selectedVectorField();
+    if (!field) return;
+    Object.assign(field, { name: $('vector-field-name')?.value.trim() || field.name, enabled: $('show-vectors').checked,
+      mode: preferredVectorSource, components: preferredVectorComponents.map(name => name || null),
+      componentScales: ['x', 'y', 'z'].map(axis => $(`vector-scale-${axis}`).valueAsNumber),
+      scale: $('vector-scale').valueAsNumber, color: $('vector-color').value,
+      radius: $('vector-radius').valueAsNumber, headRadius: $('vector-head-radius').valueAsNumber, headLength: $('vector-head-length').valueAsNumber,
+      linkDimensions: $('vector-link-dimensions').checked, anchor: $('vector-anchor').value, dimension: $('vector-dimension').value,
+      upMode: $('vector-up-mode')?.value ?? 'camera', up: ['x', 'y', 'z'].map((axis, index) => $(`vector-up-${axis}`)?.valueAsNumber ?? field.up[index]),
+    });
+    vectorSourceKinds.set(field.id, new Set(preferredVectorAnalysisKinds));
+  }
+  function loadVectorEditor(field = selectedVectorField()) {
+    preferredVectorSource = field.mode; preferredVectorComponents = field.components.map(name => name ?? '');
+    preferredVectorAnalysisKinds = new Set(vectorSourceKinds.get(field.id) ?? []);
+    $('show-vectors').checked = field.enabled;
+    for (const [id, value] of [['vector-scale', field.scale], ['vector-color', field.color], ['vector-anchor', field.anchor], ['vector-dimension', field.dimension], ['vector-up-mode', field.upMode]]) if ($(id)) $(id).value = String(value);
+    for (const [axis, scale] of field.componentScales.entries()) $(`vector-scale-${'xyz'[axis]}`).value = String(scale);
+    for (const [axis, value] of field.up.entries()) if ($(`vector-up-${'xyz'[axis]}`)) $(`vector-up-${'xyz'[axis]}`).value = String(value);
+    $('vector-link-dimensions').checked = field.linkDimensions;
+    vectorDimensions = Object.fromEntries(Object.entries(VECTOR_SIZE_IDS).map(([name, id]) => { $(id).value = String(field[name]); return [name, field[name]]; }));
+    if ($('vector-field-name')) $('vector-field-name').value = field.name;
+    for (const [axis, name] of preferredVectorComponents.entries()) $(`vector-${'xyz'[axis]}`).value = name;
+    syncVectorFieldList();
+  }
+  function syncVectorFieldList() {
+    const list = $('vector-field-list');
+    if (list) { list.replaceChildren(...vectorFields.map(field => option(field.id, `${field.name}${field.enabled ? '' : ' (hidden)'}`))); list.value = selectedVectorId; }
+    if ($('vector-up-controls')) $('vector-up-controls').hidden = $('vector-dimension').value !== '2d' || $('vector-up-mode')?.value !== 'fixed';
+  }
 
   function changed() { cancelBatch({ restore: false }); onEdit(); }
   function stateFor(kind, text, status = '') {
@@ -69,6 +107,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     cancelVectorDependency(kind);
     job.request++; job.enabled = false; job.controller?.abort(); job.controller = null;
     tools.setToolEnabled(JOBS[kind].tool, false);
+    if (kind === 'bonds') onBondStateChange();
     for (const frame of getFrames()) {
       clearAnalysisResults(frame, kind);
       if (frame.atomeyeResults) delete frame.atomeyeResults[kind];
@@ -191,30 +230,44 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       }
     }
   }
+  function pendingVectorSourceKinds(mode) {
+    if (mode === 'displacement') return new Set(displacement.enabled ? ['displacement'] : []);
+    if (!mode.startsWith('property:')) return new Set();
+    const empty = new Float32Array(0);
+    const properties = [...REFERENCE_STRAIN_FIELDS, ...STRAIN_FIELDS].flatMap(name => {
+      const analysisKind = pendingVectorComponentKind(name);
+      return analysisKind ? [{ name, analysisKind, data: empty }] : [];
+    });
+    const source = availableVectorSources({ ids: [], properties }).find(source => source.value === mode);
+    return new Set((source?.components ?? []).map(property => property.analysisKind));
+  }
   function cancelVectorDependency(kind) {
+    saveVectorEditor();
     const frame = getFrame();
-    const source = availableVectorSources(frame, { displacementEnabled: displacement.enabled })
-      .find(source => source.value === preferredVectorSource);
-    const dependent = preferredVectorSource === 'generic'
-      ? ['x', 'y', 'z'].some(axis => {
-        const name = $(`vector-${axis}`).value;
-        const property = frame?.properties.find(property => property.name === name);
-        if (property) return property.analysisKind === kind;
-        if (vectorComponentKinds.has(name)) return vectorComponentKinds.get(name) === kind;
-        // A selected component can be waiting on a cold frame or restored recipe.
-        if ([...getFrames()].some(frame => frame.properties.some(property => property.name === name && property.analysisKind === kind))) return true;
-        return pendingVectorComponentKind(name) === kind;
-      })
-      : source ? source.components?.some(property => property.analysisKind === kind)
-        : preferredVectorAnalysisKinds.has(kind) || (kind === 'displacement' && preferredVectorSource === 'displacement' && displacement.enabled);
-    if (!dependent) return;
-    $('show-vectors').checked = false;
-    renderer.setVectors(null); comparison?.setVectors(null); tools.setToolEnabled('vectors', false);
-    $('vector-status').textContent = 'Arrows were turned off because their source calculation was cancelled.';
-    syncComparison();
+    const sources = availableVectorSources(frame, { displacementEnabled: displacement.enabled });
+    let affected = 0;
+    for (const field of vectorFields) {
+      const source = sources.find(source => source.value === field.mode);
+      const dependent = field.mode === 'generic'
+        ? field.components.some(name => {
+          const property = frame?.properties.find(property => property.name === name);
+          if (property) return property.analysisKind === kind;
+          if (vectorComponentKinds.has(name)) return vectorComponentKinds.get(name) === kind;
+          if ([...getFrames()].some(frame => frame.properties.some(property => property.name === name && property.analysisKind === kind))) return true;
+          return pendingVectorComponentKind(name) === kind;
+        })
+        : source ? source.components?.some(property => property.analysisKind === kind)
+          : vectorSourceKinds.get(field.id)?.has(kind) || pendingVectorSourceKinds(field.mode).has(kind);
+      if (dependent) { field.enabled = false; affected++; }
+    }
+    if (!affected) return;
+    $('show-vectors').checked = selectedVectorField().enabled;
+    updateVectors();
+    $('vector-status').textContent = `${affected} vector field${affected === 1 ? '' : 's'} hidden because the source calculation was cancelled. Other fields remain available.`;
   }
   function configureVectorSelectors(frame) {
     const properties = frame.properties.filter(property => !property.categories);
+    const suggested = availableVectorSources(frame, { displacementEnabled: displacement.enabled }).find(source => source.components)?.components;
     if (displacement.enabled) for (const [component, name] of Object.entries(vectorPropertyNames('displacement'))) {
       if (!properties.some(property => property.name === name)) properties.push({ name, displayName: `Displacement ${component === 'magnitude' ? 'magnitude' : component.toUpperCase()} (calculating…)` });
     }
@@ -228,10 +281,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         const unavailable = option(previous, `${previous} (unavailable)`); unavailable.disabled = true; select.append(unavailable);
       }
       select.value = previous;
-      if (!previous) {
-        const matched = properties.find(property => property.data && new RegExp(`^(force|forces|velocity|velocities|displacement|displacements|f|v|u)[._]?(${component}|${axis})$`, 'i').test(property.name));
-        if (matched) select.value = matched.name;
-      }
+      if (!previous && suggested) select.value = suggested[axis].name;
       preferredVectorComponents[axis] = select.value;
     }
     rememberVectorComponentKinds(frame);
@@ -253,70 +303,75 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     const sources = availableVectorSources(getFrame(), { displacementEnabled: displacement.enabled });
     const selected = sources.find(source => source.value === preferredVectorSource);
     if (selected) preferredVectorAnalysisKinds = new Set((selected.components ?? []).map(property => property.analysisKind).filter(Boolean));
-    else if (preferredVectorSource.startsWith('property:')) {
-      // Recipes can name a calculated family before its first result exists.
-      // Resolve its ownership from declared outputs, without making any data.
-      const empty = new Float32Array(0);
-      const properties = [...REFERENCE_STRAIN_FIELDS, ...STRAIN_FIELDS].flatMap(name => {
-        const analysisKind = pendingVectorComponentKind(name);
-        return analysisKind ? [{ name, analysisKind, data: empty }] : [];
-      });
-      const pending = availableVectorSources({ ids: [], properties }).find(source => source.value === preferredVectorSource);
-      if (pending) preferredVectorAnalysisKinds = new Set(pending.components.map(property => property.analysisKind));
+    else {
+      const pending = pendingVectorSourceKinds(preferredVectorSource);
+      if (pending.size) preferredVectorAnalysisKinds = pending;
     }
-    const pendingAnalyses = getPendingAnalysisKinds().length || Object.entries(JOBS).some(([kind, { prefix }]) => jobs[kind].enabled
-      && !['Calculated', 'Failed'].includes($(`${prefix}-state`).textContent));
-    const waiting = !selected && ((preferredVectorSource === 'displacement' && displacement.enabled)
-      || (preferredVectorSource.startsWith('property:') && (preferredVectorAnalysisKinds.size
-        ? [...preferredVectorAnalysisKinds].some(kind => tools.isToolEnabled(kind)) : pendingAnalyses)));
-    if (!selected && !waiting) {
-      if (preferredVectorSource !== 'generic') $('show-vectors').checked = false;
-      preferredVectorSource = 'generic';
-      preferredVectorAnalysisKinds.clear();
-    }
+    // Preserve a field's source across cold/heterogeneous trajectory frames.
+    // Rendering waits for data; selecting arrows never starts an analysis.
     $('vector-mode').replaceChildren(...sources.map(source => option(source.value, source.label)));
-    if (waiting) {
-      const placeholder = option('', 'Waiting for calculated vector…'); placeholder.disabled = true;
-      $('vector-mode').prepend(placeholder); $('vector-mode').value = '';
-    } else $('vector-mode').value = selected?.value ?? 'generic';
+    if (!selected) {
+      const pendingAnalyses = getPendingAnalysisKinds().length || Object.entries(JOBS).some(([kind, { prefix }]) => jobs[kind].enabled
+        && !['Calculated', 'Failed'].includes($(`${prefix}-state`).textContent));
+      const waiting = preferredVectorAnalysisKinds.size
+        ? [...preferredVectorAnalysisKinds].some(kind => kind === 'displacement' ? displacement.enabled : tools.isToolEnabled(kind)) : pendingAnalyses;
+      const unavailable = option('', waiting ? 'Waiting for calculated vector…' : `${preferredVectorSource} (unavailable in this frame)`);
+      unavailable.disabled = true; $('vector-mode').prepend(unavailable);
+    }
+    $('vector-mode').value = selected ? preferredVectorSource : '';
     $('vector-components').hidden = $('vector-component-scales').hidden = preferredVectorSource !== 'generic';
-    $('vector-source-help').textContent = waiting ? 'Waiting for the selected analysis properties in this frame.'
+    $('vector-source-help').textContent = !selected ? 'This source is unavailable in the current frame. Enable its analysis separately if needed.'
       : preferredVectorSource === 'generic' ? 'Choose existing numeric properties and scale each Cartesian component for drawing. Vector arrows do not calculate atom properties.'
         : `Using ${selected.components.map(property => property.name).join(', ')}. The scale controls arrow lengths without changing these properties.`;
-    return waiting ? null : selected ?? sources.find(source => source.value === 'generic');
+    return selected ?? null;
   }
   function updateVectors() {
     const frame = getFrame();
     if (frame) configureVectorSelectors(frame);
-    const source = syncVectorSourceUi();
-    const clear = () => { renderer.setVectors(null); comparison?.setVectors(null); tools.setToolEnabled('vectors', false); };
-    if (!frame || !source || !$('show-vectors').checked) {
-      clear();
-      $('vector-status').textContent = !frame ? 'Open a structure to display existing vectors.'
-        : !source ? 'Waiting for calculated vector properties.' : 'Arrows are hidden. Atom properties remain available for coloring.';
-      syncComparison(); return;
+    syncVectorSourceUi(); saveVectorEditor(); syncVectorFieldList();
+    if (frame && renderer.frame !== frame) {
+      $('vector-status').textContent = 'Waiting for the current structure to finish loading before displaying arrows.';
+      return;
     }
-    try {
-      const properties = source.value === 'generic'
-        ? ['x', 'y', 'z'].map(axis => frame.properties.find(property => property.name === $(`vector-${axis}`).value))
-        : source.components;
-      if (!properties || properties.some(property => !property || property.categories)) {
-        clear(); $('vector-status').textContent = 'Choose three existing numeric properties to display arrows.'; syncComparison(); return;
+    const rendered = [], unavailable = [], invalid = [];
+    const sources = availableVectorSources(frame, { displacementEnabled: displacement.enabled });
+    for (const field of vectorFields) {
+      const source = sources.find(source => source.value === field.mode);
+      if (source?.components) vectorResolvedComponents.set(field.id, source.components.map(property => property.name));
+      if (source) vectorSourceKinds.set(field.id, new Set((source.components ?? []).map(property => property.analysisKind).filter(Boolean)));
+      else { const pending = pendingVectorSourceKinds(field.mode); if (pending.size) vectorSourceKinds.set(field.id, pending); }
+      const components = field.mode === 'generic' ? field.components : source?.components?.map(property => property.name) ?? [];
+      for (const name of components) {
+        const property = frame?.properties.find(property => property.name === name);
+        const kind = property ? property.analysisKind ?? null : pendingVectorComponentKind(name);
+        if (property || kind != null) vectorComponentKinds.set(name, kind);
       }
-      const scales = source.value === 'generic' ? ['x', 'y', 'z'].map(axis => {
-        const value = $(`vector-scale-${axis}`).valueAsNumber;
-        if (!Number.isFinite(value)) throw new Error('Component scale factors must be finite numbers.');
-        return value;
-      }) : [1, 1, 1];
-      const vectors = new Float32Array(frame.ids.length * 3);
-      for (let atom = 0; atom < frame.ids.length; atom++) for (let axis = 0; axis < 3; axis++) vectors[atom * 3 + axis] = properties[axis].data[atom] * scales[axis];
-      renderer.setVectors(vectors, { scale: number('vector-scale'), color: $('vector-color').value,
-        radius: number('vector-radius'), headRadius: number('vector-head-radius'), headLength: number('vector-head-length'),
-        anchor: $('vector-anchor').value, dimension: $('vector-dimension').value });
-      tools.setToolEnabled('vectors', true);
-      $('vector-status').textContent = 'Displaying existing properties. Show arrows controls vectors independently of atom visibility; zero and nonfinite arrows are hidden.';
-      syncComparison();
-    } catch (error) { clear(); $('vector-status').textContent = error.message; notify(error.message); }
+      try {
+        const result = vectorFieldData(frame, field, { displacementEnabled: displacement.enabled, sources, cache: vectorDataCache });
+        if (result) rendered.push(result);
+        else if (field.enabled) unavailable.push(field.name);
+      } catch (error) { invalid.push(`${field.name}: ${error.message}`); }
+    }
+    renderer.setVectorFields(rendered);
+    tools.setToolEnabled('vectors', rendered.length > 0);
+    $('vector-status').textContent = !frame ? 'Open a structure to display existing vectors.'
+      : invalid.length ? invalid.join(' ')
+        : `${rendered.length} vector field${rendered.length === 1 ? '' : 's'} displayed.${unavailable.length ? ` Waiting for existing source properties: ${unavailable.join(', ')}.` : rendered.length ? ' Arrows have independent visibility and settings for each field.' : ' Enable a field to display arrows.'}`;
+    syncComparison();
+  }
+  function renameProperty(oldName, name) {
+    if (oldName === name) return;
+    saveVectorEditor();
+    for (const field of vectorFields) {
+      const resolved = vectorResolvedComponents.get(field.id) ?? [];
+      if (renameVectorFieldProperty(field, oldName, name, resolved)) {
+        vectorDataCache.delete(field.id); vectorResolvedComponents.delete(field.id);
+      }
+    }
+    if (vectorComponentKinds.has(oldName)) {
+      vectorComponentKinds.set(name, vectorComponentKinds.get(oldName)); vectorComponentKinds.delete(oldName);
+    }
+    loadVectorEditor(); updateVectors(); updateMeasurements();
   }
   function displacementState(text, status) {
     $('displacement-state').textContent = text;
@@ -341,7 +396,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     displacement.request++; displacement.enabled = false;
     displacement.controller?.abort(); displacement.controller = null; displacement.parameters = null;
     clearDisplacementResults();
-    preferredVectorComponents = preferredVectorComponents.map(name => displacementNames.has(name) && !getFrame()?.properties.some(property => property.name === name) ? '' : name);
+    for (const field of vectorFields) field.components = field.components.map(name => displacementNames.has(name) && !getFrame()?.properties.some(property => property.name === name) ? null : name);
+    preferredVectorComponents = selectedVectorField().components.map(name => name ?? '');
     for (const [axis, name] of preferredVectorComponents.entries()) $(`vector-${'xyz'[axis]}`).value = name;
     tools.setToolEnabled('displacement', false);
     displacementState('Not calculated', 'Calculation cleared. Frame changes will not calculate displacement until you enable this tool again.');
@@ -422,6 +478,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         pairCutoffs = pairCutoffs.filter(entry => !(entry.first === a && entry.second === b));
         if (input.value !== '') pairCutoffs.push({ first: a, second: b, cutoff: value });
         if (jobs.bonds.enabled) void run('bonds');
+        onBondParametersChange();
       });
       label.append(text, input); details.append(label);
     }
@@ -570,29 +627,34 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         button.addEventListener('click', () => { changed(); comparison.setProjection(mode); syncComparisonToolbar(); }); toolbar.append(button);
       }
       const fit = document.createElement('button'); fit.type = 'button'; fit.textContent = 'Fit'; fit.dataset.compareReset = ''; fit.setAttribute('aria-label', 'Fit second view to structure');
-      fit.addEventListener('click', () => { changed(); const { yaw, pitch } = comparison; comparison.resetCamera(); Object.assign(comparison, { yaw, pitch }); syncComparisonToolbar(); }); toolbar.append(fit);
+      fit.addEventListener('click', () => { changed(); const { yaw, pitch, roll, constrainUp } = comparison; comparison.resetCamera(); Object.assign(comparison, { yaw, pitch, roll, constrainUp }); syncComparisonToolbar(); }); toolbar.append(fit);
       comparisonContainer.append(canvas, label, toolbar, close); renderer.canvas.parentElement.append(comparisonContainer);
       comparison = new WebGLRenderer(canvas, { onPick: index => selectAtom(index), onProjectionChange: syncComparisonToolbar, onCameraChange: syncComparisonToolbar });
     }
     comparisonContainer.hidden = false;
+    const positions = renderer.rawDisplayPositions ?? renderer.displayPositions;
+    const coordinateMode = renderer.coordinateMode ?? 'wrapped';
     if (comparison.frame !== frame) {
       const camera = comparison.frame ? cameraSnapshot(comparison) : null;
-      comparison.setFrame(frame, renderer.atomColors, renderer.displayPositions, renderer.atomRadii, renderer.repetitions);
+      comparison.setFrame(frame, renderer.atomColors, positions, renderer.atomRadii, renderer.repetitions, { coordinateMode });
       if (camera) restoreCamera(comparison, camera);
       else { comparison.resetCamera(); if ($('compare-preset').value !== 'custom') comparison.setView($('compare-preset').value); }
     } else {
       comparison.setColors(renderer.atomColors); comparison.setAtomRadii(renderer.atomRadii);
-      if (comparison.displayPositions !== renderer.displayPositions) comparison.setDisplayPositions(renderer.displayPositions);
+      if (comparison.rawDisplayPositions !== positions || comparison.coordinateMode !== coordinateMode) comparison.setDisplayPositions(positions, { coordinateMode });
       if (comparison.repetitions.some((value, axis) => value !== renderer.repetitions[axis])) comparison.setReplications(renderer.repetitions);
     }
+    const origin = renderer.periodicOrigin ?? [0, 0, 0];
+    if (origin.some((value, axis) => value !== (comparison.periodicOrigin?.[axis] ?? 0))) comparison.setPeriodicOrigin(origin, { coordinateMode });
     comparison.setVisibility(renderer.visibility);
     if (renderer.sliceMode === 'legacy') comparison.setSlice(renderer.sliceAxis, renderer.sliceMaximum);
     else comparison.setSlices(renderer.slices);
     comparison.setBackground(rgbHex(renderer.background.map(value => value * 255)));
     comparison.setCellVisible(renderer.cellVisible); comparison.setRadiusScale(renderer.radiusScale);
+    comparison.setCellWireframeMode(renderer.cellWireframeMode ?? 'mono');
     comparison.setBonds(renderer.atomBonds ?? null,
       { visible: $('show-bonds').checked, radius: number('bonds-radius') });
-    comparison.setVectors(renderer.atomVectors ?? null, renderer.vectorOptions);
+    comparison.setVectorFields(renderer.atomVectorFields ?? []);
     comparison.setDislocationNetwork(renderer.dislocationNetwork, renderer.dislocationOptions);
     syncComparisonToolbar();
   }
@@ -606,8 +668,12 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   }
   async function onFrame({ suggestedCutoff } = {}) {
     abortJobs(); currentFrame = getFrame();
+    vectorDataCache.clear();
     if (!currentFrame) return;
-    for (const id of ['bonds-cutoff', 'reference-cutoff', 'local-shear-cutoff', 'rdf-cutoff']) if (!$(id).value || (!jobs[({ 'bonds-cutoff': 'bonds', 'reference-cutoff': 'referenceStrain', 'local-shear-cutoff': 'localShear', 'rdf-cutoff': 'rdf' })[id]].enabled && suggestedCutoff)) $(id).value = String(suggestedCutoff ?? 3);
+    for (const [id, kind] of Object.entries({ 'bonds-cutoff': 'bonds', 'reference-cutoff': 'referenceStrain', 'local-shear-cutoff': 'localShear', 'rdf-cutoff': 'rdf' })) {
+      const enabled = jobs[kind].enabled || (kind === 'bonds' && getBondStatisticsEnabled());
+      if (!$(id).value || (!enabled && suggestedCutoff)) $(id).value = String(suggestedCutoff ?? 3);
+    }
     configureSelectors(currentFrame); renderPairs(currentFrame); renderElements(currentFrame); applyRadii(); updateMeasurements(); updateStatistics();
     renderer.setBonds(null);
     updateVectors();
@@ -622,24 +688,23 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     measurements = []; appearance = { elements: [], atoms: [] }; pairCutoffs = []; currentFrame = null; colors = null;
     $('show-vectors').checked = $('measure-mode').checked = $('compare-view').checked = false;
     cancelDisplacement({ redraw: false }); preferredVectorSource = 'generic'; preferredVectorAnalysisKinds.clear(); preferredVectorComponents = ['', '', '']; vectorComponentKinds.clear();
+    vectorFields = [createVectorField()]; selectedVectorId = vectorFields[0].id; vectorSequence = 1; vectorSourceKinds.clear(); vectorDataCache.clear(); vectorResolvedComponents.clear(); loadVectorEditor();
     $('show-bonds').checked = true;
     $('element-style-controls').replaceChildren(); $('bond-pair-cutoffs').replaceChildren(); $('rdf-chart').replaceChildren();
     $('export-series-first').value = '1'; $('export-series-last').value = String(getFrameCount() || 1);
-    renderer.setBonds(null); renderer.setVectors(null); renderer.setSelectedAtoms([]);
+    renderer.setBonds(null); renderer.setVectorFields([]); renderer.setSelectedAtoms([]);
     comparison?.clearFrame(); if (comparisonContainer) comparisonContainer.hidden = true;
     updateMeasurements(); syncVectorSourceUi();
   }
   function serialize() {
+    saveVectorEditor();
     const frame = getFrame();
+    const { id: _id, name: _name, ...selectedVectorSettings } = createVectorField(selectedVectorField());
     const cutoff = id => Number.isFinite($(id).valueAsNumber) && $(id).valueAsNumber > 0 ? $(id).valueAsNumber : null;
     return {
       bonds: { enabled: jobs.bonds.enabled, cutoff: cutoff('bonds-cutoff'), pairCutoffs: pairCutoffs.map(entry => ({ ...entry })), radius: number('bonds-radius'), visible: $('show-bonds').checked },
       displacement: { enabled: displacement.enabled, referenceFrame: number('displacement-reference-frame') - 1, minimumImage: $('displacement-minimum-image').checked },
-      vectors: { enabled: $('show-vectors').checked, components: ['x', 'y', 'z'].map(axis => $(`vector-${axis}`).value || null),
-        mode: preferredVectorSource, componentScales: ['x', 'y', 'z'].map(axis => $(`vector-scale-${axis}`).valueAsNumber),
-        scale: number('vector-scale'), color: $('vector-color').value,
-        radius: number('vector-radius'), headRadius: number('vector-head-radius'), headLength: number('vector-head-length'),
-        linkDimensions: $('vector-link-dimensions').checked, anchor: $('vector-anchor').value, dimension: $('vector-dimension').value },
+      vectors: { ...selectedVectorSettings, fields: vectorFields.map(field => createVectorField(field)), selectedId: selectedVectorId },
       referenceStrain: { enabled: jobs.referenceStrain.enabled, frameIndex: Math.max(0, Number($('reference-frame').value) - 1), cutoff: cutoff('reference-cutoff') },
       localShear: { enabled: jobs.localShear.enabled, cutoff: cutoff('local-shear-cutoff'), subtractMean: $('local-shear-subtract-mean').checked },
       rdf: { enabled: jobs.rdf.enabled, cutoff: cutoff('rdf-cutoff'), bins: Number($('rdf-bins').value), firstType: $('rdf-first-type').value || null, secondType: $('rdf-second-type').value || null },
@@ -651,34 +716,35 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   }
   async function restore(saved, { isCurrent = () => true } = {}) {
     if (!saved || !isCurrent()) return;
-    const source = [...getFrames()].flatMap(frame => availableVectorSources(frame, { displacementEnabled: displacement.enabled }))
-      .find(source => source.value === saved.vectors.mode);
-    const sourceKinds = source ? new Set((source.components ?? []).map(property => property.analysisKind).filter(Boolean))
-      : saved.vectors.mode === preferredVectorSource ? new Set(preferredVectorAnalysisKinds) : new Set();
-    const componentKinds = saved.vectors.components.map(name => {
+    const restoredFields = (saved.vectors.fields?.length ? saved.vectors.fields : [saved.vectors]).map((field, index) => createVectorField(field, `vector-${index + 1}`));
+    const sourceKinds = new Map(restoredFields.map(field => {
+      const source = [...getFrames()].flatMap(frame => availableVectorSources(frame, { displacementEnabled: saved.displacement.enabled })).find(source => source.value === field.mode);
+      return [field.id, source ? new Set((source.components ?? []).map(property => property.analysisKind).filter(Boolean)) : new Set(vectorSourceKinds.get(field.id) ?? [])];
+    }));
+    const componentKinds = restoredFields.flatMap(field => field.components.map(name => {
       const property = getFrame()?.properties.find(property => property.name === name)
         ?? [...getFrames()].flatMap(frame => frame.properties).find(property => property.name === name);
       return [name, property ? property.analysisKind ?? null : vectorComponentKinds.get(name)];
-    });
+    }));
     reset(); appearance = saved.appearance; pairCutoffs = saved.bonds.pairCutoffs.map(entry => ({ ...entry }));
+    vectorFields = restoredFields; selectedVectorId = vectorFields.some(field => field.id === saved.vectors.selectedId) ? saved.vectors.selectedId : vectorFields[0].id;
+    vectorSequence = Math.max(vectorFields.length, ...vectorFields.map(field => {
+      const suffix = Number(field.id.match(/^vector-(\d+)$/)?.[1]);
+      return Number.isSafeInteger(suffix) && suffix < 1e6 ? suffix : 0;
+    }));
+    for (const [id, kinds] of sourceKinds) vectorSourceKinds.set(id, kinds);
     for (const [name, kind] of componentKinds) if (name && kind !== undefined) vectorComponentKinds.set(name, kind);
+    loadVectorEditor();
     const token = generation, sourceVersion = getSourceVersion();
     const current = () => isCurrent() && token === generation && sourceVersion === getSourceVersion();
     for (const [id, value] of [['bonds-cutoff', saved.bonds.cutoff], ['bonds-radius', saved.bonds.radius], ['reference-frame', saved.referenceStrain.frameIndex + 1],
       ['reference-cutoff', saved.referenceStrain.cutoff], ['local-shear-cutoff', saved.localShear.cutoff], ['rdf-cutoff', saved.rdf.cutoff], ['rdf-bins', saved.rdf.bins],
-      ['vector-scale', saved.vectors.scale], ['vector-color', saved.vectors.color], ['compare-preset', saved.comparison.preset]]) if (value !== null) $(id).value = String(value);
-    preferredVectorSource = saved.vectors.mode;
-    preferredVectorAnalysisKinds = sourceKinds;
-    preferredVectorComponents = saved.vectors.components.map(name => name ?? '');
+      ['compare-preset', saved.comparison.preset]]) if (value !== null) $(id).value = String(value);
     $('displacement-reference-frame').value = String(saved.displacement.referenceFrame + 1);
     $('displacement-minimum-image').checked = saved.displacement.minimumImage;
     displacement.enabled = Boolean(getFrame()) && saved.displacement.enabled;
     displacement.parameters = { referenceFrame: saved.displacement.referenceFrame, minimumImage: saved.displacement.minimumImage };
     tools.setToolEnabled('displacement', displacement.enabled);
-    $('vector-link-dimensions').checked = saved.vectors.linkDimensions;
-    $('vector-anchor').value = saved.vectors.anchor; $('vector-dimension').value = saved.vectors.dimension;
-    for (const [axis, scale] of saved.vectors.componentScales.entries()) $(`vector-scale-${'xyz'[axis]}`).value = String(scale);
-    vectorDimensions = Object.fromEntries(Object.entries(VECTOR_SIZE_IDS).map(([name, id]) => { $(id).value = String(saved.vectors[name]); return [name, saved.vectors[name]]; }));
     for (const kind of Object.keys(jobs)) {
       jobs[kind].enabled = Boolean(getFrame()) && saved[kind].enabled;
       jobs[kind].parameters = kind === 'bonds' ? { cutoff: saved.bonds.cutoff, pairCutoffs: saved.bonds.pairCutoffs.map(entry => ({ first: getFrame()?.typeLabels.indexOf(entry.first), second: getFrame()?.typeLabels.indexOf(entry.second), cutoff: entry.cutoff })).filter(entry => entry.first >= 0 && entry.second >= 0) }
@@ -686,15 +752,16 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
           : kind === 'localShear' ? { cutoff: saved[kind].cutoff, subtractMean: saved[kind].subtractMean }
             : { cutoff: saved[kind].cutoff, bins: saved[kind].bins, firstType: saved[kind].firstType, secondType: saved[kind].secondType };
       tools.setToolEnabled(JOBS[kind].tool, jobs[kind].enabled);
+      if (kind === 'bonds') onBondStateChange();
     }
     $('local-shear-subtract-mean').checked = saved.localShear.subtractMean;
     $('show-bonds').checked = saved.bonds.visible;
-    $('show-vectors').checked = saved.vectors.enabled; $('measure-mode').checked = saved.measurements.enabled;
+    $('show-vectors').checked = selectedVectorField().enabled; $('measure-mode').checked = saved.measurements.enabled;
     $('measure-pbc').checked = saved.measurements.minimumImage; measurements = [...saved.measurements.atomIds];
     $('compare-view').checked = saved.comparison.enabled;
     if (getFrame()) {
       configureSelectors(getFrame());
-      for (const [axis, name] of saved.vectors.components.entries()) $(`vector-${'xyz'[axis]}`).value = name ?? '';
+      for (const [axis, name] of selectedVectorField().components.entries()) $(`vector-${'xyz'[axis]}`).value = name ?? '';
       $('rdf-first-type').value = saved.rdf.firstType ?? ''; $('rdf-second-type').value = saved.rdf.secondType ?? '';
       await onFrame();
       if (!current()) return;
@@ -771,6 +838,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   for (const id of ['bonds-cutoff', 'local-shear-cutoff', 'local-shear-subtract-mean', 'reference-frame', 'reference-cutoff', 'rdf-cutoff', 'rdf-bins', 'rdf-first-type', 'rdf-second-type']) $(id).addEventListener('change', () => {
     const kind = id.startsWith('bonds') ? 'bonds' : id.startsWith('local') ? 'localShear' : id.startsWith('reference') ? 'referenceStrain' : 'rdf';
     if (jobs[kind].enabled) void run(kind);
+    if (kind === 'bonds') onBondParametersChange();
   });
   for (const id of ['show-bonds', 'bonds-radius']) $(id).addEventListener('change', () => {
     const result = getFrame()?.atomeyeResults?.bonds?.result;
@@ -780,11 +848,31 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   $('cancel-displacement').addEventListener('click', () => cancelDisplacement());
   for (const id of ['displacement-reference-frame', 'displacement-minimum-image'])
     $(id).addEventListener('change', () => { if (displacement.enabled) void runDisplacement(); });
-  $('vector-mode').addEventListener('change', () => { changed(); preferredVectorSource = $('vector-mode').value; preferredVectorAnalysisKinds.clear(); updateVectors(); });
+  $('vector-mode').addEventListener('change', () => { changed(); preferredVectorSource = $('vector-mode').value; preferredVectorAnalysisKinds.clear(); vectorResolvedComponents.delete(selectedVectorId); updateVectors(); });
   for (const [axis, id] of ['vector-x', 'vector-y', 'vector-z'].entries())
     $(id).addEventListener('change', () => { changed(); preferredVectorComponents[axis] = $(id).value; updateVectors(); });
   for (const id of ['vector-scale-x', 'vector-scale-y', 'vector-scale-z', 'vector-scale', 'vector-color', 'vector-anchor', 'vector-dimension', 'vector-link-dimensions', 'show-vectors'])
     $(id).addEventListener('change', () => { changed(); updateVectors(); });
+  for (const id of ['vector-up-mode', 'vector-up-x', 'vector-up-y', 'vector-up-z'])
+    $(id)?.addEventListener('change', () => { changed(); updateVectors(); });
+  $('vector-field-list')?.addEventListener('change', () => {
+    saveVectorEditor(); selectedVectorId = $('vector-field-list').value; loadVectorEditor(); updateVectors(); changed();
+  });
+  $('vector-field-name')?.addEventListener('change', () => { changed(); updateVectors(); });
+  $('add-vector-field')?.addEventListener('click', () => {
+    if (vectorFields.length >= 16) { notify('Display up to 16 vector fields.'); return; }
+    saveVectorEditor();
+    let index;
+    do { index = ++vectorSequence; } while (vectorFields.some(field => field.id === `vector-${index}`));
+    const palette = ['#f7a633', '#35b8cb', '#da6f96', '#77bf62', '#a38adb'];
+    const field = createVectorField({ id: `vector-${index}`, name: `Vector ${index}`, color: palette[(index - 1) % palette.length] });
+    vectorFields.push(field); selectedVectorId = field.id; loadVectorEditor(); updateVectors(); changed();
+  });
+  $('delete-vector-field')?.addEventListener('click', () => {
+    vectorSourceKinds.delete(selectedVectorId); vectorDataCache.delete(selectedVectorId); vectorResolvedComponents.delete(selectedVectorId); vectorFields = vectorFields.filter(field => field.id !== selectedVectorId);
+    if (!vectorFields.length) vectorFields = [createVectorField({ id: `vector-${++vectorSequence}`, name: `Vector ${vectorSequence}` })];
+    selectedVectorId = vectorFields[0].id; loadVectorEditor(); updateVectors(); changed();
+  });
   for (const [name, id] of Object.entries(VECTOR_SIZE_IDS)) $(id).addEventListener('change', () => {
     try {
       const value = number(id);
@@ -817,11 +905,6 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     if (comparison && $('compare-view').checked && view !== 'custom'
       && (id === 'compare-preset' || cameraViewPreset(comparison) !== view)) { comparison.setView(view); syncComparisonToolbar(); }
   });
-  $('export-rdf').addEventListener('click', () => {
-    const result = getFrame()?.atomeyeResults?.rdf?.result; if (!result) return;
-    const rows = ['r_A,g_r,count', ...Array.from(result.radii, (radius, index) => `${radius},${result.values[index]},${result.counts[index]}`)];
-    downloadBlob(new Blob([rows.join('\n') + '\n'], { type: 'text/csv' }), `${getFileStem()}-rdf.csv`);
-  });
   $('export-jpg').addEventListener('click', () => { if (getFrame()) renderer.exportJpg(`${getFileStem()}-frame-${getFrameIndex() + 1}.jpg`, getExportOptions()); });
   $('export-atom-indices').addEventListener('click', () => {
     const frame = getFrame(); if (!frame) return;
@@ -832,12 +915,15 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   $('cancel-frame-series').addEventListener('click', () => cancelBatch());
   $('export-multiview').addEventListener('click', () => void exportViews().catch(error => notify(error.message)));
 
-  syncVectorSourceUi();
+  loadVectorEditor(); syncVectorSourceUi();
 
   return { onFrame, reset, abortJobs, cancel, run, selected, customizePalette, filterVisibility, applyRadii,
-    updateStatistics, updateVectors, cancelVectorDependency, runDisplacement, cancelDisplacement, updateMeasurements, syncComparison, serialize, restore, setEnabled, cancelBatch,
+    getBondParameters: () => getFrame() ? readParameters('bonds', getFrame()) : null,
+    isEnabled: kind => Boolean(jobs[kind]?.enabled),
+    updateStatistics, updateVectors, renameProperty, cancelVectorDependency, runDisplacement, cancelDisplacement, updateMeasurements, syncComparison, serialize, restore, setEnabled, cancelBatch,
+    refreshProperties: () => { const frame = getFrame(); if (frame) configureSelectors(frame); updateVectors(); updateMeasurements(); },
     refresh: () => { updateStatistics(); updateMeasurements(); applyRadii(); },
-    deactivate: name => { if (name === 'statistics') cancel('rdf'); else if (name === 'displacement') cancelDisplacement(); else if (name === 'vectors') { $('show-vectors').checked = false; updateVectors(); } else if (JOBS[name]) cancel(name); },
+    deactivate: name => { if (name === 'statistics') cancel('rdf'); else if (name === 'displacement') cancelDisplacement(); else if (name === 'vectors') { for (const field of vectorFields) field.enabled = false; $('show-vectors').checked = false; updateVectors(); } else if (JOBS[name]) cancel(name); },
     failed: () => [...Object.entries(JOBS).filter(([, { prefix }]) => $(`${prefix}-state`).textContent === 'Failed').map(([kind]) => kind), ...($('displacement-state').textContent === 'Failed' ? ['displacement'] : [])],
     pendingColorProperties: () => [...Object.entries(JOBS).flatMap(([kind, { prefix, property }]) =>
       jobs[kind].enabled && property && $(`${prefix}-state`).textContent !== 'Failed'
@@ -850,6 +936,6 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
 }
 
 function cameraSnapshot(renderer) {
-  return Object.fromEntries(['yaw', 'pitch', 'distance', 'orthographicScale', 'projectionMode', 'target', 'pan'].map(name => [name, Array.isArray(renderer[name]) ? [...renderer[name]] : renderer[name]]));
+  return Object.fromEntries(['yaw', 'pitch', 'roll', 'fov', 'constrainUp', 'distance', 'orthographicScale', 'projectionMode', 'target', 'pan'].map(name => [name, Array.isArray(renderer[name]) ? [...renderer[name]] : renderer[name]]));
 }
 function restoreCamera(renderer, camera) { Object.assign(renderer, camera); renderer.setProjection(camera.projectionMode); renderer.requestRender(); }

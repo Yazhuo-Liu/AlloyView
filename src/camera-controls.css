@@ -1,0 +1,49 @@
+.camera-controls[hidden] { display: none; }
+.camera-controls { position: absolute; z-index: 12; top: 68px; left: 18px; width: min(392px, calc(100% - 36px)); max-height: calc(100% - 86px); display: flex; flex-direction: column; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--overlay-strong); color: var(--text-soft); box-shadow: var(--shadow); font-size: 11px; }
+.camera-controls > header { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+.camera-controls > header strong { font-size: 13px; }
+.camera-controls > header button { width: 28px; height: 26px; border: 0; border-radius: 4px; color: var(--text-soft); background: transparent; font-size: 21px; }
+.camera-controls > header button:hover { color: var(--cyan); background: var(--accent-soft); }
+.camera-controls-body { padding: 12px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.camera-controls fieldset { margin: 0 0 11px; padding: 9px; border: 1px solid var(--line); border-radius: 5px; min-width: 0; }
+.camera-controls legend { padding: 0 5px; font-weight: 600; color: var(--text-soft); }
+.camera-controls label { margin: 0; }
+.camera-controls input[type="number"], .camera-controls select { min-width: 0; width: 100%; height: 29px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--text-soft); background: var(--control-bg); font-size: 11px; }
+.camera-controls input[readonly] { color: var(--muted); background: var(--surface-soft); }
+.camera-controls input:disabled { opacity: .5; }
+.camera-controls input:focus-visible, .camera-controls select:focus-visible, #camera-trackball:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.camera-controls input[type="range"] { min-width: 0; width: 100%; margin: 4px 0; accent-color: var(--cyan); cursor: pointer; }
+.camera-triple { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.camera-triple label { display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: center; gap: 3px; }
+.camera-triple label > span { color: var(--muted); font-size: 10px; }
+.camera-orientation { display: flex; align-items: center; gap: 10px; }
+#camera-trackball { flex: 0 0 108px; width: 108px; height: 108px; border-radius: 50%; touch-action: none; cursor: grab; }
+#camera-trackball:active { cursor: grabbing; }
+.camera-globe-surface { fill: var(--surface-soft); stroke: var(--line-strong); }
+.camera-globe-ring { fill: none; stroke: var(--line-strong); }
+.camera-globe-center { fill: var(--text-soft); }
+#camera-trackball line { stroke-width: 2; }
+#camera-trackball text { fill: #0f172a; font: 700 9px system-ui, sans-serif; }
+.camera-angles { flex: 1; min-width: 0; }
+.camera-angle { display: grid; grid-template-columns: 48px minmax(35px, 1fr) 61px 8px; align-items: center; gap: 5px; padding: 3px 0; }
+.camera-angles .camera-angle { grid-template-columns: minmax(0, 1fr) 61px 8px; }
+.camera-angles .camera-angle > span:first-child { grid-column: 1 / -1; }
+.camera-upright { display: flex; align-items: center; gap: 7px; margin-bottom: 5px !important; }
+.camera-upright input { margin: 0; accent-color: var(--cyan); }
+.camera-setting { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); align-items: center; gap: 10px; margin-bottom: 6px !important; }
+.camera-zoom { display: grid; grid-template-columns: 48px minmax(0, 1fr); align-items: center; gap: 8px; }
+.camera-help { margin: 5px 0 12px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.camera-status { margin: 0; min-height: 0; color: var(--cyan); line-height: 1.5; }
+.view-toolbar #toggle-camera-controls { display: grid; place-items: center; }
+.view-toolbar #toggle-camera-controls[aria-expanded="true"] { color: var(--cyan); background: var(--accent-soft); }
+@media (max-width: 920px) {
+  .camera-controls { top: 61px; left: 12px; width: min(392px, calc(100% - 24px)); max-height: calc(100% - 75px); }
+  .camera-controls input[type="number"], .camera-controls select { height: 34px; font-size: 12px; }
+  .camera-controls-body { padding: 10px; }
+}
+@media (max-width: 380px) {
+  #camera-trackball { flex-basis: 90px; width: 90px; height: 90px; }
+  .camera-orientation { gap: 6px; }
+  .camera-angle { grid-template-columns: 40px minmax(20px, 1fr) 54px 8px; gap: 3px; }
+  .camera-angles .camera-angle { grid-template-columns: minmax(0, 1fr) 54px 8px; }
+}

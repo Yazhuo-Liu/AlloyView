@@ -174,10 +174,15 @@ export function colorsByProperty(property, limits = null, scheme = 'atomeye', hi
     throw new Error('The scalar color maximum must be greater than its minimum.');
   }
   const span = maximum - minimum;
+  // Avoid amplifying double-precision roundoff into apparent defects in an
+  // otherwise uniform field (for example, perfect-crystal Voronoi volumes).
+  // Keep source values and range bounds exact; an explicit range still maps
+  // every requested difference, even at this scale.
+  const uniform = !limits && span <= 32 * Number.EPSILON * Math.max(Math.abs(minimum), Math.abs(maximum));
   const colors = new Uint8Array(property.data.length * 3);
   for (let atom = 0; atom < property.data.length; atom += 1) {
     const value = property.data[atom];
-    const normalized = Number.isFinite(value) && span > 0 ? (value - minimum) / span : 0.5;
+    const normalized = Number.isFinite(value) && span > 0 && !uniform ? (value - minimum) / span : 0.5;
     colors.set(Number.isFinite(value) ? sampleColorMap(normalized, colorMap.stops) : [130, 130, 130], atom * 3);
   }
   return {

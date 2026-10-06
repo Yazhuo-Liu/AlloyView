@@ -34,6 +34,8 @@ uniform float uAnchor;
 uniform float uHeadLength;
 uniform bool uArrowHead;
 uniform bool uFlatMode;
+uniform bool uFixedUp;
+uniform vec3 uArrowUp;
 out vec3 vNormal;
 out vec3 vWorld;
 out float vAlong;
@@ -64,9 +66,9 @@ void main() {
     // Keep the complete world vector, including depth. Only the glyph's width
     // faces the camera, so rotating the view projects the original 3D direction.
     vec3 cameraBack = transpose(mat3(uView)) * vec3(0.0, 0.0, 1.0);
-    vec3 screenAcross = cross(cameraBack, direction);
+    vec3 screenAcross = uFixedUp ? cross(direction, uArrowUp) : cross(cameraBack, direction);
     across = length(screenAcross) > 1e-12 ? normalize(screenAcross)
-      : transpose(mat3(uView)) * vec3(1.0, 0.0, 0.0);
+      : uFixedUp ? across : transpose(mat3(uView)) * vec3(1.0, 0.0, 0.0);
   }
   vec3 up = cross(direction, across);
   vec2 extent = uExtent;
@@ -164,6 +166,7 @@ export function createFlatArrowMesh(head = false) {
 export const DEFAULT_VECTOR_OPTIONS = Object.freeze({
   visible: true, scale: 1, radius: 0.06, headRadius: 0.15, headLength: 0.3,
   anchor: 'tail', dimension: '3d', color: Object.freeze([0.97, 0.65, 0.20]),
+  upMode: 'camera', up: Object.freeze([0, 1, 0]),
 });
 
 export function normalizeVectorOptions(options = {}, previous = {}) {
@@ -176,6 +179,10 @@ export function normalizeVectorOptions(options = {}, previous = {}) {
   }
   if (!['tail', 'head', 'center'].includes(values.anchor)) throw new Error('Arrow anchoring must be tail, head or center.');
   if (!['3d', '2d'].includes(values.dimension)) throw new Error('Arrow geometry must be 3d or 2d.');
+  if (!['camera', 'fixed'].includes(values.upMode)) throw new Error('Arrow plane must face the camera or use a fixed up direction.');
+  if (!(Array.isArray(values.up) || ArrayBuffer.isView(values.up)) || values.up.length !== 3
+    || !Array.from(values.up).every(Number.isFinite) || Math.hypot(...values.up) < 1e-12) throw new Error('Arrow up direction requires three finite components and a nonzero length.');
+  values.up = Array.from(values.up);
   values.visible = Boolean(values.visible);
   values.color = parsePrimitiveColor(values.color);
   return values;
@@ -243,7 +250,7 @@ export class AtomPrimitiveLayer {
     this.uniforms = Object.fromEntries(['uPositions', 'uColors', 'uFractional', 'uTextureWidth', 'uView', 'uProjection',
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions', 'uSliceAxis', 'uSliceMaximum', 'uSliceMode', 'uSliceCount',
       'uSlicePlanes[0]', 'uVectorMode', 'uVectorColor', 'uScale', 'uRadius', 'uExtent',
-      'uAnchor', 'uHeadLength', 'uArrowHead', 'uFlatMode'].map(name => [name, gl.getUniformLocation(this.program, name)]));
+      'uAnchor', 'uHeadLength', 'uArrowHead', 'uFlatMode', 'uFixedUp', 'uArrowUp'].map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.textures = Array.from({ length: 3 }, () => {
       const texture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -261,6 +268,7 @@ export class AtomPrimitiveLayer {
     this.bondBuffers = this.instances();
     this.vectorBuffers = this.instances();
     this.bonds = this.vectors = null;
+    this.vectorFields = [];
     this.bondOptions = { visible: true, radius: 0.08 };
     this.vectorOptions = normalizeVectorOptions();
   }
@@ -285,13 +293,7 @@ export class AtomPrimitiveLayer {
     if (this.height > maximum) throw new Error('The structure exceeds this GPU’s atom texture capacity.');
     this.positionValues = new Float32Array(this.width * this.height * 4);
     this.colorValues = new Uint8Array(this.width * this.height * 4);
-    const fractional = new Float32Array(this.width * this.height * 4);
-    for (let atom = 0; atom < count; atom += 1) {
-      fractional[atom * 4] = renderer.frame.fractional[atom * 3];
-      fractional[atom * 4 + 1] = renderer.frame.fractional[atom * 3 + 1];
-      fractional[atom * 4 + 2] = renderer.frame.fractional[atom * 3 + 2];
-    }
-    this.uploadTexture(2, fractional, gl.RGBA32F, gl.FLOAT);
+    this.fractionalValues = new Float32Array(this.width * this.height * 4);
     this.updatePositions(renderer);
     this.updateColors(colors);
   }
@@ -311,14 +313,21 @@ export class AtomPrimitiveLayer {
   }
 
   updatePositions(renderer, regenerateShifts = true) {
+    const fractional = renderer.displayFractional ?? renderer.frame.fractional;
     for (let atom = 0; atom < renderer.atomCount; atom += 1) {
       const index = atom * 3, target = atom * 4;
       this.positionValues[target] = renderer.displayPositions[index];
       this.positionValues[target + 1] = renderer.displayPositions[index + 1];
       this.positionValues[target + 2] = renderer.displayPositions[index + 2];
       this.positionValues[target + 3] = renderer.visibility?.[atom] === 0 ? 0 : 1;
+      if (this.fractionalValues) {
+        this.fractionalValues[target] = fractional[index];
+        this.fractionalValues[target + 1] = fractional[index + 1];
+        this.fractionalValues[target + 2] = fractional[index + 2];
+      }
     }
     this.uploadTexture(0, this.positionValues, this.gl.RGBA32F, this.gl.FLOAT);
+    if (this.fractionalValues && regenerateShifts) this.uploadTexture(2, this.fractionalValues, this.gl.RGBA32F, this.gl.FLOAT);
     if (this.bonds && regenerateShifts) this.uploadShifts(this.bondBuffers, bondDisplayShifts(this.bonds, renderer.frame, renderer.displayPositions));
   }
 
@@ -361,19 +370,45 @@ export class AtomPrimitiveLayer {
   }
 
   setVectors(renderer, values, options = {}) {
-    if (values && (!(values instanceof Float32Array) || values.length !== renderer.atomCount * 3)) throw new Error('The vector array does not match the current frame.');
-    this.vectorOptions = normalizeVectorOptions(options, this.vectorOptions);
-    const unchanged = values && values === this.vectors;
-    this.vectors = values;
-    if (values && !unchanged) {
-      const indices = new Uint32Array(renderer.atomCount * 2);
-      // Invalid/zero vectors produce no fragments in the shader. Keep source
-      // indexing so slices and repeated cells use the original atom directly.
-      for (let atom = 0; atom < renderer.atomCount; atom += 1) {
-        indices[atom * 2] = indices[atom * 2 + 1] = atom;
+    const settings = normalizeVectorOptions(options, this.vectorOptions);
+    this.setVectorFields(renderer, values ? [{ id: 'legacy', vectors: values, options: settings }] : []);
+    this.vectorOptions = settings;
+  }
+
+  setVectorFields(renderer, fields = []) {
+    if (!Array.isArray(fields)) throw new Error('Vector fields must be an array.');
+    const previous = new Map((this.vectorFields ?? []).map(field => [field.id, field]));
+    const ids = new Set();
+    // Validate every field before changing buffers, so one bad field cannot
+    // discard other arrows already on screen.
+    const next = fields.map(field => {
+      if (!field || typeof field.id !== 'string' || !field.id || ids.has(field.id)) throw new Error('Vector fields require unique nonempty IDs.');
+      ids.add(field.id);
+      if (!(field.vectors instanceof Float32Array) || field.vectors.length !== renderer.atomCount * 3) throw new Error('The vector array does not match the current frame.');
+      return { id: field.id, vectors: field.vectors, options: normalizeVectorOptions(field.options, previous.get(field.id)?.options) };
+    });
+    let indices;
+    for (const field of next) {
+      const old = previous.get(field.id);
+      field.buffers = old?.buffers ?? (next[0] === field && ![...previous.values()].some(item => item.buffers === this.vectorBuffers)
+        ? this.vectorBuffers : this.instances());
+      if (old?.vectors !== field.vectors) {
+        indices ??= Uint32Array.from({ length: renderer.atomCount * 2 }, (_, index) => index >> 1);
+        // Original atom indices keep all fields aligned with slices and replicas.
+        this.uploadInstances(field.buffers, indices, field.vectors);
       }
-      this.uploadInstances(this.vectorBuffers, indices, values);
-    } else if (!values) this.releaseInstances(this.vectorBuffers);
+    }
+    for (const field of previous.values()) if (!ids.has(field.id)) {
+      this.releaseInstances(field.buffers);
+      if (field.buffers !== this.vectorBuffers) {
+        for (const name of ['indices', 'vectors', 'shifts']) this.gl.deleteBuffer?.(field.buffers[name]);
+        this.gl.deleteVertexArray?.(field.buffers.vao);
+      }
+    }
+    if (!next.length && !previous.size) this.releaseInstances(this.vectorBuffers);
+    this.vectorFields = next;
+    this.vectors = next[0]?.vectors ?? null;
+    if (next[0]) this.vectorOptions = next[0].options;
   }
 
   releaseInstances(buffers) {
@@ -388,12 +423,12 @@ export class AtomPrimitiveLayer {
   clearInstances() {
     this.bonds = this.vectors = null;
     this.releaseInstances(this.bondBuffers);
-    this.releaseInstances(this.vectorBuffers);
+    this.setVectorFields({ atomCount: 0 }, []);
   }
 
   clear() {
     this.clearInstances();
-    this.positionValues = this.colorValues = null;
+    this.positionValues = this.colorValues = this.fractionalValues = null;
     this.width = this.height = 1;
     this.uploadTexture(0, new Float32Array(4), this.gl.RGBA32F, this.gl.FLOAT);
     this.uploadTexture(1, new Uint8Array(4), this.gl.RGBA8, this.gl.UNSIGNED_BYTE);
@@ -437,7 +472,8 @@ export class AtomPrimitiveLayer {
   }
 
   render(renderer) {
-    if ((!this.bonds || !this.bondOptions.visible) && (!this.vectors || !this.vectorOptions.visible)) return;
+    const fields = this.vectorFields ?? (this.vectors ? [{ vectors: this.vectors, options: this.vectorOptions, buffers: this.vectorBuffers }] : []);
+    if ((!this.bonds || !this.bondOptions.visible) && !fields.some(field => field.options.visible)) return;
     const gl = this.gl, u = this.uniforms;
     gl.useProgram(this.program);
     for (let index = 0; index < 3; index += 1) {
@@ -454,34 +490,42 @@ export class AtomPrimitiveLayer {
     gl.uniform1i(u.uSliceMode, renderer.sliceMode === 'planes' ? 1 : 0);
     gl.uniform1i(u.uSliceCount, renderer.sliceCount ?? 0);
     gl.uniform4fv(u['uSlicePlanes[0]'], renderer.slicePlaneValues);
-    gl.uniform3f(u.uVectorColor, ...this.vectorOptions.color);
-    gl.uniform1f(u.uAnchor, { tail: 0, head: -1, center: -0.5 }[this.vectorOptions.anchor]);
-    gl.uniform1f(u.uHeadLength, this.vectorOptions.headLength);
+    const firstOptions = this.vectorOptions;
     for (const replica of renderer.replicas) {
       gl.uniform3f(u.uReplicaOffset, ...replica.offset);
       gl.uniform3f(u.uReplicaIndex, ...replica.indices);
       if (this.bonds && this.bondOptions.visible) this.drawMesh(this.bondBuffers, this.cylinder, this.bondOptions.radius, 1, [0, 1], false);
-      if (this.vectors && this.vectorOptions.visible) {
-        const { scale, radius, headRadius, dimension } = this.vectorOptions;
+      for (const field of fields) if (field.options.visible) {
+        this.vectorOptions = field.options;
+        gl.uniform3f(u.uVectorColor, ...field.options.color);
+        gl.uniform1f(u.uAnchor, { tail: 0, head: -1, center: -0.5 }[field.options.anchor]);
+        gl.uniform1f(u.uHeadLength, field.options.headLength);
+        gl.uniform1i(u.uFixedUp, field.options.upMode === 'fixed' ? 1 : 0);
+        gl.uniform3f(u.uArrowUp, ...field.options.up);
+        const { scale, radius, headRadius, dimension } = field.options;
         const flat = dimension === '2d';
-        this.drawMesh(this.vectorBuffers, flat ? this.flatShaft : this.cylinder, radius, scale, [0, 1], true);
-        this.drawMesh(this.vectorBuffers, flat ? this.flatHead : this.cone, headRadius, scale, [0, 1], true, true);
+        this.drawMesh(field.buffers, flat ? this.flatShaft : this.cylinder, radius, scale, [0, 1], true);
+        this.drawMesh(field.buffers, flat ? this.flatHead : this.cone, headRadius, scale, [0, 1], true, true);
       }
     }
+    this.vectorOptions = firstOptions;
     gl.activeTexture(gl.TEXTURE0);
   }
 
   extendBounds(renderer, minimum, maximum) {
-    if (!this.vectors || !this.vectorOptions.visible) return;
-    const { scale, radius, headRadius = DEFAULT_VECTOR_OPTIONS.headRadius, anchor = 'tail' } = this.vectorOptions;
-    const shift = { tail: 0, head: -1, center: -0.5 }[anchor], padding = Math.max(radius, headRadius);
-    for (let offset = 0; offset < this.vectors.length; offset += 3) {
-      if (!Number.isFinite(this.vectors[offset]) || !Number.isFinite(this.vectors[offset + 1]) || !Number.isFinite(this.vectors[offset + 2])) continue;
-      for (let axis = 0; axis < 3; axis += 1) {
-        const delta = this.vectors[offset + axis] * scale;
-        const tail = renderer.displayPositions[offset + axis] + delta * shift, tip = tail + delta;
-        minimum[axis] = Math.min(minimum[axis], Math.min(tail, tip) + (renderer.minimumOffset?.[axis] ?? 0) - padding);
-        maximum[axis] = Math.max(maximum[axis], Math.max(tail, tip) + (renderer.maximumOffset?.[axis] ?? 0) + padding);
+    const fields = this.vectorFields ?? (this.vectors ? [{ vectors: this.vectors, options: this.vectorOptions }] : []);
+    for (const { vectors, options } of fields) {
+      if (!options.visible) continue;
+      const { scale, radius, headRadius = DEFAULT_VECTOR_OPTIONS.headRadius, anchor = 'tail' } = options;
+      const shift = { tail: 0, head: -1, center: -0.5 }[anchor], padding = Math.max(radius, headRadius);
+      for (let offset = 0; offset < vectors.length; offset += 3) {
+        if (!Number.isFinite(vectors[offset]) || !Number.isFinite(vectors[offset + 1]) || !Number.isFinite(vectors[offset + 2])) continue;
+        for (let axis = 0; axis < 3; axis += 1) {
+          const delta = vectors[offset + axis] * scale;
+          const tail = renderer.displayPositions[offset + axis] + delta * shift, tip = tail + delta;
+          minimum[axis] = Math.min(minimum[axis], Math.min(tail, tip) + (renderer.minimumOffset?.[axis] ?? 0) - padding);
+          maximum[axis] = Math.max(maximum[axis], Math.max(tail, tip) + (renderer.maximumOffset?.[axis] ?? 0) + padding);
+        }
       }
     }
   }

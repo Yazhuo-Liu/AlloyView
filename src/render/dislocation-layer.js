@@ -3,6 +3,7 @@ import { DXA_FAMILIES, splitPeriodicPolyline } from '../analysis/dxa.js';
 import { parsePrimitiveColor } from './atom-primitives.js';
 import { appendDislocationTube, createDislocationCurve } from './dislocation-curves.js';
 import { MAX_SLICES, SLICE_EPSILON } from './slicing.js';
+import { translatePeriodicPoints } from './periodic-origin.js';
 
 // A dislocation is a geometric curve, not a bond between two atom indices.
 // Keep the connected source-cell tube pieces in one indexed buffer. Periodic display
@@ -93,7 +94,7 @@ function pointArray(points) {
 /** Source-cell edge data retained for consumers of the original display helper.
  * The renderer uses the continuous tube mesh below, rather than these edges.
  */
-export function createDislocationInstances(network, cell, options = {}) {
+export function createDislocationInstances(network, cell, options = {}, display = {}) {
   const settings = normalizeDislocationOptions(options), values = [];
   const families = DXA_FAMILIES[network?.parameters?.lattice ?? 'fcc'] ?? [];
   const colors = new Map(families.map(family => [family.id, normalizedColor(family.color)]));
@@ -104,7 +105,8 @@ export function createDislocationInstances(network, cell, options = {}) {
     const family = segment.familyId ?? segment.family ?? 'other';
     if ((selected && !selected.has(family)) || settings.familyVisibility[family] === false) continue;
     const color = settings.familyColors[family] ?? colors.get(family) ?? [0.88, 0.34, 0.34];
-    const curves = splitPeriodicPolyline(pointArray(segment.points), cell);
+    const points = translatePeriodicPoints(pointArray(segment.points), cell, display.periodicOrigin);
+    const curves = display.coordinateMode === 'unwrapped' ? [points] : splitPeriodicPolyline(points, cell);
     for (const points of curves) {
       for (let offset = 0; offset < points.length - 3; offset += 3) {
         const first = [points[offset], points[offset + 1], points[offset + 2]];
@@ -122,7 +124,7 @@ export function createDislocationInstances(network, cell, options = {}) {
 }
 
 /** Build smooth, connected source-cell tubes without altering analysis data. */
-export function createDislocationTubeGeometry(network, cell, options = {}) {
+export function createDislocationTubeGeometry(network, cell, options = {}, display = {}) {
   const settings = normalizeDislocationOptions(options), values = [], indices = [], curves = [];
   const families = DXA_FAMILIES[network?.parameters?.lattice ?? 'fcc'] ?? [];
   const colors = new Map(families.map(family => [family.id, normalizedColor(family.color)]));
@@ -133,7 +135,8 @@ export function createDislocationTubeGeometry(network, cell, options = {}) {
     const family = segment.familyId ?? segment.family ?? 'other';
     if ((selected && !selected.has(family)) || settings.familyVisibility[family] === false) continue;
     const color = settings.familyColors[family] ?? colors.get(family) ?? [0.88, 0.34, 0.34];
-    for (const curve of createDislocationCurve(pointArray(segment.points), cell, segment.closed ?? null)) {
+    const points = translatePeriodicPoints(pointArray(segment.points), cell, display.periodicOrigin);
+    for (const curve of createDislocationCurve(points, cell, segment.closed ?? null, { wrap: display.coordinateMode !== 'unwrapped' })) {
       const mesh = appendDislocationTube(values, indices, curve, color);
       curves.push({ segmentId: segment.id, familyId: family, ...mesh });
       for (let index = 0; index < mesh.points.length; index += 3) {
@@ -211,8 +214,9 @@ export class DislocationLayer {
   setNetwork(renderer, network, options = {}) {
     const normalized = normalizeDislocationOptions(options, this.options);
     const appearanceKey = JSON.stringify([normalized.visibleFamilies, normalized.familyVisibility, normalized.familyColors]);
-    if (network && (this.network !== network || this.cell !== renderer.frame.cell || this.appearanceKey !== appearanceKey)) {
-      const geometry = createDislocationTubeGeometry(network, renderer.frame.cell, normalized);
+    const displayKey = JSON.stringify([renderer.periodicOrigin ?? [0, 0, 0], renderer.coordinateMode ?? 'wrapped']);
+    if (network && (this.network !== network || this.cell !== renderer.frame.cell || this.appearanceKey !== appearanceKey || this.displayKey !== displayKey)) {
+      const geometry = createDislocationTubeGeometry(network, renderer.frame.cell, normalized, renderer);
       this.minimum = geometry.minimum;
       this.maximum = geometry.maximum;
       this.count = geometry.count;
@@ -230,6 +234,7 @@ export class DislocationLayer {
     this.network = network;
     this.cell = renderer.frame?.cell ?? null;
     this.appearanceKey = appearanceKey;
+    this.displayKey = displayKey;
   }
 
   clear() {

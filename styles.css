@@ -373,6 +373,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .tool-selector { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .tool-selector-heading, .tool-panel-toolbar { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .tool-selector-heading { margin-bottom: 5px; }
+.tool-category-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; margin: 12px 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-soft); }
+.tool-category-tabs button { min-width: 0; min-height: 42px; padding: 6px 7px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); font-size: 11px; line-height: 1.35; cursor: pointer; touch-action: manipulation; }
+.tool-category-tabs button:hover { color: var(--text); background: var(--button-hover); }
+.tool-category-tabs button[aria-selected="true"] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent-text); }
+.tool-selector[data-tool-category-panel="modification"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .tool-selector button[data-tool-button] { position: relative; min-width: 0; min-height: 38px; padding: 7px 6px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--muted); font-size: 10px; cursor: pointer; }
 .tool-selector button[data-tool-button]:hover { color: var(--text); background: var(--button-hover); border-color: var(--accent-line); }
 .tool-selector button[data-tool-button].active { color: var(--accent-text); background: var(--accent-soft); border-color: var(--cyan); }
@@ -455,6 +460,33 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
 .slice-settings input[aria-invalid="true"] { border-color: var(--danger-text); }
 .configuration-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 #configuration-section .help { margin-top: 10px; }
+.periodic-origin-controls .triple-fields, .slice-pick-actions { margin-top: 12px; }
+.periodic-origin-actions, .slice-pick-actions, .vector-field-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.periodic-origin-actions { margin-top: 10px; }
+.periodic-origin-actions .button, .slice-atom-controls .button, .vector-field-actions .button { min-width: 0; padding: 6px 8px; font-size: 10px; line-height: 1.3; }
+.slice-from-atoms-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.slice-from-atoms-actions #slice-to-atom { grid-column: 1 / -1; }
+.slice-atom-controls { margin-bottom: 15px; }
+.slice-pick-actions button[aria-pressed="true"] { border-color: var(--cyan); background: var(--accent-soft); color: var(--accent-text); }
+.vector-field-controls { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.vector-field-controls > .field:first-child { margin-top: 0; }
+.vector-field-actions { margin-top: 8px; }
+.vector-field-controls input[type="text"], .external-property-section input[type="text"] { min-width: 0; width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-soft); background: var(--control-bg); }
+.vector-field-controls input[type="text"]:disabled, .external-property-section input[type="text"]:disabled { color: var(--disabled-text); background: var(--disabled-bg); }
+.external-property-list { display: grid; gap: 10px; margin-top: 14px; overflow-wrap: anywhere; }
+.external-property-list:empty { display: none; }
+.external-property-list .external-property-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
+.external-property-file-group { padding: 10px; border: 1px solid var(--line); border-radius: 6px; display: grid; gap: 8px; }
+.external-property-file-group .hint { margin: 0; color: var(--muted); }
+.external-property-file-group button { min-height: 36px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--text-soft); cursor: pointer; }
+.external-property-file-group button:hover { border-color: var(--cyan); color: var(--cyan); }
+.external-property-file-group button:disabled { color: var(--disabled-text); background: var(--disabled-bg); cursor: default; }
+@media (max-width: 380px) {
+  .external-property-list .external-property-row { grid-template-columns: 1fr 1fr; }
+  .external-property-list .external-property-row input { grid-column: 1 / -1; }
+}
+.external-property-list .external-property-row input { min-width: 0; }
+.external-property-list .external-property-row button { min-height: 36px; }
 .vector-size-fields label { min-width: 0; }
 .vector-size-fields span { font-size: 10px; }
 .help { color: var(--subtle); font-size: 9px; line-height: 1.5; margin: 10px 0 0; }
@@ -531,6 +563,39 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
 .statistics-chart table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .statistics-chart td { padding: 6px; border-bottom: 1px solid var(--line); text-align: right; }
 .statistics-chart td:first-child { text-align: left; }
+.advanced-analysis-heading { align-items: center; margin: 0; }
+.advanced-analysis-heading h3 { margin-top: 0; }
+.bond-statistics-section .paired-fields .field, .voronoi-face-filter-controls .field { min-width: 0; }
+.analysis-backend-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 10px; }
+.analysis-backend-row output { text-align: right; color: var(--text-soft); }
+.analysis-progress { display: block; width: 100%; height: 6px; margin: 10px 0; border: 0; border-radius: 99px; overflow: hidden; accent-color: var(--cyan); background: var(--range-track); }
+.analysis-progress::-webkit-progress-bar { border-radius: 99px; background: var(--range-track); }
+.analysis-progress::-webkit-progress-value { border-radius: 99px; background: var(--cyan); }
+.analysis-progress::-moz-progress-bar { border-radius: 99px; background: var(--cyan); }
+.analysis-statistics-results { min-width: 0; margin-top: 16px; }
+.statistics-result-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 18px; }
+.statistics-result-heading h4 { min-width: 0; margin: 0; color: var(--text-soft); font-size: 11px; font-weight: 650; }
+.statistics-export-button { flex: 0 0 auto; min-height: 30px; padding: 4px 8px; font-size: 10px; }
+.statistics-export-actions { margin-top: 12px; }
+.statistics-export-actions .button { min-width: 0; padding: 7px 8px; font-size: 10px; }
+.statistics-csv-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.statistics-csv-actions .button { min-width: 0; padding: 7px 8px; font-size: 10px; line-height: 1.35; }
+.statistics-csv-all-atoms { grid-column: 1 / -1; }
+.analysis-statistics-results .statistics-chart { max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+.analysis-statistics-results .statistics-chart table { font-size: 10px; }
+.statistics-chart th { padding: 6px; border-bottom: 1px solid var(--line-strong); color: var(--text-soft); font-size: 9px; font-weight: 650; text-align: right; }
+.statistics-chart th:first-child { text-align: left; }
+.statistics-chart caption { margin-bottom: 8px; color: var(--muted); font-size: 10px; text-align: left; }
+.distribution-values { max-width: 100%; margin-top: 5px; overflow-x: auto; }
+.distribution-values > summary { padding: 7px 0; color: var(--text-soft); font-size: 10px; cursor: pointer; }
+.statistics-population-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
+.statistics-population-controls .button { min-height: 32px; padding: 0 8px; font-size: 10px; }
+.statistics-population-controls > span { color: var(--muted); font-size: 10px; }
+@media (max-width: 920px) {
+  .statistics-export-button { min-height: 38px; }
+  .statistics-population-controls .button { min-height: 38px; }
+  .bond-statistics-section .tool-run-button, .voronoi-section .tool-run-button, .statistics-export-actions .button, .statistics-csv-actions .button { min-height: 42px; }
+}
 .atom-search-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; gap: 7px; margin-bottom: 15px; }
 .atom-search-row .field { min-width: 0; margin: 0; }
 .atom-search-row button { padding-inline: 10px; }

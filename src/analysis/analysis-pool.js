@@ -1,5 +1,7 @@
 import { CSP_SUMMARY_FIELDS } from './centrosymmetry.js';
 import { MAX_BONDS } from './bonds.js';
+import { mergeBondStatisticsPartials } from './bond-statistics.js';
+import { VORONOI_FIELDS, mergeVoronoiPartials } from './voronoi.js';
 import { finalizeRdf } from './rdf.js';
 import { modalCoordination, shearInvariant } from './local-shear.js';
 import { REFERENCE_STRAIN_FIELDS } from './reference-strain.js';
@@ -18,6 +20,8 @@ const STRAIN_OUTPUT_FIELDS = Object.fromEntries(['atomicShearStrain', 'atomicHyd
 const INPUT_ARRAY_FIELDS = ['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput', 'currentPositions', 'referencePositions'];
 const EXTRA_OUTPUT_FIELDS = {
   bonds: { coordination: [Uint32Array, 1] },
+  bondStatistics: { coordination: [Uint32Array, 1], q4: [Float32Array, 1], q6: [Float32Array, 1] },
+  voronoi: VORONOI_FIELDS,
   rdf: {},
   localShearCoordination: { coordination: [Uint32Array, 1] },
   localShearMetrics: { metrics: [Float64Array, 6] },
@@ -297,7 +301,7 @@ export class AnalysisPool {
       }
       extraBytes += parameters.structureInput.byteLength;
     }
-    if (['strain', 'bonds', 'rdf'].includes(parameters.kind)) {
+    if (['strain', 'bonds', 'rdf', 'bondStatistics'].includes(parameters.kind)) {
       inputs.types = frame.types;
       if (!ArrayBuffer.isView(frame.types) || frame.types.length !== atomCount) throw new Error('Analysis requires one element type per atom.');
       extraBytes += frame.types.byteLength;
@@ -336,7 +340,8 @@ export class AnalysisPool {
       + (parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput) ? PTM_INITIAL_HEAP_BYTES : 0);
     let workerCount = Math.min(this.limit, chooseWorkerCount(atomCount,
       copyBytes, this.environment,
-      ['coordination', 'displacement'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000 : 4_096));
+      parameters.kind === 'voronoi' ? 512
+        : ['coordination', 'displacement'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000 : 4_096));
     // Common PTM phases need only their central-atom rows. Their aggregate
     // private tables occupy one table, while multishell templates need a full
     // source table in each worker for neighbors-of-neighbors callbacks.
@@ -396,7 +401,8 @@ export class AnalysisPool {
       }));
       if (controller.signal.aborted) throw abortError();
       const metadata = { elapsedMs: performance.now() - startedAt, workerCount, sharedMemory,
-        engine: `${parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput) ? 'ptm-wasm' : 'js'}-worker${workerCount === 1 ? '' : `-pool×${workerCount}`}` };
+        engine: `${parameters.kind === 'voronoi' ? 'voro++-wasm'
+          : parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput) ? 'ptm-wasm' : 'js'}-worker${workerCount === 1 ? '' : `-pool×${workerCount}`}` };
       if (parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput)) {
         metadata.kernelInitializations = partials.filter((partial) => !partial.kernelReused).length;
       }
@@ -415,6 +421,9 @@ export class AnalysisPool {
           warning: partials.find((partial) => partial.warning)?.warning ?? null };
       }
       if (EXTRA_OUTPUT_FIELDS[parameters.kind]) {
+        if (parameters.kind === 'voronoi') {
+          return { ...metadata, ...mergeVoronoiPartials(partials, atomCount, { bins: parameters.bins ?? 50 }) };
+        }
         const fields = EXTRA_OUTPUT_FIELDS[parameters.kind];
         const values = Object.fromEntries(Object.entries(fields).map(([name, [Type, stride]]) => [name, new Type(atomCount * stride)]));
         for (const partial of partials) {
@@ -425,6 +434,9 @@ export class AnalysisPool {
           const counts = new Float64Array(parameters.bins ?? 100);
           for (const partial of partials) for (let bin = 0; bin < counts.length; bin += 1) counts[bin] += partial.counts[bin];
           return { ...metadata, ...finalizeRdf(counts, partials[0].normalization) };
+        }
+        if (parameters.kind === 'bondStatistics') {
+          return { ...metadata, ...mergeBondStatisticsPartials(partials, values) };
         }
         if (parameters.kind === 'bonds') {
           const count = partials.reduce((sum, partial) => sum + partial.count, 0), maxBonds = parameters.maxBonds ?? MAX_BONDS;

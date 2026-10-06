@@ -1,6 +1,5 @@
 import { add, scale } from './math.js';
 
-const MAX_ORBIT_PITCH = Math.PI / 2 - 0.008;
 const TAP_DISTANCE = 4;
 
 // Pointer Events keep mouse controls and touch gestures on the same canvas.
@@ -91,13 +90,17 @@ export function installCameraInteractions(renderer) {
     return 2 * halfHeight / Math.max(1, canvas.clientHeight);
   }
   function zoom(factor) {
-    if (renderer.projectionMode === 'orthographic') renderer.orthographicScale = Math.max(0.02, renderer.orthographicScale * factor);
+    if (renderer.projectionMode === 'orthographic') {
+      const aspect = Math.max(1, canvas.width || canvas.clientWidth || 1)
+        / Math.max(1, canvas.height || canvas.clientHeight || 1);
+      // Match the precise field-width control, so wheel/pinch gestures do not
+      // jump out of a valid narrow parallel view after a numeric edit.
+      renderer.orthographicScale = Math.max(0.001 / (2 * aspect), renderer.orthographicScale * factor);
+    }
     else renderer.distance = Math.max(0.02, renderer.distance * factor);
   }
   function rotate(dx, dy) {
-    renderer.yaw -= dx * 0.008;
-    // Keep global Z upright and prevent rolling over an orbit pole.
-    renderer.pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, renderer.pitch + dy * 0.008));
+    renderer.orbitCamera(-dx * 0.008, dy * 0.008);
   }
   function pan(dx, dy) {
     const { right, up } = renderer.cameraBasis();

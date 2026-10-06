@@ -612,7 +612,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await evaluate(`if (document.getElementById('toggle-atom-details').getAttribute('aria-expanded') === 'true') document.getElementById('toggle-atom-details').click()`);
   await waitFor('document.getElementById("atom-details").hidden && document.getElementById("atom-details").inert', 'second viewport available after collapsing Atom details');
   const secondRenderer = 'window.atomToolsRenderers.find(view => view.frame && view.canvas.id !== "viewport")';
-  const cameraFields = ['yaw', 'pitch', 'distance', 'orthographicScale', 'projectionMode', 'target', 'pan'];
+  const cameraFields = ['yaw', 'pitch', 'roll', 'fov', 'constrainUp', 'distance', 'orthographicScale', 'projectionMode', 'target', 'pan'];
   const cameraSnapshot = renderer => `Object.fromEntries(${JSON.stringify(cameraFields)}.map(key => [key, ${renderer}[key]]))`;
   async function secondCanvasPoint() {
     return evaluate(`(() => {
@@ -944,6 +944,8 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
 
   const namedRecipe = structuredClone(recipe);
   namedRecipe.settings.extensions.vectors.mode = namedStrainSource;
+  const namedVectors = namedRecipe.settings.extensions.vectors;
+  namedVectors.fields.find(field => field.id === namedVectors.selectedId).mode = namedStrainSource;
   const namedRecipePath = resolve(profile, 'named-strain-vector-recipe.json');
   await writeFile(namedRecipePath, JSON.stringify(namedRecipe));
 
@@ -1003,6 +1005,10 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   // cancellation must recognize the pending output of its enabled analysis.
   const customRecipe = structuredClone(recipe);
   Object.assign(customRecipe.settings.extensions.vectors, { mode: 'generic', components: ['referenceE11', 'force_1', 'force_2'], enabled: true });
+  const customVectors = customRecipe.settings.extensions.vectors;
+  Object.assign(customVectors.fields.find(field => field.id === customVectors.selectedId), {
+    mode: 'generic', components: ['referenceE11', 'force_1', 'force_2'], enabled: true,
+  });
   const customRecipePath = resolve(profile, 'custom-pending-vector-recipe.json');
   await writeFile(customRecipePath, JSON.stringify(customRecipe));
   await evaluate(`(async () => {
@@ -1059,7 +1065,10 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
     await click('cancel-reference-strain');
     assert.equal(await evaluate('document.getElementById("local-shear-state").textContent'), 'Calculating…', 'the unrelated analysis remains pending at cancellation');
     await assertArrowVisibilityInBothViews(false, 'cancelling a fresh named source turns arrows off despite another enabled pending calculation');
-    assert.equal(await evaluate('document.getElementById("vector-mode").value'), 'generic', 'the cancelled named source cannot keep waiting on unrelated work');
+    assert.equal(await evaluate('document.getElementById("vector-mode").value'), '', 'a cancelled named field preserves its unavailable source');
+    assert.equal(await evaluate('document.getElementById("vector-mode").selectedOptions[0].disabled'), true);
+    assert.doesNotMatch(await evaluate('document.getElementById("vector-mode").selectedOptions[0].text'), /Waiting/, 'the cancelled named source cannot keep waiting on unrelated work');
+    assert.equal((await exportConfiguration()).settings.extensions.vectors.mode, namedStrainSource, 'the disabled field remembers its source for a later calculation');
     await evaluate('window.releaseNamedRestore(); window.releaseUnrelatedRestore(); window.restoreNamedReplayHook()');
     await waitFor('document.getElementById("local-shear-state").textContent === "Calculated"', 'unrelated calculation completes after named-source cancellation');
     assert.equal(await evaluate('document.getElementById("reference-strain-state").textContent'), 'Not calculated');
@@ -1089,6 +1098,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
 
   const disabled = structuredClone(recipe);
   for (const kind of ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'comparison']) disabled.settings.extensions[kind].enabled = false;
+  for (const field of disabled.settings.extensions.vectors.fields) field.enabled = false;
   disabled.settings.extensions.appearance = { atoms: [], elements: [] };
   disabled.settings.display.colorMode = 'type';
   const disabledPath = resolve(profile, 'atom-tools-disabled.json');
@@ -1106,6 +1116,8 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
 
   const legacyDisplacement = structuredClone(disabled);
   delete legacyDisplacement.settings.extensions.displacement;
+  delete legacyDisplacement.settings.extensions.vectors.fields;
+  delete legacyDisplacement.settings.extensions.vectors.selectedId;
   Object.assign(legacyDisplacement.settings.extensions.vectors, { mode: 'displacement', enabled: false, referenceFrame: 0, minimumImage: true });
   const legacyPath = resolve(profile, 'legacy-displacement-vector.json');
   await writeFile(legacyPath, JSON.stringify(legacyDisplacement));

@@ -104,6 +104,62 @@ test('vector display retains source data and reuses instances when scaling', () 
   assert.equal(layer.vectorOptions.scale, 2);
 });
 
+test('multiple arrow fields keep independent GPU buffers, reuse settings edits and release removed groups', () => {
+  const { layer, uploads } = layerFixture(), renderer = { atomCount: 2 };
+  Object.assign(layer.gl, { createBuffer: () => ({}), createVertexArray: () => ({}) });
+  const forces = new Float32Array([1, 0, 0, 2, 0, 0]), velocities = new Float32Array([0, 3, 0, 0, 4, 0]);
+  layer.setVectorFields(renderer, [
+    { id: 'force', vectors: forces, options: { scale: 2, color: '#ff0000' } },
+    { id: 'velocity', vectors: velocities, options: { scale: 3, color: '#0000ff', anchor: 'head', dimension: '2d' } },
+  ]);
+  assert.equal(uploads.length, 4);
+  assert.notEqual(layer.vectorFields[0].buffers, layer.vectorFields[1].buffers);
+  const velocityBuffer = layer.vectorFields[1].buffers;
+  layer.setVectorFields(renderer, [
+    { id: 'force', vectors: forces, options: { scale: 5, visible: false } },
+    { id: 'velocity', vectors: velocities, options: { headLength: .8, upMode: 'fixed', up: [0, 0, 1] } },
+  ]);
+  assert.equal(uploads.length, 4, 'appearance edits do not upload another vector array');
+  assert.equal(layer.vectorFields[0].options.visible, false);
+  assert.equal(layer.vectorFields[1].options.scale, 3);
+  assert.equal(layer.vectorFields[1].options.anchor, 'head');
+  assert.deepEqual(layer.vectorFields[1].options.up, [0, 0, 1]);
+  layer.setVectorFields(renderer, [{ id: 'velocity', vectors: velocities }]);
+  assert.equal(layer.vectorFields[0].buffers, velocityBuffer);
+  assert.equal(uploads.length, 7, 'only removed field storage is released');
+  assert.equal(layer.vectors, velocities, 'legacy accessor follows the first remaining field');
+  assert.throws(() => layer.setVectorFields(renderer, [{ id: 'velocity', vectors: velocities }, { id: 'bad', vectors: new Float32Array(3) }]), /current frame/);
+  assert.equal(layer.vectorFields.length, 1, 'one malformed field cannot discard existing groups');
+  assert.throws(() => layer.setVectorFields(renderer, [{ id: 'same', vectors: velocities }, { id: 'same', vectors: forces }]), /unique/);
+  assert.equal(uploads.length, 7);
+  layer.setVectorFields(renderer, []);
+  assert.equal(layer.vectorFields.length, 0);
+  assert.equal(layer.vectors, null);
+});
+
+test('multi-field bounds use displayed atom anchors and include every visible group across replicas', () => {
+  const layer = Object.create(AtomPrimitiveLayer.prototype);
+  layer.vectorFields = [
+    { vectors: new Float32Array([4, 0, 0]), options: normalizeVectorOptions({ headRadius: .5 }) },
+    { vectors: new Float32Array([0, 6, 0]), options: normalizeVectorOptions({ anchor: 'head', headRadius: .5 }) },
+    { vectors: new Float32Array([0, 0, 100]), options: normalizeVectorOptions({ visible: false }) },
+  ];
+  const renderer = { displayPositions: new Float32Array([10, 20, 30]), minimumOffset: [-10, -2, 0], maximumOffset: [5, 3, 0] };
+  const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
+  layer.extendBounds(renderer, minimum, maximum);
+  assert.deepEqual(minimum, [-.5, 11.5, 29.5]);
+  assert.deepEqual(maximum, [19.5, 23.5, 30.5]);
+});
+
+test('fixed flat-arrow planes require a finite nonzero up direction', () => {
+  const up = [0, 0, 2], options = normalizeVectorOptions({ dimension: '2d', upMode: 'fixed', up });
+  up[2] = 0;
+  assert.deepEqual(options.up, [0, 0, 2]);
+  assert.throws(() => normalizeVectorOptions({ up: [0, 0, 0] }), /nonzero/);
+  assert.throws(() => normalizeVectorOptions({ up: [NaN, 1, 0] }), /finite/);
+  assert.throws(() => normalizeVectorOptions({ upMode: 'other' }), /plane/);
+});
+
 test('arrow anchoring fixes the requested tail, head or center at each atom', () => {
   const position = [2, 3, 4], vector = [1, -2, 3], options = { scale: 2, headLength: .8 };
   const tail = vectorArrowEndpoints(position, vector, options);

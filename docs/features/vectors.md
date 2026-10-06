@@ -1,5 +1,9 @@
 # Vector arrows
 
+## Multiple fields
+
+Use **Add field** to overlay another vector family. Choose the field to edit, give it a name, and toggle **Show this field** independently. Each field keeps its own source, Cartesian component scales, length scale, color, arrow sizes, anchor and geometry. **Delete field** removes the selected layer. Settings files preserve all fields and the selected editor; older single-vector settings still restore as one field.
+
 ## Choose existing vector data
 
 Vector is a display tool. It draws existing per-atom data and does not calculate or add scalar properties. A newly opened source starts with **Custom XYZ**: choose three numeric properties and, when needed, a separate signed display scale for each Cartesian component.
@@ -8,11 +12,11 @@ Vector is a display tool. It draws existing per-atom data and does not calculate
 
 Preset sources hide the custom component and axis-scale menus. Reference frame and minimum-image controls belong to the Displacement tool. Changing a vector source or display scale leaves the source properties unchanged.
 
-A selected calculated source or Custom XYZ component keeps its selection while an enabled analysis recomputes for a different frame. Arrows wait until the required properties are ready. Cancelling a calculation used by any arrow component unchecks **Show arrows** and clears arrows in both views, including while its result is pending. Recalculating does not turn arrows on again. Cancelling an unrelated calculation leaves imported vector arrows enabled.
+A selected source or Custom XYZ component keeps its selection across frame changes. Arrows wait until the required properties are ready. Cancelling a calculation hides only fields that depend on it in both views, including while its result is pending. Recalculating does not turn those fields on again. Other vector fields remain visible.
 
 ## Arrow visibility and scale
 
-**Show arrows** controls the overlay independently of atom visibility. Atom legend checkboxes and element or individual-atom appearance controls can hide every atom while leaving vectors visible. World-space slices still clip arrows, and replication copies them into the selected periodic cells. The second view uses the same vector data with its own camera.
+**Show this field** controls each overlay independently of atom visibility. Atom legend checkboxes and element or individual-atom appearance controls can hide every atom while leaving vectors visible. World-space slices still clip arrows, and replication copies them into the selected periodic cells. Periodic display-origin changes move all arrow anchors with their atoms. The second view and image exports use every visible field.
 
 **Length scale** converts component values into displayed lengths in Å. For Custom XYZ, the signed component scales are applied before this shared factor. These controls change arrow geometry only. **Arrow color** controls the overlay color. Zero-length and non-finite vectors are omitted.
 
@@ -22,7 +26,7 @@ A selected calculated source or Custom XYZ component keeps its selection while a
 
 Shaft radius, head radius and head length are given in Å. The default linked proportions preserve their current ratios when any of these dimensions changes; turn off the link to edit sizes independently. Relinking preserves the new ratios you selected. Very short arrows reduce the head length to fit rather than extending beyond the vector.
 
-**3D** draws a cylindrical shaft and conical head. **2D** draws a flat arrow facing the current camera; it retains the original world-space vector direction instead of discarding its Z component. Each viewport therefore orients its own flat arrow faces.
+**3D** draws a cylindrical shaft and conical head. **2D** retains the original world-space vector direction instead of discarding its Z component. Its plane can face the current camera, so each viewport orients its own flat faces, or use a fixed up direction shared by both views. The fixed plane spans the vector and its width direction, defined by their cross product with the chosen up vector. Parallel directions use a stable fallback.
 
 ## Implementation and reference
 

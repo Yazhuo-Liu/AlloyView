@@ -4,6 +4,8 @@
 
 Set a positive global cutoff and optional element-pair cutoffs. A pair cutoff of zero disables that pair. Bond visibility is independent of whether the bond graph has been calculated. Adjust the cylinder radius and color to change its appearance.
 
+Expand **Bond distributions and Q4/Q6** to calculate length and angle distributions together with local Steinhardt orientational order using the same cutoffs. This analysis has its own calculation and cancellation controls, and works without drawing bond cylinders. See [Bond statistics](bond-statistics.md) for definitions and CSV exports.
+
 ## Algorithm
 
 A periodic neighbor search emits unique undirected edges. An edge starts at the first atom and ends at the indicated periodic image of the second atom. Distinct lattice images are retained, including self-image edges in small cells; only one orientation of each undirected edge is stored. Pair-specific cutoffs override the global value.

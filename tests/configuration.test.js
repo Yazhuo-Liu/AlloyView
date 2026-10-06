@@ -50,6 +50,60 @@ test('display-only recipes work without source files and use stable defaults', (
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
 });
 
+test('advanced view recipes retain independent vector fields, free camera and periodic origin without atom arrays', () => {
+  const snapshot = fullSnapshot();
+  Object.assign(snapshot.settings.display, { periodicOrigin: [0.4, -0.25, 1.1], cellWireframeMode: 'rgb-origin' });
+  Object.assign(snapshot.settings.camera, { pitch: Math.PI * 0.7, roll: 0.3, fov: 0.8, constrainUp: false });
+  snapshot.settings.activeCategory = 'modification';
+  snapshot.settings.activeTool = 'externalProperties';
+  snapshot.settings.extensions = { vectors: { fields: [
+    { id: 'forces', name: 'Force arrows', enabled: true, mode: 'force', color: '#123abc', dimension: '2d', upMode: 'fixed', up: [0, 0, 1] },
+    { id: 'velocity', name: 'Velocity arrows', enabled: false, mode: 'velocity', scale: 2 },
+  ], selectedId: 'velocity' }, externalProperties: { files: [{
+    id: 'external-one', file: { name: 'forces.csv', size: 45 }, mapping: 'id', scope: 'all-frames', frameIndex: 4,
+    columns: [{ sourceName: 'forceX', name: 'forceX', unit: 'eV/A', enabled: true }],
+  }] } };
+  const recipe = createConfiguration(snapshot);
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.deepEqual(restored, recipe);
+  assert.deepEqual(restored.settings.display.periodicOrigin, [0.4, -0.25, 1.1]);
+  assert.equal(restored.settings.camera.pitch, Math.PI * 0.7);
+  assert.equal(restored.settings.camera.constrainUp, false);
+  assert.equal(restored.settings.extensions.vectors.fields[0].upMode, 'fixed');
+  assert.equal(restored.settings.extensions.vectors.fields[1].scale, 2);
+  assert.equal(restored.settings.extensions.vectors.selectedId, 'velocity');
+  assert.equal(restored.settings.extensions.externalProperties.files[0].file.name, 'forces.csv');
+  assert.equal(restored.settings.activeCategory, 'modification');
+  assert.equal(JSON.stringify(recipe).includes('values'), false);
+  snapshot.settings.display.periodicOrigin[0] = 99;
+  snapshot.settings.extensions.vectors.fields[0].up[0] = 99;
+  assert.equal(recipe.settings.display.periodicOrigin[0], 0.4);
+  assert.deepEqual(recipe.settings.extensions.vectors.fields[0].up, [0, 0, 1]);
+});
+
+test('advanced recipes reject invalid geometry, ambiguous vector IDs and external atom payloads before restoration', () => {
+  const recipe = createConfiguration(fullSnapshot());
+  for (const mutate of [
+    value => { value.settings.display.periodicOrigin = [1, 2]; },
+    value => { value.settings.display.cellWireframeMode = 'rainbow'; },
+    value => { value.settings.camera.roll = '30'; },
+    value => { value.settings.camera.fov = Math.PI; },
+    value => { value.settings.camera.pitch = Math.PI; },
+    value => { value.settings.extensions.vectors.fields = [{ id: 'same' }, { id: 'same' }]; },
+    value => { value.settings.extensions.vectors.fields = [{ id: 'field', up: [0, 0, 0] }]; },
+    value => { value.settings.extensions.vectors.fields = [{ id: 'field' }]; value.settings.extensions.vectors.selectedId = 'missing'; },
+    value => { value.settings.extensions.externalProperties = { files: [{
+      id: 'f', file: { name: 'a.csv', size: 5 }, mapping: 'id', scope: 'all-frames', frameIndex: 10,
+      columns: [{ sourceName: 'stress', name: 'stress', unit: '', enabled: true }],
+    }] }; },
+    value => { value.settings.extensions.externalProperties = { files: [], values: [1, 2] }; },
+  ]) {
+    const invalid = structuredClone(recipe);
+    mutate(invalid);
+    assert.throws(() => parseConfiguration(JSON.stringify(invalid)));
+  }
+});
+
 test('coordination recipes save elemental cutoff choices while preserving legacy numeric values', () => {
   for (const [preset, cutoff] of [['custom', 3.17], ['Ni', 2.85], ['Al', 3.3], ['Ta', 3.3]]) {
     const coordination = { enabled: true, cutoff, preset };
@@ -154,7 +208,7 @@ test('older version 1 recipes disable every new computation and use portable def
     bonds: { enabled: false, cutoff: null, pairCutoffs: [], radius: 0.12, visible: true },
     vectors: { enabled: false, components: [null, null, null], mode: 'generic', componentScales: [1, 1, 1],
       scale: 1, color: '#f9ca57', radius: .06, headRadius: .15,
-      headLength: .3, linkDimensions: true, anchor: 'tail', dimension: '3d' },
+      headLength: .3, linkDimensions: true, anchor: 'tail', dimension: '3d', upMode: 'camera', up: [0, 1, 0] },
     displacement: { enabled: false, referenceFrame: 0, minimumImage: true },
     referenceStrain: { enabled: false, cutoff: null, frameIndex: 0 },
     localShear: { enabled: false, cutoff: null, subtractMean: false },
@@ -261,7 +315,7 @@ function extensionSnapshot() {
     bonds: { enabled: true, cutoff: 3.1, pairCutoffs: [{ first: 'Fe', second: 'C', cutoff: 2.4 }], radius: 0.18, visible: false },
     vectors: { enabled: true, components: ['force_x', 'force_y', 'force_z'], mode: 'generic', componentScales: [1, 1, 1],
       scale: 2, color: '#ffb84a', radius: .06, headRadius: .15,
-      headLength: .3, linkDimensions: true, anchor: 'tail', dimension: '3d' },
+      headLength: .3, linkDimensions: true, anchor: 'tail', dimension: '3d', upMode: 'camera', up: [0, 1, 0] },
     displacement: { enabled: false, referenceFrame: 0, minimumImage: true },
     referenceStrain: { enabled: true, cutoff: 3.1, frameIndex: 2 },
     localShear: { enabled: true, cutoff: 3.1, subtractMean: true },
@@ -365,7 +419,7 @@ test('legacy configuration selection resolves outside Tools and old vector setti
 test('custom second-view orientations round-trip without claiming a fixed direction', () => {
   const comparison = { enabled: true, preset: 'custom', projectionMode: 'perspective', camera: {
     yaw: -.7, pitch: .3, target: [1, 2, 3], pan: [.1, .2, .3], distance: 10,
-    orthographicScale: 5, projectionMode: 'perspective',
+    orthographicScale: 5, projectionMode: 'perspective', roll: 0, fov: 40 * Math.PI / 180, constrainUp: true,
   } };
   const recipe = createConfiguration({ settings: { extensions: { comparison } } });
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.extensions.comparison, comparison);
@@ -688,6 +742,50 @@ test('recipe downloads validate before creating browser URLs and contain no sour
   recipe.settings.analyses.unknown = {};
   assert.throws(() => downloadConfiguration(recipe), /not a supported setting/);
   assert.equal(URL.createObjectURL.mock.callCount(), 1);
+});
+
+test('bond statistics and Voronoi recipes restore independent analysis settings without cached atom data', () => {
+  const extensions = extensionSnapshot();
+  extensions.bonds.enabled = false;
+  extensions.bondStatistics = { enabled: true, lengthBins: 80, angleBins: 120 };
+  extensions.voronoi = { enabled: true, faceAreaThreshold: .02, relativeFaceAreaThreshold: .001, bins: 75 };
+  const recipe = createConfiguration({ settings: { extensions, activeTool: 'voronoi',
+    display: { colorMode: 'property:atomicVolume' } } });
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.deepEqual(restored, recipe);
+  assert.equal(restored.settings.activeTool, 'voronoi');
+  assert.equal(restored.settings.extensions.bonds.enabled, false);
+  assert.deepEqual(restored.settings.extensions.bondStatistics, extensions.bondStatistics);
+  assert.deepEqual(restored.settings.extensions.voronoi, extensions.voronoi);
+  assert.equal(restored.settings.extensions.bonds.cutoff, extensions.bonds.cutoff);
+  const defaults = createConfiguration({ settings: { extensions: { bondStatistics: {}, voronoi: {} } } });
+  assert.deepEqual(defaults.settings.extensions.bondStatistics, { enabled: false, lengthBins: 100, angleBins: 180 });
+  assert.deepEqual(defaults.settings.extensions.voronoi, { enabled: false, faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50 });
+  const legacy = createConfiguration();
+  assert.equal(Object.hasOwn(legacy.settings.extensions, 'bondStatistics'), false);
+  assert.equal(Object.hasOwn(legacy.settings.extensions, 'voronoi'), false);
+});
+
+test('topology recipes reject invalid histograms, face filters and missing shared bond cutoff before restore', () => {
+  const recipe = createConfiguration({ settings: { extensions: {
+    bonds: { cutoff: 3 }, bondStatistics: { enabled: true }, voronoi: { enabled: true },
+  } } });
+  for (const mutate of [
+    value => { value.bonds.cutoff = null; },
+    value => { value.bondStatistics.lengthBins = 0; },
+    value => { value.bondStatistics.angleBins = 4097; },
+    value => { value.bondStatistics.angleBins = 1.5; },
+    value => { value.bondStatistics.enabled = 1; },
+    value => { value.bondStatistics.q6 = [1, 2]; },
+    value => { value.voronoi.faceAreaThreshold = -1; },
+    value => { value.voronoi.relativeFaceAreaThreshold = 1.01; },
+    value => { value.voronoi.bins = 1.2; },
+    value => { value.voronoi.atomicVolume = [1, 2]; },
+  ]) {
+    const invalid = structuredClone(recipe);
+    mutate(invalid.settings.extensions);
+    assert.throws(() => parseConfiguration(JSON.stringify(invalid)), /Invalid AlloyView configuration/);
+  }
 });
 
 function fullSnapshot() {

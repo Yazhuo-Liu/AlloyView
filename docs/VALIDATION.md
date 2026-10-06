@@ -1,6 +1,96 @@
 # Validation record
 
-Validation date: 2026-10-05 (UTC)
+Validation date: 2026-10-06 (UTC)
+
+## Bond statistics, Voronoi analysis and CSV exports
+
+- All **1,025 Node tests** pass, and the production static build passes. The
+  added checks cover scientific reference values, complete periodic images,
+  triclinic and open boundaries, CPU/GPU dispatch, Worker/Wasm reuse, histogram
+  reductions, cancellation, configuration validation and CSV formatting.
+- Local Steinhardt Q4/Q6 agree with analytical SC, FCC, HCP and both BCC
+  neighbor-shell references. CPU Workers count unique geometric bonds and
+  every unordered pair of neighbor directions. Empty environments retain NaN
+  order parameters, and complete histogram reductions preserve counts beyond
+  the unsigned 32-bit range.
+- `npm run test:gpu:bond-statistics` passes **15 real-browser cases**: 13 WebGPU
+  computations and two explicit CPU fallbacks. Actual WGSL execution covers
+  thin periodic cells and self-images, mixed-periodicity triclinic cells,
+  element-pair exclusions, exact cutoffs/bin boundaries and a queued CNA job
+  reusing the device/Worker. Histograms match CPU counts exactly; maximum Q4
+  and Q6 differences in these fixtures are **4.66 × 10⁻⁷** and
+  **4.18 × 10⁻⁷**, respectively. SwiftShader validates correctness, rather
+  than hardware GPU performance.
+- The independent **BSD-licensed Voro++** Wasm kernel passes periodic SC/FCC/BCC
+  volumes and indices, a twelve-pentagonal-face icosahedral shell, finite-domain
+  and mixed periodic boundaries, extreme thin single-site cells and
+  unimodular changes of a cubic basis. Irregular structures conserve cell
+  volume and reciprocal atomic interfaces have equal areas. Physical
+  replication preserves local geometry; face thresholds change topology
+  counts without changing physical volume or surface area. Initialized Worker
+  cancellation recovers with the retained Wasm module. Voronoi uses CPU
+  Workers, including when the global GPU preference is enabled.
+- `npm run test:browser:topology-tools` passes the production UI using real
+  CPU Workers. Known right-angle and SC/FCC/BCC fixtures verify distributions,
+  Q4/Q6, Voronoi indices, color properties, physical/display replication and
+  configuration replay. Graph cancellation preserves enabled bond statistics;
+  graph-disabled frame changes retain their custom cutoff. Late replies after
+  cancellation cannot republish properties.
+- Actual CSV button downloads preserve source filenames, frame numbers,
+  timesteps, units, full numeric precision and NaN. Checks cover bond
+  distributions/order, Voronoi atoms/distributions/faces, general summaries,
+  scalar/category/atom tables, RDF and a completed DXA frame with zero lines.
+  Export formatting starts no new analysis. A **390 × 640** phone touch check
+  keeps the viewport fixed while accessing Voronoi face exports.
+- Auto scalar coloring keeps double-precision roundoff in otherwise uniform
+  FCC Voronoi volumes from producing an artificial full color range. This
+  display guard preserves the exact data, reported extrema and CSV values;
+  explicit manual ranges still resolve those differences, and genuinely
+  small relative physical variations remain distinguishable.
+- `npm run test:browser:advanced-tools` passes again with these integrations,
+  including ordinary atom selection after slice picks, origin, vectors,
+  property import, precise camera edits, PNG exclusion and compact phones.
+- The full `npm run test:browser` production regression also passes, including
+  prior analyses, configuration migration, selections, trajectory playback,
+  mobile gestures, multiview PNG exports and the **204,800-atom** rendering,
+  clipping and picking case.
+
+## Advanced display, property import and tool categories
+
+- All **944 Node tests** pass. New regressions cover periodic image geometry,
+  picked replica coordinates, invalid plane construction, camera roll and pole
+  crossings, screen-aligned free orbit, narrow parallel zoom, independent vector
+  buffers and dependencies, external ID mapping, and recipe validation. The
+  production static build passes.
+- `npm run test:browser:advanced-tools` uses the production page, real Chromium
+  pointer/touch events, local files and CPU analysis Workers. Its six-atom
+  trajectory and mixed-periodicity tilted-cell fixture verify source coordinate
+  bytes and coordination results remain unchanged during display origin edits.
+  Two- and three-atom slices use the clicked periodic copy, preserve existing
+  planes on invalid input, and synchronize their numeric controls.
+- Multiple vector fields retain independent names, colors, dimensions and
+  visibility through replay and frame changes. Cancelling displacement removes
+  only its dependent arrows. Physical replication increases the rendered field
+  population from 6 to 12 without an upload-count mismatch. Fixed 2D planes
+  render without GL errors, including a source parallel to the specified up.
+- External CSV values map shuffled rows by atom ID, follow reordered trajectory
+  frames, preserve NaN, and expand consistently for physical replicas. Rename
+  and removal update the property selectors. A fresh recipe shows pending local
+  files rather than inventing numeric values; reselecting the file restores its
+  renamed/removed column settings and the selected color quantity.
+- Camera XYZ/direction edits, sliders, the direction globe, roll at 90 degrees,
+  viewport orbit/pan and perspective/parallel wheel zoom synchronize correctly.
+  A committed focused input updates with the camera; an uncommitted draft is
+  preserved. RGB cell directions submit distinct basis colors. PNG exports with
+  the camera panel open and closed have **zero changed RGBA pixels**.
+- Visualization/Modification category changes preserve an in-flight CPU result
+  and completed properties. Actual phone touch scrolling at **390 × 640**,
+  **320 × 568** and **640 × 400** keeps the viewport and camera fixed, with the
+  camera panel folded. Desktop and compact-phone screenshots were inspected.
+- Browser rendering uses Chromium's SwiftShader software graphics in this cloud
+  environment. These are functional checks, not hardware GPU speed measurements.
+
+The earlier validation sections below retain their original test totals.
 
 ## Viewport atom details and measurement vectors
 

@@ -5,6 +5,7 @@ import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS 
 import { DXA_DEFAULTS, DXA_FAMILIES } from './analysis/dxa.js';
 import { CRYSTAL_VISIBILITY_SOURCE_NAMES } from './crystal-visibility-controls.js';
 import { COORDINATION_CUTOFF_PRESETS } from './analysis/cutoff.js';
+import { normalizeExternalPropertyState } from './io/external-properties.js';
 
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
@@ -16,7 +17,7 @@ export const MAX_CONFIGURATION_SELECTION_GROUPS = MAX_SELECTION_GROUPS;
 export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
 
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const COORDINATION_CUTOFF_CHOICES = new Set(['custom', ...COORDINATION_CUTOFF_PRESETS.map(preset => preset.symbol)]);
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
@@ -145,6 +146,11 @@ function normalizeConfiguration(value, fromSnapshot) {
     && displacement.referenceFrame >= configuration.source.frameCount) {
     fail('settings.extensions.displacement.referenceFrame', 'must be smaller than the source frame count');
   }
+  for (const [index, file] of (configuration.settings.extensions.externalProperties?.files ?? []).entries()) {
+    if (configuration.source?.frameCount !== undefined && file.frameIndex >= configuration.source.frameCount) {
+      fail(`settings.extensions.externalProperties.files[${index}].frameIndex`, 'must be smaller than the source frame count');
+    }
+  }
   return configuration;
 }
 
@@ -181,7 +187,7 @@ function normalizeSource(value) {
 }
 
 function normalizeSettings(value, fromSnapshot) {
-  const input = record(value, 'settings', ['display', 'analyses', 'extensions', 'replicate', 'replicateAtoms', 'slices', 'colors', 'camera', 'activeTool', 'selectedAtomId', 'theme', 'compute', 'selectionGroups']);
+  const input = record(value, 'settings', ['display', 'analyses', 'extensions', 'replicate', 'replicateAtoms', 'slices', 'colors', 'camera', 'activeTool', 'activeCategory', 'selectedAtomId', 'theme', 'compute', 'selectionGroups']);
   const compute = record(input.compute ?? {}, 'settings.compute', ['gpuEnabled']);
   const repetitions = vector(input.replicate ?? [1, 1, 1], 'settings.replicate', 1, 4096, true);
   if (repetitions.reduce((product, count) => product * count, 1) > 4096) fail('settings.replicate', 'exceeds 4096 displayed cells');
@@ -198,6 +204,8 @@ function normalizeSettings(value, fromSnapshot) {
     camera: normalizeCamera(input.camera ?? null),
     activeTool: input.activeTool === 'configuration' ? null : nullableChoice(
       input.activeTool === undefined || input.activeTool === 'selection' ? 'display' : input.activeTool, 'settings.activeTool', TOOLS),
+    activeCategory: choice(input.activeCategory ?? (['replicate', 'externalProperties'].includes(input.activeTool) ? 'modification' : 'visualization'),
+      'settings.activeCategory', new Set(['visualization', 'modification'])),
     selectedAtomId: identifier(input.selectedAtomId ?? null, 'settings.selectedAtomId', true),
     theme: choice(input.theme ?? 'dark', 'settings.theme', new Set(['light', 'dark'])),
   };
@@ -211,13 +219,20 @@ function normalizeSelections(value) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
-  const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension']);
+  const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
   const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage']);
   const referenceStrain = record(input.referenceStrain ?? {}, `${path}.referenceStrain`, ['enabled', 'frameIndex', 'cutoff']);
   const localShear = record(input.localShear ?? {}, `${path}.localShear`, ['enabled', 'cutoff', 'subtractMean']);
   const rdf = record(input.rdf ?? {}, `${path}.rdf`, ['enabled', 'cutoff', 'bins', 'firstType', 'secondType']);
+  const bondStatistics = input.bondStatistics === undefined ? null
+    : record(input.bondStatistics, `${path}.bondStatistics`, ['enabled', 'lengthBins', 'angleBins']);
+  const voronoi = input.voronoi === undefined ? null
+    : record(input.voronoi, `${path}.voronoi`, ['enabled', 'faceAreaThreshold', 'relativeFaceAreaThreshold', 'bins']);
+  if (bondStatistics?.enabled === true && nullablePositive(bonds.cutoff, `${path}.bonds.cutoff`, fromSnapshot) === null) {
+    fail(`${path}.bonds.cutoff`, 'is required for enabled bond statistics');
+  }
   const measurements = record(input.measurements ?? {}, `${path}.measurements`, ['enabled', 'minimumImage', 'atomIds']);
   const appearance = record(input.appearance ?? {}, `${path}.appearance`, ['elements', 'atoms']);
   const comparison = record(input.comparison ?? {}, `${path}.comparison`, ['enabled', 'preset', 'projectionMode', 'camera']);
@@ -263,6 +278,18 @@ function normalizeExtensions(value, fromSnapshot) {
     // Keep older version 1 recipes unchanged. DXA contains parameters and
     // display choices only; its network is recalculated after import.
     ...(input.dxa === undefined ? {} : { dxa: normalizeDxa(input.dxa, `${path}.dxa`) }),
+    ...(input.externalProperties === undefined ? {} : { externalProperties: normalizeExternalPropertyState(input.externalProperties) }),
+    ...(bondStatistics === null ? {} : { bondStatistics: {
+      enabled: boolean(bondStatistics.enabled, `${path}.bondStatistics.enabled`, false),
+      lengthBins: number(bondStatistics.lengthBins ?? 100, `${path}.bondStatistics.lengthBins`, 1, 4096, true),
+      angleBins: number(bondStatistics.angleBins ?? 180, `${path}.bondStatistics.angleBins`, 1, 4096, true),
+    } }),
+    ...(voronoi === null ? {} : { voronoi: {
+      enabled: boolean(voronoi.enabled, `${path}.voronoi.enabled`, false),
+      faceAreaThreshold: number(voronoi.faceAreaThreshold ?? 0, `${path}.voronoi.faceAreaThreshold`, 0, MAX_COORDINATE),
+      relativeFaceAreaThreshold: number(voronoi.relativeFaceAreaThreshold ?? 0, `${path}.voronoi.relativeFaceAreaThreshold`, 0, 1),
+      bins: number(voronoi.bins ?? 50, `${path}.voronoi.bins`, 1, 4096, true),
+    } }),
     bonds: {
       ...normalizeCutoffAnalysis(bonds, `${path}.bonds`, fromSnapshot),
       pairCutoffs,
@@ -282,6 +309,9 @@ function normalizeExtensions(value, fromSnapshot) {
       linkDimensions: boolean(vectors.linkDimensions, `${path}.vectors.linkDimensions`, true),
       anchor: choice(vectors.anchor ?? 'tail', `${path}.vectors.anchor`, new Set(['tail', 'head', 'center'])),
       dimension: choice(vectors.dimension ?? '3d', `${path}.vectors.dimension`, new Set(['3d', '2d'])),
+      upMode: choice(vectors.upMode ?? 'camera', `${path}.vectors.upMode`, new Set(['camera', 'fixed'])),
+      up: normalizeVectorUp(vectors.up ?? [0, 1, 0], `${path}.vectors.up`),
+      ...(vectors.fields === undefined ? {} : normalizeVectorFields(vectors, `${path}.vectors`)),
     },
     displacement: {
       enabled: boolean(displacement.enabled, `${path}.displacement.enabled`, legacyDisplacement),
@@ -354,6 +384,48 @@ function normalizeVectorMode(value, path) {
   fail(path, 'is unsupported');
 }
 
+function normalizeVectorUp(value, path) {
+  const up = vector(value, path, -1e12, 1e12);
+  if (Math.hypot(...up) < 1e-12) fail(path, 'must be a non-zero vector');
+  return up;
+}
+
+function normalizeVectorFields(input, path) {
+  const fields = list(input.fields, `${path}.fields`, 16).map((value, index) => {
+    const fieldPath = `${path}.fields[${index}]`;
+    const entry = record(value, fieldPath, ['id', 'name', 'enabled', 'components', 'mode', 'componentScales', 'scale', 'color',
+      'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'upMode', 'up']);
+    const components = list(entry.components ?? [null, null, null], `${fieldPath}.components`, 3, 3).map((name, axis) => {
+      if (name === null) return null;
+      const component = string(name, `${fieldPath}.components[${axis}]`, 256);
+      if (FORBIDDEN_KEYS.has(component)) fail(`${fieldPath}.components[${axis}]`, 'is reserved');
+      return component;
+    });
+    const mode = normalizeVectorMode(entry.mode ?? 'generic', `${fieldPath}.mode`);
+    const enabled = boolean(entry.enabled, `${fieldPath}.enabled`, false);
+    if (enabled && mode === 'generic' && components.includes(null)) fail(`${fieldPath}.components`, 'needs three properties for enabled vectors');
+    return {
+      id: string(entry.id, `${fieldPath}.id`, 128), name: string(entry.name ?? `Vector ${index + 1}`, `${fieldPath}.name`, 256),
+      enabled, components, mode,
+      componentScales: vector(entry.componentScales ?? [1, 1, 1], `${fieldPath}.componentScales`, -1e12, 1e12),
+      scale: number(entry.scale ?? 1, `${fieldPath}.scale`, 1e-12, 1e12), color: hexColor(entry.color ?? '#f9ca57', `${fieldPath}.color`),
+      radius: number(entry.radius ?? 0.06, `${fieldPath}.radius`, 1e-12, MAX_COORDINATE),
+      headRadius: number(entry.headRadius ?? 0.15, `${fieldPath}.headRadius`, 1e-12, MAX_COORDINATE),
+      headLength: number(entry.headLength ?? 0.3, `${fieldPath}.headLength`, 1e-12, MAX_COORDINATE),
+      linkDimensions: boolean(entry.linkDimensions, `${fieldPath}.linkDimensions`, true),
+      anchor: choice(entry.anchor ?? 'tail', `${fieldPath}.anchor`, new Set(['tail', 'head', 'center'])),
+      dimension: choice(entry.dimension ?? '3d', `${fieldPath}.dimension`, new Set(['3d', '2d'])),
+      upMode: choice(entry.upMode ?? 'camera', `${fieldPath}.upMode`, new Set(['camera', 'fixed'])),
+      up: normalizeVectorUp(entry.up ?? [0, 1, 0], `${fieldPath}.up`),
+    };
+  });
+  ensureUnique(fields.map(field => field.id), `${path}.fields`);
+  const selectedId = input.selectedId === undefined ? fields[0]?.id ?? null
+    : input.selectedId === null ? null : string(input.selectedId, `${path}.selectedId`, 128);
+  if (selectedId !== null && !fields.some(field => field.id === selectedId)) fail(`${path}.selectedId`, 'must name an existing vector field');
+  return { fields, selectedId };
+}
+
 function normalizeCutoffAnalysis(input, path, fromSnapshot) {
   const enabled = boolean(input.enabled, `${path}.enabled`, false);
   const cutoff = nullablePositive(input.cutoff, `${path}.cutoff`, fromSnapshot);
@@ -387,7 +459,7 @@ function ensureUnique(values, path) {
 }
 
 function normalizeDisplay(value) {
-  const input = record(value, 'settings.display', ['coordinateMode', 'colorMode', 'radiusPercent', 'background', 'showCell', 'showAxes', 'png', 'projectionMode']);
+  const input = record(value, 'settings.display', ['coordinateMode', 'colorMode', 'radiusPercent', 'background', 'showCell', 'showAxes', 'png', 'projectionMode', 'periodicOrigin', 'cellWireframeMode']);
   const png = record(input.png ?? {}, 'settings.display.png', ['background', 'legend', 'axes']);
   const colorMode = string(input.colorMode ?? 'type', 'settings.display.colorMode', 512);
   if (colorMode !== 'type' && (!colorMode.startsWith('property:') || colorMode.length === 9)) fail('settings.display.colorMode', 'must select atom type or a property');
@@ -400,6 +472,8 @@ function normalizeDisplay(value) {
     background: background.toLowerCase(),
     showCell: boolean(input.showCell, 'settings.display.showCell', true),
     showAxes: boolean(input.showAxes, 'settings.display.showAxes', true),
+    periodicOrigin: vector(input.periodicOrigin ?? [0, 0, 0], 'settings.display.periodicOrigin', -1e12, 1e12),
+    cellWireframeMode: choice(input.cellWireframeMode ?? 'mono', 'settings.display.cellWireframeMode', new Set(['mono', 'rgb', 'rgb-origin', 'rgb-black'])),
     png: {
       background: boolean(png.background, 'settings.display.png.background', true),
       legend: boolean(png.legend, 'settings.display.png.legend', true),
@@ -540,10 +614,15 @@ function propertyEntries(value, path, keys, normalize) {
 
 function normalizeCamera(value) {
   if (value === null) return null;
-  const input = record(value, 'settings.camera', ['yaw', 'pitch', 'target', 'pan', 'distance', 'orthographicScale', 'projectionMode']);
+  const input = record(value, 'settings.camera', ['yaw', 'pitch', 'target', 'pan', 'distance', 'orthographicScale', 'projectionMode', 'roll', 'fov', 'constrainUp']);
+  const constrainUp = boolean(input.constrainUp, 'settings.camera.constrainUp', true);
   return {
     yaw: number(input.yaw, 'settings.camera.yaw', -1e12, 1e12),
-    pitch: number(input.pitch, 'settings.camera.pitch', -Math.PI / 2 - 1e-7, Math.PI / 2 + 1e-7),
+    pitch: number(input.pitch, 'settings.camera.pitch', constrainUp ? -Math.PI / 2 - 1e-7 : -1e12,
+      constrainUp ? Math.PI / 2 + 1e-7 : 1e12),
+    roll: number(input.roll ?? 0, 'settings.camera.roll', -1e12, 1e12),
+    fov: number(input.fov ?? 40 * Math.PI / 180, 'settings.camera.fov', Math.PI / 180, 175 * Math.PI / 180),
+    constrainUp,
     target: vector(input.target, 'settings.camera.target', -MAX_COORDINATE, MAX_COORDINATE),
     pan: vector(input.pan, 'settings.camera.pan', -MAX_COORDINATE, MAX_COORDINATE),
     distance: number(input.distance, 'settings.camera.distance', 1e-12, MAX_COORDINATE),
