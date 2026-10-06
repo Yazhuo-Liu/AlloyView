@@ -2,7 +2,9 @@ const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', '
 const REFERENCE_KINDS = new Set(['referenceStrain', 'displacement']);
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
-  frameCount: 0, currentIndex: 0, budgetBytes: 0, allocatedBytes: 0, residentBytes: 0, frameBytes: 0, workspaceBytes: 0 };
+  frameCount: 0, currentIndex: 0, budgetBytes: 0, allocatedBytes: 0, residentBytes: 0, frameBytes: 0, workspaceBytes: 0,
+  preparedVoronoiFrameIds: [], preparedVoronoiFrameIndexes: [], voronoiWorkspaceAtoms: 0,
+  neighborIndexCount: 0, neighborIndexBuildCount: 0, voronoiKernelWarmupCount: 0 };
 
 /** Keep one worker/device alive, and copy only the task currently being sent. */
 export class GpuAnalysisClient {
@@ -28,6 +30,7 @@ export class GpuAnalysisClient {
     this._cacheStatus = { ...EMPTY_CACHE };
     this.generation = 0;
     this.warmedUp = false;
+    this.warmedAnalysisKinds = new Set();
     this.releaseWhenIdle = false;
     this.closed = false;
   }
@@ -35,7 +38,9 @@ export class GpuAnalysisClient {
   supports(kind) { return SUPPORTED_KINDS.has(kind); }
   get cacheStatus() { return { ...this._cacheStatus, cachedFrameIds: [...this.cachedFrameIds],
     cachedPtmFits: [...this.cachedPtmFits].map(([frameId, fitId]) => ({ frameId, fitId })),
-    cachedFrameIndexes: [...(this._cacheStatus.cachedFrameIndexes ?? [])] }; }
+    cachedFrameIndexes: [...(this._cacheStatus.cachedFrameIndexes ?? [])],
+    preparedVoronoiFrameIds: [...(this._cacheStatus.preparedVoronoiFrameIds ?? [])],
+    preparedVoronoiFrameIndexes: [...(this._cacheStatus.preparedVoronoiFrameIndexes ?? [])] }; }
 
   associateFrame(frame, frameIndex) {
     if (!Number.isInteger(frameIndex) || frameIndex < 0) throw new Error('The GPU frame index must be a nonnegative integer.');
@@ -50,7 +55,7 @@ export class GpuAnalysisClient {
     if (!this.supports(parameters.kind)) return Promise.reject(new Error(`The ${parameters.kind} analysis uses CPU workers.`));
     if (frameIndex !== undefined) this.associateFrame(frame, frameIndex);
     // A user calculation takes the next slot, even when prefetch is uploading.
-    if (this.current?.type === 'prepare-frame') this.cancel(this.current);
+    this.preemptPreparation();
     if (parameters.kind === 'voronoi' && parameters.selectedTypes != null) {
       try {
         const selection = prepareVoronoiSelection(frame, parameters.selectedTypes), compactFrame = selection.frame,
@@ -70,7 +75,7 @@ export class GpuAnalysisClient {
    * These tables are temporary exports, never application frame coordinates.
    */
   classifyDxa(snapshot, { signal, onProgress = () => {} } = {}) {
-    if (this.current?.type === 'prepare-frame') this.cancel(this.current);
+    this.preemptPreparation();
     return this.enqueue('classify-dxa', { snapshot, signal, onProgress }, 1);
   }
 
@@ -78,16 +83,30 @@ export class GpuAnalysisClient {
     return this.analyze(frame, { ...input, kind: 'dxaLocal' }, options);
   }
 
-  warmup({ signal, onProgress = () => {} } = {}) {
+  warmup({ signal, analysisKinds, onProgress = () => {} } = {}) {
     if (signal?.aborted || this.closed) return Promise.reject(abortError());
+    let kinds;
+    try { kinds = gpuPreparationKinds(analysisKinds); } catch (error) { return Promise.reject(error); }
     this.resume();
-    if (this.warmedUp) return Promise.resolve(this.cacheStatus);
-    return this.enqueue('warmup', { signal, onProgress }, 1);
+    if (this.warmedUp || kinds?.every(kind => this.warmedAnalysisKinds.has(kind))) return Promise.resolve(this.cacheStatus);
+    return this.enqueue('warmup', { signal, onProgress, options:{analysisKinds:kinds} }, 2);
   }
 
-  prepareFrame(frame, { frameIndex, signal, onProgress = () => {} } = {}) {
+  prepareFrame(frame, { frameIndex, signal, analysisKinds, selectedTypes = null, onProgress = () => {} } = {}) {
     if (frameIndex !== undefined) this.associateFrame(frame, frameIndex);
-    return this.enqueue('prepare-frame', { frame, signal, onProgress }, 2);
+    try {
+      const kinds = gpuPreparationKinds(analysisKinds);
+      if (kinds?.includes('voronoi') && selectedTypes != null) {
+        const selection = prepareVoronoiSelection(frame, selectedTypes), index = this.frameIndexes.get(frame);
+        if (index !== undefined) this.frameIndexes.set(selection.frame,index);
+        frame = selection.frame;
+      }
+      return this.enqueue('prepare-frame', { frame, signal, onProgress, options:{analysisKinds:kinds} }, 2);
+    } catch (error) { return Promise.reject(error); }
+  }
+
+  preemptPreparation() {
+    if (['prepare-frame','warmup'].includes(this.current?.type)) this.cancel(this.current);
   }
 
   configureCache(options = {}) { return this.enqueue('configure-cache', { options }, 0); }
@@ -148,7 +167,10 @@ export class GpuAnalysisClient {
         for (const frameId of this.positionSources.keys()) if (!this.cachedFrameIds.has(frameId)) this.positionSources.delete(frameId);
         for (const [frameId, fit] of this.ptmSources) if (!this.cachedFrameIds.has(frameId) || this.cachedPtmFits.get(frameId) !== fit.id) this.ptmSources.delete(frameId);
         if (data.cacheStatus) this._cacheStatus = { ...data.cacheStatus };
-        if (data.ok && task.type === 'warmup') this.warmedUp = true;
+        if (data.ok && task.type === 'warmup') {
+          if (task.options?.analysisKinds) for (const kind of task.options.analysisKinds) this.warmedAnalysisKinds.add(kind);
+          else { this.warmedUp = true; this.warmedAnalysisKinds.add('voronoi'); }
+        }
       }
       if (data.ok) this.settle(task, null, ['analyze', 'classify-dxa'].includes(task.type) ? data.result : this.cacheStatus);
       else { const error = new Error(data.error || 'GPU analysis failed.'); error.name = data.name || 'Error'; this.settle(task, error); }
@@ -161,7 +183,7 @@ export class GpuAnalysisClient {
       this.worker?.terminate(); this.worker = null; this.current = null;
       this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
       this.ptmSources.clear(); this.cachedPtmFits.clear();
-      this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false; this.pump();
+      this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false; this.warmedAnalysisKinds.clear(); this.pump();
     };
     this.worker.addEventListener('error', fail);
     this.worker.addEventListener('messageerror', fail);
@@ -371,7 +393,7 @@ export class GpuAnalysisClient {
     this.queue.length = 0; this.worker?.terminate(); this.worker = null; this.current = null;
     this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
     this.ptmSources.clear(); this.cachedPtmFits.clear();
-    this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false;
+    this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false; this.warmedAnalysisKinds.clear();
     this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexFrameIds.clear();
     this.referenceFrames = new WeakMap();
   }
@@ -391,3 +413,4 @@ async function copyArray(source, task) {
 function yieldToMain() { return new Promise((resolve) => setTimeout(resolve, 0)); }
 function abortError() { return new DOMException('Analysis cancelled.', 'AbortError'); }
 import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult } from '../voronoi-selection.js';
+import { gpuPreparationKinds } from './preparation.js';

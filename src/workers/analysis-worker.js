@@ -5,7 +5,8 @@ import { calculatePtm, warmupPtm } from '../analysis/ptm.js';
 import { calculateAtomicStrain } from '../analysis/atomic-strain.js';
 import { calculateBonds } from '../analysis/bonds.js';
 import { calculateBondStatistics } from '../analysis/bond-statistics.js';
-import { calculateVoronoi, calculateVoronoiGeometry, calculateVoronoiGeometryBatch, mergeVoronoiPartials } from '../analysis/voronoi.js';
+import { calculateVoronoi, calculateVoronoiGeometry, calculateVoronoiGeometryBatch, mergeVoronoiPartials,
+  warmupVoronoi, prepareVoronoiFrame } from '../analysis/voronoi.js';
 import { calculateRdf } from '../analysis/rdf.js';
 import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLocalShear } from '../analysis/local-shear.js';
 import { calculateReferenceStrain } from '../analysis/reference-strain.js';
@@ -20,14 +21,15 @@ self.addEventListener('message', async ({ data }) => {
   const { id, fractional, cell, kind, types, residentFrameKey, ...parameters } = data;
   try {
     let frame = { fractional, cell, types }, frameUploaded = false;
-    if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'].includes(kind) && residentFrameKey !== undefined) {
+    if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch', 'voronoiPrepare'].includes(kind) && residentFrameKey !== undefined) {
       if (fractional) {
         voronoiResident = { key: residentFrameKey, frame, context: null };
         frameUploaded = true;
       } else if (voronoiResident?.key !== residentFrameKey) throw new Error('The resident Voronoi source is unavailable.');
-      frame = voronoiResident.frame;
-      parameters.context = voronoiResident.context;
-      parameters.onContext = context => { voronoiResident.context = context; };
+      const retained = voronoiResident;
+      frame = retained.frame;
+      parameters.context = retained.context;
+      parameters.onContext = context => { retained.context = context; };
     }
     const onPhase = (phase) => self.postMessage({ id, phase });
     let lastProgressAt = -Infinity;
@@ -40,7 +42,15 @@ self.addEventListener('message', async ({ data }) => {
       self.postMessage({ id, phase: 'analyzing', processedAtoms, totalAtoms });
     };
     let result;
-    if (kind === 'warmup') result = await warmupPtm({ onPhase });
+    if (kind === 'warmup') {
+      const modules = parameters.modules ?? ['ptm'], initializedModules = {};
+      // Voronoi is ready before the larger PTM fitter starts initializing.
+      for (const module of ['voronoi', 'ptm']) if (modules.includes(module)) {
+        initializedModules[module] = await (module === 'voronoi' ? warmupVoronoi : warmupPtm)({ onPhase });
+      }
+      result = { warmed: true, modules, initializedModules,
+        kernelReused: Object.values(initializedModules).every(module => module.kernelReused) };
+    }
     else if (kind === 'ptm') result = await calculatePtm(frame, { ...parameters, onPhase, onAtoms });
     else if (kind === 'strain') {
       if (parameters.ptmInput) onPhase('analyzing');
@@ -57,6 +67,9 @@ self.addEventListener('message', async ({ data }) => {
       result = calculateBonds(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'bondStatistics') {
       result = calculateBondStatistics(frame, { ...parameters, onPhase, onAtoms });
+    } else if (kind === 'voronoiPrepare') {
+      result = await prepareVoronoiFrame(frame, { ...parameters, onPhase });
+      result.frameUploaded = frameUploaded;
     } else if (kind === 'voronoi') {
       result = await calculateVoronoi(frame, { ...parameters, onPhase, onAtoms });
       result.frameUploaded = frameUploaded;

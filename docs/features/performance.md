@@ -6,9 +6,23 @@ The performance panel reports the current render/analysis timing and trajectory 
 
 ## Workers and memory
 
-Parsing runs in a structure Worker. Analyses share a bounded scheduler and process independent central-atom ranges in module Workers. The pool limits total concurrency to at most six Workers and at most the available hardware threads minus one, with a minimum of one. Memory estimates can further reduce parallel ranges.
+Parsing runs in a structure Worker. Analyses share a bounded scheduler and
+process independent central-atom ranges in module Workers. The shared CPU
+budget follows the browser's reported logical processor count:
+`max(1, floor(navigator.hardwareConcurrency) − 2)`. An eight-processor report
+allows up to six computation threads; a sixteen-processor report allows up to
+fourteen. This controls application concurrency rather than reserving OS cores.
+Actual Worker counts adapt to atom count and memory estimates, which can reduce
+parallelism below that maximum. Idle prewarmed Workers hold no computation
+budget, and foreground analyses take priority over queued background warmups.
 
-Cross-origin isolated local servers can share input coordinate arrays through SharedArrayBuffer. Ordinary static hosting uses bounded private copies prepared with yields to the UI thread. Both paths calculate on this device. Each PTM Worker initializes its own reusable WebAssembly kernel.
+Cross-origin isolation enables shared CPU coordinate snapshots through
+`SharedArrayBuffer`. It requires the appropriate isolation response headers;
+a secure context alone does not enable shared CPU memory. Without isolation,
+each Worker keeps a bounded private coordinate copy. Preparation yields to the
+UI thread, and resident snapshots avoid copying the complete structure again
+for every atom chunk. Both paths calculate on this device. PTM and Voro++
+Workers retain their own reusable WebAssembly kernel and memory.
 
 An adaptive memory budget limits cached trajectory frames and results. Cancellation and source/frame/parameter ownership checks prevent late Worker messages from applying obsolete results. Closing the source stops playback and analysis, releases cached structure data, and restores the homepage. While GPU acceleration stays enabled, its device and compiled pipelines can be reused for the next source.
 
@@ -66,9 +80,41 @@ Displacement also retains current/reference inputs, caching anchored Cartesian h
 
 Fresh ideal strain can prepare its PTM nearest-neighbor table on GPU, preserving exact ordering through shader-emulated IEEE64 arithmetic. Readback is batched to at most 16,384 atoms, while a 256 MiB ceiling bounds the full 505-byte-per-atom host table. Diamond and graphene fitting require that complete table; other templates can give CPU Workers only their own ranges. CPU fitting remains necessary, and standalone PTM retains its CPU path. Cached ideal-strain fits also keep their raw GPU PTM uploads, so a reference edit updates the small element table without repeating fitting or uploading every deformation matrix.
 
-Enabling GPU acceleration starts device initialization and common shader compilation in the background. Once a structure is loaded, the current frame's coordinates and element types are uploaded before background trajectory preparation. Preparation does not calculate analysis results. The renderer uses separate WebGL buffers, so displaying a structure and preparing WebGPU analysis are separate operations.
+### Preparation when a structure loads
 
-The GPU cache estimates the resident frame size and reserves space for calculation buffers. If the complete sequence fits its conservative budget, all frames are uploaded in the background. Otherwise, it keeps a window around the current frame, preferring the next and previous frames. Moving through the trajectory updates this window; foreground calculations take priority over background uploads. CPU and GPU caches have independent capacities, and reparsing a frame after CPU eviction still reuses its resident GPU data.
+Once the displayed frame is committed, CPU and enabled GPU preparation start
+alongside rendering. Preparation does not enable Voronoi analysis or publish
+atomic properties, histograms or cell meshes. Clicking **Calculate** runs the
+analysis with the resources already available; a calculation need not wait
+for unrelated background preparation.
+
+CPU preparation initializes reusable Voro++ and PTM modules, snapshots the
+current coordinates, and builds the resident Voronoi neighbor index and native
+context in the selected Workers. Their number follows the atom count, logical
+processor limit and memory budget described above. Shared snapshots require
+cross-origin isolation; otherwise each Worker retains its private copy. DXA
+module preparation follows the current-frame Voronoi input preparation. CPU
+preparation also runs when GPU acceleration is off.
+
+GPU preparation first compiles the four neighbor-index and Voronoi pipelines,
+uploads the current frame's coordinates and types, and prepares its initial
+neighbor index and reusable bounded clipping workspace. One discarded cell
+dispatch warms the driver's execution path; it returns no scientific result
+or display geometry. Compatible calculations reuse the device, pipelines,
+uploaded inputs, neighbor index and workspace. Other shaders compile later in
+the background. The renderer continues to use separate WebGL buffers.
+
+Foreground analyses take priority over queued preparation. A changed frame or
+source cancels obsolete preparation while reusable module and pipeline
+resources survive. Physical replication starts adapting the Worker target to
+the projected atom count and prepares the committed replicated coordinates;
+display-only replicas leave analysis inputs unchanged. Changed coordinates,
+cell geometry, or a different Voronoi input-type subset require compatible new
+snapshots and indices. A changed search radius can require another GPU index.
+Load-time preparation includes all atom types; a chosen Voronoi subset prepares
+its compact input as needed.
+
+The GPU cache estimates the resident frame size and reserves space for calculation buffers. If the complete sequence fits its conservative budget, all frames are uploaded in the background. Otherwise, it keeps a window around the current frame, preferring the next and previous frames. Adjacent frames receive coordinate uploads; Voronoi index and workspace preparation follows the displayed frame. Moving through the trajectory updates this window; foreground calculations take priority over background uploads. CPU and GPU caches have independent capacities, and reparsing a frame after CPU eviction still reuses its resident GPU data.
 
 Standard WebGPU does not expose free VRAM. The cache starts with an allocation budget of 2 GiB for hardware or 128 MiB for a software adapter, including a calculation workspace reserve. This is a ceiling, not an upfront reservation: only the loaded frames and required calculation buffers consume memory. The cache checks individual buffer limits and, if an allocation runs out of memory, lowers its budget, evicts distant frames and retries once while protecting the current frame. Thus a GPU with less available memory can retain a smaller nearby-frame window. A frame that cannot be prepared safely uses the existing CPU fallback. Closing or changing the source clears structure buffers while retaining the GPU device and compiled pipelines; switching GPU acceleration off releases the GPU Worker after any accepted calculation finishes. A new cutoff can require a new neighbor index, and uncommon shader variants are still compiled on demand.
 
@@ -83,6 +129,42 @@ The current renderer uses WebGL2. WebGPU analysis writes results to GPU buffers,
 Browsers provide no portable way to use a WebGPU `GPUBuffer` directly as a WebGL buffer. A future WebGPU renderer could draw from retained analysis buffers on the same `GPUDevice`, avoiding the full array round trip for supported displays. It would need to keep those buffers alive, map colors on GPU and write any CPU precision corrections back before drawing. The present analysis Worker owns its device and releases temporary output buffers after returning results, so this would require a change to device ownership and rendering. Legends, atom inspection and data export would still need summary statistics or selected values on the CPU.
 
 ## Compare CPU and GPU time
+
+For load-time Voronoi preparation using the bundled 28,800-atom HEA screw
+example, run the browser benchmark against the production build:
+
+```bash
+npm run build
+node scripts/benchmark-voronoi-browser.mjs --output /tmp/alloyview-voronoi-hea.json
+# Check scientific outputs against a previously saved report:
+node scripts/benchmark-voronoi-browser.mjs --reference /tmp/alloyview-voronoi-hea.json --output /tmp/alloyview-voronoi-hea-next.json
+```
+
+It records source visibility and preparation readiness separately from the
+first calculation's kernel-start and result latency. CPU runs cover isolated
+shared snapshots and nonisolated private copies, reporting module
+initializations, neighbor-index builds and uploads during the calculation.
+The GPU row measures preparation with SwiftShader; it does not time a complete
+GPU Voronoi analysis or establish a physical GPU speedup. Compare reports from
+the same machine and parameters, and include preparation cost rather than
+treating work moved to loading as eliminated work.
+
+In one verified Chromium run with three CPU Workers, time from **Calculate**
+to the first cell chunk fell from 29 to 5.7 ms with shared snapshots, and from
+32.7 to 21 ms with private copies. Background preparation finished about
+0.10–0.12 seconds after the structure became visible. Both modes reused all
+three prepared Workers with zero new kernel initializations, index builds or
+coordinate uploads, compared with three of each previously. All 13 scientific
+output digests matched. The complete shared-memory calculation remained about
+0.74 seconds, so these single-run measurements demonstrate reduced startup
+latency rather than a general reduction in total calculation time.
+
+In that run's SwiftShader probe, the four targeted pipelines, current-frame
+upload and index, 512-cell workspace and discarded-cell dispatch were ready
+18.0 seconds after loading began. The 23 common pipelines finished warming at
+29.6 seconds; previously the first coordinate upload waited about 29.4 seconds
+for that broader warmup. These are software-adapter preparation timings, with
+no complete GPU Voronoi timing or physical GPU speed claim.
 
 With Node.js 24 and Chrome/Chromium installed, run:
 

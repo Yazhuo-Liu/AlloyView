@@ -32,6 +32,27 @@ async function getKernel() {
   return kernelPromise;
 }
 
+/** Allocate the reusable native cell and output buffers without tessellating
+ * any atoms. The initialized module remains resident across source changes. */
+export async function warmupVoronoi({ onPhase = () => {} } = {}) {
+  const kernelReused = Boolean(kernelPromise);
+  if (!kernelReused) onPhase('initializing');
+  const kernel = await getKernel();
+  growPlanes(kernel, 64); growFaces(kernel, 64); growGeometry(kernel, 64, 64, 256);
+  kernel.module._alloy_voronoi_init(1);
+  return { warmed: true, kernelReused };
+}
+
+/** Prepare only the immutable source index; no per-atom cells or statistics
+ * are calculated until the foreground analysis requests them. */
+export async function prepareVoronoiFrame(frame, { context, onContext = () => {}, onPhase = () => {} } = {}) {
+  const warmed = await warmupVoronoi({ onPhase });
+  if (!context) onPhase('indexing');
+  const prepared = resolveContext(frame, context);
+  onContext(prepared);
+  return { ...warmed, indexReused: Boolean(context), atomCount: prepared.count };
+}
+
 function growPlanes(kernel, count) {
   if (count <= kernel.capacity) return;
   const { module } = kernel, capacity = Math.max(64, 2 ** Math.ceil(Math.log2(count)));

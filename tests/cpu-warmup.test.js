@@ -87,12 +87,17 @@ test('sixteen logical cores can prewarm fourteen slots rather than the old fixed
   const pool = new AnalysisPool({ environment: environment(16), workerFactory: manualFactory(stats) });
   try {
     const warming = pool.warmupCpu({ atomCount: 100_000 });
-    while (stats.messages.length < 14) await tick();
-    for (const { worker, data, transfers } of stats.messages) {
-      assert.equal(data.kind, 'warmup');
-      assert.equal(data.fractional, undefined, 'preheat never duplicates a source frame');
-      assert.deepEqual(transfers, []);
-      worker.reply(data, { warmed: true, kernelReused: false });
+    let replied = 0;
+    while (replied < 14) {
+      while (stats.messages.length === replied) await tick();
+      assert.ok(stats.messages.length - replied <= 2, 'module startup uses bounded groups');
+      for (const { worker, data, transfers } of stats.messages.slice(replied)) {
+        assert.equal(data.kind, 'warmup');
+        assert.equal(data.fractional, undefined, 'preheat never duplicates a source frame');
+        assert.deepEqual(transfers, []);
+        worker.reply(data, { warmed: true, kernelReused: false });
+        replied++;
+      }
     }
     const status = await warming;
     assert.equal(status.readyWorkers, 14);

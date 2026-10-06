@@ -13,7 +13,7 @@ async function runVoronoiChecks() {
     import('./src/analysis/analysis-pool.js'), import('./tests/helpers/crystals.js'), import('./src/data/model.js'), import('./src/analysis/voronoi.js'),
   ]);
   const cpu = new AnalysisPool(), gpu = new AnalysisPool(); cpu.setGpuEnabled(false); gpu.setGpuEnabled(true);
-  const rows = [], check = (condition, message) => { if (!condition) throw new Error(message); };
+  const rows = [], preparations = [], check = (condition, message) => { if (!condition) throw new Error(message); };
   const compare = (actual, expected, tolerance, label) => {
     check(actual.length === expected.length, label + ' array length'); let error = 0;
     for (let index = 0; index < actual.length; index++) {
@@ -111,7 +111,27 @@ async function runVoronoiChecks() {
     const unknownLabels = { ...binary, typeLabels: ['Type 1', 'Type 2'] };
     await run('Numeric source type labels select GPU sites without inferred elements', unknownLabels, { selectedTypes: ['Type 2'] });
     const fcc = crystalFrame('fcc', 2, 3.52);
-    await run('Periodic FCC', fcc);
+    const preparationProgress = [], preparationStarted = performance.now();
+    const prepared = await gpu.prepareGpuFrame(fcc,{analysisKinds:['voronoi'],onProgress:value=>preparationProgress.push(value)});
+    const preparedFrameId = gpu.gpuBackend.frameIds.get(fcc);
+    check(prepared.preparedVoronoiFrameIds.includes(preparedFrameId) && prepared.voronoiWorkspaceAtoms >= fcc.types.length
+      && prepared.neighborIndexCount > 0, 'Load-style preparation must retain actual source/index/scratch');
+    check(prepared.atomicVolume === undefined && prepared.faceOffsets === undefined,
+      'Preparation must not publish scientific results');
+    check(preparationProgress.some(value=>value.phase==='warming-kernels'), 'One-cell driver warmup must run before readiness');
+    const afterPreparation = await run('Periodic FCC', fcc);
+    check(afterPreparation.kernelReused && afterPreparation.inputReused && afterPreparation.gpuInputReused,
+      'The first prepared calculation must reuse workspace, source upload and device');
+    const afterCalculation = gpu.gpuCacheStatus;
+    check(afterCalculation.uploadCount === prepared.uploadCount && afterCalculation.neighborIndexBuildCount === prepared.neighborIndexBuildCount,
+      'Prepared FCC first analysis must not upload input or rebuild its complete initial-radius index');
+    const repeatedPreparation = await gpu.prepareGpuFrame(fcc,{analysisKinds:['voronoi']});
+    check(repeatedPreparation.voronoiKernelWarmupCount === prepared.voronoiKernelWarmupCount
+      && repeatedPreparation.uploadCount === prepared.uploadCount, 'Unchanged load preparation must reuse every completed stage');
+    preparations.push({label:'Load-style FCC preparation and genuine warmed first-analysis parity',
+      elapsedIncludingValidationMs:performance.now()-preparationStarted,neighborIndexBuildCount:prepared.neighborIndexBuildCount,
+      voronoiKernelWarmupCount:prepared.voronoiKernelWarmupCount,workspaceAtoms:prepared.voronoiWorkspaceAtoms,
+      inputReused:afterPreparation.inputReused,gpuInputReused:afterPreparation.gpuInputReused});
     const reused = await run('FCC device/frame/workspace reused', fcc, { bins: 37 });
     check(reused.kernelReused && reused.inputReused && reused.gpuInputReused, 'GPU resident inputs and convex-cell workspace must be reused');
     await run('Central-atom range retains original face neighbors', fcc, { startAtom: 5, endAtom: 17 });
@@ -194,7 +214,7 @@ async function runVoronoiChecks() {
     check(queued.every(result => result.backend === 'gpu' && result.inputReused && result.gpuInputReused), 'Voronoi and CNA share resident worker/device/frame');
     check(queued[1].structures.every(type => type === 1), 'Queued CNA still recognizes FCC');
     rows.push({ label: 'Cancellation and queued CNA reuse GPU worker', backend: 'gpu' });
-    return { rows };
-  } catch (error) { return { rows, error: error.stack || String(error) }; }
+    return { rows, preparations };
+  } catch (error) { return { rows, preparations, error: error.stack || String(error) }; }
   finally { cpu.close(); gpu.close(); }
 }

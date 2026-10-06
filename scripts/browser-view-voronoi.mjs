@@ -6,8 +6,9 @@ import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { withWebGpuBrowser } from './webgpu-browser.mjs';
 
-// Small real CPU tessellations isolate display/camera regressions. Graphics
-// use SwiftShader and these timings make no hardware performance claim.
+// Small real CPU tessellations isolate display/camera regressions; the real
+// HEA example checks selected-only cells. SwiftShader validates graphics
+// without making a hardware performance claim.
 const root = resolve(import.meta.dirname, '..');
 assert.ok(existsSync(resolve(root, 'dist/index.html')), 'Run npm run build first.');
 const fixtures = await mkdtemp(resolve(tmpdir(), 'alloyview-floating-voronoi-'));
@@ -84,8 +85,8 @@ try {
       await call('DOM.setFileInputFiles', { nodeId, files: [resolve(fixtures, filename)] });
       await evaluate(`document.querySelector(${JSON.stringify(selector)}).dispatchEvent(new Event('change',{bubbles:true}))`);
     }
-    async function load(filename, count) {
-      await file('#file-input', filename);
+    async function load(filename, count, { sourcePath = filename } = {}) {
+      await file('#file-input', sourcePath);
       await waitFor(`document.getElementById('file-name').textContent===${JSON.stringify(filename)} && document.getElementById('loading').hidden && floatingChecks.renderer?.atomCount===${count}`, `load ${filename}`);
     }
     async function pick(index = null, { comparison = false, replica = null, slice = false } = {}) {
@@ -139,6 +140,7 @@ try {
     assert.equal(await evaluate('floatingChecks.renderer.voronoiAllCellLayer.highlightedCellCount'), 1);
     assert.equal(await evaluate('floatingChecks.renderer.voronoiAllCellLayer.renderedHighlightReplicaCount'), 1);
     assert.ok(afterSelection.orange > beforeSelection.orange, 'selected all-cell polygon gains contrasting highlighted pixels');
+    assert.ok(afterSelection.paleEdges > 0, 'all-cell outlines have visible light pixels');
     assert.equal(await evaluate('document.getElementById("show-voronoi-cell").checked'), false, 'all-cell selection highlighting works with single-cell inspection off');
     assert.equal(await evaluate('floatingChecks.scienceUnchanged()'), true, 'radius and selection preserve completed analysis');
     console.log('Floating Voronoi: default blue faces, shared atom radii and all-cell selection highlighting passed.');
@@ -342,12 +344,76 @@ try {
     await press('#slice-clear-picks');
     assert.deepEqual(await evaluate('Array.from(floatingChecks.renderer.sliceSelectedAtoms).filter(index=>index>=0)'), []);
     console.log('Floating Voronoi: two/three Slice anchors remain highlighted after auto-finish and measurement clearing.');
+
+    // Exercise the real multicomponent dislocation example, with only the
+    // picked cell shown. A small display box reveals the core neighborhood;
+    // its complete 28,800-atom Voronoi analysis remains unchanged.
+    await press('#close-file');
+    await load('hea-fcc-screw.dump', 28_800, { sourcePath: resolve(root, 'examples/hea-fcc-screw.dump') });
+    await showTool('voronoi'); await press('#run-voronoi');
+    await waitFor('document.getElementById("voronoi-state").textContent==="Calculated"', 'HEA full CPU Voronoi');
+    await expand('#voronoi-cell-display'); await change('voronoi-radius-percent', '20', { event: 'input' });
+    await change('show-all-voronoi-cells', false, { checkbox: true });
+    await change('show-voronoi-cell', true, { checkbox: true });
+    await showTool('display'); await change('show-cell', false, { checkbox: true });
+    for (const id of ['png-background', 'png-legend', 'png-axes']) await change(id, false, { checkbox: true });
+    await change('background', '#ffffff', { event: 'input' });
+    await evaluate('if(document.getElementById("toggle-atom-details").getAttribute("aria-expanded")==="true")document.getElementById("toggle-atom-details").click();floatingChecks.saveScience();floatingChecks.heaIndex=floatingChecks.coreAtom();floatingChecks.focusLocal(floatingChecks.heaIndex)');
+    const heaPick = await pick(await evaluate('floatingChecks.heaIndex'));
+    await waitFor(`floatingChecks.renderer.voronoiCellGeometry?.atomIndex===${heaPick.index}`, 'HEA picked cell geometry');
+    const singleWhite = await pixels();
+    assert.equal(await evaluate('floatingChecks.renderer.voronoiCellLayer.highlightedCellCount'), 1);
+    assert.ok(singleWhite.orange > 20 && singleWhite.paleEdges > 20, 'single picked HEA cell has amber faces and light outlines');
+    await change('show-voronoi-cell', false, { checkbox: true }); const noSingle = await pixels();
+    assert.ok(singleWhite.orange > noSingle.orange + 20 && singleWhite.paleEdges > noSingle.paleEdges + 20, 'amber facets and pale edges belong to the inspected cell');
+    await change('show-voronoi-cell', true, { checkbox: true });
+    await waitFor(`floatingChecks.renderer.voronoiCellGeometry?.atomIndex===${heaPick.index}`, 'reenable cached HEA cell');
+    const heaWhiteScreenshot = await screenshot('hea-selected-cell-white.png');
+    const heaPng = await download('#export-png');
+    assert.ok(heaPng.orange > 20 && heaPng.paleEdges > 20, 'PNG includes the selected-only HEA amber cell and light outlines');
+    await writeFile(resolve(artifacts, 'hea-selected-cell.png'), Buffer.from(heaPng.bytes));
+    await change('background', '#151b2e', { event: 'input' });
+    const singleDark = await pixels(); assert.ok(singleDark.orange > 20 && singleDark.paleEdges > 20);
+    const heaDarkScreenshot = await screenshot('hea-selected-cell-dark.png');
+    const next = await evaluate('floatingChecks.localNeighbor(floatingChecks.heaIndex)');
+    await pick(next); await waitFor(`floatingChecks.renderer.voronoiCellGeometry?.atomIndex===${next}`, 'selection changes HEA cell mesh');
+    await pixels(); assert.equal(await evaluate('floatingChecks.renderer.voronoiCellLayer.highlightedCellCount'), 1);
+    await showTool('selectionGroups'); await press('#add-selection-group'); await expand('#selection-group-settings .selection-group-members');
+    await change('selection-group-operation', 'replace'); await change('selection-group-ids', String(await evaluate(`floatingChecks.renderer.frame.ids[${next}]`)), { event: 'input' });
+    await press('#apply-selection-group-ids'); await press('#toggle-selection-group-visibility'); await pixels();
+    assert.equal(await evaluate('floatingChecks.renderer.voronoiCellLayer.highlightedCellCount'), 0, 'hidden atom suppresses its selected-only cell');
+    await press('#toggle-selection-group-visibility');
+    await evaluate('floatingChecks.renderer.setSlices([])');
+    await showTool('replicate'); await change('replicate-c', '2'); await press('#apply-replicate');
+    await waitFor('floatingChecks.renderer.repetitions[2]===2', 'HEA display replicas'); await pixels();
+    assert.equal(await evaluate('floatingChecks.renderer.voronoiCellLayer.renderedReplicaCount'), 2);
+    await showTool('display'); await change('compare-view', true, { checkbox: true });
+    await waitFor('floatingChecks.comparison?.frame===floatingChecks.renderer.frame', 'HEA selected-only second view');
+    await evaluate('floatingChecks.comparison.resize();floatingChecks.comparison.setCameraState(floatingChecks.renderer.getCameraState())');
+    await pixels('comparison');
+    assert.equal(await evaluate('floatingChecks.comparison.voronoiCellLayer.highlightedCellCount'), 1);
+    assert.equal(await evaluate('floatingChecks.comparison.voronoiCellLayer.renderedReplicaCount'), 2);
+    assert.ok((await download('#export-comparison-png')).paleEdges > 0);
+    await press('#comparison-view .comparison-close'); await showTool('replicate'); await press('#reset-replicate');
+    await evaluate(`floatingChecks.focusLocal(${next})`);
+    await change('background', '#ffffff', { event: 'input' });
+    mobile = true;
+    await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 640, deviceScaleFactor: 2, mobile });
+    await call('Emulation.setTouchEmulationEnabled', { enabled: true }); await delay(100);
+    await evaluate('floatingChecks.renderer.resize();floatingChecks.renderer.setCameraState({fieldWidth:12})');
+    const singlePhone = await pixels();
+    assert.equal(singlePhone.width, 780); assert.ok(singlePhone.orange > 20 && singlePhone.paleEdges > 20);
+    const heaPhoneScreenshot = await screenshot('hea-selected-cell-phone-dpr2.png');
+    assert.equal(await evaluate('floatingChecks.scienceUnchanged()'), true, 'HEA inspection, colors, masks, replicas and DPI preserve full scientific results');
+    console.log(`HEA selected-only cells: white/dark/DPR2 light-edge pixels ${singleWhite.paleEdges}/${singleDark.paleEdges}/${singlePhone.paleEdges}; amber facets, selection changes, masks, replicas, comparison and PNG passed.`);
     return { adapter, graphics: 'SwiftShader validation only', compute: 'CPU Workers', atoms: 32,
       defaults: { color: '#3b82f6', opacity: .5 }, selectedAtomId: selected.id,
       checks: ['shared Voronoi/Display radii', 'lit faces and selected polygon highlights', 'floating default placement', 'desktop drag/resize',
         'independent orbit/pan/zoom and PNG', 'perspective/parallel camera transfer with roll', 'replicated highlights and masks',
-        'camera/layout/radius recipe and disabled-window replay', 'phone drag/resize bounds and PNG', 'retained Slice anchors and separate measurement channel'],
-      screenshots: [defaultScreenshot, highlightedScreenshot, phoneScreenshot, narrowScreenshot, sliceScreenshot], artifacts };
+        'camera/layout/radius recipe and disabled-window replay', 'phone drag/resize bounds and PNG', 'retained Slice anchors and separate measurement channel',
+        'HEA selected-only amber facets/light edges on white/dark/DPR2, masks/replicas/comparison/PNG'],
+      hea: { atoms: 28_800, selectedAtomId: heaPick.id, edgePixels: { white: singleWhite.paleEdges, dark: singleDark.paleEdges, phoneDpr2: singlePhone.paleEdges } },
+      screenshots: [defaultScreenshot, highlightedScreenshot, phoneScreenshot, narrowScreenshot, sliceScreenshot, heaWhiteScreenshot, heaDarkScreenshot, heaPhoneScreenshot], artifacts };
   }, { software: true });
   await writeFile(resolve(artifacts, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
@@ -409,15 +475,60 @@ async function initializeChecks() {
     }
     return null;
   };
+  checks.coreAtom = () => {
+    const frame = checks.renderer.frame, distance = frame.properties.find(property => property.name === 'core_distance')?.data;
+    const candidates = [];
+    for (let index = 0; index < frame.ids.length; index++) {
+      const fractional = frame.fractional.subarray(index * 3, index * 3 + 3);
+      if (fractional.some(value => value < .3 || value > .7)) continue;
+      const score = distance ? distance[index] : fractional.reduce((sum, value) => sum + (value - .5) ** 2, 0);
+      if (Number.isFinite(score)) candidates.push({ index, score });
+    }
+    candidates.sort((a, b) => a.score - b.score);
+    // A dense core can occlude its mathematically closest atom. Keep real
+    // pointer input by choosing the nearest interior core atom that is visible.
+    for (const candidate of candidates.slice(0, 128)) {
+      checks.focusLocal(candidate.index);
+      if (checks.pickPoint(candidate.index)) return candidate.index;
+    }
+    throw new Error('HEA source has no reachable interior core atom.');
+  };
+  checks.localNeighbor = index => {
+    const r = checks.renderer, center = r.displayPositions.subarray(index * 3, index * 3 + 3);
+    const candidates = [];
+    for (let atom = 0; atom < r.atomCount; atom++) {
+      if (atom === index || !r.isAtomVisible(atom, [0, 0, 0])) continue;
+      const distance = center.reduce((sum, value, axis) => sum + (value - r.displayPositions[atom * 3 + axis]) ** 2, 0);
+      if (distance > .01) candidates.push({ atom, distance });
+    }
+    candidates.sort((a, b) => a.distance - b.distance);
+    const chosen = candidates.find(candidate => checks.pickPoint(candidate.atom));
+    if (!chosen) throw new Error('HEA local neighborhood has no reachable atom.');
+    return chosen.atom;
+  };
+  checks.focusLocal = index => {
+    const r = checks.renderer, center = Array.from(r.displayPositions.subarray(index * 3, index * 3 + 3));
+    r.setCameraState({ yaw: .371, pitch: .287, constrainUp: true });
+    r.resetCamera(); const camera = r.getCameraState();
+    const position = camera.position.map((value, axis) => value + center[axis] - camera.center[axis]);
+    r.setCameraState({ position, projectionMode: 'orthographic', fieldWidth: 12 });
+    const planes = [];
+    for (let axis = 0; axis < 3; axis++) for (const direction of [-1, 1]) {
+      const normal = [0, 0, 0]; normal[axis] = direction;
+      planes.push({ id: `local-${axis}-${direction}`, normal, position: direction * center[axis] + 4, enabled: true });
+    }
+    r.setSlices(planes);
+  };
   function summary(canvas) {
     const values = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
-    let hash = 2166136261, blue = 0, orange = 0;
+    let hash = 2166136261, blue = 0, orange = 0, paleEdges = 0;
     for (let i = 0; i < values.length; i++) hash = Math.imul(hash ^ values[i], 16777619);
     for (let i = 0; i < values.length; i += 4) if (values[i + 3] > 50) {
       if (values[i + 2] > values[i] * 1.2 && values[i + 2] > values[i + 1] * 1.05) blue++;
       if (values[i] > 150 && values[i + 1] > 70 && values[i + 2] < values[i + 1] * .8) orange++;
+      if (values[i] > 210 && values[i + 1] > 210 && values[i + 2] > 140) paleEdges++;
     }
-    return { width: canvas.width, height: canvas.height, hash: hash >>> 0, blue, orange };
+    return { width: canvas.width, height: canvas.height, hash: hash >>> 0, blue, orange, paleEdges };
   }
   checks.pixels = (kind = 'renderer') => summary(checks[kind].captureImage({ includeBackground: false }));
   checks.atomHighlightPixels = index => {

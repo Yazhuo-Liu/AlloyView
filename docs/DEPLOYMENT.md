@@ -129,12 +129,13 @@ the actual deployed application and browser settings.
 Serve the contents of `dist/` with correct MIME types, especially
 `application/wasm` when the optional native core has been built.
 
-The verified default uses JavaScript module Workers; the optional Wasm build
-also uses non-shared memory and is not currently selected by the range-partitioned
-analysis pool. Cross-origin isolation is therefore not mandatory.
-PTM and the initial CPU DXA tool load their checked-in Wasm modules from the
-same versioned runtime tree. DXA owns a dedicated whole-frame Worker and
-cancels by terminating it; neither native module requires Emscripten pthreads.
+JavaScript module Workers and the checked-in PTM, Voro++ and DXA Wasm modules
+load from the same versioned runtime tree. Cross-origin isolation is optional:
+the ordinary analysis pool works with either shared coordinate snapshots or
+resident private copies. Isolated DXA can use its reusable threaded Wasm pool
+and cooperative cancellation; its nonisolated fallback cancels synchronous
+native calculations by terminating the dedicated Worker. Background module
+initialization retains reusable resources across source changes.
 `npm run dev` and `npm run preview` nevertheless send:
 
 ```text
@@ -143,17 +144,16 @@ Cross-Origin-Embedder-Policy: require-corp
 Cross-Origin-Resource-Policy: same-origin
 ```
 
-These headers allow the JavaScript coordination Worker pool to share one
-coordinate buffer and would become mandatory for a future Emscripten pthreads
-build. Every embedded resource must satisfy COEP (same-origin or an appropriate
+These headers allow analysis Workers to share coordinate snapshots and enable
+the existing Emscripten pthreads DXA build. Every embedded resource must satisfy COEP (same-origin or an appropriate
 CORP/CORS response). AlloyView intentionally has no CDN resources, which keeps
 that deployment tractable.
 
 GitHub Pages does not allow custom response headers. That is compatible with the
-current Worker pool: it uses memory-budgeted structured-clone coordinate copies
+current Worker pool: it uses memory-budgeted resident private coordinate copies
 inside the user's browser when `crossOriginIsolated` is false. GitHub still only
 serves static files and never performs the calculation or receives the selected
-structure. If Wasm pthreads are introduced later,
-deploy behind a host that can provide the COOP and COEP headers above (or add an
-isolation service worker after validating its tradeoffs); do not enable threaded
-Wasm in the current Pages workflow.
+structure. Shared CPU snapshots and threaded DXA require a host that supplies
+the COOP and COEP headers above (or an isolation service worker whose tradeoffs
+have been validated). The current Pages workflow uses the nonisolated fallback;
+WebGPU preparation and analysis work independently of shared CPU memory.

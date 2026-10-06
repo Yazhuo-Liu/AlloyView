@@ -47,7 +47,7 @@ async function run(data, controller) {
     }
     progress({ phase: 'initializing', completedAtoms: 0, totalAtoms: data.frame?.fractional.length / 3 || 0 });
     if (data.type === 'warmup') {
-      await runtime.warmup({ signal: controller.signal });
+      await runtime.warmup({ ...data.options, signal: controller.signal });
       checkSignal(controller.signal);
       self.postMessage({ id: data.id, ok: true, ...cacheState() });
       return;
@@ -84,7 +84,21 @@ async function run(data, controller) {
         referenceFractional: referenceFrame.fractional, referenceCell: referenceFrame.cell };
     }
     if (data.type === 'analyze' && Number.isInteger(data.frameIndex)) runtime.configureCache({ currentIndex: data.frameIndex });
-    if (data.type === 'analyze') releasePins = runtime.pinFrames([frame, referenceFrame]);
+    if (['analyze','prepare-frame'].includes(data.type)) releasePins = runtime.pinFrames([frame, referenceFrame]);
+    if (data.type === 'prepare-frame') {
+      const prepare = () => runtime.withErrors(() => runtime.prepareFrame(frame,
+        { ...data.options, signal:controller.signal, frameIndex:data.frameIndex, onProgress:progress }));
+      try { await prepare(); }
+      catch (error) {
+        if (!runtime.recoverMemory(error)) throw error;
+        checkSignal(controller.signal); await prepare();
+      }
+      checkSignal(controller.signal);
+      releasePins?.(); releasePins = null; runtime.finishAnalysis();
+      progress({phase:'complete',completedAtoms:frame.fractional.length / 3,totalAtoms:frame.fractional.length / 3});
+      self.postMessage({id:data.id,ok:true,...cacheState()});
+      return;
+    }
     if (parameters?.kind === 'strain' && parameters.ptmFitId !== undefined) {
       if (!Number.isInteger(parameters.ptmFitId) || parameters.ptmFitId < 1) throw new Error('The GPU PTM fit identifier is invalid.');
       if (parameters.ptmInput) {
@@ -179,10 +193,6 @@ async function run(data, controller) {
     checkSignal(controller.signal);
     if (data.type === 'analyze') { releasePins?.(); releasePins = null; runtime.finishAnalysis(); }
     progress({ phase: 'complete', completedAtoms: frame.fractional.length / 3, totalAtoms: frame.fractional.length / 3 });
-    if (data.type === 'prepare-frame') {
-      self.postMessage({ id: data.id, ok: true, ...cacheState() });
-      return;
-    }
     const buffers = [...new Set(Object.values(result).filter(ArrayBuffer.isView).map((value) => value.buffer))];
     self.postMessage({ id: data.id, ok: true, result: { ...result, backend: 'gpu',
       engine: parameters.kind === 'dxaLocal' ? 'webgpu-dxa-local-structures' : parameters.kind === 'strain' ? 'webgpu-strain-tensor' : parameters.kind === 'ptmNeighbors' ? 'webgpu-ptm-neighbors' : parameters.kind === 'cna' ? `webgpu-cna-${parameters.mode ?? 'adaptive'}`
@@ -198,7 +208,7 @@ async function run(data, controller) {
       runtime.clearPtmBuffers(activeFrame, newPtmFitId);
       if (activeFrame.ptmFit?.id === newPtmFitId) delete activeFrame.ptmFit;
     }
-    if (data.type === 'analyze') { releasePins?.(); releasePins = null; runtime.finishAnalysis(); }
+    if (['analyze','prepare-frame'].includes(data.type)) { releasePins?.(); releasePins = null; runtime.finishAnalysis(); }
     self.postMessage({ id: data.id, ok: false, error: error.message || String(error), name: error.name, ...cacheState() });
   } finally { releasePins?.(); controllers.delete(data.id); }
 }

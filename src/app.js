@@ -253,8 +253,11 @@ function updateGpuComputingTitle() {
         : 'GPU acceleration is on. Structure frames are prepared in the background; calculate again to use this preference.';
 }
 
-function scheduleGpuFramePrefetch() {
-  if (!state.frame || sourceLoadingOwner !== null) return;
+function scheduleGpuFramePrefetch({ committedFrame = null } = {}) {
+  // A freshly parsed source can prepare its committed frame while the UI is
+  // still finishing the load. Ordinary calls during source selection must
+  // not upload the previous source's frame.
+  if (!state.frame || (sourceLoadingOwner !== null && committedFrame !== state.frame)) return;
   analysisPool.associateGpuFrame(state.frame, state.frameIndex);
   void gpuPrefetch.setFrame({
     sourceKey: processingSourceKey(),
@@ -1339,6 +1342,10 @@ async function showFrame(index) {
 async function displayFrame(frame, { resetCamera = false } = {}) {
   abortAnalysisJobs();
   state.frame = frame;
+  // Prepare modules, snapshots and neighbour indices alongside the first
+  // render. Automatic analyses retain priority over both background queues.
+  void cpuPrefetch.setFrame({ sourceKey: state.sourceVersion, frame });
+  scheduleGpuFramePrefetch({ committedFrame: frame });
   selectionGroupControls.refresh();
   syncSelectionGroupInteraction();
   // Previous-frame "Calculated" labels cannot describe pending outputs in the
@@ -1390,10 +1397,6 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   setRangeProgress(elements['frame-slider']);
   updateCnaMethodUi();
   updateCspMethodUi();
-  void cpuPrefetch.setFrame({ sourceKey: state.sourceVersion, frame });
-  // Rendering remains independent of GPU preparation. Automatic foreground
-  // analyses take priority over these background uploads in the shared pool.
-  scheduleGpuFramePrefetch();
   const pending = [];
   const strainRequest = state.analysis.strain.request;
   for (const kind of Object.keys(ANALYSES)) {

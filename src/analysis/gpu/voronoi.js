@@ -48,7 +48,7 @@ function workspace(runtime, capacity) {
     const states = allocate(capacity * GPU_VORONOI_STATE_WORDS * 4);
     const settings = allocate(GPU_VORONOI_SETTINGS_BYTES);
     const planes = allocate(capacity * GPU_VORONOI_MAX_PLANES * 32);
-    return runtime.voronoiWorkspace = { capacity, geometry, faces, states, settings, planes, buffers };
+    return runtime.voronoiWorkspace = { capacity, bytes:voronoiGpuWorkspaceBytes(capacity), geometry, faces, states, settings, planes, buffers };
   } catch (error) { runtime.disposeBuffers(buffers); throw error; }
 }
 
@@ -86,6 +86,66 @@ export function prepareGpuVoronoi(frame, parameters = {}) {
     relativeFaceAreaThreshold: parameters.relativeFaceAreaThreshold ?? 0, bins: parameters.bins ?? 50 };
 }
 
+export function voronoiGpuInitialRadius(prepared) {
+  return prepared.exactSingleSite ? Math.min(...prepared.geometry.lengths) * .45 : prepared.scale * 2.5;
+}
+
+function voronoiSettings(frame, { geometry, scale, exactSingleSite }) {
+  const words = new Uint32Array(GPU_VORONOI_SETTINGS_BYTES / 4), floats = new Float32Array(words.buffer);
+  for (let axis = 0; axis < 3; axis++) {
+    floats.set([...geometry.normals[axis], geometry.lengths[axis]], axis * 4);
+    floats.set(Array.from(geometry.inverseNormals).slice(axis * 3, axis * 3 + 3), 12 + axis * 4);
+  }
+  for (let axis = 0; axis < 3; axis++) {
+    const height = frame.cell.pbc[axis] ? geometry.lengths[axis] / (2 * scale) : 1 / (geometry.lengths[axis] * scale);
+    for (let component = 0; component < 4; component++) {
+      const value = component < 3 ? geometry.normals[axis][component] : height, high = Math.fround(value);
+      floats[36 + axis * 8 + component] = high; floats[40 + axis * 8 + component] = value - high;
+      if (component < 3) {
+        const coefficient = frame.cell.vectors[axis * 3 + component] / scale, upper = Math.fround(coefficient);
+        floats[60 + axis * 8 + component] = upper; floats[64 + axis * 8 + component] = coefficient - upper;
+      }
+    }
+  }
+  floats[24] = scale; words[28] = Number(exactSingleSite);
+  return words;
+}
+
+/** Prepare the actual source index and bounded batch buffers during loading.
+ * One discarded cell primes native driver dispatch paths; no scientific
+ * arrays, histograms or geometry results are produced or transferred. */
+export async function prepareGpuVoronoiFrame(runtime, source, parameters = {}, { signal, frameIndex, onProgress = () => {} } = {}) {
+  checkSignal(signal);
+  const selection = prepareVoronoiSelection(source, parameters.selectedTypes), frame = selection.frame;
+  if (!selection.isAll && frame.gpuFrameId === undefined) frame.gpuFrameId = -++GpuRuntime.frameSerial;
+  const release = runtime.pinFrames?.([frame]);
+  try {
+    await runtime.warmup({ analysisKinds:['voronoi'], signal });
+    checkSignal(signal);
+    await runtime.uploadFrame(frame, {signal, frameIndex});
+    const frameKey = runtime.frameKey(frame);
+    if (runtime.cacheStatus().preparedVoronoiFrameIds.includes(frameKey)) return runtime.cacheStatus();
+    const prepared = prepareGpuVoronoi(frame), radius = voronoiGpuInitialRadius(prepared);
+    onProgress({phase:'preparing-neighbors',completedAtoms:0,totalAtoms:prepared.count});
+    const context = await runtime.prepareNeighbors(frame, radius, {signal});
+    checkSignal(signal);
+    const scratch = workspace(runtime, voronoiGpuBatchSize(runtime, prepared.count));
+    runtime.write(scratch.settings, voronoiSettings(frame, prepared));
+    const bindings = runtime.neighborBindings(context, [scratch.settings, scratch.geometry, scratch.faces, scratch.states, scratch.planes]);
+    onProgress({phase:'warming-kernels',completedAtoms:0,totalAtoms:1});
+    for (const shader of [VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER]) {
+      await runtime.run(shader, bindings, 1, {signal,startAtom:0,endAtom:1,batchSize:0,workgroupSize:32});
+      checkSignal(signal);
+      await yieldWorker(); checkSignal(signal);
+    }
+    runtime.voronoiPreparations.set(frameKey, {radius,capacity:scratch.capacity,
+      sources:[VORONOI_INITIALIZE_SHADER,VORONOI_CLIP_SHADER]});
+    runtime.voronoiKernelWarmupCount++;
+    onProgress({phase:'prepared',completedAtoms:prepared.count,totalAtoms:prepared.count});
+    return runtime.cacheStatus();
+  } finally { release?.(); }
+}
+
 /** GPU-native incremental half-space intersection. Every invocation constructs
  * one complete cell; linked-cell images are neither uploaded nor downloaded.
  * Six rigorous seed bounds and twice-farthest-vertex coverage prove that no
@@ -113,23 +173,7 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
   await runtime.initialize(signal);
   const size = endAtom - startAtom, kernelReused = Boolean(runtime.voronoiWorkspace);
   const scratch = workspace(runtime, voronoiGpuBatchSize(runtime, size));
-  const settingsWords = new Uint32Array(GPU_VORONOI_SETTINGS_BYTES / 4), settingsFloats = new Float32Array(settingsWords.buffer);
-  for (let axis = 0; axis < 3; axis++) {
-    settingsFloats.set([...geometry.normals[axis], geometry.lengths[axis]], axis * 4);
-    settingsFloats.set(Array.from(geometry.inverseNormals).slice(axis * 3, axis * 3 + 3), 12 + axis * 4);
-  }
-  for (let axis = 0; axis < 3; axis++) {
-    const height = frame.cell.pbc[axis] ? geometry.lengths[axis] / (2 * scale) : 1 / (geometry.lengths[axis] * scale);
-    for (let component = 0; component < 4; component++) {
-      const value = component < 3 ? geometry.normals[axis][component] : height, high = Math.fround(value);
-      settingsFloats[36 + axis * 8 + component] = high; settingsFloats[40 + axis * 8 + component] = value - high;
-      if (component < 3) {
-        const coefficient = frame.cell.vectors[axis * 3 + component] / scale, upper = Math.fround(coefficient);
-        settingsFloats[60 + axis * 8 + component] = upper; settingsFloats[64 + axis * 8 + component] = coefficient - upper;
-      }
-    }
-  }
-  settingsFloats[24] = scale; settingsWords[28] = Number(exactSingleSite);
+  const settingsWords = voronoiSettings(frame, prepared), settingsFloats = new Float32Array(settingsWords.buffer);
   const result = Object.fromEntries(Object.entries(VORONOI_FIELDS).map(([name, [Type]]) => [name, new Type(size)]));
   const faceOffsets = new Uint32Array(size + 1), faceAreas = [], faceOrders = [], faceNeighbors = [],
     faceBoundary = [], faceAccepted = [], voronoiIndices = new Array(size);
@@ -164,7 +208,7 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
     await yieldWorker(); checkSignal(signal);
   };
   onProgress({ phase: 'analyzing', completedAtoms: 0, totalAtoms: size });
-  const initialRadius = exactSingleSite ? Math.min(...geometry.lengths) * .45 : scale * 2.5;
+  const initialRadius = voronoiGpuInitialRadius(prepared);
   for (let begin = startAtom; begin < endAtom; begin += scratch.capacity) {
     checkSignal(signal);
     const end = Math.min(endAtom, begin + scratch.capacity), batchCount = end - begin;

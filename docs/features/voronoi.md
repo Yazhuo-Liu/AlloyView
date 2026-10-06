@@ -99,10 +99,15 @@ polygonal geometry and uses more memory; the single-cell preview constructs
 only the inspected cell.
 
 The default cell color is blue (`#3b82f6`), with opacity 0.5. Lit faces and
-outlined edges make neighboring cells easier to distinguish. While all-cell
+light outlined edges make neighboring cells easier to distinguish. The thin
+darker border keeps edges visible against a light background. While all-cell
 display is enabled, clicking an included atom highlights its associated cell,
 even when **Show the selected atom's cell** is unchecked. Measurement picks
-also highlight their associated cells, using the already constructed geometry.
+and slice-construction picks also highlight their associated cells. Highlighted
+cells use amber faces with stronger opacity and pale yellow edges in both
+single-cell and all-cell modes. Highlighting updates already constructed meshes
+without recalculating statistics; a new single-cell preview builds only that
+atom's geometry when it is not cached.
 
 **Atom radius** in this section controls the same percentage as **Display →
 Atom radius**. Its slider and numeric input synchronize in both directions and
@@ -137,6 +142,29 @@ when the corresponding display option is enabled. Atom radius remains one
 global value at `settings.display.radiusPercent`, shared with the Display tool.
 
 ## Implementation
+
+### Load-time preparation
+
+Loading a structure starts preparing its current frame before Voronoi is
+calculated. The CPU pool initializes reusable Voro++ modules and prepares a
+coordinate snapshot, neighbor index and native context in an adaptive number
+of Workers. Cross-origin isolation allows a shared snapshot; otherwise each
+Worker retains a private copy. Enabled GPU acceleration prepares the device,
+Voronoi pipelines, uploaded coordinates, initial neighbor index and bounded
+clipping workspace. A single discarded GPU-cell dispatch warms driver
+execution without publishing scientific results.
+
+Preparation does not activate this tool, color the atoms, calculate whole-frame
+statistics or build the optional display meshes. Foreground calculations have
+priority, and compatible repeated calculations reuse these resources. Loading
+prepares all atom types; analyzing a type subset prepares its corresponding
+inputs as needed. Frame and structure changes replace obsolete preparation.
+Physical replication increases the preparation target, while display-only
+replication does not. See [Performance](performance.md#preparation-when-a-structure-loads)
+for scheduling and memory limits.
+The [HEA benchmark](performance.md#compare-cpu-and-gpu-time) reports preparation
+and first-calculation latency separately and verifies unchanged scientific
+outputs against a saved reference report.
 
 ### CPU Workers
 

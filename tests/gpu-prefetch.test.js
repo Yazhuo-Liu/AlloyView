@@ -44,6 +44,54 @@ test('already resident GPU frames do not need CPU reparse on later visits', asyn
   await scheduler.setFrame(source('A', 5, 4));
   assert.equal(pool.uploads.length, uploadCount);
   assert.equal(reads.length, readCount);
+  assert.deepEqual(pool.preparations, [0, 4], 'visiting a coordinate-only cached frame still prepares its analysis inputs');
+});
+
+test('GPU frame preparation warms Voronoi first and reuses prepared indices, not just uploaded coordinates', async () => {
+  const pool = fakePool(3), calls = [];
+  const warmup = pool.warmupGpu.bind(pool), prepare = pool.prepareGpuFrame.bind(pool);
+  pool.warmupGpu = async options => { calls.push({ kind: 'warm', analyses: options.analysisKinds }); return warmup(options); };
+  pool.prepareGpuFrame = async (frame, options) => {
+    calls.push({ kind: 'prepare', index: options.frameIndex, analyses: options.analysisKinds });
+    return prepare(frame, options);
+  };
+  const scheduler = makeScheduler(pool);
+  scheduler.setFrame(source('HEA', 3, 1));
+  await scheduler.setEnabled(true);
+  assert.deepEqual(calls[0], { kind: 'warm', analyses: ['voronoi'] });
+  assert.deepEqual(calls[1], { kind: 'prepare', index: 1, analyses: ['voronoi'] });
+  assert.deepEqual(pool.preparations, [1]);
+  assert.equal(calls.at(-1).kind, 'warm');
+  assert.equal(calls.at(-1).analyses, undefined, 'remaining analyses warm after the current-frame inputs');
+  await scheduler.setFrame(source('HEA', 3, 1));
+  assert.deepEqual(pool.preparations, [1], 'valid prepared analysis inputs are not rebuilt on repeat visits');
+});
+
+test('GPU-off structure loading does not start a device, pipeline, or frame upload', async () => {
+  const pool = fakePool(3), scheduler = makeScheduler(pool);
+  await scheduler.setFrame(source('HEA', 3, 0));
+  assert.equal(pool.warmups, 0);
+  assert.deepEqual(pool.uploads, []);
+  assert.deepEqual(pool.preparations, []);
+});
+
+test('finishing a source load joins the same in-flight frame preparation instead of cancelling it', async () => {
+  const pool = fakePool(3), started = deferred(), release = deferred();
+  const prepare = pool.prepareGpuFrame.bind(pool);
+  let preparationSignal;
+  pool.prepareGpuFrame = async (frame, options) => {
+    preparationSignal = options.signal; started.resolve(); await release.promise;
+    return prepare(frame, options);
+  };
+  const scheduler = makeScheduler(pool), committed = source('HEA', 1, 0);
+  scheduler.setFrame(committed);
+  const pending = scheduler.setEnabled(true);
+  await started.promise;
+  assert.equal(scheduler.setFrame(committed), pending);
+  assert.equal(preparationSignal.aborted, false);
+  release.resolve(); await pending;
+  assert.deepEqual(pool.preparations, [0]);
+  assert.deepEqual(pool.uploads, [0]);
 });
 
 test('source preflight pauses background work while preserving resident frames for a rejected selection', async () => {
@@ -180,24 +228,27 @@ function makeScheduler(pool, { reads = [], statuses = [] } = {}) {
 
 function fakePool(capacity) {
   return {
-    uploads: [], warmups: 0,
+    uploads: [], preparations: [], warmups: 0,
     gpuCacheStatus: { capacity: 1, frameCount: 0, cachedFrameIndexes: [] },
     async warmupGpu() { this.warmups += 1; return this.gpuCacheStatus; },
     async configureGpuCache({ frameCount, currentIndex }) {
       this.gpuCacheStatus = { ...this.gpuCacheStatus, frameCount, currentIndex };
       return this.gpuCacheStatus;
     },
-    async prepareGpuFrame(frame, { frameIndex, signal }) {
+    async prepareGpuFrame(frame, { frameIndex, signal, analysisKinds }) {
       assert.equal(signal.aborted, false);
       assert.equal(frame.index, frameIndex);
-      this.uploads.push(frameIndex);
+      if (!this.gpuCacheStatus.cachedFrameIndexes.includes(frameIndex)) this.uploads.push(frameIndex);
+      if (analysisKinds?.includes('voronoi')) this.preparations.push(frameIndex);
       this.gpuCacheStatus = { ...this.gpuCacheStatus, capacity,
         fullTrajectory: capacity >= this.gpuCacheStatus.frameCount,
+        preparedVoronoiFrameIndexes: [...new Set([...(this.gpuCacheStatus.preparedVoronoiFrameIndexes ?? []),
+          ...(analysisKinds?.includes('voronoi') ? [frameIndex] : [])])],
         cachedFrameIndexes: [...new Set([...this.gpuCacheStatus.cachedFrameIndexes, frameIndex])].sort((a, b) => a - b) };
       return this.gpuCacheStatus;
     },
     async clearGpuFrames() {
-      this.gpuCacheStatus = { ...this.gpuCacheStatus, cachedFrameIndexes: [] };
+      this.gpuCacheStatus = { ...this.gpuCacheStatus, cachedFrameIndexes: [], preparedVoronoiFrameIndexes: [] };
       return this.gpuCacheStatus;
     },
   };

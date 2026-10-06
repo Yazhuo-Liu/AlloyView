@@ -1,6 +1,78 @@
 # Validation record
 
-Validation date: 2026-10-06 (UTC)
+Validation date: 2026-10-06 (America/New_York)
+
+## Voronoi edges, selection and load-time preparation
+
+- All **1,140 Node tests** pass (`npm test`). Coverage includes single-cell
+  amber highlighting, portable CSS-width edge ribbons, module-aware warmup,
+  shared/private resident input preparation, retained native memory,
+  foreground priority, cancellation, source invalidation and GPU workspace
+  budgets. Log: `/tmp/alloyview-voronoi-warmup-node-final.log`.
+- Two browser-scheduler regressions reproduce Worker-message starvation when
+  background retries use boosted `scheduler.yield()` continuations. Both fail
+  against the previous loop and pass with ordinary timer waits. Bounded
+  coordinate copying retains its responsive yielding behavior.
+- `npm run build` passes. Production bundle **4f6ae728e29e10c0** was used for
+  the HEA browser benchmark, with Chromium 151, SwiftShader graphics, a
+  browser-reported five logical processors and **three analysis Workers**.
+  The host has a four-CPU quota; these are individual runs, not a general
+  performance guarantee.
+- The complete **28,800-atom** `examples/hea-fcc-screw.dump` result matches
+  the previous bundle bit-for-bit in both isolated/shared and nonisolated/
+  private CPU modes. SHA-256 checks cover **13 scientific fields**: all
+  per-atom numerical arrays, complete face CSR and per-atom Voronoi indices.
+  First calculations after preparation report **zero** native initializations,
+  index builds and frame uploads, compared with three of each previously.
+
+| HEA CPU mode | First kernel begins, before → prepared | First complete analysis, before → prepared |
+| --- | ---: | ---: |
+| Private coordinates | 32.7 → 21.0 ms | 817.5 → 661.3 ms |
+| Shared coordinates | 29.0 → 5.7 ms | 738.5 → 740.4 ms |
+
+- The prepared CPU source becomes visible in **258 / 289 ms** for private/
+  shared modes; module and frame readiness follow at **382 / 388 ms** from
+  load start. Preparation moves initialization ahead of the click; the shared
+  case's unchanged total time illustrates that tessellation remains the
+  dominant work.
+- The software-GPU probe makes current-frame Voronoi resources available in
+  **18.044 s** with four pipelines, one coordinate upload, one neighbor index,
+  a bounded 512-cell workspace and one discarded driver-warmup cell. Previously
+  even the coordinate upload waited for all 23 pipelines and began at
+  **29.439 s**. Remaining general pipeline preparation still finishes at
+  **29.628 s**. These are software-driver preparation measurements, not
+  full GPU-analysis timings or evidence of physical GPU speedup.
+- Reproduce with `npm run benchmark:voronoi:browser -- --output report.json`.
+  `--cpu-only` omits the software-GPU probe; `--reference before.json` verifies
+  scientific digests against a previous CPU capture. Executed reports:
+  `/tmp/alloyview-voronoi-hea-before.json`,
+  `/tmp/alloyview-voronoi-hea-before-digest.json` and
+  `/tmp/alloyview-voronoi-hea-after.json`.
+- `npm run test:browser:view-voronoi` passes on the same production bundle.
+  The real HEA selected-only preview uses an actual pointer-picked core atom,
+  amber facets and **4,678** pale-edge pixels on both white and dark
+  backgrounds. A **390 × 640** phone at device-pixel ratio two retains
+  **6,469** pale-edge pixels. Changing the selection updates the highlighted
+  cell; hiding it removes both faces and edges. Periodic Z replication, the
+  floating second view and both real PNG exports preserve scientific arrays.
+  Existing all-cell highlights, slices, camera/layout recipes and phone
+  interactions also pass. Report/screenshots:
+  `/tmp/alloyview-floating-voronoi/report.json`; log:
+  `/tmp/alloyview-view-voronoi-browser.log`.
+- `npm run test:gpu:voronoi` passes **34 actual WGSL checks**: 30 GPU paths,
+  one automatic CPU fallback and three explicit precision-limit fallbacks.
+  A genuinely prepared first FCC calculation matches CPU topology and reuses
+  its uploaded source, neighbor index and scratch; repeated preparation does
+  not dispatch another warmup cell. Maximum scalar differences remain
+  **3.59 × 10⁻⁵ Å³** for volume and **2.00 × 10⁻⁵ Å²** for surface area.
+  Active 2,048-atom cancellation/resume and queued CNA device reuse pass.
+  Log: `/tmp/alloyview-gpu-voronoi-preparation-scientific-final.log`.
+- `npm run test:browser:voronoi` passes real CPU/GPU parity, element subsets,
+  full-cell geometry, CSVs, PNG, masks/slices/replicas/comparison, configuration
+  replay, source/frame invalidation, cancellation and phone controls. Its
+  maximum CPU/GPU volume difference is **2.26 × 10⁻⁶ Å³**. Report:
+  `/tmp/alloyview-voronoi-tools/report.json`; log:
+  `/tmp/alloyview-voronoi-browser-final.log`.
 
 ## Floating views and Voronoi display
 

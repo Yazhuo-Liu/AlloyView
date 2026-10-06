@@ -27,6 +27,7 @@ export class GpuPrefetchScheduler {
     this.source = null;
     this.generation = 0;
     this.controller = null;
+    this.running = false;
     this.clearBarrier = Promise.resolve();
     this.pending = Promise.resolve();
   }
@@ -38,6 +39,9 @@ export class GpuPrefetchScheduler {
   }
 
   setFrame({ sourceKey, frameCount, currentIndex, frame }) {
+    if (this.enabled && !this.paused && this.running && this.source?.sourceKey === sourceKey
+        && this.source.frameCount === frameCount && this.source.currentIndex === currentIndex
+        && this.source.frame === frame) return this.pending;
     this.paused = false;
     this.source = { sourceKey, frameCount, currentIndex, frame };
     return this.restart();
@@ -47,6 +51,7 @@ export class GpuPrefetchScheduler {
     this.generation += 1;
     this.controller?.abort();
     this.controller = null;
+    this.running = false;
   }
 
   pause() {
@@ -81,6 +86,7 @@ export class GpuPrefetchScheduler {
     }
     const controller = new AbortController();
     this.controller = controller;
+    this.running = true;
     const generation = this.generation;
     const source = this.source;
     const current = () => this.enabled && generation === this.generation && !controller.signal.aborted;
@@ -89,6 +95,11 @@ export class GpuPrefetchScheduler {
     };
     this.pending = this.run(source, controller.signal, current, report).catch(error => {
       if (current() && error.name !== 'AbortError') this.onStatus({ phase: 'unavailable', error: error.message });
+    }).finally(() => {
+      if (this.controller === controller) {
+        this.controller = null;
+        this.running = false;
+      }
     });
     return this.pending;
   }
@@ -97,7 +108,9 @@ export class GpuPrefetchScheduler {
     report('warming');
     await this.clearBarrier;
     if (!current()) return;
-    let status = await this.retryPreparation(() => this.pool.warmupGpu({ signal }), current);
+    // Prepare the next expensive analysis before compiling every unrelated
+    // pipeline. Source changes can interrupt the later general warmup.
+    let status = await this.retryPreparation(() => this.pool.warmupGpu({ signal, analysisKinds: ['voronoi'] }), current);
     if (!current()) return;
     if (!source || !source.frameCount || !source.frame) {
       report('ready', status);
@@ -106,11 +119,12 @@ export class GpuPrefetchScheduler {
     status = await this.pool.configureGpuCache({ frameCount: source.frameCount, currentIndex: source.currentIndex });
     if (!current()) return;
     report('preparing', status);
-    // The first upload establishes the real per-frame memory estimate. Only
-    // then can the runtime decide whether the entire trajectory will fit.
-    if (!status?.cachedFrameIndexes?.includes(source.currentIndex)) {
+    // Uploaded coordinates alone do not establish a resident neighbour index
+    // or Voronoi workspace. Prepare those even for a prefetched trajectory
+    // frame, unless the runtime confirms they still survive cache eviction.
+    if (!status?.preparedVoronoiFrameIndexes?.includes(source.currentIndex)) {
       status = await this.retryPreparation(() => this.pool.prepareGpuFrame(source.frame,
-        { frameIndex: source.currentIndex, signal }), current);
+        { frameIndex: source.currentIndex, signal, analysisKinds: ['voronoi'] }), current);
       if (!current()) return;
       report('preparing', status);
     }
@@ -132,6 +146,10 @@ export class GpuPrefetchScheduler {
       if (!gpuPrefetchOrder(source.currentIndex, source.frameCount, status?.capacity).includes(index)) break;
     }
     if (current()) report('ready', status);
+    if (!current()) return;
+    // Remaining analyses also benefit from reuse. This job stays background
+    // priority and yields its queue immediately to foreground calculations.
+    await this.retryPreparation(() => this.pool.warmupGpu({ signal }), current);
   }
 
   async retryPreparation(prepare, current) {

@@ -33,6 +33,7 @@
     "benchmark": "node scripts/benchmark.mjs",
     "benchmark:gpu": "node scripts/benchmark-gpu.mjs",
     "benchmark:voronoi:cpu": "node scripts/benchmark-voronoi-cpu.mjs",
+    "benchmark:voronoi:browser": "node scripts/benchmark-voronoi-browser.mjs",
     "benchmark:dxa": "node scripts/benchmark-dxa.mjs",
     "benchmark:dxa-cpu": "node scripts/benchmark-dxa-cpu.mjs",
     "benchmark:dxa-compare": "node scripts/benchmark-dxa-compare.mjs",

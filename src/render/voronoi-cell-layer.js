@@ -159,10 +159,134 @@ void main() {
   outColor = vec4(pow(clamp(shaded, 0.0, 1.0), vec3(1.0 / 2.2)), uOpacity);
 }`;
 
-function outlineColor(renderer, color) {
-  const background = renderer.background ?? [1, 1, 1];
-  const dark = background[0] * 0.2126 + background[1] * 0.7152 + background[2] * 0.0722 < 0.4;
-  return parsePrimitiveColor(color).map(value => dark ? value * 0.35 + 0.58 : value * 0.28);
+const SELECTED_FACE_COLOR = [1, 0.68, 0.16];
+
+const OUTLINE_VERTEX = `#version 300 es
+precision highp float;
+precision highp int;
+layout(location=0) in vec3 aStart;
+layout(location=1) in vec3 aEnd;
+layout(location=2) in uint aAtomIndex;
+uniform mat4 uView;
+uniform mat4 uProjection;
+uniform vec3 uCenter;
+uniform bool uBatched;
+uniform sampler2D uAtoms;
+uniform int uAtomTextureWidth;
+uniform vec2 uViewport;
+uniform float uEdgeWidth;
+out vec3 vWorld;
+out float vSide;
+flat out float vVisible;
+void main() {
+  vec4 atom = vec4(0.0, 0.0, 0.0, 1.0);
+  if (uBatched) atom = texelFetch(uAtoms, ivec2(int(aAtomIndex) % uAtomTextureWidth, int(aAtomIndex) / uAtomTextureWidth), 0);
+  vVisible = atom.w;
+  vec3 start = uCenter + atom.xyz + aStart;
+  vec3 end = uCenter + atom.xyz + aEnd;
+  vec4 first = uProjection * uView * vec4(start, 1.0);
+  vec4 last = uProjection * uView * vec4(end, 1.0);
+  // Clip the segment before perspective expansion. A line crossing the near
+  // plane otherwise expands from a negative W and can cover the whole image.
+  float nearFirst = first.z + first.w, nearLast = last.z + last.w;
+  if (nearFirst < 0.0 && nearLast < 0.0) {
+    vWorld = start; vSide = 0.0; vVisible = 0.0;
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return;
+  }
+  if (nearFirst < 0.0) {
+    float fraction = nearFirst / (nearFirst - nearLast);
+    first = mix(first, last, fraction); start = mix(start, end, fraction);
+  } else if (nearLast < 0.0) {
+    float fraction = nearLast / (nearLast - nearFirst);
+    last = mix(last, first, fraction); end = mix(end, start, fraction);
+  }
+  vec2 difference = (last.xy / last.w - first.xy / first.w) * uViewport;
+  float projectedLength = length(difference);
+  if (projectedLength < 1e-6) {
+    vWorld = start; vSide = 0.0; vVisible = 0.0;
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return;
+  }
+  int corner = int[6](0, 1, 2, 2, 1, 3)[gl_VertexID];
+  bool atEnd = corner >= 2;
+  float side = (corner == 0 || corner == 2) ? -1.0 : 1.0;
+  vec2 direction = difference / projectedLength;
+  vec2 perpendicular = vec2(-direction.y, direction.x);
+  vec4 clip = atEnd ? last : first;
+  // Square caps meet cleanly at polygon corners. Width is in device pixels,
+  // independently of camera distance, projection and portable GL line limits.
+  vec2 pixelOffset = (perpendicular * side + direction * (atEnd ? 1.0 : -1.0)) * uEdgeWidth * 0.5;
+  clip.xy += pixelOffset * 2.0 / uViewport * clip.w;
+  clip.z -= 1e-6 * clip.w;
+  gl_Position = clip; vWorld = atEnd ? end : start; vSide = side;
+}`;
+const OUTLINE_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp int;
+in vec3 vWorld;
+in float vSide;
+flat in float vVisible;
+uniform vec3 uEdgeColor;
+uniform vec3 uOutlineColor;
+uniform float uCoreRatio;
+uniform int uSliceCount;
+uniform vec4 uSlicePlanes[${MAX_SLICES}];
+out vec4 outColor;
+void main() {
+  if (vVisible < 0.5) discard;
+  for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
+    if (plane >= uSliceCount) break;
+    if (dot(uSlicePlanes[plane].xyz, vWorld) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) discard;
+  }
+  float side = abs(vSide);
+  vec3 color = mix(uEdgeColor, uOutlineColor, smoothstep(uCoreRatio - 0.08, uCoreRatio + 0.08, side));
+  float coverage = 1.0 - smoothstep(1.0 - fwidth(vSide) * 0.5, 1.0, side);
+  outColor = vec4(color, coverage);
+}`;
+
+/** Reuse the existing edge endpoints as instanced ribbons, without allocating
+ * additional geometry buffers or rebuilding cells for camera/selection edits. */
+class VoronoiOutlineRenderer {
+  constructor(gl) {
+    this.gl = gl; this.program = createProgram(gl, OUTLINE_VERTEX, OUTLINE_FRAGMENT, 'Voronoi outline');
+    this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uCenter', 'uBatched', 'uAtoms', 'uAtomTextureWidth',
+      'uViewport', 'uEdgeWidth', 'uEdgeColor', 'uOutlineColor', 'uCoreRatio', 'uSliceCount', 'uSlicePlanes[0]']
+      .map(name => [name, gl.getUniformLocation(this.program, name)]));
+  }
+  createVao(buffer, atomBuffer = null) {
+    const gl = this.gl, vao = gl.createVertexArray(); gl.bindVertexArray(vao); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    for (let attribute = 0; attribute < 2; attribute++) {
+      gl.enableVertexAttribArray(attribute); gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 48, attribute * 24);
+      gl.vertexAttribDivisor(attribute, 1);
+    }
+    if (atomBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, atomBuffer); gl.enableVertexAttribArray(2);
+      gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 8, 0); gl.vertexAttribDivisor(2, 1);
+    }
+    gl.bindVertexArray(null); return vao;
+  }
+  begin(renderer, planes, { batched = false, textureWidth = 1 } = {}) {
+    const gl = this.gl, u = this.uniforms;
+    gl.useProgram(this.program); gl.uniform1i(u.uBatched, Number(batched)); gl.uniform1i(u.uAtoms, batched ? 5 : 0);
+    gl.uniform1i(u.uAtomTextureWidth, textureWidth);
+    gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
+    const width = Math.max(1, renderer.canvas?.width ?? 1), height = Math.max(1, renderer.canvas?.height ?? 1);
+    this.pixelRatio = Math.max(1, width / Math.max(1, renderer.canvas?.clientWidth ?? width));
+    gl.uniform2f(u.uViewport, width, height); gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
+    gl.disable(gl.POLYGON_OFFSET_FILL); gl.disable(gl.CULL_FACE);
+  }
+  draw({ edgeVao, buffer, atomBuffer }, firstEdge, edgeCount, center, selected = false) {
+    if (!edgeCount) return;
+    const gl = this.gl, u = this.uniforms; gl.bindVertexArray(edgeVao); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    for (let attribute = 0; attribute < 2; attribute++) gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 48, firstEdge * 24 + attribute * 24);
+    if (atomBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, atomBuffer); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 8, firstEdge * 4);
+    } else gl.vertexAttribI4ui(2, 0, 0, 0, 0);
+    gl.uniform3f(u.uCenter, ...center); gl.uniform1f(u.uEdgeWidth, (selected ? 2.8 : 2.2) * this.pixelRatio);
+    gl.uniform3f(u.uEdgeColor, ...(selected ? [1, 0.95, 0.75] : [0.91, 0.96, 1]));
+    gl.uniform3f(u.uOutlineColor, ...(selected ? [0.32, 0.2, 0.06] : [0.1, 0.22, 0.38]));
+    gl.uniform1f(u.uCoreRatio, selected ? 0.72 : 0.68);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, edgeCount / 2);
+  }
 }
 
 function selectedCellAtoms(renderer) {
@@ -212,8 +336,10 @@ export class VoronoiCellLayer {
       gl.enableVertexAttribArray(attribute); gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 24, attribute * 12);
     }
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer); gl.bindVertexArray(null);
+    this.outline = new VoronoiOutlineRenderer(gl); this.edgeVao = this.outline.createVao(this.buffer);
     this.geometry = null; this.options = normalizeVoronoiCellOptions();
     this.vertexCount = this.indexCount = this.edgeCount = this.renderedReplicaCount = 0;
+    this.highlightedCellCount = 0;
   }
 
   setGeometry(geometry, options = {}) {
@@ -223,6 +349,7 @@ export class VoronoiCellLayer {
     this.geometry = geometry;
     this.vertexCount = mesh?.vertexCount ?? 0; this.indexCount = mesh?.indexCount ?? 0; this.edgeCount = mesh?.edgeCount ?? 0;
     this.renderedReplicaCount = 0;
+    this.highlightedCellCount = 0;
     const gl = this.gl; gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer); gl.bufferData(gl.ARRAY_BUFFER, mesh?.values ?? 0, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh?.indices ?? 0, gl.STATIC_DRAW);
@@ -243,7 +370,7 @@ export class VoronoiCellLayer {
   }
 
   render(renderer) {
-    this.renderedReplicaCount = 0;
+    this.renderedReplicaCount = this.highlightedCellCount = 0;
     const atom = this.geometry?.atomIndex;
     if (!this.options.enabled || !this.indexCount || !renderer.frame || atom >= renderer.atomCount || !renderer.visibility?.[atom]) return;
     const gl = this.gl, u = this.uniforms, planes = dislocationSlicePlanes(renderer);
@@ -251,7 +378,9 @@ export class VoronoiCellLayer {
     gl.uniform1i(u.uBatched, 0);
     gl.vertexAttribI4ui(2, 0, 0, 0, 0);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
-    const color = parsePrimitiveColor(this.options.color), edges = outlineColor(renderer, this.options.color);
+    const selected = selectedCellAtoms(renderer).has(atom);
+    this.highlightedCellCount = Number(selected);
+    const color = selected ? SELECTED_FACE_COLOR : parsePrimitiveColor(this.options.color);
     gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
     gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.CULL_FACE); gl.depthMask(false);
@@ -259,7 +388,7 @@ export class VoronoiCellLayer {
     for (const replica of renderer.replicas) {
       gl.uniform3f(u.uCenter, ...replica.offset.map((value, axis) => value + renderer.displayPositions[atom * 3 + axis]));
       gl.uniform3f(u.uColor, ...color);
-      gl.uniform1i(u.uEdges, 0); gl.uniform1f(u.uOpacity, this.options.opacity);
+      gl.uniform1i(u.uEdges, 0); gl.uniform1f(u.uOpacity, selected ? Math.max(0.62, this.options.opacity) : this.options.opacity);
       // A convex cell has one rear and one front surface along each ray.
       // Draw those in order so translucent shading is independent of the
       // scientific face traversal order, without sorting/rebuilding the mesh.
@@ -267,10 +396,14 @@ export class VoronoiCellLayer {
       gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_INT, 0);
       gl.cullFace(gl.BACK);
       gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_INT, 0);
-      gl.uniform3f(u.uColor, ...edges);
-      gl.uniform1i(u.uEdges, 1); gl.uniform1f(u.uOpacity, 0.9);
-      gl.drawArrays(gl.LINES, this.vertexCount, this.edgeCount);
       this.renderedReplicaCount++;
+    }
+    // Draw light outlines after every replica's translucent faces. A later
+    // face pass can otherwise blend over and erase an earlier replica's edges.
+    this.outline.begin(renderer, planes);
+    for (const replica of renderer.replicas) {
+      this.outline.draw(this, this.vertexCount, this.edgeCount,
+        replica.offset.map((value, axis) => value + renderer.displayPositions[atom * 3 + axis]), selected);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
   }
@@ -288,6 +421,7 @@ export class VoronoiAllCellLayer {
     this.cellCount = this.renderedReplicaCount = this.renderedChunkCount = 0;
     this.highlightedCellCount = this.renderedHighlightReplicaCount = 0;
     this.positionRevision = this.positions = this.visibility = null;
+    this.outline = new VoronoiOutlineRenderer(gl);
   }
 
   setGeometry(geometry, options = {}) {
@@ -308,7 +442,8 @@ export class VoronoiAllCellLayer {
       gl.enableVertexAttribArray(2); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 0, 0);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
-      this.chunks.push({ mesh, vao, buffer, indexBuffer, atomBuffer, cellRanges: cellDrawRanges(mesh) });
+      const edgeVao = this.outline.createVao(buffer, atomBuffer);
+      this.chunks.push({ mesh, vao, edgeVao, buffer, indexBuffer, atomBuffer, cellRanges: cellDrawRanges(mesh) });
     }
     this.cellCount = geometry?.cellCount ?? 0;
     this.renderedReplicaCount = this.renderedChunkCount = 0;
@@ -318,7 +453,7 @@ export class VoronoiAllCellLayer {
   clearBuffers() {
     const gl = this.gl;
     for (const chunk of this.chunks) {
-      gl.deleteVertexArray(chunk.vao); gl.deleteBuffer(chunk.buffer);
+      gl.deleteVertexArray(chunk.vao); gl.deleteVertexArray(chunk.edgeVao); gl.deleteBuffer(chunk.buffer);
       gl.deleteBuffer(chunk.indexBuffer); gl.deleteBuffer(chunk.atomBuffer);
     }
     this.chunks = []; this.cellCount = 0;
@@ -380,7 +515,7 @@ export class VoronoiAllCellLayer {
     gl.useProgram(this.program); gl.uniform1i(u.uBatched, 1); gl.uniform1i(u.uAtoms, 5);
     gl.uniform1i(u.uAtomTextureWidth, this.textureWidth); gl.activeTexture(gl.TEXTURE0 + 5); gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
-    const color = parsePrimitiveColor(this.options.color), edges = outlineColor(renderer, this.options.color);
+    const color = parsePrimitiveColor(this.options.color);
     gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
     gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.CULL_FACE); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -1);
@@ -391,9 +526,6 @@ export class VoronoiAllCellLayer {
         gl.uniform3f(u.uColor, ...color);
         gl.cullFace(gl.FRONT); gl.drawElements(gl.TRIANGLES, chunk.mesh.indexCount, gl.UNSIGNED_INT, 0);
         gl.cullFace(gl.BACK); gl.drawElements(gl.TRIANGLES, chunk.mesh.indexCount, gl.UNSIGNED_INT, 0);
-        gl.uniform3f(u.uColor, ...edges);
-        gl.uniform1i(u.uEdges, 1); gl.uniform1f(u.uOpacity, 0.9);
-        gl.drawArrays(gl.LINES, chunk.mesh.vertexCount, chunk.mesh.edgeCount);
         this.renderedChunkCount++;
       }
       this.renderedReplicaCount++;
@@ -416,31 +548,37 @@ export class VoronoiAllCellLayer {
         for (const { chunk, ranges } of highlights) {
           gl.bindVertexArray(chunk.vao);
           for (const range of ranges) {
-            gl.uniform3f(u.uColor, 1, 0.68, 0.16);
+            gl.uniform3f(u.uColor, ...SELECTED_FACE_COLOR);
             gl.uniform1i(u.uEdges, 0); gl.uniform1f(u.uOpacity, Math.max(0.62, this.options.opacity));
             gl.cullFace(gl.FRONT); gl.drawElements(gl.TRIANGLES, range.indexCount, gl.UNSIGNED_INT, range.firstIndex * 4);
             gl.cullFace(gl.BACK); gl.drawElements(gl.TRIANGLES, range.indexCount, gl.UNSIGNED_INT, range.firstIndex * 4);
-            gl.uniform3f(u.uColor, 1, 0.44, 0.06);
-            gl.uniform1i(u.uEdges, 1); gl.uniform1f(u.uOpacity, 1);
-            gl.drawArrays(gl.LINES, range.firstEdge, range.edgeCount);
           }
         }
         this.renderedHighlightReplicaCount++;
       }
+    }
+    // Keep all light outlines above all translucent cell faces, including the
+    // highlighted faces. Atom depth and world-space slice clipping still apply.
+    this.outline.begin(renderer, planes, { batched: true, textureWidth: this.textureWidth });
+    for (const replica of renderer.replicas) for (const chunk of this.chunks) {
+      this.outline.draw(chunk, chunk.mesh.vertexCount, chunk.mesh.edgeCount, replica.offset);
+    }
+    for (const replica of renderer.replicas) for (const { chunk, ranges } of highlights) for (const range of ranges) {
+      this.outline.draw(chunk, range.firstEdge, range.edgeCount, replica.offset, true);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
     gl.activeTexture(gl.TEXTURE0);
   }
 }
 
-function createProgram(gl) {
+function createProgram(gl, vertex = VERTEX, fragment = FRAGMENT, label = 'Voronoi cell') {
   const program = gl.createProgram();
-  for (const [kind, source] of [[gl.VERTEX_SHADER, VERTEX], [gl.FRAGMENT_SHADER, FRAGMENT]]) {
+  for (const [kind, source] of [[gl.VERTEX_SHADER, vertex], [gl.FRAGMENT_SHADER, fragment]]) {
     const shader = gl.createShader(kind); gl.shaderSource(shader, source); gl.compileShader(shader);
-    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(`Voronoi cell shader failed: ${gl.getShaderInfoLog(shader)}`);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(`${label} shader failed: ${gl.getShaderInfoLog(shader)}`);
     gl.attachShader(program, shader); gl.deleteShader(shader);
   }
   gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`Voronoi cell shader linking failed: ${gl.getProgramInfoLog(program)}`);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`${label} shader linking failed: ${gl.getProgramInfoLog(program)}`);
   return program;
 }

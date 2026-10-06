@@ -35,6 +35,7 @@ test('CPU modules warm during indexing, grow with atom count, and check retained
   const scheduler = new CpuPrefetchScheduler({ ...resources, onStatus: status => statuses.push(status) });
   await scheduler.warmModules({ sourceKey: 'file A' });
   assert.equal(resources.analysisCalls[0].atomCount, 1);
+  assert.deepEqual(resources.analysisCalls[0].modules, ['voronoi', 'ptm']);
   assert.equal(resources.dxaCalls[0].atomCount, 1);
   await scheduler.setFrame({ sourceKey: 'file A', frame: frame(8192) });
   assert.equal(resources.analysisCalls[1].coordinateBytes, 8192 * 24);
@@ -173,5 +174,62 @@ test('invalid or already cancelled targets do not start background resources', a
   const controller = new AbortController(); controller.abort();
   await scheduler.setAtomCount({ sourceKey: 'A', atomCount: 10000, signal: controller.signal });
   assert.equal(resources.analysisCalls.length, 0);
+  assert.equal(resources.dxaCalls.length, 0);
+});
+
+test('displayed frame inputs prepare before full DXA startup without calculating scientific results', async () => {
+  const resources = backends(), started = deferred(), release = deferred();
+  const structure = frame(28800), frames = [];
+  resources.pool.prepareCpuFrame = async (value, options) => {
+    frames.push({ value, options }); started.resolve(); await release.promise;
+    return { readyWorkers: 4, sharedMemory: true };
+  };
+  resources.pool.analyze = () => { throw new Error('Background preparation must not calculate cells.'); };
+  const scheduler = new CpuPrefetchScheduler(resources);
+  const pending = scheduler.setFrame({ sourceKey: 'HEA', frame: structure });
+  await started.promise;
+  assert.equal(frames[0].value, structure);
+  assert.equal(frames[0].options.kind, 'voronoi');
+  assert.equal(resources.analysisCalls.length, 1, 'module warmup runs independently of frame preparation');
+  assert.equal(resources.dxaCalls.length, 0, 'heavy DXA startup cannot reserve the budget before frame preparation');
+  release.resolve(); await pending;
+  assert.equal(resources.dxaCalls.length, 1);
+});
+
+test('same-sized frame changes cancel obsolete input preparation while retaining module initialization', async () => {
+  const resources = backends(), release = deferred(), frames = [];
+  resources.pool.prepareCpuFrame = async (value, options) => {
+    frames.push({ value, options });
+    if (frames.length === 1) await release.promise;
+    return { readyWorkers: 2 };
+  };
+  const scheduler = new CpuPrefetchScheduler(resources);
+  const previous = scheduler.setFrame({ sourceKey: 'trajectory', frame: frame(8192) });
+  const moduleSignal = resources.analysisCalls[0].signal;
+  const next = frame(8192);
+  const pending = scheduler.setFrame({ sourceKey: 'trajectory', frame: next });
+  assert.equal(frames[0].options.signal.aborted, true);
+  assert.equal(moduleSignal.aborted, false);
+  assert.equal(frames[1].value, next, 'atom count alone cannot identify prepared coordinates');
+  assert.equal(resources.analysisCalls.length, 1);
+  release.resolve(); await Promise.all([previous, pending]);
+  scheduler.clearSource();
+  assert.equal(frames[1].options.signal.aborted, false, 'finished preparation retains its backend resources');
+});
+
+test('source cancellation stops background frame retries without rejecting loading or destroying resources', async () => {
+  const resources = backends(), started = deferred(), release = deferred();
+  let attempts = 0;
+  resources.pool.prepareCpuFrame = async (_frame, { signal }) => {
+    attempts++;
+    started.resolve(); await release.promise;
+    assert.equal(signal.aborted, true);
+    throw new DOMException('Preparation cancelled.', 'AbortError');
+  };
+  const scheduler = new CpuPrefetchScheduler(resources);
+  const pending = scheduler.setFrame({ sourceKey: 'old', frame: frame(28800) });
+  await started.promise; scheduler.clearSource(); release.resolve();
+  await pending;
+  assert.equal(attempts, 1);
   assert.equal(resources.dxaCalls.length, 0);
 });

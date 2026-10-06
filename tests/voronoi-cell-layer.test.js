@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCell } from '../src/data/model.js';
 import { calculateVoronoiGeometry } from '../src/analysis/voronoi.js';
-import { createVoronoiCellBatch, normalizeVoronoiCellOptions, VoronoiAllCellLayer } from '../src/render/voronoi-cell-layer.js';
+import { createVoronoiCellBatch, normalizeVoronoiCellOptions, VoronoiCellLayer, VoronoiAllCellLayer } from '../src/render/voronoi-cell-layer.js';
 
 async function cube(atomIndex = 0) {
   const geometry = await calculateVoronoiGeometry({ fractional: new Float64Array(3),
@@ -15,7 +15,7 @@ function mockGl() {
   for (const name of ['VERTEX_SHADER', 'FRAGMENT_SHADER', 'COMPILE_STATUS', 'LINK_STATUS', 'ARRAY_BUFFER',
     'ELEMENT_ARRAY_BUFFER', 'FLOAT', 'STATIC_DRAW', 'UNSIGNED_INT', 'TEXTURE0', 'TEXTURE_2D', 'RGBA32F', 'RGBA',
     'TEXTURE_MIN_FILTER', 'TEXTURE_MAG_FILTER', 'NEAREST', 'TEXTURE_WRAP_S', 'TEXTURE_WRAP_T', 'CLAMP_TO_EDGE',
-    'MAX_TEXTURE_SIZE', 'BLEND', 'SRC_ALPHA', 'ONE_MINUS_SRC_ALPHA', 'ONE', 'CULL_FACE', 'POLYGON_OFFSET_FILL',
+    'MAX_TEXTURE_SIZE', 'BLEND', 'SRC_ALPHA', 'ONE_MINUS_SRC_ALPHA', 'ONE', 'CULL_FACE', 'DEPTH_TEST', 'POLYGON_OFFSET_FILL',
     'FRONT', 'BACK', 'TRIANGLES', 'LINES']) gl[name] = name === 'TEXTURE0' ? 33984 : name;
   for (const name of ['createProgram', 'createShader', 'createVertexArray', 'createBuffer', 'createTexture']) gl[name] = () => ({});
   gl.getUniformLocation = (_program, name) => name;
@@ -24,8 +24,8 @@ function mockGl() {
   for (const name of ['shaderSource', 'compileShader', 'attachShader', 'deleteShader', 'linkProgram', 'bindVertexArray',
     'bindBuffer', 'bufferData', 'enableVertexAttribArray', 'vertexAttribPointer', 'vertexAttribIPointer',
     'deleteVertexArray', 'deleteBuffer', 'bindTexture', 'texImage2D', 'activeTexture', 'texParameteri', 'useProgram',
-    'uniform1i', 'uniform1f', 'uniform3f', 'uniform4fv', 'uniformMatrix4fv', 'enable', 'disable',
-    'blendFuncSeparate', 'depthMask', 'polygonOffset', 'cullFace', 'drawElements', 'drawArrays']) {
+    'uniform1i', 'uniform1f', 'uniform2f', 'uniform3f', 'uniform4fv', 'uniformMatrix4fv', 'enable', 'disable',
+    'vertexAttribDivisor', 'vertexAttribI4ui', 'blendFuncSeparate', 'depthMask', 'polygonOffset', 'cullFace', 'drawElements', 'drawArrays', 'drawArraysInstanced']) {
     gl[name] = (...arguments_) => calls.push({ name, arguments: arguments_ });
   }
   return { gl, calls };
@@ -77,7 +77,7 @@ test('all-cell rendering appends/reuses bounded GPU buffers and shares dynamic c
   assert.equal(layer.renderedReplicaCount, 2);
   assert.equal(layer.renderedChunkCount, 2);
   assert.equal(calls.filter(call => call.name === 'drawElements').length, 4, 'two faces draws per chunk per replica, independent of its atom count');
-  assert.equal(calls.filter(call => call.name === 'drawArrays').length, 2);
+  assert.equal(calls.filter(call => call.name === 'drawArraysInstanced').length, 2);
   assert.deepEqual([...layer.textureValues], [0,0,0,1, 2,0,0,0], 'atom hiding controls every attached cell fragment');
   layer.setGeometry(geometry, {color:'#abcdef'});
   assert.equal(calls.filter(call => call.name === 'bufferData').length, uploads, 'appearance changes do not upload meshes again');
@@ -114,13 +114,17 @@ test('selection highlights only existing source-cell triangles and edges in ever
   assert.deepEqual(triangles.slice(-4).map(call => call.arguments),
     Array.from({length:4}, () => [gl.TRIANGLES,36,gl.UNSIGNED_INT,36*4]),
     'highlight draws the complete selected cell range from the original element buffer');
-  const lines = calls.filter(call => call.name === 'drawArrays');
+  const lines = calls.filter(call => call.name === 'drawArraysInstanced');
   assert.deepEqual(lines.slice(-2).map(call => call.arguments),
-    Array.from({length:2}, () => [gl.LINES,72,24]), 'highlight reuses the selected source cell outline');
+    Array.from({length:2}, () => [gl.TRIANGLES,0,6,12]), 'highlight ribbons reuse all twelve original cell edges');
+  assert.deepEqual(calls.filter(call => call.name === 'vertexAttribIPointer').slice(-2).map(call => call.arguments),
+    Array.from({length:2}, () => [2,1,gl.UNSIGNED_INT,8,72*4]), 'highlight ribbons address the selected original source-cell range');
   assert.ok(calls.some(call => call.name === 'uniform1i' && call.arguments[0] === 'uSliceCount' && call.arguments[1] === 1),
     'the common clipping shader applies equally to base cells and selected ranges');
-  assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uColor' && call.arguments[1] < 0.1),
-    'base outlines use a contrasting dark color on the light background');
+  assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uEdgeColor'
+    && call.arguments.slice(1).every(channel => channel >= 0.9)), 'base outlines are light blue on the light background');
+  assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uOutlineColor'
+    && call.arguments.slice(1).every(channel => channel < 0.4)), 'a thin dark border keeps the light edge visible on white');
   assert.equal(calls.filter(call => call.name === 'bufferData').length, uploads, 'selection needs no mesh extraction or upload');
 
   renderer.visibility[3] = 0; renderer.voronoiDisplayRevision++;
@@ -135,8 +139,8 @@ test('selection highlights only existing source-cell triangles and edges in ever
   renderer.selected = 1; renderer.background = [.02,.03,.04];
   layer.render(renderer);
   assert.equal(layer.highlightedCellCount, 1);
-  assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uColor'
-    && call.arguments.slice(1).every(channel => channel >= 0.58 && channel < 1)), 'dark backgrounds receive contrasting light outlines');
+  assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uEdgeColor'
+    && call.arguments.slice(1).every(channel => channel >= 0.75)), 'dark backgrounds also retain visibly light outlines');
   layer.clear();
   assert.equal(layer.highlightedCellCount, 0); assert.equal(layer.renderedHighlightReplicaCount, 0);
 });
@@ -150,5 +154,39 @@ test('retained meshes without cell ranges still support exact selected-cell draw
     voronoiDisplayRevision:1,replicas:[{offset:[0,0,0]}],viewMatrix:new Float32Array(16),projectionMatrix:new Float32Array(16),sliceMode:'planes',sliceCount:0});
   assert.equal(layer.highlightedCellCount, 1);
   assert.deepEqual(calls.filter(call => call.name === 'drawElements').at(-1).arguments,[gl.TRIANGLES,36,gl.UNSIGNED_INT,0]);
-  assert.deepEqual(calls.filter(call => call.name === 'drawArrays').at(-1).arguments,[gl.LINES,24,24]);
+  assert.deepEqual(calls.filter(call => call.name === 'drawArraysInstanced').at(-1).arguments,[gl.TRIANGLES,0,6,12]);
+});
+
+test('single selected-cell preview highlights amber and draws pale, CSS-sized edge ribbons without new geometry', async () => {
+  const {gl,calls} = mockGl(), layer = new VoronoiCellLayer(gl), geometry = await cube(1);
+  const renderer = {frame:{},atomCount:2,selected:1,displayPositions:Float64Array.from([0,0,0,2,0,0]),
+    visibility:Uint8Array.from([255,255]), selectedAtoms:new Int32Array(16).fill(-1), sliceSelectedAtoms:new Int32Array(3).fill(-1),
+    replicas:[{offset:[0,0,0]},{offset:[4,0,0]}], viewMatrix:new Float32Array(16),projectionMatrix:new Float32Array(16),
+    canvas:{width:800,height:400,clientWidth:400},sliceMode:'planes',sliceCount:1,slicePlaneValues:Float32Array.from([1,0,0,3]),
+    background:[1,1,1]};
+  layer.setGeometry(geometry,{enabled:true,allEnabled:false,color:'#336699',opacity:.5});
+  const uploads = calls.filter(call=>call.name==='bufferData').length;
+  layer.render(renderer);
+  assert.equal(layer.highlightedCellCount,1,'single-preview mode uses the same selection highlight as all-cell mode');
+  assert.equal(layer.renderedReplicaCount,2);
+  assert.ok(calls.some(call=>call.name==='uniform3f' && call.arguments[0]==='uColor'
+    && call.arguments.slice(1).join(',')==='1,0.68,0.16'),'picked cell faces are amber instead of the unselected blue');
+  assert.ok(calls.some(call=>call.name==='uniform3f' && call.arguments[0]==='uEdgeColor'
+    && call.arguments.slice(1).join(',')==='1,0.95,0.75'),'picked cell edges are pale yellow');
+  assert.ok(calls.some(call=>call.name==='uniform1f' && call.arguments[0]==='uEdgeWidth' && call.arguments[1]===5.6),
+    '2.8 CSS-pixel ribbons retain their size on a device-pixel-ratio-two canvas');
+  assert.deepEqual(calls.filter(call=>call.name==='drawArraysInstanced').map(call=>call.arguments),
+    [[gl.TRIANGLES,0,6,12],[gl.TRIANGLES,0,6,12]],'each replica contains all original twelve cube edges');
+  assert.equal(calls.filter(call=>call.name==='drawArrays').length,0,'visibility does not rely on implementation-dependent GL line widths');
+  assert.ok(calls.some(call=>call.name==='uniform1i' && call.arguments[0]==='uSliceCount' && call.arguments[1]===1));
+  assert.ok(!calls.some(call=>call.name==='disable' && call.arguments[0]===gl.DEPTH_TEST),'atom occlusion remains enabled');
+  const lastFace = calls.findLastIndex(call=>call.name==='drawElements'), firstEdge = calls.findIndex(call=>call.name==='drawArraysInstanced');
+  assert.ok(firstEdge>lastFace,'all translucent faces precede their outlines');
+  renderer.selected=-1;renderer.background=[0,0,0];
+  const before = calls.length; layer.render(renderer);
+  assert.equal(layer.highlightedCellCount,0);
+  assert.ok(calls.slice(before).some(call=>call.name==='uniform3f' && call.arguments[0]==='uColor'
+    && call.arguments.slice(1).join(',')==='0.2,0.4,0.6'),'unselected cells retain the user-selected base color');
+  assert.equal(calls.filter(call=>call.name==='bufferData').length,uploads,'changing selection or background never uploads or recomputes cell geometry');
+  renderer.visibility[1]=0;layer.render(renderer);assert.equal(layer.renderedReplicaCount,0);assert.equal(layer.highlightedCellCount,0);
 });

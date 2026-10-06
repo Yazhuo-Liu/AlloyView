@@ -13,6 +13,9 @@ import { validatePtmParameters, validatePreparedPtmNeighbors } from './ptm.js';
 import { CpuBudget, cpuWorkerLimit } from './cpu-budget.js';
 
 const PTM_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
+const VORONOI_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
+const VORONOI_RESIDENT_KINDS = ['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch', 'voronoiPrepare'];
+const CPU_MODULES = ['voronoi', 'ptm'];
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
   deformation: [Float64Array, 9], distances: [Float32Array, 1] };
@@ -58,7 +61,10 @@ export class AnalysisPool {
     this.nextId = 1;
     this.slots = new Set();
     this.cpuWarmup = null;
+    this.cpuFramePreparation = null;
     this.voronoiSnapshot = null;
+    this.voronoiSnapshotPending = null;
+    this.voronoiSnapshotGeneration = 0;
     this.nextVoronoiFrameKey = 1;
     this.closed = false;
     this.gpuEnabled = false;
@@ -73,7 +79,9 @@ export class AnalysisPool {
   associateGpuFrame(frame, frameIndex) { return this.gpuBackend.associateFrame?.(frame, frameIndex); }
   clearGpuFrames() { return this.gpuBackend.clearFrames?.() ?? Promise.resolve(this.gpuCacheStatus); }
   clearVoronoiFrames() {
+    this.cpuFramePreparation?.controller.abort();
     this.voronoiSnapshot = null;
+    this.voronoiSnapshotGeneration++;
     for (const slot of this.slots) {
       if (slot.task) slot.voronoiReleasePending = true;
       else this.releaseVoronoiFrame(slot);
@@ -88,8 +96,25 @@ export class AnalysisPool {
   get gpuCacheStatus() { return this.gpuBackend.cacheStatus ?? null; }
 
   get cpuWarmupStatus() {
-    return { readyWorkers: [...this.slots].filter(slot => slot.ptmWarmed).length,
+    const readyModules = Object.fromEntries(CPU_MODULES.map(module => [module,
+      [...this.slots].filter(slot => slot[`${module}Warmed`]).length]));
+    return { readyWorkers: readyModules.ptm, readyModules,
+      preparedVoronoiWorkers: this.voronoiSnapshot ? [...this.slots]
+        .filter(slot => slot.voronoiFrameKey === this.voronoiSnapshot.key).length : 0,
+      preparedVoronoiFrameKey: this.voronoiSnapshot?.key ?? null,
       workerCount: this.slots.size, targetWorkers: this.cpuWarmup?.target ?? 0, maximumWorkers: this.limit };
+  }
+
+  cpuModuleStatus(modules, targetWorkers) {
+    return { ...this.cpuWarmupStatus, modules: [...modules], targetWorkers,
+      readyWorkers: [...this.slots].filter(slot => modules.every(module => slot[`${module}Warmed`])).length };
+  }
+
+  cpuModuleWorkerCount(atomCount, coordinateBytes, modules) {
+    const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
+    const bytes = (sharedMemory ? 0 : coordinateBytes) + (modules.includes('ptm') ? atomCount * 48 + PTM_INITIAL_HEAP_BYTES : 0)
+      + (modules.includes('voronoi') ? VORONOI_INITIAL_HEAP_BYTES : 0);
+    return Math.min(this.limit, chooseWorkerCount(atomCount, bytes, this.environment, 4_096));
   }
 
   /** Preheat the heavy-analysis pool while a source is loading or expanding.
@@ -97,23 +122,25 @@ export class AnalysisPool {
    * Cancelling one caller leaves the others' warmup intact.
    */
   warmupCpu({ atomCount, coordinateBytes = atomCount * 3 * Float64Array.BYTES_PER_ELEMENT,
-    signal, onProgress = () => {} } = {}) {
+    modules = ['ptm'], signal, onProgress = () => {} } = {}) {
     if (this.closed) return Promise.reject(new Error('The analysis pool is closed.'));
     if (signal?.aborted) return Promise.reject(abortError());
     if (!Number.isInteger(atomCount) || atomCount < 1 || !Number.isFinite(coordinateBytes) || coordinateBytes < 0) {
       return Promise.reject(new Error('CPU warmup requires a positive atom count and valid coordinate size.'));
     }
-    const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
-    const bytes = (sharedMemory ? 0 : coordinateBytes) + atomCount * 48 + PTM_INITIAL_HEAP_BYTES;
-    const target = Math.min(this.limit, chooseWorkerCount(atomCount, bytes, this.environment, 4_096));
-    if (this.cpuWarmupStatus.readyWorkers >= target) {
-      const status = { ...this.cpuWarmupStatus, targetWorkers: target };
+    if (!Array.isArray(modules) || !modules.length || modules.some(module => !CPU_MODULES.includes(module))) {
+      return Promise.reject(new Error('CPU warmup modules must include ptm or voronoi.'));
+    }
+    modules = CPU_MODULES.filter(module => modules.includes(module));
+    const target = this.cpuModuleWorkerCount(atomCount, coordinateBytes, modules);
+    if (this.cpuModuleStatus(modules, target).readyWorkers >= target) {
+      const status = this.cpuModuleStatus(modules, target);
       return Promise.resolve().then(() => { if (signal?.aborted) throw abortError(); onProgress(status); return status; });
     }
     let session = this.cpuWarmup;
     if (!session || session.controller.signal.aborted) {
       const controller = new AbortController();
-      session = { controller, target, subscribers: new Set(), promise: null };
+      session = { controller, target, atomCount, coordinateBytes, modules, subscribers: new Set(), promise: null };
       this.cpuWarmup = session;
       this.controllers.add(controller);
       session.promise = Promise.resolve().then(() => this.prepareCpuWorkers(session)).finally(() => {
@@ -121,9 +148,12 @@ export class AnalysisPool {
         if (this.cpuWarmup === session) this.cpuWarmup = null;
       });
     }
-    session.target = Math.max(session.target, target);
+    session.atomCount = Math.max(session.atomCount, atomCount);
+    session.coordinateBytes = Math.max(session.coordinateBytes, coordinateBytes);
+    session.modules = CPU_MODULES.filter(module => session.modules.includes(module) || modules.includes(module));
+    session.target = this.cpuModuleWorkerCount(session.atomCount, session.coordinateBytes, session.modules);
     return new Promise((resolve, reject) => {
-      const subscriber = { target, onProgress };
+      const subscriber = { target, atomCount, coordinateBytes, modules, onProgress };
       session.subscribers.add(subscriber);
       let settled = false;
       const finish = (error, status) => {
@@ -132,13 +162,17 @@ export class AnalysisPool {
         signal?.removeEventListener('abort', abort);
         session.subscribers.delete(subscriber);
         if (!session.subscribers.size) session.controller.abort();
-        else session.target = Math.max(...[...session.subscribers].map(item => item.target));
+        else {
+          session.atomCount = Math.max(...[...session.subscribers].map(item => item.atomCount));
+          session.coordinateBytes = Math.max(...[...session.subscribers].map(item => item.coordinateBytes));
+          session.target = this.cpuModuleWorkerCount(session.atomCount, session.coordinateBytes, session.modules);
+        }
         if (error) reject(error); else resolve(status);
       };
       const abort = () => finish(abortError());
       signal?.addEventListener('abort', abort, { once: true });
       session.promise.then(status => finish(null, status), error => finish(error));
-      try { onProgress({ ...this.cpuWarmupStatus, targetWorkers: session.target }); }
+      try { onProgress(this.cpuModuleStatus(modules, target)); }
       catch (error) { finish(error); }
     });
   }
@@ -146,23 +180,94 @@ export class AnalysisPool {
   async prepareCpuWorkers(session) {
     const { signal } = session.controller;
     const report = () => {
-      const status = { ...this.cpuWarmupStatus, targetWorkers: session.target };
-      for (const subscriber of session.subscribers) subscriber.onProgress(status);
+      const status = this.cpuModuleStatus(session.modules, session.target);
+      for (const subscriber of session.subscribers) subscriber.onProgress(this.cpuModuleStatus(subscriber.modules, session.target));
       return status;
     };
     try {
-      while (this.cpuWarmupStatus.readyWorkers < session.target) {
+      while (this.cpuModuleStatus(session.modules, session.target).readyWorkers < session.target) {
         if (signal.aborted || this.closed) throw abortError();
-        const missing = session.target - this.cpuWarmupStatus.readyWorkers;
-        await Promise.all(Array.from({ length: missing }, () => this.runTask({ kind: 'warmup' }, signal,
+        const missing = Math.min(2, session.target - this.cpuModuleStatus(session.modules, session.target).readyWorkers);
+        await Promise.all(Array.from({ length: missing }, () => this.runTask({ kind: 'warmup', modules: session.modules }, signal,
           signal, () => {}, true).then(report)));
         // An already warm idle slot may stand in while all other resident
         // slots are busy. Wait for them instead of creating extra modules.
-        if (this.cpuWarmupStatus.readyWorkers < session.target) await yieldToMain();
+        if (this.cpuModuleStatus(session.modules, session.target).readyWorkers < session.target) await waitForCpuResources();
       }
       if (signal.aborted || this.closed) throw abortError();
       return report();
     } catch (error) { session.controller.abort(); throw error; }
+  }
+
+  voronoiWorkerCount(frame, workCount = frame.fractional.length / 3, targetAtoms = 512) {
+    const atomCount = frame.fractional.length / 3;
+    const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
+    // Both heavy native modules can share these resident slots. Account for
+    // their actual 16 MiB initial heaps, normalized coordinates and linked bins.
+    const workerBytes = frame.fractional.byteLength * (sharedMemory ? 1 : 2) + atomCount * 20
+      + VORONOI_INITIAL_HEAP_BYTES + PTM_INITIAL_HEAP_BYTES;
+    return Math.min(this.limit, chooseWorkerCount(workCount, workerBytes, this.environment, targetAtoms));
+  }
+
+  /** Snapshot coordinates and build the resident Voronoi index in background
+   * jobs, independently of PTM preheating. This never computes atomic cells. */
+  async prepareCpuFrame(sourceFrame, { kind = 'voronoi', selectedTypes = null, signal, onProgress = () => {} } = {}) {
+    if (this.closed) throw new Error('The analysis pool is closed.');
+    if (signal?.aborted) throw abortError();
+    if (kind !== 'voronoi') throw new Error('CPU frame preparation supports voronoi.');
+    const selection = prepareVoronoiSelection(sourceFrame, selectedTypes), frame = selection.frame;
+    const atomCount = frame.fractional.length / 3;
+    if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
+    const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
+    const target = this.voronoiWorkerCount(frame), snapshot = await this.prepareVoronoiSnapshot(frame, sharedMemory, signal);
+    if (signal?.aborted || this.closed) throw abortError();
+    const status = (phase = 'ready') => ({ kind, atomCount, sharedMemory, phase, frameKey: snapshot.key,
+      targetWorkers: target, readyWorkers: [...this.slots].filter(slot => slot.voronoiFrameKey === snapshot.key).length,
+      readyModules: this.cpuWarmupStatus.readyModules });
+    if (status().readyWorkers >= target) { const ready = status(); onProgress(ready); return ready; }
+    let session = this.cpuFramePreparation;
+    if (!session || session.snapshot.key !== snapshot.key || session.controller.signal.aborted) {
+      session?.controller.abort();
+      const controller = new AbortController();
+      session = { controller, snapshot, target, subscribers: new Set(), promise: null };
+      this.cpuFramePreparation = session; this.controllers.add(controller);
+      session.promise = Promise.resolve().then(async () => {
+        const report = (phase = 'preparing') => {
+          const progress = status(phase);
+          for (const subscriber of session.subscribers) subscriber.onProgress(progress);
+          return progress;
+        };
+        try {
+          while (status().readyWorkers < target) {
+            if (controller.signal.aborted || this.closed) throw abortError();
+            const missing = Math.min(2, target - status().readyWorkers);
+            await Promise.all(Array.from({ length: missing }, () => this.runTask({ kind: 'voronoiPrepare',
+              fractional: snapshot.coordinates, cell: snapshot.cell, residentFrameKey: snapshot.key },
+            controller.signal, undefined, phase => report(phase), sharedMemory).then(() => report())));
+            if (status().readyWorkers < target) await waitForCpuResources();
+          }
+          if (controller.signal.aborted || this.closed) throw abortError();
+          return report('ready');
+        } catch (error) { controller.abort(); throw error; }
+      }).finally(() => {
+        this.controllers.delete(controller);
+        if (this.cpuFramePreparation === session) this.cpuFramePreparation = null;
+      });
+    }
+    return new Promise((resolve, reject) => {
+      const subscriber = { onProgress }; session.subscribers.add(subscriber);
+      let settled = false;
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true; signal?.removeEventListener('abort', abort); session.subscribers.delete(subscriber);
+        if (!session.subscribers.size) session.controller.abort();
+        if (error) reject(error); else resolve(value);
+      };
+      const abort = () => finish(abortError());
+      signal?.addEventListener('abort', abort, { once: true });
+      session.promise.then(value => finish(null, value), error => finish(error));
+      try { onProgress(status('preparing')); } catch (error) { finish(error); }
+    });
   }
 
   async analyze(frame, parameters, { onProgress = () => {}, signal, frameIndex } = {}) {
@@ -296,6 +401,9 @@ export class AnalysisPool {
   async analyzeCPU(frame, parameters, { onProgress = () => {}, signal, onGeometryChunk, retainCells = true } = {}) {
     if (this.closed) throw new Error('The analysis pool is closed.');
     if (signal?.aborted) throw abortError();
+    // Queued preparation yields immediately to foreground work. Posted native
+    // initialization/index jobs return their reusable resident state on ACK.
+    this.cpuFramePreparation?.controller.abort();
     if (parameters.kind === 'localShear') return this.analyzeLocalShear(frame, parameters, { onProgress, signal });
     if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'].includes(parameters.kind)) {
       return this.analyzeVoronoiCPU(frame, parameters, { onProgress, signal, onGeometryChunk, retainCells });
@@ -546,8 +654,7 @@ export class AnalysisPool {
     // Coordinate snapshot, linked index, per-worker output, and resident Wasm
     // buffers. Face CSR is streamed in bounded chunks rather than a full
     // frame-sized private output in each Worker.
-    const workerBytes = frame.fractional.byteLength * (sharedMemory ? 1 : 2) + atomCount * 16 + 2 * 1024 ** 2;
-    const workerCount = geometryOnly ? 1 : Math.min(this.limit, chooseWorkerCount(workCount, workerBytes, this.environment, geometryBatch ? 256 : 512));
+    const workerCount = geometryOnly ? 1 : this.voronoiWorkerCount(frame, workCount, geometryBatch ? 256 : 512);
     const chunkSize = geometryOnly ? 1 : Math.max(32, Math.min(geometryBatch ? 128 : 256, Math.ceil(workCount / (workerCount * 8))));
     const chunkCount = Math.ceil(workCount / chunkSize);
     const controller = new AbortController();
@@ -636,19 +743,38 @@ export class AnalysisPool {
    * repeated analyses; changing frames retains only one pool-side snapshot.
    */
   async prepareVoronoiSnapshot(frame, sharedMemory, signal) {
+    // Foreground analysis can overtake frame preparation without making a
+    // second complete snapshot. After joining a copy, check mutable inputs
+    // exactly before using its coordinates/index identity.
+    while (this.voronoiSnapshotPending) {
+      try { await this.voronoiSnapshotPending; } catch (error) {
+        if (signal?.aborted || this.closed) throw abortError();
+      }
+      if (signal?.aborted || this.closed) throw abortError();
+    }
+    const pending = this.createVoronoiSnapshot(frame, sharedMemory, signal);
+    this.voronoiSnapshotPending = pending;
+    try { return await pending; }
+    finally { if (this.voronoiSnapshotPending === pending) this.voronoiSnapshotPending = null; }
+  }
+
+  async createVoronoiSnapshot(frame, sharedMemory, signal) {
+    const generation = this.voronoiSnapshotGeneration;
     const cellKey = JSON.stringify([Array.from(frame.cell.vectors), Array.from(frame.cell.pbc), Array.from(frame.cell.origin ?? [0, 0, 0])]);
     const previous = this.voronoiSnapshot;
     let identical = previous?.source === frame.fractional && previous.cellKey === cellKey && previous.sharedMemory === sharedMemory;
     if (identical) {
       for (let index = 0; index < frame.fractional.length; index++) {
         if (!Object.is(frame.fractional[index], previous.coordinates[index])) { identical = false; break; }
-        if (index && index % 262_144 === 0) { await yieldToMain(); if (signal.aborted) throw abortError(); }
+        if (index && index % 262_144 === 0) { await yieldToMain(); if (signal?.aborted) throw abortError(); }
       }
     }
+    if (generation !== this.voronoiSnapshotGeneration || signal?.aborted || this.closed) throw abortError();
     if (identical) return previous;
     const coordinates = await copyCoordinates(frame.fractional, signal, sharedMemory),
       cell = { ...frame.cell, vectors: frame.cell.vectors.slice(), pbc: Array.from(frame.cell.pbc), origin: Float64Array.from(frame.cell.origin ?? [0, 0, 0]) };
     const snapshot = { source: frame.fractional, coordinates, cell, cellKey, sharedMemory, key: this.nextVoronoiFrameKey++ };
+    if (generation !== this.voronoiSnapshotGeneration || signal?.aborted || this.closed) throw abortError();
     this.voronoiSnapshot = snapshot;
     return snapshot;
   }
@@ -686,6 +812,13 @@ export class AnalysisPool {
       const task = { id: this.nextId++, payload, signal, sourceSignal, resolve, reject, onPhase,
         sharedMemory, worker: null, slot: null, done: false, lease: null, posted: false };
       task.abort = () => {
+        if (task.payload.kind === 'voronoiPrepare' && !task.posted && task.slot && !this.closed) {
+          // Coordinate copying/yielding is main-thread work. Cancelling it
+          // leaves the idle Worker's previously warmed modules untouched.
+          task.cancelledVoronoi = true; task.reject(abortError());
+          this.finish(task, null, { preparationCancelled: true });
+          return;
+        }
         if (task.payload.kind === 'warmup' && task.posted && !this.closed) {
           // Module initialization is asynchronous. Let its ACK return the
           // useful module to the pool even when this subscriber went away.
@@ -726,7 +859,7 @@ export class AnalysisPool {
   async startTask(task) {
     try {
       const lease = await this.cpuBudget.acquire(1, { signal: task.signal,
-        priority: task.payload.kind === 'warmup' ? -1 : 0 });
+        priority: task.payload.kind === 'warmup' ? -1 : task.payload.kind === 'voronoiPrepare' ? -0.5 : 0 });
       if (task.done || task.signal.aborted || task.sourceSignal?.aborted || this.closed) {
         lease.release();
         this.finish(task, abortError());
@@ -737,16 +870,27 @@ export class AnalysisPool {
       // must never reinstantiate a kernel already available in another slot.
       let slot;
       if (task.payload.kind === 'warmup') {
-        const cold = this.idle.findIndex(candidate => !candidate.ptmWarmed);
+        const modules = task.payload.modules ?? ['ptm'];
+        const cold = this.idle.findIndex(candidate => modules.some(module => !candidate[`${module}Warmed`]));
         if (cold >= 0) slot = this.idle.splice(cold, 1)[0];
         else if (this.slots.size < this.limit) slot = this.createWorker();
+      } else if (VORONOI_RESIDENT_KINDS.includes(task.payload.kind)) {
+        const matching = this.idle.findIndex(candidate => task.payload.kind === 'voronoiPrepare'
+          ? candidate.voronoiFrameKey !== task.payload.residentFrameKey
+          : candidate.voronoiFrameKey === task.payload.residentFrameKey);
+        if (matching >= 0) slot = this.idle.splice(matching, 1)[0];
+        else if (task.payload.kind === 'voronoiPrepare' && this.slots.size < this.limit) slot = this.createWorker();
       }
       slot ??= this.idle.pop() ?? this.createWorker();
       slot.task = task;
       task.slot = slot;
       task.worker = slot.worker;
-      if (task.payload.kind === 'warmup' && slot.ptmWarmed) {
-        this.finish(task, null, { warmed: true, kernelReused: true });
+      if (task.payload.kind === 'warmup' && (task.payload.modules ?? ['ptm']).every(module => slot[`${module}Warmed`])) {
+        this.finish(task, null, { warmed: true, kernelReused: true, modules: task.payload.modules ?? ['ptm'] });
+        return;
+      }
+      if (task.payload.kind === 'voronoiPrepare' && slot.voronoiFrameKey === task.payload.residentFrameKey) {
+        this.finish(task, null, { warmed: true, kernelReused: true, indexReused: true, frameUploaded: false });
         return;
       }
       task.onPhase('preparing');
@@ -755,7 +899,7 @@ export class AnalysisPool {
   }
 
   createWorker() {
-    const slot = { worker: this.workerFactory(), task: null, terminated: false, ptmWarmed: false };
+    const slot = { worker: this.workerFactory(), task: null, terminated: false, ptmWarmed: false, voronoiWarmed: false };
     this.slots.add(slot);
     slot.worker.addEventListener('message', ({ data }) => {
       const task = slot.task;
@@ -778,7 +922,7 @@ export class AnalysisPool {
       // Give the status text and Cancel button a paint before copying large
       // inputs. Transfer private copies instead of synchronously cloning the
       // complete frame in each of six consecutive postMessage calls.
-      const residentChunk = ['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'].includes(task.payload.kind)
+      const residentChunk = VORONOI_RESIDENT_KINDS.includes(task.payload.kind)
         && task.payload.residentFrameKey !== undefined && task.slot.voronoiFrameKey === task.payload.residentFrameKey;
       if (!residentChunk) await yieldToMain();
       if (task.done) return;
@@ -788,7 +932,7 @@ export class AnalysisPool {
         for (const partial of payload.partials) for (const value of Object.values(partial)) {
           if (ArrayBuffer.isView(value) && value.buffer instanceof ArrayBuffer) transferables.push(value.buffer);
         }
-      } else if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'].includes(payload.kind)
+      } else if (VORONOI_RESIDENT_KINDS.includes(payload.kind)
           && payload.residentFrameKey !== undefined
           && task.slot.voronoiFrameKey === payload.residentFrameKey) {
         payload = { ...payload };
@@ -836,9 +980,13 @@ export class AnalysisPool {
       task.slot.task = null;
       if (error || this.closed) this.terminateWorker(task.slot);
       else {
-        if (task.payload.kind === 'warmup' || task.payload.kind === 'ptm'
+        if (task.payload.kind === 'warmup') {
+          for (const module of result?.modules ?? task.payload.modules ?? ['ptm']) task.slot[`${module}Warmed`] = true;
+        }
+        if (task.payload.kind === 'ptm'
           || (task.payload.kind === 'strain' && !task.payload.ptmInput)) task.slot.ptmWarmed = true;
-        if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'].includes(task.payload.kind)) {
+        if (VORONOI_RESIDENT_KINDS.includes(task.payload.kind) && !result?.preparationCancelled) {
+          task.slot.voronoiWarmed = true;
           task.slot.voronoiFrameKey = task.payload.residentFrameKey;
         }
         if (task.slot.voronoiReleasePending) this.releaseVoronoiFrame(task.slot);
@@ -860,6 +1008,7 @@ export class AnalysisPool {
   close() {
     this.closed = true;
     this.voronoiSnapshot = null;
+    this.voronoiSnapshotGeneration++;
     this.gpuBackend.close();
     for (const controller of this.controllers) controller.abort();
     for (const task of [...this.active, ...this.queue]) this.finish(task, abortError());
@@ -868,11 +1017,11 @@ export class AnalysisPool {
 }
 
 async function copyCoordinates(source, signal, sharedMemory = false) {
-  if (signal.aborted) throw abortError();
+  if (signal?.aborted) throw abortError();
   const copy = sharedMemory ? new source.constructor(new SharedArrayBuffer(source.byteLength)) : new source.constructor(source.length);
   const chunkLength = Math.max(1, Math.floor(COPY_CHUNK_BYTES / source.BYTES_PER_ELEMENT));
   for (let offset = 0; offset < source.length; offset += chunkLength) {
-    if (signal.aborted) throw abortError();
+    if (signal?.aborted) throw abortError();
     copy.set(source.subarray(offset, Math.min(source.length, offset + chunkLength)), offset);
     if (offset + chunkLength < source.length) await yieldToMain();
   }
@@ -902,6 +1051,13 @@ async function copyFields(fields, signal, sharedMemory = false) {
 function yieldToMain() {
   return typeof globalThis.scheduler?.yield === 'function' ? globalThis.scheduler.yield()
     : new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function waitForCpuResources() {
+  // scheduler.yield() promotes its continuation ahead of ordinary Worker
+  // message tasks. Repeated no-op preparation retries must allow those ACKs
+  // to run, otherwise the very resources being awaited can remain busy forever.
+  return new Promise(resolve => setTimeout(resolve, 4));
 }
 
 function abortError() {

@@ -1,5 +1,6 @@
 import { cellFaceHeights } from '../../data/model.js';
 import { NEIGHBOR_BINDINGS_WGSL } from './neighbors.js';
+import { gpuPreparationKinds } from './preparation.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, frameUploadBytes, gpuWorkspaceBytes,
   trajectoryCapacity, frameEvictionOrder } from './cache-policy.js';
 
@@ -59,13 +60,15 @@ export class GpuRuntime {
     this.memoryLimited = false;
     this.voronoiWorkspace = null;
     this.voronoiCpuContext = null;
+    this.voronoiPreparations = new Map();
+    this.neighborIndexBuildCount = this.voronoiKernelWarmupCount = 0;
   }
 
   async initialize(signal) {
     checkSignal(signal);
     if (this.lost) throw new GpuUnavailableError(this.lost);
     if (!this.initialization) this.initialization = this.initializeDevice();
-    await this.initialization;
+    await waitForGpu(this.initialization, signal);
     checkSignal(signal);
     return this.device;
   }
@@ -89,8 +92,22 @@ export class GpuRuntime {
     this.device.addEventListener('uncapturederror', (event) => { this.lost = event.error?.message || 'A WebGPU device error occurred.'; });
   }
 
-  async warmup({ signal } = {}) {
+  async warmup({ signal, analysisKinds } = {}) {
+    const kinds = gpuPreparationKinds(analysisKinds);
     await this.initialize(signal);
+    if (kinds) {
+      if (kinds.includes('voronoi')) {
+        const voronoi = await waitForGpu(import('./voronoi-shaders.js'), signal);
+        // compilePipeline shares native promises with general warmup and
+        // foreground dispatches. A cancelled caller need not wait for the
+        // driver to finish compilation before releasing the worker queue.
+        checkSignal(signal);
+        await waitForGpu(Promise.all([CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER,
+          voronoi.VORONOI_INITIALIZE_SHADER, voronoi.VORONOI_CLIP_SHADER].map(source => this.compilePipeline(source))), signal);
+      }
+      checkSignal(signal);
+      return this.cacheStatus();
+    }
     if (!this.warmupPromise) {
       this.warmupPromise = (async () => {
         const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm, dxa, dxaNeighbors, dxaLocal, bondStatistics, voronoi] = await Promise.all([
@@ -128,7 +145,7 @@ export class GpuRuntime {
       })();
       this.warmupPromise.catch(() => { this.warmupPromise = null; });
     }
-    await this.warmupPromise;
+    await waitForGpu(this.warmupPromise, signal);
     checkSignal(signal);
     return this.cacheStatus();
   }
@@ -149,10 +166,15 @@ export class GpuRuntime {
   }
 
   cacheStatus() {
-    const workspaceBytes = gpuWorkspaceBytes(this.frameBytes);
+    const workspaceBytes = Math.max(gpuWorkspaceBytes(this.frameBytes), this.voronoiWorkspace?.bytes ?? 0);
     const capacity = trajectoryCapacity({ frameCount: this.frameCount, frameBytes: this.frameBytes,
       budgetBytes: this.budgetBytes, workspaceBytes });
     const cachedFrameIndexes = [...new Set([...this.frames.values()].map(frame => frame.frameIndex).filter(Number.isInteger))].sort((a, b) => a - b);
+    const preparedVoronoi = [...this.voronoiPreparations].filter(([frameKey, prepared]) => this.frames.has(frameKey)
+      && this.indexes.has(`${frameKey}:${prepared.radius}`) && this.voronoiWorkspace?.capacity >= prepared.capacity
+      && prepared.sources.every(source => this.pipelines.has(source)));
+    const preparedVoronoiFrameIndexes = [...new Set(preparedVoronoi.map(([frameKey]) => this.frames.get(frameKey).frameIndex)
+      .filter(Number.isInteger))].sort((a,b) => a-b);
     return { initialized: Boolean(this.device && !this.lost), pipelineCount: this.pipelines.size, uploadCount: this.inputUploads,
       budgetBytes: this.budgetBytes, allocatedBytes: this.allocatedBytes, residentBytes: this.residentBytes, frameBytes: this.frameBytes,
       workspaceBytes, frameBudgetBytes: Math.max(0, this.budgetBytes - workspaceBytes), capacity,
@@ -161,7 +183,9 @@ export class GpuRuntime {
       fullTrajectory: this.frameCount > 0 && this.frameBytes > 0 && capacity >= this.frameCount,
       fullyCached: this.frameCount > 0 && cachedFrameIndexes.length === this.frameCount
         && cachedFrameIndexes[0] === 0 && cachedFrameIndexes.at(-1) === this.frameCount - 1,
-      memoryLimited: this.memoryLimited };
+      memoryLimited: this.memoryLimited, neighborIndexCount: this.indexes.size, neighborIndexBuildCount: this.neighborIndexBuildCount,
+      voronoiWorkspaceAtoms: this.voronoiWorkspace?.capacity ?? 0, voronoiKernelWarmupCount: this.voronoiKernelWarmupCount,
+      preparedVoronoiFrameIds: preparedVoronoi.map(([frameKey]) => frameKey), preparedVoronoiFrameIndexes };
   }
 
   frameKey(frame) {
@@ -236,7 +260,14 @@ export class GpuRuntime {
     }
   }
 
-  prepareFrame(frame, options) { return this.uploadFrame(frame, options); }
+  async prepareFrame(frame, options = {}) {
+    const kinds = gpuPreparationKinds(options.analysisKinds);
+    if (kinds?.includes('voronoi')) {
+      const { prepareGpuVoronoiFrame } = await waitForGpu(import('./voronoi.js'), options.signal);
+      return prepareGpuVoronoiFrame(this, frame, { selectedTypes: options.selectedTypes }, options);
+    }
+    return this.uploadFrame(frame, options);
+  }
 
   /** Resident inputs also serve atomwise kernels which need no neighbor grid. */
   async prepareFrameBuffers(frame, options) {
@@ -613,6 +644,7 @@ export class GpuRuntime {
       if (occupied[0]) throw new GpuUnavailableError('The neighbor cells are too densely occupied for a bounded GPU dispatch.');
       while (this.indexes.size >= 2) { const [oldKey, old] = this.indexes.entries().next().value; this.disposeBuffers([old.configBuffer, old.headsBuffer, old.nextBuffer]); this.indexes.delete(oldKey); }
       this.indexes.set(key, context);
+      this.neighborIndexBuildCount++;
       return context;
     } catch (error) { this.disposeBuffers(owned); throw error; }
   }
@@ -659,7 +691,7 @@ export class GpuRuntime {
   async run(source, bindings, invocations, { signal, startAtom = 0, endAtom = invocations, batchSize = 16_384, updateRange = true, workgroupSize = 128, onProgress } = {}) {
     await this.initialize(signal);
     const device = this.device;
-    const pipeline = await this.compilePipeline(source);
+    const pipeline = await waitForGpu(this.compilePipeline(source), signal);
     checkSignal(signal);
     if (!Number.isInteger(workgroupSize) || workgroupSize < 1 || workgroupSize > (device.limits.maxComputeInvocationsPerWorkgroup ?? 256)) {
       throw new GpuUnavailableError('The GPU kernel workgroup size exceeds device limits.');
@@ -716,6 +748,7 @@ export class GpuRuntime {
   }
 
   evictFrame(frameKey) {
+    this.voronoiPreparations.delete(frameKey);
     if (this.voronoiCpuContext?.frameKey === frameKey) this.voronoiCpuContext = null;
     const frame = this.frames.get(frameKey);
     if (!frame) return;
@@ -745,6 +778,7 @@ export class GpuRuntime {
     }
   }
   releaseFrames() {
+    this.voronoiPreparations.clear();
     this.disposeBuffers(this.voronoiWorkspace?.buffers ?? []); this.voronoiWorkspace = null; this.voronoiCpuContext = null;
     this.clearIndexes();
     for (const frame of this.frames.values()) this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer,
@@ -775,6 +809,20 @@ function bindingDeclarations(source) {
 }
 
 export function yieldWorker() { return new Promise((resolve) => setTimeout(resolve, 0)); }
+
+/** Native compilation/device acquisition can complete in the background, but
+ * cancellation must release the serialized worker task promptly. The shared
+ * promise always retains rejection handlers and may safely populate caches. */
+function waitForGpu(promise, signal) {
+  checkSignal(signal);
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const abort = () => { cleanup(); reject(new DOMException('Analysis cancelled.', 'AbortError')); };
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    signal.addEventListener('abort', abort, {once:true});
+    Promise.resolve(promise).then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+  });
+}
 
 function isGpuOutOfMemory(error) {
   return error?.gpuOutOfMemory || error?.name === 'GPUOutOfMemoryError';
