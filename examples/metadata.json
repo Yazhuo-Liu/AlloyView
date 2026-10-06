@@ -1,6 +1,6 @@
 {
   "fixed_end_climb/": "{count} numbered CFG files · NEB sequence",
-  "fcc-vacancy.cfg": "FCC crystal with one vacancy",
-  "bcc-trajectory.dump": "Multi-frame BCC text trajectory",
+  "hea-fcc-screw.dump": "Equiatomic CoCrFeMnNi FCC · 28,800 atoms · one screw dislocation · unrelaxed",
+  "fe-bcc-carbon-inclusion.dump": "BCC Fe + spherical diamond-C inclusion · 28,248 atoms · slice through the center to reveal C · unrelaxed",
   "NiGB_minimized.cfg": "Nickel grain boundary · 129,904 atoms · CPU/GPU benchmark"
 }

@@ -18,7 +18,9 @@ cutoffs. Increasing them can find more complex dislocations but increases work.
 Each Burgers-vector family has an independent visibility checkbox and color.
 Line radius controls a connected tube surface, with shared rings and smooth
 display interpolation at bends. Closed loops share their closing ring;
-periodic joins use matching frames in the full triclinic cell. These display
+periodic joins use matching frames in the full triclinic cell. Display pieces
+cut by periodic boundaries have filled end faces, so they appear as solid rods
+from either end. These display
 changes reuse the computed network and preserve its coordinates, measured
 length, Burgers vectors and junction topology.
 Extraction adds **Crystal structure (DXA)** to **Color by**, including when no

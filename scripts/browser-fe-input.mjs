@@ -215,7 +215,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, call }) => {
     const fetch = window.fetch;
     feInputChecks.sourceFetchHeld = false;
     window.fetch = (url, ...options) => {
-      if (!String(url).endsWith('/fcc-vacancy.cfg')) return fetch.call(window, url, ...options);
+      if (!String(url).endsWith('/hea-fcc-screw.dump')) return fetch.call(window, url, ...options);
       feInputChecks.sourceFetchHeld = true;
       return new Promise(resolve => {
         feInputChecks.releaseSourceFetch = () => {
@@ -225,7 +225,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, call }) => {
       });
     };
   })()`);
-  await chooseExample('fcc-vacancy.cfg');
+  await chooseExample('hea-fcc-screw.dump');
   await waitFor('feInputChecks.sourceFetchHeld', 'replacement source fetch held before completion');
   const sourceLoadingControlsDisabled = `document.getElementById('lattice-estimate-cancel').hidden
     && document.getElementById('lattice-estimate-cancel').disabled
@@ -240,11 +240,11 @@ const report = await withWebGpuBrowser(async ({ evaluate, call }) => {
   assert.equal(await evaluate(sourceLoadingControlsDisabled), true,
     'A late fit must not reenable lattice controls while the replacement source is loading.');
   await evaluate('feInputChecks.releaseSourceFetch()');
-  await waitForExample('fcc-vacancy.cfg', 31);
+  await waitForExample('hea-fcc-screw.dump', 28800);
   const replacement = await evaluate('feInputChecks.references()');
-  assert.equal(replacement.element, 'Al');
-  assert.equal(replacement.structure, '1');
-  assert.equal(Number(replacement.a), 4.05);
+  assert.equal(replacement.element, 'Co');
+  assert.equal(replacement.structure, '2');
+  assert.equal(Number(replacement.a), 2.51);
   assert.deepEqual(await evaluate('feInputChecks.references()'), replacement,
     'A pending fit from the Fe source must not replace the next source\'s lattice reference.');
   const analyses = await evaluate('feInputChecks.analyses');

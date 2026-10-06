@@ -146,11 +146,10 @@ function splitSamples(samples, cell, closed, tolerance) {
       const first = translated(rings[interval - 1], image), last = translated(rings[interval], image);
       if (length(subtract(last.center, first.center)) <= tolerance) continue;
       if (!current || image.some((value, axis) => value !== previousImage[axis])) {
-        current = { samples: [first], closed: false, capStart: !closed && point === 1 && interval === 1, capEnd: false };
+        current = { samples: [first], closed: false };
         pieces.push(current);
       }
       current.samples.push(last);
-      current.capEnd = !closed && point === samples.length - 1 && interval === unique.length - 1;
       previousImage = image;
     }
   }
@@ -166,6 +165,13 @@ function splitSamples(samples, cell, closed, tolerance) {
         pieces.shift();
       }
     }
+  }
+  // A cell face cuts the displayed solid tube, even when the scientific curve
+  // continues through PBC. Close each visible piece so an end-on view cannot
+  // see through its shell. Finite joined loops have no exposed ends.
+  for (const piece of pieces) {
+    piece.capStart = !piece.closed;
+    piece.capEnd = !piece.closed;
   }
   return pieces;
 }

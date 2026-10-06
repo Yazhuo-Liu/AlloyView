@@ -19,6 +19,8 @@ Fixed CNA requires exactly 12 or 14 neighbors inside the supplied cutoff. Adapti
 
 Other includes defective, surface, disordered or unsupported environments. CNA describes local geometry; it does not identify chemical ordering or uniquely determine crystal orientation.
 
+Conventional CNA does not identify cubic or hexagonal diamond. Diamond nearest neighbors have no common neighbors, so the standard CNA signatures above cannot classify them. Use [PTM](ptm.md) with **Diamond** or **Hex. diamond** enabled; these templates are off by default. A separate diamond-identification algorithm can instead analyze neighbors of neighbors. See the [OVITO diamond-identification explanation](https://www.ovito.org/manual/reference/pipelines/modifiers/identify_diamond.html).
+
 ## GPU acceleration
 
 With **Enable GPU acceleration** on, both adaptive and fixed-cutoff CNA can run through WebGPU. The chosen shell convention, crystal labels, colors and visibility controls are the same as on CPU. GPU acceleration is on by default; unavailable or unsupported GPU execution falls back to the CPU Worker implementation. Switching the preference preserves completed results; click **Identify structure** again to calculate with the new preference.

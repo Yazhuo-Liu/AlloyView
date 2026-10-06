@@ -20,7 +20,7 @@ appears as a folder entry, including the bundled `fixed_end_climb/` NEB example.
 The manifest records every sequence file rather than assuming a fixed frame count.
 
 Optional descriptions live in `examples/metadata.json`, keyed by relative file or
-folder path (for example, `"fcc-vacancy.cfg": "FCC crystal with one vacancy"`).
+folder path (for example, `"hea-fcc-screw.dump": "FCC high-entropy alloy with a screw dislocation"`).
 For folders with several sources, a sequence key uses its filename pattern, such
 as `"runs/replica.{number}.cfg"`. Unlisted examples receive format and size or
 sequence details automatically. Use `{count}` in a description to include the

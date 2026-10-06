@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { indexLammpsDumpSeries, readLammpsSeriesFrame } from '../src/io/lammps-series.js';
-
-const root = new URL('../', import.meta.url);
+import { crystalFrame, dumpText } from './helpers/crystals.js';
 
 test('numbered LAMMPS dump files combine numeric file order with frames inside each file', async () => {
-  const text = await readFile(new URL('examples/bcc-trajectory.dump', root), 'utf8');
+  const frame = crystalFrame('bcc', 1, 3.3);
+  const text = dumpText([frame, frame]);
   const later = namedBlob(text, 'snapshot_10.lmp');
   const earlier = namedBlob(text, 'snapshot_2.lmp');
   const progress = [];

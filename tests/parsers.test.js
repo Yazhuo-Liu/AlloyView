@@ -1,15 +1,42 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { parseCfg } from '../src/io/cfg.js';
 import { indexLammpsDump, parseLammpsFrame, readLammpsFrame } from '../src/io/lammps-dump.js';
 
-const root = new URL('../', import.meta.url);
+const triclinicTrajectory = [0, 100].map(timestep => `ITEM: TIMESTEP
+${timestep}
+ITEM: NUMBER OF ATOMS
+2
+ITEM: BOX BOUNDS xy xz yz pp pp pp
+0 7.3 0.5
+-0.3 6.6 0.2
+0 6.6 -0.3
+ITEM: ATOMS id type element xs ys zs pe
+1 1 Fe 0 0 0 -4.28
+2 1 Fe ${timestep ? '0.3' : '0.25'} 0.25 0.25 -4.27
+`).join('');
 
-test('extended AtomEye CFG preserves cell, atom count, properties, and fractional coordinates', async () => {
-  const text = await readFile(new URL('examples/fcc-vacancy.cfg', root), 'utf8');
-  const frame = parseCfg(text, 'fcc-vacancy.cfg');
-  assert.equal(frame.ids.length, 31);
+test('extended AtomEye CFG preserves cell, atom count, properties, and fractional coordinates', () => {
+  const frame = parseCfg(`Number of particles = 2
+A = 1.0 Angstrom
+H0(1,1) = 8.1
+H0(1,2) = 0
+H0(1,3) = 0
+H0(2,1) = 0
+H0(2,2) = 8.1
+H0(2,3) = 0
+H0(3,1) = 0
+H0(3,2) = 0
+H0(3,3) = 8.1
+.NO_VELOCITY.
+entry_count = 4
+auxiliary[0] = site_energy [eV]
+26.9815385
+Al
+0 0 0 -3.1
+0 0.25 0.25 -3.36
+`, 'extended.cfg');
+  assert.equal(frame.ids.length, 2);
   assert.deepEqual([...frame.cell.vectors], [8.1, 0, 0, 0, 8.1, 0, 0, 0, 8.1]);
   assert.deepEqual(frame.typeLabels, ['Al']);
   assert.equal(frame.properties.find((property) => property.name === 'site_energy').unit, 'eV');
@@ -143,11 +170,11 @@ X
   assert.equal(frame.imageFlags, undefined);
 });
 
-test('restricted triclinic LAMMPS dump reconstructs true bounds and scaled positions', async () => {
-  const text = await readFile(new URL('examples/bcc-trajectory.dump', root), 'utf8');
+test('restricted triclinic LAMMPS dump reconstructs true bounds and scaled positions', () => {
+  const text = triclinicTrajectory;
   const firstFrameText = text.slice(0, text.indexOf('ITEM: TIMESTEP', 1));
-  const frame = parseLammpsFrame(firstFrameText, 'bcc-trajectory.dump');
-  assert.equal(frame.ids.length, 16);
+  const frame = parseLammpsFrame(firstFrameText, 'triclinic.dump');
+  assert.equal(frame.ids.length, 2);
   assert.equal(frame.timestep, 0);
   assert.deepEqual([...frame.cell.origin], [0, 0, 0]);
   assert.deepEqual([...frame.cell.vectors].map(round6), [6.6, 0, 0, 0.5, 6.6, 0, 0.2, -0.3, 6.6]);
@@ -157,14 +184,14 @@ test('restricted triclinic LAMMPS dump reconstructs true bounds and scaled posit
 });
 
 test('LAMMPS trajectory indexing returns frame slices without reading as one text value', async () => {
-  const text = await readFile(new URL('examples/bcc-trajectory.dump', root), 'utf8');
+  const text = triclinicTrajectory;
   const blob = new Blob([text]);
   const { offsets } = await indexLammpsDump(blob);
   assert.equal(offsets.length, 2);
-  const second = await readLammpsFrame(blob, offsets, 1, 'bcc-trajectory.dump');
+  const second = await readLammpsFrame(blob, offsets, 1, 'triclinic.dump');
   assert.equal(second.timestep, 100);
-  assert.equal(second.ids[15], 16);
-  assert.equal(round6(second.fractional[45]), 0.785);
+  assert.equal(second.ids[1], 2);
+  assert.equal(round6(second.fractional[3]), 0.3);
 });
 
 test('LAMMPS parser explicitly rejects general triclinic cells', () => {

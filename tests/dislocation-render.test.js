@@ -27,6 +27,31 @@ function assertFrames(curve) {
   }
 }
 
+function assertSolidCaps(geometry, curve) {
+  const bodyIndices = (curve.ringCount - 1) * curve.radialSegments * 6;
+  assert.equal(curve.indexCount, bodyIndices + 2 * curve.radialSegments * 3);
+  let offset = curve.indexStart + bodyIndices;
+  for (const [ring, sign] of [[0, -1], [curve.ringCount - 1, 1]]) {
+    const tangent = curve.tangents.slice(ring * 3, ring * 3 + 3);
+    const normal = tangent.map(value => value * sign);
+    const triangles = geometry.indices.slice(offset, offset + curve.radialSegments * 3);
+    const center = triangles[0];
+    vectorNear(geometry.values.slice(center * 12, center * 12 + 3), curve.points.slice(ring * 3, ring * 3 + 3));
+    vectorNear(geometry.values.slice(center * 12 + 3, center * 12 + 6), [0, 0, 0]);
+    for (let index = 0; index < triangles.length; index += 3) {
+      const vertices = Array.from(triangles.slice(index, index + 3));
+      assert.equal(vertices[0], center, 'every cap triangle covers the center, leaving no hole');
+      const positions = vertices.map(vertex => Array.from(geometry.values.slice(vertex * 12 + 3, vertex * 12 + 6)));
+      const [a, b, c] = positions;
+      const ab = b.map((value, axis) => value - a[axis]), ac = c.map((value, axis) => value - a[axis]);
+      const faceNormal = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
+      assert.ok(faceNormal.reduce((sum, value, axis) => sum + value * normal[axis], 0) > 0, 'cap triangles face outward');
+      for (const vertex of vertices) vectorNear(geometry.values.slice(vertex * 12 + 6, vertex * 12 + 9), normal);
+    }
+    offset += curve.radialSegments * 3;
+  }
+}
+
 test('dislocation curves split at triclinic periodic faces without a cell-spanning connector', () => {
   const points = fractionalToCartesian(new Float64Array([0.9, 0.3, 0.4, 1.1, 0.3, 0.4]), cell, new Float64Array(6));
   const result = network(points), original = Array.from(points);
@@ -133,18 +158,19 @@ test('native closed loops with numerical endpoint residuals snap only the displa
   }
 });
 
-test('triclinic periodic tube cuts retain matching frames without caps or cell-spanning triangles', () => {
+test('triclinic periodic tube cuts have solid caps and matching frames without cell-spanning triangles', () => {
   const points = fractionalToCartesian([0.8, 0.8, 0.4, 1.2, 1.2, 0.4, 1.3, 1.3, 0.6], cell, new Float64Array(9));
   const result = network(points), original = structuredClone(result), geometry = createDislocationTubeGeometry(result, cell);
   assert.equal(geometry.curves.length, 2, 'simultaneous periodic face crossings produce two pieces');
   const [first, last] = geometry.curves;
-  assert.equal(first.capStart, true); assert.equal(first.capEnd, false);
-  assert.equal(last.capStart, false); assert.equal(last.capEnd, true);
+  assert.equal(first.capStart, true); assert.equal(first.capEnd, true);
+  assert.equal(last.capStart, true); assert.equal(last.capEnd, true);
   vectorNear(first.tangents.slice(-3), last.tangents.slice(0, 3), 1e-12);
   vectorNear(first.normals.slice(-3), last.normals.slice(0, 3), 1e-12);
   vectorNear(first.points.slice(-3).map((value, axis) => value - last.points[axis]), [14, 8, 0]);
   for (const curve of geometry.curves) {
     assertFrames(curve);
+    assertSolidCaps(geometry, curve);
     const fractional = cartesianToFractional(curve.points, cell, new Float64Array(curve.points.length));
     assert.ok(fractional.every(value => value >= -1e-9 && value <= 1 + 1e-9));
     const curveIndices = geometry.indices.slice(curve.indexStart, curve.indexStart + curve.indexCount);
@@ -163,7 +189,8 @@ test('closed periodic winding lines keep their lattice displacement instead of a
   const result = network(points); result.segments[0].closed = true; result.segments[0].isInfinite = true;
   const geometry = createDislocationTubeGeometry(result, cell), curve = geometry.curves[0];
   assert.equal(curve.closed, false, 'periodic continuation joins translated replicas rather than different cell faces');
-  assert.equal(curve.capStart, false); assert.equal(curve.capEnd, false);
+  assert.equal(curve.capStart, true); assert.equal(curve.capEnd, true);
+  assertSolidCaps(geometry, curve);
   vectorNear(curve.tangents.slice(0, 3), curve.tangents.slice(-3), 1e-12);
   vectorNear(curve.normals.slice(0, 3), curve.normals.slice(-3), 1e-12);
   let displayedLength = 0;
@@ -175,7 +202,8 @@ test('closed periodic winding lines keep their lattice displacement instead of a
   points[points.length - 1] += 1e-7;
   const residualGeometry = createDislocationTubeGeometry(result, cell), residualCurve = residualGeometry.curves[0];
   assert.equal(residualCurve.closed, false);
-  assert.equal(residualCurve.capStart, false); assert.equal(residualCurve.capEnd, false);
+  assert.equal(residualCurve.capStart, true); assert.equal(residualCurve.capEnd, true);
+  assertSolidCaps(residualGeometry, residualCurve);
   near(residualCurve.points.at(-1) - residualCurve.points[2], 12, 1e-12);
   vectorNear(residualCurve.tangents.slice(0, 3), residualCurve.tangents.slice(-3), 1e-12);
   vectorNear(residualCurve.normals.slice(0, 3), residualCurve.normals.slice(-3), 1e-12);

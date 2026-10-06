@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { isReadableLocalFile } from '../src/io/local-files.js';
+import { cfgText, crystalFrame, dumpText } from './helpers/crystals.js';
 
 test('Worker parses current and previously cached load messages', async (t) => {
   let listener;
@@ -13,8 +14,9 @@ test('Worker parses current and previously cached load messages', async (t) => {
   };
   try {
     await import('../src/workers/structure-worker.js');
-    const cfg = new File([await readFile(new URL('../examples/fcc-vacancy.cfg', import.meta.url))], 'fcc-vacancy.cfg');
-    const dump = new File([await readFile(new URL('../examples/bcc-trajectory.dump', import.meta.url))], 'bcc-trajectory.dump');
+    const cfg = new File([cfgText(crystalFrame('fcc', 2, 4.05))], 'crystal.cfg');
+    const bcc = crystalFrame('bcc', 1, 3.3);
+    const dump = new File([dumpText([bcc, bcc])], 'trajectory.dump');
     let id = 0;
     async function send(type, payload) {
       id += 1;
@@ -30,7 +32,7 @@ test('Worker parses current and previously cached load messages', async (t) => {
         const result = await send('load', payload);
         assert.equal(result.ok, true, result.error);
         assert.equal(result.result.frameCount, 1);
-        assert.equal(result.result.frame.ids.length, 31);
+        assert.equal(result.result.frame.ids.length, 32);
       });
     }
     await t.test('cloned browser files use read APIs without constructor identity', async () => {
@@ -43,7 +45,7 @@ test('Worker parses current and previously cached load messages', async (t) => {
       assert.equal(isReadableLocalFile(file), true);
       const result = await send('load', { files: [file] });
       assert.equal(result.ok, true, result.error);
-      assert.equal(result.result.frame.ids.length, 31);
+      assert.equal(result.result.frame.ids.length, 32);
     });
     await t.test('LAMMPS indexing and on-demand frames survive legacy loads', async () => {
       const loaded = await send('load', { file: dump });

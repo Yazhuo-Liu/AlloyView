@@ -6,7 +6,8 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { crystalFrame } from '../tests/helpers/crystals.js';
+import { cfgText, crystalFrame, dumpText } from '../tests/helpers/crystals.js';
+import { createCell } from '../src/data/model.js';
 import { runAtomToolsSmoke } from './browser-atom-tools.mjs';
 import { runSelectionGroupsSmoke } from './browser-selection-groups.mjs';
 
@@ -39,6 +40,16 @@ const server = createServer(async (request, response) => {
 });
 await new Promise((done) => server.listen(0, '127.0.0.1', done));
 const profile = await mkdtemp(resolve(tmpdir(), 'alloyview-chrome-'));
+// Keep small inputs local to the browser check and remove them with its profile.
+const fcc = crystalFrame('fcc', 2, 4.05);
+fcc.ids = fcc.ids.slice(0, -1);
+fcc.fractional = fcc.fractional.slice(0, -3);
+fcc.properties = [{ name: 'site_energy', unit: 'eV', data: Float64Array.from(fcc.ids, (_, index) => index % 2 ? -3.36 : -3.1) }];
+const bcc = crystalFrame('bcc', 2, 3.3);
+bcc.cell = createCell({ vectors: [6.6, 0, 0, .5, 6.6, 0, .2, -.3, 6.6], triclinic: true });
+bcc.properties = [{ name: 'pe', unit: 'eV', data: new Float64Array(bcc.ids.length).fill(-4.28) }];
+await writeFile(resolve(profile, 'test-crystal.cfg'), cfgText(fcc));
+await writeFile(resolve(profile, 'test-trajectory.dump'), dumpText([bcc, bcc]));
 const { DISPLAY: ignoredDisplay, ...environment } = process.env;
 const chrome = spawn(chromePath, [
   '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
@@ -95,11 +106,22 @@ try {
     }
     throw new Error(`Timed out waiting for ${label}: ${await evaluate('document.getElementById("toast")?.textContent')} ${JSON.stringify(pageErrors)}`);
   }
-  async function openExampleChooser(expectedLabel = 'fcc-vacancy.cfg') {
+  async function openExampleChooser(expectedLabel = 'hea-fcc-screw.dump') {
     await evaluate(`document.getElementById('open-examples').click()`);
     await waitFor(`document.getElementById('source-dialog').open && [...document.querySelectorAll('#source-options .source-option')].some(button => !button.disabled && button.textContent.includes(${JSON.stringify(expectedLabel)}))`, 'example catalog');
   }
   async function chooseExample(name) {
+    if (name === 'test-crystal.cfg' || name === 'test-trajectory.dump') {
+      const contents = await readFile(resolve(profile, name), 'utf8');
+      await evaluate(`(() => {
+        const files = new DataTransfer();
+        files.items.add(new File([${JSON.stringify(contents)}], ${JSON.stringify(name)}, { type: 'text/plain' }));
+        const input = document.getElementById('file-input');
+        input.files = files.files;
+        input.dispatchEvent(new Event('change'));
+      })()`);
+      return;
+    }
     await openExampleChooser(name);
     await evaluate(`[...document.querySelectorAll('#source-options .source-option')].find(button => !button.disabled && button.textContent.includes(${JSON.stringify(name)})).click()`);
   }
@@ -340,8 +362,8 @@ try {
     assert.equal(await evaluate('document.getElementById("export-png").disabled'), true);
     assert.equal(await evaluate('window.closeTestClient.worker === null && window.closeTestClient.pending.size === 0'), true);
   }
-  await dropFiles([resolve(root, 'examples/fcc-vacancy.cfg')]);
-  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden && document.getElementById("empty-state").hidden', 'homepage file drop');
+  await dropFiles([resolve(profile, 'test-crystal.cfg')]);
+  await waitFor('document.getElementById("file-name").textContent === "test-crystal.cfg" && document.getElementById("loading").hidden && document.getElementById("empty-state").hidden', 'homepage file drop');
   assert.equal(await evaluate('document.getElementById("frame-count").textContent'), '1');
   assert.equal(await evaluate('document.getElementById("close-file").hidden'), false);
   // Configuration export needs an open source, while the compute preference
@@ -391,7 +413,7 @@ try {
 
   // A completed parser response that reaches the UI after close stays closed.
   await evaluate('window.holdNextSource = true; window.sourceResultHeld = false');
-  await dropFiles([resolve(root, 'examples/fcc-vacancy.cfg')]);
+  await dropFiles([resolve(profile, 'test-crystal.cfg')]);
   await waitFor('window.sourceResultHeld', 'held source response');
   await evaluate('document.getElementById("close-file").click(); window.releaseSource()');
   await delay(100);
@@ -402,14 +424,14 @@ try {
   await evaluate(`(() => {
     window.sourceOriginalFetch = window.fetch;
     window.fetch = (url, options) => {
-      if (!String(url).endsWith('fcc-vacancy.cfg')) return window.sourceOriginalFetch(url, options);
+      if (!String(url).endsWith('hea-fcc-screw.dump')) return window.sourceOriginalFetch(url, options);
       window.heldFetchSignal = options.signal;
       return new Promise(resolve => {
         window.releaseExampleFetch = async () => resolve(await window.sourceOriginalFetch(url));
       });
     };
   })()`);
-  await chooseExample('fcc-vacancy.cfg');
+  await chooseExample('hea-fcc-screw.dump');
   await waitFor('Boolean(window.releaseExampleFetch)', 'held example request');
   await evaluate('document.getElementById("close-file").click()');
   assert.equal(await evaluate('window.heldFetchSignal.aborted'), true);
@@ -419,7 +441,7 @@ try {
   await evaluate('window.fetch = window.sourceOriginalFetch');
 
   // Load all bundled sources through the actual Examples UI.
-  for (const [name, frames] of [['fcc-vacancy.cfg', 1], ['bcc-trajectory.dump', 2], ['fixed_end_climb/', 40]]) {
+  for (const [name, frames] of [['hea-fcc-screw.dump', 1], ['fe-bcc-carbon-inclusion.dump', 1], ['fixed_end_climb/', 40]]) {
     await chooseExample(name);
     await waitFor(`document.getElementById('empty-state').hidden && document.getElementById('loading').hidden && document.getElementById('file-name').textContent.includes(${JSON.stringify(name)})`, name);
     assert.equal(await evaluate('Number(document.getElementById("frame-count").textContent)'), frames);
@@ -436,8 +458,8 @@ try {
   // Use Chrome's native file input, rather than constructing a fetched example.
   const { root: domRoot } = await call('DOM.getDocument');
   const { nodeId } = await call('DOM.querySelector', { nodeId: domRoot.nodeId, selector: '#file-input' });
-  for (const [name, atoms, frames] of [['bcc-trajectory.dump', 16, 2], ['fcc-vacancy.cfg', 31, 1]]) {
-    await call('DOM.setFileInputFiles', { nodeId, files: [resolve(root, `examples/${name}`)] });
+  for (const [name, atoms, frames] of [['test-trajectory.dump', 16, 2], ['test-crystal.cfg', 31, 1]]) {
+    await call('DOM.setFileInputFiles', { nodeId, files: [resolve(profile, name)] });
     await waitFor(`document.getElementById('file-name').textContent === '${name}' && document.getElementById('loading').hidden`, 'local file');
     assert.equal(await evaluate('Number(document.getElementById("atom-count").textContent)'), atoms);
     assert.equal(await evaluate('Number(document.getElementById("frame-count").textContent)'), frames);
@@ -657,8 +679,8 @@ try {
     const capture = await call('Page.captureScreenshot', { format: 'png' });
     await writeFile('/tmp/alloyview-legend-auto.png', Buffer.from(capture.data, 'base64'));
   }
-  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(root, 'examples/fcc-vacancy.cfg')] });
-  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden', 'return from legend trajectory');
+  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(profile, 'test-crystal.cfg')] });
+  await waitFor('document.getElementById("file-name").textContent === "test-crystal.cfg" && document.getElementById("loading").hidden', 'return from legend trajectory');
 
   // A cutoff edit starts analysis without a separate Apply/Calculate click.
   await showTool('coordination');
@@ -989,8 +1011,8 @@ try {
   await evaluate(`(() => { const crystal = document.querySelector('[data-reference-structure]'); crystal.value = '1'; crystal.dispatchEvent(new Event('change')); })()`);
   await waitFor('document.getElementById("strain-state").textContent === "Calculated"', 'reference recovery');
   // A new source clears filters; enabled analysis follows trajectory frames.
-  await chooseExample('bcc-trajectory.dump');
-  await waitFor('document.getElementById("file-name").textContent.includes("bcc-trajectory.dump") && document.getElementById("loading").hidden', 'BCC source');
+  await chooseExample('test-trajectory.dump');
+  await waitFor('document.getElementById("file-name").textContent.includes("test-trajectory.dump") && document.getElementById("loading").hidden', 'BCC source');
   await evaluate(`document.getElementById('run-cna').click()`);
   await waitFor('document.getElementById("cna-state").textContent === "Calculated"', 'BCC classification');
   assert.equal(await evaluate('window.structureTestRenderer.frame.properties.find(p => p.name === "structureType").data.every(id => id === 3)'), true);
@@ -1036,7 +1058,7 @@ try {
   // An anonymous numeric species receives a geometric reference from PTM;
   // selecting an element then supplies its editable material defaults.
   const numericPath = resolve(profile, 'numeric-bcc.dump');
-  await writeFile(numericPath, (await readFile(resolve(root, 'examples/bcc-trajectory.dump'), 'utf8'))
+  await writeFile(numericPath, (await readFile(resolve(profile, 'test-trajectory.dump'), 'utf8'))
     .replaceAll(' type element ', ' type ').replaceAll(' Fe ', ' '));
   await call('DOM.setFileInputFiles', { nodeId, files: [numericPath] });
   await waitFor('document.getElementById("file-name").textContent === "numeric-bcc.dump" && document.getElementById("loading").hidden', 'numeric species source');
@@ -1550,14 +1572,14 @@ try {
   // Importing an old recipe during source loading must wait for the new
   // source to commit. It cannot change the frame request and discard it.
   await evaluate('window.holdNextSource = true; window.sourceResultHeld = false');
-  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(root, 'examples/fcc-vacancy.cfg')] });
+  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(profile, 'test-crystal.cfg')] });
   await waitFor('window.sourceResultHeld === true', 'held replacement source');
   assert.equal(await evaluate('document.getElementById("export-configuration").disabled'), true, 'export must be disabled while source ownership is changing');
   assert.equal(await evaluate('document.getElementById("frame-slider").disabled'), true);
   await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [recipePath] });
   await waitFor('document.getElementById("configuration-status").textContent.includes("Waiting for source files")', 'recipe pending during source loading');
   await evaluate('window.releaseSource()');
-  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden', 'replacement source commits after recipe import');
+  await waitFor('document.getElementById("file-name").textContent === "test-crystal.cfg" && document.getElementById("loading").hidden', 'replacement source commits after recipe import');
   assert.equal(await evaluate('window.structureTestRenderer.frame.ids.length'), 31);
   assert.equal(await evaluate('document.getElementById("frame-label").textContent'), '1 / 1');
   assert.ok(await evaluate('document.getElementById("configuration-status").textContent.includes("partial-pbc.dump")'));
@@ -1575,8 +1597,8 @@ try {
   await holdRecipePreflight();
   await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [preflightPath] });
   await waitFor('window.preflightResultHeld === true', 'held recipe frame preflight');
-  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(root, 'examples/fcc-vacancy.cfg')] });
-  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden', 'source replacing an in-flight recipe');
+  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(profile, 'test-crystal.cfg')] });
+  await waitFor('document.getElementById("file-name").textContent === "test-crystal.cfg" && document.getElementById("loading").hidden', 'source replacing an in-flight recipe');
   const replacementRadius = await evaluate('document.getElementById("radius-percent").value');
   await evaluate('window.releasePreflight(); window.restorePreflightHooks()');
   await delay(100);
@@ -1614,20 +1636,20 @@ try {
 
   // A failed automatically resumed recipe loses status ownership when a
   // newer recipe is imported, even while the same source remains active.
-  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(root, 'examples/fcc-vacancy.cfg')] });
-  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden', 'source before competing pending recipes');
+  await call('DOM.setFileInputFiles', { nodeId, files: [resolve(profile, 'test-crystal.cfg')] });
+  await waitFor('document.getElementById("file-name").textContent === "test-crystal.cfg" && document.getElementById("loading").hidden', 'source before competing pending recipes');
   await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [preflightPath] });
   await waitFor('document.getElementById("configuration-status").textContent.includes("Waiting for source files")', 'pending recipe A');
   await holdRecipePreflight();
   await call('DOM.setFileInputFiles', { nodeId, files: [partialPbcPath] });
   await waitFor('window.preflightResultHeld === true', 'held automatically resumed recipe A');
   const newerRecipe = structuredClone(recipe);
-  newerRecipe.source = { kind: 'file', label: 'fcc-vacancy.cfg', format: 'cfg', frameIndex: 0, frameCount: 1,
-    files: [{ name: 'fcc-vacancy.cfg', relativePath: 'fcc-vacancy.cfg', size: (await readFile(resolve(root, 'examples/fcc-vacancy.cfg'))).byteLength }] };
+  newerRecipe.source = { kind: 'file', label: 'test-crystal.cfg', format: 'cfg', frameIndex: 0, frameCount: 1,
+    files: [{ name: 'test-crystal.cfg', relativePath: 'test-crystal.cfg', size: (await readFile(resolve(profile, 'test-crystal.cfg'))).byteLength }] };
   const newerPath = resolve(profile, 'newer-pending-recipe.json');
   await writeFile(newerPath, JSON.stringify(newerRecipe));
   await call('DOM.setFileInputFiles', { nodeId: configurationInput, files: [newerPath] });
-  await waitFor('document.getElementById("configuration-status").textContent.includes("Waiting for source files") && document.getElementById("configuration-status").textContent.includes("fcc-vacancy.cfg")', 'newer pending recipe B');
+  await waitFor('document.getElementById("configuration-status").textContent.includes("Waiting for source files") && document.getElementById("configuration-status").textContent.includes("test-crystal.cfg")', 'newer pending recipe B');
   const newerStatus = await evaluate('document.getElementById("configuration-status").textContent');
   await evaluate('window.rejectPreflight(); window.restorePreflightHooks()');
   await delay(100);
@@ -1790,8 +1812,8 @@ try {
   assert.equal(await evaluate('document.getElementById("toggle-view-controls").getAttribute("aria-expanded")'), 'true');
   assert.notEqual(await evaluate('getComputedStyle(document.getElementById("view-controls")).display'), 'none');
   await evaluate('document.getElementById("toggle-view-controls").click()');
-  await chooseExample('fcc-vacancy.cfg');
-  await waitFor('document.getElementById("file-name").textContent.includes("fcc-vacancy.cfg") && document.getElementById("loading").hidden', 'phone structure');
+  await chooseExample('test-crystal.cfg');
+  await waitFor('document.getElementById("file-name").textContent.includes("test-crystal.cfg") && document.getElementById("loading").hidden', 'phone structure');
   await showTool('cna');
   await evaluate(`(async () => {
     const appUrl = document.querySelector('script[type="module"]').src;

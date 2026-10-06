@@ -25,7 +25,7 @@ analyzed on your device; structure data is never uploaded by the application.
   <img src="docs/images/alloyview-light.png" alt="AlloyView displaying an FCC crystal with a vacancy, colored by coordination number, with display controls and a scalar legend" width="1000">
 </picture>
 
-The bundled FCC vacancy example, colored by coordination number. The 3D view
+An FCC vacancy structure, colored by coordination number. The 3D view
 is on the left; structure information, display settings, slicing and analysis
 are on the right. Switch between **Light** and **Dark** in the top bar.
 
@@ -109,8 +109,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - JSON configuration export/import directly below Structure saves source file metadata, processing
   settings, camera and theme, then restores the view and recomputes enabled
   analyses after the matching local files are opened.
-- Bundled FCC, BCC trajectory, 40-image NEB and 129,904-atom Ni grain-boundary
-  examples.
+- Bundled CoCrFeMnNi FCC with a screw dislocation, BCC Fe with a spherical
+  carbon inclusion, 40-image NEB, and 129,904-atom Ni grain-boundary examples.
+  The HEA and Fe–C structures are unrelaxed demonstration models. In the
+  Fe–C example, add a slice with normal Z and position 34.392 Å to reveal
+  the embedded carbon particle.
 - Contextual **?** help opens individual feature documentation; a static documentation
   website includes controls, algorithms, implementation links and deployment guides.
 

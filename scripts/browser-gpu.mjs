@@ -627,10 +627,15 @@ async function runApplicationSmoke({ evaluate, call }) {
   await evaluate('location.href = new URL("./index.html", location.href).href');
   await waitFor('document.readyState === "complete" && document.getElementById("enable-gpu-computing") && document.getElementById("open-examples")', 'homepage');
   assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'true', 'GPU computation is enabled by default in the application.');
-  await evaluate(`document.getElementById('open-examples').click()`);
-  await waitFor(`document.getElementById('source-dialog').open && [...document.querySelectorAll('#source-options .source-option')].some(button => !button.disabled && button.textContent.includes('fcc-vacancy.cfg'))`, 'example catalog');
-  await evaluate(`[...document.querySelectorAll('#source-options .source-option')].find(button => !button.disabled && button.textContent.includes('fcc-vacancy.cfg')).click()`);
-  await waitFor('document.getElementById("file-name").textContent === "fcc-vacancy.cfg" && document.getElementById("loading").hidden && !document.getElementById("run-analysis").disabled', 'FCC vacancy example');
+  await evaluate(`(async () => {
+    const { cfgText, crystalFrame } = await import('./tests/helpers/crystals.js');
+    const files = new DataTransfer();
+    files.items.add(new File([cfgText(crystalFrame('fcc', 2, 4.05))], 'test-crystal.cfg', { type: 'text/plain' }));
+    const input = document.getElementById('file-input');
+    input.files = files.files;
+    input.dispatchEvent(new Event('change'));
+  })()`);
+  await waitFor('document.getElementById("file-name").textContent === "test-crystal.cfg" && document.getElementById("loading").hidden && !document.getElementById("run-analysis").disabled', 'local FCC test input');
   await evaluate(`(async () => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { calculateCna } = await import('./src/analysis/cna.js');
