@@ -1,6 +1,7 @@
 import { clearAnalysisResults, replaceAnalysisProperty } from './analysis/results.js';
 import { analysisBackendLabel, analysisBackendDetails, analysisProgressText } from './analysis/status.js';
-import { renderDistributionChart, renderPopulationTable, renderStatisticsTable } from './render/distribution-chart.js';
+import { renderDistributionChart, renderStatisticsTable } from './render/distribution-chart.js';
+import { initializeVoronoiResults } from './render/voronoi-results.js';
 
 export const TOPOLOGY_PROPERTIES = Object.freeze({
   bondStatistics: Object.freeze([
@@ -38,6 +39,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
   getColorChoiceVersion = () => 0, chooseProperty = () => {}, onResultsChange = () => {},
   notify = () => {}, onEdit = () => {}, onBeforeClear = () => {} }) {
   const $ = id => globalThis.document?.getElementById(id) ?? null;
+  const voronoiView = initializeVoronoiResults({ getElement: $, chooseProperty });
   const jobs = Object.fromEntries(Object.keys(DEFINITIONS).map(kind => [kind,
     { enabled: false, failed: false, queued: false, controller: null, serial: 0, result: null, frame: null,
       settings: { ...DEFINITIONS[kind].defaults } }]));
@@ -50,6 +52,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     for (const id of Object.values(definition.fields)) if ($(id)) $(id).disabled = !available;
     if ($(`run-${prefix}`)) $(`run-${prefix}`).disabled = !available || Boolean(job.controller) || job.queued;
     if ($(`cancel-${prefix}`)) $(`cancel-${prefix}`).disabled = !available || (!job.enabled && !job.failed);
+    if (kind === 'voronoi') voronoiView.setEnabled(available && Boolean(job.result));
   }
 
   function state(kind, label, text = '') {
@@ -116,6 +119,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     if ($(`${prefix}-summary`)) $(`${prefix}-summary`).textContent = '';
     if ($(`${prefix}-backend`)) $(`${prefix}-backend`).textContent = '—';
     if ($(`${prefix}-status`)) $(`${prefix}-status`).title = '';
+    if (kind === 'voronoi') voronoiView.clear();
   }
 
   function clearFrames(kind) {
@@ -145,9 +149,11 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     for (const field of TOPOLOGY_PROPERTIES[kind]) {
       const data = result[field.key];
       if (!data || data.length !== frame.ids.length) continue;
+      const autoRangeRelativeTolerance = result.autoRangeRelativeTolerance?.[field.key];
       replaceAnalysisProperty(frame, { name: field.name, displayName: field.label, unit: field.unit, data,
         analysisKind: kind, analysisKey: key, analysisMs: result.elapsedMs,
-        analysisEngine: result.engine, analysisGpuRequested: Boolean(result.gpuRequested) });
+        analysisEngine: result.engine, analysisGpuRequested: Boolean(result.gpuRequested),
+        ...(Number.isFinite(autoRangeRelativeTolerance) && autoRangeRelativeTolerance > 0 ? { autoRangeRelativeTolerance } : {}) });
     }
     if ($(`${prefix}-results`)) $(`${prefix}-results`).hidden = false;
     if (kind === 'bondStatistics') {
@@ -162,17 +168,19 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
       const summary = result.summary ?? {};
       if ($(`${prefix}-summary`)) $(`${prefix}-summary`).textContent =
         `${format(summary.atomCount ?? frame.ids.length)} cells · mean volume ${format(summary.meanVolume)} Å³ · mean coordination ${format(summary.meanCoordination)} · ${format(summary.boundaryAtomCount ?? 0)} boundary atoms`;
-      renderDistributionChart($('voronoi-volume-chart'), result.volumeHistogram, { label: 'Voronoi atomic volumes', xLabel: 'Volume', unit: 'Å³' });
-      renderDistributionChart($('voronoi-coordination-chart'), result.coordinationHistogram, { label: 'Voronoi coordination', xLabel: 'Neighbors' });
-      renderDistributionChart($('voronoi-face-chart'), result.faceAreaHistogram, { label: 'Voronoi neighbor face areas', xLabel: 'Face area', unit: 'Å²' });
-      renderPopulationTable($('voronoi-index-frequency'), result.indexCounts);
+      voronoiView.render(result);
     }
     const backend = { ...result, engine: result.engine ?? (result.backend === 'gpu' ? 'WebGPU' : 'CPU Workers') };
-    if ($(`${prefix}-backend`)) $(`${prefix}-backend`).textContent = analysisBackendLabel(backend);
-    if ($(`${prefix}-status`)) $(`${prefix}-status`).title = analysisBackendDetails(backend);
+    const corrections = kind === 'voronoi' && result.gpuCorrectionAtoms > 0
+      ? ` · ${format(result.gpuCorrectionAtoms)} cell${result.gpuCorrectionAtoms === 1 ? '' : 's'} corrected on CPU` : '';
+    const displayBackend = kind === 'voronoi' ? { ...backend,
+      engine: result.backend === 'gpu' ? 'WebGPU' : `CPU · ${format(result.workerCount ?? 1)} Worker${(result.workerCount ?? 1) === 1 ? '' : 's'}` } : backend;
+    const backendLabel = `${analysisBackendLabel(displayBackend)}${corrections}`;
+    if ($(`${prefix}-backend`)) $(`${prefix}-backend`).textContent = backendLabel;
+    if ($(`${prefix}-status`)) $(`${prefix}-status`).title = `${analysisBackendDetails(backend)}${corrections}`;
     const progress = $(`${prefix}-progress`);
     if (progress) { progress.hidden = true; progress.value = 1; }
-    state(kind, 'Calculated', `${analysisBackendLabel(backend)} · ${format((result.elapsedMs ?? 0) / 1000)} s`);
+    state(kind, 'Calculated', `${backendLabel} · ${format((result.elapsedMs ?? 0) / 1000)} s`);
     onResultsChange({ kind, frame, clearSettings: false });
   }
 

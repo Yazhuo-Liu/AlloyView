@@ -57,6 +57,8 @@ export class GpuRuntime {
     this.warmupPromise = null;
     this.dxaWarmupPromise = null;
     this.memoryLimited = false;
+    this.voronoiWorkspace = null;
+    this.voronoiCpuContext = null;
   }
 
   async initialize(signal) {
@@ -91,14 +93,14 @@ export class GpuRuntime {
     await this.initialize(signal);
     if (!this.warmupPromise) {
       this.warmupPromise = (async () => {
-        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm, dxa, dxaNeighbors, dxaLocal, bondStatistics] = await Promise.all([
+        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm, dxa, dxaNeighbors, dxaLocal, bondStatistics, voronoi] = await Promise.all([
           import('./coordination.js'), import('./rdf.js'), import('./local-shear-shaders.js'),
           import('./bonds-shaders.js'), import('./atomic-strain-shaders.js'),
           import('./cna-shaders.js'), import('./reference-strain-shaders.js'),
           import('./centrosymmetry-shaders.js'), import('./displacement-shaders.js'), import('./ptm-neighbors-shaders.js'),
           import('./dxa-shaders.js'),
           import('./dxa-local-neighbor-shaders.js'), import('./dxa-local-shaders.js'),
-          import('./bond-statistics-shaders.js'),
+          import('./bond-statistics-shaders.js'), import('./voronoi-shaders.js'),
         ]);
         const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
           shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
@@ -106,7 +108,8 @@ export class GpuRuntime {
           bonds.BONDS_COUNT_SHADER, bonds.BONDS_WRITE_SHADER, strain.ATOMIC_STRAIN_SHADER,
           cna.CNA_FIXED_SHADER, cna.CNA_ADAPTIVE_SHADER,
           reference.REFERENCE_STRAIN_CLEAR_SHADER, reference.REFERENCE_STRAIN_SHADER,
-          csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER, ptm.PTM_NEIGHBORS_SHADER, bondStatistics.BOND_STATISTICS_SHADER];
+          csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER, ptm.PTM_NEIGHBORS_SHADER, bondStatistics.BOND_STATISTICS_SHADER,
+          voronoi.VORONOI_INITIALIZE_SHADER, voronoi.VORONOI_CLIP_SHADER];
         for (const source of sources) await this.compilePipeline(source);
         // Optional binary64 DXA kernels can compile slowly on some adapters.
         // Ordinary analyses are ready now; DXA's first dispatch shares these
@@ -713,6 +716,7 @@ export class GpuRuntime {
   }
 
   evictFrame(frameKey) {
+    if (this.voronoiCpuContext?.frameKey === frameKey) this.voronoiCpuContext = null;
     const frame = this.frames.get(frameKey);
     if (!frame) return;
     for (const [indexKey, index] of this.indexes) if (index.frameKey === frameKey) {
@@ -741,6 +745,7 @@ export class GpuRuntime {
     }
   }
   releaseFrames() {
+    this.disposeBuffers(this.voronoiWorkspace?.buffers ?? []); this.voronoiWorkspace = null; this.voronoiCpuContext = null;
     this.clearIndexes();
     for (const frame of this.frames.values()) this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer,
       frame.ptm?.metadataBuffer, frame.ptm?.scalesBuffer, frame.ptm?.deformationBuffer,

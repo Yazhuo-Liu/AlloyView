@@ -23,6 +23,22 @@ test('single-species default is AtomEye-style beige and alloys remain distinguis
   assert.notDeepEqual([...alloy.colors.slice(0, 3)], [...alloy.colors.slice(3, 6)]);
 });
 
+test('GPU measurement precision keeps ideal-cell Auto colors neutral without rounding data or hiding manual variations', () => {
+  const property = { name: 'atomicVolume', data: new Float64Array([16, 16 + 2 ** -20, 16 - 2 ** -20]),
+    autoRangeRelativeTolerance: 32 * 2 ** -23 };
+  const original = property.data.slice(), automatic = colorsByProperty(property);
+  assert.deepEqual(automatic.colors.slice(0, 3), automatic.colors.slice(3, 6));
+  assert.deepEqual(automatic.colors.slice(0, 3), automatic.colors.slice(6, 9));
+  assert.equal(automatic.legend.dataMaximum, 16 + 2 ** -20);
+  assert.equal(automatic.legend.dataMinimum, 16 - 2 ** -20);
+  const manual = colorsByProperty(property, { minimum: automatic.legend.minimum, maximum: automatic.legend.maximum });
+  assert.notDeepEqual(manual.colors.slice(3, 6), manual.colors.slice(6, 9));
+  assert.deepEqual(property.data, original);
+  const physical = { ...property, data: new Float64Array([16, 16.001]) };
+  const visible = colorsByProperty(physical);
+  assert.notDeepEqual(visible.colors.slice(0, 3), visible.colors.slice(3, 6));
+});
+
 test('automatic colors keep roundoff-level crystal volumes uniform while retaining exact data and manual limits', () => {
   const data = Float64Array.of(16 - 8 * Number.EPSILON * 16, 16, 16 + 8 * Number.EPSILON * 16, NaN);
   const original = data.slice(), property = { name: 'atomicVolume', data };

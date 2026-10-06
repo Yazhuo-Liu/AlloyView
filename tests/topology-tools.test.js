@@ -179,6 +179,20 @@ test('concurrent analyses cancel independently and protect a user color change',
   assert.equal(h.tools.isEnabled('voronoi'), true);
 });
 
+test('GPU Voronoi publishes display precision bounds without changing scientific values or integer fields', async t => {
+  const h = harness(t), pending = h.tools.run('voronoi');
+  const result = { ...voronoiResult(), backend: 'gpu', engine: 'WebGPU', fallbackReason: null, gpuCorrectionAtoms: 1,
+    autoRangeRelativeTolerance: { atomicVolume: 32 * 2 ** -23, voronoiSurfaceArea: 32 * 2 ** -23 } };
+  result.atomicVolume[1] += 1e-6;
+  h.pending[0].resolve(result); await pending;
+  const property = h.getFrame().properties.find(value => value.name === 'atomicVolume');
+  assert.equal(property.data, result.atomicVolume);
+  assert.equal(property.data[1], 8.000001);
+  assert.equal(property.autoRangeRelativeTolerance, 32 * 2 ** -23);
+  assert.match(h.fields['voronoi-backend'].textContent, /WebGPU · 1 cell corrected on CPU/);
+  assert.equal(Object.hasOwn(h.getFrame().properties.find(value => value.name === 'voronoiCoordination'), 'autoRangeRelativeTolerance'), false);
+});
+
 test('restore honors settings and its freshness guard while avoiding automatic color selection', async t => {
   const h = harness(t);
   let current = true;

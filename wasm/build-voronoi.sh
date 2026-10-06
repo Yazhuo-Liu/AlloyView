@@ -18,6 +18,6 @@ export EMCC_CORES="${EMCC_CORES:-3}"
   -I "$project_root/third_party/voro" -O3 -std=c++17 \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker \
   -sALLOW_MEMORY_GROWTH=1 -sFILESYSTEM=0 \
-  -sEXPORTED_FUNCTIONS='["_malloc","_free","_alloy_voronoi_init","_alloy_voronoi_clip","_alloy_voronoi_radius_squared","_alloy_voronoi_summary","_alloy_voronoi_faces"]' \
+  -sEXPORTED_FUNCTIONS='["_malloc","_free","_alloy_voronoi_init","_alloy_voronoi_clip","_alloy_voronoi_filter_planes","_alloy_voronoi_radius_squared","_alloy_voronoi_summary","_alloy_voronoi_faces","_alloy_voronoi_geometry_sizes","_alloy_voronoi_geometry"]' \
   -o "$project_root/src/analysis/voronoi-kernel.mjs"
 chmod 644 "$project_root/src/analysis/voronoi-kernel.mjs" "$project_root/src/analysis/voronoi-kernel.wasm"

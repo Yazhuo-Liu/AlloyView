@@ -5,16 +5,30 @@ import { calculatePtm, warmupPtm } from '../analysis/ptm.js';
 import { calculateAtomicStrain } from '../analysis/atomic-strain.js';
 import { calculateBonds } from '../analysis/bonds.js';
 import { calculateBondStatistics } from '../analysis/bond-statistics.js';
-import { calculateVoronoi } from '../analysis/voronoi.js';
+import { calculateVoronoi, calculateVoronoiGeometry, mergeVoronoiPartials } from '../analysis/voronoi.js';
 import { calculateRdf } from '../analysis/rdf.js';
 import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLocalShear } from '../analysis/local-shear.js';
 import { calculateReferenceStrain } from '../analysis/reference-strain.js';
 import { calculatePreparedDisplacements } from '../analysis/displacement.js';
 
+// One immutable source snapshot and linked-cell index per resident Worker.
+// Chunk messages reuse these arrays; results never transfer source buffers.
+let voronoiResident;
+
 self.addEventListener('message', async ({ data }) => {
-  const { id, fractional, cell, kind, types, ...parameters } = data;
+  if (data.kind === 'voronoiRelease') { voronoiResident = null; return; }
+  const { id, fractional, cell, kind, types, residentFrameKey, ...parameters } = data;
   try {
-    const frame = { fractional, cell, types };
+    let frame = { fractional, cell, types }, frameUploaded = false;
+    if ((kind === 'voronoi' || kind === 'voronoiGeometry') && residentFrameKey !== undefined) {
+      if (fractional) {
+        voronoiResident = { key: residentFrameKey, frame, context: null };
+        frameUploaded = true;
+      } else if (voronoiResident?.key !== residentFrameKey) throw new Error('The resident Voronoi source is unavailable.');
+      frame = voronoiResident.frame;
+      parameters.context = voronoiResident.context;
+      parameters.onContext = context => { voronoiResident.context = context; };
+    }
     const onPhase = (phase) => self.postMessage({ id, phase });
     let lastProgressAt = -Infinity;
     const onAtoms = (processedAtoms, totalAtoms) => {
@@ -45,6 +59,13 @@ self.addEventListener('message', async ({ data }) => {
       result = calculateBondStatistics(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'voronoi') {
       result = await calculateVoronoi(frame, { ...parameters, onPhase, onAtoms });
+      result.frameUploaded = frameUploaded;
+    } else if (kind === 'voronoiGeometry') {
+      result = await calculateVoronoiGeometry(frame, { ...parameters, onPhase, onAtoms });
+      result.frameUploaded = frameUploaded;
+    } else if (kind === 'voronoiFinalize') {
+      onPhase('finalizing');
+      result = mergeVoronoiPartials(parameters.partials, parameters.atomCount, { bins: parameters.bins, consumePartials: true });
     } else if (kind === 'rdf') {
       result = calculateRdf(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'referenceStrain') {

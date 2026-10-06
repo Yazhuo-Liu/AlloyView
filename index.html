@@ -499,21 +499,52 @@
             <p id="voronoi-status" class="help" role="status" aria-live="polite">Calculate on the complete structure, including atoms hidden in the display.</p>
             <div id="voronoi-results" class="analysis-statistics-results" hidden>
               <p id="voronoi-summary" class="help"></p>
+              <div id="voronoi-stat-cards" class="voronoi-stat-cards" aria-label="Voronoi overview"></div>
+              <div class="voronoi-color-quantities" role="group" aria-label="Color atoms by Voronoi quantity">
+                <p class="help">Color atoms by</p>
+                <div class="voronoi-color-actions">
+                  <button id="voronoi-color-volume" class="button button-secondary" type="button" disabled>Volume · Å³</button>
+                  <button id="voronoi-color-coordination" class="button button-secondary" type="button" disabled>Neighbors</button>
+                  <button id="voronoi-color-surface" class="button button-secondary" type="button" disabled>Surface · Å²</button>
+                  <button id="voronoi-color-face-order" class="button button-secondary" type="button" disabled>Max. face edges</button>
+                  <button id="voronoi-color-boundary" class="button button-secondary" type="button" disabled>Boundary faces</button>
+                </div>
+              </div>
               <div class="paired-actions statistics-export-actions">
                 <button id="export-voronoi-csv" class="button button-secondary" type="button" disabled>Atom data CSV</button>
                 <button id="export-voronoi-distributions" class="button button-secondary" type="button" disabled>Statistics CSV</button>
               </div>
-              <div id="voronoi-histogram">
+              <details id="voronoi-cell-display" class="tool-details">
+                <summary>Inspect a selected cell</summary>
+                <label class="slice-toggle"><input id="show-voronoi-cell" type="checkbox" disabled><span>Show the selected atom's cell</span></label>
+                <div class="paired-fields">
+                  <label class="field"><span>Cell color</span><input id="voronoi-cell-color" type="color" value="#008b95" disabled></label>
+                  <label class="field"><span>Opacity</span><input id="voronoi-cell-opacity" type="range" min="0" max="1" step="0.01" value="0.22" disabled></label>
+                </div>
+                <output id="voronoi-cell-status" class="help" role="status" aria-live="polite">Select an atom to inspect its cell.</output>
+                <p class="help">Click an atom in the viewport, or select its ID in Atom details. Only that cell is drawn.</p>
+              </details>
+              <div class="statistics-result-heading"><h4>Most common face-order indices</h4></div>
+              <div id="voronoi-topology-populations" class="voronoi-topology-populations" aria-label="Most common Voronoi indices"></div>
+              <p class="help">Indices describe face topology, not a unique crystal type. Use CNA or PTM to identify crystal structures.</p>
+              <details id="voronoi-distributions" class="tool-details">
+                <summary>Distributions</summary>
+                <div id="voronoi-histogram">
                 <div class="statistics-result-heading"><h4>Atomic volumes</h4></div>
                 <div id="voronoi-volume-chart" class="statistics-chart" role="group" aria-label="Voronoi atomic volume distribution"></div>
                 <div class="statistics-result-heading"><h4>Neighbor counts</h4></div>
                 <div id="voronoi-coordination-chart" class="statistics-chart" role="group" aria-label="Voronoi coordination distribution"></div>
                 <div class="statistics-result-heading"><h4>Face areas</h4></div>
                 <div id="voronoi-face-chart" class="statistics-chart" role="group" aria-label="Voronoi neighbor face area distribution"></div>
-                <div class="statistics-result-heading"><h4>Face-order indices</h4></div>
+                <p class="help">Face areas count each neighboring cell's side of a shared face. Boundary faces are excluded. Hover, tap, or use the bin slider to inspect counts and percentages.</p>
+                </div>
+              </details>
+              <details id="voronoi-topology-details" class="tool-details">
+                <summary>All face-order indices</summary>
+                <p class="help">The index ⟨n3,n4,n5,n6,…⟩ counts neighbor faces with 3, 4, 5, 6, … edges. Small-face filters affect these counts.</p>
                 <div id="voronoi-index-frequency" class="statistics-chart" role="group" aria-label="Voronoi index populations"></div>
-              </div>
-              <details class="tool-details">
+              </details>
+              <details id="voronoi-face-data" class="tool-details">
                 <summary>Individual face data</summary>
                 <p class="help">Export every cell face with its atom ID, neighbor or boundary label, area and edge count.</p>
                 <button id="export-voronoi-faces" class="button button-secondary tool-run-button" type="button" disabled>Face data CSV</button>

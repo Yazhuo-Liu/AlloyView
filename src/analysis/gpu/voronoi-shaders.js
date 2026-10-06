@@ -1,0 +1,472 @@
+import { NEIGHBOR_BINDINGS_WGSL, makeNeighborShader } from './neighbors.js';
+
+// The capacity is a resource bound, never a nearest-neighbor/topology cutoff.
+// Any exceeded bound explicitly requests the exact CPU engine.
+export const GPU_VORONOI_MAX_FACES = 64;
+export const GPU_VORONOI_MAX_FACE_VERTICES = 32;
+export const GPU_VORONOI_STATE_WORDS = 16;
+export const GPU_VORONOI_MAX_PLANES = 512;
+export const GPU_VORONOI_FLAG_CAPACITY = 1;
+export const GPU_VORONOI_FLAG_GEOMETRY = 2;
+export const GPU_VORONOI_FLAG_PRECISION = 4;
+const DECLARATIONS = `
+struct VoronoiSettings {
+  normals: array<vec4f, 3>, inverseNormals: array<vec4f, 3>,
+  scale: f32, previousRadius: f32, batchStart: u32, initialize: u32,
+  exactSingleSite: u32, padding: vec3u,
+  preciseNormals: array<vec4f, 6>, preciseCell: array<vec4f, 6>,
+};
+@group(0) @binding(5) var<storage, read> settings: VoronoiSettings;
+@group(0) @binding(6) var<storage, read_write> vertices: array<vec4u>;
+@group(0) @binding(7) var<storage, read_write> faces: array<vec4u>;
+@group(0) @binding(8) var<storage, read_write> states: array<u32>;
+@group(0) @binding(9) var<storage, read_write> planes: array<vec4f>;
+const MAX_PLANES = 512u;
+const MAX_FACES = ${GPU_VORONOI_MAX_FACES}u;
+const MAX_VERTICES = ${GPU_VORONOI_MAX_FACE_VERTICES}u;
+const STATE_WORDS = ${GPU_VORONOI_STATE_WORDS}u;
+fn vertexIndex(row: u32, face: u32, vertex: u32) -> u32 { return (row * MAX_FACES + face) * MAX_VERTICES + vertex; }
+fn faceIndex(row: u32, face: u32) -> u32 { return row * MAX_FACES + face; }
+fn fail(row: u32, flag: u32) { states[row * STATE_WORDS + 1u] |= flag; }
+fn precisionFailure(row: u32, code: u32) { if (states[row * STATE_WORDS + 1u] == 0u) { states[row * STATE_WORDS + 15u] = code; } fail(row, 4u); }
+fn geometryTolerance(point: vec3f) -> f32 { return 2e-6 * max(1.0, length(point)); }
+fn closeVertices(first: vec3f, second: vec3f) -> bool {
+  let tolerance = 4.0 * max(geometryTolerance(first), geometryTolerance(second));
+  return dot(first - second, first - second) <= tolerance * tolerance;
+}
+// Filtered contact predicates use double-double arithmetic only near the f32
+// uncertainty band. Vertex provenance identifies the exact three intersecting
+// source planes, so true crystal coplanarity is distinguished from a tiny cap.
+fn ddAdd(a: vec2f, b: vec2f) -> vec2f {
+  let sum = a.x + b.x; let recovered = sum - a.x;
+  let error = (a.x - (sum - recovered)) + (b.x - recovered) + a.y + b.y;
+  let high = sum + error; return vec2f(high, error - (high - sum));
+}
+fn ddNeg(a: vec2f) -> vec2f { return -a; }
+fn ddSub(a: vec2f, b: vec2f) -> vec2f { return ddAdd(a, -b); }
+fn ddMul(a: vec2f, b: vec2f) -> vec2f {
+  let product = a.x * b.x;
+  let splitA = 4097.0 * a.x; let highA = splitA - (splitA - a.x); let lowA = a.x - highA;
+  let splitB = 4097.0 * b.x; let highB = splitB - (splitB - b.x); let lowB = b.x - highB;
+  let error = ((highA * highB - product) + highA * lowB + lowA * highB) + lowA * lowB + a.x * b.y + a.y * b.x;
+  let high = product + error; return vec2f(high, error - (high - product));
+}
+fn ddDet(a: array<vec2f, 4>, b: array<vec2f, 4>, c: array<vec2f, 4>) -> vec2f {
+  return ddAdd(ddSub(ddMul(a[0], ddSub(ddMul(b[1], c[2]), ddMul(b[2], c[1]))),
+    ddMul(a[1], ddSub(ddMul(b[0], c[2]), ddMul(b[2], c[0])))),
+    ddMul(a[2], ddSub(ddMul(b[0], c[1]), ddMul(b[1], c[0]))));
+}
+fn readPlane(row: u32, plane: u32) -> array<vec2f, 4> {
+  let high = planes[(row * MAX_PLANES + plane) * 2u]; let low = planes[(row * MAX_PLANES + plane) * 2u + 1u];
+  return array<vec2f, 4>(vec2f(high.x, low.x), vec2f(high.y, low.y), vec2f(high.z, low.z), vec2f(high.w, low.w));
+}
+fn writePlane(row: u32, plane: u32, values: array<vec2f, 4>) {
+  planes[(row * MAX_PLANES + plane) * 2u] = vec4f(values[0].x, values[1].x, values[2].x, values[3].x);
+  planes[(row * MAX_PLANES + plane) * 2u + 1u] = vec4f(values[0].y, values[1].y, values[2].y, values[3].y);
+}
+fn packPlanes(a: u32, b: u32, c: u32) -> u32 {
+  let first = min(a, min(b, c)); let last = max(a, max(b, c)); let middle = a + b + c - first - last;
+  return first | (middle << 10u) | (last << 20u);
+}
+fn unpackPlanes(packed: u32) -> vec3u { return vec3u(packed & 1023u, (packed >> 10u) & 1023u, (packed >> 20u) & 1023u); }
+fn pointOf(record: vec4u) -> vec3f { return bitcast<vec3f>(record.xyz); }
+fn pointRecord(point: vec3f, proof: u32) -> vec4u { return vec4u(bitcast<vec3u>(point), proof); }
+fn exactContact(row: u32, proof: u32, plane: u32) -> bool {
+  let ids = unpackPlanes(proof);
+  let a = readPlane(row, ids.x); let b = readPlane(row, ids.y); let c = readPlane(row, ids.z); let testPlane = readPlane(row, plane);
+  let determinant = ddDet(a, b, c);
+  let conditioning = length(vec3f(a[0].x, a[1].x, a[2].x)) * length(vec3f(b[0].x, b[1].x, b[2].x)) * length(vec3f(c[0].x, c[1].x, c[2].x));
+  if (abs(determinant.x + determinant.y) <= 1e-8 * conditioning) { return false; }
+  if (any(ids == vec3u(plane))) { return true; }
+  let numerator = ddSub(ddAdd(ddAdd(ddMul(a[3], ddDet(testPlane, b, c)), ddMul(b[3], ddDet(a, testPlane, c))),
+    ddMul(c[3], ddDet(a, b, testPlane))), ddMul(testPlane[3], determinant));
+  let tolerance = 5e-12 * max(1.0, abs(determinant.x)) * max(1.0, abs(testPlane[3].x));
+  return abs(numerator.x + numerator.y) <= tolerance;
+}
+fn exactSamePoint(row: u32, first: u32, second: u32) -> bool {
+  let ids = unpackPlanes(second);
+  let equal = exactContact(row, first, ids.x) && exactContact(row, first, ids.y) && exactContact(row, first, ids.z);
+  return equal;
+}
+fn exactStraight(row: u32, ownPlane: u32, before: u32, middle: u32, after: u32) -> bool {
+  let candidates = unpackPlanes(before);
+  let own = readPlane(row, ownPlane); let ownNormal = vec3f(own[0].x, own[1].x, own[2].x);
+  for (var i = 0u; i < 3u; i++) {
+    let plane = candidates[i]; if (plane == ownPlane) { continue; }
+    let other = readPlane(row, plane); let normal = vec3f(other[0].x, other[1].x, other[2].x);
+    if (length(cross(normal, ownNormal)) <= 1e-5 * length(normal) * length(ownNormal)) { continue; }
+    if (exactContact(row, after, plane) && exactContact(row, middle, plane)) { return true; }
+  }
+  return false;
+}
+fn ddDiv(a: vec2f, b: vec2f) -> vec2f {
+  let quotient = a.x / b.x;
+  let residual = ddSub(a, ddMul(b, vec2f(quotient, 0.0)));
+  return ddAdd(vec2f(quotient, 0.0), vec2f((residual.x + residual.y) / b.x, 0.0));
+}
+fn exactPoint(row: u32, proof: u32) -> array<vec2f, 4> {
+  let ids = unpackPlanes(proof); let a = readPlane(row, ids.x); let b = readPlane(row, ids.y); let c = readPlane(row, ids.z);
+  let determinant = ddDet(a, b, c);
+  let conditioning = length(vec3f(a[0].x, a[1].x, a[2].x)) * length(vec3f(b[0].x, b[1].x, b[2].x)) * length(vec3f(c[0].x, c[1].x, c[2].x));
+  if (abs(determinant.x + determinant.y) <= 1e-8 * conditioning) { precisionFailure(row, 10u); return array<vec2f, 4>(); }
+  var point: array<vec2f, 4>;
+  for (var axis = 0u; axis < 3u; axis++) {
+    var first = a; var second = b; var third = c;
+    first[axis] = a[3]; second[axis] = b[3]; third[axis] = c[3];
+    point[axis] = ddDiv(ddDet(first, second, third), determinant);
+  }
+  return point;
+}
+struct PreciseContact { point: vec3f, distance: f32, };
+fn preciseContact(row: u32, proof: u32, plane: u32) -> PreciseContact {
+  let point = exactPoint(row, proof); let source = readPlane(row, plane);
+  let coordinate = vec3f(point[0].x, point[1].x, point[2].x);
+  let magnitude = length(vec3f(source[0].x, source[1].x, source[2].x));
+  var value = ddNeg(source[3]);
+  for (var axis = 0u; axis < 3u; axis++) { value = ddAdd(value, ddMul(source[axis], point[axis])); }
+  let signedValue = value.x + value.y;
+  if (any(unpackPlanes(proof) == vec3u(plane)) || abs(signedValue) <= 5e-12 * max(1.0, abs(source[3].x))) {
+    return PreciseContact(coordinate, 0.0);
+  }
+  // The retained native Voro++ cell uses tol = 10 * epsilon * 1000^2
+  // on doubled vertices. Distinct contacts inside that band may have a
+  // different marginal-topology convention; recover that complete cell.
+  if (abs(signedValue) <= 1.2e-9) { precisionFailure(row, 12u); }
+  return PreciseContact(coordinate, signedValue / magnitude);
+}
+fn exactTurn(row: u32, plane: u32, before: u32, middle: u32, after: u32) -> i32 {
+  let a = exactPoint(row, before); let b = exactPoint(row, middle); let c = exactPoint(row, after);
+  var first: array<vec2f, 4>; var second: array<vec2f, 4>;
+  for (var axis = 0u; axis < 3u; axis++) { first[axis] = ddSub(b[axis], a[axis]); second[axis] = ddSub(c[axis], b[axis]); }
+  let normal = readPlane(row, plane); let value = ddDet(first, second, normal);
+  let firstFloat = vec3f(first[0].x, first[1].x, first[2].x); let secondFloat = vec3f(second[0].x, second[1].x, second[2].x);
+  let normalFloat = vec3f(normal[0].x, normal[1].x, normal[2].x);
+  let coordinateScale = max(1.0, max(length(vec3f(a[0].x, a[1].x, a[2].x)), max(length(vec3f(b[0].x, b[1].x, b[2].x)), length(vec3f(c[0].x, c[1].x, c[2].x)))));
+  let tolerance = 5e-12 * coordinateScale * max(length(firstFloat), length(secondFloat)) * length(normalFloat);
+  if (abs(value.x + value.y) <= tolerance) {
+    if (!exactStraight(row, plane, before, middle, after) && !exactSamePoint(row, before, middle) && !exactSamePoint(row, middle, after)) { precisionFailure(row, 11u); }
+    return 0;
+  }
+  return select(-1, 1, value.x + value.y > 0.0);
+}
+fn edgeProof(row: u32, ownPlane: u32, firstRecord: vec4u, secondRecord: vec4u, newPlane: u32, oldCount: u32) -> u32 {
+  let first = unpackPlanes(firstRecord.w); let second = unpackPlanes(secondRecord.w);
+  let start = pointOf(firstRecord); let end = pointOf(secondRecord); let own = readPlane(row, ownPlane);
+  let ownNormal = vec3f(own[0].x, own[1].x, own[2].x);
+  for (var i = 0u; i < 3u; i++) {
+    let candidate = first[i]; if (candidate == ownPlane || !any(second == vec3u(candidate))) { continue; }
+    let other = readPlane(row, candidate); let normal = vec3f(other[0].x, other[1].x, other[2].x);
+    if (length(cross(ownNormal, normal)) > 1e-5 * length(ownNormal) * length(normal)) {
+      return packPlanes(ownPlane, candidate, newPlane);
+    }
+  }
+  for (var candidate = 0u; candidate < states[row * STATE_WORDS + 7u]; candidate++) {
+    if (candidate == ownPlane || candidate == newPlane) { continue; }
+    let other = readPlane(row, candidate); let normal = vec3f(other[0].x, other[1].x, other[2].x);
+    let magnitude = length(normal); let direction = normal / magnitude;
+    if (length(cross(ownNormal, normal)) < 1e-5 * length(ownNormal) * magnitude) { continue; }
+    if (abs(dot(direction, start) - other[3].x / magnitude) <= 4.0 * geometryTolerance(start)
+        && abs(dot(direction, end) - other[3].x / magnitude) <= 4.0 * geometryTolerance(end)
+        && exactContact(row, firstRecord.w, candidate) && exactContact(row, secondRecord.w, candidate)) {
+      return packPlanes(ownPlane, candidate, newPlane);
+    }
+  }
+  precisionFailure(row, 1u); return packPlanes(0u, 2u, 4u);
+}
+fn neighborPlane(row: u32, plane: u32, atom: u32, other: u32, images: vec3i) {
+  var delta: array<vec2f, 3>;
+  for (var axis = 0u; axis < 3u; axis++) {
+    delta[axis] = ddSub(vec2f(positions[other * 2u][axis], positions[other * 2u + 1u][axis]),
+      vec2f(positions[atom * 2u][axis], positions[atom * 2u + 1u][axis]));
+    delta[axis] = ddSub(delta[axis], vec2f(f32(images[axis]), 0.0));
+  }
+  var values: array<vec2f, 4>;
+  for (var component = 0u; component < 3u; component++) {
+    values[component] = vec2f(0.0);
+    for (var axis = 0u; axis < 3u; axis++) {
+      let coefficient = vec2f(settings.preciseCell[axis * 2u][component], settings.preciseCell[axis * 2u + 1u][component]);
+      values[component] = ddAdd(values[component], ddMul(delta[axis], coefficient));
+    }
+  }
+  values[3] = ddMul(ddAdd(ddAdd(ddMul(values[0], values[0]), ddMul(values[1], values[1])), ddMul(values[2], values[2])), vec2f(0.5, 0.0));
+  writePlane(row, plane, values);
+}
+fn addCap(row: u32, points: ptr<function, array<vec3f, 32>>, proofs: ptr<function, array<u32, 32>>, count: ptr<function, u32>, point: vec3f, proof: u32) -> bool {
+  for (var i = 0u; i < *count; i++) {
+    if ((*proofs)[i] == proof || closeVertices((*points)[i], point)) {
+      if (exactSamePoint(row, (*proofs)[i], proof)) {
+        let recovered = exactPoint(row, proof); (*points)[i] = vec3f(recovered[0].x, recovered[1].x, recovered[2].x); return true; }
+      // Distinct source intersections may be close, but must remain separately
+      // representable in f32. Otherwise recover the entire exact CPU cell.
+      if (length((*points)[i] - point) <= 2e-8 * max(1.0, length(point))) { precisionFailure(row, 2u); return true; }
+    }
+  }
+  if (*count >= MAX_VERTICES) { return false; }
+  (*points)[*count] = point; (*proofs)[*count] = proof; *count += 1u; return true;
+}
+fn cleanPolygon(row: u32, ownPlane: u32, points: ptr<function, array<vec3f, ${GPU_VORONOI_MAX_FACE_VERTICES + 2}>>, proofs: ptr<function, array<u32, ${GPU_VORONOI_MAX_FACE_VERTICES + 2}>>, count: u32) -> u32 {
+  var kept = 0u;
+  for (var i = 0u; i < count; i++) {
+    if (kept > 0u && ((*proofs)[i] == (*proofs)[kept - 1u] || closeVertices((*points)[i], (*points)[kept - 1u]))) {
+      if (exactSamePoint(row, (*proofs)[i], (*proofs)[kept - 1u])) {
+        let recovered = exactPoint(row, (*proofs)[i]); (*points)[kept - 1u] = vec3f(recovered[0].x, recovered[1].x, recovered[2].x); continue; }
+      if (length((*points)[i] - (*points)[kept - 1u]) <= 2e-8 * max(1.0, length((*points)[i]))) { precisionFailure(row, 3u); }
+    }
+    (*points)[kept] = (*points)[i]; (*proofs)[kept] = (*proofs)[i]; kept++;
+  }
+  if (kept > 1u && ((*proofs)[0] == (*proofs)[kept - 1u] || closeVertices((*points)[0], (*points)[kept - 1u]))) {
+    if (exactSamePoint(row, (*proofs)[0], (*proofs)[kept - 1u])) {
+      let recovered = exactPoint(row, (*proofs)[0]); (*points)[0] = vec3f(recovered[0].x, recovered[1].x, recovered[2].x); kept--; }
+    else if (length((*points)[0] - (*points)[kept - 1u]) <= 2e-8 * max(1.0, length((*points)[0]))) { precisionFailure(row, 4u); }
+  }
+  // Repeated clipping through crystal vertices can leave redundant straight
+  // corners. Remove them before reporting each face's polygon order.
+  var changed = true;
+  for (var cleanupIteration = 0u; cleanupIteration < MAX_VERTICES && changed && kept >= 3u; cleanupIteration++) {
+    changed = false;
+    for (var i = 0u; i < kept; i++) {
+      let before = (*points)[(i + kept - 1u) % kept]; let point = (*points)[i]; let after = (*points)[(i + 1u) % kept];
+      let first = point - before; let second = after - point;
+      let squared = dot(first, first) * dot(second, second);
+      let bent = cross(first, second);
+      if (squared == 0.0 || (dot(bent, bent) <= squared * 4e-8 && dot(first, second) >= 0.0)) {
+        if (exactTurn(row, ownPlane, (*proofs)[(i + kept - 1u) % kept], (*proofs)[i], (*proofs)[(i + 1u) % kept]) != 0) { continue; }
+        for (var j = i; j + 1u < kept; j++) { (*points)[j] = (*points)[j + 1u]; (*proofs)[j] = (*proofs)[j + 1u]; }
+        kept--; changed = true; break;
+      }
+    }
+  }
+  return kept;
+}
+fn updateBounds(row: u32) {
+  var lower = vec3f(3.402823e38f); var upper = vec3f(-3.402823e38f); var farthest = 0.0;
+  for (var face = 0u; face < states[row * STATE_WORDS]; face++) {
+    for (var vertex = 0u; vertex < faces[faceIndex(row, face)].x; vertex++) {
+      let point = pointOf(vertices[vertexIndex(row, face, vertex)]);
+      lower = min(lower, point); upper = max(upper, point); farthest = max(farthest, dot(point, point));
+    }
+  }
+  states[row * STATE_WORDS + 6u] = bitcast<u32>(sqrt(farthest));
+  for (var axis = 0u; axis < 3u; axis++) {
+    states[row * STATE_WORDS + 8u + axis] = bitcast<u32>(lower[axis]);
+    states[row * STATE_WORDS + 11u + axis] = bitcast<u32>(upper[axis]);
+  }
+}
+fn supportBound(row: u32, normal: vec3f) -> f32 {
+  let lower = vec3f(bitcast<f32>(states[row * STATE_WORDS + 8u]), bitcast<f32>(states[row * STATE_WORDS + 9u]), bitcast<f32>(states[row * STATE_WORDS + 10u]));
+  let upper = vec3f(bitcast<f32>(states[row * STATE_WORDS + 11u]), bitcast<f32>(states[row * STATE_WORDS + 12u]), bitcast<f32>(states[row * STATE_WORDS + 13u]));
+  return dot(normal, select(lower, upper, normal >= vec3f(0.0)));
+}
+fn clipPlane(row: u32, normal: vec3f, height: f32, neighbor: i32, plane: u32) {
+  if (states[row * STATE_WORDS + 1u] != 0u) { return; }
+  let oldCount = states[row * STATE_WORDS];
+  var cap: array<vec3f, ${GPU_VORONOI_MAX_FACE_VERTICES}>; var capProofs: array<u32, ${GPU_VORONOI_MAX_FACE_VERTICES}>; var capCount = 0u;
+  var newCount = 0u; var removed = false;
+  for (var face = 0u; face < oldCount; face++) {
+    let descriptor = faces[faceIndex(row, face)]; let count = descriptor.x;
+    var output: array<vec3f, ${GPU_VORONOI_MAX_FACE_VERTICES + 2}>; var outputProofs: array<u32, ${GPU_VORONOI_MAX_FACE_VERTICES + 2}>; var outputCount = 0u;
+    for (var vertex = 0u; vertex < count; vertex++) {
+      let firstRecord = vertices[vertexIndex(row, face, vertex)]; let secondRecord = vertices[vertexIndex(row, face, (vertex + 1u) % count)];
+      var first = pointOf(firstRecord); var second = pointOf(secondRecord);
+      var firstDistance = dot(normal, first) - height; var secondDistance = dot(normal, second) - height;
+      let refineFirst = abs(firstDistance) <= geometryTolerance(first);
+      let refineSecond = abs(secondDistance) <= geometryTolerance(second);
+      if (refineFirst) { let refined = preciseContact(row, firstRecord.w, plane); first = refined.point; firstDistance = refined.distance; }
+      if (refineSecond) { let refined = preciseContact(row, secondRecord.w, plane); second = refined.point; secondDistance = refined.distance; }
+      if (states[row * STATE_WORDS + 1u] != 0u) { return; }
+      let firstInside = firstDistance <= 0.0; let secondInside = secondDistance <= 0.0;
+      if (firstInside) {
+        if (outputCount >= MAX_VERTICES + 2u) { fail(row, 1u); return; }
+        output[outputCount] = first; outputProofs[outputCount] = firstRecord.w; outputCount++;
+        if (firstDistance == 0.0) {
+          if (!addCap(row, &cap, &capProofs, &capCount, first, firstRecord.w)) { fail(row, 1u); return; }
+        }
+      } else { removed = true; }
+      if (firstInside != secondInside) {
+        let ratio = clamp(firstDistance / (firstDistance - secondDistance), 0.0, 1.0);
+        var intersection = first + ratio * (second - first);
+        var proof = firstRecord.w;
+        if (firstDistance != 0.0) {
+          proof = secondRecord.w;
+          if (secondDistance != 0.0) {
+            proof = edgeProof(row, descriptor.w, firstRecord, secondRecord, plane, oldCount);
+            if (refineFirst || refineSecond) {
+              let recovered = exactPoint(row, proof); intersection = vec3f(recovered[0].x, recovered[1].x, recovered[2].x);
+            }
+          } else { intersection = second; }
+        } else { intersection = first; }
+        if (states[row * STATE_WORDS + 1u] != 0u) { return; }
+        if (outputCount >= MAX_VERTICES + 2u || !addCap(row, &cap, &capProofs, &capCount, intersection, proof)) { fail(row, 1u); return; }
+        output[outputCount] = intersection; outputProofs[outputCount] = proof; outputCount++;
+      }
+    }
+    outputCount = cleanPolygon(row, descriptor.w, &output, &outputProofs, outputCount);
+    if (outputCount < 3u) { continue; }
+    if (outputCount > MAX_VERTICES) { fail(row, 1u); return; }
+    faces[faceIndex(row, newCount)] = vec4u(outputCount, descriptor.y, 0u, descriptor.w);
+    for (var vertex = 0u; vertex < outputCount; vertex++) { vertices[vertexIndex(row, newCount, vertex)] = pointRecord(output[vertex], outputProofs[vertex]); }
+    newCount++;
+  }
+  if (removed && capCount >= 3u) {
+    if (newCount >= MAX_FACES) { fail(row, 1u); return; }
+    var center = vec3f(0.0);
+    for (var i = 0u; i < capCount; i++) { center += cap[i]; }
+    center /= f32(capCount);
+    let helper = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0), abs(normal.x) > 0.8);
+    let firstAxis = normalize(cross(normal, helper)); let secondAxis = cross(normal, firstAxis);
+    var projected: array<vec2f, 32>;
+    for (var i = 0u; i < capCount; i++) {
+      let point = cap[i]; let proof = capProofs[i]; let relative = point - center;
+      let value = vec2f(dot(relative, firstAxis), dot(relative, secondAxis));
+      var insertion = i;
+      while (insertion > 0u && (projected[insertion - 1u].x > value.x
+          || (projected[insertion - 1u].x == value.x && projected[insertion - 1u].y > value.y))) {
+        projected[insertion] = projected[insertion - 1u]; cap[insertion] = cap[insertion - 1u]; capProofs[insertion] = capProofs[insertion - 1u]; insertion--;
+      }
+      projected[insertion] = value; cap[insertion] = point; capProofs[insertion] = proof;
+    }
+    // A convex hull also removes numerical on-plane points inside a cap.
+    // Angular sorting alone can turn such points into artificial concave dents.
+    var hull: array<u32, 64>; var hullCount = 0u;
+    for (var i = 0u; i < capCount; i++) {
+      while (hullCount >= 2u) {
+        let first = projected[hull[hullCount - 1u]] - projected[hull[hullCount - 2u]];
+        let second = projected[i] - projected[hull[hullCount - 1u]];
+        let turn = first.x * second.y - first.y * second.x;
+        if (turn > 2e-4 * length(first) * length(second)) { break; }
+        if (abs(turn) <= 2e-4 * length(first) * length(second)
+            && exactTurn(row, plane, capProofs[hull[hullCount - 2u]], capProofs[hull[hullCount - 1u]], capProofs[i]) > 0) { break; }
+        hullCount--;
+      }
+      hull[hullCount] = i; hullCount++;
+    }
+    let lowerCount = hullCount;
+    for (var i = i32(capCount) - 2; i >= 0; i--) {
+      while (hullCount > lowerCount) {
+        let first = projected[hull[hullCount - 1u]] - projected[hull[hullCount - 2u]];
+        let second = projected[u32(i)] - projected[hull[hullCount - 1u]];
+        let turn = first.x * second.y - first.y * second.x;
+        if (turn > 2e-4 * length(first) * length(second)) { break; }
+        if (abs(turn) <= 2e-4 * length(first) * length(second)
+            && exactTurn(row, plane, capProofs[hull[hullCount - 2u]], capProofs[hull[hullCount - 1u]], capProofs[u32(i)]) > 0) { break; }
+        hullCount--;
+      }
+      hull[hullCount] = u32(i); hullCount++;
+    }
+    if (hullCount > 1u) { hullCount--; }
+    if (hullCount > MAX_VERTICES) { fail(row, 1u); return; }
+    var output: array<vec3f, 34>; var outputProofs: array<u32, 34>;
+    for (var i = 0u; i < hullCount; i++) { output[i] = cap[hull[i]]; outputProofs[i] = capProofs[hull[i]]; }
+    capCount = hullCount;
+    capCount = cleanPolygon(row, plane, &output, &outputProofs, capCount);
+    if (capCount >= 3u) {
+      faces[faceIndex(row, newCount)] = vec4u(capCount, bitcast<u32>(neighbor), 0u, plane);
+      for (var i = 0u; i < capCount; i++) { vertices[vertexIndex(row, newCount, i)] = pointRecord(output[i], outputProofs[i]); }
+      newCount++;
+    }
+  }
+  if (newCount < 4u) { fail(row, 2u); }
+  states[row * STATE_WORDS] = newCount;
+  if (removed) { updateBounds(row); }
+}
+fn finishCell(row: u32) {
+  if (states[row * STATE_WORDS + 1u] != 0u) { return; }
+  var volume = 0.0; var surface = 0.0; var farthest = 0.0;
+  let count = states[row * STATE_WORDS];
+  for (var face = 0u; face < count; face++) {
+    var descriptor = faces[faceIndex(row, face)]; var center = vec3f(0.0);
+    for (var vertex = 0u; vertex < descriptor.x; vertex++) {
+      let point = pointOf(vertices[vertexIndex(row, face, vertex)]); center += point; farthest = max(farthest, dot(point, point));
+    }
+    center /= f32(descriptor.x); var areaVector = vec3f(0.0);
+    for (var vertex = 0u; vertex < descriptor.x; vertex++) {
+      let first = pointOf(vertices[vertexIndex(row, face, vertex)]) - center;
+      let second = pointOf(vertices[vertexIndex(row, face, (vertex + 1u) % descriptor.x)]) - center;
+      areaVector += cross(first, second);
+    }
+    let areaMagnitude = max(abs(areaVector.x), max(abs(areaVector.y), abs(areaVector.z)));
+    let area = length(areaVector / max(areaMagnitude, 1e-38)) * areaMagnitude * 0.5;
+    if (!(area > 0.0) || !(area < 3.402823e38f)) { fail(row, 2u); }
+    descriptor.z = bitcast<u32>(area); faces[faceIndex(row, face)] = descriptor;
+    let sourcePlane = readPlane(row, descriptor.w);
+    let planeNormal = vec3f(sourcePlane[0].x, sourcePlane[1].x, sourcePlane[2].x);
+    surface += area; volume += area * sourcePlane[3].x / length(planeNormal) / 3.0;
+  }
+  if (!(volume > 0.0) || !(surface < 3.402823e38f)) { fail(row, 2u); }
+  states[row * STATE_WORDS + 4u] = bitcast<u32>(volume);
+  states[row * STATE_WORDS + 5u] = bitcast<u32>(surface);
+  states[row * STATE_WORDS + 6u] = bitcast<u32>(sqrt(farthest));
+  updateBounds(row);
+}
+fn seedPoint(rhs: vec3f) -> vec3f {
+  return vec3f(dot(settings.inverseNormals[0].xyz, rhs), dot(settings.inverseNormals[1].xyz, rhs), dot(settings.inverseNormals[2].xyz, rhs));
+}
+fn initializeCell(row: u32, atom: u32) {
+  let position = clamp(fractionalHigh(atom) + positions[atom * 2u + 1u].xyz, vec3f(0.0), vec3f(1.0));
+  var lower = vec3f(0.0); var upper = vec3f(0.0);
+  for (var axis = 0u; axis < 3u; axis++) {
+    let magnitude = settings.normals[axis].w;
+    if (config.pbc[axis] != 0u) { lower[axis] = -magnitude * 0.5 / settings.scale; upper[axis] = -lower[axis]; }
+    else { lower[axis] = -position[axis] / magnitude / settings.scale; upper[axis] = (1.0 - position[axis]) / magnitude / settings.scale; }
+  }
+  for (var axis = 0u; axis < 3u; axis++) {
+    let first = (axis + 1u) % 3u; let second = (axis + 2u) % 3u;
+    for (var side = 0u; side < 2u; side++) {
+      let face = axis * 2u + side; let value = select(lower[axis], upper[axis], side != 0u);
+      let neighbor = select(-10 - i32(face), i32(atom), config.pbc[axis] != 0u);
+      faces[faceIndex(row, face)] = vec4u(4u, bitcast<u32>(neighbor), 0u, face);
+      let high = settings.preciseNormals[axis * 2u]; let low = settings.preciseNormals[axis * 2u + 1u];
+      let sign = select(-1.0, 1.0, side != 0u);
+      var planeValues = array<vec2f, 4>(vec2f(high.x, low.x) * sign, vec2f(high.y, low.y) * sign, vec2f(high.z, low.z) * sign, vec2f(high.w, low.w));
+      if (config.pbc[axis] == 0u) {
+        let fraction = vec2f(positions[atom * 2u][axis], positions[atom * 2u + 1u][axis]);
+        planeValues[3] = ddMul(planeValues[3], select(fraction, ddSub(vec2f(1.0, 0.0), fraction), side != 0u));
+      }
+      writePlane(row, face, planeValues);
+      for (var vertex = 0u; vertex < 4u; vertex++) {
+        var rhs = lower; rhs[axis] = value;
+        rhs[first] = select(lower[first], upper[first], vertex == 1u || vertex == 2u);
+        rhs[second] = select(lower[second], upper[second], vertex >= 2u);
+        let firstSide = select(0u, 1u, vertex == 1u || vertex == 2u); let secondSide = select(0u, 1u, vertex >= 2u);
+        vertices[vertexIndex(row, face, vertex)] = pointRecord(seedPoint(rhs), packPlanes(face, first * 2u + firstSide, second * 2u + secondSide));
+      }
+    }
+  }
+  states[row * STATE_WORDS] = 6u; states[row * STATE_WORDS + 1u] = 0u; states[row * STATE_WORDS + 2u] = settings.exactSingleSite;
+  states[row * STATE_WORDS + 3u] = 0u; states[row * STATE_WORDS + 7u] = 6u; states[row * STATE_WORDS + 14u] = 0u; states[row * STATE_WORDS + 15u] = 0u; finishCell(row);
+}
+`;
+export const VORONOI_INITIALIZE_SHADER = `${NEIGHBOR_BINDINGS_WGSL}${DECLARATIONS}
+@compute @workgroup_size(32) fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let atom = gid.x + config.startAtom; if (atom >= config.endAtom || atom >= config.count) { return; }
+  initializeCell(atom - settings.batchStart, atom);
+}`;
+export const VORONOI_CLIP_SHADER = makeNeighborShader({ mode: 'images', declarations: DECLARATIONS,
+  initialize: `let row = atom - settings.batchStart;
+    if (states[row * STATE_WORDS + 1u] != 0u || states[row * STATE_WORDS + 2u] != 0u) { return; }`,
+  visit: `if (distanceSquared < 1e-20 * settings.scale * settings.scale) { fail(row, 2u); }
+    else if (distanceSquared > settings.previousRadius * settings.previousRadius * (1.0 - 2e-6)) {
+      let normalized = vector / settings.scale;
+      // A plane beyond twice the current farthest vertex cannot change this cell.
+      let radius = bitcast<f32>(states[row * STATE_WORDS + 6u]);
+      let magnitude = length(normalized); let direction = normalized / magnitude; let height = magnitude * 0.5;
+      // The cached AABB contains every surviving vertex. Its support function
+      // proves most vacuum/slab candidate planes irrelevant in constant time.
+      let support = supportBound(row, direction);
+      if (states[row * STATE_WORDS + 1u] == 0u && dot(normalized, normalized) <= 4.0 * radius * radius * (1.0 + 2e-5)
+          && support > height - 2e-5 * max(1.0, abs(support))) {
+        let plane = states[row * STATE_WORDS + 7u];
+        if (plane >= MAX_PLANES) { fail(row, 1u); }
+        else {
+          neighborPlane(row, plane, atom, other, vec3i(imageA, imageB, imageC));
+          states[row * STATE_WORDS + 7u]++;
+          clipPlane(row, direction, height, i32(other), plane);
+        }
+        states[row * STATE_WORDS + 3u]++;
+      }
+    }`,
+  finish: `finishCell(row);
+    if (sqrt(config.cutoff2) / settings.scale >= 2.0 * bitcast<f32>(states[row * STATE_WORDS + 6u]) * (1.0 + 2e-5)) {
+      states[row * STATE_WORDS + 2u] = 1u;
+    }`,
+}).replace('@workgroup_size(128)', '@workgroup_size(32)');

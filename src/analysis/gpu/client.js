@@ -1,4 +1,4 @@
-const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'bondStatistics', 'strain', 'cna', 'referenceStrain', 'centrosymmetry', 'displacement', 'ptmNeighbors', 'dxaLocal']);
+const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'bondStatistics', 'voronoi', 'strain', 'cna', 'referenceStrain', 'centrosymmetry', 'displacement', 'ptmNeighbors', 'dxaLocal']);
 const REFERENCE_KINDS = new Set(['referenceStrain', 'displacement']);
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,

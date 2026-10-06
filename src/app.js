@@ -43,6 +43,7 @@ import { initializeTheme } from './theme.js';
 import { initializeCameraControls } from './camera-controls.js';
 import { initializeExternalPropertyControls } from './external-property-controls.js';
 import { initializeTopologyTools } from './topology-tools.js';
+import { initializeVoronoiCellControls } from './voronoi-cell-controls.js';
 import { initializeStatisticsExports } from './statistics-export-controls.js';
 import { initializeSidebarResize } from './sidebar-resize.js';
 import { initializeToolPanels } from './tool-panels.js';
@@ -162,6 +163,7 @@ let atomEyeTools;
 let cameraControls;
 let externalProperties;
 let topologyTools;
+let voronoiCells;
 let statisticsExports;
 let dxaTools;
 let crystalVisibility;
@@ -420,7 +422,10 @@ atomEyeTools = initializeAtomEyeTools({
   selectAtom: handleAtomPick,
   getSelectionGroups: () => state.selectionGroups.groups,
   refresh: () => { if (state.frame) { refreshColorOptions(); applyColors(); updateSelectionPanel(); } },
-  chooseProperty: name => { state.colorMode = `property:${name}`; refreshColorOptions(); applyColors(); },
+  chooseProperty: (name, { manual = false } = {}) => {
+    if (manual) { colorChoiceVersion++; interruptConfigurationRestore('a color quantity change'); }
+    state.colorMode = `property:${name}`; refreshColorOptions(); applyColors();
+  },
   getColorMode: () => state.colorMode,
   getColorChoiceVersion: () => colorChoiceVersion,
   getExportOptions: () => ({ includeBackground: elements['png-background'].checked,
@@ -480,17 +485,32 @@ topologyTools = initializeTopologyTools({
   getBondParameters: () => atomEyeTools.getBondParameters(),
   getBondEnabled: () => atomEyeTools.isEnabled('bonds'),
   getColorChoiceVersion: () => colorChoiceVersion,
-  chooseProperty: name => { state.colorMode = `property:${name}`; refreshColorOptions(); applyColors(); },
+  chooseProperty: (name, { manual = false } = {}) => {
+    if (manual) { colorChoiceVersion++; interruptConfigurationRestore('a color quantity change'); }
+    state.colorMode = `property:${name}`; refreshColorOptions(); applyColors();
+  },
   onBeforeClear: (kind, { clearSettings }) => {
     if (clearSettings) atomEyeTools.cancelVectorDependency(kind);
   },
-  onResultsChange: () => {
+  onResultsChange: ({ kind, clearSettings } = {}) => {
+    if (kind === 'voronoi' && clearSettings) voronoiCells?.reset();
     if (!state.frame) return;
     refreshColorOptions(); applyColors(); updateMemoryMetric();
     reassessFrameCache(state.frame);
+    if (kind === 'voronoi') void voronoiCells?.refresh();
   },
   onEdit: () => interruptConfigurationRestore('a topology analysis edit'),
   notify: showToast,
+});
+
+voronoiCells = initializeVoronoiCellControls({
+  renderer, pool: analysisPool,
+  getFrame: () => state.frame,
+  getSelectedId: () => state.selectedId,
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  getResult: () => state.frame?.atomeyeResults?.voronoi?.result ?? null,
+  onEdit: () => interruptConfigurationRestore('a Voronoi cell display edit'),
+  onChange: () => atomEyeTools?.syncComparison(),
 });
 
 statisticsExports = initializeStatisticsExports({
@@ -710,6 +730,7 @@ window.addEventListener('beforeunload', () => {
   cameraControls?.dispose();
   externalProperties?.reset();
   topologyTools?.abortJobs();
+  voronoiCells?.abortJobs();
   statisticsExports?.dispose();
 });
 
@@ -761,10 +782,12 @@ function closeSource() {
   stopFramePlayback();
   abortAnalysisJobs();
   cpuPrefetch.clearSource();
+  analysisPool.clearVoronoiFrames();
   void gpuPrefetch.clearSource();
   atomEyeTools.reset();
   dxaTools.reset();
   topologyTools?.reset();
+  voronoiCells?.reset();
   worker.reset();
   state.pendingFrames.clear();
   cache.clear();
@@ -1094,6 +1117,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
   const selectionRequest = beginSourceOpen();
   clearTimeout(cutoffTimer);
   abortAnalysisJobs();
+  analysisPool.clearVoronoiFrames();
   void gpuPrefetch.clearSource();
   stopFramePlayback();
   const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
@@ -1152,6 +1176,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     atomEyeTools.reset();
     dxaTools.reset();
     topologyTools?.reset();
+    voronoiCells?.reset();
     for (const kind of Object.keys(state.analysis)) toolPanels.setToolEnabled(kind, false);
     toolPanels.setToolEnabled('replicate', false);
     state.references = result.frame.typeLabels.map(referenceForElement);
@@ -1857,6 +1882,7 @@ function abortAnalysisJobs() {
   atomEyeTools?.abortJobs();
   dxaTools?.abortJobs();
   topologyTools?.abortJobs();
+  voronoiCells?.abortJobs();
   for (const controller of analysisControllers.values()) controller.abort();
   analysisControllers.clear();
   analysisTasks.clear();
@@ -2483,6 +2509,7 @@ function selectAtom(index) {
     atomEyeTools?.selected(-1);
     sliceControls?.refreshPickedAtoms();
     configurePeriodicOriginUi();
+    void voronoiCells?.refresh();
     return;
   }
   state.selectedId = state.frame.ids[index];
@@ -2491,9 +2518,11 @@ function selectAtom(index) {
   atomEyeTools?.selected(index);
   sliceControls?.refreshPickedAtoms();
   configurePeriodicOriginUi();
+  void voronoiCells?.refresh();
 }
 
 function restoreSelection() {
+  void voronoiCells?.refresh();
   if (state.selectedId === null || !state.frame) {
     renderer.setSelected(-1);
     updateSelectionPanel();
@@ -2952,6 +2981,7 @@ function setControlsEnabled(enabled) {
   atomEyeTools?.setEnabled(enabled);
   dxaTools?.setEnabled(enabled);
   topologyTools?.setEnabled(enabled);
+  voronoiCells?.setEnabled(enabled);
   statisticsExports?.setEnabled(enabled);
   selectionGroupControls?.setEnabled(enabled);
   syncSelectionGroupInteraction();
@@ -3057,7 +3087,7 @@ function captureConfiguration() {
         distance: renderer.distance, orthographicScale: renderer.orthographicScale, projectionMode: renderer.projectionMode },
       activeTool: toolPanels.getActiveTool(), selectedAtomId: state.selectedId,
       activeCategory: toolPanels.getActiveCategory(),
-      extensions: { ...atomEyeTools.serialize(), ...topologyTools.serialize(), dxa: dxaTools.serialize(), externalProperties: externalProperties.getState() },
+      extensions: { ...atomEyeTools.serialize(), ...topologyTools.serialize(), voronoiDisplay: voronoiCells.serialize(), dxa: dxaTools.serialize(), externalProperties: externalProperties.getState() },
       theme: document.documentElement.dataset.theme,
     },
   });
@@ -3132,6 +3162,7 @@ async function restoreConfiguration(config) {
     atomEyeTools.reset();
     dxaTools.reset();
     topologyTools?.reset();
+    voronoiCells?.reset();
     if (targetFrame) await commitReplicationFrame(targetFrame, repetitions, saved.replicateAtoms, targetIndex, { resetCamera: false });
     else { state.repetitions = [...repetitions]; state.replicateAtoms = saved.replicateAtoms; }
     if (!current()) return;
@@ -3235,6 +3266,8 @@ async function restoreConfiguration(config) {
     await Promise.all([...tasks, atomEyeTools.restore(saved.extensions, { isCurrent: current }),
       dxaTools.restore(saved.extensions.dxa, { isCurrent: current }),
       topologyTools.restore(saved.extensions, { isCurrent: current })]);
+    if (!current()) return;
+    await voronoiCells.restore(saved.extensions.voronoiDisplay);
     if (!current()) return;
     if (state.frame) {
       state.colorMode = saved.display.colorMode;
@@ -3345,6 +3378,7 @@ async function commitReplicationFrame(frame, counts, physical, index, { resetCam
     state.processingRevision++;
     state.prefetchToken++;
     state.pendingFrames.clear();
+    analysisPool.clearVoronoiFrames();
     void gpuPrefetch.clearSource();
     cache.clear();
   }

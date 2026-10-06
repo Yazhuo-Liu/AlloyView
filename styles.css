@@ -591,10 +591,37 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
 .statistics-population-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
 .statistics-population-controls .button { min-height: 32px; padding: 0 8px; font-size: 10px; }
 .statistics-population-controls > span { color: var(--muted); font-size: 10px; }
+.voronoi-stat-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+.voronoi-stat-card { display: flex; flex-direction: column; min-width: 0; gap: 5px; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); font-variant-numeric: tabular-nums; }
+.voronoi-stat-label { color: var(--muted); font-size: 10px; }
+.voronoi-stat-card strong { color: var(--text-soft); font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.voronoi-stat-detail { color: var(--muted); font-size: 9px; line-height: 1.45; overflow-wrap: anywhere; }
+.voronoi-color-quantities > p { margin: 14px 0 7px; }
+.voronoi-color-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.voronoi-color-actions .button { min-width: 0; min-height: 34px; padding: 6px; font-size: 10px; line-height: 1.4; }
+.voronoi-color-actions .button:last-child { grid-column: 1 / -1; }
+.voronoi-topology-populations { margin: 10px 0; }
+.voronoi-topology-row + .voronoi-topology-row { margin-top: 10px; }
+.voronoi-topology-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.voronoi-topology-index { color: var(--text-soft); overflow-wrap: anywhere; }
+.voronoi-topology-track { height: 5px; margin-top: 5px; overflow: hidden; border-radius: 99px; background: var(--range-track); }
+.voronoi-topology-track > span { display: block; height: 100%; border-radius: inherit; background: var(--cyan); }
+.voronoi-chart-modes { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.voronoi-chart-modes .button { min-height: 30px; padding: 4px 9px; font-size: 10px; }
+.voronoi-chart-modes .button[aria-pressed="true"] { color: var(--accent-text); background: var(--accent-soft); border-color: var(--cyan); }
+.statistics-chart .voronoi-chart-highlight { stroke: var(--text-soft); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.voronoi-bin-control { display: flex; align-items: center; gap: 10px; margin: 3px 0 7px; color: var(--muted); font-size: 10px; }
+.voronoi-bin-control > span { flex-shrink: 0; }
+.voronoi-bin-slider { min-width: 0; flex: 1; accent-color: var(--cyan); }
+.voronoi-bin-readout { display: block; min-height: 28px; color: var(--text-soft); font-size: 10px; line-height: 1.6; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+#voronoi-cell-status { display: block; }
+#voronoi-cell-display .paired-fields .field { min-width: 0; }
 @media (max-width: 920px) {
   .statistics-export-button { min-height: 38px; }
   .statistics-population-controls .button { min-height: 38px; }
   .bond-statistics-section .tool-run-button, .voronoi-section .tool-run-button, .statistics-export-actions .button, .statistics-csv-actions .button { min-height: 42px; }
+  .voronoi-color-actions .button, .voronoi-chart-modes .button { min-height: 38px; }
+  .voronoi-bin-slider { min-height: 32px; }
 }
 .atom-search-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; gap: 7px; margin-bottom: 15px; }
 .atom-search-row .field { min-width: 0; margin: 0; }

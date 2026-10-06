@@ -56,6 +56,8 @@ export class AnalysisPool {
     this.nextId = 1;
     this.slots = new Set();
     this.cpuWarmup = null;
+    this.voronoiSnapshot = null;
+    this.nextVoronoiFrameKey = 1;
     this.closed = false;
     this.gpuEnabled = false;
     this.gpuBackend = gpuBackend ?? new GpuAnalysisClient({ environment });
@@ -68,6 +70,19 @@ export class AnalysisPool {
   prepareGpuFrame(frame, options) { return this.gpuBackend.prepareFrame?.(frame, options) ?? Promise.resolve(this.gpuCacheStatus); }
   associateGpuFrame(frame, frameIndex) { return this.gpuBackend.associateFrame?.(frame, frameIndex); }
   clearGpuFrames() { return this.gpuBackend.clearFrames?.() ?? Promise.resolve(this.gpuCacheStatus); }
+  clearVoronoiFrames() {
+    this.voronoiSnapshot = null;
+    for (const slot of this.slots) {
+      if (slot.task) slot.voronoiReleasePending = true;
+      else this.releaseVoronoiFrame(slot);
+    }
+  }
+
+  releaseVoronoiFrame(slot) {
+    if (!slot.terminated) slot.worker.postMessage({ kind: 'voronoiRelease' });
+    delete slot.voronoiFrameKey;
+    slot.voronoiReleasePending = false;
+  }
   get gpuCacheStatus() { return this.gpuBackend.cacheStatus ?? null; }
 
   get cpuWarmupStatus() {
@@ -280,6 +295,9 @@ export class AnalysisPool {
     if (this.closed) throw new Error('The analysis pool is closed.');
     if (signal?.aborted) throw abortError();
     if (parameters.kind === 'localShear') return this.analyzeLocalShear(frame, parameters, { onProgress, signal });
+    if (parameters.kind === 'voronoi' || parameters.kind === 'voronoiGeometry') {
+      return this.analyzeVoronoiCPU(frame, parameters, { onProgress, signal });
+    }
     const startedAt = performance.now();
     const atomCount = frame.fractional.length / 3;
     if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
@@ -508,6 +526,117 @@ export class AnalysisPool {
     }
   }
 
+  /** Independent cells have very different costs near voids and defects. A
+   * shared queue gives each available Worker another bounded central-atom
+   * chunk, without rebuilding its source index or Wasm module. The final CSR
+   * merge and histogram scans also run in a Worker, keeping the UI responsive.
+   */
+  async analyzeVoronoiCPU(frame, parameters, { onProgress = () => {}, signal } = {}) {
+    const startedAt = performance.now(), atomCount = frame.fractional.length / 3;
+    if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
+    const geometryOnly = parameters.kind === 'voronoiGeometry';
+    if (geometryOnly && (!Number.isInteger(parameters.atomIndex) || parameters.atomIndex < 0 || parameters.atomIndex >= atomCount)) {
+      throw new Error('Voronoi geometry requires a valid atom index.');
+    }
+    const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
+    // Coordinate snapshot, linked index, per-worker output, and resident Wasm
+    // buffers. Face CSR is streamed in bounded chunks rather than a full
+    // frame-sized private output in each Worker.
+    const workerBytes = frame.fractional.byteLength * (sharedMemory ? 1 : 2) + atomCount * 16 + 2 * 1024 ** 2;
+    const workerCount = geometryOnly ? 1 : Math.min(this.limit, chooseWorkerCount(atomCount, workerBytes, this.environment, 512));
+    const chunkSize = geometryOnly ? 1 : Math.max(32, Math.min(256, Math.ceil(atomCount / (workerCount * 8))));
+    const chunkCount = geometryOnly ? 1 : Math.ceil(atomCount / chunkSize);
+    const controller = new AbortController();
+    this.controllers.add(controller);
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    let nextChunk = 0, completedChunks = 0, completedAtoms = 0, lastReportAt = -Infinity, lastPhase;
+    const phases = new Array(workerCount).fill('queued'), processed = new Array(workerCount).fill(0);
+    const report = (index, phase, progress, force = false) => {
+      if (controller.signal.aborted) return;
+      if (index !== null) {
+        phases[index] = phase;
+        if (Number.isFinite(progress?.processedAtoms)) processed[index] = Math.max(processed[index], progress.processedAtoms);
+      }
+      const currentPhase = completedChunks === chunkCount ? phase === 'finalizing' ? 'finalizing' : 'complete'
+        : phases.some(value => value === 'analyzing' || value === 'complete') ? 'analyzing'
+          : phases.includes('indexing') ? 'indexing'
+            : phases.some(value => value === 'initializing' || value === 'prepared') ? 'initializing' : phase;
+      const now = performance.now();
+      if (!force && currentPhase === lastPhase && now - lastReportAt < 80) return;
+      lastReportAt = now; lastPhase = currentPhase;
+      onProgress({ completed: completedChunks === chunkCount ? workerCount : 0, total: workerCount, workerCount,
+        phase: currentPhase, prepared: phases.filter(value => !['queued', 'preparing'].includes(value)).length,
+        initialized: phases.filter(value => ['indexing', 'analyzing', 'complete'].includes(value)).length,
+        completedAtoms: Math.min(geometryOnly ? 1 : atomCount, completedAtoms + processed.reduce((sum, count) => sum + count, 0)),
+        totalAtoms: geometryOnly ? 1 : atomCount, completedChunks, totalChunks: chunkCount });
+    };
+    try {
+      report(null, 'preparing', undefined, true);
+      const snapshot = await this.prepareVoronoiSnapshot(frame, sharedMemory, controller.signal);
+      if (controller.signal.aborted) throw abortError();
+      const partials = new Array(chunkCount);
+      const runners = Array.from({ length: workerCount }, (_, index) => (async () => {
+        while (nextChunk < chunkCount) {
+          if (controller.signal.aborted) throw abortError();
+          const chunk = nextChunk++;
+          const startAtom = geometryOnly ? parameters.atomIndex : chunk * chunkSize,
+            endAtom = geometryOnly ? startAtom + 1 : Math.min(atomCount, startAtom + chunkSize);
+          processed[index] = 0;
+          const partial = await this.runTask({ ...parameters, fractional: snapshot.coordinates, cell: snapshot.cell,
+            residentFrameKey: snapshot.key, startAtom, endAtom, ...(!geometryOnly ? { skipStatistics: true } : {}) },
+          controller.signal, signal, (phase, progress) => report(index, phase, progress), sharedMemory);
+          if (controller.signal.aborted) throw abortError();
+          partials[chunk] = partial;
+          completedChunks++; completedAtoms += endAtom - startAtom; processed[index] = 0;
+          report(index, 'complete', undefined, completedChunks === chunkCount);
+        }
+      })());
+      await Promise.all(runners);
+      if (controller.signal.aborted) throw abortError();
+      let output;
+      if (geometryOnly) output = partials[0];
+      else {
+        report(null, 'finalizing', undefined, true);
+        output = await this.runTask({ kind: 'voronoiFinalize', partials, atomCount, bins: parameters.bins ?? 50 },
+          controller.signal, signal, phase => report(null, phase), true);
+      }
+      if (controller.signal.aborted) throw abortError();
+      report(null, 'complete', undefined, true);
+      return { ...output, workerCount, sharedMemory, chunkCount, chunkSize, scheduling: 'dynamic',
+        engine: `voro++-wasm-worker${workerCount === 1 ? '' : `-pool×${workerCount}`}${geometryOnly ? '-geometry' : ''}`,
+        elapsedMs: performance.now() - startedAt };
+    } catch (error) {
+      controller.abort();
+      throw error;
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      this.controllers.delete(controller);
+    }
+  }
+
+  /** Compare the one retained snapshot exactly, so callers mutating an input
+   * typed array or cell cannot reuse stale geometry. Reuse spans chunks and
+   * repeated analyses; changing frames retains only one pool-side snapshot.
+   */
+  async prepareVoronoiSnapshot(frame, sharedMemory, signal) {
+    const cellKey = JSON.stringify([Array.from(frame.cell.vectors), Array.from(frame.cell.pbc), Array.from(frame.cell.origin ?? [0, 0, 0])]);
+    const previous = this.voronoiSnapshot;
+    let identical = previous?.source === frame.fractional && previous.cellKey === cellKey && previous.sharedMemory === sharedMemory;
+    if (identical) {
+      for (let index = 0; index < frame.fractional.length; index++) {
+        if (!Object.is(frame.fractional[index], previous.coordinates[index])) { identical = false; break; }
+        if (index && index % 262_144 === 0) { await yieldToMain(); if (signal.aborted) throw abortError(); }
+      }
+    }
+    if (identical) return previous;
+    const coordinates = await copyCoordinates(frame.fractional, signal, sharedMemory),
+      cell = { ...frame.cell, vectors: frame.cell.vectors.slice(), pbc: Array.from(frame.cell.pbc), origin: Float64Array.from(frame.cell.origin ?? [0, 0, 0]) };
+    const snapshot = { source: frame.fractional, coordinates, cell, cellKey, sharedMemory, key: this.nextVoronoiFrameKey++ };
+    this.voronoiSnapshot = snapshot;
+    return snapshot;
+  }
+
   async analyzeLocalShear(frame, parameters, { onProgress, signal }) {
     const startedAt = performance.now(), atomCount = frame.fractional.length / 3;
     const controller = new AbortController(), abort = () => controller.abort();
@@ -545,6 +674,13 @@ export class AnalysisPool {
           // Module initialization is asynchronous. Let its ACK return the
           // useful module to the pool even when this subscriber went away.
           if (!task.cancelledWarmup) { task.cancelledWarmup = true; task.reject(abortError()); }
+          return;
+        }
+        if (task.payload.kind.startsWith('voronoi') && task.posted && !this.closed) {
+          // Bounded chunks finish cooperatively. Reject the caller immediately
+          // but retain the busy slot/lease until its ACK, preserving the native
+          // module, coordinate snapshot, and index for the next calculation.
+          if (!task.cancelledVoronoi) { task.cancelledVoronoi = true; task.reject(abortError()); }
           return;
         }
         this.finish(task, abortError());
@@ -608,7 +744,7 @@ export class AnalysisPool {
     slot.worker.addEventListener('message', ({ data }) => {
       const task = slot.task;
       if (!task || task.done || data.id !== task.id) return;
-      if (data.phase && !task.cancelledWarmup) task.onPhase(data.phase, data);
+      if (data.phase && !task.cancelledWarmup && !task.cancelledVoronoi) task.onPhase(data.phase, data);
       else if (data.phase) return;
       else this.finish(task, data.ok ? null : new Error(data.error), data.result);
     });
@@ -626,11 +762,22 @@ export class AnalysisPool {
       // Give the status text and Cancel button a paint before copying large
       // inputs. Transfer private copies instead of synchronously cloning the
       // complete frame in each of six consecutive postMessage calls.
-      await yieldToMain();
+      const residentChunk = (task.payload.kind === 'voronoi' || task.payload.kind === 'voronoiGeometry')
+        && task.payload.residentFrameKey !== undefined && task.slot.voronoiFrameKey === task.payload.residentFrameKey;
+      if (!residentChunk) await yieldToMain();
       if (task.done) return;
       let payload = task.payload;
       const transferables = [];
-      if (!task.sharedMemory && payload.kind !== 'warmup') {
+      if (payload.kind === 'voronoiFinalize') {
+        for (const partial of payload.partials) for (const value of Object.values(partial)) {
+          if (ArrayBuffer.isView(value) && value.buffer instanceof ArrayBuffer) transferables.push(value.buffer);
+        }
+      } else if ((payload.kind === 'voronoi' || payload.kind === 'voronoiGeometry')
+          && payload.residentFrameKey !== undefined
+          && task.slot.voronoiFrameKey === payload.residentFrameKey) {
+        payload = { ...payload };
+        delete payload.fractional; delete payload.cell;
+      } else if (!task.sharedMemory && payload.kind !== 'warmup') {
         payload = { ...payload, fractional: await copyCoordinates(payload.fractional, task.signal) };
         transferables.push(payload.fractional.buffer);
         for (const name of INPUT_ARRAY_FIELDS) if (payload[name]) {
@@ -651,7 +798,7 @@ export class AnalysisPool {
       }
       if (task.done || task.signal.aborted || task.sourceSignal?.aborted) return;
       task.posted = true;
-      task.worker.postMessage({ id: task.id, ...payload }, transferables);
+      task.worker.postMessage({ id: task.id, ...payload }, [...new Set(transferables)]);
       if (!task.done) task.onPhase('prepared');
     } catch (error) { this.finish(task, error); }
   }
@@ -675,6 +822,10 @@ export class AnalysisPool {
       else {
         if (task.payload.kind === 'warmup' || task.payload.kind === 'ptm'
           || (task.payload.kind === 'strain' && !task.payload.ptmInput)) task.slot.ptmWarmed = true;
+        if (task.payload.kind === 'voronoi' || task.payload.kind === 'voronoiGeometry') {
+          task.slot.voronoiFrameKey = task.payload.residentFrameKey;
+        }
+        if (task.slot.voronoiReleasePending) this.releaseVoronoiFrame(task.slot);
         this.idle.push(task.slot);
       }
     }
@@ -683,7 +834,7 @@ export class AnalysisPool {
     this.active.delete(task);
     const queued = this.queue.indexOf(task);
     if (queued >= 0) this.queue.splice(queued, 1);
-    if (!task.cancelledWarmup) {
+    if (!task.cancelledWarmup && !task.cancelledVoronoi) {
       if (error) task.reject(error);
       else task.resolve(result);
     }
@@ -692,6 +843,7 @@ export class AnalysisPool {
 
   close() {
     this.closed = true;
+    this.voronoiSnapshot = null;
     this.gpuBackend.close();
     for (const controller of this.controllers) controller.abort();
     for (const task of [...this.active, ...this.queue]) this.finish(task, abortError());

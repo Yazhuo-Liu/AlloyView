@@ -152,6 +152,10 @@ async function run(data, controller) {
         const { analyzeGpuBondStatistics } = await import('./bond-statistics.js');
         return analyzeGpuBondStatistics(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
       }
+      if (parameters.kind === 'voronoi') {
+        const { analyzeGpuVoronoi } = await import('./voronoi.js');
+        return analyzeGpuVoronoi(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
+      }
       if (parameters.kind === 'strain') {
         const { analyzeGpuAtomicStrain } = await import('./atomic-strain.js');
         return analyzeGpuAtomicStrain(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
@@ -184,7 +188,7 @@ async function run(data, controller) {
       engine: parameters.kind === 'dxaLocal' ? 'webgpu-dxa-local-structures' : parameters.kind === 'strain' ? 'webgpu-strain-tensor' : parameters.kind === 'ptmNeighbors' ? 'webgpu-ptm-neighbors' : parameters.kind === 'cna' ? `webgpu-cna-${parameters.mode ?? 'adaptive'}`
         : parameters.kind === 'referenceStrain' ? 'webgpu-reference-strain'
           : parameters.kind === 'centrosymmetry' ? `webgpu-centrosymmetry-${parameters.mode ?? 'manual'}`
-            : parameters.kind === 'displacement' ? 'webgpu-displacement' : parameters.kind === 'bondStatistics' ? 'webgpu-bond-statistics' : 'webgpu', workerCount: 1,
+            : parameters.kind === 'displacement' ? 'webgpu-displacement' : parameters.kind === 'bondStatistics' ? 'webgpu-bond-statistics' : parameters.kind === 'voronoi' ? result.engine ?? 'webgpu-voronoi' : 'webgpu', workerCount: 1,
       sharedMemory: false, elapsedMs: performance.now() - startedAt, adapter: runtime.adapterInfo,
       inputReused: !data.frame, ...(referenceFrame ? { referenceInputReused: !data.referenceFrame } : {}),
       ...(parameters.kind === 'strain' ? { ptmInputReused: data.parameters.ptmFitId !== undefined && !data.parameters.ptmInput } : {}),

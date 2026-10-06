@@ -261,7 +261,7 @@ try {
       if (name === 'bcc.xyz') {
         const populations = await exportCsv('export-voronoi-distributions');
         assert.ok(populations.objects.some(row => row.distribution === 'voronoi_index' && row.category === index && Number(row.count) === count));
-        await expand('#voronoi-results > details');
+        await expand('#voronoi-face-data');
         const faces = await exportCsv('export-voronoi-faces');
         assert.equal(faces.objects.length, 28); assert.ok(faces.objects.every(row => Number(row['face_area [Å²]']) > 0));
         const saved = await recipe();
@@ -328,7 +328,7 @@ try {
     await showTool('voronoi'); await voronoi();
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'), true, 'phone charts fit their tool panel');
     const beforeScroll = await evaluate(`(() => {const box=topologyChecks.renderer.canvas.getBoundingClientRect();return{x:box.x,y:box.y,width:box.width,height:box.height,page:scrollY};})()`);
-    await expand('#voronoi-results > details');
+    await expand('#voronoi-face-data');
     assert.equal((await exportCsv('export-voronoi-faces')).objects.length, 32 * 12);
     const afterScroll = await evaluate(`(() => {const box=topologyChecks.renderer.canvas.getBoundingClientRect();return{x:box.x,y:box.y,width:box.width,height:box.height,page:scrollY};})()`);
     assert.deepEqual(afterScroll, beforeScroll, 'scrolling to phone CSV controls leaves the rendering viewport fixed');

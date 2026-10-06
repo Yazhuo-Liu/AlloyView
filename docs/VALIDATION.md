@@ -2,6 +2,77 @@
 
 Validation date: 2026-10-06 (UTC)
 
+## Parallel Voronoi and selected-cell geometry
+
+- All **1,080 Node tests** pass, including CPU scheduling/cache lifecycle,
+  GPU host assembly and resource guards, scientific invariants, interactive
+  result summaries and optional preview configuration.
+- `npm run test:gpu:voronoi` passes **26 actual WGSL browser checks**: 22 GPU
+  paths, one complete CPU fallback and three explicit precision/coverage
+  rejections. Complete face neighbors, orders, areas, acceptance flags and
+  indices are checked against Voro++, alongside volume and surface area.
+  Maximum absolute volume and surface-area differences in these fixtures are
+  **3.59 × 10⁻⁵ Å³** and **2.00 × 10⁻⁵ Å²**. SwiftShader checks correctness;
+  these runs do not measure hardware GPU speed.
+- The complete Fe source supplies both a 256-atom bulk sample and a 64-atom
+  actual loop-core sample at source indices **[53344, 53408)**. The latter
+  contains 13 non-BCC atoms and five defect Voronoi indices. Both samples
+  match CPU face topology with **zero CPU corrections**. After cancellation,
+  a 2,048-atom FCC job resumes using the resident device, inputs and workspace,
+  retains coordination 12 and `<0,12,0,0>`, and conserves domain volume;
+  a queued CNA job reuses the same GPU Worker.
+- The NiGB example's thin periodic direction, large vacuum regions and
+  nearly degenerate interfaces can exceed verified GPU precision/coverage
+  bounds. Sampled exterior/interior ranges explicitly request CPU fallback;
+  a bounded eight-cell recovery replaces all eight cells with exact native
+  outputs and reports that count. No NiGB GPU speedup is claimed.
+- `npm run test:browser:voronoi` passes on the production bundle with real
+  CPU and GPU Workers. Summary cards, coloring shortcuts, interactive
+  distributions, CSV and selected-cell face/edge pixels are checked. Origin,
+  replicas, comparison view, hiding, slicing and PNG exports remain consistent.
+  Cancelled/late replies, source/frame transitions, finite boundaries and
+  **390 × 640** phone controls pass. Recipe import rebuilds fresh statistics
+  and the selected mesh, restoring its atom ID, visibility, color and opacity.
+  Ideal FCC GPU volumes use one Auto color; the distorted UI fixture's maximum
+  CPU/GPU volume difference is **2.26 × 10⁻⁶ Å³**.
+- Existing `npm run test:browser:topology-tools` and the full production
+  `npm run test:browser` regression also pass with the new result interface,
+  including bond/CSV behavior, trajectories, configuration, selections,
+  mobile gestures, and 204,800-atom rendering/clipping/picking.
+- CPU Voronoi uses dynamically scheduled bounded chunks and resident source
+  snapshots, linked indices and Voro++ Wasm modules. Scientific arrays are
+  bitwise identical to the pre-change implementation on both bundled examples.
+  Repeated calculations initialize/upload/index zero times; cancellation and
+  source release preserve Worker and Wasm instances.
+- Native plane pruning retains Voro++'s complete marginal/search tolerance
+  band. Adversarial near-coplanar checks compare neighbor ownership, areas,
+  orders, vertices and polygon CSR with unfiltered native clipping; checking
+  volume alone would miss an ownership change. After this correction, the
+  complete NiGB and Fe scientific hashes still match all 11 typed arrays and
+  Voronoi index strings recorded before the correction.
+- Independent checks verify reciprocal face areas/orders, rotation and origin
+  invariance, dimensional scaling, finite/triclinic boundaries, closed-cell
+  Euler topology, two-face edge incidence, outward rendering triangles
+  (including atoms exactly on nonperiodic walls) and
+  mesh volume/surface agreement. A nearly tangent neighbor retains its genuine
+  triangular face down to **1.95 × 10⁻¹² Å²**. Selected-cell camera bounds
+  include periodic polyhedra extending outside the simulation cell.
+- CPU timings below were measured with Node.js 24 and a **4-core cloud CPU
+  quota**. Development activity and garbage collection affect elapsed time;
+  these are example-specific measurements, not a universal speedup claim.
+
+| Example | Atoms | Old 4 Workers | New cold / reused 4 Workers |
+| --- | ---: | ---: | ---: |
+| `NiGB_minimized.cfg` | 129,904 | 60.84 s | 17.83 / 14.67 s |
+| `Fe_disloc_loop.dump` | 60,229 | 1.12 s | 0.934 / 0.630 s |
+
+- The repeated NiGB run uses **508** chunks, and Fe uses **236**. Fe's reused
+  1/2/4-Worker timings are **2.02 / 1.19 / 0.630 s**, with identical scientific
+  hashes. Reproduce with `npm run benchmark:voronoi:cpu -- --dataset fe` or
+  `--dataset nigb`; the script records actual workers, initialization/index/
+  upload counts, full scientific hashes and CPU quota. Large vacuum-slab
+  candidate lists still create substantial temporary CPU memory pressure.
+
 ## Hidden selections and automatic color ranges
 
 - All **1,043 Node tests** pass. Focused regressions cover immutable ID masks,
@@ -51,8 +122,8 @@ Validation date: 2026-10-06 (UTC)
   volume and reciprocal atomic interfaces have equal areas. Physical
   replication preserves local geometry; face thresholds change topology
   counts without changing physical volume or surface area. Initialized Worker
-  cancellation recovers with the retained Wasm module. Voronoi uses CPU
-  Workers, including when the global GPU preference is enabled.
+  cancellation recovers with the retained Wasm module. These original checks
+  used CPU Workers; the added WebGPU checks cover the new backend.
 - `npm run test:browser:topology-tools` passes the production UI using real
   CPU Workers. Known right-angle and SC/FCC/BCC fixtures verify distributions,
   Q4/Q6, Voronoi indices, color properties, physical/display replication and

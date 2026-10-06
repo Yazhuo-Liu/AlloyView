@@ -190,11 +190,14 @@ export function colorsByProperty(property, limits = null, scheme = 'atomeye', hi
     throw new Error('The scalar color maximum must be greater than its minimum.');
   }
   const span = emptyRange ? 0 : maximum - minimum;
-  // Avoid amplifying double-precision roundoff into apparent defects in an
-  // otherwise uniform field (for example, perfect-crystal Voronoi volumes).
+  // Avoid amplifying backend precision into apparent defects in an otherwise
+  // uniform field. A Float64 container may hold GPU float32 measurements.
   // Keep source values and range bounds exact; an explicit range still maps
   // every requested difference, even at this scale.
-  const uniform = !limits && !emptyRange && span <= 32 * Number.EPSILON * Math.max(Math.abs(minimum), Math.abs(maximum));
+  const suppliedTolerance = property.autoRangeRelativeTolerance;
+  const relativeTolerance = Number.isFinite(suppliedTolerance) && suppliedTolerance >= 0
+    ? Math.max(32 * Number.EPSILON, suppliedTolerance) : 32 * Number.EPSILON;
+  const uniform = !limits && !emptyRange && span <= relativeTolerance * Math.max(Math.abs(minimum), Math.abs(maximum));
   const colors = new Uint8Array(property.data.length * 3);
   for (let atom = 0; atom < property.data.length; atom += 1) {
     const value = property.data[atom];

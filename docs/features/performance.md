@@ -26,6 +26,8 @@ The **Enable GPU acceleration** switch beside **Light / Dark** is on by default 
 | Total or element-pair RDF | WebGPU neighbor search and distance histogram |
 | Local geometric shear | WebGPU neighbor geometry and per-atom shear |
 | Bonds | WebGPU periodic neighbor counts and compact bond graph, including element-pair cutoffs |
+| Bond distributions and Q4/Q6 | WebGPU bond lengths, angular histograms and local spherical-harmonic reductions |
+| Voronoi | WebGPU convex-cell clipping with complete periodic images; exact CPU recovery for uncertain geometry or resource limits |
 | Ideal lattice strain | WebGPU neighbors, CPU PTM fit, then WebGPU ideal-reference conversion and tensor invariants; compatible PTM fits/uploads are reused |
 | Standalone PTM | Existing CPU neighbor search and Wasm correspondence fit |
 | DXA | Hybrid: WebGPU tetrahedron alpha and elastic-compatibility classification, CPU periodic tessellation and Burgers-circuit tracing |
@@ -39,6 +41,16 @@ Ideal lattice strain reports GPU neighbor preparation, CPU PTM fitting and GPU r
 GPU code lives in **`src/analysis/gpu/`**, separate from the CPU kernels. Both backends return the same analysis quantities to the scheduler, color legend and frame cache. Linked-cell search limits neighbor candidates; the implementation does not compare every atom with every other atom. This matters for large inputs such as the bundled 129,904-atom **Ni grain boundary** example, `examples/NiGB_minimized.cfg`.
 
 A reusable GPU device and pipelines amortize initialization, while uploaded coordinate buffers can be reused across compatible analyses. GPU buffers are shared by GPU passes after an upload; JavaScript arrays and SharedArrayBuffer are not automatically the same memory as GPU buffers. Workgroup memory is local to a GPU workgroup. WebGPU is a cross-vendor API and does not require CUDA or an NVIDIA GPU.
+
+Voronoi's CPU path shares the existing concurrency budget and dynamically
+assigns bounded central-atom chunks. Each Worker retains one source snapshot,
+its linked-cell index and its Wasm module/buffers; only the first chunk uploads
+the structure. Exact coordinate comparisons invalidate mutated inputs. Native
+convex-cell tests remove planes that cannot cut the cell before sorting, and
+the final face-CSR merge and distributions run in a Worker. Voronoi's GPU path
+constructs each cell through bisector clipping in a reusable batched workspace,
+retaining polygon vertices on the device and reading back compact face measures.
+See [Voronoi](voronoi.md) for numerical recovery and boundary conventions.
 
 Reference-frame strain prepares both configurations and keeps their GPU buffers resident during the calculation. Atom-ID matching remains CPU work; the reference-neighbor search, deformation fit and output tensors run on GPU. Selecting another reference can reuse that frame's cached upload without changing the displayed frame's identity.
 

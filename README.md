@@ -81,10 +81,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Coordination histograms and total/element-pair radial distribution functions
   with CSV export. Normalized RDF requires three periodic axes and a cutoff
   within half the shortest cell face height.
-- Voronoi tessellation in Visualization tools, using reusable CPU/Wasm Workers
-  and Voro++ for periodic or finite-cell geometry. Results include atomic
+- Voronoi tessellation in Visualization tools, using dynamically scheduled
+  CPU/Wasm Workers or WebGPU for periodic or finite-cell geometry. Results include atomic
   volume, surface area, coordination, full Voronoi indices and population
-  distributions, with optional neighbor-face area filters.
+  distributions, with optional neighbor-face area filters, interactive histograms,
+  quantity-color shortcuts and a selected-cell polygon preview.
 - CSV export for the complete statistical summary, scalar statistics,
   categorical populations, coordination/RDF and bond distributions, Q4/Q6,
   Voronoi cells/faces, DXA families/lines and per-atom properties. A persistent
@@ -309,8 +310,8 @@ WebGL 2 is required. Compressed/binary dumps, LAMMPS data/input files and
 LAMMPS general triclinic `abc origin` dumps and NetCDF are not supported.
 Coordination uses one global cutoff; bond graphs have separate element-pair
 overrides. Reference-frame strain requires explicit stable atom IDs.
-Voronoi currently uses CPU/Wasm; GPU acceleration still leaves this analysis
-available through the CPU backend. Q4/Q6 describe bond orientation rather than
+Voronoi has CPU/Wasm and GPU paths, with exact CPU recovery when GPU geometry
+exceeds numerical or resource limits. Q4/Q6 describe bond orientation rather than
 chemical bond multiplicity.
 Million-atom interactive performance has
 not been verified; see the guide for memory and trajectory limitations.

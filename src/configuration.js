@@ -219,7 +219,7 @@ function normalizeSelections(value) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
   const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
   const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage']);
@@ -230,6 +230,8 @@ function normalizeExtensions(value, fromSnapshot) {
     : record(input.bondStatistics, `${path}.bondStatistics`, ['enabled', 'lengthBins', 'angleBins']);
   const voronoi = input.voronoi === undefined ? null
     : record(input.voronoi, `${path}.voronoi`, ['enabled', 'faceAreaThreshold', 'relativeFaceAreaThreshold', 'bins']);
+  const voronoiDisplay = input.voronoiDisplay === undefined ? null
+    : record(input.voronoiDisplay, `${path}.voronoiDisplay`, ['enabled', 'color', 'opacity']);
   if (bondStatistics?.enabled === true && nullablePositive(bonds.cutoff, `${path}.bonds.cutoff`, fromSnapshot) === null) {
     fail(`${path}.bonds.cutoff`, 'is required for enabled bond statistics');
   }
@@ -289,6 +291,11 @@ function normalizeExtensions(value, fromSnapshot) {
       faceAreaThreshold: number(voronoi.faceAreaThreshold ?? 0, `${path}.voronoi.faceAreaThreshold`, 0, MAX_COORDINATE),
       relativeFaceAreaThreshold: number(voronoi.relativeFaceAreaThreshold ?? 0, `${path}.voronoi.relativeFaceAreaThreshold`, 0, 1),
       bins: number(voronoi.bins ?? 50, `${path}.voronoi.bins`, 1, 4096, true),
+    } }),
+    ...(voronoiDisplay === null ? {} : { voronoiDisplay: {
+      enabled: boolean(voronoiDisplay.enabled, `${path}.voronoiDisplay.enabled`, false),
+      color: hexColor(voronoiDisplay.color ?? '#008b95', `${path}.voronoiDisplay.color`),
+      opacity: number(voronoiDisplay.opacity ?? 0.22, `${path}.voronoiDisplay.opacity`, 0, 1),
     } }),
     bonds: {
       ...normalizeCutoffAnalysis(bonds, `${path}.bonds`, fromSnapshot),

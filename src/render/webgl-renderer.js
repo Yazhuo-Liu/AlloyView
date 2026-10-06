@@ -6,6 +6,7 @@ import { VIEW_PRESETS } from './camera-presets.js';
 import { AtomPrimitiveLayer } from './atom-primitives.js';
 import { effectivePeriodicOrigin, normalizePeriodicOrigin, periodicDisplayCoordinates } from './periodic-origin.js';
 import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
+import { VoronoiCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
 import { MAX_SLICES, SLICE_EPSILON, pointVisible, validateSlices } from './slicing.js';
 import {
   add,
@@ -218,6 +219,9 @@ export class WebGLRenderer {
     this.dislocationLayer = null;
     this.dislocationNetwork = null;
     this.dislocationOptions = normalizeDislocationOptions();
+    this.voronoiCellLayer = null;
+    this.voronoiCellGeometry = null;
+    this.voronoiCellOptions = normalizeVoronoiCellOptions();
     this.atomBonds = this.atomVectors = null;
     this.atomVectorFields = [];
     this.bondOptions = { visible: true, radius: 0.08 };
@@ -348,6 +352,8 @@ export class WebGLRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.cellBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, buildCellLines(this.displayCell), gl.STATIC_DRAW);
     this.primitiveLayer?.setFrame(this, colors);
+    this.voronoiCellGeometry = null;
+    this.voronoiCellLayer?.clear();
     this.updateSceneBounds();
     gl.finish();
     this.requestRender();
@@ -368,6 +374,8 @@ export class WebGLRenderer {
     this.primitiveLayer?.clear();
     this.dislocationNetwork = null;
     this.dislocationLayer?.clear();
+    this.voronoiCellGeometry = null;
+    this.voronoiCellLayer?.clear();
     this.displayCell = this.sceneBounds = this.minimumOffset = this.maximumOffset = null;
     this.atomCount = this.displayAtomCount = 0;
     this.repetitions = [1, 1, 1];
@@ -567,6 +575,18 @@ export class WebGLRenderer {
   }
 
   setDislocations(network, options = {}) { this.setDislocationNetwork(network, options); }
+
+  setVoronoiCellGeometry(geometry, options = {}) {
+    if (geometry && (!this.frame || geometry.atomIndex >= this.atomCount)) throw new Error('The inspected Voronoi cell is outside this frame.');
+    const settings = normalizeVoronoiCellOptions(options, this.voronoiCellOptions);
+    const boundsChanged = geometry !== this.voronoiCellGeometry || settings.enabled !== this.voronoiCellOptions.enabled;
+    if (geometry && !this.voronoiCellLayer) this.voronoiCellLayer = new VoronoiCellLayer(this.gl);
+    this.voronoiCellLayer?.setGeometry(geometry, settings);
+    this.voronoiCellGeometry = geometry;
+    this.voronoiCellOptions = settings;
+    if (boundsChanged && this.frame) this.updateSceneBounds();
+    this.requestRender();
+  }
 
   setSlice(axis, maximum) {
     this.cancelSelectionGesture();
@@ -777,6 +797,7 @@ export class WebGLRenderer {
     }
     this.primitiveLayer?.extendBounds(this, minimum, maximum);
     this.dislocationLayer?.extendBounds(this, minimum, maximum);
+    this.voronoiCellLayer?.extendBounds(this, minimum, maximum);
     this.sceneBounds = { minimum, maximum };
     this.selectionSourceBounds = { minimum: sourceMinimum, maximum: sourceMaximum };
     return this.sceneBounds;
@@ -869,6 +890,7 @@ export class WebGLRenderer {
     }
     this.primitiveLayer?.render(this);
     this.dislocationLayer?.render(this);
+    this.voronoiCellLayer?.render(this);
 
     if (this.cellVisible) {
       gl.enable(gl.BLEND);

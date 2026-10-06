@@ -94,6 +94,24 @@ test('atoms exactly on open faces are valid distinct sites and left-handed orien
   }
 });
 
+test('a periodic vacuum slab retains exact surface-cell volumes after pruning distant redundant bisectors', async () => {
+  // The two outer layers own half the 15-unit vacuum gap plus half a normal
+  // lattice spacing. Complete spherical searches include thousands of thin-z
+  // periodic images, although only six physical faces define each cell.
+  const points = [];
+  for (let x = 0; x < 6; x++) for (let y = 0; y < 6; y++) points.push([(x + .5) / 6, (5 + y) / 20, .5]);
+  const result = await calculateVoronoi(input(points, [6, 0, 0, 0, 20, 0, 0, 0, 1]));
+  for (let atom = 0; atom < points.length; atom++) {
+    const row = atom % 6, width = row === 0 || row === 5 ? 8 : 1;
+    near(result.atomicVolume[atom], width);
+    near(result.voronoiSurfaceArea[atom], 2 + 4 * width);
+    assert.equal(result.voronoiCoordination[atom], 6);
+    assert.equal(result.voronoiIndices[atom], '<0,6,0,0>');
+  }
+  near(result.summary.totalVolume, 120);
+  near(result.summary.volumeError, 0);
+});
+
 test('unequal chunk boundaries preserve complete atomic cells and filtered face CSR metadata', async () => {
   const frame = input([[.11, .22, .73], [.37, .69, .12], [.88, .54, .43], [.52, .34, .99], [.23, .85, .67]], [1.4, 0, 0, .8, 1.1, 0, .3, .2, .7]);
   const parameters = { relativeFaceAreaThreshold: .025, bins: 11 };
@@ -129,11 +147,12 @@ test('cancelling an initialized Voronoi worker settles every promise and later j
     assert.equal(outcomes[0].status, 'rejected');
     assert.equal(outcomes[0].reason.name, 'AbortError');
     assert.equal(outcomes[1].status, 'fulfilled');
+    assert.equal(outcomes[1].value.kernelInitializations, 0, 'cancelled chunks keep the initialized native module');
     assert.ok(outcomes[1].value.voronoiCoordination.every(value => value === 14));
-    assert.equal(stats.created, 2, 'only the cancelled Worker is replaced');
+    assert.equal(stats.created, 1, 'a bounded cancelled chunk retains its Worker and resident Wasm');
     const third = await pool.analyze(crystalFrame('fcc', 2), { kind: 'voronoi' });
     assert.equal(third.kernelInitializations, 0);
-    assert.equal(stats.created, 2);
+    assert.equal(stats.created, 1);
     assert.equal(pool.active.size, 0);
     assert.equal(pool.queue.length, 0);
     assert.equal(pool.controllers.size, 0);

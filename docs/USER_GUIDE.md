@@ -262,6 +262,8 @@ thresholds in `settings.extensions.voronoi`. Restoring either enabled analysis
 recalculates its arrays and distributions from the saved physical frame;
 CSV files and computed arrays are not embedded in the recipe. Older recipes
 without these extensions leave both analyses off.
+Selected-cell visibility, color and opacity are saved separately in
+`settings.extensions.voronoiDisplay`, without polygon arrays.
 
 Click **Import JSON** and choose a saved configuration. If the matching source
 is already open, the viewer returns to the saved frame, restores the settings
@@ -415,10 +417,11 @@ enabling GPU acceleration does not guarantee a speedup. See
 [Performance](features/performance.md) for algorithm choices and the backend
 layout in `src/analysis/gpu/`.
 
-Bond statistics have both a pure CPU Worker path and a WebGPU path, sharing
-cutoff conventions and histogram normalization. Voronoi tessellation currently
-uses the CPU Worker pool with a reusable Voro++ Wasm kernel, regardless of the
-GPU preference.
+Bond statistics and Voronoi have both CPU Worker and WebGPU paths. CPU Voronoi
+distributes bounded atom batches dynamically and reuses its Voro++ Wasm memory,
+coordinate snapshots and neighborhood indices. GPU Voronoi constructs cells
+on the GPU and reuses its device, linked-cell inputs and workspace; numerical
+or capacity limits recover through the exact CPU implementation.
 
 Rendering currently uses WebGL2: calculated scalar and vector arrays return to
 the application before colors and arrows are uploaded for drawing. Reusing
@@ -555,8 +558,16 @@ number of edges. Boundary faces are recorded separately and do not contribute
 to neighbor coordination or the index. This implementation is unweighted;
 species-dependent radius weighting is not applied.
 
-The Voronoi tool provides distributions of volume, coordination and neighbor
-face area, plus a frequency table of indices. Its optional absolute face-area
+The Voronoi tool provides summary cards, leading topology populations and
+interactive distributions of volume, coordination and neighbor face area.
+Expand the distributions to inspect bins by pointer, touch or keyboard and
+switch between count and probability; the complete index table is paginated.
+Quantity buttons apply atomic-volume, surface-area or coordination coloring.
+Expand **Inspect a selected cell**, enable its preview and click an atom to see its
+transparent polyhedron and edges; color and opacity are adjustable. This
+single-cell geometry follows display origin, periodic replication, visibility
+and slices, appears in PNG exports and does not rerun the full analysis.
+Its optional absolute face-area
 and relative surface-fraction thresholds remove small neighbor faces from
 coordination and index statistics while preserving the tessellated volumes
 and surface areas. Atomic volumes and other numeric outputs are available
@@ -741,6 +752,9 @@ npm run benchmark
 npm run test:browser
 # Bond/Voronoi reference structures, CSV downloads and configuration replay:
 npm run test:browser:topology-tools
+# Voronoi GPU numerical parity and result/cell inspection UI:
+npm run test:gpu:voronoi
+npm run test:browser:voronoi
 # WebGPU execution checks and CPU/GPU timing (Node.js 24 and Chrome/Chromium):
 npm run test:gpu
 npm run benchmark:gpu
@@ -880,10 +894,9 @@ This is a provenance and risk statement, not legal advice.
   snapshot. See [DXA implementation review](DXA_REVIEW.md) for the source-backed
   CPU/Wasm and GPU plan, and `docs/ATOMEYE_REVIEW.md` for AtomEye.
 - Coordination, adaptive/fixed CNA, manual/Auto central symmetry, displacement,
-  reference-frame strain, RDF, local geometric shear, bonds, bond statistics and ideal-strain
+  reference-frame strain, RDF, local geometric shear, bonds, bond statistics, Voronoi and ideal-strain
   tensors can use optional WebGPU acceleration or Workers.
-  PTM and its deformation fit, DXA and Voronoi use included Wasm kernels. Voronoi
-  currently runs in CPU Workers. No Emscripten
+  PTM and its deformation fit, DXA and CPU Voronoi use included Wasm kernels. No Emscripten
   installation is needed unless rebuilding C++ with `npm run build:ptm`,
   `npm run build:dxa` or `npm run build:voronoi`. GPU-enabled DXA computes local crystal correspondence
   and classifies its mapped tetrahedra with WebGPU, completing extraction in
