@@ -786,7 +786,7 @@ test('Voronoi recipes preserve type labels and independent selected/all-cell dis
   } } });
   const restored = parseConfiguration(JSON.stringify(recipe));
   assert.deepEqual(restored.settings.extensions.voronoi.selectedTypes, ['Cu', 'Ni']);
-  assert.deepEqual(restored.settings.extensions.voronoiDisplay, { enabled: false, allEnabled: true, color: '#123456', opacity: .3 });
+  assert.deepEqual(restored.settings.extensions.voronoiDisplay, { enabled: false, allEnabled: true, color: '#123456', opacity: .3, style: 'xray', scale: 1 }, 'older recipes default to the see-through view at true cell size');
   const old = createConfiguration({ settings: { extensions: { voronoi: {}, voronoiDisplay: {} } } });
   assert.equal(old.settings.extensions.voronoi.selectedTypes, null);
   assert.equal(old.settings.extensions.voronoiDisplay.allEnabled, false);

@@ -18,6 +18,8 @@ For all atoms the selected pair population is `N(N − 1)`. For partial selectio
 
 Non-periodic cells require a surface correction that is not implemented, so the normalized RDF rejects those cells. Changing display visibility, slicing or replication does not alter the statistical input.
 
+The plot spans `0` to the maximum distance, with a dashed line at `g(r) = 1`, the uncorrelated reference. Inspection starts at the highest peak. Hover or tap the plot, drag the **Inspect radius** slider, or focus the plot and press left/right, Home, or End to move the crosshair. The readout gives the bin-center radius, the bin edges, `g(r)` and the raw directed pair count. After a recalculation, the bin containing the previously inspected radius stays selected.
+
 ## Export CSV
 
 The export section in Statistics provides a summary of the current frame, scalar property statistics, all categorical populations, all available coordination distributions, and a table of atom properties. The summary includes atom-type and crystal-structure populations, the mean and population standard deviation of scalar quantities, missing-value counts, selection-group membership, RDF normalization, completed bond statistics, Voronoi distributions, and DXA family lengths and line density. It also records the current color range separately from physical statistics.

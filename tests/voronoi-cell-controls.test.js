@@ -4,7 +4,7 @@ import { initializeVoronoiCellControls } from '../src/voronoi-cell-controls.js';
 import { createConfiguration, parseConfiguration } from '../src/configuration.js';
 
 function harness() {
-  const elements = Object.fromEntries(['show-voronoi-cell', 'show-all-voronoi-cells', 'voronoi-cell-color', 'voronoi-cell-opacity', 'voronoi-cell-status', 'voronoi-all-cells-status']
+  const elements = Object.fromEntries(['show-voronoi-cell', 'show-all-voronoi-cells', 'voronoi-cell-color', 'voronoi-cell-opacity', 'voronoi-cell-style', 'voronoi-cell-scale', 'voronoi-cell-status', 'voronoi-all-cells-status']
     .map(id => [id, { listeners: {}, addEventListener(type, listener) { this.listeners[type] = listener; } }]));
   let frame = { ids: [10, 20], fractional: new Float64Array([0, 0, 0, .5, .5, .5]) }, id = 10, version = 'a';
   let result = { atomicVolume: new Float64Array([8, 9]), voronoiCoordination: new Uint32Array([6, 12]) };
@@ -61,8 +61,8 @@ test('cell display recipe stays optional, validates appearance and contains no g
   assert.equal(Object.hasOwn(createConfiguration().settings.extensions, 'voronoiDisplay'), false);
   const recipe = createConfiguration({ settings: { extensions: { voronoiDisplay: { enabled: true, color: '#abcdef', opacity: .4 } } } });
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.extensions.voronoiDisplay,
-    { enabled: true, allEnabled: false, color: '#abcdef', opacity: .4 });
-  for (const patch of [{ opacity: -1 }, { opacity: 'NaN' }, { color: 'red' }, { vertices: [1, 2, 3] }, { enabled: 'yes' }, { allEnabled: 'yes' }]) {
+    { enabled: true, allEnabled: false, color: '#abcdef', opacity: .4, style: 'xray', scale: 1 });
+  for (const patch of [{ opacity: -1 }, { opacity: 'NaN' }, { color: 'red' }, { vertices: [1, 2, 3] }, { enabled: 'yes' }, { allEnabled: 'yes' }, { style: 'wireframe' }, { scale: .1 }]) {
     const invalid = structuredClone(recipe); Object.assign(invalid.settings.extensions.voronoiDisplay, patch);
     assert.throws(() => parseConfiguration(JSON.stringify(invalid)), /voronoiDisplay/);
   }
@@ -144,4 +144,23 @@ test('canceling partial all-cell construction rejects late chunks and source cha
   await h.jobs[2].options.onGeometryChunk([h.geometry(0), h.geometry(1)]);
   h.jobs[2].resolve({ cells: [] }); await replaced;
   assert.equal(h.allRendered.at(-1).geometry.cellCount, 2);
+});
+
+test('all-cell view and cell scale controls reach the renderer without rebuilding cells', async () => {
+  const h = harness();
+  void h.controls.restore({ allEnabled: true });
+  assert.equal(h.elements['voronoi-cell-style'].value, 'xray', 'see-through is the default all-cell view');
+  assert.equal(h.elements['voronoi-cell-scale'].value, '1');
+  const jobs = h.jobs.length;
+  Object.assign(h.elements['show-all-voronoi-cells'], { checked: true });
+  Object.assign(h.elements['voronoi-cell-color'], { value: '#3b82f6' });
+  Object.assign(h.elements['voronoi-cell-opacity'], { value: '0.5' });
+  Object.assign(h.elements['voronoi-cell-style'], { value: 'surface' });
+  Object.assign(h.elements['voronoi-cell-scale'], { value: '0.1' });
+  h.elements['voronoi-cell-style'].listeners.change();
+  assert.equal(h.allRendered.at(-1).options.style, 'surface');
+  assert.equal(h.allRendered.at(-1).options.scale, 0.4, 'scale is clamped to the supported range');
+  assert.deepEqual(h.controls.serialize(), { enabled: false, allEnabled: true, color: '#3b82f6', opacity: 0.5, style: 'surface', scale: 0.4 });
+  assert.equal(h.jobs.length, jobs, 'appearance edits reuse the pending or cached geometry request');
+  h.controls.reset();
 });

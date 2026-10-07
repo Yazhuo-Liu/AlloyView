@@ -16,7 +16,7 @@ function mockGl() {
     'ELEMENT_ARRAY_BUFFER', 'FLOAT', 'STATIC_DRAW', 'UNSIGNED_INT', 'TEXTURE0', 'TEXTURE_2D', 'RGBA32F', 'RGBA',
     'TEXTURE_MIN_FILTER', 'TEXTURE_MAG_FILTER', 'NEAREST', 'TEXTURE_WRAP_S', 'TEXTURE_WRAP_T', 'CLAMP_TO_EDGE',
     'MAX_TEXTURE_SIZE', 'BLEND', 'SRC_ALPHA', 'ONE_MINUS_SRC_ALPHA', 'ONE', 'CULL_FACE', 'DEPTH_TEST', 'POLYGON_OFFSET_FILL',
-    'FRONT', 'BACK', 'TRIANGLES', 'LINES']) gl[name] = name === 'TEXTURE0' ? 33984 : name;
+    'FRONT', 'BACK', 'TRIANGLES', 'LINES', 'ZERO', 'LEQUAL', 'GREATER']) gl[name] = name === 'TEXTURE0' ? 33984 : name;
   for (const name of ['createProgram', 'createShader', 'createVertexArray', 'createBuffer', 'createTexture']) gl[name] = () => ({});
   gl.getUniformLocation = (_program, name) => name;
   gl.getShaderParameter = gl.getProgramParameter = () => true;
@@ -25,7 +25,7 @@ function mockGl() {
     'bindBuffer', 'bufferData', 'enableVertexAttribArray', 'vertexAttribPointer', 'vertexAttribIPointer',
     'deleteVertexArray', 'deleteBuffer', 'bindTexture', 'texImage2D', 'activeTexture', 'texParameteri', 'useProgram',
     'uniform1i', 'uniform1f', 'uniform2f', 'uniform3f', 'uniform4fv', 'uniformMatrix4fv', 'enable', 'disable',
-    'vertexAttribDivisor', 'vertexAttribI4ui', 'blendFuncSeparate', 'depthMask', 'polygonOffset', 'cullFace', 'drawElements', 'drawArrays', 'drawArraysInstanced']) {
+    'vertexAttribDivisor', 'vertexAttribI4ui', 'blendFuncSeparate', 'depthMask', 'depthFunc', 'polygonOffset', 'cullFace', 'drawElements', 'drawArrays', 'drawArraysInstanced']) {
     gl[name] = (...arguments_) => calls.push({ name, arguments: arguments_ });
   }
   return { gl, calls };
@@ -58,9 +58,11 @@ test('packed cell groups retain physical polygons, integer source IDs and local 
 });
 
 test('Voronoi defaults use translucent blue faces and preserve explicit appearance settings', () => {
-  assert.deepEqual(normalizeVoronoiCellOptions(), { enabled:false, allEnabled:false, color:'#3b82f6', opacity:0.5 });
-  assert.deepEqual(normalizeVoronoiCellOptions({color:'#ff6600',opacity:0}, {allEnabled:true}),
-    { enabled:false, allEnabled:true, color:'#ff6600', opacity:0 });
+  assert.deepEqual(normalizeVoronoiCellOptions(), { enabled:false, allEnabled:false, color:'#3b82f6', opacity:0.5, style:'xray', scale:1 });
+  assert.deepEqual(normalizeVoronoiCellOptions({color:'#ff6600',opacity:0,style:'surface',scale:.7}, {allEnabled:true}),
+    { enabled:false, allEnabled:true, color:'#ff6600', opacity:0, style:'surface', scale:.7 });
+  assert.throws(() => normalizeVoronoiCellOptions({style:'wireframe'}), /style/);
+  assert.throws(() => normalizeVoronoiCellOptions({scale:.1}), /scale/);
 });
 
 test('all-cell rendering appends/reuses bounded GPU buffers and shares dynamic coordinates and visibility', async () => {
@@ -100,7 +102,7 @@ test('all-cell rendering appends/reuses bounded GPU buffers and shares dynamic c
 test('selection highlights only existing source-cell triangles and edges in every replica without a preview or mesh upload', async () => {
   const { gl, calls } = mockGl(), layer = new VoronoiAllCellLayer(gl);
   const mesh = createVoronoiCellBatch([await cube(1), await cube(3)]);
-  layer.setGeometry({ chunks:[mesh], cellCount:2, complete:true }, {allEnabled:true, enabled:false});
+  layer.setGeometry({ chunks:[mesh], cellCount:2, complete:true }, {allEnabled:true, enabled:false, style:'surface'});
   const renderer = { frame:{}, atomCount:4, selected:3, selectedAtoms:Int32Array.from([-1,3,-1]),
     displayPositions:Float64Array.from([0,0,0, 2,0,0, 4,0,0, 6,0,0]),
     visibility:Uint8Array.from([255,255,255,255]), voronoiDisplayRevision:1,
@@ -122,9 +124,13 @@ test('selection highlights only existing source-cell triangles and edges in ever
   assert.ok(calls.some(call => call.name === 'uniform1i' && call.arguments[0] === 'uSliceCount' && call.arguments[1] === 1),
     'the common clipping shader applies equally to base cells and selected ranges');
   assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uEdgeColor'
-    && call.arguments.slice(1).every(channel => channel >= 0.9)), 'base outlines are light blue on the light background');
-  assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uOutlineColor'
-    && call.arguments.slice(1).every(channel => channel < 0.4)), 'a thin dark border keeps the light edge visible on white');
+    && call.arguments.slice(1).every(channel => channel < 0.35)), 'base outlines use dark ink on the light background');
+  assert.ok(calls.some(call => call.name === 'depthMask' && call.arguments[0] === true)
+    && calls.some(call => call.name === 'blendFuncSeparate' && call.arguments[0] === gl.ZERO),
+    'nearest-surface mode resolves cell depth without changing the image');
+  assert.ok(calls.some(call => call.name === 'depthFunc' && call.arguments[0] === gl.GREATER)
+    && calls.at(-1) && calls.filter(call => call.name === 'depthFunc').at(-1).arguments[0] === gl.LEQUAL,
+    'hidden parts of a selection are ghosted and the renderer depth test is restored');
   assert.equal(calls.filter(call => call.name === 'bufferData').length, uploads, 'selection needs no mesh extraction or upload');
 
   renderer.visibility[3] = 0; renderer.voronoiDisplayRevision++;
@@ -189,4 +195,19 @@ test('single selected-cell preview highlights amber and draws pale, CSS-sized ed
     && call.arguments.slice(1).join(',')==='0.2,0.4,0.6'),'unselected cells retain the user-selected base color');
   assert.equal(calls.filter(call=>call.name==='bufferData').length,uploads,'changing selection or background never uploads or recomputes cell geometry');
   renderer.visibility[1]=0;layer.render(renderer);assert.equal(layer.renderedReplicaCount,0);assert.equal(layer.highlightedCellCount,0);
+});
+
+test('default see-through mode keeps two-sided translucent faces and fades deeper cells; scale shrinks every cell', async () => {
+  const { gl, calls } = mockGl(), layer = new VoronoiAllCellLayer(gl);
+  layer.setGeometry({ chunks:[createVoronoiCellBatch([await cube(0)])], cellCount:1 }, {allEnabled:true, scale:.8});
+  layer.render({ frame:{}, atomCount:1, displayPositions:new Float64Array(3), visibility:Uint8Array.from([255]), voronoiDisplayRevision:1,
+    replicas:[{offset:[0,0,0]}], viewMatrix:new Float32Array(16), projectionMatrix:new Float32Array(16), sliceMode:'planes', sliceCount:0,
+    background:[0,0,0], depthRange:[2,9] });
+  assert.equal(calls.filter(call => call.name === 'drawElements').length, 2, 'rear and front faces, no depth pass');
+  assert.ok(!calls.some(call => call.name === 'depthMask' && call.arguments[0] === true && calls.indexOf(call) < calls.findIndex(c => c.name === 'drawArraysInstanced')));
+  assert.ok(calls.some(call => call.name === 'uniform1f' && call.arguments[0] === 'uDepthFade' && call.arguments[1] > 0));
+  assert.ok(calls.some(call => call.name === 'uniform2f' && call.arguments[0] === 'uDepthRange' && call.arguments[2] === 9));
+  assert.equal(calls.filter(call => call.name === 'uniform1f' && call.arguments[0] === 'uScale').every(call => call.arguments[1] === .8), true);
+  assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uEdgeColor'
+    && call.arguments.slice(1).every(channel => channel >= 0.75)), 'dark backgrounds use pale outlines');
 });

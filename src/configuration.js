@@ -231,7 +231,7 @@ function normalizeExtensions(value, fromSnapshot) {
   const voronoi = input.voronoi === undefined ? null
     : record(input.voronoi, `${path}.voronoi`, ['enabled', 'faceAreaThreshold', 'relativeFaceAreaThreshold', 'bins', 'selectedTypes']);
   const voronoiDisplay = input.voronoiDisplay === undefined ? null
-    : record(input.voronoiDisplay, `${path}.voronoiDisplay`, ['enabled', 'allEnabled', 'color', 'opacity']);
+    : record(input.voronoiDisplay, `${path}.voronoiDisplay`, ['enabled', 'allEnabled', 'color', 'opacity', 'style', 'scale']);
   if (bondStatistics?.enabled === true && nullablePositive(bonds.cutoff, `${path}.bonds.cutoff`, fromSnapshot) === null) {
     fail(`${path}.bonds.cutoff`, 'is required for enabled bond statistics');
   }
@@ -300,6 +300,8 @@ function normalizeExtensions(value, fromSnapshot) {
       allEnabled: boolean(voronoiDisplay.allEnabled, `${path}.voronoiDisplay.allEnabled`, false),
       color: hexColor(voronoiDisplay.color ?? '#3b82f6', `${path}.voronoiDisplay.color`),
       opacity: number(voronoiDisplay.opacity ?? 0.5, `${path}.voronoiDisplay.opacity`, 0, 1),
+      style: choice(voronoiDisplay.style ?? 'xray', `${path}.voronoiDisplay.style`, new Set(['xray', 'surface'])),
+      scale: number(voronoiDisplay.scale ?? 1, `${path}.voronoiDisplay.scale`, 0.4, 1),
     } }),
     bonds: {
       ...normalizeCutoffAnalysis(bonds, `${path}.bonds`, fromSnapshot),

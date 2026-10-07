@@ -13,6 +13,7 @@ import { prepareDisplacements } from './analysis/displacement.js';
 import { registerVectorProperties, vectorPropertyNames } from './analysis/vector-properties.js';
 import { availableVectorSources, createVectorField, linkedArrowDimensions, renameVectorFieldProperty, vectorFieldData } from './vector-settings.js';
 import { initializeFloatingWindow } from './floating-window.js';
+import { renderRdfChart } from './render/rdf-chart.js';
 
 const JOBS = {
   bonds: { prefix: 'bonds', tool: 'bonds', property: 'bondCoordination' },
@@ -597,16 +598,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     container.append(table);
   }
   function renderRdf(result) {
-    const container = $('rdf-chart'); container.replaceChildren();
-    const maximum = Math.max(1, ...result.values), xmax = result.radii.at(-1) || 1;
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 360 190'); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Radial distribution function g(r)');
-    const path = document.createElementNS(svg.namespaceURI, 'path');
-    path.setAttribute('d', Array.from(result.radii, (radius, index) => `${index ? 'L' : 'M'}${(38 + radius / xmax * 305).toFixed(2)},${(160 - result.values[index] / maximum * 140).toFixed(2)}`).join(' '));
-    path.setAttribute('fill', 'none'); path.setAttribute('stroke', 'currentColor'); path.setAttribute('stroke-width', '2'); svg.append(path);
-    for (const [x, y, text] of [[4, 16, 'g(r)'], [38, 181, '0'], [295, 181, `${xmax.toFixed(2)} Å`], [4, 32, maximum.toFixed(1)]]) {
-      const label = document.createElementNS(svg.namespaceURI, 'text'); label.setAttribute('x', String(x)); label.setAttribute('y', String(y)); label.setAttribute('fill', 'currentColor'); label.setAttribute('font-size', '11'); label.textContent = text; svg.append(label);
-    }
-    container.append(svg); $('export-rdf').disabled = false;
+    renderRdfChart($('rdf-chart'), result); $('export-rdf').disabled = false;
   }
   function syncComparison() {
     const frame = getFrame();

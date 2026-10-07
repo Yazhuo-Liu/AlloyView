@@ -1,12 +1,12 @@
-import { createVoronoiCellBatch } from './render/voronoi-cell-layer.js';
+import { createVoronoiCellBatch, MINIMUM_VORONOI_CELL_SCALE } from './render/voronoi-cell-layer.js';
 
 /** Geometry is an optional display step. Selected-cell inspection remains
  * bounded; full tessellations stream through the resident parallel CPU pool. */
 export function initializeVoronoiCellControls({ renderer, pool, getFrame, getSelectedId,
   getSourceVersion, getResult, onEdit = () => {}, onChange = () => {}, root = document }) {
   const elements = Object.fromEntries(['show-voronoi-cell', 'show-all-voronoi-cells', 'voronoi-cell-color',
-    'voronoi-cell-opacity', 'voronoi-cell-status', 'voronoi-all-cells-status'].map(id => [id, root.getElementById(id)]));
-  const defaults = () => ({ enabled: false, allEnabled: false, color: '#3b82f6', opacity: 0.5 });
+    'voronoi-cell-opacity', 'voronoi-cell-style', 'voronoi-cell-scale', 'voronoi-cell-status', 'voronoi-all-cells-status'].map(id => [id, root.getElementById(id)]));
+  const defaults = () => ({ enabled: false, allEnabled: false, color: '#3b82f6', opacity: 0.5, style: 'xray', scale: 1 });
   let options = defaults(), controlsEnabled = true, cache = null, request = null, allRequest = null;
   const allStatus = message => { if (elements['voronoi-all-cells-status']) elements['voronoi-all-cells-status'].textContent = message; };
   function clearSelected() { renderer.setVoronoiCellGeometry(null, options); }
@@ -19,7 +19,11 @@ export function initializeVoronoiCellControls({ renderer, pool, getFrame, getSel
     if (elements['show-all-voronoi-cells']) elements['show-all-voronoi-cells'].disabled = !available;
     elements['voronoi-cell-color'].value = options.color;
     elements['voronoi-cell-opacity'].value = String(options.opacity);
-    for (const id of ['voronoi-cell-color', 'voronoi-cell-opacity']) elements[id].disabled = !available || !(options.enabled || options.allEnabled);
+    for (const id of ['voronoi-cell-color', 'voronoi-cell-opacity', 'voronoi-cell-scale']) if (elements[id]) {
+      elements[id].disabled = !available || !(options.enabled || options.allEnabled);
+    }
+    if (elements['voronoi-cell-style']) { elements['voronoi-cell-style'].value = options.style; elements['voronoi-cell-style'].disabled = !available || !options.allEnabled; }
+    if (elements['voronoi-cell-scale']) elements['voronoi-cell-scale'].value = String(options.scale);
     if (message !== undefined) elements['voronoi-cell-status'].textContent = message;
   }
   function abortSelected() { request?.controller.abort(); request = null; clearSelected(); }
@@ -148,9 +152,11 @@ export function initializeVoronoiCellControls({ renderer, pool, getFrame, getSel
     }
     return Promise.all([refreshSelected(frame, result, version), refreshAll(frame, result, version)]);
   }
-  for (const id of ['show-voronoi-cell', 'show-all-voronoi-cells', 'voronoi-cell-color', 'voronoi-cell-opacity']) elements[id]?.addEventListener('change', () => {
+  for (const id of ['show-voronoi-cell', 'show-all-voronoi-cells', 'voronoi-cell-color', 'voronoi-cell-opacity', 'voronoi-cell-style', 'voronoi-cell-scale']) elements[id]?.addEventListener('change', () => {
     onEdit(); options = { enabled: elements['show-voronoi-cell'].checked, allEnabled: elements['show-all-voronoi-cells']?.checked ?? false,
-      color: elements['voronoi-cell-color'].value, opacity: Math.max(0, Math.min(1, Number(elements['voronoi-cell-opacity'].value) || 0)) };
+      color: elements['voronoi-cell-color'].value, opacity: Math.max(0, Math.min(1, Number(elements['voronoi-cell-opacity'].value) || 0)),
+      style: elements['voronoi-cell-style']?.value === 'surface' ? 'surface' : 'xray',
+      scale: Math.max(MINIMUM_VORONOI_CELL_SCALE, Math.min(1, Number(elements['voronoi-cell-scale']?.value) || 1)) };
     void refresh();
   });
   sync();

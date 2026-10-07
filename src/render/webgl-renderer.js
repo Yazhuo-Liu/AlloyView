@@ -995,6 +995,8 @@ export class WebGLRenderer {
     this.viewMatrix = lookAt(eye, target, upHint);
     const near = Math.max(0.001, cameraDistance - closest - padding);
     const far = Math.max(near + 0.001, cameraDistance - furthest + padding);
+    // View-space distances spanning the scene, for depth cueing of overlays.
+    this.depthRange = [near, far];
     if (this.projectionMode === 'orthographic') {
       const halfHeight = this.orthographicScale;
       this.projectionMatrix = orthographic(-halfHeight * aspect, halfHeight * aspect, -halfHeight, halfHeight, near, far);

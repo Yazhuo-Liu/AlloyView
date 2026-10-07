@@ -98,9 +98,19 @@ start off. Color and opacity are adjustable. All-cell display builds additional
 polygonal geometry and uses more memory; the single-cell preview constructs
 only the inspected cell.
 
-The default cell color is blue (`#3b82f6`), with opacity 0.5. Lit faces and
-light outlined edges make neighboring cells easier to distinguish. The thin
-darker border keeps edges visible against a light background. While all-cell
+The default cell color is blue (`#3b82f6`), with opacity 0.5. Outline color
+follows the viewport background: dark edges on light backgrounds and pale
+edges with a dark rim on dark backgrounds.
+
+**All-cell view** chooses how the complete tessellation is drawn.
+**See-through** (the default) draws every cell translucently and fades deeper
+faces and edges, so the nearest cells remain legible. **Nearest surface** first
+resolves the nearest cell faces into the depth buffer, so faces and edges
+hidden behind nearer cells are not drawn; use a slice to look inside. In both views, edges only a few pixels long, from
+distant cells or microscopic faces, fade out until you zoom in. **Cell scale**
+(40–100%) shrinks each displayed cell toward its atom, separating neighboring
+cells; it changes display only, not volumes or any other result. These options
+add uniforms and one depth-only pass, but no geometry or memory. While all-cell
 display is enabled, clicking an included atom highlights its associated cell,
 even when **Show the selected atom's cell** is unchecked. Measurement picks
 and slice-construction picks also highlight their associated cells. Highlighted
@@ -136,8 +146,9 @@ statistical summary.
 Configuration export retains type labels in
 `settings.extensions.voronoi.selectedTypes`: `null` means all types, and a
 string list selects those labels. Older recipes without this field include all
-types. Selected-cell visibility, all-cell visibility, color and opacity are
-stored in `settings.extensions.voronoiDisplay`; polygon arrays are regenerated
+types. Selected-cell visibility, all-cell visibility, color, opacity, all-cell view
+(`style`: `xray` or `surface`) and cell `scale` are stored in
+`settings.extensions.voronoiDisplay`; polygon arrays are regenerated
 when the corresponding display option is enabled. Atom radius remains one
 global value at `settings.display.radiusPercent`, shared with the Display tool.
 

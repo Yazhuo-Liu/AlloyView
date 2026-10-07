@@ -2,13 +2,37 @@ import { parsePrimitiveColor } from './atom-primitives.js';
 import { dislocationSlicePlanes } from './dislocation-layer.js';
 import { MAX_SLICES, SLICE_EPSILON } from './slicing.js';
 
+/** `xray` (the default) keeps every cell translucent and fades deeper cells;
+ * `surface` hides faces and edges behind the nearest cells. */
+export const VORONOI_CELL_STYLES = Object.freeze(['xray', 'surface']);
+export const MINIMUM_VORONOI_CELL_SCALE = 0.4;
+
 export function normalizeVoronoiCellOptions(options = {}, previous = {}) {
   const color = options.color ?? previous.color ?? '#3b82f6';
   parsePrimitiveColor(color);
   const opacity = Number(options.opacity ?? previous.opacity ?? 0.5);
   if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) throw new Error('Voronoi cell opacity must be between zero and one.');
+  const style = options.style ?? previous.style ?? 'xray';
+  if (!VORONOI_CELL_STYLES.includes(style)) throw new Error(`Voronoi cell style must be one of ${VORONOI_CELL_STYLES.join(', ')}.`);
+  const scale = Number(options.scale ?? previous.scale ?? 1);
+  if (!Number.isFinite(scale) || scale < MINIMUM_VORONOI_CELL_SCALE || scale > 1) {
+    throw new Error(`Voronoi cell scale must be between ${MINIMUM_VORONOI_CELL_SCALE} and one.`);
+  }
   return { enabled: Boolean(options.enabled ?? previous.enabled ?? false),
-    allEnabled: Boolean(options.allEnabled ?? previous.allEnabled ?? false), color, opacity };
+    allEnabled: Boolean(options.allEnabled ?? previous.allEnabled ?? false), color, opacity, style, scale };
+}
+
+const SELECTED_EDGE_STYLE = Object.freeze({ width: 2.8, edge: [1, 0.95, 0.75], outline: [0.32, 0.2, 0.06], core: 0.72 });
+
+/** Unselected outlines contrast with the viewport background: dark ink derived
+ * from the cell color on light backgrounds, and a pale core with a dark rim on
+ * dark backgrounds. A fixed pale core washes out against white and pale faces. */
+export function voronoiEdgeStyle(color, background = [0, 0, 0], width = 2.2, shortEdge = 0) {
+  const [red, green, blue] = background;
+  const light = 0.2126 * red + 0.7152 * green + 0.0722 * blue > 0.5;
+  return light
+    ? { width, shortEdge, edge: color.map(value => value * 0.3), outline: color.map(value => value * 0.18), core: 0.7 }
+    : { width, shortEdge, edge: color.map(value => value + (1 - value) * 0.82), outline: color.map(value => value * 0.25), core: 0.68 };
 }
 
 /** Local Cartesian vertices remain independent of
@@ -104,18 +128,24 @@ uniform vec3 uCenter;
 uniform bool uBatched;
 uniform sampler2D uAtoms;
 uniform int uAtomTextureWidth;
+uniform float uScale;
+uniform vec2 uDepthRange;
 out vec3 vWorld;
 out vec3 vNormal;
 out vec3 vView;
+out float vDepth;
 flat out float vVisible;
 void main() {
   vec4 atom = vec4(0.0, 0.0, 0.0, 1.0);
   if (uBatched) atom = texelFetch(uAtoms, ivec2(int(aAtomIndex) % uAtomTextureWidth, int(aAtomIndex) / uAtomTextureWidth), 0);
   vVisible = atom.w;
-  vWorld = uCenter + atom.xyz + aPosition;
+  // Local vertices are relative to the generating atom, which lies inside its
+  // convex cell; scaling about it separates neighboring cells by a uniform gap.
+  vWorld = uCenter + atom.xyz + aPosition * uScale;
   vNormal = mat3(uView) * aNormal;
   vec4 view = uView * vec4(vWorld, 1.0);
   vView = view.xyz;
+  vDepth = clamp((-view.z - uDepthRange.x) / max(uDepthRange.y - uDepthRange.x, 1e-6), 0.0, 1.0);
   gl_Position = uProjection * view;
 }`;
 const FRAGMENT = `#version 300 es
@@ -124,11 +154,13 @@ precision highp int;
 in vec3 vWorld;
 in vec3 vNormal;
 in vec3 vView;
+in float vDepth;
 flat in float vVisible;
 uniform vec3 uColor;
 uniform mat4 uProjection;
 uniform float uOpacity;
-uniform bool uEdges;
+uniform float uDepthFade;
+uniform bool uDepthOnly;
 uniform int uSliceCount;
 uniform vec4 uSlicePlanes[${MAX_SLICES}];
 out vec4 outColor;
@@ -138,10 +170,8 @@ void main() {
     if (plane >= uSliceCount) break;
     if (dot(uSlicePlanes[plane].xyz, vWorld) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) discard;
   }
-  if (uEdges) {
-    outColor = vec4(uColor, uOpacity);
-    return;
-  }
+  // The nearest-surface pass needs only depth; its blend leaves color intact.
+  if (uDepthOnly) { outColor = vec4(0.0); return; }
   // Flat, outward face normals retain the physical facets. Distinct key and
   // fill lights make opposite faces read differently, including the rear
   // surfaces of translucent cells. Use the same view-space studio as atoms.
@@ -156,7 +186,7 @@ void main() {
   vec3 halfDirection = normalize(key + viewDirection);
   float specular = pow(max(0.0, dot(normal, halfDirection)), 28.0) * 0.16;
   vec3 shaded = base * light + vec3(1.0, 0.96, 0.88) * specular;
-  outColor = vec4(pow(clamp(shaded, 0.0, 1.0), vec3(1.0 / 2.2)), uOpacity);
+  outColor = vec4(pow(clamp(shaded, 0.0, 1.0), vec3(1.0 / 2.2)), uOpacity * (1.0 - uDepthFade * vDepth));
 }`;
 
 const SELECTED_FACE_COLOR = [1, 0.68, 0.16];
@@ -175,17 +205,25 @@ uniform sampler2D uAtoms;
 uniform int uAtomTextureWidth;
 uniform vec2 uViewport;
 uniform float uEdgeWidth;
+uniform float uScale;
+uniform vec2 uDepthRange;
+uniform float uShortEdge;
 out vec3 vWorld;
 out float vSide;
+out float vDepth;
+out float vLengthFade;
 flat out float vVisible;
 void main() {
   vec4 atom = vec4(0.0, 0.0, 0.0, 1.0);
   if (uBatched) atom = texelFetch(uAtoms, ivec2(int(aAtomIndex) % uAtomTextureWidth, int(aAtomIndex) / uAtomTextureWidth), 0);
   vVisible = atom.w;
-  vec3 start = uCenter + atom.xyz + aStart;
-  vec3 end = uCenter + atom.xyz + aEnd;
-  vec4 first = uProjection * uView * vec4(start, 1.0);
-  vec4 last = uProjection * uView * vec4(end, 1.0);
+  vDepth = 0.0; vLengthFade = 1.0;
+  vec3 start = uCenter + atom.xyz + aStart * uScale;
+  vec3 end = uCenter + atom.xyz + aEnd * uScale;
+  // Transform each endpoint once; uProjection * uView * p would multiply
+  // two matrices in every one of the six ribbon vertices.
+  vec4 viewStart = uView * vec4(start, 1.0), viewEnd = uView * vec4(end, 1.0);
+  vec4 first = uProjection * viewStart, last = uProjection * viewEnd;
   // Clip the segment before perspective expansion. A line crossing the near
   // plane otherwise expands from a negative W and can cover the whole image.
   float nearFirst = first.z + first.w, nearLast = last.z + last.w;
@@ -195,10 +233,10 @@ void main() {
   }
   if (nearFirst < 0.0) {
     float fraction = nearFirst / (nearFirst - nearLast);
-    first = mix(first, last, fraction); start = mix(start, end, fraction);
+    first = mix(first, last, fraction); start = mix(start, end, fraction); viewStart = mix(viewStart, viewEnd, fraction);
   } else if (nearLast < 0.0) {
     float fraction = nearLast / (nearLast - nearFirst);
-    last = mix(last, first, fraction); end = mix(end, start, fraction);
+    last = mix(last, first, fraction); end = mix(end, start, fraction); viewEnd = mix(viewEnd, viewStart, fraction);
   }
   vec2 difference = (last.xy / last.w - first.xy / first.w) * uViewport;
   float projectedLength = length(difference);
@@ -209,6 +247,14 @@ void main() {
   int corner = int[6](0, 1, 2, 2, 1, 3)[gl_VertexID];
   bool atEnd = corner >= 2;
   float side = (corner == 0 || corner == 2) ? -1.0 : 1.0;
+  // Edges only a few pixels long, from distant cells or microscopic faces,
+  // fade out instead of merging into a solid mesh; zooming in restores them.
+  if (uShortEdge > 0.0) vLengthFade = smoothstep(0.35 * uShortEdge, uShortEdge, 0.5 * projectedLength);
+  // A fully faded ribbon would still rasterize and blend; skip its fragments.
+  if (vLengthFade <= 0.0) {
+    vWorld = start; vSide = 0.0; vVisible = 0.0;
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return;
+  }
   vec2 direction = difference / projectedLength;
   vec2 perpendicular = vec2(-direction.y, direction.x);
   vec4 clip = atEnd ? last : first;
@@ -218,16 +264,22 @@ void main() {
   clip.xy += pixelOffset * 2.0 / uViewport * clip.w;
   clip.z -= 1e-6 * clip.w;
   gl_Position = clip; vWorld = atEnd ? end : start; vSide = side;
+  float depth = -(atEnd ? viewEnd.z : viewStart.z);
+  vDepth = clamp((depth - uDepthRange.x) / max(uDepthRange.y - uDepthRange.x, 1e-6), 0.0, 1.0);
 }`;
 const OUTLINE_FRAGMENT = `#version 300 es
 precision highp float;
 precision highp int;
 in vec3 vWorld;
 in float vSide;
+in float vDepth;
+in float vLengthFade;
 flat in float vVisible;
 uniform vec3 uEdgeColor;
 uniform vec3 uOutlineColor;
 uniform float uCoreRatio;
+uniform float uAlpha;
+uniform float uDepthFade;
 uniform int uSliceCount;
 uniform vec4 uSlicePlanes[${MAX_SLICES}];
 out vec4 outColor;
@@ -240,7 +292,7 @@ void main() {
   float side = abs(vSide);
   vec3 color = mix(uEdgeColor, uOutlineColor, smoothstep(uCoreRatio - 0.08, uCoreRatio + 0.08, side));
   float coverage = 1.0 - smoothstep(1.0 - fwidth(vSide) * 0.5, 1.0, side);
-  outColor = vec4(color, coverage);
+  outColor = vec4(color, coverage * vLengthFade * uAlpha * (1.0 - uDepthFade * vDepth));
 }`;
 
 /** Reuse the existing edge endpoints as instanced ribbons, without allocating
@@ -249,7 +301,8 @@ class VoronoiOutlineRenderer {
   constructor(gl) {
     this.gl = gl; this.program = createProgram(gl, OUTLINE_VERTEX, OUTLINE_FRAGMENT, 'Voronoi outline');
     this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uCenter', 'uBatched', 'uAtoms', 'uAtomTextureWidth',
-      'uViewport', 'uEdgeWidth', 'uEdgeColor', 'uOutlineColor', 'uCoreRatio', 'uSliceCount', 'uSlicePlanes[0]']
+      'uViewport', 'uEdgeWidth', 'uEdgeColor', 'uOutlineColor', 'uCoreRatio', 'uAlpha', 'uScale', 'uDepthRange', 'uDepthFade', 'uShortEdge',
+      'uSliceCount', 'uSlicePlanes[0]']
       .map(name => [name, gl.getUniformLocation(this.program, name)]));
   }
   createVao(buffer, atomBuffer = null) {
@@ -264,7 +317,7 @@ class VoronoiOutlineRenderer {
     }
     gl.bindVertexArray(null); return vao;
   }
-  begin(renderer, planes, { batched = false, textureWidth = 1 } = {}) {
+  begin(renderer, planes, { batched = false, textureWidth = 1, scale = 1, depthFade = 0 } = {}) {
     const gl = this.gl, u = this.uniforms;
     gl.useProgram(this.program); gl.uniform1i(u.uBatched, Number(batched)); gl.uniform1i(u.uAtoms, batched ? 5 : 0);
     gl.uniform1i(u.uAtomTextureWidth, textureWidth);
@@ -272,19 +325,21 @@ class VoronoiOutlineRenderer {
     const width = Math.max(1, renderer.canvas?.width ?? 1), height = Math.max(1, renderer.canvas?.height ?? 1);
     this.pixelRatio = Math.max(1, width / Math.max(1, renderer.canvas?.clientWidth ?? width));
     gl.uniform2f(u.uViewport, width, height); gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
+    gl.uniform1f(u.uScale, scale); gl.uniform2f(u.uDepthRange, ...(renderer.depthRange ?? [0, 1])); gl.uniform1f(u.uDepthFade, depthFade);
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.disable(gl.CULL_FACE);
   }
-  draw({ edgeVao, buffer, atomBuffer }, firstEdge, edgeCount, center, selected = false) {
+  setDepthFade(value) { this.gl.uniform1f(this.uniforms.uDepthFade, value); }
+  draw({ edgeVao, buffer, atomBuffer }, firstEdge, edgeCount, center, style = SELECTED_EDGE_STYLE, alpha = 1) {
     if (!edgeCount) return;
     const gl = this.gl, u = this.uniforms; gl.bindVertexArray(edgeVao); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     for (let attribute = 0; attribute < 2; attribute++) gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 48, firstEdge * 24 + attribute * 24);
     if (atomBuffer) {
       gl.bindBuffer(gl.ARRAY_BUFFER, atomBuffer); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 8, firstEdge * 4);
     } else gl.vertexAttribI4ui(2, 0, 0, 0, 0);
-    gl.uniform3f(u.uCenter, ...center); gl.uniform1f(u.uEdgeWidth, (selected ? 2.8 : 2.2) * this.pixelRatio);
-    gl.uniform3f(u.uEdgeColor, ...(selected ? [1, 0.95, 0.75] : [0.91, 0.96, 1]));
-    gl.uniform3f(u.uOutlineColor, ...(selected ? [0.32, 0.2, 0.06] : [0.1, 0.22, 0.38]));
-    gl.uniform1f(u.uCoreRatio, selected ? 0.72 : 0.68);
+    gl.uniform3f(u.uCenter, ...center); gl.uniform1f(u.uEdgeWidth, style.width * this.pixelRatio);
+    gl.uniform3f(u.uEdgeColor, ...style.edge); gl.uniform3f(u.uOutlineColor, ...style.outline);
+    gl.uniform1f(u.uCoreRatio, style.core); gl.uniform1f(u.uAlpha, alpha);
+    gl.uniform1f(u.uShortEdge, (style.shortEdge ?? 0) * this.pixelRatio);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, edgeCount / 2);
   }
 }
@@ -324,12 +379,14 @@ function cellDrawRanges(mesh) {
   return ranges;
 }
 
+const FACE_UNIFORMS = ['uView', 'uProjection', 'uCenter', 'uColor', 'uOpacity', 'uSliceCount', 'uSlicePlanes[0]',
+  'uBatched', 'uAtoms', 'uAtomTextureWidth', 'uScale', 'uDepthRange', 'uDepthFade', 'uDepthOnly'];
+
 export class VoronoiCellLayer {
   constructor(gl) {
     this.gl = gl;
     this.program = createProgram(gl);
-    this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uCenter', 'uColor', 'uOpacity', 'uEdges', 'uSliceCount', 'uSlicePlanes[0]', 'uBatched', 'uAtoms', 'uAtomTextureWidth']
-      .map(name => [name, gl.getUniformLocation(this.program, name)]));
+    this.uniforms = Object.fromEntries(FACE_UNIFORMS.map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.vao = gl.createVertexArray(); this.buffer = gl.createBuffer(); this.indexBuffer = gl.createBuffer();
     gl.bindVertexArray(this.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
     for (let attribute = 0; attribute < 2; attribute++) {
@@ -380,15 +437,18 @@ export class VoronoiCellLayer {
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
     const selected = selectedCellAtoms(renderer).has(atom);
     this.highlightedCellCount = Number(selected);
-    const color = selected ? SELECTED_FACE_COLOR : parsePrimitiveColor(this.options.color);
+    const baseColor = parsePrimitiveColor(this.options.color), color = selected ? SELECTED_FACE_COLOR : baseColor;
     gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
+    // A single convex cell has no deeper cells to fade or hide.
+    gl.uniform1f(u.uScale, this.options.scale); gl.uniform2f(u.uDepthRange, ...(renderer.depthRange ?? [0, 1]));
+    gl.uniform1f(u.uDepthFade, 0); gl.uniform1i(u.uDepthOnly, 0);
     gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.CULL_FACE); gl.depthMask(false);
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -1);
     for (const replica of renderer.replicas) {
       gl.uniform3f(u.uCenter, ...replica.offset.map((value, axis) => value + renderer.displayPositions[atom * 3 + axis]));
       gl.uniform3f(u.uColor, ...color);
-      gl.uniform1i(u.uEdges, 0); gl.uniform1f(u.uOpacity, selected ? Math.max(0.62, this.options.opacity) : this.options.opacity);
+      gl.uniform1f(u.uOpacity, selected ? Math.max(0.62, this.options.opacity) : this.options.opacity);
       // A convex cell has one rear and one front surface along each ray.
       // Draw those in order so translucent shading is independent of the
       // scientific face traversal order, without sorting/rebuilding the mesh.
@@ -400,22 +460,31 @@ export class VoronoiCellLayer {
     }
     // Draw light outlines after every replica's translucent faces. A later
     // face pass can otherwise blend over and erase an earlier replica's edges.
-    this.outline.begin(renderer, planes);
+    this.outline.begin(renderer, planes, { scale: this.options.scale });
+    const edges = selected ? SELECTED_EDGE_STYLE : voronoiEdgeStyle(baseColor, renderer.background);
     for (const replica of renderer.replicas) {
       this.outline.draw(this, this.vertexCount, this.edgeCount,
-        replica.offset.map((value, axis) => value + renderer.displayPositions[atom * 3 + axis]), selected);
+        replica.offset.map((value, axis) => value + renderer.displayPositions[atom * 3 + axis]), edges);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
   }
 }
+
+// Depth-slope units, in pixels: about one ribbon width, so a face never hides
+// the outline along its own boundary while deeper outlines remain hidden.
+const SURFACE_POLYGON_OFFSET = 2;
+const XRAY_FACE_FADE = 0.7, XRAY_EDGE_FADE = 0.85;
+const HIDDEN_HIGHLIGHT_OPACITY = 0.22, HIDDEN_HIGHLIGHT_EDGE_ALPHA = 0.5;
+// Dense tessellations use thinner base outlines than a single inspected cell,
+// and fade outlines shorter than this many CSS pixels.
+const ALL_CELL_EDGE_WIDTH = 1.6, ALL_CELL_SHORT_EDGE = 12;
 
 /** Full tessellations use one GPU buffer group per bounded worker chunk,
  * rather than a draw call and uniform upload for every atom. */
 export class VoronoiAllCellLayer {
   constructor(gl) {
     this.gl = gl; this.program = createProgram(gl);
-    this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uCenter', 'uColor', 'uOpacity', 'uEdges', 'uSliceCount', 'uSlicePlanes[0]', 'uBatched', 'uAtoms', 'uAtomTextureWidth']
-      .map(name => [name, gl.getUniformLocation(this.program, name)]));
+    this.uniforms = Object.fromEntries(FACE_UNIFORMS.map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.texture = gl.createTexture(); this.textureValues = null; this.textureWidth = 0;
     this.options = normalizeVoronoiCellOptions(); this.geometry = null; this.chunks = [];
     this.cellCount = this.renderedReplicaCount = this.renderedChunkCount = 0;
@@ -512,20 +581,42 @@ export class VoronoiAllCellLayer {
     if (!this.options.allEnabled || !this.cellCount || !renderer.frame) return;
     this.updatePositions(renderer);
     const gl = this.gl, u = this.uniforms, planes = dislocationSlicePlanes(renderer);
+    const { opacity, scale } = this.options, surface = this.options.style === 'surface';
     gl.useProgram(this.program); gl.uniform1i(u.uBatched, 1); gl.uniform1i(u.uAtoms, 5);
     gl.uniform1i(u.uAtomTextureWidth, this.textureWidth); gl.activeTexture(gl.TEXTURE0 + 5); gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
     const color = parsePrimitiveColor(this.options.color);
     gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
-    gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.enable(gl.CULL_FACE); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -1);
+    gl.uniform1f(u.uScale, scale); gl.uniform2f(u.uDepthRange, ...(renderer.depthRange ?? [0, 1]));
+    gl.uniform1i(u.uDepthOnly, 0);
+    gl.enable(gl.BLEND); gl.enable(gl.CULL_FACE); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL);
+    const drawFaces = (indexCount, firstIndex, culls) => {
+      for (const face of culls) { gl.cullFace(face); gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_INT, firstIndex * 4); }
+    };
+    const translucent = () => gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    if (surface) {
+      // Resolve the nearest cell surface into depth first, leaving the image
+      // untouched. Shared faces are front faces of exactly one adjacent cell,
+      // so back faces are unnecessary; a slice-opened cell exposes its
+      // neighbor's coincident face. The later color pass and outlines then
+      // pass only where no nearer cell hides them, without sorting any mesh.
+      gl.polygonOffset(SURFACE_POLYGON_OFFSET, SURFACE_POLYGON_OFFSET);
+      gl.depthMask(true); gl.blendFuncSeparate(gl.ZERO, gl.ONE, gl.ZERO, gl.ONE); gl.uniform1i(u.uDepthOnly, 1);
+      for (const replica of renderer.replicas) {
+        gl.uniform3f(u.uCenter, ...replica.offset);
+        for (const chunk of this.chunks) { gl.bindVertexArray(chunk.vao); drawFaces(chunk.mesh.indexCount, 0, [gl.BACK]); }
+      }
+      gl.depthMask(false); gl.uniform1i(u.uDepthOnly, 0);
+    } else gl.polygonOffset(-1, -1);
+    translucent(); gl.uniform1f(u.uDepthFade, surface ? 0 : XRAY_FACE_FADE);
+    gl.uniform3f(u.uColor, ...color); gl.uniform1f(u.uOpacity, opacity);
+    // See-through cells draw rear then front surfaces, as for one convex cell.
+    const baseCulls = surface ? [gl.BACK] : [gl.FRONT, gl.BACK];
     for (const replica of renderer.replicas) {
       gl.uniform3f(u.uCenter, ...replica.offset);
       for (const chunk of this.chunks) {
-        gl.bindVertexArray(chunk.vao); gl.uniform1i(u.uEdges, 0); gl.uniform1f(u.uOpacity, this.options.opacity);
-        gl.uniform3f(u.uColor, ...color);
-        gl.cullFace(gl.FRONT); gl.drawElements(gl.TRIANGLES, chunk.mesh.indexCount, gl.UNSIGNED_INT, 0);
-        gl.cullFace(gl.BACK); gl.drawElements(gl.TRIANGLES, chunk.mesh.indexCount, gl.UNSIGNED_INT, 0);
+        gl.bindVertexArray(chunk.vao);
+        drawFaces(chunk.mesh.indexCount, 0, baseCulls);
         this.renderedChunkCount++;
       }
       this.renderedReplicaCount++;
@@ -541,30 +632,47 @@ export class VoronoiAllCellLayer {
       highlights.push({ chunk, ranges }); highlightedAtoms.add(atom);
     }
     this.highlightedCellCount = highlightedAtoms.size;
-    if (highlights.length) {
-      gl.polygonOffset(-2, -2);
+    const highlightFaces = (culls, alpha) => {
+      gl.uniform1f(u.uOpacity, alpha);
       for (const replica of renderer.replicas) {
         gl.uniform3f(u.uCenter, ...replica.offset);
         for (const { chunk, ranges } of highlights) {
           gl.bindVertexArray(chunk.vao);
-          for (const range of ranges) {
-            gl.uniform3f(u.uColor, ...SELECTED_FACE_COLOR);
-            gl.uniform1i(u.uEdges, 0); gl.uniform1f(u.uOpacity, Math.max(0.62, this.options.opacity));
-            gl.cullFace(gl.FRONT); gl.drawElements(gl.TRIANGLES, range.indexCount, gl.UNSIGNED_INT, range.firstIndex * 4);
-            gl.cullFace(gl.BACK); gl.drawElements(gl.TRIANGLES, range.indexCount, gl.UNSIGNED_INT, range.firstIndex * 4);
-          }
+          for (const range of ranges) drawFaces(range.indexCount, range.firstIndex, culls);
         }
-        this.renderedHighlightReplicaCount++;
       }
+    };
+    if (highlights.length) {
+      gl.uniform3f(u.uColor, ...SELECTED_FACE_COLOR); gl.uniform1f(u.uDepthFade, 0);
+      if (surface) {
+        // Visible facets coincide with the resolved surface. The hidden part
+        // of a selection, including an interior cell, stays locatable as a
+        // faint amber ghost; GREATER and LEQUAL never draw a fragment twice.
+        gl.depthFunc(gl.GREATER); highlightFaces([gl.FRONT, gl.BACK], HIDDEN_HIGHLIGHT_OPACITY);
+        gl.depthFunc(gl.LEQUAL); highlightFaces([gl.BACK], Math.max(0.62, opacity));
+      } else {
+        gl.polygonOffset(-2, -2); highlightFaces([gl.FRONT, gl.BACK], Math.max(0.62, opacity));
+      }
+      this.renderedHighlightReplicaCount = renderer.replicas.length;
     }
-    // Keep all light outlines above all translucent cell faces, including the
-    // highlighted faces. Atom depth and world-space slice clipping still apply.
-    this.outline.begin(renderer, planes, { batched: true, textureWidth: this.textureWidth });
+    // Draw outlines after every translucent face, including highlighted faces.
+    // Atom depth and world-space slice clipping still apply; in surface mode
+    // the resolved cell depth also removes every hidden outline.
+    this.outline.begin(renderer, planes, { batched: true, textureWidth: this.textureWidth, scale,
+      depthFade: surface ? 0 : XRAY_EDGE_FADE });
+    const edges = voronoiEdgeStyle(color, renderer.background, ALL_CELL_EDGE_WIDTH, ALL_CELL_SHORT_EDGE);
     for (const replica of renderer.replicas) for (const chunk of this.chunks) {
-      this.outline.draw(chunk, chunk.mesh.vertexCount, chunk.mesh.edgeCount, replica.offset);
+      this.outline.draw(chunk, chunk.mesh.vertexCount, chunk.mesh.edgeCount, replica.offset, edges);
     }
-    for (const replica of renderer.replicas) for (const { chunk, ranges } of highlights) for (const range of ranges) {
-      this.outline.draw(chunk, range.firstEdge, range.edgeCount, replica.offset, true);
+    const highlightEdges = alpha => {
+      for (const replica of renderer.replicas) for (const { chunk, ranges } of highlights) for (const range of ranges) {
+        this.outline.draw(chunk, range.firstEdge, range.edgeCount, replica.offset, SELECTED_EDGE_STYLE, alpha);
+      }
+    };
+    if (highlights.length) {
+      this.outline.setDepthFade(0);
+      if (surface) { gl.depthFunc(gl.GREATER); highlightEdges(HIDDEN_HIGHLIGHT_EDGE_ALPHA); gl.depthFunc(gl.LEQUAL); }
+      highlightEdges(1);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
     gl.activeTexture(gl.TEXTURE0);

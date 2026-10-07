@@ -531,6 +531,10 @@
                   <label class="field"><span>Cell color</span><input id="voronoi-cell-color" type="color" value="#3b82f6" disabled></label>
                   <label class="field"><span>Opacity</span><input id="voronoi-cell-opacity" type="range" min="0" max="1" step="0.01" value="0.5" disabled></label>
                 </div>
+                <div class="paired-fields">
+                  <label class="field"><span>All-cell view</span><select id="voronoi-cell-style" disabled><option value="xray">See-through</option><option value="surface">Nearest surface</option></select></label>
+                  <label class="field"><span>Cell scale</span><input id="voronoi-cell-scale" type="range" min="0.4" max="1" step="0.01" value="1" disabled></label>
+                </div>
                 <label class="field radius-field">
                   <span>Atom radius <small>Shared with Display</small></span>
                   <span class="range-number-row">
@@ -540,7 +544,7 @@
                 </label>
                 <output id="voronoi-cell-status" class="help" role="status" aria-live="polite">Select an atom to inspect its cell.</output>
                 <output id="voronoi-all-cells-status" class="help" role="status" aria-live="polite">All-cell display is off.</output>
-                <p class="help">Click an atom in the viewport, or select its ID in Atom details, to highlight its cell. Reduce the atom radius to see the faces and edges more clearly. Showing all cells builds additional display geometry and uses more memory.</p>
+                <p class="help">Click an atom in the viewport, or select its ID in Atom details, to highlight its cell. Reduce the atom radius to see the faces and edges more clearly. <b>See-through</b> shows every cell and fades deeper ones; <b>Nearest surface</b> hides faces and edges behind the nearest cells. Lower <b>Cell scale</b> to shrink each cell toward its atom and separate neighbors; statistics are unchanged. Showing all cells builds additional display geometry and uses more memory.</p>
               </details>
               <details id="voronoi-distributions" class="tool-details">
                 <summary>Distributions</summary>
