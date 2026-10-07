@@ -33,9 +33,9 @@ test('legend histograms count finite values per color band and reuse cached data
     'wide integer ranges fall back to equal-width bands');
 });
 
-test('the legend probe reports the value and band population under the pointer', () => {
+test('the legend probe reports the value under the pointer and names the band it counts', () => {
   const data = new Float64Array(100).map((_, index) => index / 10);
-  const scale = createLegendScale(root, { minimum: 0, maximum: 10, gradient: 'linear-gradient(red, blue)', property: { data } },
+  const scale = createLegendScale(root, { minimum: 0, maximum: 9.6, unit: 'Å', gradient: 'linear-gradient(red, blue)', property: { data } },
     { format: value => value.toFixed(2) });
   assert.equal(scale.all('svg').length, 1, 'a faint histogram sits behind the gradient');
   assert.equal(scale.find('legend-gradient')[0].style.background, 'linear-gradient(red, blue)');
@@ -43,7 +43,10 @@ test('the legend probe reports the value and band population under the pointer',
   assert.equal(label.hidden, true);
   scale.dispatch('pointermove', { clientX: 150 });
   assert.equal(label.hidden, false); assert.equal(marker.style.left, '25%');
-  assert.match(label.textContent, /^2\.50 · \d+ atoms in band$/);
+  assert.equal(label.textContent, '2.40 Å\n2 atoms between 2.40 and 2.60', 'band 12 of 48 spans 2.4–2.6 and holds 2.4 and 2.5');
+  assert.match(scale.title, /^Bars count atoms in 48 equal value bands of the color range\. 3 finite values lie outside it\.$/);
+  scale.dispatch('pointermove', { clientX: 300 });
+  assert.equal(label.textContent, '9.60 Å\n3 atoms between 9.40 and 9.60', 'the last band includes the maximum 9.6');
   scale.dispatch('pointermove', { clientX: 400 });
   assert.equal(marker.style.left, '100%'); assert.equal(label.style.left, '86%', 'the label stays inside the legend');
   scale.dispatch('pointerleave');
@@ -52,15 +55,35 @@ test('the legend probe reports the value and band population under the pointer',
   assert.equal(bare.all('svg').length, 0);
   bare.dispatch('pointerdown', { clientX: 200 });
   assert.equal(bare.find('legend-probe-label')[0].textContent, '2');
+  assert.equal(bare.title, '');
+  const fine = createLegendScale(root, { minimum: 3.4675, maximum: 19.77419, gradient: 'red', property: { data: Float64Array.of(9.95, 10.1) } },
+    { format: String });
+  fine.dispatch('pointermove', { clientX: 180 });
+  assert.equal(fine.find('legend-probe-label')[0].textContent, '9.99\n2 atoms between 9.92 and 10.26',
+    'probe numbers keep the digits that distinguish bands');
+});
+
+test('the probe label stays inside the scale once its width is known', () => {
+  const scale = createLegendScale(root, { minimum: 0, maximum: 1, gradient: 'red' }, { format: String });
+  const [label] = scale.find('legend-probe-label');
+  label.offsetWidth = 60;
+  scale.dispatch('pointermove', { clientX: 102 });
+  assert.equal(label.style.left, '30px');
+  scale.dispatch('pointermove', { clientX: 200 });
+  assert.equal(label.style.left, '100px');
+  label.offsetWidth = 260;
+  scale.dispatch('pointermove', { clientX: 290 });
+  assert.equal(label.style.left, '100px', 'a label wider than the scale is centered');
 });
 
 test('integer legends snap the probe to the nearest integer and report its population', () => {
   const scale = createLegendScale(root, { minimum: 10, maximum: 12, gradient: 'red', property: { data: Uint8Array.of(11, 12, 12, 12) } }, { format: String });
   const [marker] = scale.find('legend-probe'), [label] = scale.find('legend-probe-label');
   scale.dispatch('pointermove', { clientX: 225 });
-  assert.equal(label.textContent, '11 · 1 atom'); assert.equal(marker.style.left, '50%');
+  assert.equal(label.textContent, '11\n1 atom with this value'); assert.equal(marker.style.left, '50%');
   scale.dispatch('pointermove', { clientX: 290 });
-  assert.equal(label.textContent, '12 · 3 atoms'); assert.equal(marker.style.left, '100%');
+  assert.equal(label.textContent, '12\n3 atoms with this value'); assert.equal(marker.style.left, '100%');
   scale.dispatch('pointermove', { clientX: 100 });
-  assert.equal(label.textContent, '10 · 0 atoms');
+  assert.equal(label.textContent, '10\n0 atoms with this value');
+  assert.equal(scale.title, 'Bars count atoms at each integer value of the color range.');
 });

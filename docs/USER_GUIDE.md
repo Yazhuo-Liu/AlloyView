@@ -50,13 +50,18 @@ current tool again or **Close / cancel** to cancel that analysis and clear its
 results. **Cancel** clears the result while leaving the settings open to retry.
 
 On phones, the viewport stays above an independently scrolling tools panel.
-**View**, **Legend / atoms** and **Atom details** start collapsed; tap to open
+**View**, **Legend / atoms** and **Details** start collapsed; tap to open
 camera controls, the legend's atom filters or the inspection window.
+**Details** sits in the top row beside the view tools, and an open panel stays
+below that row, so every button remains visible. On a short screen showing a
+trajectory, an open legend or Details panel covers the trajectory bar; collapse
+it to use the bar again. Landscape phones place the trajectory bar between
+**Legend / atoms** and the axes.
 Collapsing a legend preserves its filters and the
 separate PNG legend option. Drag one finger over the structure to rotate it;
 spread or pinch two fingers to zoom in or out, and move both fingers together
 to pan. These gestures work in both Perspective and Ortho. Tap an atom to
-update its details, then expand **Atom details** in the viewport to inspect
+update its details, then expand **Details** in the viewport to inspect
 them. Selecting an atom preserves the current sidebar tool and window state.
 
 Display options, color maps and legend limits apply as you edit them. Incomplete
@@ -111,12 +116,22 @@ properties unchanged. Counts and percentages update with the displayed populatio
 For scalar properties, choose a palette below the quantity selector.
 The ten maps are AtomEye rainbow, Viridis, Plasma, Magma,
 Inferno, Cividis, Turbo, Spectral, Cool–warm and Grayscale. The selected colors
-also appear in exported PNG legends.
+also appear in exported PNG legends. With a background, the PNG legend panel
+matches the on-screen legend in the current light or dark theme; the palette's
+name is left out of the image.
+
+Type the limits into **Min** and **Max**, or drag the two-thumb slider above
+them. The slider spans the data range, widened to include a typed limit
+outside it, and its ends give the exact data minimum and maximum. Dragging one
+thumb past the other pushes it along, as typing does for the number fields.
+Hover or tap the gradient to read the value at that position; the faint bars
+behind it count atoms in 48 equal value bands of the displayed range, and the
+probe names its band, for example *6 atoms between 9.92 and 10.26*.
 
 The highlighted **Auto** button means automatic limits are on: the minimum and
 maximum follow that property's data in the current frame. Click **Auto** to
-turn it off and keep the displayed limits. Editing either limit also turns
-Auto off. Those fixed limits survive frame changes, analysis-result reuse and
+turn it off and keep the displayed limits. Editing or dragging either limit
+also turns Auto off. Those fixed limits survive frame changes, analysis-result reuse and
 switching away from and back to that color property. Each scalar property keeps
 its own palette, range and Auto setting. Configurations save the selected
 quantity along with these settings. Cancelling an analysis removes its
@@ -708,8 +723,8 @@ See [Selections](features/selection-groups.md) for detailed controls and limits.
 
 ## Measurements and appearance overrides
 
-The **Atom details** window floats over the viewport, opens by default on
-desktop, and starts collapsed on phones. Its button expands or collapses it;
+The **Details** window floats over the viewport and starts collapsed on
+desktop and phones. Its button expands or collapses it;
 the window does not appear in PNG exports. Use **Atom ID → Find** to select an
 atom by its identifier. **Center** makes the selected atom the camera target. Enable
 **Measure selected atoms** and select two atoms for a distance and its
@@ -721,7 +736,7 @@ selecting different display replicas does not create separate measurement
 points. **Clear measurements** clears that selection.
 
 Under **Display → Element colors and radii**, change an element's appearance
-or visibility. **Atom details → Selected atom appearance** overrides a
+or visibility. **Details → Selected atom appearance** overrides a
 specific atom's color, radius or visibility. This appearance section starts
 collapsed; **Reset** returns the atom to element settings. Overrides follow
 the original atom IDs across frames and displayed
@@ -733,7 +748,7 @@ before the overall radius scale.
 
 Enable **Display → Show a second view** to inspect the same frame from another
 angle in a movable, resizable floating window. It starts on the left on desktop
-and the right on phones, keeping the Atom details button accessible. Drag its header to
+and the right on phones, keeping the Details button accessible. Drag its header to
 move it or its corner handle to resize it; keyboard adjustment is also
 available. Its own toolbar includes Top/Bottom/Front/Back/Left/Right and projection
 controls. A selected direction is highlighted until you rotate away from it,
@@ -747,7 +762,7 @@ trajectory-frame changes. Configuration import restores custom camera angles.
 The **Apply to main** button copies this camera's position, orientation,
 projection and zoom to the main view. The second view's PNG button saves its
 own camera with the shared background, legend and XYZ-arrow export options,
-excluding window controls, toolbars and Atom details. Its position and size
+excluding window controls, toolbars and Details. Its position and size
 are stored as viewport-relative fractions in
 `settings.extensions.comparison.layout` and adapt to another screen on import.
 Camera movement does not launch another analysis. **Six-view PNG** exports

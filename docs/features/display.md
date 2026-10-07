@@ -2,7 +2,7 @@
 
 ## Controls
 
-Choose wrapped coordinates to place periodic atoms inside the simulation cell, or unwrapped coordinates to show the available trajectory positions. **Color by** selects atom types, imported scalar properties, or completed analysis fields. Scalar palettes, fixed ranges, automatic ranges and visibility filters also appear in the viewport legend. A faint histogram behind a scalar gradient shows how the finite values are distributed across the displayed range (square-root heights keep sparse bands visible). Hover or tap the gradient to read the value at that position and the number of atoms in its band; the gradient's tooltip counts values outside the range.
+Choose wrapped coordinates to place periodic atoms inside the simulation cell, or unwrapped coordinates to show the available trajectory positions. **Color by** selects atom types, imported scalar properties, or completed analysis fields. Scalar palettes, fixed ranges, automatic ranges and visibility filters also appear in the viewport legend. Set the range by typing **Min** and **Max** or by dragging the two-thumb slider above them. The slider spans the data range, widened to include any typed limit outside it; its ends give the exact data minimum and maximum. As with the number fields, moving one limit past the other pushes the other one along. A faint histogram behind a scalar gradient divides the displayed range into 48 equal value bands (one band per value for small integer ranges) and shows how many finite values fall in each; square-root heights keep sparse bands visible. Hover or tap the gradient to read the value at that position and how many atoms lie between the limits of its band, for example *6 atoms between 9.92 and 10.26*. The gradient's tooltip explains the bands and counts values outside the range.
 
 Every categorical legend has a visibility checkbox for each class, including each element in **Atom type**. Element choices are stored by label and continue to apply after switching color quantities or trajectory frames. Other categorical filters belong to their own property, so hiding a CNA class does not hide a PTM class with the same numeric ID. These display filters intersect with appearance and scalar-range filters, synchronize to the second view, and are saved in configuration JSON.
 
@@ -12,13 +12,13 @@ Every categorical legend has a visibility checkbox for each class, including eac
 
 ## Floating second view
 
-**Show a second view** opens a movable, resizable window looking at the same data. It starts on the left on desktop and on the right on phones, keeping the Atom details button accessible. Drag the window header to move it, or its resize corner to change its size. Focus either handle and use arrow keys for keyboard adjustment; Shift makes a larger step. Home restores the default layout, and Escape cancels an active drag or resize. Position and size remain bounded by the viewport.
+**Show a second view** opens a movable, resizable window looking at the same data. It starts on the left on desktop and on the right on phones, keeping the Details button accessible. Drag the window header to move it, or its resize corner to change its size. Focus either handle and use arrow keys for keyboard adjustment; Shift makes a larger step. Home restores the default layout, and Escape cancels an active drag or resize. Position and size remain bounded by the viewport.
 
 Its own toolbar provides Top, Bottom, Front, Back, Left, Right, Perspective and Ortho. Choosing a standard direction highlights its button. Rotating away from it clears the highlight and changes the direction label to **Custom**; panning or zooming retains the current direction. **Fit** frames the structure while retaining a custom orientation. **Apply to main** copies the second camera's position, orientation, projection and zoom to the main view.
 
 Rotate, pan and zoom inside either viewport independently. The second view inherits the main view's atom-radius scale, element and per-atom radius/color overrides, scalar palettes and visibility filters immediately. Both also share coordinates, slices, replication, cell/background settings, bonds, vectors and Voronoi cells. Display edits and trajectory-frame changes preserve the second camera's orientation.
 
-The second view's PNG button exports that camera independently. It uses the shared PNG background, legend and XYZ-arrow settings. Window controls, toolbars and Atom details stay out of the image. Saving the second view does not replace the main camera.
+The second view's PNG button exports that camera independently. It uses the shared PNG background, legend and XYZ-arrow settings. Window controls, toolbars and Details stay out of the image. Saving the second view does not replace the main camera.
 
 Configuration JSON saves the second camera and its viewport-relative layout in `settings.extensions.comparison.layout`, with `left`, `top`, `width` and `height` fractions. Restoring the recipe on a different screen adapts the window to the current viewport.
 
@@ -48,7 +48,7 @@ Wrapped/unwrapped display and clipping do not rewrite analysis coordinates. Anal
 
 ## Image and trajectory exports
 
-PNG preserves alpha when **Include background in PNG** is unchecked. Legend and XYZ annotations are composited independently, so enabling a legend does not restore a solid canvas background. JPG uses an opaque background because the format has no alpha channel.
+PNG preserves alpha when **Include background in PNG** is unchecked. Legend and XYZ annotations are composited independently, so enabling a legend does not restore a solid canvas background. With a background, the legend panel uses the colors of the on-screen legend in the current light or dark theme. A scalar legend shows the quantity, color bar and limits; the color map's name is not written into the image. JPG uses an opaque background because the format has no alpha channel.
 
 Six-view PNG combines the six Cartesian directions. Frame images export the requested first/last/step range in a ZIP archive; cancellation stops the export and the original frame is restored. Visible atom ID export uses current display visibility. EPS is unavailable because the previous output stored raster pixels rather than vector geometry.
 

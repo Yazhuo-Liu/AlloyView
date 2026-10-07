@@ -1195,7 +1195,7 @@ export class WebGLRenderer {
     const cssWidth = Number(this.canvas.clientWidth) || width;
     const scale = Math.max(1, Math.min(3, width / cssWidth));
     if (legend) {
-      drawLegendOverlay(context, legend, width, height, scale, { includeBackground });
+      drawLegendOverlay(context, legend, width, height, scale, { includeBackground, theme: legendExportTheme(this.canvas) });
     }
     if (includeAxes) drawAxesOverlay(context, axisDirectionsFromView(this.viewMatrix), width, height, scale);
     return exportCanvas;
@@ -1229,7 +1229,26 @@ export class WebGLRenderer {
   }
 }
 
-export function drawLegendOverlay(context, legend, width, height, scale = 1, { includeBackground = true } = {}) {
+// Dark-theme legend colors, used when the page styles are unavailable.
+const LEGEND_PANEL_THEME = {
+  panel: 'rgba(9, 22, 31, 0.92)', border: 'rgba(178, 203, 218, 0.25)',
+  title: '#e2e8f0', label: '#cbd5e1', keyBorder: 'rgba(178, 203, 218, 0.25)',
+};
+
+/** The on-screen legend's colors for the current light or dark theme. */
+export function legendExportTheme(element) {
+  const styles = element?.ownerDocument?.defaultView?.getComputedStyle?.(element);
+  const read = (name, fallback) => styles?.getPropertyValue(name).trim() || fallback;
+  return {
+    panel: read('--overlay', LEGEND_PANEL_THEME.panel),
+    border: read('--line-strong', LEGEND_PANEL_THEME.border),
+    title: read('--text-soft', LEGEND_PANEL_THEME.title),
+    label: read('--muted', LEGEND_PANEL_THEME.label),
+    keyBorder: read('--line-strong', LEGEND_PANEL_THEME.keyBorder),
+  };
+}
+
+export function drawLegendOverlay(context, legend, width, height, scale = 1, { includeBackground = true, theme = LEGEND_PANEL_THEME } = {}) {
   if (!legend || width < 100 * scale || height < 72 * scale) return;
   const margin = 18 * scale;
   const padding = 12 * scale;
@@ -1245,19 +1264,29 @@ export function drawLegendOverlay(context, legend, width, height, scale = 1, { i
   panelHeight = Math.min(panelHeight, height - margin * 2);
   const x = margin;
   const y = height - margin - panelHeight;
+  // The panel matches the on-screen legend in the current theme. Without a
+  // background, dark text suits the light pages images are usually placed on.
   const textColors = includeBackground
-    ? { title: '#d9e7ea', label: '#a4b7be', muted: '#8299a2' }
-    : { title: '#142f3e', label: '#355563', muted: '#526d7b' };
+    ? { title: theme.title, label: theme.label, keyBorder: theme.keyBorder }
+    : { title: '#142f3e', label: '#355563', keyBorder: 'rgba(53, 85, 99, 0.45)' };
 
   context.save();
   // Background is one export option for the viewport AND legend. Keep only
   // text, swatches and the scalar color bar when exporting transparency.
   if (includeBackground) {
-    context.fillStyle = 'rgba(9, 22, 31, 0.92)';
-    context.strokeStyle = 'rgba(105, 139, 151, 0.7)';
+    context.fillStyle = theme.panel;
+    context.strokeStyle = theme.border;
     context.lineWidth = scale;
-    context.fillRect(x, y, panelWidth, panelHeight);
-    context.strokeRect(x + scale * 0.5, y + scale * 0.5, panelWidth - scale, panelHeight - scale);
+    const inset = scale * 0.5;
+    if (typeof context.roundRect === 'function') {
+      context.beginPath();
+      context.roundRect(x + inset, y + inset, panelWidth - scale, panelHeight - scale, 8 * scale);
+      context.fill();
+      context.stroke();
+    } else {
+      context.fillRect(x, y, panelWidth, panelHeight);
+      context.strokeRect(x + inset, y + inset, panelWidth - scale, panelHeight - scale);
+    }
   }
   context.textBaseline = 'alphabetic';
   context.fillStyle = textColors.title;
@@ -1276,13 +1305,7 @@ export function drawLegendOverlay(context, legend, width, height, scale = 1, { i
 }
 
 function drawScalarLegend(context, legend, x, y, panelWidth, padding, scale, textColors) {
-  if (legend.schemeLabel) {
-    context.fillStyle = textColors.muted;
-    context.font = `${8 * scale}px system-ui, sans-serif`;
-    context.textAlign = 'right';
-    context.fillText(legend.schemeLabel, x + panelWidth - padding, y + 20 * scale, panelWidth * 0.46);
-    context.textAlign = 'left';
-  }
+  // The color bar itself shows the palette; its name stays out of the image.
   const gradientX = x + padding;
   const gradientY = y + 34 * scale;
   const gradientWidth = panelWidth - padding * 2;
@@ -1299,7 +1322,7 @@ function drawScalarLegend(context, legend, x, y, panelWidth, padding, scale, tex
   }
   context.fillStyle = gradient;
   context.fillRect(gradientX, gradientY, gradientWidth, gradientHeight);
-  context.strokeStyle = 'rgba(220, 235, 239, 0.38)';
+  context.strokeStyle = textColors.keyBorder;
   context.lineWidth = scale;
   context.strokeRect(gradientX, gradientY, gradientWidth, gradientHeight);
   context.fillStyle = textColors.label;

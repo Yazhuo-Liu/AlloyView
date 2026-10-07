@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell } from '../src/data/model.js';
 
-import { axisDirectionsFromView, drawAxesOverlay, drawLegendOverlay, WebGLRenderer } from '../src/render/webgl-renderer.js';
+import { axisDirectionsFromView, drawAxesOverlay, drawLegendOverlay, legendExportTheme, WebGLRenderer } from '../src/render/webgl-renderer.js';
 
 test('cell box visibility is renderer state and requests a redraw', () => {
   const renderer = Object.create(WebGLRenderer.prototype);
@@ -213,8 +213,30 @@ test('PNG scalar legend overlay uses the selected color map and visible range', 
     colorStops: [[0, 68, 1, 84], [1, 253, 231, 37]],
   }, 640, 480);
 
-  assert.deepEqual(texts, ['coordination', 'Viridis', '8', '12']);
+  assert.deepEqual(texts, ['coordination', '8', '12'], 'the color bar shows the palette without naming it');
   assert.deepEqual(stops, [[0, 'rgb(68 1 84)'], [1, 'rgb(253 231 37)']]);
+});
+
+test('PNG legend panels use the current theme colors', () => {
+  const styles = { '--overlay': ' rgba(255, 255, 255, 0.94)', '--line-strong': 'rgba(34, 69, 88, 0.27)', '--text-soft': '#243545', '--muted': '#334155' };
+  const canvas = { ownerDocument: { defaultView: { getComputedStyle: () => ({ getPropertyValue: name => styles[name] ?? '' }) } } };
+  const theme = legendExportTheme(canvas);
+  assert.deepEqual(theme, { panel: 'rgba(255, 255, 255, 0.94)', border: 'rgba(34, 69, 88, 0.27)', title: '#243545',
+    label: '#334155', keyBorder: 'rgba(34, 69, 88, 0.27)' });
+  assert.equal(legendExportTheme(null).panel, 'rgba(9, 22, 31, 0.92)', 'without page styles the dark theme applies');
+  const painted = [];
+  const context = { save() {}, restore() {}, beginPath() {}, arc() {},
+    roundRect(...values) { painted.push(['roundRect', values[4]]); },
+    fill() { painted.push(['fill', this.fillStyle]); },
+    stroke() { painted.push(['stroke', this.strokeStyle]); },
+    fillRect() {}, strokeRect() {},
+    fillText(value) { painted.push(['text', value, this.fillStyle]); },
+    createLinearGradient() { return { addColorStop() {} }; } };
+  drawLegendOverlay(context, { kind: 'scalar', title: 'coordination', minimum: 8, maximum: 12, colorStops: [[0, 0, 0, 0], [1, 255, 255, 255]] },
+    640, 480, 2, { theme });
+  assert.deepEqual(painted.slice(0, 4), [['roundRect', 16], ['fill', theme.panel], ['stroke', theme.border], ['text', 'coordination', theme.title]],
+    'a rounded panel like the on-screen legend');
+  assert.deepEqual(painted.slice(4), [['text', '8', theme.label], ['text', '12', theme.label]]);
 });
 
 test('PNG atom-type legend overlay draws the current type swatches', () => {
@@ -244,7 +266,7 @@ test('PNG atom-type legend overlay draws the current type swatches', () => {
   assert.equal(arcs.length, 2);
 });
 
-test('empty scalar PNG legends keep their title, unit and palette without inventing a gradient or numeric range', () => {
+test('empty scalar PNG legends keep their title and unit without inventing a gradient or numeric range', () => {
   for (const includeBackground of [true, false]) {
     const texts = [], rectangles = [];
     const context = { save() {}, restore() {}, strokeRect() {},
@@ -255,7 +277,7 @@ test('empty scalar PNG legends keep their title, unit and palette without invent
     drawLegendOverlay(context, { kind: 'scalar', title: 'atomicVolume', unit: 'Å³',
       minimum: null, maximum: null, emptyRange: true, schemeLabel: 'Viridis',
       colorStops: [[0, 68, 1, 84], [1, 253, 231, 37]] }, 640, 480, 1, { includeBackground });
-    assert.deepEqual(texts, ['atomicVolume [Å³]', 'Viridis', 'No visible finite values']);
+    assert.deepEqual(texts, ['atomicVolume [Å³]', 'No visible finite values']);
     assert.equal(rectangles.length, includeBackground ? 1 : 0, 'only the optional panel background is painted');
   }
 });

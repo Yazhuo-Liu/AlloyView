@@ -204,7 +204,7 @@ match. Changes to CNA method, fixed radius or central-symmetry mode/neighbor cou
 replace the affected result. Older requests cannot replace a newer parameter
 choice or another source. Element reference edits persist by input type label
 across frames and reset with a new source. PTM deformation arrays are counted in
-the adaptive frame-cache memory budget. Results are available in **Atom details** and
+the adaptive frame-cache memory budget. Results are available in **Details** and
 **Current measurements**.
 
 Each analysis has a **Cancel** button beside its status. It stops that analysis's

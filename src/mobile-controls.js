@@ -16,6 +16,7 @@ export function initializeMobileControls() {
       wrapper: document.getElementById('atom-details-overlay'),
       button: document.getElementById('toggle-atom-details'),
       panel: document.getElementById('atom-details'),
+      // Details also folds on desktop and starts folded everywhere.
       desktopCollapsible: true,
     },
   ].filter(({ wrapper, button, panel }) => wrapper && button && panel);
@@ -28,8 +29,10 @@ export function initializeMobileControls() {
     if (overlay.desktopCollapsible) overlay.panel.hidden = !expanded;
   }
 
+  const expandedByDefault = overlay => !narrow.matches && !overlay.desktopCollapsible;
+
   function syncLayout() {
-    for (const overlay of overlays) setExpanded(overlay, !narrow.matches);
+    for (const overlay of overlays) setExpanded(overlay, expandedByDefault(overlay));
     document.getElementById('background-picker')?.removeAttribute('open');
   }
 
@@ -69,10 +72,10 @@ export function initializeMobileControls() {
 
   const details = overlays.find(({ panel }) => panel.id === 'atom-details');
   if (details) {
-    // Closing a source restores the device default for the next structure;
+    // Closing a source folds Details again for the next structure;
     // frame/analysis updates preserve the user's current expansion choice.
     new MutationObserver(() => {
-      if (details.wrapper.hidden) setExpanded(details, !narrow.matches);
+      if (details.wrapper.hidden) setExpanded(details, expandedByDefault(details));
     }).observe(details.wrapper, { attributes: true, attributeFilter: ['hidden'] });
   }
 

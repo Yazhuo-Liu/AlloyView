@@ -1,11 +1,11 @@
-# Atom details and measurements
+# Details and measurements
 
 ## Atom selection and appearance
 
 Click or tap an atom, or find it by its source ID. The details include input properties and completed analysis quantities. Selecting a replicated image refers to the original atom. Element and per-atom overrides can change color, radius and visibility; per-atom overrides take precedence.
 
-**Atom details** is a floating window in the viewport. It starts expanded on
-desktop and collapsed on phones; its button toggles the window. Picking an
+**Details** is a floating window in the viewport. It starts collapsed on
+desktop and phones; its button toggles the window. Picking an
 atom updates the contents while preserving the window state and current
 sidebar tool. The window scrolls independently and is excluded from PNG
 exports. **Selected atom appearance** remains collapsed until opened.

@@ -60,6 +60,7 @@ import { normalizeSelectionGroups, selectionGroupVisibility } from './selection-
 import { initializeSelectionGroupControls } from './selection-group-controls.js';
 import { initializeCrystalVisibilityControls, isCrystalStructureProperty } from './crystal-visibility-controls.js';
 import { createLegendScale } from './render/legend-histogram.js';
+import { createLegendRangeSlider } from './render/legend-range-slider.js';
 
 const elements = Object.fromEntries([
   'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar', 'enable-gpu-computing',
@@ -2733,7 +2734,7 @@ function renderLegend(legend) {
     }
     elements['color-legend'].append(actions, items);
   } else {
-    const scale = createLegendScale(document, legend, { format: formatValue });
+    let scale = createLegendScale(document, legend, { format: formatValue });
     const range = document.createElement('div');
     range.className = 'legend-range';
     const minimum = document.createElement('span');
@@ -2781,7 +2782,29 @@ function renderLegend(legend) {
     };
     syncAutomatic();
     actions.append(automatic);
-    controls.append(schemeControl, minimumControl.label, maximumControl.label, visibility, actions);
+    let pendingSliderRange = null;
+    const rangeSlider = createLegendRangeSlider(document, {
+      minimum: legend.minimum, maximum: editableMaximum, dataMinimum: legend.dataMinimum, dataMaximum: legend.dataMaximum,
+      step, format: formatValue,
+      onInput: (requested, changed) => {
+        interruptConfigurationRestore('a color range edit');
+        const limits = coupleScalarRange(requested.minimum, requested.maximum, changed, step);
+        if (!limits) return;
+        minimumControl.input.value = formatEditableNumber(limits.minimum);
+        maximumControl.input.value = formatEditableNumber(limits.maximum);
+        // A drag reports many positions per frame; recolor once per frame.
+        if (!pendingSliderRange) {
+          requestAnimationFrame(() => {
+            const pending = pendingSliderRange;
+            pendingSliderRange = null;
+            // A frame change may have replaced this legend and its property.
+            if (pending && rangeSlider.element.isConnected) applyRange(pending);
+          });
+        }
+        pendingSliderRange = limits;
+      },
+    });
+    controls.append(schemeControl, rangeSlider.element, minimumControl.label, maximumControl.label, visibility, actions);
     const freezeCurrentRange = () => {
       const limits = scalarColorRanges.get(legend.property.name)
         ?? { minimum: legend.minimum, maximum: editableMaximum };
@@ -2796,6 +2819,10 @@ function renderLegend(legend) {
       renderer.setColors(palette.colors);
       applyScalarVisibility(palette.legend);
       atomEyeTools.syncComparison();
+      // The histogram and hover probe describe the displayed range.
+      const nextScale = createLegendScale(document, palette.legend, { format: formatValue });
+      scale.replaceWith(nextScale);
+      scale = nextScale;
       minimum.textContent = formatValue(limits.minimum);
       maximum.textContent = formatValue(limits.maximum);
       syncAutomatic();
@@ -2823,6 +2850,8 @@ function renderLegend(legend) {
       if (changed !== 'minimum') minimumControl.input.value = formatEditableNumber(requestedMinimum);
       if (changed !== 'maximum') maximumControl.input.value = formatEditableNumber(requestedMaximum);
       const limits = { minimum: requestedMinimum, maximum: requestedMaximum };
+      // A typed limit beyond the data widens the slider track.
+      rangeSlider.set(limits);
       applyRange(limits);
     };
     minimumControl.input.addEventListener('input', () => applyLiveRange('minimum'));

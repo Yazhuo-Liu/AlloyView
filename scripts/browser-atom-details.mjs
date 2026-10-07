@@ -115,7 +115,9 @@ try {
     async function exportRecipe() { return evaluate('atomDetailsChecks.exportRecipe()'); }
 
     await openFile('atom-details-trajectory.xyz', 108);
-    assert.equal(await evaluate('document.getElementById("toggle-atom-details").getAttribute("aria-expanded")'), 'true', 'desktop opens Atom details by default');
+    assert.equal(await evaluate('document.getElementById("toggle-atom-details").getAttribute("aria-expanded")'), 'false', 'desktop starts with Details folded');
+    assert.equal(await evaluate('document.getElementById("toggle-atom-details").textContent'), 'Details');
+    await setExpanded(true);
     assert.equal(await evaluate('document.getElementById("selected-atom-appearance").open'), false);
     await showTool('vectors');
     const selected = await pick();
@@ -167,7 +169,8 @@ try {
     await press('#close-file');
     assert.equal(await evaluate('document.getElementById("atom-details-overlay").hidden'), true);
     await openFile('atom-details-periodic.xyz', 4);
-    assert.equal(await evaluate('document.getElementById("toggle-atom-details").getAttribute("aria-expanded")'), 'true');
+    assert.equal(await evaluate('document.getElementById("toggle-atom-details").getAttribute("aria-expanded")'), 'false', 'closing a source folds Details again');
+    await setExpanded(true);
     await showTool('vectors');
     await evaluate(`(() => { const r=atomDetailsChecks.renderer; r.setView('front'); r.centerOnPoint([5,5,5]); r.orthographicScale=7; r.render(performance.now(),{trackStats:false}); })()`);
     await change('measure-mode', true, true);
@@ -228,7 +231,9 @@ try {
     assert.deepEqual(await evaluate('atomDetailsChecks.overlayState()'), { details: true, view: false, legend: false, detailsInert: false, viewInert: true, legendInert: true });
     await press('#toggle-legend');
     assert.deepEqual(await evaluate('atomDetailsChecks.overlayState()'), { details: false, view: false, legend: true, detailsInert: true, viewInert: true, legendInert: false });
+    assert.deepEqual(await evaluate('atomDetailsChecks.overlayCollisions()'), [], 'the open phone legend stays below the Details toggle and toolbar');
     await press('#toggle-atom-details');
+    assert.deepEqual(await evaluate('atomDetailsChecks.overlayCollisions()'), [], 'open phone Details leaves the legend toggle uncovered');
     await evaluate('document.getElementById("atom-search-id").focus()');
     await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
@@ -242,6 +247,7 @@ try {
       await setExpanded(true);
       const pane = await evaluate(`(() => { const panel=document.getElementById('atom-details'),style=getComputedStyle(panel),box=panel.getBoundingClientRect();panel.scrollTop=0;return{width:innerWidth,height:innerHeight,panelHeight:box.height,contentHeight:panel.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom),scrollable:panel.scrollHeight>panel.clientHeight,x:box.left+8,y:box.bottom-16}; })()`);
       assert.ok(pane.contentHeight > 0, `compact phone must expose usable Atom details content: ${JSON.stringify(pane)}`);
+      assert.deepEqual(await evaluate('atomDetailsChecks.overlayCollisions()'), [], `open Details at ${width}×${height} leaves the toolbar and overlay toggles uncovered`);
       assert.equal(pane.scrollable, true);
       const compactCamera = await evaluate('atomDetailsChecks.cameraAndViewport()');
       await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: pane.x, y: pane.y }] });
@@ -258,8 +264,10 @@ try {
       await press('#toggle-view-controls');
       assert.deepEqual(await evaluate('atomDetailsChecks.overlayState()'), { details: false, view: true, legend: false, detailsInert: true, viewInert: false, legendInert: true });
       await press('#toggle-atom-details');
+      assert.deepEqual(await evaluate('atomDetailsChecks.overlayCollisions()'), [], `Details opened from View at ${width}×${height} leaves the toolbar and overlay toggles uncovered`);
       await press('#toggle-legend');
       assert.deepEqual(await evaluate('atomDetailsChecks.overlayState()'), { details: false, view: false, legend: true, detailsInert: true, viewInert: true, legendInert: false });
+      assert.deepEqual(await evaluate('atomDetailsChecks.overlayCollisions()'), [], `the open legend at ${width}×${height} stays below the Details toggle and toolbar`);
       await press('#toggle-atom-details');
       assert.deepEqual(await evaluate('atomDetailsChecks.overlayState()'), { details: true, view: false, legend: false, detailsInert: false, viewInert: true, legendInert: true });
       assert.deepEqual(await evaluate('atomDetailsChecks.cameraAndViewport()'), compactCamera, 'compact overlay switching preserves camera and viewport');
@@ -350,6 +358,20 @@ async function initializeChecks() {
     const r = checks.renderer, rect = r.canvas.getBoundingClientRect();
     return { yaw: r.yaw, pitch: r.pitch, pan: [...r.pan], target: [...r.target], distance: r.distance, scale: r.orthographicScale, projection: r.projectionMode,
       canvas: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, pageScroll: scrollY };
+  };
+  // Open panels and the overlay toggles must not cover one another or the view toolbar.
+  checks.overlayCollisions = () => {
+    const box = element => { const rect = element?.getBoundingClientRect(); return rect?.width && rect.height ? rect : null; };
+    const items = [['toolbar', document.querySelector('.view-toolbar')], ['details-toggle', document.getElementById('toggle-atom-details')],
+      ['view-toggle', document.getElementById('toggle-view-controls')], ['legend-toggle', document.getElementById('toggle-legend')],
+      ['details-panel', document.getElementById('atom-details')], ['legend-panel', document.getElementById('legend')]]
+      .map(([name, element]) => [name, box(element)]).filter(([, rect]) => rect);
+    const collisions = [];
+    for (let first = 0; first < items.length; first++) for (let second = first + 1; second < items.length; second++) {
+      const [a, b] = [items[first][1], items[second][1]];
+      if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) collisions.push(`${items[first][0]}×${items[second][0]}`);
+    }
+    return collisions;
   };
   checks.overlayState = () => {
     const expanded = id => document.getElementById(id).getAttribute('aria-expanded') === 'true';

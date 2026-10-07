@@ -35,7 +35,7 @@ export function scalarLegendHistogram(data, minimum, maximum, bins = LEGEND_HIST
 }
 
 /** A faint per-band histogram behind the color gradient and a hover/tap probe
- * reporting the value under the pointer and the atoms in that band. */
+ * reporting the value under the pointer and how many atoms share its band. */
 export function createLegendScale(root, legend, { format = String } = {}) {
   const scale = root.createElement('div');
   scale.className = 'legend-scale';
@@ -69,16 +69,25 @@ export function createLegendScale(root, legend, { format = String } = {}) {
   marker.hidden = label.hidden = true;
   label.setAttribute('role', 'status');
   scale.append(gradient, marker, label);
+  const unit = legend.unit ? ` ${legend.unit}` : '';
+  const atoms = count => `${count.toLocaleString('en-US')} atom${count === 1 ? '' : 's'}`;
+  // Digits finer than a band (or a pixel-scale step) are noise in the probe.
+  const resolution = span / (histogram && !histogram.integer ? histogram.counts.length : 100);
+  const decimals = resolution > 0 ? Math.max(0, Math.min(20, 1 - Math.floor(Math.log10(resolution)))) : null;
+  const rounded = value => format(decimals === null ? value : Number(value.toFixed(decimals)));
   function describe(fraction) {
     const value = minimum + fraction * span;
-    if (!histogram) return { fraction, text: format(value) };
+    if (!histogram) return { fraction, text: `${rounded(value)}${unit}` };
     if (histogram.integer) {
       const index = Math.max(0, Math.min(histogram.counts.length - 1, Math.round(value) - histogram.first));
-      const count = histogram.counts[index];
-      return { fraction: position(histogram.first + index), text: `${format(histogram.first + index)} · ${count.toLocaleString('en-US')} atom${count === 1 ? '' : 's'}` };
+      return { fraction: position(histogram.first + index),
+        text: `${format(histogram.first + index)}${unit}\n${atoms(histogram.counts[index])} with this value` };
     }
-    const count = histogram.counts[Math.min(histogram.counts.length - 1, Math.floor(fraction * histogram.counts.length))];
-    return { fraction, text: `${format(value)} · ${count.toLocaleString('en-US')} atom${count === 1 ? '' : 's'} in band` };
+    // Name the band explicitly: the bar under the pointer counts the atoms
+    // whose values fall between these two limits.
+    const bands = histogram.counts.length, index = Math.min(bands - 1, Math.floor(fraction * bands));
+    const lower = minimum + index * span / bands, upper = index === bands - 1 ? maximum : minimum + (index + 1) * span / bands;
+    return { fraction, text: `${rounded(value)}${unit}\n${atoms(histogram.counts[index])} between ${rounded(lower)} and ${rounded(upper)}` };
   }
   function probe(event) {
     const rectangle = scale.getBoundingClientRect?.();
@@ -86,14 +95,22 @@ export function createLegendScale(root, legend, { format = String } = {}) {
     const { fraction, text } = describe(Math.max(0, Math.min(1, (event.clientX - rectangle.left) / rectangle.width)));
     marker.hidden = label.hidden = false;
     marker.style.left = `${fraction * 100}%`;
-    // Keep the label inside the legend near either end.
-    label.style.left = `${Math.max(14, Math.min(86, fraction * 100))}%`;
     label.textContent = text;
+    // Keep the label inside the legend near either end.
+    const width = label.offsetWidth;
+    label.style.left = width
+      ? `${width >= rectangle.width ? rectangle.width / 2 : Math.max(width / 2, Math.min(rectangle.width - width / 2, fraction * rectangle.width))}px`
+      : `${Math.max(14, Math.min(86, fraction * 100))}%`;
   }
   function hide() { marker.hidden = label.hidden = true; }
   scale.addEventListener('pointermove', probe);
   scale.addEventListener('pointerdown', probe);
   scale.addEventListener('pointerleave', hide);
-  scale.title = histogram ? `${(histogram.below + histogram.above).toLocaleString('en-US')} finite values lie outside this range.` : '';
+  if (histogram) {
+    const outside = histogram.below + histogram.above;
+    scale.title = `${histogram.integer ? 'Bars count atoms at each integer value'
+      : `Bars count atoms in ${histogram.counts.length} equal value bands`} of the color range.`
+      + (outside ? ` ${outside.toLocaleString('en-US')} finite value${outside === 1 ? ' lies' : 's lie'} outside it.` : '');
+  } else scale.title = '';
   return scale;
 }

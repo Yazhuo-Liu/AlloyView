@@ -147,8 +147,10 @@ try {
 
     await showTool('display'); await change('compare-view', true, { checkbox: true });
     await waitFor('floatingChecks.comparison?.frame && !document.getElementById("comparison-view").hidden', 'floating second view');
+    // Details starts folded; open it to check the default layout against its full panel.
+    await evaluate('if(document.getElementById("toggle-atom-details").getAttribute("aria-expanded")!=="true")document.getElementById("toggle-atom-details").click()');
     let b = await boxes(); assertContained(b.panel, b.viewport);
-    assert.equal(intersects(b.panel, b.details), false, 'default second view avoids the open Atom details panel');
+    assert.equal(intersects(b.panel, b.details), false, 'default second view avoids the open Details panel');
     const defaultScreenshot = await screenshot('voronoi-floating-default.png');
     const firstCamera = await camera('comparison'), untouchedMain = await camera();
     let handle = await point('#comparison-drag-handle', { left: true });

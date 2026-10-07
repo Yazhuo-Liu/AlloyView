@@ -22,10 +22,10 @@ export function normalizeFloatingWindow(rect, bounds) {
 }
 
 export function defaultFloatingWindow(bounds, { narrow = false } = {}) {
-  // Atom details occupy the upper right on desktop. A second view starts on
+  // Details occupies the upper right on desktop. A second view starts on
   // the opposite side, below the primary viewport's toolbar.
   // On a short phone viewport, the minimum height may move the titlebar up.
-  // Start on the right as well, keeping the folded Atom details toggle free.
+  // Start on the right as well, keeping the folded Details toggle free.
   const width = narrow ? Math.min(240, Math.max(180, bounds.width - 140))
     : Math.min(520, Math.max(240, bounds.width * .42));
   return constrainFloatingWindow({ left: narrow ? bounds.width - width - 12 : 12, top: narrow ? 112 : 56,

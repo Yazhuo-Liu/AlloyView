@@ -25,7 +25,7 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 | Count and classify neighbor environments | [Coordination](features/coordination.md), [CNA](features/cna.md), [PTM](features/ptm.md) |
 | Inspect disorder and deformation | [Central symmetry](features/centrosymmetry.md), [Ideal lattice strain](features/ideal-strain.md), [Reference frame strain](features/reference-strain.md), [Local shear](features/local-shear.md) |
 | Extract and display dislocation networks | [Dislocation analysis (DXA)](features/dislocations.md) |
-| Measure geometry and distributions | [Atom details](features/selection.md), [Statistics and RDF](features/statistics.md) |
+| Measure geometry and distributions | [Details](features/selection.md), [Statistics and RDF](features/statistics.md) |
 | Save settings and export figures | [Configuration](features/configuration.md), [Display exports](features/display.md#image-and-trajectory-exports) |
 
 ## Understand and verify the implementation

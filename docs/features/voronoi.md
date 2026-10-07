@@ -92,7 +92,7 @@ numerical table. Constant-valued populations retain their actual coordinate,
 and neighbor-count distributions report integer coordination values.
 
 Expand **Cell display** and enable **Show the selected atom's cell** to inspect
-an atom picked in the viewport or by ID in Atom details. **Show all analyzed
+an atom picked in the viewport or by ID in Details. **Show all analyzed
 cells** optionally draws the cells of every included input site. Both options
 start off. Color and opacity are adjustable. All-cell display builds additional
 polygonal geometry and uses more memory; the single-cell preview constructs

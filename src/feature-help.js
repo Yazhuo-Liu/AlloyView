@@ -19,7 +19,7 @@ export const FEATURE_HELP = Object.freeze({
   referenceStrain: { title: 'Reference frame strain', page: 'reference-strain', summary: 'Match stable atom IDs to a trajectory reference and fit a local deformation gradient from reference-frame neighbors.' },
   localShear: { title: 'Local shear', page: 'local-shear', summary: 'Measure the anisotropy of normalized neighbor second moments using AtomEye geometric shear. No reference frame is required.' },
   selectionGroups: { title: 'Selections', page: 'selection-groups', summary: 'Create named atom groups by clicking, dragging a box or entering IDs. Edit each group\'s color, visibility and members; groups follow stable IDs across frames.' },
-  selection: { title: 'Atom details and measurements', page: 'selection', summary: 'Inspect atom properties in the viewport window, override appearance, and measure distance, its vector components, angle or dihedral with optional periodic image correction. The window is omitted from image exports.' },
+  selection: { title: 'Details and measurements', page: 'selection', summary: 'Inspect atom properties in the viewport window, override appearance, and measure distance, its vector components, angle or dihedral with optional periodic image correction. The window is omitted from image exports.' },
   performance: { title: 'Performance', page: 'performance', summary: 'Inspect GPU and analysis timing, Worker concurrency, and the trajectory cache. Rendering and analysis remain on this device.' },
   configuration: { title: 'Configuration', page: 'configuration', summary: 'Save or restore source metadata and view/analysis settings as JSON. Reopen the matching original files to restore a session.' },
 });

@@ -146,10 +146,10 @@
             </div>
           </div>
           <div id="atom-details-overlay" class="atom-details-overlay" hidden>
-            <button id="toggle-atom-details" class="mobile-overlay-toggle atom-details-toggle" type="button" aria-controls="atom-details" aria-expanded="true">Atom details</button>
-            <section id="atom-details" class="atom-details selection-section" data-feature-help="selection" aria-label="Atom details and measurements">
+            <button id="toggle-atom-details" class="mobile-overlay-toggle atom-details-toggle" type="button" aria-controls="atom-details" aria-expanded="false">Details</button>
+            <section id="atom-details" class="atom-details selection-section" data-feature-help="selection" aria-label="Details and measurements" hidden>
               <div class="section-heading">
-                <div><p class="section-kicker">SELECTION</p><h3>Atom details</h3></div>
+                <div><p class="section-kicker">SELECTION</p><h3>Details</h3></div>
                 <button id="clear-selection" class="text-button" type="button" hidden>Clear</button>
               </div>
               <div class="atom-search-row">
@@ -544,7 +544,7 @@
                 </label>
                 <output id="voronoi-cell-status" class="help" role="status" aria-live="polite">Select an atom to inspect its cell.</output>
                 <output id="voronoi-all-cells-status" class="help" role="status" aria-live="polite">All-cell display is off.</output>
-                <p class="help">Click an atom in the viewport, or select its ID in Atom details, to highlight its cell. Reduce the atom radius to see the faces and edges more clearly. <b>See-through</b> shows every cell and fades deeper ones; <b>Nearest surface</b> hides faces and edges behind the nearest cells. Lower <b>Cell scale</b> to shrink each cell toward its atom and separate neighbors; statistics are unchanged. Showing all cells builds additional display geometry and uses more memory.</p>
+                <p class="help">Click an atom in the viewport, or select its ID in Details, to highlight its cell. Reduce the atom radius to see the faces and edges more clearly. <b>See-through</b> shows every cell and fades deeper ones; <b>Nearest surface</b> hides faces and edges behind the nearest cells. Lower <b>Cell scale</b> to shrink each cell toward its atom and separate neighbors; statistics are unchanged. Showing all cells builds additional display geometry and uses more memory.</p>
               </details>
               <details id="voronoi-distributions" class="tool-details">
                 <summary>Distributions</summary>
