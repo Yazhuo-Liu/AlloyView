@@ -153,7 +153,9 @@ export async function withWebGpuBrowser(run, { software = true, isolated = false
     if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill('SIGKILL');
     server.closeAllConnections();
     await new Promise((done) => server.close(done));
-    await rm(profile, { recursive: true, force: true });
+    // Chrome's helper processes can still be writing the profile briefly
+    // after the browser exits; retry instead of failing a finished run.
+    await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 

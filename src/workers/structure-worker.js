@@ -158,7 +158,8 @@ async function loadCfgSequence(inputFiles, requestId) {
   }
   const first = parseCfg(await files[0].text(), files[0].name);
   const continuity = prepareSequenceBaseline(first);
-  source = { files, format: 'cfg-sequence', continuity, frameQueue: Promise.resolve() };
+  source = { files, format: 'cfg-sequence', continuity, checkpoints: new Map(), frameQueue: Promise.resolve() };
+  rememberContinuity(source, continuity);
   return {
     format: source.format,
     frameCount: files.length,
@@ -174,18 +175,36 @@ function queueCfgSequenceFrame(index, requestId) {
   return task;
 }
 
+// Each sequence frame is unwrapped against the state of the frame before it.
+// Keeping recent states lets a repeated, backward or prefetch request resume
+// from the nearest earlier frame instead of re-parsing from the first file.
+// A state owns copies of its IDs and coordinates (about 44 bytes per atom).
+const SEQUENCE_CHECKPOINT_BYTES = 256 * 1024 ** 2;
+
+function rememberContinuity(sequenceSource, state) {
+  const { checkpoints } = sequenceSource;
+  checkpoints.delete(state.index);
+  checkpoints.set(state.index, state);
+  const bytes = state.ids.byteLength + state.wrappedFractional.byteLength + state.unwrappedFractional.byteLength;
+  const limit = Math.max(2, Math.floor(SEQUENCE_CHECKPOINT_BYTES / bytes));
+  while (checkpoints.size > limit) checkpoints.delete(checkpoints.keys().next().value);
+}
+
 async function readCfgSequenceFrame(sequenceSource, index, requestId) {
   if (!Number.isInteger(index) || index < 0 || index >= sequenceSource.files.length) {
     throw new Error(`CFG sequence frame ${index} is outside the available range.`);
   }
 
-  let continuity = sequenceSource.continuity;
-  let start = continuity.index + 1;
+  let continuity = null;
+  for (const state of sequenceSource.checkpoints.values()) {
+    if (state.index < index && (!continuity || state.index > continuity.index)) continuity = state;
+  }
+  let start = continuity ? continuity.index + 1 : 1;
   let frame = null;
-  if (index <= continuity.index) {
+  if (!continuity) {
     frame = parseCfg(await sequenceSource.files[0].text(), sequenceSource.files[0].name);
     continuity = prepareSequenceBaseline(frame);
-    start = 1;
+    rememberContinuity(sequenceSource, continuity);
     if (index === 0) {
       sequenceSource.continuity = continuity;
       return frame;
@@ -196,11 +215,12 @@ async function readCfgSequenceFrame(sequenceSource, index, requestId) {
     const file = sequenceSource.files[current];
     frame = parseCfg(await file.text(), file.name);
     continuity = unwrapSequenceFrame(frame, continuity, current);
+    rememberContinuity(sequenceSource, continuity);
     self.postMessage({
       id: requestId,
       event: 'progress',
-      loaded: current + 1,
-      total: index + 1,
+      loaded: current - start + 1,
+      total: index - start + 1,
       stage: 'sequence-unwrap',
     });
   }

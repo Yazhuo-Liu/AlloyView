@@ -23,7 +23,7 @@ elif [[ -f /workspace/.tools/wasm-sdk/usr/share/emscripten/em++.py ]]; then
   export LD_LIBRARY_PATH="/workspace/.tools/wasm-sdk/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
   compiler=(python3 /workspace/.tools/wasm-sdk/usr/share/emscripten/em++.py)
 else
-  echo 'Install Emscripten (tested: Debian 3.1.69 / LLVM 19) to rebuild DXA.' >&2
+  echo 'Install Emscripten 3.1.69 to rebuild DXA, e.g. emsdk: ./emsdk install 3.1.69 && ./emsdk activate 3.1.69 && source ./emsdk_env.sh' >&2
   exit 1
 fi
 dxa_root="$project_root/third_party/dxa"

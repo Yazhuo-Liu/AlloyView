@@ -3,6 +3,7 @@ import { NEIGHBOR_BINDINGS_WGSL } from './neighbors.js';
 import { gpuPreparationKinds } from './preparation.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, frameUploadBytes, gpuWorkspaceBytes,
   trajectoryCapacity, frameEvictionOrder } from './cache-policy.js';
+import { yieldToEventLoop as yieldWorker } from '../../task-yield.js';
 
 const MAX_INPUT_BYTES = 256 * 1024 ** 2;
 const CONFIG_BYTES = 128;
@@ -177,6 +178,7 @@ export class GpuRuntime {
       .filter(Number.isInteger))].sort((a,b) => a-b);
     return { initialized: Boolean(this.device && !this.lost), pipelineCount: this.pipelines.size, uploadCount: this.inputUploads,
       budgetBytes: this.budgetBytes, allocatedBytes: this.allocatedBytes, residentBytes: this.residentBytes, frameBytes: this.frameBytes,
+      bufferLimitBytes: this.device ? Math.min(this.device.limits.maxBufferSize, this.device.limits.maxStorageBufferBindingSize) : 0,
       workspaceBytes, frameBudgetBytes: Math.max(0, this.budgetBytes - workspaceBytes), capacity,
       frameCount: this.frameCount, currentIndex: this.currentIndex,
       cachedFrameIds: [...this.frames.keys()], cachedFrameIndexes,
@@ -571,7 +573,12 @@ export class GpuRuntime {
     const frameKey = this.frameKey(frame);
     this.protectedFrameKey = frameKey;
     const key = `${frameKey}:${cutoff}`;
-    if (this.indexes.has(key)) return this.indexes.get(key);
+    const cached = this.indexes.get(key);
+    if (cached) {
+      // Keep recently used radii; eviction removes the least recently used.
+      this.indexes.delete(key); this.indexes.set(key, cached);
+      return cached;
+    }
     const heights = Array.from(cellFaceHeights(frame.cell));
     const vectors = Array.from(frame.cell.vectors);
     if (vectors.some((value) => !Number.isFinite(value)) || heights.some((value) => !Number.isFinite(value) || value <= 0)) {
@@ -728,6 +735,45 @@ export class GpuRuntime {
     }
   }
 
+  /** Consecutive bounded dispatches of one kernel over [0, total). Queue
+   * writes and submissions execute in order, so each dispatch sees the range
+   * that `setRange` wrote before it; waiting only every few dispatches keeps
+   * the GPU busy and cancellation responsive without a round trip per batch.
+   * Dispatch sizes stay bounded for the GPU watchdog. */
+  async runSequence(source, bindings, total, { batch, setRange, signal, workgroupSize = 128, waitEvery = 8, onProgress } = {}) {
+    await this.initialize(signal);
+    const device = this.device;
+    const pipeline = await waitForGpu(this.compilePipeline(source), signal);
+    checkSignal(signal);
+    if (!Number.isInteger(workgroupSize) || workgroupSize < 1 || workgroupSize > (device.limits.maxComputeInvocationsPerWorkgroup ?? 256)) {
+      throw new GpuUnavailableError('The GPU kernel workgroup size exceeds device limits.');
+    }
+    const declared = new Set(bindingDeclarations(source).map(({ binding }) => binding));
+    device.pushErrorScope('validation');
+    try {
+      const bindGroup = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0),
+        entries: bindings.map((buffer, binding) => ({ binding, resource: { buffer } })).filter(({ binding }) => declared.has(binding)) });
+      let unwaited = 0;
+      for (let start = 0; start < total; start += batch) {
+        checkSignal(signal);
+        const end = Math.min(total, start + batch), workgroups = Math.ceil((end - start) / workgroupSize);
+        if (workgroups > device.limits.maxComputeWorkgroupsPerDimension) throw new GpuUnavailableError('The GPU dispatch exceeds device limits.');
+        setRange(start, end);
+        const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+        pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(workgroups); pass.end();
+        device.queue.submit([encoder.finish()]);
+        onProgress?.(end);
+        if (++unwaited >= waitEvery && end < total) {
+          unwaited = 0;
+          await device.queue.onSubmittedWorkDone(); checkSignal(signal); await yieldWorker();
+        }
+      }
+      await device.queue.onSubmittedWorkDone(); checkSignal(signal);
+    } finally {
+      const error = await device.popErrorScope(); if (error) throw new GpuUnavailableError(error.message);
+    }
+  }
+
   async read(buffer, Type, length, { signal } = {}) {
     checkSignal(signal);
     const bytes = length * Type.BYTES_PER_ELEMENT;
@@ -808,7 +854,8 @@ function bindingDeclarations(source) {
     .map((match) => ({ binding: Number(match[1]), access: match[2] }));
 }
 
-export function yieldWorker() { return new Promise((resolve) => setTimeout(resolve, 0)); }
+// Lets cancellation messages reach the GPU Worker between batches.
+export { yieldWorker };
 
 /** Native compilation/device acquisition can complete in the background, but
  * cancellation must release the serialized worker task promptly. The shared

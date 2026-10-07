@@ -45,7 +45,7 @@ export function initializeVoronoiCellControls({ renderer, pool, getFrame, getSel
   async function refreshSelected(frame, result, version) {
     const id = getSelectedId(), currentIndex = renderer.selected;
     const atomIndex = frame && id !== null && id !== undefined
-      ? currentIndex >= 0 && frame.ids[currentIndex] === id ? currentIndex : frame.ids.findIndex(value => value === id) : -1;
+      ? currentIndex >= 0 && frame.ids[currentIndex] === id ? currentIndex : frame.ids.indexOf(id) : -1;
     if (!controlsEnabled || !options.enabled || !frame || !result || atomIndex < 0 || !included(result, atomIndex)) {
       abortSelected(); onChange();
       sync(!frame ? 'Load a structure to inspect its cells.' : !result ? 'Calculate Voronoi to inspect a cell.'

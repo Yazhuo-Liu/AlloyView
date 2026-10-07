@@ -1,4 +1,4 @@
-import { applyAppearance, hexColor, rgbHex } from './appearance.js';
+import { applyAppearance, findAtomIndex, hexColor, rgbHex } from './appearance.js';
 import { radiusForElement } from './render/atomic-radii.js';
 import { colorsByType } from './render/palette.js';
 import { analysisProgressText, analysisBackendLabel, analysisBackendDetails } from './analysis/status.js';
@@ -530,7 +530,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   function updateMeasurements() {
     const frame = getFrame(), container = $('measurement-data'); container.replaceChildren();
     if (!frame || !$('measure-mode').checked) { renderer.setSelectedAtoms([]); return; }
-    const indices = measurements.map(id => frame.ids.findIndex(value => String(value) === String(id))).filter(index => index >= 0);
+    const indices = measurements.map(id => findAtomIndex(frame.ids, id)).filter(index => index >= 0);
     renderer.setSelectedAtoms(indices);
     if (!indices.length) { container.textContent = 'Select up to four atoms to measure.'; return; }
     if (indices.length === 1) { container.textContent = `Atom: ${frame.ids[indices[0]]}. Select another atom to measure.`; return; }
@@ -891,7 +891,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     } catch (error) { $(id).value = String(vectorDimensions[name]); notify(error.message); }
   });
   $('find-atom').addEventListener('click', () => {
-    const frame = getFrame(), index = frame?.ids.findIndex(id => String(id) === $('atom-search-id').value.trim()) ?? -1;
+    const frame = getFrame(), index = frame ? findAtomIndex(frame.ids, $('atom-search-id').value.trim()) : -1;
     if (index < 0) { notify('No atom has that ID in this frame.'); return; }
     selectAtom(index); renderer.centerOnAtom(index);
   });

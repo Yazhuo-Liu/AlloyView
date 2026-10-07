@@ -75,4 +75,9 @@ test('XYZ rejects malformed schemas, unsafe identities and incomplete frames', a
   await assert.rejects(indexXyz(new Blob(['2\ncomment\nFe 0 0 0\n'])), /truncated/);
   await assert.rejects(indexXyz(new Blob(['1\ncomment\n\n'])), /blank atom/);
   await assert.rejects(indexXyz(new Blob(['0\ncomment\n'])), /positive/);
+  // Rows are blank exactly when trim() empties them, including Unicode spaces.
+  for (const chunkSize of [2, 4096]) {
+    await assert.rejects(indexXyz(new Blob(['1\ncomment\n\u00a0\u3000\r\n']), () => {}, { chunkSize }), /blank atom/);
+    assert.deepEqual((await indexXyz(new Blob(['\u3000\n1\nc\n\u00a0é\n\u2028\n1\nc\n\u0000\n']), () => {}, { chunkSize })).offsets, [4, 17]);
+  }
 });

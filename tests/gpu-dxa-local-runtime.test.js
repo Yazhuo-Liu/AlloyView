@@ -48,6 +48,32 @@ function fixture({ failAllocation = -1, failRead = -1, cancelAfterRun, mutateRow
     if (allocated.length === failAllocation) throw new Error('Allocation failed.');
     const buffer = { data: new Uint8Array(Math.max(4, bytes)) }; allocated.push(buffer); return buffer;
   };
+  const dispatch = (source, bindings, options) => {
+    if (source === DXA_LOCAL_NEIGHBORS_SHADER) {
+      const [context, table, packed, settings, status] = bindings, config = new Uint32Array(context.data.buffer);
+      const start = config[26], end = config[27], count = end - start;
+      runs.push({ source, table, packed, settings, start, end, count, options });
+      const words = new Uint32Array(status.data.buffer);
+      if (candidateOverflow) words[1] = 1;
+      if (context.attempt >= resolveAfterAttempt) words[0] += count;
+    } else {
+      assert.equal(source, DXA_LOCAL_SHADER);
+      const [settings, table, templates, output] = bindings, controls = new Uint32Array(settings.data.buffer);
+      const start = controls[1], end = controls[2], total = controls[0], type = controls[3];
+      runs.push({ source, table, settings, templates, output, start, end, count: end - start, options });
+      const rows = new Uint32Array(output.data.buffer), view = new DataView(output.data.buffer);
+      const width = new Uint32Array(templates.data.buffer)[(type - 1) * 33];
+      for (let atom = start; atom < end; atom++) {
+        const offset = atom * DXA_LOCAL_ROW_WORDS;
+        rows[offset] = type;
+        rows.fill(MISSING, offset + 1, offset + 17);
+        for (let neighbor = 0; neighbor < width; neighbor++) rows[offset + 1 + neighbor] = (atom + neighbor + 1) % total;
+        view.setFloat64((offset + 17) * 4, 2.5, true);
+      }
+      mutateRows?.(rows, view);
+    }
+    if (cancelAfterRun?.source === source) cancelAfterRun.controller.abort();
+  };
   const runtime = {
     device: { limits: { maxBufferSize: 256 * 1024 ** 2, maxStorageBufferBindingSize: 256 * 1024 ** 2 } },
     budgetBytes: 512 * 1024 ** 2,
@@ -59,34 +85,18 @@ function fixture({ failAllocation = -1, failRead = -1, cancelAfterRun, mutateRow
     pinFrames(frames) { pins.push(...frames); return () => { unpins++; }; },
     async prepareNeighbors(frame, radius, { signal }) {
       signal?.throwIfAborted();
-      const context = { frame, radius, attempt: contexts.length + 1 }; contexts.push(context); return context;
+      // The configuration words carry each neighbor dispatch's atom range.
+      const context = { frame, radius, attempt: contexts.length + 1, data: new Uint8Array(112) }; contexts.push(context); return context;
     },
     neighborBindings(context, extras) { return [context, ...extras]; },
-    async run(source, bindings, count, options) {
-      options.signal?.throwIfAborted();
-      if (source === DXA_LOCAL_NEIGHBORS_SHADER) {
-        const [context, table, packed, settings, status] = bindings;
-        runs.push({ source, table, packed, settings, start: options.startAtom, end: options.endAtom, count, options });
-        const words = new Uint32Array(status.data.buffer);
-        if (candidateOverflow) words[1] = 1;
-        if (context.attempt >= resolveAfterAttempt) words[0] += count;
-      } else {
-        assert.equal(source, DXA_LOCAL_SHADER);
-        const [settings, table, templates, output] = bindings, controls = new Uint32Array(settings.data.buffer);
-        const start = controls[1], end = controls[2], total = controls[0], type = controls[3];
-        runs.push({ source, table, settings, templates, output, start, end, count, options });
-        const rows = new Uint32Array(output.data.buffer), view = new DataView(output.data.buffer);
-        const width = new Uint32Array(templates.data.buffer)[(type - 1) * 33];
-        for (let atom = start; atom < end; atom++) {
-          const offset = atom * DXA_LOCAL_ROW_WORDS;
-          rows[offset] = type;
-          rows.fill(MISSING, offset + 1, offset + 17);
-          for (let neighbor = 0; neighbor < width; neighbor++) rows[offset + 1 + neighbor] = (atom + neighbor + 1) % total;
-          view.setFloat64((offset + 17) * 4, 2.5, true);
-        }
-        mutateRows?.(rows, view);
+    async runSequence(source, bindings, total, options) {
+      for (let start = 0; start < total; start += options.batch) {
+        options.signal?.throwIfAborted();
+        options.setRange(start, Math.min(total, start + options.batch));
+        dispatch(source, bindings, options);
+        options.onProgress?.(Math.min(total, start + options.batch));
       }
-      if (cancelAfterRun?.source === source) cancelAfterRun.controller.abort();
+      options.signal?.throwIfAborted();
     },
     async read(buffer, Type, length, { signal }) {
       signal?.throwIfAborted(); reads.push({ buffer, Type, length });

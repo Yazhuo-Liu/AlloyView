@@ -2,7 +2,7 @@ import { rdfNormalization, finalizeRdf } from '../rdf.js';
 import { MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { cellFaceHeights } from '../../data/model.js';
 import { makeNeighborShader } from './neighbors.js';
-import { GpuUnavailableError } from './runtime.js';
+import { GpuUnavailableError, yieldWorker } from './runtime.js';
 
 const U32_MAX = 0xffff_ffff;
 const MAX_BATCH_ATOMS = 16_384;
@@ -138,7 +138,7 @@ export async function correctGpuRdfPairs(frame, normalization, pairs, counts, { 
   for (let index = 0; index < pairs.length; index += 2) {
     if (index % 8192 === 0) {
       signal?.throwIfAborted();
-      if (index) await new Promise((resolve) => setTimeout(resolve, 0));
+      if (index) await yieldWorker();
     }
     const atom = pairs[index], other = pairs[index + 1];
     if (atom === other || (firstType !== null && frame.types[atom] !== firstType)

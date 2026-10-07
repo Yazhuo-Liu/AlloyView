@@ -10,11 +10,17 @@ const ELEMENT_RADII = Object.freeze({
 
 const DEFAULT_RADIUS = 1.25;
 
+// Default radii per immutable type array; callers receive their own copy.
+const radiiCache = new WeakMap();
+
 export function radiiByType(frame) {
   const byType = frame.typeLabels.map((label) => ELEMENT_RADII[normalizeElement(label)] ?? DEFAULT_RADIUS);
+  const key = byType.join(','), cached = radiiCache.get(frame.types);
+  if (cached?.key === key) return cached.radii.slice();
   const radii = new Float32Array(frame.types.length);
   for (let atom = 0; atom < frame.types.length; atom += 1) radii[atom] = byType[frame.types[atom]] ?? DEFAULT_RADIUS;
-  return radii;
+  if (frame.types && typeof frame.types === 'object') radiiCache.set(frame.types, { key, radii });
+  return radii.slice();
 }
 
 export function radiusForElement(label) {

@@ -40,11 +40,12 @@ export class NeighborSearch {
       const axis = this.dimensions.indexOf(Math.max(...this.dimensions));
       this.dimensions[axis] = Math.max(1, Math.floor(this.dimensions[axis] / 2));
     }
+    this.nearestRadii = new Map();
     this.heads = new Int32Array(this.dimensions.reduce((a, b) => a * b, 1)).fill(-1);
     this.next = new Int32Array(this.count);
     for (let atom = 0; atom < this.count; atom += 1) {
-      const indices = [0, 1, 2].map((axis) => this.binIndex(this.coordinates[atom * 3 + axis], axis));
-      const bin = this.flatten(...indices);
+      const bin = this.flatten(this.binIndex(this.coordinates[atom * 3], 0),
+        this.binIndex(this.coordinates[atom * 3 + 1], 1), this.binIndex(this.coordinates[atom * 3 + 2], 2));
       this.next[atom] = this.heads[bin];
       this.heads[bin] = atom;
     }
@@ -59,11 +60,32 @@ export class NeighborSearch {
     return (x * this.dimensions[1] + y) * this.dimensions[2] + z;
   }
 
+  /** A first radius whose sphere is expected to hold 1.3× the requested
+   * neighbors. The general initial radius expects about 17 atoms, so 18 PTM
+   * neighbors usually failed the first pass and searched again at 1.6×. Any
+   * sphere holding at least the requested count yields the same sorted
+   * nearest neighbors, so this changes only the work, never the result. */
+  nearestRadius(needed) {
+    let radius = this.nearestRadii.get(needed);
+    if (radius !== undefined) return radius;
+    radius = Math.max(this.initialRadius, this.initialRadius / 1.6 * Math.cbrt(3 * 1.3 * needed / (4 * Math.PI)));
+    // Thin cells keep the original start rather than reach the image budget.
+    if (this.imageBudget(radius) > 100_000) radius = this.initialRadius;
+    this.nearestRadii.set(needed, radius);
+    return radius;
+  }
+
+  imageBudget(radius) {
+    let product = 1;
+    for (let axis = 0; axis < 3; axis++) if (this.cell.pbc[axis]) product *= Math.ceil(2 * (radius / this.heights[axis] + 1e-12)) + 1;
+    return product;
+  }
+
   nearest(atom, count) {
     if (!Number.isInteger(count) || count < 1) throw new Error('Invalid nearest-neighbor count.');
     const needed = this.cell.pbc.some(Boolean) ? count : Math.min(count, this.count - 1);
     if (needed === 0) return [];
-    let radius = this.initialRadius;
+    let radius = this.nearestRadius(needed);
     for (let attempt = 0; attempt < 24; attempt += 1) {
       const neighbors = this.within(atom, radius);
       if (neighbors.length >= needed) {
@@ -76,47 +98,53 @@ export class NeighborSearch {
     throw new Error('Neighbor search could not resolve this cell geometry. Check the cell and coordinates.');
   }
 
+  /** Bins overlapping [center − bound, center + bound] along one axis, as
+   * [first, last, wrap]: visit first..last, reducing modulo the dimension when
+   * `wrap` is set. The visiting order matches an explicit index list. */
+  binRange(center, bound, axis, output) {
+    const dimension = this.dimensions[axis], periodic = this.cell.pbc[axis];
+    const width = this.span[axis] / dimension;
+    const lo = Math.floor((center - bound - this.minimum[axis]) / width);
+    const hi = Math.floor((center + bound - this.minimum[axis]) / width);
+    if (periodic && hi - lo + 1 >= dimension) { output[0] = 0; output[1] = dimension - 1; output[2] = 0; }
+    else if (periodic) { output[0] = lo; output[1] = hi; output[2] = 1; }
+    else { output[0] = Math.max(0, lo); output[1] = Math.min(dimension - 1, hi); output[2] = 0; }
+    return output;
+  }
+
+  /** Every image within `radius` of `atom`. This runs for every candidate of
+   * every atom in most analyses, so the inner loops keep values in scalars
+   * rather than allocating per candidate; the arithmetic is unchanged. */
   within(atom, radius, limit = Infinity) {
     if (!Number.isFinite(radius) || radius <= 0) throw new Error('The neighbor radius must be positive and finite.');
-    const bounds = Array.from(this.heights, (height) => radius / height + 1e-12);
-    const center = Array.from(this.coordinates.subarray(atom * 3, atom * 3 + 3));
-    const binAxes = bounds.map((bound, axis) => {
-      const dimension = this.dimensions[axis];
-      const width = this.span[axis] / dimension;
-      const lo = Math.floor((center[axis] - bound - this.minimum[axis]) / width);
-      const hi = Math.floor((center[axis] + bound - this.minimum[axis]) / width);
-      if (this.cell.pbc[axis] && hi - lo + 1 >= dimension) return Array.from({ length: dimension }, (_, i) => i);
-      const indices = [];
-      const start = this.cell.pbc[axis] ? lo : Math.max(0, lo);
-      const end = this.cell.pbc[axis] ? hi : Math.min(dimension - 1, hi);
-      for (let i = start; i <= end; i += 1) {
-        if (this.cell.pbc[axis]) indices.push((i % dimension + dimension) % dimension);
-        else if (i >= 0 && i < dimension) indices.push(i);
-      }
-      return indices;
-    });
-    const h = this.cell.vectors;
+    const coordinates = this.coordinates, h = this.cell.vectors, pbc = this.cell.pbc;
+    const b0 = radius / this.heights[0] + 1e-12, b1 = radius / this.heights[1] + 1e-12, b2 = radius / this.heights[2] + 1e-12;
+    const cx = coordinates[atom * 3], cy = coordinates[atom * 3 + 1], cz = coordinates[atom * 3 + 2];
+    const [x0, x1, xWrap] = this.binRange(cx, b0, 0, this.rangeX ??= new Int32Array(3));
+    const [y0, y1, yWrap] = this.binRange(cy, b1, 1, this.rangeY ??= new Int32Array(3));
+    const [z0, z1, zWrap] = this.binRange(cz, b2, 2, this.rangeZ ??= new Int32Array(3));
+    const [dx, dy, dz] = this.dimensions;
+    // Prevent pathological cells from spending unbounded time enumerating images.
+    if (this.imageBudget(radius) > 100_000) throw new Error('The cell is too thin for this neighbor search; use a less skewed cell.');
+    const p0 = pbc[0], p1 = pbc[1], p2 = pbc[2];
+    const h0 = h[0], h1 = h[1], h2 = h[2], h3 = h[3], h4 = h[4], h5 = h[5], h6 = h[6], h7 = h[7], h8 = h[8];
     const neighbors = [];
     const radiusSquared = radius * radius;
-    // Prevent pathological cells from spending unbounded time enumerating images.
-    const imageBudget = bounds.reduce((product, bound, axis) => (
-      product * (this.cell.pbc[axis] ? Math.ceil(2 * bound) + 1 : 1)
-    ), 1);
-    if (imageBudget > 100_000) throw new Error('The cell is too thin for this neighbor search; use a less skewed cell.');
-    for (const bx of binAxes[0]) for (const by of binAxes[1]) for (const bz of binAxes[2]) {
-      for (let other = this.heads[this.flatten(bx, by, bz)]; other >= 0; other = this.next[other]) {
-        const difference = center.map((value, axis) => this.coordinates[other * 3 + axis] - value);
-        const ranges = difference.map((value, axis) => this.cell.pbc[axis]
-          ? [Math.ceil(-bounds[axis] - value), Math.floor(bounds[axis] - value)]
-          : [0, 0]);
-        for (let a = ranges[0][0]; a <= ranges[0][1]; a += 1) {
-          for (let b = ranges[1][0]; b <= ranges[1][1]; b += 1) {
-            for (let c = ranges[2][0]; c <= ranges[2][1]; c += 1) {
+    for (let ix = x0; ix <= x1; ix++) for (let iy = y0; iy <= y1; iy++) for (let iz = z0; iz <= z1; iz++) {
+      const bx = xWrap ? (ix % dx + dx) % dx : ix, by = yWrap ? (iy % dy + dy) % dy : iy, bz = zWrap ? (iz % dz + dz) % dz : iz;
+      for (let other = this.heads[(bx * dy + by) * dz + bz]; other >= 0; other = this.next[other]) {
+        const d0 = coordinates[other * 3] - cx, d1 = coordinates[other * 3 + 1] - cy, d2 = coordinates[other * 3 + 2] - cz;
+        const aLo = p0 ? Math.ceil(-b0 - d0) : 0, aHi = p0 ? Math.floor(b0 - d0) : 0;
+        const bLo = p1 ? Math.ceil(-b1 - d1) : 0, bHi = p1 ? Math.floor(b1 - d1) : 0;
+        const cLo = p2 ? Math.ceil(-b2 - d2) : 0, cHi = p2 ? Math.floor(b2 - d2) : 0;
+        for (let a = aLo; a <= aHi; a += 1) {
+          for (let b = bLo; b <= bHi; b += 1) {
+            for (let c = cLo; c <= cHi; c += 1) {
               if (other === atom && a === 0 && b === 0 && c === 0) continue;
-              const da = difference[0] + a, db = difference[1] + b, dc = difference[2] + c;
-              const x = da * h[0] + db * h[3] + dc * h[6];
-              const y = da * h[1] + db * h[4] + dc * h[7];
-              const z = da * h[2] + db * h[5] + dc * h[8];
+              const da = d0 + a, db = d1 + b, dc = d2 + c;
+              const x = da * h0 + db * h3 + dc * h6;
+              const y = da * h1 + db * h4 + dc * h7;
+              const z = da * h2 + db * h5 + dc * h8;
               const distanceSquared = x * x + y * y + z * z;
               if (distanceSquared <= radiusSquared) {
                 neighbors.push({ atom: other, x, y, z, distanceSquared, imageA: a, imageB: b, imageC: c });

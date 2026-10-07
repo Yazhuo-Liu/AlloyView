@@ -160,13 +160,14 @@ export class DxaClient {
         transfer.push(coordinates.buffer, frame.cell.vectors.buffer, frame.cell.origin.buffer);
       }
       const worker = this.ensureWorker();
-      const gpuBudgetBytes = this.gpuBackend?.cacheStatus?.budgetBytes;
+      const { budgetBytes: gpuBudgetBytes, bufferLimitBytes: gpuBufferLimitBytes } = this.gpuBackend?.cacheStatus ?? {};
       // Only the host clears the retained cancellation word. Resetting it in
       // the receiving Worker could erase an abort that raced with delivery.
       this.setCancellation(0);
       worker.postMessage({ id: task.id, type: task.type, frame, atomCount: task.count,
         parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes, workerCount: task.workerCount,
         gpuSnapshotBudgetBytes: Number.isSafeInteger(gpuBudgetBytes) && gpuBudgetBytes > 0 ? Math.min(512 * 1024 ** 2, gpuBudgetBytes) : undefined,
+        gpuBufferLimitBytes: Number.isSafeInteger(gpuBufferLimitBytes) && gpuBufferLimitBytes > 0 ? gpuBufferLimitBytes : undefined,
         gpuAvailable: Boolean(task.parameters?.gpuEnabled && this.environment.navigator?.gpu
           && typeof this.gpuBackend?.classifyDxa === 'function'),
         gpuLocalAvailable: Boolean(task.parameters?.gpuEnabled && this.environment.navigator?.gpu

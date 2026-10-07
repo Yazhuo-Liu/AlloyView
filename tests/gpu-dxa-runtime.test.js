@@ -35,12 +35,20 @@ function fixture({ failAllocation = -1, failRead = false, cancelAfterRun } = {})
     createBuffer: allocate,
     storageBuffer(values) { const buffer = allocate(values.byteLength); buffer.data.set(new Uint8Array(values.buffer, values.byteOffset, values.byteLength)); return buffer; },
     write(buffer, values, offset = 0) { buffer.data.set(new Uint8Array(values.buffer, values.byteOffset, values.byteLength), offset); },
-    async run(source, bindings, count, options) {
-      const settings = new Uint32Array(bindings[0].data.buffer);
-      runs.push({ source, start: settings[3], end: settings[4], count, options });
-      const output = new Int32Array(bindings.at(-1).data.buffer);
-      output.fill(source === DXA_ALPHA_SHADER ? 1 : 0, settings[3], settings[4]);
-      cancelAfterRun?.abort();
+    async runSequence(source, bindings, total, options) {
+      for (let start = 0; start < total; start += options.batch) {
+        options.signal?.throwIfAborted();
+        const end = Math.min(total, start + options.batch);
+        // Each dispatch reads the range its settings buffer received.
+        options.setRange(start, end);
+        const settings = new Uint32Array(bindings[0].data.buffer);
+        runs.push({ source, start: settings[3], end: settings[4], count: end - start, options });
+        const output = new Int32Array(bindings.at(-1).data.buffer);
+        output.fill(source === DXA_ALPHA_SHADER ? 1 : 0, settings[3], settings[4]);
+        cancelAfterRun?.abort();
+        options.onProgress?.(end);
+      }
+      options.signal?.throwIfAborted();
     },
     async read(buffer, Type, length, { signal }) {
       signal?.throwIfAborted(); reads.push(buffer);

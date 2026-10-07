@@ -35,7 +35,7 @@ function harness({ neighborError, tensorError } = {}) {
       return parameters.kind === 'ptmNeighbors' ? { ...table, engine: 'webgpu-ptm-neighbors' }
         : { ...tensor, referenceBackend: 'gpu', engine: 'webgpu-strain' };
     } };
-  const pool = new AnalysisPool({ gpuBackend });
+  const pool = new AnalysisPool({ gpuBackend, ptmNeighborBackend: 'gpu' });
   pool.setGpuEnabled(true);
   pool.analyzeCPU = async (_frame, parameters, options) => {
     calls.push({ backend: 'cpu', parameters });

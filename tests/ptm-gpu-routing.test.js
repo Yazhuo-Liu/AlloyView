@@ -22,7 +22,7 @@ function neighborsFor(frame) {
   return table;
 }
 
-function harness({ supported = true, neighborError, neighborResult, afterNeighbors, fitError } = {}) {
+function harness({ supported = true, neighborError, neighborResult, afterNeighbors, fitError, poolOptions = { ptmNeighborBackend: 'gpu' } } = {}) {
   const frame = crystalFrame('fcc', 2), table = neighborsFor(frame), calls = [];
   const fit = Object.fromEntries(Object.entries(PTM_FIELDS).map(([field, [Type, stride]]) => [field, new Type(frame.types.length * stride)]));
   const gpuBackend = { supports: kind => supported && kind === 'ptmNeighbors', close() {},
@@ -34,7 +34,7 @@ function harness({ supported = true, neighborError, neighborResult, afterNeighbo
       afterNeighbors?.();
       return neighborResult ?? { ...table, engine: 'webgpu-ptm-neighbors', arithmetic: 'f64' };
     } };
-  const pool = new AnalysisPool({ gpuBackend });
+  const pool = new AnalysisPool({ gpuBackend, ...poolOptions });
   pool.setGpuEnabled(true);
   pool.analyzeCPU = async (inputFrame, parameters, options) => {
     calls.push({ backend: 'cpu', frame: inputFrame, parameters, options });
@@ -46,6 +46,20 @@ function harness({ supported = true, neighborError, neighborResult, afterNeighbo
   };
   return { frame, table, fit, pool, calls, parameters: { kind: 'ptm', flags: 127, rmsdCutoff: .1 } };
 }
+
+test('automatic PTM routing prepares GPU neighbors only for small CPU pools', async () => {
+  for (const [hardwareConcurrency, expected] of [[5, 'gpu'], [6, 'cpu'], [32, 'cpu']]) {
+    const { frame, pool, calls, parameters } = harness({ poolOptions: { environment: { navigator: { hardwareConcurrency } } } });
+    try {
+      const result = await pool.analyze(frame, parameters);
+      assert.deepEqual(calls.map(call => call.backend), expected === 'gpu' ? ['gpu', 'cpu'] : ['cpu'], `${hardwareConcurrency} threads`);
+      assert.equal(result.neighborBackend, expected);
+      // Choosing the faster CPU search is not a fallback.
+      assert.equal(result.fallbackReason, undefined); assert.equal(result.neighborFallbackReason, undefined);
+    } finally { pool.close(); }
+  }
+  assert.throws(() => new AnalysisPool({ ptmNeighborBackend: 'cpu' }), /auto or gpu/);
+});
 
 test('public PTM uses GPU neighbors then CPU fitting, retaining inputs and two-stage progress', async () => {
   const { frame, table, fit, pool, calls, parameters } = harness(), progress = [], controller = new AbortController();

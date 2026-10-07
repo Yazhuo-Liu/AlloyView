@@ -39,8 +39,8 @@ export async function indexLammpsDump(blob, onProgress = () => {}) {
     combined.set(chunk, tail.length);
     const baseOffset = offset - tail.length;
 
-    for (let index = 0; index <= combined.length - TIMESTEP_MARKER.length; index += 1) {
-      if (combined[index] !== TIMESTEP_MARKER[0]) continue;
+    const last = combined.length - TIMESTEP_MARKER.length;
+    for (let index = combined.indexOf(TIMESTEP_MARKER[0]); index >= 0 && index <= last; index = combined.indexOf(TIMESTEP_MARKER[0], index + 1)) {
       if (index > 0 && combined[index - 1] !== 10) continue;
       let matches = true;
       for (let markerIndex = 1; markerIndex < TIMESTEP_MARKER.length; markerIndex += 1) {
@@ -154,41 +154,38 @@ export function parseLammpsFrame(text, sourceName = 'trajectory.dump') {
   const elements = columnIndex.has('element') ? new Array(count) : null;
   const idSet = new Set();
 
+  // Column positions are fixed for the frame; resolve them once rather than
+  // per atom, and keep the per-atom loop free of allocations.
+  const idColumn = columnIndex.get('id'), typeColumn = columnIndex.get('type'), elementColumn = columnIndex.get('element');
+  const coordinateReaders = [[wrappedCoordinateSet, wrappedValues], [unwrappedCoordinateSet, unwrappedValues]]
+    .filter(([coordinateSet]) => coordinateSet)
+    .map(([coordinateSet, values]) => ({ values, names: coordinateSet.names, columns: coordinateSet.names.map(name => columnIndex.get(name)) }));
+  const imageColumns = IMAGE_COLUMNS.map(name => columnIndex.get(name));
+  const propertyColumns = propertyNames.map(name => columnIndex.get(name));
   for (let atom = 0; atom < count; atom += 1, cursor += 1) {
-    const tokens = (lines[cursor] ?? '').trim().split(/\s+/).filter(Boolean);
+    // After trim(), splitting on whitespace yields an empty token only for an empty line.
+    const line = (lines[cursor] ?? '').trim();
+    const tokens = line === '' ? [] : line.split(/\s+/);
     if (tokens.length !== columns.length) {
       throw dumpError(`Line ${cursor + 1} (atom ${atom + 1}): expected ${columns.length} columns; found ${tokens.length}.`);
     }
-    const id = integerValue(tokens[columnIndex.get('id')], cursor, 'id');
+    const id = integerValue(tokens[idColumn], cursor, 'id');
     if (idSet.has(id)) throw dumpError(`Line ${cursor + 1}: atom ID ${id} is duplicated.`);
     idSet.add(id);
     ids[atom] = id;
-    const rawType = integerValue(tokens[columnIndex.get('type')], cursor, 'type');
+    const rawType = integerValue(tokens[typeColumn], cursor, 'type');
     if (rawType <= 0) throw dumpError(`Line ${cursor + 1}: type must be a positive integer.`);
     rawTypes[atom] = rawType;
-    if (elements) elements[atom] = tokens[columnIndex.get('element')];
-    for (const [coordinateSet, values] of [
-      [wrappedCoordinateSet, wrappedValues],
-      [unwrappedCoordinateSet, unwrappedValues],
-    ]) {
-      if (!coordinateSet) continue;
+    if (elements) elements[atom] = tokens[elementColumn];
+    for (const { values, names, columns: coordinateColumns } of coordinateReaders) {
       for (let component = 0; component < 3; component += 1) {
-        values[atom * 3 + component] = finiteValue(
-          tokens[columnIndex.get(coordinateSet.names[component])],
-          cursor,
-          coordinateSet.names[component],
-        );
+        values[atom * 3 + component] = finiteValue(tokens[coordinateColumns[component]], cursor, names[component]);
       }
     }
     if (imageFlags) {
       for (let component = 0; component < 3; component += 1) {
         const name = IMAGE_COLUMNS[component];
-        const image = integerValue(
-          tokens[columnIndex.get(name)],
-          cursor,
-          name,
-          { allowNegative: true },
-        );
+        const image = integerValue(tokens[imageColumns[component]], cursor, name, { allowNegative: true });
         if (image < -2_147_483_648 || image > 2_147_483_647) {
           throw dumpError(`Line ${cursor + 1}: ${name} is outside the supported 32-bit image-flag range.`);
         }
@@ -196,8 +193,7 @@ export function parseLammpsFrame(text, sourceName = 'trajectory.dump') {
       }
     }
     for (let property = 0; property < properties.length; property += 1) {
-      const name = propertyNames[property];
-      properties[property].data[atom] = finiteValue(tokens[columnIndex.get(name)], cursor, name);
+      properties[property].data[atom] = finiteValue(tokens[propertyColumns[property]], cursor, propertyNames[property]);
     }
   }
 

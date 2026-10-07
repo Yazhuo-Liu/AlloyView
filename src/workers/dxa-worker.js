@@ -42,6 +42,7 @@ async function handleRequest(data) {
       memoryBudgetBytes,
       workerCount,
       gpuSnapshotBudgetBytes: data.gpuSnapshotBudgetBytes,
+      gpuBufferLimitBytes: data.gpuBufferLimitBytes,
       // The client clears its known word immediately before posting a new
       // request. Clearing here could erase a concurrent cancellation request.
       resetCancellation: false,

@@ -11,6 +11,7 @@ import { GpuAnalysisClient } from './gpu/client.js';
 import { validateReferences } from './lattice.js';
 import { validatePtmParameters, validatePreparedPtmNeighbors } from './ptm.js';
 import { CpuBudget, cpuWorkerLimit } from './cpu-budget.js';
+import { yieldToMain } from '../task-yield.js';
 
 const PTM_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
@@ -20,6 +21,11 @@ const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
   deformation: [Float64Array, 9], distances: [Float32Array, 1] };
 const PTM_NEIGHBOR_FIELDS = ['counts', 'indices', 'vectors'];
+// GPU PTM neighbors order candidates in emulated binary64 on one device queue,
+// while CPU workers search neighbors in parallel within the fit. On NiGB the
+// GPU takes about 5 µs per atom and a CPU worker about 27 µs, so the GPU stage
+// only shortens PTM for pools of at most three workers.
+export const GPU_PTM_NEIGHBOR_MAX_WORKERS = 3;
 const STRAIN_OUTPUT_FIELDS = Object.fromEntries(['atomicShearStrain', 'atomicHydrostaticStrain', 'atomicVolumeChange',
   'strainE11', 'strainE22', 'strainE33', 'strainE12', 'strainE13', 'strainE23'].map((name) => [name, [Float32Array, 1]]));
 const INPUT_ARRAY_FIELDS = ['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput', 'currentPositions', 'referencePositions'];
@@ -35,11 +41,13 @@ const EXTRA_OUTPUT_FIELDS = {
   displacement: { vectors: [Float32Array, 3], magnitudes: [Float64Array, 1] },
 };
 
-export function chooseWorkerCount(atomCount, coordinateBytes, environment = globalThis, targetAtoms = 50_000) {
+/** `coordinateBytes` is held by every worker. `sharedBytes` does not grow
+ * with the worker count, e.g. disjoint output ranges and their merged result. */
+export function chooseWorkerCount(atomCount, coordinateBytes, environment = globalThis, targetAtoms = 50_000, { sharedBytes = 0 } = {}) {
   let count = Math.min(Math.max(1, Math.ceil(atomCount / targetAtoms)), cpuWorkerLimit(environment));
   const heapLimit = Number(environment.performance?.memory?.jsHeapSizeLimit);
   const copyBudget = Number.isFinite(heapLimit) ? heapLimit * 0.15 : 256 * 1024 ** 2;
-  while (count > 1 && coordinateBytes * count > copyBudget) count -= 1;
+  while (count > 1 && coordinateBytes * count + sharedBytes > copyBudget) count -= 1;
   return count;
 }
 
@@ -47,10 +55,14 @@ export function chooseWorkerCount(atomCount, coordinateBytes, environment = glob
  * coordinate copies. Every task owns a disjoint central-atom range.
  */
 export class AnalysisPool {
-  constructor({ environment = globalThis, gpuBackend, cpuBudget, workerFactory = () => new Worker(
+  /** `ptmNeighborBackend: 'gpu'` always prepares PTM neighbors on the GPU when
+   * it is enabled; `'auto'` does so only for small CPU pools. */
+  constructor({ environment = globalThis, gpuBackend, cpuBudget, ptmNeighborBackend = 'auto', workerFactory = () => new Worker(
     new URL('../workers/analysis-worker.js', import.meta.url), { type: 'module' },
   ) } = {}) {
+    if (!['auto', 'gpu'].includes(ptmNeighborBackend)) throw new Error('PTM neighbors must use the auto or gpu backend.');
     this.environment = environment;
+    this.ptmNeighborBackend = ptmNeighborBackend;
     this.workerFactory = workerFactory;
     this.cpuBudget = cpuBudget ?? new CpuBudget({ environment });
     this.limit = this.cpuBudget.limit;
@@ -307,7 +319,7 @@ export class AnalysisPool {
     if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
     validatePtmParameters(parameters);
     const suppliedNeighbors = parameters.preparedNeighbors !== undefined;
-    const prepareNeighbors = !suppliedNeighbors && this.gpuBackend.supports('ptmNeighbors');
+    const prepareNeighbors = !suppliedNeighbors && this.gpuPtmNeighbors();
     const stages = prepareNeighbors ? 2 : 1;
     const progress = (backend, stage, offset = 0) => update => onProgress({ ...update, backend, stage,
       completedAtoms: offset + (update.completedAtoms ?? 0), totalAtoms: atomCount * stages });
@@ -315,7 +327,7 @@ export class AnalysisPool {
     if (prepareNeighbors) {
       ({ neighbors, preparedNeighbors, neighborFallbackReason, neighborElapsedMs } = await this.preparePtmNeighborsWithGpu(
         frame, parameters, { signal, frameIndex, onProgress: progress('gpu', 'ptm-neighbors') }));
-    } else if (!suppliedNeighbors) {
+    } else if (!suppliedNeighbors && !this.gpuBackend.supports('ptmNeighbors')) {
       neighborFallbackReason = 'The ptm analysis uses CPU workers; no GPU kernel is available for PTM neighbors.';
     }
     const ptm = await this.analyzeCPU(frame, { ...parameters, ...(preparedNeighbors ? { preparedNeighbors } : {}) },
@@ -327,6 +339,11 @@ export class AnalysisPool {
       ptmWorkerCount: ptm.workerCount, ptmElapsedMs: ptm.elapsedMs, elapsedMs: performance.now() - startedAt,
       engine: [neighbors ? neighbors.engine ?? 'webgpu-ptm-neighbors' : null, ptm.engine].filter(Boolean).join('+'),
       ...(neighborFallbackReason ? { neighborFallbackReason, fallbackReason: neighborFallbackReason } : {}) };
+  }
+
+  gpuPtmNeighbors() {
+    return this.gpuBackend.supports('ptmNeighbors')
+      && (this.ptmNeighborBackend === 'gpu' || this.limit <= GPU_PTM_NEIGHBOR_MAX_WORKERS);
   }
 
   /** Schema preflight stays on the main thread; value validation stays in the
@@ -360,7 +377,7 @@ export class AnalysisPool {
     validateReferences(parameters.references, frame.types);
     const fresh = !parameters.ptmInput;
     if (fresh) validatePtmParameters(parameters);
-    const prepareNeighbors = fresh && this.gpuBackend.supports('ptmNeighbors');
+    const prepareNeighbors = fresh && this.gpuPtmNeighbors();
     const stages = fresh ? prepareNeighbors ? 3 : 2 : 1;
     const progress = (backend, stage, offset = 0) => update => onProgress({ ...update, backend, stage,
       completedAtoms: offset + (update.completedAtoms ?? 0), totalAtoms: atomCount * stages });
@@ -464,19 +481,22 @@ export class AnalysisPool {
         : autoCentrosymmetry ? { centrosymmetry: [Float32Array, 1], cspStructureTypes: [Uint8Array, 1], cspNeighborCounts: [Uint8Array, 1] }
           : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] });
     const outputBytesPerAtom = Object.values(outputFields).reduce((sum, [Type, stride]) => sum + Type.BYTES_PER_ELEMENT * stride, 0);
-    const copyBytes = (sharedMemory ? 0 : frame.fractional.byteLength + extraBytes) + atomCount * (48 + outputBytesPerAtom)
+    // Every worker holds its coordinates and a full-frame neighbor index; each
+    // writes only its own atom range, merged once into full output arrays.
+    const copyBytes = (sharedMemory ? 0 : frame.fractional.byteLength + extraBytes) + atomCount * 48
       + (parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput) ? PTM_INITIAL_HEAP_BYTES : 0);
+    const outputBytes = 2 * atomCount * outputBytesPerAtom;
     let workerCount = Math.min(this.limit, chooseWorkerCount(atomCount,
       copyBytes, this.environment,
       parameters.kind === 'voronoi' ? 512
-        : ['coordination', 'displacement'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000 : 4_096));
+        : ['coordination', 'displacement'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000 : 4_096, { sharedBytes: outputBytes }));
     // Common PTM phases need only their central-atom rows. Their aggregate
     // private tables occupy one table, while multishell templates need a full
     // source table in each worker for neighbors-of-neighbors callbacks.
     if (!sharedMemory && sharedNeighborTable && !fullNeighborTable) {
       const heapLimit = Number(this.environment.performance?.memory?.jsHeapSizeLimit);
       const copyBudget = Number.isFinite(heapLimit) ? heapLimit * .15 : 256 * 1024 ** 2;
-      while (workerCount > 1 && copyBytes * workerCount + neighborBytes > copyBudget) workerCount--;
+      while (workerCount > 1 && copyBytes * workerCount + outputBytes + neighborBytes > copyBudget) workerCount--;
     }
     const controller = new AbortController();
     this.controllers.add(controller);
@@ -1048,10 +1068,6 @@ async function copyFields(fields, signal, sharedMemory = false) {
   return copies;
 }
 
-function yieldToMain() {
-  return typeof globalThis.scheduler?.yield === 'function' ? globalThis.scheduler.yield()
-    : new Promise((resolve) => setTimeout(resolve, 0));
-}
 
 function waitForCpuResources() {
   // scheduler.yield() promotes its continuation ahead of ordinary Worker

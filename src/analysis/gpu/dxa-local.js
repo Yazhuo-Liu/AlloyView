@@ -34,15 +34,9 @@ export async function analyzeGpuDxaLocalStructures(runtime, frame, input, { sign
       { coordinates: input.coordinates, inverse: input.inverse, requiredNeighbors }, { signal, onProgress });
     const bindings = [settingsBuffer, nearest.tableBuffer, templatesBuffer, outputBuffer];
     report('dxa-local-structures');
-    for (let start = 0; start < atomCount; start += GPU_DXA_LOCAL_BATCH_ATOMS) {
-      checkSignal(signal);
-      const end = Math.min(start + GPU_DXA_LOCAL_BATCH_ATOMS, atomCount);
-      runtime.write(settingsBuffer, new Uint32Array([start, end]), 4);
-      await runtime.run(DXA_LOCAL_SHADER, bindings, end - start,
-        { signal, workgroupSize: DXA_LOCAL_WORKGROUP_SIZE, batchSize: 0, updateRange: false });
-      report('dxa-local-structures', end);
-      if (end < atomCount) { await yieldWorker(); checkSignal(signal); }
-    }
+    await runtime.runSequence(DXA_LOCAL_SHADER, bindings, atomCount, { batch: GPU_DXA_LOCAL_BATCH_ATOMS, signal,
+      workgroupSize: DXA_LOCAL_WORKGROUP_SIZE, setRange: (start, end) => runtime.write(settingsBuffer, new Uint32Array([start, end]), 4),
+      onProgress: end => report('dxa-local-structures', end) });
     report('dxa-local-readback');
     const rows = await runtime.read(outputBuffer, Uint32Array, atomCount * DXA_LOCAL_ROW_WORDS, { signal });
     const structures = new Int32Array(atomCount), neighbors = new Int32Array(atomCount * neighborWidth).fill(-1);

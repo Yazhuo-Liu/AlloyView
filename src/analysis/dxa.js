@@ -312,7 +312,7 @@ export async function calculateDxa(frame, parameters = {}, options = {}) {
 }
 
 async function performDxaCalculation(frame, parameters = {}, { onProgress = () => {}, onControl = () => {}, resetCancellation = true,
-  memoryBudgetBytes, workerCount: requestedWorkers, classifyDxa, signal, gpuSnapshotBudgetBytes,
+  memoryBudgetBytes, workerCount: requestedWorkers, classifyDxa, signal, gpuSnapshotBudgetBytes, gpuBufferLimitBytes,
   verifyGpuClassification = false, identifyDxa, verifyGpuLocalStructures = false } = {}) {
   checkSignal(signal);
   const settings = validateDxaParameters(parameters), count = validateDxaFrame(frame);
@@ -359,7 +359,11 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       settings.trialCircuitLength, settings.circuitStretchability, settings.onlyPerfectDislocations ? 1 : 0,
       settings.lineSmoothingIterations, settings.linePointInterval];
     let output;
-    if (settings.gpuEnabled && (typeof classifyDxa === 'function' || typeof identifyDxa === 'function')) {
+    // The WebGPU stages emulate binary64 arithmetic. With several native
+    // threads, CPU local identification and classification finish sooner.
+    const gpuStagesAvailable = typeof classifyDxa === 'function' || typeof identifyDxa === 'function';
+    const gpuSkipped = Boolean(settings.gpuEnabled && gpuStagesAvailable && workerCount > 1);
+    if (settings.gpuEnabled && gpuStagesAvailable && !gpuSkipped) {
       stagedSession = true;
       const budgetBytes = gpuSnapshotBudgetBytes ?? Math.min(DXA_GPU_SNAPSHOT_LIMIT,
         Math.floor((memoryBudgetBytes ?? 1.5 * 1024 ** 3) * .35));
@@ -444,7 +448,7 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       checkDxaCancellation(module);
       try {
         if (typeof classifyDxa !== 'function') throw new Error('WebGPU tetrahedron classification is unavailable in this browser or context.');
-        const snapshot = exportDxaSnapshot(module, budgetBytes);
+        const snapshot = exportDxaSnapshot(module, budgetBytes, gpuBufferLimitBytes);
         gpuSnapshotBytes = snapshot.vertices.byteLength + snapshot.tetrahedra.byteLength
           + snapshot.edges.byteLength + snapshot.transitions.byteLength;
         let referenceRegions;
@@ -490,7 +494,8 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       output = module._alloy_dxa_finish(gpuResult ? regionsPointer : 0,
         gpuResult ? gpuResult.regions.length : 0);
     } else {
-      if (settings.gpuEnabled) fallbackReason = 'WebGPU DXA is unavailable in this browser or context.';
+      if (gpuSkipped) fallbackReason = `${workerCount} CPU threads run DXA faster than its WebGPU binary64 stages.`;
+      else if (settings.gpuEnabled) fallbackReason = 'WebGPU DXA is unavailable in this browser or context.';
       output = module._alloy_dxa_analyze(...argumentsList);
     }
     if (!output) {
@@ -509,7 +514,7 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       gpuStages: [...(gpuLocalResult ? DXA_GPU_LOCAL_STAGES : []), ...(gpuResult ? DXA_GPU_STAGES : [])],
       gpuElapsedMs: gpuTotal('elapsedMs'), gpuArithmetic: gpuResult?.arithmetic ?? gpuLocalResult?.arithmetic,
       gpuUploadedBytes: gpuTotal('uploadedBytes'), gpuReadbackBytes: gpuTotal('readbackBytes'),
-      gpuSnapshotBytes, gpuLocalInputBytes, gpuFallback: Boolean(settings.gpuEnabled && !usedGpu),
+      gpuSnapshotBytes, gpuLocalInputBytes, gpuFallback: Boolean(settings.gpuEnabled && !usedGpu && !gpuSkipped), gpuSkipped,
       stageFallbacks, gpuFallbackReason: !usedGpu ? fallbackReason : undefined, fallbackReason };
   } finally {
     kernelProgress = null;
@@ -593,10 +598,15 @@ function verifyDxaLocalResult(result, input, structures, neighbors, maximumDista
   }
 }
 
-function exportDxaSnapshot(module, budgetBytes) {
+function exportDxaSnapshot(module, budgetBytes, bufferLimitBytes = Infinity) {
   if (!Number.isSafeInteger(budgetBytes) || budgetBytes < 1 || budgetBytes > 0xffff_ffff) {
     throw new Error('The WebGPU DXA snapshot budget must be a positive 32-bit byte count.');
   }
+  // The GPU Worker rejects any table larger than one device buffer. Checking
+  // the native counts first avoids packing and copying a snapshot it refuses.
+  const tableBytes = Math.max(module._alloy_dxa_vertex_count() * 24, module._alloy_dxa_tet_count() * 64,
+    module._alloy_dxa_edge_count() * 32, module._alloy_dxa_transition_count() * 160);
+  if (tableBytes > bufferLimitBytes) throw new Error('The DXA tables exceed GPU buffer limits; using CPU workers.');
   const workspaceBytes = module._alloy_dxa_tet_count() * 12 + 32;
   if (module._alloy_dxa_snapshot_bytes() + workspaceBytes > budgetBytes) {
     throw new Error('The DXA topology and GPU workspace exceed the WebGPU snapshot memory budget.');

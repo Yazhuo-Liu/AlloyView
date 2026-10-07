@@ -94,7 +94,6 @@ export function calculateCoordination(frameLike, cutoff, range = {}) {
           other,
           cell,
           fractionalBounds,
-          cutoffSquared,
         );
         if (distanceSquared <= cutoffSquared) {
           coordination[atom] += 1;
@@ -119,55 +118,60 @@ export function calculateCoordination(frameLike, cutoff, range = {}) {
   };
 }
 
+/** Squared length of the shortest periodic image of second − first, or
+ * +∞ when no image can lie within `fractionalBounds`. It runs for every
+ * candidate pair, so it keeps values in scalars instead of allocating. */
 export function minimumImageDistanceSquared(
   fractional,
   first,
   second,
   cell,
   fractionalBounds = null,
-  stopAtSquared = Number.POSITIVE_INFINITY,
 ) {
   const baseFirst = first * 3;
   const baseSecond = second * 3;
-  const difference = [
-    fractional[baseSecond] - fractional[baseFirst],
-    fractional[baseSecond + 1] - fractional[baseFirst + 1],
-    fractional[baseSecond + 2] - fractional[baseFirst + 2],
-  ];
-  const bounds = fractionalBounds ?? Array.from(cellFaceHeights(cell), () => Number.POSITIVE_INFINITY);
-  const ranges = [];
-  for (let dimension = 0; dimension < 3; dimension += 1) {
-    if (cell.pbc[dimension]) {
-      const bound = Number.isFinite(bounds[dimension]) ? bounds[dimension] : 1;
-      const minimum = Math.ceil(difference[dimension] - bound);
-      const maximum = Math.floor(difference[dimension] + bound);
-      if (minimum > maximum) return Number.POSITIVE_INFINITY;
-      ranges.push([minimum, maximum]);
-    } else {
-      if (Number.isFinite(bounds[dimension]) && Math.abs(difference[dimension]) > bounds[dimension]) {
-        return Number.POSITIVE_INFINITY;
-      }
-      ranges.push([0, 0]);
-    }
-  }
+  const d0 = fractional[baseSecond] - fractional[baseFirst];
+  const d1 = fractional[baseSecond + 1] - fractional[baseFirst + 1];
+  const d2 = fractional[baseSecond + 2] - fractional[baseFirst + 2];
+  const pbc = cell.pbc;
+  const bound0 = fractionalBounds ? fractionalBounds[0] : Number.POSITIVE_INFINITY;
+  const bound1 = fractionalBounds ? fractionalBounds[1] : Number.POSITIVE_INFINITY;
+  const bound2 = fractionalBounds ? fractionalBounds[2] : Number.POSITIVE_INFINITY;
+  let a0 = 0, a1 = 0, b0 = 0, b1 = 0, c0 = 0, c1 = 0;
+  if (pbc[0]) {
+    const bound = Number.isFinite(bound0) ? bound0 : 1;
+    a0 = Math.ceil(d0 - bound); a1 = Math.floor(d0 + bound);
+    if (a0 > a1) return Number.POSITIVE_INFINITY;
+  } else if (Number.isFinite(bound0) && Math.abs(d0) > bound0) return Number.POSITIVE_INFINITY;
+  if (pbc[1]) {
+    const bound = Number.isFinite(bound1) ? bound1 : 1;
+    b0 = Math.ceil(d1 - bound); b1 = Math.floor(d1 + bound);
+    if (b0 > b1) return Number.POSITIVE_INFINITY;
+  } else if (Number.isFinite(bound1) && Math.abs(d1) > bound1) return Number.POSITIVE_INFINITY;
+  if (pbc[2]) {
+    const bound = Number.isFinite(bound2) ? bound2 : 1;
+    c0 = Math.ceil(d2 - bound); c1 = Math.floor(d2 + bound);
+    if (c0 > c1) return Number.POSITIVE_INFINITY;
+  } else if (Number.isFinite(bound2) && Math.abs(d2) > bound2) return Number.POSITIVE_INFINITY;
 
   const h = cell.vectors;
+  const h0 = h[0], h1 = h[1], h2 = h[2], h3 = h[3], h4 = h[4], h5 = h[5], h6 = h[6], h7 = h[7], h8 = h[8];
   let closest = Number.POSITIVE_INFINITY;
-  for (let imageA = ranges[0][0]; imageA <= ranges[0][1]; imageA += 1) {
-    const a = difference[0] - imageA;
-    for (let imageB = ranges[1][0]; imageB <= ranges[1][1]; imageB += 1) {
-      const b = difference[1] - imageB;
-      for (let imageC = ranges[2][0]; imageC <= ranges[2][1]; imageC += 1) {
-        const c = difference[2] - imageC;
-        const x = a * h[0] + b * h[3] + c * h[6];
-        const y = a * h[1] + b * h[4] + c * h[7];
-        const z = a * h[2] + b * h[5] + c * h[8];
+  for (let imageA = a0; imageA <= a1; imageA += 1) {
+    const a = d0 - imageA;
+    for (let imageB = b0; imageB <= b1; imageB += 1) {
+      const b = d1 - imageB;
+      for (let imageC = c0; imageC <= c1; imageC += 1) {
+        const c = d2 - imageC;
+        const x = a * h0 + b * h3 + c * h6;
+        const y = a * h1 + b * h4 + c * h7;
+        const z = a * h2 + b * h5 + c * h8;
         const squared = x * x + y * y + z * z;
         if (squared < closest) closest = squared;
       }
     }
   }
-  return closest <= stopAtSquared ? closest : closest;
+  return closest;
 }
 
 function reduceBinCount(dimensions, target) {

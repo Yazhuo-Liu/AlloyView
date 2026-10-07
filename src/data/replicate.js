@@ -1,5 +1,6 @@
 import { createCell, invert3, validateFrame } from './model.js';
 import { normalizeRepetitions } from '../render/replication.js';
+import { yieldToMain } from '../task-yield.js';
 
 export const MAX_PHYSICAL_REPLICATION_ATOMS = 4_000_000;
 export const MAX_PHYSICAL_REPLICATION_BYTES = 512 * 1024 ** 2;
@@ -157,4 +158,3 @@ function importedProperties(frame) {
 }
 
 function checkSignal(signal) { if (signal?.aborted) throw new DOMException('Replication cancelled.', 'AbortError'); }
-function yieldToMain() { return typeof globalThis.scheduler?.yield === 'function' ? globalThis.scheduler.yield() : new Promise((resolve) => setTimeout(resolve, 0)); }

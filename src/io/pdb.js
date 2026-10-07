@@ -1,6 +1,6 @@
 import { createCell, validateFrame } from '../data/model.js';
 import { coordinatesForCell, inferNonperiodicCell } from './xyz.js';
-import { scanTextLines } from './text-lines.js';
+import { lineText, scanLineBytes } from './text-lines.js';
 
 export async function indexPdb(blob, onProgress = () => {}, options = {}) {
   const startedAt = performance.now();
@@ -11,18 +11,18 @@ export async function indexPdb(blob, onProgress = () => {}, options = {}) {
   let implicitAtoms = 0;
   let modelAtoms = 0;
   let explicitModels = false;
-  for await (const line of scanTextLines(blob, onProgress, options)) {
-    const record = line.text.slice(0, 6).trim();
+  await scanLineBytes(blob, (bytes, from, to, start, end) => {
+    const record = recordName(bytes, from, to);
     if (record === 'MODEL') {
       if (active) throw pdbError('MODEL records must be separated by ENDMDL.');
       if (implicitAtoms) throw pdbError('Atom records before the first MODEL cannot be combined with a model trajectory.');
       explicitModels = true;
-      active = { start: line.start, end: null, header: currentHeader };
+      active = { start, end: null, header: currentHeader };
       modelAtoms = 0;
     } else if (record === 'ENDMDL') {
       if (!active) throw pdbError('ENDMDL has no preceding MODEL.');
       if (!modelAtoms) throw pdbError('A MODEL contains no atom records.');
-      active.end = line.end;
+      active.end = end;
       frames.push(active);
       active = null;
     } else if (record === 'ATOM' || record === 'HETATM') {
@@ -30,14 +30,36 @@ export async function indexPdb(blob, onProgress = () => {}, options = {}) {
       if (active) modelAtoms += 1;
       else implicitAtoms += 1;
     } else if (!active && (record === 'CRYST1' || record === 'TITLE')) {
-      header.push(line.text);
+      header.push(lineText(bytes.subarray(from, to)));
       currentHeader = header.join('\n');
     }
-  }
+  }, onProgress, options);
   if (active) throw pdbError('The last MODEL is missing ENDMDL.');
   if (!explicitModels && implicitAtoms) frames.push({ start: 0, end: blob.size });
   if (!frames.length) throw pdbError('The file contains no ATOM or HETATM records.');
   return { frames, header: explicitModels ? header.join('\n') : '', indexMs: performance.now() - startedAt };
+}
+
+const INDEXED_RECORDS = ['MODEL', 'ENDMDL', 'ATOM', 'HETATM', 'CRYST1', 'TITLE']
+  .map(name => ({ name, bytes: Uint8Array.from(name, character => character.charCodeAt(0)) }));
+const isAsciiSpace = byte => byte === 32 || (byte >= 9 && byte <= 13);
+
+// The record the indexer uses, or '', from the trimmed first six characters
+// of a line's text. UTF-8 decodes ASCII bytes to the same characters, so an
+// ASCII prefix is compared without decoding it.
+function recordName(bytes, from, to) {
+  let first = from, last = Math.min(to, from + 6);
+  for (let index = first; index < last; index++) {
+    if (bytes[index] >= 0x80) return lineText(bytes.subarray(from, to)).slice(0, 6).trim();
+  }
+  while (first < last && isAsciiSpace(bytes[first])) first++;
+  while (last > first && isAsciiSpace(bytes[last - 1])) last--;
+  search: for (const record of INDEXED_RECORDS) {
+    if (record.bytes.length !== last - first) continue;
+    for (let index = 0; index < record.bytes.length; index++) if (bytes[first + index] !== record.bytes[index]) continue search;
+    return record.name;
+  }
+  return '';
 }
 
 export async function readPdbFrame(blob, indexed, index, sourceName = 'trajectory.pdb') {

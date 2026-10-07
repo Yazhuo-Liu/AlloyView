@@ -3,6 +3,7 @@ import { MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { modalCoordination, shearInvariant } from '../local-shear.js';
 import { makeShearCoordinationShader, makeShearMetricsShader, SHEAR_REDUCTION_SHADER, SHEAR_FINALIZE_SHADER,
   SHEAR_CORRECTION_SHADER, SHEAR_WORKGROUP_SIZE } from './local-shear-shaders.js';
+import { yieldWorker } from './runtime.js';
 
 export const MAX_GPU_SHEAR_COORDINATION = 64;
 
@@ -41,7 +42,7 @@ export async function analyzeGpuLocalShear(runtime, frame, parameters = {}, { si
     for (let atom = 0; atom < count; atom += 1) if (cutoffFlags[atom]) {
       coordination[atom] = neighborsFor(atom).length;
       countCorrections += 1;
-      if (countCorrections % 256 === 0) { await yieldToWorker(); checkAbort(signal); }
+      if (countCorrections % 256 === 0) { await yieldWorker(); checkAbort(signal); }
     }
     const { histogram, coordinationSum } = shearCoordinationStatistics(coordination);
     const mode = modalCoordination(histogram);
@@ -65,7 +66,7 @@ export async function analyzeGpuLocalShear(runtime, frame, parameters = {}, { si
       const correctedMoments = new Float32Array(correctedAtoms.length * 8);
       for (let index = 0; index < correctedAtoms.length; index += 1) {
         correctedMoments.set(shearNeighborMoments(neighborsFor(correctedAtoms[index]), mode), index * 8);
-        if (index && index % 256 === 0) { await yieldToWorker(); checkAbort(signal); }
+        if (index && index % 256 === 0) { await yieldWorker(); checkAbort(signal); }
       }
       const correctedCountBuffer = upload(new Uint32Array([correctedAtoms.length, 0, 0, 0]));
       const correctedAtomBuffer = upload(Uint32Array.from(correctedAtoms));
@@ -158,4 +159,3 @@ function gpuUnsupported(message) {
   error.name = 'GpuUnsupportedError';
   return error;
 }
-function yieldToWorker() { return new Promise(resolve => setTimeout(resolve, 0)); }

@@ -47,14 +47,11 @@ export async function prepareGpuDxaLocalNeighbors(runtime, frame,
     for (; radiusAttempts < MAX_GPU_CNA_RADIUS_ATTEMPTS; radiusAttempts++) {
       checkSignal(signal);
       if (radiusAttempts) context = await runtime.prepareNeighbors(frame, radius, { signal });
-      for (let start = 0; start < count; start += GPU_DXA_LOCAL_NEIGHBOR_BATCH_ATOMS) {
-        const end = Math.min(start + GPU_DXA_LOCAL_NEIGHBOR_BATCH_ATOMS, count);
-        await runtime.run(DXA_LOCAL_NEIGHBORS_SHADER, runtime.neighborBindings(context,
-          [tableBuffer, sourceBuffer, settingsBuffer, statusBuffer]), end - start,
-        { signal, startAtom: start, endAtom: end, batchSize: 0 });
-        report('dxa-local-neighbors', completed, end);
-        if (end < count) { await yieldWorker(); checkSignal(signal); }
-      }
+      // The neighbor context's configuration carries each dispatch's atom range.
+      const bindings = runtime.neighborBindings(context, [tableBuffer, sourceBuffer, settingsBuffer, statusBuffer]);
+      await runtime.runSequence(DXA_LOCAL_NEIGHBORS_SHADER, bindings, count, { batch: GPU_DXA_LOCAL_NEIGHBOR_BATCH_ATOMS, signal,
+        setRange: (start, end) => runtime.write(bindings[0], new Uint32Array([start, end]), 104),
+        onProgress: end => report('dxa-local-neighbors', completed, end) });
       const status = await runtime.read(statusBuffer, Uint32Array, 4, { signal });
       if (status[1]) throw new GpuUnavailableError('The DXA local neighbor candidate search exceeds the GPU per-atom budget.');
       completed = status[0];

@@ -1,11 +1,11 @@
 import { referenceFactors } from './atomic-strain.js';
 import { STRAIN_STRUCTURES } from './lattice.js';
 import { determinant3 } from '../data/model.js';
+import { yieldToMain } from '../task-yield.js';
 
 const IDEAL_CA = Math.sqrt(8 / 3);
 const CHUNK_SIZE = 32768;
 const supported = new Set(STRAIN_STRUCTURES);
-const yieldToBrowser = () => new Promise(resolve => setTimeout(resolve, 0));
 
 function checkAbort(signal) {
   if (signal?.aborted) throw new DOMException('Lattice estimation cancelled.', 'AbortError');
@@ -40,7 +40,7 @@ export async function estimateLatticeReferences(frame, ptm, { rmsdCutoff = .1, m
   for (let atom = 0; atom < count; atom += 1) {
     if (atom && atom % CHUNK_SIZE === 0) {
       onProgress(atom, count);
-      await yieldToBrowser();
+      await yieldToMain();
       checkAbort(signal);
     }
     const type = frame.types[atom];
@@ -135,7 +135,7 @@ async function median(values, signal) {
         [values[current], values[higher]] = [values[higher], values[current]];
         higher -= 1;
       } else current += 1;
-      if (++work % CHUNK_SIZE === 0) { await yieldToBrowser(); checkAbort(signal); }
+      if (++work % CHUNK_SIZE === 0) { await yieldToMain(); checkAbort(signal); }
     }
     if (upperIndex < lower) right = lower - 1;
     else if (upperIndex > higher) left = higher + 1;
@@ -147,7 +147,7 @@ async function median(values, signal) {
   let lower = values[0];
   for (let i = 1; i < upperIndex; i += 1) {
     lower = Math.max(lower, values[i]);
-    if (++work % CHUNK_SIZE === 0) { await yieldToBrowser(); checkAbort(signal); }
+    if (++work % CHUNK_SIZE === 0) { await yieldToMain(); checkAbort(signal); }
   }
   return (lower + upper) / 2;
 }

@@ -191,3 +191,58 @@ test('staged DXA imports local GPU correspondence and records per-stage fallback
     assert.equal(resumed.segments.length, 0);
   } finally { await releaseDxaKernels(); }
 });
+
+test('GPU snapshots resolve edges that use the reverse of a listed crystal transition', async () => {
+  // FCC with HCP stacking-fault layers: the cluster graph lists one direction
+  // of each transition, while tessellation edges also use the reverse ones.
+  const a = 4 / Math.SQRT2, repeat = 6, layers = [0, 1, 2, 0, 1, 2, 0, 1, 0, 2, 1, 2];
+  const shifts = [[0, 0], [2 / 3, 1 / 3], [1 / 3, 2 / 3]], fractional = [];
+  for (let layer = 0; layer < layers.length; layer++) for (let i = 0; i < repeat; i++) for (let j = 0; j < repeat; j++) {
+    fractional.push((i + shifts[layers[layer]][0]) / repeat, (j + shifts[layers[layer]][1]) / repeat, layer / layers.length);
+  }
+  const coordinates = Float64Array.from(fractional), count = coordinates.length / 3;
+  const cell = createCell({ vectors: [repeat * a, 0, 0, -repeat * a / 2, repeat * Math.sqrt(3) * a / 2, 0,
+    0, 0, layers.length * Math.sqrt(2 / 3) * a], triclinic: true });
+  const frame = { fractional: coordinates, cell, positions: fractionalToCartesian(coordinates, cell),
+    ids: Uint32Array.from({ length: count }, (_, index) => index + 1), types: new Uint16Array(count), typeLabels: ['Ni'], properties: [] };
+  try {
+    const expected = await calculateDxa(frame);
+    let snapshot;
+    const staged = await calculateDxa(frame, { gpuEnabled: true }, { verifyGpuClassification: true,
+      classifyDxa: async (value, options) => { snapshot = value; return { regions: options.referenceRegions }; } });
+    assert.deepEqual(staged.stageFallbacks, []);
+    assert.ok(snapshot.transitionCount > 1 && snapshot.transitionCount % 2 === 1, 'each listed transition and its reverse have a slot');
+    for (let slot = 1; slot < snapshot.transitionCount; slot += 2) {
+      // A reverse slot holds its forward slot's two matrices swapped.
+      assert.deepEqual(snapshot.transitions.subarray((slot + 1) * 20, (slot + 1) * 20 + 9), snapshot.transitions.subarray(slot * 20 + 9, slot * 20 + 18));
+      assert.deepEqual(snapshot.transitions.subarray((slot + 1) * 20 + 9, (slot + 1) * 20 + 18), snapshot.transitions.subarray(slot * 20, slot * 20 + 9));
+    }
+    assert.deepEqual(staged.atomStructureTypes, expected.atomStructureTypes);
+    assert.deepEqual(staged.segments, expected.segments);
+  } finally { await releaseDxaKernels(); }
+});
+
+test('threaded native DXA skips the slower WebGPU binary64 stages', async () => {
+  try {
+    const unused = async () => { throw new Error('GPU stages must not run with native threads.'); };
+    const result = await calculateDxa(crystalFrame('fcc', 8), { gpuEnabled: true }, { workerCount: 2, identifyDxa: unused, classifyDxa: unused });
+    assert.equal(result.workerCount, 2); assert.equal(result.backend, 'cpu');
+    assert.equal(result.gpuSkipped, true); assert.equal(result.gpuFallback, false);
+    assert.deepEqual(result.stageFallbacks, []); assert.match(result.fallbackReason, /2 CPU threads/);
+  } finally { await releaseDxaKernels(); }
+});
+
+test('DXA tables larger than one GPU buffer fall back before the snapshot is exported', async () => {
+  const frame = crystalFrame('fcc', 4);
+  try {
+    let calls = 0;
+    const result = await calculateDxa(frame, { gpuEnabled: true }, { gpuBufferLimitBytes: 64,
+      classifyDxa: async () => { calls++; throw new Error('not called'); } });
+    assert.equal(calls, 0);
+    assert.deepEqual(result.stageFallbacks, [{ stage: 'tetrahedra', reason: 'The DXA tables exceed GPU buffer limits; using CPU workers.' }]);
+    assert.equal(result.segments.length, 0);
+    const fits = await calculateDxa(frame, { gpuEnabled: true }, { gpuBufferLimitBytes: 256 * 1024 ** 2, verifyGpuClassification: true,
+      classifyDxa: async (_snapshot, options) => { calls++; return { regions: options.referenceRegions }; } });
+    assert.equal(calls, 1); assert.deepEqual(fits.stageFallbacks, []);
+  } finally { await releaseDxaKernels(); }
+});

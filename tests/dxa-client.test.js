@@ -213,11 +213,12 @@ test('cancellation in the first GPU progress callback retains a serial heap befo
 });
 
 test('DXA preflights snapshot export against the warmed shared GPU memory budget', async () => {
-  const { client, workers } = setup({ gpuBackend: { cacheStatus: { budgetBytes: 128 * 1024 ** 2 },
+  const { client, workers } = setup({ gpuBackend: { cacheStatus: { budgetBytes: 128 * 1024 ** 2, bufferLimitBytes: 64 * 1024 ** 2 },
     classifyDxa: async () => { throw new Error('not called'); } } });
   const request = client.analyze(source(), { gpuEnabled: true });
   await flush(); const worker = workers[0], task = worker.messages[0];
   assert.equal(task.gpuSnapshotBudgetBytes, 128 * 1024 ** 2);
+  assert.equal(task.gpuBufferLimitBytes, 64 * 1024 ** 2);
   worker.emit({ id: task.id, ok: true, result: { segments: [] } }); await request;
   await client.close();
 });

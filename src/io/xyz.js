@@ -1,5 +1,5 @@
 import { cartesianToFractional, createCell, fractionalToCartesian, validateFrame, wrapFractional } from '../data/model.js';
-import { scanTextLines } from './text-lines.js';
+import { isBlankLine, lineText, scanLineBytes } from './text-lines.js';
 
 const ELEMENTS = 'H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og'.split(' ');
 
@@ -8,20 +8,22 @@ export async function indexXyz(blob, onProgress = () => {}, options = {}) {
   const offsets = [];
   let stage = 'count';
   let remaining = 0;
-  for await (const line of scanTextLines(blob, onProgress, options)) {
+  // Atom rows are only counted and checked for content; only count lines
+  // are decoded.
+  await scanLineBytes(blob, (bytes, from, to, start) => {
     if (stage === 'count') {
-      if (!line.text.trim()) continue;
-      remaining = atomCount(line.text);
-      offsets.push(line.start);
+      if (isBlankLine(bytes, from, to)) return;
+      remaining = atomCount(lineText(bytes.subarray(from, to)));
+      offsets.push(start);
       stage = 'comment';
     } else if (stage === 'comment') {
       stage = 'atoms';
     } else {
-      if (!line.text.trim()) throw xyzError(`Frame ${offsets.length} has a blank atom row.`);
+      if (isBlankLine(bytes, from, to)) throw xyzError(`Frame ${offsets.length} has a blank atom row.`);
       remaining -= 1;
       if (!remaining) stage = 'count';
     }
-  }
+  }, onProgress, options);
   if (offsets.length === 0) throw xyzError('The file contains no XYZ frames.');
   if (stage !== 'count') throw xyzError(`Frame ${offsets.length} is truncated; a comment and all declared atom rows are required.`);
   return { offsets, indexMs: performance.now() - startedAt };

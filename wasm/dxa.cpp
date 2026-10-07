@@ -45,6 +45,41 @@ constexpr uint32_t reversedEdge = uint32_t(1) << 31;
 constexpr uint32_t noTransition = std::numeric_limits<uint32_t>::max();
 constexpr int edgeVertices[6][2] = {{0,1},{0,2},{0,3},{1,2},{1,3},{2,3}};
 
+// Pack each tetrahedron's vertices, neighbors and oriented edge indices from
+// the vertex-pair index. The loop runs in its own frame: inlined into the
+// export, which owns destructible temporaries, the build without threads would
+// route every tessellation call through its JS exception trampolines.
+__attribute__((noinline)) bool packTetrahedra(const DelaunayTessellation& tessellation, uint32_t* tetData,
+        size_t tets, size_t vertices, uint32_t atomCount, const uint32_t* starts, const uint64_t* pairs) {
+    const auto orientedEdge = [&](uint32_t from, uint32_t to) -> uint32_t {
+        for (size_t entry = starts[from], end = starts[from + 1]; entry < end; ++entry)
+            if (uint32_t(pairs[entry] >> 32) == to) return uint32_t(pairs[entry]);
+        return 0;
+    };
+    // Each worker writes only its own fixed tetrahedron row; exceptions and
+    // cancellation join every worker before snapshot cleanup/fallback.
+    return parallelForWithProgress(tets, [&](size_t tet) {
+        uint32_t* row = tetData + tet * 16;
+        const bool finite = tessellation.isFiniteCell(tet);
+        row[14] = finite ? 1 : 0;
+        for (int vertex = 0; vertex < 4; ++vertex) {
+            row[vertex] = finite ? tessellation.cellVertex(tet, vertex) : 0;
+            row[4 + vertex] = tessellation.cellAdjacent(tet, vertex);
+            if (row[4 + vertex] >= tets || (finite && row[vertex] >= vertices))
+                throw std::runtime_error("DXA snapshot contains an invalid tessellation index.");
+        }
+        if (!finite) return;
+        uint32_t atoms[4];
+        for (int vertex = 0; vertex < 4; ++vertex) {
+            atoms[vertex] = static_cast<uint32_t>(tessellation.vertexIndex(row[vertex]));
+            if (atoms[vertex] >= atomCount)
+                throw std::runtime_error("DXA snapshot contains an invalid tessellation index.");
+        }
+        for (int edge = 0; edge < 6; ++edge)
+            row[8 + edge] = orientedEdge(atoms[edgeVertices[edge][0]], atoms[edgeVertices[edge][1]]);
+    });
+}
+
 // One whole-frame scientific pipeline. It lives in the existing reusable Wasm
 // heap while JavaScript dispatches the immutable GPU classification stage.
 struct DxaSession {
@@ -118,8 +153,9 @@ struct DxaSession {
 
     size_t transitionCount() const {
         // All self-transitions have the same exact identity operation and share
-        // slot zero. Other directed transitions retain their own exact matrix.
-        return structure->clusterGraph()->clusterTransitions().size() + 1;
+        // slot zero. The graph lists one transition of each pair; edges can use
+        // either direction, so each transition and its reverse get a slot.
+        return 2 * structure->clusterGraph()->clusterTransitions().size() + 1;
     }
     size_t edgeCount() const { return mapping->tessellationEdgeCount() + 1; }
     uint64_t snapshotBytes() const {
@@ -142,9 +178,10 @@ struct DxaSession {
         const size_t vertices = tessellation.numberOfVertices();
         const size_t tets = tessellation.numberOfTetrahedra();
         const size_t edges = edgeCount(), transitions = transitionCount();
-        // Includes the bounded host-side key map used during packing. Reject
-        // before allocating any snapshot arrays; callers can finish on CPU.
-        const uint64_t workingBytes = snapshotBytes() + uint64_t(edges) * 48 +
+        // Includes the temporary vertex-pair index and transition map used
+        // during packing. Reject before allocating any snapshot arrays; callers
+        // can finish on CPU.
+        const uint64_t workingBytes = snapshotBytes() + uint64_t(count + 1) * 4 + uint64_t(edges) * 24 +
             uint64_t(transitions) * 32;
         if (vertices > std::numeric_limits<int32_t>::max() ||
                 tets > std::numeric_limits<int32_t>::max() || edges >= reversedEdge ||
@@ -160,8 +197,8 @@ struct DxaSession {
             const Point3& point = tessellation.vertexPosition(vertex);
             for (int axis = 0; axis < 3; ++axis) vertexData[vertex * 3 + axis] = point[axis];
         }));
-        // Slot zero is the self-transition. Other slots are graph transitions
-        // in their original order, including separately represented reverses.
+        // Slot zero is the self-transition. Each graph transition is followed
+        // by its reverse, whose row holds the same two matrices swapped.
         for (int axis = 0; axis < 3; ++axis) {
             transitionData[axis * 4] = 1;
             transitionData[9 + axis * 4] = 1;
@@ -169,28 +206,32 @@ struct DxaSession {
         transitionData[18] = 1;
         std::unordered_map<const ClusterTransition*, uint32_t> transitionIndices;
         transitionIndices.reserve(transitions);
-        const auto& graphTransitions = structure->clusterGraph()->clusterTransitions();
-        for (size_t index = 0; index < graphTransitions.size(); ++index) {
-            const ClusterTransition* transition = graphTransitions[index];
-            transitionIndices.emplace(transition, static_cast<uint32_t>(index + 1));
-            for (int component = 0; component < 9; ++component) {
-                transitionData[(index + 1) * 20 + component] = transition->tm.elements()[component];
-                transitionData[(index + 1) * 20 + 9 + component] = transition->reverse->tm.elements()[component];
+        uint32_t transitionIndex = 1;
+        for (const ClusterTransition* forward : structure->clusterGraph()->clusterTransitions()) {
+            for (const ClusterTransition* transition : {forward, static_cast<const ClusterTransition*>(forward->reverse)}) {
+                transitionIndices.emplace(transition, transitionIndex);
+                double* row = transitionData.data() + size_t(transitionIndex) * 20;
+                for (int component = 0; component < 9; ++component) {
+                    row[component] = transition->tm.elements()[component];
+                    row[9 + component] = transition->reverse->tm.elements()[component];
+                }
+                row[18] = transition->isSelfTransition() ? 1 : 0;
+                ++transitionIndex;
             }
-            transitionData[(index + 1) * 20 + 18] = transition->isSelfTransition() ? 1 : 0;
         }
         // Edge zero represents every missing/unmapped pair. Existing edge
         // vectors stay in their original reference frame and orientation.
         edgeData[6] = noTransition;
-        std::unordered_map<uint64_t, uint32_t> edgeIndices;
-        edgeIndices.reserve(edges);
+        std::vector<uint32_t> edgeVertices1(edges), edgeVertices2(edges), adjacencyStart(size_t(count) + 2);
         uint32_t edgeIndex = 1;
         mapping->visitTessellationEdges([&](const auto& edge) {
             if ((edgeIndex & 1023) == 0) requireStage(true);
-            const uint32_t first = static_cast<uint32_t>(edge.vertex1);
-            const uint32_t second = static_cast<uint32_t>(edge.vertex2);
-            const uint64_t key = (uint64_t(std::min(first, second)) << 32) | std::max(first, second);
-            edgeIndices.emplace(key, edgeIndex | (first > second ? reversedEdge : 0));
+            if (edge.vertex1 >= size_t(count) || edge.vertex2 >= size_t(count))
+                throw std::runtime_error("DXA snapshot contains an invalid tessellation edge.");
+            edgeVertices1[edgeIndex] = static_cast<uint32_t>(edge.vertex1);
+            edgeVertices2[edgeIndex] = static_cast<uint32_t>(edge.vertex2);
+            ++adjacencyStart[edge.vertex1 + 2];
+            ++adjacencyStart[edge.vertex2 + 2];
             uint32_t* row = edgeData.data() + size_t(edgeIndex) * 8;
             row[6] = noTransition;
             if (edge.hasClusterVector()) {
@@ -208,30 +249,21 @@ struct DxaSession {
         });
         if (edgeIndex != edges)
             throw std::runtime_error("DXA immutable edge count is inconsistent.");
-        // The key map is complete and immutable before any worker reads it.
-        // Each worker writes only its own fixed tetrahedron row; exceptions
-        // and cancellation join every worker before snapshot cleanup/fallback.
-        const auto& packedEdgeIndices = edgeIndices;
-        requireStage(parallelForWithProgress(tets, [&](size_t tet) {
-            uint32_t* row = tetData.data() + tet * 16;
-            const bool finite = tessellation.isFiniteCell(tet);
-            row[14] = finite ? 1 : 0;
-            for (int vertex = 0; vertex < 4; ++vertex) {
-                row[vertex] = finite ? tessellation.cellVertex(tet, vertex) : 0;
-                row[4 + vertex] = tessellation.cellAdjacent(tet, vertex);
-                if (row[4 + vertex] >= tets || (finite && row[vertex] >= vertices))
-                    throw std::runtime_error("DXA snapshot contains an invalid tessellation index.");
-            }
-            if (!finite) return;
-            for (int edge = 0; edge < 6; ++edge) {
-                const uint32_t first = static_cast<uint32_t>(tessellation.vertexIndex(row[edgeVertices[edge][0]]));
-                const uint32_t second = static_cast<uint32_t>(tessellation.vertexIndex(row[edgeVertices[edge][1]]));
-                const uint64_t key = (uint64_t(std::min(first, second)) << 32) | std::max(first, second);
-                const auto found = packedEdgeIndices.find(key);
-                if (found != packedEdgeIndices.end())
-                    row[8 + edge] = found->second ^ (first > second ? reversedEdge : 0);
-            }
-        }));
+        // A pair of vertices has at most one edge. List it under both of its
+        // vertices with the other vertex and its index, flagged from the end
+        // vertex, which traverses it against its stored direction.
+        for (size_t vertex = 2; vertex < adjacencyStart.size(); ++vertex) adjacencyStart[vertex] += adjacencyStart[vertex - 1];
+        std::vector<uint64_t> adjacency(2 * size_t(edges - 1));
+        for (uint32_t edge = 1; edge < edges; ++edge) {
+            const uint32_t first = edgeVertices1[edge], second = edgeVertices2[edge];
+            adjacency[adjacencyStart[first + 1]++] = (uint64_t(second) << 32) | edge;
+            adjacency[adjacencyStart[second + 1]++] = (uint64_t(first) << 32) | edge | reversedEdge;
+        }
+        std::vector<uint32_t>().swap(edgeVertices1);
+        std::vector<uint32_t>().swap(edgeVertices2);
+        // The index is complete and immutable before any worker reads it.
+        requireStage(packTetrahedra(tessellation, tetData.data(), tets, vertices, uint32_t(count),
+            adjacencyStart.data(), adjacency.data()));
         exported = true;
     }
 

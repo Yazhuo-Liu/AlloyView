@@ -1,3 +1,17 @@
+/** GPU bond vectors are float32 differences of float32 positions and cell
+ * images, so their rounding error grows with the coordinate magnitude rather
+ * than the bond length. Allow four float32 ulps of the largest coordinate. */
+export function bondVectorTolerance(frame) {
+  const { vectors, origin } = frame.cell, extent = [0, 0, 0];
+  for (let index = 0; index < frame.fractional.length; index++) extent[index % 3] = Math.max(extent[index % 3], Math.abs(frame.fractional[index]));
+  let scale = 0;
+  for (let axis = 0; axis < 3; axis++) {
+    scale = Math.max(scale, Math.abs(origin?.[axis] ?? 0) + extent[0] * Math.abs(vectors[axis])
+      + extent[1] * Math.abs(vectors[3 + axis]) + extent[2] * Math.abs(vectors[6 + axis]));
+  }
+  return Math.max(3e-5, scale > 0 ? 4 * 2 ** (Math.floor(Math.log2(scale)) - 23) : 0);
+}
+
 /** Compare periodic graphs independent of linked-cell insertion/output order. */
 export function compareGpuBonds(actual, expected, vectorTolerance = 3e-5) {
   if (actual.count !== expected.count) throw new Error(`Bond counts differ: GPU ${actual.count}, CPU ${expected.count}.`);

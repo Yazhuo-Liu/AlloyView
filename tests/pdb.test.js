@@ -55,6 +55,14 @@ test('PDB rejects duplicate serials, invalid cells and malformed model blocks', 
   await assert.rejects(indexPdb(new Blob([`MODEL        1\n${atom()}\n`])), /missing ENDMDL/);
   await assert.rejects(indexPdb(new Blob([`MODEL        1\nENDMDL\n`])), /no atom/);
   await assert.rejects(indexPdb(new Blob([`ENDMDL\n${atom()}`])), /no preceding/);
+  // Record names are the trimmed first six characters of each line's text.
+  for (const chunkSize of [3, 4096]) {
+    const index = text => indexPdb(new Blob([text]), () => {}, { chunkSize });
+    assert.deepEqual((await index('MODEL 1\n\u00a0ATOM\nENDMDL\n')).frames.map(frame => [frame.start, frame.end]), [[0, 22]]);
+    assert.equal((await index(` MODEL 1\n${atom()}\nENDMDL\t\r\n`)).frames[0].end, 19 + atom().length);
+    await assert.rejects(index('MODEL 1\nATOMé\nENDMDL\n'), /no atom/);
+    await assert.rejects(index(`MODEL 1\n${atom()}\n ENDMDL\n`), /missing ENDMDL/);
+  }
 });
 
 test('PDB model indexes snapshot preceding CRYST1 metadata instead of applying a later cell', async () => {

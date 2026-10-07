@@ -283,28 +283,29 @@ function parseExtendedAtoms(lines, start, count, entryCount, noVelocity, auxilia
       continue;
     }
 
-    let values = tokens;
+    let first = 0;
     let rowMass = currentMass;
     let rowSymbol = currentSymbol;
     if (tokens.length === entryCount + 2) {
       rowMass = finiteNumber(tokens[0], `mass on line ${index + 1}`);
       rowSymbol = validateSymbol(tokens[1], index);
-      values = tokens.slice(2);
+      first = 2;
     }
-    if (values.length !== entryCount) {
-      throw cfgError(`Line ${index + 1}: expected ${entryCount} numeric values; found ${values.length} columns.`);
+    if (tokens.length - first !== entryCount) {
+      throw cfgError(`Line ${index + 1}: expected ${entryCount} numeric values; found ${tokens.length - first} columns.`);
     }
     if (rowMass === null || rowSymbol === null) {
       throw cfgError(`Line ${index + 1}: extended CFG data is missing a preceding mass or element/type declaration.`);
     }
-    const numbers = values.map((value) => finiteNumber(value, `line ${index + 1}`));
-    fractional.push(numbers[0], numbers[1], numbers[2]);
+    // Columns are validated in order; a failure discards the partial row.
+    const x = finiteAtomValue(tokens[first], index), y = finiteAtomValue(tokens[first + 1], index), z = finiteAtomValue(tokens[first + 2], index);
+    for (let property = 0; property < propertyData.length; property += 1) {
+      propertyData[property][atom] = finiteAtomValue(tokens[first + 3 + property], index);
+    }
+    fractional.push(x, y, z);
     masses[atom] = rowMass;
     if (!typeMap.has(rowSymbol)) typeMap.set(rowSymbol, typeMap.size);
     types.push(typeMap.get(rowSymbol));
-    for (let property = 0; property < propertyData.length; property += 1) {
-      propertyData[property][atom] = numbers[3 + property];
-    }
     atom += 1;
   }
 
@@ -431,13 +432,22 @@ function addIdentityTwice(eta) {
   return result;
 }
 
+// Fortran exponents (1.0d-3) are rewritten only when present: replace() would
+// return the token unchanged otherwise, so skipping it gives the same number.
 function parseCfgNumber(value) {
-  return Number(value.replace(/[dD]/, 'e'));
+  return Number(value.indexOf('d') < 0 && value.indexOf('D') < 0 ? value : value.replace(/[dD]/, 'e'));
 }
 
 function finiteNumber(value, label) {
   const parsed = parseCfgNumber(value);
   if (!Number.isFinite(parsed)) throw cfgError(`${label} is not a finite number: “${value}”.`);
+  return parsed;
+}
+
+// As finiteNumber(value, `line ${lineIndex + 1}`), building the label only on failure.
+function finiteAtomValue(value, lineIndex) {
+  const parsed = parseCfgNumber(value);
+  if (!Number.isFinite(parsed)) throw cfgError(`line ${lineIndex + 1} is not a finite number: “${value}”.`);
   return parsed;
 }
 

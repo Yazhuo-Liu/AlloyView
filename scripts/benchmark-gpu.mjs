@@ -9,14 +9,15 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
   const results = await evaluate(`(async () => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { parseCfg } = await import('./src/io/cfg.js');
-    const { compareGpuBonds, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, compareGpuPtm, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
+    const { bondVectorTolerance, compareGpuBonds, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, compareGpuPtm, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
     const { cartesianToFractional } = await import('./src/data/model.js');
     const { prepareDisplacements } = await import('./src/analysis/displacement.js');
     const { transformFrame } = await import('./scripts/gpu-fixtures.js');
     const { STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
     const { REFERENCE_STRAIN_FIELDS } = await import('./src/analysis/reference-strain.js');
     const frame = parseCfg(await (await fetch('./examples/NiGB_minimized.cfg')).text(), 'NiGB_minimized.cfg');
-    const cpu = new AnalysisPool(), gpu = new AnalysisPool();
+    // Benchmark the GPU PTM-neighbor kernel itself; the application chooses it only for small CPU pools.
+    const cpu = new AnalysisPool(), gpu = new AnalysisPool({ ptmNeighborBackend: 'gpu' });
     cpu.setGpuEnabled(false); gpu.setGpuEnabled(true);
     const preload = { enabled: ${JSON.stringify(process.argv.includes('--preload'))}, wallMs: 0 };
     const rows = [], ptmPreparation = { wallMs: 0, engine: null };
@@ -96,7 +97,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
           throw new Error(kernel + ' must execute real GPU kernels: ' + (measured.result.fallbackReason ?? measured.result.engine));
         const field = kind === 'coordination' ? 'coordination' : kind === 'rdf' ? 'counts' : kind === 'cna' ? 'structures' : 'localShear';
         const tolerance = kind === 'localShear' ? 3e-5 : 0;
-        const compareResults = (actual, expected) => kind === 'bonds' ? compareGpuBonds(actual, expected)
+        const compareResults = (actual, expected) => kind === 'bonds' ? compareGpuBonds(actual, expected, bondVectorTolerance(inputFrame))
           : kind === 'strain' ? compareGpuFields(actual, expected, STRAIN_FIELDS, 2e-6).maxAbsoluteError
             : kind === 'referenceStrain' ? compareGpuFields(actual, expected, REFERENCE_STRAIN_FIELDS, 2e-6).maxAbsoluteError
             : kind === 'centrosymmetry' ? compareGpuCentrosymmetry(actual, expected, 2e-6).maxAbsoluteError

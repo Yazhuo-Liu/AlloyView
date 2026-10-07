@@ -118,6 +118,17 @@ test('the whole trajectory stays resident and repeated analysis uses its existin
   } finally { runtime.close(); }
 });
 
+test('neighbor indexes evict the least recently used radius', async () => {
+  const { runtime } = fixture();
+  try {
+    const frame = input(0);
+    for (const radius of [3.1, 3.2, 3.1, 3.3, 3.1]) await runtime.prepareNeighbors(frame, radius);
+    // 3.1 was used again before 3.3 arrived, so 3.2 is the one evicted.
+    assert.equal(runtime.neighborIndexBuildCount, 3);
+    assert.deepEqual([...runtime.indexes.keys()].map(key => Number(key.split(':')[1])), [3.3, 3.1]);
+  } finally { runtime.close(); }
+});
+
 test('a constrained cache evicts the furthest frames and follows a moved current frame', async () => {
   const { runtime, allocations } = fixture();
   try {

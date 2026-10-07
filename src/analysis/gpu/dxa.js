@@ -39,15 +39,9 @@ export async function analyzeGpuDxaClassification(runtime, snapshot, { signal, o
     for (const [source, bindings, phase] of [[DXA_ALPHA_SHADER, alphaBindings, 'dxa-alpha'],
       [DXA_REGION_SHADER, regionBindings, 'dxa-elastic-compatibility']]) {
       report(phase);
-      for (let start = 0; start < tetrahedronCount; start += GPU_DXA_BATCH_TETRAHEDRA) {
-        checkSignal(signal);
-        const end = Math.min(start + GPU_DXA_BATCH_TETRAHEDRA, tetrahedronCount);
-        runtime.write(settingsBuffer, new Uint32Array([start, end]), 12);
-        await runtime.run(source, bindings, end - start, { signal, batchSize: 0, updateRange: false,
-          workgroupSize: DXA_WORKGROUP_SIZE });
-        report(phase, end);
-        if (end < tetrahedronCount) { await yieldWorker(); checkSignal(signal); }
-      }
+      await runtime.runSequence(source, bindings, tetrahedronCount, { batch: GPU_DXA_BATCH_TETRAHEDRA, signal,
+        workgroupSize: DXA_WORKGROUP_SIZE, setRange: (start, end) => runtime.write(settingsBuffer, new Uint32Array([start, end]), 12),
+        onProgress: end => report(phase, end) });
     }
     report('dxa-readback');
     const regions = await runtime.read(regionsBuffer, Int32Array, tetrahedronCount, { signal });

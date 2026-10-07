@@ -49,10 +49,12 @@ function getKernel() {
           cache.set(atom, neighbors);
         }
         const count = Math.min(requested, neighbors.length);
+        // Read the heap views per call: Wasm memory growth replaces them.
+        const heapF64 = module.HEAPF64, heapU32 = module.HEAPU32, point = points >> 3, index = indices >> 2;
         for (let i = 0; i < count; i += 1) {
           const n = neighbors[i];
-          module.HEAPF64.set([n.x, n.y, n.z], (points >> 3) + i * 3);
-          module.HEAPU32[(indices >> 2) + i] = n.atom;
+          heapF64[point + i * 3] = n.x; heapF64[point + i * 3 + 1] = n.y; heapF64[point + i * 3 + 2] = n.z;
+          heapU32[index + i] = n.atom;
         }
         return count;
       } });

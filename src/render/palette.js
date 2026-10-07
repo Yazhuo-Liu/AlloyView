@@ -105,8 +105,9 @@ export function colorsByType(frame, hiddenLabels = new Set()) {
     ? [DEFAULT_ATOM_COLOR]
     : frame.typeLabels.map((label, index) => ELEMENT_COLORS[label] ?? TYPE_COLORS[index % TYPE_COLORS.length]);
   for (let atom = 0; atom < frame.types.length; atom += 1) {
-    colors.set(palette[frame.types[atom]], atom * 3);
-    counts[frame.types[atom]] += 1;
+    const type = frame.types[atom], rgb = palette[type];
+    colors[atom * 3] = rgb[0]; colors[atom * 3 + 1] = rgb[1]; colors[atom * 3 + 2] = rgb[2];
+    counts[type] += 1;
   }
   return {
     colors,
@@ -124,7 +125,9 @@ export function colorsByType(frame, hiddenLabels = new Set()) {
 /** Label-based choices remain meaningful when a frame reorders its type IDs. */
 export function visibilityByType(frame, hiddenLabels) {
   if (hiddenLabels.size === 0) return null;
-  return Uint8Array.from(frame.types, id => hiddenLabels.has(frame.typeLabels[id]) ? 0 : 255);
+  const hidden = frame.typeLabels.map(label => hiddenLabels.has(label)), mask = new Uint8Array(frame.types.length);
+  for (let atom = 0; atom < mask.length; atom++) mask[atom] = hidden[frame.types[atom]] ? 0 : 255;
+  return mask;
 }
 
 export function colorsByCategory(property, hiddenTypes = new Set()) {
@@ -201,8 +204,8 @@ export function colorsByProperty(property, limits = null, scheme = 'atomeye', hi
   const colors = new Uint8Array(property.data.length * 3);
   for (let atom = 0; atom < property.data.length; atom += 1) {
     const value = property.data[atom];
-    const normalized = Number.isFinite(value) && span > 0 && !uniform ? (value - minimum) / span : 0.5;
-    colors.set(Number.isFinite(value) ? sampleColorMap(normalized, colorMap.stops) : [130, 130, 130], atom * 3);
+    if (!Number.isFinite(value)) { colors[atom * 3] = colors[atom * 3 + 1] = colors[atom * 3 + 2] = 130; continue; }
+    writeColorMap(span > 0 && !uniform ? (value - minimum) / span : 0.5, colorMap.stops, colors, atom * 3);
   }
   return {
     colors,
@@ -273,7 +276,9 @@ export function colorMapGradient(stops) {
   )).join(', ')})`;
 }
 
-function sampleColorMap(value, stops) {
+// Interpolated color-map RGB written at `offset`; runs once per atom, so it
+// stores into the output instead of returning a new array.
+function writeColorMap(value, stops, output, offset) {
   const clamped = Math.max(0, Math.min(1, value));
   let right = 1;
   while (right < stops.length && stops[right][0] < clamped) right += 1;
@@ -281,7 +286,8 @@ function sampleColorMap(value, stops) {
   right = Math.min(stops.length - 1, right);
   const span = stops[right][0] - stops[left][0];
   const amount = span > 0 ? (clamped - stops[left][0]) / span : 0;
-  return [0, 1, 2].map((component) => Math.round(
-    stops[left][component + 1] * (1 - amount) + stops[right][component + 1] * amount,
-  ));
+  const from = stops[left], to = stops[right];
+  for (let component = 0; component < 3; component++) {
+    output[offset + component] = Math.round(from[component + 1] * (1 - amount) + to[component + 1] * amount);
+  }
 }

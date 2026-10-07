@@ -1,5 +1,6 @@
 import { cellFaceHeights, determinant3, invert3 } from '../data/model.js';
 import { atomRange, NeighborSearch } from './neighbors.js';
+import { yieldToMain } from '../task-yield.js';
 
 export const REFERENCE_STRAIN_FIELDS = Object.freeze([
   'referenceShearStrain', 'referenceHydrostaticStrain', 'referenceVolumeChange',
@@ -97,10 +98,6 @@ function throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException('Analysis cancelled.', 'AbortError');
 }
 
-function yieldToMain() {
-  return typeof globalThis.scheduler?.yield === 'function' ? globalThis.scheduler.yield()
-    : new Promise(resolve => setTimeout(resolve, 0));
-}
 
 /** Unweighted local least-squares deformation: r(current) ~= F r(reference).
  * Neighbors and cutoff belong to the reference configuration. Image changes

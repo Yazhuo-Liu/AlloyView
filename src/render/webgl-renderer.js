@@ -76,6 +76,9 @@ void main() {
     }
   }
   vVisible = aVisible > 0.5 && sliceVisible ? 1 : 0;
+  // Filtered or sliced-away atoms are dropped before rasterization rather than
+  // shading every covered pixel only to discard it.
+  if (vVisible == 0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
   bool selected = gl_InstanceID == uSelected;
   for (int item = 0; item < ${SELECTION_HIGHLIGHT_COUNT}; item++) selected = selected || gl_InstanceID == uSelectedAtoms[item];
   vSelected = selected ? 1 : 0;
@@ -1100,6 +1103,9 @@ export class WebGLRenderer {
     return (this.replicas ?? [{ indices: SOURCE_REPLICA }]).some(replica => this.isAtomVisible(atom, replica.indices));
   }
 
+  /** Nearest visible atom under the pointer, in front of the camera. This
+   * visits every displayed atom, so the loop keeps the projection and slice
+   * tests in scalars; the arithmetic matches transformPoint/pointVisible. */
   pick(clientX, clientY) {
     this.lastPick = null;
     if (!this.frame) return -1;
@@ -1109,30 +1115,48 @@ export class WebGLRenderer {
     const y = clientY - rectangle.top;
     let closest = -1;
     let closestDepth = Number.NEGATIVE_INFINITY;
-    const positions = this.displayPositions;
+    const positions = this.displayPositions, visibility = this.visibility, radii = this.atomRadii;
+    const v = this.viewMatrix, p = this.projectionMatrix, width = rectangle.width, height = rectangle.height;
+    const planes = this.sliceMode === 'planes', vectors = this.frame.cell.vectors;
+    const slices = planes ? this.slices.filter(slice => slice.enabled) : [];
+    const fractional = this.displayFractional ?? this.frame.fractional, axis = this.sliceAxis;
+    const repetition = this.repetitions?.[axis] ?? 1;
     for (const replica of this.replicas ?? [{ indices: [0, 0, 0], offset: [0, 0, 0] }]) {
+      const [ia, ib, ic] = replica.indices, [ox, oy, oz] = replica.offset;
       for (let atom = 0; atom < this.atomCount; atom += 1) {
-        if (!this.isAtomVisible(atom, replica.indices)) continue;
+        if (visibility?.[atom] === 0) continue;
         const index = atom * 3;
-        const view = transformPoint(this.viewMatrix, positions[index] + replica.offset[0],
-          positions[index + 1] + replica.offset[1], positions[index + 2] + replica.offset[2]);
-        if (view[2] >= 0) continue;
-        const clip = transformPoint(this.projectionMatrix, view[0], view[1], view[2]);
-        if (clip[3] <= 0) continue;
-        const screenX = (clip[0] / clip[3] * 0.5 + 0.5) * rectangle.width;
-        const screenY = (0.5 - clip[1] / clip[3] * 0.5) * rectangle.height;
-        const radius = (this.atomRadii?.[atom] ?? 0.7) * this.radiusScale;
-        const edgeClip = transformPoint(this.projectionMatrix, view[0] + radius, view[1], view[2]);
-        const radiusPixels = Math.max(3, Math.abs(edgeClip[0] / edgeClip[3] - clip[0] / clip[3]) * rectangle.width * 0.5);
+        if (planes) {
+          const px = positions[index] + ia * vectors[0] + ib * vectors[3] + ic * vectors[6];
+          const py = positions[index + 1] + ia * vectors[1] + ib * vectors[4] + ic * vectors[7];
+          const pz = positions[index + 2] + ia * vectors[2] + ib * vectors[5] + ic * vectors[8];
+          let shown = true;
+          for (const slice of slices) {
+            const distance = slice.normal[0] * px + slice.normal[1] * py + slice.normal[2] * pz - slice.position;
+            if (slice.side === 'positive' ? distance < -SLICE_EPSILON : distance > SLICE_EPSILON) { shown = false; break; }
+          }
+          if (!shown) continue;
+        } else if (!((fractional[index + axis] + replica.indices[axis]) / repetition <= this.sliceMaximum)) continue;
+        const wx = positions[index] + ox, wy = positions[index + 1] + oy, wz = positions[index + 2] + oz;
+        const viewX = v[0] * wx + v[4] * wy + v[8] * wz + v[12];
+        const viewY = v[1] * wx + v[5] * wy + v[9] * wz + v[13];
+        const viewZ = v[2] * wx + v[6] * wy + v[10] * wz + v[14];
+        if (viewZ >= 0) continue;
+        const clipX = p[0] * viewX + p[4] * viewY + p[8] * viewZ + p[12];
+        const clipY = p[1] * viewX + p[5] * viewY + p[9] * viewZ + p[13];
+        const clipW = p[3] * viewX + p[7] * viewY + p[11] * viewZ + p[15];
+        if (clipW <= 0) continue;
+        const screenX = (clipX / clipW * 0.5 + 0.5) * width;
+        const screenY = (0.5 - clipY / clipW * 0.5) * height;
+        const edgeX = viewX + (radii?.[atom] ?? 0.7) * this.radiusScale;
+        const edgeClipX = p[0] * edgeX + p[4] * viewY + p[8] * viewZ + p[12];
+        const edgeClipW = p[3] * edgeX + p[7] * viewY + p[11] * viewZ + p[15];
+        const radiusPixels = Math.max(3, Math.abs(edgeClipX / edgeClipW - clipX / clipW) * width * 0.5);
         const distanceSquared = (x - screenX) ** 2 + (y - screenY) ** 2;
-        if (distanceSquared <= radiusPixels ** 2 && view[2] > closestDepth) {
+        if (distanceSquared <= radiusPixels ** 2 && viewZ > closestDepth) {
           closest = atom;
-          closestDepth = view[2];
-          this.lastPick = {
-            index: atom,
-            replica: Array.from(replica.indices),
-            position: [positions[index] + replica.offset[0], positions[index + 1] + replica.offset[1], positions[index + 2] + replica.offset[2]],
-          };
+          closestDepth = viewZ;
+          this.lastPick = { index: atom, replica: Array.from(replica.indices), position: [wx, wy, wz] };
         }
       }
     }

@@ -1,4 +1,5 @@
 import { FrameCache } from './data/frame-cache.js';
+import { findAtomIndex } from './appearance.js';
 import { chooseFrameCachePolicy, estimateFrameBytes } from './data/cache-policy.js';
 import { physicalReplicationPlan, replicateFrame } from './data/replicate.js';
 import { normalizeRepetitions } from './render/replication.js';
@@ -366,7 +367,7 @@ sliceControls = initializeSliceControls({
     .filter(point => point.position) ?? [],
   onPickedAtomsChange: (ids) => {
     const frame = state.frame;
-    const indices = frame && renderer.frame === frame ? ids.map(id => frame.ids.findIndex(value => value === id))
+    const indices = frame && renderer.frame === frame ? ids.map(id => frame.ids.indexOf(id))
       .filter(index => index >= 0) : [];
     renderer.setSliceSelectedAtoms(indices);
     atomEyeTools?.syncComparison();
@@ -429,7 +430,7 @@ atomEyeTools = initializeAtomEyeTools({
     }
     return topologyTools?.getPropertyKind(name) ?? null;
   },
-  getSelectedIndex: () => state.selectedId === null || !state.frame ? -1 : state.frame.ids.findIndex(id => String(id) === String(state.selectedId)),
+  getSelectedIndex: () => state.selectedId === null || !state.frame ? -1 : findAtomIndex(state.frame.ids, state.selectedId),
   selectAtom: handleAtomPick,
   getSelectionGroups: () => state.selectionGroups.groups,
   refresh: () => { if (state.frame) { refreshColorOptions(); applyColors(); updateSelectionPanel(); } },
@@ -1667,7 +1668,7 @@ function displayedAtomPoint(id, replicaIndices = [0, 0, 0]) {
   if (id === null || id === undefined || !state.frame || !renderer.displayPositions) return null;
   const counts = displayRepetitions();
   if (replicaIndices.length !== 3 || replicaIndices.some((value, axis) => !Number.isInteger(value) || value < 0 || value >= counts[axis])) return null;
-  const index = state.frame.ids.findIndex(value => value === id);
+  const index = state.frame.ids.indexOf(id);
   if (index < 0) return null;
   const point = Array.from(renderer.displayPositions.slice(index * 3, index * 3 + 3));
   for (let axis = 0; axis < 3; axis++) {
@@ -1714,7 +1715,7 @@ function updatePeriodicOrigin() {
 
 function centerPeriodicOriginOnSelected() {
   if (!state.frame || state.selectedId === null) return;
-  const index = state.frame.ids.findIndex(id => id === state.selectedId);
+  const index = state.frame.ids.indexOf(state.selectedId);
   if (index < 0) return;
   setPeriodicOrigin([0, 1, 2].map(axis => state.frame.cell.pbc[axis] ? state.frame.fractional[index * 3 + axis] - 0.5 : 0));
 }
@@ -2543,7 +2544,7 @@ function restoreSelection() {
     updateSelectionPanel();
     return;
   }
-  const index = state.frame.ids.findIndex((id) => id === state.selectedId);
+  const index = state.frame.ids.indexOf(state.selectedId);
   if (index < 0) {
     state.selectedId = null;
     renderer.setSelected(-1);
@@ -2563,7 +2564,7 @@ function restoreSelection() {
 
 function updateSelectionPanel(index = null) {
   if (index === null && state.selectedId !== null && state.frame) {
-    const found = state.frame.ids.findIndex((id) => id === state.selectedId);
+    const found = state.frame.ids.indexOf(state.selectedId);
     if (found >= 0) index = found;
   }
   if (index !== null && !renderer.isAnyReplicaVisible(index)) {
@@ -2696,7 +2697,8 @@ function renderLegend(legend) {
         if (checkbox.checked) hidden.delete(key);
         else hidden.add(key);
         row.classList.toggle('is-hidden', !checkbox.checked);
-        applyScalarVisibility(paletteForCurrentMode().legend);
+        // Visibility edits keep the displayed legend; recoloring every atom is unnecessary.
+        applyScalarVisibility(currentColorLegend ?? paletteForCurrentMode().legend);
         atomEyeTools.syncComparison();
       });
       row.append(checkbox);
@@ -2724,7 +2726,8 @@ function renderLegend(legend) {
           checkbox.checked = checked;
           row.classList.toggle('is-hidden', !checked);
         }
-        applyScalarVisibility(paletteForCurrentMode().legend);
+        // Visibility edits keep the displayed legend; recoloring every atom is unnecessary.
+        applyScalarVisibility(currentColorLegend ?? paletteForCurrentMode().legend);
         atomEyeTools.syncComparison();
       });
       actions.append(button);
@@ -2835,7 +2838,7 @@ function renderLegend(legend) {
     visibilityCheckbox.addEventListener('change', () => {
       interruptConfigurationRestore('a color visibility change');
       scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
-      applyScalarVisibility(paletteForCurrentMode().legend);
+      applyScalarVisibility(currentColorLegend ?? paletteForCurrentMode().legend);
       atomEyeTools.syncComparison();
     });
     automatic.addEventListener('click', () => {
@@ -2877,7 +2880,13 @@ function formatEditableNumber(value) {
   return String(value);
 }
 
+let axisTriadKey = '';
 function updateAxisTriad(directions) {
+  // Every render reports the camera, including frame changes and recoloring
+  // that leave it still. The triad depends only on these three directions.
+  const key = ['x', 'y', 'z'].map(axis => `${directions[axis].x},${directions[axis].y},${directions[axis].depth}`).join(';');
+  if (key === axisTriadKey) return;
+  axisTriadKey = key;
   const origin = 48;
   const length = 35;
   const renderOrder = [];

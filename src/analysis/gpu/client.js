@@ -4,7 +4,7 @@ const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
   frameCount: 0, currentIndex: 0, budgetBytes: 0, allocatedBytes: 0, residentBytes: 0, frameBytes: 0, workspaceBytes: 0,
   preparedVoronoiFrameIds: [], preparedVoronoiFrameIndexes: [], voronoiWorkspaceAtoms: 0,
-  neighborIndexCount: 0, neighborIndexBuildCount: 0, voronoiKernelWarmupCount: 0 };
+  neighborIndexCount: 0, neighborIndexBuildCount: 0, voronoiKernelWarmupCount: 0, bufferLimitBytes: 0 };
 
 /** Keep one worker/device alive, and copy only the task currently being sent. */
 export class GpuAnalysisClient {
@@ -410,7 +410,7 @@ async function copyArray(source, task) {
   }
   return result;
 }
-function yieldToMain() { return new Promise((resolve) => setTimeout(resolve, 0)); }
 function abortError() { return new DOMException('Analysis cancelled.', 'AbortError'); }
 import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult } from '../voronoi-selection.js';
 import { gpuPreparationKinds } from './preparation.js';
+import { yieldToMain } from '../../task-yield.js';

@@ -13,21 +13,20 @@ const MAXIMUM_INTEGER_BANDS = 64;
 export function scalarLegendHistogram(data, minimum, maximum, bins = LEGEND_HISTOGRAM_BINS) {
   const cached = cache.get(data);
   if (cached && cached.minimum === minimum && cached.maximum === maximum && cached.bins === bins) return cached;
-  const span = maximum - minimum;
-  let below = 0, above = 0, integer = true;
+  const span = maximum - minimum, first = Math.ceil(minimum), last = Math.floor(maximum);
+  // Count both band layouts in one pass; integer bands are kept only if every
+  // in-range value is an integer and few enough values are possible.
+  const integerCandidate = last >= first && last - first < MAXIMUM_INTEGER_BANDS;
+  const bands = new Uint32Array(bins), integers = integerCandidate ? new Uint32Array(last - first + 1) : null;
+  let below = 0, above = 0, integer = integerCandidate;
   for (const value of data) {
     if (!Number.isFinite(value)) continue;
-    if (value < minimum) below++;
-    else if (value > maximum) above++;
-    else if (integer && !Number.isInteger(value)) integer = false;
+    if (value < minimum) { below++; continue; }
+    if (value > maximum) { above++; continue; }
+    bands[span > 0 ? Math.min(bins - 1, Math.floor((value - minimum) / span * bins)) : 0]++;
+    if (integer) { if (Number.isInteger(value)) integers[value - first]++; else integer = false; }
   }
-  const first = Math.ceil(minimum), last = Math.floor(maximum);
-  integer &&= last >= first && last - first < MAXIMUM_INTEGER_BANDS;
-  const counts = new Uint32Array(integer ? last - first + 1 : bins);
-  for (const value of data) {
-    if (!(value >= minimum && value <= maximum)) continue;
-    counts[integer ? value - first : span > 0 ? Math.min(bins - 1, Math.floor((value - minimum) / span * bins)) : 0]++;
-  }
+  const counts = integer ? integers : bands;
   let peak = 0;
   for (const count of counts) peak = Math.max(peak, count);
   const result = { minimum, maximum, bins, counts, below, above, peak, integer, first };

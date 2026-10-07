@@ -99,6 +99,8 @@ void main() {
   shown = shown && sliceVisible(start, firstFractional, uReplicaIndex);
   if (!uVectorMode) shown = shown && sliceVisible(start + delta, secondFractional, secondReplica);
   vVisible = shown ? 1 : 0;
+  // Hidden bonds and arrows are dropped before rasterization.
+  if (!shown) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 }`;
 
 const FRAGMENT = `#version 300 es

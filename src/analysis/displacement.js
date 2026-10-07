@@ -1,5 +1,6 @@
 import { cellFaceHeights, fractionalToCartesian, invert3 } from '../data/model.js';
 import { createReferenceMappingAsync } from './reference-strain.js';
+import { yieldToMain } from '../task-yield.js';
 
 const MAX_IMAGE_CANDIDATES = 100_000;
 const derivedCartesianPositions = new WeakMap();
@@ -231,7 +232,3 @@ function throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException('Displacement cancelled.', 'AbortError');
 }
 
-function yieldToMain() {
-  return typeof globalThis.scheduler?.yield === 'function' ? globalThis.scheduler.yield()
-    : new Promise(resolve => setTimeout(resolve, 0));
-}

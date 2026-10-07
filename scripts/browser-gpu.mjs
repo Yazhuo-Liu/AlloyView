@@ -10,20 +10,21 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
     const { AnalysisPool } = await import('./src/analysis/analysis-pool.js');
     const { crystalFrame } = await import('./tests/helpers/crystals.js');
     const { createCell, fractionalToCartesian } = await import('./src/data/model.js');
-    const { compareGpuBonds, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, compareGpuPreparedNeighbors, compareGpuPtm, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
+    const { bondVectorTolerance, compareGpuBonds, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, compareGpuPreparedNeighbors, compareGpuPtm, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
     const { cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures, idealStrainFixtures } = await import('./scripts/gpu-fixtures.js');
     const { prepareDisplacements } = await import('./src/analysis/displacement.js');
     const { NeighborSearch } = await import('./src/analysis/neighbors.js');
     const { calculatePtm } = await import('./src/analysis/ptm.js');
     const { STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
     const { REFERENCE_STRAIN_FIELDS } = await import('./src/analysis/reference-strain.js');
-    window.gpuTests = { AnalysisPool, crystalFrame, createCell, fractionalToCartesian, compareGpuBonds, compareGpuFields,
+    window.gpuTests = { AnalysisPool, crystalFrame, createCell, fractionalToCartesian, bondVectorTolerance, compareGpuBonds, compareGpuFields,
       compareGpuCentrosymmetry, compareGpuDisplacements, compareGpuPreparedNeighbors, compareGpuPtm, prepareDisplacements, snapshotGpuInputs, NeighborSearch, calculatePtm,
       cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures, idealStrainFixtures,
       STRAIN_FIELDS, REFERENCE_STRAIN_FIELDS, rows: [] };
     window.gpuTests.cpu = new AnalysisPool();
     window.gpuTests.cpu.setGpuEnabled(false);
-    window.gpuTests.gpu = new AnalysisPool();
+    // These checks validate the GPU PTM-neighbor stage on any host size.
+    window.gpuTests.gpu = new AnalysisPool({ ptmNeighborBackend: 'gpu' });
     window.gpuTests.gpu.setGpuEnabled(true);
     window.gpuTests.check = (condition, message) => { if (!condition) throw new Error(message); };
     window.gpuTests.isGpu = result => result.backend === 'gpu' || /webgpu/i.test(result.engine ?? '');
@@ -72,7 +73,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
       const domainComparison = parameters.kind === 'ptmNeighbors' ? window.gpuTests.compareGpuPreparedNeighbors(actual, expected)
         : parameters.kind === 'centrosymmetry' ? window.gpuTests.compareGpuCentrosymmetry(actual, expected, tolerance)
         : parameters.kind === 'displacement' ? window.gpuTests.compareGpuDisplacements(actual, expected, tolerance) : null;
-      let maxAbsoluteError = parameters.kind === 'bonds' ? window.gpuTests.compareGpuBonds(actual, expected)
+      let maxAbsoluteError = parameters.kind === 'bonds' ? window.gpuTests.compareGpuBonds(actual, expected, window.gpuTests.bondVectorTolerance(frame))
         : tensorComparison ? tensorComparison.maxAbsoluteError
           : domainComparison ? domainComparison.maxAbsoluteError
           : window.gpuTests.compare(actual[field], expected[field], tolerance);
@@ -498,7 +499,7 @@ async function runGpuPreloadChecks({ evaluate }) {
   return evaluate(`(async () => {
     const { AnalysisPool, crystalFrame, check, compare, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements,
       prepareDisplacements, compareGpuPreparedNeighbors, REFERENCE_STRAIN_FIELDS } = window.gpuTests;
-    const gpu = new AnalysisPool(), cpu = new AnalysisPool();
+    const gpu = new AnalysisPool({ ptmNeighborBackend: 'gpu' }), cpu = new AnalysisPool();
     cpu.setGpuEnabled(false); gpu.setGpuEnabled(true);
     try {
       const started = performance.now();
@@ -645,11 +646,12 @@ async function runApplicationSmoke({ evaluate, call }) {
     const { calculateReferenceStrain, REFERENCE_STRAIN_FIELDS } = await import('./src/analysis/reference-strain.js');
     const { calculateAtomicStrain, STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
     const { compareGpuArrays, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
-    const analyze = AnalysisPool.prototype.analyze, setVectors = WebGLRenderer.prototype.setVectors;
+    const analyze = AnalysisPool.prototype.analyze, setVectorFields = WebGLRenderer.prototype.setVectorFields;
     window.applicationGpuChecks = { rows: [], adaptive: null, arrows: null };
-    window.restoreApplicationGpuHooks = () => { AnalysisPool.prototype.analyze = analyze; WebGLRenderer.prototype.setVectors = setVectors; };
-    WebGLRenderer.prototype.setVectors = function(vectors, options) {
-      const result = setVectors.call(this, vectors, options);
+    window.restoreApplicationGpuHooks = () => { AnalysisPool.prototype.analyze = analyze; WebGLRenderer.prototype.setVectorFields = setVectorFields; };
+    // The application draws every arrow field through setVectorFields.
+    WebGLRenderer.prototype.setVectorFields = function(fields = []) {
+      const result = setVectorFields.call(this, fields), vectors = fields[0]?.vectors ?? null;
       if (this.canvas.id === 'viewport') window.applicationGpuChecks.arrows = vectors ? { type: vectors.constructor.name, components: vectors.length,
         primitives: this.primitiveLayer?.vectorInstances?.length ?? null, glError: this.gl.getError() } : null;
       return result;
@@ -742,7 +744,10 @@ async function runApplicationSmoke({ evaluate, call }) {
   })()`);
   await waitFor(`document.getElementById('strain-state').textContent === 'Calculated' && window.applicationGpuChecks.rows.some(row => row.kind === 'strain' && row.freshFit && row.gpu)`, 'fresh ideal strain GPU neighbor/reference/tensor routing');
   const idealRouting = [await evaluate('window.applicationGpuChecks.rows.filter(row => row.kind === "strain").at(-1)')];
-  assert.equal(idealRouting[0].neighborBackend, 'gpu'); assert.equal(idealRouting[0].ptmBackend, 'cpu');
+  // The application prepares PTM neighbors on the GPU only for small CPU pools.
+  const appNeighborBackend = await evaluate(`import('./src/analysis/cpu-budget.js').then(({ cpuWorkerLimit }) =>
+    import('./src/analysis/analysis-pool.js').then(({ GPU_PTM_NEIGHBOR_MAX_WORKERS }) => cpuWorkerLimit() <= GPU_PTM_NEIGHBOR_MAX_WORKERS ? 'gpu' : 'cpu'))`);
+  assert.equal(idealRouting[0].neighborBackend, appNeighborBackend); assert.equal(idealRouting[0].ptmBackend, 'cpu');
   assert.equal(idealRouting[0].referenceBackend, 'gpu'); assert.equal(idealRouting[0].tensorBackend, 'gpu');
   assert.equal(await evaluate('document.getElementById("legend-color-mode").value'), 'property:atomicShearStrain');
   let beforeIdeal = await evaluate('window.applicationGpuChecks.rows.length');
@@ -1027,7 +1032,7 @@ async function runBuiltIdealChecks({ evaluate }) {
     const { compareGpuFields, compareGpuPtm } = await import('./scripts/gpu-comparison.js');
     const NativeWorker = window.Worker, workerUrls = [];
     window.Worker = class extends NativeWorker { constructor(url, options) { workerUrls.push(String(url)); super(url, options); } };
-    const cpu = new AnalysisPool(), gpu = new AnalysisPool(); cpu.setGpuEnabled(false); gpu.setGpuEnabled(true);
+    const cpu = new AnalysisPool(), gpu = new AnalysisPool({ ptmNeighborBackend: 'gpu' }); cpu.setGpuEnabled(false); gpu.setGpuEnabled(true);
     try {
       const frame = crystalFrame('fcc', 3, 3.52), parameters = { kind: 'strain', references: [{ structure: 1, a: 3.52 }], flags: 255, rmsdCutoff: .1 };
       const fresh = await gpu.analyze(frame, parameters), expected = await cpu.analyze(frame, parameters);
