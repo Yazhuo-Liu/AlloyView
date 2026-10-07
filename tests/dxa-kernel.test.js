@@ -52,7 +52,7 @@ test('rotated perfect FCC control and a failed thin cell do not poison a reused 
   const recovered = await calculateDxa(crystalFrame('fcc', 4), { gpuEnabled: true });
   assert.equal(recovered.segments.length, 0);
   assert.equal(recovered.backend, 'cpu');
-  assert.equal(recovered.gpuFallback, true);
+  assert.equal(Object.hasOwn(recovered.parameters, 'gpuEnabled'), false, 'legacy GPU preferences do not change recovered CPU execution');
 });
 
 test('real DXA preserves a strained translated triclinic FCC lattice and an isolated vacancy', async () => {

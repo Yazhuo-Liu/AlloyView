@@ -22,7 +22,7 @@ class Element {
   dispatch(name) { this.listeners.get(name)?.({ target: this }); }
 }
 
-function harness(t) {
+function harness(t, { gpuPreference } = {}) {
   const previousDocument = globalThis.document;
   const ids = ['dxa-lattice', 'dxa-trial-length', 'dxa-stretchability', 'dxa-smoothing',
     'dxa-point-interval', 'dxa-perfect-only', 'dxa-line-radius', 'run-dxa', 'cancel-dxa',
@@ -31,7 +31,7 @@ function harness(t) {
   globalThis.document = { getElementById: id => fields[id], createElement: tag => new Element(tag) };
   t.after(() => { globalThis.document = previousDocument; });
   let frame = { ids: new Uint32Array([1, 2, 3, 4]), properties: [{ name: 'coordination', data: new Uint8Array([12, 12, 12, 12]) }] };
-  let version = 'source:0', gpuEnabled = true, colorMode = 'type', colorChoiceVersion = 0;
+  let version = 'source:0', colorMode = 'type', colorChoiceVersion = 0;
   const pending = [], enabledTools = new Set(), draws = [], notifications = [], resultChanges = [];
   const client = {
     releases: 0,
@@ -44,7 +44,9 @@ function harness(t) {
     setDislocationNetwork(network, settings) { this.network = network; this.settings = settings; draws.push({ network, settings }); } };
   const tools = initializeDxaTools({ renderer, client,
     tools: { setToolEnabled(name, enabled) { if (enabled) enabledTools.add(name); else enabledTools.delete(name); } },
-    getFrame: () => frame, getSourceVersion: () => version, getGpuEnabled: () => gpuEnabled,
+    getFrame: () => frame, getSourceVersion: () => version,
+    // An obsolete preference callback must never affect the CPU-only tool.
+    ...(gpuPreference ? { getGpuEnabled: gpuPreference } : {}),
     getColorMode: () => colorMode, getColorChoiceVersion: () => colorChoiceVersion,
     onResultsChange(change) {
       resultChanges.push(change);
@@ -57,7 +59,6 @@ function harness(t) {
     getFrame: () => frame,
     getColorMode: () => colorMode,
     setColorMode(value) { colorMode = value; colorChoiceVersion++; },
-    setGpuEnabled(value) { gpuEnabled = value; },
     setFrame(value, sourceVersion = version) { frame = value; version = sourceVersion; },
   };
 }
@@ -65,7 +66,7 @@ function harness(t) {
 function network(length = 4) {
   return { segments: [{ id: 0, familyId: 'perfect', points: new Float64Array([0, 0, 0, length, 0, 0]) }],
     counts: { perfect: 1 }, totalLength: length, density: length / 1000, elapsedMs: 16, engine: 'Wasm CPU',
-    backend: 'cpu', gpuFallback: true };
+    backend: 'cpu', workerCount: 1 };
 }
 
 function structureNetwork(values = [0, 1, 2, 3], segments = []) {
@@ -182,7 +183,7 @@ for (const [change, version] of [['source', 'new-source:0'], ['physical replicat
     const updated = h.tools.onFrame();
     assert.equal(first.options.signal.aborted, true);
     assert.equal(h.pending[1].inputFrame, replacement);
-    first.options.onProgress({ phase: 'obsolete', completedStages: 11, totalStages: 12 });
+    first.options.onProgress({ phase: 'obsolete', completedStages: 11, totalStages: 11 });
     assert.doesNotMatch(h.fields['dxa-status'].textContent, /obsolete/);
     first.resolve(network(20));
     assert.equal(await old, false);
@@ -209,7 +210,8 @@ test('line family visibility, colors, and radius redraw without changing atom co
   assert.equal(h.renderer.atomColors, atomColors);
   assert.equal(h.pending.length, 1);
   assert.match(h.fields['dxa-summary'].textContent, /1 segments.*4\.0000 Å/);
-  assert.match(h.fields['dxa-status'].textContent, /Wasm CPU.*CPU fallback/);
+  assert.match(h.fields['dxa-status'].textContent, /Wasm CPU.*1 thread/);
+  assert.doesNotMatch(h.fields['dxa-status'].textContent, /fallback/);
 });
 
 test('same-frame results can be reused, while Cancel removes all cached DXA networks', async t => {
@@ -224,36 +226,76 @@ test('same-frame results can be reused, while Cancel removes all cached DXA netw
   assert.equal(h.renderer.network.totalLength, 8);
 });
 
-test('DXA displays the actual GPU stage and mixed backend without claiming CPU fallback', async t => {
+test('DXA reports automatic CPU thread counts and eleven native stages', async t => {
   const h = harness(t), task = h.tools.run();
-  h.pending[0].options.onProgress({ phase: 'dxa-local-neighbors', backend: 'gpu', workerCount: 1,
-    completedStages: 0, totalStages: 11, completedAtoms: 0, processedAtoms: 2048, totalAtoms: 4096 });
-  assert.match(h.fields['dxa-status'].textContent, /GPU.*2,048 \/ 4,096 atoms/);
-  h.pending[0].options.onProgress({ phase: 'tetrahedron-alpha', backend: 'gpu', workerCount: 4,
-    completedStages: 7, totalStages: 11, completedTetrahedra: 400, totalTetrahedra: 1200 });
-  assert.match(h.fields['dxa-status'].textContent, /GPU.*400 \/ 1,200 tetrahedra/);
-  assert.doesNotMatch(h.fields['dxa-status'].textContent, /CPU|threads/);
-  h.pending[0].resolve({ ...network(), backend: 'hybrid', engine: 'Wasm CPU + WebGPU',
-    gpuFallback: false, gpuStages: ['tetrahedron-alpha', 'elastic-compatibility'],
-    stageFallbacks: [{ stage: 'local', reason: 'GPU local precision limit' }] });
+  assert.match(h.fields['dxa-status'].textContent, /Preparing CPU DXA/);
+  assert.equal('gpuEnabled' in h.pending[0].parameters, false);
+  h.pending[0].options.onProgress({ phase: 'local-structures', backend: 'cpu', workerCount: 4, completedStages: 2 });
+  assert.match(h.fields['dxa-status'].textContent, /local structures.*CPU.*4 threads.*2 \/ 11 stages/);
+  h.pending[0].options.onProgress({ phase: 'collecting', backend: 'cpu', workerCount: 4, completedStages: 11, totalStages: 11 });
+  assert.match(h.fields['dxa-status'].textContent, /CPU.*4 threads.*11 \/ 11 stages/);
+  h.pending[0].resolve({ ...network(), workerCount: 4, engine: 'Wasm CPU · 4 threads',
+    stageTimings: [{ phase: 'local-structures', elapsedMs: 80 }, { phase: 'tracing', elapsedMs: 120 }] });
   await task;
-  assert.match(h.fields['dxa-status'].textContent, /Wasm CPU \+ WebGPU/);
+  assert.match(h.fields['dxa-status'].textContent, /Wasm CPU.*4 threads/);
   assert.doesNotMatch(h.fields['dxa-status'].textContent, /fallback/);
-  assert.match(h.fields['dxa-status'].title, /elastic-compatibility/);
-  assert.match(h.fields['dxa-status'].title, /local CPU fallback: GPU local precision limit/);
+  assert.match(h.fields['dxa-status'].title, /local-structures: 80 ms/);
+  assert.match(h.fields['dxa-status'].title, /tracing: 120 ms/);
 });
 
-test('changing GPU preference reruns DXA on the same frame instead of reusing the other backend', async t => {
-  const h = harness(t), initial = h.tools.run();
-  h.pending[0].resolve(network()); await initial;
-  h.setGpuEnabled(false);
-  const cpu = h.tools.run();
-  assert.equal(h.pending.length, 2);
-  assert.equal(h.pending[1].parameters.gpuEnabled, false);
-  h.pending[1].resolve({ ...network(), gpuFallback: false }); await cpu;
-  assert.doesNotMatch(h.fields['dxa-status'].textContent, /fallback/);
+test('thread startup fallback reports one CPU thread and exposes the concrete reason in the status tooltip', async t => {
+  const h = harness(t), task = h.tools.run();
+  const reason = 'SharedArrayBuffer is unavailable because this page is not cross-origin isolated.';
+  h.pending[0].options.onProgress({ phase: 'warming', backend: 'cpu', workerCount: 1, threadingFallback: reason });
+  assert.match(h.fields['dxa-status'].textContent, /CPU.*1 thread.*0 \/ 11 stages/);
+  assert.match(h.fields['dxa-status'].title, /SharedArrayBuffer/);
+  h.pending[0].resolve({ ...network(), threadingFallback: reason });
+  await task;
+  assert.match(h.fields['dxa-status'].textContent, /Wasm CPU.*1 thread.*single-thread fallback/);
+  assert.equal(h.fields['dxa-status'].title, `CPU threading fallback: ${reason}`);
+});
+
+test('private CPU stage workers are distinguished from global extraction threads and report stage fallbacks', async t => {
+  const h = harness(t), task = h.tools.run();
+  h.pending[0].options.onProgress({ phase: 'CPU local crystal recognition', cpuStage: 'local',
+    backend: 'cpu', workerCount: 3, nativeWorkerCount: 1, completedStages: 0 });
+  assert.match(h.fields['dxa-status'].textContent, /CPU local crystal recognition.*3 Workers.*global 1 thread/);
+  assert.doesNotMatch(h.fields['dxa-status'].textContent, /3 threads/);
+  const result = { ...structureNetwork(), workerCount: 3, nativeWorkerCount: 1,
+    cpuOffloadUsed: true, cpuStageWorkerCounts: { local: 3, tetrahedra: 2 },
+    cpuStageFallbacks: [{ stage: 'tetrahedra', reason: 'Worker startup was denied; remaining cells used the native CPU kernel.' }],
+    cpuStageTimings: [{ stage: 'local', elapsedMs: 100, workerCount: 3,
+      copiedBytes: 3 * 1024 ** 2, kernelInitializations: 3 }],
+    stageTimings: [{ phase: 'Identify local crystal structures', elapsedMs: 120 }] };
+  h.pending[0].resolve(result); await task;
+  assert.match(h.fields['dxa-status'].textContent, /global 1 thread.*local stages up to 3 Workers/);
+  assert.doesNotMatch(h.fields['dxa-status'].textContent, /3 threads/);
+  assert.match(h.fields['dxa-status'].textContent, /local-stage fallback/);
+  assert.match(h.fields['dxa-status'].title, /Global extraction: 1 CPU thread/);
+  assert.match(h.fields['dxa-status'].title, /Local crystal identification: 3 CPU Workers/);
+  assert.match(h.fields['dxa-status'].title, /Tetrahedron classification: 2 CPU Workers/);
+  assert.match(h.fields['dxa-status'].title, /CPU tetrahedra fallback: Worker startup was denied/);
+  assert.match(h.fields['dxa-status'].title, /CPU local offload: 100 ms.*3 Workers.*3\.00 MiB copied.*3 kernel initializations/);
+  assert.match(h.fields['dxa-status'].title, /Identify local crystal structures: 120 ms/);
+  assert.equal(h.getFrame().properties.find(property => property.name === DXA_STRUCTURE_PROPERTY).analysisWorkerCount, 3);
+});
+
+test('global GPU preference changes reuse the same CPU DXA result without reading the obsolete callback', async t => {
+  let globalGpuEnabled = true, reads = 0;
+  const h = harness(t, { gpuPreference: () => { reads++; return globalGpuEnabled; } }), initial = h.tools.run();
+  const accepted = structureNetwork();
+  assert.equal('gpuEnabled' in h.pending[0].parameters, false);
+  h.pending[0].resolve(accepted); await initial;
+  globalGpuEnabled = false;
   assert.equal(await h.tools.run(), true);
-  assert.equal(h.pending.length, 2);
+  globalGpuEnabled = true;
+  assert.equal(await h.tools.run(), true);
+  assert.equal(h.pending.length, 1);
+  assert.equal(h.renderer.network, accepted);
+  assert.equal(reads, 0);
+  const property = h.getFrame().properties.find(item => item.name === DXA_STRUCTURE_PROPERTY);
+  assert.equal('analysisGpuRequested' in property, false);
+  assert.equal(property.analysisWorkerCount, 1);
 });
 
 test('DXA retains only the latest result rather than caching line graphs across a trajectory', async t => {

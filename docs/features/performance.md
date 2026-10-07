@@ -44,7 +44,7 @@ The **Enable GPU acceleration** switch beside **Light / Dark** is on by default 
 | Voronoi | WebGPU convex-cell clipping with complete periodic images; exact CPU recovery for uncertain geometry or resource limits |
 | Ideal lattice strain | WebGPU neighbors, CPU PTM fit, then WebGPU ideal-reference conversion and tensor invariants; compatible PTM fits/uploads are reused |
 | Standalone PTM | Existing CPU neighbor search and Wasm correspondence fit |
-| DXA | Hybrid: WebGPU tetrahedron alpha and elastic-compatibility classification, CPU periodic tessellation and Burgers-circuit tracing |
+| DXA | Complete CPU Wasm extraction; shared-memory pthreads on isolated hosts, private CPU Workers for eligible local stages on nonisolated hosts |
 
 Algorithms without a GPU version continue to use their CPU implementation. When WebGPU, a suitable adapter or the required device limits are unavailable, supported analyses also fall back to CPU. Cancelling a calculation stops the job and retains the usual cancellation behavior. WebGPU requires a secure browser context: HTTPS or localhost.
 
@@ -68,13 +68,20 @@ See [Voronoi](voronoi.md) for numerical recovery and boundary conventions.
 
 Reference-frame strain prepares both configurations and keeps their GPU buffers resident during the calculation. Atom-ID matching remains CPU work; the reference-neighbor search, deformation fit and output tensors run on GPU. Selecting another reference can reuse that frame's cached upload without changing the displayed frame's identity.
 
-DXA uploads a deduplicated snapshot of the completed tessellation and ideal
-edge mapping to the shared GPU device. Alpha filtering and elastic compatibility
-run there in two passes with intermediate labels kept on the device. One region
-array returns to the existing Wasm session before interface construction and
-line tracing. The reported backend is hybrid; a failed GPU stage reuses the
-prepared CPU state. This does not yet implement GPU Delaunay or GPU line tracing.
-See [DXA](dislocations.md) for settings and scientific limitations.
+DXA computes the complete network on CPU in one Wasm heap. On isolated hosts,
+a reusable pthread pool shares this global workspace and divides independent
+atom/cell work; ordered topology and graph stages keep their required
+coordination. On nonisolated hosts, eligible local crystal and tetrahedron
+classification stages reuse the ordinary CPU Worker pool; one coordinator
+retains the complete network and continues its global kernel with one thread.
+The status reports both global threads and peak local-stage Workers. Private
+snapshots, Wasm imports and Worker startup consume time and memory; small or
+memory-limited jobs and failed stage tasks use native CPU stages.
+Automatic private-stage selection uses at most four Workers and accounts for
+the pool's retained Wasm heaps and Voronoi snapshots. A failed
+isolated pthread startup retains the complete serial kernel. The GPU preference does not affect its backend or
+completed results. See [DXA](dislocations.md) for settings, memory and scientific
+limitations.
 
 Displacement also retains current/reference inputs, caching anchored Cartesian high/low buffers separately for wrapped and unwrapped coordinates. Its vector differences, current-cell minimum images and magnitudes run on GPU after CPU atom matching. A Cartesian-only upload does not need the neighbor grid, so open coordinates outside the fractional unit box are supported. Auto central symmetry reuses compatible adaptive-CNA labels or runs GPU adaptive CNA before nearest-shell voting and greedy pairing.
 

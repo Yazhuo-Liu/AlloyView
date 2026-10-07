@@ -13,16 +13,17 @@ const mime = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/jav
   '.json': 'application/json', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png',
   '.cfg': 'text/plain', '.dump': 'text/plain', '.wgsl': 'text/plain', '.wasm': 'application/wasm' };
 
-/** Launch a secure localhost page and exercise the real browser WebGPU API.
+/** Launch a secure localhost page and, by default, exercise the real WebGPU API.
  * Software mode is explicit: its timings never represent physical GPU speed.
+ * CPU/Wasm checks can skip the adapter requirement without changing GPU tests.
  */
-export async function withWebGpuBrowser(run, { software = true, isolated = false } = {}) {
+export async function withWebGpuBrowser(run, { software = true, isolated = false, requireGpu = true } = {}) {
   const chromePath = process.env.CHROME_PATH ?? [
     '/opt/google/chrome/chrome', '/usr/bin/google-chrome', '/usr/bin/chromium',
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   ].find(existsSync);
   assert.ok(chromePath, 'Install Chrome/Chromium or set CHROME_PATH.');
-  assert.equal(typeof WebSocket, 'function', 'Browser GPU scripts require Node 22 or newer with built-in WebSocket.');
+  assert.equal(typeof WebSocket, 'function', 'Browser scripts require Node 22 or newer with built-in WebSocket.');
   const additionalArguments = process.env.ALLOYVIEW_CHROME_ARGS ? JSON.parse(process.env.ALLOYVIEW_CHROME_ARGS) : [];
   assert.ok(Array.isArray(additionalArguments) && additionalArguments.every((argument) => typeof argument === 'string'),
     'ALLOYVIEW_CHROME_ARGS must be a JSON array of Chromium flags.');
@@ -32,6 +33,7 @@ export async function withWebGpuBrowser(run, { software = true, isolated = false
     if (isolated) {
       response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
       response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+      response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     }
     const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
     if (pathname === '/AlloyView/__gpu_test__.html') {
@@ -123,7 +125,7 @@ export async function withWebGpuBrowser(run, { software = true, isolated = false
       if (await evaluate('document.readyState === "complete" && location.pathname.endsWith("__gpu_test__.html")')) break;
       await delay(25);
     }
-    const adapter = await evaluate(`(async () => {
+    const adapter = requireGpu ? await evaluate(`(async () => {
       if (!navigator.gpu) return { available: false, reason: 'This browser does not expose WebGPU.' };
       const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
       if (!adapter) return { available: false, reason: 'WebGPU found no usable adapter.' };
@@ -132,12 +134,12 @@ export async function withWebGpuBrowser(run, { software = true, isolated = false
         description: info.description, isFallbackAdapter: Boolean(info.isFallbackAdapter ?? adapter.isFallbackAdapter),
         limits: { maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
           maxComputeWorkgroupsPerDimension: adapter.limits.maxComputeWorkgroupsPerDimension } };
-    })()`);
+    })()`) : { required: false, available: false, reason: 'WebGPU is not required for this CPU browser check.' };
     const diagnostics = `Chrome: ${chromePath}\nGPU initialization log:\n${chromeErrors || '(no stderr output)'}`;
-    assert.ok(adapter.available, `${adapter.reason} Check the GPU driver and Vulkan support, or use --software to validate using SwiftShader.\n${diagnostics}`);
+    assert.ok(!requireGpu || adapter.available, `${adapter.reason} Check the GPU driver and Vulkan support, or use --software to validate using SwiftShader.\n${diagnostics}`);
     const softwareAdapter = adapter.isFallbackAdapter
       || /swiftshader|software|llvmpipe/i.test(`${adapter.vendor} ${adapter.architecture} ${adapter.description}`);
-    assert.ok(software || !softwareAdapter,
+    assert.ok(!requireGpu || software || !softwareAdapter,
       `Hardware WebGPU requested, but Chrome selected a software adapter (${adapter.vendor} ${adapter.architecture}). Use --software for software validation.\n${diagnostics}`);
     const result = await run({ evaluate, call, adapter });
     assert.deepEqual(pageErrors, [], `Unhandled browser exceptions: ${JSON.stringify(pageErrors)}`);

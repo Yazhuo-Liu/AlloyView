@@ -7,7 +7,6 @@ import { crystalFrame } from './helpers/crystals.js';
 import { fccScrewFrame } from './helpers/dislocations.js';
 
 const modulePromise = createDxa({ wasmBinary: await readFile(new URL('../src/analysis/dxa-kernel.wasm', import.meta.url)) });
-const EXPORT_BUDGET = 256 * 1024 ** 2;
 
 async function withFrame(frame, run, lattice = 1) {
   const module = await modulePromise;
@@ -23,14 +22,14 @@ async function withFrame(frame, run, lattice = 1) {
     lattice, 14, 9, 0, 1, 2.5];
   const error = () => module.UTF8ToString(module._alloy_dxa_last_error());
   const begin = () => assert.equal(module._alloy_dxa_begin(...args), 1, error());
-  const result = (regionsPointer = 0, count = 0) => {
-    const pointer = module._alloy_dxa_finish(regionsPointer, count);
+  const readResult = pointer => {
     assert.ok(pointer, error());
     return JSON.parse(module.UTF8ToString(pointer));
   };
-  try { await run({ module, begin, result, error }); }
+  const result = () => readResult(module._alloy_dxa_finish());
+  const complete = () => readResult(module._alloy_dxa_analyze(...args));
+  try { await run({ module, args, coordinates, cellPointer, begin, result, complete, error }); }
   finally {
-    module._alloy_dxa_dispose();
     module._alloy_dxa_dispose();
     module._free(coordinates);
     module._free(cellPointer);
@@ -38,88 +37,87 @@ async function withFrame(frame, run, lattice = 1) {
   }
 }
 
-test('staged DXA rejects export before allocation and finishes the retained topology on CPU', async () => {
-  await withFrame(crystalFrame('fcc', 4), ({ module, begin, result, error }) => {
-    begin();
-    const tets = module._alloy_dxa_tet_count();
-    assert.ok(tets > 0);
-    assert.ok(module._alloy_dxa_snapshot_bytes() > 0);
-    assert.equal(module._alloy_dxa_vertex_ptr(), 0);
-    assert.equal(module._alloy_dxa_export(1), 0);
-    assert.match(error(), /export memory budget/);
-    assert.equal(module._alloy_dxa_tet_count(), tets, 'failed export retains the prepared geometry');
-    assert.equal(module._alloy_dxa_vertex_ptr(), 0, 'failed export retains no partially allocated snapshot');
-    const output = result();
-    assert.equal(output.segments.length, 0);
-    assert.ok(output.atomStructureTypes.every(value => value === 1));
-  });
-});
-
-test('staged region injection retains the exact original screw-dislocation network', async () => {
-  await withFrame(fccScrewFrame(), ({ module, begin, result, error }) => {
-    begin();
-    const original = result();
+test('staged CPU DXA preserves the complete entry point’s screw-dislocation network', async () => {
+  await withFrame(fccScrewFrame(), ({ module, begin, result, complete }) => {
+    const original = complete();
     assert.equal(original.segments.length, 1);
-    module._alloy_dxa_dispose();
     begin();
-    const counts = [module._alloy_dxa_vertex_count(), module._alloy_dxa_tet_count(),
-      module._alloy_dxa_edge_count(), module._alloy_dxa_transition_count()];
-    assert.equal(module._alloy_dxa_export(EXPORT_BUDGET), 1, error());
-    assert.deepEqual([module._alloy_dxa_vertex_count(), module._alloy_dxa_tet_count(),
-      module._alloy_dxa_edge_count(), module._alloy_dxa_transition_count()], counts);
-    const pointers = [module._alloy_dxa_vertex_ptr(), module._alloy_dxa_tet_ptr(),
-      module._alloy_dxa_edge_ptr(), module._alloy_dxa_transition_ptr()];
-    assert.ok(pointers.every(Boolean));
-    assert.ok(module._alloy_dxa_alpha() > 0);
-    assert.equal(module.HEAPU32[module._alloy_dxa_edge_ptr() / 4 + 6], 0xffffffff,
-      'edge zero is the unmapped sentinel');
-    assert.equal(module.HEAPF64[module._alloy_dxa_transition_ptr() / 8 + 18], 1,
-      'the common identity transition preserves exact self bypass');
-    const regions = module._alloy_dxa_cpu_regions_ptr();
-    assert.ok(regions, error());
-    assert.ok(module.HEAP32.subarray(regions / 4, regions / 4 + counts[1]).every(value => value === -1 || value === 0));
-    // Native expected-region allocation can grow the heap; getters resolve the
-    // current views, and unchanged snapshot pointers remain valid.
-    assert.deepEqual([module._alloy_dxa_vertex_ptr(), module._alloy_dxa_tet_ptr(),
-      module._alloy_dxa_edge_ptr(), module._alloy_dxa_transition_ptr()], pointers);
-    module._alloy_dxa_release_snapshot();
-    module._alloy_dxa_release_snapshot();
-    assert.equal(module._alloy_dxa_vertex_ptr(), 0);
-    assert.equal(module._alloy_dxa_tet_count(), counts[1], 'snapshot release retains the original geometry');
-    assert.equal(module._alloy_dxa_cpu_regions_ptr(), regions, 'labels have independent lifetime');
-    const injected = result(regions, counts[1]);
-    assert.deepEqual(injected, original);
-    assert.equal(module._alloy_dxa_vertex_ptr(), 0);
+    const staged = result();
+    assert.deepEqual(staged, original);
     module._alloy_dxa_dispose();
-    assert.equal(module._alloy_dxa_tet_count(), 0);
-    assert.equal(module._alloy_dxa_vertex_ptr(), 0);
+    // A fresh frame can reuse the same kernel after the staged workspace ends.
+    begin();
+    assert.deepEqual(result(), original);
   });
 });
 
-test('invalid staged region labels dispose only the frame workspace and allow kernel recovery', async () => {
-  await withFrame(crystalFrame('bcc', 4), ({ module, begin, result, error }) => {
+test('legacy CPU analyze releases its native session while its JSON remains readable until caller disposal', async () => {
+  await withFrame(crystalFrame('bcc', 4), ({ module, args, begin, result, error }) => {
+    const pointer = module._alloy_dxa_analyze(...args);
+    assert.ok(pointer, error());
+    // This getter observes session ownership without beginning another
+    // calculation or invalidating the module-owned return string.
+    assert.equal(module._alloy_dxa_worker_tet_count(), 0);
+    const original = JSON.parse(module.UTF8ToString(pointer));
+    assert.ok(original.atomStructureTypes.every(type => type === 3));
+    module._alloy_dxa_dispose();
+    module._alloy_dxa_dispose();
+    assert.equal(module._alloy_dxa_worker_vertex_ptr(), 0);
     begin();
-    const count = module._alloy_dxa_tet_count(), labels = module._malloc(count * 4);
-    try {
-      module.HEAP32.fill(-1, labels / 4, labels / 4 + count);
-      module.HEAP32[labels / 4] = 2;
-      assert.equal(module._alloy_dxa_finish(labels, count), 0);
-      assert.match(error(), /invalid region labels/);
-      assert.equal(module._alloy_dxa_tet_count(), 0);
-      begin();
-      assert.ok(result().atomStructureTypes.every(value => value === 3));
-    } finally { module._free(labels); }
+    assert.deepEqual(result(), original);
+    module._alloy_dxa_dispose();
+    const nextPointer = module._alloy_dxa_analyze(...args);
+    assert.ok(nextPointer, error());
+    assert.deepEqual(JSON.parse(module.UTF8ToString(nextPointer)), original);
   }, 3);
 });
 
-test('staged cancellation frees its retained frame and recovers without replacing Wasm', async () => {
+test('staged CPU workspace can be disposed before tracing and then reused', async () => {
+  await withFrame(crystalFrame('bcc', 4), ({ module, begin, result, complete, error }) => {
+    assert.equal(module._alloy_dxa_finish(), 0);
+    assert.match(error(), /no active staged analysis/);
+    begin();
+    module._alloy_dxa_dispose();
+    module._alloy_dxa_dispose();
+    assert.equal(module._alloy_dxa_finish(), 0);
+    assert.match(error(), /no active staged analysis/);
+    begin();
+    const output = result();
+    assert.equal(output.segments.length, 0);
+    assert.ok(output.atomStructureTypes.every(value => value === 3));
+    assert.deepEqual(complete(), output);
+  }, 3);
+});
+
+test('failed staged CPU input clears the old workspace and permits a corrected frame', async () => {
+  await withFrame(crystalFrame('fcc', 4), ({ module, args, coordinates, cellPointer, begin, result, error }) => {
+    begin();
+    const originalPosition = module.HEAPF64[coordinates / 8];
+    module.HEAPF64[coordinates / 8] = NaN;
+    assert.equal(module._alloy_dxa_begin(...args), 0);
+    assert.match(error(), /coordinates must be finite/);
+    module.HEAPF64[coordinates / 8] = originalPosition;
+    assert.equal(module._alloy_dxa_finish(), 0);
+    assert.match(error(), /no active staged analysis/);
+    const originalCell = module.HEAPF64.slice(cellPointer / 8, cellPointer / 8 + 12);
+    module.HEAPF64.fill(0, cellPointer / 8, cellPointer / 8 + 9);
+    assert.equal(module._alloy_dxa_begin(...args), 0);
+    assert.match(error(), /non-singular/);
+    module.HEAPF64.set(originalCell, cellPointer / 8);
+    begin();
+    assert.ok(result().atomStructureTypes.every(value => value === 1));
+  });
+});
+
+test('cancellation between CPU stages releases the frame and recovers in the same Wasm kernel', async () => {
   await withFrame(crystalFrame('hcp', 4), ({ module, begin, result, error }) => {
     begin();
     module.HEAP32[module._alloy_dxa_cancel_ptr() / 4] = 1;
-    assert.equal(module._alloy_dxa_finish(0, 0), 0);
+    assert.equal(module._alloy_dxa_finish(), 0);
     assert.match(error(), /canceled/);
-    assert.equal(module._alloy_dxa_tet_count(), 0);
     module._alloy_dxa_reset_cancel();
+    assert.equal(module._alloy_dxa_finish(), 0);
+    assert.match(error(), /no active staged analysis/);
     begin();
     assert.ok(result().atomStructureTypes.every(value => value === 2));
   }, 2);

@@ -11,7 +11,7 @@ let queue = Promise.resolve();
 
 self.addEventListener('message', ({ data }) => {
   if (data.type === 'cancel') { controllers.get(data.id)?.abort(); return; }
-  if (!['analyze', 'classify-dxa', 'warmup', 'configure-cache', 'prepare-frame', 'clear-frames'].includes(data.type)) return;
+  if (!['analyze', 'warmup', 'configure-cache', 'prepare-frame', 'clear-frames'].includes(data.type)) return;
   const controller = new AbortController(); controllers.set(data.id, controller);
   queue = queue.then(() => run(data, controller)).catch(() => {});
 });
@@ -53,23 +53,6 @@ async function run(data, controller) {
       return;
     }
     await runtime.initialize(controller.signal);
-    if (data.type === 'classify-dxa') {
-      const { analyzeGpuDxaClassification } = await import('./dxa.js');
-      const classify = () => runtime.withErrors(() => analyzeGpuDxaClassification(runtime, data.snapshot,
-        { signal: controller.signal, onProgress: progress }));
-      let result;
-      try { result = await classify(); }
-      catch (error) {
-        if (!runtime.recoverMemory(error)) throw error;
-        checkSignal(controller.signal);
-        result = await classify();
-      }
-      checkSignal(controller.signal);
-      self.postMessage({ id: data.id, ok: true, result: { ...result, backend: 'gpu',
-        engine: 'webgpu-dxa-classification', workerCount: 1, adapter: runtime.adapterInfo,
-        elapsedMs: performance.now() - startedAt }, ...cacheState() }, [result.regions.buffer]);
-      return;
-    }
     if (data.frame) frames.set(data.frameId, data.frame);
     const frame = frames.get(data.frameId);
     activeFrame = frame;
@@ -131,10 +114,6 @@ async function run(data, controller) {
     const analyze = () => runtime.withErrors(async () => {
       if (parameters.kind === 'coordination') return analyzeGpuCoordination(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
       if (parameters.kind === 'rdf') return analyzeGpuRdf(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
-      if (parameters.kind === 'dxaLocal') {
-        const { analyzeGpuDxaLocalStructures } = await import('./dxa-local.js');
-        return analyzeGpuDxaLocalStructures(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
-      }
       if (parameters.kind === 'ptmNeighbors') {
         const { analyzeGpuPtmNeighbors } = await import('./ptm-neighbors.js');
         return analyzeGpuPtmNeighbors(runtime, frame, parameters, { signal: controller.signal, onProgress: progress });
@@ -195,7 +174,7 @@ async function run(data, controller) {
     progress({ phase: 'complete', completedAtoms: frame.fractional.length / 3, totalAtoms: frame.fractional.length / 3 });
     const buffers = [...new Set(Object.values(result).filter(ArrayBuffer.isView).map((value) => value.buffer))];
     self.postMessage({ id: data.id, ok: true, result: { ...result, backend: 'gpu',
-      engine: parameters.kind === 'dxaLocal' ? 'webgpu-dxa-local-structures' : parameters.kind === 'strain' ? 'webgpu-strain-tensor' : parameters.kind === 'ptmNeighbors' ? 'webgpu-ptm-neighbors' : parameters.kind === 'cna' ? `webgpu-cna-${parameters.mode ?? 'adaptive'}`
+      engine: parameters.kind === 'strain' ? 'webgpu-strain-tensor' : parameters.kind === 'ptmNeighbors' ? 'webgpu-ptm-neighbors' : parameters.kind === 'cna' ? `webgpu-cna-${parameters.mode ?? 'adaptive'}`
         : parameters.kind === 'referenceStrain' ? 'webgpu-reference-strain'
           : parameters.kind === 'centrosymmetry' ? `webgpu-centrosymmetry-${parameters.mode ?? 'manual'}`
             : parameters.kind === 'displacement' ? 'webgpu-displacement' : parameters.kind === 'bondStatistics' ? 'webgpu-bond-statistics' : parameters.kind === 'voronoi' ? result.engine ?? 'webgpu-voronoi' : 'webgpu', workerCount: 1,

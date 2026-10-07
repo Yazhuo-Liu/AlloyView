@@ -297,8 +297,9 @@ npm run dev
 ```
 
 Open <http://localhost:5173>. The development server sends COOP/COEP headers so
-that the coordination Worker pool can share one coordinate buffer when the
-browser supports `SharedArrayBuffer`. Non-isolated deployments, including
+that ordinary analysis Workers can share coordinate buffers and DXA can use
+one shared Wasm heap with its pthread pool when the browser supports
+`SharedArrayBuffer`. Non-isolated deployments, including
 GitHub Pages, use bounded private coordinate copies instead, prepared in chunks
 and transferred to Workers while allowing the UI to update. Both modes parse
 and calculate entirely on the user's device; the static host never receives
@@ -312,8 +313,12 @@ npm run preview
 ```
 
 The deployable files are in `dist/`. Any static server can host them. No backend
-API is used. A deployment only needs COOP/COEP headers if a future pthreads Wasm
-build is enabled; see [docs/DEPLOYMENT.md](DEPLOYMENT.md).
+API is used. Shared CPU snapshots and the existing threaded DXA kernel require
+COOP/COEP response headers. The build includes a Cloudflare Pages `_headers`
+file in the same artifact uploaded to GitHub Pages. Cloudflare interprets it as
+response-header configuration; GitHub Pages does not. Nonisolated DXA can use
+private CPU Workers for local stages while its global kernel runs serially. See
+[deployment](DEPLOYMENT.md#cross-origin-isolation-and-cloudflare-pages).
 
 ## Extend the modification tools
 
@@ -399,10 +404,9 @@ It prefers WebGPU for coordination, adaptive/fixed-cutoff CNA,
 manual/Auto central symmetry, displacement, reference-frame strain, RDF,
 local geometric shear, bonds, bond-length/angle distributions, local Q4/Q6,
 PTM neighbor preparation and ideal lattice strain
-neighbor/reference/tensor stages, and DXA nearest-neighbor search, local crystal correspondence and
-tetrahedron geometry/elastic-compatibility classification.
-DXA remains a hybrid CPU/GPU pipeline with CPU crystal mapping, periodic
-tessellation, mesh construction and line tracing. PTM and fresh ideal strain
+neighbor/reference/tensor stages. DXA always performs complete CPU/Wasm
+extraction and automatically uses shared-memory threads when available; its
+backend and results are independent of the GPU switch. PTM and fresh ideal strain
 prepare neighbors on GPU when supported, then fit PTM correspondence with the
 shared CPU Wasm Worker pool. Strain can reuse a compatible fit and its GPU upload;
 editing lattice parameters updates the element-reference table without
@@ -510,14 +514,21 @@ an enabled DXA tool when restored.
 
 DXA requires sufficient periodic cell thickness. For `NiGB_minimized.cfg`,
 repeat Z twice with **Replicate atoms for analysis** enabled; display copies
-alone do not enlarge the analyzed cell. With GPU acceleration enabled, WebGPU
-performs nearest-neighbor search, local common-neighbor analysis and ordered
-ideal-crystal correspondence for FCC, BCC, HCP, cubic diamond and hexagonal
-diamond, followed later by tetrahedron classification. CPU Wasm builds crystal
-clusters, maps the lattice, constructs the periodic tessellation and interface,
-and traces the dislocation lines. Each GPU stage can fall back to CPU without
-restarting the complete analysis. This version awaits broader scientific
-validation and does not include newer HCP low-c/a treatment.
+alone do not enlarge the analyzed cell. One CPU coordinator owns the complete
+DXA structure and graph in one Wasm heap. On an isolated host, pthreads share
+this heap and divide independent work; they do not copy a full analysis per
+atom. Without isolation, sufficiently large jobs can reuse the existing CPU
+Worker pool for local identification and tetrahedron classification. One
+coordinator retains the global network; private stage Workers receive bounded
+snapshots and return local results. Automatic private stages use at most four
+Workers, reduced further by available CPU and memory capacity. The status distinguishes the global kernel's
+thread count from the peak local-stage Worker count. Small jobs, memory limits,
+unavailable Workers or threaded initialization failures retain native CPU work;
+stage failures report their fallback reason. Private snapshots and Worker
+startup add overhead, so extra Workers do not guarantee a speedup.
+Changing **Enable GPU
+acceleration** leaves DXA results and parameters unchanged. This version awaits
+broader scientific validation and does not include newer HCP low-c/a treatment.
 See [DXA](features/dislocations.md) for
 the algorithm, search settings and limitations.
 
@@ -925,15 +936,16 @@ This is a provenance and risk statement, not legal advice.
   Voronoi polycrystal construction are not implemented. The initial DXA module
   comes from the separately reviewed OVITO core, not the reviewed AtomEye
   snapshot. See [DXA implementation review](DXA_REVIEW.md) for the source-backed
-  CPU/Wasm and GPU plan, and `docs/ATOMEYE_REVIEW.md` for AtomEye.
+  CPU/Wasm algorithm and historical GPU research, and
+  `docs/ATOMEYE_REVIEW.md` for AtomEye.
 - Coordination, adaptive/fixed CNA, manual/Auto central symmetry, displacement,
   reference-frame strain, RDF, local geometric shear, bonds, bond statistics, Voronoi and ideal-strain
   tensors can use optional WebGPU acceleration or Workers.
   PTM and its deformation fit, DXA and CPU Voronoi use included Wasm kernels. No Emscripten
   installation is needed unless rebuilding C++ with `npm run build:ptm`,
-  `npm run build:dxa` or `npm run build:voronoi`. GPU-enabled DXA computes local crystal correspondence
-  and classifies its mapped tetrahedra with WebGPU, completing extraction in
-  the same CPU Wasm session.
+  `npm run build:dxa` or `npm run build:voronoi`. DXA uses CPU Wasm for every
+  extraction stage; its optional pthread build can be rebuilt with
+  `npm run build:dxa:threaded`.
 
 The bundled `NiGB_minimized.cfg` contains 129,904 atoms and can be used to
 compare CPU and GPU analysis with the same parameters. Measure cold and warm

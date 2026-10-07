@@ -105,16 +105,17 @@ public:
     /// Identifies the atomic structures.
     bool identifyStructures();
 
-    /// Imports already identified structures and ideal-ordered neighbors.
-    /// The headless GPU adapter supplies the same information produced by
-    /// identifyStructures(); graph construction and symmetry handling retain
-    /// their original implementation.
-    bool importLocalStructures(const int32_t* structureTypes, const int32_t* neighbors,
+    /// Identifies a half-open atom range using the original full-frame neighbor search.
+    /// The prepared search is retained so one CPU worker can process several ranges.
+    bool identifyStructuresRange(size_t start, size_t end);
+
+    /// Imports complete local results produced by the same CPU recognition algorithm.
+    bool importLocalStructures(const int32_t* structures, const int32_t* neighbors,
             size_t particleCount, size_t neighborWidth, FloatType maximumDistance);
 
-    /// Read-only access for the staged headless adapter and scientific checks.
+    /// Returns the full, ordered native neighbor rows (including periodic-image duplicates).
+    const int* neighborListsData() const { return _neighborLists.data(); }
     size_t neighborListWidth() const { return _neighborListsSize; }
-    const int* neighborListData() const { return _neighborLists.empty() ? nullptr : _neighborLists.data(); }
 
     /// Combines adjacent atoms to clusters.
     bool buildClusters();
@@ -182,6 +183,7 @@ public:
 
     /// Releases the memory allocated for neighbor lists.
     void freeNeighborLists() {
+        _localNeighborFinder.reset();
         decltype(_neighborLists){}.swap(_neighborLists);
         decltype(_atomSymmetryPermutations){}.swap(_atomSymmetryPermutations);
         _atomClustersArray.reset();
@@ -224,6 +226,7 @@ private:
     const PropertyPtr _atomClusters;
     BufferWriteAccess<int64_t, access_mode::discard_read_write> _atomClustersArray;
     std::vector<int> _neighborLists;
+    std::shared_ptr<NearestNeighborFinder> _localNeighborFinder;
     std::vector<int> _atomSymmetryPermutations;
     size_t _neighborListsSize = 0;
     BufferReadAccessAndRef<SelectionIntType> _particleSelection;

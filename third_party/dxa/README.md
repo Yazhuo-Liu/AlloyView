@@ -22,7 +22,8 @@ neighbor routines are kept where possible. `geometry/` contains the periodic
 Delaunay/Geogram and half-edge mesh functionality required by DXA. The browser
 entry point is `wasm/dxa.cpp`, executed in a dedicated Worker. Isolated hosts
 cancel through a shared atomic word, retaining the kernel and pthread pool.
-Static hosting without shared memory uses Worker termination for cancellation.
+Static hosting without shared memory cancels global synchronous work by Worker
+termination; asynchronous private CPU stages can cancel and retain the coordinator.
 
 The optional `dxa-kernel-threaded` binary restores shared-memory parallel loops
 through a bounded `std::thread` adapter. Independent atoms use dynamically
@@ -41,41 +42,24 @@ grows to the needed capacity and reuses its idle Workers on subsequent analyses.
 The browser reserves two reported logical processors, and the client additionally
 limits activity according to structure size and the global CPU/memory budget.
 This backend requires cross-origin isolation and
-SharedArrayBuffer; static hosts without the required headers retain the complete
-serial implementation. Build it with `bash wasm/build-dxa-threaded.sh`.
+SharedArrayBuffer. Static hosts retain one global serial kernel, with optional
+private CPU stage Workers for independent local recognition and tetrahedron
+classification. Build pthread support with `bash wasm/build-dxa-threaded.sh`.
 
-The reference backend is CPU/Wasm. The staged C ABI additionally retains one
-whole-frame pipeline in that same heap while JavaScript dispatches an immutable
-GPU classifier. A separate preparation stage exports the nearest-neighbor
-finder's wrapped binary64 Cartesian positions, the cell inverse, and the
-original ideal coordination templates. Validated crystal types and complete
-ideal-ordered neighbor rows can replace local identification without executing
-CPU CNA. Planar-defect restrictions, neighbor dimensions and indices are checked
-before importing; an invalid import retains the input for CPU fallback. The
-temporary wrapped-position copy is released after dispatch and does not replace
-the scientific source positions, kernel or heap. The geometry snapshot contains
-perturbed tessellation vertices, cell adjacency, deduplicated original-atom-pair
-edges, and directed cluster transition
-matrices. An optional region import replaces only independent alpha/elastic
-classification; manifold construction, robust tessellation and dislocation
-tracing retain the original CPU algorithm. This is a hybrid backend, not a
-complete GPU-resident DXA. Failed GPU allocation or dispatch can finish the same
-prepared pipeline with the original CPU classifier, avoiding repeated geometry.
-
-The additional upstream numerical hooks are a read-only edge visitor and count
-in `ElasticMapping.h`, and validated local-output import plus read-only neighbor
-access in `StructureAnalysis`. They do not change CPU local identification,
-edge generation, cluster construction, mapping, reference frames or lifetime.
-The geometry adapter exposes immutable vertex
-counts and optionally borrows validated `-1/0` region labels for synchronous
-manifold construction. All existing ordered reductions, topology repair,
-Burgers-circuit search, line tracing and junction operations remain unchanged.
-Native export rejects its snapshot and temporary-map memory budget before
-allocating arrays. The host releases native snapshot copies immediately after
-copying their data for GPU dispatch; finishing also clears them before building
-the manifold. The retained scientific session and imported labels have separate
-lifetimes. Export, snapshot release and session disposal do not replace the
-Wasm module, shared memory or warmed pthread Workers.
+DXA uses only CPU/Wasm. The staged C ABI retains one complete scientific
+pipeline in its heap: `alloy_dxa_begin` validates input and runs crystal
+identification, cluster construction, Delaunay tessellation and elastic mapping;
+`alloy_dxa_finish` runs native tetrahedron classification, constructs the
+interface mesh, traces the dislocation network and serializes it. The optional
+private CPU path uses `alloy_dxa_prepare` and `alloy_dxa_import_local` to merge
+complete ordered neighbor rows from the unchanged `StructureAnalysis` range
+routine. Read-only binary64 geometry/edge/transition tables let CPU Workers run
+the native alpha, sliver, Burgers and Frank predicates in `wasm/dxa-classify.cpp`.
+Validated, session-owned labels skip only that independent classification loop;
+mesh numbering, connectivity and tracing keep their original order. Export
+budget or stage failures preserve native CPU fallback. Coordinate/snapshot copies
+and private worker heaps are bounded separately from the global topology heap.
+Cancellation and session disposal retain warmed modules where possible.
 
 It does not classify defective atoms and substitute their bonds for dislocation
 lines. Defect surface output is not currently returned by the entry point.

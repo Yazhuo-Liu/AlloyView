@@ -15,6 +15,7 @@ const screw = fccScrewFrame(), perfect = fccScrewFrame({ screw: false });
 // Delaunay tie ordering can then add a small wiggle to the extracted curve;
 // its arc length need not equal the ideal straight periodic winding exactly.
 const lengthTolerance = 2e-3;
+const isolated = process.argv.includes('--isolated');
 function xyz(frame, step = 0) {
   const lines = [String(frame.ids.length), `Lattice="${Array.from(frame.cell.vectors).join(' ')}" Properties=species:S:1:pos:R:3:id:I:1 pbc="F F T" Step=${step}`];
   for (let atom = 0; atom < frame.ids.length; atom++) lines.push(`Ni ${Array.from(frame.positions.subarray(atom * 3, atom * 3 + 3)).join(' ')} ${atom + 1}`);
@@ -53,13 +54,18 @@ try {
         checks.analyses++; checks.progress = []; checks.client = this;
         return analyze.call(this, frame, parameters, { ...options, onProgress: progress => {
           checks.progress.push(progress); options.onProgress?.(progress);
-          if (checks.cancelAtNativeStage && progress.completedStages > 0 && progress.completedStages < 12) {
+          if (checks.cancelAtNativeStage && !progress.cpuStage && progress.completedStages > 0 && progress.completedStages < 12) {
             checks.cancelAtNativeStage = false; checks.cancelStage = progress;
             document.getElementById('cancel-dxa').click();
           }
         } }).then(result => { checks.rows.push({ atoms: frame.ids.length, segments: result.segments.length,
           length: result.totalLength, engine: result.engine, backend: result.backend, elapsedMs: result.elapsedMs,
-          gpuFallback: result.gpuFallback }); return result; });
+          workerCount: result.workerCount, threaded: result.threaded, sharedMemory: result.sharedMemory,
+          nativeWorkerCount: result.nativeWorkerCount, cpuOffloadUsed: result.cpuOffloadUsed,
+          cpuStageWorkerCounts: result.cpuStageWorkerCounts, cpuStageTimings: result.cpuStageTimings,
+          cpuStageFallbacks: result.cpuStageFallbacks,
+          poolSize: result.poolSize, kernelGeneration: result.kernelGeneration,
+          wasmMemoryBytes: result.wasmMemoryBytes, threadingFallback: result.threadingFallback }); return result; });
       };
       const ensureWorker = DxaClient.prototype.ensureWorker, tracked = new WeakSet();
       DxaClient.prototype.ensureWorker = function() {
@@ -96,8 +102,6 @@ try {
     }
     const extract = async () => {
       await evaluate('dxaChecks.showTool("dxa"); document.getElementById("run-dxa").click()');
-      // Software adapters can spend over a minute compiling DXA's exact
-      // binary64 kernels on the first run. This is a correctness smoke check.
       await waitFor('document.getElementById("dxa-state").textContent === "Calculated"', 'Complete native DXA extraction', 180_000);
     };
     await openFile(source); await extract();
@@ -105,15 +109,38 @@ try {
       const r = dxaChecks.renderer, n = r.dislocationNetwork;
       return { isolated: crossOriginIsolated, atoms: r.frame.ids.length, segments: n.segments.length, length: n.totalLength,
         family: n.segments[0]?.familyId, burgersMagnitude: Math.hypot(...n.segments[0].spatialBurgersVector),
-        engine: n.engine, backend: n.backend, gpuFallback: n.gpuFallback, status: document.getElementById('dxa-status').textContent,
+        engine: n.engine, backend: n.backend, threaded: n.threaded, workerCount: n.workerCount,
+        sharedMemory: n.sharedMemory, poolSize: n.poolSize, kernelGeneration: n.kernelGeneration,
+        nativeWorkerCount: n.nativeWorkerCount, cpuOffloadUsed: n.cpuOffloadUsed,
+        cpuStageWorkerCounts: n.cpuStageWorkerCounts, cpuStageTimings: n.cpuStageTimings,
+        cpuStageFallbacks: n.cpuStageFallbacks,
+        status: document.getElementById('dxa-status').textContent,
         elapsedMs: n.elapsedMs, stageEvents: dxaChecks.progress.length };
     })()`);
-    assert.equal(initial.isolated, false, 'DXA must work under GitHub Pages without COOP/COEP.');
+    assert.equal(initial.isolated, isolated, 'DXA runs with the requested static-host response headers.');
     assert.equal(initial.atoms, screw.ids.length); assert.equal(initial.segments, 1); assert.equal(initial.family, 'perfect');
     assert.ok(Math.abs(initial.length - screw.expected.totalLength) < lengthTolerance, JSON.stringify({ initial, expected: screw.expected }));
     assert.ok(Math.abs(initial.burgersMagnitude - screw.expected.burgersMagnitude) < 1e-3, JSON.stringify({ initial, expected: screw.expected }));
-    assert.equal(initial.backend, 'hybrid'); assert.equal(initial.gpuFallback, false);
-    assert.match(initial.status, /WebGPU/); assert.doesNotMatch(initial.status, /fallback/);
+    assert.equal(initial.backend, 'cpu');
+    assert.match(initial.engine, /^Wasm CPU/);
+    assert.doesNotMatch(initial.status, /WebGPU|hybrid/i);
+    if (!isolated) {
+      assert.equal(initial.threaded, false); assert.equal(initial.nativeWorkerCount, 1);
+      assert.equal(initial.cpuOffloadUsed, true); assert.ok(initial.workerCount >= 2);
+      assert.match(initial.status, /global 1 thread.*local stages up to \d+ Workers/);
+      assert.deepEqual(initial.cpuStageFallbacks, []);
+    }
+
+    // The GPU preference still controls other analyses. It must neither
+    // invalidate nor rerun the complete CPU DXA result.
+    const preference = await evaluate(`(async () => {
+      const network = dxaChecks.renderer.dislocationNetwork, before = dxaChecks.analyses;
+      const toggle = document.getElementById('enable-gpu-computing');
+      toggle.click(); toggle.click(); await new Promise(resolve => setTimeout(resolve, 60));
+      return { sameResult: dxaChecks.renderer.dislocationNetwork === network, analyses: dxaChecks.analyses - before,
+        state: document.getElementById('dxa-state').textContent };
+    })()`);
+    assert.deepEqual(preference, { sameResult: true, analyses: 0, state: 'Calculated' }, 'GPU preference changes leave CPU DXA results and enabled state intact');
 
     const appearance = await evaluate(`(() => {
       const checks = dxaChecks, renderer = checks.renderer, atoms = renderer.atomColors, before = checks.analyses;
@@ -171,7 +198,7 @@ try {
       cleared: dxaChecks.renderer.dislocationNetwork === null,
       coordinationPreserved: dxaChecks.renderer.frame.properties.includes(dxaChecks.coordination),
       coordinationState: document.getElementById('analysis-state').textContent })`);
-    assert.equal(cancellation.terminated, true); assert.equal(cancellation.cleared, true);
+    assert.equal(cancellation.terminated, !initial.sharedMemory); assert.equal(cancellation.cleared, true);
     assert.equal(cancellation.coordinationPreserved, true); assert.equal(cancellation.coordinationState, 'Calculated');
     await extract();
     const recovery = await evaluate('({workers:dxaChecks.workers.length,segments:dxaChecks.renderer.dislocationNetwork.segments.length,backend:dxaChecks.renderer.dislocationNetwork.backend})');
@@ -216,9 +243,10 @@ try {
     assert.equal(mobile.visible, true); assert.equal(mobile.belowViewport, true); assert.equal(mobile.horizontalOverflow, false);
     const final = await evaluate('({rows:dxaChecks.rows,analyses:dxaChecks.analyses,workers:dxaChecks.workers,glError:dxaChecks.renderer.gl.getError()})');
     assert.equal(final.glError, 0);
-    return { scope: 'Production DXA Worker, analysis UI, rendering, PNG and recipe replay; no COOP/COEP',
-      adapter, fixture: { ...initial, expected: screw.expected, lengthTolerance }, appearance, recipeReplay, cancellation, recovery, realRepeat, nextFrame, mobile, final };
-  }, { software: useSoftwareAdapter(true) });
+    return { scope: 'Production CPU DXA Worker, GPU-preference independence, UI, rendering, PNG and recipe replay',
+      deployment: isolated ? 'Isolated host' : 'Static host without COOP/COEP',
+      adapter, fixture: { ...initial, expected: screw.expected, lengthTolerance }, preference, appearance, recipeReplay, cancellation, recovery, realRepeat, nextFrame, mobile, final };
+  }, { software: useSoftwareAdapter(true), isolated, requireGpu: false });
   console.log(JSON.stringify(report, null, 2));
 } finally {
   await rm(directory, { recursive: true, force: true });

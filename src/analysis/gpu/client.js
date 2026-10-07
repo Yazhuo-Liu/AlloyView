@@ -1,4 +1,4 @@
-const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'bondStatistics', 'voronoi', 'strain', 'cna', 'referenceStrain', 'centrosymmetry', 'displacement', 'ptmNeighbors', 'dxaLocal']);
+const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'bondStatistics', 'voronoi', 'strain', 'cna', 'referenceStrain', 'centrosymmetry', 'displacement', 'ptmNeighbors']);
 const REFERENCE_KINDS = new Set(['referenceStrain', 'displacement']);
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
@@ -69,18 +69,6 @@ export class GpuAnalysisClient {
       } catch (error) { return Promise.reject(error); }
     }
     return this.enqueue('analyze', { frame, parameters, signal, onProgress }, 1);
-  }
-
-  /** Transfer an owned native DXA snapshot through the existing device queue.
-   * These tables are temporary exports, never application frame coordinates.
-   */
-  classifyDxa(snapshot, { signal, onProgress = () => {} } = {}) {
-    this.preemptPreparation();
-    return this.enqueue('classify-dxa', { snapshot, signal, onProgress }, 1);
-  }
-
-  identifyDxa(frame, input, options = {}) {
-    return this.analyze(frame, { ...input, kind: 'dxaLocal' }, options);
   }
 
   warmup({ signal, analysisKinds, onProgress = () => {} } = {}) {
@@ -172,7 +160,7 @@ export class GpuAnalysisClient {
           else { this.warmedUp = true; this.warmedAnalysisKinds.add('voronoi'); }
         }
       }
-      if (data.ok) this.settle(task, null, ['analyze', 'classify-dxa'].includes(task.type) ? data.result : this.cacheStatus);
+      if (data.ok) this.settle(task, null, task.type === 'analyze' ? data.result : this.cacheStatus);
       else { const error = new Error(data.error || 'GPU analysis failed.'); error.name = data.name || 'Error'; this.settle(task, error); }
       if (this.current === task) { this.current = null; this.pump(); }
     });
@@ -206,16 +194,6 @@ export class GpuAnalysisClient {
         totalAtoms: task.frame.fractional.length / 3, workerCount: 1 });
       await yieldToMain();
       if (task.settled) { this.finishDispatch(task); return; }
-      if (task.type === 'classify-dxa') {
-        const { validateGpuDxaSnapshot } = await import('./dxa.js');
-        validateGpuDxaSnapshot(task.snapshot, { validateValues: false });
-        const transfer = [...new Set(['vertices', 'tetrahedra', 'edges', 'transitions'].map(name => task.snapshot[name].buffer))];
-        if (task.settled) { this.finishDispatch(task); return; }
-        if (this.worker !== worker) throw abortError();
-        task.dispatched = true;
-        worker.postMessage({ type: task.type, id: task.id, snapshot: task.snapshot }, transfer);
-        return;
-      }
       let frameId, frameIndex, frame, referenceFrameId, referenceFrameIndex, referenceFrame;
       let parameters = task.parameters;
       let referenceSource;
@@ -273,16 +251,6 @@ export class GpuAnalysisClient {
         delete parameters.referenceCell;
       }
       const positionSources = [];
-      if (task.type === 'analyze' && parameters?.kind === 'dxaLocal') {
-        const { validateGpuDxaLocalInput } = await import('./dxa-local.js');
-        validateGpuDxaLocalInput(task.frame, parameters);
-        const input = {};
-        for (const name of ['coordinates', 'templates', 'inverse']) {
-          input[name] = await copyArray(parameters[name], task);
-          transfer.push(input[name].buffer);
-        }
-        parameters = { ...parameters, ...input };
-      }
       if (task.type === 'analyze' && parameters?.kind === 'displacement') {
         const variant = parameters.minimumImage === false ? 'unwrapped-cartesian' : 'cartesian';
         const positions = {};
@@ -383,7 +351,7 @@ export class GpuAnalysisClient {
     if (keepDevice) { this.resume(); return this.clearFrames(); }
     if (whenIdle) {
       this.releaseWhenIdle = true;
-      for (const task of this.pending.values()) if (!['analyze', 'classify-dxa'].includes(task.type)) this.cancel(task);
+      for (const task of this.pending.values()) if (task.type !== 'analyze') this.cancel(task);
       this.pump();
       return;
     }

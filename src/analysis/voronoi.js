@@ -16,6 +16,8 @@ const MAX_CANDIDATES = 1_000_000;
 let kernelPromise;
 let resident;
 
+export function voronoiKernelMemoryBytes() { return resident?.module.HEAPU8.byteLength ?? 0; }
+
 async function getKernel() {
   if (!kernelPromise) kernelPromise = (async () => {
     let options = {};
@@ -40,7 +42,7 @@ export async function warmupVoronoi({ onPhase = () => {} } = {}) {
   const kernel = await getKernel();
   growPlanes(kernel, 64); growFaces(kernel, 64); growGeometry(kernel, 64, 64, 256);
   kernel.module._alloy_voronoi_init(1);
-  return { warmed: true, kernelReused };
+  return { warmed: true, kernelReused, wasmMemoryBytes: kernel.module.HEAPU8.byteLength };
 }
 
 /** Prepare only the immutable source index; no per-atom cells or statistics

@@ -32,10 +32,10 @@ test('targeted GPU warmup shares just four Voronoi/index pipelines without alloc
   try {
     const status=await runtime.warmup({analysisKinds:['voronoi']});
     assert.equal(status.pipelineCount,4);assert.equal(compiled.length,4);assert.equal(allocations.length,0);
-    assert.equal(runtime.dxaWarmupPromise,null);assert.ok(runtime.pipelines.has(VORONOI_CLIP_SHADER));
+    assert.ok(runtime.pipelines.has(VORONOI_CLIP_SHADER));
     await runtime.warmup({analysisKinds:['voronoi','voronoi']}); assert.equal(compiled.length,4);
-    await runtime.warmup();await runtime.dxaWarmupPromise;
-    assert.equal(compiled.length,27);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
+    await runtime.warmup();
+    assert.equal(compiled.length,23);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
     await assert.rejects(runtime.warmup({analysisKinds:['ptm']}),/analysisKinds/);
   } finally {runtime.close();}
 });
@@ -110,8 +110,8 @@ test('full warmup cancellation frees its task while shared pipelines finish with
     const warming=runtime.warmup({signal:controller.signal}),cancelled=assert.rejects(warming,{name:'AbortError'});
     await until(()=>compiled.includes(COORDINATION_SHADER));controller.abort();await cancelled;
     await runtime.warmup({analysisKinds:['voronoi']});assert.ok(runtime.pipelines.has(VORONOI_CLIP_SHADER));
-    release();await runtime.warmup();await runtime.dxaWarmupPromise;
-    assert.equal(compiled.length,27);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
+    release();await runtime.warmup();
+    assert.equal(compiled.length,23);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
   } finally {release();runtime.close();}
 });
 

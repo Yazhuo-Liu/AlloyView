@@ -1,6 +1,197 @@
 # Validation record
 
-Validation date: 2026-10-06 (America/New_York)
+Validation date: 2026-10-07 (America/New_York)
+
+## DXA lifetime cleanup and isolated routing (2026-10-07)
+
+DXA private-stage input is retained between chunks of the same stage, then
+disposed when that stage ends. Worker objects and initialized Wasm heap
+capacity remain reusable. The displayed JavaScript network and the analysis
+pool's deliberate current-source Voronoi preparation have separate lifetimes.
+The main native kernel now also releases its serialized JSON storage after the
+caller copies out the result. The complete C entry point keeps its returned
+JSON readable until explicit disposal or the next calculation, while releasing
+the native extraction session immediately.
+
+- Both serial and pthread Wasm artifacts were rebuilt. All **1,178 Node tests**
+  pass, including the complete-entry-point output lifetime, idempotent disposal
+  and subsequent staged/complete reuse. Log:
+  `/tmp/alloyview-dxa-cache-node-final.log`.
+- The real 60,229-atom Fe browser check passes two automatic nonisolated calls:
+  four local Workers and three, then two, tetrahedron Workers around one native
+  thread. The complete network and atom labels agree exactly with the serial
+  reference. Every DXA resident key and reservation is cleared at completion;
+  CPU leases and active jobs are zero. The helper modules remain initialized.
+  Log: `/tmp/alloyview-dxa-cache-private-browser.log`.
+- The isolated browser selects **15 native threads**, skips private stage
+  offload entirely and passes two Fe runs with no fallback. Atom labels,
+  closed-loop topology and physical Burgers vectors agree with the serial
+  reference; CPU leases and jobs return to zero. Shared heap capacity stays at
+  **162,004,992 bytes** on both runs. This uses a local server supplying the
+  deployment headers; no remote Cloudflare deployment was performed. Log:
+  `/tmp/alloyview-dxa-cache-isolated-final.log`.
+- The isolated Fe check now uses the existing CPU benchmark's **1%** length
+  tolerance for native parallel PDEL insertion. The old **0.2%** threshold
+  originated in the removed GPU comparison and incorrectly failed a valid
+  native result at **0.226%** deviation. Final parallel lengths are
+  **104.11750** and **104.23133 Å**, versus serial **103.96182 Å**: deviations
+  **0.150%** and **0.259%**. All other scientific checks remain in place, and
+  nonisolated private execution still requires exact equality. No numerical
+  extraction or tessellation algorithm changed for this lifetime cleanup.
+
+## DXA private CPU stage execution (2026-10-07)
+
+Nonisolated hosts now reuse the existing analysis Worker pool for eligible
+local crystal recognition and interface tetrahedron classification. One
+single-threaded coordinator retains the complete global extraction. Automatic
+private stages use at most **four Workers**, with actual retained-heap and
+snapshot budgets reducing the count. Isolated hosts retain the shared-memory
+pthread route, including Geogram PDEL when multiple native threads are selected.
+Ordered cluster/mesh/tracing work still includes serial dependencies.
+
+- All **1,177 Node tests** pass. New coverage includes the complete private
+  local/tetrahedron interface, all five input lattices and perfect-only settings,
+  exact exported cell labels and complete networks, CPU-lease release/reacquire,
+  bounded Worker affinity under contention, measured retained heaps,
+  timeout/cancellation and fatal coordinator cleanup before queued frames.
+  Both serial and threaded Wasm builds pass; **26 native parity tests** cover
+  17 local-recognition cases and nine tetrahedron cases.
+  Log: `/tmp/alloyview-dxa-private-node-final.log`.
+- The real browser source suite passes ordinary nonisolated extraction with
+  two private Workers and exact serial network/atom parity; isolated pthread
+  growth **2 → 3 → 4 → 1**, cancellation and reuse; threaded-module denial,
+  pthread constructor denial, stalled startup and early startup abort; and
+  all **eight** local/tetrahedron constructor, stalled-task, malformed-reply
+  and active cancellation/recovery cases. Private failures complete the native
+  CPU stage with exact output, preserve source buffers, release every CPU
+  lease/job and close all Workers. A later healthy job retries both stages.
+  The stalled-task fixture injects a **150 ms** deadline without changing
+  the production **30 s** chunk deadline. Log:
+  `/tmp/alloyview-dxa-private-parallel-final.log`.
+- Production bundle **d9199f837826d74b** passes the full DXA UI checks on
+  ordinary static hosting (**global one CPU thread, three private Workers**)
+  and isolated hosting (**three native pthreads, no private stage offload**).
+  Changing the GPU preference causes **zero** DXA reruns and preserves the
+  result object. Family styling, lines with all atoms hidden, PNG export,
+  configuration replay, physical/display replication, trajectory updates and
+  phone layout pass. Cancellation during a native global stage preserves an
+  unrelated coordination result; nonisolated extraction terminates its
+  coordinator, while isolated extraction retains its shared coordinator.
+  Logs: `/tmp/alloyview-dxa-private-ui-static-final.log` and
+  `/tmp/alloyview-dxa-private-ui-isolated-final.log`.
+- The remaining GPU regression passes **251 scientific comparisons**:
+  **248 GPU paths** and **three expected CPU fallbacks**, plus **12**
+  cancellation cases, **eight** displacement input validations and **61,719**
+  exact arithmetic comparisons across **8,817** input pairs. Its **19**
+  application checks pass preference routing, configuration replay, dependent
+  arrow cancellation, trajectory residency, replication and source changes.
+  This verifies compatibility of the shared analysis pool and Worker memory
+  telemetry with the other GPU algorithms. Chromium software graphics verifies
+  execution, not physical GPU performance. Log:
+  `/tmp/alloyview-dxa-private-other-gpu-final.log`.
+- The complete real Fe input contains **60,229 atoms**, **60,007 BCC** and
+  **222 Other**. Nonisolated private execution preserves every segment point,
+  length, crystal/spatial Burgers vector, junction, atom label and source
+  statistic exactly against the serial reference. The closed **½⟨111⟩** loop
+  retains **23 points** and length **103.961820921 Å**.
+- A controlled two-Worker profile records warm serial total **3,130.7 ms**,
+  first private run **2,854.5 ms**, and repeat **2,644.4 ms**. Repetition
+  reduces total time by about **15.5%** in that run, with zero new stage
+  kernels and zero stage fallbacks. Log:
+  `/tmp/alloyview-dxa-private-fe-controlled.log`.
+- The automatic profile mirrors application preparation: **18** resident
+  Voronoi Workers, **15** warmed PTM Workers and one prepared DXA coordinator.
+  The browser reports **40 logical processors**; these are individual browser
+  runs rather than reserved CPU cores or a general speed guarantee. A first
+  profile records **3,087.9 → 2,522.3 ms** warm serial/repeated total time
+  (**18.3%** lower), with four local Workers, three tetrahedron Workers on the
+  first call and two on repetition. Preparation takes **1,150.4 ms**, recorded
+  separately. Log: `/tmp/alloyview-dxa-private-fe-auto-final.log`.
+- Six further consecutive automatic calls preserve exact Fe output and
+  keep both private stages active: **local 4 / tetrahedra 3** initially, then
+  **local 4 / tetrahedra 2** on all five repeats, with zero fallbacks. Warm
+  serial time is **3,041.7 ms**; the first call takes **2,620.2 ms**, and repeats
+  take **2,365.8–2,471.9 ms** (mean **2,406.0 ms**, about **21%** lower).
+  Four actual DXA stage heaps stabilize at **65.375 MiB** each after the second
+  call and remain fixed through the sixth. Aggregate pool module capacities
+  stay at **795.5 MiB**, plus **42.305 MiB** resident Voronoi inputs; these are
+  reported buffer capacities, not process RSS. No private snapshot reservations
+  remain after completion. Log:
+  `/tmp/alloyview-dxa-private-fe-auto-stability.log`.
+- The packed Fe tetrahedron snapshot is **65,226,416 bytes** (**62.2 MiB**).
+  First automatic classification copies it to three Workers (**186.6 MiB**);
+  repetitions copy it to two (**124.4 MiB**). Four local Workers copy
+  **5,782,368 bytes** of geometry/cell input. These copies occur per selected
+  Worker, never once per atom, and are included in measured complete run time.
+
+Reproduce the automatic memory/reuse profile with
+`npm run test:browser:fe-loop -- --software --workers=auto --repetitions=6`.
+These tests require no GPU adapter for computation; Chromium software graphics
+does not establish physical GPU performance. Private-stage improvements vary
+with input geometry, available CPU capacity, retained memory and initialization.
+
+## CPU-only DXA baseline before private-stage offload (2026-10-07)
+
+The baseline revision performed complete extraction on CPU Wasm. Isolated hosts
+used one shared heap and a reusable pthread pool; ordinary static hosts and
+threaded initialization failures used the complete serial CPU path. The GPU
+preference controlled other analyses and left DXA results intact. These records
+precede private local-stage Worker offload. Verification commands were
+`npm run test:browser:dxa`,
+`npm run test:browser:dxa -- --isolated` and
+`npm run test:browser:dxa-parallel`, after `npm run build`.
+
+- All **1,128 Node tests** pass. Coverage includes the complete CPU interface,
+  shared-pool reuse, partial/failed startup cleanup, timeout and cancellation,
+  fallback diagnostics and retained serial capabilities after later errors.
+  Log: `/tmp/alloyview-dxa-cpu-node-final.log`.
+- The real browser pthread regression passes nonisolated serial extraction and
+  isolated shared-heap extraction, pool growth **2 → 3 → 4 → 1**, source changes,
+  cancellation, recovery and shutdown. Injected threaded-module fetch denial,
+  pthread constructor denial and an actual child that never acknowledges
+  startup all fall back successfully without repeated attempts or orphan
+  Workers. The stalled-child test shortens the default **15 s** watchdog timer
+  to **1.5 s** in its test shim; it does not change the production deadline.
+- Early cancellation during real pthread startup acknowledges in about **11 ms**
+  in this run, clears `client.current`, releases its CPU lease, retains the
+  coordinator and shared control pointer, and allows a following two-thread
+  extraction in the same kernel. This is a functional observation, not a
+  latency guarantee. Log: `/tmp/alloyview-cpu-dxa-parallel.log`.
+- Production bundle **4a0bea33ea0cdb2d** passes the DXA UI browser checks both
+  without isolation (**one CPU thread**) and with isolation (**three CPU
+  threads**). GPU preference changes cause **zero** DXA reruns and preserve the
+  result object. Family styling, lines with all atoms hidden, PNG export,
+  configuration replay, physical/display replication, trajectory updates and
+  phone layout pass. Cancellation preserves an unrelated coordination result;
+  serial extraction replaces its terminated Worker, while shared extraction
+  retains its coordinator and kernel generation. Logs:
+  `/tmp/alloyview-cpu-dxa-ui-static.log` and
+  `/tmp/alloyview-cpu-dxa-ui-isolated.log`.
+- The adapted real Fe-loop browser check includes all **60,229 atoms**:
+  **60,007 BCC** and **222 Other**, one closed finite **½⟨111⟩** loop with
+  **23 points**, length **103.961820921 Å**, and reciprocal endpoint
+  self-junctions. Cold/warm atom labels match; line-length and physical Burgers
+  differences are **zero**, and both runs retain kernel generation **1** and
+  its heap. Log: `/tmp/alloyview-cpu-dxa-fe-loop.log`.
+- `npm run test:gpu -- --software` passes **251 scientific comparisons** for
+  the remaining analysis algorithms: **248 GPU paths** and **three expected
+  CPU fallbacks**, plus **12 cancellation cases**, **eight displacement input
+  validations** and **61,719 exact arithmetic comparisons**. Application
+  checks pass CPU/GPU preference routing, configuration replay, dependent-arrow
+  cancellation, trajectory residency, physical replication and source changes.
+  This confirms that removing the DXA GPU routes preserves other GPU features.
+  Log: `/tmp/alloyview-dxa-cpu-other-gpu.log`.
+
+These browser runs use Chromium with software graphics where needed. They
+verify execution and scientific invariants, not physical GPU performance or a
+general CPU speedup. Cloudflare `_headers` are copied exactly into the build;
+the deployment tests verify their global COOP/COEP/CORP rule.
+
+Earlier DXA GPU results below are retained as historical measurements against
+the revisions then tested. Their retired `dxa-gpu`, `dxa-local-gpu` and `dxa-f64`
+commands are not current regression commands. These records do not imply a
+currently available GPU DXA backend or change other analyses' GPU validation.
+Commands shown with earlier DXA GPU records require the revision then tested.
 
 ## Voronoi edges, selection and load-time preparation
 
@@ -549,7 +740,7 @@ Reproduce with `npm test`, `npm run build`, `npm run test:browser`,
 `npm run test:browser:fe-lattice-gpu`.
 GPU results here use a software adapter and do not establish hardware speed.
 
-## GPU local DXA correspondence
+## Historical GPU local DXA correspondence
 
 The next DXA stage runs nearest-shell search, local CNA and ordered ideal-bond
 graph matching on the existing WebGPU device. Neighbor vectors remain resident
@@ -613,7 +804,7 @@ the production smoke test's initial 60-second extraction timeout. The test now
 allows 180 seconds for extraction and passed on a separate run; this changes
 the validation deadline, not product behavior.
 
-## Hybrid GPU DXA
+## Historical hybrid GPU DXA
 
 The preceding migration ran tetrahedron alpha filtering and elastic-compatibility checks on
 the existing WebGPU device, then continues interface construction and tracing

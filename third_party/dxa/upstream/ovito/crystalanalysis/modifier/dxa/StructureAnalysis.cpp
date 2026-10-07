@@ -72,6 +72,7 @@ StructureAnalysis::StructureAnalysis(ConstPropertyPtr positions, const Simulatio
     _atomClustersArray(_atomClusters),
     _atomSymmetryPermutations(positions->size()),
     _clusterGraph(std::make_shared<ClusterGraph>()),
+    _maximumNeighborDistance(0),
     _preferredCrystalOrientations(std::move(preferredCrystalOrientations)),
     _identifyPlanarDefects(identifyPlanarDefects)
 {
@@ -453,76 +454,101 @@ void StructureAnalysis::initializeListOfStructures()
 ******************************************************************************/
 bool StructureAnalysis::identifyStructures()
 {
-    // Prepare the neighbor list.
-    int maxNeighborListSize = std::min((int)_neighborListsSize + 1, (int)MAX_NEIGHBORS);
-    NearestNeighborFinder neighFinder(maxNeighborListSize);
-    if(!neighFinder.prepare(positions(), cell(), _particleSelection.buffer()))
-        return false;
+    bool success = identifyStructuresRange(0, positions()->size());
+    // The whole-frame pipeline does not need the search once recognition ends.
+    _localNeighborFinder.reset();
+    return success;
+}
 
-    // Identify local structure around each particle.
+/******************************************************************************
+* Identifies an atom range with the unchanged local recognition algorithm.
+******************************************************************************/
+bool StructureAnalysis::identifyStructuresRange(size_t start, size_t end)
+{
+    if(start > end || end > positions()->size() ||
+            _neighborLists.size() != positions()->size() * _neighborListsSize)
+        throw Exception("Invalid CPU DXA local atom range.");
     _maximumNeighborDistance = 0;
+    if(Task::current()->isCanceled())
+        return false;
+    if(start == end)
+        return true;
 
-    return parallelForWithProgress(positions()->size(), [this, &neighFinder](size_t index) {
-        determineLocalStructure(neighFinder, index);
+    // Reset the assigned rows, including when a worker repeats or overlaps a job.
+    std::fill(_structureTypesArray.begin() + start, _structureTypesArray.begin() + end, COORD_OTHER);
+    std::fill(_neighborLists.begin() + start * _neighborListsSize,
+            _neighborLists.begin() + end * _neighborListsSize, -1);
+    std::fill(_atomSymmetryPermutations.begin() + start, _atomSymmetryPermutations.begin() + end, 0);
+
+    if(!_localNeighborFinder) {
+        int maxNeighborListSize = std::min((int)_neighborListsSize + 1, (int)MAX_NEIGHBORS);
+        auto finder = std::make_shared<NearestNeighborFinder>(maxNeighborListSize);
+        if(!finder->prepare(positions(), cell(), _particleSelection.buffer()))
+            return false;
+        _localNeighborFinder = std::move(finder);
+    }
+
+    return parallelForWithProgress(end - start, [this, start](size_t index) {
+        determineLocalStructure(*_localNeighborFinder, start + index);
     });
 }
 
 /******************************************************************************
-* Imports the immutable output of the headless GPU local-structure stage.
+* Validates and imports ordered local results from the original CPU algorithm.
 ******************************************************************************/
-bool StructureAnalysis::importLocalStructures(const int32_t* structureTypes,
-        const int32_t* neighbors, size_t particleCount, size_t neighborWidth,
-        FloatType maximumDistance)
+bool StructureAnalysis::importLocalStructures(const int32_t* structures, const int32_t* neighbors,
+        size_t particleCount, size_t neighborWidth, FloatType maximumDistance)
 {
-    if(!structureTypes || !neighbors || particleCount != positions()->size() ||
-            neighborWidth != _neighborListsSize || !std::isfinite(maximumDistance) ||
-            maximumDistance < 0)
-        throw Exception("DXA GPU local structures have inconsistent dimensions or cutoff.");
+    if(!structures || !neighbors || particleCount != positions()->size() ||
+            neighborWidth != _neighborListsSize ||
+            _neighborLists.size() != particleCount * neighborWidth ||
+            !std::isfinite(maximumDistance) || maximumDistance < 0)
+        throw Exception("Invalid CPU DXA local result dimensions or neighbor distance.");
 
     bool anyCrystal = false;
-    // Validate the complete borrowed input before changing native arrays.
-    // Image/half-cell checks belong to the GPU stage, which retains its exact
-    // selected vectors; atom indices alone cannot identify periodic images.
-    for(size_t atom = 0; atom < particleCount; ++atom) {
-        if((atom & 1023) == 0 && Task::current()->isCanceled()) return false;
-        const int type = structureTypes[atom];
-        bool allowed = type == LATTICE_OTHER || type == _inputCrystalType;
-        if(_identifyPlanarDefects) {
-            if(_inputCrystalType == LATTICE_FCC || _inputCrystalType == LATTICE_HCP)
-                allowed = type == LATTICE_OTHER || type == LATTICE_FCC || type == LATTICE_HCP;
-            else if(_inputCrystalType == LATTICE_CUBIC_DIAMOND || _inputCrystalType == LATTICE_HEX_DIAMOND)
-                allowed = type == LATTICE_OTHER || type == LATTICE_CUBIC_DIAMOND || type == LATTICE_HEX_DIAMOND;
-        }
+    for(size_t atom = 0; atom < particleCount; atom++) {
+        if((atom & 1023) == 0 && Task::current()->isCanceled())
+            return false;
+        int type = structures[atom];
+        bool allowed = type == COORD_OTHER || type == _inputCrystalType;
+        if(_identifyPlanarDefects && (_inputCrystalType == LATTICE_FCC || _inputCrystalType == LATTICE_HCP))
+            allowed = allowed || type == COORD_FCC || type == COORD_HCP;
+        if(_identifyPlanarDefects && (_inputCrystalType == LATTICE_CUBIC_DIAMOND || _inputCrystalType == LATTICE_HEX_DIAMOND))
+            allowed = allowed || type == COORD_CUBIC_DIAMOND || type == COORD_HEX_DIAMOND;
         if(!allowed)
-            throw Exception("DXA GPU local structures contain an invalid crystal type.");
+            throw Exception("CPU DXA local results contain an invalid structure type.");
+
         const int32_t* row = neighbors + atom * neighborWidth;
-        if(type == LATTICE_OTHER) {
-            for(size_t index = 0; index < neighborWidth; ++index)
-                if(row[index] != -1)
-                    throw Exception("DXA GPU unmatched atoms must have empty neighbor rows.");
+        if(type == COORD_OTHER) {
+            for(size_t entry = 0; entry < neighborWidth; entry++)
+                if(row[entry] != -1)
+                    throw Exception("Unidentified CPU DXA atoms must have empty neighbor rows.");
             continue;
         }
         anyCrystal = true;
-        if(size_t(_coordinationStructures[type].numNeighbors) != neighborWidth)
-            throw Exception("DXA GPU local structures have an inconsistent neighbor width.");
-        for(size_t index = 0; index < neighborWidth; ++index) {
-            if(row[index] < 0 || size_t(row[index]) >= particleCount || size_t(row[index]) == atom)
-                throw Exception("DXA GPU local structures contain an invalid neighbor index.");
-            for(size_t previous = 0; previous < index; ++previous)
-                if(row[index] == row[previous])
-                    throw Exception("DXA GPU local structures contain duplicate neighbors.");
-        }
+        if(static_cast<size_t>(_coordinationStructures[type].numNeighbors) != neighborWidth)
+            throw Exception("CPU DXA local results have an incompatible neighbor width.");
+        for(size_t entry = 0; entry < neighborWidth; entry++)
+            if(row[entry] < 0 || static_cast<size_t>(row[entry]) >= particleCount ||
+                    static_cast<size_t>(row[entry]) == atom)
+                throw Exception("CPU DXA local results contain an invalid neighbor index.");
+        // Multiple periodic images can have the same atom ID. Preserve the native
+        // row, including duplicates, instead of changing recognition acceptance.
     }
     if((anyCrystal && maximumDistance <= 0) || (!anyCrystal && maximumDistance != 0))
-        throw Exception("DXA GPU local structures have an inconsistent crystal cutoff.");
+        throw Exception("CPU DXA local results have an inconsistent neighbor distance.");
 
-    for(size_t atom = 0; atom < particleCount; ++atom) {
-        if((atom & 1023) == 0 && Task::current()->isCanceled()) return false;
-        _structureTypesArray[atom] = structureTypes[atom];
+    // Validate the entire frame before changing its scientific results.
+    for(size_t atom = 0; atom < particleCount; atom++) {
+        if((atom & 1023) == 0 && Task::current()->isCanceled())
+            return false;
+        _structureTypesArray[atom] = structures[atom];
         std::copy_n(neighbors + atom * neighborWidth, neighborWidth,
-            _neighborLists.data() + atom * neighborWidth);
+                _neighborLists.begin() + atom * neighborWidth);
     }
-    _maximumNeighborDistance.store(maximumDistance, std::memory_order_relaxed);
+    std::fill(_atomSymmetryPermutations.begin(), _atomSymmetryPermutations.end(), 0);
+    _maximumNeighborDistance = maximumDistance;
+    _localNeighborFinder.reset();
     return true;
 }
 

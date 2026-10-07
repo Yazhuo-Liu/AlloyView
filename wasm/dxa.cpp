@@ -5,11 +5,11 @@
 #include <ovito/crystalanalysis/modifier/dxa/InterfaceMesh.h>
 #include <ovito/crystalanalysis/modifier/dxa/DislocationTracer.h>
 #include <geometry/DelaunayTessellation.h>
+#include <cstring>
+#include <unordered_map>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
-#include <cstring>
-#include <unordered_map>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 EM_JS(void, alloy_dxa_progress, (const char* phase, int completed, int total), {
@@ -57,7 +57,7 @@ __attribute__((noinline)) bool packTetrahedra(const DelaunayTessellation& tessel
         return 0;
     };
     // Each worker writes only its own fixed tetrahedron row; exceptions and
-    // cancellation join every worker before snapshot cleanup/fallback.
+    // cancellation join every worker before CPU stage snapshot cleanup/fallback.
     return parallelForWithProgress(tets, [&](size_t tet) {
         uint32_t* row = tetData + tet * 16;
         const bool finite = tessellation.isFiniteCell(tet);
@@ -66,22 +66,22 @@ __attribute__((noinline)) bool packTetrahedra(const DelaunayTessellation& tessel
             row[vertex] = finite ? tessellation.cellVertex(tet, vertex) : 0;
             row[4 + vertex] = tessellation.cellAdjacent(tet, vertex);
             if (row[4 + vertex] >= tets || (finite && row[vertex] >= vertices))
-                throw std::runtime_error("DXA snapshot contains an invalid tessellation index.");
+                throw std::runtime_error("DXA CPU stage snapshot contains an invalid tessellation index.");
         }
         if (!finite) return;
         uint32_t atoms[4];
         for (int vertex = 0; vertex < 4; ++vertex) {
             atoms[vertex] = static_cast<uint32_t>(tessellation.vertexIndex(row[vertex]));
             if (atoms[vertex] >= atomCount)
-                throw std::runtime_error("DXA snapshot contains an invalid tessellation index.");
+                throw std::runtime_error("DXA CPU stage snapshot contains an invalid tessellation index.");
         }
         for (int edge = 0; edge < 6; ++edge)
             row[8 + edge] = orientedEdge(atoms[edgeVertices[edge][0]], atoms[edgeVertices[edge][1]]);
     });
 }
 
-// One whole-frame scientific pipeline. It lives in the existing reusable Wasm
-// heap while JavaScript dispatches the immutable GPU classification stage.
+// One whole-frame CPU pipeline retained in the reusable Wasm heap between
+// topology preparation and interface construction/tracing. Pthreads share it.
 struct DxaSession {
     SimulationCellObject cell;
     PropertyPtr positions, structures;
@@ -93,15 +93,13 @@ struct DxaSession {
     ProgressingTask operation;
     int count, lattice, smoothing;
     double coarsening;
-    std::vector<double> vertexData, transitionData;
-    std::vector<Point3> localInputPositions;
-    std::array<double, 9> localInverse;
-    std::vector<uint32_t> tetData, edgeData;
-    std::vector<int32_t> cpuRegions;
-    bool exported = false;
-    bool cpuRegionsComplete = false;
-    bool localIdentified = false;
     bool mappingReady = false;
+    bool workerSnapshotReady = false;
+    bool meshConstructed = false;
+    std::vector<double> vertexData, transitionData;
+    std::vector<uint32_t> tetData, edgeData;
+    std::vector<int32_t> workerRegions;
+    std::vector<int32_t> diagnosticRegions;
 
     DxaSession(const AffineTransformation& matrix, int pbcBits, int atomCount,
             int latticeType, int trial, int stretch, int perfectOnly,
@@ -121,45 +119,16 @@ struct DxaSession {
         mapping = std::make_unique<ElasticMapping>(*structure, tessellation);
         interfaceMesh = std::make_unique<InterfaceMesh>(*mapping);
         tracer = std::make_unique<DislocationTracer>(*interfaceMesh, structure->clusterGraph(), trial, stretch);
-        for (int component = 0; component < 9; ++component)
-            localInverse[component] = cell.inverseMatrix()(component % 3, component / 3);
     }
-
-    const double* exportLocalPositions() {
-        if (localInputPositions.empty()) {
-            localInputPositions.resize(count);
-            BufferReadAccess<Point3> source(positions);
-            // Mirror NearestNeighborFinder::prepare, including its Cartesian
-            // subtraction order and the occasional second boundary wrap.
-            for (int atom = 0; atom < count; ++atom) {
-                if ((atom & 1023) == 0) requireStage(true);
-                Point3 point = source[atom];
-                Point3 reduced = cell.reciprocalCellMatrix() * point;
-                for (int axis = 0; axis < 3; ++axis) {
-                    if (cell.hasPbc(axis)) {
-                        if (const double shift = std::floor(reduced[axis])) {
-                            reduced[axis] -= shift;
-                            point -= shift * cell.matrix().column(axis);
-                        }
-                    }
-                }
-                localInputPositions[atom] = point;
-            }
-        }
-        static_assert(sizeof(Point3) == 3 * sizeof(double), "DXA local positions require packed doubles.");
-        return localInputPositions.front().data();
-    }
-    void releaseLocalInput() { std::vector<Point3>().swap(localInputPositions); }
-
     size_t transitionCount() const {
         // All self-transitions have the same exact identity operation and share
         // slot zero. The graph lists one transition of each pair; edges can use
         // either direction, so each transition and its reverse get a slot.
         return 2 * structure->clusterGraph()->clusterTransitions().size() + 1;
     }
-    size_t edgeCount() const { return mapping->tessellationEdgeCount() + 1; }
+    size_t edgeCount() const { return mapping->workerEdgeCount() + 1; }
     uint64_t snapshotBytes() const {
-        return uint64_t(tessellation.numberOfVertices()) * 24 +
+        return uint64_t(tessellation.workerVertexCount()) * 24 +
             uint64_t(tessellation.numberOfTetrahedra()) * 64 +
             uint64_t(edgeCount()) * 32 + uint64_t(transitionCount()) * 160;
     }
@@ -168,14 +137,14 @@ struct DxaSession {
         std::vector<double>().swap(transitionData);
         std::vector<uint32_t>().swap(tetData);
         std::vector<uint32_t>().swap(edgeData);
-        exported = false;
+        workerSnapshotReady = false;
     }
 
     void exportSnapshot(uint32_t budgetBytes) {
-        if (exported) return;
+        if (workerSnapshotReady) return;
         requireStage(true);
         if (!mappingReady) throw std::runtime_error("DXA crystal mapping has not been constructed.");
-        const size_t vertices = tessellation.numberOfVertices();
+        const size_t vertices = tessellation.workerVertexCount();
         const size_t tets = tessellation.numberOfTetrahedra();
         const size_t edges = edgeCount(), transitions = transitionCount();
         // Includes the temporary vertex-pair index and transition map used
@@ -186,7 +155,7 @@ struct DxaSession {
         if (vertices > std::numeric_limits<int32_t>::max() ||
                 tets > std::numeric_limits<int32_t>::max() || edges >= reversedEdge ||
                 transitions >= noTransition || workingBytes > budgetBytes)
-            throw std::runtime_error("DXA immutable GPU workspace exceeds the export memory budget.");
+            throw std::runtime_error("DXA immutable CPU Worker workspace exceeds the export memory budget.");
         vertexData.resize(vertices * 3);
         tetData.resize(tets * 16);
         edgeData.resize(edges * 8);
@@ -224,7 +193,7 @@ struct DxaSession {
         edgeData[6] = noTransition;
         std::vector<uint32_t> edgeVertices1(edges), edgeVertices2(edges), adjacencyStart(size_t(count) + 2);
         uint32_t edgeIndex = 1;
-        mapping->visitTessellationEdges([&](const auto& edge) {
+        mapping->visitWorkerEdges([&](const auto& edge) {
             if ((edgeIndex & 1023) == 0) requireStage(true);
             if (edge.vertex1 >= size_t(count) || edge.vertex2 >= size_t(count))
                 throw std::runtime_error("DXA snapshot contains an invalid tessellation edge.");
@@ -264,35 +233,33 @@ struct DxaSession {
         // The index is complete and immutable before any worker reads it.
         requireStage(packTetrahedra(tessellation, tetData.data(), tets, vertices, uint32_t(count),
             adjacencyStart.data(), adjacency.data()));
-        exported = true;
+        workerSnapshotReady = true;
     }
 
-    const int32_t* expectedRegions() {
-        if (!mappingReady) throw std::runtime_error("DXA crystal mapping has not been constructed.");
-        if (cpuRegionsComplete) return cpuRegions.data();
-        cpuRegions.assign(tessellation.numberOfTetrahedra(), -1);
-        const double alpha = 5.0 * structure->maximumNeighborDistance();
-        requireStage(parallelForWithProgress(cpuRegions.size(), [&](size_t tet) {
-            if (!tessellation.isFiniteCell(tet)) return;
-            bool filled = false;
-            if (const auto result = tessellation.alphaTest(tet, alpha)) filled = *result;
-            else {
-                int face = 0;
-                for (; face < 4; ++face) {
-                    const auto adjacent = tessellation.cellAdjacent(tet, face);
-                    if (!tessellation.isFiniteCell(adjacent)) break;
-                    const auto adjacentResult = tessellation.alphaTest(adjacent, alpha);
-                    if (adjacentResult && !*adjacentResult) break;
-                }
-                filled = face == 4;
-            }
-            if (filled && mapping->isElasticMappingCompatible(tet)) cpuRegions[tet] = 0;
-        }));
-        cpuRegionsComplete = true;
-        return cpuRegions.data();
-    }
 };
 std::unique_ptr<DxaSession> activeSession;
+
+
+void buildCpuMapping(DxaSession& session) {
+    auto& structure = *session.structure;
+    auto& mapping = *session.mapping;
+    alloy_dxa_progress("Build crystal clusters", 1, 11);
+    requireStage(structure.buildClusters());
+    alloy_dxa_progress("Connect crystal reference frames", 2, 11);
+    requireStage(structure.connectClusters());
+    alloy_dxa_progress("Periodic Delaunay tessellation", 3, 11);
+    requireStage(session.tessellation.generateTessellation(structure.cell(),
+        BufferReadAccess<Point3>(session.positions).cbegin(), session.count,
+        3.5 * structure.maximumNeighborDistance(), false, nullptr, session.operation));
+    alloy_dxa_progress("Build tessellation edges", 4, 11);
+    requireStage(mapping.generateTessellationEdges(session.operation));
+    alloy_dxa_progress("Assign crystal clusters", 5, 11);
+    requireStage(mapping.assignVerticesToClusters(session.operation));
+    alloy_dxa_progress("Map edges to the ideal lattice", 6, 11);
+    requireStage(mapping.assignIdealVectorsToEdges(4, session.operation));
+    structure.freeNeighborLists();
+    session.mappingReady = true;
+}
 
 void saveCurrentError(bool dispose) {
     try { throw; }
@@ -319,9 +286,10 @@ void alloy_dxa_reset_cancel() {
     dxaCancellationWord().store(0, std::memory_order_relaxed);
     Task::current()->resetCancellation();
 }
-void alloy_dxa_dispose() { activeSession.reset(); }
-void alloy_dxa_release_snapshot() { if (activeSession) activeSession->clearSnapshot(); }
-void alloy_dxa_release_local_input() { if (activeSession) activeSession->releaseLocalInput(); }
+void alloy_dxa_dispose() {
+    activeSession.reset();
+    std::string().swap(resultJson);
+}
 
 // Vectors are column vectors; cell[9..11] is the Cartesian origin. Periodicity
 // is encoded in bits 0, 1 and 2, including for a tilted simulation cell.
@@ -330,7 +298,7 @@ int alloy_dxa_prepare(const double* coordinates, int count,
         int perfectOnly, int smoothing, double coarsening) {
     activeSession.reset();
     lastError.clear();
-    resultJson.clear();
+    std::string().swap(resultJson);
     try {
         requireStage(true);
         if (!coordinates || !cellData || count < 1)
@@ -351,213 +319,116 @@ int alloy_dxa_prepare(const double* coordinates, int count,
             trial, stretch, perfectOnly, smoothing, coarsening);
         auto& session = *activeSession;
         if (session.cell.isDegenerate()) throw std::runtime_error("Simulation cell is degenerate.");
-        BufferWriteAccess<Point3> positionAccess(session.positions);
-        for (int i = 0; i < count; ++i) {
-            if ((i & 1023) == 0) requireStage(true);
-            const double* p = coordinates + static_cast<size_t>(i) * 3;
-            if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
-                throw std::runtime_error("DXA atom coordinates must be finite.");
-            positionAccess[i] = Point3(p[0], p[1], p[2]);
-        }
-        return 1;
-    } catch (...) { saveCurrentError(true); }
-    return 0;
-}
-
-int alloy_dxa_local_neighbor_width() {
-    return activeSession ? int(activeSession->structure->neighborListWidth()) : 0;
-}
-const uint32_t* alloy_dxa_local_templates_ptr() {
-    if (!activeSession) return nullptr;
-    static std::array<uint32_t, 5 * 33> templates;
-    for (int type = 1; type <= 5; ++type) {
-        const auto& coordination = *StructureAnalysis::latticeStructure(type).coordStructure;
-        uint32_t* row = templates.data() + size_t(type - 1) * 33;
-        row[0] = coordination.numNeighbors;
-        for (int neighbor = 0; neighbor < 16; ++neighbor) {
-            row[1 + neighbor] = neighbor < coordination.numNeighbors ? coordination.cnaSignatures[neighbor] : 0;
-            row[17 + neighbor] = neighbor < coordination.numNeighbors ? coordination.neighborArray.neighborArray[neighbor] : 0;
-        }
-    }
-    return templates.data();
-}
-const double* alloy_dxa_local_positions_ptr() {
-    lastError.clear();
-    try {
-        requireStage(true);
-        if (!activeSession) throw std::runtime_error("DXA has no active staged analysis.");
-        return activeSession->exportLocalPositions();
-    } catch (...) {
-        saveCurrentError(false);
-        if (activeSession) activeSession->releaseLocalInput();
-    }
-    return nullptr;
-}
-const double* alloy_dxa_local_inverse_ptr() {
-    return activeSession ? activeSession->localInverse.data() : nullptr;
-}
-const int32_t* alloy_dxa_local_types_ptr() {
-    return activeSession && activeSession->localIdentified
-        ? static_cast<const int32_t*>(activeSession->structures->data()) : nullptr;
-}
-const int32_t* alloy_dxa_local_neighbors_ptr() {
-    return activeSession && activeSession->localIdentified
-        ? activeSession->structure->neighborListData() : nullptr;
-}
-double alloy_dxa_local_max_distance() {
-    return activeSession && activeSession->localIdentified
-        ? activeSession->structure->maximumNeighborDistance() : 0;
-}
-int alloy_dxa_identify_local_cpu() {
-    lastError.clear();
-    try {
-        requireStage(true);
-        if (!activeSession) throw std::runtime_error("DXA has no active staged analysis.");
-        auto& session = *activeSession;
-        if (session.mappingReady) throw std::runtime_error("DXA crystal mapping has already been constructed.");
-        if (!session.localIdentified) {
-            alloy_dxa_progress("Identify local crystal structures", 0, 11);
-            requireStage(session.structure->identifyStructures());
-            session.localIdentified = true;
-        }
-        return 1;
-    } catch (...) { saveCurrentError(true); }
-    return 0;
-}
-
-// A GPU local stage supplies only its identified types and ideal-ordered atom
-// indices. Failed or unsupported dispatch uses null input in this same session.
-int alloy_dxa_build_mapping(const int32_t* types, const int32_t* neighbors,
-        int width, double maximumDistance) {
-    lastError.clear();
-    bool validatingImport = false;
-    try {
-        requireStage(true);
-        if (!activeSession) throw std::runtime_error("DXA has no active staged analysis.");
-        auto& session = *activeSession;
-        if (session.mappingReady) throw std::runtime_error("DXA crystal mapping has already been constructed.");
-        auto& structure = *session.structure;
-        auto& mapping = *session.mapping;
-        if (types) {
-            alloy_dxa_progress("Import GPU local crystal structures", 0, 11);
-            validatingImport = true;
-            requireStage(structure.importLocalStructures(types, neighbors, session.count,
-                width, maximumDistance));
-            validatingImport = false;
-            session.localIdentified = true;
-        } else {
-            if (neighbors || width || maximumDistance)
-                throw std::runtime_error("DXA CPU local fallback requires empty imported arrays.");
-            if (!session.localIdentified) {
-                alloy_dxa_progress("Identify local crystal structures", 0, 11);
-                requireStage(structure.identifyStructures());
-                session.localIdentified = true;
+        {
+            BufferWriteAccess<Point3> positionAccess(session.positions);
+            for (int i = 0; i < count; ++i) {
+                if ((i & 1023) == 0) requireStage(true);
+                const double* p = coordinates + static_cast<size_t>(i) * 3;
+                if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
+                    throw std::runtime_error("DXA atom coordinates must be finite.");
+                positionAccess[i] = Point3(p[0], p[1], p[2]);
             }
         }
-        session.releaseLocalInput();
-        alloy_dxa_progress("Build crystal clusters", 1, 11);
-        requireStage(structure.buildClusters());
-        alloy_dxa_progress("Connect crystal reference frames", 2, 11);
-        requireStage(structure.connectClusters());
-        alloy_dxa_progress("Periodic Delaunay tessellation", 3, 11);
-        requireStage(session.tessellation.generateTessellation(structure.cell(),
-            BufferReadAccess<Point3>(session.positions).cbegin(), session.count,
-            3.5 * structure.maximumNeighborDistance(), false, nullptr, session.operation));
-        alloy_dxa_progress("Build tessellation edges", 4, 11);
-        requireStage(mapping.generateTessellationEdges(session.operation));
-        alloy_dxa_progress("Assign crystal clusters", 5, 11);
-        requireStage(mapping.assignVerticesToClusters(session.operation));
-        alloy_dxa_progress("Map edges to the ideal lattice", 6, 11);
-        requireStage(mapping.assignIdealVectorsToEdges(4, session.operation));
-        structure.freeNeighborLists();
-        session.mappingReady = true;
         return 1;
-    } catch (...) {
-        // Invalid immutable GPU rows have not modified native arrays, so a
-        // fallback can identify the same retained input on CPU. Cancellation
-        // and failures after graph construction dispose the scientific frame.
-        saveCurrentError(!validatingImport || Task::current()->isCanceled());
-    }
+    } catch (...) { saveCurrentError(true); }
     return 0;
 }
 
-// Backward-compatible staged CPU preparation remains a composition of the new
-// input stage and the original complete mapping/geometry implementation.
 int alloy_dxa_begin(const double* coordinates, int count,
         const double* cellData, int pbcBits, int lattice, int trial, int stretch,
         int perfectOnly, int smoothing, double coarsening) {
-    if (!alloy_dxa_prepare(coordinates, count, cellData, pbcBits, lattice, trial,
+    if(!alloy_dxa_prepare(coordinates, count, cellData, pbcBits, lattice, trial,
             stretch, perfectOnly, smoothing, coarsening)) return 0;
-    return alloy_dxa_build_mapping(nullptr, nullptr, 0, 0);
+    try {
+        alloy_dxa_progress("Identify local crystal structures", 0, 11);
+        requireStage(activeSession->structure->identifyStructures());
+        buildCpuMapping(*activeSession);
+        return 1;
+    } catch (...) { saveCurrentError(true); }
+    return 0;
 }
 
-int alloy_dxa_vertex_count() {
-    return activeSession && activeSession->mappingReady ? activeSession->tessellation.numberOfVertices() : 0;
-}
-int alloy_dxa_tet_count() {
-    return activeSession && activeSession->mappingReady ? activeSession->tessellation.numberOfTetrahedra() : 0;
-}
-int alloy_dxa_edge_count() { return activeSession && activeSession->mappingReady ? activeSession->edgeCount() : 0; }
-int alloy_dxa_transition_count() { return activeSession && activeSession->mappingReady ? activeSession->transitionCount() : 0; }
-double alloy_dxa_snapshot_bytes() {
-    return activeSession && activeSession->mappingReady ? double(activeSession->snapshotBytes()) : 0;
-}
-double alloy_dxa_alpha() {
-    return activeSession && activeSession->localIdentified
-        ? 5.0 * activeSession->structure->maximumNeighborDistance() : 0;
-}
-const double* alloy_dxa_vertex_ptr() { return activeSession && activeSession->exported ? activeSession->vertexData.data() : nullptr; }
-const uint32_t* alloy_dxa_tet_ptr() { return activeSession && activeSession->exported ? activeSession->tetData.data() : nullptr; }
-const uint32_t* alloy_dxa_edge_ptr() { return activeSession && activeSession->exported ? activeSession->edgeData.data() : nullptr; }
-const double* alloy_dxa_transition_ptr() { return activeSession && activeSession->exported ? activeSession->transitionData.data() : nullptr; }
-int alloy_dxa_export(uint32_t budgetBytes) {
+int alloy_dxa_import_local(const int32_t* types, const int32_t* neighbors,
+        int count, int width, double maximumDistance) {
     lastError.clear();
     try {
-        if (!activeSession) throw std::runtime_error("DXA has no active staged analysis.");
+        requireStage(true);
+        if(!activeSession || activeSession->mappingReady || count < 1 || width < 1)
+            throw std::runtime_error("CPU DXA has no prepared local-analysis workspace.");
+        requireStage(activeSession->structure->importLocalStructures(types, neighbors,
+            count, width, maximumDistance));
+        buildCpuMapping(*activeSession);
+        return 1;
+    } catch (...) { saveCurrentError(true); }
+    return 0;
+}
+
+int alloy_dxa_worker_snapshot(uint32_t budgetBytes) {
+    lastError.clear();
+    try {
+        if(!activeSession) throw std::runtime_error("CPU DXA has no prepared topology.");
         activeSession->exportSnapshot(budgetBytes);
         return 1;
     } catch (...) {
         saveCurrentError(false);
-        if (activeSession) activeSession->clearSnapshot();
+        if(activeSession) activeSession->clearSnapshot();
     }
     return 0;
 }
-const int32_t* alloy_dxa_cpu_regions_ptr() {
+void alloy_dxa_release_worker_snapshot() { if(activeSession) activeSession->clearSnapshot(); }
+int alloy_dxa_worker_vertex_count() { return activeSession ? activeSession->tessellation.workerVertexCount() : 0; }
+int alloy_dxa_worker_tet_count() { return activeSession ? activeSession->tessellation.numberOfTetrahedra() : 0; }
+int alloy_dxa_worker_edge_count() { return activeSession ? activeSession->edgeCount() : 0; }
+int alloy_dxa_worker_transition_count() { return activeSession ? activeSession->transitionCount() : 0; }
+double alloy_dxa_worker_snapshot_bytes() { return activeSession ? activeSession->snapshotBytes() : 0; }
+double alloy_dxa_worker_alpha() { return activeSession ? 5.0 * activeSession->structure->maximumNeighborDistance() : 0; }
+const double* alloy_dxa_worker_vertex_ptr() { return activeSession && activeSession->workerSnapshotReady ? activeSession->vertexData.data() : nullptr; }
+const uint32_t* alloy_dxa_worker_tet_ptr() { return activeSession && activeSession->workerSnapshotReady ? activeSession->tetData.data() : nullptr; }
+const uint32_t* alloy_dxa_worker_edge_ptr() { return activeSession && activeSession->workerSnapshotReady ? activeSession->edgeData.data() : nullptr; }
+const double* alloy_dxa_worker_transition_ptr() { return activeSession && activeSession->workerSnapshotReady ? activeSession->transitionData.data() : nullptr; }
+int alloy_dxa_import_regions(const int32_t* regions, int count) {
     lastError.clear();
     try {
-        if (!activeSession) throw std::runtime_error("DXA has no active staged analysis.");
-        return activeSession->expectedRegions();
+        requireStage(true);
+        if(!activeSession || !activeSession->mappingReady || !regions || count < 1 ||
+                size_t(count) != activeSession->tessellation.numberOfTetrahedra())
+            throw std::runtime_error("CPU DXA classification has invalid dimensions.");
+        for(int index = 0; index < count; ++index) {
+            if((index & 1023) == 0) requireStage(true);
+            if(regions[index] != -1 && regions[index] != 0)
+                throw std::runtime_error("CPU DXA classification contains invalid region labels.");
+        }
+        activeSession->workerRegions.assign(regions, regions + count);
+        return 1;
+    } catch (...) { saveCurrentError(false); }
+    return 0;
+}
+
+// Read back the actual manifold classifier's labels for scientific parity
+// diagnostics. This is allocated on demand and is unused by normal extraction.
+const int32_t* alloy_dxa_worker_regions_ptr() {
+    lastError.clear();
+    try {
+        if(!activeSession || !activeSession->meshConstructed)
+            throw std::runtime_error("CPU DXA interface classification has not finished.");
+        auto& session = *activeSession;
+        session.diagnosticRegions.resize(session.tessellation.numberOfTetrahedra());
+        for(size_t cell = 0; cell < session.diagnosticRegions.size(); ++cell)
+            session.diagnosticRegions[cell] = session.tessellation.getUserField(cell);
+        return session.diagnosticRegions.data();
     } catch (...) { saveCurrentError(false); }
     return nullptr;
 }
 
-// GPU labels are borrowed until this synchronous call returns. nullptr,0 uses
-// the original CPU classification, allowing a failed GPU stage to recover in
-// the same retained topology/heap without rerunning previous DXA stages.
-const char* alloy_dxa_finish(const int32_t* regions, int regionCount) {
+// Continue the retained CPU topology through classification and tracing.
+const char* alloy_dxa_finish() {
     lastError.clear();
-    resultJson.clear();
+    std::string().swap(resultJson);
     try {
         requireStage(true);
         if (!activeSession) throw std::runtime_error("DXA has no active staged analysis.");
         auto& session = *activeSession;
         if (!session.mappingReady) throw std::runtime_error("DXA crystal mapping has not been constructed.");
-        if ((!regions && regionCount != 0) ||
-                (regions && (regionCount < 0 || size_t(regionCount) != session.tessellation.numberOfTetrahedra())))
-            throw std::runtime_error("DXA GPU classification has an inconsistent tetrahedron count.");
-        if (regions) {
-            for (int tet = 0; tet < regionCount; ++tet) {
-                if ((tet & 1023) == 0) requireStage(true);
-                if ((regions[tet] != -1 && regions[tet] != 0) ||
-                        (regions[tet] == 0 && !session.tessellation.isFiniteCell(tet)))
-                    throw std::runtime_error("DXA GPU classification contains invalid region labels.");
-            }
-        }
-        // The host has copied immutable snapshots before dispatching GPU work.
-        // Release those duplicates before the manifold/tracer allocate their
-        // topology; the original scientific session and imported labels stay.
-        session.clearSnapshot();
-        session.tessellation.setPreclassifiedRegions(regions, regionCount);
         auto& cell = session.cell;
         auto& structure = *session.structure;
         auto& interfaceMesh = *session.interfaceMesh;
@@ -567,7 +438,10 @@ const char* alloy_dxa_finish(const int32_t* regions, int regionCount) {
         const double coarsening = session.coarsening;
         const auto& structures = session.structures;
         alloy_dxa_progress("Construct crystal interface mesh", 7, 11);
+        if(!session.workerRegions.empty())
+            session.tessellation.setWorkerRegions(session.workerRegions.data(), session.workerRegions.size());
         requireStage(interfaceMesh.createMesh(structure.maximumNeighborDistance(), {}, operation));
+        session.meshConstructed = true;
         alloy_dxa_progress("Trace Burgers circuits and dislocation lines", 8, 11);
         requireStage(tracer.traceDislocationSegments(operation));
         alloy_dxa_progress("Connect dislocation junctions", 9, 11);
@@ -639,14 +513,17 @@ const char* alloy_dxa_finish(const int32_t* regions, int regionCount) {
     return nullptr;
 }
 
-// Backward-compatible CPU entry point. No GPU snapshots are created here.
+// Complete CPU entry point for headless callers.
 const char* alloy_dxa_analyze(const double* coordinates, int count,
         const double* cellData, int pbcBits, int lattice, int trial, int stretch,
         int perfectOnly, int smoothing, double coarsening) {
     if (!alloy_dxa_begin(coordinates, count, cellData, pbcBits, lattice, trial,
             stretch, perfectOnly, smoothing, coarsening)) return nullptr;
-    const char* result = alloy_dxa_finish(nullptr, 0);
-    alloy_dxa_dispose();
+    const char* result = alloy_dxa_finish();
+    // The returned JSON belongs to this module and remains valid until the
+    // caller disposes it or starts the next calculation. Release the native
+    // graph here, but keep that output storage alive for the caller to read.
+    activeSession.reset();
     return result;
 }
 }

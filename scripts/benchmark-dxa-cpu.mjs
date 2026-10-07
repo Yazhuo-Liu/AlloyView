@@ -47,6 +47,8 @@ try {
       for (let repetition = 0; repetition < repetitions; repetition++) {
         const result = await calculateDxa(frame, { lattice: entry.lattice }, { workerCount });
         assert.equal(result.workerCount, expectedThreads, result.threadingFallback);
+        assert.equal(result.backend, 'cpu');
+        assert.match(result.engine, /^Wasm CPU/);
         const atomLabelHash = createHash('sha256').update(result.atomStructureTypes).digest('hex');
         const signature = { segments: result.segments.length, structureCounts: result.structureCounts, atomLabelHash,
           totalLength: result.totalLength, families: result.counts,
@@ -69,7 +71,12 @@ try {
           assert.equal(signature.totalLength, 0);
         }
         const nativeStageMs = result.stageTimings.reduce((sum, stage) => sum + stage.elapsedMs, 0);
-        const run = { sequenceIndex, repetition, requestedThreads: workerCount, workerCount: result.workerCount, elapsedMs: result.elapsedMs,
+        const run = { sequenceIndex, repetition, requestedThreads: workerCount, workerCount: result.workerCount,
+          backend: result.backend, engine: result.engine, threaded: result.threaded, sharedMemory: result.sharedMemory,
+          nativeWorkerCount: result.nativeWorkerCount, cpuOffloadUsed: result.cpuOffloadUsed,
+          cpuStageWorkerCounts: result.cpuStageWorkerCounts, cpuStageTimings: result.cpuStageTimings,
+          cpuStageFallbacks: result.cpuStageFallbacks,
+          elapsedMs: result.elapsedMs,
           nativeStageMs, otherPipelineMs: result.elapsedMs - nativeStageMs, stageTimings: result.stageTimings,
           kernelGeneration: result.kernelGeneration, poolSize: result.poolSize, wasmMemoryBytes: result.wasmMemoryBytes,
           rssMiB: process.memoryUsage().rss / 1024 ** 2, signature };

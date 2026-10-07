@@ -131,14 +131,15 @@ public:
     /// Generates the Delaunay tessellation.
     bool generateTessellation(const SimulationCellObject* simCell, const Point3* positions, size_t numPoints, FloatType ghostLayerSize, bool coverDomainWithFiniteTets, const SelectionIntType* selectedPoints, ProgressingTask& operation);
 
-    // Immutable snapshot/region import hooks for AlloyView's GPU classifier.
-    size_type numberOfVertices() const { return _dt->nb_vertices(); }
-    void setPreclassifiedRegions(const int32_t* values, size_t count) {
+    // Immutable geometry exported to private CPU stage Workers. Imported labels
+    // are owned by the enclosing DXA session and borrowed only while meshing.
+    size_type workerVertexCount() const { return _dt->nb_vertices(); }
+    void setWorkerRegions(const int32_t* values, size_t count) {
         if(values && count != numberOfTetrahedra())
-            throw Exception("DXA GPU classification has an inconsistent tetrahedron count.");
-        _preclassifiedRegions = values;
+            throw Exception("CPU DXA classification has an inconsistent tetrahedron count.");
+        _workerRegions = values;
     }
-    const int32_t* preclassifiedRegions() const { return _preclassifiedRegions; }
+    const int32_t* workerRegions() const { return _workerRegions; }
 
     /// Returns the total number of tetrahedra in the tessellation.
     size_type numberOfTetrahedra() const { return _dt->nb_cells(); }
@@ -267,8 +268,7 @@ private:
     /// Determines whether the given tetrahedral cell is a ghost cell (or an invalid cell).
     bool classifyGhostCell(CellHandle cell) const;
 
-    // Borrowed only while the staged C ABI finishes this tessellation.
-    const int32_t* _preclassifiedRegions = nullptr;
+    const int32_t* _workerRegions = nullptr;
 
     /// The internal Delaunay generator object.
     GEO::Delaunay_var _dt;

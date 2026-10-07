@@ -59,6 +59,18 @@ test('production versions the whole module graph and works at a Pages subpath', 
     const withWasm = await buildSite(root, out);
     await access(join(out, 'assets', withWasm.buildId, 'wasm/coordination.mjs'));
     await access(join(out, 'assets', withWasm.buildId, 'wasm/coordination.wasm'));
+
+    // Cloudflare reads policy from the output root, including for Workers and
+    // Wasm. Changing that policy must invalidate cached runtime responses too.
+    const headers = '/*\n  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\n  Cross-Origin-Resource-Policy: same-origin\n';
+    await writeFile(join(root, '_headers'), headers);
+    const isolated = await buildSite(root, out);
+    assert.notEqual(isolated.buildId, withWasm.buildId);
+    assert.equal(await readFile(join(out, '_headers'), 'utf8'), headers);
+    assert.equal((await buildSite(root, out)).buildId, isolated.buildId);
+    await assert.rejects(access(join(out, 'assets', isolated.buildId, '_headers')), { code: 'ENOENT' });
+    await writeFile(join(root, '_headers'), headers.replace('require-corp', 'credentialless'));
+    assert.notEqual((await buildSite(root, out)).buildId, isolated.buildId);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

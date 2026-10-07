@@ -96,7 +96,7 @@ const crystalCategoryProperties = new Set(['structureType', 'ptmStructureType', 
   'idealStrainStructureType', DXA_STRUCTURE_PROPERTY]);
 const cpuBudget = new CpuBudget({ environment: globalThis });
 const analysisPool = new AnalysisPool({ cpuBudget });
-const dxaClient = new DxaClient({ cpuBudget, gpuBackend: analysisPool.gpuBackend });
+const dxaClient = new DxaClient({ cpuBudget, cpuStageBackend: analysisPool });
 const coordinationPool = new CoordinationPool(analysisPool);
 const analysisControllers = new Map();
 const analysisTasks = new Map();
@@ -465,7 +465,6 @@ crystalVisibility = initializeCrystalVisibilityControls({
 dxaTools = initializeDxaTools({
   renderer, tools: toolPanels, client: dxaClient, getFrame: () => state.frame,
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
-  getGpuEnabled: () => analysisPool.gpuEnabled,
   getColorMode: () => state.colorMode,
   getColorChoiceVersion: () => colorChoiceVersion,
   onResultsChange: ({ selectProperty, clearSettings }) => {

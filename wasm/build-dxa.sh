@@ -30,13 +30,13 @@ dxa_root="$project_root/third_party/dxa"
 (cd "$dxa_root" && sha256sum --check --quiet SHA256SUMS)
 export EMCC_CORES="${EMCC_CORES:-3}"
 mapfile -t sources < <(find "$dxa_root/upstream" "$dxa_root/compat" "$dxa_root/geometry" -name '*.cpp' -print | sort)
-"${compiler[@]}" "$project_root/wasm/dxa.cpp" "${sources[@]}" \
+"${compiler[@]}" "$project_root/wasm/dxa.cpp" "$project_root/wasm/dxa-local.cpp" "$project_root/wasm/dxa-classify.cpp" "${sources[@]}" \
   -I "$dxa_root" -I "$dxa_root/upstream" -I "$dxa_root/compat" -I "$dxa_root/geometry" \
   -O3 -std=c++17 -fexceptions "${thread_flags[@]}" \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node \
   -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2147483648 -sINITIAL_MEMORY=33554432 \
   -sSTACK_SIZE=2097152 -sFILESYSTEM=0 -sDISABLE_EXCEPTION_CATCHING=0 \
-  -sEXPORTED_FUNCTIONS='["_malloc","_free","_alloy_dxa_analyze","_alloy_dxa_last_error","_alloy_dxa_set_threads","_alloy_dxa_thread_count","_alloy_dxa_cancel_ptr","_alloy_dxa_reset_cancel","_alloy_dxa_begin","_alloy_dxa_export","_alloy_dxa_finish","_alloy_dxa_dispose","_alloy_dxa_release_snapshot","_alloy_dxa_vertex_count","_alloy_dxa_vertex_ptr","_alloy_dxa_tet_count","_alloy_dxa_tet_ptr","_alloy_dxa_edge_count","_alloy_dxa_edge_ptr","_alloy_dxa_transition_count","_alloy_dxa_transition_ptr","_alloy_dxa_alpha","_alloy_dxa_snapshot_bytes","_alloy_dxa_cpu_regions_ptr","_alloy_dxa_prepare","_alloy_dxa_build_mapping","_alloy_dxa_local_templates_ptr","_alloy_dxa_local_positions_ptr","_alloy_dxa_local_inverse_ptr","_alloy_dxa_local_neighbor_width","_alloy_dxa_release_local_input","_alloy_dxa_identify_local_cpu","_alloy_dxa_local_types_ptr","_alloy_dxa_local_neighbors_ptr","_alloy_dxa_local_max_distance"]' \
+  -sEXPORTED_FUNCTIONS='["_malloc","_free","_alloy_dxa_analyze","_alloy_dxa_last_error","_alloy_dxa_set_threads","_alloy_dxa_thread_count","_alloy_dxa_cancel_ptr","_alloy_dxa_reset_cancel","_alloy_dxa_begin","_alloy_dxa_finish","_alloy_dxa_dispose","_alloy_dxa_prepare","_alloy_dxa_import_local","_alloy_dxa_worker_snapshot","_alloy_dxa_release_worker_snapshot","_alloy_dxa_worker_vertex_count","_alloy_dxa_worker_tet_count","_alloy_dxa_worker_edge_count","_alloy_dxa_worker_transition_count","_alloy_dxa_worker_snapshot_bytes","_alloy_dxa_worker_alpha","_alloy_dxa_worker_vertex_ptr","_alloy_dxa_worker_tet_ptr","_alloy_dxa_worker_edge_ptr","_alloy_dxa_worker_transition_ptr","_alloy_dxa_import_regions","_alloy_dxa_worker_regions_ptr","_alloy_dxa_classify_range","_alloy_dxa_classify_error","_alloy_dxa_local_prepare","_alloy_dxa_local_identify","_alloy_dxa_local_structures_ptr","_alloy_dxa_local_neighbors_ptr","_alloy_dxa_local_neighbor_width","_alloy_dxa_local_max_distance","_alloy_dxa_local_error","_alloy_dxa_local_dispose"]' \
   "-sEXPORTED_RUNTIME_METHODS=$runtime_methods" \
   -o "$project_root/src/analysis/$output_name.mjs"
 chmod 644 "$project_root/src/analysis/$output_name.mjs" "$project_root/src/analysis/$output_name.wasm"

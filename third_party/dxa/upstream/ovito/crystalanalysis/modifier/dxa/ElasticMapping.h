@@ -113,20 +113,19 @@ public:
     /// Determines the ideal vector corresponding to each edge of the tessellation.
     bool assignIdealVectorsToEdges(int crystalPathSteps, ProgressingTask& operation);
 
-    // AlloyView's immutable GPU snapshot adapter. This exposes existing edge
-    // records without changing their construction, mapping, or ownership.
-    size_t tessellationEdgeCount() const { return _edgeCount; }
-    template<class Function> void visitTessellationEdges(Function&& function) const {
-        for(const auto& firstEdge : _vertexEdges)
-            for(const TessellationEdge* edge = firstEdge.first; edge; edge = edge->nextLeavingEdge)
-                function(*edge);
-    }
-
     /// Determines whether the elastic mapping from the physical configuration
     /// of the crystal to the imaginary, stress-free configuration is compatible
     /// within the given tessellation cell. Returns false if the mapping is incompatible
     /// or cannot be determined.
     bool isElasticMappingCompatible(DelaunayTessellation::CellHandle cell) const;
+
+    // Read-only CPU Worker snapshot traversal; native mapping ownership stays here.
+    size_t workerEdgeCount() const { return _edgeCount; }
+    template<typename Visitor> void visitWorkerEdges(Visitor&& visit) const {
+        for(const auto& edges : _vertexEdges)
+            for(const TessellationEdge* edge = edges.first; edge; edge = edge->nextLeavingEdge)
+                visit(*edge);
+    }
 
     /// Returns the cluster to which a vertex of the tessellation has been assigned (may be NULL).
     Cluster* clusterOfVertex(size_t vertexIndex) const {

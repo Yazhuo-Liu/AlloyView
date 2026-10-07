@@ -1,5 +1,14 @@
 # CPU DXA profile
 
+Current DXA extraction is CPU/Wasm only (2026-10-07), with one global heap and
+a reusable pthread pool when available, or private Worker offload of eligible
+local stages on nonisolated hosts. The dated measurements below are
+historical profiles. GPU snapshot packing and accelerator experiments describe
+earlier revisions; they are no longer part of production extraction. Their
+numerical records remain unchanged.
+
+## Historical pthread optimizations
+
 The CPU path uses Wasm pthreads for local crystal identification, Delaunay
 construction, ghost-cell classification, and interface tetrahedron
 classification. It now also prepares interface boundary masks and GPU snapshot
@@ -25,7 +34,7 @@ Explicit sequences accept 1–64 requested threads; the runtime can clamp that
 request for smaller frames. The historical six-thread run above is a diagnostic
 oversubscription on this machine.
 
-## Adopted interface and GPU snapshot optimizations
+## Historical interface and GPU snapshot optimizations
 
 The current implementation adds two bounded parallel passes while retaining
 the existing pool and heap. Interface construction first validates wrapped

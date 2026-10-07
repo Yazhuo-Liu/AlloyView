@@ -132,9 +132,10 @@ Serve the contents of `dist/` with correct MIME types, especially
 JavaScript module Workers and the checked-in PTM, Voro++ and DXA Wasm modules
 load from the same versioned runtime tree. Cross-origin isolation is optional:
 the ordinary analysis pool works with either shared coordinate snapshots or
-resident private copies. Isolated DXA can use its reusable threaded Wasm pool
-and cooperative cancellation; its nonisolated fallback cancels synchronous
-native calculations by terminating the dedicated Worker. Background module
+resident private copies. DXA always computes on CPU; isolated DXA can use its reusable threaded Wasm pool
+and cooperative cancellation; nonisolated DXA can offload eligible local stages
+to the existing private CPU Worker pool. Its global native kernel remains
+single-threaded and synchronous work cancels by terminating the dedicated Worker. Background module
 initialization retains reusable resources across source changes.
 `npm run dev` and `npm run preview` nevertheless send:
 
@@ -157,3 +158,87 @@ structure. Shared CPU snapshots and threaded DXA require a host that supplies
 the COOP and COEP headers above (or an isolation service worker whose tradeoffs
 have been validated). The current Pages workflow uses the nonisolated fallback;
 WebGPU preparation and analysis work independently of shared CPU memory.
+
+## Cross-origin isolation and Cloudflare Pages
+
+The production build includes `dist/_headers` for static Cloudflare Pages
+hosting. Deploy the contents of `dist/` as the Pages build output. Its global
+rule applies these headers to HTML, module Workers, JavaScript and Wasm assets:
+
+```text
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
+```
+
+The GitHub Actions workflow also uploads this file, because it builds and
+uploads the complete `dist/` directory. Including `_headers` in an artifact
+does not cause the host to interpret it as response-header configuration.
+Cloudflare parses `_headers` as deployment configuration, rather than serving
+it as a downloadable asset. These rules apply to static asset responses;
+Pages Functions must set their own response headers. Other hosts need equivalent
+server or proxy settings. GitHub Pages does not interpret this file. Its DXA
+global kernel runs with one thread, while eligible local identification and
+tetrahedron classification can use the existing private CPU Worker pool. See the official
+[Cloudflare Pages headers documentation](https://developers.cloudflare.com/pages/configuration/headers/).
+GitHub describes artifact upload in its
+[custom Pages workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages);
+the separate request for COOP/COEP response configuration remains documented in
+[GitHub's Pages headers discussion](https://github.com/orgs/community/discussions/13309).
+
+On a secure HTTPS origin or localhost, verify `window.crossOriginIsolated`
+is `true` and `typeof SharedArrayBuffer === 'function'` in the browser console.
+The browser's Permissions-Policy must also allow cross-origin isolation.
+DXA checks the actual runtime capability and automatically uses shared-memory
+pthreads or private local-stage CPU tasks around its serial global kernel.
+Failed threaded module/pool initialization
+also selects one CPU thread and reports a diagnostic; a host name alone does
+not guarantee multithreading. See
+[MDN crossOriginIsolated](https://developer.mozilla.org/en-US/docs/Web/API/Window/crossOriginIsolated).
+
+Selection follows browser capabilities, not the host name: a normally isolated
+Cloudflare deployment keeps the existing shared-heap pthread path and skips
+private stage snapshots. The four-Worker automatic limit applies only to the
+nonisolated private stages; it does not cap shared native threads. Private stage
+inputs, tables and temporary outputs are released when their stage ends, while
+Workers and initialized Wasm heap capacity remain reusable. Freeing native
+allocations does not shrink Wasm memory. Keeping or discarding a module is a
+startup-versus-capacity policy choice, rather than caching the previous frame's
+DXA input. The displayed JavaScript result and deliberate current-source
+Voronoi preparation have separate lifetimes. See the
+[DXA lifetime details](features/dislocations.md#cpu-execution-and-worker-pools).
+
+These policies have effects beyond thread availability. COEP `require-corp`
+blocks cross-origin resources loaded without a suitable CORS or CORP response;
+third-party scripts, images, fonts and embedded frames need compatible policies.
+AlloyView's runtime assets are bundled on the same origin. CORP `same-origin`
+also prevents other origins from embedding these assets through no-cors requests.
+See [MDN COEP](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cross-Origin-Embedder-Policy).
+
+COOP `same-origin` separates cross-origin opener and popup relationships;
+workflows that rely on a third-party popup communicating through `window.opener`
+need review. Ordinary external links and top-level navigation still work.
+The GitHub and Documents links already open with `rel="noopener noreferrer"`.
+See [MDN COOP](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cross-Origin-Opener-Policy).
+
+If a future third-party embed or popup workflow needs a nonisolated page,
+remove the COOP/COEP rules from `_headers`, or omit that file from the deployment
+output, and rebuild. The host must stop applying any equivalent response rules.
+DXA then automatically uses its nonisolated CPU path, including private
+local-stage tasks when eligible; no backend switch is needed.
+
+Multithreaded DXA uses one global Wasm heap shared by a bounded pthread pool,
+with one coordinator and one complete network. It does not allocate a separate
+complete DXA analysis for each atom. Shared memory reduces duplication but
+does not remove the tessellation and topology workspace, or guarantee a speedup
+for small structures or sequential stages.
+Isolation enables the shared-memory pthread route and skips private stage
+snapshots. Native multithreaded Delaunay uses Geogram's parallel PDEL engine.
+It does not parallelize every DXA phase: global coordination, cluster merging,
+ordered mesh connectivity and Burgers-circuit tracing still have serial work.
+Each selected nonisolated stage Worker receives a complete immutable geometry
+or packed tetrahedron snapshot, then processes bounded output ranges. These
+stage copies do not create separate dislocation networks. Their copying and startup
+costs can outweigh the saved compute time; the chosen path also respects the
+shared analysis concurrency and memory limits.

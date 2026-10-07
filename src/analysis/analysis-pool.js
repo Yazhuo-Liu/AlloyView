@@ -12,11 +12,12 @@ import { validateReferences } from './lattice.js';
 import { validatePtmParameters, validatePreparedPtmNeighbors } from './ptm.js';
 import { CpuBudget, cpuWorkerLimit } from './cpu-budget.js';
 import { yieldToMain } from '../task-yield.js';
+import { analyzeDxaStagePool, DXA_STAGE_KINDS } from './dxa-cpu-pool.js';
 
 const PTM_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_RESIDENT_KINDS = ['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch', 'voronoiPrepare'];
-const CPU_MODULES = ['voronoi', 'ptm'];
+const CPU_MODULES = ['voronoi', 'ptm', 'dxa'];
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
   deformation: [Float64Array, 9], distances: [Float32Array, 1] };
@@ -72,6 +73,8 @@ export class AnalysisPool {
     this.queue = [];
     this.nextId = 1;
     this.slots = new Set();
+    this.dxaStages = new Map();
+    this.slotWaiters = new Set();
     this.cpuWarmup = null;
     this.cpuFramePreparation = null;
     this.voronoiSnapshot = null;
@@ -104,6 +107,32 @@ export class AnalysisPool {
     if (!slot.terminated) slot.worker.postMessage({ kind: 'voronoiRelease' });
     delete slot.voronoiFrameKey;
     slot.voronoiReleasePending = false;
+    slot.residentInputBytes = 0;
+  }
+
+  analyzeDxaLocal(input, options) { return analyzeDxaStagePool(this, 'local', input, options); }
+  analyzeDxaTetrahedra(input, options) { return analyzeDxaStagePool(this, 'tetrahedra', input, options); }
+
+  reserveDxaStage(key, workerCount) {
+    this.dxaStages.set(key, { workerCount, slots: new Set(), activeWorkers: 0, peakWorkers: 0 });
+  }
+
+  releaseDxaStage(key) {
+    const stage = this.dxaStages.get(key);
+    for (const slot of stage?.slots ?? []) if (slot.dxaReservedKey === key) delete slot.dxaReservedKey;
+    this.dxaStages.delete(key);
+    this.releaseDxaStageFrames(key);
+    this.notifyWorkerSlots();
+  }
+
+  releaseDxaStageFrames(key) {
+    for (const slot of this.slots) if (slot.dxaResidentKey === key) {
+      if (slot.task) slot.dxaReleasePending = key;
+      else {
+        slot.worker.postMessage({ kind: 'dxaRelease', dxaResidentKey: key });
+        delete slot.dxaResidentKey;
+      }
+    }
   }
   get gpuCacheStatus() { return this.gpuBackend.cacheStatus ?? null; }
 
@@ -125,7 +154,7 @@ export class AnalysisPool {
   cpuModuleWorkerCount(atomCount, coordinateBytes, modules) {
     const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
     const bytes = (sharedMemory ? 0 : coordinateBytes) + (modules.includes('ptm') ? atomCount * 48 + PTM_INITIAL_HEAP_BYTES : 0)
-      + (modules.includes('voronoi') ? VORONOI_INITIAL_HEAP_BYTES : 0);
+      + (modules.includes('voronoi') ? VORONOI_INITIAL_HEAP_BYTES : 0) + (modules.includes('dxa') ? 32 * 1024 ** 2 : 0);
     return Math.min(this.limit, chooseWorkerCount(atomCount, bytes, this.environment, 4_096));
   }
 
@@ -141,7 +170,7 @@ export class AnalysisPool {
       return Promise.reject(new Error('CPU warmup requires a positive atom count and valid coordinate size.'));
     }
     if (!Array.isArray(modules) || !modules.length || modules.some(module => !CPU_MODULES.includes(module))) {
-      return Promise.reject(new Error('CPU warmup modules must include ptm or voronoi.'));
+      return Promise.reject(new Error('CPU warmup modules must include ptm, voronoi or dxa.'));
     }
     modules = CPU_MODULES.filter(module => modules.includes(module));
     const target = this.cpuModuleWorkerCount(atomCount, coordinateBytes, modules);
@@ -878,30 +907,27 @@ export class AnalysisPool {
 
   async startTask(task) {
     try {
-      const lease = await this.cpuBudget.acquire(1, { signal: task.signal,
-        priority: task.payload.kind === 'warmup' ? -1 : task.payload.kind === 'voronoiPrepare' ? -0.5 : 0 });
-      if (task.done || task.signal.aborted || task.sourceSignal?.aborted || this.closed) {
-        lease.release();
-        this.finish(task, abortError());
-        return;
+      let slot;
+      while (!slot) {
+        // Resident DXA inputs have a bounded set of slots. Wait for an eligible
+        // slot before entering the global budget, so a blocked admission never
+        // prevents that slot's current owner from obtaining its own permit.
+        if (!this.hasWorkerSlot(task)) await this.waitForWorkerSlot(task);
+        const lease = await this.cpuBudget.acquire(1, { signal: task.signal,
+          priority: task.payload.kind === 'warmup' ? -1 : task.payload.kind === 'voronoiPrepare' ? -0.5 : 0 });
+        if (task.done || task.signal.aborted || task.sourceSignal?.aborted || this.closed) {
+          lease.release(); this.finish(task, abortError()); return;
+        }
+        task.lease = lease;
+        slot = this.selectWorkerSlot(task);
+        if (!slot) {
+          // Another admission may have claimed the eligible slot while this
+          // task awaited its permit. Release it and wait for a real vacancy.
+          lease.release(); task.lease = null;
+        }
       }
-      task.lease = lease;
       // Warm each resident slot once, then grow the pool. Repeated prefetches
       // must never reinstantiate a kernel already available in another slot.
-      let slot;
-      if (task.payload.kind === 'warmup') {
-        const modules = task.payload.modules ?? ['ptm'];
-        const cold = this.idle.findIndex(candidate => modules.some(module => !candidate[`${module}Warmed`]));
-        if (cold >= 0) slot = this.idle.splice(cold, 1)[0];
-        else if (this.slots.size < this.limit) slot = this.createWorker();
-      } else if (VORONOI_RESIDENT_KINDS.includes(task.payload.kind)) {
-        const matching = this.idle.findIndex(candidate => task.payload.kind === 'voronoiPrepare'
-          ? candidate.voronoiFrameKey !== task.payload.residentFrameKey
-          : candidate.voronoiFrameKey === task.payload.residentFrameKey);
-        if (matching >= 0) slot = this.idle.splice(matching, 1)[0];
-        else if (task.payload.kind === 'voronoiPrepare' && this.slots.size < this.limit) slot = this.createWorker();
-      }
-      slot ??= this.idle.pop() ?? this.createWorker();
       slot.task = task;
       task.slot = slot;
       task.worker = slot.worker;
@@ -918,13 +944,78 @@ export class AnalysisPool {
     } catch (error) { this.finish(task, error); }
   }
 
+  slotEligible(task, slot) {
+    if (!DXA_STAGE_KINDS.includes(task.payload.kind)) return slot.dxaReservedKey === undefined;
+    const key = task.payload.dxaResidentKey, stage = this.dxaStages.get(key);
+    if (!stage) return false;
+    return slot.dxaReservedKey === key || (slot.dxaReservedKey === undefined && stage.slots.size < stage.workerCount);
+  }
+
+  canCreateTaskSlot(task) {
+    if (this.slots.size >= this.limit) return false;
+    if (!DXA_STAGE_KINDS.includes(task.payload.kind)) return true;
+    const stage = this.dxaStages.get(task.payload.dxaResidentKey);
+    return Boolean(stage && stage.slots.size < stage.workerCount);
+  }
+
+  async waitForWorkerSlot(task) {
+    while (!this.hasWorkerSlot(task)) {
+      if (task.done || task.signal.aborted || task.sourceSignal?.aborted || this.closed) throw abortError();
+      await new Promise((resolve, reject) => {
+        const finish = error => {
+          this.slotWaiters.delete(wake); task.signal.removeEventListener('abort', abort);
+          if (error) reject(error); else resolve();
+        };
+        const wake = () => finish(), abort = () => finish(abortError());
+        this.slotWaiters.add(wake); task.signal.addEventListener('abort', abort, { once: true });
+        if (task.signal.aborted || task.done || this.closed) abort();
+      });
+    }
+  }
+
+  hasWorkerSlot(task) { return this.idle.some(slot => this.slotEligible(task, slot)) || this.canCreateTaskSlot(task); }
+
+  notifyWorkerSlots() { for (const wake of [...this.slotWaiters]) wake(); }
+
+  selectWorkerSlot(task) {
+    const eligible = slot => this.slotEligible(task, slot);
+    let index = -1;
+    if (task.payload.kind === 'warmup') {
+      const modules = task.payload.modules ?? ['ptm'];
+      index = this.idle.findIndex(slot => eligible(slot) && modules.some(module => !slot[`${module}Warmed`]));
+    } else if (VORONOI_RESIDENT_KINDS.includes(task.payload.kind)) {
+      index = this.idle.findIndex(slot => eligible(slot) && (task.payload.kind === 'voronoiPrepare'
+        ? slot.voronoiFrameKey !== task.payload.residentFrameKey : slot.voronoiFrameKey === task.payload.residentFrameKey));
+    } else if (DXA_STAGE_KINDS.includes(task.payload.kind)) {
+      index = this.idle.findIndex(slot => eligible(slot) && slot.dxaReservedKey === task.payload.dxaResidentKey);
+    }
+    let slot;
+    if (index >= 0) slot = this.idle.splice(index, 1)[0];
+    else if (['warmup', 'voronoiPrepare'].includes(task.payload.kind) && this.canCreateTaskSlot(task)) slot = this.createWorker();
+    else {
+      for (let i = this.idle.length - 1; i >= 0; i--) if (eligible(this.idle[i])) {
+        slot = this.idle.splice(i, 1)[0]; break;
+      }
+      if (!slot && this.canCreateTaskSlot(task)) slot = this.createWorker();
+    }
+    if (slot && DXA_STAGE_KINDS.includes(task.payload.kind)) {
+      const key = task.payload.dxaResidentKey, stage = this.dxaStages.get(key);
+      slot.dxaReservedKey = key; stage.slots.add(slot);
+      stage.activeWorkers++; stage.peakWorkers = Math.max(stage.peakWorkers, stage.activeWorkers);
+    }
+    return slot;
+  }
+
   createWorker() {
     const slot = { worker: this.workerFactory(), task: null, terminated: false, ptmWarmed: false, voronoiWarmed: false };
     this.slots.add(slot);
     slot.worker.addEventListener('message', ({ data }) => {
       const task = slot.task;
       if (!task || task.done || data.id !== task.id) return;
-      if (data.phase && !task.cancelledWarmup && !task.cancelledVoronoi) task.onPhase(data.phase, data);
+      if (data.phase && !task.cancelledWarmup && !task.cancelledVoronoi) {
+        try { task.onPhase(data.phase, data); }
+        catch (error) { this.finish(task, error); }
+      }
       else if (data.phase) return;
       else this.finish(task, data.ok ? null : new Error(data.error), data.result);
     });
@@ -948,7 +1039,18 @@ export class AnalysisPool {
       if (task.done) return;
       let payload = task.payload;
       const transferables = [];
-      if (payload.kind === 'voronoiFinalize') {
+      if (DXA_STAGE_KINDS.includes(payload.kind)) {
+        payload = { ...payload };
+        if (task.slot.dxaResidentKey === payload.dxaResidentKey) delete payload.dxaStageInput;
+        else {
+          const source = payload.dxaStageInput, fields = payload.kind === 'dxaLocal' ? ['coordinates'] : ['vertices', 'tetrahedra', 'edges', 'transitions'];
+          payload.dxaStageInput = { ...source };
+          for (const name of fields) {
+            payload.dxaStageInput[name] = await copyCoordinates(source[name], task.signal);
+            transferables.push(payload.dxaStageInput[name].buffer);
+          }
+        }
+      } else if (payload.kind === 'voronoiFinalize') {
         for (const partial of payload.partials) for (const value of Object.values(partial)) {
           if (ArrayBuffer.isView(value) && value.buffer instanceof ArrayBuffer) transferables.push(value.buffer);
         }
@@ -988,8 +1090,10 @@ export class AnalysisPool {
     slot.terminated = true;
     slot.worker.terminate();
     this.slots.delete(slot);
+    this.dxaStages.get(slot.dxaReservedKey)?.slots.delete(slot);
     const index = this.idle.indexOf(slot);
     if (index >= 0) this.idle.splice(index, 1);
+    this.notifyWorkerSlots();
   }
 
   finish(task, error, result) {
@@ -997,25 +1101,51 @@ export class AnalysisPool {
     task.done = true;
     task.signal.removeEventListener('abort', task.abort);
     if (task.slot) {
+      if (DXA_STAGE_KINDS.includes(task.payload.kind)) {
+        const stage = this.dxaStages.get(task.payload.dxaResidentKey);
+        if (stage) stage.activeWorkers--;
+      }
       task.slot.task = null;
       if (error || this.closed) this.terminateWorker(task.slot);
       else {
+        if (result?.nativeHeapBytes) {
+          task.slot.moduleHeapBytes ??= {};
+          for (const module of CPU_MODULES) {
+            const bytes = result.nativeHeapBytes[module];
+            if (Number.isSafeInteger(bytes) && bytes >= 0) task.slot.moduleHeapBytes[module] = Math.max(task.slot.moduleHeapBytes[module] ?? 0, bytes);
+          }
+          task.slot.dxaHeapBytes = task.slot.moduleHeapBytes.dxa ?? task.slot.dxaHeapBytes;
+        }
+        if (Number.isSafeInteger(result?.residentInputBytes) && result.residentInputBytes >= 0) task.slot.residentInputBytes = result.residentInputBytes;
         if (task.payload.kind === 'warmup') {
           for (const module of result?.modules ?? task.payload.modules ?? ['ptm']) task.slot[`${module}Warmed`] = true;
+          const dxaHeap = result?.initializedModules?.dxa?.wasmMemoryBytes;
+          if (Number.isFinite(dxaHeap)) task.slot.dxaHeapBytes = Math.max(task.slot.dxaHeapBytes ?? 0, dxaHeap);
         }
         if (task.payload.kind === 'ptm'
           || (task.payload.kind === 'strain' && !task.payload.ptmInput)) task.slot.ptmWarmed = true;
+        if (DXA_STAGE_KINDS.includes(task.payload.kind)) {
+          task.slot.dxaWarmed = true;
+          task.slot.dxaResidentKey = task.payload.dxaResidentKey;
+          if (Number.isFinite(result?.wasmMemoryBytes)) task.slot.dxaHeapBytes = Math.max(task.slot.dxaHeapBytes ?? 0, result.wasmMemoryBytes);
+        }
         if (VORONOI_RESIDENT_KINDS.includes(task.payload.kind) && !result?.preparationCancelled) {
           task.slot.voronoiWarmed = true;
           task.slot.voronoiFrameKey = task.payload.residentFrameKey;
         }
         if (task.slot.voronoiReleasePending) this.releaseVoronoiFrame(task.slot);
+        if (task.slot.dxaReleasePending) {
+          task.slot.worker.postMessage({ kind: 'dxaRelease', dxaResidentKey: task.slot.dxaReleasePending });
+          if (task.slot.dxaResidentKey === task.slot.dxaReleasePending) delete task.slot.dxaResidentKey;
+          delete task.slot.dxaReleasePending;
+        }
         this.idle.push(task.slot);
       }
     }
     task.lease?.release();
     task.lease = null;
     this.active.delete(task);
+    this.notifyWorkerSlots();
     const queued = this.queue.indexOf(task);
     if (queued >= 0) this.queue.splice(queued, 1);
     if (!task.cancelledWarmup && !task.cancelledVoronoi) {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 import { DXA_DEFAULTS, DXA_FAMILIES, classifyBurgersVector, dxaCartesianCoordinates,
-  calculateDxa, dxaWorkerCount, estimateDxaMemory, normalizeDxaResult, preflightDxaMemory, releaseDxaKernels, splitPeriodicPolyline,
+  calculateDxa, dxaWorkerCount, estimateDxaMemory, normalizeDxaResult, preflightDxaMemory, prepareDxaThreadPool, releaseDxaKernels, splitPeriodicPolyline, warmupDxa,
   validateDxaFrame, validateDxaParameters } from '../src/analysis/dxa.js';
 import { crystalFrame } from './helpers/crystals.js';
 
@@ -37,6 +37,8 @@ test('DXA parameters validate supported phases and native algorithm limits', () 
     assert.throws(() => validateDxaParameters(parameters), /DXA|supported/);
   }
   assert.equal(validateDxaParameters({ linePointInterval: 0, lineSmoothingIterations: 0 }).linePointInterval, 0);
+  assert.deepEqual(validateDxaParameters({ gpuEnabled: true }), DXA_DEFAULTS, 'retired GPU flags are ignored and not serialized');
+  assert.throws(() => validateDxaParameters({ trialCircuitLength: null }), /DXA/);
 });
 
 test('Burgers families preserve cubic signs/permutations and ideal vector magnitudes', () => {
@@ -122,127 +124,183 @@ test('periodic splitting handles negative multi-image lines, corner crossings an
   assert.deepEqual(splitPeriodicPolyline(zero, cell), []);
 });
 
-test('staged DXA imports local GPU correspondence and records per-stage fallback without reinitializing its kernel', async () => {
-  const frame = crystalFrame('fcc', 4);
-  let reference, localCalls = 0;
+test('native CPU DXA keeps one warmed heap, stable scientific results and CPU-only progress', async () => {
+  const frame = crystalFrame('fcc', 4), progress = [];
   try {
-    const verified = await calculateDxa(frame, { gpuEnabled: true }, {
-      verifyGpuLocalStructures: true,
-      identifyDxa: async (input, options) => {
-        assert.equal(input.coordinates.length, frame.ids.length * 3);
-        assert.equal(input.templates.length, 165); assert.equal(input.inverse.length, 9);
-        assert.equal(input.lattice, 1); assert.equal(input.identifyPlanarDefects, true);
-        assert.ok(options.referenceStructures.every(value => value === 1));
-        reference = { structures: options.referenceStructures, neighbors: options.referenceNeighbors,
-          neighborWidth: input.neighborWidth, maxNeighborDistance: options.referenceMaxNeighborDistance,
-          elapsedMs: 3, uploadedBytes: 48, readbackBytes: 24, arithmetic: 'ieee754-f64' };
-        localCalls++;
-        return reference;
-      },
-      classifyDxa: async () => { throw new Error('tetrahedron GPU budget unavailable'); },
+    const ready = await warmupDxa({ atomCount: frame.ids.length });
+    const forbiddenGpuStage = () => { throw new Error('Retired GPU callbacks must never run.'); };
+    const first = await calculateDxa(frame, { gpuEnabled: true }, {
+      onProgress: event => progress.push(event), identifyDxa: forbiddenGpuStage, classifyDxa: forbiddenGpuStage,
     });
-    assert.equal(verified.backend, 'hybrid'); assert.equal(verified.gpuFallback, false);
-    assert.deepEqual(verified.gpuStages, ['local-neighbors', 'local-structures', 'local-correspondence']);
-    assert.deepEqual(verified.stageFallbacks, [{ stage: 'tetrahedra', reason: 'tetrahedron GPU budget unavailable' }]);
-    assert.equal(verified.gpuElapsedMs, 3); assert.equal(verified.gpuUploadedBytes, 48); assert.equal(verified.gpuReadbackBytes, 24);
-    assert.equal(verified.segments.length, 0);
-    const withoutCpuOracle = await calculateDxa(frame, { gpuEnabled: true }, { identifyDxa: async (_input, options) => {
-      assert.equal(options.referenceStructures, undefined); localCalls++;
-      return reference;
-    } });
-    assert.equal(withoutCpuOracle.kernelGeneration, verified.kernelGeneration);
-    assert.equal(withoutCpuOracle.backend, 'hybrid'); assert.equal(withoutCpuOracle.gpuFallback, false);
-    assert.equal(withoutCpuOracle.segments.length, 0);
-    assert.ok(!withoutCpuOracle.stageTimings.some(stage => /Identify local crystal/.test(stage.phase)),
-      'the production GPU local path does not repeat native crystal identification');
-    assert.equal(localCalls, 2);
-    const localFailure = await calculateDxa(frame, { gpuEnabled: true }, {
-      identifyDxa: async () => { throw new Error('local GPU occupancy exceeded'); },
-      verifyGpuClassification: true,
-      classifyDxa: async (_snapshot, options) => ({ regions: options.referenceRegions,
-        elapsedMs: 7, uploadedBytes: 16, readbackBytes: 8, arithmetic: 'ieee754-f64' }),
-    });
-    assert.equal(localFailure.kernelGeneration, verified.kernelGeneration);
-    assert.equal(localFailure.backend, 'hybrid'); assert.equal(localFailure.gpuFallback, false);
-    assert.deepEqual(localFailure.gpuStages, ['tetrahedron-alpha', 'elastic-compatibility']);
-    assert.deepEqual(localFailure.stageFallbacks, [{ stage: 'local', reason: 'local GPU occupancy exceeded' }]);
-    assert.equal(localFailure.segments.length, 0);
-    const invalid = { ...reference, neighbors: reference.neighbors.slice() };
-    invalid.neighbors[0] = 0;
-    const rejectedImport = await calculateDxa(frame, { gpuEnabled: true }, { identifyDxa: async () => invalid });
-    assert.equal(rejectedImport.backend, 'cpu'); assert.equal(rejectedImport.gpuFallback, true);
-    assert.equal(rejectedImport.segments.length, 0);
-    assert.ok(rejectedImport.stageFallbacks.some(entry => entry.stage === 'local' && /neighbor|correspondence/i.test(entry.reason)));
-    assert.equal(rejectedImport.kernelGeneration, verified.kernelGeneration);
-    for (const metrics of [{ elapsedMs: -1 }, { uploadedBytes: Infinity }, { readbackBytes: 1.5 }]) {
-      const invalidMetrics = await calculateDxa(frame, { gpuEnabled: true }, {
-        identifyDxa: async () => ({ ...reference, ...metrics }),
-      });
-      assert.equal(invalidMetrics.backend, 'cpu'); assert.equal(invalidMetrics.gpuFallback, true);
-      assert.equal(invalidMetrics.segments.length, 0);
-      assert.ok(invalidMetrics.stageFallbacks.some(entry => entry.stage === 'local' && /performance metrics/.test(entry.reason)));
-      assert.equal(invalidMetrics.kernelGeneration, verified.kernelGeneration);
-    }
-    const controller = new AbortController();
-    await assert.rejects(calculateDxa(frame, { gpuEnabled: true }, { signal: controller.signal,
-      identifyDxa: async () => { controller.abort(); return reference; } }), { name: 'AbortError' });
-    const resumed = await calculateDxa(frame);
-    assert.equal(resumed.kernelGeneration, verified.kernelGeneration);
-    assert.equal(resumed.segments.length, 0);
+    assert.equal(first.backend, 'cpu');
+    assert.equal(first.engine, 'Wasm CPU');
+    assert.equal(first.workerCount, 1);
+    assert.equal(first.kernelGeneration, ready.kernelGeneration);
+    assert.ok(first.wasmMemoryBytes >= ready.wasmMemoryBytes);
+    assert.equal(first.segments.length, 0);
+    assert.ok(first.atomStructureTypes.every(type => type === 1));
+    assert.ok(progress.length > 5 && progress.every(event => event.backend === 'cpu'));
+    assert.ok(first.stageTimings.length > 5 && first.stageTimings.every(stage => stage.backend === 'cpu' && stage.elapsedMs >= 0));
+    assert.equal(Object.keys(first).some(key => /^gpu|^stageFallbacks$|^fallbackReason$/i.test(key)), false);
+    assert.deepEqual(first.parameters, DXA_DEFAULTS);
+    const second = await calculateDxa(frame);
+    assert.equal(second.kernelGeneration, first.kernelGeneration);
+    assert.deepEqual(second.atomStructureTypes, first.atomStructureTypes);
+    assert.deepEqual(second.segments, first.segments);
   } finally { await releaseDxaKernels(); }
 });
 
-test('GPU snapshots resolve edges that use the reverse of a listed crystal transition', async () => {
-  // FCC with HCP stacking-fault layers: the cluster graph lists one direction
-  // of each transition, while tessellation edges also use the reverse ones.
-  const a = 4 / Math.SQRT2, repeat = 6, layers = [0, 1, 2, 0, 1, 2, 0, 1, 0, 2, 1, 2];
-  const shifts = [[0, 0], [2 / 3, 1 / 3], [1 / 3, 2 / 3]], fractional = [];
-  for (let layer = 0; layer < layers.length; layer++) for (let i = 0; i < repeat; i++) for (let j = 0; j < repeat; j++) {
-    fractional.push((i + shifts[layers[layer]][0]) / repeat, (j + shifts[layers[layer]][1]) / repeat, layer / layers.length);
-  }
-  const coordinates = Float64Array.from(fractional), count = coordinates.length / 3;
-  const cell = createCell({ vectors: [repeat * a, 0, 0, -repeat * a / 2, repeat * Math.sqrt(3) * a / 2, 0,
-    0, 0, layers.length * Math.sqrt(2 / 3) * a], triclinic: true });
-  const frame = { fractional: coordinates, cell, positions: fractionalToCartesian(coordinates, cell),
-    ids: Uint32Array.from({ length: count }, (_, index) => index + 1), types: new Uint16Array(count), typeLabels: ['Ni'], properties: [] };
+test('CPU DXA cancellation between native stages disposes the session and reuses its warmed kernel', async () => {
+  const frame = crystalFrame('fcc', 4), controller = new AbortController();
   try {
-    const expected = await calculateDxa(frame);
-    let snapshot;
-    const staged = await calculateDxa(frame, { gpuEnabled: true }, { verifyGpuClassification: true,
-      classifyDxa: async (value, options) => { snapshot = value; return { regions: options.referenceRegions }; } });
-    assert.deepEqual(staged.stageFallbacks, []);
-    assert.ok(snapshot.transitionCount > 1 && snapshot.transitionCount % 2 === 1, 'each listed transition and its reverse have a slot');
-    for (let slot = 1; slot < snapshot.transitionCount; slot += 2) {
-      // A reverse slot holds its forward slot's two matrices swapped.
-      assert.deepEqual(snapshot.transitions.subarray((slot + 1) * 20, (slot + 1) * 20 + 9), snapshot.transitions.subarray(slot * 20 + 9, slot * 20 + 18));
-      assert.deepEqual(snapshot.transitions.subarray((slot + 1) * 20 + 9, (slot + 1) * 20 + 18), snapshot.transitions.subarray(slot * 20, slot * 20 + 9));
-    }
-    assert.deepEqual(staged.atomStructureTypes, expected.atomStructureTypes);
-    assert.deepEqual(staged.segments, expected.segments);
+    const ready = await warmupDxa({ atomCount: frame.ids.length });
+    await assert.rejects(calculateDxa(frame, {}, { signal: controller.signal, onProgress(event) {
+      if (event.completedStages === 6) controller.abort();
+    } }), { name: 'AbortError' });
+    const next = await calculateDxa(frame);
+    assert.equal(next.kernelGeneration, ready.kernelGeneration);
+    assert.equal(next.segments.length, 0);
+    assert.ok(next.atomStructureTypes.every(type => type === 1));
   } finally { await releaseDxaKernels(); }
 });
 
-test('threaded native DXA skips the slower WebGPU binary64 stages', async () => {
+test('native pthread DXA retains CPU parity and its growable pool', async () => {
+  const frame = crystalFrame('fcc', 8);
   try {
-    const unused = async () => { throw new Error('GPU stages must not run with native threads.'); };
-    const result = await calculateDxa(crystalFrame('fcc', 8), { gpuEnabled: true }, { workerCount: 2, identifyDxa: unused, classifyDxa: unused });
-    assert.equal(result.workerCount, 2); assert.equal(result.backend, 'cpu');
-    assert.equal(result.gpuSkipped, true); assert.equal(result.gpuFallback, false);
-    assert.deepEqual(result.stageFallbacks, []); assert.match(result.fallbackReason, /2 CPU threads/);
+    const serial = await calculateDxa(frame, {}, { workerCount: 1 });
+    const threaded = await calculateDxa(frame, {}, { workerCount: 2 });
+    assert.equal(threaded.workerCount, 2);
+    assert.equal(threaded.poolSize, 1);
+    assert.equal(threaded.backend, 'cpu');
+    assert.equal(threaded.engine, 'Wasm CPU · 2 threads');
+    assert.equal(threaded.kernelGeneration, serial.kernelGeneration);
+    assert.deepEqual(threaded.segments, serial.segments);
+    assert.deepEqual(threaded.atomStructureTypes, serial.atomStructureTypes);
+    const smaller = await warmupDxa({ atomCount: frame.ids.length, workerCount: 1 });
+    assert.equal(smaller.poolSize, 1, 'a smaller target retains already prepared slots');
   } finally { await releaseDxaKernels(); }
 });
 
-test('DXA tables larger than one GPU buffer fall back before the snapshot is exported', async () => {
-  const frame = crystalFrame('fcc', 4);
-  try {
-    let calls = 0;
-    const result = await calculateDxa(frame, { gpuEnabled: true }, { gpuBufferLimitBytes: 64,
-      classifyDxa: async () => { calls++; throw new Error('not called'); } });
-    assert.equal(calls, 0);
-    assert.deepEqual(result.stageFallbacks, [{ stage: 'tetrahedra', reason: 'The DXA tables exceed GPU buffer limits; using CPU workers.' }]);
-    assert.equal(result.segments.length, 0);
-    const fits = await calculateDxa(frame, { gpuEnabled: true }, { gpuBufferLimitBytes: 256 * 1024 ** 2, verifyGpuClassification: true,
-      classifyDxa: async (_snapshot, options) => { calls++; return { regions: options.referenceRegions }; } });
-    assert.equal(calls, 1); assert.deepEqual(fits.stageFallbacks, []);
-  } finally { await releaseDxaKernels(); }
+function poolFixture({ load = async worker => worker, allocate } = {}) {
+  const workers = [], runtimeError = () => {};
+  const pool = { unusedWorkers: [], runningWorkers: [],
+    allocateUnusedWorker() {
+      if (allocate) allocate(workers.length);
+      const worker = { terminated: false, terminate() { this.terminated = true; } };
+      workers.push(worker); this.unusedWorkers.push(worker);
+    },
+    loadWasmModuleToWorker(worker) { worker.onerror = runtimeError; return load(worker, workers.indexOf(worker)); },
+  };
+  const module = { dxaShared: true, PThread: pool, HEAP32: new Int32Array(new SharedArrayBuffer(8)), _alloy_dxa_cancel_ptr: () => 0 };
+  return { module, workers, runtimeError };
+}
+
+test('denied pthread startup removes failed slots and latches one CPU thread in the same shared heap', async () => {
+  const { module, workers, runtimeError } = poolFixture({ load: async (_worker, index) => {
+    if (index === 1) throw new Error('Pthread module was denied.');
+  } });
+  assert.equal(await prepareDxaThreadPool(module, 4), 1);
+  assert.match(module.dxaThreadingFallback, /denied/);
+  assert.equal(module.PThread.unusedWorkers.length, 2);
+  assert.equal(workers[1].terminated, true);
+  assert.equal(workers[0].onerror, runtimeError, 'successful slots retain normal fatal-runtime handling');
+  assert.equal(await prepareDxaThreadPool(module, 6), 1);
+  assert.equal(workers.length, 3, 'latched failure never repeats startup on later frames');
+});
+
+test('synchronous pthread load and allocation failures clean partial startup before serial fallback', async () => {
+  const failedLoad = poolFixture({ load() { throw new Error('Worker module cannot load.'); } });
+  assert.equal(await prepareDxaThreadPool(failedLoad.module, 3), 1);
+  assert.equal(failedLoad.workers.length, 2);
+  assert.ok(failedLoad.workers.every(worker => worker.terminated));
+  assert.equal(failedLoad.module.PThread.unusedWorkers.length, 0);
+  let loaded = false;
+  const failedAllocation = poolFixture({ allocate(index) { if (index === 1) throw new Error('Worker construction denied.'); },
+    load: async () => { await new Promise(resolve => setTimeout(resolve, 0)); loaded = true; } });
+  assert.equal(await prepareDxaThreadPool(failedAllocation.module, 4), 1);
+  assert.equal(loaded, true, 'already started slots are joined before leaving pool preparation');
+  assert.equal(failedAllocation.module.PThread.unusedWorkers.length, 1);
+});
+
+test('pthread error events fall back, while cancellation is never reported as startup failure', async () => {
+  const denied = poolFixture({ load(worker) {
+    queueMicrotask(() => worker.onerror({ message: 'Pthread worker rejected by CSP.' }));
+    return new Promise(() => {});
+  } });
+  assert.equal(await prepareDxaThreadPool(denied.module, 2), 1);
+  assert.equal(denied.workers[0].terminated, true);
+  assert.equal(denied.module.PThread.unusedWorkers.length, 0);
+  assert.match(denied.module.dxaThreadingFallback, /CSP/);
+  const controller = new AbortController(), canceled = poolFixture({ load: async () => { controller.abort(); } });
+  await assert.rejects(prepareDxaThreadPool(canceled.module, 2, { signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(canceled.module.dxaThreadingFallback, undefined);
+});
+
+test('stalled pthread startup is bounded, retains loaded slots and ignores late notifications', async () => {
+  let finishStalled;
+  const { module, workers, runtimeError } = poolFixture({ load(worker, index) {
+    if (index === 0) { worker.loaded = true; return Promise.resolve(worker); }
+    return new Promise(resolve => { finishStalled = () => { worker.loaded = true; resolve(worker); }; });
+  } });
+  assert.equal(await prepareDxaThreadPool(module, 3, { startupTimeoutMs: 30 }), 1);
+  assert.match(module.dxaThreadingFallback, /pthread worker.*startup within 30 ms/);
+  assert.deepEqual(module.PThread.unusedWorkers, [workers[0]]);
+  assert.equal(workers[0].terminated, false);
+  assert.equal(workers[0].onerror, runtimeError);
+  assert.equal(workers[1].terminated, true);
+  const retiredHandler = workers[1].onerror;
+  finishStalled(); await new Promise(resolve => setTimeout(resolve, 0));
+  workers[1].onerror({ message: 'An obsolete startup failure.' });
+  assert.equal(workers[1].onerror, retiredHandler, 'a late loaded result never restores a removed worker’s runtime handler');
+  assert.deepEqual(module.PThread.unusedWorkers, [workers[0]]);
+  assert.equal(await prepareDxaThreadPool(module, 4, { startupTimeoutMs: 30 }), 1);
+  assert.equal(workers.length, 2, 'timeout fallback remains latched');
+});
+
+test('signal abort immediately cleans stalled pthread slots and later startup retries the same heap', async () => {
+  let stalling = true;
+  const controller = new AbortController();
+  const { module, workers } = poolFixture({ load(worker) {
+    return stalling ? new Promise(() => {}) : Promise.resolve(worker);
+  } });
+  const preparation = prepareDxaThreadPool(module, 3, { signal: controller.signal, startupTimeoutMs: 5000 });
+  const rejected = assert.rejects(preparation, { name: 'AbortError' });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(workers.length, 2);
+  controller.abort(); await rejected;
+  assert.ok(workers.every(worker => worker.terminated));
+  assert.equal(module.PThread.unusedWorkers.length, 0);
+  assert.equal(module.dxaThreadingFallback, undefined);
+  stalling = false;
+  assert.equal(await prepareDxaThreadPool(module, 2, { startupTimeoutMs: 100 }), 2);
+  assert.equal(workers.length, 3);
+  assert.equal(module.PThread.unusedWorkers.length, 1);
+});
+
+test('shared atomic cancellation releases stalled startup without a controller message', async () => {
+  const { module, workers } = poolFixture({ load: () => new Promise(() => {}) });
+  const preparation = prepareDxaThreadPool(module, 3, { startupTimeoutMs: 5000 });
+  const rejected = assert.rejects(preparation, { name: 'AbortError' });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  Atomics.store(module.HEAP32, 0, 1);
+  await rejected;
+  assert.ok(workers.every(worker => worker.terminated));
+  assert.equal(module.PThread.unusedWorkers.length, 0);
+  assert.equal(module.dxaThreadingFallback, undefined);
+});
+
+test('aborted queued pool preparation allocates no stale slots after another module finishes startup', async () => {
+  let releaseFirst;
+  const first = poolFixture({ load: worker => new Promise(resolve => { releaseFirst = () => resolve(worker); }) });
+  const firstPreparation = prepareDxaThreadPool(first.module, 2, { startupTimeoutMs: 1000 });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const second = poolFixture(), controller = new AbortController();
+  const secondPreparation = prepareDxaThreadPool(second.module, 2, { signal: controller.signal, startupTimeoutMs: 1000 });
+  const rejected = assert.rejects(secondPreparation, { name: 'AbortError' });
+  controller.abort(); await rejected;
+  assert.equal(second.workers.length, 0);
+  releaseFirst();
+  assert.equal(await firstPreparation, 2);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(second.workers.length, 0);
 });

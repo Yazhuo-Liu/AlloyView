@@ -57,7 +57,6 @@ export class GpuRuntime {
     this.analysisFramePins = new Map();
     this.adaptiveCna = new Map();
     this.warmupPromise = null;
-    this.dxaWarmupPromise = null;
     this.memoryLimited = false;
     this.voronoiWorkspace = null;
     this.voronoiCpuContext = null;
@@ -111,13 +110,11 @@ export class GpuRuntime {
     }
     if (!this.warmupPromise) {
       this.warmupPromise = (async () => {
-        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm, dxa, dxaNeighbors, dxaLocal, bondStatistics, voronoi] = await Promise.all([
+        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm, bondStatistics, voronoi] = await Promise.all([
           import('./coordination.js'), import('./rdf.js'), import('./local-shear-shaders.js'),
           import('./bonds-shaders.js'), import('./atomic-strain-shaders.js'),
           import('./cna-shaders.js'), import('./reference-strain-shaders.js'),
           import('./centrosymmetry-shaders.js'), import('./displacement-shaders.js'), import('./ptm-neighbors-shaders.js'),
-          import('./dxa-shaders.js'),
-          import('./dxa-local-neighbor-shaders.js'), import('./dxa-local-shaders.js'),
           import('./bond-statistics-shaders.js'), import('./voronoi-shaders.js'),
         ]);
         const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
@@ -129,20 +126,6 @@ export class GpuRuntime {
           csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER, ptm.PTM_NEIGHBORS_SHADER, bondStatistics.BOND_STATISTICS_SHADER,
           voronoi.VORONOI_INITIALIZE_SHADER, voronoi.VORONOI_CLIP_SHADER];
         for (const source of sources) await this.compilePipeline(source);
-        // Optional binary64 DXA kernels can compile slowly on some adapters.
-        // Ordinary analyses are ready now; DXA's first dispatch shares these
-        // background compilations instead of delaying the whole worker queue.
-        if (!this.dxaWarmupPromise) {
-          const device = this.device;
-          this.dxaWarmupPromise = (async () => {
-            for (const source of [dxa.DXA_ALPHA_SHADER, dxa.DXA_REGION_SHADER,
-              dxaNeighbors.DXA_LOCAL_NEIGHBORS_SHADER, dxaLocal.DXA_LOCAL_SHADER]) {
-              if (this.device !== device) return;
-              try { await this.compilePipeline(source); }
-              catch (error) { if (this.device === device) this.dxaWarmupError = error.message || String(error); }
-            }
-          })();
-        }
       })();
       this.warmupPromise.catch(() => { this.warmupPromise = null; });
     }
@@ -508,7 +491,7 @@ export class GpuRuntime {
    */
   reserveWorkspace(bytes) {
     if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.budgetBytes) {
-      throw new GpuUnavailableError('The DXA tables exceed the GPU memory budget; using CPU workers.');
+      throw new GpuUnavailableError('The analysis workspace exceeds the GPU memory budget; using CPU workers.');
     }
     if (this.allocatedBytes + bytes > this.budgetBytes) {
       for (const key of frameEvictionOrder(this.frames, this.currentIndex, this.protectedKeys())) {
@@ -516,7 +499,7 @@ export class GpuRuntime {
         if (this.allocatedBytes + bytes <= this.budgetBytes) break;
       }
       if (this.allocatedBytes + bytes > this.budgetBytes) {
-        throw new GpuUnavailableError('The DXA workspace exceeds the available GPU memory budget; using CPU workers.');
+        throw new GpuUnavailableError('The analysis workspace exceeds the available GPU memory budget; using CPU workers.');
       }
     }
   }
@@ -735,45 +718,6 @@ export class GpuRuntime {
     }
   }
 
-  /** Consecutive bounded dispatches of one kernel over [0, total). Queue
-   * writes and submissions execute in order, so each dispatch sees the range
-   * that `setRange` wrote before it; waiting only every few dispatches keeps
-   * the GPU busy and cancellation responsive without a round trip per batch.
-   * Dispatch sizes stay bounded for the GPU watchdog. */
-  async runSequence(source, bindings, total, { batch, setRange, signal, workgroupSize = 128, waitEvery = 8, onProgress } = {}) {
-    await this.initialize(signal);
-    const device = this.device;
-    const pipeline = await waitForGpu(this.compilePipeline(source), signal);
-    checkSignal(signal);
-    if (!Number.isInteger(workgroupSize) || workgroupSize < 1 || workgroupSize > (device.limits.maxComputeInvocationsPerWorkgroup ?? 256)) {
-      throw new GpuUnavailableError('The GPU kernel workgroup size exceeds device limits.');
-    }
-    const declared = new Set(bindingDeclarations(source).map(({ binding }) => binding));
-    device.pushErrorScope('validation');
-    try {
-      const bindGroup = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0),
-        entries: bindings.map((buffer, binding) => ({ binding, resource: { buffer } })).filter(({ binding }) => declared.has(binding)) });
-      let unwaited = 0;
-      for (let start = 0; start < total; start += batch) {
-        checkSignal(signal);
-        const end = Math.min(total, start + batch), workgroups = Math.ceil((end - start) / workgroupSize);
-        if (workgroups > device.limits.maxComputeWorkgroupsPerDimension) throw new GpuUnavailableError('The GPU dispatch exceeds device limits.');
-        setRange(start, end);
-        const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-        pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(workgroups); pass.end();
-        device.queue.submit([encoder.finish()]);
-        onProgress?.(end);
-        if (++unwaited >= waitEvery && end < total) {
-          unwaited = 0;
-          await device.queue.onSubmittedWorkDone(); checkSignal(signal); await yieldWorker();
-        }
-      }
-      await device.queue.onSubmittedWorkDone(); checkSignal(signal);
-    } finally {
-      const error = await device.popErrorScope(); if (error) throw new GpuUnavailableError(error.message);
-    }
-  }
-
   async read(buffer, Type, length, { signal } = {}) {
     checkSignal(signal);
     const bytes = length * Type.BYTES_PER_ELEMENT;
@@ -842,7 +786,7 @@ export class GpuRuntime {
   }
   close() {
     this.releaseFrames(); this.pipelines.clear(); this.pipelineCompilations.clear();
-    this.device?.destroy(); this.device = null; this.warmupPromise = null; this.dxaWarmupPromise = null;
+    this.device?.destroy(); this.device = null; this.warmupPromise = null;
   }
 }
 GpuRuntime.frameSerial = 0;

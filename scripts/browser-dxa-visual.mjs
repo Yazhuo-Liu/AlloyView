@@ -347,7 +347,7 @@ try {
       scientific, geometry, atomFilters, scalarRange, linesOnly, independentFamilies, replay, replayRange,
       noLines: { ...noLines, types: undefined }, cancellation, sourceRange,
       screenshots: { legacyScreenshot, coreScreenshot, viewportScreenshot, controlsScreenshot, exportScreenshot } };
-  }, { software: useSoftwareAdapter(true), isolated: !process.argv.includes('--no-isolation') });
+  }, { software: useSoftwareAdapter(true), isolated: !process.argv.includes('--no-isolation'), requireGpu: false });
   console.log(JSON.stringify(report, null, 2));
 } finally { await rm(temporary, { recursive: true, force: true }); }
 

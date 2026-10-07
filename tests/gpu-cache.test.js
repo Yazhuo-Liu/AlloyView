@@ -8,9 +8,6 @@ import { DISPLACEMENT_SHADER } from '../src/analysis/gpu/displacement-shaders.js
 import { PTM_NEIGHBORS_SHADER } from '../src/analysis/gpu/ptm-neighbors-shaders.js';
 import { VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER } from '../src/analysis/gpu/voronoi-shaders.js';
 import { BOND_STATISTICS_SHADER } from '../src/analysis/gpu/bond-statistics-shaders.js';
-import { DXA_ALPHA_SHADER, DXA_REGION_SHADER } from '../src/analysis/gpu/dxa-shaders.js';
-import { DXA_LOCAL_NEIGHBORS_SHADER } from '../src/analysis/gpu/dxa-local-neighbor-shaders.js';
-import { DXA_LOCAL_SHADER } from '../src/analysis/gpu/dxa-local-shaders.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, FALLBACK_GPU_BUDGET_BYTES,
   frameUploadBytes, gpuWorkspaceBytes, trajectoryCapacity } from '../src/analysis/gpu/cache-policy.js';
 import { crystalFrame } from './helpers/crystals.js';
@@ -223,9 +220,8 @@ test('clearing a source frees input and index buffers while retaining the device
   const state = fixture(), { runtime } = state;
   try {
     await runtime.warmup();
-    await runtime.dxaWarmupPromise;
-    assert.equal(state.compiled, 27);
-    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER, CSP_SHADER, DISPLACEMENT_SHADER, PTM_NEIGHBORS_SHADER, BOND_STATISTICS_SHADER, VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER, DXA_ALPHA_SHADER, DXA_REGION_SHADER, DXA_LOCAL_NEIGHBORS_SHADER, DXA_LOCAL_SHADER]) {
+    assert.equal(state.compiled, 23);
+    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER, CSP_SHADER, DISPLACEMENT_SHADER, PTM_NEIGHBORS_SHADER, BOND_STATISTICS_SHADER, VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER]) {
       assert.ok(runtime.pipelines.has(source), 'new analysis kernels compile during device warmup');
     }
     const pipelines = [...runtime.pipelines.values()], device = runtime.device;
@@ -243,48 +239,28 @@ test('clearing a source frees input and index buffers while retaining the device
   assert.equal(state.destroyed, true);
 });
 
-test('an optional DXA pipeline compilation failure leaves other GPU analyses warmed on the same device', async () => {
-  const state = fixture(), { runtime } = state;
-  const compile = runtime.compilePipeline.bind(runtime);
-  runtime.compilePipeline = source => {
-    if ([DXA_ALPHA_SHADER, DXA_REGION_SHADER, DXA_LOCAL_NEIGHBORS_SHADER, DXA_LOCAL_SHADER].includes(source)) throw new Error('Unsupported DXA shader.');
-    return compile(source);
-  };
-  try {
-    await runtime.warmup();
-    await runtime.dxaWarmupPromise;
-    assert.equal(state.compiled, 23);
-    assert.ok(runtime.pipelines.has(CNA_FIXED_SHADER)); assert.ok(runtime.pipelines.has(CSP_SHADER));
-    assert.equal(runtime.lost, null); assert.equal(runtime.dxaWarmupError, 'Unsupported DXA shader.');
-    assert.equal(runtime.cacheStatus().initialized, true); assert.equal(state.destroyed, false);
-  } finally { runtime.close(); }
-});
-
-test('ordinary GPU warmup returns while DXA compiles in the background and on-demand requests share its compilation', async () => {
+test('concurrent GPU requests share a pipeline compilation while unrelated kernels keep independent error scopes', async () => {
   const state = fixture(), { runtime } = state;
   const compile = runtime.device.createComputePipelineAsync.bind(runtime.device);
-  let releaseAlpha, alphaCalls = 0;
-  const alphaReady = new Promise(resolve => { releaseAlpha = resolve; });
+  let releaseCsp, cspCalls = 0;
+  const cspReady = new Promise(resolve => { releaseCsp = resolve; });
   runtime.device.createComputePipelineAsync = async options => {
-    if (options.compute.module.code === DXA_ALPHA_SHADER) { alphaCalls++; await alphaReady; }
+    if (options.compute.module.code === CSP_SHADER) { cspCalls++; await cspReady; }
     return compile(options);
   };
   try {
-    const status = await runtime.warmup();
-    assert.equal(status.initialized, true); assert.equal(state.compiled, 23);
-    assert.equal(alphaCalls, 1); assert.ok(runtime.dxaWarmupPromise);
+    const first = runtime.compilePipeline(CSP_SHADER), second = runtime.compilePipeline(CSP_SHADER);
+    assert.equal(first, second); assert.equal(cspCalls, 1);
     assert.equal(state.scopes.length, 0, 'background compilation releases the device error-scope stack before awaiting');
-    const first = runtime.compilePipeline(DXA_ALPHA_SHADER), second = runtime.compilePipeline(DXA_ALPHA_SHADER);
-    assert.equal(first, second); assert.equal(alphaCalls, 1);
+    await runtime.compilePipeline(CNA_ADAPTIVE_SHADER);
     assert.ok(runtime.pipelines.has(CNA_ADAPTIVE_SHADER));
-    await runtime.compilePipeline('@compute @workgroup_size(128) fn main() {}');
     assert.equal(state.scopes.length, 0, 'foreground compilation has an independent error scope');
-    releaseAlpha();
-    const [a, b] = await Promise.all([first, second, runtime.dxaWarmupPromise]);
-    assert.equal(a, b); assert.equal(alphaCalls, 1);
-    assert.ok(runtime.pipelines.has(DXA_ALPHA_SHADER)); assert.ok(runtime.pipelines.has(DXA_REGION_SHADER));
-    assert.equal(runtime.pipelineCompilations.size, 0); assert.equal(state.compiled, 28);
-  } finally { releaseAlpha(); await runtime.dxaWarmupPromise; runtime.close(); }
+    releaseCsp();
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(a, b); assert.equal(cspCalls, 1);
+    assert.ok(runtime.pipelines.has(CSP_SHADER));
+    assert.equal(runtime.pipelineCompilations.size, 0); assert.equal(state.compiled, 2);
+  } finally { releaseCsp(); runtime.close(); }
 });
 
 test('a failed shared GPU compilation is retired so a later on-demand request can retry', async () => {
@@ -304,21 +280,21 @@ test('a failed shared GPU compilation is retired so a later on-demand request ca
   } finally { runtime.close(); }
 });
 
-test('closing a device during background DXA compilation cannot repopulate its pipeline cache', async () => {
+test('closing a device during pending pipeline compilation cannot repopulate its cache', async () => {
   const state = fixture(), { runtime } = state;
   const compile = runtime.device.createComputePipelineAsync.bind(runtime.device);
-  let releaseAlpha;
-  const alphaReady = new Promise(resolve => { releaseAlpha = resolve; });
+  let releaseCsp;
+  const cspReady = new Promise(resolve => { releaseCsp = resolve; });
   runtime.device.createComputePipelineAsync = async options => {
-    if (options.compute.module.code === DXA_ALPHA_SHADER) await alphaReady;
+    if (options.compute.module.code === CSP_SHADER) await cspReady;
     return compile(options);
   };
-  await runtime.warmup();
-  const background = runtime.dxaWarmupPromise;
+  const compilation = runtime.compilePipeline(CSP_SHADER);
+  const rejected = assert.rejects(compilation, /device was released/);
   assert.equal(runtime.pipelineCompilations.size, 1);
-  runtime.close(); releaseAlpha(); await background;
+  runtime.close(); releaseCsp(); await rejected;
   assert.equal(runtime.device, null); assert.equal(runtime.pipelines.size, 0);
-  assert.equal(runtime.pipelineCompilations.size, 0); assert.equal(runtime.dxaWarmupPromise, null);
+  assert.equal(runtime.pipelineCompilations.size, 0);
   assert.equal(state.destroyed, true);
 });
 

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DxaClient } from '../src/analysis/dxa-client.js';
 import { createCell } from '../src/data/model.js';
+import { CpuBudget } from '../src/analysis/cpu-budget.js';
 
 class FakeWorker {
   constructor() { this.listeners = new Map(); this.messages = []; this.terminated = false; }
@@ -14,7 +15,7 @@ const source = () => ({ fractional: new Float64Array([0, 0, 0, .5, .5, 0, .5, 0,
   cell: createCell({ vectors: [4, 0, 0, 1, 4, 0, 0, 0, 4] }) });
 const setup = (options = {}) => {
   const workers = [], client = new DxaClient({ workerFactory: () => { const worker = new FakeWorker(); workers.push(worker); return worker; },
-    yieldToMain: async () => {}, environment: options.gpuBackend ? { navigator: { gpu: {} } } : globalThis, ...options });
+    yieldToMain: async () => {}, environment: globalThis, ...options });
   return { client, workers };
 };
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -27,7 +28,8 @@ test('DXA client transfers owned coordinate copies without detaching the display
   assert.equal(frame.fractional.byteLength, 12 * 8); assert.equal(frame.cell.vectors.byteLength, 9 * 8);
   assert.notEqual(task.frame.fractional.buffer, frame.fractional.buffer);
   assert.deepEqual(Array.from(task.frame.fractional), Array.from(frame.fractional));
-  assert.equal(task.parameters.lattice, 'bcc'); assert.equal(task.parameters.gpuEnabled, true);
+  assert.equal(task.parameters.lattice, 'bcc'); assert.equal(Object.hasOwn(task.parameters, 'gpuEnabled'), false);
+  assert.equal(Object.keys(task).some(key => /gpu/i.test(key)), false);
   worker.emit({ id: task.id, progress: { phase: 'triangulating', completedStages: 3, totalStages: 12 } });
   assert.equal(progress.at(-1).phase, 'triangulating'); assert.equal(progress.at(-1).workerCount, 1);
   worker.emit({ id: task.id, ok: true, result: { segments: [], engine: 'Wasm CPU' } });
@@ -35,201 +37,20 @@ test('DXA client transfers owned coordinate copies without detaching the display
   client.close();
 });
 
-const topologySnapshot = () => ({ vertexCount: 4, tetrahedronCount: 2, edgeCount: 1, transitionCount: 1,
-  alpha: 3, vertices: new Float64Array(12), tetrahedra: new Uint32Array(32),
-  edges: new Uint32Array(8), transitions: new Float64Array(20) });
 
-const localInput = () => ({ coordinates: new Float64Array(12), templates: new Uint32Array(165),
-  inverse: new Float64Array(9), lattice: 1, identifyPlanarDefects: true, atomCount: 4, neighborWidth: 12 });
-
-test('DXA local correspondence uses the shared GPU backend with the original frame identity', async () => {
-  const calls = [], progress = [], frame = source();
-  const { client, workers } = setup({ gpuBackend: {
-    async identifyDxa(actualFrame, input, options) {
-      assert.equal(actualFrame, frame, 'resident GPU frame cache identity is preserved');
-      const owned = structuredClone(input, { transfer: [input.coordinates.buffer, input.templates.buffer, input.inverse.buffer] });
-      calls.push({ input: owned, signal: options.signal });
-      options.onProgress({ phase: 'GPU local correspondence', completedAtoms: 2, totalAtoms: 4 });
-      return { structures: new Int32Array(4), neighbors: new Int32Array(48).fill(-1),
-        neighborWidth: 12, maxNeighborDistance: 0, gpuStages: ['local-neighbors', 'local-structures', 'local-correspondence'] };
-    },
-    async classifyDxa() { return { regions: new Int32Array([-1, 0]) }; },
-  } });
-  const request = client.analyze(frame, { gpuEnabled: true }, { onProgress: event => progress.push(event) });
-  await flush();
-  const worker = workers[0], task = worker.messages[0], input = localInput();
-  assert.equal(task.gpuLocalAvailable, true); assert.equal(task.gpuAvailable, true);
-  worker.emit({ id: task.id, gpuRequest: { requestId: 5, stage: 'local', input } });
-  await flush();
-  assert.equal(calls.length, 1); assert.equal(calls[0].input.coordinates.length, 12);
-  assert.equal(input.coordinates.byteLength, 0); assert.equal(frame.fractional.byteLength, 96);
-  const localReply = worker.messages.at(-1);
-  assert.equal(localReply.requestId, 5); assert.equal(localReply.ok, true);
-  assert.deepEqual(localReply.result.structures, new Int32Array(4));
-  assert.equal(localReply.result.neighbors.length, 48);
-  assert.equal(progress.at(-1).completedStages, 0); assert.equal(progress.at(-1).completedAtoms, 2);
-  assert.equal(progress.at(-1).totalTetrahedra, undefined);
-  worker.emit({ id: task.id, gpuRequest: { requestId: 6, stage: 'tetrahedra', snapshot: topologySnapshot() } });
-  await flush();
-  assert.equal(worker.messages.at(-1).requestId, 6); assert.equal(worker.messages.at(-1).ok, true);
-  assert.equal(client.cpuBudget.active, 1);
-  worker.emit({ id: task.id, ok: true, result: { backend: 'hybrid' } });
-  assert.equal((await request).backend, 'hybrid'); assert.equal(client.cpuBudget.active, 0);
-  await client.close();
-});
-
-test('GPU local support is independent of tetrahedron support and local failures retain the paused session', async () => {
-  const { client, workers } = setup({ gpuBackend: {
-    identifyDxa: async () => { throw new Error('GPU local neighbor occupancy limit'); },
-  } });
+test('DXA ignores legacy GPU flags and does not read or dispatch a GPU backend', async () => {
+  let calls = 0;
+  const backend = new Proxy({}, { get() { calls++; throw new Error('DXA must not read GPU state.'); } });
+  const { client, workers } = setup({ gpuBackend: backend, environment: { navigator: { gpu: {} } } });
   const request = client.analyze(source(), { gpuEnabled: true });
   await flush();
   const worker = workers[0], task = worker.messages[0];
-  assert.equal(task.gpuLocalAvailable, true); assert.equal(task.gpuAvailable, false);
-  worker.emit({ id: task.id, gpuRequest: { requestId: 8, stage: 'local', input: localInput() } });
-  await flush();
-  const reply = worker.messages.at(-1);
-  assert.equal(reply.ok, false); assert.match(reply.error, /occupancy limit/);
-  assert.equal(workers.length, 1); assert.equal(client.cpuBudget.active, 1); assert.equal(client.pending.size, 1);
-  worker.emit({ id: task.id, ok: true, result: { backend: 'cpu', gpuFallback: true } });
-  assert.equal((await request).gpuFallback, true);
-  await client.close();
-});
-
-test('cancellation before the local GPU RPC keeps the serial kernel and skips the local computation', async () => {
-  const controller = new AbortController(); let calls = 0;
-  const { client, workers } = setup({ gpuBackend: {
-    identifyDxa: async () => { calls++; return {}; },
-  } });
-  const request = client.analyze(source(), { gpuEnabled: true }, { signal: controller.signal,
-    onProgress: progress => { if (progress.backend === 'gpu') controller.abort(); } });
-  const rejected = assert.rejects(request, { name: 'AbortError' });
-  await flush(); const worker = workers[0], id = worker.messages[0].id;
-  worker.emit({ id, progress: { phase: 'GPU local neighbors and crystal correspondence', backend: 'gpu' } });
-  await rejected;
-  assert.equal(worker.terminated, false); assert.equal(worker.messages.at(-1).type, 'cancel');
-  worker.emit({ id, gpuRequest: { requestId: 9, stage: 'local', input: localInput() } });
-  await flush();
-  assert.equal(calls, 0); assert.equal(worker.messages.at(-1).name, 'AbortError');
-  assert.equal(client.cpuBudget.active, 1);
-  worker.emit({ id, ok: false, name: 'AbortError', error: 'Cancelled at GPU local checkpoint' });
-  assert.equal(client.cpuBudget.active, 0);
-  await client.close();
-});
-
-test('DXA routes owned native topology through the existing GPU backend and returns its regions', async () => {
-  const calls = [], progress = [];
-  const { client, workers } = setup({ gpuBackend: {
-    async classifyDxa(snapshot, options) {
-      const owned = structuredClone(snapshot, { transfer: ['vertices', 'tetrahedra', 'edges', 'transitions'].map(key => snapshot[key].buffer) });
-      calls.push({ snapshot: owned, signal: options.signal });
-      options.onProgress({ phase: 'GPU alpha classification', totalAtoms: 2, completedAtoms: 1 });
-      return { regions: new Int32Array([-1, 0]), gpuStages: ['tetrahedron-alpha', 'elastic-compatibility'],
-        arithmetic: 'ieee754-f64', elapsedMs: 5 };
-    },
-  } });
-  const frame = source(), request = client.analyze(frame, { gpuEnabled: true }, { onProgress: event => progress.push(event) });
-  await flush();
-  const worker = workers[0], task = worker.messages[0], snapshot = topologySnapshot();
-  assert.equal(task.gpuAvailable, true);
-  worker.emit({ id: task.id, gpuRequest: { requestId: 7, snapshot } });
-  await flush();
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].snapshot.vertices.length, 12);
-  assert.equal(snapshot.vertices.byteLength, 0, 'the copied native snapshot transfers ownership');
-  assert.equal(frame.fractional.byteLength, 96, 'rendered coordinates remain owned by the caller');
-  const reply = worker.messages.at(-1);
-  assert.equal(reply.type, 'gpu-result'); assert.equal(reply.requestId, 7);
-  assert.equal(reply.ok, true); assert.deepEqual(reply.result.regions, new Int32Array([-1, 0]));
-  assert.equal(progress.at(-1).backend, 'gpu');
-  assert.equal(progress.at(-1).totalAtoms, 4);
-  assert.equal(progress.at(-1).totalTetrahedra, 2); assert.equal(progress.at(-1).completedTetrahedra, 1);
-  assert.equal(client.cpuBudget.active, 1, 'the native session retains its global CPU lease');
-  worker.emit({ id: task.id, ok: true, result: { segments: [], backend: 'hybrid', engine: 'Wasm CPU + WebGPU' } });
-  assert.equal((await request).backend, 'hybrid'); assert.equal(client.cpuBudget.active, 0);
-  await client.close();
-});
-
-test('GPU memory failure returns to the paused native session without rejecting or restarting DXA', async () => {
-  const { client, workers } = setup({ gpuBackend: { classifyDxa: async () => { throw new Error('GPU memory budget exceeded'); } } });
-  const request = client.analyze(source(), { gpuEnabled: true });
-  await flush();
-  const worker = workers[0], task = worker.messages[0];
-  worker.emit({ id: task.id, gpuRequest: { requestId: 4, snapshot: topologySnapshot() } });
-  await flush();
-  const reply = worker.messages.at(-1);
-  assert.equal(reply.type, 'gpu-result'); assert.equal(reply.ok, false); assert.match(reply.error, /memory budget/);
-  assert.equal(client.pending.size, 1); assert.equal(client.cpuBudget.active, 1);
-  assert.equal(workers.length, 1); assert.equal(worker.messages.filter(message => message.type === 'analyze').length, 1);
-  worker.emit({ id: task.id, ok: true, result: { backend: 'cpu', gpuFallback: true, fallbackReason: reply.error } });
-  assert.equal((await request).gpuFallback, true);
-  await client.close();
-});
-
-test('cancelling a GPU checkpoint keeps a serial native heap and ignores its late GPU reply', async () => {
-  let finishGpu, gpuSignal;
-  const { client, workers } = setup({ gpuBackend: {
-    classifyDxa: (_snapshot, { signal }) => { gpuSignal = signal; return new Promise(resolve => { finishGpu = resolve; }); },
-  } });
-  const controller = new AbortController(), first = client.analyze(source(), { gpuEnabled: true }, { signal: controller.signal });
-  const rejected = assert.rejects(first, { name: 'AbortError' });
-  await flush();
-  const worker = workers[0], firstId = worker.messages[0].id;
-  worker.emit({ id: firstId, gpuRequest: { requestId: 10, snapshot: topologySnapshot() } });
-  const next = client.analyze(source());
-  controller.abort(); await rejected;
-  assert.equal(gpuSignal.aborted, true);
-  assert.equal(worker.terminated, false);
-  assert.equal(client.cpuBudget.active, 1);
-  assert.equal(worker.messages.at(-1).type, 'cancel');
-  worker.emit({ id: firstId, ok: false, name: 'AbortError', error: 'Cancelled at GPU checkpoint' });
-  await flush();
-  const nextTask = worker.messages.at(-1);
-  assert.equal(nextTask.type, 'analyze'); assert.notEqual(nextTask.id, firstId);
-  finishGpu({ regions: new Int32Array([-1, 0]) }); await flush();
-  assert.equal(worker.messages.at(-1), nextTask, 'a stale GPU reply cannot reach the next native calculation');
-  assert.equal(workers.length, 1);
-  worker.emit({ id: nextTask.id, ok: true, result: { segments: [] } });
-  await next; assert.equal(client.cpuBudget.active, 0);
-  await client.close();
-});
-
-test('cancellation in the first GPU progress callback retains a serial heap before its RPC arrives', async () => {
-  const controller = new AbortController(); let calls = 0;
-  const { client, workers } = setup({ gpuBackend: { classifyDxa: async () => { calls++; return { regions: new Int32Array(2) }; } } });
-  const first = client.analyze(source(), { gpuEnabled: true }, { signal: controller.signal,
-    onProgress: progress => { if (progress.backend === 'gpu') controller.abort(); } });
-  const rejected = assert.rejects(first, { name: 'AbortError' });
-  await flush(); const worker = workers[0], id = worker.messages[0].id;
-  worker.emit({ id, progress: { phase: 'GPU tetrahedron and elastic classification', backend: 'gpu' } });
-  await rejected;
-  assert.equal(worker.terminated, false); assert.equal(worker.messages.at(-1).type, 'cancel');
-  worker.emit({ id, gpuRequest: { requestId: 11, snapshot: topologySnapshot() } });
-  await flush();
-  assert.equal(calls, 0); assert.equal(worker.messages.at(-1).name, 'AbortError');
-  worker.emit({ id, ok: false, name: 'AbortError', error: 'Cancelled' });
-  assert.equal(client.cpuBudget.active, 0);
-  await client.close();
-});
-
-test('DXA preflights snapshot export against the warmed shared GPU memory budget', async () => {
-  const { client, workers } = setup({ gpuBackend: { cacheStatus: { budgetBytes: 128 * 1024 ** 2, bufferLimitBytes: 64 * 1024 ** 2 },
-    classifyDxa: async () => { throw new Error('not called'); } } });
-  const request = client.analyze(source(), { gpuEnabled: true });
-  await flush(); const worker = workers[0], task = worker.messages[0];
-  assert.equal(task.gpuSnapshotBudgetBytes, 128 * 1024 ** 2);
-  assert.equal(task.gpuBufferLimitBytes, 64 * 1024 ** 2);
-  worker.emit({ id: task.id, ok: true, result: { segments: [] } }); await request;
-  await client.close();
-});
-
-test('GPU enabled without browser WebGPU support skips native snapshot preparation', async () => {
-  const { client, workers } = setup({ environment: {}, gpuBackend: { classifyDxa: async () => { throw new Error('not called'); } } });
-  const request = client.analyze(source(), { gpuEnabled: true });
-  await flush(); const worker = workers[0], task = worker.messages[0];
-  assert.equal(task.gpuAvailable, false);
-  worker.emit({ id: task.id, ok: true, result: { backend: 'cpu', gpuFallback: true } });
-  assert.equal((await request).gpuFallback, true);
+  assert.equal(Object.keys(task).some(key => /gpu/i.test(key)), false);
+  assert.equal(Object.hasOwn(task.parameters, 'gpuEnabled'), false);
+  worker.emit({ id: task.id, ok: true, result: { backend: 'cpu', engine: 'Wasm CPU' } });
+  assert.equal((await request).backend, 'cpu');
+  assert.equal(calls, 0);
+  assert.equal(typeof client.classifyGpu, 'undefined');
   await client.close();
 });
 
@@ -369,13 +190,276 @@ test('a foreground DXA request preempts warmup without discarding an initializin
   const calculation = client.analyze(source());
   await rejected;
   assert.equal(worker.terminated, false);
-  assert.equal(worker.messages.length, 1, 'native work starts only after initialization acknowledges');
+  assert.equal(worker.messages.filter(message => message.type !== 'cancel').length, 1, 'native work starts only after initialization acknowledges');
+  assert.deepEqual(worker.messages.at(-1), { type: 'cancel', id: warmId });
   worker.emit({ id: warmId, ok: true, result: { workerCount: 1, poolSize: 0, kernelGeneration: 1, sharedMemory: false } });
   await flush();
   assert.equal(workers.length, 1);
-  assert.equal(worker.messages[1].type, 'analyze');
-  worker.emit({ id: worker.messages[1].id, ok: true, result: { segments: [] } });
+  assert.equal(worker.messages.at(-1).type, 'analyze');
+  worker.emit({ id: worker.messages.at(-1).id, ok: true, result: { segments: [] } });
   await calculation;
   assert.equal(client.cpuBudget.active, 0);
   await client.close();
+});
+
+test('pthread startup fallback is retained and later jobs acquire only one CPU permit', async () => {
+  const environment = { navigator: { hardwareConcurrency: 8 }, crossOriginIsolated: true, SharedArrayBuffer };
+  const { client, workers } = setup({ environment });
+  const warming = client.warmup({ atomCount: 16000, workerCount: 4 });
+  await flush();
+  const worker = workers[0], message = worker.messages[0];
+  assert.equal(message.workerCount, 4);
+  worker.emit({ id: message.id, control: null });
+  worker.emit({ id: message.id, ok: true, result: { workerCount: 1, poolSize: 0,
+    kernelGeneration: 1, wasmMemoryBytes: 32 * 1024 ** 2, sharedMemory: false,
+    threadingFallback: 'Pthread startup denied by the host.' } });
+  assert.equal((await warming).workerCount, 1);
+  const cached = await client.warmup({ atomCount: 16000, workerCount: 6 });
+  assert.equal(cached.workerCount, 1);
+  assert.equal(cached.threadingFallback, 'Pthread startup denied by the host.');
+  assert.equal(worker.messages.length, 1, 'failed pool startup is not retried on each frame');
+  const calculation = client.analyze({ ...source(), fractional: new Float64Array(16000 * 3) });
+  await flush();
+  assert.equal(worker.messages.at(-1).workerCount, 1);
+  assert.equal(client.cpuBudget.active, 1);
+  worker.emit({ id: worker.messages.at(-1).id, ok: true, result: { backend: 'cpu' } });
+  await calculation;
+  assert.equal(client.cpuBudget.active, 0);
+  await client.close();
+});
+
+for (const announcement of ['before', 'after']) {
+  test(`serial cancellation works in an isolated browser when fallback control arrives ${announcement} abort`, async () => {
+    const environment = { navigator: { hardwareConcurrency: 8 }, crossOriginIsolated: true, SharedArrayBuffer };
+    const { client, workers } = setup({ environment }), controller = new AbortController();
+    const request = client.analyze(source(), {}, { signal: controller.signal });
+    const rejected = assert.rejects(request, { name: 'AbortError' });
+    await flush();
+    const worker = workers[0], id = worker.messages[0].id;
+    if (announcement === 'before') worker.emit({ id, control: null });
+    controller.abort(); await rejected;
+    if (announcement === 'after') {
+      assert.equal(worker.terminated, false);
+      assert.equal(client.cpuBudget.active, 1, 'a possible shared startup retains its permit until mode is known');
+      worker.emit({ id, control: null });
+    }
+    assert.equal(worker.terminated, true);
+    assert.equal(client.cpuBudget.active, 0);
+    assert.equal(client.current, null);
+    const next = client.analyze(source()); await flush();
+    assert.equal(workers.length, 2);
+    workers[1].emit({ id: workers[1].messages[0].id, ok: true, result: { backend: 'cpu' } });
+    await next;
+    await client.close();
+  });
+}
+
+for (const fallback of ['serial-module', 'pthread-pool']) {
+  test(`a scientific error after ${fallback} fallback retains the actual one-thread CPU budget`, async () => {
+    const environment = { navigator: { hardwareConcurrency: 8 }, crossOriginIsolated: true, SharedArrayBuffer };
+    const { client, workers } = setup({ environment });
+    const frame = { ...source(), fractional: new Float64Array(16000 * 3) };
+    const calculation = client.analyze(frame, {}, { workerCount: 4 });
+    const rejected = assert.rejects(calculation, /periodic cell too thin/);
+    await flush();
+    const worker = workers[0], id = worker.messages[0].id;
+    assert.equal(worker.messages[0].workerCount, 4);
+    if (fallback === 'serial-module') worker.emit({ id, control: null });
+    else {
+      worker.emit({ id, control: { cancelBuffer: new SharedArrayBuffer(64), cancelPointer: 0 } });
+      worker.emit({ id, progress: { phase: 'Pthread startup unavailable; using one CPU thread', workerCount: 1,
+        threadingFallback: 'Pthread startup denied.' } });
+    }
+    worker.emit({ id, ok: false, error: 'periodic cell too thin' });
+    await rejected;
+    assert.equal(client.ready, null, 'error replies do not fabricate warmed-module diagnostics');
+    assert.equal(client.cpuBudget.active, 0);
+    const warming = client.warmup({ atomCount: 16000, workerCount: 6 });
+    await flush();
+    assert.equal(worker.messages.at(-1).workerCount, 1);
+    assert.equal(client.cpuBudget.active, 1);
+    worker.emit({ id: worker.messages.at(-1).id, ok: true, result: { workerCount: 1, poolSize: 0, kernelGeneration: 1,
+      sharedMemory: fallback === 'pthread-pool', ...(fallback === 'pthread-pool' ? { threadingFallback: 'Pthread startup denied.' } : {}) } });
+    await warming;
+    const next = client.analyze(frame, {}, { workerCount: 4 }); await flush();
+    assert.equal(worker.messages.at(-1).workerCount, 1);
+    assert.equal(client.cpuBudget.active, 1);
+    worker.emit({ id: worker.messages.at(-1).id, ok: true, result: { backend: 'cpu' } });
+    await next;
+    assert.equal(client.cpuBudget.active, 0);
+    await client.close();
+  });
+}
+
+test('ordinary one-thread work does not latch serial execution, and Worker replacement clears a fallback latch', async () => {
+  const environment = { navigator: { hardwareConcurrency: 8 }, crossOriginIsolated: true, SharedArrayBuffer };
+  const { client, workers } = setup({ environment });
+  const small = client.analyze(source()); await flush();
+  const worker = workers[0], firstId = worker.messages[0].id;
+  worker.emit({ id: firstId, control: { cancelBuffer: new SharedArrayBuffer(64), cancelPointer: 0 } });
+  worker.emit({ id: firstId, progress: { phase: 'warming', workerCount: 1 } });
+  worker.emit({ id: firstId, ok: true, result: { workerCount: 1, poolSize: 0, kernelGeneration: 1, sharedMemory: true } });
+  await small;
+  const frame = { ...source(), fractional: new Float64Array(16000 * 3) };
+  const larger = client.analyze(frame, {}, { workerCount: 4 });
+  const rejected = assert.rejects(larger, /damaged Wasm/); await flush();
+  const id = worker.messages.at(-1).id;
+  assert.equal(worker.messages.at(-1).workerCount, 4, 'small frames do not disable later parallel work');
+  worker.emit({ id, progress: { phase: 'warming', workerCount: 1, threadingFallback: 'Pthread startup denied.' } });
+  worker.emit({ id, ok: false, error: 'damaged Wasm', fatal: true });
+  await rejected;
+  const recovery = client.analyze(frame, {}, { workerCount: 4 }); await flush();
+  assert.equal(workers.length, 2);
+  assert.equal(workers[1].messages[0].workerCount, 4, 'a fresh Worker may attempt normal threading again');
+  workers[1].emit({ id: workers[1].messages[0].id, ok: true, result: { backend: 'cpu' } });
+  await recovery;
+  await client.close();
+});
+
+const staticEnvironment = { navigator: { hardwareConcurrency: 4 }, crossOriginIsolated: false };
+const largeSource = () => ({ ...source(), fractional: new Float64Array(8192 * 3) });
+const stageReply = () => ({ structures: new Int32Array(8192), neighbors: new Int32Array(8192 * 12),
+  neighborWidth: 12, maxNeighborDistance: 3, workerCount: 2, elapsedMs: 5 });
+
+test('nonisolated stage RPC releases the coordinator permit before pooled work and reacquires it before import', async () => {
+  const cpuBudget = new CpuBudget({ environment: staticEnvironment }); let calls = 0;
+  const cpuStageBackend = { analyzeDxaTetrahedra() {}, async analyzeDxaLocal(input, options) {
+    calls++; assert.equal(cpuBudget.active, 0, 'the waiting native coordinator holds no compute permit');
+    assert.equal(options.workerCount, 2); assert.equal(options.taskTimeoutMs, 123);
+    const lease = await cpuBudget.acquire(2, { signal: options.signal });
+    assert.equal(cpuBudget.active, 2); lease.release(); return stageReply();
+  } };
+  const { client, workers } = setup({ environment: staticEnvironment, cpuBudget, cpuStageBackend, cpuStageTaskTimeoutMs: 123 });
+  const pending = client.analyze(largeSource()); await flush();
+  const worker = workers[0], initial = worker.messages[0];
+  assert.equal(initial.cpuOffload, true); assert.equal(initial.workerCount, 1); assert.equal(cpuBudget.active, 1);
+  worker.emit({ id: initial.id, control: null });
+  worker.emit({ id: initial.id, progress: { cpuStage: 'local', awaitingCpuStage: true } });
+  worker.emit({ id: initial.id, cpuStageRequest: { requestId: 1, stage: 'local', input: { immutable: true } } });
+  await flush();
+  assert.equal(calls, 1); assert.equal(cpuBudget.active, 1);
+  const reply = worker.messages.at(-1);
+  assert.equal(reply.type, 'cpu-stage-result'); assert.equal(reply.ok, true); assert.equal(reply.result.structures.length, 8192);
+  worker.emit({ id: initial.id, ok: true, result: { nativeWorkerCount: 1, workerCount: 2, backend: 'cpu' } });
+  await pending; assert.equal(cpuBudget.active, 0);
+  await client.close();
+});
+
+test('private CPU stage failure reacquires a native permit and supplies a stage fallback reply', async () => {
+  const cpuBudget = new CpuBudget({ environment: staticEnvironment });
+  const cpuStageBackend = { analyzeDxaTetrahedra() {}, async analyzeDxaLocal() {
+    assert.equal(cpuBudget.active, 0); throw new Error('The private Worker could not initialize.');
+  } };
+  const { client, workers } = setup({ environment: staticEnvironment, cpuBudget, cpuStageBackend });
+  const pending = client.analyze(largeSource()); await flush();
+  const worker = workers[0], id = worker.messages[0].id;
+  worker.emit({ id, cpuStageRequest: { requestId: 2, stage: 'local', input: {} } }); await flush();
+  assert.equal(cpuBudget.active, 1); assert.equal(worker.messages.at(-1).ok, false);
+  assert.match(worker.messages.at(-1).error, /could not initialize/); assert.equal(worker.terminated, false);
+  worker.emit({ id, ok: true, result: { backend: 'cpu' } }); await pending;
+  assert.equal(cpuBudget.active, 0); await client.close();
+});
+
+test('automatic private DXA degree leaves room for interface snapshots while explicit requests remain available', async () => {
+  for (const [requested, expected] of [[undefined, 4], [8, 8]]) {
+    const environment = { ...staticEnvironment, navigator: { hardwareConcurrency: 40 } };
+    const atomCount = 60229, degrees = [];
+    const cpuStageBackend = { analyzeDxaTetrahedra() {}, async analyzeDxaLocal(input, options) {
+      degrees.push(options.workerCount);
+      return { structures: new Int32Array(atomCount), neighbors: new Int32Array(atomCount * 12),
+        neighborWidth: 12, maxNeighborDistance: 3, workerCount: expected };
+    } };
+    const { client, workers } = setup({ environment, cpuStageBackend });
+    const frame = { ...source(), fractional: new Float64Array(atomCount * 3) };
+    const pending = client.analyze(frame, {}, { workerCount: requested }); await flush();
+    const worker = workers[0], initial = worker.messages[0];
+    assert.equal(initial.workerCount, 1); assert.equal(initial.cpuOffload, true);
+    worker.emit({ id: initial.id, cpuStageRequest: { requestId: 5, stage: 'local', input: {} } }); await flush();
+    assert.deepEqual(degrees, [expected]);
+    worker.emit({ id: initial.id, ok: true, result: { backend: 'cpu' } }); await pending;
+    assert.equal(frame.fractional.byteLength, atomCount * 3 * 8);
+    await client.close();
+  }
+});
+
+test('CPU stage cancellation waits for private job cleanup and native ACK before the next frame reuses its coordinator', async () => {
+  const cpuBudget = new CpuBudget({ environment: staticEnvironment }), controller = new AbortController();
+  let finishStage;
+  const cpuStageBackend = { analyzeDxaTetrahedra() {}, async analyzeDxaLocal(input, { signal }) {
+    const lease = await cpuBudget.acquire(2, { signal });
+    return new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => { finishStage = () => {
+        lease.release(); reject(new DOMException('Private jobs joined.', 'AbortError'));
+      }; }, { once: true });
+    });
+  } };
+  const { client, workers } = setup({ environment: staticEnvironment, cpuBudget, cpuStageBackend });
+  const first = client.analyze(largeSource(), {}, { signal: controller.signal });
+  const rejection = assert.rejects(first, { name: 'AbortError' }); await flush();
+  const worker = workers[0], id = worker.messages[0].id;
+  worker.emit({ id, control: null });
+  worker.emit({ id, cpuStageRequest: { requestId: 3, stage: 'local', input: {} } }); await flush();
+  assert.equal(cpuBudget.active, 2);
+  const second = client.analyze(source());
+  controller.abort(); await rejection;
+  assert.equal(worker.terminated, false); assert.equal(worker.messages.at(-1).type, 'cancel');
+  worker.emit({ id, ok: false, error: 'Cancelled.', name: 'AbortError' }); await flush();
+  assert.equal(worker.messages.filter(message => message.type === 'analyze').length, 1,
+    'an early native ACK must not hide still-running private jobs');
+  assert.equal(client.current.id, id);
+  finishStage(); await flush(); await flush();
+  assert.equal(cpuBudget.active, 1); assert.equal(workers.length, 1);
+  assert.equal(worker.messages.at(-1).type, 'analyze'); assert.notEqual(worker.messages.at(-1).id, id);
+  worker.emit({ id: worker.messages.at(-1).id, ok: true, result: { backend: 'cpu' } });
+  await second; assert.equal(cpuBudget.active, 0); await client.close();
+});
+
+for (const failure of ['fatal', 'error', 'messageerror']) {
+  test(`DXA coordinator ${failure} waits for private cleanup before preparing the next frame`, async () => {
+    // Leave a third permit available: a prematurely retired frame could
+    // dispatch its successor while the old private snapshots still exist.
+    const environment = { ...staticEnvironment, navigator: { hardwareConcurrency: 6 } };
+    const cpuBudget = new CpuBudget({ environment });
+    let finishCleanup;
+    const cpuStageBackend = { analyzeDxaTetrahedra() {}, async analyzeDxaLocal(input, { signal }) {
+      const lease = await cpuBudget.acquire(2, { signal });
+      return new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => { finishCleanup = () => {
+          lease.release(); reject(new DOMException('Private jobs joined.', 'AbortError'));
+        }; }, { once: true });
+      });
+    } };
+    const { client, workers } = setup({ environment, cpuBudget, cpuStageBackend });
+    const first = client.analyze(largeSource());
+    const rejected = assert.rejects(first, /crash/); await flush();
+    const worker = workers[0], id = worker.messages[0].id;
+    worker.emit({ id, control: null });
+    worker.emit({ id, cpuStageRequest: { requestId: 4, stage: 'local', input: {} } }); await flush();
+    assert.equal(cpuBudget.active, 2);
+    const second = client.analyze(source());
+    if (failure === 'fatal') worker.emit({ id, ok: false, error: 'Native Worker crash.', name: 'RuntimeError', fatal: true });
+    else worker.listeners.get(failure)({ message: 'Native Worker crash.' });
+    await rejected; await flush();
+    assert.equal(worker.terminated, true, 'A damaged coordinator stops immediately.');
+    assert.equal(client.current.id, id, 'The old frame retains ownership until its private jobs join.');
+    assert.equal(workers.length, 1, 'The next frame has not allocated another coordinator.');
+    assert.equal(cpuBudget.active, 2); assert.equal(client.queue.length, 1);
+    finishCleanup(); await flush(); await flush();
+    assert.equal(workers.length, 2); assert.equal(cpuBudget.active, 1);
+    const nextWorker = workers[1];
+    assert.equal(nextWorker.messages[0].type, 'analyze');
+    nextWorker.emit({ id: nextWorker.messages[0].id, ok: true, result: { recovered: true } });
+    assert.deepEqual(await second, { recovered: true });
+    assert.equal(cpuBudget.active, 0); assert.equal(client.current, null);
+    await client.close();
+  });
+}
+
+test('explicit one-worker requests and isolated browsers retain the native route despite an available stage pool', async () => {
+  for (const environment of [staticEnvironment, { ...staticEnvironment, crossOriginIsolated: true, SharedArrayBuffer }]) {
+    const { client, workers } = setup({ environment, cpuStageBackend: { analyzeDxaLocal() {}, analyzeDxaTetrahedra() {} } });
+    const pending = client.analyze(largeSource(), {}, { workerCount: 1 }); await flush();
+    assert.equal(workers[0].messages[0].cpuOffload, false);
+    workers[0].emit({ id: workers[0].messages[0].id, ok: true, result: {} }); await pending; await client.close();
+  }
 });

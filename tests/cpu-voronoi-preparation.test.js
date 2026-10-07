@@ -45,10 +45,12 @@ for (const sharedMemory of [false, true]) test(`background Voronoi preparation r
     assert.equal(first.readyWorkers, 2); assert.equal(joined.frameKey, first.frameKey);
     assert.equal(first.sharedMemory, sharedMemory);
     assert.equal(stats.created, 2); assert.equal(stats.messages.filter(kind => kind === 'voronoiPrepare').length, 2);
-    assert.deepEqual(pool.cpuWarmupStatus.readyModules, { voronoi: 2, ptm: 0 });
+    assert.deepEqual(pool.cpuWarmupStatus.readyModules, { voronoi: 2, ptm: 0, dxa: 0 });
+    assert.ok([...pool.slots].every(slot => slot.moduleHeapBytes.voronoi >= 16 * 1024 ** 2
+      && slot.residentInputBytes >= frame.fractional.byteLength * 2), 'heap and resident-index telemetry cover both native and retained JS memory');
     assert.equal(pool.cpuBudget.active, 0, 'prepared idle Workers retain memory without CPU permits');
     const warm = await pool.warmupCpu({ atomCount: 8192, modules: ['ptm', 'voronoi'] });
-    assert.equal(warm.readyWorkers, 2); assert.deepEqual(warm.readyModules, { voronoi: 2, ptm: 2 });
+    assert.equal(warm.readyWorkers, 2); assert.deepEqual(warm.readyModules, { voronoi: 2, ptm: 2, dxa: 0 });
     const result = await pool.analyzeCPU(frame, { kind: 'voronoi', bins: 19 });
     const direct = await calculateVoronoi(frame, { bins: 19 });
     assert.equal(result.kernelInitializations, 0); assert.equal(result.indexBuilds, 0); assert.equal(result.frameUploads, 0);
@@ -65,6 +67,7 @@ for (const sharedMemory of [false, true]) test(`background Voronoi preparation r
     assert.equal(updated.indexBuilds, 0); assert.equal(updated.frameUploads, 0);
     for (const field of scientificFields) assert.deepEqual(updated[field], updatedDirect[field], field);
     pool.clearVoronoiFrames();
+    assert.ok([...pool.slots].every(slot => slot.residentInputBytes === 0), 'releasing resident coordinates removes their memory reservation');
     assert.equal(pool.cpuWarmupStatus.preparedVoronoiWorkers, 0);
     const rebuilt = await pool.prepareCpuFrame(frame);
     assert.notEqual(rebuilt.frameKey, changed.frameKey);
@@ -77,7 +80,7 @@ test('module-aware warmup allocates only requested kernels and rejects unknown m
   const pool = new AnalysisPool({ environment: environment(), workerFactory: realFactory(stats) });
   try {
     const status = await pool.warmupCpu({ atomCount: 8192, modules: ['voronoi'] });
-    assert.equal(status.readyWorkers, 2); assert.deepEqual(status.readyModules, { voronoi: 2, ptm: 0 });
+    assert.equal(status.readyWorkers, 2); assert.deepEqual(status.readyModules, { voronoi: 2, ptm: 0, dxa: 0 });
     await assert.rejects(pool.warmupCpu({ atomCount: 1, modules: [] }), /modules/);
     await assert.rejects(pool.warmupCpu({ atomCount: 1, modules: ['unknown'] }), /modules/);
     const messages = stats.messages.length;
@@ -97,7 +100,7 @@ test('coalescing requested module sets recalculates the native heap memory quota
     ]);
     assert.equal(ptm.targetWorkers, 1); assert.equal(voronoi.targetWorkers, 1);
     assert.equal(stats.created, 1, 'the combined 16 MiB + 16 MiB heaps constrain growing shared warmup requests');
-    assert.deepEqual(pool.cpuWarmupStatus.readyModules, { voronoi: 1, ptm: 1 });
+    assert.deepEqual(pool.cpuWarmupStatus.readyModules, { voronoi: 1, ptm: 1, dxa: 0 });
   } finally { pool.close(); }
 });
 

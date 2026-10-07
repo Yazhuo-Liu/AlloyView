@@ -28,7 +28,7 @@ const integer = value => Number(value).toLocaleString('en-US');
 /** DXA owns one whole-frame Worker job, its line network and the existing
  * per-atom structure output. Frame edits invalidate in-flight Worker replies. */
 export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion,
-  getGpuEnabled = () => false, onEdit = () => {}, onDisplayChange = () => {},
+  onEdit = () => {}, onDisplayChange = () => {},
   getColorMode = () => 'type', getColorChoiceVersion = () => 0, onResultsChange = () => {},
   onMemoryChange = () => {}, notify = () => {}, client = new DxaClient() }) {
   let enabled = false, controlsEnabled = false, controller = null, request = 0;
@@ -143,7 +143,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
       replaceAnalysisProperty(frame, { name: DXA_STRUCTURE_PROPERTY, displayName: DXA_STRUCTURE_LABEL,
         data: result.atomStructureTypes, categories: DXA_STRUCTURE_TYPES, unit: '',
         analysisKind: 'dxa', analysisKey: key, analysisMs: result.elapsedMs,
-        analysisEngine: result.engine, analysisGpuRequested: Boolean(getGpuEnabled()) });
+        analysisEngine: result.engine, analysisWorkerCount: result.workerCount ?? 1 });
       atomStructureFrame = frame;
       colorDefaultPending = false;
     }
@@ -152,12 +152,21 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     const count = result.segments?.length ?? 0;
     const length = Number(result.totalLength ?? 0), density = Number(result.density ?? 0);
     $('dxa-summary').textContent = `${integer(count)} segments · ${length.toPrecision(5)} Å total length · ${density.toExponential(3)} Å⁻² density`;
-    $('dxa-status').textContent = `${result.engine ?? 'CPU / Wasm'} · ${duration(result.elapsedMs ?? 0)}${result.gpuFallback ? ' · CPU fallback' : ''}`;
-    $('dxa-status').title = [...(result.stageFallbacks?.length
-      ? result.stageFallbacks.map(entry => `${entry.stage} CPU fallback: ${entry.reason}`)
-      : [result.fallbackReason ?? result.gpuFallbackReason]),
+    const workers = result.workerCount ?? 1;
+    const nativeWorkers = result.nativeWorkerCount ?? workers;
+    const concurrency = result.cpuOffloadUsed
+      ? `global ${integer(nativeWorkers)} ${nativeWorkers === 1 ? 'thread' : 'threads'} · local stages up to ${integer(workers)} Workers`
+      : `${integer(nativeWorkers)} ${nativeWorkers === 1 ? 'thread' : 'threads'}`;
+    $('dxa-status').textContent = `Wasm CPU · ${concurrency} · ${duration(result.elapsedMs ?? 0)}${result.threadingFallback ? ' · single-thread fallback' : ''}${result.cpuStageFallbacks?.length ? ' · local-stage fallback' : ''}`;
+    $('dxa-status').title = [result.threadingFallback ? `CPU threading fallback: ${result.threadingFallback}` : '',
+      ...(result.cpuOffloadUsed ? [
+        `Global extraction: ${integer(nativeWorkers)} ${nativeWorkers === 1 ? 'CPU thread' : 'CPU threads'}`,
+        `Local crystal identification: ${integer(result.cpuStageWorkerCounts?.local ?? 1)} CPU Workers`,
+        `Tetrahedron classification: ${integer(result.cpuStageWorkerCounts?.tetrahedra ?? 1)} CPU Workers`,
+      ] : []),
+      ...(result.cpuStageFallbacks ?? []).map(fallback => `CPU ${fallback.stage} fallback: ${fallback.reason}`),
+      ...(result.cpuStageTimings ?? []).map(stage => `CPU ${stage.stage} offload: ${duration(stage.elapsedMs)} · ${integer(stage.workerCount)} Workers · ${(Number(stage.copiedBytes ?? 0) / 1024 ** 2).toFixed(2)} MiB copied · ${integer(stage.kernelInitializations ?? 0)} kernel initializations`),
       ...(result.stageTimings ?? []).map(stage => `${stage.phase}: ${duration(stage.elapsedMs)}`),
-      ...(result.gpuStages?.length ? [`GPU stages: ${result.gpuStages.join(', ')}`] : []),
     ].filter(Boolean).join('\n');
     onResultsChange({ selectProperty: selectStructures && atomStructureFrame ? DXA_STRUCTURE_PROPERTY : null });
     renderFamilies(); draw(); onMemoryChange(frame);
@@ -183,30 +192,27 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     clearNetwork();
     const serial = request, sourceVersion = getSourceVersion();
     const current = () => serial === request && frame === getFrame() && sourceVersion === getSourceVersion() && enabled;
-    const gpuEnabled = Boolean(getGpuEnabled());
-    const key = JSON.stringify({ ...settings, gpuEnabled }), cached = cachedResult;
+    const key = JSON.stringify(settings), cached = cachedResult;
     if (cached?.frame === frame && cached.key === key) { showResult(cached.result, frame, key, shouldSelectStructures()); return true; }
     // Global line graphs can be large. Keep only the latest frame/result,
     // rather than adding unaccounted graph arrays to the trajectory cache.
     cachedResult = null;
     const job = new AbortController(); controller = job;
     state('Calculating…');
-    $('dxa-status').textContent = `Preparing ${gpuEnabled ? 'GPU-accelerated' : 'CPU'} DXA for ${integer(frame.ids.length)} atoms…`;
+    $('dxa-status').textContent = `Preparing CPU DXA for ${integer(frame.ids.length)} atoms…`;
     try {
-      const result = await client.analyze(frame, { ...settings, gpuEnabled }, {
+      const result = await client.analyze(frame, settings, {
         signal: job.signal,
         onProgress: progress => {
           if (!current() || job.signal.aborted) return;
           const stage = String(progress.phase ?? 'Analyzing').replace(/[-_]/g, ' ');
-          const done = progress.completedStages ?? 0, total = progress.totalStages ?? 12;
-          const backend = progress.backend === 'gpu' ? 'GPU' : progress.backend === 'hybrid' ? 'CPU + GPU' : 'CPU';
-          const threads = backend === 'CPU' && progress.workerCount > 1 ? ` · ${progress.workerCount} threads` : '';
-          const completion = Number.isFinite(progress.totalTetrahedra) && progress.totalTetrahedra > 0
-            ? `${integer(progress.completedTetrahedra ?? 0)} / ${integer(progress.totalTetrahedra)} tetrahedra`
-            : progress.backend === 'gpu' && String(progress.phase).startsWith('dxa-local') && progress.totalAtoms > 0
-              ? `${integer(progress.processedAtoms ?? progress.completedAtoms ?? 0)} / ${integer(progress.totalAtoms)} atoms`
-            : `${done} / ${total} stages`;
-          $('dxa-status').textContent = `${stage} · ${backend}${threads} · ${completion}`;
+          const done = progress.completedStages ?? 0, total = progress.totalStages ?? 11;
+          const workers = progress.workerCount ?? 1;
+          const concurrency = progress.cpuStage
+            ? `${integer(workers)} ${workers === 1 ? 'Worker' : 'Workers'} · global ${integer(progress.nativeWorkerCount ?? 1)} thread`
+            : `${integer(workers)} ${workers === 1 ? 'thread' : 'threads'}`;
+          $('dxa-status').textContent = `${stage} · CPU · ${concurrency} · ${done} / ${total} stages`;
+          if (progress.threadingFallback) $('dxa-status').title = `CPU threading fallback: ${progress.threadingFallback}`;
         },
       });
       if (!current() || job.signal.aborted) return false;

@@ -1,11 +1,13 @@
 # Dislocation extraction: implementation review
 
-Research date: 2026-10-05 UTC. An initial CPU/Wasm port is now described in
-[Dislocation analysis](features/dislocations.md). This review preserves the
-source inspection and feasibility findings that preceded it. The current
-hybrid accelerator implements GPU nearest-neighbor search, local crystal
-correspondence, tetrahedron alpha filtering and elastic compatibility; the full
-resident geometry/tracing design below remains proposed.
+Research date: 2026-10-05 UTC. This document preserves source inspection,
+feasibility findings and historical GPU experiments. As of 2026-10-07 the
+production [Dislocation analysis](features/dislocations.md) is CPU/Wasm only,
+with shared-memory pthreads or private local-stage CPU Workers around one
+global serial kernel. GPU designs,
+implementation descriptions, command names and numerical measurements below
+refer to earlier revisions; they are not current supported execution paths.
+Numerical records are preserved rather than reinterpreted as current results.
 
 ## Conclusion
 
@@ -75,7 +77,7 @@ The default trial circuit limit is 14 atom-to-atom steps and stretchability is
 distance cutoff. Partial dislocations, stacking faults, coherent twins and
 junctions must retain their supported crystallographic transformations.
 
-## CPU and GPU allocation
+## Historical CPU/GPU allocation study
 
 | Stage | Current implementation | Remaining GPU migration opportunity |
 | --- | --- | --- |

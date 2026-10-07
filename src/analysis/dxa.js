@@ -46,7 +46,10 @@ export const DXA_FAMILIES = Object.freeze({
 });
 
 export function validateDxaParameters(parameters = {}) {
-  const settings = { ...DXA_DEFAULTS, ...parameters };
+  // Older saved configurations may contain gpuEnabled. Accept their native
+  // settings while omitting retired backend flags from jobs and new exports.
+  const settings = Object.fromEntries(Object.entries(DXA_DEFAULTS)
+    .map(([name, value]) => [name, Object.hasOwn(parameters ?? {}, name) ? parameters[name] : value]));
   if (!DXA_LATTICES.some(lattice => lattice.id === settings.lattice)) throw new Error('Choose a supported DXA input crystal lattice.');
   for (const [name, minimum, maximum] of [['trialCircuitLength', 3, 100], ['circuitStretchability', 0, 100],
     ['lineSmoothingIterations', 0, 100]]) {
@@ -132,9 +135,7 @@ export function dxaCartesianCoordinates(frame) {
 }
 
 const DXA_STAGES = 11;
-const DXA_GPU_STAGES = Object.freeze(['tetrahedron-alpha', 'elastic-compatibility']);
-const DXA_GPU_LOCAL_STAGES = Object.freeze(['local-neighbors', 'local-structures', 'local-correspondence']);
-const DXA_GPU_SNAPSHOT_LIMIT = 512 * 1024 ** 2;
+const DXA_PTHREAD_STARTUP_TIMEOUT_MS = 15_000;
 let kernelPromise, kernelProgress, poolGrowth = Promise.resolve();
 let kernelGeneration = 0, kernelThreadingFallback;
 let activeDxaCalculation = false;
@@ -164,6 +165,7 @@ export function dxaWorkerCount(count, requested, environment = globalThis) {
 
 async function getKernel() {
   if (!kernelPromise) {
+    kernelThreadingFallback = undefined;
     kernelPromise = (async () => {
       const wantsThreading = sharedDxaAvailable();
       async function initialize(threaded) {
@@ -214,42 +216,114 @@ function kernelMetadata(module, workerCount) {
   return { workerCount, poolSize: module.dxaShared
     ? module.PThread.unusedWorkers.length + module.PThread.runningWorkers.length : 0,
   kernelGeneration, wasmMemoryBytes: module.HEAPU8.byteLength,
-  sharedMemory: Boolean(module.dxaShared), threadingFallback: kernelThreadingFallback };
+  sharedMemory: Boolean(module.dxaShared), threadingFallback: module.dxaThreadingFallback ?? kernelThreadingFallback };
 }
 
-async function growPool(module, workerCount) {
+async function growPool(module, workerCount, { signal, startupTimeoutMs } = {}) {
   if (!module.dxaShared || workerCount < 2) return;
   const growth = poolGrowth.then(async () => {
+    checkSignal(signal);
+    checkDxaCancellation(module);
     const pool = module.PThread;
     const pending = [];
-    while (pool.unusedWorkers.length + pool.runningWorkers.length < workerCount - 1) {
-      pool.allocateUnusedWorker();
+    let allocationError;
+    const missing = Math.max(0, workerCount - 1 - pool.unusedWorkers.length - pool.runningWorkers.length);
+    for (let slot = 0; slot < missing; slot++) {
+      try { pool.allocateUnusedWorker(); }
+      catch (error) { allocationError = error; break; }
       const worker = pool.unusedWorkers.at(-1);
       // Emscripten's loader resolves only on success; reject startup errors as
-      // well, and remove a failed slot so a future request can retry growth.
+      // well and remove failed slots before choosing serial execution.
       pending.push(new Promise((resolve, reject) => {
-        const loaded = pool.loadWasmModuleToWorker(worker);
-        const runtimeErrorHandler = worker.onerror;
-        worker.onerror = event => {
-          worker.terminate();
+        let settled = false, runtimeErrorHandler, timeout, cancellationPoll;
+        const cleanup = () => {
+          clearTimeout(timeout);
+          clearInterval(cancellationPoll);
+          signal?.removeEventListener('abort', abort);
+        };
+        const success = value => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          // Only a successfully loaded slot receives normal Emscripten runtime
+          // handling. Late load/error notifications for removed slots do nothing.
+          if (runtimeErrorHandler !== undefined) worker.onerror = runtimeErrorHandler;
+          resolve(value);
+        };
+        const fail = error => {
+          if (settled) return;
+          if (error?.name === 'AbortError' && worker.loaded) { success(worker); return; }
+          settled = true;
+          cleanup();
+          worker.onerror = fail;
+          try { worker.terminate(); } catch { /* A denied startup may already be stopped. */ }
           const index = pool.unusedWorkers.indexOf(worker);
           if (index >= 0) pool.unusedWorkers.splice(index, 1);
-          reject(new Error(event.message || 'The DXA pthread worker could not start.'));
+          reject(error instanceof Error ? error : new Error(error?.message || 'The DXA pthread worker could not start.'));
         };
-        loaded.then(value => {
-          // Once started, preserve Emscripten's fatal runtime handling rather
-          // than mistaking a crashed numerical thread for a startup failure.
-          worker.onerror = runtimeErrorHandler;
-          resolve(value);
-        }, reject);
+        const abort = () => fail(new DOMException('The DXA calculation was cancelled.', 'AbortError'));
+        const pollCancellation = () => {
+          try { checkSignal(signal); checkDxaCancellation(module); }
+          catch (error) { fail(error); }
+        };
+        signal?.addEventListener('abort', abort, { once: true });
+        timeout = setTimeout(() => fail(new Error(`The DXA pthread worker did not finish startup within ${startupTimeoutMs} ms.`)), startupTimeoutMs);
+        // During asynchronous pthread loading, host analysis cancellation may
+        // reach only the retained atomic word. Observe it without entering the
+        // numerical workspace or keeping the coordinator/CPU permit blocked.
+        cancellationPoll = setInterval(pollCancellation, 25);
+        try {
+          pollCancellation();
+          if (settled) return;
+          const loaded = pool.loadWasmModuleToWorker(worker);
+          runtimeErrorHandler = worker.onerror;
+          if (!settled || !worker.loaded) worker.onerror = fail;
+          Promise.resolve(loaded).then(success, fail);
+        } catch (error) { fail(error); }
       }));
     }
     const outcomes = await Promise.allSettled(pending);
     const failed = outcomes.find(outcome => outcome.status === 'rejected');
+    if (allocationError) throw allocationError;
     if (failed) throw failed.reason;
   });
   poolGrowth = growth.catch(() => {});
-  return growth;
+  return abortablePoolPreparation(growth, signal);
+}
+
+function abortablePoolPreparation(preparation, signal) {
+  if (!signal) return preparation;
+  checkSignal(signal);
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new DOMException('The DXA calculation was cancelled.', 'AbortError'));
+    signal.addEventListener('abort', abort, { once: true });
+    preparation.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+
+/** Prepare native CPU slots before entering the numerical workspace. Startup
+ * failure latches a serial execution choice for this retained shared heap.
+ * Already loaded idle slots remain reusable resources, never partial workers.
+ */
+export async function prepareDxaThreadPool(module, workerCount, {
+  signal, startupTimeoutMs = DXA_PTHREAD_STARTUP_TIMEOUT_MS,
+} = {}) {
+  checkSignal(signal);
+  if (!Number.isSafeInteger(workerCount) || workerCount < 1) throw new Error('DXA worker count must be a positive integer.');
+  if (!Number.isSafeInteger(startupTimeoutMs) || startupTimeoutMs < 1 || startupTimeoutMs > 0x7fffffff) {
+    throw new Error('DXA pthread startup timeout must be a positive 32-bit millisecond count.');
+  }
+  if (!module.dxaShared || module.dxaThreadingFallback) return 1;
+  try { await growPool(module, workerCount, { signal, startupTimeoutMs }); }
+  catch (error) {
+    checkSignal(signal);
+    checkDxaCancellation(module);
+    module.dxaThreadingFallback = error.message || String(error);
+    return 1;
+  }
+  checkSignal(signal);
+  checkDxaCancellation(module);
+  return workerCount;
 }
 
 /** Initialize the one persistent kernel and grow its existing pthread pool.
@@ -262,7 +336,8 @@ export async function warmupDxa(options = {}) {
 }
 
 async function initializeDxa({ atomCount = 1, workerCount: requestedWorkers,
-  memoryBudgetBytes, onProgress = () => {}, onControl = () => {}, resetCancellation = true } = {}) {
+  memoryBudgetBytes, onProgress = () => {}, onControl = () => {}, resetCancellation = true, signal, startupTimeoutMs } = {}) {
+  checkSignal(signal);
   if (!Number.isSafeInteger(atomCount) || atomCount < 1) throw new Error('DXA warmup requires a valid atom count.');
   const estimateBytes = preflightDxaMemory(atomCount, memoryBudgetBytes);
   let workerCount = dxaWorkerCount(atomCount, requestedWorkers);
@@ -273,14 +348,24 @@ async function initializeDxa({ atomCount = 1, workerCount: requestedWorkers,
   onProgress({ phase: 'initializing', completedStages: 0, totalStages: DXA_STAGES,
     backend: 'cpu', workerCount, totalAtoms: atomCount });
   const module = await getKernel();
+  checkSignal(signal);
   if (resetCancellation) module._alloy_dxa_reset_cancel();
   const control = cancellationControl(module);
-  if (control) onControl(control);
-  if (!module.dxaShared) workerCount = 1;
+  // Announce serial startup too. A client waiting for shared cancellation must
+  // switch to Worker termination if threaded-module startup fell back.
+  onControl(control ?? null);
+  if (!module.dxaShared || module.dxaThreadingFallback) workerCount = 1;
   checkDxaCancellation(module);
   onProgress({ phase: 'warming', completedStages: 0, totalStages: DXA_STAGES,
     backend: 'cpu', workerCount, totalAtoms: atomCount });
-  await growPool(module, workerCount);
+  const preparedWorkerCount = await prepareDxaThreadPool(module, workerCount, { signal, startupTimeoutMs });
+  if (preparedWorkerCount !== workerCount) {
+    workerCount = preparedWorkerCount;
+    onProgress({ phase: 'Pthread startup unavailable; using one CPU thread',
+      completedStages: 0, totalStages: DXA_STAGES, backend: 'cpu', workerCount,
+      totalAtoms: atomCount, threadingFallback: module.dxaThreadingFallback });
+  }
+  checkSignal(signal);
   checkDxaCancellation(module);
   return kernelMetadata(module, workerCount);
 }
@@ -300,9 +385,9 @@ export async function releaseDxaKernels() {
   kernelThreadingFallback = undefined;
 }
 
-/** Executes full DXA, optionally dispatching local crystal correspondence
- * and immutable tetrahedron classification to the shared WebGPU backend.
- * Browser callers should use DxaClient to keep synchronous work off the UI.
+/** Executes full DXA with the native CPU kernel. Browser callers should use
+ * DxaClient to keep synchronous work off the UI. Pthreads are chosen solely
+ * from isolation/shared-memory support and the shared CPU/memory budget.
  */
 export async function calculateDxa(frame, parameters = {}, options = {}) {
   if (activeDxaCalculation) throw new Error('A DXA calculation is already using the native workspace.');
@@ -312,8 +397,7 @@ export async function calculateDxa(frame, parameters = {}, options = {}) {
 }
 
 async function performDxaCalculation(frame, parameters = {}, { onProgress = () => {}, onControl = () => {}, resetCancellation = true,
-  memoryBudgetBytes, workerCount: requestedWorkers, classifyDxa, signal, gpuSnapshotBudgetBytes, gpuBufferLimitBytes,
-  verifyGpuClassification = false, identifyDxa, verifyGpuLocalStructures = false } = {}) {
+  memoryBudgetBytes, workerCount: requestedWorkers, signal, startupTimeoutMs, runCpuStage } = {}) {
   checkSignal(signal);
   const settings = validateDxaParameters(parameters), count = validateDxaFrame(frame);
   const memoryEstimateBytes = preflightDxaMemory(count, memoryBudgetBytes);
@@ -321,7 +405,7 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
   const startedAt = performance.now();
   const report = update => onProgress({ backend: 'cpu', workerCount, ...update });
   const ready = await initializeDxa({ atomCount: count, workerCount: requestedWorkers,
-    memoryBudgetBytes, onProgress: report, onControl, resetCancellation });
+    memoryBudgetBytes, onProgress: report, onControl, resetCancellation, signal, startupTimeoutMs });
   workerCount = ready.workerCount;
   const module = await getKernel();
   checkSignal(signal);
@@ -335,19 +419,38 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
     throw new Error('DXA could not allocate its input; reduce the analyzed structure or real replication.');
   }
   const stageTimings = [];
-  let stagePhase, stageStarted, stageBackend;
-  const beginStage = (phase, completedStages, totalStages = DXA_STAGES, backend = 'cpu') => {
+  const cpuStageTimings = [], cpuStageFallbacks = [], cpuStageWorkerCounts = {};
+  const importedCpuStages = new Set();
+  let stagePhase, stageStarted;
+  const beginStage = (phase, completedStages, totalStages = DXA_STAGES) => {
     const now = performance.now();
-    if (stagePhase) stageTimings.push({ phase: stagePhase, elapsedMs: now - stageStarted, backend: stageBackend });
+    if (stagePhase) stageTimings.push({ phase: stagePhase, elapsedMs: now - stageStarted, backend: 'cpu' });
     stagePhase = completedStages < totalStages ? phase : undefined;
     stageStarted = now;
-    stageBackend = backend;
-    report({ phase, completedStages, totalStages, totalAtoms: count, backend });
+    report({ phase, completedStages, totalStages, totalAtoms: count });
   };
   kernelProgress = beginStage;
-  let gpuResult, gpuLocalResult, gpuSnapshotBytes = 0, gpuLocalInputBytes = 0, fallbackReason;
-  const stageFallbacks = [];
-  let regionsPointer = 0, localStructuresPointer = 0, localNeighborsPointer = 0, stagedSession = false;
+  const runStage = async (stage, input, completedStages) => {
+    const phase = stage === 'local' ? 'CPU local crystal recognition' : 'CPU interface tetrahedron classification';
+    beginStage(phase, completedStages);
+    report({ phase, completedStages, totalStages: DXA_STAGES, totalAtoms: count, cpuStage: stage, awaitingCpuStage: true });
+    const result = await runCpuStage(stage, input, { signal, onProgress: update => report({ ...update, cpuStage: stage, phase }) });
+    checkSignal(signal); checkDxaCancellation(module);
+    if (!Number.isSafeInteger(result?.workerCount) || result.workerCount < 1) throw new Error('CPU DXA returned invalid worker metadata.');
+    cpuStageWorkerCounts[stage] = result.workerCount;
+    cpuStageTimings.push({ stage, workerCount: result.workerCount, elapsedMs: result.elapsedMs ?? 0,
+      inputBytes: result.inputBytes ?? 0, copiedBytes: result.copiedBytes ?? 0,
+      chunkCount: result.chunkCount ?? 1, kernelInitializations: result.kernelInitializations ?? 0 });
+    return result;
+  };
+  const fallback = (stage, error) => {
+    if (error?.name === 'AbortError' || signal?.aborted) throw error;
+    checkDxaCancellation(module);
+    const reason = error.message || String(error);
+    cpuStageFallbacks.push({ stage, reason });
+    report({ phase: `CPU Worker ${stage} unavailable; continuing on native CPU`, completedStages: stage === 'local' ? 0 : 7,
+      totalStages: DXA_STAGES, totalAtoms: count, cpuStageFallback: { stage, reason } });
+  };
   try {
     module.HEAPF64.set(positions, coordinates / 8);
     module.HEAPF64.set(frame.cell.vectors, cellPointer / 8);
@@ -358,173 +461,90 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       DXA_LATTICES.find(lattice => lattice.id === settings.lattice).kernelId,
       settings.trialCircuitLength, settings.circuitStretchability, settings.onlyPerfectDislocations ? 1 : 0,
       settings.lineSmoothingIterations, settings.linePointInterval];
-    let output;
-    // The WebGPU stages emulate binary64 arithmetic. With several native
-    // threads, CPU local identification and classification finish sooner.
-    const gpuStagesAvailable = typeof classifyDxa === 'function' || typeof identifyDxa === 'function';
-    const gpuSkipped = Boolean(settings.gpuEnabled && gpuStagesAvailable && workerCount > 1);
-    if (settings.gpuEnabled && gpuStagesAvailable && !gpuSkipped) {
-      stagedSession = true;
-      const budgetBytes = gpuSnapshotBudgetBytes ?? Math.min(DXA_GPU_SNAPSHOT_LIMIT,
-        Math.floor((memoryBudgetBytes ?? 1.5 * 1024 ** 3) * .35));
-      if (typeof identifyDxa === 'function') {
-        if (!module._alloy_dxa_prepare(...argumentsList)) throw nativeDxaError(module);
-        try {
-          const input = exportDxaLocalInput(module, count, argumentsList[4], !settings.onlyPerfectDislocations, budgetBytes);
-          gpuLocalInputBytes = input.coordinates.byteLength + input.templates.byteLength + input.inverse.byteLength;
-          let referenceStructures, referenceNeighbors, referenceMaxNeighborDistance, verificationInput;
-          if (verifyGpuLocalStructures) {
-            if (!module._alloy_dxa_identify_local_cpu()) throw nativeDxaError(module);
-            const types = module._alloy_dxa_local_types_ptr(), neighbors = module._alloy_dxa_local_neighbors_ptr();
-            if (!types || !neighbors) throw nativeDxaError(module);
-            referenceStructures = module.HEAP32.slice(types / 4, types / 4 + count);
-            referenceNeighbors = module.HEAP32.slice(neighbors / 4, neighbors / 4 + count * input.neighborWidth);
-            referenceMaxNeighborDistance = module._alloy_dxa_local_max_distance();
-            verificationInput = { neighborWidth: input.neighborWidth, templates: input.templates.slice() };
-          }
-          checkSignal(signal);
-          checkDxaCancellation(module);
-          // This progress is posted before the RPC. The host can therefore
-          // cancel a serial Wasm session while it awaits the GPU checkpoint.
-          beginStage('GPU local neighbors and crystal correspondence', 0, DXA_STAGES, 'gpu');
-          const local = await withSignal(identifyDxa(input, { signal, referenceStructures, referenceNeighbors, referenceMaxNeighborDistance,
-            referenceWidth: referenceNeighbors ? input.neighborWidth : undefined,
-            onProgress: progress => report({ completedStages: 0, totalStages: DXA_STAGES,
-              ...progress, backend: 'gpu', totalAtoms: count }) }), signal);
-          checkSignal(signal);
-          checkDxaCancellation(module);
-          validateDxaLocalResult(local, count, input.neighborWidth);
-          if (referenceStructures) verifyDxaLocalResult(local, verificationInput, referenceStructures,
-            referenceNeighbors, referenceMaxNeighborDistance);
-          localStructuresPointer = module._malloc(local.structures.byteLength);
-          localNeighborsPointer = module._malloc(local.neighbors.byteLength);
-          if (!localStructuresPointer || !localNeighborsPointer) throw new Error('DXA could not allocate the GPU crystal correspondence.');
-          module.HEAP32.set(local.structures, localStructuresPointer / 4);
-          module.HEAP32.set(local.neighbors, localNeighborsPointer / 4);
-          gpuLocalResult = local;
-        } catch (error) {
-          if (error?.name === 'AbortError' || signal?.aborted) throw error;
-          checkDxaCancellation(module);
-          fallbackReason = error?.message || String(error);
-          stageFallbacks.push({ stage: 'local', reason: fallbackReason });
-          report({ phase: 'GPU local analysis unavailable; continuing crystal identification on CPU', completedStages: 0,
-            totalStages: DXA_STAGES, totalAtoms: count, fallbackReason });
-        } finally {
-          // Packing arrays are independent of the persistent native session.
-          // Their owned JS copies were transferred without exposing its heap.
-          module._alloy_dxa_release_local_input();
-        }
-        try {
-          checkSignal(signal);
-          checkDxaCancellation(module);
-          let mapped = module._alloy_dxa_build_mapping(gpuLocalResult ? localStructuresPointer : 0,
-            gpuLocalResult ? localNeighborsPointer : 0, gpuLocalResult?.neighborWidth ?? 0,
-            gpuLocalResult?.maxNeighborDistance ?? 0);
-          if (!mapped && gpuLocalResult) {
-            const error = nativeDxaError(module);
-            if (error.name === 'AbortError') throw error;
-            // Import validation happens before changing native structures.
-            // Only that failure retains a prepared local session; failures
-            // during topology construction dispose it and remain fatal.
-            if (module._alloy_dxa_local_neighbor_width() > 0) {
-              gpuLocalResult = undefined;
-              fallbackReason = error.message;
-              stageFallbacks.push({ stage: 'local', reason: fallbackReason });
-              report({ phase: 'GPU local correspondence rejected; continuing crystal identification on CPU', completedStages: 0,
-                totalStages: DXA_STAGES, totalAtoms: count, fallbackReason });
-              mapped = module._alloy_dxa_build_mapping(0, 0, 0, 0);
-            }
-          }
-          if (!mapped) throw nativeDxaError(module);
-        } finally {
-          if (localStructuresPointer) module._free(localStructuresPointer);
-          if (localNeighborsPointer) module._free(localNeighborsPointer);
-          localStructuresPointer = localNeighborsPointer = 0;
-        }
-      } else {
-        if (!module._alloy_dxa_begin(...argumentsList)) throw nativeDxaError(module);
-      }
-      checkSignal(signal);
-      checkDxaCancellation(module);
-      try {
-        if (typeof classifyDxa !== 'function') throw new Error('WebGPU tetrahedron classification is unavailable in this browser or context.');
-        const snapshot = exportDxaSnapshot(module, budgetBytes, gpuBufferLimitBytes);
-        gpuSnapshotBytes = snapshot.vertices.byteLength + snapshot.tetrahedra.byteLength
-          + snapshot.edges.byteLength + snapshot.transitions.byteLength;
-        let referenceRegions;
-        if (verifyGpuClassification) {
-          const pointer = module._alloy_dxa_cpu_regions_ptr();
-          if (!pointer) throw nativeDxaError(module);
-          referenceRegions = module.HEAP32.slice(pointer / 4, pointer / 4 + snapshot.tetrahedronCount);
-        }
-        const tetrahedronCount = snapshot.tetrahedronCount;
-        checkSignal(signal);
-        checkDxaCancellation(module);
-        beginStage('GPU tetrahedron and elastic classification', 7, DXA_STAGES, 'gpu');
-        const classified = await withSignal(classifyDxa(snapshot, { signal, referenceRegions,
-          onProgress: progress => report({ completedStages: 7, totalStages: DXA_STAGES,
-            ...progress, backend: 'gpu', totalAtoms: count,
-            totalTetrahedra: progress.totalTetrahedra ?? progress.totalAtoms ?? tetrahedronCount,
-            completedTetrahedra: progress.completedTetrahedra ?? progress.completedAtoms ?? 0 }) }), signal);
-        checkSignal(signal);
-        checkDxaCancellation(module);
-        if (!(classified?.regions instanceof Int32Array) || classified.regions.length !== tetrahedronCount
-          || classified.regions.some(value => value !== -1 && value !== 0)) {
-          throw new Error('WebGPU DXA returned invalid tetrahedron regions.');
-        }
-        if (referenceRegions && !classified.regions.every((value, index) => value === referenceRegions[index])) {
-          throw new Error('WebGPU DXA classification differs from the native numerical reference.');
-        }
-        regionsPointer = module._malloc(classified.regions.byteLength);
-        if (!regionsPointer) throw new Error('DXA could not allocate the GPU tetrahedron classification.');
-        module.HEAP32.set(classified.regions, regionsPointer / 4);
-        gpuResult = classified;
-      } catch (error) {
-        if (error?.name === 'AbortError' || signal?.aborted) throw error;
-        checkDxaCancellation(module);
-        fallbackReason = error?.message || String(error);
-        stageFallbacks.push({ stage: 'tetrahedra', reason: fallbackReason });
-        report({ phase: 'GPU unavailable; continuing DXA on CPU', completedStages: 7,
-          totalStages: DXA_STAGES, totalAtoms: count, fallbackReason });
-      }
-      checkSignal(signal);
-      checkDxaCancellation(module);
-      // A failed GPU dispatch reuses the already mapped native topology and
-      // any successful GPU local correspondence, without restarting DXA.
-      output = module._alloy_dxa_finish(gpuResult ? regionsPointer : 0,
-        gpuResult ? gpuResult.regions.length : 0);
-    } else {
-      if (gpuSkipped) fallbackReason = `${workerCount} CPU threads run DXA faster than its WebGPU binary64 stages.`;
-      else if (settings.gpuEnabled) fallbackReason = 'WebGPU DXA is unavailable in this browser or context.';
-      output = module._alloy_dxa_analyze(...argumentsList);
-    }
-    if (!output) {
-      throw nativeDxaError(module);
-    }
+    // Preserve the staged native session for a cancellation checkpoint between
+    // topology construction and CPU mesh construction/dislocation tracing.
     checkSignal(signal);
+    checkDxaCancellation(module);
+    const offload = workerCount === 1 && typeof runCpuStage === 'function';
+    let localImported = false;
+    if (offload) {
+      if (!module._alloy_dxa_prepare(...argumentsList)) throw nativeDxaError(module);
+      let typesPointer = 0, neighborsPointer = 0;
+      try {
+        const local = await runStage('local', { atomCount: count, coordinates: positions, cell: frame.cell,
+          lattice: argumentsList[4], perfectOnly: settings.onlyPerfectDislocations }, 0);
+        if (!(local.structures instanceof Int32Array) || local.structures.length !== count
+          || !(local.neighbors instanceof Int32Array) || !Number.isSafeInteger(local.neighborWidth) || local.neighborWidth < 1
+          || local.neighbors.length !== count * local.neighborWidth || !Number.isFinite(local.maxNeighborDistance) || local.maxNeighborDistance < 0) {
+          throw new Error('CPU DXA local rows have invalid dimensions.');
+        }
+        typesPointer = module._malloc(local.structures.byteLength); neighborsPointer = module._malloc(local.neighbors.byteLength);
+        if (!typesPointer || !neighborsPointer) throw new Error('DXA could not allocate CPU Worker crystal rows.');
+        module.HEAP32.set(local.structures, typesPointer / 4); module.HEAP32.set(local.neighbors, neighborsPointer / 4);
+        if (!module._alloy_dxa_import_local(typesPointer, neighborsPointer, count, local.neighborWidth, local.maxNeighborDistance)) throw nativeDxaError(module);
+        localImported = true;
+        importedCpuStages.add('local');
+      } catch (error) { fallback('local', error); }
+      finally {
+        if (typesPointer) module._free(typesPointer);
+        if (neighborsPointer) module._free(neighborsPointer);
+      }
+    }
+    if (!localImported && !module._alloy_dxa_begin(...argumentsList)) throw nativeDxaError(module);
+    checkSignal(signal);
+    checkDxaCancellation(module);
+    if (offload) {
+      let regionsPointer = 0;
+      try {
+        const snapshotBudget = Math.min(512 * 1024 ** 2,
+          // Native packing and its owned JS copy coexist until all tables
+          // have been copied. Reserve both before accepting this snapshot.
+          Math.max(1, Math.floor(((memoryBudgetBytes ?? 1.5 * 1024 ** 3) - memoryEstimateBytes) / 2)));
+        const snapshot = exportDxaCpuSnapshot(module, snapshotBudget, count);
+        const classified = await runStage('tetrahedra', snapshot, 7);
+        if (!(classified.regions instanceof Int32Array) || classified.regions.length !== snapshot.tetrahedronCount
+          || classified.regions.some(value => value !== -1 && value !== 0)) throw new Error('CPU DXA interface labels are invalid.');
+        regionsPointer = module._malloc(classified.regions.byteLength);
+        if (!regionsPointer) throw new Error('DXA could not allocate CPU Worker interface labels.');
+        module.HEAP32.set(classified.regions, regionsPointer / 4);
+        if (!module._alloy_dxa_import_regions(regionsPointer, classified.regions.length)) throw nativeDxaError(module);
+        importedCpuStages.add('tetrahedra');
+      } catch (error) { fallback('tetrahedra', error); }
+      finally { if (regionsPointer) module._free(regionsPointer); }
+    }
+    const output = module._alloy_dxa_finish();
+    if (!output) throw nativeDxaError(module);
+    checkSignal(signal);
+    checkDxaCancellation(module);
     report({ phase: 'collecting', completedStages: DXA_STAGES, totalStages: DXA_STAGES, totalAtoms: count });
     const result = normalizeDxaResult(JSON.parse(module.UTF8ToString(output)), frame.cell, settings, count);
-    const usedGpu = Boolean(gpuLocalResult || gpuResult);
-    const gpuResults = [gpuLocalResult, gpuResult].filter(Boolean);
-    const gpuTotal = key => gpuResults.length ? gpuResults.reduce((sum, value) => sum + (value[key] ?? 0), 0) : undefined;
+    const peakWorkers = Math.max(workerCount, ...Object.values(cpuStageWorkerCounts));
     return { ...result, elapsedMs: performance.now() - startedAt, memoryEstimateBytes,
       stageTimings, ...kernelMetadata(module, workerCount), threaded: Boolean(module.dxaShared),
-      engine: `${workerCount > 1 ? `Wasm CPU · ${workerCount} threads` : 'Wasm CPU'}${usedGpu ? ' + WebGPU' : ''}`,
-      backend: usedGpu ? 'hybrid' : 'cpu',
-      gpuStages: [...(gpuLocalResult ? DXA_GPU_LOCAL_STAGES : []), ...(gpuResult ? DXA_GPU_STAGES : [])],
-      gpuElapsedMs: gpuTotal('elapsedMs'), gpuArithmetic: gpuResult?.arithmetic ?? gpuLocalResult?.arithmetic,
-      gpuUploadedBytes: gpuTotal('uploadedBytes'), gpuReadbackBytes: gpuTotal('readbackBytes'),
-      gpuSnapshotBytes, gpuLocalInputBytes, gpuFallback: Boolean(settings.gpuEnabled && !usedGpu && !gpuSkipped), gpuSkipped,
-      stageFallbacks, gpuFallbackReason: !usedGpu ? fallbackReason : undefined, fallbackReason };
+      nativeWorkerCount: workerCount, workerCount: peakWorkers, cpuStageWorkerCounts, cpuStageTimings, cpuStageFallbacks,
+      cpuOffloadUsed: importedCpuStages.size > 0,
+      engine: cpuStageTimings.length ? `Wasm CPU · global ${workerCount} thread · CPU Worker pool ×${peakWorkers}`
+        : workerCount > 1 ? `Wasm CPU · ${workerCount} threads` : 'Wasm CPU', backend: 'cpu' };
   } finally {
     kernelProgress = null;
-    if (stagedSession) module._alloy_dxa_dispose();
-    if (regionsPointer) module._free(regionsPointer);
-    if (localStructuresPointer) module._free(localStructuresPointer);
-    if (localNeighborsPointer) module._free(localNeighborsPointer);
+    module._alloy_dxa_dispose();
     module._free(coordinates);
     module._free(cellPointer);
   }
+}
+
+function exportDxaCpuSnapshot(module, budgetBytes, atomCount) {
+  try {
+    if (!module._alloy_dxa_worker_snapshot(budgetBytes)) throw nativeDxaError(module);
+    const vertexCount = module._alloy_dxa_worker_vertex_count(), tetrahedronCount = module._alloy_dxa_worker_tet_count();
+    const edgeCount = module._alloy_dxa_worker_edge_count(), transitionCount = module._alloy_dxa_worker_transition_count();
+    const copy = (heap, pointer, length) => heap.slice(pointer / heap.BYTES_PER_ELEMENT, pointer / heap.BYTES_PER_ELEMENT + length);
+    return { atomCount, vertexCount, tetrahedronCount, edgeCount, transitionCount, alpha: module._alloy_dxa_worker_alpha(),
+      vertices: copy(module.HEAPF64, module._alloy_dxa_worker_vertex_ptr(), vertexCount * 3),
+      tetrahedra: copy(module.HEAPU32, module._alloy_dxa_worker_tet_ptr(), tetrahedronCount * 16),
+      edges: copy(module.HEAPU32, module._alloy_dxa_worker_edge_ptr(), edgeCount * 8),
+      transitions: copy(module.HEAPF64, module._alloy_dxa_worker_transition_ptr(), transitionCount * 20) };
+  } finally { module._alloy_dxa_release_worker_snapshot(); }
 }
 
 function nativeDxaError(module) {
@@ -536,113 +556,8 @@ function nativeDxaError(module) {
   return new Error(message);
 }
 
-function exportDxaLocalInput(module, count, lattice, identifyPlanarDefects, budgetBytes) {
-  const inputBytes = count * 3 * 8 + 5 * 33 * 4 + 9 * 8;
-  if (!Number.isSafeInteger(budgetBytes) || budgetBytes < 1 || budgetBytes > 0xffff_ffff) {
-    throw new Error('The WebGPU DXA snapshot budget must be a positive 32-bit byte count.');
-  }
-  if (inputBytes > budgetBytes) throw new Error('The DXA local input exceeds the WebGPU snapshot memory budget.');
-  const positions = module._alloy_dxa_local_positions_ptr();
-  const templates = module._alloy_dxa_local_templates_ptr();
-  const inverse = module._alloy_dxa_local_inverse_ptr();
-  if (!positions || !templates || !inverse) throw nativeDxaError(module);
-  return { coordinates: module.HEAPF64.slice(positions / 8, positions / 8 + count * 3),
-    templates: module.HEAPU32.slice(templates / 4, templates / 4 + 5 * 33),
-    inverse: module.HEAPF64.slice(inverse / 8, inverse / 8 + 9), atomCount: count, lattice,
-    identifyPlanarDefects, neighborWidth: module._alloy_dxa_local_neighbor_width() };
-}
-
-function validateDxaLocalResult(result, count, width) {
-  if (!(result?.structures instanceof Int32Array) || result.structures.length !== count
-    || result.structures.some(value => value < 0 || value > 5)
-    || !(result.neighbors instanceof Int32Array) || result.neighbors.length !== count * width
-    || result.neighborWidth !== width || result.neighbors.some(value => value < -1 || value >= count)
-    || !Number.isFinite(result.maxNeighborDistance) || result.maxNeighborDistance < 0
-    || (result.structures.some(value => value !== 0) ? result.maxNeighborDistance === 0 : result.maxNeighborDistance !== 0)) {
-    throw new Error('WebGPU DXA returned invalid local crystal correspondence.');
-  }
-  if ((result.elapsedMs !== undefined && (!Number.isFinite(result.elapsedMs) || result.elapsedMs < 0))
-    || ['uploadedBytes', 'readbackBytes'].some(key => result[key] !== undefined
-      && (!Number.isSafeInteger(result[key]) || result[key] < 0))) {
-    throw new Error('WebGPU DXA returned invalid local performance metrics.');
-  }
-}
-
-function verifyDxaLocalResult(result, input, structures, neighbors, maximumDistance) {
-  const fail = () => { throw new Error('WebGPU DXA local correspondence differs from the native numerical reference.'); };
-  if (!result.structures.every((type, index) => type === structures[index])
-    || Math.abs(result.maxNeighborDistance - maximumDistance) > 8 * Number.EPSILON * Math.max(1, maximumDistance)) fail();
-  const permutation = new Int32Array(16), width = input.neighborWidth;
-  for (let atom = 0; atom < structures.length; atom++) {
-    const type = structures[atom];
-    if (!type) continue;
-    const template = (type - 1) * 33, count = input.templates[template], row = atom * width;
-    for (let index = 0; index < count; index++) {
-      const id = result.neighbors[row + index];
-      let mapped = -1;
-      for (let reference = 0; reference < count; reference++) if (neighbors[row + reference] === id) { mapped = reference; break; }
-      if (mapped < 0) fail();
-      for (let previous = 0; previous < index; previous++) if (permutation[previous] === mapped) fail();
-      permutation[index] = mapped;
-    }
-    // Exactly degenerate neighbor distances can choose a different ideal
-    // crystal orientation. Accept template automorphisms, while requiring
-    // the same atom set, CNA signatures and every ideal adjacency relation.
-    for (let index = 0; index < count; index++) {
-      if (input.templates[template + 1 + index] !== input.templates[template + 1 + permutation[index]]) fail();
-      const actualMask = input.templates[template + 17 + index], referenceMask = input.templates[template + 17 + permutation[index]];
-      for (let other = 0; other < count; other++) {
-        if (((actualMask >>> other) & 1) !== ((referenceMask >>> permutation[other]) & 1)) fail();
-      }
-    }
-  }
-}
-
-function exportDxaSnapshot(module, budgetBytes, bufferLimitBytes = Infinity) {
-  if (!Number.isSafeInteger(budgetBytes) || budgetBytes < 1 || budgetBytes > 0xffff_ffff) {
-    throw new Error('The WebGPU DXA snapshot budget must be a positive 32-bit byte count.');
-  }
-  // The GPU Worker rejects any table larger than one device buffer. Checking
-  // the native counts first avoids packing and copying a snapshot it refuses.
-  const tableBytes = Math.max(module._alloy_dxa_vertex_count() * 24, module._alloy_dxa_tet_count() * 64,
-    module._alloy_dxa_edge_count() * 32, module._alloy_dxa_transition_count() * 160);
-  if (tableBytes > bufferLimitBytes) throw new Error('The DXA tables exceed GPU buffer limits; using CPU workers.');
-  const workspaceBytes = module._alloy_dxa_tet_count() * 12 + 32;
-  if (module._alloy_dxa_snapshot_bytes() + workspaceBytes > budgetBytes) {
-    throw new Error('The DXA topology and GPU workspace exceed the WebGPU snapshot memory budget.');
-  }
-  try {
-    if (!module._alloy_dxa_export(budgetBytes)) throw nativeDxaError(module);
-    const vertexCount = module._alloy_dxa_vertex_count(), tetrahedronCount = module._alloy_dxa_tet_count();
-    const edgeCount = module._alloy_dxa_edge_count(), transitionCount = module._alloy_dxa_transition_count();
-    // These arrays own their storage. Never transfer or expose the persistent
-    // Wasm heap, which is shared with all retained native pthreads.
-    const copy = (heap, pointer, length) => heap.slice(pointer / heap.BYTES_PER_ELEMENT,
-      pointer / heap.BYTES_PER_ELEMENT + length);
-    return { vertexCount, tetrahedronCount, edgeCount, transitionCount, alpha: module._alloy_dxa_alpha(),
-      vertices: copy(module.HEAPF64, module._alloy_dxa_vertex_ptr(), vertexCount * 3),
-      tetrahedra: copy(module.HEAPU32, module._alloy_dxa_tet_ptr(), tetrahedronCount * 16),
-      edges: copy(module.HEAPU32, module._alloy_dxa_edge_ptr(), edgeCount * 8),
-      transitions: copy(module.HEAPF64, module._alloy_dxa_transition_ptr(), transitionCount * 20) };
-  } finally {
-    // The immutable transfer copies outlive native packing arrays. Free the
-    // latter before awaiting GPU work so interface construction can reuse it.
-    module._alloy_dxa_release_snapshot();
-  }
-}
-
 function checkSignal(signal) {
   if (signal?.aborted) throw new DOMException('The DXA calculation was cancelled.', 'AbortError');
-}
-
-function withSignal(promise, signal) {
-  if (!signal) return promise;
-  checkSignal(signal);
-  return new Promise((resolve, reject) => {
-    const abort = () => reject(new DOMException('The DXA calculation was cancelled.', 'AbortError'));
-    signal.addEventListener('abort', abort, { once: true });
-    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
-  });
 }
 
 export function normalizeDxaResult(raw, cell, parameters = {}, atomCount) {

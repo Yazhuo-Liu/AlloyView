@@ -1,23 +1,33 @@
 import { calculateCoordination } from '../analysis/coordination.js';
 import { calculateCna } from '../analysis/cna.js';
 import { calculateCentrosymmetry } from '../analysis/centrosymmetry.js';
-import { calculatePtm, warmupPtm } from '../analysis/ptm.js';
+import { calculatePtm, warmupPtm, ptmKernelMemoryBytes } from '../analysis/ptm.js';
 import { calculateAtomicStrain } from '../analysis/atomic-strain.js';
 import { calculateBonds } from '../analysis/bonds.js';
 import { calculateBondStatistics } from '../analysis/bond-statistics.js';
 import { calculateVoronoi, calculateVoronoiGeometry, calculateVoronoiGeometryBatch, mergeVoronoiPartials,
-  warmupVoronoi, prepareVoronoiFrame } from '../analysis/voronoi.js';
+  warmupVoronoi, prepareVoronoiFrame, voronoiKernelMemoryBytes } from '../analysis/voronoi.js';
 import { calculateRdf } from '../analysis/rdf.js';
 import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLocalShear } from '../analysis/local-shear.js';
 import { calculateReferenceStrain } from '../analysis/reference-strain.js';
 import { calculatePreparedDisplacements } from '../analysis/displacement.js';
+import { calculateDxaLocalRange, calculateDxaTetrahedraRange, releaseDxaCpuStageData, warmupDxaCpuStages, dxaCpuKernelMemoryBytes } from '../analysis/dxa-cpu-stages.js';
 
 // One immutable source snapshot and linked-cell index per resident Worker.
 // Chunk messages reuse these arrays; results never transfer source buffers.
 let voronoiResident;
 
+function residentInputBytes() {
+  const context = voronoiResident?.context, frame = voronoiResident?.frame;
+  const arrays = [frame?.fractional, frame?.cell?.vectors, frame?.cell?.origin, context?.search?.coordinates,
+    context?.search?.heads, context?.search?.next];
+  return [...new Set(arrays.filter(ArrayBuffer.isView).map(array => array.buffer))]
+    .reduce((sum, buffer) => sum + buffer.byteLength, 0);
+}
+
 self.addEventListener('message', async ({ data }) => {
   if (data.kind === 'voronoiRelease') { voronoiResident = null; return; }
+  if (data.kind === 'dxaRelease') { await releaseDxaCpuStageData(data.dxaResidentKey); return; }
   const { id, fractional, cell, kind, types, residentFrameKey, ...parameters } = data;
   try {
     let frame = { fractional, cell, types }, frameUploaded = false;
@@ -45,11 +55,15 @@ self.addEventListener('message', async ({ data }) => {
     if (kind === 'warmup') {
       const modules = parameters.modules ?? ['ptm'], initializedModules = {};
       // Voronoi is ready before the larger PTM fitter starts initializing.
-      for (const module of ['voronoi', 'ptm']) if (modules.includes(module)) {
-        initializedModules[module] = await (module === 'voronoi' ? warmupVoronoi : warmupPtm)({ onPhase });
+      for (const module of ['voronoi', 'ptm', 'dxa']) if (modules.includes(module)) {
+        initializedModules[module] = await (module === 'voronoi' ? warmupVoronoi : module === 'dxa' ? warmupDxaCpuStages : warmupPtm)({ onPhase });
       }
       result = { warmed: true, modules, initializedModules,
         kernelReused: Object.values(initializedModules).every(module => module.kernelReused) };
+    }
+    else if (kind === 'dxaLocal' || kind === 'dxaTetrahedra') {
+      result = await (kind === 'dxaLocal' ? calculateDxaLocalRange : calculateDxaTetrahedraRange)(parameters.dxaStageInput,
+        { residentKey: parameters.dxaResidentKey, startAtom: parameters.startAtom, endAtom: parameters.endAtom, onPhase });
     }
     else if (kind === 'ptm') result = await calculatePtm(frame, { ...parameters, onPhase, onAtoms });
     else if (kind === 'strain') {
@@ -104,6 +118,8 @@ self.addEventListener('message', async ({ data }) => {
       const metrics = parameters.metricInput.subarray(offset, offset + (parameters.endAtom - parameters.startAtom) * 6);
       result = finalizeLocalShear(metrics, { ...parameters, onAtoms });
     } else throw new Error(`Unknown analysis kind: ${kind}`);
+    result = { ...result, nativeHeapBytes: { ptm: ptmKernelMemoryBytes(), voronoi: voronoiKernelMemoryBytes(),
+      dxa: dxaCpuKernelMemoryBytes() }, residentInputBytes: residentInputBytes() };
     const fields = [...Object.values(result), ...(kind === 'voronoiGeometryBatch' ? result.cells.flatMap(cell => Object.values(cell)) : [])];
     const buffers = [...new Set(fields.filter(ArrayBuffer.isView).map((value) => value.buffer))];
     self.postMessage({ id, ok: true, result }, buffers);

@@ -70,11 +70,10 @@ private:
         // completed tessellation/edge mapping. Each thread owns one cell's
         // region field; numbering and mesh-wide reductions stay in cell order.
         if(!parallelForWithProgress(_tessellation.numberOfTetrahedra(), [&](size_t cell) {
-            if(const int32_t* regions = _tessellation.preclassifiedRegions()) {
+            if(const int32_t* regions = _tessellation.workerRegions()) {
                 _tessellation.setUserField(cell, regions[cell]);
                 return;
             }
-
             // Alpha-shape criterion: This determines whether the Delaunay tetrahedron is part of a filled region.
             bool isFilledTetrehedron = false;
             if(_tessellation.isFiniteCell(cell)) {

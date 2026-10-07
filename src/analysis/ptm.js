@@ -19,6 +19,7 @@ export const PTM_FIELDS = Object.freeze({ structures: [Uint8Array, 1], rmsd: [Fl
 // scientific tests supply the same binary directly (fetch cannot read file:).
 let nodeBinary;
 let kernelPromise;
+let residentModule;
 let neighborContext = null;
 async function kernelOptions() {
   if (typeof process !== 'object' || !process.versions?.node) return {};
@@ -59,6 +60,7 @@ function getKernel() {
         return count;
       } });
       if (module._alloy_ptm_init() !== 0) throw new Error('PTM initialization failed.');
+      residentModule = module;
       return module;
     })().catch((error) => {
       kernelPromise = undefined;
@@ -68,12 +70,14 @@ function getKernel() {
   return kernelPromise;
 }
 
+export function ptmKernelMemoryBytes() { return residentModule?.HEAPU8.byteLength ?? 0; }
+
 /** Initialize the resident module without inventing a frame or running a fit. */
 export async function warmupPtm({ onPhase = () => {} } = {}) {
   const kernelReused = Boolean(kernelPromise);
   onPhase('initializing');
-  await getKernel();
-  return { warmed: true, kernelReused };
+  const module = await getKernel();
+  return { warmed: true, kernelReused, wasmMemoryBytes: module.HEAPU8.byteLength };
 }
 
 export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, preparedNeighbors,

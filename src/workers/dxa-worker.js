@@ -6,30 +6,23 @@ import { calculateDxa, warmupDxa } from '../analysis/dxa.js';
 // Static hosts without shared memory retain termination as their fallback.
 let requests = Promise.resolve();
 const controllers = new Map();
-const gpuRequests = new Map();
-let nextGpuRequestId = 1;
+const cpuStageRequests = new Map();
+let nextCpuStageId = 1;
 
-function requestGpuStage(id, stage, payload, { signal } = {}) {
-  if (signal?.aborted) return Promise.reject(new DOMException('The DXA calculation was cancelled.', 'AbortError'));
-  const requestId = nextGpuRequestId++;
+function requestCpuStage(id, stage, input, { signal } = {}) {
+  if (signal?.aborted) return Promise.reject(new DOMException('CPU DXA stage cancelled.', 'AbortError'));
+  const requestId = nextCpuStageId++;
   return new Promise((resolve, reject) => {
-    const abort = () => {
-      gpuRequests.delete(requestId);
-      reject(new DOMException('The DXA calculation was cancelled.', 'AbortError'));
-    };
     const finish = (error, result) => {
-      gpuRequests.delete(requestId);
-      signal?.removeEventListener('abort', abort);
+      cpuStageRequests.delete(requestId); signal?.removeEventListener('abort', abort);
       if (error) reject(error); else resolve(result);
     };
-    gpuRequests.set(requestId, { id, finish });
+    const abort = () => finish(new DOMException('CPU DXA stage cancelled.', 'AbortError'));
+    cpuStageRequests.set(requestId, { id, finish });
     signal?.addEventListener('abort', abort, { once: true });
-    try {
-      const keys = stage === 'local' ? ['coordinates', 'templates', 'inverse'] : ['vertices', 'tetrahedra', 'edges', 'transitions'];
-      const transfer = keys.map(key => payload[key].buffer);
-      const data = stage === 'local' ? { input: payload } : { snapshot: payload };
-      self.postMessage({ id, gpuRequest: { requestId, stage, ...data } }, [...new Set(transfer)]);
-    } catch (error) { finish(error); }
+    const fields = stage === 'local' ? ['coordinates'] : ['vertices', 'tetrahedra', 'edges', 'transitions'];
+    try { self.postMessage({ id, cpuStageRequest: { requestId, stage, input } }, fields.map(field => input[field].buffer)); }
+    catch (error) { finish(error); }
   });
 }
 
@@ -41,16 +34,13 @@ async function handleRequest(data) {
     const options = {
       memoryBudgetBytes,
       workerCount,
-      gpuSnapshotBudgetBytes: data.gpuSnapshotBudgetBytes,
-      gpuBufferLimitBytes: data.gpuBufferLimitBytes,
       // The client clears its known word immediately before posting a new
       // request. Clearing here could erase a concurrent cancellation request.
       resetCancellation: false,
       onControl: control => self.postMessage({ id, control }),
       onProgress: progress => self.postMessage({ id, progress }),
       signal: controller.signal,
-      classifyDxa: data.gpuAvailable ? (snapshot, options) => requestGpuStage(id, 'tetrahedra', snapshot, options) : undefined,
-      identifyDxa: data.gpuLocalAvailable ? (input, options) => requestGpuStage(id, 'local', input, options) : undefined,
+      runCpuStage: data.cpuOffload ? (stage, input, options) => requestCpuStage(id, stage, input, options) : undefined,
     };
     if (type === 'warmup') {
       const result = await warmupDxa({ ...options, atomCount: data.atomCount });
@@ -70,16 +60,17 @@ async function handleRequest(data) {
   }
 }
 self.addEventListener('message', ({ data }) => {
-  // Replies and cancellation must bypass the serialized analysis queue: the
-  // active request is awaiting this reply while retaining its native session.
-  if (data.type === 'gpu-result') {
-    const pending = gpuRequests.get(data.requestId);
-    if (!pending || pending.id !== data.id) return;
+  if (data.type === 'cpu-stage-result') {
+    const request = cpuStageRequests.get(data.requestId);
+    if (!request || request.id !== data.id) return;
     let error;
-    if (!data.ok) { error = new Error(data.error || 'WebGPU DXA failed.'); error.name = data.name || 'Error'; }
-    pending.finish(error, data.result);
+    if (!data.ok) { error = new Error(data.error || 'CPU DXA stage failed.'); error.name = data.name || 'Error'; }
+    request.finish(error, data.result);
     return;
   }
+  // Cancellation bypasses the queue while startup/pool preparation is awaiting
+  // asynchronous work. Native calculations use the client's atomic control.
   if (data.type === 'cancel') { controllers.get(data.id)?.abort(); return; }
+  if (data.type !== 'warmup' && data.type !== 'analyze') return;
   requests = requests.then(() => handleRequest(data));
 });

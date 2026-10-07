@@ -102,9 +102,13 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   and PTM neighbor preparation with WebGPU.
   Fresh ideal lattice strain uses GPU neighbor preparation, CPU Wasm fitting,
   then GPU element-reference conversion and tensors, reusing cached fits and
-  uploads. DXA uses GPU nearest-neighbor search, local crystal correspondence,
-  tetrahedron geometry and lattice-compatibility checks, with CPU crystal
-  mapping, periodic tessellation and dislocation tracing. Other analyses keep
+  uploads. DXA performs complete CPU/Wasm extraction, automatically using one
+  shared heap and a pthread pool on isolated hosts. Nonisolated hosts can
+  offload local crystal identification and tetrahedron classification to the
+  existing CPU Worker pool while one coordinator retains the global network.
+  Automatic private stages use at most four Workers, subject to memory limits.
+  Small jobs and unavailable Workers use native CPU stages.
+  Its backend is independent of the GPU preference. Other analyses keep
   their CPU implementation; unavailable GPU support falls back to CPU.
   Completed results remain available when the preference changes.
 - Per-analysis Cancel controls stop computation and reset results and frame
@@ -225,9 +229,9 @@ WebGL 2 support. No installation or account is needed.
    **Enable GPU acceleration** in the top bar prefers WebGPU for coordination,
    adaptive/fixed CNA, manual/Auto central symmetry, displacement,
    reference-frame strain, RDF, local shear, bonds, bond statistics and ideal-strain
-   neighbor/reference/tensor stages, plus DXA local crystal correspondence
-   and tetrahedron classification
-   on the next calculation.
+   neighbor/reference/tensor stages on the next calculation.
+   DXA always uses CPU Wasm, with shared-memory threads when supported or
+   private local-stage Workers on nonisolated hosts.
    PTM correspondence fitting still uses CPU Wasm. The switch starts on; CPU
    fallback keeps analyses available on browsers without suitable GPU support.
    See [performance](docs/features/performance.md) for backend choices and

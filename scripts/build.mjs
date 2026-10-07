@@ -9,6 +9,10 @@ const projectRoot = resolve(import.meta.dirname, '..');
 
 export async function buildSite(root = projectRoot, out = resolve(root, 'dist')) {
   const entries = ['src', 'styles.css', 'licenses'];
+  let headers = null;
+  try {
+    headers = await readFile(resolve(root, '_headers'));
+  } catch (error) { if (error?.code !== 'ENOENT') throw error; }
   try {
     await access(resolve(root, 'examples'));
     entries.push('examples');
@@ -47,6 +51,9 @@ export async function buildSite(root = projectRoot, out = resolve(root, 'dist'))
   }
   for (const entry of [...entries, 'index.html']) await hashEntry(entry);
   hash.update('examples/manifest.json').update('\0').update(exampleManifest).update('\0');
+  // Header policy changes also need fresh Worker/Wasm URLs: previously cached
+  // responses may lack the isolation headers needed to share the DXA heap.
+  if (headers !== null) hash.update('_headers').update('\0').update(headers).update('\0');
   const buildId = hash.digest('hex').slice(0, 16);
   const assetPrefix = `./assets/${buildId}/`;
   const runtimeRoot = resolve(out, 'assets', buildId);
@@ -67,6 +74,7 @@ export async function buildSite(root = projectRoot, out = resolve(root, 'dist'))
     await writeFile(resolve(destination, 'examples/manifest.json'), exampleManifest);
   }
   await cp(resolve(root, 'LICENSE'), resolve(out, 'LICENSE'));
+  if (headers !== null) await writeFile(resolve(out, '_headers'), headers);
   const html = await readFile(resolve(root, 'index.html'), 'utf8');
   await writeFile(resolve(out, 'index.html'), html
     .replaceAll('./src/', `${assetPrefix}src/`)

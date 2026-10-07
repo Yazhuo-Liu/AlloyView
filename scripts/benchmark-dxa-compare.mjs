@@ -141,6 +141,7 @@ function createBackend(name, api) {
   let finalBytes = 0;
   let analyses = 0;
   function onControl(control) {
+    if (!control) return;
     assert.ok(control.cancelBuffer instanceof SharedArrayBuffer, `${name} must retain a shared Wasm heap.`);
     if (cancelPointer === undefined) cancelPointer = control.cancelPointer;
     else assert.equal(control.cancelPointer, cancelPointer, `${name} cancellation address must remain stable.`);
@@ -150,7 +151,7 @@ function createBackend(name, api) {
   function recordKernel(metadata) {
     if (generation === undefined) generation = metadata.kernelGeneration;
     else assert.equal(metadata.kernelGeneration, generation, `${name} must reuse its kernel across analyses.`);
-    assert.ok(metadata.sharedMemory, `${name} must use its shared-memory production kernel.`);
+    assert.ok(metadata.sharedMemory, `${name} must use its shared-memory production kernel: ${metadata.threadingFallback ?? 'no shared memory'}`);
     initialBytes ??= metadata.wasmMemoryBytes;
     maximumBytes = Math.max(maximumBytes, metadata.wasmMemoryBytes);
     finalBytes = metadata.wasmMemoryBytes;
@@ -176,6 +177,9 @@ function createBackend(name, api) {
       assert.equal(result.backend, 'cpu');
       const nativeStageMs = result.stageTimings.reduce((sum, stage) => sum + stage.elapsedMs, 0);
       return { result, timing: { workerCount: result.workerCount, wholeElapsedMs, elapsedMs: result.elapsedMs, nativeStageMs,
+        nativeWorkerCount: result.nativeWorkerCount, cpuOffloadUsed: result.cpuOffloadUsed,
+        cpuStageWorkerCounts: result.cpuStageWorkerCounts, cpuStageTimings: result.cpuStageTimings,
+        cpuStageFallbacks: result.cpuStageFallbacks,
         otherPipelineMs: wholeElapsedMs - nativeStageMs, stageTimings: result.stageTimings,
         kernelGeneration: result.kernelGeneration, poolSize: result.poolSize, wasmMemoryBytes: result.wasmMemoryBytes,
         rssMiB: process.memoryUsage().rss / 1024 ** 2 } };
