@@ -51,7 +51,8 @@ test('interactive Voronoi bins expose exact counts and update through touch, sli
   const root = documentRoot(), container = root.createElement('div');
   renderVoronoiHistogram(container, [{ lower: 0, upper: 1, count: 163840 }, { lower: 1, upper: 2, count: 491520 }], { label: 'Volumes', unit: 'Å³' });
   const svg = container.all('svg')[0], slider = container.all('input')[0], output = container.all('output')[0];
-  assert.match(output.textContent, /163,840 samples · 25%/);
+  assert.match(output.textContent, /491,520 samples · 75%/, 'inspection starts on the most populated bin');
+  slider.value = '0'; slider.dispatch('input'); assert.match(output.textContent, /163,840 samples · 25%/);
   slider.value = '1'; slider.dispatch('input'); assert.match(output.textContent, /491,520 samples · 75%/);
   let prevented = false;
   svg.dispatch('keydown', { key: 'Home', preventDefault: () => { prevented = true; } });
@@ -86,6 +87,8 @@ test('narrow volume bins retain distinct readable limits without changing their 
   const root = documentRoot(), container = root.createElement('div');
   const rows = [{ lower: 16.000001, upper: 16.000002, count: 1 }, { lower: 16.000002, upper: 16.000003, count: 2 }];
   renderVoronoiHistogram(container, rows, { unit: 'Å³' });
+  assert.match(container.all('output')[0].textContent, /16\.000002–16\.000003 Å³/);
+  container.all('input')[0].value = '0'; container.all('input')[0].dispatch('input');
   assert.match(container.all('output')[0].textContent, /16\.000001–16\.000002 Å³/);
   assert.equal(container.all('text').some(element => element.textContent === '16.000001'), true);
   assert.deepEqual(rows.map(row => row.lower), [16.000001, 16.000002]);

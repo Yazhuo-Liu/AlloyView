@@ -35,11 +35,20 @@ export function voronoiEdgeStyle(color, background = [0, 0, 0], width = 2.2, sho
     : { width, shortEdge, edge: color.map(value => value + (1 - value) * 0.82), outline: color.map(value => value * 0.25), core: 0.68 };
 }
 
+// Marks a face or edge slot that no other displayed cell shares.
+export const NO_NEIGHBOR = 0xffffffff;
+
 /** Local Cartesian vertices remain independent of
- * display wrapping, periodic origin, replication and scientific atom arrays. */
-export function createVoronoiCellMesh(cell) {
+ * display wrapping, periodic origin, replication and scientific atom arrays.
+ *
+ * With `shared`, a face shared with another analyzed cell is kept only by the
+ * lower-index cell, and an edge only by the lowest-index cell around it. Each
+ * kept face records that neighbor; each kept edge records up to two other
+ * cells and their image offsets, so the renderer can still draw a copy for a
+ * cell displayed in another periodic image, hidden owner or shrunken view. */
+export function createVoronoiCellMesh(cell, { shared = false } = {}) {
   if (!Number.isInteger(cell?.atomIndex) || cell.atomIndex < 0) throw new Error('A Voronoi cell needs a valid atom index.');
-  const { vertices, faceOffsets, faceVertices } = cell;
+  const { vertices, faceOffsets, faceVertices } = cell, atom = cell.atomIndex;
   if (!vertices || vertices.length % 3 || !Array.from(vertices).every(Number.isFinite)
     || !faceOffsets || faceOffsets.length < 2 || faceOffsets[0] !== 0
     || faceOffsets.at(-1) !== faceVertices?.length) throw new Error('Invalid Voronoi cell geometry.');
@@ -47,64 +56,99 @@ export function createVoronoiCellMesh(cell) {
   // convex polyhedron to orient faces, rather than the local atom origin.
   const interior = [0, 0, 0];
   for (let index = 0; index < vertices.length; index++) interior[index % 3] += vertices[index] / (vertices.length / 3);
-  const values = [], indices = [], edges = new Map();
-  for (let face = 0; face < faceOffsets.length - 1; face++) {
+  const faceCount = faceOffsets.length - 1, neighbors = new Int32Array(faceCount).fill(-1), offsets = new Array(faceCount);
+  const values = [], vertexNeighbors = [], indices = [], faces = [], edges = new Map();
+  for (let face = 0; face < faceCount; face++) {
     const start = faceOffsets[face], end = faceOffsets[face + 1];
     if (end - start < 3 || end < start) throw new Error('Voronoi cell faces require at least three corners.');
     const corners = Array.from(faceVertices.subarray(start, end));
     if (corners.some(index => !Number.isInteger(index) || index < 0 || index * 3 >= vertices.length)) throw new Error('Invalid Voronoi face vertex.');
     const points = corners.map(index => Array.from(vertices.subarray(index * 3, index * 3 + 3)));
-    let normal;
-    for (let corner = 1; corner + 1 < points.length; corner++) {
-      const a = points[corner].map((value, axis) => value - points[0][axis]);
-      const b = points[corner + 1].map((value, axis) => value - points[0][axis]);
-      const n = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-      const length = Math.hypot(...n);
-      if (length > 0) { normal = n.map(value => value / length); break; }
-    }
-    if (!normal) throw new Error('A Voronoi cell face is degenerate.');
+    // Newell's normal stays well defined for tiny or nearly collinear faces,
+    // whose bisector offset below would otherwise be imprecise.
+    let normal = [0, 0, 0];
+    points.forEach((point, corner) => {
+      const next = points[(corner + 1) % points.length];
+      normal[0] += (point[1] - next[1]) * (point[2] + next[2]);
+      normal[1] += (point[2] - next[2]) * (point[0] + next[0]);
+      normal[2] += (point[0] - next[0]) * (point[1] + next[1]);
+    });
+    const length = Math.hypot(...normal);
+    if (!(length > 0)) throw new Error('A Voronoi cell face is degenerate.');
+    normal = normal.map(value => value / length);
     const inward = normal.reduce((sum, value, axis) => sum + value * (points[0][axis] - interior[axis]), 0) < 0;
     if (inward) normal = normal.map(value => -value);
-    const first = values.length / 6;
-    for (const point of points) values.push(...point, ...normal);
+    for (let corner = 0; corner < corners.length; corner++) {
+      const a = corners[corner], b = corners[(corner + 1) % corners.length], key = a < b ? `${a}:${b}` : `${b}:${a}`;
+      const entry = edges.get(key) ?? { a, b, faces: [] };
+      entry.faces.push(face); edges.set(key, entry);
+    }
+    const neighbor = shared ? cell.faceNeighbors?.[face] ?? -1 : -1;
+    if (neighbor >= 0 && neighbor !== atom) {
+      // The neighbor's image lies across the bisector plane, at twice the
+      // plane's distance from this atom along the outward normal.
+      const distance = normal.reduce((sum, value, axis) => sum + value * points[0][axis], 0);
+      neighbors[face] = neighbor; offsets[face] = normal.map(value => 2 * distance * value);
+      if (neighbor < atom) continue;
+    }
+    const first = values.length / 6, firstIndex = indices.length;
+    for (const point of points) { values.push(...point, ...normal); vertexNeighbors.push(neighbors[face] < 0 ? NO_NEIGHBOR : neighbors[face]); }
     for (let corner = 1; corner + 1 < points.length; corner++) {
       if (inward) indices.push(first, first + corner + 1, first + corner);
       else indices.push(first, first + corner, first + corner + 1);
     }
-    for (let corner = 0; corner < corners.length; corner++) {
-      const a = corners[corner], b = corners[(corner + 1) % corners.length];
-      const key = a < b ? `${a}:${b}` : `${b}:${a}`;
-      if (!edges.has(key)) edges.set(key, [...vertices.subarray(a * 3, a * 3 + 3), 0, 0, 0,
-        ...vertices.subarray(b * 3, b * 3 + 3), 0, 0, 0]);
-    }
+    faces.push({ firstIndex, indexCount: indices.length - firstIndex, neighbor: neighbors[face] < 0 ? NO_NEIGHBOR : neighbors[face] });
   }
-  const faceVertexCount = values.length / 6;
-  for (const edge of edges.values()) values.push(...edge);
-  return { values: Float32Array.from(values), indices: Uint32Array.from(indices),
-    vertexCount: faceVertexCount, indexCount: indices.length, edgeCount: edges.size * 2 };
+  const faceVertexCount = values.length / 6, edgeIds = [], edgeRecords = [];
+  for (const { a, b, faces: adjacent } of edges.values()) {
+    // Faces toward a boundary or this cell's own periodic image add no other
+    // displayed cell. Rare edges shared by more than three cells may be drawn
+    // by two owners; none is ever omitted.
+    const others = adjacent.filter(face => neighbors[face] >= 0);
+    if (others.some(face => neighbors[face] < atom)) continue;
+    const [first, second] = others;
+    values.push(...vertices.subarray(a * 3, a * 3 + 3), ...(first === undefined ? [0, 0, 0] : offsets[first]),
+      ...vertices.subarray(b * 3, b * 3 + 3), ...(second === undefined ? [0, 0, 0] : offsets[second]));
+    const record = { a: first === undefined ? NO_NEIGHBOR : neighbors[first], b: second === undefined ? NO_NEIGHBOR : neighbors[second] };
+    edgeIds.push(atom, record.a, record.b, 0); edgeRecords.push(record);
+  }
+  return { values: Float32Array.from(values), vertexNeighbors: Uint32Array.from(vertexNeighbors), edgeIds: Uint32Array.from(edgeIds),
+    indices: Uint32Array.from(indices), faces, edges: edgeRecords,
+    vertexCount: faceVertexCount, indexCount: indices.length, edgeCount: edgeRecords.length * 2 };
 }
 
-/** Pack a bounded group of cells into one face/outline draw buffer. Atom IDs
- * stay integer attributes so display transforms and masks need no mesh rebuild. */
+/** Pack a bounded group of cells into one face/outline draw buffer, storing
+ * each shared face and edge once. Atom IDs stay integer attributes so display
+ * transforms and masks need no mesh rebuild. `cellIds` holds two integers per
+ * vertex slot: (owner, neighbor) for faces and (owner, other, other, 0) across
+ * an edge's two slots. */
 export function createVoronoiCellBatch(cells) {
-  const meshes = cells.map(createVoronoiCellMesh);
+  const meshes = cells.map(cell => createVoronoiCellMesh(cell, { shared: true }));
   const vertexCount = meshes.reduce((sum, mesh) => sum + mesh.vertexCount, 0);
   const edgeCount = meshes.reduce((sum, mesh) => sum + mesh.edgeCount, 0);
   const indexCount = meshes.reduce((sum, mesh) => sum + mesh.indexCount, 0);
-  const values = new Float32Array((vertexCount + edgeCount) * 6);
-  const indices = new Uint32Array(indexCount), atomIndices = new Uint32Array(vertexCount + edgeCount);
+  const values = new Float32Array((vertexCount + edgeCount) * 6), cellIds = new Uint32Array((vertexCount + edgeCount) * 2);
+  const indices = new Uint32Array(indexCount);
   const bounds = new Float64Array(cells.length * 7), cellRanges = new Uint32Array(cells.length * 5);
+  const foreignFaces = [], foreignEdges = [];
   let vertex = 0, edge = vertexCount, index = 0;
   cells.forEach((cell, cellIndex) => {
     const mesh = meshes[cellIndex];
-    // Faces and edges for a cell are contiguous. Preserve their draw ranges
-    // so selecting an atom can emphasize its existing mesh without extracting
-    // geometry, uploading buffers or drawing the whole tessellation again.
+    // A cell's owned faces and edges are contiguous; the faces and edges its
+    // neighbors own on its behalf are listed separately. Together they let a
+    // selection emphasize the whole polyhedron without extracting geometry.
     cellRanges.set([cell.atomIndex, index, mesh.indexCount, edge, mesh.edgeCount], cellIndex * 5);
     values.set(mesh.values.subarray(0, mesh.vertexCount * 6), vertex * 6);
     values.set(mesh.values.subarray(mesh.vertexCount * 6), edge * 6);
-    atomIndices.fill(cell.atomIndex, vertex, vertex + mesh.vertexCount);
-    atomIndices.fill(cell.atomIndex, edge, edge + mesh.edgeCount);
+    for (let offset = 0; offset < mesh.vertexCount; offset++) {
+      cellIds[(vertex + offset) * 2] = cell.atomIndex; cellIds[(vertex + offset) * 2 + 1] = mesh.vertexNeighbors[offset];
+    }
+    cellIds.set(mesh.edgeIds, edge * 2);
+    for (const face of mesh.faces) if (face.neighbor !== NO_NEIGHBOR) foreignFaces.push(face.neighbor, index + face.firstIndex, face.indexCount);
+    mesh.edges.forEach(({ a, b }, offset) => {
+      if (a !== NO_NEIGHBOR) foreignEdges.push(a, edge + offset * 2, 1);
+      if (b !== NO_NEIGHBOR) foreignEdges.push(b, edge + offset * 2, 2);
+    });
     for (const value of mesh.indices) indices[index++] = value + vertex;
     const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
     for (let point = 0; point < cell.vertices.length; point += 3) for (let axis = 0; axis < 3; axis++) {
@@ -114,14 +158,77 @@ export function createVoronoiCellBatch(cells) {
     bounds.set([cell.atomIndex, ...minimum, ...maximum], cellIndex * 7);
     vertex += mesh.vertexCount; edge += mesh.edgeCount;
   });
-  return { values, indices, atomIndices, bounds, cellRanges, vertexCount, indexCount, edgeCount, cellCount: cells.length };
+  return { values, cellIds, indices, bounds, cellRanges, foreignFaces: Uint32Array.from(foreignFaces),
+    foreignEdges: Uint32Array.from(foreignEdges), vertexCount, indexCount, edgeCount, cellCount: cells.length };
 }
+
+// Display positions differ by at least a cell vector across a periodic
+// boundary, so this tolerance only absorbs float32 rounding.
+const SAME_IMAGE_TOLERANCE = 0.02;
+
+// Whether `other` minus its image offset (`scale` times the vector at
+// `values[start]`) is displayed at `atom`'s position.
+function sameImage(positions, atom, other, values, start, scale = 1) {
+  for (let axis = 0; axis < 3; axis++) {
+    if (Math.abs(positions[other * 3 + axis] - scale * values[start + axis] - positions[atom * 3 + axis]) >= SAME_IMAGE_TOLERANCE) return false;
+  }
+  return true;
+}
+
+/** The shared faces and edges whose other cell is displayed in a different
+ * periodic image than their owner, for the given display positions. Only these
+ * need a second copy at true cell size; every other stored copy serves all of
+ * its cells. Copies are compact standalone records, so all chunks' copies can
+ * share one small buffer and a few draws: face triangle corners as
+ * (position, normal) with (owner, neighbor) IDs, and edges drawn from their
+ * first other cell followed by those drawn from their second. */
+export function periodicCopies(mesh, positions) {
+  const { values, cellIds, indices, foreignFaces, foreignEdges } = mesh, corners = [], edges = [[], []];
+  for (let entry = 0; entry < foreignFaces.length; entry += 3) {
+    const neighbor = foreignFaces[entry], first = foreignFaces[entry + 1], count = foreignFaces[entry + 2];
+    const vertex = indices[first], base = vertex * 6;
+    // The offset is twice the face's bisector distance along its normal.
+    const distance = 2 * (values[base] * values[base + 3] + values[base + 1] * values[base + 4] + values[base + 2] * values[base + 5]);
+    if (!sameImage(positions, cellIds[vertex * 2], neighbor, values, base + 3, distance)) {
+      for (let index = first; index < first + count; index++) corners.push(indices[index]);
+    }
+  }
+  for (let entry = 0; entry < foreignEdges.length; entry += 3) {
+    const other = foreignEdges[entry], slot = foreignEdges[entry + 1], which = foreignEdges[entry + 2];
+    if (!sameImage(positions, cellIds[slot * 2], other, values, slot * 6 + (which === 1 ? 3 : 9))) edges[which - 1].push(slot);
+  }
+  const faceValues = new Float32Array(corners.length * 6), faceIds = new Uint32Array(corners.length * 2);
+  corners.forEach((vertex, index) => {
+    faceValues.set(values.subarray(vertex * 6, vertex * 6 + 6), index * 6);
+    faceIds.set(cellIds.subarray(vertex * 2, vertex * 2 + 2), index * 2);
+  });
+  const slots = [...edges[0], ...edges[1]];
+  const edgeValues = new Float32Array(slots.length * 12), edgeIds = new Uint32Array(slots.length * 4);
+  slots.forEach((slot, index) => {
+    edgeValues.set(values.subarray(slot * 6, slot * 6 + 12), index * 12);
+    edgeIds.set(cellIds.subarray(slot * 2, slot * 2 + 4), index * 4);
+  });
+  return { faceValues, faceIds, cornerCount: corners.length, edgeValues, edgeIds,
+    firstEdgeCount: edges[0].length, secondEdgeCount: edges[1].length };
+}
+
+const SAME_IMAGE = SAME_IMAGE_TOLERANCE.toFixed(2);
+// Shared GLSL: atom texture lookup and same-location test.
+const ATOM_LOOKUP = `
+const uint NO_NEIGHBOR = 0xffffffffu;
+vec4 atomAt(uint index) {
+  int atom = int(index);
+  return texelFetch(uAtoms, ivec2(atom % uAtomTextureWidth, atom / uAtomTextureWidth), 0);
+}
+bool sameImage(vec3 a, vec3 b) { return all(lessThan(abs(a - b), vec3(${SAME_IMAGE}))); }`;
 
 const VERTEX = `#version 300 es
 precision highp float;
+precision highp int;
 layout(location=0) in vec3 aPosition;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in uint aAtomIndex;
+layout(location=3) in uint aNeighbor;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform vec3 uCenter;
@@ -130,23 +237,58 @@ uniform sampler2D uAtoms;
 uniform int uAtomTextureWidth;
 uniform float uScale;
 uniform vec2 uDepthRange;
+// 0: the owner's copy; 1: the neighbor's copy, submitted only where the two
+// cells are displayed apart; 2/3: the same copies, forced for selected cells;
+// −1: both copies as instances 0 and 1, at a reduced Cell scale.
+uniform int uAnchor;
+// 0: every face; 1/2: only faces facing away from/toward the camera.
+uniform int uFacing;
 out vec3 vWorld;
 out vec3 vNormal;
 out vec3 vView;
 out float vDepth;
 flat out float vVisible;
+${ATOM_LOOKUP}
 void main() {
-  vec4 atom = vec4(0.0, 0.0, 0.0, 1.0);
-  if (uBatched) atom = texelFetch(uAtoms, ivec2(int(aAtomIndex) % uAtomTextureWidth, int(aAtomIndex) / uAtomTextureWidth), 0);
-  vVisible = atom.w;
-  // Local vertices are relative to the generating atom, which lies inside its
-  // convex cell; scaling about it separates neighboring cells by a uniform gap.
-  vWorld = uCenter + atom.xyz + aPosition * uScale;
-  vNormal = mat3(uView) * aNormal;
+  vec3 origin = vec3(0.0), local = aPosition, normal = aNormal;
+  bool visible = true;
+  if (uBatched) {
+    bool shared = aNeighbor != NO_NEIGHBOR, trueSize = uScale > 0.9999;
+    int anchor = uAnchor < 0 ? gl_InstanceID : uAnchor;
+    // The neighbor's image lies across the bisector plane of this face.
+    vec3 offset = 2.0 * dot(aPosition, aNormal) * aNormal;
+    if (anchor == 1 || anchor == 3) {
+      vec4 neighbor = shared ? atomAt(aNeighbor) : vec4(0.0);
+      normal = -aNormal; origin = neighbor.xyz; local = aPosition - offset;
+      visible = shared && neighbor.w > 0.5;
+      // A selected neighbor redraws a merged face with the owner's arithmetic,
+      // reproducing the resolved surface depth exactly.
+      if (anchor == 3 && shared && trueSize) {
+        vec4 owner = atomAt(aAtomIndex);
+        if (sameImage(neighbor.xyz - offset, owner.xyz)) { origin = owner.xyz; local = aPosition; }
+      }
+    } else {
+      vec4 owner = atomAt(aAtomIndex);
+      origin = owner.xyz; visible = owner.w > 0.5;
+      // A hidden owner's copy still bounds a visible neighbor displayed beside it.
+      if (!visible && anchor == 0 && shared && trueSize) {
+        vec4 neighbor = atomAt(aNeighbor);
+        visible = neighbor.w > 0.5 && sameImage(neighbor.xyz - offset, owner.xyz);
+      }
+    }
+  }
+  vWorld = uCenter + origin + local * uScale;
+  vNormal = mat3(uView) * normal;
   vec4 view = uView * vec4(vWorld, 1.0);
   vView = view.xyz;
+  if (uFacing != 0) {
+    bool front = uProjection[3][3] > 0.5 ? vNormal.z > 0.0 : dot(vNormal, -view.xyz) > 0.0;
+    visible = visible && (uFacing == 2) == front;
+  }
+  vVisible = visible ? 1.0 : 0.0;
   vDepth = clamp((-view.z - uDepthRange.x) / max(uDepthRange.y - uDepthRange.x, 1e-6), 0.0, 1.0);
-  gl_Position = uProjection * view;
+  // Collapse undrawn copies before rasterization instead of discarding pixels.
+  gl_Position = visible ? uProjection * view : vec4(2.0, 2.0, 2.0, 1.0);
 }`;
 const FRAGMENT = `#version 300 es
 precision highp float;
@@ -161,9 +303,23 @@ uniform mat4 uProjection;
 uniform float uOpacity;
 uniform float uDepthFade;
 uniform bool uDepthOnly;
+uniform bool uTwoSided;
 uniform int uSliceCount;
 uniform vec4 uSlicePlanes[${MAX_SLICES}];
 out vec4 outColor;
+// Flat, outward face normals retain the physical facets. Distinct key and
+// fill lights make opposite faces read differently, including the rear
+// surfaces of translucent cells. Use the same view-space studio as atoms.
+vec3 shade(vec3 normal, vec3 viewDirection) {
+  vec3 key = normalize(vec3(-0.48, 0.62, 0.72));
+  vec3 fill = normalize(vec3(0.68, -0.36, 0.48));
+  float ambient = mix(0.18, 0.29, normal.y * 0.5 + 0.5);
+  float light = ambient + 0.72 * max(0.0, dot(normal, key))
+    + 0.18 * max(0.0, dot(normal, fill));
+  vec3 halfDirection = normalize(key + viewDirection);
+  float specular = pow(max(0.0, dot(normal, halfDirection)), 28.0) * 0.16;
+  return pow(uColor, vec3(2.2)) * light + vec3(1.0, 0.96, 0.88) * specular;
+}
 void main() {
   if (vVisible < 0.5) discard;
   for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
@@ -172,21 +328,12 @@ void main() {
   }
   // The nearest-surface pass needs only depth; its blend leaves color intact.
   if (uDepthOnly) { outColor = vec4(0.0); return; }
-  // Flat, outward face normals retain the physical facets. Distinct key and
-  // fill lights make opposite faces read differently, including the rear
-  // surfaces of translucent cells. Use the same view-space studio as atoms.
   vec3 normal = normalize(vNormal);
-  vec3 key = normalize(vec3(-0.48, 0.62, 0.72));
-  vec3 fill = normalize(vec3(0.68, -0.36, 0.48));
-  float ambient = mix(0.18, 0.29, normal.y * 0.5 + 0.5);
-  float light = ambient + 0.72 * max(0.0, dot(normal, key))
-    + 0.18 * max(0.0, dot(normal, fill));
-  vec3 base = pow(uColor, vec3(2.2));
   vec3 viewDirection = uProjection[3][3] > 0.5 ? vec3(0.0, 0.0, 1.0) : normalize(-vView);
-  vec3 halfDirection = normalize(key + viewDirection);
-  float specular = pow(max(0.0, dot(normal, halfDirection)), 28.0) * 0.16;
-  vec3 shaded = base * light + vec3(1.0, 0.96, 0.88) * specular;
-  outColor = vec4(pow(clamp(shaded, 0.0, 1.0), vec3(1.0 / 2.2)), uOpacity * (1.0 - uDepthFade * vDepth));
+  // One stored copy of a shared face is the rear of one cell and the front of
+  // its neighbor; light it as the surface facing the camera.
+  if (uTwoSided && dot(normal, viewDirection) < 0.0) normal = -normal;
+  outColor = vec4(pow(clamp(shade(normal, viewDirection), 0.0, 1.0), vec3(1.0 / 2.2)), uOpacity * (1.0 - uDepthFade * vDepth));
 }`;
 
 const SELECTED_FACE_COLOR = [1, 0.68, 0.16];
@@ -197,6 +344,10 @@ precision highp int;
 layout(location=0) in vec3 aStart;
 layout(location=1) in vec3 aEnd;
 layout(location=2) in uint aAtomIndex;
+// Up to two other cells sharing this edge, and their image offsets.
+layout(location=3) in uvec2 aNeighbors;
+layout(location=4) in vec3 aOffsetA;
+layout(location=5) in vec3 aOffsetB;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform vec3 uCenter;
@@ -208,18 +359,50 @@ uniform float uEdgeWidth;
 uniform float uScale;
 uniform vec2 uDepthRange;
 uniform float uShortEdge;
+// 0: the owner's copy; 1/2: the first/second other cell's copy, submitted
+// only where it is displayed apart; 3-5: the same copies, forced; −1: all
+// three as consecutive ribbons of each edge instance, at a reduced Cell scale.
+uniform int uAnchor;
 out vec3 vWorld;
 out float vSide;
 out float vDepth;
 out float vLengthFade;
 flat out float vVisible;
+${ATOM_LOOKUP}
 void main() {
-  vec4 atom = vec4(0.0, 0.0, 0.0, 1.0);
-  if (uBatched) atom = texelFetch(uAtoms, ivec2(int(aAtomIndex) % uAtomTextureWidth, int(aAtomIndex) / uAtomTextureWidth), 0);
-  vVisible = atom.w;
+  vec3 origin = vec3(0.0), shift = vec3(0.0);
+  vVisible = 1.0;
+  if (uBatched) {
+    bool hasA = aNeighbors.x != NO_NEIGHBOR, hasB = aNeighbors.y != NO_NEIGHBOR, trueSize = uScale > 0.9999;
+    int mode = uAnchor < 0 ? gl_VertexID / 6 : uAnchor, anchor = mode % 3;
+    bool visible;
+    if (anchor == 0) {
+      vec4 owner = atomAt(aAtomIndex);
+      origin = owner.xyz; visible = owner.w > 0.5;
+      // A hidden owner's copy still serves other cells displayed beside it.
+      if (!visible && mode == 0 && trueSize) {
+        if (hasA) { vec4 a = atomAt(aNeighbors.x); visible = a.w > 0.5 && sameImage(a.xyz - aOffsetA, owner.xyz); }
+        if (!visible && hasB) { vec4 b = atomAt(aNeighbors.y); visible = b.w > 0.5 && sameImage(b.xyz - aOffsetB, owner.xyz); }
+      }
+    } else if (anchor == 1) {
+      vec4 a = hasA ? atomAt(aNeighbors.x) : vec4(0.0);
+      origin = a.xyz; shift = aOffsetA; visible = hasA && a.w > 0.5;
+    } else {
+      vec4 b = hasB ? atomAt(aNeighbors.y) : vec4(0.0);
+      origin = b.xyz; shift = aOffsetB; visible = hasB && b.w > 0.5;
+      // Both other cells may share one image apart from the owner; the first
+      // cell's copy already draws it there.
+      if (visible && mode == 2 && hasA && trueSize) {
+        vec4 a = atomAt(aNeighbors.x);
+        visible = !(a.w > 0.5 && sameImage(a.xyz - aOffsetA, b.xyz - aOffsetB));
+      }
+    }
+    vVisible = visible ? 1.0 : 0.0;
+  }
   vDepth = 0.0; vLengthFade = 1.0;
-  vec3 start = uCenter + atom.xyz + aStart * uScale;
-  vec3 end = uCenter + atom.xyz + aEnd * uScale;
+  if (vVisible < 0.5) { vWorld = origin; vSide = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec3 start = uCenter + origin + (aStart - shift) * uScale;
+  vec3 end = uCenter + origin + (aEnd - shift) * uScale;
   // Transform each endpoint once; uProjection * uView * p would multiply
   // two matrices in every one of the six ribbon vertices.
   vec4 viewStart = uView * vec4(start, 1.0), viewEnd = uView * vec4(end, 1.0);
@@ -244,7 +427,7 @@ void main() {
     vWorld = start; vSide = 0.0; vVisible = 0.0;
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return;
   }
-  int corner = int[6](0, 1, 2, 2, 1, 3)[gl_VertexID];
+  int corner = int[6](0, 1, 2, 2, 1, 3)[gl_VertexID % 6];
   bool atEnd = corner >= 2;
   float side = (corner == 0 || corner == 2) ? -1.0 : 1.0;
   // Edges only a few pixels long, from distant cells or microscopic faces,
@@ -295,6 +478,9 @@ void main() {
   outColor = vec4(color, coverage * vLengthFade * uAlpha * (1.0 - uDepthFade * vDepth));
 }`;
 
+// Vertex attribute and byte offset within an edge's two vertex slots.
+const EDGE_ATTRIBUTES = [[0, 0], [4, 12], [1, 24], [5, 36]];
+
 /** Reuse the existing edge endpoints as instanced ribbons, without allocating
  * additional geometry buffers or rebuilding cells for camera/selection edits. */
 class VoronoiOutlineRenderer {
@@ -302,20 +488,17 @@ class VoronoiOutlineRenderer {
     this.gl = gl; this.program = createProgram(gl, OUTLINE_VERTEX, OUTLINE_FRAGMENT, 'Voronoi outline');
     this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uCenter', 'uBatched', 'uAtoms', 'uAtomTextureWidth',
       'uViewport', 'uEdgeWidth', 'uEdgeColor', 'uOutlineColor', 'uCoreRatio', 'uAlpha', 'uScale', 'uDepthRange', 'uDepthFade', 'uShortEdge',
-      'uSliceCount', 'uSlicePlanes[0]']
+      'uAnchor', 'uSliceCount', 'uSlicePlanes[0]']
       .map(name => [name, gl.getUniformLocation(this.program, name)]));
   }
-  createVao(buffer, atomBuffer = null) {
-    const gl = this.gl, vao = gl.createVertexArray(); gl.bindVertexArray(vao); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    for (let attribute = 0; attribute < 2; attribute++) {
-      gl.enableVertexAttribArray(attribute); gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 48, attribute * 24);
-      gl.vertexAttribDivisor(attribute, 1);
-    }
-    if (atomBuffer) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, atomBuffer); gl.enableVertexAttribArray(2);
-      gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 8, 0); gl.vertexAttribDivisor(2, 1);
-    }
-    gl.bindVertexArray(null); return vao;
+  // Each edge spans two 24-byte vertex slots: start, offset A, end, offset B.
+  // Its IDs span two integer pairs: owner, other A, other B, unused.
+  createVao(withIds = false) {
+    const gl = this.gl, vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+    for (const [attribute] of EDGE_ATTRIBUTES) { gl.enableVertexAttribArray(attribute); gl.vertexAttribDivisor(attribute, 1); }
+    if (withIds) for (const attribute of [2, 3]) { gl.enableVertexAttribArray(attribute); gl.vertexAttribDivisor(attribute, 1); }
+    gl.bindVertexArray(null);
+    return vao;
   }
   begin(renderer, planes, { batched = false, textureWidth = 1, scale = 1, depthFade = 0 } = {}) {
     const gl = this.gl, u = this.uniforms;
@@ -329,18 +512,23 @@ class VoronoiOutlineRenderer {
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.disable(gl.CULL_FACE);
   }
   setDepthFade(value) { this.gl.uniform1f(this.uniforms.uDepthFade, value); }
-  draw({ edgeVao, buffer, atomBuffer }, firstEdge, edgeCount, center, style = SELECTED_EDGE_STYLE, alpha = 1) {
+  setAnchor(anchor) { this.gl.uniform1i(this.uniforms.uAnchor, anchor); }
+  // WebGL2 has no base instance, so each draw points the attributes at its
+  // first edge slot.
+  // `ribbons` draws that many 6-vertex ribbons per edge instance.
+  draw({ edgeVao, buffer, idBuffer }, firstEdge, edgeCount, center, style = SELECTED_EDGE_STYLE, alpha = 1, ribbons = 1) {
     if (!edgeCount) return;
     const gl = this.gl, u = this.uniforms; gl.bindVertexArray(edgeVao); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    for (let attribute = 0; attribute < 2; attribute++) gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 48, firstEdge * 24 + attribute * 24);
-    if (atomBuffer) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, atomBuffer); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 8, firstEdge * 4);
-    } else gl.vertexAttribI4ui(2, 0, 0, 0, 0);
+    for (const [attribute, offset] of EDGE_ATTRIBUTES) gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 48, firstEdge * 24 + offset);
+    if (idBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, idBuffer);
+      gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 16, firstEdge * 8); gl.vertexAttribIPointer(3, 2, gl.UNSIGNED_INT, 16, firstEdge * 8 + 4);
+    } else { gl.vertexAttribI4ui(2, 0, 0, 0, 0); gl.vertexAttribI4ui(3, NO_NEIGHBOR, NO_NEIGHBOR, 0, 0); }
     gl.uniform3f(u.uCenter, ...center); gl.uniform1f(u.uEdgeWidth, style.width * this.pixelRatio);
     gl.uniform3f(u.uEdgeColor, ...style.edge); gl.uniform3f(u.uOutlineColor, ...style.outline);
     gl.uniform1f(u.uCoreRatio, style.core); gl.uniform1f(u.uAlpha, alpha);
     gl.uniform1f(u.uShortEdge, (style.shortEdge ?? 0) * this.pixelRatio);
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, edgeCount / 2);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6 * ribbons, edgeCount / 2);
   }
 }
 
@@ -352,35 +540,8 @@ function selectedCellAtoms(renderer) {
   return atoms;
 }
 
-// Normal batches have explicit cell ranges. Deriving them once also supports
-// meshes retained by another view from before the range metadata was added.
-function cellDrawRanges(mesh) {
-  const ranges = new Map();
-  if (mesh.cellRanges) {
-    for (let entry = 0; entry < mesh.cellRanges.length; entry += 5) {
-      const [atom, firstIndex, indexCount, firstEdge, edgeCount] = mesh.cellRanges.subarray(entry, entry + 5);
-      const atomRanges = ranges.get(atom) ?? [];
-      atomRanges.push({ firstIndex, indexCount, firstEdge, edgeCount }); ranges.set(atom, atomRanges);
-    }
-    return ranges;
-  }
-  for (let index = 0; index < mesh.indexCount;) {
-    const firstIndex = index, atom = mesh.atomIndices[mesh.indices[index]];
-    while (index < mesh.indexCount && mesh.atomIndices[mesh.indices[index]] === atom) index += 3;
-    const atomRanges = ranges.get(atom) ?? [];
-    atomRanges.push({ firstIndex, indexCount: index - firstIndex, firstEdge: 0, edgeCount: 0 }); ranges.set(atom, atomRanges);
-  }
-  for (let edge = mesh.vertexCount; edge < mesh.vertexCount + mesh.edgeCount;) {
-    const firstEdge = edge, atom = mesh.atomIndices[edge];
-    while (edge < mesh.vertexCount + mesh.edgeCount && mesh.atomIndices[edge] === atom) edge += 2;
-    const atomRanges = ranges.get(atom);
-    if (atomRanges?.length) { atomRanges[0].firstEdge = firstEdge; atomRanges[0].edgeCount = edge - firstEdge; }
-  }
-  return ranges;
-}
-
 const FACE_UNIFORMS = ['uView', 'uProjection', 'uCenter', 'uColor', 'uOpacity', 'uSliceCount', 'uSlicePlanes[0]',
-  'uBatched', 'uAtoms', 'uAtomTextureWidth', 'uScale', 'uDepthRange', 'uDepthFade', 'uDepthOnly'];
+  'uBatched', 'uAtoms', 'uAtomTextureWidth', 'uScale', 'uDepthRange', 'uDepthFade', 'uDepthOnly', 'uAnchor', 'uFacing', 'uTwoSided'];
 
 export class VoronoiCellLayer {
   constructor(gl) {
@@ -393,7 +554,7 @@ export class VoronoiCellLayer {
       gl.enableVertexAttribArray(attribute); gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 24, attribute * 12);
     }
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer); gl.bindVertexArray(null);
-    this.outline = new VoronoiOutlineRenderer(gl); this.edgeVao = this.outline.createVao(this.buffer);
+    this.outline = new VoronoiOutlineRenderer(gl); this.edgeVao = this.outline.createVao();
     this.geometry = null; this.options = normalizeVoronoiCellOptions();
     this.vertexCount = this.indexCount = this.edgeCount = this.renderedReplicaCount = 0;
     this.highlightedCellCount = 0;
@@ -433,7 +594,9 @@ export class VoronoiCellLayer {
     const gl = this.gl, u = this.uniforms, planes = dislocationSlicePlanes(renderer);
     gl.useProgram(this.program); gl.bindVertexArray(this.vao);
     gl.uniform1i(u.uBatched, 0);
-    gl.vertexAttribI4ui(2, 0, 0, 0, 0);
+    gl.vertexAttribI4ui(2, 0, 0, 0, 0); gl.vertexAttribI4ui(3, NO_NEIGHBOR, 0, 0, 0);
+    // The inspected cell keeps every face; its rear surfaces keep their own shading.
+    gl.uniform1i(u.uAnchor, 2); gl.uniform1i(u.uFacing, 0); gl.uniform1i(u.uTwoSided, 0);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
     const selected = selectedCellAtoms(renderer).has(atom);
     this.highlightedCellCount = Number(selected);
@@ -489,8 +652,21 @@ export class VoronoiAllCellLayer {
     this.options = normalizeVoronoiCellOptions(); this.geometry = null; this.chunks = [];
     this.cellCount = this.renderedReplicaCount = this.renderedChunkCount = 0;
     this.highlightedCellCount = this.renderedHighlightReplicaCount = 0;
-    this.positionRevision = this.positions = this.visibility = null;
+    this.positionRevision = this.positions = this.visibility = null; this.positionVersion = 0;
     this.outline = new VoronoiOutlineRenderer(gl);
+    // Copies for cells displayed across a periodic boundary, from all chunks.
+    const copyVao = gl.createVertexArray(), copyBuffer = gl.createBuffer(), copyIdBuffer = gl.createBuffer();
+    gl.bindVertexArray(copyVao); gl.bindBuffer(gl.ARRAY_BUFFER, copyBuffer);
+    for (let attribute = 0; attribute < 2; attribute++) {
+      gl.enableVertexAttribArray(attribute); gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 24, attribute * 12);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, copyIdBuffer);
+    gl.enableVertexAttribArray(2); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 8, 0);
+    gl.enableVertexAttribArray(3); gl.vertexAttribIPointer(3, 1, gl.UNSIGNED_INT, 8, 4);
+    gl.bindVertexArray(null);
+    this.copyFaces = { vao: copyVao, buffer: copyBuffer, idBuffer: copyIdBuffer, cornerCount: 0 };
+    this.copyEdges = { edgeVao: this.outline.createVao(true), buffer: gl.createBuffer(), idBuffer: gl.createBuffer(), firstSlots: 0, secondSlots: 0 };
+    this.copyKey = null;
   }
 
   setGeometry(geometry, options = {}) {
@@ -501,18 +677,19 @@ export class VoronoiAllCellLayer {
     this.geometry = geometry;
     for (let index = this.chunks.length; index < (geometry?.chunks.length ?? 0); index++) {
       const mesh = geometry.chunks[index], gl = this.gl;
-      const vao = gl.createVertexArray(), buffer = gl.createBuffer(), indexBuffer = gl.createBuffer(), atomBuffer = gl.createBuffer();
+      const vao = gl.createVertexArray(), buffer = gl.createBuffer(), indexBuffer = gl.createBuffer(), idBuffer = gl.createBuffer();
       gl.bindVertexArray(vao); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
       gl.bufferData(gl.ARRAY_BUFFER, mesh.values, gl.STATIC_DRAW);
       for (let attribute = 0; attribute < 2; attribute++) {
         gl.enableVertexAttribArray(attribute); gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 24, attribute * 12);
       }
-      gl.bindBuffer(gl.ARRAY_BUFFER, atomBuffer); gl.bufferData(gl.ARRAY_BUFFER, mesh.atomIndices, gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(2); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 0, 0);
+      // Face vertices carry (owner, neighbor) integer pairs.
+      gl.bindBuffer(gl.ARRAY_BUFFER, idBuffer); gl.bufferData(gl.ARRAY_BUFFER, mesh.cellIds, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(2); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, 8, 0);
+      gl.enableVertexAttribArray(3); gl.vertexAttribIPointer(3, 1, gl.UNSIGNED_INT, 8, 4);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
-      const edgeVao = this.outline.createVao(buffer, atomBuffer);
-      this.chunks.push({ mesh, vao, edgeVao, buffer, indexBuffer, atomBuffer, cellRanges: cellDrawRanges(mesh) });
+      this.chunks.push({ mesh, vao, edgeVao: this.outline.createVao(true), buffer, indexBuffer, idBuffer });
     }
     this.cellCount = geometry?.cellCount ?? 0;
     this.renderedReplicaCount = this.renderedChunkCount = 0;
@@ -523,9 +700,9 @@ export class VoronoiAllCellLayer {
     const gl = this.gl;
     for (const chunk of this.chunks) {
       gl.deleteVertexArray(chunk.vao); gl.deleteVertexArray(chunk.edgeVao); gl.deleteBuffer(chunk.buffer);
-      gl.deleteBuffer(chunk.indexBuffer); gl.deleteBuffer(chunk.atomBuffer);
+      gl.deleteBuffer(chunk.indexBuffer); gl.deleteBuffer(chunk.idBuffer);
     }
-    this.chunks = []; this.cellCount = 0;
+    this.chunks = []; this.cellCount = 0; this.highlightRuns = null; this.copyKey = null;
     this.highlightedCellCount = this.renderedHighlightReplicaCount = 0;
   }
 
@@ -555,7 +732,7 @@ export class VoronoiAllCellLayer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, values);
-    this.textureWidth = width; this.positions = renderer.displayPositions;
+    this.textureWidth = width; this.positions = renderer.displayPositions; this.positionVersion++;
     this.visibility = renderer.visibility; this.positionRevision = renderer.voronoiDisplayRevision;
   }
 
@@ -575,6 +752,66 @@ export class VoronoiAllCellLayer {
     }
   }
 
+  /** Gather every chunk's periodic copies into one small buffer pair after
+   * display positions or the streamed chunks change. */
+  refreshCopies(positions) {
+    const key = `${this.positionVersion}:${this.chunks.length}`;
+    if (this.copyKey === key) return;
+    const gl = this.gl, parts = this.chunks.map(chunk => periodicCopies(chunk.mesh, positions));
+    const join = (name, Type) => {
+      const output = new Type(parts.reduce((sum, part) => sum + part[name].length, 0));
+      let offset = 0;
+      for (const part of parts) { output.set(part[name], offset); offset += part[name].length; }
+      return output;
+    };
+    const cornerCount = parts.reduce((sum, part) => sum + part.cornerCount, 0);
+    // Upload only when either list changes from or to empty, or is non-empty.
+    if (cornerCount || this.copyFaces.cornerCount) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.copyFaces.buffer); gl.bufferData(gl.ARRAY_BUFFER, join('faceValues', Float32Array), gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.copyFaces.idBuffer); gl.bufferData(gl.ARRAY_BUFFER, join('faceIds', Uint32Array), gl.DYNAMIC_DRAW);
+    }
+    const ordered = which => parts.flatMap(part => {
+      const [start, count] = which === 1 ? [0, part.firstEdgeCount] : [part.firstEdgeCount, part.secondEdgeCount];
+      return [{ values: part.edgeValues.subarray(start * 12, (start + count) * 12), ids: part.edgeIds.subarray(start * 4, (start + count) * 4) }];
+    });
+    const edgeParts = [...ordered(1), ...ordered(2)];
+    const firstSlots = parts.reduce((sum, part) => sum + part.firstEdgeCount * 2, 0), secondSlots = parts.reduce((sum, part) => sum + part.secondEdgeCount * 2, 0);
+    if (firstSlots || secondSlots || this.copyEdges.firstSlots || this.copyEdges.secondSlots) {
+      const values = new Float32Array((firstSlots + secondSlots) * 6), ids = new Uint32Array((firstSlots + secondSlots) * 2);
+      let offset = 0;
+      for (const part of edgeParts) { values.set(part.values, offset * 6); ids.set(part.ids, offset * 2); offset += part.values.length / 6; }
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.copyEdges.buffer); gl.bufferData(gl.ARRAY_BUFFER, values, gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.copyEdges.idBuffer); gl.bufferData(gl.ARRAY_BUFFER, ids, gl.DYNAMIC_DRAW);
+    }
+    Object.assign(this.copyFaces, { cornerCount }); Object.assign(this.copyEdges, { firstSlots, secondSlots });
+    this.copyKey = key;
+  }
+
+  /** Draw runs for selected cells: each cell's owned faces and edges plus
+   * those its neighbors own on its behalf, merged into contiguous ranges.
+   * Rebuilt only when the selection or the streamed chunk list changes. */
+  selectedRuns(selected) {
+    const key = [...selected].sort((a, b) => a - b).join(',');
+    if (this.highlightRuns?.key === key && this.highlightRuns.chunkCount === this.chunks.length) return this.highlightRuns;
+    const runs = [], cells = new Set();
+    for (const chunk of this.chunks) {
+      const { cellRanges, foreignFaces, foreignEdges } = chunk.mesh, faces = [], edges = [];
+      for (let entry = 0; entry < cellRanges.length; entry += 5) {
+        if (!selected.has(cellRanges[entry])) continue;
+        cells.add(cellRanges[entry]);
+        faces.push([2, cellRanges[entry + 1], cellRanges[entry + 2]]); edges.push([3, cellRanges[entry + 3], cellRanges[entry + 4]]);
+      }
+      for (let entry = 0; entry < foreignFaces.length; entry += 3) {
+        if (selected.has(foreignFaces[entry])) faces.push([3, foreignFaces[entry + 1], foreignFaces[entry + 2]]);
+      }
+      for (let entry = 0; entry < foreignEdges.length; entry += 3) {
+        if (selected.has(foreignEdges[entry])) edges.push([3 + foreignEdges[entry + 2], foreignEdges[entry + 1], 2]);
+      }
+      if (faces.length || edges.length) runs.push({ chunk, faces: mergeRuns(faces), edges: mergeRuns(edges) });
+    }
+    return this.highlightRuns = { key, chunkCount: this.chunks.length, runs, cellCount: cells.size };
+  }
+
   render(renderer) {
     this.renderedReplicaCount = this.renderedChunkCount = 0;
     this.highlightedCellCount = this.renderedHighlightReplicaCount = 0;
@@ -588,70 +825,82 @@ export class VoronoiAllCellLayer {
     const color = parsePrimitiveColor(this.options.color);
     gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
     gl.uniform1f(u.uScale, scale); gl.uniform2f(u.uDepthRange, ...(renderer.depthRange ?? [0, 1]));
-    gl.uniform1i(u.uDepthOnly, 0);
-    gl.enable(gl.BLEND); gl.enable(gl.CULL_FACE); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL);
-    const drawFaces = (indexCount, firstIndex, culls) => {
-      for (const face of culls) { gl.cullFace(face); gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_INT, firstIndex * 4); }
+    gl.uniform1i(u.uDepthOnly, 0); gl.uniform1i(u.uFacing, 0); gl.uniform1i(u.uTwoSided, 1);
+    gl.enable(gl.BLEND); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL);
+    const cull = face => { if (face) { gl.enable(gl.CULL_FACE); gl.cullFace(face); } else gl.disable(gl.CULL_FACE); };
+    // At true size, one stored copy serves both cells unless they are
+    // displayed in different periodic images; only those faces are drawn again
+    // at the neighbor. A reduced Cell scale shrinks each cell toward its own
+    // atom, so every shared face then needs the neighbor's copy.
+    const trueSize = scale > 0.9999;
+    if (trueSize) this.refreshCopies(renderer.displayPositions);
+    const drawAll = face => {
+      cull(face);
+      for (const replica of renderer.replicas) {
+        gl.uniform3f(u.uCenter, ...replica.offset);
+        gl.uniform1i(u.uAnchor, trueSize ? 0 : -1);
+        for (const chunk of this.chunks) {
+          gl.bindVertexArray(chunk.vao);
+          if (trueSize) gl.drawElements(gl.TRIANGLES, chunk.mesh.indexCount, gl.UNSIGNED_INT, 0);
+          else gl.drawElementsInstanced(gl.TRIANGLES, chunk.mesh.indexCount, gl.UNSIGNED_INT, 0, 2);
+        }
+        if (trueSize && this.copyFaces.cornerCount) {
+          gl.uniform1i(u.uAnchor, 1); gl.bindVertexArray(this.copyFaces.vao);
+          gl.drawArrays(gl.TRIANGLES, 0, this.copyFaces.cornerCount);
+        }
+      }
     };
     const translucent = () => gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     if (surface) {
       // Resolve the nearest cell surface into depth first, leaving the image
-      // untouched. Shared faces are front faces of exactly one adjacent cell,
-      // so back faces are unnecessary; a slice-opened cell exposes its
-      // neighbor's coincident face. The later color pass and outlines then
-      // pass only where no nearer cell hides them, without sorting any mesh.
+      // untouched. A stored shared face may face either way, so neither pass
+      // culls. The later color pass and outlines then pass only where no
+      // nearer cell hides them, without sorting any mesh.
       gl.polygonOffset(SURFACE_POLYGON_OFFSET, SURFACE_POLYGON_OFFSET);
       gl.depthMask(true); gl.blendFuncSeparate(gl.ZERO, gl.ONE, gl.ZERO, gl.ONE); gl.uniform1i(u.uDepthOnly, 1);
-      for (const replica of renderer.replicas) {
-        gl.uniform3f(u.uCenter, ...replica.offset);
-        for (const chunk of this.chunks) { gl.bindVertexArray(chunk.vao); drawFaces(chunk.mesh.indexCount, 0, [gl.BACK]); }
-      }
+      drawAll(null);
       gl.depthMask(false); gl.uniform1i(u.uDepthOnly, 0);
     } else gl.polygonOffset(-1, -1);
     translucent(); gl.uniform1f(u.uDepthFade, surface ? 0 : XRAY_FACE_FADE);
     gl.uniform3f(u.uColor, ...color); gl.uniform1f(u.uOpacity, opacity);
-    // See-through cells draw rear then front surfaces, as for one convex cell.
-    const baseCulls = surface ? [gl.BACK] : [gl.FRONT, gl.BACK];
-    for (const replica of renderer.replicas) {
-      gl.uniform3f(u.uCenter, ...replica.offset);
-      for (const chunk of this.chunks) {
-        gl.bindVertexArray(chunk.vao);
-        drawFaces(chunk.mesh.indexCount, 0, baseCulls);
-        this.renderedChunkCount++;
-      }
-      this.renderedReplicaCount++;
-    }
-    // The all-cell mesh already contains the selected polyhedron. Draw only
-    // its contiguous triangle/edge ranges after the base tessellation, so the
-    // highlight stays legible regardless of chunk order and does not depend
-    // on the separate "Show selected cell" preview setting.
-    const selected = selectedCellAtoms(renderer), highlights = [], highlightedAtoms = new Set();
-    for (const chunk of this.chunks) for (const atom of selected) {
-      const ranges = chunk.cellRanges.get(atom);
-      if (!ranges) continue;
-      highlights.push({ chunk, ranges }); highlightedAtoms.add(atom);
-    }
-    this.highlightedCellCount = highlightedAtoms.size;
-    const highlightFaces = (culls, alpha) => {
-      gl.uniform1f(u.uOpacity, alpha);
-      for (const replica of renderer.replicas) {
-        gl.uniform3f(u.uCenter, ...replica.offset);
-        for (const { chunk, ranges } of highlights) {
-          gl.bindVertexArray(chunk.vao);
-          for (const range of ranges) drawFaces(range.indexCount, range.firstIndex, culls);
+    // See-through draws every camera-averted polygon before every facing one.
+    for (const face of surface ? [null] : [gl.FRONT, gl.BACK]) drawAll(face);
+    this.renderedReplicaCount = renderer.replicas.length;
+    this.renderedChunkCount = renderer.replicas.length * this.chunks.length;
+    // Selected cells are drawn after the base tessellation, so the highlight
+    // stays legible regardless of chunk order and does not depend on the
+    // separate "Show selected cell" preview setting.
+    const selected = selectedCellAtoms(renderer), highlight = selected.size ? this.selectedRuns(selected) : null;
+    this.highlightedCellCount = highlight?.cellCount ?? 0;
+    // Forced anchors place every face at its selected cell; facing is judged
+    // from that cell, so its rear surfaces precede its front ones.
+    const highlightFaces = (facings, alpha) => {
+      gl.uniform1f(u.uOpacity, alpha); cull(null);
+      for (const facing of facings) {
+        gl.uniform1i(u.uFacing, facing);
+        for (const replica of renderer.replicas) {
+          gl.uniform3f(u.uCenter, ...replica.offset);
+          for (const { chunk, faces } of highlight.runs) {
+            gl.bindVertexArray(chunk.vao);
+            for (const [anchor, first, count] of faces) {
+              if (!count) continue;
+              gl.uniform1i(u.uAnchor, anchor); gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_INT, first * 4);
+            }
+          }
         }
       }
+      gl.uniform1i(u.uFacing, 0);
     };
-    if (highlights.length) {
+    if (highlight?.runs.length) {
       gl.uniform3f(u.uColor, ...SELECTED_FACE_COLOR); gl.uniform1f(u.uDepthFade, 0);
       if (surface) {
         // Visible facets coincide with the resolved surface. The hidden part
         // of a selection, including an interior cell, stays locatable as a
         // faint amber ghost; GREATER and LEQUAL never draw a fragment twice.
-        gl.depthFunc(gl.GREATER); highlightFaces([gl.FRONT, gl.BACK], HIDDEN_HIGHLIGHT_OPACITY);
-        gl.depthFunc(gl.LEQUAL); highlightFaces([gl.BACK], Math.max(0.62, opacity));
+        gl.depthFunc(gl.GREATER); highlightFaces([1, 2], HIDDEN_HIGHLIGHT_OPACITY);
+        gl.depthFunc(gl.LEQUAL); highlightFaces([2], Math.max(0.62, opacity));
       } else {
-        gl.polygonOffset(-2, -2); highlightFaces([gl.FRONT, gl.BACK], Math.max(0.62, opacity));
+        gl.polygonOffset(-2, -2); highlightFaces([1, 2], Math.max(0.62, opacity));
       }
       this.renderedHighlightReplicaCount = renderer.replicas.length;
     }
@@ -661,15 +910,24 @@ export class VoronoiAllCellLayer {
     this.outline.begin(renderer, planes, { batched: true, textureWidth: this.textureWidth, scale,
       depthFade: surface ? 0 : XRAY_EDGE_FADE });
     const edges = voronoiEdgeStyle(color, renderer.background, ALL_CELL_EDGE_WIDTH, ALL_CELL_SHORT_EDGE);
-    for (const replica of renderer.replicas) for (const chunk of this.chunks) {
-      this.outline.draw(chunk, chunk.mesh.vertexCount, chunk.mesh.edgeCount, replica.offset, edges);
+    for (const replica of renderer.replicas) {
+      this.outline.setAnchor(trueSize ? 0 : -1);
+      for (const chunk of this.chunks) {
+        this.outline.draw(chunk, chunk.mesh.vertexCount, chunk.mesh.edgeCount, replica.offset, edges, 1, trueSize ? 1 : 3);
+      }
+      if (trueSize) {
+        const { firstSlots, secondSlots } = this.copyEdges;
+        this.outline.setAnchor(1); this.outline.draw(this.copyEdges, 0, firstSlots, replica.offset, edges);
+        this.outline.setAnchor(2); this.outline.draw(this.copyEdges, firstSlots, secondSlots, replica.offset, edges);
+      }
     }
     const highlightEdges = alpha => {
-      for (const replica of renderer.replicas) for (const { chunk, ranges } of highlights) for (const range of ranges) {
-        this.outline.draw(chunk, range.firstEdge, range.edgeCount, replica.offset, SELECTED_EDGE_STYLE, alpha);
+      for (const replica of renderer.replicas) for (const { chunk, edges: runs } of highlight.runs) for (const [anchor, first, count] of runs) {
+        this.outline.setAnchor(anchor);
+        this.outline.draw(chunk, first, count, replica.offset, SELECTED_EDGE_STYLE, alpha);
       }
     };
-    if (highlights.length) {
+    if (highlight?.runs.length) {
       this.outline.setDepthFade(0);
       if (surface) { gl.depthFunc(gl.GREATER); highlightEdges(HIDDEN_HIGHLIGHT_EDGE_ALPHA); gl.depthFunc(gl.LEQUAL); }
       highlightEdges(1);
@@ -677,6 +935,18 @@ export class VoronoiAllCellLayer {
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
     gl.activeTexture(gl.TEXTURE0);
   }
+}
+
+// Sort [anchor, first, count] draw ranges and join adjacent ones per anchor.
+function mergeRuns(entries) {
+  entries.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged = [];
+  for (const entry of entries) {
+    const last = merged.at(-1);
+    if (last && last[0] === entry[0] && last[1] + last[2] === entry[1]) last[2] += entry[2];
+    else merged.push([...entry]);
+  }
+  return merged;
 }
 
 function createProgram(gl, vertex = VERTEX, fragment = FRAGMENT, label = 'Voronoi cell') {

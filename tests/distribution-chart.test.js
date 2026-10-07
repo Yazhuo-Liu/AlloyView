@@ -11,7 +11,7 @@ class Element {
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = [...children]; }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
-  dispatch(name) { this.listeners.get(name)?.({ target: this }); }
+  dispatch(name, event = {}) { this.listeners.get(name)?.({ target: this, ...event }); }
   focus() { this.ownerDocument.activeElement = this; }
   all(tag) { return this.children.flatMap(child => [...(child.tagName === tag ? [child] : []), ...child.all(tag)]); }
   text() { return [this.textContent, ...this.children.map(child => child.text())].join(' '); }
@@ -66,4 +66,18 @@ test('population paging retains every index and keyboard focus with bounded rend
   assert.equal(container.all('button')[1].disabled, true);
   assert.equal(root.activeElement, container.all('button')[0]);
   assert.deepEqual(seen, entries.map(entry => entry.index));
+});
+
+test('bond distributions use the interactive histogram with an exact bin readout and density column', () => {
+  const { container } = rootAndContainer();
+  container.getBoundingClientRect = () => ({ left: 0, width: 360 });
+  renderDistributionChart(container, { counts: [1, 0, 3], edges: [2, 2.5, 3, 3.5], centers: [2.25, 2.75, 3.25] }, { label: 'Bond lengths', unit: 'Å', xLabel: 'Length' });
+  const svg = container.all('svg')[0], slider = container.all('input')[0], output = container.all('output')[0];
+  svg.getBoundingClientRect = () => ({ left: 0, width: 360 });
+  assert.equal(slider.value, '2', 'inspection starts on the most populated bin');
+  assert.match(output.textContent, /^3–3\.5 Å · 3 samples · 75%$/);
+  svg.dispatch('pointermove', { clientX: 60, pointerType: 'mouse' });
+  assert.equal(slider.value, '0'); assert.match(output.textContent, /^2–2\.5 Å \(upper excluded\) · 1 samples · 25%$/);
+  const details = container.all('details')[0]; details.open = true; details.dispatch('toggle');
+  assert.deepEqual(container.all('th').map(cell => cell.textContent), ['Lower', 'Upper', 'Count', 'Probability', 'Density']);
 });

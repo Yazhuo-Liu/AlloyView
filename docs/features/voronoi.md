@@ -287,6 +287,23 @@ visibility rules. The scientific statistics remain cached while mesh
 construction runs separately; changing cell appearance does not recalculate
 the tessellation.
 
+The all-cell mesh stores every shared face and edge once. A face between two
+analyzed cells belongs to the lower-index cell, and an edge to the
+lowest-index cell around it; faces on a nonperiodic wall or toward a cell's own
+periodic image stay unique. A stored face records its neighbor, whose image
+offset is twice the face's bisector distance along its normal; a stored edge
+records its other cells and their offsets. When cells are displayed side by
+side at full **Cell scale**, the single copy serves all of them, including when
+its owner atom is hidden. Whenever display positions change, AlloyView lists
+the faces and edges whose cells are displayed in different periodic images and
+draws only those again at the other cell, from one small shared buffer. A
+reduced Cell scale shrinks every cell toward its own atom, so each shared face
+and edge is then drawn once per cell, in the same number of draw calls. Compared
+with storing each cell separately, this halves stored triangles, keeps a third
+of the edges and halves the GPU buffer memory, without changing the image. A
+selected cell is highlighted from its own faces plus those its neighbors store
+for it.
+
 This analysis uses an **unweighted** tessellation. It does not
 assign element-dependent radii or construct a radical/power diagram, and it
 constructs viewport geometry only when a cell display option is enabled.

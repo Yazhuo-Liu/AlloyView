@@ -28,7 +28,7 @@ function rdf() {
 }
 
 test('g(r) axes use a rounded top, the ideal-gas reference and exact bin readouts', () => {
-  assert.deepEqual([0.3, 1, 1.2, 2.2, 3.1, 7, 12].map(niceCeiling), [0.5, 1, 2, 2.5, 5, 10, 20]);
+  assert.deepEqual([0.3, 1, 1.1, 2.2, 3.1, 5.3, 7, 12].map(niceCeiling).map(value => +value.toPrecision(12)), [0.3, 1, 1.2, 2.5, 4, 6, 8, 12]);
   const chart = container(), result = rdf();
   renderRdfChart(chart, result);
   const texts = chart.all('text').map(text => text.textContent);

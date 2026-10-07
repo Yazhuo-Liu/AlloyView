@@ -14,6 +14,7 @@ import { registerVectorProperties, vectorPropertyNames } from './analysis/vector
 import { availableVectorSources, createVectorField, linkedArrowDimensions, renameVectorFieldProperty, vectorFieldData } from './vector-settings.js';
 import { initializeFloatingWindow } from './floating-window.js';
 import { renderRdfChart } from './render/rdf-chart.js';
+import { renderInteractiveHistogram } from './render/distribution-chart.js';
 
 const JOBS = {
   bonds: { prefix: 'bonds', tool: 'bonds', property: 'bondCoordination' },
@@ -563,6 +564,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     renderer.setAtomRadii(applyAppearance(frame, colors ?? colorsByType(frame).colors, null, appearance, { selectionGroups: getSelectionGroups() }).radii);
     updateAtomStyle(); syncComparison();
   }
+  let coordinationChart = null;
   function updateStatistics() {
     const frame = getFrame(), container = $('coordination-histogram'); container.replaceChildren();
     const property = frame?.properties.find(entry => entry.name === 'bondCoordination') ?? frame?.properties.find(entry => entry.name === 'coordination');
@@ -574,28 +576,12 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       mean = sum / property.data.length;
     }
     const text = document.createElement('p'); text.textContent = `${property.name} · mean ${mean.toFixed(3)} · ${property.data.length.toLocaleString()} atoms`; container.append(text);
-    const entries = [...histogram].sort((a, b) => a[0] - b[0]);
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 360 180');
-    svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Coordination number histogram');
-    const maximum = Math.max(...entries.map(([, count]) => count)), width = 310 / entries.length;
-    for (const [index, [coordination, count]] of entries.entries()) {
-      const rectangle = document.createElementNS(svg.namespaceURI, 'rect'), height = count / maximum * 135;
-      rectangle.setAttribute('x', String(35 + index * width)); rectangle.setAttribute('y', String(150 - height));
-      rectangle.setAttribute('width', String(Math.max(.1, width - 2))); rectangle.setAttribute('height', String(height)); rectangle.setAttribute('fill', 'currentColor');
-      const title = document.createElementNS(svg.namespaceURI, 'title'); title.textContent = `${coordination} neighbors: ${count} atoms`; rectangle.append(title); svg.append(rectangle);
-      if (entries.length < 20 || index === 0 || index === entries.length - 1) {
-        const label = document.createElementNS(svg.namespaceURI, 'text'); label.textContent = String(coordination); label.setAttribute('x', String(35 + (index + .5) * width));
-        label.setAttribute('y', '168'); label.setAttribute('text-anchor', 'middle'); label.setAttribute('fill', 'currentColor'); label.setAttribute('font-size', '11'); svg.append(label);
-      }
-    }
-    container.append(svg);
-    const table = document.createElement('table');
-    for (const [coordination, count] of entries) {
-      const row = document.createElement('tr');
-      for (const value of [coordination, count, `${(100 * count / property.data.length).toFixed(2)}%`]) { const cell = document.createElement('td'); cell.textContent = String(value); row.append(cell); }
-      table.append(row);
-    }
-    container.append(table);
+    // Keep one chart element so its count/probability mode and inspected bin
+    // survive recalculation, as in the Voronoi histograms.
+    coordinationChart ??= document.createElement('div');
+    container.append(coordinationChart);
+    renderInteractiveHistogram(coordinationChart, [...histogram].sort((a, b) => a[0] - b[0]).map(([value, count]) => ({ value, count })),
+      { label: `${property.displayName ?? property.name} distribution`, xLabel: 'Neighbors', discrete: true });
   }
   function renderRdf(result) {
     renderRdfChart($('rdf-chart'), result); $('export-rdf').disabled = false;

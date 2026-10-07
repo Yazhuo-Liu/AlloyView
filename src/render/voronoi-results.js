@@ -1,16 +1,12 @@
-import { distributionRows, renderPopulationTable } from './distribution-chart.js';
+import { renderInteractiveHistogram, renderPopulationTable } from './distribution-chart.js';
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
+// Voronoi histograms use the shared interactive histogram.
+export { renderInteractiveHistogram as renderVoronoiHistogram };
+
 const number = value => value !== null && value !== undefined && Number.isFinite(Number(value))
   ? Number(value).toLocaleString('en-US', { maximumSignificantDigits: 5 }) : '—';
 const percent = value => `${number(value * 100)}%`;
 const population = value => Number.isFinite(Number(value)) ? Number(value).toLocaleString('en-US') : '—';
-function coordinate(value, width = 0) {
-  if (!Number.isFinite(value)) return '—';
-  const digits = width > 0 && value !== 0 ? Math.max(5, Math.ceil(Math.log10(Math.abs(value) / width)) + 2) : 5;
-  return value.toLocaleString('en-US', { maximumSignificantDigits: Math.min(17, digits) });
-}
-const chartPreferences = new WeakMap();
 const QUANTITIES = Object.freeze({
   'voronoi-color-volume': 'atomicVolume', 'voronoi-color-coordination': 'voronoiCoordination',
   'voronoi-color-surface': 'voronoiSurfaceArea', 'voronoi-color-face-order': 'voronoiMaxFaceOrder',
@@ -21,13 +17,6 @@ function node(root, tag, text, className) {
   const element = root.createElement(tag);
   if (text !== undefined) element.textContent = text;
   if (className) element.className = className;
-  return element;
-}
-
-function svgNode(root, tag, attributes, text) {
-  const element = root.createElementNS(SVG_NS, tag);
-  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, String(value));
-  if (text !== undefined) element.textContent = text;
   return element;
 }
 
@@ -118,139 +107,6 @@ function renderTopologies(container, entries, count) {
   else if (entries.length > 6) container.append(node(root, 'p', `${population(entries.length)} distinct indices; open the complete table below for the remaining populations.`, 'help'));
 }
 
-function histogramTable(container, rows, label, unit) {
-  const root = container.ownerDocument, pageSize = 50;
-  let page = 0;
-  function render(focus) {
-    const table = node(root, 'table'), head = node(root, 'thead'), headings = node(root, 'tr');
-    table.append(node(root, 'caption', `${label}${unit ? ` · ${unit}` : ''}`));
-    for (const text of ['Lower', 'Upper', 'Count', 'Probability']) {
-      const th = node(root, 'th', text); th.setAttribute('scope', 'col'); headings.append(th);
-    }
-    head.append(headings); table.append(head);
-    const body = node(root, 'tbody');
-    for (const row of rows.slice(page * pageSize, (page + 1) * pageSize)) {
-      const tr = node(root, 'tr');
-      for (const value of [coordinate(row.lower, row.upper - row.lower), coordinate(row.upper, row.upper - row.lower), population(row.count), percent(row.probability)]) tr.append(node(root, 'td', value));
-      body.append(tr);
-    }
-    table.append(body); container.replaceChildren(table);
-    if (rows.length <= pageSize) return;
-    const controls = node(root, 'div', undefined, 'statistics-population-controls');
-    const previous = node(root, 'button', 'Previous', 'button button-secondary'), next = node(root, 'button', 'Next', 'button button-secondary');
-    previous.type = next.type = 'button'; previous.disabled = page === 0; next.disabled = (page + 1) * pageSize >= rows.length;
-    previous.setAttribute('aria-label', `Previous ${label} bins`); next.setAttribute('aria-label', `Next ${label} bins`);
-    previous.addEventListener('click', () => { page--; render('previous'); });
-    next.addEventListener('click', () => { page++; render('next'); });
-    controls.append(previous, node(root, 'span', `${page * pageSize + 1}–${Math.min((page + 1) * pageSize, rows.length)} of ${number(rows.length)}`), next);
-    container.append(controls);
-    if (focus) (focus === 'next' ? (next.disabled ? previous : next) : (previous.disabled ? next : previous)).focus?.();
-  }
-  render();
-}
-
-/** One SVG path for all bins, a single movable highlight and native slider:
- * chart DOM stays bounded even for thousands of bins. Pointer/touch and keyboard
- * inspection report the original counts rather than rounded plot coordinates. */
-export function renderVoronoiHistogram(container, distribution, { label = 'Distribution', xLabel = '', unit = '', discrete = false } = {}) {
-  if (!container) return;
-  const root = container.ownerDocument;
-  const rows = distributionRows(distribution).filter(row => Number.isFinite(row.lower) && Number.isFinite(row.upper));
-  const total = rows.reduce((sum, row) => sum + row.count, 0);
-  container.replaceChildren();
-  if (!rows.length || !total) { container.append(node(root, 'p', 'No qualifying samples.', 'help')); return; }
-  const preference = chartPreferences.get(container) ?? { mode: 'count', selected: 0 };
-  preference.selected = Math.min(rows.length - 1, preference.selected);
-  chartPreferences.set(container, preference);
-  const modes = node(root, 'div', undefined, 'voronoi-chart-modes');
-  modes.setAttribute('role', 'group'); modes.setAttribute('aria-label', `${label} vertical axis`);
-  const countButton = node(root, 'button', 'Count', 'button button-secondary'), probabilityButton = node(root, 'button', 'Probability', 'button button-secondary');
-  countButton.type = probabilityButton.type = 'button';
-  modes.append(countButton, probabilityButton); container.append(modes);
-  const svg = svgNode(root, 'svg', { viewBox: '0 0 360 200', tabindex: 0, role: 'group', 'aria-label': `${label}; ${population(total)} samples. Use left and right arrows to inspect bins.` });
-  svg.append(svgNode(root, 'title', {}, `${label}: ${population(total)} samples in ${rows.length} bins.`));
-  const left = 46, right = 344, top = 24, bottom = 154;
-  const minimum = Math.min(...rows.map(row => row.lower)), maximum = Math.max(...rows.map(row => row.upper));
-  const constant = maximum === minimum;
-  const x = value => constant ? (left + right) / 2 : left + (value - minimum) / (maximum - minimum) * (right - left);
-  const bounds = row => constant ? [left + (right - left) * .25, right - (right - left) * .25] : [x(row.lower), x(row.upper)];
-  const bars = svgNode(root, 'path', { class: 'chart-bar' }), highlight = svgNode(root, 'rect', { class: 'voronoi-chart-highlight', y: top, height: bottom - top, fill: 'none' });
-  svg.append(bars, highlight, svgNode(root, 'path', { d: `M${left},${top}V${bottom}H${right}`, class: 'chart-axis', fill: 'none' }));
-  const yMaximum = svgNode(root, 'text', { x: left - 5, y: top + 4, 'font-size': 10, 'text-anchor': 'end' });
-  const yLabel = svgNode(root, 'text', { x: left, y: 12, 'font-size': 10, 'text-anchor': 'start' });
-  svg.append(yMaximum, yLabel);
-  const xTicks = discrete ? [...new Set([rows[0].center, Math.round((rows[0].center + rows.at(-1).center) / 2), rows.at(-1).center])]
-    .map(value => [x(value), bottom + 18, number(value), 'middle']) : [
-      [left, bottom + 18, constant ? '' : coordinate(minimum, (maximum - minimum) / 10), 'start'],
-      [(left + right) / 2, bottom + 18, constant ? number(minimum) : coordinate((minimum + maximum) / 2, (maximum - minimum) / 10), 'middle'],
-      [right, bottom + 18, constant ? '' : coordinate(maximum, (maximum - minimum) / 10), 'end'],
-    ];
-  for (const [px, py, text, anchor] of [[left - 5, bottom + 4, '0', 'end'], ...xTicks,
-    [(left + right) / 2, 194, `${xLabel}${unit ? ` (${unit})` : ''}`, 'middle'],
-  ]) svg.append(svgNode(root, 'text', { x: px, y: py, 'font-size': 10, 'text-anchor': anchor }, text));
-  container.append(svg);
-  const inspect = node(root, 'label', undefined, 'voronoi-bin-control');
-  inspect.append(node(root, 'span', 'Inspect bin'));
-  const slider = node(root, 'input', undefined, 'voronoi-bin-slider');
-  slider.type = 'range'; slider.min = '0'; slider.max = String(rows.length - 1); slider.step = '1'; slider.value = String(preference.selected);
-  slider.setAttribute('aria-label', `${label} bin`); inspect.append(slider); container.append(inspect);
-  const readout = node(root, 'output', undefined, 'voronoi-bin-readout'); readout.setAttribute('aria-live', 'polite');
-  container.append(readout);
-  function select(index) {
-    preference.selected = Math.max(0, Math.min(rows.length - 1, index));
-    const row = rows[preference.selected], [from, to] = bounds(row);
-    highlight.setAttribute('x', from); highlight.setAttribute('width', Math.max(.5, to - from));
-    slider.value = String(preference.selected);
-    const description = discrete ? `${xLabel || 'Value'} ${number(row.center)}` : row.lower === row.upper
-      ? `${number(row.lower)}${unit ? ` ${unit}` : ''}` :
-        `${coordinate(row.lower, row.upper - row.lower)}–${coordinate(row.upper, row.upper - row.lower)}${unit ? ` ${unit}` : ''}${preference.selected < rows.length - 1 ? ' (upper excluded)' : ''}`;
-    readout.textContent = `${description} · ${population(row.count)} samples · ${percent(row.probability)}`;
-    readout.title = `Lower: ${row.lower}; upper: ${row.upper}; count: ${row.count}; fraction: ${row.probability}`;
-    slider.setAttribute('aria-valuetext', readout.textContent);
-  }
-  function plot(mode) {
-    preference.mode = mode;
-    const key = mode === 'probability' ? 'probability' : 'count';
-    const highest = Math.max(...rows.map(row => row[key]));
-    let path = '';
-    for (const row of rows) {
-      if (!row.count) continue;
-      const [from, to] = bounds(row), height = row[key] / highest * (bottom - top);
-      path += `M${from.toFixed(2)},${bottom}v${(-height).toFixed(2)}h${Math.max(.05, to - from).toFixed(2)}v${height.toFixed(2)}z`;
-    }
-    bars.setAttribute('d', path); yMaximum.textContent = mode === 'probability' ? percent(highest) : population(highest);
-    yLabel.textContent = mode === 'probability' ? 'Probability' : 'Count';
-    countButton.setAttribute('aria-pressed', String(mode === 'count')); probabilityButton.setAttribute('aria-pressed', String(mode === 'probability'));
-    select(preference.selected);
-  }
-  function inspectPointer(event) {
-    const rectangle = svg.getBoundingClientRect?.();
-    if (!rectangle?.width || !Number.isFinite(event.clientX)) return;
-    const px = (event.clientX - rectangle.left) / rectangle.width * 360;
-    if (px < left || px > right) return;
-    const value = constant ? minimum : minimum + (px - left) / (right - left) * (maximum - minimum);
-    let low = 0, high = rows.length - 1;
-    while (low < high) { const middle = (low + high) >> 1; if (rows[middle].upper <= value) low = middle + 1; else high = middle; }
-    if (low > 0 && rows[low].lower > value && Math.abs(rows[low - 1].center - value) < Math.abs(rows[low].center - value)) low--;
-    select(low);
-  }
-  countButton.addEventListener('click', () => plot('count')); probabilityButton.addEventListener('click', () => plot('probability'));
-  slider.addEventListener('input', () => select(Number(slider.value)));
-  svg.addEventListener('pointerdown', inspectPointer);
-  svg.addEventListener('pointermove', event => { if (event.pointerType !== 'touch') inspectPointer(event); });
-  svg.addEventListener('keydown', event => {
-    const next = { ArrowLeft: preference.selected - 1, ArrowRight: preference.selected + 1, Home: 0, End: rows.length - 1 }[event.key];
-    if (next === undefined) return;
-    event.preventDefault(); select(next);
-  });
-  plot(preference.mode);
-  const details = node(root, 'details', undefined, 'distribution-values');
-  details.append(node(root, 'summary', 'View binned values'));
-  const table = node(root, 'div'); let rendered = false;
-  details.addEventListener('toggle', () => { if (details.open && !rendered) { rendered = true; histogramTable(table, rows, label, unit); details.append(table); } });
-  container.append(details);
-}
-
 /** Result presentation has no calculation or renderer ownership. Color buttons
  * use the same Color by entry point as the existing legend. */
 export function initializeVoronoiResults({ getElement, chooseProperty = () => {} }) {
@@ -280,9 +136,9 @@ export function initializeVoronoiResults({ getElement, chooseProperty = () => {}
       result = next; topologyRendered = false;
       renderCards($('voronoi-stat-cards'), result);
       renderTopologies($('voronoi-topology-populations'), result.indexCounts, result.summary?.atomCount ?? result.atomicVolume?.length ?? 0);
-      renderVoronoiHistogram($('voronoi-volume-chart'), result.volumeHistogram, { label: 'Voronoi atomic volumes', xLabel: 'Volume', unit: 'Å³' });
-      renderVoronoiHistogram($('voronoi-coordination-chart'), result.coordinationHistogram, { label: 'Voronoi coordination', xLabel: 'Neighbors', discrete: true });
-      renderVoronoiHistogram($('voronoi-face-chart'), result.faceAreaHistogram, { label: 'Voronoi neighbor face areas', xLabel: 'Face area', unit: 'Å²' });
+      renderInteractiveHistogram($('voronoi-volume-chart'), result.volumeHistogram, { label: 'Voronoi atomic volumes', xLabel: 'Volume', unit: 'Å³' });
+      renderInteractiveHistogram($('voronoi-coordination-chart'), result.coordinationHistogram, { label: 'Voronoi coordination', xLabel: 'Neighbors', discrete: true });
+      renderInteractiveHistogram($('voronoi-face-chart'), result.faceAreaHistogram, { label: 'Voronoi neighbor face areas', xLabel: 'Face area', unit: 'Å²' });
       $('voronoi-index-frequency')?.replaceChildren(); renderCompleteTopology(); updateControls();
     },
   };

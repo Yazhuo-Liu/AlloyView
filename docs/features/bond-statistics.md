@@ -32,7 +32,7 @@ Q4/Q6 become atom properties for **Color by**, atom details and CSV export. Atom
 
 ## Normalization and CSV exports
 
-Every histogram reports bin edges and centers, raw counts, probability and density. A nonempty distribution has `probability = count / total`; density is probability divided by bin width. Probabilities sum to one and density integrates to one in Å for lengths or degrees for angles. Empty populations have zero histogram counts and probabilities. Bins are half-open, with the upper endpoint included in the final bin.
+The length and angle plots use the same inspection as the Voronoi histograms: switch between **Count** and **Probability**, hover or tap a bin, drag **Inspect bin**, or focus the plot and press left/right, Home, or End. **View binned values** opens the numerical table. Every histogram reports bin edges and centers, raw counts, probability and density. A nonempty distribution has `probability = count / total`; density is probability divided by bin width. Probabilities sum to one and density integrates to one in Å for lengths or degrees for angles. Empty populations have zero histogram counts and probabilities. Bins are half-open, with the upper endpoint included in the final bin.
 
 **Length CSV** and **Angle CSV** export the complete binned distributions. **Q4/Q6 stats CSV** exports their scalar summaries; **Atom Q4/Q6 CSV** exports per-atom values and neighbor counts with atom identifiers. **Statistics → Export statistics as CSV** also provides summaries and all available atom properties. Exports preserve the analysis population rather than applying display visibility filters.
 

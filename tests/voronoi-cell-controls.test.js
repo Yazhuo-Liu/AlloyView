@@ -83,7 +83,7 @@ test('full-cell display defaults off, streams all contributing atoms and reuses 
   job.resolve({ cells: [], workerCount: 2 }); await ready;
   const geometry = h.allRendered.at(-1).geometry;
   assert.equal(geometry.cellCount, 2);
-  assert.deepEqual(geometry.chunks.map(chunk => [...new Set(chunk.atomIndices)]), [[0], [1]]);
+  assert.deepEqual(geometry.chunks.map(chunk => Array.from(chunk.cellRanges.filter((_, index) => index % 5 === 0))), [[0], [1]]);
   assert.match(h.elements['voronoi-all-cells-status'].textContent, /2 cells.*2 Workers/);
   await h.controls.restore({ allEnabled: false });
   assert.equal(h.allRendered.at(-1).options.allEnabled, false);

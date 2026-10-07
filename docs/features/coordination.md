@@ -2,7 +2,7 @@
 
 ## Controls
 
-Set a positive cutoff radius in Å. Editing the cutoff schedules a new calculation after a short typing pause; committing the field applies it immediately. The count becomes available for coloring, atom inspection and the coordination distribution. Cancel clears the result and disables automatic calculation on later frames.
+Set a positive cutoff radius in Å. Editing the cutoff schedules a new calculation after a short typing pause; committing the field applies it immediately. The count becomes available for coloring, atom inspection and the coordination distribution. The distribution plot in Statistics supports **Count**/**Probability**, hover or tap inspection, an **Inspect bin** slider and left/right, Home and End keys; **View binned values** lists every coordination number. Cancel clears the result and disables automatic calculation on later frames.
 
 The numeric field remains editable at the top. **Cutoff preset** lists
 **Custom** first, followed by 35 common metals with their suggested radii.

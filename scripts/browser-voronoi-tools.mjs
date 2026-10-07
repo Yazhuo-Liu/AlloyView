@@ -144,11 +144,11 @@ try {
     assert.ok(await evaluate('document.querySelectorAll("#voronoi-topology-populations [data-voronoi-index]").length>0 || document.getElementById("voronoi-topology-populations").textContent.includes("<")'), 'opening distributions exposes common topological populations');
     const volumeChart = '#voronoi-volume-chart';
     assert.equal(await evaluate(`document.querySelectorAll('${volumeChart} svg path.chart-bar').length`), 1, 'one bar path avoids excessive DOM');
-    await press(`${volumeChart} .voronoi-chart-modes button:last-child`);
+    await press(`${volumeChart} .chart-modes button:last-child`);
     assert.match(await evaluate(`document.querySelector('${volumeChart} svg').textContent`), /Probability/i);
     const volumeBins = cpuResult.volumeHistogram.length;
-    await evaluate(`(() => {const slider=document.querySelector('${volumeChart} .voronoi-bin-slider');slider.value=String(Math.floor(${volumeBins}/2));slider.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-    assert.ok(await evaluate(`document.querySelector('${volumeChart} .voronoi-bin-readout').textContent.length>0`), 'selected histogram bin exposes numerical values');
+    await evaluate(`(() => {const slider=document.querySelector('${volumeChart} .chart-inspect-slider');slider.value=String(Math.floor(${volumeBins}/2));slider.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    assert.ok(await evaluate(`document.querySelector('${volumeChart} .chart-readout').textContent.length>0`), 'selected histogram bin exposes numerical values');
     console.log('Voronoi UI: CPU domain volume, summary cards, quantity shortcuts and readable distributions passed.');
 
     await run({ gpu: true });
@@ -445,7 +445,7 @@ try {
     assert.equal(await evaluate('document.querySelector("[data-voronoi-type=Ni]").checked'), true, 'phone type choices agree with the restored all-site analysis');
     await expand('#voronoi-distributions');
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'), true, 'result cards and interactive charts fit the phone');
-    await press('#voronoi-coordination-chart .voronoi-chart-modes button:last-child');
+    await press('#voronoi-coordination-chart .chart-modes button:last-child');
     const phoneScreenshot = await screenshot('voronoi-390x640.png');
     const viewport = await evaluate('(() => {const box=document.getElementById("viewport").getBoundingClientRect();return{top:box.top,bottom:box.bottom,height:box.height};})()');
     assert.ok(viewport.top >= 0 && viewport.bottom <= 640 && viewport.height > 100, 'tool scrolling retains the phone viewport');
@@ -513,7 +513,7 @@ async function initializeChecks() {
     const geometry = checks[kind]?.voronoiAllCellGeometry;
     if (!geometry) return null;
     return { cellCount: geometry.cellCount, complete: Boolean(geometry.complete), chunks: geometry.chunks.length,
-      atomIndices: [...new Set(geometry.chunks.flatMap(chunk => Array.from(chunk.atomIndices)))].sort((a, b) => a - b) };
+      atomIndices: [...new Set(geometry.chunks.flatMap(chunk => Array.from(chunk.cellRanges).filter((_, index) => index % 5 === 0)))].sort((a, b) => a - b) };
   };
   checks.saveAllGeometry = () => { checks.previousAllGeometry = checks.renderer.voronoiAllCellGeometry; };
   checks.allGeometryChanged = () => checks.previousAllGeometry !== checks.renderer.voronoiAllCellGeometry;

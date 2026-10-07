@@ -20,11 +20,12 @@ function svgNode(root, tag, attributes, text) {
   return element;
 }
 
-/** The smallest 1, 2, 2.5 or 5 × 10ⁿ at or above a positive value. */
+/** The smallest rounded axis limit (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 × 10ⁿ)
+ * at or above a positive value; fine steps keep a tall peak near full height. */
 export function niceCeiling(value) {
   if (!(value > 0)) return 1;
   const power = 10 ** Math.floor(Math.log10(value));
-  return [1, 2, 2.5, 5, 10].find(step => step * power >= value * (1 - 1e-12)) * power;
+  return [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find(step => step * power >= value * (1 - 1e-12)) * power;
 }
 
 /** One SVG path for every bin, plus a single movable crosshair and native

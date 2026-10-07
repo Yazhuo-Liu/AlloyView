@@ -294,7 +294,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .crystal-items input { width: 13px; height: 13px; margin: 0; accent-color: var(--cyan); }
 .crystal-items .legend-count { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 .crystal-items .is-hidden { opacity: .65; }
+.legend-scale { position: relative; padding-top: 16px; cursor: crosshair; touch-action: pan-y; }
+.legend-histogram { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 14px; overflow: visible; pointer-events: none; }
+.legend-histogram path { fill: var(--muted); opacity: .45; }
 .legend-gradient { height: 8px; border-radius: 99px; }
+.legend-probe { position: absolute; top: 2px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text-soft); box-shadow: 0 0 0 1px var(--overlay); pointer-events: none; }
+.legend-probe-label { position: absolute; bottom: calc(100% + 4px); transform: translateX(-50%); padding: 3px 7px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel); color: var(--text-soft); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; box-shadow: var(--shadow); pointer-events: none; }
+.legend-probe[hidden], .legend-probe-label[hidden] { display: none; }
 .legend-range { display: flex; justify-content: space-between; margin-top: 5px; color: var(--muted); font-size: 9px; }
 .legend-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .legend-controls label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; }
@@ -606,25 +612,25 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
 .voronoi-topology-index { color: var(--text-soft); overflow-wrap: anywhere; }
 .voronoi-topology-track { height: 5px; margin-top: 5px; overflow: hidden; border-radius: 99px; background: var(--range-track); }
 .voronoi-topology-track > span { display: block; height: 100%; border-radius: inherit; background: var(--cyan); }
-.voronoi-chart-modes { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
-.voronoi-chart-modes .button { min-height: 30px; padding: 4px 9px; font-size: 10px; }
-.voronoi-chart-modes .button[aria-pressed="true"] { color: var(--accent-text); background: var(--accent-soft); border-color: var(--cyan); }
-.statistics-chart .voronoi-chart-highlight, .statistics-chart .chart-crosshair { stroke: var(--text-soft); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.chart-modes { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.chart-modes .button { min-height: 30px; padding: 4px 9px; font-size: 10px; }
+.chart-modes .button[aria-pressed="true"] { color: var(--accent-text); background: var(--accent-soft); border-color: var(--cyan); }
+.statistics-chart .chart-highlight, .statistics-chart .chart-crosshair { stroke: var(--text-soft); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 .statistics-chart .chart-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .statistics-chart .chart-reference { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
 .statistics-chart .chart-marker { fill: var(--cyan); stroke: var(--panel); stroke-width: 1.5; pointer-events: none; }
-.voronoi-bin-control, .chart-inspect-control { display: flex; align-items: center; gap: 10px; margin: 3px 0 7px; color: var(--muted); font-size: 10px; }
-.voronoi-bin-control > span, .chart-inspect-control > span { flex-shrink: 0; }
-.voronoi-bin-slider, .chart-inspect-slider { min-width: 0; flex: 1; accent-color: var(--cyan); }
-.voronoi-bin-readout, .chart-readout { display: block; min-height: 28px; color: var(--text-soft); font-size: 10px; line-height: 1.6; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.chart-inspect-control { display: flex; align-items: center; gap: 10px; margin: 3px 0 7px; color: var(--muted); font-size: 10px; }
+.chart-inspect-control > span { flex-shrink: 0; }
+.chart-inspect-slider { min-width: 0; flex: 1; accent-color: var(--cyan); }
+.chart-readout { display: block; min-height: 28px; color: var(--text-soft); font-size: 10px; line-height: 1.6; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 #voronoi-cell-status { display: block; }
 #voronoi-cell-display .paired-fields .field { min-width: 0; }
 @media (max-width: 920px) {
   .statistics-export-button { min-height: 38px; }
   .statistics-population-controls .button { min-height: 38px; }
   .bond-statistics-section .tool-run-button, .voronoi-section .tool-run-button, .statistics-export-actions .button, .statistics-csv-actions .button { min-height: 42px; }
-  .voronoi-color-actions .button, .voronoi-chart-modes .button { min-height: 38px; }
-  .voronoi-bin-slider, .chart-inspect-slider { min-height: 32px; }
+  .voronoi-color-actions .button, .chart-modes .button { min-height: 38px; }
+  .chart-inspect-slider { min-height: 32px; }
 }
 .atom-search-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; gap: 7px; margin-bottom: 15px; }
 .atom-search-row .field { min-width: 0; margin: 0; }

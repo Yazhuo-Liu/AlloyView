@@ -58,6 +58,7 @@ import { initializeFeatureHelp } from './feature-help.js';
 import { normalizeSelectionGroups, selectionGroupVisibility } from './selection-groups.js';
 import { initializeSelectionGroupControls } from './selection-group-controls.js';
 import { initializeCrystalVisibilityControls, isCrystalStructureProperty } from './crystal-visibility-controls.js';
+import { createLegendScale } from './render/legend-histogram.js';
 
 const elements = Object.fromEntries([
   'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar', 'enable-gpu-computing',
@@ -2730,9 +2731,7 @@ function renderLegend(legend) {
     }
     elements['color-legend'].append(actions, items);
   } else {
-    const gradient = document.createElement('div');
-    gradient.className = 'legend-gradient';
-    gradient.style.background = legend.gradient;
+    const scale = createLegendScale(document, legend, { format: formatValue });
     const range = document.createElement('div');
     range.className = 'legend-range';
     const minimum = document.createElement('span');
@@ -2845,7 +2844,7 @@ function renderLegend(legend) {
       else freezeCurrentRange();
       applyColors();
     });
-    elements['color-legend'].append(gradient, range, controls);
+    elements['color-legend'].append(scale, range, controls);
   }
   elements.legend.hidden = false;
 }
