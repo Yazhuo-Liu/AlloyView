@@ -514,9 +514,9 @@ export class GpuRuntime {
     this.device.queue.writeBuffer(buffer, byteOffset, values.buffer, values.byteOffset, values.byteLength);
   }
 
-  zeroBuffer(buffer) {
+  zeroBuffer(buffer, offset = 0, size = undefined) {
     const encoder = this.device.createCommandEncoder();
-    encoder.clearBuffer(buffer);
+    encoder.clearBuffer(buffer, offset, size);
     this.device.queue.submit([encoder.finish()]);
   }
 

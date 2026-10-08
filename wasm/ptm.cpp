@@ -12,6 +12,14 @@ EM_JS(int, fetch_neighbors, (int atom, int count, double* points, uint32_t* indi
 });
 
 static ptm_local_handle_t handle = nullptr;
+// Optional per-atom types, used only for PTM's chemical ordering. Without them
+// every environment reads as one species, which leaves ordering undetermined.
+static const int32_t* atom_types = nullptr;
+static int atom_type_count = 0;
+
+static int32_t type_of(size_t atom) {
+    return atom_types && atom < static_cast<size_t>(atom_type_count) ? atom_types[atom] : -1;
+}
 
 static int get_neighbors(void*, size_t, size_t atom, int requested, ptm_atomicenv_t* env) {
     double points[PTM_MAX_INPUT_POINTS - 1][3];
@@ -20,6 +28,7 @@ static int get_neighbors(void*, size_t, size_t atom, int requested, ptm_atomicen
     std::memset(env, 0, sizeof(*env));
     env->num = count + 1;
     env->atom_indices[0] = atom;
+    env->numbers[0] = type_of(atom);
     for (int i = 0; i < PTM_MAX_INPUT_POINTS; ++i) env->correspondences[i] = i;
     if (count > 0) {
         uint64_t ordering = 0;
@@ -32,6 +41,7 @@ static int get_neighbors(void*, size_t, size_t atom, int requested, ptm_atomicen
         for (int i = 0; i < count; ++i) {
             int source = env->correspondences[i + 1] - 1;
             env->atom_indices[i + 1] = indices[source];
+            env->numbers[i + 1] = type_of(indices[source]);
             std::memcpy(env->points[i + 1], points[source], 3 * sizeof(double));
         }
     }
@@ -45,18 +55,28 @@ int alloy_ptm_init() {
     return error;
 }
 
-// Packed output: type, RMSD, inverse scale, nearest distance, F[9].
+// Types are borrowed: the caller keeps the array alive until it passes null.
+void alloy_ptm_set_types(const int32_t* types, int count) {
+    atom_types = count > 0 ? types : nullptr;
+    atom_type_count = atom_types ? count : 0;
+}
+
+// Packed output: type, RMSD, inverse scale, nearest distance, F[9],
+// orientation quaternion (w, x, y, z) and ordering type.
 // Unmatched environments carry NaN numerical outputs, never invented zeros.
 int alloy_ptm_atom(int atom, int flags, double* output) {
     ptm_result_t result;
     int error = ptm_index(handle, atom, get_neighbors, nullptr, flags, true, &result, nullptr);
     output[0] = result.structure_type;
-    for (int i = 1; i < 13; ++i) output[i] = NAN;
+    for (int i = 1; i < 17; ++i) output[i] = NAN;
+    output[17] = 0;
     if (result.structure_type) {
         output[1] = result.rmsd;
         output[2] = result.scale;
         output[3] = result.interatomic_distance;
         for (int i = 0; i < 9; ++i) output[4 + i] = result.F[i];
+        for (int i = 0; i < 4; ++i) output[13 + i] = result.orientation[i];
+        output[17] = result.ordering_type;
     }
     return error;
 }

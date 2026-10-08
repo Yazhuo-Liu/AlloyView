@@ -15,7 +15,7 @@ const cell = createCell({ origin: [4, -3, 7], vectors: [10, 0, 0, 3, 8, 0, 1, 2,
 
 test('DXA threads require shared memory and isolation, with a bounded hardware budget', () => {
   const browser = { SharedArrayBuffer, crossOriginIsolated: true, navigator: { hardwareConcurrency: 16 } };
-  assert.equal(dxaWorkerCount(10000, undefined, browser), 3);
+  assert.equal(dxaWorkerCount(10000, undefined, browser), 5);
   assert.equal(dxaWorkerCount(100000, undefined, browser), 14);
   assert.equal(dxaWorkerCount(100000, undefined, { ...browser, navigator: { hardwareConcurrency: 8 } }), 6);
   assert.equal(dxaWorkerCount(10000, 2, browser), 2);

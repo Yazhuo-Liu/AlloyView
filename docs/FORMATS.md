@@ -90,14 +90,66 @@ Rejected explicitly:
 - missing/partial coordinate groups, partial `ix/iy/iz` image flags, missing
   ID/type, duplicate IDs/columns;
 - string custom columns other than `element`;
-- binary, compressed, or non-`ITEM:` formats. In particular, a LAMMPS data file
-  named `.lmp` is not the same format as a LAMMPS text dump and is not currently
-  parsed.
+- binary, compressed, or non-`ITEM:` formats. A LAMMPS data file named `.lmp`
+  is recognized by its header and read by the [data-file parser](#lammps-data-file)
+  instead.
 
 The filename extension does not select the parser. Files named `.dump`, `.lmp`,
 `.lammpstrj`, or `.lammpstraj` are recognized as LAMMPS trajectories only when
 their content contains native `ITEM: TIMESTEP` dump blocks. One file may contain
 one or many frames.
+
+## LAMMPS data file
+
+A data file written by `write_data`, Atomsk, Packmol and similar tools holds one
+configuration. It is recognized by its header (an `N atoms` count and the
+`xlo xhi` bounds after the free-text title line), whatever its name; `data.*`
+and `*.data` names are also accepted.
+
+- **Header:** `atoms`, `atom types`, `xlo xhi`, `ylo yhi`, `zlo zhi` and the
+  optional `xy xz yz` tilt factors. Other counts (bonds, angles…) are ignored.
+  The box becomes a restricted triclinic cell. Data files do not store boundary
+  conditions, so every axis is periodic, as LAMMPS assumes until a `boundary`
+  command says otherwise.
+- **Atoms:** the style comment after the keyword (`Atoms # charge`), as
+  `write_data` writes it, selects the columns. Supported styles are `atomic`,
+  `charge`, `molecular`, `bond`, `angle`, `full`, `sphere` and `dipole`. Without
+  a comment, 5 or 8 columns are read as `atomic`; any other width is rejected
+  with a request to add the comment, because `charge` and `molecular` rows have
+  the same width. Three trailing image flags, when present for every atom,
+  unwrap the coordinates. Charge, molecule ID, diameter, density and dipole
+  columns become atom properties.
+- **Type names:** an `Atom Type Labels` section, or a single-word comment after
+  a mass (`1 55.845 # Fe`), names the types; these names also select element
+  colors and radii. Atoms rows may then use the labels instead of numbers.
+  Without names, types are shown as `Type 1`, `Type 2`, ….
+- **Other sections:** `Masses` becomes a `mass` property and `Velocities`
+  becomes `vx`, `vy`, `vz`. Coefficient, bond, angle and other topology
+  sections are skipped.
+
+General triclinic boxes (`avec`, `bvec`, `cvec`, `abc origin`) and atom styles
+not listed above are rejected with a specific message. Atom IDs must be unique
+positive integers.
+
+## VASP POSCAR and CONTCAR
+
+A POSCAR or CONTCAR file holds one periodic configuration. It is recognized by
+its layout and by the names `POSCAR*`, `CONTCAR*`, `*.vasp` and `*.poscar`.
+Browsers may hide files without an extension in the file picker; choose
+**All files** there, or select the containing folder.
+
+- The scale factor multiplies the lattice and Cartesian coordinates. A negative
+  value is the target cell volume in Å³, and three values scale the x, y and z
+  components separately (VASP 6).
+- VASP 5 files list the species above the counts; potential suffixes such as
+  `Fe_pv` are reduced to the element. VASP 4 files without that line take the
+  species from the comment line when it contains one element symbol per count,
+  and otherwise show `Type 1`, `Type 2`, ….
+- `Selective dynamics` flags become `selectiveDynamicsX`, `Y` and `Z`
+  properties (1 for T). `Direct` and `Cartesian` (or `K`) coordinates are both
+  supported; velocity and predictor blocks after the coordinates are ignored.
+
+Atoms are numbered in file order. XDATCAR trajectories are not yet supported.
 
 Without an `element` column, atom types and their legend entries use the original
 numeric identifiers as `Type N` (for example, `Type 1`). AlloyView does not infer
@@ -179,7 +231,8 @@ Numbered XYZ and PDB sequences are sorted by their varying numeric filename
 field. Every member can contain multiple frames; its indexed frames are
 concatenated into the global trajectory. Sequences remain separated by format,
 directory and filename pattern. NetCDF and compressed structure files are
-not supported.
+not supported. LAMMPS data and POSCAR files open one at a time, not as numbered
+sequences.
 
 ## Coordination cutoff suggestion
 

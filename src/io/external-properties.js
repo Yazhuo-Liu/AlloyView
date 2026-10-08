@@ -7,15 +7,16 @@ const BAD_NAMES = new Set(['__proto__', 'prototype', 'constructor']);
 const RESERVED_NAMES = new Set([
   'id', 'ids', 'type', 'types', 'positions', 'fractional', 'cell', 'imageFlags', 'unwrappedPositions',
   'coordination', 'structureType', 'centralSymmetry', 'centralSymmetryStructureType', 'centralSymmetryNeighbors',
-  'ptmStructureType', 'ptmRmsd', 'ptmDistance', 'idealStrainStructureType', 'dxaStructureType', 'localShear',
+  'ptmStructureType', 'ptmRmsd', 'ptmDistance', 'ptmOrderingType', 'ptmOrientationW', 'ptmOrientationX',
+  'ptmOrientationY', 'ptmOrientationZ', 'idealStrainStructureType', 'dxaStructureType', 'localShear',
   'atomicShearStrain', 'atomicHydrostaticStrain', 'atomicVolumeChange',
   'bondQ4', 'bondQ6', 'bondStatisticsCoordination', 'atomicVolume', 'voronoiSurfaceArea',
   'voronoiCoordination', 'voronoiBoundaryFaces', 'voronoiMaxFaceOrder',
   'strainE11', 'strainE22', 'strainE33', 'strainE12', 'strainE13', 'strainE23',
   'referenceShearStrain', 'referenceHydrostaticStrain', 'referenceVolumeChange',
   'referenceE11', 'referenceE22', 'referenceE33', 'referenceE12', 'referenceE13', 'referenceE23',
-  ...Array.from({ length: 9 }, (_, index) => `referenceF${Math.floor(index / 3) + 1}${index % 3 + 1}`),
-  ...['X', 'Y', 'Z', 'Magnitude'].map(suffix => `displacement${suffix}`),
+  ...Array.from({ length: 9 }, (_, index) => `referenceF${Math.floor(index / 3) + 1}${index % 3 + 1}`), 'referenceD2min',
+  ...['X', 'Y', 'Z', 'Magnitude', 'Tile'].map(suffix => `displacement${suffix}`),
 ].map(name => name.toLowerCase()));
 const ID_NAMES = new Set(['id', 'atom_id', 'atomid']);
 

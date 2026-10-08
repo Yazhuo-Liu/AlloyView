@@ -1,20 +1,13 @@
 import { radiiByType } from './render/atomic-radii.js';
 import { selectionGroupStyles } from './selection-groups.js';
+import { atomIndexEntry, atomIndicesById } from './data/atom-ids.js';
 
 // Atom indices by display ID, built once per immutable ID array. A replicated
 // or merged frame may repeat an ID, so a key can name several atoms.
 const indicesByIdCache = new WeakMap();
 function indicesById(ids) {
   let map = indicesByIdCache.get(ids);
-  if (map) return map;
-  map = new Map();
-  for (let index = 0; index < ids.length; index += 1) {
-    const key = String(ids[index]), existing = map.get(key);
-    if (existing === undefined) map.set(key, index);
-    else if (typeof existing === 'number') map.set(key, [existing, index]);
-    else existing.push(index);
-  }
-  indicesByIdCache.set(ids, map);
+  if (!map) { map = atomIndicesById(ids); indicesByIdCache.set(ids, map); }
   return map;
 }
 
@@ -31,7 +24,7 @@ export function findAtomIndex(ids, id) {
 }
 
 function forEachAtom(map, key, visit) {
-  const found = map.get(key);
+  const found = atomIndexEntry(map, key);
   if (typeof found === 'number') visit(found);
   else if (found) for (const index of found) visit(index);
 }

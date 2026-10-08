@@ -10,7 +10,26 @@ PTM compares local neighbor topology and geometry with ideal crystal templates. 
 
 The geometric fit can be reused by ideal lattice strain when template candidates and RMSD parameters match. A strain-only fit does not enable PTM display properties. Cancellation of one analysis does not automatically cancel an independent consumer of the fit.
 
-Identification depends on enabled templates, local disorder and RMSD tolerance. A recognized crystal template does not establish composition, chemical ordering or a stress-free reference lattice.
+Identification depends on enabled templates, local disorder and RMSD tolerance. A recognized crystal template does not establish composition or a stress-free reference lattice.
+
+## Orientation and chemical ordering
+
+Every matched atom also receives its lattice orientation as a unit quaternion, **PTM orientation qw, qx, qy, qz**, rotated into the fundamental zone nearest the identity. An axis-aligned crystal has qw = ±1. Unmatched atoms have no orientation (NaN). The components are ordinary scalar properties for Color by, Details and CSV export; adjacent grains differ in at least one component.
+
+**PTM chemical ordering** compares the element types of an atom and its matched neighbors, as PTM defines for binary chemistry:
+
+| Ordering | Meaning |
+| --- | --- |
+| Pure | All neighbors share the central atom's type |
+| L1₀ | CuAu-type tetragonal order on an FCC lattice |
+| L1₂ (A-site) | Cu₃Au order, central atom on a majority (Cu) site |
+| L1₂ (B-site) | Cu₃Au order, central atom on a minority (Au) site |
+| B2 | CsCl order on a BCC lattice |
+| Zincblende | SiC order on a cubic or hexagonal diamond lattice |
+| Hex. BN | Boron-nitride order on graphene |
+| Other | Unmatched atoms, and environments with three or more types or no listed order |
+
+Ordering uses the source atom types exactly as loaded, so it detects B2 or L1₂ domains in binary alloys and in binary sub-lattices of a larger alloy only where an environment contains exactly two types. Multi-principal-element neighborhoods report Other. The legend checkboxes hide ordering classes like any other category. These outputs follow OVITO's `outputOrientation` and `outputOrderingTypes` options.
 
 ## Use in ideal lattice strain
 

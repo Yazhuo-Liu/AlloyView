@@ -57,7 +57,9 @@ export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, 
     for (let begin = startAtom; begin < endAtom;) {
       checkSignal(signal);
       const end = Math.min(endAtom, begin + batchSize);
-      await runtime.zeroBuffer(histogram); await runtime.zeroBuffer(corrections);
+      // Records are read only below the atomic count, so clearing the
+      // 16-byte header resets the queue without rewriting all records.
+      await runtime.zeroBuffer(histogram); await runtime.zeroBuffer(corrections, 0, 16);
       await runtime.run(BOND_STATISTICS_SHADER, bindings, end - begin,
         { signal, startAtom: begin, endAtom: end, batchSize: 0 });
       const diagnostics = await runtime.read(corrections, Uint32Array, 4, { signal });

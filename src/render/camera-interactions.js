@@ -1,6 +1,10 @@
 import { add, scale } from './math.js';
 
 const TAP_DISTANCE = 4;
+// A second tap or click on the same atom within this time and distance makes
+// it the rotation center, like AtomEye's right-click anchor.
+const DOUBLE_TAP_MS = 350;
+const DOUBLE_TAP_PIXELS = 12;
 
 // Pointer Events keep mouse controls and touch gestures on the same canvas.
 export function installCameraInteractions(renderer) {
@@ -9,7 +13,7 @@ export function installCameraInteractions(renderer) {
   const window = document?.defaultView;
   const touches = new Map();
   const listeners = [];
-  let drag = null, gesture = null, marquee = null, selectionJob = 0;
+  let drag = null, gesture = null, marquee = null, selectionJob = 0, lastTap = null;
 
   function listen(target, name, handler, options) {
     if (!target) return;
@@ -22,7 +26,7 @@ export function installCameraInteractions(renderer) {
   function reset() {
     const ids = [...touches.keys(), ...(drag ? [drag.id] : [])];
     touches.clear();
-    drag = gesture = null;
+    drag = gesture = lastTap = null;
     cancelBox();
     for (const id of ids) release(id);
   }
@@ -176,11 +180,22 @@ export function installCameraInteractions(renderer) {
       else cancelBox();
     } else if (select) {
       const atom = renderer.pick(event.clientX, event.clientY);
+      // The picked replica's position, read before handlers can pick again.
+      const position = renderer.lastPick?.index === atom ? renderer.lastPick.position : null;
       if (renderer.selectionInteraction?.mode === 'click' && renderer.selectionInteraction.onPick) renderer.selectionInteraction.onPick(atom);
       else renderer.onPick(atom);
+      const time = event.timeStamp ?? performance.now();
+      // Picking modes (measurement, slice or group picking) own repeated clicks.
+      if (position && (renderer.allowsDoubleTapAnchor?.() ?? true) && lastTap?.atom === atom && time - lastTap.time <= DOUBLE_TAP_MS
+          && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) <= DOUBLE_TAP_PIXELS) {
+        renderer.centerOnPoint(position);
+        lastTap = null;
+      } else lastTap = position ? { atom, time, x: event.clientX, y: event.clientY } : null;
     }
   }
   for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) listen(canvas, name, end);
+  // As with native double-clicks, pressing anything else in between starts over.
+  listen(document, 'pointerdown', event => { if (event.target !== canvas) lastTap = null; }, true);
   listen(canvas, 'contextmenu', event => event.preventDefault());
   listen(canvas, 'wheel', event => {
     if (!renderer.frame) return;

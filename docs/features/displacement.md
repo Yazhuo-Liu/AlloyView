@@ -8,6 +8,10 @@ The result provides **Displacement X**, **Displacement Y**, **Displacement Z** a
 
 **Cancel** disables the analysis and removes its properties from current and cached frames. Pending work cannot publish a late result, and subsequent frame changes do not restart it. If a removed field was selected for coloring, coloring returns to atom type. Cancelling unchecks **Show arrows** and clears both views when arrows use Displacement or any of its components through Custom XYZ. Unrelated imported arrows stay enabled. The Displacement source also disappears from Vector. **Calculate displacement** enables and starts the analysis again; arrow visibility stays off until you enable it.
 
+## Color tiles
+
+**Color tiles per cell vector** reproduces AtomEye's tiling tracer. Enter how many tiles to cut along the reference cell vectors **a**, **b** and **c**; zero leaves an axis undivided, and all zeros turn tiles off. Each atom's tile is the checkerboard parity of its position in the reference frame, `(⌊nₐ·sₐ⌋ + ⌊n_b·s_b⌋ + ⌊n_c·s_c⌋) mod 2` in reduced coordinates. The result is the categorical **Color tile** property (Tile A and Tile B), selected for coloring when tiles are enabled. Atoms keep their tile in every later frame through the same ID matching as displacement, so the pattern deforms with the material: slip steps, shear bands and grain-boundary sliding appear as offsets between tiles. Unmatched atoms have no tile. The legend checkboxes hide either tile. Changing the counts recolors without recalculating displacement, and the counts are saved in configuration JSON.
+
 ## Match atoms between frames
 
 When both frames contain explicit stable IDs, current atoms are matched to reference atoms by those IDs. Missing reference matches receive `NaN` components and magnitude, and are omitted from scalar ranges and arrows.

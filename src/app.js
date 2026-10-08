@@ -14,7 +14,7 @@ import { CpuBudget } from './analysis/cpu-budget.js';
 import { DxaClient } from './analysis/dxa-client.js';
 import { analysisProgressText as formatAnalysisProgress, analysisBackendLabel, analysisBackendDetails } from './analysis/status.js';
 import { STRUCTURE_TYPES } from './analysis/cna.js';
-import { PTM_TYPES } from './analysis/ptm.js';
+import { PTM_ORDERING_TYPES, PTM_TYPES } from './analysis/ptm.js';
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
 import { ELEMENT_LATTICES, STRAIN_STRUCTURES, referenceForElement, validateReferences } from './analysis/lattice.js';
 import { estimateLatticeReferences } from './analysis/lattice-estimate.js';
@@ -104,9 +104,14 @@ const analysisTasks = new Map();
 const ANALYSES = {
   cna: { prefix: 'cna', name: 'structureType', label: 'Crystal structure (CNA)', help: 'Calculate to color by crystal structure. The legend checkboxes control visibility.' },
   centrosymmetry: { prefix: 'csp', name: 'centralSymmetry', label: 'Central symmetry (normalized)', help: 'Runs on the complete structure, including hidden atoms.' },
-  ptm: { prefix: 'ptm', name: 'ptmStructureType', label: 'Crystal structure (PTM)', help: 'Results include structure type, RMSD and nearest-neighbor distance.' },
+  ptm: { prefix: 'ptm', name: 'ptmStructureType', label: 'Crystal structure (PTM)', help: 'Results include structure type, RMSD, nearest-neighbor distance, lattice orientation and binary chemical ordering.' },
   strain: { prefix: 'strain', name: 'atomicShearStrain', label: 'Atomic shear strain', help: 'Missing lattice references are estimated from the current structure. Editable references stay fixed across frames. This is not displacement strain between trajectory frames.' },
 };
+// PTM outputs besides the structure type, as [property name, selector label].
+const PTM_EXTRA_OUTPUTS = Object.freeze([['ptmRmsd', 'PTM RMSD (best fit)'], ['ptmDistance', 'PTM nearest-neighbor distance [Å]'],
+  ['ptmOrderingType', 'PTM chemical ordering'],
+  ...['W', 'X', 'Y', 'Z'].map(axis => [`ptmOrientation${axis}`, `PTM orientation q${axis.toLowerCase()}`])]);
+
 const state = {
   file: null,
   files: [],
@@ -342,6 +347,11 @@ function handleAtomPick(index) {
   selectAtom(index);
 }
 
+// Repeated clicks belong to measurement, slice picking or group picking when
+// those are active; otherwise a double-click anchors the camera on the atom.
+renderer.allowsDoubleTapAnchor = () => !(sliceControls?.isPicking() || selectionGroupControls?.getInteractionState().enabled
+  || document.getElementById('measure-mode')?.checked);
+
 function selectGroupAtomIndices(indices) {
   const frame = state.frame;
   if (!frame || !selectionGroupControls?.getInteractionState().enabled) return;
@@ -423,7 +433,7 @@ atomEyeTools = initializeAtomEyeTools({
       if (!analysis.enabled) continue;
       const outputs = kind === 'coordination' ? ['coordination']
         : kind === 'strain' ? STRAIN_FIELDS
-          : kind === 'ptm' ? [ANALYSES[kind].name, 'ptmRmsd', 'ptmDistance']
+          : kind === 'ptm' ? [ANALYSES[kind].name, ...PTM_EXTRA_OUTPUTS.map(([field]) => field)]
             : kind === 'centrosymmetry' && analysis.parameters?.mode === 'auto'
               ? [ANALYSES[kind].name, 'centralSymmetryStructureType', 'centralSymmetryNeighbors']
               : [ANALYSES[kind].name];
@@ -940,7 +950,7 @@ async function classifyStructureEntries(entries, originLabel, isCurrent) {
         if (!isCurrent()) return;
         const detectedFormat = detectStructureFormatHeader(header);
         const filenameHint = inferStructureFormatFromPath(entry.relativePath);
-        format = detectedFormat ?? (['cfg', 'xyz', 'pdb'].includes(filenameHint) ? filenameHint : null);
+        format = detectedFormat ?? (['cfg', 'xyz', 'pdb', 'poscar'].includes(filenameHint) ? filenameHint : null);
       }
       classified[index] = { ...entry, format };
       completed += 1;
@@ -959,7 +969,7 @@ async function unrecognizedFilesMessage(candidates) {
   const first = candidates[0];
   const preview = await first.file.slice(0, 120).text();
   const compactPreview = preview.replace(/\s+/g, ' ').trim().slice(0, 72) || '(empty file)';
-  return `No CFG, LAMMPS, XYZ or PDB data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
+  return `No CFG, LAMMPS, XYZ, PDB or POSCAR data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
 }
 
 function showSourceChooser(catalog, originLabel, entries = state.availableEntries, { singleFiles = false } = {}) {
@@ -1292,7 +1302,7 @@ function configureSourceUi(result) {
 function sourceFormatLabel(format) {
   const sequence = format.endsWith('-sequence');
   const base = sequence ? format.slice(0, -9) : format;
-  return `${({ cfg: 'CFG', 'lammps-dump': 'LAMMPS', xyz: 'XYZ', pdb: 'PDB' })[base] ?? base.toUpperCase()}${sequence ? ' · sequence' : ''}`;
+  return `${({ cfg: 'CFG', 'lammps-dump': 'LAMMPS', 'lammps-data': 'LAMMPS data', xyz: 'XYZ', pdb: 'PDB', poscar: 'POSCAR' })[base] ?? base.toUpperCase()}${sequence ? ' · sequence' : ''}`;
 }
 
 async function showFrame(index) {
@@ -1806,7 +1816,7 @@ function refreshColorOptions() {
   for (const [kind, { name, label, prefix }] of Object.entries(ANALYSES)) {
     if (state.analysis[kind].enabled && elements[`${prefix}-state`].textContent !== 'Failed') {
       const outputs = kind === 'strain' ? STRAIN_FIELDS.map(field => [field, field === name ? label : field])
-        : kind === 'ptm' ? [[name, label], ['ptmRmsd', 'PTM RMSD (best fit)'], ['ptmDistance', 'PTM nearest-neighbor distance [Å]']]
+        : kind === 'ptm' ? [[name, label], ...PTM_EXTRA_OUTPUTS]
           : [[name, label]];
       for (const [field, fieldLabel] of outputs) {
         if (!propertyNames.has(field)) elements['color-mode'].append(option(`property:${field}`, `${fieldLabel} (calculating…)`));
@@ -2194,7 +2204,8 @@ function storePtmResult(frame, result, parameters, expose = true) {
   if (!result.structures) return;
   frame.ptm = { key: JSON.stringify({ flags: parameters.flags, rmsdCutoff: parameters.rmsdCutoff }),
     structures: result.structures, rmsd: result.rmsd, scales: result.scales,
-    deformation: result.deformation, distances: result.distances };
+    deformation: result.deformation, distances: result.distances,
+    orientations: result.orientations, orderings: result.orderings };
   if (!expose) return;
   const fromStrain = Boolean(result.atomicShearStrain);
   const metadata = { analysisKind: 'ptm', analysisMs: fromStrain ? (result.ptmElapsedMs ?? result.elapsedMs) : result.elapsedMs,
@@ -2208,6 +2219,16 @@ function storePtmResult(frame, result, parameters, expose = true) {
     { ...metadata, name: 'ptmRmsd', displayName: 'PTM RMSD (best fit)', data: result.rmsd },
     { ...metadata, name: 'ptmDistance', displayName: 'PTM nearest-neighbor distance', unit: 'Å', data: result.distances },
   ];
+  if (result.orderings && result.orientations) {
+    properties.push({ ...metadata, name: 'ptmOrderingType', displayName: 'PTM chemical ordering',
+      data: result.orderings, categories: PTM_ORDERING_TYPES });
+    // Unit quaternion (w, x, y, z) of the lattice orientation, NaN when unmatched.
+    ['W', 'X', 'Y', 'Z'].forEach((axis, component) => {
+      const data = new Float32Array(result.orientations.length / 4);
+      for (let atom = 0; atom < data.length; atom += 1) data[atom] = result.orientations[atom * 4 + component];
+      properties.push({ ...metadata, name: `ptmOrientation${axis}`, displayName: `PTM orientation q${axis.toLowerCase()}`, data });
+    });
+  }
   for (const property of properties) replaceAnalysisProperty(frame, property);
 }
 

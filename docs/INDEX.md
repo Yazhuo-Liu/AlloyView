@@ -4,7 +4,7 @@ AlloyView opens atomistic structures, renders them with WebGL 2, and performs lo
 
 ## Start with a structure
 
-Open a CFG, LAMMPS text dump, XYZ or PDB file using **Open local**, or drop a file onto the viewer. Open a numbered sequence with **Choose files** or **Choose folder**. The **×** beside the structure name closes the source and returns to the homepage.
+Open a CFG, LAMMPS dump or data, XYZ, PDB or VASP POSCAR file using **Open local**, or drop a file onto the viewer. Open a numbered sequence with **Choose files** or **Choose folder**. The **×** beside the structure name closes the source and returns to the homepage.
 
 The [user guide](USER_GUIDE.md) describes the full workflow; [file formats](FORMATS.md) lists coordinate, cell and property conventions. Configuration import/export is always available directly below the structure summary.
 
@@ -30,7 +30,7 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 
 ## Understand and verify the implementation
 
-[Analysis implementation](STRUCTURE_ANALYSIS.md) explains crystal classification, ideal lattice strain and the Worker scheduler. [Validation](VALIDATION.md) describes tests and comparisons. [Deployment](DEPLOYMENT.md) explains the static build, including these documentation pages.
+[Analysis implementation](STRUCTURE_ANALYSIS.md) explains crystal classification, ideal lattice strain and the Worker scheduler. [Validation](VALIDATION.md) describes tests and comparisons. [Deployment](DEPLOYMENT.md) explains the static build, including these documentation pages. The [improvement backlog](TODO.md) lists planned performance work and features from OVITO and AtomEye, in priority order.
 
 [DXA implementation review](DXA_REVIEW.md) records the source, licensing and
 CPU/Wasm algorithm and historical WebGPU research. The current DXA tool uses

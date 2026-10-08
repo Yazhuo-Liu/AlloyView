@@ -1,3 +1,4 @@
+import { atomIdSet, frameAtomIdLookup, hasAtomId } from './data/atom-ids.js';
 /** Named selections store source atom IDs, never row or replicated-image indices.
  * Immutable group arrays also let the display path cache membership styling.
  */
@@ -143,10 +144,7 @@ export function selectionGroupVisibility(frame, groups = []) {
   if (!frame?.ids?.length || !groups.length) return null;
   let entry = visibilityCache.get(groups);
   if (!entry) {
-    const hiddenIds = new Set();
-    for (const group of groups) {
-      if (!group.visible) for (const atomId of group.atomIds) hiddenIds.add(String(atomId));
-    }
+    const hiddenIds = atomIdSet(groups.flatMap(group => group.visible ? [] : group.atomIds));
     entry = { hiddenIds, masks: new WeakMap() };
     if (Object.isFrozen(groups)) visibilityCache.set(groups, entry);
   }
@@ -155,7 +153,7 @@ export function selectionGroupVisibility(frame, groups = []) {
   if (cached?.length === frame.ids.length) return cached.mask;
   let mask = null;
   for (let index = 0; index < frame.ids.length; index += 1) {
-    if (!entry.hiddenIds.has(String(frame.ids[index]))) continue;
+    if (!hasAtomId(entry.hiddenIds, frame.ids[index])) continue;
     if (!mask) { mask = new Uint8Array(frame.ids.length); mask.fill(255); }
     mask[index] = 0;
   }
@@ -166,14 +164,12 @@ export function selectionGroupVisibility(frame, groups = []) {
 export function summarizeSelectionGroups(frame, state) {
   let entry = frame && frameIdsCache.get(frame);
   if (!entry || entry.ids !== frame.ids) {
-    const frameIds = new Set();
-    for (const id of frame?.ids ?? []) frameIds.add(String(id));
-    entry = { ids: frame?.ids, frameIds };
+    entry = { ids: frame?.ids, hasFrameId: frameAtomIdLookup(frame?.ids ?? []) };
     if (frame) frameIdsCache.set(frame, entry);
   }
-  const { frameIds } = entry;
+  const { hasFrameId } = entry;
   return state.groups.map((group) => ({ id: group.id, totalCount: group.atomIds.length,
-    matchedCount: group.atomIds.reduce((count, id) => count + Number(frameIds.has(String(id))), 0) }));
+    matchedCount: group.atomIds.reduce((count, id) => count + Number(hasFrameId(id)), 0) }));
 }
 
 function uniqueAtomIds(value) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculatePtm } from '../src/analysis/ptm.js';
+import { calculatePtm, PTM_ORDERING_TYPES } from '../src/analysis/ptm.js';
 import { calculateAtomicStrain, STRAIN_FIELDS } from '../src/analysis/atomic-strain.js';
 import { referenceForElement, validateReferences } from '../src/analysis/lattice.js';
 import { createCell } from '../src/data/model.js';
@@ -53,6 +53,28 @@ test('PTM matches periodic primitive cells, graphene and an icosahedral center',
     vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10], pbc: [false, false, false],
   }) };
   assert.equal((await calculatePtm(ico, { flags: 8 })).structures[0], 4);
+});
+
+test('PTM reports binary chemical ordering from atom types and a unit lattice orientation', async () => {
+  const withTypes = (frame, type) => ({ ...frame, types: Uint16Array.from({ length: frame.ids.length }, (_, atom) => type(atom)), typeLabels: ['A', 'B'] });
+  const label = id => PTM_ORDERING_TYPES.find(item => item.id === id).label;
+  const count = values => Array.from(values).reduce((counts, id) => ({ ...counts, [label(id)]: (counts[label(id)] ?? 0) + 1 }), {});
+  // Cu3Au: the corner site of each cubic cell is the minority species.
+  const l12 = await calculatePtm(withTypes(crystalFrame('fcc', 4), atom => atom % 4 === 0 ? 1 : 0));
+  assert.deepEqual(count(l12.orderings), { 'L1₂ (A-site)': 192, 'L1₂ (B-site)': 64 });
+  const b2 = await calculatePtm(withTypes(crystalFrame('bcc', 4), atom => atom % 2));
+  assert.deepEqual(count(b2.orderings), { B2: 128 });
+  const pure = await calculatePtm(crystalFrame('fcc', 4));
+  assert.deepEqual(count(pure.orderings), { Pure: 256 });
+  // Three species around every atom have no binary ordering.
+  assert.deepEqual(count((await calculatePtm(withTypes(crystalFrame('fcc', 4), atom => atom % 3))).orderings), { Other: 256 });
+  assert.equal(pure.orientations.length, 256 * 4);
+  for (let atom = 0; atom < 256; atom += 1) {
+    const [w, x, y, z] = pure.orientations.subarray(atom * 4, atom * 4 + 4);
+    assert.ok(Math.abs(Math.hypot(w, x, y, z) - 1) < 1e-12 && Math.abs(Math.abs(w) - 1) < 1e-9, 'an axis-aligned crystal has the identity orientation');
+  }
+  const rejected = await calculatePtm(withTypes(crystalFrame('bcc', 4), atom => atom % 2), { flags: 1 });
+  assert.ok(rejected.orderings.every(id => id === 0) && rejected.orientations.every(Number.isNaN), 'unmatched atoms have no ordering or orientation');
 });
 
 test('PTM template selection and RMSD cutoff reject fits; zero disables the cutoff', async () => {

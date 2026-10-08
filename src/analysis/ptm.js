@@ -12,8 +12,25 @@ export const PTM_TYPES = Object.freeze([...STRUCTURE_TYPES,
   { id: 8, label: 'Graphene', description: 'Graphene coordination', color: [160, 120, 254] },
 ]);
 
+// PTM's chemical ordering of a matched environment. It needs exactly two
+// species around an atom; environments with one species are "Pure" and
+// those with three or more species are "Other".
+export const PTM_ORDERING_TYPES = Object.freeze([
+  { id: 0, label: 'Other', description: 'Unmatched, or no binary ordering', color: [242, 242, 242] },
+  { id: 1, label: 'Pure', description: 'All neighbors share the central species', color: [180, 180, 180] },
+  { id: 2, label: 'L1₀', description: 'Tetragonal binary order (CuAu type)', color: [129, 245, 104] },
+  { id: 3, label: 'L1₂ (A-site)', description: 'Cu₃Au order, central atom on a majority site', color: [76, 160, 255] },
+  { id: 4, label: 'L1₂ (B-site)', description: 'Cu₃Au order, central atom on a minority site', color: [255, 160, 76] },
+  { id: 5, label: 'B2', description: 'CsCl order', color: [230, 70, 70] },
+  { id: 6, label: 'Zincblende', description: 'SiC order on a diamond lattice', color: [130, 90, 220] },
+  { id: 7, label: 'Hex. BN', description: 'Boron-nitride order on graphene', color: [210, 210, 60] },
+].map(Object.freeze));
+
 export const PTM_FIELDS = Object.freeze({ structures: [Uint8Array, 1], rmsd: [Float32Array, 1],
-  scales: [Float64Array, 1], deformation: [Float64Array, 9], distances: [Float32Array, 1] });
+  scales: [Float64Array, 1], deformation: [Float64Array, 9], distances: [Float32Array, 1],
+  orientations: [Float64Array, 4], orderings: [Uint8Array, 1] });
+// One packed kernel record: see alloy_ptm_atom in wasm/ptm.cpp.
+const PTM_RECORD_DOUBLES = 18;
 
 // The generated module targets browsers without static Node imports. Node's
 // scientific tests supply the same binary directly (fetch cannot read file:).
@@ -80,7 +97,7 @@ export async function warmupPtm({ onPhase = () => {} } = {}) {
   return { warmed: true, kernelReused, wasmMemoryBytes: module.HEAPU8.byteLength };
 }
 
-export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, preparedNeighbors,
+export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, preparedNeighbors, types = frame.types,
   onPhase = () => {}, onAtoms = () => {}, ...range } = {}) {
   validatePtmParameters({ rmsdCutoff, flags });
   const prepared = preparedNeighbors === undefined ? null : validatePreparedPtmNeighbors(frame, preparedNeighbors,
@@ -94,10 +111,17 @@ export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, prepare
   const { startAtom, endAtom } = atomRange(prepared ? frame.fractional.length / 3 : search.count, range);
   const count = endAtom - startAtom;
   const result = Object.fromEntries(Object.entries(PTM_FIELDS).map(([name, [Type, stride]]) => [name,
-    name === 'structures' ? new Type(count * stride) : new Type(count * stride).fill(NaN)]));
+    Type === Uint8Array ? new Type(count * stride) : new Type(count * stride).fill(NaN)]));
   const cache = new Map();
-  const output = module._malloc(13 * 8);
+  const output = module._malloc(PTM_RECORD_DOUBLES * 8);
   if (!output) throw new Error('PTM output allocation failed.');
+  // Species of every atom a neighborhood may reach; only ordering uses them.
+  const sourceCount = prepared ? frame.fractional.length / 3 : search.count;
+  const typePointer = ArrayBuffer.isView(types) && types.length === sourceCount ? module._malloc(sourceCount * 4) : 0;
+  if (typePointer) {
+    module.HEAP32.set(types, typePointer >> 2);
+    module._alloy_ptm_set_types(typePointer, sourceCount);
+  }
   neighborContext = { search, cache, preparedNeighbors: prepared };
   try {
     onPhase('analyzing');
@@ -114,17 +138,20 @@ export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, prepare
       }
       const error = module._alloy_ptm_atom(atom, flags, output);
       if (error) throw new Error(`PTM failed for atom ${atom + 1} (code ${error}).`);
-      const data = module.HEAPF64.subarray(output >> 3, (output >> 3) + 13);
+      const data = module.HEAPF64.subarray(output >> 3, (output >> 3) + PTM_RECORD_DOUBLES);
       result.rmsd[index] = data[1]; // Retain best-fit RMSD even for rejected fits.
       if (!data[0] || (rmsdCutoff > 0 && data[1] > rmsdCutoff)) continue;
       result.structures[index] = data[0];
       result.scales[index] = data[2];
       result.distances[index] = data[3];
       result.deformation.set(data.subarray(4, 13), index * 9);
+      result.orientations.set(data.subarray(13, 17), index * 4);
+      result.orderings[index] = typePointer ? data[17] : 0;
     }
     onAtoms(count, count);
   } finally {
     module._free(output);
+    if (typePointer) { module._alloy_ptm_set_types(0, 0); module._free(typePointer); }
     // The reusable module must not retain coordinates from a closed source.
     neighborContext = null;
   }

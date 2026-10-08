@@ -66,6 +66,30 @@ test('finite shear and rigid rotation use Green-Lagrange strain', () => {
   near(rotated.referenceF21, Math.sin(angle));
 });
 
+test('D²min vanishes for affine deformation and equals the direct non-affine residual otherwise', () => {
+  const reference = crystalFrame('fcc', 3);
+  const sheared = calculate(deform(reference, [1, 0.04, 0, 0, 1, 0, 0.02, 0, 0.97]), reference);
+  assert.ok(sheared.referenceD2min.every(value => value === 0), 'homogeneous deformation has no non-affine residual');
+  let seed = 5; const noise = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31 - 0.5) * 0.01;
+  const current = { ...reference, fractional: reference.fractional.map(value => value + noise()) };
+  const result = calculate(current, reference);
+  const L = reference.cell.vectors[0], count = reference.ids.length, cutoff = 3.3;
+  const image = (fractional, i, j, axis) => { const delta = fractional[j * 3 + axis] - fractional[i * 3 + axis]; return (delta - Math.round(delta)) * L; };
+  for (const atom of [0, 17, 63, 107]) {
+    const F = Array.from({ length: 9 }, (_, k) => result[`referenceF${Math.floor(k / 3) + 1}${k % 3 + 1}`][atom]);
+    let direct = 0;
+    for (let other = 0; other < count; other += 1) {
+      if (other === atom) continue;
+      const D = [0, 1, 2].map(axis => image(reference.fractional, atom, other, axis));
+      if (Math.hypot(...D) > cutoff) continue;
+      const d = [0, 1, 2].map(axis => image(current.fractional, atom, other, axis));
+      for (let row = 0; row < 3; row += 1) direct += (d[row] - F[row * 3] * D[0] - F[row * 3 + 1] * D[1] - F[row * 3 + 2] * D[2]) ** 2;
+    }
+    assert.ok(direct > 1e-4, 'the perturbation is non-affine');
+    assert.ok(Math.abs(result.referenceD2min[atom] - direct) <= 1e-4 * direct, `atom ${atom}: ${result.referenceD2min[atom]} vs ${direct}`);
+  }
+});
+
 test('stable ID mapping follows reordered atoms and preserves changed fractional geometry', () => {
   const reference = crystalFrame('fcc');
   const transformed = deform(reference, [1.05, .08, 0, 0, .97, 0, 0, 0, 1]);

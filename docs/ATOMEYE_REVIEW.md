@@ -1,7 +1,7 @@
 # AtomEye source review
 
 Review date: 2026-10-01  
-Browser migration status updated: 2026-10-03
+Browser migration status updated: 2026-10-07 (remaining work: [improvement backlog](TODO.md))
 Upstream: <https://github.com/jameskermode/AtomEye>  
 Pinned commit: `c418eb2553f6793460d4a956236fc698c39fbe74`
 
@@ -112,7 +112,7 @@ PTM, to this source tree.
 | Pair cutoffs, neighbor/bond graph, and coordination-based visibility | `Atoms/Neighborlist.c`, `A3/rcut_patch.c`, and `A3/utils.c` maintain species-pair cutoffs and bond/coordination display state. | **Implemented independently for bonds.** Worker-built graphs support element-pair cutoff overrides and periodic images; WebGL instanced cylinders reuse the source graph under display replication. The original coordination tool retains its separate uniform-cutoff, distinct-ID convention. |
 | Auxiliary scalar coloring and thresholds | `A3/A.c` and `A3/utils.c` select auxiliary arrays, colormaps, saturation, and visibility thresholds. | **Implemented in browser form.** Numeric source/analysis properties share ten color maps, per-property Auto/fixed limits, and optional out-of-range hiding. |
 | Distance, bond-angle, dihedral, and local atom inquiry | `doc/atomeye.html` and `A3/info.c` document last-2/3/4 atom geometric queries. | **Implemented independently.** Multi-picking measures distance, angle and dihedral with selectable periodic-image treatment. Atom ID lookup, camera centering and single-atom appearance overrides extend the existing inquiry panel. |
-| Vector-field arrows | Upstream README documents `draw_arrows` for consecutive auxiliary triplets and overlays. | **Implemented independently for one field.** Displacement follows stable IDs and a chosen reference frame; force/velocity use imported vector families, and custom XYZ has per-axis scales. Arrows support anchoring, linked/independent dimensions and 3D or camera-facing 2D geometry. Multiple simultaneous overlays remain a gap. |
+| Vector-field arrows | Upstream README documents `draw_arrows` for consecutive auxiliary triplets and overlays. | **Implemented independently, with multiple fields.** Displacement follows stable IDs and a chosen reference frame; force/velocity use imported vector families, and custom XYZ has per-axis scales. Arrows support anchoring, linked/independent dimensions and 3D or camera-facing 2D geometry. Several fields can be shown at once, each with its own source and style (see [vectors](features/vectors.md)). |
 | Voronoi grain construction | `Atoms/Voronoi.c` rotates/cuts copies around seed sites to generate polycrystals and removes close GB atoms. | **Do not mislabel as Voronoi analysis.** It is a structure-construction tool, not per-atom Voronoi volume/index computation. It belongs in a future builder module, if at all. |
 
 Normalized central symmetry, independently implemented adaptive/fixed CNA,
@@ -133,8 +133,8 @@ documented separately in [Structure analysis](STRUCTURE_ANALYSIS.md).
 | Upstream workflow | Browser status |
 | --- | --- |
 | Extended XYZ and PDB input; optional NetCDF | Plain/Extended XYZ and fixed-width PDB, including indexed trajectories and numbered sequences, are implemented independently. NetCDF remains unsupported. |
-| Element/single-atom colors, radii and hiding | Editable type and atom overrides are implemented and saved in recipes. External color/radius-file import and color tiling blocks remain unsupported. |
-| Find an atom and anchor the camera | ID lookup and selected-atom camera centering are implemented. Crystal-origin manipulation and the native command interface are not reproduced. |
+| Element/single-atom colors, radii and hiding | Editable type and atom overrides are implemented and saved in recipes. AtomEye's color-tiling tracer is implemented as **Displacement → Color tiles** (see [displacement](features/displacement.md#color-tiles)). External color/radius-file import remains unsupported. |
+| Find an atom and anchor the camera | ID lookup, selected-atom camera centering and double-click/double-tap anchoring on the picked image are implemented. Numeric crystal-origin shifts are implemented as the periodic display origin; drag-based origin shifting and the native command interface are not reproduced. |
 | Multiple viewports | A movable, resizable second view shares frame/results with an independent camera, its own PNG export and an Apply to main control. Recipes retain its viewport-relative layout; six-view PNG contact sheets are also available. The native arbitrary-window/thread model remains separate. |
 | Screenshots and animation scripts | PNG/JPG and cancellable selected-frame PNG ZIP export are implemented. JSON recipes restore processing, but do not interpret arbitrary AtomEye commands or encode movies. |
 | Save atom indices | Visible source-ID list export is implemented; display replicas do not duplicate IDs. |

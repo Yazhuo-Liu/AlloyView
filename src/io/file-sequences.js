@@ -1,4 +1,9 @@
-const SUPPORTED_EXTENSION = /\.(?:cfg|dump|lmp|lammpstrj|lammpstraj|xyz|extxyz|pdb|ent|txt)$/i;
+import { looksLikeLammpsData } from './lammps-data.js';
+import { looksLikePoscar } from './poscar.js';
+
+const SUPPORTED_EXTENSION = /\.(?:cfg|dump|lmp|lammpstrj|lammpstraj|data|lammps|xyz|extxyz|pdb|ent|vasp|poscar|txt)$/i;
+// VASP names its structure files without an extension.
+const VASP_NAME = /^(?:POSCAR|CONTCAR)/i;
 const NUMBER_RUN = /\d+/g;
 
 const naturalCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
@@ -9,12 +14,14 @@ export function isSupportedStructurePath(path) {
 
 export function isPotentialStructurePath(path) {
   const filename = String(path).replaceAll('\\', '/').split('/').at(-1);
-  return isSupportedStructurePath(path) || /\d/.test(filename);
+  return isSupportedStructurePath(path) || /\d/.test(filename) || VASP_NAME.test(filename);
 }
 
 export function inferStructureFormatFromPath(path) {
   const filename = String(path).replaceAll('\\', '/').split('/').at(-1);
   if (/(?:^|\.)cfg(?:\.|$)/i.test(filename)) return 'cfg';
+  if (VASP_NAME.test(filename) || /\.(?:vasp|poscar)$/i.test(filename)) return 'poscar';
+  if (/(?:^|\.)data(?:\.|$)/i.test(filename)) return 'lammps-data';
   if (/(?:^|\.)(?:dump|lmp|lammpstrj|lammpstraj)(?:\.|$)/i.test(filename)) return 'lammps-dump';
   if (/(?:^|\.)(?:xyz|extxyz)(?:\.|$)/i.test(filename)) return 'xyz';
   if (/(?:^|\.)(?:pdb|ent)(?:\.|$)/i.test(filename)) return 'pdb';
@@ -26,7 +33,10 @@ export function detectStructureFormatHeader(text) {
   const firstDataLine = lines.find((line) => line.trim() && !line.trim().startsWith('#'))?.trim() ?? '';
   if (/^Number\s+of\s+particles\s*=\s*\d+/i.test(firstDataLine)) return 'cfg';
   if (/^ITEM:\s+TIMESTEP\b/i.test(firstDataLine)) return 'lammps-dump';
+  // A data file's free-text title can be anything, so check its header first.
+  if (looksLikeLammpsData(text)) return 'lammps-data';
   if (/^\d+$/.test(firstDataLine) && Number(firstDataLine) > 0) return 'xyz';
+  if (looksLikePoscar(text)) return 'poscar';
   if (lines.some((line) => /^(?:HEADER|TITLE|CRYST1|MODEL|ATOM|HETATM)(?:\s|$)/.test(line))) return 'pdb';
   return null;
 }

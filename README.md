@@ -14,7 +14,7 @@
 </p>
 
 AlloyView is a browser-based viewer for atomistic structures and trajectories
-in metals and alloys. Open AtomEye CFG, LAMMPS text dumps, XYZ or PDB, inspect
+in metals and alloys. Open AtomEye CFG, LAMMPS dumps and data files, XYZ, PDB or VASP POSCAR, inspect
 atoms, calculate structural properties, and export figures. Files are parsed and
 analyzed on your device; structure data is never uploaded by the application.
 
@@ -31,7 +31,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 
 ## Features
 
-- AtomEye CFG, LAMMPS text dumps, plain/extended XYZ and PDB, including
+- AtomEye CFG, LAMMPS text dumps and data files, plain/extended XYZ, PDB and
+  VASP POSCAR/CONTCAR, including
   triclinic cells, numeric scalar/vector properties and periodic boundary flags.
 - Individual files, multi-frame trajectories and numbered structure sequences,
   with a timeline and continuous playback.
@@ -309,14 +310,15 @@ modules from mixing file-loading protocols after deployment. See the
 | Topic | Reference |
 | --- | --- |
 | Detailed capabilities, local setup and current limits | [User & development guide](docs/USER_GUIDE.md) |
-| CFG, LAMMPS, XYZ and PDB conventions | [Supported formats](docs/FORMATS.md) |
+| CFG, LAMMPS, XYZ, PDB and POSCAR conventions | [Supported formats](docs/FORMATS.md) |
 | Static hosting and GitHub Pages | [Deployment](docs/DEPLOYMENT.md) |
 | Executed tests and benchmark results | [Validation record](docs/VALIDATION.md) |
 | AtomEye design references and source provenance | [AtomEye review](docs/ATOMEYE_REVIEW.md) |
 | CNA, PTM, ideal-lattice strain, central symmetry and parallel execution | [Structure analysis](docs/STRUCTURE_ANALYSIS.md) |
 
-WebGL 2 is required. Compressed/binary dumps, LAMMPS data/input files and
-LAMMPS general triclinic `abc origin` dumps and NetCDF are not supported.
+WebGL 2 is required. Compressed/binary dumps, LAMMPS input scripts, general
+triclinic `abc origin` boxes, XDATCAR and NetCDF are not supported. LAMMPS data
+files and VASP POSCAR/CONTCAR open as single structures.
 Coordination uses one global cutoff; bond graphs have separate element-pair
 overrides. Reference-frame strain requires explicit stable atom IDs.
 Voronoi has CPU/Wasm and GPU paths, with exact CPU recovery when GPU geometry

@@ -13,6 +13,32 @@ const derivedCartesianPositions = new WeakMap();
  * Unmatched current atoms remain NaN; they do not produce arrow fragments.
  * Disable minimumImage when trajectory coordinates have already been unwrapped.
  */
+export const MAX_COLOR_TILES = 64;
+export const COLOR_TILE_CATEGORIES = Object.freeze([
+  { id: 0, label: 'Tile A', description: 'Even checkerboard tile in the reference frame', color: [232, 232, 232] },
+  { id: 1, label: 'Tile B', description: 'Odd checkerboard tile in the reference frame', color: [70, 110, 190] },
+].map(Object.freeze));
+
+/** AtomEye-style color tiling: the checkerboard parity of each atom's
+ * reference position, cut into `tiles` (a, b, c) pieces along the reference
+ * cell vectors; 0 leaves an axis undivided. Unmatched atoms are NaN. Atoms
+ * keep this label in later frames, so slip and shear show as offset tiles. */
+export function colorTileLabels(referenceFrame, referenceMapping, tiles) {
+  if (!Array.isArray(tiles) || tiles.length !== 3 || tiles.some(count => !Number.isInteger(count) || count < 0 || count > MAX_COLOR_TILES)) {
+    throw new Error(`Color tiles need three integers from 0 to ${MAX_COLOR_TILES}.`);
+  }
+  const labels = new Float32Array(referenceMapping.length).fill(NaN), fractional = referenceFrame.fractional;
+  for (let atom = 0; atom < referenceMapping.length; atom += 1) {
+    const reference = referenceMapping[atom];
+    if (reference < 0) continue;
+    let tile = 0;
+    // The tolerance keeps atoms on a tile boundary (0.5 with 2 tiles) together.
+    for (let axis = 0; axis < 3; axis += 1) if (tiles[axis]) tile += Math.floor(tiles[axis] * fractional[reference * 3 + axis] + 1e-6);
+    labels[atom] = ((tile % 2) + 2) % 2;
+  }
+  return labels;
+}
+
 export async function computeDisplacements(frame, reference, {
   minimumImage = true, signal, onProgress = () => {},
 } = {}) {

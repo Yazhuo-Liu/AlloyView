@@ -2,6 +2,47 @@
 
 Validation date: 2026-10-07 (America/New_York)
 
+## Backlog phase 1: performance and feature additions (2026-10-07)
+
+The small items of the [improvement backlog](TODO.md) were implemented and
+checked as follows.
+
+- **DXA kernels** were rebuilt with native Wasm exceptions, SIMD and LTO and
+  return per-atom labels as bytes. Single-thread SHA-256 hashes of the complete
+  normalized result match the previous build for 14 cases on both the plain and
+  the threaded kernel: the four examples (NiGB replicated 1×1×2), six NEB
+  frames, synthetic FCC/BCC/HCP and the HEA example analyzed as HCP. The DXA
+  browser suite and the isolated/nonisolated parallel suite pass.
+- **PTM** was rebuilt with orientation and ordering outputs. Structure type,
+  RMSD, scale, deformation and distance are identical to the previous kernel on
+  the HEA, Fe-loop and NEB examples and on synthetic crystals; L1₂, B2, pure and
+  three-species fixtures give the expected ordering classes.
+- **Main-thread kernels:** category colors and masks, flattened scalar color
+  maps, numeric atom-ID matching and the CFG parser changes are byte- or
+  element-identical to the previous code on randomized data, edge-case IDs and
+  all 44 example files, including six malformed CFG variants with identical
+  error messages.
+- **D²min** is zero for affine fixtures and matches a direct per-neighbor sum;
+  the WebGPU suite (SwiftShader adapter) compares every reference-strain field,
+  including D²min, with the CPU result.
+- **LAMMPS data and POSCAR** parsers have unit tests for every supported layout
+  and error. A real browser opened an 864-atom L1₂ data file (types named from
+  Masses comments) and a POSCAR, and PTM reported 648 A-site and 216 B-site
+  atoms.
+- **Color tiles** follow atoms across a two-frame slip trajectory, keep the
+  selection while the next frame computes, and are saved in configuration JSON.
+- **Double-click anchoring** is limited to ordinary picking: presses elsewhere
+  and measurement, slice or group picking reset or suppress it. The first
+  browser run caught a spurious anchor between two separate clicks, which this
+  rule fixed.
+- All **1,198 Node tests** pass. Browser suites: smoke, atom details,
+  view/Voronoi, selection hide, advanced tools, topology tools, DXA, DXA
+  parallel, WebGPU and GPU bond statistics.
+- The smoke test's shared-pool check assumed at most six analysis Workers, a
+  rule the scheduler no longer has. The unchanged previous commit also created
+  9 Workers in one of two runs, so the check now uses the real
+  `hardwareConcurrency − 2` limit; two consecutive smoke runs pass.
+
 ## DXA lifetime cleanup and isolated routing (2026-10-07)
 
 DXA private-stage input is retained between chunks of the same stage, then

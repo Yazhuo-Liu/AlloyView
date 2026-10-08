@@ -72,8 +72,9 @@ while cluster merging, ordered mesh connectivity, Burgers-circuit tracing and
 line/junction processing retain serial work. The isolated route uses
 pthreads directly and skips private local-stage snapshot offload.
 The application limits active CPU concurrency to
-`max(1, navigator.hardwareConcurrency - 2)`, shared with ordinary analyses;
-atom count and memory limits can reduce the selected count. Reported logical
+`max(1, navigator.hardwareConcurrency - 2)`, shared with ordinary analyses.
+DXA requests one native thread per 2,048 atoms within that limit; atom count and
+memory limits can reduce the selected count. Reported logical
 processors are not a guarantee of physical cores or reserved OS cores.
 
 The runtime automatically selects the threaded kernel when cross-origin
@@ -184,6 +185,10 @@ remain historical in the [implementation review](../DXA_REVIEW.md); they are
 not an available backend.
 
 ## Limitations
+
+Both DXA kernels are compiled with WebAssembly SIMD and native WebAssembly
+exceptions, so DXA needs Chrome 95, Firefox 100 or Safari 16.4 or newer (the
+rest of AlloyView has no such requirement).
 
 DXA requires a three-dimensional cell and sufficient periodic thickness.
 `NiGB_minimized.cfg` has a thin Z direction: enable **Replicate atoms for

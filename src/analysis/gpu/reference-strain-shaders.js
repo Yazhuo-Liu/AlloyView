@@ -98,6 +98,7 @@ for (var component = 0u; component < 9u; component += 1u) {
   covariance[component] = vec2f(0.0); crossCovariance[component] = vec2f(0.0);
 }
 var neighborCount = 0u;
+var squaredLengths = vec2f(0.0);
 var imageCandidates = 0u;
 var imageWork = 0u;
 var referenceNeighborCount = 0u;`;
@@ -124,6 +125,7 @@ var currentFractional: array<vec2f, 3>;
 for (var axis = 0u; axis < 3u; axis += 1u) { currentFractional[axis] = dsAdd(referenceFractional[axis], resolved.fractional[axis]); }
 let r = referenceCartesian(referenceFractional, false);
 let s = referenceCartesian(currentFractional, true);
+for (var axis = 0u; axis < 3u; axis += 1u) { squaredLengths = dsAdd(squaredLengths, dsMultiply(s[axis], s[axis])); }
 for (var row = 0u; row < 3u; row += 1u) {
   for (var column = 0u; column < 3u; column += 1u) {
     covariance[row * 3u + column] = dsAdd(covariance[row * 3u + column], dsMultiply(r[row], r[column]));
@@ -187,6 +189,19 @@ strainValues[count + index] = dsValue(hydrostatic);
 strainValues[count * 2u + index] = dsValue(numericalZero(dsSubtract(volume, vec2f(1.0, 0.0))));
 for (var component = 0u; component < 6u; component += 1u) { strainValues[count * (component + 3u) + index] = dsValue(tensor[component]); }
 for (var component = 0u; component < 9u; component += 1u) { strainValues[count * (component + 9u) + index] = dsValue(matrix[component]); }
+// D²min = Σ|d|² − 2 Σ F∘C + Σ (F A Fᵀ)ᵢᵢ, as nonAffineSquaredDisplacement on the CPU.
+var fc = vec2f(0.0);
+for (var component = 0u; component < 9u; component += 1u) { fc = dsAdd(fc, dsMultiply(matrix[component], crossCovariance[component])); }
+var faf = vec2f(0.0);
+for (var row = 0u; row < 3u; row += 1u) {
+  for (var column = 0u; column < 3u; column += 1u) {
+    var fa = vec2f(0.0);
+    for (var k = 0u; k < 3u; k += 1u) { fa = dsAdd(fa, dsMultiply(matrix[row * 3u + k], covariance[k * 3u + column])); }
+    faf = dsAdd(faf, dsMultiply(fa, matrix[row * 3u + column]));
+  }
+}
+let residual = dsValue(dsAdd(dsSubtract(squaredLengths, dsMultiply(fc, vec2f(2.0, 0.0))), faf));
+strainValues[count * 18u + index] = select(max(0.0, residual), 0.0, abs(residual) <= dsValue(squaredLengths) * 1e-10);
 flags[currentAtom] = 1u;`;
 
 // Binding 4 is the current-frame coordinate buffer rather than unused species.
@@ -204,5 +219,5 @@ export const REFERENCE_STRAIN_CLEAR_SHADER = `
 @compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid: vec3u) {
   let atom = gid.x; if (atom >= parameters[0]) { return; }
   let undefinedValue = bitcast<f32>(parameters[1]);
-  for (var field = 0u; field < 18u; field += 1u) { strainValues[field * parameters[0] + atom] = undefinedValue; }
+  for (var field = 0u; field < 19u; field += 1u) { strainValues[field * parameters[0] + atom] = undefinedValue; }
 }`;

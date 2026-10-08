@@ -397,7 +397,11 @@ export class AtomPrimitiveLayer {
       field.buffers = old?.buffers ?? (next[0] === field && ![...previous.values()].some(item => item.buffers === this.vectorBuffers)
         ? this.vectorBuffers : this.instances());
       if (old?.vectors !== field.vectors) {
-        indices ??= Uint32Array.from({ length: renderer.atomCount * 2 }, (_, index) => index >> 1);
+        if (!indices) {
+          // A plain loop; Uint32Array.from with a callback is ~20× slower here.
+          indices = new Uint32Array(renderer.atomCount * 2);
+          for (let index = 0; index < indices.length; index += 1) indices[index] = index >> 1;
+        }
         // Original atom indices keep all fields aligned with slices and replicas.
         this.uploadInstances(field.buffers, indices, field.vectors);
       }

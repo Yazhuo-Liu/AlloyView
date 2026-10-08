@@ -8,6 +8,10 @@ import { indexLammpsDump, readLammpsFrame } from '../io/lammps-dump.js';
 import { indexLammpsDumpSeries, readLammpsSeriesFrame } from '../io/lammps-series.js';
 import { indexXyz, readXyzFrame } from '../io/xyz.js';
 import { indexPdb, readPdbFrame } from '../io/pdb.js';
+import { parseLammpsData } from '../io/lammps-data.js';
+import { parsePoscar } from '../io/poscar.js';
+
+const SINGLE_FRAME_PARSERS = { 'lammps-data': parseLammpsData, poscar: parsePoscar };
 
 let source = null;
 let wasmModulePromise;
@@ -33,6 +37,8 @@ self.addEventListener('message', async (event) => {
         frame = await queueCfgSequenceFrame(payload.index, id);
       } else if (['xyz', 'xyz-sequence', 'pdb', 'pdb-sequence'].includes(source.format)) {
         frame = await readIndexedTextFrame(source, payload.index);
+      } else if (SINGLE_FRAME_PARSERS[source.format] && payload.index === 0) {
+        frame = SINGLE_FRAME_PARSERS[source.format](await source.file.text(), source.file.name);
       } else {
         throw new Error('A single CFG file contains only one frame. Select multiple numbered CFG files to load a sequence.');
       }
@@ -69,7 +75,7 @@ async function loadSource(inputFiles, requestId) {
     if (formats.every((format) => format === 'lammps-dump')) return loadLammpsDumpSequence(files, requestId);
     if (formats.every((format) => format === 'xyz')) return loadIndexedTextSource(files, 'xyz', requestId);
     if (formats.every((format) => format === 'pdb')) return loadIndexedTextSource(files, 'pdb', requestId);
-    throw new Error('A numbered file sequence must contain a single format: CFG, LAMMPS text dump, XYZ, or PDB.');
+    throw new Error('A numbered file sequence must contain a single format: CFG, LAMMPS text dump, XYZ, or PDB. LAMMPS data and POSCAR files open one at a time.');
   }
   const [file] = files;
   const header = await file.slice(0, 64 * 1024).text();
@@ -90,7 +96,14 @@ async function loadSource(inputFiles, requestId) {
     return { format: source.format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
   }
   if (format === 'xyz' || format === 'pdb') return loadIndexedTextSource(files, format, requestId);
-  throw new Error('Unrecognized file format. Supported structures are AtomEye CFG, LAMMPS text dump, XYZ / Extended XYZ, and PDB.');
+  if (SINGLE_FRAME_PARSERS[format]) {
+    const startedAt = performance.now();
+    const text = await file.text();
+    source = { file, format, offsets: [0] };
+    const frame = SINGLE_FRAME_PARSERS[format](text, file.name);
+    return { format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
+  }
+  throw new Error('Unrecognized file format. Supported structures are AtomEye CFG, LAMMPS text dump and data files, XYZ / Extended XYZ, PDB, and VASP POSCAR.');
 }
 
 async function loadIndexedTextSource(inputFiles, format, requestId) {

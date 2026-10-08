@@ -369,7 +369,8 @@ export class WebGLRenderer {
     this.voronoiAllCellGeometry = null;
     this.voronoiAllCellLayer?.clear();
     this.updateSceneBounds();
-    gl.finish();
+    // The returned time covers submitting the uploads. Waiting for the GPU
+    // with gl.finish() here would stall every frame change just to time it.
     this.requestRender();
     return performance.now() - startedAt;
   }
@@ -500,7 +501,6 @@ export class WebGLRenderer {
     this.primitiveLayer?.updatePositions(this);
     if (this.dislocationNetwork) this.dislocationLayer?.setNetwork(this, this.dislocationNetwork, this.dislocationOptions);
     this.updateSceneBounds();
-    this.gl.finish();
     this.requestRender();
     return performance.now() - startedAt;
   }

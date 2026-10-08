@@ -12,7 +12,9 @@ The solution is `F = (Σ r Rᵀ)(Σ R Rᵀ)⁻¹`. At least three independent di
 
 Periodic relative changes are resolved in the full triclinic metric while retaining the reference bond's lattice image, including distinct images in primitive cells. Reference and current frames must use the same periodic axes. A wrapped trajectory cannot resolve relative slips beyond the nearest reference image.
 
-Reference-frame strain follows observed atom motion and has a different reference from ideal lattice strain. It does not perform a PTM phase classification or report non-affine D²min.
+The fit's residual is the non-affine squared displacement **referenceD2min** (Å²), `D²min = Σ |r − F R|²` over the same neighbors with the fitted `F`. It is zero for any homogeneous deformation and grows where neighbors move non-affinely, such as shear-transformation zones in metallic glasses and dislocation cores in crystals. As in OVITO, the sum is not divided by the neighbor count, so D²min increases with the cutoff. It is computed from the fit's accumulated sums as `Σ|r|² − 2 Σ F∘(Σ r Rᵀ) + Σ (F (Σ R Rᵀ) Fᵀ)ᵢᵢ`; residuals below 10⁻¹⁰ of `Σ|r|²` are rounding and become zero. CPU and GPU use the same expression.
+
+Reference-frame strain follows observed atom motion and has a different reference from ideal lattice strain. It does not perform a PTM phase classification.
 
 ## GPU acceleration
 

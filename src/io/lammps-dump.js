@@ -272,7 +272,9 @@ function coordinateSetToFractional(coordinateSet, values, cell) {
 }
 
 function addImageFlags(fractional, imageFlags) {
-  return Float32Array.from(fractional, (value, index) => value + imageFlags[index]);
+  const unwrapped = new Float32Array(fractional.length);
+  for (let index = 0; index < fractional.length; index += 1) unwrapped[index] = fractional[index] + imageFlags[index];
+  return unwrapped;
 }
 
 function createDumpCell(bounds, boundaryFlags, triclinic) {

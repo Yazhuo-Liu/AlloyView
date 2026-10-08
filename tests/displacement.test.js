@@ -154,3 +154,16 @@ test('row-order mapping yields to cancellation while preparing large frames', as
   }), { name: 'AbortError' });
   assert.equal(matchingCheckpoint, true);
 });
+
+test('color tiles follow reference reduced coordinates by atom and leave unmatched atoms undefined', async () => {
+  const { colorTileLabels, COLOR_TILE_CATEGORIES } = await import('../src/analysis/displacement.js');
+  const reference = { fractional: Float64Array.of(0.1, 0.2, 0.3, 0.6, 0.2, 0.3, 0.5, 0.7, 0.3, 0.999999, 0.9, 0.9, 0.2, 0.6, 0.1) };
+  const mapping = Int32Array.of(4, 3, 2, 1, 0, -1);
+  const along = colorTileLabels(reference, mapping, [2, 0, 0]);
+  assert.deepEqual(Array.from(along.subarray(0, 5)), [0, 1, 1, 1, 0], 'a boundary at 0.5 belongs to the upper tile');
+  assert.ok(Number.isNaN(along[5]));
+  const checker = colorTileLabels(reference, mapping, [2, 2, 1]);
+  assert.deepEqual(Array.from(checker.subarray(0, 5)), [1, 0, 0, 1, 0]);
+  assert.deepEqual(COLOR_TILE_CATEGORIES.map(category => category.id), [0, 1]);
+  for (const tiles of [[1, 1], [0, -1, 0], [0, 65, 0], [0, 0.5, 0]]) assert.throws(() => colorTileLabels(reference, mapping, tiles), /three integers/);
+});

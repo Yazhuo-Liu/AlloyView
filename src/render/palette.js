@@ -130,26 +130,50 @@ export function visibilityByType(frame, hiddenLabels) {
   return mask;
 }
 
+// Category IDs are usually small non-negative integers. Those use lookup
+// tables; any other value (NaN, negative, fractional or large) takes the Map
+// path, so results match a Map lookup per atom exactly.
+const CATEGORY_TABLE_SIZE = 256;
+// `(id | 0) === id` is Number.isInteger for this range, including -0.
+const isTableCategory = id => id >= 0 && id < CATEGORY_TABLE_SIZE && (id | 0) === id;
+
 export function colorsByCategory(property, hiddenTypes = new Set()) {
   const colors = new Uint8Array(property.data.length * 3);
-  const counts = new Map();
+  const counts = new Map(), tableCounts = new Uint32Array(CATEGORY_TABLE_SIZE);
   const categories = new Map(property.categories.map((item) => [item.id, item]));
+  const fallback = [242, 242, 242], table = new Uint8Array(CATEGORY_TABLE_SIZE * 3);
+  for (let id = 0; id < CATEGORY_TABLE_SIZE; id += 1) table.set(categories.get(id)?.color ?? fallback, id * 3);
   for (let atom = 0; atom < property.data.length; atom += 1) {
-    const id = property.data[atom];
-    colors.set(categories.get(id)?.color ?? [242, 242, 242], atom * 3);
-    counts.set(id, (counts.get(id) ?? 0) + 1);
+    const id = property.data[atom], offset = atom * 3;
+    if (id >= 0 && id < CATEGORY_TABLE_SIZE && (id | 0) === id) {
+      const entry = id * 3;
+      colors[offset] = table[entry]; colors[offset + 1] = table[entry + 1]; colors[offset + 2] = table[entry + 2];
+      tableCounts[id] += 1;
+    } else {
+      colors.set(categories.get(id)?.color ?? fallback, offset);
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
   }
+  const countOf = id => isTableCategory(id) ? tableCounts[id] : counts.get(id) ?? 0;
   return { colors, legend: {
     kind: 'types', title: property.displayName ?? property.name, property,
     atomCount: property.data.length,
-    items: property.categories.map((item) => ({ ...item, count: counts.get(item.id) ?? 0,
+    items: property.categories.map((item) => ({ ...item, count: countOf(item.id),
       visible: !hiddenTypes.has(item.id) })),
   } };
 }
 
 export function visibilityByCategory(property, hiddenTypes) {
   if (hiddenTypes.size === 0) return null;
-  return Uint8Array.from(property.data, (id) => hiddenTypes.has(Number.isFinite(id) ? id : 'NaN') ? 0 : 255);
+  const hidden = new Uint8Array(CATEGORY_TABLE_SIZE), mask = new Uint8Array(property.data.length);
+  for (let id = 0; id < CATEGORY_TABLE_SIZE; id += 1) hidden[id] = hiddenTypes.has(id) ? 1 : 0;
+  for (let atom = 0; atom < mask.length; atom += 1) {
+    const id = property.data[atom];
+    const isHidden = id >= 0 && id < CATEGORY_TABLE_SIZE && (id | 0) === id
+      ? hidden[id] === 1 : hiddenTypes.has(Number.isFinite(id) ? id : 'NaN');
+    mask[atom] = isHidden ? 0 : 255;
+  }
+  return mask;
 }
 
 /** Optional rangeVisibility excludes atoms from range estimates, without changing their colors or source data. */
@@ -201,11 +225,11 @@ export function colorsByProperty(property, limits = null, scheme = 'atomeye', hi
   const relativeTolerance = Number.isFinite(suppliedTolerance) && suppliedTolerance >= 0
     ? Math.max(32 * Number.EPSILON, suppliedTolerance) : 32 * Number.EPSILON;
   const uniform = !limits && !emptyRange && span <= relativeTolerance * Math.max(Math.abs(minimum), Math.abs(maximum));
-  const colors = new Uint8Array(property.data.length * 3);
+  const colors = new Uint8Array(property.data.length * 3), stops = flatColorStops(colorMap.stops);
   for (let atom = 0; atom < property.data.length; atom += 1) {
     const value = property.data[atom];
     if (!Number.isFinite(value)) { colors[atom * 3] = colors[atom * 3 + 1] = colors[atom * 3 + 2] = 130; continue; }
-    writeColorMap(span > 0 && !uniform ? (value - minimum) / span : 0.5, colorMap.stops, colors, atom * 3);
+    writeColorMap(span > 0 && !uniform ? (value - minimum) / span : 0.5, stops, colors, atom * 3);
   }
   return {
     colors,
@@ -276,18 +300,31 @@ export function colorMapGradient(stops) {
   )).join(', ')})`;
 }
 
+// Color-map stops flattened into typed arrays once per map: the per-atom loop
+// then avoids nested-array access while keeping the same arithmetic.
+const flatStopsCache = new WeakMap();
+function flatColorStops(stops) {
+  let flat = flatStopsCache.get(stops);
+  if (!flat) {
+    flat = { count: stops.length, positions: Float64Array.from(stops, stop => stop[0]),
+      rgb: Float64Array.from(stops.flatMap(stop => [stop[1], stop[2], stop[3]])) };
+    flatStopsCache.set(stops, flat);
+  }
+  return flat;
+}
+
 // Interpolated color-map RGB written at `offset`; runs once per atom, so it
 // stores into the output instead of returning a new array.
-function writeColorMap(value, stops, output, offset) {
+function writeColorMap(value, { count, positions, rgb }, output, offset) {
   const clamped = Math.max(0, Math.min(1, value));
   let right = 1;
-  while (right < stops.length && stops[right][0] < clamped) right += 1;
+  while (right < count && positions[right] < clamped) right += 1;
   const left = Math.max(0, right - 1);
-  right = Math.min(stops.length - 1, right);
-  const span = stops[right][0] - stops[left][0];
-  const amount = span > 0 ? (clamped - stops[left][0]) / span : 0;
-  const from = stops[left], to = stops[right];
-  for (let component = 0; component < 3; component++) {
-    output[offset + component] = Math.round(from[component + 1] * (1 - amount) + to[component + 1] * amount);
-  }
+  right = Math.min(count - 1, right);
+  const span = positions[right] - positions[left];
+  const amount = span > 0 ? (clamped - positions[left]) / span : 0;
+  const from = left * 3, to = right * 3;
+  output[offset] = Math.round(rgb[from] * (1 - amount) + rgb[to] * amount);
+  output[offset + 1] = Math.round(rgb[from + 1] * (1 - amount) + rgb[to + 1] * amount);
+  output[offset + 2] = Math.round(rgb[from + 2] * (1 - amount) + rgb[to + 2] * amount);
 }

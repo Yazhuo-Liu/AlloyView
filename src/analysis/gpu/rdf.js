@@ -96,7 +96,8 @@ export async function analyzeGpuRdf(runtime, frame, parameters, { signal, onProg
       signal?.throwIfAborted();
       const endAtom = Math.min(count, startAtom + batchSize);
       await runtime.zeroBuffer(histogram);
-      await runtime.zeroBuffer(corrections);
+      // Only the 16-byte header is read before the counted records.
+      await runtime.zeroBuffer(corrections, 0, 16);
       await runtime.run(RDF_SHADER, bindings, endAtom - startAtom, { signal, context, startAtom, endAtom });
       const batchCounts = await runtime.read(histogram, Uint32Array, bins, { signal });
       const diagnostics = await runtime.read(corrections, Uint32Array, 4, { signal });

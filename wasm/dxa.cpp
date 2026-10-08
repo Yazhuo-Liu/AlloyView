@@ -5,11 +5,13 @@
 #include <ovito/crystalanalysis/modifier/dxa/InterfaceMesh.h>
 #include <ovito/crystalanalysis/modifier/dxa/DislocationTracer.h>
 #include <geometry/DelaunayTessellation.h>
+#include <cstdint>
 #include <cstring>
 #include <unordered_map>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 EM_JS(void, alloy_dxa_progress, (const char* phase, int completed, int total), {
@@ -27,6 +29,10 @@ using namespace Ovito::Delaunay;
 namespace {
 std::string resultJson;
 std::string lastError;
+// Callers that read per-atom labels from memory switch this on; the JSON then
+// omits one number per atom. Headless callers keep the complete JSON.
+bool binaryStructureLabels = false;
+std::vector<uint8_t> resultStructureLabels;
 
 void vectorJson(std::ostream& out, const Vector3& v) {
     out << '[' << v.x() << ',' << v.y() << ',' << v.z() << ']';
@@ -289,7 +295,11 @@ void alloy_dxa_reset_cancel() {
 void alloy_dxa_dispose() {
     activeSession.reset();
     std::string().swap(resultJson);
+    std::vector<uint8_t>().swap(resultStructureLabels);
 }
+void alloy_dxa_binary_labels(int enabled) { binaryStructureLabels = enabled != 0; }
+const uint8_t* alloy_dxa_result_labels_ptr() { return resultStructureLabels.data(); }
+int alloy_dxa_result_labels_count() { return static_cast<int>(resultStructureLabels.size()); }
 
 // Vectors are column vectors; cell[9..11] is the Cartesian origin. Periodicity
 // is encoded in bits 0, 1 and 2, including for a tilted simulation cell.
@@ -299,6 +309,7 @@ int alloy_dxa_prepare(const double* coordinates, int count,
     activeSession.reset();
     lastError.clear();
     std::string().swap(resultJson);
+    std::vector<uint8_t>().swap(resultStructureLabels);
     try {
         requireStage(true);
         if (!coordinates || !cellData || count < 1)
@@ -424,6 +435,7 @@ const int32_t* alloy_dxa_worker_regions_ptr() {
 const char* alloy_dxa_finish() {
     lastError.clear();
     std::string().swap(resultJson);
+    std::vector<uint8_t>().swap(resultStructureLabels);
     try {
         requireStage(true);
         if (!activeSession) throw std::runtime_error("DXA has no active staged analysis.");
@@ -497,14 +509,26 @@ const char* alloy_dxa_finish() {
             }
             out << "]}";
         }
-        out << "],\"totalLength\":" << totalLength << ",\"atomStructureTypes\":[";
+        out << "],\"totalLength\":" << totalLength;
         BufferReadAccess<int32_t> structureAccess(structures);
-        for (int i = 0; i < count; ++i) {
-            if ((i & 1023) == 0) requireStage(true);
-            if (i) out << ',';
-            out << structureAccess[i];
+        if (binaryStructureLabels) {
+            resultStructureLabels.resize(static_cast<size_t>(count));
+            for (int i = 0; i < count; ++i) {
+                if ((i & 1023) == 0) requireStage(true);
+                const int32_t type = structureAccess[i];
+                if (type < 0 || type > 255) throw std::runtime_error("DXA produced an out-of-range structure label.");
+                resultStructureLabels[i] = static_cast<uint8_t>(type);
+            }
+            out << ",\"atomStructureTypesBinary\":true}";
+        } else {
+            out << ",\"atomStructureTypes\":[";
+            for (int i = 0; i < count; ++i) {
+                if ((i & 1023) == 0) requireStage(true);
+                if (i) out << ',';
+                out << structureAccess[i];
+            }
+            out << "]}";
         }
-        out << "]}";
         resultJson = out.str();
         alloy_dxa_progress("DXA complete", 11, 11);
         return resultJson.c_str();

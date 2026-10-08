@@ -21,6 +21,9 @@ const CPU_MODULES = ['voronoi', 'ptm', 'dxa'];
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
   deformation: [Float64Array, 9], distances: [Float32Array, 1] };
+// Standalone PTM also returns orientations and chemical ordering; strain
+// reuses only the fields above as its PTM input.
+const PTM_RESULT_FIELDS = { ...PTM_OUTPUT_FIELDS, orientations: [Float64Array, 4], orderings: [Uint8Array, 1] };
 const PTM_NEIGHBOR_FIELDS = ['counts', 'indices', 'vectors'];
 // GPU PTM neighbors order candidates in emulated binary64 on one device queue,
 // while CPU workers search neighbors in parallel within the fit. On NiGB the
@@ -479,6 +482,10 @@ export class AnalysisPool {
       inputs.types = frame.types;
       if (!ArrayBuffer.isView(frame.types) || frame.types.length !== atomCount) throw new Error('Analysis requires one element type per atom.');
       extraBytes += frame.types.byteLength;
+    } else if (parameters.kind === 'ptm' && ArrayBuffer.isView(frame.types) && frame.types.length === atomCount) {
+      // Types are optional for PTM; they only determine chemical ordering.
+      inputs.types = frame.types;
+      extraBytes += frame.types.byteLength;
     }
     for (const name of ['referenceFractional', 'referenceMapping', 'metricInput', 'currentPositions', 'referencePositions']) {
       if (inputs[name]) {
@@ -505,8 +512,8 @@ export class AnalysisPool {
       neighborBytes = PTM_NEIGHBOR_FIELDS.reduce((bytes, field) => bytes + sharedNeighborTable[field].byteLength, 0);
       if (fullNeighborTable) extraBytes += neighborBytes;
     }
-    const outputFields = EXTRA_OUTPUT_FIELDS[parameters.kind] ?? (parameters.kind === 'ptm' ? PTM_OUTPUT_FIELDS
-      : parameters.kind === 'strain' ? { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : PTM_OUTPUT_FIELDS) }
+    const outputFields = EXTRA_OUTPUT_FIELDS[parameters.kind] ?? (parameters.kind === 'ptm' ? PTM_RESULT_FIELDS
+      : parameters.kind === 'strain' ? { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : PTM_RESULT_FIELDS) }
         : autoCentrosymmetry ? { centrosymmetry: [Float32Array, 1], cspStructureTypes: [Uint8Array, 1], cspNeighborCounts: [Uint8Array, 1] }
           : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] });
     const outputBytesPerAtom = Object.values(outputFields).reduce((sum, [Type, stride]) => sum + Type.BYTES_PER_ELEMENT * stride, 0);
@@ -649,8 +656,8 @@ export class AnalysisPool {
         return { ...metadata, ...values, incomplete: partials.reduce((sum, partial) => sum + (partial.incomplete ?? 0), 0), warning: null };
       }
       if (parameters.kind === 'ptm' || parameters.kind === 'strain') {
-        const fields = parameters.kind === 'ptm' ? PTM_OUTPUT_FIELDS
-          : { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : PTM_OUTPUT_FIELDS) };
+        const fields = parameters.kind === 'ptm' ? PTM_RESULT_FIELDS
+          : { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : PTM_RESULT_FIELDS) };
         const values = Object.fromEntries(Object.entries(fields).map(([name, [Type, stride]]) => [name, new Type(atomCount * stride)]));
         let incomplete = 0;
         for (const partial of partials) {

@@ -166,6 +166,35 @@ test('desktop left drag, right/Shift drag, click and wheel retain their controls
   assert.equal(r.yaw, before);
 });
 
+test('a quick second tap or click on the same atom centers the camera on that replica', () => {
+  const { renderer: r, touch, document } = fixture();
+  const centered = [];
+  r.centerOnPoint = point => centered.push(point);
+  r.pick = function () { this.lastPick = { index: 7, replica: [1, 0, 0], position: [9, 2, 3] }; return 7; };
+  const tap = (x, time, extra) => { touch('pointerdown', 1, x, 220, { timeStamp: time, ...extra }); touch('pointerup', 1, x, 220, { timeStamp: time, ...extra }); };
+  tap(160, 1000); tap(162, 1200);
+  assert.deepEqual(centered, [[9, 2, 3]]);
+  assert.deepEqual(r.picks, [7, 7], 'both taps still select');
+  tap(160, 2000); tap(160, 2400);
+  assert.equal(centered.length, 1, 'taps further apart in time do not center');
+  tap(160, 3000); tap(190, 3100);
+  assert.equal(centered.length, 1, 'taps far apart on screen do not center');
+  const mouse = { pointerType: 'mouse' };
+  tap(160, 4000, mouse); tap(160, 4100, mouse);
+  assert.equal(centered.length, 2, 'a mouse double-click centers too');
+  tap(160, 4500, mouse);
+  document.emit('pointerdown', { target: {} });
+  tap(160, 4600, mouse);
+  assert.equal(centered.length, 2, 'pressing a control between clicks starts over');
+  r.allowsDoubleTapAnchor = () => false;
+  tap(160, 4700, mouse); tap(160, 4800, mouse);
+  assert.equal(centered.length, 2, 'measurement and picking modes keep repeated clicks for themselves');
+  r.allowsDoubleTapAnchor = () => true;
+  r.pick = function () { this.lastPick = null; return -1; };
+  tap(160, 5000); tap(160, 5100);
+  assert.equal(centered.length, 2, 'empty space does not move the camera');
+});
+
 test('click selection routes taps to a group handler while keeping orbit drags', () => {
   const { renderer: r, touch } = fixture();
   const group = [];

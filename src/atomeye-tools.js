@@ -9,7 +9,7 @@ import { createReferenceMappingAsync, REFERENCE_STRAIN_FIELDS } from './analysis
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
 import { measureAtoms } from './measurements.js';
 import { createImageArchive, downloadBlob } from './export-archive.js';
-import { prepareDisplacements } from './analysis/displacement.js';
+import { COLOR_TILE_CATEGORIES, colorTileLabels, MAX_COLOR_TILES, prepareDisplacements } from './analysis/displacement.js';
 import { registerVectorProperties, vectorPropertyNames } from './analysis/vector-properties.js';
 import { availableVectorSources, createVectorField, linkedArrowDimensions, renameVectorFieldProperty, vectorFieldData } from './vector-settings.js';
 import { initializeFloatingWindow } from './floating-window.js';
@@ -200,7 +200,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         else {
           for (const [name, data] of Object.entries(result)) {
             if (data instanceof Float32Array && data.length === frame.ids.length && (name.startsWith('reference') || name === 'localShear')) {
-              replaceAnalysisProperty(frame, { name, unit: '', data, analysisKind: kind });
+              replaceAnalysisProperty(frame, { name, unit: name === 'referenceD2min' ? 'Å²' : '', data, analysisKind: kind });
             }
           }
         }
@@ -219,7 +219,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
 
   function option(value, label) { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; }
   function pendingVectorComponentKind(name) {
-    if (displacement.enabled && Object.values(vectorPropertyNames('displacement')).includes(name)) return 'displacement';
+    if (displacement.enabled && (Object.values(vectorPropertyNames('displacement')).includes(name) || name === 'displacementTile')) return 'displacement';
     for (const [kind, { property }] of Object.entries(JOBS)) {
       if (jobs[kind].enabled && (kind === 'referenceStrain' ? REFERENCE_STRAIN_FIELDS.includes(name) : property === name)) return kind;
     }
@@ -386,6 +386,13 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     if (text !== 'Calculated') $('displacement-status').removeAttribute('title');
     if (status) $('displacement-status').textContent = status;
   }
+  // Blank or invalid entries count as zero, which leaves that axis undivided.
+  function colorTileCounts() {
+    return ['a', 'b', 'c'].map(axis => {
+      const value = $(`displacement-tiles-${axis}`).valueAsNumber;
+      return Number.isInteger(value) ? Math.max(0, Math.min(MAX_COLOR_TILES, value)) : 0;
+    });
+  }
   function clearDisplacementResults() {
     for (const frame of getFrames()) {
       clearAnalysisResults(frame, 'displacement');
@@ -446,16 +453,28 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
               if (current()) $('displacement-status').textContent = analysisProgressText(progress, { frameIndex: getFrameIndex(), kind: 'displacement' });
             } });
           if (!current()) return;
-          cached = { key: resultKey('displacement', parameters, result.gpuRequested), result };
+          cached = { key: resultKey('displacement', parameters, result.gpuRequested), result, referenceMapping: prepared.referenceMapping };
           frame.atomeyeResults ??= {}; frame.atomeyeResults.displacement = cached;
         }
         if (!current()) return;
         const { vectors, magnitudes, unmatched = 0, mappingMode = 'id' } = cached.result;
         registerVectorProperties(frame, { mode: 'displacement', vectors, magnitudes });
+        const tiles = colorTileCounts(), tilesActive = tiles.some(Boolean);
+        if (tilesActive) {
+          const tileKey = JSON.stringify(tiles);
+          if (cached.tiles?.key !== tileKey) {
+            const reference = parameters.referenceFrame === getFrameIndex() ? frame : await getFrameAt(parameters.referenceFrame);
+            if (!current()) return;
+            if (!reference) throw new Error('The displacement reference frame is no longer available.');
+            cached.tiles = { key: tileKey, data: colorTileLabels(reference, cached.referenceMapping, tiles) };
+          }
+          replaceAnalysisProperty(frame, { name: 'displacementTile', displayName: 'Color tile', unit: '', data: cached.tiles.data,
+            categories: COLOR_TILE_CATEGORIES, analysisKind: 'displacement' });
+        } else frame.properties = frame.properties.filter(property => !(property.name === 'displacementTile' && property.analysisKind === 'displacement'));
         configureVectorSelectors(frame);
         displacementState('Calculated', `${(frame.ids.length - unmatched).toLocaleString()} atoms calculated · ${analysisBackendLabel(cached.result)}${Number.isFinite(cached.result.elapsedMs) ? ` · ${Math.round(cached.result.elapsedMs).toLocaleString()} ms` : ''}. Displacement X, Y, Z and magnitude are available in Color by and Vector arrows.${unmatched ? ` ${unmatched.toLocaleString()} unmatched IDs have NaN.` : ''}${mappingMode === 'row-order' ? ' No explicit IDs: matching by row order requires consistent atom ordering.' : ''}`);
         $('displacement-status').title = analysisBackendDetails(cached.result);
-        if (!automatic && colorChoice === getColorChoiceVersion()) chooseProperty('displacementMagnitude');
+        if (!automatic && colorChoice === getColorChoiceVersion()) chooseProperty(tilesActive ? 'displacementTile' : 'displacementMagnitude');
         else refresh();
         onMemoryChange(frame); updateVectors();
       } catch (error) {
@@ -714,7 +733,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     const cutoff = id => Number.isFinite($(id).valueAsNumber) && $(id).valueAsNumber > 0 ? $(id).valueAsNumber : null;
     return {
       bonds: { enabled: jobs.bonds.enabled, cutoff: cutoff('bonds-cutoff'), pairCutoffs: pairCutoffs.map(entry => ({ ...entry })), radius: number('bonds-radius'), visible: $('show-bonds').checked },
-      displacement: { enabled: displacement.enabled, referenceFrame: number('displacement-reference-frame') - 1, minimumImage: $('displacement-minimum-image').checked },
+      displacement: { enabled: displacement.enabled, referenceFrame: number('displacement-reference-frame') - 1, minimumImage: $('displacement-minimum-image').checked,
+        tiles: colorTileCounts() },
       vectors: { ...selectedVectorSettings, fields: vectorFields.map(field => createVectorField(field)), selectedId: selectedVectorId },
       referenceStrain: { enabled: jobs.referenceStrain.enabled, frameIndex: Math.max(0, Number($('reference-frame').value) - 1), cutoff: cutoff('reference-cutoff') },
       localShear: { enabled: jobs.localShear.enabled, cutoff: cutoff('local-shear-cutoff'), subtractMean: $('local-shear-subtract-mean').checked },
@@ -755,6 +775,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       ['compare-preset', saved.comparison.preset]]) if (value !== null) $(id).value = String(value);
     $('displacement-reference-frame').value = String(saved.displacement.referenceFrame + 1);
     $('displacement-minimum-image').checked = saved.displacement.minimumImage;
+    ['a', 'b', 'c'].forEach((axis, index) => { $(`displacement-tiles-${axis}`).value = String(saved.displacement.tiles[index]); });
     displacement.enabled = Boolean(getFrame()) && saved.displacement.enabled;
     displacement.parameters = { referenceFrame: saved.displacement.referenceFrame, minimumImage: saved.displacement.minimumImage };
     tools.setToolEnabled('displacement', displacement.enabled);
@@ -855,7 +876,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   });
   $('run-displacement').addEventListener('click', () => void runDisplacement());
   $('cancel-displacement').addEventListener('click', () => cancelDisplacement());
-  for (const id of ['displacement-reference-frame', 'displacement-minimum-image'])
+  for (const id of ['displacement-reference-frame', 'displacement-minimum-image', 'displacement-tiles-a', 'displacement-tiles-b', 'displacement-tiles-c'])
     $(id).addEventListener('change', () => { if (displacement.enabled) void runDisplacement(); });
   $('vector-mode').addEventListener('change', () => { changed(); preferredVectorSource = $('vector-mode').value; preferredVectorAnalysisKinds.clear(); vectorResolvedComponents.delete(selectedVectorId); updateVectors(); });
   for (const [axis, id] of ['vector-x', 'vector-y', 'vector-z'].entries())
@@ -938,9 +959,9 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       jobs[kind].enabled && property && $(`${prefix}-state`).textContent !== 'Failed'
         ? (kind === 'referenceStrain' ? REFERENCE_STRAIN_FIELDS : [property]).map(name => ({
           name, label: name === 'bondCoordination' ? 'Coordination (bond cutoffs)' : name,
-        })) : []), ...(displacement.enabled && getFrame() && $('displacement-state').textContent !== 'Failed' ? Object.entries(vectorPropertyNames('displacement')).map(([component, name]) => ({
+        })) : []), ...(displacement.enabled && getFrame() && $('displacement-state').textContent !== 'Failed' ? [...Object.entries(vectorPropertyNames('displacement')).map(([component, name]) => ({
           name, label: `Displacement ${component === 'magnitude' ? 'magnitude' : component.toUpperCase()}`,
-        })) : [])],
+        })), ...(colorTileCounts().some(Boolean) ? [{ name: 'displacementTile', label: 'Color tile' }] : [])] : [])],
   };
 }
 

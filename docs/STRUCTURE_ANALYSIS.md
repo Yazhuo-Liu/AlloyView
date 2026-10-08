@@ -293,8 +293,9 @@ use 4,096 atoms per target range; cheaper coordination, displacement and
 cached-fit strain target 50,000 atoms. Each PTM Worker
 has its own Wasm instance, avoiding pthread/shared-Wasm hosting requirements.
 There is one total concurrency limit across
-all analyses: at most six Workers and at most `hardwareConcurrency - 1`, with
-at least one Worker on small/single-core systems. Copy and scratch-memory
+all analyses, `hardwareConcurrency − 2` Workers (at least one), which leaves two
+reported logical processors for the interface and browser; whole-frame DXA
+threads count against the same budget. Copy and scratch-memory
 estimates further reduce each job's range count. Different analyses may run
 concurrently within that budget.
 

@@ -6,7 +6,25 @@ export const REFERENCE_STRAIN_FIELDS = Object.freeze([
   'referenceShearStrain', 'referenceHydrostaticStrain', 'referenceVolumeChange',
   'referenceE11', 'referenceE22', 'referenceE33', 'referenceE12', 'referenceE13', 'referenceE23',
   ...Array.from({ length: 9 }, (_, k) => `referenceF${Math.floor(k / 3) + 1}${k % 3 + 1}`),
+  'referenceD2min',
 ]);
+
+/** Non-affine squared displacement D²min = Σ |d − F·D|² over the fitted
+ * neighbors (OVITO's definition, not divided by the neighbor count). It is
+ * expanded as Σ|d|² − 2 Σ F∘C + Σ (F A Fᵀ)ᵢᵢ with C = Σ d Dᵀ and A = Σ D Dᵀ,
+ * the sums the fit already holds; the GPU shader uses the same expansion.
+ * Residuals below 1e-10 of Σ|d|² are rounding and become zero. */
+export function nonAffineSquaredDisplacement(F, covariance, crossCovariance, squaredLengths) {
+  let fc = 0, faf = 0;
+  for (let k = 0; k < 9; k += 1) fc += F[k] * crossCovariance[k];
+  for (let row = 0; row < 3; row += 1) for (let column = 0; column < 3; column += 1) {
+    let fa = 0;
+    for (let k = 0; k < 3; k += 1) fa += F[row * 3 + k] * covariance[k * 3 + column];
+    faf += fa * F[row * 3 + column];
+  }
+  const value = squaredLengths - 2 * fc + faf;
+  return Math.abs(value) <= squaredLengths * 1e-10 ? 0 : Math.max(0, value);
+}
 
 const numericalZero = value => Math.abs(value) < 1e-12 ? 0 : value;
 const MAX_REFERENCE_NEIGHBORS = 100_000;
@@ -141,7 +159,7 @@ export function calculateReferenceStrain(frame, {
     if (referenceAtom < 0) { incomplete += 1; continue; }
     covariance.fill(0);
     crossCovariance.fill(0);
-    let neighbors = 0;
+    let neighbors = 0, squaredLengths = 0;
     const referenceNeighbors = search.within(referenceAtom, cutoff, MAX_REFERENCE_NEIGHBORS + 1);
     if (referenceNeighbors.length > MAX_REFERENCE_NEIGHBORS) {
       throw new Error('Too many reference-strain neighbors; reduce the cutoff.');
@@ -167,6 +185,7 @@ export function calculateReferenceStrain(frame, {
       currentVector[0] = a * h[0] + b * h[3] + c * h[6];
       currentVector[1] = a * h[1] + b * h[4] + c * h[7];
       currentVector[2] = a * h[2] + b * h[5] + c * h[8];
+      squaredLengths += currentVector[0] * currentVector[0] + currentVector[1] * currentVector[1] + currentVector[2] * currentVector[2];
       for (let row = 0; row < 3; row += 1) for (let column = 0; column < 3; column += 1) {
         covariance[row * 3 + column] += r[row] * r[column];
         crossCovariance[row * 3 + column] += currentVector[row] * r[column];
@@ -194,6 +213,7 @@ export function calculateReferenceStrain(frame, {
     for (const [name, k] of [['referenceE11', 0], ['referenceE22', 4], ['referenceE33', 8],
       ['referenceE12', 1], ['referenceE13', 2], ['referenceE23', 5]]) result[name][index] = E[k];
     for (let k = 0; k < 9; k += 1) result[`referenceF${Math.floor(k / 3) + 1}${k % 3 + 1}`][index] = F[k];
+    result.referenceD2min[index] = nonAffineSquaredDisplacement(F, covariance, crossCovariance, squaredLengths);
   }
   onAtoms(length, length);
   return { ...result, startAtom, endAtom, incomplete, warning: null, elapsedMs: performance.now() - startedAt };

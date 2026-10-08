@@ -505,7 +505,9 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   assert.ok(await evaluate('window.atomToolsRenderer.frame.properties.find(property => property.name === "referenceShearStrain").data.every(value => Number.isFinite(value) && Math.abs(value) < 1e-4)'));
   await waitFor('["bonds-state", "rdf-state", "local-shear-state"].every(id => document.getElementById(id).textContent === "Calculated")', 'concurrent frame analysis completion');
   workerCount = await evaluate('window.atomToolsWorkers.length');
-  assert.ok(workerCount > 0 && workerCount <= 6, 'concurrent analyses must share the bounded Worker pool');
+  // cpuWorkerLimit(): hardwareConcurrency − 2 Workers for every analysis together.
+  const workerLimit = await evaluate('Math.max(1, (navigator.hardwareConcurrency || 2) - 2)');
+  assert.ok(workerCount > 0 && workerCount <= workerLimit, `concurrent analyses must share the bounded Worker pool (${workerCount} of ${workerLimit})`);
   await click('cancel-local-shear');
   await click('run-local-shear');
   await waitFor('document.getElementById("local-shear-state").textContent === "Calculated"', 'local shear after shared pool warmup');
@@ -919,7 +921,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   assert.equal(recipe.settings.extensions.bonds.enabled, true);
   assert.equal(recipe.settings.extensions.vectors.enabled, true);
   assert.equal(recipe.settings.extensions.vectors.mode, 'displacement');
-  assert.deepEqual(recipe.settings.extensions.displacement, { enabled: true, referenceFrame: 0, minimumImage: true });
+  assert.deepEqual(recipe.settings.extensions.displacement, { enabled: true, referenceFrame: 0, minimumImage: true, tiles: [0, 0, 0] });
   assert.equal(recipe.settings.extensions.vectors.anchor, 'center');
   assert.equal(recipe.settings.extensions.vectors.dimension, '2d');
   assert.equal(recipe.settings.extensions.vectors.linkDimensions, true);
@@ -1123,7 +1125,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await writeFile(legacyPath, JSON.stringify(legacyDisplacement));
   await call('DOM.setFileInputFiles', { nodeId: recipeInput, files: [legacyPath] });
   await waitFor('document.getElementById("configuration-status").textContent.includes("restored") && document.getElementById("displacement-state").textContent === "Calculated"', 'legacy Vector displacement migrates to independent analysis');
-  assert.deepEqual((await exportConfiguration()).settings.extensions.displacement, { enabled: true, referenceFrame: 0, minimumImage: true });
+  assert.deepEqual((await exportConfiguration()).settings.extensions.displacement, { enabled: true, referenceFrame: 0, minimumImage: true, tiles: [0, 0, 0] });
   assert.equal(await evaluate('document.getElementById("show-vectors").checked'), false);
   assert.equal(await evaluate('Boolean(window.atomToolsRenderer.primitiveLayer?.vectors)'), false);
   assert.ok(await evaluate('window.atomToolsRenderer.frame.properties.some(property => property.name === "displacementMagnitude")'));

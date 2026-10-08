@@ -159,7 +159,9 @@ export function dxaWorkerCount(count, requested, environment = globalThis) {
   // A client supplies its already resolved global budget. A Worker may report
   // a different privacy-limited core count, so do not clamp that budget again.
   const maximum = requested ?? cpuWorkerLimit(environment);
-  const threads = requested ?? (node ? 1 : Math.min(maximum, Math.ceil(count / 4096)));
+  // One thread per 2,048 atoms: 16 threads for 28,800 atoms measured 7% faster
+  // than 8; the shared CPU budget still bounds the total.
+  const threads = requested ?? (node ? 1 : Math.min(maximum, Math.ceil(count / 2048)));
   return Math.min(threads, maximum, Math.max(1, Math.floor(count / 1024)));
 }
 
@@ -181,6 +183,8 @@ async function getKernel() {
         try {
           const module = await createDxa(moduleOptions);
           module.dxaShared = threaded;
+          // Per-atom labels are copied from memory rather than parsed from JSON.
+          module._alloy_dxa_binary_labels?.(1);
           kernelGeneration++;
           return module;
         } catch (error) {
@@ -517,7 +521,15 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
     checkSignal(signal);
     checkDxaCancellation(module);
     report({ phase: 'collecting', completedStages: DXA_STAGES, totalStages: DXA_STAGES, totalAtoms: count });
-    const result = normalizeDxaResult(JSON.parse(module.UTF8ToString(output)), frame.cell, settings, count);
+    const raw = JSON.parse(module.UTF8ToString(output));
+    if (raw.atomStructureTypesBinary) {
+      // UTF8ToString above refreshed the heap views after any pthread growth;
+      // normalizeDxaResult rejects a short copy, so a stale view cannot pass.
+      const pointer = module._alloy_dxa_result_labels_ptr(), length = module._alloy_dxa_result_labels_count();
+      raw.atomStructureTypes = module.HEAPU8.slice(pointer, pointer + length);
+      delete raw.atomStructureTypesBinary;
+    }
+    const result = normalizeDxaResult(raw, frame.cell, settings, count);
     const peakWorkers = Math.max(workerCount, ...Object.values(cpuStageWorkerCounts));
     return { ...result, elapsedMs: performance.now() - startedAt, memoryEstimateBytes,
       stageTimings, ...kernelMetadata(module, workerCount), threaded: Boolean(module.dxaShared),
@@ -591,9 +603,10 @@ export function normalizeDxaResult(raw, cell, parameters = {}, atomCount) {
   if (!Number.isFinite(volume) || volume <= 0) throw new Error('DXA requires a positive analyzed volume.');
   let atomStructureTypes, structureCounts = {};
   if (raw.atomStructureTypes !== undefined) {
-    if (!Array.isArray(raw.atomStructureTypes) || (atomCount !== undefined && raw.atomStructureTypes.length !== atomCount)
-        || raw.atomStructureTypes.some(value => !Number.isInteger(value) || value < 0 || value > 5)) throw new Error('DXA returned invalid atom structure identifiers.');
-    atomStructureTypes = Uint8Array.from(raw.atomStructureTypes);
+    const labels = raw.atomStructureTypes;
+    if (!(Array.isArray(labels) || labels instanceof Uint8Array) || (atomCount !== undefined && labels.length !== atomCount)
+        || labels.some(value => !Number.isInteger(value) || value < 0 || value > 5)) throw new Error('DXA returned invalid atom structure identifiers.');
+    atomStructureTypes = labels instanceof Uint8Array ? labels : Uint8Array.from(labels);
     for (const id of atomStructureTypes) structureCounts[id] = (structureCounts[id] ?? 0) + 1;
   }
   return { ...raw, segments, totalLength, volume, density: totalLength / volume, counts, familyLengths, atomStructureTypes, structureCounts,

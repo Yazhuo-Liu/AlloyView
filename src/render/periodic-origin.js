@@ -22,7 +22,9 @@ export function translatePeriodicPoints(positions, cell, origin = [0, 0, 0]) {
   const vectors = cell.vectors;
   const shift = [0, 1, 2].map(axis => offset[0] * vectors[axis] + offset[1] * vectors[3 + axis] + offset[2] * vectors[6 + axis]);
   if (!shift.every(Number.isFinite)) throw new Error('Periodic display translation must remain finite.');
-  return Float64Array.from(positions, (value, index) => value - shift[index % 3]);
+  const translated = new Float64Array(positions.length);
+  for (let index = 0; index < positions.length; index += 1) translated[index] = positions[index] - shift[index % 3];
+  return translated;
 }
 
 /** Return independent display arrays while retaining the source coordinates.

@@ -41,9 +41,9 @@ test('prepared double-precision reference contexts preserve every field for repe
   assert.throws(() => calculateReferenceStrain({ ...frame }, { ...parameters, preparedContext }), /does not match/);
 });
 
-test('GPU sparse reference corrections reuse the CPU context and preserve all 18 Float32 fields', async () => {
+test('GPU sparse reference corrections reuse the CPU context and preserve every Float32 field', async () => {
   const frame = crystalFrame('fcc', 1), parameters = parametersFor(frame), expected = calculateReferenceStrain(frame, parameters);
-  const flat = new Float32Array(18 * frame.ids.length);
+  const flat = new Float32Array(REFERENCE_STRAIN_FIELDS.length * frame.ids.length);
   REFERENCE_STRAIN_FIELDS.forEach((field, index) => flat.set(expected[field], index * frame.ids.length));
   flat[0] = 99;
   const runtime = fakeRuntime(frame, flat, new Uint32Array([2, 1, 1, 1]));

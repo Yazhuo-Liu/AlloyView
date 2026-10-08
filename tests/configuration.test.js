@@ -209,7 +209,7 @@ test('older version 1 recipes disable every new computation and use portable def
     vectors: { enabled: false, components: [null, null, null], mode: 'generic', componentScales: [1, 1, 1],
       scale: 1, color: '#f9ca57', radius: .06, headRadius: .15,
       headLength: .3, linkDimensions: true, anchor: 'tail', dimension: '3d', upMode: 'camera', up: [0, 1, 0] },
-    displacement: { enabled: false, referenceFrame: 0, minimumImage: true },
+    displacement: { enabled: false, referenceFrame: 0, minimumImage: true, tiles: [0, 0, 0] },
     referenceStrain: { enabled: false, cutoff: null, frameIndex: 0 },
     localShear: { enabled: false, cutoff: null, subtractMean: false },
     rdf: { enabled: false, cutoff: null, bins: 100, firstType: null, secondType: null },
@@ -316,7 +316,7 @@ function extensionSnapshot() {
     vectors: { enabled: true, components: ['force_x', 'force_y', 'force_z'], mode: 'generic', componentScales: [1, 1, 1],
       scale: 2, color: '#ffb84a', radius: .06, headRadius: .15,
       headLength: .3, linkDimensions: true, anchor: 'tail', dimension: '3d', upMode: 'camera', up: [0, 1, 0] },
-    displacement: { enabled: false, referenceFrame: 0, minimumImage: true },
+    displacement: { enabled: false, referenceFrame: 0, minimumImage: true, tiles: [0, 0, 0] },
     referenceStrain: { enabled: true, cutoff: 3.1, frameIndex: 2 },
     localShear: { enabled: true, cutoff: 3.1, subtractMean: true },
     rdf: { enabled: true, cutoff: 8, bins: 256, firstType: 'Fe', secondType: 'C' },
@@ -335,7 +335,7 @@ test('legacy displacement vector recipes migrate analysis settings and retain gl
   for (const [key, value] of Object.entries(vectors)) {
     if (!['referenceFrame', 'minimumImage'].includes(key)) assert.deepEqual(restored.vectors[key], value);
   }
-  assert.deepEqual(restored.displacement, { enabled: true, referenceFrame: 1, minimumImage: false });
+  assert.deepEqual(restored.displacement, { enabled: true, referenceFrame: 1, minimumImage: false, tiles: [0, 0, 0] });
   assert.deepEqual(restored.vectors.components, [null, null, null]);
   assert.equal(Object.hasOwn(restored.vectors, 'referenceFrame'), false);
   assert.equal(Object.hasOwn(restored.vectors, 'minimumImage'), false);
@@ -350,12 +350,12 @@ test('old displacement calculation survives migration when arrow visibility is d
     mode: 'displacement', enabled: false, referenceFrame: 2, minimumImage: false,
   } } } });
   assert.equal(recipe.settings.extensions.vectors.enabled, false);
-  assert.deepEqual(recipe.settings.extensions.displacement, { enabled: true, referenceFrame: 2, minimumImage: false });
+  assert.deepEqual(recipe.settings.extensions.displacement, { enabled: true, referenceFrame: 2, minimumImage: false, tiles: [0, 0, 0] });
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
 });
 
 test('independent displacement settings round-trip and override legacy vector calculation settings', () => {
-  const displacement = { enabled: false, referenceFrame: 4, minimumImage: true };
+  const displacement = { enabled: false, referenceFrame: 4, minimumImage: true, tiles: [2, 0, 3] };
   const recipe = createConfiguration({ settings: { activeTool: 'displacement', extensions: {
     displacement, vectors: { mode: 'displacement', enabled: true, referenceFrame: 1, minimumImage: false },
   } } });
@@ -365,14 +365,14 @@ test('independent displacement settings round-trip and override legacy vector ca
   assert.equal(recipe.settings.extensions.vectors.mode, 'displacement');
   assert.equal(Object.hasOwn(recipe.settings.extensions.vectors, 'referenceFrame'), false);
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
-  for (const invalid of [{ enabled: 1 }, { referenceFrame: -1 }, { referenceFrame: .5 }, { minimumImage: 'true' }]) {
+  for (const invalid of [{ enabled: 1 }, { referenceFrame: -1 }, { referenceFrame: .5 }, { minimumImage: 'true' }, { tiles: [1, 2] }, { tiles: [0, 65, 0] }, { tiles: [0, 1.5, 0] }]) {
     assert.throws(() => createConfiguration({ settings: { extensions: { displacement: { ...displacement, ...invalid } } } }), /settings\.extensions\.displacement/);
   }
 });
 
 test('displacement reference bounds are checked whenever the independent analysis is enabled', () => {
   const source = { format: 'xyz', frameCount: 2, files: [{ name: 'frames.xyz', size: 42 }] };
-  const displacement = { enabled: true, referenceFrame: 1, minimumImage: false };
+  const displacement = { enabled: true, referenceFrame: 1, minimumImage: false, tiles: [0, 0, 0] };
   assert.deepEqual(createConfiguration({ source, settings: { extensions: { displacement } } }).settings.extensions.displacement, displacement);
   assert.throws(() => createConfiguration({ source, settings: { extensions: { displacement: { ...displacement, referenceFrame: 2 } } } }), /settings\.extensions\.displacement\.referenceFrame/);
   assert.equal(createConfiguration({ source, settings: { extensions: { displacement: { ...displacement, enabled: false, referenceFrame: 9 } } } }).settings.extensions.displacement.referenceFrame, 9);

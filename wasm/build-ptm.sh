@@ -19,6 +19,6 @@ export EMCC_CORES="${EMCC_CORES:-3}"
   -I "$project_root/third_party/ptm" -O3 -std=c++17 \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker \
   -sALLOW_MEMORY_GROWTH=1 -sFILESYSTEM=0 \
-  -sEXPORTED_FUNCTIONS='["_malloc","_free","_alloy_ptm_init","_alloy_ptm_atom"]' \
+  -sEXPORTED_FUNCTIONS='["_malloc","_free","_alloy_ptm_init","_alloy_ptm_atom","_alloy_ptm_set_types"]' \
   -o "$project_root/src/analysis/ptm-kernel.mjs"
 chmod 644 "$project_root/src/analysis/ptm-kernel.mjs" "$project_root/src/analysis/ptm-kernel.wasm"

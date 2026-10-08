@@ -1,7 +1,7 @@
 # AlloyView user and development guide
 
 AlloyView is a browser-only atomistic structure viewer and analysis prototype for
-metals and alloys. Local AtomEye CFG, LAMMPS text dump, XYZ and PDB files are parsed in a
+metals and alloys. Local AtomEye CFG, LAMMPS text dump and data, XYZ, PDB and VASP POSCAR files are parsed in a
 Web Worker, rendered with WebGL 2 sphere impostors, and never uploaded by the
 application.
 
@@ -22,7 +22,7 @@ sequence and rebuild to include it automatically; optional descriptions live in
 `examples/metadata.json`. Development discovers additions when the chooser opens.
 See [Deployment](DEPLOYMENT.md#bundled-examples) for discovery rules and metadata.
 
-Drop a CFG, LAMMPS, XYZ or PDB file anywhere on the page, including the homepage, header
+Drop a CFG, LAMMPS, XYZ, PDB or POSCAR file anywhere on the page, including the homepage, header
 or controls panel, to open it directly. Dropping multiple files opens a chooser
 for a single file; numbered names stay independent. Use **Open local → Choose
 files…** or **Choose folder…** when you want to open a multi-file sequence.
@@ -62,7 +62,8 @@ separate PNG legend option. Drag one finger over the structure to rotate it;
 spread or pinch two fingers to zoom in or out, and move both fingers together
 to pan. These gestures work in both Perspective and Ortho. Tap an atom to
 update its details, then expand **Details** in the viewport to inspect
-them. Selecting an atom preserves the current sidebar tool and window state.
+them. Double-tap (or double-click) an atom to rotate and zoom around it.
+Selecting an atom preserves the current sidebar tool and window state.
 
 Display options, color maps and legend limits apply as you edit them. Incomplete
 or empty numeric input keeps the last valid result instead of becoming zero.
@@ -407,7 +408,10 @@ Select the crystal templates and an RMSD threshold (default 0.1; 0 disables
 rejection), then click **Identify**. It adds SC, cubic/hexagonal diamond and
 graphene identification to the CNA classes. All nine legend rows have counts,
 colors and visibility checkboxes. Template checkboxes select what to analyze;
-legend checkboxes control visibility without recalculating.
+legend checkboxes control visibility without recalculating. PTM also returns
+each matched atom's lattice orientation (quaternion components **qw, qx, qy,
+qz**) and its binary chemical ordering (Pure, L1₀, L1₂ A/B site, B2,
+zincblende, hexagonal BN or Other), determined from the loaded atom types.
 
 Analysis status distinguishes waiting for Workers, preparing input, initializing
 PTM and building the neighbor search from the matching calculation itself.
@@ -486,7 +490,9 @@ interface), set the reference-neighbor cutoff, and calculate. The viewer
 matches explicit atom IDs, selects neighbors in the reference configuration,
 and fits a local deformation gradient to their current vectors. It returns
 Green–Lagrange shear and hydrostatic strain, volume change, six strain-tensor
-components and nine deformation-gradient components in Cartesian axes.
+components, nine deformation-gradient components in Cartesian axes, and the
+non-affine squared displacement D²min (Å²), which highlights shear
+transformation zones and other non-affine rearrangements.
 This compares trajectory configurations; **Ideal lattice reference** instead
 uses PTM correspondence and editable perfect-lattice constants.
 With GPU acceleration enabled, **Frame strain** can use WebGPU; it keeps the same
@@ -636,7 +642,10 @@ affine cell deformation. Its physical X, Y and Z components and magnitude in Å
 remain selectable in **Color by** independently of arrow drawing. While enabled,
 frame and reference changes recalculate them. **Cancel** removes the fields from
 current and cached frames and stops pending and subsequent calculations;
-**Calculate displacement** restarts the analysis. See the
+**Calculate displacement** restarts the analysis. Non-zero **Color tiles per
+cell vector** paint the reference configuration as a checkerboard that follows
+the atoms through later frames (AtomEye's tiling tracer), so slip and shear
+appear as offset tiles. See the
 [displacement documentation](features/displacement.md) for the algorithm and
 atom-correspondence limitations.
 
@@ -826,7 +835,9 @@ The test suite checks CFG and orthogonal/restricted-triclinic LAMMPS parsing,
 coordinate conversion, malformed-input errors, PBC neighbors, FCC/BCC
 coordination, and bounded LRU caching. The benchmark separates text generation,
 parsing, and coordination analysis. Browser GPU upload/FPS/memory are measured in
-the in-app performance panel on the target workstation. The browser smoke test
+the in-app performance panel on the target workstation. **GPU upload** is the time
+to submit a frame's display buffers; the viewer does not stall to wait for the GPU
+to finish them. The browser smoke test
 uses software WebGL to verify correctness, not to measure target GPU performance.
 The separate WebGPU checks exercise real compute shaders using a software
 adapter by default. The GPU benchmark loads `examples/NiGB_minimized.cfg`,

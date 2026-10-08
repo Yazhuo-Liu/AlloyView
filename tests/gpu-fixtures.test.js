@@ -123,7 +123,9 @@ function analyticStrain(F) {
     - F[1] * (F[3] * F[8] - F[5] * F[6]) + F[2] * (F[3] * F[7] - F[4] * F[6]);
   return { referenceShearStrain: shear, referenceHydrostaticStrain: hydrostatic, referenceVolumeChange: determinant - 1,
     referenceE11: E[0], referenceE22: E[4], referenceE33: E[8], referenceE12: E[1], referenceE13: E[2], referenceE23: E[5],
-    ...Object.fromEntries(F.map((value, k) => [`referenceF${Math.floor(k / 3) + 1}${k % 3 + 1}`, value])) };
+    ...Object.fromEntries(F.map((value, k) => [`referenceF${Math.floor(k / 3) + 1}${k % 3 + 1}`, value])),
+    // An affine deformation leaves no non-affine residual.
+    referenceD2min: 0 };
 }
 
 for (const fixture of referenceStrainFixtures()) {
@@ -135,7 +137,8 @@ for (const fixture of referenceStrainFixtures()) {
     for (let atom = 0; atom < fixture.frame.ids.length; atom += 1) for (const name of REFERENCE_STRAIN_FIELDS) {
       if (nanAtoms.has(atom)) assert.ok(Number.isNaN(result[name][atom]), `${name}[${atom}] should be NaN.`);
       else if (expected) near(result[name][atom], expected[name]);
-      else if (atom === 0 && expectedCenter) near(result[name][atom], expectedCenter[name]);
+      // A center fit can be exact while its neighborhood moves non-affinely.
+      else if (atom === 0 && expectedCenter && name !== 'referenceD2min') near(result[name][atom], expectedCenter[name]);
       else assert.ok(Number.isFinite(result[name][atom]), `${name}[${atom}] should have a defined fit.`);
     }
     for (const [name, expectedTiny] of Object.entries(fixture.expectedTinyFields ?? {})) {

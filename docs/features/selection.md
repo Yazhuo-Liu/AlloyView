@@ -2,7 +2,7 @@
 
 ## Atom selection and appearance
 
-Click or tap an atom, or find it by its source ID. The details include input properties and completed analysis quantities. Selecting a replicated image refers to the original atom. Element and per-atom overrides can change color, radius and visibility; per-atom overrides take precedence.
+Click or tap an atom, or find it by its source ID. The details include input properties and completed analysis quantities. Selecting a replicated image refers to the original atom. Double-click or double-tap an atom to make it the center of rotation and zoom; the camera moves to the clicked periodic or replicated image, and both clicks still select it. While measuring, picking slice atoms or picking group members, repeated clicks keep their picking meaning and do not move the camera. The **Center** button does the same for the selected atom. Element and per-atom overrides can change color, radius and visibility; per-atom overrides take precedence.
 
 **Details** is a floating window in the viewport. It starts collapsed on
 desktop and phones; its button toggles the window. Picking an

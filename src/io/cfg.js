@@ -124,7 +124,7 @@ export function parseCfg(text, sourceName = 'structure.cfg') {
   const parsed = entryCount === null
     ? parseBasicAtoms(lines, dataIndex, count)
     : parseExtendedAtoms(lines, dataIndex, count, entryCount, noVelocity, auxiliary);
-  const rawFractional = Float64Array.from(parsed.fractional);
+  const rawFractional = parsed.fractional;
   const fractional = wrapCfgFractional(rawFractional, cell.pbc);
   const semantics = extractExtendedSemantics(parsed.properties, count);
   let unwrappedPositions;
@@ -142,17 +142,15 @@ export function parseCfg(text, sourceName = 'structure.cfg') {
   } else {
     imageFlags = inferCfgImageFlags(rawFractional, cell.pbc);
     if (imageFlags) {
-      const unwrappedFractional = Float64Array.from(
-        fractional,
-        (value, index) => value + imageFlags[index],
-      );
+      const unwrappedFractional = new Float64Array(fractional.length);
+      for (let index = 0; index < fractional.length; index += 1) unwrappedFractional[index] = fractional[index] + imageFlags[index];
       unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
       unwrapSource = 'out-of-cell CFG coordinates';
     }
   }
   const frame = validateFrame({
-    ids: semantics.ids ?? Float64Array.from({ length: count }, (_, index) => index + 1),
-    types: Uint16Array.from(parsed.types),
+    ids: semantics.ids ?? rowOrderIds(count),
+    types: parsed.types,
     typeLabels: parsed.typeLabels,
     idSource: semantics.ids ? 'explicit' : 'row-order',
     positions: fractionalToCartesian(fractional, cell),
@@ -170,12 +168,20 @@ export function parseCfg(text, sourceName = 'structure.cfg') {
   return frame;
 }
 
+function rowOrderIds(count) {
+  const ids = new Float64Array(count);
+  for (let index = 0; index < count; index += 1) ids[index] = index + 1;
+  return ids;
+}
+
 function wrapCfgFractional(fractional, pbc) {
-  const stabilized = Float64Array.from(fractional, (value, index) => {
-    if (!pbc[index % 3]) return value;
+  const stabilized = new Float64Array(fractional.length);
+  for (let index = 0; index < fractional.length; index += 1) {
+    const value = fractional[index];
+    if (!pbc[index % 3]) { stabilized[index] = value; continue; }
     const nearestInteger = Math.round(value);
-    return Math.abs(value - nearestInteger) <= CFG_BOUNDARY_TOLERANCE ? nearestInteger : value;
-  });
+    stabilized[index] = Math.abs(value - nearestInteger) <= CFG_BOUNDARY_TOLERANCE ? nearestInteger : value;
+  }
   return wrapFractional(stabilized, pbc);
 }
 
@@ -198,8 +204,8 @@ function inferCfgImageFlags(rawFractional, pbc) {
 }
 
 function parseBasicAtoms(lines, start, count) {
-  const fractional = [];
-  const types = [];
+  const fractional = new Float64Array(count * 3);
+  const types = new Uint16Array(count);
   const masses = new Float32Array(count);
   const velocity = [new Float32Array(count), new Float32Array(count), new Float32Array(count)];
   const typeMap = new Map();
@@ -221,9 +227,9 @@ function parseBasicAtoms(lines, start, count) {
     masses[atom] = finiteNumber(tokens[0], `mass on line ${index + 1}`);
     const symbol = validateSymbol(tokens[1], index);
     if (!typeMap.has(symbol)) typeMap.set(symbol, typeMap.size);
-    types.push(typeMap.get(symbol));
+    types[atom] = typeMap.get(symbol);
     for (let component = 0; component < 3; component += 1) {
-      fractional.push(finiteNumber(tokens[2 + component], `fractional coordinate on line ${index + 1}`));
+      fractional[atom * 3 + component] = finiteNumber(tokens[2 + component], `fractional coordinate on line ${index + 1}`);
       if (rowHasVelocity) velocity[component][atom] = finiteNumber(tokens[5 + component], `velocity on line ${index + 1}`);
     }
     atom += 1;
@@ -262,8 +268,8 @@ function parseExtendedAtoms(lines, start, count, entryCount, noVelocity, auxilia
       : new Float32Array(count)
   ));
   const masses = new Float32Array(count);
-  const fractional = [];
-  const types = [];
+  const fractional = new Float64Array(count * 3);
+  const types = new Uint16Array(count);
   const typeMap = new Map();
   let currentMass = null;
   let currentSymbol = null;
@@ -302,10 +308,10 @@ function parseExtendedAtoms(lines, start, count, entryCount, noVelocity, auxilia
     for (let property = 0; property < propertyData.length; property += 1) {
       propertyData[property][atom] = finiteAtomValue(tokens[first + 3 + property], index);
     }
-    fractional.push(x, y, z);
+    fractional[atom * 3] = x; fractional[atom * 3 + 1] = y; fractional[atom * 3 + 2] = z;
     masses[atom] = rowMass;
     if (!typeMap.has(rowSymbol)) typeMap.set(rowSymbol, typeMap.size);
-    types.push(typeMap.get(rowSymbol));
+    types[atom] = typeMap.get(rowSymbol);
     atom += 1;
   }
 

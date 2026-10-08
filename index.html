@@ -29,7 +29,7 @@
         </a>
 
         <div class="file-actions">
-          <input id="file-input" type="file" accept=".cfg,.dump,.lammpstrj,.lammps,.xyz,.extxyz,.pdb,.ent,text/plain" multiple hidden>
+          <input id="file-input" type="file" accept=".cfg,.dump,.lammpstrj,.lammps,.lmp,.data,.xyz,.extxyz,.pdb,.ent,.vasp,.poscar,text/plain" multiple hidden>
           <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
           <button id="open-local" class="button button-primary" type="button" title="Open individual structure files or browse a local folder">
             <span aria-hidden="true">＋</span> Open local
@@ -76,7 +76,7 @@
             </div>
             <p class="eyebrow">BROWSER-NATIVE MATERIALS VIEWER</p>
             <h1>See materials<br>atom by atom</h1>
-            <p class="empty-copy">Open CFG, LAMMPS dump, XYZ or PDB structures, or select a folder to detect numbered structure sequences. Parsing, analysis, and rendering all stay in this browser.</p>
+            <p class="empty-copy">Open CFG, LAMMPS dump or data, XYZ, PDB or VASP POSCAR structures, or select a folder to detect numbered structure sequences. Parsing, analysis, and rendering all stay in this browser.</p>
             <button id="empty-open" class="button button-primary button-large" type="button">Open local structures</button>
             <p class="format-note">Orthogonal and restricted triclinic cells supported</p>
           </div>
@@ -581,6 +581,13 @@
             </div>
             <label class="field"><span>Reference frame</span><input id="displacement-reference-frame" type="number" value="1" min="1" step="1" disabled></label>
             <label class="slice-toggle"><input id="displacement-minimum-image" type="checkbox" checked disabled><span>Minimum image across periodic boundaries</span></label>
+            <p class="field-label">Color tiles per cell vector</p>
+            <div class="triple-fields">
+              <label><span>a</span><input id="displacement-tiles-a" type="number" value="0" min="0" max="64" step="1" disabled></label>
+              <label><span>b</span><input id="displacement-tiles-b" type="number" value="0" min="0" max="64" step="1" disabled></label>
+              <label><span>c</span><input id="displacement-tiles-c" type="number" value="0" min="0" max="64" step="1" disabled></label>
+            </div>
+            <p class="help">Non-zero counts paint a checkerboard in the reference frame's reduced coordinates. Each atom keeps its tile through every frame, so slip steps and shear bands show as offsets in the pattern (<b>Color tile</b> in Color by). Zero along an axis leaves it undivided; all zeros turn tiles off.</p>
             <button id="run-displacement" class="button button-accent tool-run-button" type="button" disabled>Calculate displacement</button>
             <p class="help">Current position minus reference position, matched by atom ID. Components and magnitude become atom properties for Color by and Vector arrows. Turn off minimum image for continuous unwrapped motion beyond half a periodic cell.</p>
             <p id="displacement-status" class="help" role="status" aria-live="polite">Open this tool to start calculating. Cancel clears its results and stops frame updates.</p>
@@ -749,7 +756,7 @@
               <label><input type="checkbox" data-ptm-template="128" disabled>Graphene</label>
             </div>
             <p class="help">Matches local polyhedra to crystal templates. Fits above the RMSD threshold are Other; 0 disables this threshold. Diamond and graphene templates use additional neighbor shells.</p>
-            <p id="ptm-status" class="help" role="status" aria-live="polite">Results include structure type, RMSD and nearest-neighbor distance.</p>
+            <p id="ptm-status" class="help" role="status" aria-live="polite">Results include structure type, RMSD, nearest-neighbor distance, lattice orientation and binary chemical ordering.</p>
           </section>
 
           <section id="tool-strain" class="side-section analysis-section" data-tool-panel="strain" hidden>
@@ -865,7 +872,7 @@
     </div>
 
     <div id="file-drop-overlay" class="file-drop-overlay" aria-hidden="true" hidden>
-      <div><strong>Drop a structure file to open</strong><span>CFG / LAMMPS / XYZ / PDB · One file at a time</span></div>
+      <div><strong>Drop a structure file to open</strong><span>CFG / LAMMPS / XYZ / PDB / POSCAR · One file at a time</span></div>
     </div>
     <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-dialog-title">
       <div class="source-dialog-card">

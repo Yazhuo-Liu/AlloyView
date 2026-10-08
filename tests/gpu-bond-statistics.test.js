@@ -73,7 +73,7 @@ function fakeRuntime({ flags = BOND_STATISTICS_FLAG_PRECISION, failRead = false,
     createBuffer: allocate,
     storageBuffer(values) { const buffer = allocate(values.byteLength); buffer.data.set(new Uint8Array(values.buffer, values.byteOffset, values.byteLength)); return buffer; },
     neighborBindings(_context, extra) { return extra; },
-    zeroBuffer(buffer) { buffer.data.fill(0); },
+    zeroBuffer(buffer, offset = 0, size = buffer.data.length - offset) { buffer.data.fill(0, offset, offset + size); },
     async run(_source, bindings, _count, options) {
       dispatches.push({ ...options });
       const words = new Uint32Array(bindings[1].data.buffer);

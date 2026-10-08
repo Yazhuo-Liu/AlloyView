@@ -16,7 +16,7 @@ export const MAX_CONFIGURATION_RDF_BINS = 4096;
 export const MAX_CONFIGURATION_SELECTION_GROUPS = MAX_SELECTION_GROUPS;
 export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
 
-const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence']);
+const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'lammps-data', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence', 'poscar']);
 const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const COORDINATION_CUTOFF_CHOICES = new Set(['custom', ...COORDINATION_CUTOFF_PRESETS.map(preset => preset.symbol)]);
@@ -222,7 +222,7 @@ function normalizeExtensions(value, fromSnapshot) {
   const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
   const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
-  const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage']);
+  const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage', 'tiles']);
   const referenceStrain = record(input.referenceStrain ?? {}, `${path}.referenceStrain`, ['enabled', 'frameIndex', 'cutoff']);
   const localShear = record(input.localShear ?? {}, `${path}.localShear`, ['enabled', 'cutoff', 'subtractMean']);
   const rdf = record(input.rdf ?? {}, `${path}.rdf`, ['enabled', 'cutoff', 'bins', 'firstType', 'secondType']);
@@ -330,6 +330,7 @@ function normalizeExtensions(value, fromSnapshot) {
       enabled: boolean(displacement.enabled, `${path}.displacement.enabled`, legacyDisplacement),
       referenceFrame: number(displacement.referenceFrame ?? (legacyDisplacement ? legacyReferenceFrame : 0), `${path}.displacement.referenceFrame`, 0, Number.MAX_SAFE_INTEGER, true),
       minimumImage: boolean(displacement.minimumImage, `${path}.displacement.minimumImage`, legacyDisplacement ? legacyMinimumImage : true),
+      tiles: vector(displacement.tiles ?? [0, 0, 0], `${path}.displacement.tiles`, 0, 64, true),
     },
     referenceStrain: {
       ...normalizeCutoffAnalysis(referenceStrain, `${path}.referenceStrain`, fromSnapshot),
@@ -733,6 +734,7 @@ function canonicalFormat(format) {
   if (format === 'lammps-dump' || format === 'lammps-dump-sequence') return 'lammps-dump';
   if (format === 'xyz' || format === 'xyz-sequence') return 'xyz';
   if (format === 'pdb' || format === 'pdb-sequence') return 'pdb';
+  if (format === 'lammps-data' || format === 'poscar') return format;
   return null;
 }
 
