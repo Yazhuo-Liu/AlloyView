@@ -9,7 +9,10 @@ export const IPF_KEYS = Object.freeze({
 export function normalizeOrientationSettings(value = {}) {
   const direction = value.direction ?? 'z';
   if (!['x', 'y', 'z', 'custom'].includes(direction)) throw new Error('Choose an IPF sample direction: X, Y, Z or Custom.');
-  const custom = Array.from(value.custom ?? [0, 0, 1]);
+  // Check the length before copying: shared configuration JSON could supply
+  // an array-like object such as { length: 4294967295 }.
+  const source = value.custom ?? [0, 0, 1];
+  const custom = source?.length === 3 ? Array.from(source) : [];
   if (custom.length !== 3 || !custom.every(component => typeof component === 'number' && Number.isFinite(component) && Math.abs(component) <= 1e15)
       || Math.hypot(...custom) < 1e-12) throw new Error('The IPF sample direction must have three finite components and a nonzero length.');
   return { direction, custom };

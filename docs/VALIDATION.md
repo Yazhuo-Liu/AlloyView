@@ -2,6 +2,42 @@
 
 Latest validation: 2026-10-08 (America/New_York, EDT). Earlier entries retain their own dates.
 
+## Review of A3, A4, A7 and O14 (2026-10-08)
+
+This is an independent review of `01e88f8`. The commit as delivered passes all
+1,412 Node tests and the build. These suites also pass: keyboard, orientation
+and discrete colors, export resolution, smoke, binning, expressions, clusters,
+slice sweep, view/Voronoi, Voronoi, legend preview, initial colors, atom
+details, advanced tools, topology, selection/hide, coordination presets,
+trajectory Workers, CPU warm-up, Fe input, Fe loop, Fe lattice GPU, DXA, DXA
+visual, DXA parallel, GPU, GPU bond statistics and GPU Voronoi.
+
+- **IPF math:** checked by hand. PTM numbering and template axes match
+  `third_party/ptm`: FCC=1, HCP=2, BCC=3; the HCP basal neighbors lie along
+  ±x, so a₁ = [2−1−10] and c = z.
+  - `R(q)ᵀ` matches the active template-to-sample rotation.
+  - The cubic sector 0 ≤ y ≤ x ≤ z and the 6/mmm wedge are correct, and their
+    weights equal 1 at the corners.
+  - The stereographic key reproduces the corners [101] at u = √2 − 1 and
+    [111] at u = v = 1/(√3 + 1).
+- **Tiled exports:** in the forced 35-tile comparisons, 0.03–0.06% of pixels
+  differ by more than 5 levels, with no seam excess (0.04% at seams).
+  - The "Current view" path is unchanged.
+  - A 6000×4000 export takes 2.7 s in 12 tiles.
+- **Fixed — discrete legend colors:** colors came from hashed hues and were
+  often indistinguishable. Values 1–6 had a minimum CIE76 ΔE of 8.0, 0–12 had
+  3.6, and 0–31 had 0.7. Discrete values now use color number (value mod 18)
+  from the cluster palette, now `DISTINCT_CATEGORY_COLORS` in `palette.js`,
+  whose minimum ΔE is 25.6. Colors still depend only on the value. Any 18
+  consecutive integers are distinct, which the tests check.
+- **Fixed — orientation custom vector:** shared configuration JSON could
+  supply an array-like `custom` such as `{ "length": 4294967295 }`. Copying it
+  without a length check froze the page: 3×10⁷ already took 2.2 s. The length
+  is now checked first, and a test covers this.
+- After both fixes, all 1,414 Node tests and the build pass. These suites also
+  pass: orientation and discrete colors, clusters, legend preview, initial
+  colors and binning.
+
 ## Phase 2 completion and CI recovery (2026-10-08)
 
 Reference: `a07793e`, synchronized from `origin/main`. The unfinished batch

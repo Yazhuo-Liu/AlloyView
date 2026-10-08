@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { colorsByDiscreteProperty, discreteValues, MAX_DISCRETE_VALUES } from '../src/render/discrete-colors.js';
+import { colorsByDiscreteProperty, discreteColor, discreteValues, MAX_DISCRETE_VALUES } from '../src/render/discrete-colors.js';
 import { ipfColor, ipfWeights, normalizeOrientationSettings, OrientationColorResolver, sampleToCrystalDirection } from '../src/render/orientation-colors.js';
 import { initialColorQuantities } from '../src/render/color-quantities.js';
 import { visibilityByCategory } from '../src/render/palette.js';
@@ -175,4 +175,24 @@ test('orientation and discrete settings reject invalid and unknown inputs before
   }
   for (const mode of ['automatic', true, 1]) assert.throws(() => createConfiguration({ settings: { colors: { modes: [{ property: 'phase', mode }] } } }));
   assert.throws(() => createConfiguration({ settings: { colors: { orientation: { unknown: 1 } } } }));
+});
+
+test('orientation settings reject array-like custom vectors before copying them', () => {
+  const startedAt = performance.now();
+  for (const custom of [{ length: 4294967295 }, { length: 3 }, 'abc', [1, 2]]) {
+    assert.throws(() => normalizeOrientationSettings({ direction: 'custom', custom }), /three finite components/);
+  }
+  assert.throws(() => createConfiguration({ settings: { colors: { orientation: { direction: 'z', custom: { length: 4294967295 } } } } }),
+    /settings\.colors\.orientation/);
+  assert.ok(performance.now() - startedAt < 1000, 'a huge length is rejected without iterating it');
+  assert.deepEqual(normalizeOrientationSettings({ direction: 'custom', custom: new Float64Array([0, 1, 1]) }).custom, [0, 1, 1]);
+});
+
+test('any 18 consecutive integers, including negative ones, receive distinct discrete colors', () => {
+  for (const start of [-9, 0, 1, 8, 1000]) {
+    const colors = Array.from({ length: 18 }, (_, index) => discreteColor(start + index).join(','));
+    assert.equal(new Set(colors).size, 18, `values ${start}–${start + 17}`);
+  }
+  assert.deepEqual(discreteColor(-0), discreteColor(0));
+  assert.deepEqual(discreteColor('NaN'), [130, 130, 130]);
 });

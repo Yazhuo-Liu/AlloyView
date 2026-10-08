@@ -20,8 +20,11 @@ For a numeric property containing at most **32 distinct safe integer values**,
 the legend also offers **Color scale → Discrete integer values**. Continuous
 colors remain the default. Discrete colors show one counted row and visibility
 checkbox per actual value, with an additional gray NaN row for undefined values.
-Negative integers work too. Colors and hidden values stay attached to the
-integer when values disappear, reappear or reorder between frames. If a later
+Negative integers work too. Each integer takes color number (value mod 18)
+from the same 18-color palette as cluster IDs, so any 18 consecutive values
+are distinct; values 18 apart share a color. Colors and hidden values stay
+attached to the integer when values disappear, reappear or reorder between
+frames. If a later
 frame contains noninteger values or more than 32 classes, it uses continuous
 colors until the field becomes eligible again. Select an atom and use
 **Details → Hide … atoms** to hide its current element or discrete class in one

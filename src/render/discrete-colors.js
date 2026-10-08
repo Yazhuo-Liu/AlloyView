@@ -1,3 +1,5 @@
+import { DISTINCT_CATEGORY_COLORS } from './palette.js';
+
 // Imported numeric fields stay continuous unless the user explicitly chooses
 // discrete colors. Values, rather than their current legend row, identify a class.
 export const MAX_DISCRETE_VALUES = 32;
@@ -23,16 +25,10 @@ export function discreteValues(property) {
 
 export function discreteColor(value) {
   if (value === 'NaN') return [130, 130, 130];
-  // The same integer has the same hue when categories disappear or reorder.
-  let hash = 2166136261;
-  for (const character of String(value)) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
-  hash = Math.imul(hash ^ (hash >>> 16), 0x7feb352d);
-  hash = Math.imul(hash ^ (hash >>> 15), 0x846ca68b);
-  const hue = ((hash ^ (hash >>> 16)) >>> 0) / 4294967296 * 6;
-  const chroma = .72, x = chroma * (1 - Math.abs(hue % 2 - 1)), m = .12;
-  const rgb = hue < 1 ? [chroma, x, 0] : hue < 2 ? [x, chroma, 0] : hue < 3 ? [0, chroma, x]
-    : hue < 4 ? [0, x, chroma] : hue < 5 ? [x, 0, chroma] : [chroma, 0, x];
-  return rgb.map(component => Math.round(255 * (component + m)));
+  // The color depends only on the integer, so it survives categories that
+  // disappear or reorder. Any 18 consecutive integers get distinct colors.
+  const count = DISTINCT_CATEGORY_COLORS.length;
+  return [...DISTINCT_CATEGORY_COLORS[((value % count) + count) % count]];
 }
 
 export function colorsByDiscreteProperty(property, hiddenValues = new Set()) {

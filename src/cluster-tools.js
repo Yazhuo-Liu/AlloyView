@@ -1,6 +1,7 @@
 import { clearAnalysisResults, replaceAnalysisProperty } from './analysis/results.js';
 import { analysisBackendLabel, analysisBackendDetails, analysisProgressText } from './analysis/status.js';
 import { atomIdSet, hasAtomId } from './data/atom-ids.js';
+import { DISTINCT_CATEGORY_COLORS } from './render/palette.js';
 
 export const CLUSTER_PROPERTIES = Object.freeze([
   Object.freeze({ key: 'clusterId', name: 'clusterId', label: 'Cluster ID' }),
@@ -10,11 +11,7 @@ export const CLUSTER_PROPERTIES = Object.freeze([
 /** Distinct hues for cluster IDs 1, 2, … in turn. None is gray, which marks
  * atoms outside the analyzed group (ID 0). Sizes sort IDs, so neighboring
  * large clusters receive the most different early colors. */
-export const CLUSTER_COLORS = Object.freeze([
-  [230, 25, 75], [60, 180, 75], [255, 225, 25], [0, 130, 200], [245, 130, 48], [145, 30, 180],
-  [70, 240, 240], [240, 50, 230], [210, 245, 60], [250, 190, 212], [0, 128, 128], [220, 190, 255],
-  [170, 110, 40], [128, 0, 0], [170, 255, 195], [128, 128, 0], [255, 215, 180], [100, 100, 255],
-].map(color => Object.freeze(color)));
+export const CLUSTER_COLORS = DISTINCT_CATEGORY_COLORS;
 export const CLUSTER_EXCLUDED_COLOR = Object.freeze([128, 128, 128]);
 /** Clusters listed individually in the color legend; others share one entry. */
 export const CLUSTER_LEGEND_LIMIT = 20;
