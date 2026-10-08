@@ -1,7 +1,9 @@
 import { looksLikeLammpsData } from './lammps-data.js';
 import { looksLikePoscar } from './poscar.js';
 
-const SUPPORTED_EXTENSION = /\.(?:cfg|dump|lmp|lammpstrj|lammpstraj|data|lammps|xyz|extxyz|pdb|ent|vasp|poscar|txt)$/i;
+// A `.gz` suffix marks a gzip-compressed file; the content, not the name,
+// decides whether a file is compressed (see gzip.js).
+const SUPPORTED_EXTENSION = /\.(?:cfg|dump|lmp|lammpstrj|lammpstraj|data|lammps|xyz|extxyz|pdb|ent|vasp|poscar|txt)(?:\.gz)?$/i;
 // VASP names its structure files without an extension.
 const VASP_NAME = /^(?:POSCAR|CONTCAR)/i;
 const NUMBER_RUN = /\d+/g;
@@ -14,13 +16,13 @@ export function isSupportedStructurePath(path) {
 
 export function isPotentialStructurePath(path) {
   const filename = String(path).replaceAll('\\', '/').split('/').at(-1);
-  return isSupportedStructurePath(path) || /\d/.test(filename) || VASP_NAME.test(filename);
+  return isSupportedStructurePath(path) || /\d/.test(filename) || VASP_NAME.test(filename) || /\.gz$/i.test(filename);
 }
 
 export function inferStructureFormatFromPath(path) {
   const filename = String(path).replaceAll('\\', '/').split('/').at(-1);
   if (/(?:^|\.)cfg(?:\.|$)/i.test(filename)) return 'cfg';
-  if (VASP_NAME.test(filename) || /\.(?:vasp|poscar)$/i.test(filename)) return 'poscar';
+  if (VASP_NAME.test(filename) || /\.(?:vasp|poscar)(?:\.gz)?$/i.test(filename)) return 'poscar';
   if (/(?:^|\.)data(?:\.|$)/i.test(filename)) return 'lammps-data';
   if (/(?:^|\.)(?:dump|lmp|lammpstrj|lammpstraj)(?:\.|$)/i.test(filename)) return 'lammps-dump';
   if (/(?:^|\.)(?:xyz|extxyz)(?:\.|$)/i.test(filename)) return 'xyz';

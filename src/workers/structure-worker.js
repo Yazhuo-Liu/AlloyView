@@ -4,6 +4,7 @@ import { prepareSequenceBaseline, unwrapSequenceFrame } from '../data/trajectory
 import { parseCfg } from '../io/cfg.js';
 import { isReadableLocalFile, normalizeLocalFiles } from '../io/local-files.js';
 import { detectStructureFormatHeader, inferStructureFormatFromPath } from '../io/file-sequences.js';
+import { assertGzipSupported, decompressToFile, readFileBytes, readFileText, readStructureHeader } from '../io/gzip.js';
 import { indexLammpsDump, readLammpsFrame } from '../io/lammps-dump.js';
 import { indexLammpsDumpSeries, readLammpsSeriesFrame } from '../io/lammps-series.js';
 import { indexXyz, readXyzFrame } from '../io/xyz.js';
@@ -38,7 +39,7 @@ self.addEventListener('message', async (event) => {
       } else if (['xyz', 'xyz-sequence', 'pdb', 'pdb-sequence'].includes(source.format)) {
         frame = await readIndexedTextFrame(source, payload.index);
       } else if (SINGLE_FRAME_PARSERS[source.format] && payload.index === 0) {
-        frame = SINGLE_FRAME_PARSERS[source.format](await source.file.text(), source.file.name);
+        frame = SINGLE_FRAME_PARSERS[source.format](await readFileText(source.file), source.file.name);
       } else {
         throw new Error('A single CFG file contains only one frame. Select multiple numbered CFG files to load a sequence.');
       }
@@ -65,22 +66,27 @@ async function loadSource(inputFiles, requestId) {
   if (files.length === 0 || files.some((file) => !isReadableLocalFile(file))) {
     throw new Error('No valid local file was provided.');
   }
+  // gzip files are detected by content and decompressed here (see gzip.js):
+  // trajectories read in random order once into a Blob, single-frame files
+  // whenever they are read.
+  for (const file of files) await assertGzipSupported(file);
   if (files.length > 1) {
     const formats = [];
     for (const file of files) {
-      const header = await file.slice(0, 64 * 1024).text();
+      const header = await readStructureHeader(file);
       formats.push(detectStructureFormatHeader(header) ?? inferStructureFormatFromPath(file.name));
     }
     if (formats.every((format) => format === 'cfg')) return loadCfgSequence(files, requestId);
-    if (formats.every((format) => format === 'lammps-dump')) return loadLammpsDumpSequence(files, requestId);
-    if (formats.every((format) => format === 'xyz')) return loadIndexedTextSource(files, 'xyz', requestId);
-    if (formats.every((format) => format === 'pdb')) return loadIndexedTextSource(files, 'pdb', requestId);
+    if (formats.every((format) => format === 'lammps-dump')) return loadLammpsDumpSequence(await decompressFiles(files), requestId);
+    if (formats.every((format) => format === 'xyz')) return loadIndexedTextSource(await decompressFiles(files), 'xyz', requestId);
+    if (formats.every((format) => format === 'pdb')) return loadIndexedTextSource(await decompressFiles(files), 'pdb', requestId);
     throw new Error('A numbered file sequence must contain a single format: CFG, LAMMPS text dump, XYZ, or PDB. LAMMPS data and POSCAR files open one at a time.');
   }
-  const [file] = files;
-  const header = await file.slice(0, 64 * 1024).text();
-  const format = detectStructureFormatHeader(header) ?? inferStructureFormatFromPath(file.name);
+  const [inputFile] = files;
+  const header = await readStructureHeader(inputFile);
+  const format = detectStructureFormatHeader(header) ?? inferStructureFormatFromPath(inputFile.name);
   if (format === 'lammps-dump') {
+    const file = await decompressToFile(inputFile);
     const { offsets, indexMs } = await indexLammpsDump(file, ({ loaded, total }) => {
       self.postMessage({ id: requestId, event: 'progress', loaded, total, stage: 'index' });
     });
@@ -90,20 +96,27 @@ async function loadSource(inputFiles, requestId) {
   }
   if (format === 'cfg') {
     const startedAt = performance.now();
-    const text = await file.text();
-    source = { file, format: 'cfg', offsets: [0] };
-    const frame = parseCfg(text, file.name);
+    const bytes = await readFileBytes(inputFile);
+    source = { file: inputFile, format: 'cfg', offsets: [0] };
+    const frame = parseCfg(bytes, inputFile.name);
     return { format: source.format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
   }
-  if (format === 'xyz' || format === 'pdb') return loadIndexedTextSource(files, format, requestId);
+  if (format === 'xyz' || format === 'pdb') return loadIndexedTextSource(await decompressFiles(files), format, requestId);
   if (SINGLE_FRAME_PARSERS[format]) {
+    const file = inputFile;
     const startedAt = performance.now();
-    const text = await file.text();
+    const text = await readFileText(file);
     source = { file, format, offsets: [0] };
     const frame = SINGLE_FRAME_PARSERS[format](text, file.name);
     return { format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
   }
-  throw new Error('Unrecognized file format. Supported structures are AtomEye CFG, LAMMPS text dump and data files, XYZ / Extended XYZ, PDB, and VASP POSCAR.');
+  throw new Error('Unrecognized file format. Supported structures are AtomEye CFG, LAMMPS text dump and data files, XYZ / Extended XYZ, PDB, and VASP POSCAR, uncompressed or gzip-compressed.');
+}
+
+async function decompressFiles(files) {
+  const decompressed = [];
+  for (const file of files) decompressed.push(await decompressToFile(file));
+  return decompressed;
 }
 
 async function loadIndexedTextSource(inputFiles, format, requestId) {
@@ -156,7 +169,7 @@ async function loadCfgSequence(inputFiles, requestId) {
   const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
   const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
   for (let index = 0; index < files.length; index += 1) {
-    const header = await files[index].slice(0, 4096).text();
+    const header = await readStructureHeader(files[index], 4096);
     const format = detectStructureFormatHeader(header) ?? inferStructureFormatFromPath(files[index].name);
     if (format !== 'cfg') {
       throw new Error(`Multi-file trajectories currently require AtomEye CFG files; “${files[index].name}” is not CFG.`);
@@ -169,7 +182,7 @@ async function loadCfgSequence(inputFiles, requestId) {
       stage: 'sequence-index',
     });
   }
-  const first = parseCfg(await files[0].text(), files[0].name);
+  const first = parseCfg(await readFileBytes(files[0]), files[0].name);
   const continuity = prepareSequenceBaseline(first);
   source = { files, format: 'cfg-sequence', continuity, checkpoints: new Map(), frameQueue: Promise.resolve() };
   rememberContinuity(source, continuity);
@@ -215,7 +228,7 @@ async function readCfgSequenceFrame(sequenceSource, index, requestId) {
   let start = continuity ? continuity.index + 1 : 1;
   let frame = null;
   if (!continuity) {
-    frame = parseCfg(await sequenceSource.files[0].text(), sequenceSource.files[0].name);
+    frame = parseCfg(await readFileBytes(sequenceSource.files[0]), sequenceSource.files[0].name);
     continuity = prepareSequenceBaseline(frame);
     rememberContinuity(sequenceSource, continuity);
     if (index === 0) {
@@ -226,7 +239,7 @@ async function readCfgSequenceFrame(sequenceSource, index, requestId) {
 
   for (let current = start; current <= index; current += 1) {
     const file = sequenceSource.files[current];
-    frame = parseCfg(await file.text(), file.name);
+    frame = parseCfg(await readFileBytes(file), file.name);
     continuity = unwrapSequenceFrame(frame, continuity, current);
     rememberContinuity(sequenceSource, continuity);
     self.postMessage({

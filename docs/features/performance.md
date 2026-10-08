@@ -6,7 +6,11 @@ The performance panel reports the current render/analysis timing and trajectory 
 
 ## Workers and memory
 
-Parsing runs in a structure Worker. Analyses share a bounded scheduler and
+Parsing runs in a structure Worker. It converts the atom rows of LAMMPS dumps,
+CFG and XYZ files directly from their bytes, with the same values and error
+messages as line-based parsing, and decompresses gzip input; see
+[supported formats](../FORMATS.md#trajectory-memory-behavior) for the exactness
+rules and the memory used by `.gz` trajectories. Analyses share a bounded scheduler and
 process independent central-atom ranges in module Workers. The shared CPU
 budget follows the browser's reported logical processor count:
 `max(1, floor(navigator.hardwareConcurrency) − 2)`. An eight-processor report

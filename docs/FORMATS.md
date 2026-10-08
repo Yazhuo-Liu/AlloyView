@@ -90,7 +90,8 @@ Rejected explicitly:
 - missing/partial coordinate groups, partial `ix/iy/iz` image flags, missing
   ID/type, duplicate IDs/columns;
 - string custom columns other than `element`;
-- binary, compressed, or non-`ITEM:` formats. A LAMMPS data file named `.lmp`
+- binary or non-`ITEM:` formats ([gzip-compressed](#gzip-compressed-files)
+  text dumps are accepted). A LAMMPS data file named `.lmp`
   is recognized by its header and read by the [data-file parser](#lammps-data-file)
   instead.
 
@@ -230,9 +231,40 @@ be inferred from an already-wrapped PDB trajectory.
 Numbered XYZ and PDB sequences are sorted by their varying numeric filename
 field. Every member can contain multiple frames; its indexed frames are
 concatenated into the global trajectory. Sequences remain separated by format,
-directory and filename pattern. NetCDF and compressed structure files are
-not supported. LAMMPS data and POSCAR files open one at a time, not as numbered
-sequences.
+directory and filename pattern. NetCDF is not supported. LAMMPS data and
+POSCAR files open one at a time, not as numbered sequences.
+
+## gzip-compressed files
+
+Every format above may also be gzip-compressed, for example `traj.dump.gz`,
+`replica.0.cfg.gz` or `movie.xyz.gz`. A file counts as compressed when it
+starts with the gzip signature bytes `1f 8b`, whatever its name, and format
+detection reads the decompressed header, so a `.gz` name need not reveal the
+inner format. The structure Worker decompresses with the browser's
+`DecompressionStream` (Chrome and Edge 80, Firefox 113, Safari 16.4 or newer);
+older browsers report that the file must be decompressed first.
+
+- **Trajectories read in any order** (LAMMPS dumps, XYZ and PDB, including
+  numbered sequences) are decompressed once when opened. The Worker copies the
+  output into a `Blob` in 8 MiB parts, so its own memory holds one part at a
+  time, then indexes and slices that Blob exactly like an uncompressed file.
+  The Blob takes the decompressed size. Chromium-based browsers move large
+  Blob data to disk; Firefox and Safari may keep it in memory, so there a
+  trajectory whose decompressed size approaches the free memory of the device
+  should be decompressed before opening. AlloyView does not write the
+  decompressed copy to the origin private file system.
+- **Single-frame files** (CFG, LAMMPS data and POSCAR), including every image
+  of a CFG sequence, are decompressed each time they are read. Only the file
+  being parsed is held in memory, as for uncompressed files; revisiting a
+  frame decompresses its file again.
+
+Numbered `.gz` files form sequences like uncompressed files, for example
+`dump.{number}.gz` or `replica.{number}.cfg.gz`, and a sequence may mix
+compressed and uncompressed members. A gzip file must contain a single gzip
+stream. A file made by concatenating streams, for example by appending to an
+existing `.gz` dump (LAMMPS `dump_modify append yes`) or by `bgzip`, is
+rejected with a decompression error; decompress it and compress it again with
+`gzip` to open it.
 
 ## Coordination cutoff suggestion
 
@@ -272,7 +304,19 @@ spherical-shell normalization.
 The structure Worker scans the local `File` in 4 MiB byte chunks for line-start
 `ITEM: TIMESTEP` markers. It records byte offsets but does not call `file.text()`
 for the complete trajectory. A requested frame is read with `Blob.slice(start,
-end).text()`, parsed, and transferred to the main thread.
+end).arrayBuffer()`, parsed, and transferred to the main thread.
+
+The atom rows of LAMMPS dumps, CFG files and XYZ frames are converted directly
+from these bytes instead of splitting decoded lines into strings. Every value
+is exactly the number that `Number()` gives for the token (CFG and XYZ also
+accept Fortran `d` exponents as before). A plain decimal token whose digits
+form an integer below 2^53 and whose decimal exponent lies within ±22 is
+converted with one correctly rounded multiplication or division; every other
+token, such as `1e-30`, `0x10` or `nan`, is converted by `Number()` from its
+text. A frame whose atom rows contain a non-ASCII byte, which might belong to a
+Unicode space, or any malformed row is parsed again from its decoded text by
+the line-based parser, so results and error messages do not depend on the
+input path.
 
 For a numbered set of LAMMPS dump files, files are naturally sorted by the
 varying numeric filename field. Each file receives its own byte-offset index,
@@ -299,8 +343,10 @@ analysis array triggers another estimate and may shrink the cache. This policy
 is a heuristic, because browsers do not expose a portable exact memory counter.
 
 The folder opener examines conventional `.cfg`, `.dump`, `.lmp`, `.lammpstrj`,
-`.lammpstraj`, `.xyz`, `.extxyz`, `.pdb`, `.ent` and `.txt` paths plus other filenames containing digits after the user grants read
-access. It reads at most the first 64 KiB of each candidate to identify the CFG
+`.lammpstraj`, `.xyz`, `.extxyz`, `.pdb`, `.ent` and `.txt` paths, the same names
+ending in `.gz`, any other `.gz` file and other filenames containing digits after the user grants read
+access. It reads at most the first 64 KiB of each candidate, after decompression
+for a gzip file, to identify the CFG
 or LAMMPS/XYZ/PDB text header. An explicit structure filename segment is retained as
 a fallback hint and the full parser remains authoritative. For CFG files, each
 run of digits in the complete filename is considered as a possible frame index.

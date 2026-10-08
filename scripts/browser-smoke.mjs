@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { gzipSync } from 'node:zlib';
 import { cfgText, crystalFrame, dumpText } from '../tests/helpers/crystals.js';
 import { createCell } from '../src/data/model.js';
 import { runAtomToolsSmoke } from './browser-atom-tools.mjs';
@@ -50,6 +51,8 @@ bcc.cell = createCell({ vectors: [6.6, 0, 0, .5, 6.6, 0, .2, -.3, 6.6], triclini
 bcc.properties = [{ name: 'pe', unit: 'eV', data: new Float64Array(bcc.ids.length).fill(-4.28) }];
 await writeFile(resolve(profile, 'test-crystal.cfg'), cfgText(fcc));
 await writeFile(resolve(profile, 'test-trajectory.dump'), dumpText([bcc, bcc]));
+// gzip input is recognized by content and decompressed in the structure Worker.
+await writeFile(resolve(profile, 'test-trajectory.dump.gz'), gzipSync(dumpText([bcc, bcc])));
 const { DISPLAY: ignoredDisplay, ...environment } = process.env;
 const chrome = spawn(chromePath, [
   '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
@@ -458,7 +461,7 @@ try {
   // Use Chrome's native file input, rather than constructing a fetched example.
   const { root: domRoot } = await call('DOM.getDocument');
   const { nodeId } = await call('DOM.querySelector', { nodeId: domRoot.nodeId, selector: '#file-input' });
-  for (const [name, atoms, frames] of [['test-trajectory.dump', 16, 2], ['test-crystal.cfg', 31, 1]]) {
+  for (const [name, atoms, frames] of [['test-trajectory.dump', 16, 2], ['test-trajectory.dump.gz', 16, 2], ['test-crystal.cfg', 31, 1]]) {
     await call('DOM.setFileInputFiles', { nodeId, files: [resolve(profile, name)] });
     await waitFor(`document.getElementById('file-name').textContent === '${name}' && document.getElementById('loading').hidden`, 'local file');
     assert.equal(await evaluate('Number(document.getElementById("atom-count").textContent)'), atoms);

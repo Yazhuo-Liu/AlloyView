@@ -5,15 +5,67 @@ import {
   validateFrame,
   wrapFractional,
 } from '../data/model.js';
+import {
+  AsciiRowReader,
+  FALLBACK,
+  NUMBER,
+  SYMBOL_OR_NUMBER,
+  TEXT,
+  asBytes,
+  isByteInput,
+  lineStartAfter,
+  parseBytesWithFallback,
+  readHeaderLines,
+} from './ascii-rows.js';
 
 const NUMBER_PATTERN = '[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[EeDd][-+]?\\d+)?';
+const SYMBOL_PATTERN = /^[A-Za-z][A-Za-z0-9_+-]*$/;
+const HASH = 35;
 const IDENTITY = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 const CFG_BOUNDARY_TOLERANCE = 1e-5;
 
-export function parseCfg(text, sourceName = 'structure.cfg') {
+/**
+ * Parse a CFG file from its text or from its UTF-8 bytes. The atom rows of
+ * bytes are read directly when possible (see ascii-rows.js). Otherwise, and
+ * for every malformed file, the bytes are decoded and parsed as text, so the
+ * result and any error message do not depend on the input type.
+ */
+export function parseCfg(input, sourceName = 'structure.cfg') {
   const startedAt = performance.now();
+  if (!isByteInput(input)) return parseCfgText(input, sourceName, startedAt);
+  return parseBytesWithFallback(
+    asBytes(input),
+    (bytes) => parseCfgBytes(bytes, sourceName, startedAt),
+    (text) => parseCfgText(text, sourceName, startedAt),
+  );
+}
+
+function parseCfgText(text, sourceName, startedAt) {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const header = readCfgHeader(lines);
+  const parsed = header.entryCount === null
+    ? parseBasicAtoms(lines, header.dataIndex, header.count)
+    : parseExtendedAtoms(lines, header.dataIndex, header.count, extendedLayout(header));
+  return finishCfgFrame(header, parsed, sourceName, startedAt);
+}
+
+function parseCfgBytes(bytes, sourceName, startedAt) {
+  const header = readHeaderLines(bytes, readCfgHeader);
+  if (!header) return null;
+  const start = lineStartAfter(bytes, header.dataIndex);
+  if (start < 0) return null;
+  const parsed = header.entryCount === null
+    ? readBasicAtomBytes(bytes, start, header.count)
+    : readExtendedAtomBytes(bytes, start, header.count, extendedLayout(header));
+  return finishCfgFrame(header, parsed, sourceName, startedAt);
+}
+
+// Reads the header from `lines`. Only the first `usableLines` lines are known
+// when the caller decoded just the start of a file; if the header continues
+// beyond them, this returns null and the caller decodes more.
+function readCfgHeader(lines, usableLines = lines.length) {
   const firstIndex = lines.findIndex((line) => line.trim() && !line.trim().startsWith('#'));
+  if (firstIndex < 0 && usableLines < lines.length) return null;
   if (firstIndex < 0) throw cfgError('The file is empty.');
 
   const countMatch = lines[firstIndex].trim().match(/^Number\s+of\s+particles\s*=\s*(\d+)\s*$/i);
@@ -99,6 +151,7 @@ export function parseCfg(text, sourceName = 'structure.cfg') {
     dataIndex = lineIndex;
     break;
   }
+  if (dataIndex < 0 && usableLines < lines.length) return null;
 
   if (h0Seen.size !== 9) {
     const missing = [...Array(9).keys()].filter((index) => !h0Seen.has(index))
@@ -120,10 +173,10 @@ export function parseCfg(text, sourceName = 'structure.cfg') {
     pbc: [true, true, true],
     triclinic: hasOffDiagonal(vectors),
   });
+  return { count, cell, dataIndex, entryCount, noVelocity, auxiliary };
+}
 
-  const parsed = entryCount === null
-    ? parseBasicAtoms(lines, dataIndex, count)
-    : parseExtendedAtoms(lines, dataIndex, count, entryCount, noVelocity, auxiliary);
+function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt) {
   const rawFractional = parsed.fractional;
   const fractional = wrapCfgFractional(rawFractional, cell.pbc);
   const semantics = extractExtendedSemantics(parsed.properties, count);
@@ -236,6 +289,10 @@ function parseBasicAtoms(lines, start, count) {
   }
 
   if (atom !== count) throw cfgError(`The atom data ended early: ${count} atoms were declared, but only ${atom} were read.`);
+  return basicAtomResult(fractional, types, typeMap, masses, hasVelocity, velocity);
+}
+
+function basicAtomResult(fractional, types, typeMap, masses, hasVelocity, velocity) {
   const properties = [{ name: 'mass', unit: 'amu', data: masses }];
   if (hasVelocity) {
     for (let component = 0; component < 3; component += 1) {
@@ -245,7 +302,52 @@ function parseBasicAtoms(lines, start, count) {
   return { fractional, types, typeLabels: [...typeMap.keys()], properties };
 }
 
-function parseExtendedAtoms(lines, start, count, entryCount, noVelocity, auxiliary) {
+// Byte-level counterpart of parseBasicAtoms: the same arrays, and FALLBACK
+// wherever parseBasicAtoms would throw (see ascii-rows.js).
+function readBasicAtomBytes(bytes, start, count) {
+  const fractional = new Float64Array(count * 3);
+  const types = new Uint16Array(count);
+  const masses = new Float32Array(count);
+  const velocity = [new Float32Array(count), new Float32Array(count), new Float32Array(count)];
+  const typeMap = new Map();
+  const kinds = Uint8Array.of(NUMBER, TEXT, NUMBER, NUMBER, NUMBER, NUMBER, NUMBER, NUMBER);
+  const values = new Float64Array(kinds.length);
+  const texts = new Array(kinds.length).fill('');
+  const reader = new AsciiRowReader(bytes, start, { fortranExponents: true });
+  const symbols = new SymbolCache();
+  let hasVelocity = null;
+  let atom = 0;
+
+  while (atom < count && !reader.atEnd()) {
+    if (reader.skipLineStartingWith(HASH)) continue;
+    const tokenCount = reader.readRow(kinds, values, texts);
+    if (tokenCount === 0) continue;
+    if (tokenCount !== 5 && tokenCount !== 8) throw FALLBACK;
+    const rowHasVelocity = tokenCount === 8;
+    if (hasVelocity !== null && hasVelocity !== rowHasVelocity) throw FALLBACK;
+    hasVelocity = rowHasVelocity;
+    if (!Number.isFinite(values[0])) throw FALLBACK;
+    masses[atom] = values[0];
+    types[atom] = symbols.typeIndex(texts[1], typeMap);
+    for (let component = 0; component < 3; component += 1) {
+      const coordinate = values[2 + component];
+      if (!Number.isFinite(coordinate)) throw FALLBACK;
+      fractional[atom * 3 + component] = coordinate;
+      if (rowHasVelocity) {
+        const speed = values[5 + component];
+        if (!Number.isFinite(speed)) throw FALLBACK;
+        velocity[component][atom] = speed;
+      }
+    }
+    atom += 1;
+  }
+
+  if (atom !== count) throw FALLBACK;
+  return basicAtomResult(fractional, types, typeMap, masses, hasVelocity, velocity);
+}
+
+// Validation and storage shared by the text and byte readers of extended rows.
+function extendedLayout({ count, entryCount, noVelocity, auxiliary }) {
   const baseColumns = noVelocity ? 3 : 6;
   const auxiliaryCount = entryCount - baseColumns;
   if (entryCount < baseColumns || auxiliaryCount < 0) {
@@ -267,10 +369,31 @@ function parseExtendedAtoms(lines, start, count, entryCount, noVelocity, auxilia
       ? new Float64Array(count)
       : new Float32Array(count)
   ));
-  const masses = new Float32Array(count);
-  const fractional = new Float64Array(count * 3);
-  const types = new Uint16Array(count);
-  const typeMap = new Map();
+  return {
+    entryCount,
+    propertyDefinitions,
+    propertyData,
+    masses: new Float32Array(count),
+    fractional: new Float64Array(count * 3),
+    types: new Uint16Array(count),
+    typeMap: new Map(),
+  };
+}
+
+function extendedAtomResult({ fractional, types, typeMap, masses, propertyDefinitions, propertyData }) {
+  return {
+    fractional,
+    types,
+    typeLabels: [...typeMap.keys()],
+    properties: [
+      { name: 'mass', unit: 'amu', data: masses },
+      ...propertyDefinitions.map((definition, index) => ({ ...definition, data: propertyData[index] })),
+    ],
+  };
+}
+
+function parseExtendedAtoms(lines, start, count, layout) {
+  const { entryCount, propertyData, masses, fractional, types, typeMap } = layout;
   let currentMass = null;
   let currentSymbol = null;
   let atom = 0;
@@ -316,15 +439,91 @@ function parseExtendedAtoms(lines, start, count, entryCount, noVelocity, auxilia
   }
 
   if (atom !== count) throw cfgError(`The atom data ended early: ${count} atoms were declared, but only ${atom} were read.`);
-  return {
-    fractional,
-    types,
-    typeLabels: [...typeMap.keys()],
-    properties: [
-      { name: 'mass', unit: 'amu', data: masses },
-      ...propertyDefinitions.map((definition, index) => ({ ...definition, data: propertyData[index] })),
-    ],
-  };
+  return extendedAtomResult(layout);
+}
+
+// Byte-level counterpart of parseExtendedAtoms: the same arrays, and FALLBACK
+// wherever parseExtendedAtoms would throw (see ascii-rows.js). A token that
+// starts with a letter is never a finite number, so it is read as text: a
+// mass line is a single finite number, a symbol line a single valid symbol.
+function readExtendedAtomBytes(bytes, start, count, layout) {
+  const { entryCount, propertyData, masses, fractional, types, typeMap } = layout;
+  const propertyCount = propertyData.length;
+  const kinds = new Uint8Array(entryCount + 2).fill(NUMBER);
+  kinds[0] = SYMBOL_OR_NUMBER;
+  kinds[1] = SYMBOL_OR_NUMBER;
+  const values = new Float64Array(kinds.length);
+  const texts = new Array(kinds.length).fill('');
+  const reader = new AsciiRowReader(bytes, start, { fortranExponents: true });
+  const symbols = new SymbolCache();
+  let currentMass = null;
+  let currentSymbol = null;
+  let atom = 0;
+
+  while (atom < count && !reader.atEnd()) {
+    if (reader.skipLineStartingWith(HASH)) continue;
+    const tokenCount = reader.readRow(kinds, values, texts);
+    if (tokenCount === 0) continue;
+    if (tokenCount === 1) {
+      // Not finite: texts[0] holds the token.
+      if (Number.isFinite(values[0])) currentMass = values[0];
+      else currentSymbol = symbols.validate(texts[0]);
+      continue;
+    }
+
+    let first = 0;
+    let rowMass = currentMass;
+    let rowSymbol = currentSymbol;
+    if (tokenCount === entryCount + 2) {
+      if (!Number.isFinite(values[0]) || Number.isFinite(values[1])) throw FALLBACK;
+      rowMass = values[0];
+      rowSymbol = symbols.validate(texts[1]);
+      first = 2;
+    }
+    if (tokenCount - first !== entryCount || rowMass === null || rowSymbol === null) throw FALLBACK;
+    const x = values[first], y = values[first + 1], z = values[first + 2];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) throw FALLBACK;
+    for (let property = 0; property < propertyCount; property += 1) {
+      const value = values[first + 3 + property];
+      if (!Number.isFinite(value)) throw FALLBACK;
+      propertyData[property][atom] = value;
+    }
+    fractional[atom * 3] = x; fractional[atom * 3 + 1] = y; fractional[atom * 3 + 2] = z;
+    masses[atom] = rowMass;
+    types[atom] = symbols.typeIndex(rowSymbol, typeMap);
+    atom += 1;
+  }
+
+  if (atom !== count) throw FALLBACK;
+  return extendedAtomResult(layout);
+}
+
+// Remembers the last symbol so that validation and type lookup run once per
+// change of symbol rather than once per atom.
+class SymbolCache {
+  constructor() {
+    this.valid = null;
+    this.typed = null;
+    this.type = 0;
+  }
+
+  validate(symbol) {
+    if (symbol !== this.valid) {
+      if (!SYMBOL_PATTERN.test(symbol)) throw FALLBACK;
+      this.valid = symbol;
+    }
+    return symbol;
+  }
+
+  typeIndex(symbol, typeMap) {
+    if (symbol !== this.typed) {
+      this.validate(symbol);
+      if (!typeMap.has(symbol)) typeMap.set(symbol, typeMap.size);
+      this.typed = symbol;
+      this.type = typeMap.get(symbol);
+    }
+    return this.type;
+  }
 }
 
 function extractExtendedSemantics(properties, count) {
@@ -458,7 +657,7 @@ function finiteAtomValue(value, lineIndex) {
 }
 
 function validateSymbol(value, lineIndex) {
-  if (!/^[A-Za-z][A-Za-z0-9_+-]*$/.test(value)) {
+  if (!SYMBOL_PATTERN.test(value)) {
     throw cfgError(`Line ${lineIndex + 1} has an invalid element/type symbol: “${value}”.`);
   }
   return value;

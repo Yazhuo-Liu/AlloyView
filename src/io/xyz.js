@@ -1,4 +1,17 @@
 import { cartesianToFractional, createCell, fractionalToCartesian, validateFrame, wrapFractional } from '../data/model.js';
+import {
+  AsciiRowReader,
+  FALLBACK,
+  NUMBER,
+  SKIP,
+  TEXT,
+  asBytes,
+  isAsciiBlank,
+  isByteInput,
+  lineStartAfter,
+  parseBytesWithFallback,
+  readHeaderLines,
+} from './ascii-rows.js';
 import { isBlankLine, lineText, scanLineBytes } from './text-lines.js';
 
 const ELEMENTS = 'H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og'.split(' ');
@@ -34,16 +47,55 @@ export async function readXyzFrame(blob, offsets, index, sourceName = 'trajector
     throw new Error(`XYZ trajectory frame ${index} is outside the available range.`);
   }
   const end = offsets[index + 1] ?? blob.size;
-  const frame = parseXyzFrame(await blob.slice(offsets[index], end).text(), sourceName);
+  const frame = parseXyzFrame(new Uint8Array(await blob.slice(offsets[index], end).arrayBuffer()), sourceName);
   frame.frameIndex = index;
   return frame;
 }
 
-export function parseXyzFrame(text, sourceName = 'structure.xyz') {
+/**
+ * Parse one XYZ frame from its text or from its UTF-8 bytes. The atom rows of
+ * bytes are read directly when possible (see ascii-rows.js). Otherwise, and
+ * for every malformed frame, the bytes are decoded and parsed as text, so the
+ * result and any error message do not depend on the input type.
+ */
+export function parseXyzFrame(input, sourceName = 'structure.xyz') {
   const startedAt = performance.now();
-  const lines = String(text).replace(/^\uFEFF/, '').split(/\r?\n/);
+  if (!isByteInput(input)) return parseXyzText(String(input), sourceName, startedAt);
+  return parseBytesWithFallback(
+    asBytes(input),
+    (bytes) => parseXyzBytes(bytes, sourceName, startedAt),
+    (text) => parseXyzText(text, sourceName, startedAt),
+  );
+}
+
+function parseXyzText(text, sourceName, startedAt) {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const header = readXyzHeader(lines);
+  const atoms = createXyzAtoms(header);
+  readXyzRowsText(lines, header, atoms);
+  return finishXyzFrame(header, atoms, sourceName, startedAt);
+}
+
+function parseXyzBytes(bytes, sourceName, startedAt) {
+  const header = readHeaderLines(bytes, readXyzHeader);
+  if (!header) return null;
+  const start = lineStartAfter(bytes, header.cursor);
+  // A quoted token may contain blanks (see tokenizeRow); leave quotes to the
+  // text parser.
+  if (start < 0 || bytes.indexOf(34, start) >= 0 || bytes.indexOf(39, start) >= 0) return null;
+  const atoms = createXyzAtoms(header);
+  const end = readXyzRowsBytes(bytes, start, header, atoms);
+  if (!isAsciiBlank(bytes, end)) return null;
+  return finishXyzFrame(header, atoms, sourceName, startedAt);
+}
+
+// Reads the count and comment lines. Only the first `usableLines` lines are
+// known when the caller decoded just the start of the data; if the header
+// continues beyond them, this returns null and the caller decodes more.
+function readXyzHeader(lines, usableLines = lines.length) {
   let cursor = 0;
   while (!lines[cursor]?.trim() && cursor < lines.length) cursor += 1;
+  if (cursor + 1 >= usableLines && usableLines < lines.length) return null;
   const count = atomCount(lines[cursor]);
   cursor += 1;
   if (cursor >= lines.length) throw xyzError('The comment line is missing.');
@@ -63,13 +115,24 @@ export function parseXyzFrame(text, sourceName = 'structure.xyz') {
     unit: '', data: new Float32Array(count), field, component,
   })));
   if (new Set(properties.map((property) => property.name)).size !== properties.length) throw xyzError('Flattened numeric property names are duplicated.');
-  const ids = new Float64Array(count);
-  const types = new Uint16Array(count);
-  const positions = new Float32Array(count * 3);
-  const typeLabels = [];
-  const typeMap = new Map();
+  return { cursor, count, comment, metadata, fields, speciesField, positionField, idField, properties };
+}
+
+function createXyzAtoms({ count, fields }) {
+  return {
+    ids: new Float64Array(count),
+    types: new Uint16Array(count),
+    positions: new Float32Array(count * 3),
+    typeLabels: [],
+    typeMap: new Map(),
+    columnCount: fields.reduce((sum, field) => sum + field.width, 0),
+  };
+}
+
+function readXyzRowsText(lines, { cursor: firstLine, count, speciesField, positionField, idField, properties }, atoms) {
+  const { ids, types, positions, typeLabels, typeMap, columnCount } = atoms;
   const seenIds = new Set();
-  const columnCount = fields.reduce((sum, field) => sum + field.width, 0);
+  let cursor = firstLine;
   for (let atom = 0; atom < count; atom += 1, cursor += 1) {
     const tokens = tokenizeRow(lines[cursor] ?? '');
     if (tokens.length !== columnCount) throw xyzError(`Atom row ${atom + 1} requires ${columnCount} columns; found ${tokens.length}.`);
@@ -93,6 +156,102 @@ export function parseXyzFrame(text, sourceName = 'structure.xyz') {
     }
   }
   if (lines.slice(cursor).some((line) => line.trim())) throw xyzError('Unexpected data after the declared atom rows.');
+}
+
+// Byte-level counterpart of readXyzRowsText: the same arrays, and FALLBACK
+// wherever that loop would throw (see ascii-rows.js). Returns the position
+// after the last row.
+function readXyzRowsBytes(bytes, start, { count, speciesField, positionField, idField, properties }, atoms) {
+  const { ids, types, positions, typeLabels, typeMap, columnCount } = atoms;
+  const kinds = new Uint8Array(columnCount).fill(SKIP);
+  kinds[speciesField.offset] = TEXT;
+  for (let axis = 0; axis < 3; axis += 1) kinds[positionField.offset + axis] = NUMBER;
+  if (idField) kinds[idField.offset] = NUMBER;
+  const propertyCount = properties.length;
+  const propertyColumns = new Int32Array(propertyCount);
+  // 0: real (NaN allowed), 1: integer, 2: logical
+  const propertyTypes = new Uint8Array(propertyCount);
+  properties.forEach((property, index) => {
+    const column = property.field.offset + property.component;
+    propertyColumns[index] = column;
+    propertyTypes[index] = property.field.type === 'L' ? 2 : property.field.type === 'I' ? 1 : 0;
+    kinds[column] = property.field.type === 'L' ? TEXT : NUMBER;
+  });
+  const propertyData = properties.map((property) => property.data);
+  const values = new Float64Array(columnCount);
+  const texts = new Array(columnCount).fill('');
+  const atomicNumbers = speciesField.name === 'Z';
+  const labels = new Map();
+  let lastToken = null;
+  let lastType = 0;
+  // IDs below the map limit are checked for duplicates in a byte map, larger
+  // ones in a Set; together they find exactly the duplicates of the text loop.
+  const seenLimit = Math.min(count * 4 + 64, 1 << 26);
+  const seen = new Uint8Array(seenLimit);
+  const largeIds = new Set();
+  const reader = new AsciiRowReader(bytes, start, { fortranExponents: true });
+  for (let atom = 0; atom < count; atom += 1) {
+    if (reader.readRow(kinds, values, texts) !== columnCount) throw FALLBACK;
+    const token = texts[speciesField.offset];
+    if (token !== lastToken) {
+      let species = labels.get(token);
+      if (species === undefined) {
+        try {
+          species = speciesLabel(token, atomicNumbers);
+        } catch {
+          throw FALLBACK;
+        }
+        labels.set(token, species);
+      }
+      if (!typeMap.has(species)) {
+        if (typeLabels.length >= 65_535) throw FALLBACK;
+        typeMap.set(species, typeLabels.length);
+        typeLabels.push(species);
+      }
+      lastToken = token;
+      lastType = typeMap.get(species);
+    }
+    types[atom] = lastType;
+    for (let axis = 0; axis < 3; axis += 1) {
+      const coordinate = values[positionField.offset + axis];
+      if (!Number.isFinite(coordinate)) throw FALLBACK;
+      positions[atom * 3 + axis] = coordinate;
+    }
+    let id = atom + 1;
+    if (idField) {
+      id = values[idField.offset];
+      if (!Number.isSafeInteger(id) || id <= 0) throw FALLBACK;
+      if (id < seenLimit) {
+        if (seen[id] !== 0) throw FALLBACK;
+        seen[id] = 1;
+      } else {
+        if (largeIds.has(id)) throw FALLBACK;
+        largeIds.add(id);
+      }
+    }
+    ids[atom] = id;
+    for (let property = 0; property < propertyCount; property += 1) {
+      const column = propertyColumns[property];
+      let value;
+      if (propertyTypes[property] === 2) {
+        value = logicalValue(texts[column]);
+        if (value < 0) throw FALLBACK;
+      } else {
+        value = values[column];
+        // A non-finite value came from the text conversion, so texts[column]
+        // holds its token.
+        if (!Number.isFinite(value) && !/^nan$/i.test(texts[column])) throw FALLBACK;
+        if (propertyTypes[property] === 1 && !Number.isSafeInteger(value)) throw FALLBACK;
+      }
+      propertyData[property][atom] = value;
+    }
+  }
+  return reader.position;
+}
+
+function finishXyzFrame(header, atoms, sourceName, startedAt) {
+  const { metadata, fields, speciesField, idField, properties, comment } = header;
+  const { ids, types, positions, typeLabels } = atoms;
   const cell = cellFromMetadata(metadata, positions);
   const coordinates = coordinatesForCell(positions, cell, 'XYZ');
   return validateFrame({
@@ -199,9 +358,15 @@ function atomCount(value) {
 }
 
 function booleanValue(value) {
+  const logical = logicalValue(value);
+  if (logical < 0) throw xyzError(`Invalid boolean value: ${value}.`);
+  return logical;
+}
+
+function logicalValue(value) {
   if (/^(?:t|true|1)$/i.test(value)) return 1;
   if (/^(?:f|false|0)$/i.test(value)) return 0;
-  throw xyzError(`Invalid boolean value: ${value}.`);
+  return -1;
 }
 
 function numeric(value, label, { allowNaN = false } = {}) {

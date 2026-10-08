@@ -14,9 +14,10 @@
 </p>
 
 AlloyView is a browser-based viewer for atomistic structures and trajectories
-in metals and alloys. Open AtomEye CFG, LAMMPS dumps and data files, XYZ, PDB or VASP POSCAR, inspect
-atoms, calculate structural properties, and export figures. Files are parsed and
-analyzed on your device; structure data is never uploaded by the application.
+in metals and alloys. Open AtomEye CFG, LAMMPS dumps and data files, XYZ, PDB or VASP POSCAR
+(also gzip-compressed), inspect atoms, calculate structural properties, and
+export figures. Files are parsed and analyzed on your device; structure data is
+never uploaded by the application.
 
 ## Viewer
 
@@ -316,8 +317,9 @@ modules from mixing file-loading protocols after deployment. See the
 | AtomEye design references and source provenance | [AtomEye review](docs/ATOMEYE_REVIEW.md) |
 | CNA, PTM, ideal-lattice strain, central symmetry and parallel execution | [Structure analysis](docs/STRUCTURE_ANALYSIS.md) |
 
-WebGL 2 is required. Compressed/binary dumps, LAMMPS input scripts, general
-triclinic `abc origin` boxes, XDATCAR and NetCDF are not supported. LAMMPS data
+WebGL 2 is required. Binary dumps, LAMMPS input scripts, general triclinic
+`abc origin` boxes, XDATCAR, NetCDF and concatenated (multi-stream) gzip files
+are not supported; ordinary `.gz` files of every supported format open directly. LAMMPS data
 files and VASP POSCAR/CONTCAR open as single structures.
 Coordination uses one global cutoff; bond graphs have separate element-pair
 overrides. Reference-frame strain requires explicit stable atom IDs.

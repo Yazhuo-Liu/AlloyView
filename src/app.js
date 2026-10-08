@@ -25,6 +25,7 @@ import {
   inferStructureFormatFromPath,
   isPotentialStructurePath,
 } from './io/file-sequences.js';
+import { readStructureHeader } from './io/gzip.js';
 import {
   colorsByProperty,
   colorsByCategory,
@@ -946,7 +947,7 @@ async function classifyStructureEntries(entries, originLabel, isCurrent) {
       cursor += 1;
       let format = null;
       if (isPotentialStructurePath(entry.relativePath)) {
-        const header = await entry.file.slice(0, 64 * 1024).text();
+        const header = await readStructureHeader(entry.file);
         if (!isCurrent()) return;
         const detectedFormat = detectStructureFormatHeader(header);
         const filenameHint = inferStructureFormatFromPath(entry.relativePath);

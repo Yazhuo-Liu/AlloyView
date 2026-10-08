@@ -4,7 +4,7 @@ AlloyView opens atomistic structures, renders them with WebGL 2, and performs lo
 
 ## Start with a structure
 
-Open a CFG, LAMMPS dump or data, XYZ, PDB or VASP POSCAR file using **Open local**, or drop a file onto the viewer. Open a numbered sequence with **Choose files** or **Choose folder**. The **×** beside the structure name closes the source and returns to the homepage.
+Open a CFG, LAMMPS dump or data, XYZ, PDB or VASP POSCAR file, plain or gzip-compressed (`.gz`), using **Open local**, or drop a file onto the viewer. Open a numbered sequence with **Choose files** or **Choose folder**. The **×** beside the structure name closes the source and returns to the homepage.
 
 The [user guide](USER_GUIDE.md) describes the full workflow; [file formats](FORMATS.md) lists coordinate, cell and property conventions. Configuration import/export is always available directly below the structure summary.
 

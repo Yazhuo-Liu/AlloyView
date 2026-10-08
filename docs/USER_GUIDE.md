@@ -1,9 +1,9 @@
 # AlloyView user and development guide
 
 AlloyView is a browser-only atomistic structure viewer and analysis prototype for
-metals and alloys. Local AtomEye CFG, LAMMPS text dump and data, XYZ, PDB and VASP POSCAR files are parsed in a
-Web Worker, rendered with WebGL 2 sphere impostors, and never uploaded by the
-application.
+metals and alloys. Local AtomEye CFG, LAMMPS text dump and data, XYZ, PDB and VASP POSCAR files,
+also gzip-compressed, are parsed in a Web Worker, rendered with WebGL 2 sphere
+impostors, and never uploaded by the application.
 
 The viewer supports this workflow:
 
@@ -859,7 +859,7 @@ for adapter options and timing interpretation.
 - LAMMPS text dump: `id`, numeric `type`, common scalar columns, `x/y/z`,
   `xu/yu/zu`, `xs/ys/zs`, or `xsu/ysu/zsu`; orthogonal and restricted triclinic
   `xy/xz/yz` boxes; per-axis boundary flags; and optional `ix/iy/iz` image flags
-  for unwrapped display. General triclinic `abc origin`, compressed/binary dumps,
+  for unwrapped display. General triclinic `abc origin`, binary dumps,
   partial image flags, and non-numeric custom columns (except `element`) are
   rejected explicitly. Format recognition is content-based; conventional
   `.dump`, `.lmp`, `.lammpstrj`, and `.lammpstraj` names are shown as candidates.
@@ -872,6 +872,12 @@ for adapter options and timing interpretation.
 - PDB: fixed-width `ATOM`/`HETATM`, decimal serial IDs, `CRYST1` lengths and
   angles, occupancy/temperature factors and multi-model trajectories.
   Structures without `CRYST1` use a padded nonperiodic bounding cell.
+- gzip: every format above may be gzip-compressed (`.gz`). Files are
+  recognized by content and decompressed in the structure Worker, and numbered
+  `.gz` files form sequences. Trajectories are decompressed once into a browser
+  Blob of the decompressed size; single-frame files are decompressed whenever
+  they are read. Concatenated multi-stream gzip files are rejected. See
+  [gzip-compressed files](FORMATS.md#gzip-compressed-files).
 - Trajectories: LAMMPS byte offsets are indexed incrementally; requested frames
   are sliced and parsed on demand. A single dump file may contain multiple
   frames. Numbered LAMMPS dump files are naturally sorted, their internal frame
@@ -950,7 +956,9 @@ This is a provenance and risk statement, not legal advice.
 - The parser currently indexes a dump in one Worker and does not stream partial
   atom rows into the renderer.
 - Very large text frames still require memory for the frame slice, parsed arrays,
-  the main-thread copy, and GPU buffers. One million atoms is an exploration
+  the main-thread copy, and GPU buffers. A gzip-compressed trajectory also
+  occupies its decompressed size as Blob data, which Firefox and Safari may keep
+  in memory. One million atoms is an exploration
   target, not a performance claim.
 - Coordination retains a global cutoff; the separate bond graph provides
   element-pair cutoff overrides.

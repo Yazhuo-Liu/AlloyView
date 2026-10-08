@@ -5,6 +5,18 @@ import {
   validateFrame,
   wrapFractional,
 } from '../data/model.js';
+import {
+  AsciiRowReader,
+  FALLBACK,
+  NUMBER,
+  SKIP,
+  TEXT,
+  asBytes,
+  decodeText,
+  isByteInput,
+  lineStartAfter,
+  parseBytesWithFallback,
+} from './ascii-rows.js';
 
 const TIMESTEP_MARKER = new TextEncoder().encode('ITEM: TIMESTEP');
 const WRAPPED_COORDINATE_SETS = [
@@ -74,13 +86,51 @@ export async function readLammpsFrame(blob, offsets, frameIndex, sourceName = 't
     throw new Error(`Trajectory frame ${frameIndex} is outside the range 0..${offsets.length - 1}.`);
   }
   const end = frameIndex + 1 < offsets.length ? offsets[frameIndex + 1] : blob.size;
-  const text = await blob.slice(offsets[frameIndex], end).text();
-  return parseLammpsFrame(text, sourceName);
+  const bytes = new Uint8Array(await blob.slice(offsets[frameIndex], end).arrayBuffer());
+  return parseLammpsFrame(bytes, sourceName);
 }
 
-export function parseLammpsFrame(text, sourceName = 'trajectory.dump') {
+/**
+ * Parse one dump frame from its text or from its UTF-8 bytes. The atom rows
+ * of bytes are read directly when possible (see ascii-rows.js). Otherwise, and
+ * for every malformed frame, the bytes are decoded and parsed as text, so the
+ * result and any error message do not depend on the input type.
+ */
+export function parseLammpsFrame(input, sourceName = 'trajectory.dump') {
   const startedAt = performance.now();
+  if (!isByteInput(input)) return parseLammpsText(input, sourceName, startedAt);
+  return parseBytesWithFallback(
+    asBytes(input),
+    (bytes) => parseLammpsBytes(bytes, sourceName, startedAt),
+    (text) => parseLammpsText(text, sourceName, startedAt),
+  );
+}
+
+function parseLammpsText(text, sourceName, startedAt) {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const header = readDumpHeader(lines);
+  const atoms = createDumpAtoms(header);
+  readDumpRowsText(lines, header, atoms);
+  return finishDumpFrame(header, atoms, sourceName, startedAt);
+}
+
+// The header occupies the first nine lines. Decoding only those bytes yields
+// the same lines as decoding the frame: a UTF-8 sequence never spans a line
+// feed, and the leading BOM is removed in both cases.
+const HEADER_LINES = 9;
+
+function parseLammpsBytes(bytes, sourceName, startedAt) {
+  const atomStart = lineStartAfter(bytes, HEADER_LINES);
+  if (atomStart < 0) return null;
+  const lines = decodeText(bytes.subarray(0, atomStart)).replace(/^\uFEFF/, '').split(/\r?\n/);
+  const header = readDumpHeader(lines);
+  if (header.cursor !== HEADER_LINES) return null;
+  const atoms = createDumpAtoms(header);
+  readDumpRowsBytes(bytes, atomStart, header, atoms);
+  return finishDumpFrame(header, atoms, sourceName, startedAt);
+}
+
+function readDumpHeader(lines) {
   let cursor = 0;
 
   expectHeader(lines, cursor, 'ITEM: TIMESTEP');
@@ -143,26 +193,42 @@ export function parseLammpsFrame(text, sourceName = 'trajectory.dump') {
   const hasImageFlags = imageColumnCount === IMAGE_COLUMNS.length;
   cursor += 1;
 
+  return {
+    cursor, timestep, count, cell, columns, columnIndex,
+    wrappedCoordinateSet, unwrappedCoordinateSet, hasImageFlags,
+  };
+}
+
+function createDumpAtoms({ count, columns, columnIndex, wrappedCoordinateSet, unwrappedCoordinateSet, hasImageFlags }) {
   const propertyNames = columns.filter((name) => !RESERVED_COLUMNS.has(name));
-  const ids = new Float64Array(count);
-  const rawTypes = new Float64Array(count);
-  const types = new Uint16Array(count);
   const wrappedValues = wrappedCoordinateSet ? new Float32Array(count * 3) : null;
   const unwrappedValues = unwrappedCoordinateSet ? new Float32Array(count * 3) : null;
-  const imageFlags = hasImageFlags ? new Int32Array(count * 3) : null;
-  const properties = propertyNames.map((name) => ({ name, unit: '', data: new Float32Array(count) }));
-  const elements = columnIndex.has('element') ? new Array(count) : null;
-  const idSet = new Set();
+  return {
+    propertyNames,
+    ids: new Float64Array(count),
+    rawTypes: new Float64Array(count),
+    types: new Uint16Array(count),
+    wrappedValues,
+    unwrappedValues,
+    imageFlags: hasImageFlags ? new Int32Array(count * 3) : null,
+    properties: propertyNames.map((name) => ({ name, unit: '', data: new Float32Array(count) })),
+    elements: columnIndex.has('element') ? new Array(count) : null,
+    // Column positions are fixed for the frame; resolve them once rather
+    // than per atom.
+    coordinateReaders: [[wrappedCoordinateSet, wrappedValues], [unwrappedCoordinateSet, unwrappedValues]]
+      .filter(([coordinateSet]) => coordinateSet)
+      .map(([coordinateSet, values]) => ({ values, names: coordinateSet.names, columns: coordinateSet.names.map(name => columnIndex.get(name)) })),
+  };
+}
 
-  // Column positions are fixed for the frame; resolve them once rather than
-  // per atom, and keep the per-atom loop free of allocations.
+function readDumpRowsText(lines, { cursor: firstLine, count, columns, columnIndex }, atoms) {
+  const { propertyNames, ids, rawTypes, imageFlags, properties, elements, coordinateReaders } = atoms;
+  const idSet = new Set();
   const idColumn = columnIndex.get('id'), typeColumn = columnIndex.get('type'), elementColumn = columnIndex.get('element');
-  const coordinateReaders = [[wrappedCoordinateSet, wrappedValues], [unwrappedCoordinateSet, unwrappedValues]]
-    .filter(([coordinateSet]) => coordinateSet)
-    .map(([coordinateSet, values]) => ({ values, names: coordinateSet.names, columns: coordinateSet.names.map(name => columnIndex.get(name)) }));
   const imageColumns = IMAGE_COLUMNS.map(name => columnIndex.get(name));
   const propertyColumns = propertyNames.map(name => columnIndex.get(name));
-  for (let atom = 0; atom < count; atom += 1, cursor += 1) {
+  // Keep the per-atom loop free of allocations.
+  for (let atom = 0, cursor = firstLine; atom < count; atom += 1, cursor += 1) {
     // After trim(), splitting on whitespace yields an empty token only for an empty line.
     const line = (lines[cursor] ?? '').trim();
     const tokens = line === '' ? [] : line.split(/\s+/);
@@ -196,7 +262,82 @@ export function parseLammpsFrame(text, sourceName = 'trajectory.dump') {
       properties[property].data[atom] = finiteValue(tokens[propertyColumns[property]], cursor, propertyNames[property]);
     }
   }
+}
 
+// Fills the same arrays as readDumpRowsText. Wherever that loop would throw,
+// this one throws FALLBACK instead, and the text parser reports the error.
+// Reserved columns that the frame does not use (for example xs/ys/zs next to
+// x/y/z) are skipped without conversion, as in the text loop.
+function readDumpRowsBytes(bytes, start, { count, columns, columnIndex }, atoms) {
+  const { propertyNames, ids, rawTypes, imageFlags, properties, elements, coordinateReaders } = atoms;
+  const columnCount = columns.length;
+  const kinds = new Uint8Array(columnCount).fill(SKIP);
+  const idColumn = columnIndex.get('id'), typeColumn = columnIndex.get('type'), elementColumn = columnIndex.get('element');
+  kinds[idColumn] = NUMBER;
+  kinds[typeColumn] = NUMBER;
+  if (elements) kinds[elementColumn] = TEXT;
+  // Finite real columns: [column, stride, offset] with their target arrays.
+  const realColumns = [];
+  const realTargets = [];
+  for (const { values, columns: coordinateColumns } of coordinateReaders) {
+    coordinateColumns.forEach((column, component) => {
+      realColumns.push(column, 3, component);
+      realTargets.push(values);
+    });
+  }
+  propertyNames.forEach((name, property) => {
+    realColumns.push(columnIndex.get(name), 1, 0);
+    realTargets.push(properties[property].data);
+  });
+  for (let index = 0; index < realColumns.length; index += 3) kinds[realColumns[index]] = NUMBER;
+  const real = Int32Array.from(realColumns);
+  const realCount = realTargets.length;
+  const imageColumns = Int32Array.from(IMAGE_COLUMNS, (name) => columnIndex.get(name) ?? 0);
+  if (imageFlags) for (const column of imageColumns) kinds[column] = NUMBER;
+
+  // IDs below the map limit are checked for duplicates in a byte map, larger
+  // ones in a Set. Together they find exactly the duplicates that the Set of
+  // the text loop finds; both treat -0 and 0 as the same ID.
+  const seenLimit = Math.min(count * 4 + 64, 1 << 26);
+  const seen = new Uint8Array(seenLimit);
+  const largeIds = new Set();
+  const values = new Float64Array(columnCount);
+  const texts = new Array(columnCount).fill('');
+  const reader = new AsciiRowReader(bytes, start);
+  for (let atom = 0; atom < count; atom += 1) {
+    if (reader.readRow(kinds, values, texts) !== columnCount) throw FALLBACK;
+    const id = values[idColumn];
+    if (!Number.isSafeInteger(id) || id < 0) throw FALLBACK;
+    if (id < seenLimit) {
+      if (seen[id] !== 0) throw FALLBACK;
+      seen[id] = 1;
+    } else {
+      if (largeIds.has(id)) throw FALLBACK;
+      largeIds.add(id);
+    }
+    ids[atom] = id;
+    const type = values[typeColumn];
+    if (!Number.isSafeInteger(type) || type <= 0) throw FALLBACK;
+    rawTypes[atom] = type;
+    if (elements) elements[atom] = texts[elementColumn];
+    for (let index = 0; index < realCount; index += 1) {
+      const value = values[real[index * 3]];
+      if (!Number.isFinite(value)) throw FALLBACK;
+      realTargets[index][atom * real[index * 3 + 1] + real[index * 3 + 2]] = value;
+    }
+    if (imageFlags) {
+      for (let component = 0; component < 3; component += 1) {
+        const image = values[imageColumns[component]];
+        if (!Number.isSafeInteger(image) || image < -2_147_483_648 || image > 2_147_483_647) throw FALLBACK;
+        imageFlags[atom * 3 + component] = image;
+      }
+    }
+  }
+}
+
+function finishDumpFrame(header, atoms, sourceName, startedAt) {
+  const { count, cell, timestep, wrappedCoordinateSet, unwrappedCoordinateSet } = header;
+  const { ids, rawTypes, types, wrappedValues, unwrappedValues, imageFlags, properties, elements } = atoms;
   const rawTypeLabels = [...new Set(rawTypes)].sort((left, right) => left - right);
   if (rawTypeLabels.length > 65_535) throw dumpError('The file contains more than 65,535 atom types, which the current data layout cannot represent.');
   const typeMap = new Map(rawTypeLabels.map((value, index) => [value, index]));

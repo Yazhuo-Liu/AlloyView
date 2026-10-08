@@ -29,7 +29,7 @@
         </a>
 
         <div class="file-actions">
-          <input id="file-input" type="file" accept=".cfg,.dump,.lammpstrj,.lammps,.lmp,.data,.xyz,.extxyz,.pdb,.ent,.vasp,.poscar,text/plain" multiple hidden>
+          <input id="file-input" type="file" accept=".cfg,.dump,.lammpstrj,.lammps,.lmp,.data,.xyz,.extxyz,.pdb,.ent,.vasp,.poscar,.gz,text/plain,application/gzip" multiple hidden>
           <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
           <button id="open-local" class="button button-primary" type="button" title="Open individual structure files or browse a local folder">
             <span aria-hidden="true">＋</span> Open local
@@ -76,7 +76,7 @@
             </div>
             <p class="eyebrow">BROWSER-NATIVE MATERIALS VIEWER</p>
             <h1>See materials<br>atom by atom</h1>
-            <p class="empty-copy">Open CFG, LAMMPS dump or data, XYZ, PDB or VASP POSCAR structures, or select a folder to detect numbered structure sequences. Parsing, analysis, and rendering all stay in this browser.</p>
+            <p class="empty-copy">Open CFG, LAMMPS dump or data, XYZ, PDB or VASP POSCAR structures, plain or gzip-compressed, or select a folder to detect numbered structure sequences. Parsing, analysis, and rendering all stay in this browser.</p>
             <button id="empty-open" class="button button-primary button-large" type="button">Open local structures</button>
             <p class="format-note">Orthogonal and restricted triclinic cells supported</p>
           </div>
@@ -872,7 +872,7 @@
     </div>
 
     <div id="file-drop-overlay" class="file-drop-overlay" aria-hidden="true" hidden>
-      <div><strong>Drop a structure file to open</strong><span>CFG / LAMMPS / XYZ / PDB / POSCAR · One file at a time</span></div>
+      <div><strong>Drop a structure file to open</strong><span>CFG / LAMMPS / XYZ / PDB / POSCAR, also .gz · One file at a time</span></div>
     </div>
     <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-dialog-title">
       <div class="source-dialog-card">
