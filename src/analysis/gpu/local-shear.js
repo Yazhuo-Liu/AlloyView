@@ -3,7 +3,7 @@ import { MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { modalCoordination, shearInvariant } from '../local-shear.js';
 import { makeShearCoordinationShader, makeShearMetricsShader, SHEAR_REDUCTION_SHADER, SHEAR_FINALIZE_SHADER,
   SHEAR_CORRECTION_SHADER, SHEAR_WORKGROUP_SIZE } from './local-shear-shaders.js';
-import { yieldWorker } from './runtime.js';
+import { readGpuBuffers, yieldWorker } from './runtime.js';
 
 export const MAX_GPU_SHEAR_COORDINATION = 64;
 
@@ -24,9 +24,9 @@ export async function analyzeGpuLocalShear(runtime, frame, parameters = {}, { si
     progress('indexing');
     const coordinationBuffer = create(count * Uint32Array.BYTES_PER_ELEMENT);
     const correctionFlagsBuffer = create(count * Uint32Array.BYTES_PER_ELEMENT);
-    await runtime.run(makeShearCoordinationShader(), runtime.neighborBindings(context, [coordinationBuffer, correctionFlagsBuffer]), count, { signal });
-    const coordination = await runtime.read(coordinationBuffer, Uint32Array, count, { signal });
-    const cutoffFlags = await runtime.read(correctionFlagsBuffer, Uint32Array, count, { signal });
+    await runtime.run(makeShearCoordinationShader(), runtime.neighborBindings(context, [coordinationBuffer, correctionFlagsBuffer]), count, { signal, wait: false });
+    const [coordination, cutoffFlags] = await readGpuBuffers(runtime, [{ buffer: coordinationBuffer, Type: Uint32Array, length: count },
+      { buffer: correctionFlagsBuffer, Type: Uint32Array, length: count }], { signal });
     checkAbort(signal);
     let search;
     const cachedNeighbors = new Map();
@@ -58,8 +58,18 @@ export async function analyzeGpuLocalShear(runtime, frame, parameters = {}, { si
     const metrics = create(count * 6 * Float32Array.BYTES_PER_ELEMENT);
     const normalizationSums = create(count * Float32Array.BYTES_PER_ELEMENT);
     const normalizationCounts = create(count * Uint32Array.BYTES_PER_ELEMENT);
-    await runtime.run(makeShearMetricsShader(mode), runtime.neighborBindings(context, [metrics, normalizationSums, normalizationCounts, correctionFlagsBuffer]), count, { signal });
-    const correctionFlags = await runtime.read(correctionFlagsBuffer, Uint32Array, count, { signal });
+    await runtime.run(makeShearMetricsShader(mode), runtime.neighborBindings(context, [metrics, normalizationSums, normalizationCounts, correctionFlagsBuffer]), count, { signal, wait: false });
+    // The workgroup reduction overwrites every partial. Run it before knowing
+    // whether sparse corrections exist, so the usual uncorrected case reads
+    // flags and partials in one mapping; corrections simply reduce again.
+    const groups = Math.ceil(count / SHEAR_WORKGROUP_SIZE);
+    const partialsBuffer = create(groups * 8 * Float32Array.BYTES_PER_ELEMENT);
+    const countBuffer = upload(new Uint32Array([count, 0, 0, 0]));
+    const reduce = () => runtime.run(SHEAR_REDUCTION_SHADER, [countBuffer, metrics, normalizationSums, normalizationCounts, partialsBuffer],
+      groups * SHEAR_WORKGROUP_SIZE, { signal, batchSize: 0, wait: false });
+    await reduce();
+    let [correctionFlags, partials] = await readGpuBuffers(runtime, [{ buffer: correctionFlagsBuffer, Type: Uint32Array, length: count },
+      { buffer: partialsBuffer, Type: Float32Array, length: groups * 8 }], { signal });
     const correctedAtoms = [];
     for (let atom = 0; atom < count; atom += 1) if (correctionFlags[atom]) correctedAtoms.push(atom);
     if (correctedAtoms.length) {
@@ -72,14 +82,10 @@ export async function analyzeGpuLocalShear(runtime, frame, parameters = {}, { si
       const correctedAtomBuffer = upload(Uint32Array.from(correctedAtoms));
       const correctedMomentBuffer = upload(correctedMoments);
       await runtime.run(SHEAR_CORRECTION_SHADER, [correctedCountBuffer, correctedAtomBuffer, correctedMomentBuffer,
-        metrics, normalizationSums, normalizationCounts], correctedAtoms.length, { signal, batchSize: 0 });
+        metrics, normalizationSums, normalizationCounts], correctedAtoms.length, { signal, batchSize: 0, wait: false });
+      await reduce();
+      partials = await runtime.read(partialsBuffer, Float32Array, groups * 8, { signal });
     }
-    const groups = Math.ceil(count / SHEAR_WORKGROUP_SIZE);
-    const partialsBuffer = create(groups * 8 * Float32Array.BYTES_PER_ELEMENT);
-    const countBuffer = upload(new Uint32Array([count, 0, 0, 0]));
-    await runtime.run(SHEAR_REDUCTION_SHADER, [countBuffer, metrics, normalizationSums, normalizationCounts, partialsBuffer],
-      groups * SHEAR_WORKGROUP_SIZE, { signal, batchSize: 0 });
-    const partials = await runtime.read(partialsBuffer, Float32Array, groups * 8, { signal });
     checkAbort(signal);
     const { normalization, meanMetric } = reduceShearMoments(partials, count);
     if (!(Math.fround(normalization) > 0) || !Number.isFinite(Math.fround(normalization))
@@ -95,7 +101,7 @@ export async function analyzeGpuLocalShear(runtime, frame, parameters = {}, { si
     floatParameters.set(meanMetric, 4);
     const finalizeBuffer = upload(finalizeParameters);
     const output = create(count * Float32Array.BYTES_PER_ELEMENT);
-    await runtime.run(SHEAR_FINALIZE_SHADER, [finalizeBuffer, metrics, output], count, { signal, batchSize: 0 });
+    await runtime.run(SHEAR_FINALIZE_SHADER, [finalizeBuffer, metrics, output], count, { signal, batchSize: 0, wait: false });
     const values = await runtime.read(output, Float32Array, count, { signal });
     checkAbort(signal);
     progress('complete', count);

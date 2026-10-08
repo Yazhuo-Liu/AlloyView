@@ -216,8 +216,9 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
     let radius = initialRadius, context = await runtime.prepareNeighbors(frame, radius, { signal });
     runtime.write(scratch.settings, settingsWords);
     let bindings = runtime.neighborBindings(context, [scratch.settings, scratch.geometry, scratch.faces, scratch.states, scratch.planes]);
+    // Clipping and the state readback are queued behind initialization.
     await runtime.run(VORONOI_INITIALIZE_SHADER, bindings, batchCount,
-      { signal, startAtom: begin, endAtom: end, batchSize: 0, workgroupSize: 32 }); dispatches++;
+      { signal, startAtom: begin, endAtom: end, batchSize: 0, workgroupSize: 32, wait: false }); dispatches++;
     let states;
     for (let attempt = 0; attempt < 32; attempt++) {
       if (!exactSingleSite) {
@@ -235,7 +236,7 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
         bindings = runtime.neighborBindings(context, [scratch.settings, scratch.geometry, scratch.faces, scratch.states, scratch.planes]);
         runtime.write(scratch.settings, settingsWords);
         await runtime.run(VORONOI_CLIP_SHADER, bindings, batchCount,
-          { signal, startAtom: begin, endAtom: end, batchSize: 0, workgroupSize: 32 }); dispatches++;
+          { signal, startAtom: begin, endAtom: end, batchSize: 0, workgroupSize: 32, wait: false }); dispatches++;
       }
       states = await runtime.read(scratch.states, Uint32Array, batchCount * GPU_VORONOI_STATE_WORDS, { signal });
       const floats = new Float32Array(states.buffer);

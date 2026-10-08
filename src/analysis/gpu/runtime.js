@@ -9,6 +9,20 @@ const MAX_INPUT_BYTES = 256 * 1024 ** 2;
 const CONFIG_BYTES = 128;
 const STORAGE = 128, COPY_SRC = 4, COPY_DST = 8, UNIFORM = 64, MAP_READ = 1;
 export const MAX_GPU_PERIODIC_RADIUS_FACES = 32;
+// Range-batched kernels keep a few dispatches queued instead of waiting for
+// each one. Software adapters retain the former 16k batches; hardware starts
+// at 64k atoms and adapts each pipeline's batch to its measured dispatch time,
+// so slow kernels or GPUs stay well below driver watchdog limits.
+export const GPU_SOFTWARE_BATCH_ATOMS = 16_384;
+export const GPU_HARDWARE_BATCH_ATOMS = 65_536;
+export const GPU_MAX_BATCH_ATOMS = 262_144;
+export const GPU_MIN_BATCH_ATOMS = 4096;
+export const GPU_BATCHES_IN_FLIGHT = 3;
+export const GPU_TARGET_BATCH_MS = 60;
+// Staging buffers are pooled by power-of-two size and reused across reads.
+const STAGING_MIN_BYTES = 64 * 1024;
+const STAGING_POOLED_MAX_BYTES = 32 * 1024 ** 2;
+const STAGING_POOL_MAX_BYTES = 64 * 1024 ** 2;
 
 const CLEAR_NEIGHBORS_SHADER = `${NEIGHBOR_BINDINGS_WGSL}
 @compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -27,8 +41,24 @@ export class GpuUnavailableError extends Error {
   constructor(message) { super(message); this.name = 'GpuUnavailableError'; }
 }
 
+/** SwiftShader/llvmpipe and fallback adapters keep conservative batch sizes. */
+export function isSoftwareGpuAdapter(info = {}) {
+  return Boolean(info.isFallbackAdapter) || /swiftshader|software|llvmpipe/i.test(`${info.vendor ?? ''} ${info.architecture ?? ''} ${info.description ?? ''}`);
+}
+
 export function checkSignal(signal) {
   if (signal?.aborted) throw new DOMException('Analysis cancelled.', 'AbortError');
+}
+
+/** Read several `{ buffer, Type, length, offset }` ranges with one staging
+ * mapping. Runtimes that only implement `read` are read sequentially. */
+export async function readGpuBuffers(runtime, requests, options = {}) {
+  if (typeof runtime.readMany === 'function') return runtime.readMany(requests, options);
+  const values = [];
+  for (const { buffer, Type, length, offset = 0 } of requests) {
+    values.push(await runtime.read(buffer, Type, length, offset ? { ...options, offset } : options));
+  }
+  return values;
 }
 
 /** One device and queue shared by all GPU analyses in the dedicated worker. */
@@ -62,6 +92,14 @@ export class GpuRuntime {
     this.voronoiCpuContext = null;
     this.voronoiPreparations = new Map();
     this.neighborIndexBuildCount = this.voronoiKernelWarmupCount = 0;
+    this.softwareAdapter = false;
+    // Measured per-pipeline batch sizes (atoms) for range-batched kernels.
+    this.batchHints = new Map();
+    this.stagingPool = [];
+    this.stagingPoolBytes = 0;
+    // Exact binary64 coordinate words keyed by an immutable frame's
+    // fractional array; shared by central symmetry and PTM neighbors.
+    this.exactCoordinateCache = new WeakMap();
   }
 
   async initialize(signal) {
@@ -80,6 +118,7 @@ export class GpuRuntime {
     if (!adapter) throw new GpuUnavailableError('No WebGPU adapter is available.');
     this.adapterInfo = adapter.info ? { vendor: adapter.info.vendor, architecture: adapter.info.architecture,
       device: adapter.info.device, description: adapter.info.description, isFallbackAdapter: Boolean(adapter.info.isFallbackAdapter) } : {};
+    this.softwareAdapter = isSoftwareGpuAdapter(this.adapterInfo);
     if (!this.explicitBudget) this.budgetBytes = conservativeGpuBudget(adapter.limits, this.adapterInfo);
     this.device = await adapter.requestDevice({ requiredLimits: {
       maxStorageBuffersPerShaderStage: Math.min(10, adapter.limits.maxStorageBuffersPerShaderStage),
@@ -229,7 +268,8 @@ export class GpuRuntime {
           const positionsBuffer = this.storageBuffer(uploaded); owned.push(positionsBuffer);
           const typesBuffer = existing?.typesBuffer ?? this.storageBuffer(types);
           if (!existing?.typesBuffer) owned.push(typesBuffer);
-          await this.device.queue.onSubmittedWorkDone?.();
+          // Queue writes are ordered before later dispatches and the error
+          // scopes report allocation failures; no completion round trip.
           checkSignal(signal);
           return { positionsBuffer, typesBuffer, frameIndex, bytes };
         });
@@ -316,7 +356,7 @@ export class GpuRuntime {
           const metadataBuffer = own(this.storageBuffer(input.metadata));
           const scalesBuffer = own(this.storageBuffer(input.scales));
           const deformationBuffer = own(this.storageBuffer(input.deformation));
-          await this.device.queue.onSubmittedWorkDone?.(); checkSignal(signal);
+          checkSignal(signal);
           return { typesBuffer, metadataBuffer, scalesBuffer, deformationBuffer };
         });
         const ptm = { ...buffers, structures: ptmInput.structures, scales: ptmInput.scales, deformation: ptmInput.deformation,
@@ -400,7 +440,7 @@ export class GpuRuntime {
       try {
         await this.withErrors(async () => {
           positionsBuffer = this.storageBuffer(packed);
-          await this.device.queue.onSubmittedWorkDone?.(); checkSignal(signal);
+          checkSignal(signal);
         });
         const cartesian = existing?.cartesian ?? new Map();
         cartesian.set(variant, { positionsBuffer, atomCount, source: positions, anchor });
@@ -443,6 +483,7 @@ export class GpuRuntime {
     // adapter. Release indexes and speculative trajectory inputs, then let
     // the worker retry the complete analysis once with its active frame.
     this.clearIndexes();
+    this.releaseStagingPool();
     this.shrinkBudget();
     for (const key of frameEvictionOrder(this.frames, this.currentIndex, this.protectedKeys())) this.evictFrame(key);
     return true;
@@ -474,6 +515,7 @@ export class GpuRuntime {
     if (size > this.device.limits.maxBufferSize || ((usage & STORAGE) && size > this.device.limits.maxStorageBufferBindingSize)) {
       throw new GpuUnavailableError('This analysis exceeds the GPU buffer limits; using CPU workers.');
     }
+    if (this.allocatedBytes + size > this.budgetBytes && this.stagingPool.length) this.releaseStagingPool();
     if (this.allocatedBytes + size > this.budgetBytes) {
       for (const key of frameEvictionOrder(this.frames, this.currentIndex, this.protectedKeys())) {
         this.evictFrame(key);
@@ -493,6 +535,7 @@ export class GpuRuntime {
     if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.budgetBytes) {
       throw new GpuUnavailableError('The analysis workspace exceeds the GPU memory budget; using CPU workers.');
     }
+    if (this.allocatedBytes + bytes > this.budgetBytes && this.stagingPool.length) this.releaseStagingPool();
     if (this.allocatedBytes + bytes > this.budgetBytes) {
       for (const key of frameEvictionOrder(this.frames, this.currentIndex, this.protectedKeys())) {
         this.evictFrame(key);
@@ -625,10 +668,13 @@ export class GpuRuntime {
       this.write(context.configBuffer, new Uint8Array(config));
       this.configContexts.set(context.configBuffer, context);
       // Clearing bins and indexing atoms are GPU operations; no JS linked-cell
-      // construction or quadratic all-pairs upload is required.
-      await this.run(CLEAR_NEIGHBORS_SHADER, this.neighborBindings(context), totalBins, { signal, batchSize: 0, updateRange: false });
+      // construction or quadratic all-pairs upload is required. Each costs one
+      // atomic per bin/atom, so both are single dispatches, and the only round
+      // trip is the occupancy readback queued behind them. Bin list order was
+      // already set by racing atomics within each dispatch.
+      await this.run(CLEAR_NEIGHBORS_SHADER, this.neighborBindings(context), totalBins, { signal, batchSize: 0, updateRange: false, wait: false });
       const occupancyBuffer = own(this.createBuffer((totalBins + 1) * 4));
-      await this.run(INDEX_NEIGHBORS_SHADER, this.neighborBindings(context, [occupancyBuffer]), atomCount, { signal });
+      await this.run(INDEX_NEIGHBORS_SHADER, this.neighborBindings(context, [occupancyBuffer]), atomCount, { signal, batchSize: 0, wait: false });
       const occupied = await this.read(occupancyBuffer, Uint32Array, 1, { signal });
       this.disposeBuffers([occupancyBuffer]); owned.splice(owned.indexOf(occupancyBuffer), 1);
       if (occupied[0]) throw new GpuUnavailableError('The neighbor cells are too densely occupied for a bounded GPU dispatch.');
@@ -678,7 +724,16 @@ export class GpuRuntime {
     return compilation;
   }
 
-  async run(source, bindings, invocations, { signal, startAtom = 0, endAtom = invocations, batchSize = 16_384, updateRange = true, workgroupSize = 128, onProgress } = {}) {
+  /** Dispatch `source` over [startAtom, endAtom). Kernels bound to a neighbor
+   * index config, or given a `range` writer, run in batches whose bounds are
+   * written in queue order before each dispatch; up to GPU_BATCHES_IN_FLIGHT
+   * stay queued instead of waiting for each one. Standalone kernels and
+   * `batchSize: 0` use one dispatch. With `wait: false` the call returns once
+   * everything is submitted, for callers whose next step (another kernel or a
+   * readback) is ordered behind it on the same queue anyway. Returns the
+   * batch size the next batched call of this kernel can start from. */
+  async run(source, bindings, invocations, { signal, startAtom = 0, endAtom = invocations, batchSize, initialBatchSize,
+    updateRange = true, workgroupSize = 128, onProgress, range, wait = true } = {}) {
     await this.initialize(signal);
     const device = this.device;
     const pipeline = await waitForGpu(this.compilePipeline(source), signal);
@@ -688,47 +743,134 @@ export class GpuRuntime {
     }
     const layout = pipeline.getBindGroupLayout(0);
     const entries = bindings.map((buffer, binding) => ({ binding, resource: { buffer } }));
+    const pending = [];
     device.pushErrorScope('validation');
     try {
       const declaredBindings = new Set(bindingDeclarations(source).map(({ binding }) => binding));
       const bindGroup = device.createBindGroup({ layout, entries: entries.filter(({ binding }) => declaredBindings.has(binding)) });
       const context = updateRange ? this.configContexts.get(bindings[0]) : null;
-      const size = batchSize || endAtom - startAtom;
-      if (!context && batchSize && endAtom - startAtom > size) {
-        // Standalone kernels own their indexing and run as a single dispatch.
-        batchSize = 0;
+      const batched = Boolean(context || range) && batchSize !== 0;
+      const adaptive = batched && !batchSize && !this.softwareAdapter;
+      const roundBatch = value => Math.max(workgroupSize, Math.ceil(value / workgroupSize) * workgroupSize);
+      let size = endAtom - startAtom;
+      if (batched) {
+        const initial = batchSize || (this.softwareAdapter ? GPU_SOFTWARE_BATCH_ATOMS : initialBatchSize ?? GPU_HARDWARE_BATCH_ATOMS);
+        size = roundBatch(adaptive ? Math.min(initial, this.batchHints.get(source) ?? initial) : initial);
       }
-      const step = context ? Math.max(workgroupSize, Math.ceil(size / workgroupSize) * workgroupSize) : endAtom - startAtom;
-      for (let offset = startAtom; offset < endAtom; offset += step) {
+      let completedAt = performance.now();
+      const settle = async () => {
+        const batch = pending.shift();
+        await batch.done;
+        const now = performance.now(), elapsed = now - Math.max(completedAt, batch.submittedAt);
+        completedAt = now;
+        if (adaptive) size = roundBatch(this.adaptBatch(source, batch.atoms, elapsed, size));
         checkSignal(signal);
-        const end = Math.min(endAtom, offset + step);
+        onProgress?.({ completedAtoms: batch.end, totalAtoms: endAtom });
+      };
+      for (let offset = startAtom; offset < endAtom;) {
+        checkSignal(signal);
+        const end = Math.min(endAtom, offset + size);
         if (context) this.write(bindings[0], new Uint32Array([offset, end]), 104);
+        if (range) this.write(range.buffer, range.values(offset, end), range.offset ?? 0);
         const workgroups = Math.ceil((end - offset) / workgroupSize);
         if (workgroups > device.limits.maxComputeWorkgroupsPerDimension) throw new GpuUnavailableError('The GPU dispatch exceeds device limits.');
         const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
         pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(workgroups); pass.end();
         device.queue.submit([encoder.finish()]);
-        await device.queue.onSubmittedWorkDone();
-        checkSignal(signal);
-        onProgress?.({ completedAtoms: end, totalAtoms: endAtom });
-        if (end < endAtom) await yieldWorker();
+        const submittedAt = performance.now(), atoms = end - offset;
+        offset = end;
+        if (!wait && offset >= endAtom) break;
+        const done = device.queue.onSubmittedWorkDone();
+        done.catch(() => {});
+        pending.push({ end, atoms, submittedAt, done });
+        if (pending.length >= GPU_BATCHES_IN_FLIGHT) await settle();
+        if (offset < endAtom) await yieldWorker();
       }
+      if (wait) while (pending.length) await settle();
+      return size;
     } finally {
       const error = await device.popErrorScope(); if (error) throw new GpuUnavailableError(error.message);
     }
   }
 
-  async read(buffer, Type, length, { signal } = {}) {
+  /** Keep each queued dispatch near GPU_TARGET_BATCH_MS. Slow pipelines shrink
+   * at once and remember it for later runs; fast ones grow only within a run,
+   * so a new cutoff or frame never starts above the initial batch. */
+  adaptBatch(source, atoms, elapsedMs, current) {
+    if (!(elapsedMs > 0) || !(atoms > 0)) return current;
+    const predicted = atoms / elapsedMs * GPU_TARGET_BATCH_MS;
+    let next = current;
+    if (elapsedMs > 2 * GPU_TARGET_BATCH_MS) {
+      next = Math.floor(Math.max(GPU_MIN_BATCH_ATOMS, Math.min(current, predicted)));
+      this.batchHints.set(source, next);
+    } else if (elapsedMs < GPU_TARGET_BATCH_MS / 2 && atoms * 2 >= current) {
+      next = Math.floor(Math.min(GPU_MAX_BATCH_ATOMS, Math.max(current, Math.min(current * 4, predicted))));
+      if ((this.batchHints.get(source) ?? Infinity) < next) this.batchHints.delete(source);
+    }
+    return next;
+  }
+
+  async read(buffer, Type, length, { signal, offset = 0 } = {}) {
+    const [values] = await this.readMany([{ buffer, Type, length, offset }], { signal });
+    return values;
+  }
+
+  /** Copy several buffer ranges into one pooled staging buffer and map it once.
+   * Requests are copied in queue order after all previously submitted work. */
+  async readMany(requests, { signal } = {}) {
     checkSignal(signal);
-    const bytes = length * Type.BYTES_PER_ELEMENT;
-    const staging = this.createBuffer(bytes, MAP_READ | COPY_DST);
+    const layout = [];
+    let total = 0;
+    for (const { Type, length, offset = 0 } of requests) {
+      const bytes = length * Type.BYTES_PER_ELEMENT;
+      if (!Number.isInteger(bytes) || bytes < 0 || bytes % 4 || offset % 4) throw new Error('GPU readbacks require 4-byte aligned ranges.');
+      layout.push({ start: total, bytes });
+      total += Math.ceil(bytes / 8) * 8;
+    }
+    if (!total) return requests.map(({ Type }) => new Type(0));
+    const staging = this.acquireStaging(total);
+    let reusable = false;
     try {
-      const encoder = this.device.createCommandEncoder(); encoder.copyBufferToBuffer(buffer, 0, staging, 0, bytes);
+      const encoder = this.device.createCommandEncoder();
+      requests.forEach(({ buffer, offset = 0 }, index) => {
+        if (layout[index].bytes) encoder.copyBufferToBuffer(buffer, offset, staging, layout[index].start, layout[index].bytes);
+      });
       this.device.queue.submit([encoder.finish()]);
-      await staging.mapAsync(1, 0, bytes); checkSignal(signal);
-      const values = new Type(staging.getMappedRange(0, bytes).slice(0)); staging.unmap();
-      return values;
-    } finally { this.disposeBuffers([staging]); }
+      await staging.mapAsync(MAP_READ, 0, total);
+      try {
+        const mapped = staging.getMappedRange(0, total);
+        return requests.map(({ Type }, index) => new Type(mapped.slice(layout[index].start, layout[index].start + layout[index].bytes)));
+      } finally { staging.unmap(); reusable = true; checkSignal(signal); }
+    } finally { this.releaseStaging(staging, reusable); }
+  }
+
+  acquireStaging(bytes) {
+    let best = -1;
+    for (let index = 0; index < this.stagingPool.length; index++) {
+      const size = this.bufferSizes.get(this.stagingPool[index]) ?? 0;
+      if (size >= bytes && (best < 0 || size < this.bufferSizes.get(this.stagingPool[best]))) best = index;
+    }
+    if (best >= 0) {
+      const [buffer] = this.stagingPool.splice(best, 1);
+      this.stagingPoolBytes -= this.bufferSizes.get(buffer);
+      return buffer;
+    }
+    const size = bytes > STAGING_POOLED_MAX_BYTES ? bytes : Math.max(STAGING_MIN_BYTES, 2 ** Math.ceil(Math.log2(bytes)));
+    return this.createBuffer(size, MAP_READ | COPY_DST);
+  }
+
+  /** Unmapped buffers return to a bounded pool; others are destroyed. */
+  releaseStaging(buffer, reusable = true) {
+    const size = this.bufferSizes.get(buffer) ?? Infinity;
+    const limit = Math.min(STAGING_POOL_MAX_BYTES, Math.floor(this.budgetBytes / 16));
+    if (!reusable || this.lost || !this.device || size > STAGING_POOLED_MAX_BYTES || this.stagingPoolBytes + size > limit) {
+      this.disposeBuffers([buffer]); return;
+    }
+    this.stagingPool.push(buffer); this.stagingPoolBytes += size;
+  }
+
+  releaseStagingPool() {
+    this.disposeBuffers(this.stagingPool); this.stagingPool = []; this.stagingPoolBytes = 0;
   }
 
   protectedKeys() {
@@ -769,6 +911,8 @@ export class GpuRuntime {
   }
   releaseFrames() {
     this.voronoiPreparations.clear();
+    this.releaseStagingPool();
+    this.exactCoordinateCache = new WeakMap();
     this.disposeBuffers(this.voronoiWorkspace?.buffers ?? []); this.voronoiWorkspace = null; this.voronoiCpuContext = null;
     this.clearIndexes();
     for (const frame of this.frames.values()) this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer,

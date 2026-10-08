@@ -107,7 +107,10 @@ async function checkCores(cores) {
     assert.equal(loaded.analyses, 0, 'Loading prewarms modules without running any analysis.');
     assert.equal(loaded.status.readyWorkers, 1);
     const initialDxa = loaded.events.find(row => row.backend === 'dxa' && row.atoms === atoms && row.status).status;
-    assert.equal(initialDxa.workerCount, 1);
+    // One DXA thread per 2,048 atoms; this small source stays below the
+    // code warm-up threshold.
+    assert.equal(initialDxa.workerCount, Math.min(cores - 2, Math.ceil(atoms / 2048)));
+    assert.deepEqual(initialDxa.warmedKernelPaths, []);
 
     await evaluate(`cpuWarmupChecks.showTool('replicate'); cpuWarmupChecks.change('replicate-c', '${repetitions}'); document.getElementById('apply-replicate').click();`);
     await waitFor(`cpuWarmupChecks.renderer.repetitions[2] === ${repetitions}`, 'Display replication');
@@ -131,6 +134,8 @@ async function checkCores(cores) {
     const expandedDxa = expansionWarmups.find(row => row.backend === 'dxa' && row.status).status;
     assert.equal(expandedDxa.workerCount, cores - 2);
     assert.equal(expandedDxa.poolSize, cores - 3, 'DXA pool size counts child pthreads; its coordinator supplies the remaining thread.');
+    assert.deepEqual(expandedDxa.warmedKernelPaths, ['parallel'],
+      'A large source also warms the parallel DXA code before any extraction.');
     assert.equal(expandedDxa.kernelGeneration, initialDxa.kernelGeneration);
     assert.ok(expandedDxa.wasmMemoryBytes >= initialDxa.wasmMemoryBytes);
     assert.equal(expanded.workers.filter(row => /dxa-worker\.js/.test(row.url)).length, 1,

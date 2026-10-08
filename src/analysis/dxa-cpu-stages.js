@@ -3,6 +3,9 @@ import { determinant3 } from '../data/model.js';
 let kernelPromise, kernelModule, kernelGeneration = 0, resident;
 const FIELDS = ['vertices', 'tetrahedra', 'edges', 'transitions'];
 const WIDTHS = [0, 12, 12, 14, 16, 16];
+/** The large arrays of each private stage input. Everything else is small
+ * metadata that can travel with every request. */
+export const DXA_STAGE_FIELDS = Object.freeze({ local: Object.freeze(['coordinates']), tetrahedra: Object.freeze([...FIELDS]) });
 
 async function getKernel(onPhase = () => {}) {
   const reused = Boolean(kernelPromise);
@@ -31,10 +34,13 @@ export async function warmupDxaCpuStages({ onPhase } = {}) {
   return { kernelReused, kernelGeneration, wasmMemoryBytes: module.HEAPU8.byteLength };
 }
 
-export function validateDxaLocalInput(input) {
+/** `requireArrays: false` validates the metadata of an input whose arrays are
+ * delivered later; arrays that are present are always checked. */
+export function validateDxaLocalInput(input, { requireArrays = true } = {}) {
   const count = input?.atomCount;
-  if (!Number.isSafeInteger(count) || count < 1 || !(input.coordinates instanceof Float64Array)
-      || input.coordinates.length !== count * 3 || !Number.isInteger(input.lattice) || !WIDTHS[input.lattice]
+  const checkArrays = requireArrays || input?.coordinates !== undefined;
+  if (!Number.isSafeInteger(count) || count < 1 || (checkArrays && (!(input.coordinates instanceof Float64Array)
+      || input.coordinates.length !== count * 3)) || !Number.isInteger(input.lattice) || !WIDTHS[input.lattice]
       || typeof input.perfectOnly !== 'boolean') throw new Error('CPU DXA local input has invalid dimensions or crystal settings.');
   const cell = input.cell;
   if (cell?.vectors?.length !== 9 || cell?.origin?.length !== 3 || cell?.pbc?.length !== 3
@@ -45,15 +51,51 @@ export function validateDxaLocalInput(input) {
   return { atomCount: count, neighborWidth: WIDTHS[input.lattice] };
 }
 
-export function validateDxaSnapshot(input) {
+export function validateDxaSnapshot(input, { requireArrays = true } = {}) {
   for (const [count, field, Type, stride] of [['vertexCount', 'vertices', Float64Array, 3],
     ['tetrahedronCount', 'tetrahedra', Uint32Array, 16], ['edgeCount', 'edges', Uint32Array, 8],
     ['transitionCount', 'transitions', Float64Array, 20]]) {
-    if (!Number.isSafeInteger(input?.[count]) || input[count] < 1 || !(input[field] instanceof Type)
-        || input[field].length !== input[count] * stride) throw new Error('CPU DXA interface tables have invalid dimensions.');
+    const checkArray = requireArrays || input?.[field] !== undefined;
+    if (!Number.isSafeInteger(input?.[count]) || input[count] < 1 || (checkArray && (!(input[field] instanceof Type)
+        || input[field].length !== input[count] * stride))) throw new Error('CPU DXA interface tables have invalid dimensions.');
   }
   if (!Number.isFinite(input.alpha) || input.alpha < 0) throw new Error('CPU DXA interface alpha must be finite and nonnegative.');
   return input.tetrahedronCount;
+}
+
+/** Stage input without its large arrays or copy function. */
+export function dxaStageMetadata(stage, input) {
+  const { arrays: _arrays, ...metadata } = input;
+  for (const field of DXA_STAGE_FIELDS[stage]) delete metadata[field];
+  return metadata;
+}
+
+/** Answer one stage Worker's MessagePort with a private copy of the input.
+ * The coordinator owns the source (`input.arrays()` copies it, for example
+ * from its native heap), so the copy and its transfer bypass the page thread.
+ */
+export function serveDxaStageInput(stage, input, port) {
+  try {
+    const arrays = typeof input.arrays === 'function' ? input.arrays()
+      : Object.fromEntries(DXA_STAGE_FIELDS[stage].map(field => [field, input[field].slice()]));
+    port.postMessage({ input: { ...dxaStageMetadata(stage, input), ...arrays } },
+      DXA_STAGE_FIELDS[stage].map(field => arrays[field].buffer));
+  } catch (error) {
+    port.postMessage({ error: error?.message || String(error) });
+  } finally { port.close(); }
+}
+
+/** A pool task may carry `{ port }` instead of its input. If the coordinator
+ * never answers, the pool's task deadline or cancellation ends this Worker. */
+function receiveDxaStageInput(port) {
+  return new Promise((resolve, reject) => {
+    port.addEventListener('message', ({ data }) => {
+      port.close();
+      if (data?.input) resolve(data.input);
+      else reject(new Error(data?.error || 'The CPU DXA stage input was not delivered.'));
+    }, { once: true });
+    port.start();
+  });
 }
 
 function checkedRange(start, end, count) {
@@ -95,6 +137,7 @@ export async function calculateDxaLocalRange(input, { residentKey, startAtom, en
   const { module, kernelReused } = await getKernel(onPhase);
   module._alloy_dxa_reset_cancel();
   let frameUploaded = false;
+  if (input?.port) input = await receiveDxaStageInput(input.port);
   if (input) {
     const dimensions = validateDxaLocalInput(input);
     disposeResident(module);
@@ -134,6 +177,7 @@ export async function calculateDxaTetrahedraRange(input, { residentKey, startAto
   const { module, kernelReused } = await getKernel(onPhase);
   module._alloy_dxa_reset_cancel();
   let frameUploaded = false;
+  if (input?.port) input = await receiveDxaStageInput(input.port);
   if (input) {
     validateDxaSnapshot(input);
     disposeResident(module);

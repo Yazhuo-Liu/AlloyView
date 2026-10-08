@@ -1,12 +1,18 @@
 const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'bondStatistics', 'voronoi', 'strain', 'cna', 'referenceStrain', 'centrosymmetry', 'displacement', 'ptmNeighbors']);
 const REFERENCE_KINDS = new Set(['referenceStrain', 'displacement']);
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
+// One running task plus one posted behind it. A task is posted early only
+// when its inputs are already resident, so it carries no frame payload; the
+// worker retains those inputs for received tasks even if the running task
+// evicts their GPU buffers.
+const MAX_TASKS_IN_FLIGHT = 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
   frameCount: 0, currentIndex: 0, budgetBytes: 0, allocatedBytes: 0, residentBytes: 0, frameBytes: 0, workspaceBytes: 0,
   preparedVoronoiFrameIds: [], preparedVoronoiFrameIndexes: [], voronoiWorkspaceAtoms: 0,
   neighborIndexCount: 0, neighborIndexBuildCount: 0, voronoiKernelWarmupCount: 0, bufferLimitBytes: 0 };
 
-/** Keep one worker/device alive, and copy only the task currently being sent. */
+/** Keep one worker/device alive, and copy only the task currently being sent.
+ * Results arrive in posting order because the worker runs tasks serially. */
 export class GpuAnalysisClient {
   constructor({ environment = globalThis, workerFactory = () => new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }) } = {}) {
     this.environment = environment;
@@ -14,7 +20,7 @@ export class GpuAnalysisClient {
     this.worker = null;
     this.pending = new Map();
     this.queue = [];
-    this.current = null;
+    this.active = [];
     this.nextId = 1;
     this.frameIds = new WeakMap();
     this.frameIndexes = new WeakMap();
@@ -36,6 +42,8 @@ export class GpuAnalysisClient {
   }
 
   supports(kind) { return SUPPORTED_KINDS.has(kind); }
+  /** The oldest task that was taken from the queue and has not finished. */
+  get current() { return this.active[0] ?? null; }
   get cacheStatus() { return { ...this._cacheStatus, cachedFrameIds: [...this.cachedFrameIds],
     cachedPtmFits: [...this.cachedPtmFits].map(([frameId, fitId]) => ({ frameId, fitId })),
     cachedFrameIndexes: [...(this._cacheStatus.cachedFrameIndexes ?? [])],
@@ -94,7 +102,7 @@ export class GpuAnalysisClient {
   }
 
   preemptPreparation() {
-    if (['prepare-frame','warmup'].includes(this.current?.type)) this.cancel(this.current);
+    for (const task of [...this.active]) if (['prepare-frame','warmup'].includes(task.type)) this.cancel(task);
   }
 
   configureCache(options = {}) { return this.enqueue('configure-cache', { options }, 0); }
@@ -132,7 +140,7 @@ export class GpuAnalysisClient {
 
   cancel(task) {
     this.settle(task, abortError());
-    if (this.current === task) {
+    if (this.active.includes(task)) {
       if (task.dispatched) this.worker?.postMessage({ type: 'cancel', id: task.id });
     } else {
       const index = this.queue.indexOf(task); if (index >= 0) this.queue.splice(index, 1);
@@ -145,7 +153,7 @@ export class GpuAnalysisClient {
     const worker = this.worker;
     this.worker.addEventListener('message', ({ data }) => {
       if (this.worker !== worker) return;
-      const task = this.pending.get(data.id) ?? (this.current?.id === data.id ? this.current : null);
+      const task = this.pending.get(data.id) ?? this.active.find(active => active.id === data.id) ?? null;
       if (!task) return;
       if (data.progress) { if (!task.settled) task.onProgress({ ...data.progress, backend: 'gpu', workerCount: 1 }); return; }
       if (task.generation === this.generation) {
@@ -162,13 +170,13 @@ export class GpuAnalysisClient {
       }
       if (data.ok) this.settle(task, null, task.type === 'analyze' ? data.result : this.cacheStatus);
       else { const error = new Error(data.error || 'GPU analysis failed.'); error.name = data.name || 'Error'; this.settle(task, error); }
-      if (this.current === task) { this.current = null; this.pump(); }
+      this.finishDispatch(task);
     });
     const fail = (event) => {
       if (this.worker !== worker) return;
       const error = new Error(event.message || 'The GPU analysis worker failed.');
-      if (this.current) this.settle(this.current, error);
-      this.worker?.terminate(); this.worker = null; this.current = null;
+      for (const task of this.active) this.settle(task, error);
+      this.worker?.terminate(); this.worker = null; this.active = [];
       this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
       this.ptmSources.clear(); this.cachedPtmFits.clear();
       this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false; this.warmedAnalysisKinds.clear(); this.pump();
@@ -178,12 +186,30 @@ export class GpuAnalysisClient {
   }
 
   pump() {
-    if (this.current || this.closed) return;
-    const task = this.queue.shift();
-    if (!task) { if (this.releaseWhenIdle) this.release(); return; }
-    if (task.settled) { this.pump(); return; }
-    this.current = task;
-    void this.dispatch(task);
+    if (this.closed) return;
+    for (;;) {
+      while (this.queue[0]?.settled) this.queue.shift();
+      const task = this.queue[0];
+      if (!task) { if (!this.active.length && this.releaseWhenIdle) this.release(); return; }
+      if (this.active.length && !this.canPipeline(task)) return;
+      this.queue.shift();
+      this.active.push(task);
+      void this.dispatch(task);
+    }
+  }
+
+  /** Post the next analysis behind running work only when its frame (and
+   * reference frame) are resident and every earlier task has been posted, so
+   * the worker still receives and runs tasks in queue order. */
+  canPipeline(task) {
+    if (this.active.length >= MAX_TASKS_IN_FLIGHT || task.type !== 'analyze' || task.generation !== this.generation) return false;
+    if (this.active.some(active => !active.dispatched || active.type === 'clear-frames')) return false;
+    const resident = frame => { const id = this.frameIds.get(frame); return id !== undefined && this.cachedFrameIds.has(id); };
+    if (!task.frame || !resident(task.frame)) return false;
+    if (REFERENCE_KINDS.has(task.parameters?.kind)) {
+      try { if (!resident(this.referenceFrame(task.parameters))) return false; } catch { return false; }
+    }
+    return true;
   }
 
   async dispatch(task) {
@@ -313,10 +339,15 @@ export class GpuAnalysisClient {
         if (!variants) { variants = new Map(); this.positionSources.set(id, variants); }
         variants.set(variant, source);
       }
+      // A resident next task may now be posted behind this one.
+      this.pump();
     } catch (error) { this.settle(task, error); this.finishDispatch(task); }
   }
 
-  finishDispatch(task) { if (this.current === task) { this.current = null; this.pump(); } }
+  finishDispatch(task) {
+    const index = this.active.indexOf(task);
+    if (index >= 0) { this.active.splice(index, 1); this.pump(); }
+  }
 
   referenceFrame(parameters) {
     // Legacy coordinate-only references have no species array. They may cache
@@ -358,7 +389,7 @@ export class GpuAnalysisClient {
     this.releaseWhenIdle = false;
     this.generation++;
     for (const task of this.pending.values()) this.settle(task, abortError());
-    this.queue.length = 0; this.worker?.terminate(); this.worker = null; this.current = null;
+    this.queue.length = 0; this.worker?.terminate(); this.worker = null; this.active = [];
     this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
     this.ptmSources.clear(); this.cachedPtmFits.clear();
     this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false; this.warmedAnalysisKinds.clear();

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { calculateDxa, releaseDxaKernels, warmupDxa } from '../src/analysis/dxa.js';
+import { calculateDxa, dxaCodeWarmupFrame, releaseDxaKernels, warmupDxa } from '../src/analysis/dxa.js';
 import { crystalFrame } from './helpers/crystals.js';
 import { fccScrewFrame } from './helpers/dislocations.js';
 
@@ -97,4 +97,39 @@ test('parallel DXA preserves FCC screw Burgers vector, winding, connectivity and
     assert.ok(result.totalLength < 1.001 * winding);
     assert.ok(Math.abs(result.totalLength - serial.totalLength) / winding < 1e-3);
   }
+});
+
+const science = ({ segments, atomStructureTypes, totalLength, counts }) => ({ segments, atomStructureTypes, totalLength, counts });
+
+test('the code warm-up fixture is a real dislocation and warms each kernel path once without changing results', async () => {
+  await releaseDxaKernels();
+  const fixture = await calculateDxa(dxaCodeWarmupFrame(), {}, { workerCount: 2 });
+  assert.equal(fixture.workerCount, 2); assert.equal(fixture.segments.length, 1); assert.equal(fixture.counts.perfect, 1);
+  assert.equal(fixture.atomStructureTypes.length, 2560);
+  await releaseDxaKernels();
+  const frame = fccScrewFrame();
+  const fresh = await calculateDxa(frame, {}, { workerCount: 1 });
+  await releaseDxaKernels();
+  const ready = await warmupDxa({ atomCount: 30000, workerCount: 2, warmCode: true });
+  assert.deepEqual(ready.warmedKernelPaths, ['parallel']); assert.ok(ready.codeWarmupMs > 0);
+  assert.equal(ready.workerCount, 2); assert.equal(ready.poolSize, 1);
+  const again = await warmupDxa({ atomCount: 30000, workerCount: 2, warmCode: true });
+  assert.equal(again.codeWarmupMs, undefined, 'a warmed path is not run again');
+  const serial = await warmupDxa({ atomCount: 30000, workerCount: 1, warmCode: true });
+  assert.deepEqual(serial.warmedKernelPaths.toSorted(), ['parallel', 'serial']);
+  const warmed = await calculateDxa(frame, {}, { workerCount: 1 });
+  assert.deepEqual(science(warmed), science(fresh), 'one-thread output is identical after the warm-up');
+  assert.equal(warmed.kernelGeneration, ready.kernelGeneration);
+});
+
+test('a cancelled code warm-up rejects, keeps the kernel and leaves its path unwarmed', async () => {
+  await releaseDxaKernels();
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 5);
+  await assert.rejects(warmupDxa({ atomCount: 30000, workerCount: 2, warmCode: true, signal: controller.signal }), { name: 'AbortError' });
+  const ready = await warmupDxa({ atomCount: 30000, workerCount: 2 });
+  assert.deepEqual(ready.warmedKernelPaths, []);
+  const recovered = await calculateDxa(crystalFrame('fcc', 4), {}, { workerCount: 1 });
+  assert.equal(recovered.kernelGeneration, ready.kernelGeneration);
+  assert.deepEqual(recovered.warmedKernelPaths, ['serial'], 'a completed analysis marks its own path');
 });

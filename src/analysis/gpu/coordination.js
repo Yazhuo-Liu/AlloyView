@@ -1,6 +1,6 @@
 import { minimumImageDistanceSquared } from '../coordination.js';
 import { makeNeighborShader } from './neighbors.js';
-import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
 
 const CORRECTION_CAPACITY = 65_536;
 export const COORDINATION_SHADER = makeNeighborShader({
@@ -37,21 +37,27 @@ export async function analyzeGpuCoordination(runtime, frame, parameters, { signa
     const coordinationBuffer = create(atomCount * 4);
     const candidateBuffer = create(atomCount * 4);
     const correctionBuffer = create((4 + CORRECTION_CAPACITY * 3) * 4);
+    // Completed batches report progress (and are cancellation points); all
+    // three outputs then share one staging mapping.
     await runtime.run(COORDINATION_SHADER, runtime.neighborBindings(context, [coordinationBuffer, candidateBuffer, correctionBuffer]), atomCount,
       { signal, onProgress: (progress) => onProgress({ ...progress, phase: 'analyzing' }) });
-    const coordination = await runtime.read(coordinationBuffer, Uint32Array, atomCount, { signal });
-    const candidates = await runtime.read(candidateBuffer, Uint32Array, atomCount, { signal });
-    const correctionHeader = await runtime.read(correctionBuffer, Uint32Array, 4, { signal });
+    const [coordination, candidates, correctionHeader] = await readGpuBuffers(runtime, [
+      { buffer: coordinationBuffer, Type: Uint32Array, length: atomCount },
+      { buffer: candidateBuffer, Type: Uint32Array, length: atomCount },
+      { buffer: correctionBuffer, Type: Uint32Array, length: 4 }], { signal });
     if (correctionHeader[1] || correctionHeader[0] > CORRECTION_CAPACITY) {
       throw new GpuUnavailableError('Too many coordination distances are near the cutoff for reliable GPU precision.');
     }
     if (correctionHeader[0]) {
-      const corrections = await runtime.read(correctionBuffer, Uint32Array, 4 + CORRECTION_CAPACITY * 3, { signal });
+      // Only the occupied pair and approximate-flag ranges are copied back.
+      const [pairs, flags] = await readGpuBuffers(runtime, [
+        { buffer: correctionBuffer, Type: Uint32Array, offset: 16, length: correctionHeader[0] * 2 },
+        { buffer: correctionBuffer, Type: Uint32Array, offset: (4 + CORRECTION_CAPACITY * 2) * 4, length: correctionHeader[0] }], { signal });
       const bounds = context.faceHeights.map((height) => cutoff / height + 1e-12), cutoffSquared = cutoff * cutoff;
       for (let index = 0; index < correctionHeader[0]; index++) {
-        const atom = corrections[4 + index * 2], other = corrections[5 + index * 2];
+        const atom = pairs[index * 2], other = pairs[index * 2 + 1];
         const actual = minimumImageDistanceSquared(frame.fractional, atom, other, frame.cell, bounds) <= cutoffSquared ? 1 : 0;
-        const approximate = corrections[4 + CORRECTION_CAPACITY * 2 + index];
+        const approximate = flags[index];
         coordination[atom] += actual - approximate;
         if (index && index % 8192 === 0) { await yieldWorker(); checkSignal(signal); }
       }

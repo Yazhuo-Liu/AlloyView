@@ -373,7 +373,9 @@ test('cancelled replacement PTM uploads preserve the preceding valid fit and fre
   try {
     const first = await runtime.preparePtmBuffers(frame, fit, ptmEncoder(counter));
     const controller = new AbortController(), before = runtime.allocatedBytes;
-    runtime.device.queue.onSubmittedWorkDone = async () => controller.abort();
+    // Uploads no longer wait for queue completion; cancel while writing.
+    const writeBuffer = runtime.device.queue.writeBuffer;
+    runtime.device.queue.writeBuffer = (...values) => { writeBuffer(...values); controller.abort(); };
     await assert.rejects(runtime.preparePtmBuffers(frame, { ...fit, revision: 1 }, ptmEncoder(counter), { signal: controller.signal }), { name: 'AbortError' });
     assert.equal(runtime.allocatedBytes, before); assert.equal(first.metadataBuffer.destroyed, false);
     assert.equal(runtime.getPtmBuffers(frame, fit).metadataBuffer, first.metadataBuffer);

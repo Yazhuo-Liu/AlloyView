@@ -1,22 +1,29 @@
 import { estimateDxaMemory } from './dxa.js';
-import { validateDxaLocalInput, validateDxaSnapshot } from './dxa-cpu-stages.js';
+import { DXA_STAGE_FIELDS, dxaStageMetadata, validateDxaLocalInput, validateDxaSnapshot } from './dxa-cpu-stages.js';
 import { yieldToMain } from '../task-yield.js';
 
 export const DXA_STAGE_KINDS = Object.freeze(['dxaLocal', 'dxaTetrahedra']);
 const DXA_INITIAL_HEAP_BYTES = 32 * 1024 ** 2;
 const STAGE_CHUNKS = { local: 2048, tetrahedra: 8192 };
+const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const abortError = () => new DOMException('CPU DXA stage cancelled.', 'AbortError');
 
+/** Bytes of one private input copy, from its dimensions. The arrays may still
+ * be in the coordinator Worker. */
 export function dxaStageInputBytes(stage, input) {
-  return stage === 'local' ? input.coordinates.byteLength + 12 * 8
-    : ['vertices', 'tetrahedra', 'edges', 'transitions'].reduce((sum, field) => sum + input[field].byteLength, 0);
+  return stage === 'local' ? input.atomCount * 3 * 8 + 12 * 8
+    : (input.vertexCount * 3 + input.transitionCount * 20) * 8 + (input.tetrahedronCount * 16 + input.edgeCount * 8) * 4;
 }
 
+const validateStageInput = (stage, input) => stage === 'local'
+  ? validateDxaLocalInput(input, { requireArrays: false }) : validateDxaSnapshot(input, { requireArrays: false });
+
 export function chooseDxaStageWorkers(pool, stage, input, { workerCount, memoryBudgetBytes } = {}) {
-  const workCount = stage === 'local' ? validateDxaLocalInput(input).atomCount : validateDxaSnapshot(input);
+  const validated = validateStageInput(stage, input);
+  const workCount = stage === 'local' ? validated.atomCount : validated;
   const atomCount = input.atomCount ?? input.vertexCount;
   const inputBytes = dxaStageInputBytes(stage, input);
-  const outputBytes = stage === 'local' ? atomCount * (1 + validateDxaLocalInput(input).neighborWidth) * 4 : workCount * 4;
+  const outputBytes = stage === 'local' ? atomCount * (1 + validated.neighborWidth) * 4 : workCount * 4;
   const coordinatorBytes = estimateDxaMemory(atomCount);
   const budget = memoryBudgetBytes ?? 1.5 * 1024 ** 3;
   if (!Number.isFinite(budget) || budget <= 0) throw new Error('CPU DXA stage memory budget must be positive and finite.');
@@ -53,11 +60,49 @@ export function chooseDxaStageWorkers(pool, stage, input, { workerCount, memoryB
     memoryEstimateBytes: memoryEstimate(count) };
 }
 
+async function copyArray(source, signal) {
+  const copy = new source.constructor(source.length);
+  const chunkLength = Math.max(1, Math.floor(COPY_CHUNK_BYTES / source.BYTES_PER_ELEMENT));
+  for (let offset = 0; offset < source.length; offset += chunkLength) {
+    if (signal?.aborted) throw abortError();
+    copy.set(source.subarray(offset, Math.min(source.length, offset + chunkLength)), offset);
+    if (offset + chunkLength < source.length) await yieldToMain();
+  }
+  return copy;
+}
+
+/** How a newly assigned slot obtains its private input copy:
+ * - `deliverInput(port)` hands one end of a new MessageChannel to the
+ *   coordinator Worker, which owns the arrays and sends a transferred copy
+ *   straight to the stage Worker. The page thread copies nothing.
+ * - `input.arrays()` returns fresh arrays (an in-process coordinator).
+ * - Otherwise the arrays in `input` are copied here in bounded chunks.
+ */
+function privateInputSource(stage, input, deliverInput) {
+  const fields = DXA_STAGE_FIELDS[stage], metadata = dxaStageMetadata(stage, input);
+  const result = (values, transfer, delivery) => ({ input: values, transfer, delivery });
+  if (typeof deliverInput === 'function') return async () => {
+    const channel = new MessageChannel();
+    try { deliverInput(channel.port1); }
+    catch (error) { channel.port1.close(); channel.port2.close(); throw error; }
+    return result({ port: channel.port2 }, [channel.port2], 'port');
+  };
+  if (typeof input.arrays === 'function') return async () => {
+    const arrays = input.arrays();
+    return result({ ...metadata, ...arrays }, fields.map(field => arrays[field].buffer), 'direct');
+  };
+  return async signal => {
+    const arrays = {};
+    for (const field of fields) arrays[field] = await copyArray(input[field], signal);
+    return result({ ...metadata, ...arrays }, fields.map(field => arrays[field].buffer), 'copy');
+  };
+}
+
 /** Use existing resident analysis slots and their shared CPU budget. Each slot
  * gets one complete immutable input, then runs disjoint bounded output chunks.
  */
 export async function analyzeDxaStagePool(pool, stage, input, {
-  signal, onProgress = () => {}, workerCount, memoryBudgetBytes, taskTimeoutMs = 30_000,
+  signal, onProgress = () => {}, workerCount, memoryBudgetBytes, taskTimeoutMs = 30_000, deliverInput,
 } = {}) {
   if (pool.closed) throw new Error('The analysis pool is closed.');
   if (signal?.aborted) throw abortError();
@@ -67,10 +112,16 @@ export async function analyzeDxaStagePool(pool, stage, input, {
   const kind = stage === 'local' ? 'dxaLocal' : 'dxaTetrahedra';
   const key = `dxa-${stage}-${pool.nextDxaStageKey = (pool.nextDxaStageKey ?? 0) + 1}`;
   const chunkSize = STAGE_CHUNKS[stage], chunkCount = Math.ceil(workCount / chunkSize);
-  let nextChunk = 0, completed = 0, completedChunks = 0, copiedBytes = 0, kernelInitializations = 0;
+  let nextChunk = 0, completed = 0, completedChunks = 0, copiedBytes = 0, kernelInitializations = 0, inputDelivery;
+  const source = privateInputSource(stage, input, deliverInput);
+  const dxaStageInputSource = async taskSignal => {
+    const prepared = await source(taskSignal);
+    inputDelivery = prepared.delivery;
+    return prepared;
+  };
   const startedAt = performance.now(), progress = new Array(count).fill(0);
   const structures = stage === 'local' ? new Int32Array(workCount) : null;
-  const neighborWidth = stage === 'local' ? validateDxaLocalInput(input).neighborWidth : 0;
+  const neighborWidth = stage === 'local' ? validateDxaLocalInput(input, { requireArrays: false }).neighborWidth : 0;
   const neighbors = stage === 'local' ? new Int32Array(workCount * neighborWidth).fill(-1) : null;
   const regions = stage === 'tetrahedra' ? new Int32Array(workCount).fill(-1) : null;
   let maxNeighborDistance = 0;
@@ -97,7 +148,9 @@ export async function analyzeDxaStagePool(pool, stage, input, {
       let timedOut = false;
       try {
         timer = setTimeout(() => { timedOut = true; deadline.abort(); }, taskTimeoutMs);
-        const result = await pool.runTask({ kind, dxaStageInput: input, dxaResidentKey: key, startAtom, endAtom },
+        // The pool calls dxaStageInputSource only for a slot without this
+        // stage's resident input and never posts the function itself.
+        const result = await pool.runTask({ kind, dxaStageInputSource, dxaResidentKey: key, startAtom, endAtom },
           deadline.signal, controller.signal, (phase, data) => report(index, phase, data));
         if (controller.signal.aborted) throw abortError();
         if (result.startAtom !== startAtom || result.endAtom !== endAtom) throw new Error('CPU DXA returned an incomplete output range.');
@@ -134,7 +187,7 @@ export async function analyzeDxaStagePool(pool, stage, input, {
     if (controller.signal.aborted) throw abortError();
     return { ...(stage === 'local' ? { structures, neighbors, neighborWidth, maxNeighborDistance } : { regions }),
       workerCount: pool.dxaStages.get(key)?.peakWorkers || 1,
-      elapsedMs: performance.now() - startedAt, inputBytes, copiedBytes, chunkCount, kernelInitializations,
+      elapsedMs: performance.now() - startedAt, inputBytes, copiedBytes, inputDelivery, chunkCount, kernelInitializations,
       memoryEstimateBytes: selection.memoryEstimateBytes, backend: 'cpu' };
   } catch (error) {
     controller.abort();

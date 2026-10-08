@@ -7,6 +7,73 @@ historical profiles. GPU snapshot packing and accelerator experiments describe
 earlier revisions; they are no longer part of production extraction. Their
 numerical records remain unchanged.
 
+## Browser versus Node and the first extraction (2026-10-08)
+
+Production (cross-origin isolated, eight threads on a 10-thread machine)
+reported 854 ms for `examples/hea-fcc-screw.dump`, while Node took
+555–650 ms with eight threads. On the reference machine, headless Chrome 154
+with COOP/COEP (`scripts/webgpu-browser.mjs`, `isolated: true`) and Node
+26.10 give the same times for the same run in a fresh page or process. The gap
+is the first extraction, not the browser. Milliseconds, eight threads,
+28,800 atoms, before the code warm-up described below:
+
+| | Chrome, first | Chrome, later | Node, first | Node, later |
+| --- | ---: | ---: | ---: | ---: |
+| Complete extraction (DXA Worker) | 893–938 | 540–606 | 932 | 569–593 |
+| Periodic Delaunay tessellation | 301–304 | 217–262 | 322 | 239–255 |
+| Map edges to the ideal lattice | 107–108 | 64–73 | 116 | 66–68 |
+| Construct crystal interface mesh | 91–100 | 50–61 | 101 | 51–53 |
+| Trace Burgers circuits and lines | 174–176 | 94–95 | 172 | 94–97 |
+
+Every stage is 1.3–1.8 times slower in the first run. V8 compiles
+WebAssembly functions lazily, first as baseline code, and optimizes a function
+only for later calls, so a function with one long loop runs unoptimized in
+the first extraction. With `node --no-wasm-lazy-compilation
+--no-wasm-dynamic-tiering` (everything optimized at startup) the first Node
+run took 620 ms; disabling only dynamic tiering left it at 869 ms. Heap growth
+(32 to 70 MB) is not the cause.
+
+Everything around the native stages is small. Kernel startup (Worker, module,
+compilation) took 48–64 ms and growing seven pthreads 23–28 ms; both happen
+during background preparation. Per extraction, the page needed 3–11 ms to
+copy the coordinates and post the job, the DXA Worker 3–11 ms to convert and
+upload them and 1.6–5.4 ms to decode and normalize the result (labels are
+binary), and the result reached the page 0.4–1.3 ms after the Worker
+finished. Results now include these as `hostTimings`.
+
+Background preparation for structures of at least 8,192 atoms now also
+extracts a built-in 2,560-atom FCC screw dislocation on two threads (one on
+the single-thread kernel). In alternating fresh pages the first HEA
+extraction took 554–598 ms with it and 930–938 ms without it; the warm-up added
+about 270 ms of background time to preparation (one later page under heavy
+machine load: 768 ms with and 1,057 ms without). The Fe loop (BCC) improved
+from 1,300 to 978 ms in Node (926 ms warm), so the FCC fixture also covers
+other lattices. On the single-thread kernel the first HEA run went from 1,405
+to 982 ms (968–1,000 warm). One-thread outputs after the warm-up hash
+identically to the previous build on all 14 cases of both kernels.
+
+On a host without isolation, the page previously copied each private stage
+input once per stage Worker: four copies of the 23 MiB HEA tetrahedron tables
+(65 MiB for the Fe loop). The DXA Worker now sends each stage Worker its own
+copy through a `MessagePort`. Main-thread task time per extraction (Chrome
+`TaskDuration`, including the test harness) fell from 115–177 to 31–60 ms for
+HEA and from 292–344 to 67–107 ms for the Fe loop. Local identification may
+now use up to eight Workers: 39–72 ms for HEA instead of 63–109 ms with four,
+and 128–132 instead of 186–217 ms for the Fe loop. Later Fe-loop extractions
+took 1,770–1,987 instead of 1,936–2,100 ms; for HEA the change (908–1,096
+instead of 932–1,024 ms) is within the noise of the shared machine. With the
+code warm-up, first extractions took 1,114–1,237 instead of 1,387–1,576 ms
+(HEA) and 2,264–2,669 instead of 2,683–2,809 ms (Fe loop). Atom labels and
+line lengths were identical to the previous build in every run.
+
+Tetrahedron classification in private Workers is still roughly break-even
+with the single-thread native stage. Packing the tables in the DXA Worker
+(`alloy_dxa_worker_snapshot`, now its own stage timing) took 63–98 ms for HEA
+and 197–355 ms for the Fe loop, and the four-Worker stage 104–154 and
+253–331 ms, while the native classification it replaces takes about 180 and
+520 ms. A faster packer, or skipping this stage, would help more than further
+transfer changes.
+
 ## Historical pthread optimizations
 
 The CPU path uses Wasm pthreads for local crystal identification, Delaunay

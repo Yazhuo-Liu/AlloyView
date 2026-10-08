@@ -136,6 +136,59 @@ test('one GPU worker serializes jobs and reuses uploaded frame identities withou
   } finally { client.close(); }
 });
 
+test('a resident analysis is posted behind running GPU work, at most one deep, and results settle in posting order', async () => {
+  const { client, workers } = fakeClient(), data = frame();
+  try {
+    const upload = client.analyze(data, { kind: 'coordination' });
+    await until(() => workers[0]?.messages.length === 1);
+    workers[0].answer(workers[0].messages[0]); await upload;
+    const order = [];
+    const second = client.analyze(data, { kind: 'rdf' }).then(value => { order.push('rdf'); return value; });
+    const third = client.analyze(data, { kind: 'bonds', cutoff: 3 }).then(value => { order.push('bonds'); return value; });
+    const fourth = client.analyze(data, { kind: 'coordination' }).then(value => { order.push('coordination'); return value; });
+    await until(() => workers[0].messages.length === 3);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const [, running, waiting] = workers[0].messages;
+    assert.equal(workers[0].messages.length, 3, 'a third task stays in the client queue');
+    assert.deepEqual([running.parameters.kind, waiting.parameters.kind], ['rdf', 'bonds']);
+    assert.equal(running.frame, undefined); assert.equal(waiting.frame, undefined, 'only resident inputs are posted early');
+    workers[0].answer(running);
+    await until(() => workers[0].messages.length === 4);
+    workers[0].answer(waiting); workers[0].answer(workers[0].messages[3]);
+    await Promise.all([second, third, fourth]);
+    assert.deepEqual(order, ['rdf', 'bonds', 'coordination']);
+    assert.equal(client.current, null);
+  } finally { client.close(); }
+});
+
+test('a posted queued analysis keeps cancellation semantics and a worker failure rejects every posted task', async () => {
+  const { client, workers } = fakeClient(), data = frame(), controller = new AbortController();
+  try {
+    const upload = client.analyze(data, { kind: 'coordination' });
+    await until(() => workers[0]?.messages.length === 1);
+    workers[0].answer(workers[0].messages[0]); await upload;
+    const running = client.analyze(data, { kind: 'rdf' });
+    const cancelled = client.analyze(data, { kind: 'bonds', cutoff: 3 }, { signal: controller.signal });
+    const rejection = assert.rejects(cancelled, { name: 'AbortError' });
+    await until(() => workers[0].messages.length === 3);
+    controller.abort(); await rejection;
+    assert.deepEqual(workers[0].messages.at(-1), { type: 'cancel', id: workers[0].messages[2].id });
+    const later = client.analyze(data, { kind: 'coordination' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(workers[0].messages.filter(message => message.type === 'analyze').length, 3,
+      'the cancelled task occupies its slot until the worker acknowledges it');
+    workers[0].answer(workers[0].messages[1]); await running;
+    workers[0].answer(workers[0].messages[2], { ok: false, name: 'AbortError', error: 'cancelled' });
+    await until(() => workers[0].messages.filter(message => message.type === 'analyze').length === 4);
+    const behind = client.analyze(data, { kind: 'rdf' });
+    await until(() => workers[0].messages.filter(message => message.type === 'analyze').length === 5);
+    const failures = [assert.rejects(later, /GPU worker crashed/), assert.rejects(behind, /GPU worker crashed/)];
+    workers[0].emit('error', { message: 'GPU worker crashed' });
+    await Promise.all(failures);
+    assert.equal(client.current, null); assert.equal(client.worker, null);
+  } finally { client.close(); }
+});
+
 test('GPU abort settles promptly and keeps following jobs serialized until worker acknowledgement', async () => {
   const { client, workers } = fakeClient(), controller = new AbortController();
   try {

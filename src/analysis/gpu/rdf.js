@@ -2,11 +2,11 @@ import { rdfNormalization, finalizeRdf } from '../rdf.js';
 import { MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { cellFaceHeights } from '../../data/model.js';
 import { makeNeighborShader } from './neighbors.js';
-import { GpuUnavailableError, yieldWorker } from './runtime.js';
+import { GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
 
 const U32_MAX = 0xffff_ffff;
 const MAX_BATCH_ATOMS = 16_384;
-const MAX_CORRECTIONS = 65_536;
+const MAX_HARDWARE_BATCH_ATOMS = 65_536;
 const F32_EPSILON = 2 ** -23;
 
 // RDF's half-face-height radius excludes contributing duplicate/self images.
@@ -72,8 +72,10 @@ export async function analyzeGpuRdf(runtime, frame, parameters, { signal, onProg
   }
   const margin = rdfPrecisionMargin(frame, cutoff);
   const context = await runtime.prepareNeighbors(frame, cutoff + margin * 1.125, { signal });
-  const batchSize = rdfGpuBatchSize(count);
-  const correctionCapacity = Math.min(MAX_CORRECTIONS, Math.max(1024, batchSize * 4));
+  const batchSize = rdfGpuBatchSize(count, { hardware: runtime.softwareAdapter === false });
+  // Four ambiguous shell pairs per atom plus the former small-batch floor:
+  // a batch spanning several former 16k batches never has less capacity.
+  const correctionCapacity = batchSize * 4 + 1024;
   const settingsData = new ArrayBuffer(32);
   const unsigned = new Uint32Array(settingsData);
   const floats = new Float32Array(settingsData);
@@ -82,34 +84,48 @@ export async function analyzeGpuRdf(runtime, frame, parameters, { signal, onProg
   floats[5] = margin;
   unsigned[6] = MAX_NEIGHBORS_PER_ATOM;
   const allocated = [];
+  const allocate = buffer => { allocated.push(buffer); return buffer; };
   let correctedPairs = 0;
   try {
-    const histogram = runtime.createBuffer(bins * 4);
-    allocated.push(histogram);
-    const settings = runtime.storageBuffer(new Uint8Array(settingsData));
-    allocated.push(settings);
-    const corrections = runtime.createBuffer(16 + correctionCapacity * 8);
-    allocated.push(corrections);
-    const bindings = runtime.neighborBindings(context, [histogram, settings, corrections]);
+    const settings = allocate(runtime.storageBuffer(new Uint8Array(settingsData)));
+    // Two histogram/correction slots let the next batch run while this one is
+    // read back and corrected. Integer counts make the order irrelevant.
+    const slots = Array.from({ length: count > batchSize ? 2 : 1 }, () => {
+      const histogram = allocate(runtime.createBuffer(bins * 4));
+      const corrections = allocate(runtime.createBuffer(16 + correctionCapacity * 8));
+      return { histogram, corrections, bindings: runtime.neighborBindings(context, [histogram, settings, corrections]) };
+    });
     const counts = new Float64Array(bins);
-    for (let startAtom = 0; startAtom < count; startAtom += batchSize) {
+    // Dispatches within a batch start at the former 16k atoms and follow the
+    // measured dispatch time; the histogram bound applies to the whole batch.
+    let dispatchSize = MAX_BATCH_ATOMS;
+    const launch = async (startAtom, slot) => {
       signal?.throwIfAborted();
       const endAtom = Math.min(count, startAtom + batchSize);
-      await runtime.zeroBuffer(histogram);
+      await runtime.zeroBuffer(slot.histogram);
       // Only the 16-byte header is read before the counted records.
-      await runtime.zeroBuffer(corrections, 0, 16);
-      await runtime.run(RDF_SHADER, bindings, endAtom - startAtom, { signal, context, startAtom, endAtom });
-      const batchCounts = await runtime.read(histogram, Uint32Array, bins, { signal });
-      const diagnostics = await runtime.read(corrections, Uint32Array, 4, { signal });
+      await runtime.zeroBuffer(slot.corrections, 0, 16);
+      dispatchSize = await runtime.run(RDF_SHADER, slot.bindings, endAtom - startAtom,
+        { signal, context, startAtom, endAtom, initialBatchSize: dispatchSize, wait: false }) ?? dispatchSize;
+      const readback = readGpuBuffers(runtime, [{ buffer: slot.histogram, Type: Uint32Array, length: bins },
+        { buffer: slot.corrections, Type: Uint32Array, length: 4 }], { signal });
+      readback.catch(() => {});
+      return { endAtom, slot, readback };
+    };
+    let pending = await launch(0, slots[0]);
+    for (let index = 1; pending; index++) {
+      const following = pending.endAtom < count ? await launch(pending.endAtom, slots[index % slots.length]) : null;
+      const [batchCounts, diagnostics] = await pending.readback;
       if (diagnostics[1]) throw new GpuUnavailableError('Too many RDF pairs lie on floating-point shell boundaries.');
       if (diagnostics[2]) throw new GpuUnavailableError('The RDF neighborhood exceeds the GPU safety limit.');
       for (let bin = 0; bin < bins; bin += 1) counts[bin] += batchCounts[bin];
       if (diagnostics[0]) {
-        const records = await runtime.read(corrections, Uint32Array, 4 + diagnostics[0] * 2, { signal });
-        await correctGpuRdfPairs(frame, normalization, records.subarray(4), counts, { signal });
+        const records = await runtime.read(pending.slot.corrections, Uint32Array, diagnostics[0] * 2, { signal, offset: 16 });
+        await correctGpuRdfPairs(frame, normalization, records, counts, { signal });
         correctedPairs += diagnostics[0];
       }
-      onProgress({ phase: 'analyzing', completedAtoms: endAtom, totalAtoms: count, done: endAtom, total: count });
+      onProgress({ phase: 'analyzing', completedAtoms: pending.endAtom, totalAtoms: count, done: pending.endAtom, total: count });
+      pending = following;
     }
     return { startAtom: 0, endAtom: count, ...finalizeRdf(counts, normalization), correctedPairs };
   } finally {
@@ -117,10 +133,13 @@ export async function analyzeGpuRdf(runtime, frame, parameters, { signal, onProg
   }
 }
 
-/** Bound every atomic histogram to u32 while accumulating batches in f64. */
-export function rdfGpuBatchSize(atomCount) {
-  return Math.max(1, Math.min(MAX_BATCH_ATOMS, atomCount,
-    Math.floor(U32_MAX / Math.min(MAX_NEIGHBORS_PER_ATOM, Math.max(1, atomCount - 1)))));
+/** Bound every atomic histogram to u32 while accumulating batches in f64.
+ * Hardware batches are whole multiples of the 16k software batch. */
+export function rdfGpuBatchSize(atomCount, { hardware = false } = {}) {
+  const bound = Math.floor(U32_MAX / Math.min(MAX_NEIGHBORS_PER_ATOM, Math.max(1, atomCount - 1)));
+  const limit = hardware ? Math.max(MAX_BATCH_ATOMS, Math.floor(Math.min(MAX_HARDWARE_BATCH_ATOMS, bound) / MAX_BATCH_ATOMS) * MAX_BATCH_ATOMS)
+    : MAX_BATCH_ATOMS;
+  return Math.max(1, Math.min(limit, atomCount, bound));
 }
 
 export function rdfPrecisionMargin(frame, cutoff) {

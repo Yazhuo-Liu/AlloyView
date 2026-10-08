@@ -1,6 +1,6 @@
 import { cellFaceHeights } from '../../data/model.js';
 import { calculatePreparedDisplacements, prepareDisplacementCalculation } from '../displacement.js';
-import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
 import { DISPLACEMENT_SHADER } from './displacement-shaders.js';
 
 export const MAX_GPU_DISPLACEMENT_CORRECTION_ATOMS = 16_384;
@@ -41,18 +41,18 @@ export async function analyzeGpuDisplacement(runtime, frame, parameters = {}, { 
     const bindings = [settingsBuffer, mappingBuffer, current.positionsBuffer, reference.positionsBuffer,
       vectorsBuffer, magnitudesBuffer, flagsBuffer];
     report('analyzing');
-    for (let start = startAtom; start < endAtom; start += BATCH_ATOMS) {
-      checkSignal(signal);
-      const end = Math.min(start + BATCH_ATOMS, endAtom);
-      runtime.write(settingsBuffer, new Uint32Array([start, end]), 40);
-      await runtime.run(DISPLACEMENT_SHADER, bindings, end - start, { signal, batchSize: 0 });
-      report('analyzing', end - startAtom);
-      checkSignal(signal);
-      if (end < endAtom) await yieldWorker();
-    }
-    const vectors = await runtime.read(vectorsBuffer, Float32Array, count * 3, { signal });
-    const packedMagnitudes = await runtime.read(magnitudesBuffer, Float32Array, count * 4, { signal });
-    const flags = await runtime.read(flagsBuffer, Uint32Array, count, { signal });
+    // Batch bounds are written to the settings range in queue order before
+    // each dispatch, so the light 16k batches stay queued instead of waiting
+    // for each other; each completed batch still reports progress.
+    await runtime.run(DISPLACEMENT_SHADER, bindings, count, { signal, startAtom, endAtom, batchSize: BATCH_ATOMS,
+      range: { buffer: settingsBuffer, offset: 40, values: (start, end) => new Uint32Array([start, end]) },
+      onProgress: ({ completedAtoms }) => report('analyzing', completedAtoms - startAtom) });
+    report('analyzing', count);
+    checkSignal(signal);
+    const [vectors, packedMagnitudes, flags] = await readGpuBuffers(runtime, [
+      { buffer: vectorsBuffer, Type: Float32Array, length: count * 3 },
+      { buffer: magnitudesBuffer, Type: Float32Array, length: count * 4 },
+      { buffer: flagsBuffer, Type: Uint32Array, length: count }], { signal });
     const magnitudes = new Float64Array(count);
     let matched = 0, correctedAtoms = 0, lastYieldAt = performance.now();
     for (let index = 0; index < count; index += 1) {

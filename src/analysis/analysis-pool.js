@@ -1047,15 +1047,14 @@ export class AnalysisPool {
       let payload = task.payload;
       const transferables = [];
       if (DXA_STAGE_KINDS.includes(payload.kind)) {
-        payload = { ...payload };
-        if (task.slot.dxaResidentKey === payload.dxaResidentKey) delete payload.dxaStageInput;
-        else {
-          const source = payload.dxaStageInput, fields = payload.kind === 'dxaLocal' ? ['coordinates'] : ['vertices', 'tetrahedra', 'edges', 'transitions'];
-          payload.dxaStageInput = { ...source };
-          for (const name of fields) {
-            payload.dxaStageInput[name] = await copyCoordinates(source[name], task.signal);
-            transferables.push(payload.dxaStageInput[name].buffer);
-          }
+        // The stage supplies a private input (usually a MessagePort answered
+        // by the DXA coordinator Worker) only for a slot without it.
+        const { dxaStageInputSource: source, ...rest } = payload;
+        payload = rest;
+        if (task.slot.dxaResidentKey !== payload.dxaResidentKey) {
+          const prepared = await source(task.signal);
+          payload.dxaStageInput = prepared.input;
+          transferables.push(...prepared.transfer);
         }
       } else if (payload.kind === 'voronoiFinalize') {
         for (const partial of payload.partials) for (const value of Object.values(partial)) {

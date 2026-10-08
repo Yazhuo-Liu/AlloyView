@@ -99,10 +99,14 @@ processes bounded disjoint output ranges. Further chunks reuse that resident
 input. This duplicates stage inputs per Worker, not per atom, and does not
 duplicate complete dislocation extraction. Private tasks need copied snapshots
 and temporary result buffers, unlike pthreads sharing one heap.
-ArrayBuffer transfer avoids an additional
-message copy but moves ownership; preparing snapshots and importing them into
-worker-local Wasm still costs time and memory. The original viewer coordinates
-remain attached. See [MDN transferable
+The DXA Worker keeps each stage input: the coordinates, or the tetrahedron
+tables packed in its native heap. The page sends it only the stage
+dimensions and, for each selected Worker, one end of a new `MessageChannel`;
+the DXA Worker answers that port with a transferred private copy. The page
+thread therefore copies no stage input. ArrayBuffer transfer avoids an
+additional message copy but moves ownership; packing the tables, copying them
+once per Worker and importing them into worker-local Wasm still cost time and
+memory. The original viewer coordinates remain attached. See [MDN transferable
 objects](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Transferable_objects).
 Small inputs, an explicit one-worker request, memory limits or unavailable
 Workers retain the native CPU stages. Failed local-stage tasks fall back to the
@@ -112,12 +116,14 @@ Each private chunk has a **30 s** deadline. Constructor errors, malformed replie
 or a Worker that never finishes its task cancel that stage's outstanding jobs
 before native fallback. A later calculation retries healthy Workers rather than
 permanently disabling independent-stage execution.
-Automatic private-stage execution uses at most **four Workers**, further
-limited by CPU permits, work size and measured retained heaps. This leaves
-room for the larger tetrahedron snapshots and avoids rebuilding the full local
-neighbor index in too many private heaps. An explicit development worker-count
-request still respects concurrency and memory limits; the four-Worker default
-does not limit the isolated pthread route.
+Automatic private-stage execution uses one Worker per 4,096 atoms, at most
+**eight** for local crystal identification and **four** for tetrahedron
+classification, further limited by CPU permits, work size and measured
+retained heaps. A local-stage copy needs 24 bytes per atom plus the Worker's
+own neighbor index; a tetrahedron-table copy needs about 850 bytes per atom
+(23 MiB for the 28,800-atom HEA example). An explicit development
+worker-count request applies to both stages and still respects concurrency
+and memory limits; these caps do not limit the isolated pthread route.
 
 Private inputs and lookup tables stay resident only while chunks of the same
 stage need them. At the stage's end, its snapshots, native tables, session and
@@ -144,6 +150,18 @@ File loading and physical replication prewarm and grow reusable CPU pools.
 Display-only copies need no additional analysis threads. Repeated calculations
 and ordinary source changes reuse the initialized Wasm module and its heap;
 lowering the active thread count keeps initialized idle pthreads for reuse.
+For structures of at least **8,192 atoms**, preparation then extracts one
+built-in 2,560-atom FCC screw dislocation on at most two threads and discards
+the result. Browsers compile WebAssembly functions lazily and optimize a
+long-running function only for later calls, so without this step the first
+extraction in a page took about 1.6 times as long as later ones: 930 versus
+580 ms for the HEA example with eight threads on the reference machine,
+in Chrome as in Node. The warm-up takes about 270 ms of background CPU time,
+once per DXA Worker and thread mode (one or several threads), and holds only
+the permits of the threads it uses. A foreground extraction preempts it;
+without shared memory it first waits for the current half of the warm-up
+(its native topology or interface part). A completed extraction also counts
+as warm. The warm-up does not change any result.
 Shared-memory cancellation is cooperative and preserves the pthread pool.
 Private stage tasks follow the analysis pool's cancellation path. Without
 shared control memory, cancelling synchronous native work terminates its
@@ -158,8 +176,10 @@ extraction on the NiGB example physically repeated twice along Z. Repeat with
 `--workers 2` or `--workers 4`. The retained-heap benchmark
 `npm run benchmark:dxa-cpu -- --dataset all --threads 1,2,4,1 --repetitions 2`
 records native stage times and scientific label/topology checks while reusing
-one heap across concurrency changes. [CPU profiles](../DXA_CPU_PROFILE.md)
-retain earlier measurements; they are device-specific records.
+one heap across concurrency changes. Each result also lists `hostTimings`:
+kernel and pool readiness, input conversion and upload, and result decoding.
+[CPU profiles](../DXA_CPU_PROFILE.md) retain earlier measurements; they are
+device-specific records.
 
 `npm run test:browser:dxa-parallel -- --software` checks both isolated pthreads
 and ordinary nonisolated CPU stage offload, including initialization failures, pool reuse,

@@ -43,7 +43,7 @@ export async function analyzeGpuCentrosymmetry(runtime, frame, parameters = {}, 
   const owned = [], own = buffer => { owned.push(buffer); return buffer; };
   try {
     const resultBuffer = own(runtime.createBuffer(count * CSP_RESULT_WORDS * 4));
-    const source = await prepareCspCoordinates(frame, { signal });
+    const source = await exactCoordinateWords(runtime, frame, { signal });
     const sourceBuffer = own(runtime.storageBuffer(source));
     const settingsBuffer = own(runtime.storageBuffer(prepareCspSettings(frame, { required, neighbors, mode })));
     const labelsBuffer = own(runtime.storageBuffer(classifications ? Uint32Array.from(classifications) : new Uint32Array(1)));
@@ -52,8 +52,10 @@ export async function analyzeGpuCentrosymmetry(runtime, frame, parameters = {}, 
       checkSignal(signal);
       if (radiusAttempts) context = await runtime.prepareNeighbors(frame, radius, { signal });
       progress('indexing');
+      // Emulated binary64 pairing is the heaviest neighbor kernel; its batches
+      // start at the former 16k atoms and grow only after measured dispatches.
       await runtime.run(CSP_SHADER, runtime.neighborBindings(context, [resultBuffer, sourceBuffer, settingsBuffer, labelsBuffer]), count,
-        { signal, startAtom, endAtom, onProgress: value => onProgress({ ...value, phase: 'analyzing', stage: 'pairing', workerCount: 1 }) });
+        { signal, startAtom, endAtom, initialBatchSize: 16_384, onProgress: value => onProgress({ ...value, phase: 'analyzing', stage: 'pairing', workerCount: 1 }) });
       data = await runtime.read(resultBuffer, Uint32Array, count * CSP_RESULT_WORDS, { signal });
       unresolved = 0;
       for (let atom = startAtom; atom < endAtom; atom++) {
@@ -88,6 +90,18 @@ export async function analyzeGpuCentrosymmetry(runtime, frame, parameters = {}, 
       gpuCorrectionAtoms: 0, gpuCnaReused, gpuCnaCorrectionAtoms: cnaResult?.gpuCorrectionAtoms ?? 0,
       gpuCnaCorrectionReasons: cnaResult?.gpuCorrectionReasons ?? null, gpuArithmetic: 'ieee754-f64-ordering' };
   } finally { runtime.disposeBuffers(owned); }
+}
+
+/** Encoded words for one immutable frame input are shared by central
+ * symmetry and PTM-neighbor preparation. Runtimes without a cache (tests,
+ * direct callers) encode on every call. */
+export async function exactCoordinateWords(runtime, frame, { signal } = {}) {
+  const cache = runtime?.exactCoordinateCache, pbc = Array.from(frame.cell.pbc, Boolean).join();
+  const cached = cache?.get(frame.fractional);
+  if (cached && cached.cell === frame.cell && cached.pbc === pbc) { checkSignal(signal); return cached.words; }
+  const words = await prepareCspCoordinates(frame, { signal });
+  cache?.set(frame.fractional, { cell: frame.cell, pbc, words });
+  return words;
 }
 
 /** Upload original CPU-wrapped IEEE64 values; this is input preparation, not

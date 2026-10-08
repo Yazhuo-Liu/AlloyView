@@ -1,6 +1,6 @@
 # Improvement backlog
 
-Last updated: 2026-10-07 (phase 1 completed)
+Last updated: 2026-10-08 (phase 1 completed; phase 2 in progress)
 
 This backlog collects a performance and parallelism audit of AlloyView and a
 feature comparison with OVITO and AtomEye. Work through it in phase order.
@@ -255,6 +255,8 @@ PTM [E].
 
 ### P11. WebGPU batch pipelining
 
+**Status:** Done 2026-10-08. Up to three dispatches stay queued; hardware batches start at 64k atoms and adapt toward about 60 ms per dispatch (4,096–262,144); the neighbor index is one clear plus one index dispatch. On the GTX 1080 Ti, 1M-atom FCC coordination 217 → 51 ms, fixed CNA 309 → 86 ms, adaptive CNA 427 → 129 ms, local shear 425 → 121 ms [M]. Deterministic outputs are bit-identical (121 analyses, 1,592 fields); fields that already varied between runs of the old build (atomic-race order) vary the same way. See [performance](features/performance.md).
+
 **Effort:** S–M. Every 16,384-atom batch submits and then awaits
 `onSubmittedWorkDone()` before the next (`src/analysis/gpu/runtime.js` ~701–715);
 the neighbor-index build is batched the same way (62 round trips at 1M atoms)
@@ -263,6 +265,8 @@ use 64k+ batches on hardware adapters. Light kernels 2–5×, CNA/CSP 5–20% [E
 Watch driver watchdog limits.
 
 ### P12. WebGPU readbacks and task queueing
+
+**Status:** Done 2026-10-08. Pooled staging buffers with one map per batch, 16k-atom bond-statistics ranges with adaptive dispatches, one pipelined GPU task behind the running one when its frames are resident, and a per-frame exact-f64 coordinate cache shared by CSP and PTM neighbors. NiGB bond statistics 2,141 → 495 ms, PTM neighbors 852 → 477 ms, RDF 49 → 16 ms [M]. Bond-statistics moments may differ in the last bits (merge order, already nondeterministic). Known issue, not caused by this change: `npm run test:gpu -- --hardware` fails its HCP ideal-strain exact-zero check on the unmodified baseline too.
 
 **Effort:** S–M. Each read creates a staging buffer and maps it in its own
 `mapAsync` (coordination 3–4, local shear 5, bonds 3, RDF 2–3 per batch;
@@ -282,6 +286,8 @@ during a drag; recompute exact CPU colors when the drag ends. Removes the
 
 ### P14. Byte-level parsers
 
+**Status:** Done 2026-10-08 (`src/io/ascii-rows.js`). Plain decimals use the exact mantissa × 10^k fast path (mantissa < 2^53, |k| ≤ 22); everything else, and every error, goes through the original text code. Identical frames on all 44 examples, 397 whole-file variants and 180,000 fuzzed inputs. Worker read+parse in Chrome: HEA 54 → 21 ms, Fe loop 238 → 74 ms, NiGB 348 → 106 ms [M]. PDB, LAMMPS data and POSCAR keep their text parsers.
+
 **Effort:** M. A prototype that parses the dump atom block from bytes matched
 `Number()` on every value and took HEA 50 → 15 ms and Fe 250 → 50 ms [M]. Apply
 to dump, CFG and XYZ with the same validation and error messages.
@@ -298,11 +304,15 @@ incremental indexing, and replication in a Worker.
 
 ### P16. Nonisolated DXA fallback
 
+**Status:** Done 2026-10-08. Stage inputs stay in the DXA Worker and reach stage Workers through transferred MessageChannel ports; local identification may use up to 8 Workers and tetrahedron classification up to 4. Main-thread time per run: HEA 115–177 → 31–60 ms, Fe 292–344 → 67–107 ms [M]. Open question for the owner: tetrahedron-classification offload is still about break-even (packing tables 63–98 ms on HEA, 197–355 ms on Fe), so either a faster native packer (C++ rebuild) or skipping that stage could help; left unchanged.
+
 **Effort:** S–M. The tetrahedron snapshot is copied on the main thread once per
 stage Worker (about 4 × 23 MiB for HEA) [M]. Send it from the DXA Worker to stage
 Workers over a MessagePort and give each stage its own Worker cap. Tens of ms [E].
 
 ### P17. Browser versus Node DXA gap
+
+**Status:** Done 2026-10-08. The gap was a cold first extraction (lazy Wasm compilation and tier-up), not the browser: first runs took about 900–940 ms in both Chrome and Node, later runs 540–600 ms. A background code warm-up after the existing prewarm extracts a built-in 2,560-atom screw dislocation on at most 2 threads (low priority, preempted by a real Extract), bringing the first HEA run to 554–598 ms [M]. Breakdown in [DXA CPU profile](DXA_CPU_PROFILE.md).
 
 **Effort:** S (investigation). Production reported 854 ms for HEA with 8 threads;
 Node took 555–650 ms [M]. Profile the browser run (pool growth, snapshot copies,
@@ -333,6 +343,8 @@ point set for empty sites. OVITO:
 `particles/modifier/analysis/wignerseitz/WignerSeitzAnalysisModifier.cpp`.
 
 ### O8. gzip input
+
+**Status:** Done 2026-10-08 (`src/io/gzip.js`). Detected by the gzip signature; trajectories are decompressed once into a Blob made of 8 MiB parts, single-frame files on each read. No OPFS spill: the decompressed size must fit in browser storage/memory (documented in [file formats](FORMATS.md)). Concatenated gzip members are rejected with an explanation.
 
 **Effort:** M. Decompress with `DecompressionStream` in the parser Worker and
 keep random access by indexing the decompressed stream, spilling to OPFS for

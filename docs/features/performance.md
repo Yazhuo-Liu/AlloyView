@@ -89,7 +89,79 @@ limitations.
 
 Displacement also retains current/reference inputs, caching anchored Cartesian high/low buffers separately for wrapped and unwrapped coordinates. Its vector differences, current-cell minimum images and magnitudes run on GPU after CPU atom matching. A Cartesian-only upload does not need the neighbor grid, so open coordinates outside the fractional unit box are supported. Auto central symmetry reuses compatible adaptive-CNA labels or runs GPU adaptive CNA before nearest-shell voting and greedy pairing.
 
-Fresh ideal strain can prepare its PTM nearest-neighbor table on GPU, preserving exact ordering through shader-emulated IEEE64 arithmetic. Readback is batched to at most 16,384 atoms, while a 256 MiB ceiling bounds the full 505-byte-per-atom host table. Diamond and graphene fitting require that complete table; other templates can give CPU Workers only their own ranges. CPU fitting remains necessary, and standalone PTM retains its CPU path. Cached ideal-strain fits also keep their raw GPU PTM uploads, so a reference edit updates the small element table without repeating fitting or uploading every deformation matrix.
+Fresh ideal strain can prepare its PTM nearest-neighbor table on GPU, preserving exact ordering through shader-emulated IEEE64 arithmetic. Readback is batched to at most 16,384 atoms in two alternating row buffers, so the next batch runs while one is decoded, and a 256 MiB ceiling bounds the full 505-byte-per-atom host table. Central symmetry and this preparation share one exact binary64 coordinate encoding per frame input. Diamond and graphene fitting require that complete table; other templates can give CPU Workers only their own ranges. CPU fitting remains necessary, and standalone PTM retains its CPU path. Cached ideal-strain fits also keep their raw GPU PTM uploads, so a reference edit updates the small element table without repeating fitting or uploading every deformation matrix.
+
+### Dispatch batching and readback
+
+A neighbor index is cleared and filled with one dispatch each; its only round
+trip is the occupancy check queued behind them. Kernels that visit central
+atoms in ranges write each range into a small settings buffer before the
+dispatch on the same queue, and keep up to three dispatches queued instead of
+waiting for each one. Software adapters keep 16,384-atom ranges, as does the
+light displacement kernel. Hardware adapters start other neighbor kernels at
+65,536 atoms (16,384 for the emulated-IEEE64 central-symmetry pass) and adjust
+each pipeline to its measured dispatch time, about 60 ms per dispatch: slow
+dispatches shrink the range at once, to no fewer than 4,096 atoms, and later
+runs of that pipeline start smaller; fast ones grow within the run up to
+262,144 atoms. This keeps dispatches well below driver watchdog limits on
+slower GPUs. Input uploads do not wait for queue completion; WebGPU orders them
+before later dispatches, and error scopes still report allocation failures.
+
+Results are copied into a reusable staging buffer, and the outputs of one
+step share one mapping: coordination counts, candidates and the correction
+header; shear coordination and cutoff flags; displacement vectors, magnitudes
+and flags; or bond rows and records. Pooled staging buffers are bounded to
+64 MiB (1/16 of a software budget) and are released before cached frames when
+memory runs short. RDF reads back 32,768-atom ranges on hardware for large
+frames, still within its 32-bit histogram bound, and two histogram buffers let
+the next range run while the previous one is corrected. Bond distributions read
+back up to 16,384 atoms at a time (formerly 2,048); their dispatches start at
+2,048 atoms and follow the measured dispatch time, because angular enumeration
+is quadratic in the neighbor count. A range whose exact-correction queue
+overflows is split by the number of records it requested, and the next range
+follows the observed correction density. Each range is read back completely,
+including the expected correction records, before the next one starts; its CPU
+merge and exact pair corrections then run while the GPU computes the next
+range. Histograms, coordination and per-atom rows do not depend on range
+boundaries; merging per-range moments in a different order can change only the
+last bits of mean and standard deviation, whose merge order already varied
+with the GPU's correction-record order.
+
+The GPU Worker runs one task at a time. When the next analysis's frame (and
+reference frame) is already resident, the client posts it while the current
+task runs, so the Worker can start it without another main-thread round trip.
+At most one task waits this way, cancellation still reaches it, and results
+settle in posting order. The Worker keeps the inputs of every task it has
+received until that task finishes, so an earlier task can evict their GPU
+buffers and the later task uploads them again instead of failing.
+
+Measured on a GTX 1080 Ti (Chrome/Vulkan hardware adapter) through the
+persistent GPU Worker, as the median of 12 warm calls from three alternating
+browser processes per build, for `NiGB_minimized.cfg` (129,904 atoms):
+
+| Analysis | Before | After |
+| --- | ---: | ---: |
+| Coordination | 35 ms | 14 ms |
+| RDF | 49 ms | 16 ms |
+| Local shear | 73 ms | 31 ms |
+| Fixed-cutoff CNA | 48 ms | 28 ms |
+| Displacement | 46 ms | 31 ms |
+| Bonds | 170 ms | 125 ms |
+| PTM neighbor table | 852 ms | 477 ms |
+| Bond distributions | 2,141 ms | 495 ms |
+| Central symmetry (12 / Auto) | 402 / 450 ms | 358 / 401 ms |
+
+Adaptive CNA and reference-frame strain were unchanged within noise; their time
+is GPU arithmetic and sparse CPU correction. Bond distributions also gained
+from an allocation-free exact pair correction, which this example needs for
+2.2 million angle pairs on integer-degree bin edges. For a 1,000,188-atom FCC
+crystal, coordination fell from 217 to 51 ms, local shear from 425 to 121 ms,
+fixed CNA from 309 to 86 ms, adaptive CNA from 427 to 129 ms, RDF from 310 to
+135 ms and 12-neighbor central symmetry from 1,294 to 963 ms. Deterministic
+outputs were bit-identical to the previous build; bond edge order, Q4/Q6,
+reference-frame strain and Voronoi values, which already varied between runs of
+the previous build with the linked-cell insertion order, varied by the same
+amounts.
 
 ### Preparation when a structure loads
 
@@ -135,7 +207,7 @@ Uploads, shader compilation, reductions and result readback all contribute to el
 
 ## Analysis results and rendering
 
-The current renderer uses WebGL2. WebGPU analysis writes results to GPU buffers, copies them to a readable staging buffer, and returns typed arrays to the application. The color legend uses these scalar arrays, and vector display builds arrow data from the selected X, Y and Z fields. Drawing then uploads colors and vectors into separate WebGL buffers. Input uploads can be reused by subsequent WebGPU calculations, but the current rendering path still includes result readback and WebGL upload.
+The current renderer uses WebGL2. WebGPU analysis writes results to GPU buffers, copies them to a reusable readable staging buffer, and returns typed arrays to the application. The color legend uses these scalar arrays, and vector display builds arrow data from the selected X, Y and Z fields. Drawing then uploads colors and vectors into separate WebGL buffers. Input uploads can be reused by subsequent WebGPU calculations, but the current rendering path still includes result readback and WebGL upload.
 
 Browsers provide no portable way to use a WebGPU `GPUBuffer` directly as a WebGL buffer. A future WebGPU renderer could draw from retained analysis buffers on the same `GPUDevice`, avoiding the full array round trip for supported displays. It would need to keep those buffers alive, map colors on GPU and write any CPU precision corrections back before drawing. The present analysis Worker owns its device and releases temporary output buffers after returning results, so this would require a change to device ownership and rendering. Legends, atom inspection and data export would still need summary statistics or selected values on the CPU.
 

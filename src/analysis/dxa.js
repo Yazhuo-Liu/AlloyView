@@ -220,7 +220,8 @@ function kernelMetadata(module, workerCount) {
   return { workerCount, poolSize: module.dxaShared
     ? module.PThread.unusedWorkers.length + module.PThread.runningWorkers.length : 0,
   kernelGeneration, wasmMemoryBytes: module.HEAPU8.byteLength,
-  sharedMemory: Boolean(module.dxaShared), threadingFallback: module.dxaThreadingFallback ?? kernelThreadingFallback };
+  sharedMemory: Boolean(module.dxaShared), threadingFallback: module.dxaThreadingFallback ?? kernelThreadingFallback,
+  warmedKernelPaths: [...(module.dxaCodeWarmed ?? [])] };
 }
 
 async function growPool(module, workerCount, { signal, startupTimeoutMs } = {}) {
@@ -333,10 +334,64 @@ export async function prepareDxaThreadPool(module, workerCount, {
 /** Initialize the one persistent kernel and grow its existing pthread pool.
  * The returned diagnostics describe the same heap on later calculations.
  * Callers may share its cancellation word, but never transfer the shared heap.
+ * `warmCode` also runs one small extraction (see dxaCodeWarmupFrame) unless
+ * this module already ran the same serial or parallel code path.
  */
 export async function warmupDxa(options = {}) {
   if (activeDxaCalculation) throw new Error('A DXA calculation is already using the native workspace.');
-  return initializeDxa(options);
+  const ready = await initializeDxa(options);
+  return options.warmCode ? warmDxaCode(ready, options) : ready;
+}
+
+/** Atom count from which background preparation also warms the kernel code.
+ * Below it, the warm-up extraction would cost about as much as the analysis. */
+export const DXA_CODE_WARMUP_MIN_ATOMS = 8192;
+
+/** V8 compiles Wasm functions lazily and first runs them as baseline code. A
+ * function with a long loop is optimized only for later calls, so the first
+ * complete extraction in a page took about 1.5 times as long as later ones
+ * (HEA, 8 threads: 930 versus 580 ms). This 2,560-atom FCC screw dislocation
+ * along periodic Z, free in X and Y, exercises the same crystal recognition,
+ * parallel Delaunay, interface and Burgers-circuit code in about 250 ms.
+ */
+export function dxaCodeWarmupFrame() {
+  const a = 3.52, nx = 20, ny = 16, nz = 4, step = [a / Math.SQRT2, a, a / Math.SQRT2];
+  const size = [nx * step[0], ny * step[1], nz * step[2]];
+  const fractional = new Float64Array(nx * ny * nz * 6);
+  let cursor = 0;
+  for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) for (let k = 0; k < nz; k++) {
+    for (const basis of [0, .5]) {
+      const x = (i + basis) * step[0], y = (j + basis) * step[1];
+      const z = (k + basis) * step[2] + step[2] / (2 * Math.PI)
+        * Math.atan2(y - size[1] / 2 - .17 * a, x - size[0] / 2 - .13 * a);
+      fractional[cursor++] = x / size[0]; fractional[cursor++] = y / size[1]; fractional[cursor++] = z / size[2];
+    }
+  }
+  return { fractional, cell: { vectors: Float64Array.of(size[0], 0, 0, 0, size[1], 0, 0, 0, size[2]),
+    origin: new Float64Array(3), pbc: [false, false, true] } };
+}
+
+const codeVariant = workerCount => workerCount > 1 ? 'parallel' : 'serial';
+
+async function warmDxaCode(ready, { memoryBudgetBytes, signal }) {
+  const module = await getKernel();
+  const warmed = module.dxaCodeWarmed ??= new Set();
+  const variant = codeVariant(ready.workerCount);
+  if (warmed.has(variant)) return kernelMetadata(module, ready.workerCount);
+  const started = performance.now();
+  activeDxaCalculation = true;
+  try {
+    // Two threads select the parallel Delaunay and interface paths, which
+    // differ from the one-thread code. Results are discarded.
+    await performDxaCalculation(dxaCodeWarmupFrame(), {}, { workerCount: Math.min(2, ready.workerCount),
+      memoryBudgetBytes, resetCancellation: false, signal, yieldBetweenStages: true });
+  } catch (error) {
+    if (error?.name === 'AbortError' || signal?.aborted) throw error;
+    // Best effort: never retry a failing warm-up or block the real analysis.
+    warmed.add(variant);
+    return { ...kernelMetadata(module, ready.workerCount), codeWarmupError: error.message || String(error) };
+  } finally { activeDxaCalculation = false; }
+  return { ...kernelMetadata(module, ready.workerCount), codeWarmupMs: performance.now() - started };
 }
 
 async function initializeDxa({ atomCount = 1, workerCount: requestedWorkers,
@@ -401,7 +456,7 @@ export async function calculateDxa(frame, parameters = {}, options = {}) {
 }
 
 async function performDxaCalculation(frame, parameters = {}, { onProgress = () => {}, onControl = () => {}, resetCancellation = true,
-  memoryBudgetBytes, workerCount: requestedWorkers, signal, startupTimeoutMs, runCpuStage } = {}) {
+  memoryBudgetBytes, workerCount: requestedWorkers, signal, startupTimeoutMs, runCpuStage, yieldBetweenStages = false } = {}) {
   checkSignal(signal);
   const settings = validateDxaParameters(parameters), count = validateDxaFrame(frame);
   const memoryEstimateBytes = preflightDxaMemory(count, memoryBudgetBytes);
@@ -414,6 +469,10 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
   const module = await getKernel();
   checkSignal(signal);
   module._alloy_dxa_set_threads(workerCount);
+  // Host-side work around the native stages: kernel/pool readiness, input
+  // conversion and upload, and result decoding/normalization.
+  const hostTimings = { prepareMs: performance.now() - startedAt, inputMs: 0, collectMs: 0 };
+  let hostStarted = performance.now();
   report({ phase: 'indexing', completedStages: 0, totalStages: DXA_STAGES, totalAtoms: count });
   const positions = dxaCartesianCoordinates(frame);
   const coordinates = module._malloc(positions.byteLength), cellPointer = module._malloc(12 * 8);
@@ -443,7 +502,7 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
     if (!Number.isSafeInteger(result?.workerCount) || result.workerCount < 1) throw new Error('CPU DXA returned invalid worker metadata.');
     cpuStageWorkerCounts[stage] = result.workerCount;
     cpuStageTimings.push({ stage, workerCount: result.workerCount, elapsedMs: result.elapsedMs ?? 0,
-      inputBytes: result.inputBytes ?? 0, copiedBytes: result.copiedBytes ?? 0,
+      inputBytes: result.inputBytes ?? 0, copiedBytes: result.copiedBytes ?? 0, inputDelivery: result.inputDelivery,
       chunkCount: result.chunkCount ?? 1, kernelInitializations: result.kernelInitializations ?? 0 });
     return result;
   };
@@ -460,6 +519,7 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
     module.HEAPF64.set(frame.cell.vectors, cellPointer / 8);
     module.HEAPF64.set(frame.cell.origin, cellPointer / 8 + 9);
     const pbc = frame.cell.pbc.reduce((bits, enabled, axis) => bits | (enabled ? 1 << axis : 0), 0);
+    hostTimings.inputMs = performance.now() - hostStarted;
     report({ phase: 'analyzing', completedStages: 0, totalStages: DXA_STAGES, totalAtoms: count });
     const argumentsList = [coordinates, count, cellPointer, pbc,
       DXA_LATTICES.find(lattice => lattice.id === settings.lattice).kernelId,
@@ -475,8 +535,11 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       if (!module._alloy_dxa_prepare(...argumentsList)) throw nativeDxaError(module);
       let typesPointer = 0, neighborsPointer = 0;
       try {
-        const local = await runStage('local', { atomCount: count, coordinates: positions, cell: frame.cell,
-          lattice: argumentsList[4], perfectOnly: settings.onlyPerfectDislocations }, 0);
+        // Stage Workers receive private copies of these coordinates directly
+        // from this Worker (see serveDxaStageInput), never via the page.
+        const local = await runStage('local', { atomCount: count, cell: frame.cell,
+          lattice: argumentsList[4], perfectOnly: settings.onlyPerfectDislocations,
+          arrays: () => ({ coordinates: positions.slice() }) }, 0);
         if (!(local.structures instanceof Int32Array) || local.structures.length !== count
           || !(local.neighbors instanceof Int32Array) || !Number.isSafeInteger(local.neighborWidth) || local.neighborWidth < 1
           || local.neighbors.length !== count * local.neighborWidth || !Number.isFinite(local.maxNeighborDistance) || local.maxNeighborDistance < 0) {
@@ -495,17 +558,23 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       }
     }
     if (!localImported && !module._alloy_dxa_begin(...argumentsList)) throw nativeDxaError(module);
+    // A background warm-up lets a Worker cancel message arrive between the
+    // two synchronous native halves, even without shared cancellation memory.
+    if (yieldBetweenStages) await new Promise(resolve => setTimeout(resolve, 0));
     checkSignal(signal);
     checkDxaCancellation(module);
     if (offload) {
       let regionsPointer = 0;
       try {
         const snapshotBudget = Math.min(512 * 1024 ** 2,
-          // Native packing and its owned JS copy coexist until all tables
-          // have been copied. Reserve both before accepting this snapshot.
+          // The native tables stay packed while each stage Worker receives
+          // its own copy. Reserve both before accepting this snapshot.
           Math.max(1, Math.floor(((memoryBudgetBytes ?? 1.5 * 1024 ** 3) - memoryEstimateBytes) / 2)));
-        const snapshot = exportDxaCpuSnapshot(module, snapshotBudget, count);
-        const classified = await runStage('tetrahedra', snapshot, 7);
+        beginStage('Pack interface tables for CPU Workers', 7);
+        const { snapshot, release } = openDxaCpuSnapshot(module, snapshotBudget, count);
+        let classified;
+        try { classified = await runStage('tetrahedra', snapshot, 7); }
+        finally { release(); }
         if (!(classified.regions instanceof Int32Array) || classified.regions.length !== snapshot.tetrahedronCount
           || classified.regions.some(value => value !== -1 && value !== 0)) throw new Error('CPU DXA interface labels are invalid.');
         regionsPointer = module._malloc(classified.regions.byteLength);
@@ -521,6 +590,7 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
     checkSignal(signal);
     checkDxaCancellation(module);
     report({ phase: 'collecting', completedStages: DXA_STAGES, totalStages: DXA_STAGES, totalAtoms: count });
+    hostStarted = performance.now();
     const raw = JSON.parse(module.UTF8ToString(output));
     if (raw.atomStructureTypesBinary) {
       // UTF8ToString above refreshed the heap views after any pthread growth;
@@ -530,9 +600,13 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       delete raw.atomStructureTypesBinary;
     }
     const result = normalizeDxaResult(raw, frame.cell, settings, count);
+    hostTimings.collectMs = performance.now() - hostStarted;
+    // A completed extraction has compiled this code path and queued its
+    // optimization, so a later code warm-up would add nothing.
+    (module.dxaCodeWarmed ??= new Set()).add(codeVariant(workerCount));
     const peakWorkers = Math.max(workerCount, ...Object.values(cpuStageWorkerCounts));
     return { ...result, elapsedMs: performance.now() - startedAt, memoryEstimateBytes,
-      stageTimings, ...kernelMetadata(module, workerCount), threaded: Boolean(module.dxaShared),
+      stageTimings, hostTimings, ...kernelMetadata(module, workerCount), threaded: Boolean(module.dxaShared),
       nativeWorkerCount: workerCount, workerCount: peakWorkers, cpuStageWorkerCounts, cpuStageTimings, cpuStageFallbacks,
       cpuOffloadUsed: importedCpuStages.size > 0,
       engine: cpuStageTimings.length ? `Wasm CPU · global ${workerCount} thread · CPU Worker pool ×${peakWorkers}`
@@ -545,18 +619,33 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
   }
 }
 
-function exportDxaCpuSnapshot(module, budgetBytes, atomCount) {
+/** Pack the interface tables in the native heap and keep them there for the
+ * stage: `arrays()` copies them for one stage Worker at a time, so neither
+ * this Worker nor the page holds a complete JavaScript copy in between.
+ */
+function openDxaCpuSnapshot(module, budgetBytes, atomCount) {
+  let open = false;
+  const release = () => { if (open) module._alloy_dxa_release_worker_snapshot(); open = false; };
   try {
+    open = true;
     if (!module._alloy_dxa_worker_snapshot(budgetBytes)) throw nativeDxaError(module);
     const vertexCount = module._alloy_dxa_worker_vertex_count(), tetrahedronCount = module._alloy_dxa_worker_tet_count();
     const edgeCount = module._alloy_dxa_worker_edge_count(), transitionCount = module._alloy_dxa_worker_transition_count();
-    const copy = (heap, pointer, length) => heap.slice(pointer / heap.BYTES_PER_ELEMENT, pointer / heap.BYTES_PER_ELEMENT + length);
-    return { atomCount, vertexCount, tetrahedronCount, edgeCount, transitionCount, alpha: module._alloy_dxa_worker_alpha(),
-      vertices: copy(module.HEAPF64, module._alloy_dxa_worker_vertex_ptr(), vertexCount * 3),
-      tetrahedra: copy(module.HEAPU32, module._alloy_dxa_worker_tet_ptr(), tetrahedronCount * 16),
-      edges: copy(module.HEAPU32, module._alloy_dxa_worker_edge_ptr(), edgeCount * 8),
-      transitions: copy(module.HEAPF64, module._alloy_dxa_worker_transition_ptr(), transitionCount * 20) };
-  } finally { module._alloy_dxa_release_worker_snapshot(); }
+    const tables = [['vertices', 'HEAPF64', module._alloy_dxa_worker_vertex_ptr(), vertexCount * 3],
+      ['tetrahedra', 'HEAPU32', module._alloy_dxa_worker_tet_ptr(), tetrahedronCount * 16],
+      ['edges', 'HEAPU32', module._alloy_dxa_worker_edge_ptr(), edgeCount * 8],
+      ['transitions', 'HEAPF64', module._alloy_dxa_worker_transition_ptr(), transitionCount * 20]];
+    const arrays = () => {
+      if (!open) throw new Error('The DXA interface tables were already released.');
+      // Read the current views: a grown heap replaces its ArrayBuffer.
+      return Object.fromEntries(tables.map(([name, view, pointer, length]) => {
+        const heap = module[view], start = pointer / heap.BYTES_PER_ELEMENT;
+        return [name, heap.slice(start, start + length)];
+      }));
+    };
+    return { snapshot: { atomCount, vertexCount, tetrahedronCount, edgeCount, transitionCount,
+      alpha: module._alloy_dxa_worker_alpha(), arrays }, release };
+  } catch (error) { release(); throw error; }
 }
 
 function nativeDxaError(module) {

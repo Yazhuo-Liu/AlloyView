@@ -13,9 +13,10 @@ class FakeWorker {
 }
 const source = () => ({ fractional: new Float64Array([0, 0, 0, .5, .5, 0, .5, 0, .5, 0, .5, .5]),
   cell: createCell({ vectors: [4, 0, 0, 1, 4, 0, 0, 0, 4] }) });
+// Most cases check pool preparation alone; the code warm-up has its own tests.
 const setup = (options = {}) => {
   const workers = [], client = new DxaClient({ workerFactory: () => { const worker = new FakeWorker(); workers.push(worker); return worker; },
-    yieldToMain: async () => {}, environment: globalThis, ...options });
+    yieldToMain: async () => {}, environment: globalThis, codeWarmupMinAtoms: Infinity, ...options });
   return { client, workers };
 };
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -130,7 +131,8 @@ test('a fatal Wasm error releases the damaged module before another DXA job', as
 
 test('DXA prewarming grows a retained coordinator and source reset keeps its Wasm resources', async () => {
   const workers = [], environment = { navigator: { hardwareConcurrency: 8 }, crossOriginIsolated: true, SharedArrayBuffer };
-  const client = new DxaClient({ environment, workerFactory: () => { const worker = new FakeWorker(); workers.push(worker); return worker; }, yieldToMain: async () => {} });
+  const client = new DxaClient({ environment, workerFactory: () => { const worker = new FakeWorker(); workers.push(worker); return worker; },
+    yieldToMain: async () => {}, codeWarmupMinAtoms: Infinity });
   const control = { cancelBuffer: new SharedArrayBuffer(64), cancelPointer: 0 };
   for (const count of [2, 3, 4]) {
     const warming = client.warmup({ atomCount: 16000, workerCount: count });
@@ -178,6 +180,60 @@ test('shared DXA cancellation keeps the Worker and lease until ACK, then resets 
   await next;
   assert.equal(client.cpuBudget.active, 0);
   assert.equal(client.current, null);
+  await client.close();
+});
+
+test('large-frame warmup then runs one two-thread code warm-up per coordinator with its own permits', async () => {
+  const environment = { navigator: { hardwareConcurrency: 8 }, crossOriginIsolated: true, SharedArrayBuffer };
+  const { client, workers } = setup({ environment, codeWarmupMinAtoms: undefined });
+  const ready = { poolSize: 3, kernelGeneration: 1, wasmMemoryBytes: 32 * 1024 ** 2, sharedMemory: true };
+  const warming = client.warmup({ atomCount: 16000, workerCount: 4 });
+  await flush();
+  const worker = workers[0], pool = worker.messages[0];
+  assert.equal(pool.warmCode, false); assert.equal(pool.workerCount, 4); assert.equal(client.cpuBudget.active, 4);
+  worker.emit({ id: pool.id, ok: true, result: { ...ready, workerCount: 4, warmedKernelPaths: [] } });
+  await flush();
+  const code = worker.messages[1];
+  assert.equal(code.type, 'warmup'); assert.equal(code.warmCode, true); assert.equal(code.frame, undefined);
+  assert.equal(code.workerCount, 2); assert.equal(client.cpuBudget.active, 2, 'the code warm-up holds only its two permits');
+  worker.emit({ id: code.id, ok: true, result: { ...ready, workerCount: 2, warmedKernelPaths: ['parallel'], codeWarmupMs: 250 } });
+  const warmed = await warming;
+  assert.equal(warmed.workerCount, 4); assert.deepEqual(warmed.warmedKernelPaths, ['parallel']);
+  assert.equal(client.ready.workerCount, 4); assert.equal(client.cpuBudget.active, 0);
+  await client.warmup({ atomCount: 30000, workerCount: 4 });
+  await client.warmup({ atomCount: 4000, workerCount: 2 });
+  assert.equal(worker.messages.length, 2, 'warmed code and a prepared pool need no further requests');
+  await client.close();
+});
+
+test('a foreground analysis preempts the code warm-up, and its own result marks the code warm', async () => {
+  const environment = { navigator: { hardwareConcurrency: 8 }, crossOriginIsolated: true, SharedArrayBuffer };
+  const { client, workers } = setup({ environment, codeWarmupMinAtoms: undefined });
+  const control = { cancelBuffer: new SharedArrayBuffer(64), cancelPointer: 0 };
+  const ready = { poolSize: 3, kernelGeneration: 1, wasmMemoryBytes: 32 * 1024 ** 2, sharedMemory: true };
+  const warming = client.warmup({ atomCount: 16000, workerCount: 4 });
+  const rejected = assert.rejects(warming, { name: 'AbortError' });
+  await flush();
+  const worker = workers[0];
+  worker.emit({ id: worker.messages[0].id, control });
+  worker.emit({ id: worker.messages[0].id, ok: true, result: { ...ready, workerCount: 4, warmedKernelPaths: [] } });
+  await flush();
+  const code = worker.messages[1];
+  assert.equal(code.warmCode, true);
+  worker.emit({ id: code.id, control });
+  const calculation = client.analyze({ ...source(), fractional: new Float64Array(16000 * 3) }, {}, { workerCount: 4 });
+  await rejected;
+  assert.equal(Atomics.load(new Int32Array(control.cancelBuffer), 0), 1, 'shared cancellation interrupts the native warm-up');
+  assert.equal(worker.messages.at(-1).type, 'cancel');
+  const retry = client.warmup({ atomCount: 16000, workerCount: 4 });
+  worker.emit({ id: code.id, ok: false, name: 'AbortError', error: 'Cancelled' });
+  await flush();
+  const analysis = worker.messages.at(-1);
+  assert.equal(analysis.type, 'analyze');
+  worker.emit({ id: analysis.id, ok: true, result: { ...ready, workerCount: 4, warmedKernelPaths: ['parallel'], segments: [] } });
+  await calculation; await retry;
+  assert.equal(worker.messages.filter(message => message.warmCode).length, 1, 'a completed analysis already warmed the code');
+  assert.equal(client.cpuBudget.active, 0);
   await client.close();
 });
 
@@ -360,26 +416,59 @@ test('private CPU stage failure reacquires a native permit and supplies a stage 
   assert.equal(cpuBudget.active, 0); await client.close();
 });
 
-test('automatic private DXA degree leaves room for interface snapshots while explicit requests remain available', async () => {
-  for (const [requested, expected] of [[undefined, 4], [8, 8]]) {
+test('automatic private DXA degree has separate local and interface-snapshot caps; explicit requests apply to both', async () => {
+  for (const [requested, expected] of [[undefined, { local: 8, tetrahedra: 4 }], [6, { local: 6, tetrahedra: 6 }]]) {
     const environment = { ...staticEnvironment, navigator: { hardwareConcurrency: 40 } };
-    const atomCount = 60229, degrees = [];
-    const cpuStageBackend = { analyzeDxaTetrahedra() {}, async analyzeDxaLocal(input, options) {
-      degrees.push(options.workerCount);
-      return { structures: new Int32Array(atomCount), neighbors: new Int32Array(atomCount * 12),
-        neighborWidth: 12, maxNeighborDistance: 3, workerCount: expected };
-    } };
+    const atomCount = 60229, degrees = {};
+    const cpuStageBackend = {
+      async analyzeDxaLocal(input, options) {
+        degrees.local = options.workerCount;
+        return { structures: new Int32Array(atomCount), neighbors: new Int32Array(atomCount * 12),
+          neighborWidth: 12, maxNeighborDistance: 3, workerCount: options.workerCount };
+      },
+      async analyzeDxaTetrahedra(input, options) {
+        degrees.tetrahedra = options.workerCount;
+        return { regions: new Int32Array(input.tetrahedronCount), workerCount: options.workerCount };
+      },
+    };
     const { client, workers } = setup({ environment, cpuStageBackend });
     const frame = { ...source(), fractional: new Float64Array(atomCount * 3) };
     const pending = client.analyze(frame, {}, { workerCount: requested }); await flush();
     const worker = workers[0], initial = worker.messages[0];
     assert.equal(initial.workerCount, 1); assert.equal(initial.cpuOffload, true);
     worker.emit({ id: initial.id, cpuStageRequest: { requestId: 5, stage: 'local', input: {} } }); await flush();
-    assert.deepEqual(degrees, [expected]);
+    worker.emit({ id: initial.id, cpuStageRequest: { requestId: 6, stage: 'tetrahedra', input: { tetrahedronCount: 9 } } }); await flush();
+    assert.deepEqual(degrees, expected);
     worker.emit({ id: initial.id, ok: true, result: { backend: 'cpu' } }); await pending;
     assert.equal(frame.fractional.byteLength, atomCount * 3 * 8);
     await client.close();
   }
+});
+
+test('stage input ports go from the pool to the coordinator, and a replaced coordinator refuses them', async () => {
+  let deliver;
+  const cpuStageBackend = { analyzeDxaTetrahedra() {}, async analyzeDxaLocal(input, options) {
+    assert.equal(Object.hasOwn(input, 'coordinates'), false, 'the page receives stage dimensions only');
+    deliver = options.deliverInput;
+    const { port1, port2 } = new MessageChannel();
+    options.deliverInput(port1);
+    port2.close();
+    return stageReply();
+  } };
+  const { client, workers } = setup({ environment: staticEnvironment, cpuStageBackend });
+  const pending = client.analyze(largeSource()); await flush();
+  const worker = workers[0], id = worker.messages[0].id;
+  worker.emit({ id, control: null });
+  worker.emit({ id, cpuStageRequest: { requestId: 7, stage: 'local', input: { atomCount: 8192 } } }); await flush();
+  const forwarded = worker.messages.find(message => message.type === 'cpu-stage-input');
+  assert.equal(forwarded.id, id); assert.equal(forwarded.requestId, 7);
+  assert.equal(forwarded.port.constructor.name, 'MessagePort');
+  forwarded.port.close();
+  worker.emit({ id, ok: true, result: { backend: 'cpu' } }); await pending;
+  const { port1, port2 } = new MessageChannel();
+  assert.throws(() => deliver(port1), { name: 'AbortError' });
+  port2.close();
+  await client.close();
 });
 
 test('CPU stage cancellation waits for private job cleanup and native ACK before the next frame reuses its coordinator', async () => {

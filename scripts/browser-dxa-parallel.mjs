@@ -117,6 +117,7 @@ async function checkDeployment(isolated) {
         assert.ok(Number.isFinite(stage.elapsedMs) && stage.elapsedMs >= 0);
         assert.ok(Number.isFinite(stage.inputBytes) && stage.inputBytes > 0);
         assert.ok(Number.isFinite(stage.copiedBytes) && stage.copiedBytes > 0);
+        assert.equal(stage.inputDelivery, 'port', 'The DXA Worker sends stage inputs directly; the page copies none.');
         assert.ok(Number.isInteger(stage.chunkCount) && stage.chunkCount >= 2);
       }
       assert.equal(offloaded.cpuLease, 0, 'The coordinator and local pool jobs release the shared CPU budget.');

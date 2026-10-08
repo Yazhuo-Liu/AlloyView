@@ -1,6 +1,6 @@
 import { PTM_MAX_NEIGHBORS } from '../ptm.js';
 import { adaptiveCnaInitialRadius, MAX_GPU_CNA_RADIUS_ATTEMPTS } from './cna.js';
-import { prepareCspCoordinates } from './centrosymmetry.js';
+import { exactCoordinateWords } from './centrosymmetry.js';
 import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
 import { PTM_NEIGHBORS_SHADER, PTM_NEIGHBOR_ROW_WORDS } from './ptm-neighbors-shaders.js';
 
@@ -31,21 +31,34 @@ export async function analyzeGpuPtmNeighbors(runtime, frame, parameters = {}, { 
     let radius = adaptiveCnaInitialRadius(frame), context = await runtime.prepareNeighbors(frame, radius, { signal });
     const counts = new Uint8Array(count), indices = new Uint32Array(count * PTM_MAX_NEIGHBORS), vectors = new Float64Array(count * PTM_MAX_NEIGHBORS * 3);
     const complete = new Uint8Array(count), batchAtoms = Math.min(GPU_PTM_NEIGHBOR_BATCH_ATOMS, count);
-    const rowsBuffer = own(runtime.createBuffer(batchAtoms * PTM_NEIGHBOR_ROW_WORDS * Uint32Array.BYTES_PER_ELEMENT));
-    const sourceBuffer = own(runtime.storageBuffer(await prepareCspCoordinates(frame, { signal })));
+    // Two bounded row slots: the next batch runs while this one is decoded.
+    const rowSlots = Array.from({ length: count > batchAtoms ? 2 : 1 },
+      () => own(runtime.createBuffer(batchAtoms * PTM_NEIGHBOR_ROW_WORDS * Uint32Array.BYTES_PER_ELEMENT)));
+    const sourceBuffer = own(runtime.storageBuffer(await exactCoordinateWords(runtime, frame, { signal })));
     const settings = preparePtmNeighborSettings(frame, required), settingsBuffer = own(runtime.storageBuffer(settings));
     const resolvedBuffer = own(runtime.createBuffer(count * Uint32Array.BYTES_PER_ELEMENT));
     let completed = 0, radiusAttempts = 0;
     for (; radiusAttempts < MAX_GPU_CNA_RADIUS_ATTEMPTS; radiusAttempts++) {
       if (radiusAttempts) context = await runtime.prepareNeighbors(frame, radius, { signal });
+      const starts = [];
       for (let start = 0; start < count; start += batchAtoms) {
+        if (!complete.subarray(start, Math.min(start + batchAtoms, count)).every(Boolean)) starts.push(start);
+      }
+      // Batch bounds reach the shader through queue-ordered settings writes.
+      const launch = async index => {
         checkSignal(signal);
-        const end = Math.min(start + batchAtoms, count);
-        if (complete.subarray(start, end).every(Boolean)) continue;
+        const start = starts[index], end = Math.min(start + batchAtoms, count), rowsBuffer = rowSlots[index % rowSlots.length];
         runtime.write(settingsBuffer, new Uint32Array([start, end - start]), 4);
         await runtime.run(PTM_NEIGHBORS_SHADER, runtime.neighborBindings(context, [rowsBuffer, sourceBuffer, settingsBuffer, resolvedBuffer]), end - start,
-          { signal, startAtom: start, endAtom: end, batchSize: 0 });
-        const data = await runtime.read(rowsBuffer, Uint32Array, (end - start) * PTM_NEIGHBOR_ROW_WORDS, { signal });
+          { signal, startAtom: start, endAtom: end, batchSize: 0, wait: false });
+        const readback = runtime.read(rowsBuffer, Uint32Array, (end - start) * PTM_NEIGHBOR_ROW_WORDS, { signal });
+        readback.catch(() => {});
+        return { start, end, readback };
+      };
+      let pending = starts.length ? await launch(0) : null;
+      for (let index = 1; pending; index++) {
+        const following = index < starts.length ? await launch(index) : null;
+        const { start, end } = pending, data = await pending.readback;
         const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
         for (let atom = start; atom < end; atom++) {
           const row = (atom - start) * PTM_NEIGHBOR_ROW_WORDS;
@@ -61,7 +74,8 @@ export async function analyzeGpuPtmNeighbors(runtime, frame, parameters = {}, { 
           }
         }
         progress('analyzing', completed); checkSignal(signal);
-        if (end < count) await yieldWorker();
+        pending = following;
+        if (pending) await yieldWorker();
       }
       if (completed === count) { radiusAttempts++; break; }
       radius *= 1.6; await yieldWorker(); checkSignal(signal);

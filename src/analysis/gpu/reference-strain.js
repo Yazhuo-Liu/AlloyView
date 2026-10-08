@@ -1,7 +1,7 @@
 import { cellFaceHeights } from '../../data/model.js';
 import { atomRange } from '../neighbors.js';
 import { REFERENCE_STRAIN_FIELDS, calculateReferenceStrain, prepareReferenceStrainContext } from '../reference-strain.js';
-import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
 import { REFERENCE_STRAIN_SHADER, REFERENCE_STRAIN_CLEAR_SHADER } from './reference-strain-shaders.js';
 
 export const MAX_GPU_REFERENCE_CORRECTION_ATOMS = 16_384;
@@ -28,13 +28,13 @@ export async function analyzeGpuReferenceStrain(runtime, frame, parameters = {},
     const outputBuffer = own(runtime.createBuffer(count * REFERENCE_STRAIN_FIELDS.length * Float32Array.BYTES_PER_ELEMENT));
     const flagsBuffer = own(runtime.createBuffer(frame.fractional.length / 3 * Uint32Array.BYTES_PER_ELEMENT));
     const clearParameters = own(runtime.storageBuffer(new Uint32Array([count, 0x7fc00000, 0, 0])));
-    await runtime.run(REFERENCE_STRAIN_CLEAR_SHADER, [clearParameters, outputBuffer], count, { signal, batchSize: 0 });
+    await runtime.run(REFERENCE_STRAIN_CLEAR_SHADER, [clearParameters, outputBuffer], count, { signal, batchSize: 0, wait: false });
     report('analyzing');
     await runtime.run(REFERENCE_STRAIN_SHADER, [reference.configBuffer, reference.positionsBuffer, reference.headsBuffer,
       reference.nextBuffer, current.positionsBuffer, mappingBuffer, settingsBuffer, outputBuffer, flagsBuffer], reference.atomCount,
     { signal, onProgress: update => report('analyzing', Math.min(count, Math.floor(update.completedAtoms / reference.atomCount * count))) });
-    const flags = await runtime.read(flagsBuffer, Uint32Array, frame.fractional.length / 3, { signal });
-    const values = await runtime.read(outputBuffer, Float32Array, count * REFERENCE_STRAIN_FIELDS.length, { signal });
+    const [flags, values] = await readGpuBuffers(runtime, [{ buffer: flagsBuffer, Type: Uint32Array, length: frame.fractional.length / 3 },
+      { buffer: outputBuffer, Type: Float32Array, length: count * REFERENCE_STRAIN_FIELDS.length }], { signal });
     checkSignal(signal);
     const result = Object.fromEntries(REFERENCE_STRAIN_FIELDS.map((field, index) => [field, values.subarray(index * count, (index + 1) * count)]));
     let correctedAtoms = 0, incomplete = 0, context;

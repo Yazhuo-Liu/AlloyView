@@ -4,7 +4,7 @@ import { Worker } from 'node:worker_threads';
 import { AnalysisPool } from '../src/analysis/analysis-pool.js';
 import { chooseDxaStageWorkers } from '../src/analysis/dxa-cpu-pool.js';
 import { calculateDxa, dxaCartesianCoordinates, releaseDxaKernels } from '../src/analysis/dxa.js';
-import { calculateDxaLocalRange, releaseDxaCpuStageData } from '../src/analysis/dxa-cpu-stages.js';
+import { calculateDxaLocalRange, dxaStageMetadata, releaseDxaCpuStageData, serveDxaStageInput } from '../src/analysis/dxa-cpu-stages.js';
 import { crystalFrame } from './helpers/crystals.js';
 import { fccScrewFrame } from './helpers/dislocations.js';
 
@@ -21,7 +21,10 @@ function realFactory(stats) {
     stats.created++;
     return {
       addEventListener(name, listener) { worker.on(name, data => listener(name === 'message' ? { data } : data)); },
-      postMessage(data, transfers) { stats.messages.push({ kind: data.kind, uploaded: Boolean(data.dxaStageInput) }); worker.postMessage(data, transfers); },
+      postMessage(data, transfers) {
+        stats.messages.push({ kind: data.kind, uploaded: Boolean(data.dxaStageInput), inputKeys: Object.keys(data.dxaStageInput ?? {}) });
+        worker.postMessage(data, transfers);
+      },
       terminate() { stats.terminated++; void worker.terminate(); },
     };
   };
@@ -196,12 +199,50 @@ test('real local and interface CPU Worker stages preserve the complete native sc
     assert.deepEqual(offloaded.cpuStageWorkerCounts, { local: 2, tetrahedra: 2 });
     assert.equal(offloaded.nativeWorkerCount, 1); assert.equal(offloaded.workerCount, 2);
     assert.equal(offloaded.cpuOffloadUsed, true); assert.deepEqual(offloaded.cpuStageFallbacks, []);
-    assert.equal(offloaded.cpuStageTimings.length, 2); assert.ok(offloaded.cpuStageTimings.every(stage => stage.copiedBytes === stage.inputBytes * 2));
+    assert.equal(offloaded.cpuStageTimings.length, 2);
+    assert.ok(offloaded.cpuStageTimings.every(stage => stage.copiedBytes === stage.inputBytes * 2 && stage.inputDelivery === 'direct'));
     assert.deepEqual(frame.fractional, original); assert.equal(pool.cpuBudget.active, 0);
     const warm = await calculateDxa(frame, {}, { workerCount: 1, runCpuStage: (stage, input, options) =>
       pool[stage === 'local' ? 'analyzeDxaLocal' : 'analyzeDxaTetrahedra'](input, { ...options, workerCount: 2 }) });
     assert.deepEqual(science(warm), science(baseline)); assert.ok(warm.cpuStageTimings.every(stage => stage.kernelInitializations === 0));
     assert.equal(stats.created, 2);
+  } finally { pool.close(); await releaseDxaKernels(); }
+});
+
+// Emulates dxa-worker.js: the page sees only stage dimensions, and each new
+// stage Worker receives its arrays over a port answered by the coordinator.
+const portStage = (pool, served, serve = serveDxaStageInput) => (stage, input, options) =>
+  pool[stage === 'local' ? 'analyzeDxaLocal' : 'analyzeDxaTetrahedra'](structuredClone(dxaStageMetadata(stage, input)),
+    { ...options, workerCount: 2, deliverInput: port => { served.push(stage); serve(stage, input, port); } });
+
+test('coordinator MessagePort delivery preserves the complete network without page-thread input arrays', async () => {
+  const stats = { created: 0, terminated: 0, messages: [] }, frame = fccScrewFrame(), served = [];
+  const pool = new AnalysisPool({ environment, workerFactory: realFactory(stats) });
+  try {
+    const baseline = await calculateDxa(frame, {}, { workerCount: 1 });
+    const offloaded = await calculateDxa(frame, {}, { workerCount: 1, runCpuStage: portStage(pool, served) });
+    assert.deepEqual(science(offloaded), science(baseline));
+    assert.deepEqual(offloaded.cpuStageFallbacks, []);
+    assert.deepEqual(served, ['local', 'local', 'tetrahedra', 'tetrahedra'], 'one private copy per stage Worker');
+    assert.ok(offloaded.cpuStageTimings.every(stage => stage.inputDelivery === 'port' && stage.copiedBytes === stage.inputBytes * 2));
+    const uploads = stats.messages.filter(message => message.uploaded);
+    assert.equal(uploads.length, 4); assert.ok(uploads.every(message => message.inputKeys.join() === 'port'));
+    assert.equal(pool.cpuBudget.active, 0);
+  } finally { pool.close(); await releaseDxaKernels(); }
+});
+
+test('an unanswerable stage input port fails only that stage, which falls back to native CPU', async () => {
+  const stats = { created: 0, terminated: 0, messages: [] }, frame = fccScrewFrame(), served = [];
+  const pool = new AnalysisPool({ environment, workerFactory: realFactory(stats) });
+  try {
+    const baseline = await calculateDxa(frame, {}, { workerCount: 1 });
+    const released = (stage, input, port) => serveDxaStageInput(stage, stage === 'local' ? input
+      : { ...input, arrays: () => { throw new Error('The DXA interface tables were already released.'); } }, port);
+    const result = await calculateDxa(frame, {}, { workerCount: 1, runCpuStage: portStage(pool, served, released) });
+    assert.deepEqual(science(result), science(baseline));
+    assert.deepEqual(result.cpuStageFallbacks.map(row => row.stage), ['tetrahedra']);
+    assert.match(result.cpuStageFallbacks[0].reason, /already released/);
+    assert.equal(pool.cpuBudget.active, 0); assert.ok(stats.terminated >= 1, 'the failed stage Workers are replaced');
   } finally { pool.close(); await releaseDxaKernels(); }
 });
 

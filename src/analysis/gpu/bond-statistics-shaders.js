@@ -90,7 +90,9 @@ fn preciseAngle(cosine: f32) -> f32 {
   var neighborIds: array<u32, ${MAX_GPU_BOND_STATISTICS_NEIGHBORS}>;
   var neighborShifts: array<vec3i, ${MAX_GPU_BOND_STATISTICS_NEIGHBORS}>;
   var neighborCount = 0u; var flags = 0u;
-  let outputBase = (atom - config.startAtom) * ${BOND_STATISTICS_ATOM_WORDS}u;
+  // Rows are relative to the batch start in settings[8], not to the current
+  // dispatch range, so one batch can be split into several dispatches.
+  let outputBase = (atom - settings[8]) * ${BOND_STATISTICS_ATOM_WORDS}u;
 `,
   candidateVisit: `
   let pairCutoff = selectedCutoff(types[atom], types[other]);

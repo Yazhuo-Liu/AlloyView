@@ -42,6 +42,8 @@ The global **Enable GPU acceleration** preference chooses WebGPU when supported.
 
 Both backends use the same edge ownership, angle counting, cutoffs and normalization. Their elapsed time includes preparation and result transfer. Small floating-point differences in Q values and summaries can remain. Cancellation ends the active job rather than starting a fallback calculation.
 
+GPU results are read back for up to 16,384 central atoms at a time; dispatches start at 2,048 atoms and grow only while they finish quickly, because angular work is quadratic in the neighbor count. Near-perfect crystals with integer-degree angle bins place many pairs on bin edges; their exact CPU corrections run while the GPU computes the next range, and a range whose correction queue overflows is split by the number of records it requested. Histograms, coordination and per-atom Q values do not depend on these boundaries. The order in which per-range length, angle and Q moments are merged can change only the last bits of their mean and standard deviation, as the GPU's correction-record order already does.
+
 Angular enumeration grows quadratically with the number of neighbors. The calculation supports at most 1,024 qualifying neighbors per atom and reports an error if the limit is exceeded. It retains complete populations instead of sampling angles; reduce cutoffs for unusually dense environments.
 
 ## Implementation

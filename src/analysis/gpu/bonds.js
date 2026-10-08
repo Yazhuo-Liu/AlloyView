@@ -1,6 +1,6 @@
 import { MAX_BONDS, MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { NeighborSearch, atomRange } from '../neighbors.js';
-import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
 import { BONDS_COUNT_SHADER, BONDS_WRITE_SHADER, BOND_ATOM_WORDS, BOND_RECORD_WORDS } from './bonds-shaders.js';
 
 export const MAX_GPU_BOND_PAIR_CUTOFFS = 256;
@@ -104,9 +104,9 @@ export async function analyzeGpuBonds(runtime, frame, parameters = {}, { signal,
       const recordBuffer = create(count * BOND_RECORD_WORDS * 4), diagnosticsBuffer = create(16);
       await runtime.run(BONDS_WRITE_SHADER, runtime.neighborBindings(context, [settingsBuffer, atomBuffer, recordBuffer, diagnosticsBuffer]), endAtom - startAtom,
         { signal, startAtom, endAtom, onProgress: ({ completedAtoms }) => progress('analyzing', Math.floor((endAtom - startAtom + completedAtoms - startAtom) / 2)) });
-      const diagnostics = await runtime.read(diagnosticsBuffer, Uint32Array, 4, { signal });
+      const [diagnostics, records] = await readGpuBuffers(runtime, [{ buffer: diagnosticsBuffer, Type: Uint32Array, length: 4 },
+        { buffer: recordBuffer, Type: Uint32Array, length: count * BOND_RECORD_WORDS }], { signal });
       if (diagnostics[0]) throw new GpuUnavailableError('GPU bond count and compact output disagree; using CPU workers.');
-      const records = await runtime.read(recordBuffer, Uint32Array, count * BOND_RECORD_WORDS, { signal });
       const floatRecords = new Float32Array(records.buffer), signedRecords = new Int32Array(records.buffer);
       for (let edge = 0; edge < count; edge++) {
         const base = edge * BOND_RECORD_WORDS;

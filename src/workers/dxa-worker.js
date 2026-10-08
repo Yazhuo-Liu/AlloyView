@@ -1,4 +1,5 @@
 import { calculateDxa, warmupDxa } from '../analysis/dxa.js';
+import { dxaStageMetadata, serveDxaStageInput } from '../analysis/dxa-cpu-stages.js';
 
 // Deliberately separate from the reusable atom-range worker pool. A native
 // topology calculation is synchronous. Isolated clients cancel through the
@@ -18,10 +19,11 @@ function requestCpuStage(id, stage, input, { signal } = {}) {
       if (error) reject(error); else resolve(result);
     };
     const abort = () => finish(new DOMException('CPU DXA stage cancelled.', 'AbortError'));
-    cpuStageRequests.set(requestId, { id, finish });
+    cpuStageRequests.set(requestId, { id, stage, input, finish });
     signal?.addEventListener('abort', abort, { once: true });
-    const fields = stage === 'local' ? ['coordinates'] : ['vertices', 'tetrahedra', 'edges', 'transitions'];
-    try { self.postMessage({ id, cpuStageRequest: { requestId, stage, input } }, fields.map(field => input[field].buffer)); }
+    // Only dimensions go to the page. Each stage Worker it selects receives
+    // a MessagePort, which this Worker answers with a transferred copy.
+    try { self.postMessage({ id, cpuStageRequest: { requestId, stage, input: dxaStageMetadata(stage, input) } }); }
     catch (error) { finish(error); }
   });
 }
@@ -43,7 +45,7 @@ async function handleRequest(data) {
       runCpuStage: data.cpuOffload ? (stage, input, options) => requestCpuStage(id, stage, input, options) : undefined,
     };
     if (type === 'warmup') {
-      const result = await warmupDxa({ ...options, atomCount: data.atomCount });
+      const result = await warmupDxa({ ...options, atomCount: data.atomCount, warmCode: Boolean(data.warmCode) });
       self.postMessage({ id, ok: true, result });
       return;
     }
@@ -60,6 +62,16 @@ async function handleRequest(data) {
   }
 }
 self.addEventListener('message', ({ data }) => {
+  if (data.type === 'cpu-stage-input') {
+    const request = cpuStageRequests.get(data.requestId);
+    if (request?.id === data.id) serveDxaStageInput(request.stage, request.input, data.port);
+    else {
+      // A late request after cancellation or completion fails its stage task.
+      data.port?.postMessage({ error: 'The CPU DXA stage is no longer active.' });
+      data.port?.close();
+    }
+    return;
+  }
   if (data.type === 'cpu-stage-result') {
     const request = cpuStageRequests.get(data.requestId);
     if (!request || request.id !== data.id) return;

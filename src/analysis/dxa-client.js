@@ -1,8 +1,10 @@
-import { dxaWorkerCount, preflightDxaMemory, validateDxaFrame, validateDxaParameters } from './dxa.js';
+import { DXA_CODE_WARMUP_MIN_ATOMS, dxaWorkerCount, preflightDxaMemory, validateDxaFrame, validateDxaParameters } from './dxa.js';
 import { CpuBudget } from './cpu-budget.js';
 
 const COPY_CHUNK_VALUES = 512 * 1024;
-const DEFAULT_PRIVATE_STAGE_MAX_WORKERS = 4;
+// Automatic private-stage Workers on hosts without shared memory, one per
+// 4,096 atoms up to these caps and the CPU budget.
+const DEFAULT_STAGE_WORKER_LIMITS = Object.freeze({ local: 8, tetrahedra: 4 });
 const abortError = () => new DOMException('The DXA calculation was cancelled.', 'AbortError');
 
 /** One coordinator and one growable Wasm heap per client. Shared-memory jobs
@@ -12,9 +14,12 @@ const abortError = () => new DOMException('The DXA calculation was cancelled.', 
 export class DxaClient {
   constructor({ workerFactory = () => new Worker(new URL('../workers/dxa-worker.js', import.meta.url), { type: 'module' }),
     memoryBudgetBytes, workerCount, environment = globalThis, cpuBudget,
-    cpuStageBackend, cpuStageTaskTimeoutMs,
+    cpuStageBackend, cpuStageTaskTimeoutMs, codeWarmupMinAtoms = DXA_CODE_WARMUP_MIN_ATOMS,
+    stageWorkerLimits = DEFAULT_STAGE_WORKER_LIMITS,
     yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
     this.workerFactory = workerFactory;
+    this.codeWarmupMinAtoms = codeWarmupMinAtoms;
+    this.stageWorkerLimits = { ...DEFAULT_STAGE_WORKER_LIMITS, ...stageWorkerLimits };
     this.memoryBudgetBytes = memoryBudgetBytes;
     this.workerCount = workerCount;
     this.environment = environment;
@@ -48,12 +53,37 @@ export class DxaClient {
       preflightDxaMemory(atomCount, this.memoryBudgetBytes);
       count = this.requestedWorkers(atomCount, workerCount);
     } catch (error) { return Promise.reject(error); }
+    const pool = this.preparePool(atomCount, count, signal, onProgress);
+    return atomCount < this.codeWarmupMinAtoms ? pool
+      : pool.then(ready => this.warmCode(ready, { atomCount, signal, onProgress }));
+  }
+
+  preparePool(atomCount, count, signal, onProgress) {
     if (this.worker && this.ready && this.ready.poolSize >= count - 1) {
       return Promise.resolve({ ...this.ready, workerCount: count });
     }
-    const prepared = [this.current, ...this.queue].find(task => task?.type === 'warmup' && !task.settled && task.workerCount >= count);
+    const prepared = [this.current, ...this.queue].find(task => task?.type === 'warmup' && !task.warmCode
+      && !task.settled && task.workerCount >= count);
     if (prepared && prepared.signal === signal) return prepared.promise;
     return this.enqueue({ type: 'warmup', count: atomCount, workerCount: count, signal, onProgress });
+  }
+
+  codeWarmed(workerCount) {
+    return Boolean(this.ready?.warmedKernelPaths?.includes(workerCount > 1 ? 'parallel' : 'serial'));
+  }
+
+  /** After the pool is ready, run one small extraction on at most two of its
+   * threads, so the first real analysis does not run cold Wasm code. It is a
+   * separate low-priority task: it holds only the permits it uses, and a
+   * foreground analysis preempts it like any other warmup. */
+  warmCode(ready, { atomCount, signal, onProgress }) {
+    const workerCount = Math.min(2, ready.workerCount);
+    if (this.codeWarmed(workerCount)) return ready;
+    if (signal?.aborted || this.closed) return Promise.reject(abortError());
+    const result = () => ({ ...this.ready, workerCount: ready.workerCount });
+    const pending = [this.current, ...this.queue].find(task => task?.warmCode && !task.settled);
+    if (pending && pending.signal === signal) return pending.promise.then(result);
+    return this.enqueue({ type: 'warmup', warmCode: true, count: atomCount, workerCount, signal, onProgress }).then(result);
   }
 
   analyze(frame, parameters = {}, { signal, onProgress = () => {}, workerCount = this.workerCount } = {}) {
@@ -65,16 +95,18 @@ export class DxaClient {
       preflightDxaMemory(count, this.memoryBudgetBytes);
       workers = this.requestedWorkers(count, workerCount);
     } catch (error) { return Promise.reject(error); }
-    // Private Workers duplicate the full stage geometry. Growing too many
-    // local-recognition heaps can leave no room for the later tetrahedron
-    // snapshot, even after their local inputs are released. Keep automatic
-    // degree modest; explicit requests still use the per-stage memory caps.
-    const stageWorkerCount = Math.min(this.cpuBudget.limit,
-      workerCount ?? Math.min(DEFAULT_PRIVATE_STAGE_MAX_WORKERS, Math.ceil(count / 4096)));
-    const cpuOffload = this.environment.crossOriginIsolated !== true && count >= 8192 && stageWorkerCount > 1
+    // Each private Worker holds a complete copy of its stage input. Local
+    // recognition needs 24 bytes per atom plus its own neighbor index, while
+    // a tetrahedron-table copy needs about 850 bytes per atom (23 MiB for
+    // 28,800 atoms), so each stage has its own automatic cap. Explicit
+    // requests apply to both; the per-stage memory checks still limit them.
+    const stageWorkerCounts = Object.fromEntries(Object.entries(this.stageWorkerLimits).map(([stage, maximum]) =>
+      [stage, Math.min(this.cpuBudget.limit, workerCount ?? Math.min(maximum, Math.ceil(count / 4096)))]));
+    const cpuOffload = this.environment.crossOriginIsolated !== true && count >= 8192
+      && Math.max(...Object.values(stageWorkerCounts)) > 1
       && typeof this.cpuStageBackend?.analyzeDxaLocal === 'function' && typeof this.cpuStageBackend?.analyzeDxaTetrahedra === 'function';
     return this.enqueue({ type: 'analyze', frame, parameters: settings, count, workerCount: workers,
-      stageWorkerCount, cpuOffload, signal, onProgress });
+      stageWorkerCounts, cpuOffload, signal, onProgress });
   }
 
   enqueue(values) {
@@ -122,10 +154,13 @@ export class DxaClient {
         return;
       }
       if (data.ok) {
-        const { workerCount, poolSize, kernelGeneration, wasmMemoryBytes, threadingFallback, sharedMemory } = data.result;
+        const { workerCount, poolSize, kernelGeneration, wasmMemoryBytes, threadingFallback, sharedMemory, warmedKernelPaths } = data.result;
         if (threadingFallback || sharedMemory === false) this.singleThreadOnly = true;
         const threaded = data.result.threaded ?? data.result.sharedMemory;
-        if (Number.isInteger(poolSize)) this.ready = { workerCount, poolSize, kernelGeneration, wasmMemoryBytes, threaded, sharedMemory, threadingFallback };
+        if (Number.isInteger(poolSize)) {
+          this.ready = { workerCount: task.warmCode ? this.ready?.workerCount ?? workerCount : workerCount,
+            poolSize, kernelGeneration, wasmMemoryBytes, threaded, sharedMemory, threadingFallback, warmedKernelPaths };
+        }
         this.settle(task, null, data.result);
       } else {
         const error = new Error(data.error || 'DXA calculation failed.'); error.name = data.name || 'Error';
@@ -167,6 +202,13 @@ export class DxaClient {
   async dispatch(task) {
     try {
       task.workerCount = this.requestedWorkers(task.count, task.workerCount);
+      if (task.warmCode && (this.codeWarmed(task.workerCount) || !this.worker)) {
+        // A completed analysis or an earlier warm-up already ran this code.
+        // A replaced coordinator is prepared again by the next warmup request.
+        this.settle(task, null, { ...this.ready });
+        this.retire(task);
+        return;
+      }
       task.lease = await this.cpuBudget.acquire(task.workerCount, {
         signal: task.controller.signal, priority: task.type === 'warmup' ? -1 : 0,
       });
@@ -197,7 +239,7 @@ export class DxaClient {
       this.setCancellation(0);
       worker.postMessage({ id: task.id, type: task.type, frame, atomCount: task.count,
         parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes, workerCount: task.workerCount,
-        cpuOffload: Boolean(task.cpuOffload) }, transfer);
+        cpuOffload: Boolean(task.cpuOffload), warmCode: Boolean(task.warmCode) }, transfer);
       task.dispatched = true;
     } catch (error) {
       if (!task.settled) this.settle(task, error);
@@ -225,8 +267,14 @@ export class DxaClient {
       const method = stage === 'local' ? this.cpuStageBackend?.analyzeDxaLocal
         : stage === 'tetrahedra' ? this.cpuStageBackend?.analyzeDxaTetrahedra : undefined;
       if (typeof method !== 'function') throw new Error('The requested CPU DXA stage is unavailable.');
-      result = await method.call(this.cpuStageBackend, input, { signal: task.controller.signal,
-        workerCount: task.stageWorkerCount, memoryBudgetBytes: this.memoryBudgetBytes, taskTimeoutMs: this.cpuStageTaskTimeoutMs,
+      // Forward one end of each stage Worker's channel to the coordinator,
+      // which owns the input arrays. Nothing large passes through this thread.
+      const deliverInput = port => {
+        if (this.worker !== worker || task.settled) { port.close(); throw abortError(); }
+        worker.postMessage({ type: 'cpu-stage-input', id: task.id, requestId, port }, [port]);
+      };
+      result = await method.call(this.cpuStageBackend, input, { signal: task.controller.signal, deliverInput,
+        workerCount: task.stageWorkerCounts[stage], memoryBudgetBytes: this.memoryBudgetBytes, taskTimeoutMs: this.cpuStageTaskTimeoutMs,
         onProgress: progress => {
           if (task.settled) return;
           try { task.onProgress({ ...progress, backend: 'cpu', cpuStage: stage, nativeWorkerCount: task.workerCount,

@@ -5,8 +5,8 @@ import { createCell } from '../src/data/model.js';
 import { crystalFrame } from './helpers/crystals.js';
 import { calculateBondStatistics, validateBondStatisticsParameters, createBondStatisticsAccumulators,
   finalizeBondStatistics } from '../src/analysis/bond-statistics.js';
-import { analyzeGpuBondStatistics, correctGpuBondStatisticsPairs, bondStatisticsGpuBatchSize,
-  GPU_BOND_STATISTICS_BATCH_ATOMS } from '../src/analysis/gpu/bond-statistics.js';
+import { analyzeGpuBondStatistics, correctGpuBondStatisticsPairs, bondStatisticsGpuBatchSize, nextBondStatisticsBatch,
+  wrappedFractional, GPU_BOND_STATISTICS_BATCH_ATOMS } from '../src/analysis/gpu/bond-statistics.js';
 import { BOND_STATISTICS_ATOM_WORDS, BOND_STATISTICS_CORRECTION_WORDS,
   BOND_STATISTICS_FLAG_PRECISION, BOND_STATISTICS_FLAG_NEIGHBORS, MAX_GPU_BOND_STATISTICS_NEIGHBORS } from '../src/analysis/gpu/bond-statistics-shaders.js';
 import { GpuAnalysisClient } from '../src/analysis/gpu/client.js';
@@ -62,7 +62,7 @@ test('GPU exact histogram records retain shifted triclinic, mixed-PBC, type over
 });
 
 function fakeRuntime({ flags = BOND_STATISTICS_FLAG_PRECISION, failRead = false, allocationFailure = false,
-  abortController, overflowOnce = false } = {}) {
+  abortController, overflowOnce = false, requestedRecords = 0 } = {}) {
   const allocated = [], released = [], dispatches = [], preparations = [];
   const allocate = bytes => {
     if (allocationFailure && allocated.length === 1) throw new Error('allocation failed');
@@ -73,17 +73,18 @@ function fakeRuntime({ flags = BOND_STATISTICS_FLAG_PRECISION, failRead = false,
     createBuffer: allocate,
     storageBuffer(values) { const buffer = allocate(values.byteLength); buffer.data.set(new Uint8Array(values.buffer, values.byteOffset, values.byteLength)); return buffer; },
     neighborBindings(_context, extra) { return extra; },
+    write(buffer, values, offset = 0) { buffer.data.set(new Uint8Array(values.buffer, values.byteOffset, values.byteLength), offset); },
     zeroBuffer(buffer, offset = 0, size = buffer.data.length - offset) { buffer.data.fill(0, offset, offset + size); },
     async run(_source, bindings, _count, options) {
       dispatches.push({ ...options });
       const words = new Uint32Array(bindings[1].data.buffer);
       for (let atom = options.startAtom; atom < options.endAtom; atom++) words[(atom - options.startAtom) * BOND_STATISTICS_ATOM_WORDS + 3] = flags;
-      if (overflowOnce && dispatches.length === 1) new Uint32Array(bindings[3].data.buffer)[1] = 1;
+      if (overflowOnce && dispatches.length === 1) new Uint32Array(bindings[3].data.buffer).set([requestedRecords, 1]);
       abortController?.abort();
     },
-    async read(buffer, Type, length, { signal }) {
+    async read(buffer, Type, length, { signal, offset = 0 }) {
       signal?.throwIfAborted(); if (failRead) throw new Error('device lost');
-      return new Type(buffer.data.buffer.slice(0, length * Type.BYTES_PER_ELEMENT));
+      return new Type(buffer.data.buffer.slice(offset, offset + length * Type.BYTES_PER_ELEMENT));
     },
     disposeBuffers(buffers) { released.push(...buffers); },
   };
@@ -109,6 +110,36 @@ test('GPU correction overflow retries smaller dispatches using the same device b
   assert.equal(setup.dispatches.length, 3);
   assert.deepEqual(setup.dispatches.map(value => [value.startAtom, value.endAtom]), [[0, 4], [0, 2], [2, 4]]);
   assert.deepEqual(setup.released, setup.allocated);
+});
+
+test('an overflowed correction queue is split by its requested record count, then batches follow the observed density', async () => {
+  const frame = crystalFrame('fcc', 2), options = { cutoff: 3.1 };
+  // 32 atoms receive max(1024, 32 * 128) queued records.
+  const capacity = 4096, setup = fakeRuntime({ overflowOnce: true, requestedRecords: capacity * 8 });
+  const actual = await analyzeGpuBondStatistics(setup.runtime, frame, options);
+  assert.deepEqual(actual.angleCounts, calculateBondStatistics(frame, options).angleCounts);
+  // 32 atoms requested eight capacities: retry 32 * 0.9 / 8 = 3 atoms, then grow back to the whole range.
+  assert.deepEqual(setup.dispatches.map(value => [value.startAtom, value.endAtom]), [[0, 32], [0, 3], [3, 32]]);
+  assert.equal(nextBondStatisticsBatch({ atoms: 16_384, records: 2 ** 20, capacity: 2 ** 19, maximum: 16_384, overflow: true }), 7372);
+  assert.equal(nextBondStatisticsBatch({ atoms: 16_384, records: 0, capacity: 2 ** 19, maximum: 16_384, overflow: true }), 8192);
+  assert.equal(nextBondStatisticsBatch({ atoms: 2, records: 0, capacity: 1024, maximum: 16_384, overflow: true }), 1);
+  assert.equal(nextBondStatisticsBatch({ atoms: 16_384, records: 0, capacity: 2 ** 19, maximum: 16_384, overflow: false }), 16_384);
+  assert.equal(nextBondStatisticsBatch({ atoms: 8192, records: 8192 * 64, capacity: 2 ** 19, maximum: 16_384, overflow: false }), 6144);
+  assert.equal(nextBondStatisticsBatch({ atoms: 8192, records: 8192, capacity: 2 ** 19, maximum: 16_384, overflow: false }), 16_384);
+});
+
+test('pre-wrapped exact corrections match per-record wrapping for open and periodic axes', async () => {
+  const frame = { fractional: Float64Array.from([3.05, -.95, .2, -2.05, 4.95, .2, .2, .2, .2]), types: Uint16Array.from([0, 1, 0]),
+    cell: createCell({ vectors: [10, 0, 0, 4, 8, 0, 0, 0, 10], pbc: [true, true, false], triclinic: true }) };
+  assert.deepEqual([...wrappedFractional(frame)].map(value => Math.round(value * 1e12) / 1e12), [.05, .05, .2, .95, .95, .2, .2, .2, .2]);
+  const options = { cutoff: 4.2, lengthBins: 21, angleBins: 36 };
+  const prepared = validateBondStatisticsParameters(frame, options), records = exactRecords(frame, prepared);
+  const implicit = createBondStatisticsAccumulators(prepared), explicit = createBondStatisticsAccumulators(prepared);
+  await correctGpuBondStatisticsPairs(frame, prepared, records, implicit);
+  await correctGpuBondStatisticsPairs(frame, prepared, records, explicit, { wrapped: wrappedFractional(frame) });
+  assert.deepEqual(explicit, implicit);
+  const invalid = records.slice(0, BOND_STATISTICS_CORRECTION_WORDS); invalid[0] = 7;
+  await assert.rejects(correctGpuBondStatisticsPairs(frame, prepared, invalid, implicit), { name: 'GpuUnavailableError' });
 });
 
 test('GPU oversized environments request explicit CPU fallback, never truncated coordination', async () => {

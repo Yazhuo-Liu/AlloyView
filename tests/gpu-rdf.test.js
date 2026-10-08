@@ -56,11 +56,17 @@ test('RDF excludes exact-cutoff pairs and self images, retaining distinct overla
 });
 
 test('RDF batches bound atomic u32 counts for the full 129,904-atom example and dense systems', () => {
-  for (const count of [2, 3, 4096, 129_904, 4_000_000]) {
-    const batch = rdfGpuBatchSize(count);
+  for (const count of [2, 3, 4096, 50_000, 129_904, 4_000_000]) for (const hardware of [false, true]) {
+    const batch = rdfGpuBatchSize(count, { hardware });
     assert.ok(batch >= 1 && batch <= count);
     assert.ok(batch * Math.min(MAX_NEIGHBORS_PER_ATOM, count - 1) <= 0xffff_ffff);
+    if (!hardware) assert.ok(batch <= 16_384);
+    // Larger hardware batches cover whole former 16k batches, so their
+    // proportional correction capacity never splits differently.
+    else if (batch < count) assert.equal(batch % 16_384, 0);
   }
+  assert.equal(rdfGpuBatchSize(129_904, { hardware: true }), 32_768);
+  assert.equal(rdfGpuBatchSize(50_000, { hardware: true }), 50_000);
   const frame = fixture();
   const firstMargin = rdfPrecisionMargin(frame, 4);
   assert.ok(firstMargin > 0 && firstMargin < .01);

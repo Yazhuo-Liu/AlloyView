@@ -2,13 +2,17 @@ import { NeighborSearch } from '../neighbors.js';
 import { validateBondStatisticsParameters, createBondStatisticsAccumulators, calculateBondStatisticsAtom,
   addBondStatisticsSample, mergeBondStatisticsMoment, bondStatisticsHistogramBin, finalizeBondStatistics } from '../bond-statistics.js';
 import { prepareGpuBondParameters } from './bonds.js';
-import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
 import { BOND_STATISTICS_SHADER, BOND_STATISTICS_ATOM_WORDS, BOND_STATISTICS_CORRECTION_WORDS,
   BOND_STATISTICS_FLAG_PRECISION, BOND_STATISTICS_FLAG_NEIGHBORS, MAX_GPU_BOND_STATISTICS_NEIGHBORS } from './bond-statistics-shaders.js';
 
 export const MAX_GPU_BOND_STATISTICS_CORRECTIONS = 16_384;
+// Queued exact-bin pair records per dispatch (48 bytes each). Hardware
+// adapters keep twice the software queue, so 16k-atom batches fit about 32
+// boundary pairs per atom before a dispatch is split.
 export const MAX_GPU_BOND_STATISTICS_PAIR_CORRECTIONS = 262_144;
-export const GPU_BOND_STATISTICS_BATCH_ATOMS = 2048;
+export const MAX_GPU_BOND_STATISTICS_HARDWARE_PAIR_CORRECTIONS = 524_288;
+export const GPU_BOND_STATISTICS_BATCH_ATOMS = 16_384;
 
 /** A shell can receive every pair. Bound both histogram and correction atomics
  * to u32 per dispatch, regardless of the overall frame's sample count. */
@@ -16,6 +20,18 @@ export function bondStatisticsGpuBatchSize(atomCount) {
   const samplesPerAtom = MAX_GPU_BOND_STATISTICS_NEIGHBORS
     + MAX_GPU_BOND_STATISTICS_NEIGHBORS * (MAX_GPU_BOND_STATISTICS_NEIGHBORS - 1) / 2;
   return Math.max(1, Math.min(atomCount, GPU_BOND_STATISTICS_BATCH_ATOMS, Math.floor(0xffff_ffff / samplesPerAtom)));
+}
+
+/** Choose the next dispatch from the observed boundary-pair density so its
+ * correction queue is expected to fit; a dispatch that overflowed is split by
+ * its requested record count (or halved when that count is unavailable). */
+export function nextBondStatisticsBatch({ atoms, records, capacity, maximum, overflow }) {
+  if (overflow) {
+    const estimate = records > capacity ? Math.floor(atoms * capacity * 0.9 / records) : Math.floor(atoms / 2);
+    return Math.max(1, Math.min(atoms - 1, estimate));
+  }
+  if (!records) return maximum;
+  return Math.max(1, Math.min(maximum, Math.floor(capacity * 0.75 * atoms / records)));
 }
 
 /** Linked cells and coordinates remain resident on the existing device. Each
@@ -38,8 +54,9 @@ export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, 
   const allocated = [], allocate = bytes => { const buffer = runtime.createBuffer(bytes); allocated.push(buffer); return buffer; };
   const upload = values => { const buffer = runtime.storageBuffer(values); allocated.push(buffer); return buffer; };
   const initialBatch = bondStatisticsGpuBatchSize(count);
-  const capacity = Math.min(MAX_GPU_BOND_STATISTICS_PAIR_CORRECTIONS, Math.max(1024, initialBatch * 128));
-  let correctionAtoms = 0, correctedPairs = 0, search;
+  const capacity = Math.min(runtime.softwareAdapter === false ? MAX_GPU_BOND_STATISTICS_HARDWARE_PAIR_CORRECTIONS
+    : MAX_GPU_BOND_STATISTICS_PAIR_CORRECTIONS, Math.max(1024, initialBatch * 128));
+  let correctionAtoms = 0, correctedPairs = 0, search, wrapped;
   try {
     const values = new Uint32Array(12 + (parameters.pairCutoffs?.length ?? 0) * 4), floats = new Float32Array(values.buffer);
     values.set([parameters.pairCutoffs?.length ?? 0, lengthBins, angleBins, capacity]);
@@ -53,26 +70,58 @@ export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, 
     const histogram = allocate((lengthBins + angleBins) * 4);
     const corrections = allocate(16 + capacity * BOND_STATISTICS_CORRECTION_WORDS * 4);
     const bindings = runtime.neighborBindings(context, [settings, atomBuffer, histogram, corrections]);
-    let batchSize = initialBatch;
-    for (let begin = startAtom; begin < endAtom;) {
+    // A batch shares one histogram, queue and row range. Its dispatches start
+    // at the former 2,048 atoms and follow the measured dispatch time, since
+    // dense environments make the angular enumeration quadratic per atom.
+    let batchSize = initialBatch, recordDensity = 0, dispatchSize = 2048;
+    const launch = async begin => {
       checkSignal(signal);
       const end = Math.min(endAtom, begin + batchSize);
+      // Boundary-pair records usually follow the previous batch's density;
+      // copying that much speculatively avoids a second mapping per batch.
+      const expected = recordDensity ? Math.min(capacity, Math.ceil(recordDensity * (end - begin) * 1.25) + 1024) : 0;
       // Records are read only below the atomic count, so clearing the
       // 16-byte header resets the queue without rewriting all records.
       await runtime.zeroBuffer(histogram); await runtime.zeroBuffer(corrections, 0, 16);
-      await runtime.run(BOND_STATISTICS_SHADER, bindings, end - begin,
-        { signal, startAtom: begin, endAtom: end, batchSize: 0 });
-      const diagnostics = await runtime.read(corrections, Uint32Array, 4, { signal });
-      if (diagnostics[1]) {
+      runtime.write(settings, new Uint32Array([begin]), 32);
+      dispatchSize = await runtime.run(BOND_STATISTICS_SHADER, bindings, end - begin,
+        { signal, startAtom: begin, endAtom: end, initialBatchSize: dispatchSize, wait: false }) ?? dispatchSize;
+      // One mapping returns the queue header, rows and histogram together.
+      const readback = readGpuBuffers(runtime, [
+        { buffer: corrections, Type: Uint32Array, length: 4 },
+        { buffer: atomBuffer, Type: Uint32Array, length: (end - begin) * BOND_STATISTICS_ATOM_WORDS },
+        { buffer: histogram, Type: Uint32Array, length: lengthBins + angleBins },
+        { buffer: corrections, Type: Uint32Array, offset: 16, length: expected * BOND_STATISTICS_CORRECTION_WORDS }], { signal });
+      readback.catch(() => {});
+      return { begin, end, expected, readback };
+    };
+    // Read a batch completely (splitting it if its correction queue
+    // overflowed) before the next batch reuses the same GPU buffers.
+    const collect = async batch => {
+      for (;;) {
+        const [diagnostics, atomWords, batchCounts, prefix] = await batch.readback;
+        const atoms = batch.end - batch.begin;
+        if (!diagnostics[1]) {
+          const words = diagnostics[0] * BOND_STATISTICS_CORRECTION_WORDS;
+          const records = !diagnostics[0] ? null : diagnostics[0] <= batch.expected ? prefix.subarray(0, words)
+            : await runtime.read(corrections, Uint32Array, words, { signal, offset: 16 });
+          recordDensity = diagnostics[0] / atoms;
+          batchSize = nextBondStatisticsBatch({ atoms, records: diagnostics[0], capacity, maximum: initialBatch, overflow: false });
+          return { ...batch, diagnostics, atomWords, batchCounts, records };
+        }
         // Crystalline shell ties can fill the correction queue; reduce only
         // this dispatch, keeping the GPU device, buffers and neighbor index.
-        if (batchSize === 1) throw new GpuUnavailableError('A bond environment exceeds the GPU precision correction capacity.');
-        batchSize = Math.max(1, Math.floor(batchSize / 2)); continue;
+        if (atoms === 1) throw new GpuUnavailableError('A bond environment exceeds the GPU precision correction capacity.');
+        batchSize = nextBondStatisticsBatch({ atoms, records: diagnostics[0], capacity, maximum: initialBatch, overflow: true });
+        batch = await launch(batch.begin);
       }
-      const [atomWords, batchCounts] = await Promise.all([
-        runtime.read(atomBuffer, Uint32Array, (end - begin) * BOND_STATISTICS_ATOM_WORDS, { signal }),
-        runtime.read(histogram, Uint32Array, lengthBins + angleBins, { signal }),
-      ]);
+    };
+    // The GPU computes the next batch while this one is merged and its
+    // boundary pairs are corrected on the CPU. Moments are merged in batch
+    // order; counts and histograms are integers.
+    for (let current = await collect(await launch(startAtom)); current;) {
+      const { begin, end, diagnostics, atomWords, batchCounts, records } = current;
+      const next = end < endAtom ? await launch(end) : null;
       for (let bin = 0; bin < lengthBins; bin++) output.lengthCounts[bin] += batchCounts[bin];
       for (let bin = 0; bin < angleBins; bin++) output.angleCounts[bin] += batchCounts[lengthBins + bin];
       const atomFloats = new Float32Array(atomWords.buffer);
@@ -97,15 +146,15 @@ export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, 
           addBondStatisticsSample(output.moments.q4, q4[row]); addBondStatisticsSample(output.moments.q6, q6[row]);
         }
       }
-      if (diagnostics[0]) {
-        const records = await runtime.read(corrections, Uint32Array, 4 + diagnostics[0] * BOND_STATISTICS_CORRECTION_WORDS, { signal });
-        await correctGpuBondStatisticsPairs(frame, prepared, records.subarray(4), output, { signal });
+      if (records) {
+        wrapped ??= wrappedFractional(frame);
+        await correctGpuBondStatisticsPairs(frame, prepared, records, output, { signal, wrapped });
         correctedPairs += diagnostics[0];
       }
-      begin = end;
-      onProgress({ phase: 'analyzing', completedAtoms: begin - startAtom, totalAtoms: count,
-        done: begin - startAtom, total: count, workerCount: 1 });
-      if (begin < endAtom) await yieldWorker();
+      onProgress({ phase: 'analyzing', completedAtoms: end - startAtom, totalAtoms: count,
+        done: end - startAtom, total: count, workerCount: 1 });
+      if (next) await yieldWorker();
+      current = next ? await collect(next) : null;
     }
     checkSignal(signal);
     return finalizeBondStatistics({ startAtom, endAtom, coordination, q4, q6, ...output,
@@ -116,38 +165,56 @@ export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, 
 /** Recover only bin-boundary pairs with the exact wrapped f64 source vectors.
  * IDs and explicit image shifts distinguish repeated/self images in thin and
  * tilted periodic cells. This does not create a second neighbor index. */
-export async function correctGpuBondStatisticsPairs(frame, prepared, records, output, { signal } = {}) {
+export async function correctGpuBondStatisticsPairs(frame, prepared, records, output, { signal, wrapped = wrappedFractional(frame) } = {}) {
   const signed = new Int32Array(records.buffer, records.byteOffset, records.length);
+  // Millions of boundary pairs occur in near-perfect crystals with integer-
+  // degree bins. Pre-wrapped coordinates and scalar locals avoid per-record
+  // arrays and views; the f64 operations and their order are unchanged.
+  const h = frame.cell.vectors, vectors = new Float64Array(6);
+  const { maximumCutoff, lengthBins, angleBins } = prepared, { lengthCounts, angleCounts, moments } = output;
   for (let offset = 0; offset < records.length; offset += BOND_STATISTICS_CORRECTION_WORDS) {
     if (offset % (4096 * BOND_STATISTICS_CORRECTION_WORDS) === 0) {
       checkSignal(signal); if (offset) await yieldWorker();
     }
     const kind = records[offset], atom = records[offset + 1];
-    const first = exactImageVector(frame, atom, records[offset + 2], signed.subarray(offset + 4, offset + 7));
-    const firstSquared = first[0] ** 2 + first[1] ** 2 + first[2] ** 2;
+    if (kind !== 0 && kind !== 1) throw new GpuUnavailableError('The GPU bond statistics correction record is invalid.');
+    exactImageVector(vectors, 0, wrapped, h, atom, records[offset + 2], signed[offset + 4], signed[offset + 5], signed[offset + 6]);
+    const firstSquared = vectors[0] ** 2 + vectors[1] ** 2 + vectors[2] ** 2;
     if (kind === 0) {
       const length = Math.sqrt(firstSquared);
-      output.lengthCounts[bondStatisticsHistogramBin(length, prepared.maximumCutoff, prepared.lengthBins)]++;
-      addBondStatisticsSample(output.moments.length, length);
-    } else if (kind === 1) {
-      const second = exactImageVector(frame, atom, records[offset + 3], signed.subarray(offset + 7, offset + 10));
-      const secondSquared = second[0] ** 2 + second[1] ** 2 + second[2] ** 2;
-      const cosine = Math.max(-1, Math.min(1, (first[0] * second[0] + first[1] * second[1] + first[2] * second[2])
+      lengthCounts[bondStatisticsHistogramBin(length, maximumCutoff, lengthBins)]++;
+      addBondStatisticsSample(moments.length, length);
+    } else {
+      exactImageVector(vectors, 3, wrapped, h, atom, records[offset + 3], signed[offset + 7], signed[offset + 8], signed[offset + 9]);
+      const secondSquared = vectors[3] ** 2 + vectors[4] ** 2 + vectors[5] ** 2;
+      const cosine = Math.max(-1, Math.min(1, (vectors[0] * vectors[3] + vectors[1] * vectors[4] + vectors[2] * vectors[5])
         * ((1 / Math.sqrt(firstSquared)) * (1 / Math.sqrt(secondSquared)))));
       const angle = Math.acos(cosine) * 180 / Math.PI;
-      output.angleCounts[bondStatisticsHistogramBin(angle, 180, prepared.angleBins)]++;
-      addBondStatisticsSample(output.moments.angle, angle);
-    } else throw new GpuUnavailableError('The GPU bond statistics correction record is invalid.');
+      angleCounts[bondStatisticsHistogramBin(angle, 180, angleBins)]++;
+      addBondStatisticsSample(moments.angle, angle);
+    }
   }
 }
 
-function exactImageVector(frame, atom, other, shift) {
-  const difference = [0, 1, 2].map(axis => {
-    const first = frame.fractional[atom * 3 + axis], second = frame.fractional[other * 3 + axis];
-    return (frame.cell.pbc[axis] ? (second - Math.floor(second)) - (first - Math.floor(first)) : second - first) + shift[axis];
-  });
-  const h = frame.cell.vectors, [a, b, c] = difference;
-  return [a * h[0] + b * h[3] + c * h[6], a * h[1] + b * h[4] + c * h[7], a * h[2] + b * h[5] + c * h[8]];
+/** Source fractional coordinates, wrapped into [0, 1) on periodic axes. */
+export function wrappedFractional(frame) {
+  const source = frame.fractional, wrapped = new Float64Array(source.length);
+  const periodic = [0, 1, 2].map(axis => Boolean(frame.cell.pbc[axis]));
+  for (let index = 0; index < source.length; index++) {
+    const value = source[index];
+    wrapped[index] = periodic[index % 3] ? value - Math.floor(value) : value;
+  }
+  return wrapped;
+}
+
+/** Exact wrapped source difference plus the GPU image shift, in Cartesian f64. */
+function exactImageVector(target, base, wrapped, h, atom, other, shiftA, shiftB, shiftC) {
+  const a = (wrapped[other * 3] - wrapped[atom * 3]) + shiftA;
+  const b = (wrapped[other * 3 + 1] - wrapped[atom * 3 + 1]) + shiftB;
+  const c = (wrapped[other * 3 + 2] - wrapped[atom * 3 + 2]) + shiftC;
+  target[base] = a * h[0] + b * h[3] + c * h[6];
+  target[base + 1] = a * h[1] + b * h[4] + c * h[7];
+  target[base + 2] = a * h[2] + b * h[5] + c * h[8];
 }
 
 function readMoment(unsigned, floats, offset) {

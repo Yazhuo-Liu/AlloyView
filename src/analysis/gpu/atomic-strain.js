@@ -1,7 +1,7 @@
 import { STRAIN_FIELDS } from '../atomic-strain.js';
 import { validateReferences } from '../lattice.js';
 import { atomRange } from '../neighbors.js';
-import { GpuUnavailableError, checkSignal, yieldWorker } from './runtime.js';
+import { GpuUnavailableError, checkSignal, readGpuBuffers, yieldWorker } from './runtime.js';
 import { ATOMIC_STRAIN_SHADER } from './atomic-strain-shaders.js';
 
 export const PTM_SCALE_INVALID = 1;
@@ -44,9 +44,9 @@ export async function analyzeGpuAtomicStrain(runtime, frame, parameters = {}, { 
     onProgress({ backend: 'gpu', stage: 'strain-reference', phase: 'analyzing', completedAtoms: 0, totalAtoms: count });
     await runtime.run(ATOMIC_STRAIN_SHADER,
       [config, ptm.typesBuffer, ptm.metadataBuffer, ptm.scalesBuffer, ptm.deformationBuffer, references, output, diagnostics],
-      count, { signal, batchSize: 0 });
-    const values = await runtime.read(output, Float32Array, count * STRAIN_FIELDS.length, { signal });
-    const status = await runtime.read(diagnostics, Uint32Array, 2, { signal });
+      count, { signal, batchSize: 0, wait: false });
+    const [values, status] = await readGpuBuffers(runtime, [{ buffer: output, Type: Float32Array, length: count * STRAIN_FIELDS.length },
+      { buffer: diagnostics, Type: Uint32Array, length: 2 }], { signal });
     checkSignal(signal);
     if (status[1]) throw new GpuUnavailableError('The ideal lattice reference or PTM tensor exceeds the GPU floating-point precision range.');
     onProgress({ backend: 'gpu', stage: 'strain-reference', phase: 'complete', completedAtoms: count, totalAtoms: count });

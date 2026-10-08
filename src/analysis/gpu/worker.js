@@ -5,21 +5,38 @@ import { analyzeGpuRdf } from './rdf.js';
 const runtime = new GpuRuntime();
 const controllers = new Map();
 // Double precision inputs stay available for the kernels' sparse corrections,
-// and are evicted together with their actual GPU buffers.
+// and are released after their actual GPU buffers are evicted.
 const frames = new Map();
+// The client may post a task without its payload while an earlier task still
+// runs. Received tasks retain their inputs here, so the earlier task can evict
+// GPU buffers and the later one simply uploads them again.
+const receivedFrameIds = new Map();
 let queue = Promise.resolve();
 
 self.addEventListener('message', ({ data }) => {
   if (data.type === 'cancel') { controllers.get(data.id)?.abort(); return; }
   if (!['analyze', 'warmup', 'configure-cache', 'prepare-frame', 'clear-frames'].includes(data.type)) return;
   const controller = new AbortController(); controllers.set(data.id, controller);
-  queue = queue.then(() => run(data, controller)).catch(() => {});
+  const retained = [...new Set([data.frameId, data.referenceFrameId].filter(id => id !== undefined))];
+  for (const id of retained) receivedFrameIds.set(id, (receivedFrameIds.get(id) ?? 0) + 1);
+  queue = queue.then(() => run(data, controller)).catch(() => {}).finally(() => {
+    for (const id of retained) {
+      const count = receivedFrameIds.get(id) ?? 0;
+      if (count > 1) receivedFrameIds.set(id, count - 1); else receivedFrameIds.delete(id);
+    }
+  });
 });
+
+/** Release inputs whose GPU upload was evicted. This runs when a task starts,
+ * after every task posted before it has been received; a reply cannot prune
+ * a frame that the client already posted a later task for. */
+function pruneFrames() {
+  const resident = new Set(runtime.cacheStatus().cachedFrameIds);
+  for (const frameId of frames.keys()) if (!resident.has(frameId) && !receivedFrameIds.has(frameId)) frames.delete(frameId);
+}
 
 function cacheState() {
   const cacheStatus = runtime.cacheStatus();
-  const resident = new Set(cacheStatus.cachedFrameIds);
-  for (const frameId of frames.keys()) if (!resident.has(frameId)) frames.delete(frameId);
   // The client may omit a payload only if both its f64 input and GPU upload exist.
   const cachedFrameIds = cacheStatus.cachedFrameIds.filter(frameId => frames.has(frameId));
   const cachedCartesianFrames = [...runtime.frames].filter(([frameId]) => frames.has(frameId))
@@ -34,6 +51,7 @@ async function run(data, controller) {
   let releasePins, activeFrame, newPtmFitId;
   const progress = (update) => self.postMessage({ id: data.id, progress: { ...update, backend: 'gpu', workerCount: 1 } });
   try {
+    pruneFrames();
     checkSignal(controller.signal);
     if (data.type === 'clear-frames') {
       runtime.clearFrames(); frames.clear();
