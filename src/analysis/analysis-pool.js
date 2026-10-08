@@ -17,6 +17,8 @@ import { analyzeDxaStagePool, DXA_STAGE_KINDS } from './dxa-cpu-pool.js';
 const PTM_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_RESIDENT_KINDS = ['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch', 'voronoiPrepare'];
+const CPU_CACHED_INPUT_FIELDS = [...['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput',
+  'currentPositions', 'referencePositions'], 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex'];
 const CPU_MODULES = ['voronoi', 'ptm', 'dxa'];
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
@@ -34,6 +36,7 @@ const STRAIN_OUTPUT_FIELDS = Object.fromEntries(['atomicShearStrain', 'atomicHyd
   'strainE11', 'strainE22', 'strainE33', 'strainE12', 'strainE13', 'strainE23'].map((name) => [name, [Float32Array, 1]]));
 const INPUT_ARRAY_FIELDS = ['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput', 'currentPositions', 'referencePositions'];
 const EXTRA_OUTPUT_FIELDS = {
+  coordination: { coordination: [Uint32Array, 1] },
   bonds: { coordination: [Uint32Array, 1] },
   bondStatistics: { coordination: [Uint32Array, 1], q4: [Float32Array, 1], q6: [Float32Array, 1] },
   voronoi: VORONOI_FIELDS,
@@ -84,6 +87,8 @@ export class AnalysisPool {
     this.voronoiSnapshotPending = null;
     this.voronoiSnapshotGeneration = 0;
     this.nextVoronoiFrameKey = 1;
+    this.cpuSnapshots = []; this.cpuSnapshotPending = null; this.nextCpuFrameKey = 1; this.nextCpuAnalysisKey = 1;
+    this.cpuSnapshotGeneration = 0;
     this.closed = false;
     this.gpuEnabled = false;
     this.gpuBackend = gpuBackend ?? new GpuAnalysisClient({ environment });
@@ -97,6 +102,7 @@ export class AnalysisPool {
   associateGpuFrame(frame, frameIndex) { return this.gpuBackend.associateFrame?.(frame, frameIndex); }
   clearGpuFrames() { return this.gpuBackend.clearFrames?.() ?? Promise.resolve(this.gpuCacheStatus); }
   clearVoronoiFrames() {
+    this.clearCpuFrames();
     this.cpuFramePreparation?.controller.abort();
     this.voronoiSnapshot = null;
     this.voronoiSnapshotGeneration++;
@@ -104,6 +110,21 @@ export class AnalysisPool {
       if (slot.task) slot.voronoiReleasePending = true;
       else this.releaseVoronoiFrame(slot);
     }
+  }
+
+  clearCpuFrames() {
+    this.cpuSnapshots = []; this.cpuSnapshotGeneration++;
+    for (const slot of this.slots) {
+      if (slot.task) slot.cpuReleasePending = true;
+      else this.releaseCpuFrame(slot);
+    }
+  }
+
+  releaseCpuFrame(slot) {
+    if (!slot.terminated) slot.worker.postMessage({ kind: 'cpuRelease' });
+    delete slot.cpuFrameKey; slot.cpuFrameKeys?.clear(); slot.cpuAnalysisFrames?.clear(); delete slot.cpuAnalysisKey; slot.cpuReleasePending = false;
+    // Voronoi and native heaps are accounted separately by their next ACK.
+    slot.residentInputBytes = 0;
   }
 
   releaseVoronoiFrame(slot) {
@@ -156,7 +177,7 @@ export class AnalysisPool {
 
   cpuModuleWorkerCount(atomCount, coordinateBytes, modules) {
     const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
-    const bytes = (sharedMemory ? 0 : coordinateBytes) + (modules.includes('ptm') ? atomCount * 48 + PTM_INITIAL_HEAP_BYTES : 0)
+    const bytes = (sharedMemory ? 0 : coordinateBytes) + (modules.includes('ptm') ? (sharedMemory ? 0 : atomCount * 48) + PTM_INITIAL_HEAP_BYTES : 0)
       + (modules.includes('voronoi') ? VORONOI_INITIAL_HEAP_BYTES : 0) + (modules.includes('dxa') ? 32 * 1024 ** 2 : 0);
     return Math.min(this.limit, chooseWorkerCount(atomCount, bytes, this.environment, 4_096));
   }
@@ -264,6 +285,7 @@ export class AnalysisPool {
     if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
     const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
     const target = this.voronoiWorkerCount(frame), snapshot = await this.prepareVoronoiSnapshot(frame, sharedMemory, signal);
+    if (sharedMemory) await this.prepareCpuIndex(snapshot.cpuSnapshot, undefined, signal, signal, () => {}, -.5);
     if (signal?.aborted || this.closed) throw abortError();
     const status = (phase = 'ready') => ({ kind, atomCount, sharedMemory, phase, frameKey: snapshot.key,
       targetWorkers: target, readyWorkers: [...this.slots].filter(slot => slot.voronoiFrameKey === snapshot.key).length,
@@ -286,7 +308,8 @@ export class AnalysisPool {
             if (controller.signal.aborted || this.closed) throw abortError();
             const missing = Math.min(2, target - status().readyWorkers);
             await Promise.all(Array.from({ length: missing }, () => this.runTask({ kind: 'voronoiPrepare',
-              fractional: snapshot.coordinates, cell: snapshot.cell, residentFrameKey: snapshot.key },
+              fractional: snapshot.coordinates, cell: snapshot.cell, types: snapshot.cpuSnapshot.types, residentFrameKey: snapshot.key,
+              cpuFrameKey: snapshot.cpuSnapshot.key, cpuNeighborIndex: snapshot.cpuSnapshot.neighborIndex },
             controller.signal, undefined, phase => report(phase), sharedMemory).then(() => report())));
             if (status().readyWorkers < target) await waitForCpuResources();
           }
@@ -517,11 +540,11 @@ export class AnalysisPool {
         : autoCentrosymmetry ? { centrosymmetry: [Float32Array, 1], cspStructureTypes: [Uint8Array, 1], cspNeighborCounts: [Uint8Array, 1] }
           : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] });
     const outputBytesPerAtom = Object.values(outputFields).reduce((sum, [Type, stride]) => sum + Type.BYTES_PER_ELEMENT * stride, 0);
-    // Every worker holds its coordinates and a full-frame neighbor index; each
-    // writes only its own atom range, merged once into full output arrays.
-    const copyBytes = (sharedMemory ? 0 : frame.fractional.byteLength + extraBytes) + atomCount * 48
+    // Shared coordinates and linked cells are charged once. Private Workers
+    // retain one frame/index, while each native fitter retains its own heap.
+    const copyBytes = (sharedMemory ? 0 : 2 * (frame.fractional.byteLength + atomCount * 48 + extraBytes))
       + (parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput) ? PTM_INITIAL_HEAP_BYTES : 0);
-    const outputBytes = 2 * atomCount * outputBytesPerAtom;
+    const outputBytes = 2 * atomCount * outputBytesPerAtom + (sharedMemory ? frame.fractional.byteLength + extraBytes + atomCount * 48 : 0);
     let workerCount = Math.min(this.limit, chooseWorkerCount(atomCount,
       copyBytes, this.environment,
       parameters.kind === 'voronoi' ? 512
@@ -536,71 +559,120 @@ export class AnalysisPool {
     }
     const controller = new AbortController();
     this.controllers.add(controller);
+    const releaseBackground = this.cpuBudget.deferBackground?.({ signal: controller.signal }) ?? (() => {});
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
-    let completed = 0;
-    const phases = new Array(workerCount).fill('queued');
-    const atomProgress = new Array(workerCount).fill(0);
+    const cpuAnalysisKey = this.nextCpuAnalysisKey++;
+    // Preserve the former logical reduction partitions. Chunks may migrate
+    // between Workers, but Welford/normalization sums continue in the exact
+    // original atom order inside each partition before the ordered merge.
+    const orderedReduction = ['bondStatistics', 'localShearMetrics'].includes(parameters.kind);
+    const maxChunk = ['coordination', 'displacement', 'localShearFinalize'].includes(parameters.kind) ? 8192
+      : parameters.kind === 'ptm' || parameters.kind === 'strain' ? 4096 : 2048;
+    const chunkSize = Math.max(128, Math.min(maxChunk, Math.ceil(atomCount / (workerCount * (['ptm', 'strain'].includes(parameters.kind) ? 4 : 8)))));
+    const chunks = [];
+    for (let partition = 0; partition < workerCount; partition++) {
+      const first = Math.floor(atomCount * partition / workerCount), last = Math.floor(atomCount * (partition + 1) / workerCount);
+      for (let startAtom = first; startAtom < last; startAtom += chunkSize) chunks.push({ startAtom,
+        endAtom: Math.min(last, startAtom + chunkSize), partition, ready: startAtom === first || !orderedReduction });
+    }
+    const phases = new Array(workerCount).fill('queued'), atomProgress = new Array(workerCount).fill(0);
+    const merged = Object.fromEntries(Object.entries(outputFields).map(([name, [Type, stride]]) => [name, new Type(atomCount * stride)]));
+    if (parameters.kind === 'cna') merged.structures = merged.values;
+    else if (parameters.kind === 'centrosymmetry' && !autoCentrosymmetry) merged.centrosymmetry = merged.values;
+    const reductions = new Array(workerCount), reducedPartials = new Array(workerCount);
+    let completedAtoms = 0, completedChunks = 0, completed = 0, lastCompletedAtoms = 0;
     const report = (index, phase, progress) => {
       if (controller.signal.aborted) return;
       if (index !== null) phases[index] = phase;
-      if (index !== null) {
-        const rangeCount = Math.floor(atomCount * (index + 1) / workerCount) - Math.floor(atomCount * index / workerCount);
-        if (phase === 'complete') atomProgress[index] = rangeCount;
-        else if (Number.isFinite(progress?.processedAtoms)) atomProgress[index] = Math.max(atomProgress[index],
-          Math.max(0, Math.min(rangeCount, Math.floor(progress.processedAtoms))));
-      }
-      const prepared = phases.filter((value) => ['prepared', 'initializing', 'indexing', 'analyzing', 'complete'].includes(value)).length;
-      const initialized = phases.filter((value) => ['indexing', 'analyzing', 'complete'].includes(value)).length;
-      const currentPhase = completed === workerCount ? 'complete'
-        : phases.some((value) => value === 'analyzing' || value === 'complete') ? 'analyzing'
+      if (index !== null && Number.isFinite(progress?.processedAtoms)) atomProgress[index] = Math.max(atomProgress[index], progress.processedAtoms);
+      const prepared = phases.filter(value => ['prepared', 'initializing', 'indexing', 'analyzing', 'complete'].includes(value)).length;
+      const initialized = phases.filter(value => ['indexing', 'analyzing', 'complete'].includes(value)).length;
+      const currentPhase = completedChunks === chunks.length ? 'complete'
+        : phases.some(value => value === 'analyzing' || value === 'complete') ? 'analyzing'
           : phases.includes('indexing') ? 'indexing'
-            : phases.some((value) => value === 'initializing' || value === 'prepared') ? 'initializing'
+            : phases.some(value => value === 'initializing' || value === 'prepared') ? 'initializing'
               : phases.includes('preparing') ? 'preparing' : index === null ? phase : 'queued';
+      lastCompletedAtoms = Math.max(lastCompletedAtoms, Math.min(atomCount, completedAtoms + atomProgress.reduce((sum, count) => sum + count, 0)));
       onProgress({ completed, total: workerCount, workerCount, phase: currentPhase, prepared, initialized,
-        completedAtoms: atomProgress.reduce((sum, count) => sum + count, 0), totalAtoms: atomCount });
+        completedAtoms: lastCompletedAtoms, totalAtoms: atomCount, completedChunks, totalChunks: chunks.length });
     };
     try {
-      report(null, sharedMemory ? 'preparing' : 'queued');
-      let coordinates = frame.fractional;
-      if (sharedMemory) {
-        coordinates = await copyCoordinates(frame.fractional, controller.signal, true);
-        for (const name of INPUT_ARRAY_FIELDS) if (inputs[name]) inputs[name] = await copyCoordinates(inputs[name], controller.signal, true);
-        if (inputs.ptmInput) {
-          inputs.ptmInput = await copyFields(inputs.ptmInput, controller.signal, true);
-        }
-        if (inputs.preparedNeighbors) inputs.preparedNeighbors = await copyPtmNeighbors(inputs.preparedNeighbors, controller.signal, true);
+      report(null, 'preparing');
+      const needsIndex = !inputs.preparedNeighbors && !(parameters.kind === 'strain' && inputs.ptmInput)
+        && !['displacement', 'localShearFinalize', 'referenceStrain', 'coordination'].includes(parameters.kind);
+      const snapshot = await this.prepareCpuSnapshot(frame, sharedMemory, controller.signal);
+      let sharedIndexBuilds = 0;
+      if (sharedMemory && (needsIndex || parameters.kind === 'coordination')) {
+        sharedIndexBuilds += Number(await this.prepareCpuIndex(snapshot, parameters.kind === 'coordination' ? parameters.cutoff : undefined,
+          controller.signal, signal, phase => report(null, phase)));
       }
+      if (sharedMemory) {
+        for (const name of INPUT_ARRAY_FIELDS) if (inputs[name] && name !== 'types') inputs[name] = await copyCoordinates(inputs[name], controller.signal, true);
+        if (inputs.ptmInput) inputs.ptmInput = await copyFields(inputs.ptmInput, controller.signal, true);
+        if (inputs.preparedNeighbors) inputs.preparedNeighbors = await copyPtmNeighbors(inputs.preparedNeighbors, controller.signal, true);
+        if (parameters.kind === 'referenceStrain') {
+          const reference = await this.prepareCpuSnapshot({ fractional: parameters.referenceFractional, cell: parameters.referenceCell }, sharedMemory, controller.signal);
+          sharedIndexBuilds += Number(await this.prepareCpuIndex(reference, undefined, controller.signal, signal, phase => report(null, phase)));
+          inputs.referenceFractional = reference.coordinates; inputs.referenceCell = reference.cell;
+          inputs.referenceNeighborIndex = reference.neighborIndex;
+        }
+      }
+      const cpuCoordinationIndex = snapshot.coordinationIndices.get(parameters.cutoff);
+      const partials = new Array(chunks.length);
+      const runners = Array.from({ length: workerCount }, (_, index) => (async () => {
+        while (true) {
+          if (controller.signal.aborted) throw abortError();
+          const chunkIndex = chunks.findIndex(chunk => chunk.ready && !chunk.claimed);
+          if (chunkIndex < 0) break;
+          const chunk = chunks[chunkIndex]; chunk.claimed = true; atomProgress[index] = 0;
+          const { startAtom, endAtom, partition } = chunk;
+          const partial = await this.runTask({ fractional: snapshot.coordinates, cell: snapshot.cell, ...inputs,
+            types: snapshot.types ?? inputs.types, cpuFrameKey: snapshot.key, cpuAnalysisKey,
+            cpuNeighborIndex: snapshot.neighborIndex, cpuCoordinationIndex,
+            startAtom, endAtom, ...(parameters.kind === 'coordination' ? { compactOutput: true } : {}),
+            ...(parameters.kind === 'bondStatistics' && reductions[partition] ? { momentInput: reductions[partition].moments } : {}),
+            ...(parameters.kind === 'localShearMetrics' && reductions[partition] ? { reductionInput: reductions[partition] } : {}) },
+          controller.signal, signal, (phase, progress) => report(index, phase, progress), sharedMemory);
+          if (controller.signal.aborted) throw abortError();
+          for (const [name, [, stride]] of Object.entries(outputFields)) {
+            const field = name === 'values' ? parameters.kind === 'cna' ? 'structures' : 'centrosymmetry' : name;
+            merged[name].set(partial[field], startAtom * stride);
+            delete partial[field];
+          }
+          // Return only bounded row buffers; merged scientific arrays are held
+          // once, rather than retaining every chunk's duplicate full outputs.
+          if (orderedReduction) {
+            const previous = reductions[partition];
+            if (parameters.kind === 'bondStatistics') {
+              if (previous) {
+                for (const name of ['lengthCounts', 'angleCounts']) for (let bin = 0; bin < partial[name].length; bin++) partial[name][bin] += previous[name][bin];
+              }
+            }
+            reductions[partition] = partial;
+            reducedPartials[partition] = partial;
+            const next = chunks[chunkIndex + 1]; if (next?.partition === partition) next.ready = true;
+          } else partials[chunkIndex] = partial;
+          completedAtoms += endAtom - startAtom; completedChunks++; atomProgress[index] = 0;
+          if (completedChunks === chunks.length) completed = workerCount;
+          report(index, 'complete');
+        }
+      })());
+      releaseBackground();
+      await Promise.all(runners);
       if (controller.signal.aborted) throw abortError();
-      const partials = await Promise.all(Array.from({ length: workerCount }, (_, index) => {
-        const startAtom = Math.floor(atomCount * index / workerCount);
-        const endAtom = Math.floor(atomCount * (index + 1) / workerCount);
-        return this.runTask({ fractional: coordinates, cell: frame.cell, ...inputs, startAtom, endAtom },
-          controller.signal, signal, (phase, progress) => report(index, phase, progress), sharedMemory)
-          .then((partial) => {
-            completed += 1;
-            report(index, 'complete');
-            return partial;
-          });
-      }));
-      if (controller.signal.aborted) throw abortError();
-      const metadata = { elapsedMs: performance.now() - startedAt, workerCount, sharedMemory,
+      if (orderedReduction) partials.splice(0, partials.length, ...reducedPartials);
+      const metadata = { elapsedMs: performance.now() - startedAt, workerCount, sharedMemory, chunkSize, chunkCount: chunks.length, scheduling: 'dynamic',
+        frameKey: snapshot.key, indexBuilds: sharedIndexBuilds + partials.filter(partial => partial.indexBuilt).length, frameUploads: partials.filter(partial => partial.frameUploaded).length,
         engine: `${parameters.kind === 'voronoi' ? 'voro++-wasm'
           : parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput) ? 'ptm-wasm' : 'js'}-worker${workerCount === 1 ? '' : `-pool×${workerCount}`}` };
       if (parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput)) {
         metadata.kernelInitializations = partials.filter((partial) => !partial.kernelReused).length;
       }
       if (parameters.kind === 'coordination') {
-        const coordination = new Uint32Array(atomCount);
-        let candidatePairs = 0, acceptedPairs = 0;
-        for (const partial of partials) {
-          for (let atom = 0; atom < atomCount; atom += 1) {
-            coordination[atom] += partial.coordination[atom];
-            if (atom && atom % 65_536 === 0) { await yieldToMain(); if (controller.signal.aborted) throw abortError(); }
-          }
-          candidatePairs += partial.candidatePairs;
-          acceptedPairs += partial.acceptedPairs;
-        }
+        const coordination = merged.coordination;
+        const candidatePairs = partials.reduce((sum, partial) => sum + partial.candidatePairs, 0),
+          acceptedPairs = partials.reduce((sum, partial) => sum + partial.acceptedPairs, 0);
         return { ...metadata, coordination, ...await coordinationStatistics(coordination, controller.signal), candidatePairs, acceptedPairs, bins: partials[0]?.bins,
           warning: partials.find((partial) => partial.warning)?.warning ?? null };
       }
@@ -609,9 +681,8 @@ export class AnalysisPool {
           return { ...metadata, ...mergeVoronoiPartials(partials, atomCount, { bins: parameters.bins ?? 50 }) };
         }
         const fields = EXTRA_OUTPUT_FIELDS[parameters.kind];
-        const values = Object.fromEntries(Object.entries(fields).map(([name, [Type, stride]]) => [name, new Type(atomCount * stride)]));
+        const values = Object.fromEntries(Object.keys(fields).map(name => [name, merged[name]]));
         for (const partial of partials) {
-          for (const [name, [, stride]] of Object.entries(fields)) values[name].set(partial[name], partial.startAtom * stride);
           if (atomCount > 65_536) { await yieldToMain(); if (controller.signal.aborted) throw abortError(); }
         }
         if (parameters.kind === 'rdf') {
@@ -658,25 +729,21 @@ export class AnalysisPool {
       if (parameters.kind === 'ptm' || parameters.kind === 'strain') {
         const fields = parameters.kind === 'ptm' ? PTM_RESULT_FIELDS
           : { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : PTM_RESULT_FIELDS) };
-        const values = Object.fromEntries(Object.entries(fields).map(([name, [Type, stride]]) => [name, new Type(atomCount * stride)]));
+        const values = Object.fromEntries(Object.keys(fields).map(name => [name, merged[name]]));
         let incomplete = 0;
         for (const partial of partials) {
-          for (const [name, [, stride]] of Object.entries(fields)) values[name].set(partial[name], partial.startAtom * stride);
           incomplete += partial.incomplete ?? 0;
         }
         return { ...metadata, ...values, incomplete, warning: null };
       }
       const field = parameters.kind === 'cna' ? 'structures' : 'centrosymmetry';
-      const values = parameters.kind === 'cna' ? new Uint8Array(atomCount) : new Float32Array(atomCount);
-      const cspStructureTypes = autoCentrosymmetry ? new Uint8Array(atomCount) : null;
-      const cspNeighborCounts = autoCentrosymmetry ? new Uint8Array(atomCount) : null;
+      const values = merged[field];
+      const cspStructureTypes = autoCentrosymmetry ? merged.cspStructureTypes : null;
+      const cspNeighborCounts = autoCentrosymmetry ? merged.cspNeighborCounts : null;
       const cspSummary = autoCentrosymmetry ? Object.fromEntries(CSP_SUMMARY_FIELDS.map((name) => [name, 0])) : null;
       let incomplete = 0;
       for (const partial of partials) {
-        values.set(partial[field], partial.startAtom);
         if (autoCentrosymmetry) {
-          cspStructureTypes.set(partial.cspStructureTypes, partial.startAtom);
-          cspNeighborCounts.set(partial.cspNeighborCounts, partial.startAtom);
           for (const name of CSP_SUMMARY_FIELDS) cspSummary[name] += partial.cspSummary[name];
         }
         incomplete += partial.incomplete ?? 0;
@@ -687,6 +754,7 @@ export class AnalysisPool {
       controller.abort();
       throw error;
     } finally {
+      releaseBackground();
       signal?.removeEventListener('abort', abort);
       this.controllers.delete(controller);
     }
@@ -741,6 +809,7 @@ export class AnalysisPool {
     try {
       report(null, 'preparing', undefined, true);
       const snapshot = await this.prepareVoronoiSnapshot(frame, sharedMemory, controller.signal);
+      if (sharedMemory) await this.prepareCpuIndex(snapshot.cpuSnapshot, undefined, controller.signal, signal);
       if (controller.signal.aborted) throw abortError();
       const partials = new Array(chunkCount);
       const runners = Array.from({ length: workerCount }, (_, index) => (async () => {
@@ -751,7 +820,8 @@ export class AnalysisPool {
             endAtom = geometryOnly ? startAtom + 1 : Math.min(workCount, startAtom + chunkSize);
           processed[index] = 0;
           const partial = await this.runTask({ ...parameters, selectedTypes: null, fractional: snapshot.coordinates, cell: snapshot.cell,
-            residentFrameKey: snapshot.key, startAtom, endAtom,
+            residentFrameKey: snapshot.key, cpuFrameKey: snapshot.cpuSnapshot.key, types: snapshot.cpuSnapshot.types,
+            cpuNeighborIndex: snapshot.cpuSnapshot.neighborIndex, startAtom, endAtom,
             ...(geometryOnly ? { atomIndex: geometryIndices[0] } : geometryBatch
               ? { atomIndices: Array.from(geometryIndices.subarray(startAtom, endAtom)) } : { skipStatistics: true }) },
           controller.signal, signal, (phase, progress) => report(index, phase, progress), sharedMemory);
@@ -816,23 +886,76 @@ export class AnalysisPool {
 
   async createVoronoiSnapshot(frame, sharedMemory, signal) {
     const generation = this.voronoiSnapshotGeneration;
-    const cellKey = JSON.stringify([Array.from(frame.cell.vectors), Array.from(frame.cell.pbc), Array.from(frame.cell.origin ?? [0, 0, 0])]);
-    const previous = this.voronoiSnapshot;
-    let identical = previous?.source === frame.fractional && previous.cellKey === cellKey && previous.sharedMemory === sharedMemory;
-    if (identical) {
-      for (let index = 0; index < frame.fractional.length; index++) {
-        if (!Object.is(frame.fractional[index], previous.coordinates[index])) { identical = false; break; }
-        if (index && index % 262_144 === 0) { await yieldToMain(); if (signal?.aborted) throw abortError(); }
-      }
-    }
+    const cpuSnapshot = await this.prepareCpuSnapshot(frame, sharedMemory, signal);
     if (generation !== this.voronoiSnapshotGeneration || signal?.aborted || this.closed) throw abortError();
-    if (identical) return previous;
-    const coordinates = await copyCoordinates(frame.fractional, signal, sharedMemory),
-      cell = { ...frame.cell, vectors: frame.cell.vectors.slice(), pbc: Array.from(frame.cell.pbc), origin: Float64Array.from(frame.cell.origin ?? [0, 0, 0]) };
-    const snapshot = { source: frame.fractional, coordinates, cell, cellKey, sharedMemory, key: this.nextVoronoiFrameKey++ };
-    if (generation !== this.voronoiSnapshotGeneration || signal?.aborted || this.closed) throw abortError();
+    if (this.voronoiSnapshot?.cpuSnapshot === cpuSnapshot) return this.voronoiSnapshot;
+    const snapshot = { source: frame.fractional, coordinates: cpuSnapshot.coordinates, cell: cpuSnapshot.cell,
+      cellKey: cpuSnapshot.cellKey, sharedMemory, cpuSnapshot, key: this.nextVoronoiFrameKey++ };
     this.voronoiSnapshot = snapshot;
     return snapshot;
+  }
+
+  async prepareCpuSnapshot(frame, sharedMemory, signal) {
+    while (this.cpuSnapshotPending) {
+      try { await this.cpuSnapshotPending; } catch (error) { if (signal?.aborted || this.closed) throw abortError(); }
+    }
+    const pending = this.createCpuSnapshot(frame, sharedMemory, signal); this.cpuSnapshotPending = pending;
+    try { return await pending; } finally { if (this.cpuSnapshotPending === pending) this.cpuSnapshotPending = null; }
+  }
+
+  async createCpuSnapshot(frame, sharedMemory, signal) {
+    const generation = this.cpuSnapshotGeneration;
+    const cellKey = JSON.stringify([Array.from(frame.cell.vectors), Array.from(frame.cell.pbc), Array.from(frame.cell.origin ?? [0, 0, 0])]);
+    const types = ArrayBuffer.isView(frame.types) && frame.types.length === frame.fractional.length / 3 ? frame.types : undefined;
+    for (const previous of this.cpuSnapshots) {
+      if (previous.source !== frame.fractional || previous.sourceTypes !== types || previous.cellKey !== cellKey || previous.sharedMemory !== sharedMemory) continue;
+      let identical = true;
+      for (const [source, retained] of [[frame.fractional, previous.coordinates], [types, previous.types]]) {
+        if (!source) continue;
+        for (let index = 0; index < source.length; index++) {
+          if (!Object.is(source[index], retained[index])) { identical = false; break; }
+          if (index && index % 262_144 === 0) { await yieldToMain(); if (signal?.aborted) throw abortError(); }
+        }
+        if (!identical) break;
+      }
+      if (signal?.aborted || this.closed || generation !== this.cpuSnapshotGeneration) throw abortError();
+      if (identical) return previous;
+    }
+    const snapshot = { source: frame.fractional, sourceTypes: types, coordinates: await copyCoordinates(frame.fractional, signal, sharedMemory),
+      types: types ? await copyCoordinates(types, signal, sharedMemory) : undefined,
+      cell: { ...frame.cell, vectors: frame.cell.vectors.slice(), pbc: Array.from(frame.cell.pbc), origin: Float64Array.from(frame.cell.origin ?? [0, 0, 0]) },
+      key: this.nextCpuFrameKey++, cellKey, sharedMemory, coordinationIndices: new Map(), indexPending: new Map() };
+    if (signal?.aborted || this.closed || generation !== this.cpuSnapshotGeneration) throw abortError();
+    this.cpuSnapshots = [snapshot, ...this.cpuSnapshots.filter(previous => previous.source !== frame.fractional)].slice(0, 2);
+    return snapshot;
+  }
+
+  async prepareCpuIndex(snapshot, cutoff, signal, sourceSignal, onPhase = () => {}, priority = 0) {
+    signal ??= new AbortController().signal;
+    const cacheKey = cutoff ?? 'nearest';
+    if (cutoff === undefined ? snapshot.neighborIndex : snapshot.coordinationIndices.has(cutoff)) return false;
+    if (snapshot.indexPending.has(cacheKey)) {
+      const dependency = snapshot.indexPending.get(cacheKey);
+      if (priority > dependency.payload.cpuPriority) {
+        dependency.payload.cpuPriority = priority; this.cpuBudget.promote?.(dependency.signal, priority);
+      }
+      try { await dependency; } catch (error) { if (signal?.aborted || this.closed) throw abortError(); }
+      if (signal?.aborted || this.closed) throw abortError();
+      if (cutoff === undefined ? snapshot.neighborIndex : snapshot.coordinationIndices.has(cutoff)) return false;
+    }
+    const payload = { kind: 'cpuPrepare', fractional: snapshot.coordinates, cell: snapshot.cell, types: snapshot.types,
+      cpuFrameKey: snapshot.key, sharedIndex: true, cutoff, cpuPriority: priority };
+    const pending = this.runTask(payload, signal, sourceSignal, onPhase, true).then(result => {
+      if (result.neighborIndex) snapshot.neighborIndex = result.neighborIndex;
+      if (result.coordinationIndex) {
+        snapshot.coordinationIndices.set(result.coordinationIndex.cutoff, result.coordinationIndex);
+        if (snapshot.coordinationIndices.size > 2) snapshot.coordinationIndices.delete(snapshot.coordinationIndices.keys().next().value);
+      }
+      return Boolean(result.indexBuilt);
+    });
+    pending.signal = signal; pending.payload = payload;
+    snapshot.indexPending.set(cacheKey, pending);
+    try { return await pending; } finally { if (snapshot.indexPending.get(cacheKey) === pending) snapshot.indexPending.delete(cacheKey); }
   }
 
   async analyzeLocalShear(frame, parameters, { onProgress, signal }) {
@@ -868,7 +991,7 @@ export class AnalysisPool {
       const task = { id: this.nextId++, payload, signal, sourceSignal, resolve, reject, onPhase,
         sharedMemory, worker: null, slot: null, done: false, lease: null, posted: false };
       task.abort = () => {
-        if (task.payload.kind === 'voronoiPrepare' && !task.posted && task.slot && !this.closed) {
+        if ((task.payload.kind === 'voronoiPrepare' || task.payload.cpuFrameKey !== undefined) && !task.posted && task.slot && !this.closed) {
           // Coordinate copying/yielding is main-thread work. Cancelling it
           // leaves the idle Worker's previously warmed modules untouched.
           task.cancelledVoronoi = true; task.reject(abortError());
@@ -881,7 +1004,7 @@ export class AnalysisPool {
           if (!task.cancelledWarmup) { task.cancelledWarmup = true; task.reject(abortError()); }
           return;
         }
-        if (task.payload.kind.startsWith('voronoi') && task.posted && !this.closed) {
+        if ((task.payload.cpuFrameKey !== undefined || task.payload.kind.startsWith('voronoi')) && task.posted && !this.closed) {
           // Bounded chunks finish cooperatively. Reject the caller immediately
           // but retain the busy slot/lease until its ACK, preserving the native
           // module, coordinate snapshot, and index for the next calculation.
@@ -921,7 +1044,7 @@ export class AnalysisPool {
         // prevents that slot's current owner from obtaining its own permit.
         if (!this.hasWorkerSlot(task)) await this.waitForWorkerSlot(task);
         const lease = await this.cpuBudget.acquire(1, { signal: task.signal,
-          priority: task.payload.kind === 'warmup' ? -1 : task.payload.kind === 'voronoiPrepare' ? -0.5 : 0 });
+          priority: task.payload.cpuPriority ?? (task.payload.kind === 'warmup' ? -1 : ['voronoiPrepare', 'cpuPrepare'].includes(task.payload.kind) ? -0.5 : 0) });
         if (task.done || task.signal.aborted || task.sourceSignal?.aborted || this.closed) {
           lease.release(); this.finish(task, abortError()); return;
         }
@@ -990,6 +1113,10 @@ export class AnalysisPool {
     if (task.payload.kind === 'warmup') {
       const modules = task.payload.modules ?? ['ptm'];
       index = this.idle.findIndex(slot => eligible(slot) && modules.some(module => !slot[`${module}Warmed`]));
+    } else if (task.payload.cpuFrameKey !== undefined) {
+      index = task.payload.kind === 'voronoiPrepare'
+        ? this.idle.findIndex(slot => eligible(slot) && slot.voronoiFrameKey !== task.payload.residentFrameKey)
+        : this.idle.findIndex(slot => eligible(slot) && slot.cpuFrameKeys?.has(task.payload.cpuFrameKey));
     } else if (VORONOI_RESIDENT_KINDS.includes(task.payload.kind)) {
       index = this.idle.findIndex(slot => eligible(slot) && (task.payload.kind === 'voronoiPrepare'
         ? slot.voronoiFrameKey !== task.payload.residentFrameKey : slot.voronoiFrameKey === task.payload.residentFrameKey));
@@ -1014,7 +1141,7 @@ export class AnalysisPool {
   }
 
   createWorker() {
-    const slot = { worker: this.workerFactory(), task: null, terminated: false, ptmWarmed: false, voronoiWarmed: false };
+    const slot = { worker: this.workerFactory(), cpuFrameKeys: new Set(), cpuAnalysisFrames: new Map(), task: null, terminated: false, ptmWarmed: false, voronoiWarmed: false };
     this.slots.add(slot);
     slot.worker.addEventListener('message', ({ data }) => {
       const task = slot.task;
@@ -1040,7 +1167,8 @@ export class AnalysisPool {
       // Give the status text and Cancel button a paint before copying large
       // inputs. Transfer private copies instead of synchronously cloning the
       // complete frame in each of six consecutive postMessage calls.
-      const residentChunk = VORONOI_RESIDENT_KINDS.includes(task.payload.kind)
+      const residentChunk = task.payload.cpuFrameKey !== undefined && task.slot.cpuFrameKeys?.has(task.payload.cpuFrameKey)
+        || VORONOI_RESIDENT_KINDS.includes(task.payload.kind)
         && task.payload.residentFrameKey !== undefined && task.slot.voronoiFrameKey === task.payload.residentFrameKey;
       if (!residentChunk) await yieldToMain();
       if (task.done) return;
@@ -1062,28 +1190,43 @@ export class AnalysisPool {
         }
       } else if (VORONOI_RESIDENT_KINDS.includes(payload.kind)
           && payload.residentFrameKey !== undefined
-          && task.slot.voronoiFrameKey === payload.residentFrameKey) {
+          && task.slot.voronoiFrameKey === payload.residentFrameKey
+          && (payload.cpuFrameKey === undefined || task.slot.cpuFrameKeys?.has(payload.cpuFrameKey))) {
         payload = { ...payload };
         delete payload.fractional; delete payload.cell;
+      } else if (payload.cpuFrameKey !== undefined) {
+        payload = { ...payload };
+        const frameReused = task.slot.cpuFrameKeys?.has(payload.cpuFrameKey);
+        const analysisReused = task.slot.cpuAnalysisFrames.has(payload.cpuAnalysisKey);
+        const chunkNeighbors = !task.sharedMemory && payload.preparedNeighbors && !((payload.flags ?? 31) & 224);
+        const preparedNeighbors = payload.preparedNeighbors;
+        if (frameReused) {
+          delete payload.fractional; delete payload.cell; delete payload.types;
+        } else if (!task.sharedMemory) {
+          payload.fractional = await copyCoordinates(payload.fractional, task.signal);
+          transferables.push(payload.fractional.buffer);
+          if (payload.types) { payload.types = await copyCoordinates(payload.types, task.signal); transferables.push(payload.types.buffer); }
+        }
+        if (analysisReused) { for (const name of CPU_CACHED_INPUT_FIELDS) if (name !== 'types') delete payload[name]; }
+        else if (!task.sharedMemory) {
+          for (const name of INPUT_ARRAY_FIELDS) if (name !== 'types' && payload[name]) {
+            payload[name] = await copyCoordinates(payload[name], task.signal); transferables.push(payload[name].buffer);
+          }
+          if (payload.ptmInput) { payload.ptmInput = await copyFields(payload.ptmInput, task.signal); transferables.push(...Object.values(payload.ptmInput).map(values => values.buffer)); }
+          if (payload.preparedNeighbors && !chunkNeighbors) {
+            payload.preparedNeighbors = await copyPtmNeighbors(payload.preparedNeighbors, task.signal, false);
+            transferables.push(...PTM_NEIGHBOR_FIELDS.map(field => payload.preparedNeighbors[field].buffer));
+          }
+        }
+        if (chunkNeighbors) {
+          payload.preparedNeighbors = await copyPtmNeighbors(preparedNeighbors, task.signal, false, { startAtom: payload.startAtom, endAtom: payload.endAtom });
+          transferables.push(...PTM_NEIGHBOR_FIELDS.map(field => payload.preparedNeighbors[field].buffer));
+        }
       } else if (!task.sharedMemory && payload.kind !== 'warmup') {
         payload = { ...payload, fractional: await copyCoordinates(payload.fractional, task.signal) };
         transferables.push(payload.fractional.buffer);
-        for (const name of INPUT_ARRAY_FIELDS) if (payload[name]) {
-          const source = name === 'metricInput' ? payload[name].subarray(payload.startAtom * 6, payload.endAtom * 6) : payload[name];
-          payload[name] = await copyCoordinates(source, task.signal);
-          transferables.push(payload[name].buffer);
-          if (name === 'metricInput') payload.metricStartAtom = payload.startAtom;
-        }
-        if (payload.ptmInput) {
-          payload.ptmInput = await copyFields(payload.ptmInput, task.signal);
-          transferables.push(...Object.values(payload.ptmInput).map((values) => values.buffer));
-        }
-        if (payload.preparedNeighbors) {
-          payload.preparedNeighbors = await copyPtmNeighbors(payload.preparedNeighbors, task.signal, false,
-            (payload.flags ?? 31) & 224 ? {} : { startAtom: payload.startAtom, endAtom: payload.endAtom });
-          transferables.push(...PTM_NEIGHBOR_FIELDS.map(field => payload.preparedNeighbors[field].buffer));
-        }
       }
+
       if (task.done || task.signal.aborted || task.sourceSignal?.aborted) return;
       task.posted = true;
       task.worker.postMessage({ id: task.id, ...payload }, [...new Set(transferables)]);
@@ -1139,6 +1282,19 @@ export class AnalysisPool {
           task.slot.voronoiWarmed = true;
           task.slot.voronoiFrameKey = task.payload.residentFrameKey;
         }
+        if (task.payload.cpuFrameKey !== undefined && !result?.preparationCancelled) { task.slot.cpuFrameKey = task.payload.cpuFrameKey;
+          task.slot.cpuFrameKeys.delete(task.payload.cpuFrameKey); task.slot.cpuFrameKeys.add(task.payload.cpuFrameKey);
+          if (task.slot.cpuFrameKeys.size > 2) {
+            const evictedKey = task.slot.cpuFrameKeys.values().next().value; task.slot.cpuFrameKeys.delete(evictedKey);
+            for (const [key, frameKey] of task.slot.cpuAnalysisFrames) if (frameKey === evictedKey) task.slot.cpuAnalysisFrames.delete(key);
+          }
+          if (task.payload.cpuAnalysisKey !== undefined) {
+            task.slot.cpuAnalysisFrames.delete(task.payload.cpuAnalysisKey);
+            task.slot.cpuAnalysisFrames.set(task.payload.cpuAnalysisKey, task.payload.cpuFrameKey);
+            if (task.slot.cpuAnalysisFrames.size > 2) task.slot.cpuAnalysisFrames.delete(task.slot.cpuAnalysisFrames.keys().next().value);
+          }
+          task.slot.cpuAnalysisKey = task.payload.cpuAnalysisKey; }
+        if (task.slot.cpuReleasePending) this.releaseCpuFrame(task.slot);
         if (task.slot.voronoiReleasePending) this.releaseVoronoiFrame(task.slot);
         if (task.slot.dxaReleasePending) {
           task.slot.worker.postMessage({ kind: 'dxaRelease', dxaResidentKey: task.slot.dxaReleasePending });
@@ -1165,6 +1321,7 @@ export class AnalysisPool {
     this.closed = true;
     this.voronoiSnapshot = null;
     this.voronoiSnapshotGeneration++;
+    this.cpuSnapshots = []; this.cpuSnapshotGeneration++;
     this.gpuBackend.close();
     for (const controller of this.controllers) controller.abort();
     for (const task of [...this.active, ...this.queue]) this.finish(task, abortError());

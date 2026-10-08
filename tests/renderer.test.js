@@ -39,25 +39,43 @@ test('slice picks and measurement picks retain independent highlights without dr
   assert.equal(redraws,6);
 });
 
-test('closing a frame releases atom data and GPU buffers while retaining the renderer', () => {
-  const r = Object.create(WebGLRenderer.prototype), sizes = new Map();
+test('closing a frame releases atom data, scalar edit callbacks and GPU storage while retaining reusable renderer objects', () => {
+  const r = Object.create(WebGLRenderer.prototype), sizes = new Map(), textureUploads = [], disabled = [];
+  const source = new Float64Array(100), input = { data: source, values: new Float32Array(100), colorOverrides: new Uint8Array(100) };
+  let commits = 0;
   Object.assign(r, { frame: {}, displayPositions: new Float32Array(300), atomCount: 100,
     displayAtomCount: 400, atomRadii: new Float32Array(100), visibility: new Uint8Array(100),
     selectionVisibility: new Uint8Array(100),
     sceneBounds: {}, displayCell: {}, selected: 9, selectedAtoms:Int32Array.from([9]),sliceSelectedAtoms:Int32Array.from([0,1,2]),
     requestRender() {}, onProjectionChange() {},
-    interactions: { reset() {} } });
+    interactions: { reset() {} }, sphereVao: {}, scalarColorInput: input,
+    scalarColorPreview: { input, onCommit() { commits++; } }, scalarColorTexture: {}, scalarColorTextureWidth: 10,
+    primitiveLayer: { scalarColorInput: input, clear() { this.scalarColorInput = null; } } });
   let bound;
-  r.gl = { ARRAY_BUFFER: 1, STATIC_DRAW: 2, bindBuffer(target, buffer) { bound = buffer; },
-    bufferData(target, size) { sizes.set(bound, size); } };
-  for (const name of ['positionBuffer', 'colorBuffer', 'fractionalBuffer', 'visibilityBuffer', 'radiusBuffer', 'cellBuffer']) r[name] = {};
+  r.gl = { ARRAY_BUFFER: 1, STATIC_DRAW: 2, TEXTURE0: 10, TEXTURE_2D: 3, R32F: 4, RED: 5, FLOAT: 6,
+    bindVertexArray() {}, disableVertexAttribArray(index) { disabled.push(index); },
+    bindBuffer(target, buffer) { assert.ok(buffer, 'every source buffer has its own retained GL object'); bound = buffer; },
+    bufferData(target, size) { sizes.set(bound, size); }, activeTexture() {}, bindTexture() {},
+    texImage2D(...args) { textureUploads.push(args); } };
+  const names = ['positionBuffer', 'colorBuffer', 'fractionalBuffer', 'visibilityBuffer', 'radiusBuffer', 'cellBuffer', 'scalarColorBuffer', 'colorOverrideBuffer'];
+  for (const name of names) r[name] = {};
+  const retained = names.map(name => r[name]), texture = r.scalarColorTexture;
   r.clearFrame();
   assert.equal(r.frame, null); assert.equal(r.displayPositions, null); assert.equal(r.atomRadii, null);
   assert.equal(r.selectionVisibility, null);
   assert.equal(r.atomCount, 0); assert.equal(r.displayAtomCount, 0); assert.equal(r.sceneBounds, null);
   assert.equal(r.selected, -1); assert.equal(r.projectionMode, 'perspective');
   assert.ok(r.selectedAtoms.every(index=>index===-1)); assert.ok(r.sliceSelectedAtoms.every(index=>index===-1));
-  assert.equal(sizes.size, 6); assert.ok([...sizes.values()].every(size => size === 0));
+  assert.equal(r.scalarColorInput, null); assert.equal(r.scalarColorPreview, null); assert.equal(r.primitiveLayer.scalarColorInput, null);
+  assert.equal(commits, 0, 'closing discards the old edit instead of resurrecting its source through a commit');
+  r.finishScalarColorPreview(); assert.equal(commits, 0);
+  assert.ok(disabled.includes(6) && disabled.includes(7), 'scalar vertex arrays are disabled');
+  assert.equal(sizes.size, names.length); assert.ok([...sizes.values()].every(size => size === 0));
+  assert.deepEqual(names.map(name => r[name]), retained, 'empty buffers remain reusable');
+  assert.equal(r.scalarColorTexture, texture); assert.equal(r.scalarColorTextureWidth, 1);
+  assert.equal(textureUploads.length, 1);
+  assert.deepEqual(textureUploads[0].slice(3, 5), [1, 1], 'the full source-sized scalar texture is released');
+  assert.equal(textureUploads[0].at(-1).byteLength, 4);
 });
 
 test('display coordinates can change without replacing the analysis frame', () => {

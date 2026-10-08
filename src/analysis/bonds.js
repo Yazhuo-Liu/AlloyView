@@ -30,7 +30,7 @@ export function calculateBonds(frame, { cutoff, pairCutoffs = [], maxBonds = MAX
     maximumCutoff = Math.max(maximumCutoff, value);
   }
   onPhase('indexing');
-  const search = new NeighborSearch(frame);
+  const search = (frame.neighborSearch ?? new NeighborSearch(frame));
   onPhase('analyzing');
   const coordination = new Uint32Array(endAtom - startAtom);
   let capacity = Math.min(256, maxBonds), length = 0;

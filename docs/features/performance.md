@@ -6,9 +6,12 @@ The performance panel reports the current render/analysis timing and trajectory 
 
 ## Workers and memory
 
-Parsing runs in a structure Worker. It converts the atom rows of LAMMPS dumps,
-CFG and XYZ files directly from their bytes, with the same values and error
-messages as line-based parsing, and decompresses gzip input; see
+The structure Worker coordinates indexing and a reusable parser pool. A
+foreground parser is reserved for the requested frame; a bounded background
+pool parses nearby frames in parallel. Complete frames become available while
+the remaining trajectory is indexed. Parsers convert the atom rows of LAMMPS
+dumps, CFG and XYZ files directly from their bytes, with the same values and error
+messages as line-based parsing, and decompress gzip input; see
 [supported formats](../FORMATS.md#trajectory-memory-behavior) for the exactness
 rules and the memory used by `.gz` trajectories. Analyses share a bounded scheduler and
 process independent central-atom ranges in module Workers. The shared CPU
@@ -18,14 +21,26 @@ allows up to six computation threads; a sixteen-processor report allows up to
 fourteen. This controls application concurrency rather than reserving OS cores.
 Actual Worker counts adapt to atom count and memory estimates, which can reduce
 parallelism below that maximum. Idle prewarmed Workers hold no computation
-budget, and foreground analyses take priority over queued background warmups.
+budget. Parsing, physical replication, ordinary analyses and DXA share the
+budget, and foreground work takes priority over queued background preparation.
+Cancelling a parser request rejects the caller and removes queued work
+immediately. A parser already inside its synchronous numerical loop finishes
+before its result is discarded and its CPU permit is released; its Worker is
+reused for the next request. Physical replication yields between bounded
+batches and can stop cooperatively without recreating its Worker.
 
-Cross-origin isolation enables shared CPU coordinate snapshots through
-`SharedArrayBuffer`. It requires the appropriate isolation response headers;
+Cross-origin isolation enables shared CPU coordinate snapshots and linked-cell
+neighbor indices through `SharedArrayBuffer`. An analysis Worker builds the
+index once; subsequent compatible analyses and chunks read the same arrays.
+It requires the appropriate isolation response headers;
 a secure context alone does not enable shared CPU memory. Without isolation,
-each Worker keeps a bounded private coordinate copy. Preparation yields to the
-UI thread, and resident snapshots avoid copying the complete structure again
-for every atom chunk. Both paths calculate on this device. PTM and Voro++
+each Worker keeps a bounded private coordinate copy and resident index.
+Preparation yields to the UI thread, and resident snapshots avoid copying the
+complete structure again for every atom chunk. Bounded chunks are claimed
+dynamically. Scientific reductions retain their original logical atom partitions
+and accumulation order. Coordinate, type or cell changes invalidate retained
+inputs; closing the source releases them while preserving initialized modules.
+Both paths calculate on this device. PTM and Voro++
 Workers retain their own reusable WebAssembly kernel and memory.
 
 An adaptive memory budget limits cached trajectory frames and results. Cancellation and source/frame/parameter ownership checks prevent late Worker messages from applying obsolete results. Closing the source stops playback and analysis, releases cached structure data, and restores the homepage. While GPU acceleration stays enabled, its device and compiled pipelines can be reused for the next source.
@@ -208,6 +223,14 @@ Uploads, shader compilation, reductions and result readback all contribute to el
 ## Analysis results and rendering
 
 The current renderer uses WebGL2. WebGPU analysis writes results to GPU buffers, copies them to a reusable readable staging buffer, and returns typed arrays to the application. The color legend uses these scalar arrays, and vector display builds arrow data from the selected X, Y and Z fields. Drawing then uploads colors and vectors into separate WebGL buffers. Input uploads can be reused by subsequent WebGPU calculations, but the current rendering path still includes result readback and WebGL upload.
+
+While dragging the legend's range slider, the renderer uploads normalized
+scalar values once and maps colors and range visibility in WebGL shaders.
+Further drag steps update uniforms instead of rescanning and uploading every
+atom's colors. Both views share the prepared scalar values; selection colors
+and other visibility filters still apply. The exact CPU palette and histogram
+return when editing ends or an image is exported. This temporary rendering
+preview does not alter scientific values or analysis backends.
 
 Browsers provide no portable way to use a WebGPU `GPUBuffer` directly as a WebGL buffer. A future WebGPU renderer could draw from retained analysis buffers on the same `GPUDevice`, avoiding the full array round trip for supported displays. It would need to keep those buffers alive, map colors on GPU and write any CPU precision corrections back before drawing. The present analysis Worker owns its device and releases temporary output buffers after returning results, so this would require a change to device ownership and rendering. Legends, atom inspection and data export would still need summary statistics or selected values on the CPU.
 

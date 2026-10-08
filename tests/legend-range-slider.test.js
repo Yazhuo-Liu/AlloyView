@@ -72,3 +72,16 @@ test('the two-thumb slider reports pushed limits and follows typed limits', () =
   assert.equal(minimum.value, '0'); assert.equal(maximum.value, '15');
   assert.equal(reports.length, 2, 'typed limits are not reported back');
 });
+
+test('range edits commit their latest limits on release, cancellation, lost capture, blur and keyboard completion', () => {
+  for (const event of ['change', 'pointerup', 'pointercancel', 'lostpointercapture', 'blur', 'keyup']) {
+    const commits = [];
+    const slider = createLegendRangeSlider(root, { minimum: 0, maximum: 10, dataMinimum: 0, dataMaximum: 10, step: 1,
+      onCommit: limits => commits.push(limits) });
+    slider.inputs.minimum.value = '2'; slider.inputs.minimum.dispatch('input');
+    slider.inputs.minimum.value = '3'; slider.inputs.minimum.dispatch('input');
+    assert.equal(commits.length, 0, `${event} retains the preview during editing`);
+    slider.inputs.minimum.dispatch(event); slider.inputs.minimum.dispatch('change');
+    assert.deepEqual(commits, [{ minimum: 3, maximum: 10 }], `${event} commits once`);
+  }
+});

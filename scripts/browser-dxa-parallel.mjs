@@ -51,6 +51,7 @@ async function checkDeployment(isolated) {
         cpuStageFallbacks: result.cpuStageFallbacks,
         engine: result.engine, backend: result.backend, elapsedMs: result.elapsedMs,
         totalLength: result.totalLength, stageTimings: result.stageTimings,
+        parallelEdgePasses: result.parallelEdgePasses,
         atomStructureTypes: Array.from(result.atomStructureTypes),
         segments: result.segments.map(segment => ({ id: segment.id, family: segment.familyId,
           structureType: segment.structureType, closed: segment.closed, isInfinite: segment.isInfinite,
@@ -100,6 +101,8 @@ async function checkDeployment(isolated) {
       assert.equal(offloaded.cpuOffloadUsed, true);
       assert.deepEqual(offloaded.cpuStageWorkerCounts, { local: 2, tetrahedra: 2 });
       assert.deepEqual(offloaded.cpuStageFallbacks, []);
+      assert.equal(offloaded.parallelEdgePasses.candidateCells, 0, 'Private-stage hosting retains ordered serial global edges.');
+      assert.equal(offloaded.parallelEdgePasses.pathSearchEdges, 0);
       assert.deepEqual(offloaded.atomStructureTypes, baseline.atomStructureTypes, 'Private local tasks preserve every atom label.');
       assert.equal(offloaded.segments.length, 1);
       assert.equal(offloaded.segments[0].family, 'perfect');
@@ -154,6 +157,11 @@ async function checkDeployment(isolated) {
     assert.equal(threaded.threaded, true);
     assert.equal(threaded.backend, 'cpu');
     assert.match(threaded.engine, /2 threads/);
+    assert.ok(threaded.parallelEdgePasses.candidateCells > 2048, 'The actual browser kernel runs the immutable candidate prepass.');
+    assert.ok(threaded.parallelEdgePasses.pathSearchEdges > 2048, 'Defect searches use the bounded concurrent path pass.');
+    assert.ok(threaded.parallelEdgePasses.directPathEdges > 2048, 'Perfect bulk edges bypass unnecessary staging.');
+    assert.equal(baseline.parallelEdgePasses.candidateCells, 0);
+    assert.equal(baseline.parallelEdgePasses.pathSearchEdges, 0);
     assert.deepEqual(threaded.atomStructureTypes, baseline.atomStructureTypes, 'Parallel crystal classification must preserve every atom label.');
     assert.equal(threaded.segments.length, 1);
     assert.equal(threaded.segments[0].family, 'perfect');

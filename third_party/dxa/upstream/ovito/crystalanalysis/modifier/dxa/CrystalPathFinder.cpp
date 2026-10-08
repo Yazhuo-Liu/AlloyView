@@ -29,8 +29,11 @@ namespace Ovito::CrystalAnalysis {
 * Finds an atom-to-atom path from atom 1 to atom 2 that lies entirely in the
 * good crystal region.
 ******************************************************************************/
-std::optional<ClusterVector> CrystalPathFinder::findPath(size_t atomIndex1, size_t atomIndex2)
+std::optional<ClusterVector> CrystalPathFinder::findPath(size_t atomIndex1, size_t atomIndex2,
+    bool readOnlyTransitions, bool* requiresOrderedSearch)
 {
+    bool deferred = false;
+    if(requiresOrderedSearch) *requiresOrderedSearch = false;
     OVITO_ASSERT(atomIndex1 != atomIndex2);
 
     Cluster* cluster1 = structureAnalysis().atomCluster(atomIndex1);
@@ -68,7 +71,7 @@ std::optional<ClusterVector> CrystalPathFinder::findPath(size_t atomIndex1, size
     // Process items from queue until it becomes empty or the destination atom has been reached.
     PathNode* end_of_queue = &start;
     std::optional<ClusterVector> result;
-    for(PathNode* current = &start; current != nullptr && !result; current = current->nextToProcess) {
+    for(PathNode* current = &start; current != nullptr && !result && !deferred; current = current->nextToProcess) {
         size_t currentAtom = current->atomIndex;
         OVITO_ASSERT(currentAtom != atomIndex2);
         OVITO_ASSERT(_visitedAtoms.test(currentAtom) == true);
@@ -115,7 +118,16 @@ std::optional<ClusterVector> CrystalPathFinder::findPath(size_t atomIndex1, size
                 pathVector.localVec() += step.localVec();
             else if(pathVector.cluster() != nullptr) {
                 OVITO_ASSERT(step.cluster() != nullptr);
-                ClusterTransition* transition = clusterGraph()->determineClusterTransition(step.cluster(), pathVector.cluster());
+                ClusterTransition* transition = nullptr;
+                if(readOnlyTransitions) {
+                    // Read only the existing direct transition. Searching or caching
+                    // a new graph path would mutate shared lists and can affect ties.
+                    for(ClusterTransition* t = step.cluster()->transitions; t; t = t->next) {
+                        if(t->cluster2 == pathVector.cluster()) { transition = t; break; }
+                    }
+                    if(!transition) { deferred = true; break; }
+                }
+                else transition = clusterGraph()->determineClusterTransition(step.cluster(), pathVector.cluster());
                 if(!transition)
                     continue;   // Failed to concatenate cluster vectors.
                 pathVector.localVec() += transition->transform(step.localVec());
@@ -147,6 +159,7 @@ std::optional<ClusterVector> CrystalPathFinder::findPath(size_t atomIndex1, size
     for(PathNode* current = &start; current != nullptr; current = current->nextToProcess)
         _visitedAtoms.reset(current->atomIndex);
 
+    if(requiresOrderedSearch) *requiresOrderedSearch = deferred;
     return result;
 }
 

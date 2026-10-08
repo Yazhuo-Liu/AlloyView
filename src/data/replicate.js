@@ -56,10 +56,11 @@ export function physicalReplicationPlan(frame, values, {
  * axes. Continuous source images are rewrapped in the enlarged cell; otherwise
  * crossing an old internal cell boundary would look like a displacement jump.
  */
-export async function replicateFrame(frame, values, { signal, onProgress = () => {}, ...limits } = {}) {
+export async function replicateFrame(frame, values, { signal, onProgress = () => {}, yieldTask = yieldToMain, ...limits } = {}) {
   checkSignal(signal);
   const plan = physicalReplicationPlan(frame, values, limits);
   const { repetitions, sourceAtomCount: count, atomCount } = plan;
+  onProgress({ phase: 'replicating', completedAtoms: 0, totalAtoms: atomCount });
   const h = frame.cell.vectors;
   const vectors = Float64Array.from(h, (value, index) => value * repetitions[Math.floor(index / 3)]);
   const cell = createCell({ origin: frame.cell.origin, vectors, pbc: frame.cell.pbc, triclinic: frame.cell.triclinic });
@@ -80,7 +81,7 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
           || frame.unwrappedPositions && !Number.isFinite(frame.unwrappedPositions[index])
           || frame.imageFlags && !Number.isSafeInteger(frame.imageFlags[index])) throw new Error('Physical replication requires finite coordinates and integer image flags.');
     }
-    if ((atom + 1) % 16_384 === 0) { await yieldToMain(); checkSignal(signal); }
+    if ((atom + 1) % 16_384 === 0) { await yieldTask(); checkSignal(signal); }
   }
   const PositionArray = frame.positions instanceof Float64Array ? Float64Array : Float32Array;
   const UnwrappedArray = frame.unwrappedPositions instanceof Float64Array
@@ -136,7 +137,7 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
       completedAtoms += 1;
       if (completedAtoms % 16_384 === 0) {
         onProgress({ phase: 'replicating', completedAtoms, totalAtoms: atomCount });
-        await yieldToMain();
+        await yieldTask();
         checkSignal(signal);
       }
     }

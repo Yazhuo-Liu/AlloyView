@@ -23,7 +23,7 @@ export async function indexXyz(blob, onProgress = () => {}, options = {}) {
   let remaining = 0;
   // Atom rows are only counted and checked for content; only count lines
   // are decoded.
-  await scanLineBytes(blob, (bytes, from, to, start) => {
+  await scanLineBytes(blob, (bytes, from, to, start, end) => {
     if (stage === 'count') {
       if (isBlankLine(bytes, from, to)) return;
       remaining = atomCount(lineText(bytes.subarray(from, to)));
@@ -34,7 +34,10 @@ export async function indexXyz(blob, onProgress = () => {}, options = {}) {
     } else {
       if (isBlankLine(bytes, from, to)) throw xyzError(`Frame ${offsets.length} has a blank atom row.`);
       remaining -= 1;
-      if (!remaining) stage = 'count';
+      if (!remaining) {
+        stage = 'count';
+        options.onFrame?.({ start: offsets[offsets.length - 1], end, index: offsets.length - 1 });
+      }
     }
   }, onProgress, options);
   if (offsets.length === 0) throw xyzError('The file contains no XYZ frames.');

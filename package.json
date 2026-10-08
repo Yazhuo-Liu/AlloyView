@@ -26,6 +26,8 @@
     "test:browser:dxa-visual": "node scripts/browser-dxa-visual.mjs",
     "test:browser:dxa-parallel": "node scripts/browser-dxa-parallel.mjs",
     "test:browser:cpu-warmup": "node scripts/browser-cpu-warmup.mjs",
+    "test:browser:legend-preview": "node scripts/browser-scalar-legend-preview.mjs",
+    "test:browser:trajectory-workers": "node scripts/browser-trajectory-workers.mjs",
     "test:gpu": "node scripts/browser-gpu.mjs",
     "benchmark": "node scripts/benchmark.mjs",
     "benchmark:gpu": "node scripts/benchmark-gpu.mjs",

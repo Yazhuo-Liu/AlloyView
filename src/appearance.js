@@ -34,11 +34,12 @@ function forEachAtom(map, key, visit) {
  * for radius, and any of them can hide an atom. Element styles are resolved
  * per type; atom and group overrides touch only the atoms they name, so the
  * common case without overrides never converts every atom ID to a string. */
-export function applyAppearance(frame, colors, visibility, appearance = {}, { elementColors = true, selectionGroups = [] } = {}) {
+export function applyAppearance(frame, colors, visibility, appearance = {}, { elementColors = true, selectionGroups = [], trackColorOverrides = false } = {}) {
   const elements = new Map((appearance.elements ?? []).map(entry => [entry.label, entry]));
   const atoms = new Map((appearance.atoms ?? []).map(entry => [String(entry.id), entry]));
   const groups = selectionGroupStyles(selectionGroups);
   const outputColors = colors.slice();
+  const colorOverrides = trackColorOverrides ? new Uint8Array(frame.ids.length) : null;
   const outputVisibility = visibility?.slice() ?? new Uint8Array(frame.ids.length).fill(255);
   const radii = radiiByType(frame);
   const typeStyles = frame.typeLabels.map(label => elements.get(label));
@@ -48,7 +49,7 @@ export function applyAppearance(frame, colors, visibility, appearance = {}, { el
       const type = frame.types[index], style = typeStyles[type];
       if (!style) continue;
       const rgb = typeColors[type];
-      if (rgb) { outputColors[index * 3] = rgb[0]; outputColors[index * 3 + 1] = rgb[1]; outputColors[index * 3 + 2] = rgb[2]; }
+      if (rgb) { outputColors[index * 3] = rgb[0]; outputColors[index * 3 + 1] = rgb[1]; outputColors[index * 3 + 2] = rgb[2]; if (colorOverrides) colorOverrides[index] = 255; }
       if (style.radius != null) radii[index] = style.radius;
       if (style.visible === false) outputVisibility[index] = 0;
     }
@@ -57,18 +58,19 @@ export function applyAppearance(frame, colors, visibility, appearance = {}, { el
     const byId = indicesById(frame.ids);
     for (const [key, group] of groups) forEachAtom(byId, key, index => {
       outputColors[index * 3] = group.rgb[0]; outputColors[index * 3 + 1] = group.rgb[1]; outputColors[index * 3 + 2] = group.rgb[2];
+      if (colorOverrides) colorOverrides[index] = 255;
       if (group.visible === false) outputVisibility[index] = 0;
     });
     for (const [key, atom] of atoms) {
       const rgb = atom.color ? hexColor(atom.color) : null;
       forEachAtom(byId, key, index => {
-        if (rgb) { outputColors[index * 3] = rgb[0]; outputColors[index * 3 + 1] = rgb[1]; outputColors[index * 3 + 2] = rgb[2]; }
+        if (rgb) { outputColors[index * 3] = rgb[0]; outputColors[index * 3 + 1] = rgb[1]; outputColors[index * 3 + 2] = rgb[2]; if (colorOverrides) colorOverrides[index] = 255; }
         if (atom.radius != null) radii[index] = atom.radius;
         if (atom.visible === false) outputVisibility[index] = 0;
       });
     }
   }
-  return { colors: outputColors, visibility: outputVisibility, radii };
+  return { colors: outputColors, visibility: outputVisibility, radii, ...(colorOverrides ? { colorOverrides } : {}) };
 }
 
 export function hexColor(value) {

@@ -121,6 +121,11 @@ public:
 
     // Read-only CPU Worker snapshot traversal; native mapping ownership stays here.
     size_t workerEdgeCount() const { return _edgeCount; }
+    size_t parallelCandidateCells() const { return _parallelCandidateCells; }
+    size_t parallelPathEdges() const { return _parallelPathEdges; }
+    size_t parallelPathBatches() const { return _parallelPathBatches; }
+    size_t deferredPathEdges() const { return _deferredPathEdges; }
+    size_t directPathEdges() const { return _directPathEdges; }
     template<typename Visitor> void visitWorkerEdges(Visitor&& visit) const {
         for(const auto& edges : _vertexEdges)
             for(const TessellationEdge* edge = edges.first; edge; edge = edge->nextLeavingEdge)
@@ -180,6 +185,8 @@ private:
 
     /// Number of tessellation edges on the local processor.
     size_t _edgeCount;
+    size_t _parallelCandidateCells = 0, _parallelPathEdges = 0;
+    size_t _parallelPathBatches = 0, _deferredPathEdges = 0, _directPathEdges = 0;
 
     /// Stores the cluster assigned to each vertex atom of the tessellation.
     std::vector<Cluster*> _vertexClusters;

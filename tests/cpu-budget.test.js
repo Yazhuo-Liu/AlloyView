@@ -42,3 +42,25 @@ test('foreground work precedes queued prewarming and aborted reservations releas
   foregroundLease.release(); (await warm).release();
   assert.equal(budget.active, 0);
 });
+
+test('foreground input preparation defers background admission without consuming a permit', async () => {
+  const budget = new CpuBudget({ environment: { navigator: { hardwareConcurrency: 4 } } });
+  const releasePreparation = budget.deferBackground();
+  let backgroundAdmitted = false;
+  const background = budget.acquire(1, { priority: -1 }).then(lease => { backgroundAdmitted = true; return lease; });
+  const foreground = await budget.acquire(1);
+  assert.equal(budget.active, 1); assert.equal(backgroundAdmitted, false);
+  foreground.release(); await Promise.resolve(); assert.equal(backgroundAdmitted, false);
+  releasePreparation(); const warmed = await background; assert.equal(backgroundAdmitted, true);
+  warmed.release(); assert.equal(budget.active, 0);
+});
+
+test('joining a queued shared index promotes its useful dependency through a background deferral', async () => {
+  const budget = new CpuBudget({ environment: { navigator: { hardwareConcurrency: 3 } } });
+  const controller = new AbortController(), releasePreparation = budget.deferBackground();
+  const dependency = budget.acquire(1, { priority: -.5, signal: controller.signal });
+  assert.equal(budget.active, 0);
+  budget.promote(controller.signal, 0); const lease = await dependency;
+  assert.equal(budget.active, 1); lease.release(); releasePreparation();
+  assert.equal(budget.active, 0); assert.equal(budget.queue.length, 0);
+});

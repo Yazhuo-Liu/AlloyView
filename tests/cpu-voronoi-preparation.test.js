@@ -113,13 +113,13 @@ test('foreground calculation preempts queued frame preparation and preparation p
     const rejected = assert.rejects(background, { name: 'AbortError' });
     const warming = pool.warmupCpu({ atomCount: 8192 });
     await tick(); await tick();
-    const foreground = pool.analyzeCPU(frame, { kind: 'cna' });
+    const foreground = pool.analyzeCPU(crystalFrame('fcc', 1), { kind: 'cna' });
     blocker.release();
     while (stats.messages.length < 2) await tick();
     assert.equal(stats.messages[0].data.kind, 'cna');
     assert.ok(stats.messages.every(message => message.data.kind !== 'voronoiPrepare'), 'preempted queued frame jobs never upload coordinates');
     for (const { worker, data } of stats.messages) worker.reply(data, data.kind === 'warmup'
-      ? { warmed: true } : { startAtom: 0, structures: new Uint8Array(frame.ids.length).fill(1) });
+      ? { warmed: true } : { startAtom: data.startAtom, structures: new Uint8Array(data.endAtom - data.startAtom).fill(1) });
     await rejected; await foreground;
     // A cold slot used by CNA still needs its first module-only warmup.
     while (stats.messages.length < 3) await tick();

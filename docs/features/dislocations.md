@@ -65,6 +65,17 @@ graph/topology operations retain their required global coordination.
 Local crystal identification, robust periodic Delaunay insertion, ghost-cell
 and interface-cell classification, and bounded interface preparation can use
 shared-memory threads. Final interface faces retain their original order.
+Edge construction prepares immutable candidate masks in parallel and commits
+deduplicated edges in the original cell/edge order. Edge-to-lattice mapping
+uses a private path finder per thread and bounded result batches. Searches
+requiring a new cluster-graph transition are deferred to the ordered commit,
+so parallel workers never mutate the graph's transition cache. Cheap direct
+neighbors within one crystal cluster bypass batch staging; small search tails
+run serially to avoid scheduling overhead. The result's `parallelEdgePasses`
+reports candidate cells, direct paths, searched edges, batches and deferred
+searches. Temporary mapping storage is capped at 262,144 edges (about 3 MiB);
+the reusable native heap
+and pthread pool are retained.
 Isolation does not make every extraction step parallel. With more than one
 native thread, Delaunay construction uses Geogram's parallel **PDEL** engine;
 one thread uses **BDEL**. The full tessellation still needs global coordination,

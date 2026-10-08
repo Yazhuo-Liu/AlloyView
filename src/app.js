@@ -1,7 +1,7 @@
 import { FrameCache } from './data/frame-cache.js';
+import { framePreparationSignal } from './data/frame-preparation.js';
 import { findAtomIndex } from './appearance.js';
 import { chooseFrameCachePolicy, estimateFrameBytes } from './data/cache-policy.js';
-import { physicalReplicationPlan, replicateFrame } from './data/replicate.js';
 import { normalizeRepetitions } from './render/replication.js';
 import { GpuPrefetchScheduler } from './data/gpu-prefetch.js';
 import { CpuPrefetchScheduler } from './data/cpu-prefetch.js';
@@ -118,6 +118,8 @@ const state = {
   files: [],
   format: null,
   frameCount: 0,
+  indexComplete: true,
+  indexError: null,
   frameIndex: 0,
   frame: null,
   selectedId: null,
@@ -156,6 +158,9 @@ const localPathCollator = new Intl.Collator('en', { numeric: true, sensitivity: 
 let toastTimer = null;
 let frameTimer = null;
 let playbackTimer = null;
+let playbackBuffer = null;
+let framePrefetchController = null;
+let frameNavigationController = null;
 let interactionHintTimer = null;
 let interactionHintFadeTimer = null;
 let cutoffTimer = null;
@@ -177,6 +182,7 @@ let statisticsExports;
 let dxaTools;
 let crystalVisibility;
 let currentColorLegend = null;
+let commitScalarLegendEdit = null;
 let selectionGroupControls;
 let colorChoiceVersion = 0;
 let backgroundCustomized = false;
@@ -289,6 +295,7 @@ try {
     onCameraChange: updateAxisTriad,
     onProjectionChange: syncProjectionControls,
     onRender: () => sliceGizmo?.update(),
+    onBeforeCapture: () => commitScalarLegendEdit?.(),
   });
 } catch (error) {
   showToast(error.message);
@@ -417,12 +424,13 @@ const worker = new StructureWorkerClient(({ loaded, total, stage }) => {
     const percentage = total > 0 ? Math.round(loaded / total * 100) : 0;
     setLoading(true, `Indexing numbered LAMMPS dumps… ${percentage}%`);
   }
-});
+}, { cpuBudget, onSourceInfo: updateSourceIndex });
 
 atomEyeTools = initializeAtomEyeTools({
   renderer, pool: analysisPool, tools: toolPanels,
   getFrame: () => state.frame, getFrameAt: getFrame,
   getFrameIndex: () => state.frameIndex, getFrameCount: () => state.frameCount,
+  ensureIndexed: waitForSourceIndex,
   getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
   getPendingAnalysisKinds: () => [...Object.entries(state.analysis).filter(([kind, analysis]) => {
@@ -585,7 +593,10 @@ elements['frame-first'].addEventListener('click', () => showFrameManually(0));
 elements['frame-previous'].addEventListener('click', () => showFrameManually(Math.max(0, state.frameIndex - 1)));
 elements['frame-play'].addEventListener('click', toggleFramePlayback);
 elements['frame-next'].addEventListener('click', () => showFrameManually(Math.min(state.frameCount - 1, state.frameIndex + 1)));
-elements['frame-last'].addEventListener('click', () => showFrameManually(state.frameCount - 1));
+elements['frame-last'].addEventListener('click', async () => {
+  try { await waitForSourceIndex(); showFrameManually(state.frameCount - 1); }
+  catch (error) { if (error.name !== 'AbortError') showToast(error.message); }
+});
 
 elements['color-mode'].addEventListener('change', () => {
   selectColorMode(elements['color-mode'].value);
@@ -792,6 +803,7 @@ function closeSource() {
   replicationRequest++;
   configurationRequest++;
   restorationOwner = null;
+  commitScalarLegendEdit = null;
   sourceLoadingOwner = null;
   sourceOpenRequest++;
   sourceFetchController?.abort();
@@ -813,12 +825,16 @@ function closeSource() {
   dxaTools.reset();
   topologyTools?.reset();
   voronoiCells?.reset();
+  framePrefetchController?.abort();
+  framePrefetchController = null;
+  frameNavigationController?.abort();
+  frameNavigationController = null;
   worker.reset();
   state.pendingFrames.clear();
   cache.clear();
   cache.setLimit(3);
   Object.assign(state, {
-    file: null, files: [], frame: null, format: null, frameCount: 0, frameIndex: 0,
+    file: null, files: [], frame: null, format: null, frameCount: 0, frameIndex: 0, indexComplete: true, indexError: null,
     selectedId: null, colorMode: 'type', coordinateMode: 'wrapped', periodicOrigin: [0, 0, 0], repetitions: [1, 1, 1], replicateAtoms: false,
     source: null, availableSources: [], availableEntries: [], cachePlan: null,
     references: [], referenceLabels: [],
@@ -1153,6 +1169,10 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
   // these same pools before the user starts an analysis.
   void cpuPrefetch.warmModules({ sourceKey: sourceVersion });
   state.prefetchToken += 1;
+  framePrefetchController?.abort();
+  framePrefetchController = null;
+  frameNavigationController?.abort();
+  frameNavigationController = null;
   state.pendingFrames.clear();
   const request = state.frameRequest + 1;
   state.frameRequest = request;
@@ -1174,7 +1194,11 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     state.file = files[0];
     state.files = files;
     state.format = result.format;
-    state.frameCount = result.frameCount;
+    const initialIndex = worker.sourceInfo ?? result;
+    state.frameCount = Math.max(result.frameCount, initialIndex.frameCount);
+    state.indexComplete = initialIndex.indexComplete !== false;
+    state.indexError = initialIndex.error ?? null;
+    result.frameCount = state.frameCount;
     state.frameIndex = 0;
     analysisPool.associateGpuFrame(result.frame, 0);
     state.selectedId = null;
@@ -1226,9 +1250,11 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     elements['empty-state'].hidden = true;
     finishSourceOpen(selectionRequest);
     setLoading(false);
+    updateSourceIndex(worker.sourceInfo ?? result);
     showInteractionHint();
     scheduleFramePrefetch(0);
-    showToast(
+    if (state.indexError) showToast(`Trajectory indexing stopped: ${state.indexError}`);
+    else showToast(
       files.length > 1
         ? `Loaded ${result.frameCount} frames from ${files.length} local files; the first frame has ${formatInteger(result.frame.ids.length)} atoms.`
         : `Loaded ${formatInteger(result.frame.ids.length)} atoms locally.`,
@@ -1300,6 +1326,51 @@ function configureSourceUi(result) {
   setRangeProgress(elements['frame-slider']);
 }
 
+function updateSourceIndex(info) {
+  if (!state.file || !state.frame || sourceLoadingOwner !== null || info.format !== state.format) return;
+  const previousCount = state.frameCount;
+  const previousError = state.indexError;
+  state.frameCount = Math.max(1, info.frameCount);
+  state.indexComplete = info.indexComplete !== false;
+  state.indexError = info.error ?? null;
+  elements['frame-count'].textContent = `${formatInteger(state.frameCount)}${state.indexComplete ? '' : '+'}`;
+  elements['frame-slider'].max = String(state.frameCount - 1);
+  elements['frame-label'].textContent = `${state.frameIndex + 1} / ${state.frameCount}${state.indexComplete ? '' : '+'}`;
+  elements['trajectory-section'].hidden = state.frameCount <= 1 && state.indexComplete;
+  elements.viewport.parentElement.classList.toggle('trajectory-visible', state.frameCount > 1 || !state.indexComplete);
+  elements['metric-index'].textContent = formatDuration(Math.max(0, info.indexMs ?? 0));
+  if (previousCount !== state.frameCount) {
+    state.cachePlan = chooseFrameCachePolicy(state.frame, state.frameCount, {
+      heapLimit: performance.memory?.jsHeapSizeLimit, heapUsed: performance.memory?.usedJSHeapSize,
+      deviceMemoryGiB: navigator.deviceMemory,
+    });
+    cache.setLimit(state.cachePlan.limit);
+    renderFrameTicks(state.frameCount);
+    for (const name of ['reference-frame', 'displacement-reference-frame', 'export-series-first', 'export-series-last']) {
+      const input = document.getElementById(name);
+      if (!input) continue;
+      if (name === 'export-series-last' && Number(input.value) === previousCount) input.value = String(state.frameCount);
+      input.max = String(state.frameCount);
+    }
+    updateCacheLabel();
+    if (state.indexComplete) scheduleFramePrefetch(state.frameIndex);
+  }
+  if (info.error && info.error !== previousError) showToast(`Trajectory indexing stopped: ${info.error}`);
+  updateFrameNavigation();
+  setRangeProgress(elements['frame-slider']);
+}
+
+async function waitForSourceIndex({ signal } = {}) {
+  if (signal?.aborted) throw new DOMException('Trajectory indexing wait cancelled.', 'AbortError');
+  const version = state.sourceVersion;
+  if (!state.indexComplete) {
+    await worker.waitForIndex({ signal });
+    if (version !== state.sourceVersion) throw new DOMException('Structure source closed.', 'AbortError');
+    if (worker.sourceInfo) updateSourceIndex(worker.sourceInfo);
+  }
+  if (state.indexError) throw new Error(`Trajectory indexing stopped: ${state.indexError}`);
+}
+
 function sourceFormatLabel(format) {
   const sequence = format.endsWith('-sequence');
   const base = sequence ? format.slice(0, -9) : format;
@@ -1309,6 +1380,9 @@ function sourceFormatLabel(format) {
 async function showFrame(index) {
   if (sourceLoadingOwner !== null) return false;
   if (!Number.isInteger(index) || index < 0 || index >= state.frameCount) return false;
+  frameNavigationController?.abort();
+  const navigation = new AbortController();
+  frameNavigationController = navigation;
   if (index !== state.frameIndex) cancelLatticeEstimation();
   const interruptedReplication = Boolean(replicationController);
   if (interruptedReplication) {
@@ -1329,13 +1403,15 @@ async function showFrame(index) {
     return true;
   }
   gpuPrefetch.cancel();
+  cancelFramePrefetch();
   const requiresLoad = !cache.has(index);
   if (requiresLoad) setLoading(true, `Preparing frame ${index + 1}…`);
   try {
-    const frame = await getFrame(index);
+    const frame = await getFrame(index, { signal: navigation.signal });
     if (request !== state.frameRequest) return false;
     if (!frame) return false;
     state.frameIndex = index;
+    if (state.playing) preparePlaybackBuffer();
     await displayFrame(frame);
     if (request !== state.frameRequest) return false;
     if (requiresLoad) setLoading(false);
@@ -1442,33 +1518,30 @@ async function getFrame(index, { background = false, cacheFrame = true, signal, 
     return cached;
   }
   const existing = state.pendingFrames.get(index);
-  if (existing) {
+  if (existing && !existing.signal?.aborted && (background || !existing.background)) {
     if (cacheFrame) existing.cacheFrame = true;
     return existing.promise;
   }
   const sourceVersion = state.sourceVersion;
   const processingRevision = state.processingRevision;
   const physical = state.replicateAtoms, repetitions = [...state.repetitions];
-  const pending = { cacheFrame, promise: null };
-  pending.promise = worker.frame(index, { reportProgress: !background })
+  const pending = { cacheFrame, promise: null, background, signal };
+  pending.promise = worker.frame(index, { reportProgress: !background, background, signal })
     .then(async (result) => {
-      if (sourceVersion !== state.sourceVersion || processingRevision !== state.processingRevision) return null;
-      if (!pending.cacheFrame && (signal?.aborted || (sourceKey && sourceKey !== processingSourceKey()))) return null;
-      // A foreground request can promote a background load after its GPU
-      // prefetch signal was cancelled. Continue work needed by that request.
-      const preparationSignal = { get aborted() {
-        return sourceVersion !== state.sourceVersion || processingRevision !== state.processingRevision
-          || (!pending.cacheFrame && Boolean(signal?.aborted));
-      } };
+      const preparationSignal = framePreparationSignal(signal, () =>
+        sourceVersion === state.sourceVersion && processingRevision === state.processingRevision
+          && (!sourceKey || sourceKey === processingSourceKey()));
+      if (preparationSignal.aborted) return null;
       result.frame.frameIndex = index;
       await externalProperties.applyToFrame(result.frame);
       if (preparationSignal.aborted) return null;
-      const frame = physical ? await prepareAnalysisFrame(result.frame, repetitions, true, { signal: preparationSignal }) : result.frame;
+      const frame = physical ? await prepareAnalysisFrame(result.frame, repetitions, true, { signal: preparationSignal, background }) : result.frame;
       if (preparationSignal.aborted) return null;
       analysisPool.associateGpuFrame(frame, index);
       // GPU residency can extend beyond the CPU window without evicting the
       // displayed frame or retaining the whole sequence twice in host memory.
-      if (pending.cacheFrame) {
+      if (pending.cacheFrame && state.pendingFrames.get(index) === pending) {
+        if (background && cache.has(state.frameIndex)) cache.get(state.frameIndex);
         cache.set(index, frame);
         updateCacheLabel();
       }
@@ -1481,25 +1554,39 @@ async function getFrame(index, { background = false, cacheFrame = true, signal, 
   return pending.promise;
 }
 
+function cancelFramePrefetch() {
+  state.prefetchToken++;
+  framePrefetchController?.abort();
+  framePrefetchController = null;
+  worker.cancelPrefetch();
+}
+
 function scheduleFramePrefetch(centerIndex) {
+  cancelFramePrefetch();
   if (state.frameCount <= 1 || !state.cachePlan) return;
-  const token = state.prefetchToken + 1;
-  state.prefetchToken = token;
+  const controller = new AbortController();
+  framePrefetchController = controller;
+  const token = state.prefetchToken;
   const indices = prefetchOrder(centerIndex, state.frameCount, state.cachePlan.limit, state.cachePlan.fullTrajectory);
-  const run = async () => {
-    for (const index of indices) {
-      if (token !== state.prefetchToken) return;
+  const concurrency = Math.max(1, Math.min(4, cpuBudget.limit - 1, state.cachePlan.limit - 1,
+    Math.floor(128 * 1024 ** 2 / Math.max(1, state.cachePlan.estimatedFrameBytes))));
+  let cursor = 0;
+  const lane = async () => {
+    while (cursor < indices.length && token === state.prefetchToken && !controller.signal.aborted) {
+      const index = indices[cursor++];
       if (cache.has(index)) continue;
       try {
-        await getFrame(index, { background: true });
+        await getFrame(index, { background: true, signal: controller.signal });
         if (cache.has(centerIndex)) cache.get(centerIndex);
-      } catch {
-        return;
+      } catch (error) {
+        if (error.name === 'AbortError' || controller.signal.aborted) return;
+        // A malformed speculative frame must not stop the other available
+        // frames; requesting it explicitly will display the parser's error.
       }
-      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   };
-  if ('requestIdleCallback' in window) window.requestIdleCallback(() => run(), { timeout: 800 });
+  const run = () => { if (!controller.signal.aborted) void Promise.all(Array.from({ length: concurrency }, lane)); };
+  if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 800 });
   else setTimeout(run, 40);
 }
 
@@ -1545,7 +1632,7 @@ function updateFrameNavigation() {
   elements['frame-first'].disabled = atStart;
   elements['frame-previous'].disabled = atStart;
   elements['frame-next'].disabled = atEnd;
-  elements['frame-last'].disabled = atEnd;
+  elements['frame-last'].disabled = atEnd && state.indexComplete;
   elements['frame-play'].disabled = state.frameCount <= 1;
 }
 
@@ -1566,7 +1653,20 @@ function toggleFramePlayback() {
   if (state.frameCount <= 1) return;
   state.playing = true;
   updatePlaybackButton();
+  preparePlaybackBuffer();
   schedulePlaybackStep();
+}
+
+function preparePlaybackBuffer() {
+  if (!state.playing || state.frameCount <= 1) return;
+  const index = nextPlaybackFrame(state.frameIndex, state.frameCount);
+  const sourceVersion = state.sourceVersion;
+  if (playbackBuffer?.index === index && playbackBuffer.sourceVersion === sourceVersion) return;
+  playbackBuffer?.controller.abort();
+  const controller = new AbortController();
+  const promise = getFrame(index, { signal: controller.signal }); // Reserved foreground lane.
+  promise.catch(() => {});
+  playbackBuffer = { index, sourceVersion, promise, controller };
 }
 
 function schedulePlaybackStep() {
@@ -1574,19 +1674,29 @@ function schedulePlaybackStep() {
   playbackTimer = setTimeout(async () => {
     if (!state.playing || state.frameCount <= 1) return;
     const sourceVersion = state.sourceVersion;
-    const next = nextPlaybackFrame(state.frameIndex, state.frameCount);
-    const displayed = await showFrame(next);
-    if (!displayed || !state.playing || sourceVersion !== state.sourceVersion) {
-      stopFramePlayback();
+    if (!state.indexComplete && state.frameIndex === state.frameCount - 1) {
+      schedulePlaybackStep(); // Wait for the next discovered frame instead of wrapping early.
       return;
     }
-    schedulePlaybackStep();
+    const next = nextPlaybackFrame(state.frameIndex, state.frameCount);
+    try {
+      if (playbackBuffer?.index === next && playbackBuffer.sourceVersion === sourceVersion) await playbackBuffer.promise;
+      const displayed = await showFrame(next);
+      if (!displayed || !state.playing || sourceVersion !== state.sourceVersion) { stopFramePlayback(); return; }
+      preparePlaybackBuffer();
+      schedulePlaybackStep();
+    } catch (error) {
+      stopFramePlayback();
+      if (error.name !== 'AbortError' && sourceVersion === state.sourceVersion) showToast(error.message);
+    }
   }, DEFAULT_PLAYBACK_INTERVAL_MS);
 }
 
 function stopFramePlayback() {
   clearTimeout(playbackTimer);
   playbackTimer = null;
+  playbackBuffer?.controller.abort();
+  playbackBuffer = null;
   if (!state.playing) return;
   state.playing = false;
   updatePlaybackButton();
@@ -1630,7 +1740,7 @@ function reassessFrameCache(frame) {
   });
   if (revised.limit >= cache.limit) return;
   state.cachePlan = revised;
-  state.prefetchToken += 1;
+  cancelFramePrefetch();
   cache.setLimit(revised.limit);
   updateCacheLabel();
 }
@@ -1861,12 +1971,12 @@ function applyColors() {
   }
 }
 
-function applyScalarVisibility(legend) {
+function applyScalarVisibility(legend, { includeScalarRange = true } = {}) {
   currentColorLegend = legend;
   let colorMask = null;
   if (legend.kind === 'types' && legend.property) {
     colorMask = visibilityByCategory(legend.property, hiddenCategoriesFor(legend.property.name));
-  } else if (legend.kind === 'scalar') {
+  } else if (legend.kind === 'scalar' && includeScalarRange) {
     colorMask = visibilityByProperty(
       legend.property,
       legend.customRange ? { minimum: legend.minimum, maximum: legend.maximum } : null,
@@ -2640,6 +2750,7 @@ function updateSelectionPanel(index = null) {
 }
 
 function renderLegend(legend) {
+  commitScalarLegendEdit = null;
   currentColorLegend = legend;
   crystalVisibility?.refresh();
   elements['color-legend'].replaceChildren();
@@ -2805,6 +2916,14 @@ function renderLegend(legend) {
     syncAutomatic();
     actions.append(automatic);
     let pendingSliderRange = null;
+    let previewActive = false;
+    const finishSliderPreview = (limits = pendingSliderRange ?? scalarColorRanges.get(legend.property.name)) => {
+      pendingSliderRange = null;
+      if (!rangeSlider.element.isConnected || !limits) return;
+      previewActive = false;
+      commitScalarLegendEdit = null;
+      applyRange(limits);
+    };
     const rangeSlider = createLegendRangeSlider(document, {
       minimum: legend.minimum, maximum: editableMaximum, dataMinimum: legend.dataMinimum, dataMaximum: legend.dataMaximum,
       step, format: formatValue,
@@ -2814,17 +2933,23 @@ function renderLegend(legend) {
         if (!limits) return;
         minimumControl.input.value = formatEditableNumber(limits.minimum);
         maximumControl.input.value = formatEditableNumber(limits.maximum);
-        // A drag reports many positions per frame; recolor once per frame.
+        // Save the exact limits immediately (also for export before the next
+        // animation frame), while drawing the temporary preview once per frame.
+        scalarColorRanges.set(legend.property.name, limits);
+        scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
+        commitScalarLegendEdit = () => finishSliderPreview();
+        syncAutomatic();
         if (!pendingSliderRange) {
           requestAnimationFrame(() => {
             const pending = pendingSliderRange;
             pendingSliderRange = null;
             // A frame change may have replaced this legend and its property.
-            if (pending && rangeSlider.element.isConnected) applyRange(pending);
+            if (pending && rangeSlider.element.isConnected) previewRange(pending);
           });
         }
         pendingSliderRange = limits;
       },
+      onCommit: (limits) => finishSliderPreview(limits),
     });
     controls.append(schemeControl, rangeSlider.element, minimumControl.label, maximumControl.label, visibility, actions);
     const freezeCurrentRange = () => {
@@ -2834,6 +2959,9 @@ function renderLegend(legend) {
       return limits;
     };
     const applyRange = (limits) => {
+      pendingSliderRange = null;
+      previewActive = false;
+      commitScalarLegendEdit = null;
       const palette = atomEyeTools.customizePalette(colorsByProperty(legend.property, limits, legend.scheme,
         hiddenCategoriesFor(legend.property.name), selectionGroupVisibility(state.frame, state.selectionGroups.groups)));
       scalarColorRanges.set(legend.property.name, limits);
@@ -2848,6 +2976,32 @@ function renderLegend(legend) {
       minimum.textContent = formatValue(limits.minimum);
       maximum.textContent = formatValue(limits.maximum);
       syncAutomatic();
+    };
+    const previewRange = (limits) => {
+      const previewLegend = { ...legend, ...limits, customRange: true };
+      if (!previewActive || !renderer.scalarColorPreview) {
+        const overrides = atomEyeTools.customizePalette({ colors: renderer.atomColors, legend }, { trackColorOverrides: true }).colorOverrides;
+        // Preserve element, structure, appearance and selection filters once;
+        // the moving scalar range is evaluated by both atom and bond shaders.
+        applyScalarVisibility(previewLegend, { includeScalarRange: false });
+        const preview = renderer.setScalarColorPreview(legend.property.data, { ...previewLegend, colorOverrides: overrides,
+          hideOutside: visibilityCheckbox.checked, onCommit: () => finishSliderPreview() });
+        if (!preview) { applyRange(limits); return; }
+        atomEyeTools.syncComparison();
+        previewActive = true;
+      } else {
+        const preview = renderer.setScalarColorPreview(legend.property.data, { ...previewLegend, input: renderer.scalarColorPreview.input,
+          hideOutside: visibilityCheckbox.checked, onCommit: () => finishSliderPreview() });
+        if (!preview) { applyRange(limits); return; }
+        atomEyeTools.syncScalarColorPreview();
+      }
+      currentColorLegend = previewLegend;
+      // Rebuilding histogram counts would scan all atoms per tick. Keep the
+      // gradient/value probe responsive and restore exact counts on release.
+      const nextScale = createLegendScale(document, previewLegend, { format: formatValue, histogram: false });
+      scale.replaceWith(nextScale); scale = nextScale;
+      minimum.textContent = formatValue(limits.minimum);
+      maximum.textContent = formatValue(limits.maximum);
     };
     const applyLiveRange = (changed) => {
       interruptConfigurationRestore('a color range edit');
@@ -3212,6 +3366,8 @@ async function restoreConfiguration(config) {
   restorationOwner = request;
   try {
     clearTimeout(frameTimer);
+    if (config.source && targetIndex >= state.frameCount && !state.indexComplete) await waitForSourceIndex();
+    if (!current()) return;
     if (config.source && targetIndex >= state.frameCount) throw new Error('The saved frame is not available in the loaded source.');
     const existingTarget = state.frame ? await getFrame(targetIndex) : null;
     const repetitions = existingTarget ? normalizeRepetitions(saved.replicate, sourceFrame(existingTarget).cell.pbc) : saved.replicate;
@@ -3412,7 +3568,7 @@ function sourceFrame(frame) {
   return analysisFrameSources.get(frame) ?? frame;
 }
 
-async function prepareAnalysisFrame(frame, counts, physical, { signal, onProgress } = {}) {
+async function prepareAnalysisFrame(frame, counts, physical, { signal, onProgress, background = false } = {}) {
   const raw = sourceFrame(frame);
   // Retain only imported values, including ones temporarily replaced by an
   // analysis. Source geometry is shared until physical copies are requested.
@@ -3425,16 +3581,21 @@ async function prepareAnalysisFrame(frame, counts, physical, { signal, onProgres
   delete source.atomeyeResults;
   delete source.analysisOriginalProperties;
   delete source.processingSourceBytes;
-  if (physical && !signal?.aborted) {
-    // Validate expansion first, then grow reusable pools while replication
-    // yields to the browser. Display-only copies never enter this branch.
-    const plan = physicalReplicationPlan(source, counts);
-    void cpuPrefetch.setAtomCount({ sourceKey: state.sourceVersion, atomCount: plan.atomCount, signal });
-  }
+  let warming = false;
+  const replicationProgress = progress => {
+    // Validation and expansion run off the main thread. The first progress
+    // message contains the validated target count, so preparation overlaps the
+    // copy without another O(N) source-ID scan in the rendering thread.
+    if (!warming && !signal?.aborted) {
+      warming = true;
+      void cpuPrefetch.setAtomCount({ sourceKey: state.sourceVersion, atomCount: progress.totalAtoms, signal });
+    }
+    onProgress?.(progress);
+  };
   // External columns expand in their persistent Worker, rather than being
   // copied once here and a second time when the property registry refreshes.
   const replicationSource = physical ? { ...source, properties: source.properties.filter(property => !property.externalImportId) } : source;
-  const prepared = physical ? await replicateFrame(replicationSource, counts, { signal, onProgress }) : source;
+  const prepared = physical ? await worker.replicate(replicationSource, counts, { signal, onProgress: replicationProgress, background }) : source;
   analysisFrameSources.set(prepared, source);
   if (externalProperties && !signal?.aborted) await externalProperties.applyToFrame(prepared, { sourceFrame: source });
   if (signal?.aborted) throw new DOMException('Replication cancelled.', 'AbortError');
@@ -3448,7 +3609,7 @@ async function commitReplicationFrame(frame, counts, physical, index, { resetCam
     || (physical && counts.some((count, axis) => count !== state.repetitions[axis]));
   if (processingChanged) {
     state.processingRevision++;
-    state.prefetchToken++;
+    cancelFramePrefetch();
     state.pendingFrames.clear();
     analysisPool.clearVoronoiFrames();
     void gpuPrefetch.clearSource();

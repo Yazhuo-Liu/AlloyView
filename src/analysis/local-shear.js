@@ -24,7 +24,7 @@ export function calculateLocalShearCoordination(frame, { cutoff, onPhase = () =>
   validateCutoff(cutoff);
   const count = frame.fractional.length / 3, { startAtom, endAtom } = atomRange(count, range);
   onPhase('indexing');
-  const search = new NeighborSearch(frame), coordination = new Uint32Array(endAtom - startAtom), histogram = [];
+  const search = (frame.neighborSearch ?? new NeighborSearch(frame)), coordination = new Uint32Array(endAtom - startAtom), histogram = [];
   let coordinationSum = 0;
   onPhase('analyzing');
   for (let atom = startAtom; atom < endAtom; atom += 1) {
@@ -38,13 +38,13 @@ export function calculateLocalShearCoordination(frame, { cutoff, onPhase = () =>
   return { startAtom, endAtom, coordination, histogram: Array.from(histogram, (value) => value ?? 0), coordinationSum };
 }
 
-export function calculateLocalShearMetrics(frame, { cutoff, coordinationMode, onPhase = () => {}, onAtoms = () => {}, ...range } = {}) {
+export function calculateLocalShearMetrics(frame, { cutoff, coordinationMode, reductionInput, onPhase = () => {}, onAtoms = () => {}, ...range } = {}) {
   validateCutoff(cutoff);
   const count = frame.fractional.length / 3, { startAtom, endAtom } = atomRange(count, range);
   if (!Number.isInteger(coordinationMode) || coordinationMode < 0) throw new Error('Invalid geometric shear coordination.');
   onPhase('indexing');
-  const search = new NeighborSearch(frame), metrics = new Float64Array((endAtom - startAtom) * 6), metricSum = new Array(6).fill(0);
-  let normalizationSum = 0, normalizationParticipants = 0;
+  const search = (frame.neighborSearch ?? new NeighborSearch(frame)), metrics = new Float64Array((endAtom - startAtom) * 6), metricSum = reductionInput?.metricSum.slice() ?? new Array(6).fill(0);
+  let normalizationSum = reductionInput?.normalizationSum ?? 0, normalizationParticipants = reductionInput?.normalizationParticipants ?? 0;
   onPhase('analyzing');
   for (let atom = startAtom; atom < endAtom; atom += 1) {
     const neighbors = boundedNeighbors(search, atom, cutoff);

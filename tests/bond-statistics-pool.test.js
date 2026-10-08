@@ -68,7 +68,7 @@ test('GPU unavailability keeps bond statistics functional in pure CPU mode', asy
   } finally { pool.close(); }
 });
 
-test('cancelling heavy bond statistics terminates that job while a queued independent CNA completes', async () => {
+test('cancelling heavy bond statistics preserves its Worker while a queued independent CNA completes', async () => {
   const stats = { created: 0 }, controller = new AbortController();
   const pool = new AnalysisPool({ environment: { navigator: { hardwareConcurrency: 2 } }, workerFactory: nodeFactory(stats) });
   let interrupted = false;
@@ -85,7 +85,7 @@ test('cancelling heavy bond statistics terminates that job while a queued indepe
     assert.equal(results[0].reason.name, 'AbortError');
     assert.equal(results[1].status, 'fulfilled');
     assert.deepEqual(results[1].value.structures, calculateCna(smallFrame).structures);
-    assert.equal(stats.created, 2, 'the next job replaces the explicitly terminated Worker');
+    assert.equal(stats.created, 1, 'the next job reuses the cancelled bounded Worker');
     assert.equal(pool.active.size, 0);
   } finally { pool.close(); }
 });

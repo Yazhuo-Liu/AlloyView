@@ -35,7 +35,7 @@ const canvasBlob = (canvas, type = 'image/png') => new Promise((resolve, reject)
 /** Own analysis lifecycles separately from display-only vector settings, and
  * invalidate pending results on source/frame edits. */
 export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFrameAt,
-  getFrameIndex, getFrameCount, getFrames, getSourceVersion, getSelectedIndex,
+  getFrameIndex, getFrameCount, getFrames, getSourceVersion, getSelectedIndex, ensureIndexed = async () => {},
   selectAtom, refresh, chooseProperty, getColorMode, getSelectionGroups = () => [], getColorChoiceVersion = () => 0, getPendingAnalysisKinds = () => [], getAnalysisPropertyKind = () => null, getExportOptions, showFrame,
   stopPlayback, getFileStem, notify = () => {}, onEdit = () => {}, onMemoryChange = () => {},
   onBondParametersChange = () => {}, onBondStateChange = () => {}, getBondStatisticsEnabled = () => false }) {
@@ -565,14 +565,14 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       for (const row of rows) { const item = document.createElement('p'); item.textContent = row; container.append(item); }
     } catch (error) { container.textContent = error.message; }
   }
-  function customizePalette(palette) {
+  function customizePalette(palette, { trackColorOverrides = false } = {}) {
     const frame = getFrame();
     if (!frame) return palette;
-    const result = applyAppearance(frame, palette.colors, null, appearance, { elementColors: getColorMode() === 'type', selectionGroups: getSelectionGroups() });
+    const result = applyAppearance(frame, palette.colors, null, appearance, { elementColors: getColorMode() === 'type', selectionGroups: getSelectionGroups(), trackColorOverrides });
     if (getColorMode() === 'type') palette.legend.items = palette.legend.items.map(item => ({ ...item,
       color: appearance.elements.find(entry => entry.label === item.label)?.color ? hexColor(appearance.elements.find(entry => entry.label === item.label).color) : item.color }));
     colors = result.colors;
-    return { ...palette, colors: result.colors };
+    return { ...palette, colors: result.colors, ...(result.colorOverrides ? { colorOverrides: result.colorOverrides } : {}) };
   }
   function filterVisibility(mask) {
     const frame = getFrame(); if (!frame) return mask;
@@ -649,7 +649,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       resizeHandle.setAttribute('aria-label', 'Resize second view. Drag or use arrow keys.'); resizeHandle.title = 'Resize second view';
       resizeHandle.textContent = '◢';
       comparisonContainer.append(header, toolbar, surface, resizeHandle); renderer.canvas.parentElement.append(comparisonContainer);
-      comparison = new WebGLRenderer(canvas, { onPick: index => selectAtom(index), onProjectionChange: syncComparisonToolbar, onCameraChange: syncComparisonToolbar });
+      comparison = new WebGLRenderer(canvas, { onPick: index => selectAtom(index), onProjectionChange: syncComparisonToolbar, onCameraChange: syncComparisonToolbar,
+        onBeforeCapture: () => renderer.onBeforeCapture?.() });
       comparisonWindow = initializeFloatingWindow({ element: comparisonContainer, dragHandle: header, resizeHandle,
         onEdit: changed, onChange: () => comparison.requestRender() });
     }
@@ -662,13 +663,17 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       if (camera) restoreCamera(comparison, camera);
       else { comparison.resetCamera(); if ($('compare-preset').value !== 'custom') comparison.setView($('compare-preset').value); }
     } else {
-      comparison.setColors(renderer.atomColors); comparison.setAtomRadii(renderer.atomRadii);
+      if (comparison.atomColors !== renderer.atomColors || comparison.sourceColorRevision !== renderer.colorRevision) comparison.setColors(renderer.atomColors);
+      if (comparison.atomRadii !== renderer.atomRadii || comparison.sourceRadiusRevision !== renderer.radiusRevision) comparison.setAtomRadii(renderer.atomRadii);
       if (comparison.rawDisplayPositions !== positions || comparison.coordinateMode !== coordinateMode) comparison.setDisplayPositions(positions, { coordinateMode });
       if (comparison.repetitions.some((value, axis) => value !== renderer.repetitions[axis])) comparison.setReplications(renderer.repetitions);
     }
     const origin = renderer.periodicOrigin ?? [0, 0, 0];
     if (origin.some((value, axis) => value !== (comparison.periodicOrigin?.[axis] ?? 0))) comparison.setPeriodicOrigin(origin, { coordinateMode });
-    comparison.setVisibility(renderer.visibility, { selectionVisibility: renderer.selectionVisibility });
+    comparison.sourceColorRevision = renderer.colorRevision; comparison.sourceRadiusRevision = renderer.radiusRevision;
+    if (comparison.visibility !== renderer.visibility || comparison.selectionVisibility !== renderer.selectionVisibility) {
+      comparison.setVisibility(renderer.visibility, { selectionVisibility: renderer.selectionVisibility });
+    }
     comparison.setSelected(renderer.selected);
     comparison.setSelectedAtoms(Array.from(renderer.selectedAtoms ?? []).filter(index => index >= 0));
     comparison.setSliceSelectedAtoms(Array.from(renderer.sliceSelectedAtoms ?? []).filter(index => index >= 0));
@@ -683,8 +688,17 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     comparison.setDislocationNetwork(renderer.dislocationNetwork, renderer.dislocationOptions);
     comparison.setVoronoiCellGeometry(renderer.voronoiCellGeometry, renderer.voronoiCellOptions);
     comparison.setVoronoiAllCellGeometry(renderer.voronoiAllCellGeometry, renderer.voronoiCellOptions);
+    syncScalarColorPreview();
     comparisonRestore.apply(comparison, comparisonWindow);
     syncComparisonToolbar();
+  }
+  // A legend drag must not repeat full-frame colors, radii or visibility
+  // uploads in the second view. Both views share the prepared scalar input.
+  function syncScalarColorPreview() {
+    if (!comparison?.frame || !$('compare-view').checked) return;
+    const preview = renderer.scalarColorPreview;
+    if (preview) comparison.setScalarColorPreview(preview.input.data, { ...preview, input: preview.input });
+    else comparison.clearScalarColorPreview();
   }
   function syncComparisonToolbar() {
     if (!comparison?.frame || !comparisonContainer || !$('compare-view').checked) return;
@@ -811,18 +825,29 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     $('run-displacement').disabled = !enabled || $('displacement-state').textContent === 'Calculating…';
     $('cancel-displacement').disabled = !enabled || !displacement.enabled;
   }
-  function cancelBatch({ restore = true } = {}) { if (batch) { batch.cancelled = true; batch.restore = restore; } }
+  function cancelBatch({ restore = true } = {}) {
+    if (batch) {
+      batch.cancelled = true; batch.restore = restore;
+      batch.controller?.abort();
+    }
+  }
   async function exportSeries() {
     if (!getFrame() || batch) return;
-    const first = number('export-series-first') - 1, last = number('export-series-last') - 1, step = number('export-series-step');
-    if (![first, last, step].every(Number.isInteger) || first < 0 || last < first || last >= getFrameCount()) throw new Error('Choose a valid frame range and integer step.');
-    const count = Math.floor((last - first) / step) + 1;
-    if (count > 500) throw new Error('Export at most 500 frames in one archive.');
-    const task = { cancelled: false, restore: true, source: getSourceVersion() }; batch = task;
+    // Establish ownership and cancellation synchronously: even an already
+    // completed index produces an await boundary before the first image.
+    const task = { cancelled: false, restore: true, source: getSourceVersion(), controller: new AbortController() };
+    batch = task;
     const original = getFrameIndex(), camera = cameraSnapshot(renderer), entries = []; let total = 0;
     let completed = false, failure = null;
     stopPlayback(); $('cancel-frame-series').disabled = false; $('export-frame-series').disabled = true;
+    $('export-series-status').textContent = 'Preparing trajectory index…';
     try {
+      await ensureIndexed({ signal: task.controller.signal });
+      if (task.cancelled || task.source !== getSourceVersion() || !getFrame()) return;
+      const first = number('export-series-first') - 1, last = number('export-series-last') - 1, step = number('export-series-step');
+      if (![first, last, step].every(Number.isInteger) || first < 0 || last < first || last >= getFrameCount()) throw new Error('Choose a valid frame range and integer step.');
+      const count = Math.floor((last - first) / step) + 1;
+      if (count > 500) throw new Error('Export at most 500 frames in one archive.');
       for (let index = first; index <= last; index += step) {
         if (task.cancelled || task.source !== getSourceVersion()) return;
         $('export-series-status').textContent = `Rendering frame ${index + 1} · ${entries.length} / ${count} exported`;
@@ -950,7 +975,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   return { onFrame, reset, abortJobs, cancel, run, selected, customizePalette, filterVisibility, applyRadii,
     getBondParameters: () => getFrame() ? readParameters('bonds', getFrame()) : null,
     isEnabled: kind => Boolean(jobs[kind]?.enabled),
-    updateStatistics, updateVectors, renameProperty, cancelVectorDependency, runDisplacement, cancelDisplacement, updateMeasurements, syncComparison, serialize, restore, setEnabled, cancelBatch,
+    updateStatistics, updateVectors, renameProperty, cancelVectorDependency, runDisplacement, cancelDisplacement, updateMeasurements, syncComparison, syncScalarColorPreview, serialize, restore, setEnabled, cancelBatch,
     refreshProperties: () => { const frame = getFrame(); if (frame) configureSelectors(frame); updateVectors(); updateMeasurements(); },
     refresh: () => { updateStatistics(); updateMeasurements(); applyRadii(); },
     deactivate: name => { if (name === 'statistics') cancel('rdf'); else if (name === 'displacement') cancelDisplacement(); else if (name === 'vectors') { for (const field of vectorFields) field.enabled = false; $('show-vectors').checked = false; updateVectors(); } else if (JOBS[name]) cancel(name); },

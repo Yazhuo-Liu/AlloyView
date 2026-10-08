@@ -5,7 +5,7 @@ import { cellFaceHeights, determinant3 } from '../data/model.js';
  * Queries inspect a complete sphere before keeping the nearest neighbors.
  */
 export class NeighborSearch {
-  constructor({ fractional, cell }) {
+  constructor({ fractional, cell }, { sharedMemory = false } = {}) {
     this.count = fractional.length / 3;
     if (!Number.isInteger(this.count) || this.count < 1) throw new Error('Analysis requires at least one atom.');
     this.cell = cell;
@@ -13,7 +13,8 @@ export class NeighborSearch {
     if (this.heights.some((height) => !Number.isFinite(height) || height <= 0)) {
       throw new Error('Neighbor search requires a finite, non-singular cell.');
     }
-    this.coordinates = new Float64Array(fractional.length);
+    const allocate = (Type, length) => sharedMemory ? new Type(new SharedArrayBuffer(length * Type.BYTES_PER_ELEMENT)) : new Type(length);
+    this.coordinates = allocate(Float64Array, fractional.length);
     this.minimum = [0, 0, 0];
     this.span = [1, 1, 1];
     for (let axis = 0; axis < 3; axis += 1) {
@@ -41,14 +42,33 @@ export class NeighborSearch {
       this.dimensions[axis] = Math.max(1, Math.floor(this.dimensions[axis] / 2));
     }
     this.nearestRadii = new Map();
-    this.heads = new Int32Array(this.dimensions.reduce((a, b) => a * b, 1)).fill(-1);
-    this.next = new Int32Array(this.count);
+    this.heads = allocate(Int32Array, this.dimensions.reduce((a, b) => a * b, 1)).fill(-1);
+    this.next = allocate(Int32Array, this.count);
     for (let atom = 0; atom < this.count; atom += 1) {
       const bin = this.flatten(this.binIndex(this.coordinates[atom * 3], 0),
         this.binIndex(this.coordinates[atom * 3 + 1], 1), this.binIndex(this.coordinates[atom * 3 + 2], 2));
       this.next[atom] = this.heads[bin];
       this.heads[bin] = atom;
     }
+  }
+
+  /** Immutable transport descriptor. On isolated hosts the linked arrays are
+   * allocated once in a Worker and every resident Worker reads the same SABs.
+   * Per-query scratch and the radius cache always stay private to a Worker. */
+  exportIndex() {
+    return Object.fromEntries(['count', 'cell', 'heights', 'minimum', 'span',
+      'initialRadius', 'dimensions', 'coordinates', 'heads', 'next'].map(name => [name, this[name]]));
+  }
+
+  static fromIndex(index) {
+    if (!index || !(index.coordinates instanceof Float64Array) || !(index.heads instanceof Int32Array)
+        || !(index.next instanceof Int32Array) || index.coordinates.length !== index.count * 3
+        || index.next.length !== index.count || index.heads.length !== index.dimensions?.reduce((a, b) => a * b, 1)) {
+      throw new Error('The resident neighbor index is incomplete.');
+    }
+    const search = Object.assign(Object.create(NeighborSearch.prototype), index);
+    search.nearestRadii = new Map();
+    return search;
   }
 
   binIndex(value, axis) {

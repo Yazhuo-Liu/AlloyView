@@ -18,6 +18,32 @@ export class CpuBudget {
     this.limit = cpuWorkerLimit(environment);
     this.active = 0;
     this.queue = [];
+    this.backgroundDeferrals = new Set();
+  }
+
+  /** Foreground input preparation must enter admission before its asynchronous
+   * snapshot copy finishes. A deferral consumes no computation permit and
+   * only holds queued background jobs; other foreground work can proceed. */
+  deferBackground({ signal } = {}) {
+    const token = {};
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true; signal?.removeEventListener('abort', release);
+      this.backgroundDeferrals.delete(token); this.pump();
+    };
+    if (signal?.aborted) { released = true; return release; }
+    this.backgroundDeferrals.add(token); signal?.addEventListener('abort', release, { once: true });
+    return release;
+  }
+
+  /** A foreground subscriber can join a shared index preparation which was
+   * originally queued by prefetch. Promote that useful dependency instead of
+   * blocking behind its own background deferral or building a second index. */
+  promote(signal, priority = 0) {
+    for (const request of this.queue) if (request.signal === signal) request.priority = Math.max(request.priority, priority);
+    this.queue.sort((first, second) => second.priority - first.priority);
+    this.pump();
   }
 
   acquire(count = 1, { signal, priority = 0 } = {}) {
@@ -45,6 +71,7 @@ export class CpuBudget {
   pump() {
     while (this.queue.length) {
       const request = this.queue[0];
+      if (request.priority < 0 && this.backgroundDeferrals.size) break;
       // Do not let a stream of one-thread jobs starve a waiting DXA batch.
       if (this.active + request.count > this.limit) break;
       this.queue.shift();

@@ -221,7 +221,7 @@ export function calculateReferenceStrain(frame, {
 
 /** Reuse the double-precision index and correspondence for sparse GPU
  * corrections, instead of rebuilding the complete frame for each atom. */
-export function prepareReferenceStrainContext(frame, { referenceFractional, referenceCell, referenceMapping }) {
+export function prepareReferenceStrainContext(frame, { referenceFractional, referenceCell, referenceMapping, referenceSearch }) {
   const count = frame.fractional.length / 3;
   const referenceCount = referenceFractional?.length / 3;
   if (!Number.isInteger(referenceCount) || referenceCount < 1 || referenceMapping?.length !== count) {
@@ -240,7 +240,7 @@ export function prepareReferenceStrainContext(frame, { referenceFractional, refe
     if (reference >= 0) inverseMapping[reference] = atom;
   }
 
-  const search = new NeighborSearch({ fractional: referenceFractional, cell: referenceCell });
+  const search = referenceSearch ?? new NeighborSearch({ fractional: referenceFractional, cell: referenceCell });
   const referenceInverse = invert3(referenceCell.vectors);
   const currentHeights = cellFaceHeights(frame.cell);
   const currentFractional = Float64Array.from(frame.fractional, (value, k) => {

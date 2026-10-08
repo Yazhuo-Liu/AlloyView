@@ -1,0 +1,573 @@
+{
+  "baseline": "cda3c41980451955b2c07c03181a7f1b09000de2",
+  "runtime": "Node v24.19.0",
+  "availableParallelism": 4,
+  "command": "node scripts/benchmark-dxa-edges.mjs --baseline-ref cda3c41 --threads 3 --repetitions 3",
+  "edgeThreads": 3,
+  "warmupsPerMode": 1,
+  "repetitions": 3,
+  "protocol": "Serial Delaunay and all other stages held fixed. Alternate baseline/current edge passes on the same deterministic serial topology; time edges and mapping before tracing. Every complete raw scientific network and atom label must match exactly. Retain modules, native pools and heaps.",
+  "artifactHashes": {
+    "baseline": {
+      "dxa-kernel-threaded.mjs": "f6398e009c47cb97d351c63217a014ac1e289c44f6efda8b4e24d5f64c8392f2",
+      "dxa-kernel-threaded.wasm": "6690e039322ea25a4edbeecb12076ddce46afdf3b7293c100b800646ee1dd6e0",
+      "dxa-kernel.mjs": "a194d83f3586becd3c77b5ced2dad6149cef1146663b56aaf3c682c187408169",
+      "dxa-kernel.wasm": "7ef3fa90656dcb58a64a1693d0550a4780f68a1c8406e45caceaafb0a8a027ed"
+    },
+    "current": {
+      "dxa-kernel-threaded.mjs": "a61340133562d22d739cc61ebbab2d4e7a234bfaa3920dd3174410623aa1b364",
+      "dxa-kernel-threaded.wasm": "1de3e8da18ffec99c69468811a008ddc122497fd808ac138242d800b98fcffca",
+      "dxa-kernel.mjs": "dd5ea13788b385b0e9a13c38040f4f111b3a151785d6f12946ba89c8a09317ca",
+      "dxa-kernel.wasm": "c29eb7578764ef3d618007ddc6f2ea8487aaa34390da4d1d4a50954be1ec26dc"
+    }
+  },
+  "adaptedSourceManifestSha256": "992d145f257f7ce527a6194daedd2397d980c9b110edc879d9769b82129652d5",
+  "precisionRules": [
+    "All geometry and stages outside edge building/mapping use one thread in both artifacts; serial Delaunay generates deterministic repeated topology.",
+    "Full raw native scientific JSON matches exactly: remove only parallelEdgePasses diagnostics before hashing; keep every atom label, cluster ID, orientation, point, junction, Burgers vector, length, volume and other scientific field.",
+    "Timing ends after native begin (through ideal mapping); finish still runs for scientific validation, but its time is excluded from this stage comparison.",
+    "Fe has only 1546 expensive staged edges, below the existing 2048-item concurrent threshold; bulk direct neighbors use the exact fast bypass and the small tail stays serial.",
+    "Whole DXA speed is not inferred from these isolated phase timings; periodic parallel Delaunay tie handling and host contention can affect total timings."
+  ],
+  "phaseNames": [
+    "Identify local crystal structures",
+    "Build crystal clusters",
+    "Connect crystal reference frames",
+    "Periodic Delaunay tessellation",
+    "Build tessellation edges",
+    "Assign crystal clusters",
+    "Map edges to the ideal lattice"
+  ],
+  "datasets": [
+    {
+      "fixture": "HEA",
+      "atoms": 28800,
+      "replication": [
+        1,
+        1,
+        1
+      ],
+      "topologyIncludingEdgeSentinel": {
+        "vertices": 44069,
+        "tetrahedra": 263703,
+        "edges": 201421
+      },
+      "rawScienceSha256": "46ed8ec35fd0d88ea1a6b51a4e7c9b5ebd5122b4e93a9a6a51bd2fdbcbcdd470",
+      "exactAcrossAllRuns": true,
+      "currentDiagnostics": {
+        "candidateCells": 172625,
+        "pathSearchEdges": 44726,
+        "pathSearchBatches": 1,
+        "deferredPathEdges": 0,
+        "directPathEdges": 156694
+      },
+      "phaseMediansMs": {
+        "baseline": [
+          98.16353100000015,
+          7.170179999999618,
+          0.9661370000003444,
+          252.10619199999974,
+          44.532782000000225,
+          0.40236600000025646,
+          55.52560099999937
+        ],
+        "current": [
+          117.78764899999987,
+          6.893516000000091,
+          0.9176439999996546,
+          253.22132899999997,
+          47.76103000000012,
+          0.5869360000001507,
+          38.55460300000004
+        ]
+      },
+      "edgeMapComparison": [
+        {
+          "phase": "Build tessellation edges",
+          "baselineMs": 44.532782000000225,
+          "currentMs": 47.76103000000012,
+          "improvementPercent": -7.249149626447937
+        },
+        {
+          "phase": "Map edges to the ideal lattice",
+          "baselineMs": 55.52560099999937,
+          "currentMs": 38.55460300000004,
+          "improvementPercent": 30.56427610751934
+        }
+      ],
+      "runs": [
+        {
+          "version": "baseline",
+          "beginMs": 479.7999359999999,
+          "phaseMs": [
+            98.16353100000015,
+            7.170179999999618,
+            1.1087620000002971,
+            252.10619199999974,
+            63.45895700000028,
+            0.559563999999682,
+            56.911375000000135
+          ]
+        },
+        {
+          "version": "current",
+          "beginMs": 472.51339499999995,
+          "phaseMs": [
+            118.16090200000008,
+            8.211389999999938,
+            1.6005319999999301,
+            255.92225599999983,
+            49.08444499999996,
+            0.5987629999999626,
+            38.55460300000004
+          ]
+        },
+        {
+          "version": "current",
+          "beginMs": 481.668044,
+          "phaseMs": [
+            117.78764899999987,
+            6.741394000000128,
+            0.9176439999996546,
+            253.22132899999997,
+            47.76103000000012,
+            0.5869360000001507,
+            54.457568999999694
+          ]
+        },
+        {
+          "version": "baseline",
+          "beginMs": 462.2201609999993,
+          "phaseMs": [
+            106.9443280000005,
+            7.46358599999985,
+            0.9661370000003444,
+            252.45122899999933,
+            44.532782000000225,
+            0.40236600000025646,
+            49.25423299999966
+          ]
+        },
+        {
+          "version": "baseline",
+          "beginMs": 437.49814199999946,
+          "phaseMs": [
+            96.51237499999934,
+            6.7855030000000625,
+            0.958795999999893,
+            233.91264500000034,
+            42.841661000000386,
+            0.4016560000000027,
+            55.52560099999937
+          ]
+        },
+        {
+          "version": "current",
+          "beginMs": 435.69313000000056,
+          "phaseMs": [
+            106.92440799999986,
+            6.893516000000091,
+            0.8950699999995777,
+            239.4921290000002,
+            44.27098699999988,
+            0.419463000000178,
+            36.49738400000024
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "Fe",
+      "atoms": 60229,
+      "replication": [
+        1,
+        1,
+        1
+      ],
+      "topologyIncludingEdgeSentinel": {
+        "vertices": 126334,
+        "tetrahedra": 760983,
+        "edges": 421604
+      },
+      "rawScienceSha256": "625d772ca60c7e854c90e46025bd9f25370764cb1814fdf7e1566baf70c78d80",
+      "exactAcrossAllRuns": true,
+      "currentDiagnostics": {
+        "candidateCells": 361374,
+        "pathSearchEdges": 1546,
+        "pathSearchBatches": 1,
+        "deferredPathEdges": 0,
+        "directPathEdges": 420057
+      },
+      "phaseMediansMs": {
+        "baseline": [
+          392.7309870000008,
+          25.14828900000066,
+          2.8049190000001545,
+          715.9445650000016,
+          106.15554399999746,
+          0.40578199999981734,
+          43.22168000000238
+        ],
+        "current": [
+          427.3590009999989,
+          24.474583000001076,
+          2.4115160000001197,
+          757.3546600000009,
+          103.08119799999986,
+          0.4353159999991476,
+          43.949015000001964
+        ]
+      },
+      "edgeMapComparison": [
+        {
+          "phase": "Build tessellation edges",
+          "baselineMs": 106.15554399999746,
+          "currentMs": 103.08119799999986,
+          "improvementPercent": 2.896076723037355
+        },
+        {
+          "phase": "Map edges to the ideal lattice",
+          "baselineMs": 43.22168000000238,
+          "currentMs": 43.949015000001964,
+          "improvementPercent": -1.6828013163753486
+        }
+      ],
+      "runs": [
+        {
+          "version": "baseline",
+          "beginMs": 1289.3654229999993,
+          "phaseMs": [
+            377.292786,
+            24.48332599999958,
+            2.8049190000001545,
+            711.8899650000003,
+            115.68588900000032,
+            0.40578199999981734,
+            56.130011999999624
+          ]
+        },
+        {
+          "version": "current",
+          "beginMs": 1403.697078000001,
+          "phaseMs": [
+            427.3590009999989,
+            27.28771500000039,
+            4.139350999999806,
+            790.6641340000006,
+            103.30647700000009,
+            0.5729539999992994,
+            49.63682400000107
+          ]
+        },
+        {
+          "version": "current",
+          "beginMs": 1360.2718509999995,
+          "phaseMs": [
+            431.41434499999923,
+            24.474583000001076,
+            2.3434939999988273,
+            757.3546600000009,
+            103.08119799999986,
+            0.4353159999991476,
+            40.40857900000083
+          ]
+        },
+        {
+          "version": "baseline",
+          "beginMs": 1286.6602010000006,
+          "phaseMs": [
+            392.7309870000008,
+            25.14828900000066,
+            2.5907069999993837,
+            715.9445650000016,
+            106.15554399999746,
+            0.36774399999922025,
+            43.22168000000238
+          ]
+        },
+        {
+          "version": "baseline",
+          "beginMs": 1319.829153999999,
+          "phaseMs": [
+            422.5817559999996,
+            26.666559000001143,
+            3.704604999998992,
+            720.301195,
+            103.49438999999984,
+            0.40700400000059744,
+            42.26550900000075
+          ]
+        },
+        {
+          "version": "current",
+          "beginMs": 1310.4692650000034,
+          "phaseMs": [
+            402.16228200000114,
+            23.87280499999906,
+            2.4115160000001197,
+            734.2544710000002,
+            102.93634499999825,
+            0.421836000001349,
+            43.949015000001964
+          ]
+        }
+      ]
+    },
+    {
+      "fixture": "NiGB",
+      "atoms": 259808,
+      "replication": [
+        1,
+        1,
+        2
+      ],
+      "topologyIncludingEdgeSentinel": {
+        "vertices": 857324,
+        "tetrahedra": 5161691,
+        "edges": 1820287
+      },
+      "rawScienceSha256": "29565cc3270f9fa7e5be839912a1a07128e2ed4bf2f697008854dd5e77f1087a",
+      "exactAcrossAllRuns": true,
+      "currentDiagnostics": {
+        "candidateCells": 1560677,
+        "pathSearchEdges": 325799,
+        "pathSearchBatches": 4,
+        "deferredPathEdges": 6349,
+        "directPathEdges": 1494487
+      },
+      "phaseMediansMs": {
+        "baseline": [
+          1375.4362529999926,
+          76.70369100000244,
+          9.818874000004143,
+          5375.431977999993,
+          662.5197009999974,
+          2.4113560000041616,
+          425.52406899999914
+        ],
+        "current": [
+          1406.9852490000048,
+          82.71452999999747,
+          8.95463899999595,
+          5562.729441999996,
+          618.2082329999976,
+          2.7131139999983134,
+          384.77359100000467
+        ]
+      },
+      "edgeMapComparison": [
+        {
+          "phase": "Build tessellation edges",
+          "baselineMs": 662.5197009999974,
+          "currentMs": 618.2082329999976,
+          "improvementPercent": 6.688324578592431
+        },
+        {
+          "phase": "Map edges to the ideal lattice",
+          "baselineMs": 425.52406899999914,
+          "currentMs": 384.77359100000467,
+          "improvementPercent": 9.576538900786492
+        }
+      ],
+      "runs": [
+        {
+          "version": "baseline",
+          "beginMs": 8548.418833000003,
+          "phaseMs": [
+            1433.265929000001,
+            86.01902699999482,
+            9.818874000004143,
+            5886.003543999999,
+            703.407815999999,
+            2.4113560000041616,
+            425.52406899999914
+          ]
+        },
+        {
+          "version": "current",
+          "beginMs": 7953.566844999994,
+          "phaseMs": [
+            1399.9276880000034,
+            83.22534499999892,
+            8.95463899999595,
+            5439.949256,
+            618.2082329999976,
+            2.7131139999983134,
+            398.6754740000033
+          ]
+        },
+        {
+          "version": "current",
+          "beginMs": 8027.463868999999,
+          "phaseMs": [
+            1429.9806180000014,
+            77.65426700000535,
+            8.475760999994236,
+            5562.729441999996,
+            591.2390910000104,
+            2.8742639999982202,
+            352.73690199998964
+          ]
+        },
+        {
+          "version": "baseline",
+          "beginMs": 7957.318731000007,
+          "phaseMs": [
+            1375.4362529999926,
+            76.70369100000244,
+            9.836804000005941,
+            5375.431977999993,
+            662.5197009999974,
+            2.85278100000869,
+            452.6770370000013
+          ]
+        },
+        {
+          "version": "baseline",
+          "beginMs": 7634.357220999998,
+          "phaseMs": [
+            1358.565610000005,
+            76.2085919999954,
+            9.025187999999616,
+            5181.347487000006,
+            587.5857309999992,
+            2.369842999993125,
+            417.51611900000717
+          ]
+        },
+        {
+          "version": "current",
+          "beginMs": 8403.215744999994,
+          "phaseMs": [
+            1406.9852490000048,
+            82.71452999999747,
+            9.04552899999544,
+            5831.511118000009,
+            683.7748379999975,
+            2.649634999994305,
+            384.77359100000467
+          ]
+        }
+      ]
+    }
+  ],
+  "serialArtifactParity": [
+    {
+      "kernel": "dxa-kernel",
+      "fixture": "FCC screw",
+      "atoms": 8640,
+      "segments": 1,
+      "totalLength": 14.934458956039819,
+      "sha256": "5a386531b195e12be78a2ac3b02658a6abc434a5b6b58f9fff06e9a6a22e6d52",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel",
+      "fixture": "perfect FCC",
+      "atoms": 500,
+      "segments": 0,
+      "totalLength": 0,
+      "sha256": "9f6b5d212da186624338f13feb9926662fc7ba66bc3ac27ae784c44fb70c7b16",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel",
+      "fixture": "perfect BCC",
+      "atoms": 250,
+      "segments": 0,
+      "totalLength": 0,
+      "sha256": "3120549c38d5474daad44da3a709a59852b1763c4025a51338a7068bb3d45270",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel",
+      "fixture": "perfect HCP",
+      "atoms": 250,
+      "segments": 0,
+      "totalLength": 0,
+      "sha256": "dbf9d243568de99e97c4d7bf18a42e00a866b4ec6adae281d0ad57d3a8088508",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel",
+      "fixture": "HEA",
+      "atoms": 28800,
+      "segments": 1,
+      "totalLength": 40.73181242367052,
+      "sha256": "c13ca836b21913a62dfdd52ebcc5c5d9ae54ad2c4cd90e159d913a7041c43f90",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel",
+      "fixture": "Fe loop",
+      "atoms": 60229,
+      "segments": 1,
+      "totalLength": 103.96182092116152,
+      "sha256": "1a3e0dc3c5a473298ae9ddf992c92f0e2b6144075895fca315a2b3a88b7dd7ed",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel-threaded",
+      "fixture": "FCC screw",
+      "atoms": 8640,
+      "segments": 1,
+      "totalLength": 14.934458956039819,
+      "sha256": "5a386531b195e12be78a2ac3b02658a6abc434a5b6b58f9fff06e9a6a22e6d52",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel-threaded",
+      "fixture": "perfect FCC",
+      "atoms": 500,
+      "segments": 0,
+      "totalLength": 0,
+      "sha256": "9f6b5d212da186624338f13feb9926662fc7ba66bc3ac27ae784c44fb70c7b16",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel-threaded",
+      "fixture": "perfect BCC",
+      "atoms": 250,
+      "segments": 0,
+      "totalLength": 0,
+      "sha256": "3120549c38d5474daad44da3a709a59852b1763c4025a51338a7068bb3d45270",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel-threaded",
+      "fixture": "perfect HCP",
+      "atoms": 250,
+      "segments": 0,
+      "totalLength": 0,
+      "sha256": "dbf9d243568de99e97c4d7bf18a42e00a866b4ec6adae281d0ad57d3a8088508",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel-threaded",
+      "fixture": "HEA",
+      "atoms": 28800,
+      "segments": 1,
+      "totalLength": 40.73181242367052,
+      "sha256": "c13ca836b21913a62dfdd52ebcc5c5d9ae54ad2c4cd90e159d913a7041c43f90",
+      "exact": true
+    },
+    {
+      "kernel": "dxa-kernel-threaded",
+      "fixture": "Fe loop",
+      "atoms": 60229,
+      "segments": 1,
+      "totalLength": 103.96182092116152,
+      "sha256": "1a3e0dc3c5a473298ae9ddf992c92f0e2b6144075895fca315a2b3a88b7dd7ed",
+      "exact": true
+    }
+  ],
+  "compiler": "3.1.69",
+  "sourceFilesSha256": {
+    "third_party/dxa/compat/compat.h": "b40e190cfc70b9dc6f9be6c6bb652e0b91bb05f43edff323091543a3662e8145",
+    "third_party/dxa/upstream/ovito/crystalanalysis/modifier/dxa/ElasticMapping.cpp": "d41208957820b99d384eeda5b5f5ab1a6272f6e18437f86d8ebddfb5630b2df3",
+    "third_party/dxa/upstream/ovito/crystalanalysis/modifier/dxa/ElasticMapping.h": "8ea991c5466752caed080929fbd8342964db92db33ce273ef7cf840edc94d8cb",
+    "third_party/dxa/upstream/ovito/crystalanalysis/modifier/dxa/CrystalPathFinder.cpp": "4ec9db9678017d3649f15c2433b39325385e09d1ce0fa7a954b107bde35ad08b",
+    "third_party/dxa/upstream/ovito/crystalanalysis/modifier/dxa/CrystalPathFinder.h": "a755bcbae1c234f55c0d8a7cdae18ba01e60a22313b32f673290f10a832bf654",
+    "wasm/dxa.cpp": "1ddb3f3b0b5e42fdf7aec682a302310f9e48ee493518533563523971a195c556"
+  }
+}

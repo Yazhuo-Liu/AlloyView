@@ -1,7 +1,7 @@
-import { calculateCoordination } from '../analysis/coordination.js';
+import { calculateCoordination, createCoordinationIndex } from '../analysis/coordination.js';
 import { calculateCna } from '../analysis/cna.js';
 import { calculateCentrosymmetry } from '../analysis/centrosymmetry.js';
-import { calculatePtm, warmupPtm, ptmKernelMemoryBytes } from '../analysis/ptm.js';
+import { calculatePtm, warmupPtm, ptmKernelMemoryBytes, releasePtmFrame } from '../analysis/ptm.js';
 import { calculateAtomicStrain } from '../analysis/atomic-strain.js';
 import { calculateBonds } from '../analysis/bonds.js';
 import { calculateBondStatistics } from '../analysis/bond-statistics.js';
@@ -9,30 +9,92 @@ import { calculateVoronoi, calculateVoronoiGeometry, calculateVoronoiGeometryBat
   warmupVoronoi, prepareVoronoiFrame, voronoiKernelMemoryBytes } from '../analysis/voronoi.js';
 import { calculateRdf } from '../analysis/rdf.js';
 import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLocalShear } from '../analysis/local-shear.js';
-import { calculateReferenceStrain } from '../analysis/reference-strain.js';
+import { calculateReferenceStrain, prepareReferenceStrainContext } from '../analysis/reference-strain.js';
 import { calculatePreparedDisplacements } from '../analysis/displacement.js';
 import { calculateDxaLocalRange, calculateDxaTetrahedraRange, releaseDxaCpuStageData, warmupDxaCpuStages, dxaCpuKernelMemoryBytes } from '../analysis/dxa-cpu-stages.js';
+
+import { NeighborSearch } from '../analysis/neighbors.js';
+
+const CPU_INPUT_FIELDS = ['structureInput', 'referenceFractional', 'referenceMapping', 'metricInput',
+  'currentPositions', 'referencePositions', 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex'];
+let cpuResident, cpuAnalysis;
+const cpuResidents = new Map(), cpuAnalyses = new Map();
 
 // One immutable source snapshot and linked-cell index per resident Worker.
 // Chunk messages reuse these arrays; results never transfer source buffers.
 let voronoiResident;
 
 function residentInputBytes() {
-  const context = voronoiResident?.context, frame = voronoiResident?.frame;
-  const arrays = [frame?.fractional, frame?.cell?.vectors, frame?.cell?.origin, context?.search?.coordinates,
-    context?.search?.heads, context?.search?.next];
-  return [...new Set(arrays.filter(ArrayBuffer.isView).map(array => array.buffer))]
-    .reduce((sum, buffer) => sum + buffer.byteLength, 0);
+  const buffers = new Set(), visited = new Set();
+  const visit = value => {
+    if (!value || typeof value !== 'object' || visited.has(value)) return;
+    visited.add(value);
+    if (ArrayBuffer.isView(value)) { buffers.add(value.buffer); return; }
+    if (value instanceof Map) { for (const child of value.values()) visit(child); }
+    else for (const child of Object.values(value)) visit(child);
+  };
+  visit(cpuResidents); visit(cpuAnalyses); visit(voronoiResident);
+  return [...buffers].reduce((sum, buffer) => sum + buffer.byteLength, 0);
 }
 
 self.addEventListener('message', async ({ data }) => {
+  if (data.kind === 'cpuRelease') { for (const retained of cpuResidents.values()) releasePtmFrame(retained.frame); cpuResident = null; cpuAnalysis = null; cpuResidents.clear(); cpuAnalyses.clear(); return; }
   if (data.kind === 'voronoiRelease') { voronoiResident = null; return; }
   if (data.kind === 'dxaRelease') { await releaseDxaCpuStageData(data.dxaResidentKey); return; }
-  const { id, fractional, cell, kind, types, residentFrameKey, ...parameters } = data;
+  const { id, fractional, cell, kind, types, residentFrameKey, cpuFrameKey, cpuAnalysisKey, cpuNeighborIndex,
+    cpuCoordinationIndex, ...parameters } = data;
   try {
-    let frame = { fractional, cell, types }, frameUploaded = false;
+    let frame = { fractional, cell, types }, frameUploaded = false, cpuIndexBuilt = false, cpuIndexReused = false;
+    if (cpuFrameKey !== undefined) {
+      cpuResident = cpuResidents.get(cpuFrameKey);
+      cpuIndexReused = Boolean(cpuResident);
+      if (!cpuIndexReused) {
+        if (!fractional || !cell) throw new Error('The resident CPU source is unavailable.');
+        frame.immutableAnalysisFrame = true;
+        cpuResident = { key: cpuFrameKey, frame, search: null, coordinationIndex: null };
+        frameUploaded = true;
+      }
+      cpuResidents.delete(cpuFrameKey); cpuResidents.set(cpuFrameKey, cpuResident);
+      if (cpuResidents.size > 2) {
+        const evictedKey = cpuResidents.keys().next().value; releasePtmFrame(cpuResidents.get(evictedKey).frame); cpuResidents.delete(evictedKey);
+        for (const [key, analysis] of cpuAnalyses) if (analysis.frameKey === evictedKey) cpuAnalyses.delete(key);
+      }
+      frame = cpuResident.frame;
+      if (cpuNeighborIndex && !cpuResident.search) cpuResident.search = NeighborSearch.fromIndex(cpuNeighborIndex);
+      if (cpuCoordinationIndex && cpuResident.coordinationIndex?.cutoff !== cpuCoordinationIndex.cutoff) cpuResident.coordinationIndex = cpuCoordinationIndex;
+      if (cpuAnalysisKey !== undefined) {
+        cpuAnalysis = cpuAnalyses.get(cpuAnalysisKey);
+        if (!cpuAnalysis) {
+          cpuAnalysis = { key: cpuAnalysisKey, frameKey: cpuFrameKey, inputs: Object.fromEntries(CPU_INPUT_FIELDS
+            .filter(name => parameters[name] !== undefined).map(name => [name, parameters[name]])), referenceContext: null };
+        }
+        cpuAnalyses.delete(cpuAnalysisKey); cpuAnalyses.set(cpuAnalysisKey, cpuAnalysis);
+        if (cpuAnalyses.size > 2) cpuAnalyses.delete(cpuAnalyses.keys().next().value);
+        if (parameters.preparedNeighbors) cpuAnalysis.inputs.preparedNeighbors = parameters.preparedNeighbors;
+        Object.assign(parameters, cpuAnalysis.inputs);
+      }
+      if (kind === 'coordination' || (kind === 'cpuPrepare' && parameters.cutoff !== undefined)) {
+        if (cpuResident.coordinationIndex?.cutoff !== parameters.cutoff) {
+          cpuResident.coordinationIndex = createCoordinationIndex(frame, parameters.cutoff, { sharedMemory: parameters.sharedIndex });
+          cpuIndexBuilt = true;
+        }
+        parameters.coordinationIndex = cpuResident.coordinationIndex;
+      } else if (!parameters.preparedNeighbors && !['warmup', 'displacement', 'localShearFinalize'].includes(kind)
+          && !(kind === 'strain' && parameters.ptmInput) && kind !== 'referenceStrain') {
+        if (!cpuResident.search) { cpuResident.search = new NeighborSearch(frame, { sharedMemory: parameters.sharedIndex }); cpuIndexBuilt = true; }
+      }
+      frame.neighborSearch = cpuResident.search;
+      if (kind === 'centrosymmetry' && parameters.mode === 'auto' && !parameters.structureInput) {
+        frame.adaptiveCnaClassifications ??= new Uint8Array(frame.fractional.length / 3).fill(255);
+      }
+      if (kind === 'referenceStrain' && !cpuAnalysis.referenceContext) {
+        const referenceSearch = parameters.referenceNeighborIndex ? NeighborSearch.fromIndex(parameters.referenceNeighborIndex) : undefined;
+        cpuAnalysis.referenceContext = prepareReferenceStrainContext(frame, { ...parameters, referenceSearch });
+      }
+      if (kind === 'referenceStrain') parameters.preparedContext = cpuAnalysis.referenceContext;
+    }
     if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch', 'voronoiPrepare'].includes(kind) && residentFrameKey !== undefined) {
-      if (fractional) {
+      if (fractional || (cpuFrameKey !== undefined && voronoiResident?.key !== residentFrameKey)) {
         voronoiResident = { key: residentFrameKey, frame, context: null };
         frameUploaded = true;
       } else if (voronoiResident?.key !== residentFrameKey) throw new Error('The resident Voronoi source is unavailable.');
@@ -52,7 +114,11 @@ self.addEventListener('message', async ({ data }) => {
       self.postMessage({ id, phase: 'analyzing', processedAtoms, totalAtoms });
     };
     let result;
-    if (kind === 'warmup') {
+    if (kind === 'cpuPrepare') {
+      result = { neighborIndex: cpuResident.search?.exportIndex(), coordinationIndex: cpuResident.coordinationIndex,
+        indexBuilt: cpuIndexBuilt };
+    }
+    else if (kind === 'warmup') {
       const modules = parameters.modules ?? ['ptm'], initializedModules = {};
       // Voronoi is ready before the larger PTM fitter starts initializing.
       for (const module of ['voronoi', 'ptm', 'dxa']) if (modules.includes(module)) {
@@ -118,10 +184,10 @@ self.addEventListener('message', async ({ data }) => {
       const metrics = parameters.metricInput.subarray(offset, offset + (parameters.endAtom - parameters.startAtom) * 6);
       result = finalizeLocalShear(metrics, { ...parameters, onAtoms });
     } else throw new Error(`Unknown analysis kind: ${kind}`);
-    result = { ...result, nativeHeapBytes: { ptm: ptmKernelMemoryBytes(), voronoi: voronoiKernelMemoryBytes(),
+    result = { ...result, ...(cpuFrameKey !== undefined ? { frameUploaded, indexBuilt: cpuIndexBuilt, indexReused: cpuIndexReused } : {}), nativeHeapBytes: { ptm: ptmKernelMemoryBytes(), voronoi: voronoiKernelMemoryBytes(),
       dxa: dxaCpuKernelMemoryBytes() }, residentInputBytes: residentInputBytes() };
     const fields = [...Object.values(result), ...(kind === 'voronoiGeometryBatch' ? result.cells.flatMap(cell => Object.values(cell)) : [])];
-    const buffers = [...new Set(fields.filter(ArrayBuffer.isView).map((value) => value.buffer))];
+    const buffers = [...new Set(fields.filter(ArrayBuffer.isView).map((value) => value.buffer).filter(buffer => buffer instanceof ArrayBuffer))];
     self.postMessage({ id, ok: true, result }, buffers);
   } catch (error) {
     self.postMessage({ id, ok: false, error: error instanceof Error ? error.message : String(error) });

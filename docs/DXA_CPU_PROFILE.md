@@ -1,11 +1,64 @@
 # CPU DXA profile
 
-Current DXA extraction is CPU/Wasm only (2026-10-07), with one global heap and
+Current DXA extraction is CPU/Wasm only (2026-10-08), with one global heap and
 a reusable pthread pool when available, or private Worker offload of eligible
 local stages on nonisolated hosts. The dated measurements below are
 historical profiles. GPU snapshot packing and accelerator experiments describe
 earlier revisions; they are no longer part of production extraction. Their
 numerical records remain unchanged.
+
+## Ordered edge passes, P18 (2026-10-08)
+
+Tessellation-edge construction now prepares a byte-sized candidate mask per
+primary tetrahedron with shared-memory threads, then keeps the original
+cell/edge iteration, first-seen orientation and deduplication order. Lattice
+mapping uses private path-finder scratch for independent searches. A search
+that needs a previously uncached cluster transition is deferred to the original
+ordered commit; parallel searches never write the graph's transition cache.
+Direct same-cluster neighbors bypass staging, and small search tails remain
+serial. Batches hold at most 262,144 edges, reusing the existing unassigned-edge
+storage and about 3 MiB of temporary results. The original general parallel
+loop remains unchanged; only mapping uses the new context-aware loop.
+
+The two rebuilt kernels match normalized complete-result SHA-256 hashes from
+`cda3c41` in 12 serial comparisons. Additional native tests hold one serial
+Delaunay geometry fixed while comparing one versus three edge-pass threads,
+including a screw, planar faults and the Fe loop. They compare every line
+coordinate, junction, Burgers vector and tetrahedron region, rather than only
+line totals. Diagnostic `parallelEdgePasses` counts identify candidate masks,
+direct paths, searched/deferred edges and batches separately.
+
+The stage benchmark deliberately constructs Delaunay geometry with one thread
+and changes the thread count only for edge building and mapping. This avoids
+existing PDEL insertion ties and unrelated geometry costs. Every measured run
+still finishes and checks the complete scientific network against the serial
+reference. It measures these stages rather than claiming an equivalent
+end-to-end speedup for every frame:
+
+```bash
+node scripts/benchmark-dxa-edges.mjs --baseline-ref cda3c41 --threads 3 --repetitions 3
+```
+
+Node.js 24.19, three edge-pass threads, medians of three alternating warm runs,
+milliseconds. Candidate preparation and the ordered commit are included in
+the edge-building column. All warmup and measured complete scientific JSON
+hashes match exactly, including NiGB replicated 1×1×2.
+
+| Case | Edge building, before → after | Lattice mapping, before → after |
+| --- | ---: | ---: |
+| HEA, 28,800 atoms | 44.5 → 47.8 | 55.5 → 38.6 |
+| Fe loop, 60,229 atoms | 106.2 → 103.1 | 43.2 → 43.9 |
+| NiGB, 259,808 atoms | 662.5 → 618.2 | 425.5 → 384.8 |
+
+HEA mapping improves about 30%, while its edge preparation is slightly slower.
+Fe mapping remains effectively unchanged. These measurements support bounded
+parallel search without a universal whole-frame speedup claim. Full protocol,
+kernel hashes, samples and diagnostics are in
+[dxa-p18-ordered-edges.json](benchmarks/dxa-p18-ordered-edges.json).
+
+Burgers tracing, cluster traversal, junction merging and ordered graph/mesh
+commits still require further work. The complete extraction continues to reuse
+one native heap and the initialized pthread pool.
 
 ## Browser versus Node and the first extraction (2026-10-08)
 

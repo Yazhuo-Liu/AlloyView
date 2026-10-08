@@ -49,7 +49,7 @@ export function coupleSliderPositions(minimum, maximum, changed, positions) {
 /** Two thumbs on one track for the scalar color limits. The track spans the
  * data range and any typed limit outside it. `onInput` receives the dragged
  * limits; `set` follows limits typed into the number fields. */
-export function createLegendRangeSlider(root, { minimum, maximum, dataMinimum, dataMaximum, step, format = String, onInput }) {
+export function createLegendRangeSlider(root, { minimum, maximum, dataMinimum, dataMaximum, step, format = String, onInput, onCommit }) {
   const element = root.createElement('div');
   element.className = 'legend-slider';
   const track = root.createElement('span'), fill = root.createElement('span');
@@ -64,10 +64,17 @@ export function createLegendRangeSlider(root, { minimum, maximum, dataMinimum, d
     input.dataset.limit = name;
     input.setAttribute('aria-label', `${text} color limit`);
     input.addEventListener('input', () => move(name));
+    // Native change covers mouse, touch and keyboard range editing. Capture
+    // release/cancellation too: a lost pointer or focus must never leave the
+    // temporary shader palette active. Commit is idempotent between inputs.
+    for (const event of ['change', 'pointerup', 'pointercancel', 'lostpointercapture', 'blur', 'keyup']) {
+      input.addEventListener(event, () => commit(name));
+    }
     inputs[name] = input;
   }
   element.append(track, inputs.minimum, inputs.maximum);
   let domain = null;
+  let dirty = false, currentLimits = { minimum, maximum };
 
   function show(lowerPosition, upperPosition, limits) {
     inputs.minimum.value = String(lowerPosition);
@@ -98,7 +105,15 @@ export function createLegendRangeSlider(root, { minimum, maximum, dataMinimum, d
     const limits = { minimum: legendSliderValue(domain, lowerPosition), maximum: legendSliderValue(domain, upperPosition) };
     // The track keeps its scale while dragging, so a thumb stays under the pointer.
     show(lowerPosition, upperPosition, limits);
+    currentLimits = limits;
+    dirty = true;
     onInput?.(limits, changed);
+  }
+
+  function commit(changed) {
+    if (!dirty) return;
+    dirty = false;
+    onCommit?.(currentLimits, changed);
   }
 
   set({ minimum, maximum });

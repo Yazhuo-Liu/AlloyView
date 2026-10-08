@@ -110,13 +110,14 @@ export function calculateBondStatisticsAtom(search, atom, prepared, output) {
 
 /** Independent center ranges run in resident CPU workers. Positions and cell
  * remain authoritative; display replication and slices do not affect analysis. */
-export function calculateBondStatistics(frame, { onPhase = () => {}, onAtoms = () => {}, ...parameters } = {}) {
+export function calculateBondStatistics(frame, { onPhase = () => {}, onAtoms = () => {}, momentInput, ...parameters } = {}) {
   const startedAt = performance.now();
   const prepared = validateBondStatisticsParameters(frame, parameters);
   const { startAtom, endAtom } = prepared;
   onPhase('indexing');
-  const search = new NeighborSearch(frame);
+  const search = (frame.neighborSearch ?? new NeighborSearch(frame));
   const output = createBondStatisticsAccumulators(prepared);
+  if (momentInput) output.moments = structuredClone(momentInput);
   const coordination = new Uint32Array(endAtom - startAtom);
   const q4 = new Float32Array(endAtom - startAtom), q6 = new Float32Array(endAtom - startAtom);
   onPhase('analyzing');

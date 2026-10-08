@@ -15,7 +15,7 @@ export function calculateCna(frame, { mode = 'adaptive', cutoff = 3, ...range } 
   const startedAt = performance.now();
   if (!['adaptive', 'fixed'].includes(mode)) throw new Error('Unknown CNA mode.');
   if (mode === 'fixed' && (!Number.isFinite(cutoff) || cutoff <= 0)) throw new Error('CNA cutoff must be positive and finite.');
-  const search = new NeighborSearch(frame);
+  const search = (frame.neighborSearch ?? new NeighborSearch(frame));
   const { startAtom, endAtom } = atomRange(search.count, range);
   const structures = new Uint8Array(endAtom - startAtom);
   for (let atom = startAtom; atom < endAtom; atom += 1) {

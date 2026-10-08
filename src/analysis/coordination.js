@@ -2,40 +2,25 @@ import { cellFaceHeights } from '../data/model.js';
 
 const MAX_BINS = 2_000_000;
 
-/**
- * Cutoff coordination using linked cells in fractional coordinates.
- *
- * The decomposition follows the same physical invariants as AtomEye's
- * Neighborlist.c (fractional bins, cell face heights, PBC-wrapped bin
- * connectivity), but is an independent implementation with dynamic counts and
- * an image search that remains correct for restricted triclinic cells.
+/** Build the immutable, cutoff-specific linked cells once for a resident frame.
+ * The owner must rebuild the index when fractional coordinates change. Shared
+ * backing stores let each Worker traverse the same lists without cloning them.
  */
-export function calculateCoordination(frameLike, cutoff, range = {}) {
-  const startedAt = performance.now();
+export function createCoordinationIndex(frameLike, cutoff, { sharedMemory = false } = {}) {
   const { fractional, cell } = frameLike;
   const count = fractional.length / 3;
-  if (!Number.isInteger(count) || count < 1) throw new Error('Coordination analysis requires at least one atom.');
-  if (!Number.isFinite(cutoff) || cutoff <= 0) throw new Error('The cutoff radius must be a finite value greater than zero.');
-  const startAtom = range.startAtom ?? 0;
-  const endAtom = range.endAtom ?? count;
-  if (!Number.isInteger(startAtom) || !Number.isInteger(endAtom)
-      || startAtom < 0 || endAtom > count || startAtom >= endAtom) {
-    throw new Error('The coordination atom range is invalid.');
-  }
-
+  validateInputs(count, cutoff);
   const heights = cellFaceHeights(cell);
-  const smallPeriodicAxes = Array.from(heights, (height, axis) => (
-    cell.pbc[axis] && height < 2 * cutoff ? axis : -1
-  ))
-    .filter((axis) => axis >= 0);
   const dimensions = Array.from(heights, (height) => Math.max(1, Math.min(256, Math.floor(height / cutoff))));
   reduceBinCount(dimensions, Math.max(1, Math.min(MAX_BINS, count * 4)));
   const totalBins = dimensions[0] * dimensions[1] * dimensions[2];
-  const heads = new Int32Array(totalBins);
+  const allocate = (length) => sharedMemory && typeof SharedArrayBuffer === 'function'
+    ? new Int32Array(new SharedArrayBuffer(length * Int32Array.BYTES_PER_ELEMENT))
+    : new Int32Array(length);
+  const heads = allocate(totalBins);
   heads.fill(-1);
-  const next = new Int32Array(count);
-  const atomBins = new Int32Array(count);
-
+  const next = allocate(count);
+  const atomBins = allocate(count);
   for (let atom = 0; atom < count; atom += 1) {
     const base = atom * 3;
     const indices = [0, 0, 0];
@@ -51,8 +36,45 @@ export function calculateCoordination(frameLike, cutoff, range = {}) {
     next[atom] = heads[bin];
     heads[bin] = atom;
   }
+  return {
+    version: 1, count, cutoff, heights, dimensions, heads, next, atomBins,
+    cellVectors: Array.from(cell.vectors), pbc: Array.from(cell.pbc),
+  };
+}
 
-  const coordination = new Uint32Array(count);
+/**
+ * Cutoff coordination using linked cells in fractional coordinates.
+ *
+ * The decomposition follows the same physical invariants as AtomEye's
+ * Neighborlist.c (fractional bins, cell face heights, PBC-wrapped bin
+ * connectivity), but is an independent implementation with dynamic counts and
+ * an image search that remains correct for restricted triclinic cells.
+ */
+export function calculateCoordination(frameLike, cutoff, range = {}) {
+  const startedAt = performance.now();
+  const { fractional, cell } = frameLike;
+  const count = fractional.length / 3;
+  validateInputs(count, cutoff);
+  const startAtom = range.startAtom ?? 0;
+  const endAtom = range.endAtom ?? count;
+  if (!Number.isInteger(startAtom) || !Number.isInteger(endAtom)
+      || startAtom < 0 || endAtom > count || startAtom >= endAtom) {
+    throw new Error('The coordination atom range is invalid.');
+  }
+
+  const index = range.coordinationIndex ?? createCoordinationIndex(frameLike, cutoff);
+  if (index.version !== 1 || index.count !== count || index.cutoff !== cutoff
+      || index.cellVectors.some((value, axis) => value !== cell.vectors[axis])
+      || index.pbc.some((value, axis) => value !== cell.pbc[axis])) {
+    throw new Error('The coordination index does not match the frame cell or cutoff.');
+  }
+  const { heights, dimensions, heads, next, atomBins } = index;
+  const smallPeriodicAxes = Array.from(heights, (height, axis) => (
+    cell.pbc[axis] && height < 2 * cutoff ? axis : -1
+  ))
+    .filter((axis) => axis >= 0);
+  const compactOutput = range.compactOutput === true;
+  const coordination = new Uint32Array(compactOutput ? endAtom - startAtom : count);
   const neighborBins = new Int32Array(27);
   const cutoffSquared = cutoff * cutoff;
   const fractionalBounds = Array.from(heights, (height) => cutoff / height + 1e-12);
@@ -86,8 +108,9 @@ export function calculateCoordination(frameLike, cutoff, range = {}) {
 
     for (let neighborBin = 0; neighborBin < neighborBinCount; neighborBin += 1) {
       for (let other = heads[neighborBins[neighborBin]]; other >= 0; other = next[other]) {
-        if (other <= atom) continue;
-        candidatePairs += 1;
+        if (other === atom || (!compactOutput && other < atom)) continue;
+        const ownsPair = other > atom;
+        if (ownsPair) candidatePairs += 1;
         const distanceSquared = minimumImageDistanceSquared(
           fractional,
           atom,
@@ -96,9 +119,12 @@ export function calculateCoordination(frameLike, cutoff, range = {}) {
           fractionalBounds,
         );
         if (distanceSquared <= cutoffSquared) {
-          coordination[atom] += 1;
-          coordination[other] += 1;
-          acceptedPairs += 1;
+          if (compactOutput) coordination[atom - startAtom] += 1;
+          else {
+            coordination[atom] += 1;
+            coordination[other] += 1;
+          }
+          if (ownsPair) acceptedPairs += 1;
         }
       }
     }
@@ -112,10 +138,16 @@ export function calculateCoordination(frameLike, cutoff, range = {}) {
     bins: dimensions,
     startAtom,
     endAtom,
+    ...(compactOutput ? { compactOutput: true } : {}),
     warning: smallPeriodicAxes.length > 0
       ? `The cell height along periodic axis ${smallPeriodicAxes.map((axis) => 'abc'[axis]).join(', ')} is less than twice the cutoff. Results count the closest image of each unique atom ID and do not count multiple periodic images of the same atom.`
       : null,
   };
+}
+
+function validateInputs(count, cutoff) {
+  if (!Number.isInteger(count) || count < 1) throw new Error('Coordination analysis requires at least one atom.');
+  if (!Number.isFinite(cutoff) || cutoff <= 0) throw new Error('The cutoff radius must be a finite value greater than zero.');
 }
 
 /** Squared length of the shortest periodic image of second − first, or

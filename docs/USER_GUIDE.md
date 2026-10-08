@@ -33,6 +33,16 @@ prefetching and analyses, releases the source and its cached/GPU data, and
 resumes the rotating BCC model. You can immediately open the same or another
 file.
 
+For multi-frame dump, XYZ and PDB files, the first complete frame can appear
+while the rest of the file is indexed. A `+` after the frame count indicates
+that more frames may still be found. A reserved foreground parser handles
+requested frames while a bounded background pool prefetches nearby ones;
+playback prepares the next frame while the current frame remains visible.
+Saved configurations wait for indexing when their target frame is not yet
+available. Cancelling prefetch discards obsolete results and stops queued work;
+an active synchronous parse finishes before its reusable Worker and CPU
+capacity are released.
+
 ## Live controls and panel width
 
 On desktop, drag the divider between the viewport and the right controls panel
@@ -125,6 +135,10 @@ Type the limits into **Min** and **Max**, or drag the two-thumb slider above
 them. The slider spans the data range, widened to include a typed limit
 outside it, and its ends give the exact data minimum and maximum. Dragging one
 thumb past the other pushes it along, as typing does for the number fields.
+During a drag, colors and range hiding update in the renderer without a full
+atom-color recalculation at every step. Releasing the slider or exporting an
+image restores exact colors and histogram counts in both views. Selection
+colors, bonds and Voronoi cells keep following the same display filters.
 Hover or tap the gradient to read the value at that position; the faint bars
 behind it count atoms in 48 equal value bands of the displayed range, and the
 probe names its band, for example *6 atoms between 9.92 and 10.26*.
@@ -193,6 +207,9 @@ and selection groups can edit different copies independently. Turning the
 checkbox off returns to analysis of the source atoms with display copies.
 Counts and this mode are saved in JSON; older configurations default to display
 replication. The original files remain unchanged.
+Validation and physical copying run in a reusable Worker. Cancelling an
+expansion leaves the source and previously displayed structure intact;
+background analysis preparation grows its existing pools during the copy.
 
 ## Arbitrary clipping planes
 
@@ -416,8 +433,10 @@ zincblende, hexagonal BN or Other), determined from the loaded atom types.
 Analysis status distinguishes waiting for Workers, preparing input, initializing
 PTM and building the neighbor search from the matching calculation itself.
 PTM reports processed atom counts while partitions are still running, alongside
-the number of completed Workers. Successful jobs return their Workers to the
-shared pool, retaining the initialized PTM Wasm kernel for subsequent jobs;
+completed work. Compatible analyses reuse their frame's coordinates and neighbor
+index; bounded central-atom chunks are assigned dynamically. Successful jobs
+return their Workers to the shared pool, retaining initialized Wasm kernels and
+resident inputs for subsequent jobs;
 input preparation yields between large chunks so the status and **Cancel**
 controls can remain responsive.
 
@@ -541,11 +560,15 @@ repeat Z twice with **Replicate atoms for analysis** enabled; display copies
 alone do not enlarge the analyzed cell. One CPU coordinator owns the complete
 DXA structure and graph in one Wasm heap. On an isolated host, pthreads share
 this heap and divide independent work; they do not copy a full analysis per
-atom. Without isolation, sufficiently large jobs can reuse the existing CPU
+atom. Tessellation-edge candidates and independent lattice-path searches also
+run in parallel, with deduplication and graph-cache updates committed in their
+original order. Burgers tracing and junction construction retain ordered work.
+Without isolation, sufficiently large jobs can reuse the existing CPU
 Worker pool for local identification and tetrahedron classification. One
 coordinator retains the global network; private stage Workers receive bounded
-snapshots and return local results. Automatic private stages use at most four
-Workers, reduced further by available CPU and memory capacity. The status distinguishes the global kernel's
+snapshots and return local results. Automatic private stages use at most eight
+Workers for crystal recognition and four for tetrahedron classification,
+reduced further by available CPU and memory capacity. The status distinguishes the global kernel's
 thread count from the peak local-stage Worker count. Small jobs, memory limits,
 unavailable Workers or threaded initialization failures retain native CPU work;
 stage failures report their fallback reason. Private snapshots and Worker
@@ -953,8 +976,9 @@ This is a provenance and risk statement, not legal advice.
   shear, manual/Auto central symmetry, displacement, bonds, bond statistics and ideal-strain
   reference/tensor evaluation and fresh-strain neighbor preparation; fallback Canvas rendering is
   not implemented.
-- The parser currently indexes a dump in one Worker and does not stream partial
-  atom rows into the renderer.
+- A structure Worker indexes complete frame boundaries incrementally, with
+  parallel parsers for requested and prefetched frames. Partial atom rows are
+  not rendered, and an active synchronous parse cannot be interrupted mid-loop.
 - Very large text frames still require memory for the frame slice, parsed arrays,
   the main-thread copy, and GPU buffers. A gzip-compressed trajectory also
   occupies its decompressed size as Blob data, which Firefox and Safari may keep
@@ -969,7 +993,7 @@ This is a provenance and risk statement, not legal advice.
   sibling files as a native desktop application can. **Open local** offers both a file picker and a folder picker. Choose a folder
   to detect sibling sequences automatically, or select several files together.
 - NetCDF, Python/ASE integration, arbitrary command scripts, live monitoring
-  of growing files, atom color/radius file imports, color tiling blocks and
+  of growing files, atom color/radius file imports and
   Voronoi polycrystal construction are not implemented. The initial DXA module
   comes from the separately reviewed OVITO core, not the reviewed AtomEye
   snapshot. See [DXA implementation review](DXA_REVIEW.md) for the source-backed

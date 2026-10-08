@@ -238,6 +238,13 @@ categorical property, so slip steps and shear bands show in later frames.
 
 ### P10. Shared neighbor index and dynamic chunks for CPU analyses
 
+**Status:** Done 2026-10-08. Compatible analyses reuse frame-keyed coordinates
+and neighbor indices. Isolated Workers share one index; nonisolated Workers
+retain a bounded private frame/index cache. Dynamic bounded chunks preserve
+the original reduction order, and PTM retains its native species buffer per
+resident frame. Shared input memory is charged once. Cancellation preserves
+healthy Workers and initialized Wasm modules. See [validation](VALIDATION.md).
+
 **Effort:** M. **Deployments:** mostly isolated.
 
 Each analysis splits atoms into static equal ranges, every Worker rebuilds a
@@ -280,6 +287,14 @@ already nondeterministic.
 
 ### P13. Shader-side colormap while dragging legend limits
 
+**Status:** Done 2026-10-08. Dragging prepares one scalar buffer and updates
+shader uniforms for atom/bond colors and range visibility in both views,
+including Voronoi face/edge visibility. Selection color overrides remain
+active. Release, cancellation, keyboard completion and PNG capture commit the
+exact CPU palette; ranges unsafe for the preview use the CPU path. The
+20,000-atom browser check records no per-tick scalar/color/mask uploads or
+full-array color scans after preparation.
+
 **Effort:** M. Upload one scalar per atom and map colors in the vertex shader
 during a drag; recompute exact CPU colors when the drag ends. Removes the
 75–90 ms per tick at 1M atoms [M].
@@ -293,6 +308,16 @@ during a drag; recompute exact CPU colors when the drag ends. Removes the
 to dump, CFG and XYZ with the same validation and error messages.
 
 ### P15. Parallel trajectory parsing and prefetch
+
+**Status:** Done 2026-10-08. A foreground parser lane and up to four background
+parsers share the CPU budget. Dump, XYZ and PDB indexing publishes complete
+frames incrementally; CFG raw frames parse in parallel while ordered
+checkpoints preserve unwrapped coordinates. Playback buffers the next frame,
+and physical replication runs in a reusable Worker. Source/seek cancellation
+rejects requests and removes queued work immediately; an active synchronous
+parse finishes before its Worker and permit are reused. Gzip still requires
+complete decompression before random-access indexing. Configuration replay
+and whole-trajectory export await indexing completion.
 
 **Effort:** M. One structure Worker parses frames serially, prefetch cannot be
 cancelled (`src/worker-client.js`), the first frame waits for the whole file
@@ -422,6 +447,15 @@ running simulation appends frames (Chromium only).
 ## Phase 3: large changes
 
 ### P18. Parallel DXA edge building and edge mapping
+
+**Status:** Done 2026-10-08 for the edge candidate/path-search passes. Immutable
+tetrahedron masks and independent lattice searches run in pthreads; original
+edge deduplication, first-seen orientation and graph-transition creation retain
+their ordered commits. Cheap direct neighbors bypass staging, and bounded
+batches reuse temporary storage. Serial complete-network hashes match the
+reference for both Wasm artifacts. Burgers tracing, cluster traversal and
+junction merging still need the algorithm redesign described below; this item
+does not claim they are parallel. See [CPU profile](DXA_CPU_PROFILE.md).
 
 **Effort:** L. With 8 threads, about 275 ms of the HEA run stays serial: edge
 building 61, edge mapping 87, Burgers tracing 90, clusters 14, serialization

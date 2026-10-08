@@ -15,7 +15,7 @@ import { parseLammpsFrame } from '../src/io/lammps-dump.js';
 // Pool startup and one full warm analysis are excluded at each thread count.
 const ROOT = resolve(import.meta.dirname, '..');
 const USAGE = 'node scripts/benchmark-dxa-compare.mjs [--baseline-ref HEX_COMMIT] '
-  + '[--threads 1,2,4] [--dataset all|fe|nigb] [--repetitions 1..10]';
+  + '[--threads 1,2,4] [--dataset all|fe|nigb|hea] [--repetitions 1..10]';
 
 function parseOptions(args) {
   const options = { baselineRef: 'd6f9010', threads: [1, 2, 4], dataset: 'all', repetitions: 3 };
@@ -42,7 +42,7 @@ function parseOptions(args) {
   }
   assert.ok(options.threads.length && options.threads.every(count => Number.isSafeInteger(count) && count >= 1 && count <= 64),
     'Use --threads with a comma-separated sequence in 1..64.');
-  assert.ok(['all', 'fe', 'nigb'].includes(options.dataset), 'Use --dataset all|fe|nigb.');
+  assert.ok(['all', 'fe', 'nigb', 'hea'].includes(options.dataset), 'Use --dataset all|fe|nigb|hea.');
   options.repetitions = Number(options.repetitions);
   assert.ok(Number.isInteger(options.repetitions) && options.repetitions >= 1 && options.repetitions <= 10,
     'Use --repetitions 1..10.');
@@ -125,6 +125,15 @@ function validateSignature(signature, result, entry, reference) {
     const points = result.segments[0].points;
     assert.ok(Math.hypot(points[0] - points.at(-3), points[1] - points.at(-2), points[2] - points.at(-1)) < 1e-6,
       'The finite Fe loop must close within the native coordinate tolerance.');
+  } else if (entry.id === 'hea') {
+    assert.equal(signature.segments, 1, 'The HEA example retains its single FCC screw dislocation.');
+    const segment = signature.topology[0];
+    assert.equal(segment.family, 'perfect'); assert.equal(segment.structureType, 1);
+    assert.equal(segment.closed, true); assert.equal(segment.isInfinite, true);
+    assert.ok(Math.abs(segment.burgersMagnitude - Math.SQRT1_2) < 1e-10);
+    assert.ok(signature.totalLength > 40 && signature.totalLength < 42);
+    assert.deepEqual(segment.junctions,
+      [[{ segmentId: segment.id, end: 1 }], [{ segmentId: segment.id, end: 0 }]]);
   } else {
     assert.equal(signature.segments, 0, 'The real replicated NiGB reference has no dislocation lines.');
     assert.equal(signature.totalLength, 0);
@@ -179,7 +188,7 @@ function createBackend(name, api) {
       return { result, timing: { workerCount: result.workerCount, wholeElapsedMs, elapsedMs: result.elapsedMs, nativeStageMs,
         nativeWorkerCount: result.nativeWorkerCount, cpuOffloadUsed: result.cpuOffloadUsed,
         cpuStageWorkerCounts: result.cpuStageWorkerCounts, cpuStageTimings: result.cpuStageTimings,
-        cpuStageFallbacks: result.cpuStageFallbacks,
+        cpuStageFallbacks: result.cpuStageFallbacks, parallelEdgePasses: result.parallelEdgePasses,
         otherPipelineMs: wholeElapsedMs - nativeStageMs, stageTimings: result.stageTimings,
         kernelGeneration: result.kernelGeneration, poolSize: result.poolSize, wasmMemoryBytes: result.wasmMemoryBytes,
         rssMiB: process.memoryUsage().rss / 1024 ** 2 } };
@@ -235,6 +244,7 @@ async function main() {
       current: { commit: gitText(['rev-parse', 'HEAD']), workingTreeStatus: gitText(['status', '--short']), filesSha256 },
       datasets: [] };
     const datasets = [
+      { id: 'hea', filename: 'hea-fcc-screw.dump', parse: parseLammpsFrame, replication: [1, 1, 1], lattice: 'fcc' },
       { id: 'fe', filename: 'Fe_disloc_loop.dump', parse: parseLammpsFrame, replication: [1, 1, 1], lattice: 'bcc' },
       { id: 'nigb', filename: 'NiGB_minimized.cfg', parse: parseCfg, replication: [1, 1, 2], lattice: 'fcc' },
     ].filter(entry => options.dataset === 'all' || entry.id === options.dataset);
@@ -245,13 +255,16 @@ async function main() {
         realReplication: entry.replication, atoms: frame.ids.length, comparisons: [] };
       report.datasets.push(row);
       let scientificReference;
-      let serialLength;
+      let serialLength, serialNetworkHash;
       function check(signature, result, workerCount) {
         validateSignature(signature, result, entry, scientificReference);
         scientificReference ??= signature;
         if (workerCount === 1) {
           serialLength ??= signature.totalLength;
           assert.equal(signature.totalLength, serialLength, 'Serial total length must agree exactly between versions and repeats.');
+          serialNetworkHash ??= signature.exactNetworkHash;
+          assert.equal(signature.exactNetworkHash, serialNetworkHash,
+            'The complete serial network must retain exact points, Burgers vectors, orientation, connections and lengths.');
         } else assert.ok(Math.abs(signature.totalLength - scientificReference.totalLength)
           <= Math.max(1e-10, scientificReference.totalLength * 0.01), 'Parallel total length must stay within 1% of the reference.');
       }

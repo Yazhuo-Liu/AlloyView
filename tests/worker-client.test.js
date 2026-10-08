@@ -118,3 +118,135 @@ test('reset rejects pending loads/frames, ignores old Workers and allows a fresh
     client.close();
   } finally { globalThis.Worker = originalWorker; }
 });
+
+test('cancelling prefetch rejects background requests while preserving foreground requests', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const client = new StructureWorkerClient();
+    const background = client.frame(5, { background: true, reportProgress: false });
+    const foreground = client.frame(90);
+    const cancelled = assert.rejects(background, { name: 'AbortError' });
+    client.cancelPrefetch();
+    await cancelled;
+    assert.equal(client.pending.size, 1);
+    assert.ok(client.worker.messages.some(message => message.type === 'cancel-frame' && message.payload.id === 1));
+    client.handleMessage({ id: 2, ok: true, result: { index: 90 } });
+    assert.deepEqual(await foreground, { index: 90 });
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
+});
+
+test('frame AbortSignals cancel the actual Worker request and ignore its late response', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const client = new StructureWorkerClient();
+    const controller = new AbortController();
+    const frame = client.frame(10, { signal: controller.signal });
+    const rejected = assert.rejects(frame, { name: 'AbortError' });
+    controller.abort();
+    await rejected;
+    assert.equal(client.pending.size, 0);
+    assert.equal(client.worker.messages.at(-1).type, 'cancel-frame');
+    client.handleMessage({ id: 1, ok: true, result: { index: 10 } });
+    assert.equal(client.pending.size, 0);
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
+});
+
+test('source indexing updates are tied to the current load and remain available after its first-frame result', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const updates = [];
+    const client = new StructureWorkerClient(() => {}, { onSourceInfo: info => updates.push(info) });
+    const loaded = client.load(new File(['xyz'], 'trajectory.xyz'));
+    const loadId = client.loadId;
+    assert.equal(client.worker.messages[0].payload.incremental, true);
+    client.handleMessage({ event: 'source-info', loadId, result: { frameCount: 1, indexComplete: false } });
+    client.handleMessage({ id: loadId, ok: true, result: { frameCount: 1 } });
+    await loaded;
+    client.handleMessage({ event: 'source-info', loadId, result: { frameCount: 20, indexComplete: true } });
+    assert.equal(client.sourceInfo.frameCount, 20);
+    const next = client.load(new File(['cfg'], 'new.cfg'));
+    client.handleMessage({ event: 'source-info', loadId, result: { frameCount: 99 } });
+    assert.equal(client.sourceInfo, null);
+    assert.equal(updates.length, 2);
+    client.handleMessage({ id: client.loadId, ok: true, result: {} });
+    await next;
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
+});
+
+test('reset cancels a replication waiting for CPU capacity before it can recreate stale Workers', async () => {
+  const { CpuBudget } = await import('../src/analysis/cpu-budget.js');
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const budget = new CpuBudget({ environment: { navigator: { hardwareConcurrency: 3 } } });
+    const occupied = await budget.acquire(1);
+    const client = new StructureWorkerClient(() => {}, { cpuBudget: budget });
+    const replication = client.replicate({}, [2, 1, 1]);
+    const rejected = assert.rejects(replication, { name: 'AbortError' });
+    assert.equal(budget.queue.length, 1);
+    client.reset();
+    await rejected;
+    occupied.release();
+    assert.equal(budget.active, 0);
+    assert.equal(budget.queue.length, 0);
+    assert.equal(client.replicationWorker, null);
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
+});
+
+test('replication cancellation preserves the CPU lease until its reusable Worker acknowledges', async () => {
+  const { CpuBudget } = await import('../src/analysis/cpu-budget.js');
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const budget = new CpuBudget({ environment: { navigator: { hardwareConcurrency: 3 } } });
+    const client = new StructureWorkerClient(() => {}, { cpuBudget: budget });
+    const controller = new AbortController();
+    const replication = client.replicate({}, [2, 1, 1], { signal: controller.signal });
+    const rejected = assert.rejects(replication, { name: 'AbortError' });
+    await new Promise(resolve => setImmediate(resolve));
+    const worker = client.replicationWorker;
+    const id = worker.messages[0].id;
+    assert.equal(budget.active, 1);
+    controller.abort();
+    await rejected;
+    assert.equal(budget.active, 1, 'current replication chunk has not acknowledged cancellation');
+    assert.equal(client.pending.size, 1);
+    client.handleMessage({ id, ok: false, name: 'AbortError', error: 'Replication cancelled.' }, worker);
+    assert.equal(budget.active, 0);
+    assert.equal(client.pending.size, 0);
+    const next = client.replicate({}, [3, 1, 1]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(client.replicationWorker, worker);
+    client.handleMessage({ id: worker.messages.at(-1).id, ok: true, result: { frame: { atoms: 3 } } }, worker);
+    assert.deepEqual(await next, { atoms: 3 });
+    assert.equal(budget.active, 0);
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
+});
+
+test('cancelling an index-completion wait detaches the subscriber while source indexing continues', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const client = new StructureWorkerClient();
+    const controller = new AbortController();
+    const completion = client.waitForIndex({ signal: controller.signal });
+    const rejected = assert.rejects(completion, { name: 'AbortError' });
+    controller.abort();
+    await rejected;
+    assert.equal(client.pending.size, 0);
+    assert.equal(client.worker.terminated, undefined);
+    assert.equal(client.worker.messages[0].type, 'index-complete');
+    const next = client.frame(0);
+    client.handleMessage({ id: 2, ok: true, result: { index: 0 } });
+    assert.deepEqual(await next, { index: 0 });
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
+});

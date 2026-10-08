@@ -54,10 +54,14 @@ public:
     /// Returns a reference to the cluster graph.
     const std::shared_ptr<ClusterGraph>& clusterGraph() { return structureAnalysis().clusterGraph(); }
 
+    /// Read-only searches may run concurrently on the immutable cluster graph.
+    /// A missing cached transition defers the whole search to the ordered commit,
+    /// preserving the original cache insertion and floating-point operation order.
     /// Finds an atom-to-atom path from atom 1 to atom 2 that lies entirely in the good crystal region.
     /// If a path could be found, returns the corresponding ideal vector connecting the two
     /// atoms in the ideal stress-free reference configuration.
-    std::optional<ClusterVector> findPath(size_t atomIndex1, size_t atomIndex2);
+    std::optional<ClusterVector> findPath(size_t atomIndex1, size_t atomIndex2,
+        bool readOnlyTransitions = false, bool* requiresOrderedSearch = nullptr);
 
 private:
 

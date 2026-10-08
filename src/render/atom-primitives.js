@@ -1,5 +1,6 @@
 import { invert3 } from '../data/model.js';
 import { MAX_SLICES, SLICE_EPSILON } from './slicing.js';
+import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms } from './scalar-colormap.js';
 
 // Atom textures and instance buffers have source-frame sizes. Repeating a skew
 // cell changes uniforms only; recoloring/filtering never walks every bond.
@@ -14,6 +15,8 @@ layout(location=4) in vec3 aShift;
 uniform sampler2D uPositions;
 uniform sampler2D uColors;
 uniform sampler2D uFractional;
+uniform sampler2D uScalarValues;
+${SCALAR_COLOR_GLSL}
 uniform int uTextureWidth;
 uniform mat4 uView;
 uniform mat4 uProjection;
@@ -85,8 +88,11 @@ void main() {
   vNormal = uFlatMode ? vec3(0.0, 0.0, 1.0)
     : mat3(uView) * normalize(across * normal.x + up * normal.y + direction * normal.z);
   gl_Position = uProjection * uView * vec4(vWorld, 1.0);
-  vColorFirst = uVectorMode ? uVectorColor : texelFetch(uColors, first, 0).rgb;
-  vColorSecond = uVectorMode ? uVectorColor : texelFetch(uColors, second, 0).rgb;
+  vec4 firstColor = texelFetch(uColors, first, 0), secondColor = texelFetch(uColors, second, 0);
+  float firstScalar = uScalarColorEnabled ? texelFetch(uScalarValues, first, 0).r : 0.0;
+  float secondScalar = uScalarColorEnabled ? texelFetch(uScalarValues, second, 0).r : 0.0;
+  vColorFirst = uVectorMode ? uVectorColor : scalarColor(firstScalar, firstColor.a > 0.5, firstColor.rgb);
+  vColorSecond = uVectorMode ? uVectorColor : scalarColor(secondScalar, secondColor.a > 0.5, secondColor.rgb);
   vec3 firstFractional = texelFetch(uFractional, first, 0).xyz;
   vec3 secondFractional = texelFetch(uFractional, second, 0).xyz;
   vec3 secondReplica = uReplicaIndex + aShift;
@@ -97,6 +103,7 @@ void main() {
       : (startData.w > 0.5 && endData.w > 0.5))
     && vectorLength > 1e-12 && segmentLength > 1e-12 && endpointInDisplay;
   shown = shown && sliceVisible(start, firstFractional, uReplicaIndex);
+  if (!uVectorMode) shown = shown && scalarShown(firstScalar) && scalarShown(secondScalar);
   if (!uVectorMode) shown = shown && sliceVisible(start + delta, secondFractional, secondReplica);
   vVisible = shown ? 1 : 0;
   // Hidden bonds and arrows are dropped before rasterization.
@@ -253,7 +260,8 @@ export class AtomPrimitiveLayer {
     this.uniforms = Object.fromEntries(['uPositions', 'uColors', 'uFractional', 'uTextureWidth', 'uView', 'uProjection',
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions', 'uSliceAxis', 'uSliceMaximum', 'uSliceMode', 'uSliceCount',
       'uSlicePlanes[0]', 'uVectorMode', 'uVectorColor', 'uScale', 'uRadius', 'uExtent',
-      'uAnchor', 'uHeadLength', 'uArrowHead', 'uFlatMode', 'uFixedUp', 'uArrowUp'].map(name => [name, gl.getUniformLocation(this.program, name)]));
+      'uAnchor', 'uHeadLength', 'uArrowHead', 'uFlatMode', 'uFixedUp', 'uArrowUp', 'uScalarValues',
+      ...SCALAR_COLOR_UNIFORMS].map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.textures = Array.from({ length: 3 }, () => {
       const texture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -289,6 +297,7 @@ export class AtomPrimitiveLayer {
   }
 
   setFrame(renderer, colors) {
+    this.scalarColorInput = null;
     const gl = this.gl, maximum = gl.getParameter(gl.MAX_TEXTURE_SIZE), count = renderer.atomCount;
     this.clearInstances();
     this.width = Math.min(maximum, Math.max(1, Math.ceil(Math.sqrt(count))));
@@ -336,6 +345,7 @@ export class AtomPrimitiveLayer {
   }
 
   updateColors(colors) {
+    this.scalarColorInput = null;
     for (let atom = 0; atom < colors.length / 3; atom += 1) {
       this.colorValues[atom * 4] = colors[atom * 3];
       this.colorValues[atom * 4 + 1] = colors[atom * 3 + 1];
@@ -343,6 +353,15 @@ export class AtomPrimitiveLayer {
       this.colorValues[atom * 4 + 3] = 255;
     }
     this.uploadTexture(1, this.colorValues, this.gl.RGBA8, this.gl.UNSIGNED_BYTE);
+  }
+
+  updateScalarColorPreview(input) {
+    if (this.scalarColorInput === input) return;
+    this.scalarColorInput = input;
+    const gl = this.gl;
+    for (let atom = 0; atom < input.values.length; atom++) this.colorValues[atom * 4 + 3] = input.colorOverrides[atom];
+    this.uploadTexture(1, this.colorValues, gl.RGBA8, gl.UNSIGNED_BYTE);
+    gl.activeTexture(gl.TEXTURE0);
   }
 
   uploadInstances(buffers, indices, vectors) {
@@ -436,6 +455,7 @@ export class AtomPrimitiveLayer {
 
   clear() {
     this.clearInstances();
+    this.scalarColorInput = null;
     this.positionValues = this.colorValues = this.fractionalValues = null;
     this.width = this.height = 1;
     this.uploadTexture(0, new Float32Array(4), this.gl.RGBA32F, this.gl.FLOAT);
@@ -484,11 +504,14 @@ export class AtomPrimitiveLayer {
     if ((!this.bonds || !this.bondOptions.visible) && !fields.some(field => field.options.visible)) return;
     const gl = this.gl, u = this.uniforms;
     gl.useProgram(this.program);
-    for (let index = 0; index < 3; index += 1) {
+    if (renderer.scalarColorPreview) this.updateScalarColorPreview(renderer.scalarColorPreview.input);
+    for (let index = 0; index < (renderer.scalarColorPreview ? 4 : 3); index += 1) {
       gl.activeTexture(gl.TEXTURE0 + index);
-      gl.bindTexture(gl.TEXTURE_2D, this.textures[index]);
+      gl.bindTexture(gl.TEXTURE_2D, index === 3 ? renderer.scalarColorTexture : this.textures[index]);
     }
     gl.uniform1i(u.uPositions, 0); gl.uniform1i(u.uColors, 1); gl.uniform1i(u.uFractional, 2);
+    gl.uniform1i(u.uScalarValues, renderer.scalarColorPreview ? 3 : 2);
+    applyScalarColorUniforms(gl, u, renderer.scalarColorPreview);
     gl.uniform1i(u.uTextureWidth, this.width);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix);
     gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);

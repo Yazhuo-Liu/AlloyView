@@ -269,7 +269,7 @@ export async function calculateVoronoiGeometryBatch(frame, { atomIndices = null,
 
 /** Build once per resident source snapshot; all central-atom chunks share it. */
 export function createVoronoiContext(frame) {
-  const search = new NeighborSearch(frame), count = search.count;
+  const search = (frame.neighborSearch ?? new NeighborSearch(frame)), count = search.count;
   const cellVolume = Math.abs(determinant3(frame.cell.vectors));
   const scale = Math.cbrt(cellVolume / count), areaScale = scale ** 2, volumeScale = scale ** 3;
   const geometry = initialGeometry(frame.cell);

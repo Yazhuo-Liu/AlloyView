@@ -1108,7 +1108,7 @@ try {
   assert.equal(await evaluate('window.structureTestRenderer.frame.properties.some(p => p.analysisKind === "cna")'), false);
   assert.equal(await evaluate('document.getElementById("ptm-state").textContent'), 'Calculated');
 
-  // User cancellation stops real Workers, restores the uncomputed state and
+  // User cancellation stops bounded work, preserves reusable Workers, restores the uncomputed state and
   // removes results from cached frames without stopping independent analyses.
   const cancelCases = [['coordination', 'analysis'], ['cna', 'cna'], ['centrosymmetry', 'csp'], ['ptm', 'ptm'], ['strain', 'strain']];
   await evaluate(`(async () => {
@@ -1119,6 +1119,31 @@ try {
     window.cancelTestCalls = [];
     window.cancelWorkers = { created: 0, terminated: 0 };
     let originalFactory;
+    const tracked = new WeakSet();
+    const track = worker => {
+      if (tracked.has(worker)) return worker;
+      tracked.add(worker);
+      const post = worker.postMessage.bind(worker);
+      worker.postMessage = (data, transfer) => {
+        post(data, transfer);
+        if (data.kind === window.cancelOnWorkerPost) {
+          window.cancelOnWorkerPost = null;
+          window.cancelPostedObservation = {
+            before: document.getElementById(window.cancelPrefix + '-state').textContent,
+            activeBefore: window.cancelTestPool.active.size, workerPosted: true
+          };
+          // Cancel after a real atom-range message was delivered, before its
+          // ACK can commit a result. This also covers very small fast frames.
+          queueMicrotask(() => {
+            if (window.cancelPostedAction === 'close') {
+              document.getElementById('frame-play').click();
+              document.getElementById('close-file').click();
+            } else document.getElementById('cancel-' + window.cancelPrefix).click();
+          });
+        }
+      };
+      return worker;
+    };
     AnalysisPool.prototype.analyze = function(frame, parameters, ...rest) {
       if (!window.cancelTestPool) {
         window.cancelTestPool = this;
@@ -1128,8 +1153,9 @@ try {
           const terminate = worker.terminate.bind(worker);
           window.cancelWorkers.created++;
           worker.terminate = () => { window.cancelWorkers.terminated++; terminate(); };
-          return worker;
+          return track(worker);
         };
+        for (const slot of this.slots) track(slot.worker);
       }
       window.cancelTestCalls.push(parameters.kind);
       const task = original.call(this, frame, parameters, ...rest);
@@ -1147,12 +1173,15 @@ try {
   })()`);
   for (const [kind, prefix] of cancelCases) {
     const cancelled = await evaluate(`(async () => {
+      window.cancelPostedObservation = null;
+      window.cancelPostedAction = 'cancel';
+      window.cancelPrefix = '${prefix}'; window.cancelOnWorkerPost = '${kind}';
       document.getElementById('run-${prefix}').click();
-      await Promise.resolve(); await Promise.resolve();
-      const before = document.getElementById('${prefix}-state').textContent;
-      const activeBefore = window.cancelTestPool.active.size;
-      document.getElementById('cancel-${prefix}').click();
-      return { before, activeBefore,
+      const deadline = performance.now() + 15000;
+      while (!window.cancelPostedObservation && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+      if (!window.cancelPostedObservation) throw new Error('${kind} did not dispatch a real CPU Worker');
+      await Promise.resolve();
+      return { ...window.cancelPostedObservation,
         state: document.getElementById('${prefix}-state').textContent,
         startDisabled: document.getElementById('run-${prefix}').disabled,
         cancelDisabled: document.getElementById('cancel-${prefix}').disabled,
@@ -1161,7 +1190,7 @@ try {
         color: document.getElementById('color-mode').value,
         results: window.structureTestRenderer.frame.properties.some(property => property.analysisKind === '${kind}'),
         loading: !document.getElementById('loading').hidden,
-        liveWorkers: window.cancelWorkers.created - window.cancelWorkers.terminated };
+        liveWorkers: window.cancelTestPool.slots.size };
     })()`);
     assert.equal(cancelled.before, 'Calculating…', kind);
     assert.ok(cancelled.activeBefore >= 1, `${kind} must start a real Worker`);
@@ -1169,9 +1198,12 @@ try {
     assert.equal(cancelled.startDisabled, false, kind);
     assert.equal(cancelled.cancelDisabled, true, kind);
     assert.equal(cancelled.metric, '—', kind);
-    assert.equal(cancelled.active, 0, kind);
-    assert.equal(cancelled.queued, 0, kind);
-    assert.equal(cancelled.liveWorkers, 0, kind);
+    assert.equal(cancelled.workerPosted, true, kind);
+    await waitFor('window.cancelTestPool.active.size === 0 && window.cancelTestPool.queue.length === 0 && window.cancelTestPool.cpuBudget.active === 0', kind + ' bounded cancellation ACK');
+    const retained = await evaluate('({ live: window.cancelTestPool.slots.size, idle: window.cancelTestPool.idle.length, terminated: window.cancelWorkers.terminated })');
+    assert.ok(retained.live >= 1, kind + ' retains reusable native Workers');
+    assert.equal(retained.live, retained.idle, kind);
+    assert.equal(retained.terminated, 0, kind + ' bounded cancellation preserves native memory');
     assert.equal(cancelled.results, false, kind);
     assert.equal(cancelled.color, 'type', kind);
     assert.equal(cancelled.loading, false, kind);
@@ -1367,20 +1399,23 @@ try {
   // old results and prefetched frames cannot restore the structure.
   const sourceClose = await evaluate(`(async () => {
     document.getElementById('cancel-cna').click();
+    window.cancelPostedObservation = null; window.cancelPostedAction = 'close';
+    window.cancelPrefix = 'cna'; window.cancelOnWorkerPost = 'cna';
     document.getElementById('run-cna').click();
-    document.getElementById('frame-play').click();
+    const deadline = performance.now() + 15000;
+    while (!window.cancelPostedObservation && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+    if (!window.cancelPostedObservation) throw new Error('Source close did not reach a real CNA Worker');
     await Promise.resolve();
-    const activeBefore = window.cancelTestPool.active.size;
-    document.getElementById('close-file').click();
-    return { activeBefore, active: window.cancelTestPool.active.size, queued: window.cancelTestPool.queue.length,
+    return { ...window.cancelPostedObservation, active: window.cancelTestPool.active.size, queued: window.cancelTestPool.queue.length,
       frame: window.structureTestRenderer.frame, atoms: window.structureTestRenderer.atomCount,
       bufferBytes: (() => {
         const r = window.structureTestRenderer; r.gl.bindBuffer(r.gl.ARRAY_BUFFER, r.positionBuffer);
         return r.gl.getBufferParameter(r.gl.ARRAY_BUFFER, r.gl.BUFFER_SIZE);
       })() };
   })()`);
-  assert.ok(sourceClose.activeBefore > 0);
-  assert.equal(sourceClose.active, 0); assert.equal(sourceClose.queued, 0);
+  assert.ok(sourceClose.activeBefore > 0); assert.equal(sourceClose.workerPosted, true);
+  await waitFor('window.cancelTestPool.active.size === 0 && window.cancelTestPool.queue.length === 0 && window.cancelTestPool.cpuBudget.active === 0', 'source close Worker ACKs');
+  assert.equal(await evaluate('window.cancelTestPool.cpuSnapshots.length'), 0, 'source close releases resident CPU source snapshots');
   assert.equal(sourceClose.frame, null); assert.equal(sourceClose.atoms, 0); assert.equal(sourceClose.bufferBytes, 0);
   await delay(1100);
   await checkHome();

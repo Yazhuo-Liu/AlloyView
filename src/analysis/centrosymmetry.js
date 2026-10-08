@@ -22,7 +22,7 @@ export function calculateCentrosymmetry(frame, {
     throw new Error('Central symmetry requires an even neighbor count between 2 and 32.');
   }
   onPhase('indexing');
-  const search = new NeighborSearch(frame);
+  const search = (frame.neighborSearch ?? new NeighborSearch(frame));
   const { startAtom, endAtom } = atomRange(search.count, range);
   if (structureInput !== undefined && (!(structureInput instanceof Uint8Array)
       || structureInput.length !== search.count || structureInput.some((type) => type > 4))) {
@@ -36,7 +36,7 @@ export function calculateCentrosymmetry(frame, {
   const cspSummary = auto ? Object.fromEntries(CSP_SUMMARY_FIELDS.map((name) => [name, 0])) : null;
   // A range owns central atoms only. Neighbor classification is allowed across
   // every range boundary and cached by original atom ID, including PBC images.
-  const classifications = auto && !structureInput ? new Uint8Array(search.count).fill(255) : structureInput;
+  const classifications = auto && !structureInput ? (frame.adaptiveCnaClassifications ?? new Uint8Array(search.count).fill(255)) : structureInput;
   const classifyAtom = (atom, shell) => {
     if (classifications[atom] !== 255) return classifications[atom];
     const type = classifyAdaptiveEnvironment(shell ?? search.nearest(atom, 14));

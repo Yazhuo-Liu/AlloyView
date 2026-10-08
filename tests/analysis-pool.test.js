@@ -131,7 +131,7 @@ test('real Auto CSP atom progress allows cancellation while an independent queue
     assert.equal(interrupted?.phase, 'analyzing');
     assert.equal(outcomes[1].status, 'fulfilled');
     assert.deepEqual(outcomes[1].value.structures, calculateCna(nextFrame).structures);
-    assert.equal(stats.created, 2, 'a terminated Auto Worker is replaced for the queued job');
+    assert.equal(stats.created, 1, 'bounded cancellation retains the Worker for the queued job');
     assert.equal(stats.maximum, 1);
     assert.equal(pool.active.size, 0);
   } finally { pool.close(); }
@@ -177,7 +177,7 @@ test('non-isolated dispatch yields and transfers a private typed coordinate copy
         assert.ok(yielded, 'the main thread gets a turn before dispatch');
         assert.notEqual(data.fractional.buffer, source.buffer);
         assert.deepEqual(data.fractional, source);
-        assert.deepEqual(transferables, [data.fractional.buffer]);
+        assert.deepEqual(transferables, [data.fractional.buffer, data.types.buffer]);
         worker.postMessage(data, transferables);
         assert.equal(data.fractional.byteLength, 0, 'the private copy is transferred, not cloned');
         posted = true;
@@ -218,7 +218,7 @@ test('real atom progress allows cancelling a running fit while a queued independ
     assert.equal(interruptedProgress.phase, 'analyzing');
     assert.equal(continued.status, 'fulfilled');
     assert.deepEqual(continued.value.structures, calculateCna(secondFrame).structures);
-    assert.equal(stats.created, 2, 'a cancelled busy Worker is replaced rather than reused');
+    assert.equal(stats.created, 1, 'a cancelled bounded fit retains its Worker and Wasm kernel');
     assert.equal(stats.maximum, 1, 'the queued job respects the pool concurrency budget');
     assert.equal(pool.active.size, 0);
   } finally { pool.close(); }
@@ -239,7 +239,7 @@ test('closing during shared-memory preparation settles before any Worker is disp
   assert.equal(pool.controllers.size, 0);
 });
 
-test('cancelling preparation prevents input transfer and terminates the allocated Worker', async () => {
+test('cancelling snapshot preparation prevents input transfer and Worker allocation', async () => {
   let posted = 0, terminated = 0;
   const pool = new AnalysisPool({ workerFactory: () => ({ addEventListener() {},
     postMessage() { posted += 1; }, terminate() { terminated += 1; } }) });
@@ -251,7 +251,7 @@ test('cancelling preparation prevents input transfer and terminates the allocate
   await outcome;
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(posted, 0);
-  assert.equal(terminated, 1);
+  assert.equal(terminated, 0);
   assert.equal(pool.idle.length, 0);
   pool.close();
 });
@@ -348,7 +348,7 @@ test('cancelling running and queued tasks rejects promptly and releases all slot
   const results = await outcomes;
   assert.ok(results.every((result) => result.status === 'rejected' && result.reason.name === 'AbortError'));
   assert.equal(active, 0);
-  assert.equal(started, 1, 'aborting a running task must not start its already-cancelled queued successor');
+  assert.equal(started, 0, 'aborting snapshot copying prevents both Worker admissions');
   assert.equal(pool.queue.length, 0);
   assert.equal(pool.active.size, 0);
   pool.close();

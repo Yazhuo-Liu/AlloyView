@@ -24,6 +24,7 @@ export async function indexPdb(blob, onProgress = () => {}, options = {}) {
       if (!modelAtoms) throw pdbError('A MODEL contains no atom records.');
       active.end = end;
       frames.push(active);
+      options.onFrame?.({ ...active, index: frames.length - 1 });
       active = null;
     } else if (record === 'ATOM' || record === 'HETATM') {
       if (explicitModels && !active) throw pdbError('Atom records must occur inside MODEL/ENDMDL blocks.');
@@ -35,7 +36,10 @@ export async function indexPdb(blob, onProgress = () => {}, options = {}) {
     }
   }, onProgress, options);
   if (active) throw pdbError('The last MODEL is missing ENDMDL.');
-  if (!explicitModels && implicitAtoms) frames.push({ start: 0, end: blob.size });
+  if (!explicitModels && implicitAtoms) {
+    frames.push({ start: 0, end: blob.size });
+    options.onFrame?.({ start: 0, end: blob.size, index: 0 });
+  }
   if (!frames.length) throw pdbError('The file contains no ATOM or HETATM records.');
   return { frames, header: explicitModels ? header.join('\n') : '', indexMs: performance.now() - startedAt };
 }

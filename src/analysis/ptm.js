@@ -38,6 +38,8 @@ let nodeBinary;
 let kernelPromise;
 let residentModule;
 let neighborContext = null;
+const residentTypeInputs = new WeakMap();
+const validatedNeighborInputs = new WeakMap(), validatedCoordinateFrames = new WeakSet();
 async function kernelOptions() {
   if (typeof process !== 'object' || !process.versions?.node) return {};
   nodeBinary ??= import('node:fs/promises').then(({ readFile }) => readFile(new URL('./ptm-kernel.wasm', import.meta.url)));
@@ -89,6 +91,13 @@ function getKernel() {
 
 export function ptmKernelMemoryBytes() { return residentModule?.HEAPU8.byteLength ?? 0; }
 
+/** Release frame-owned native species storage without destroying the fitter. */
+export function releasePtmFrame(frame) {
+  const retained = residentTypeInputs.get(frame);
+  if (retained) { retained.module._free(retained.pointer); residentTypeInputs.delete(frame); }
+  validatedNeighborInputs.delete(frame); validatedCoordinateFrames.delete(frame);
+}
+
 /** Initialize the resident module without inventing a frame or running a fit. */
 export async function warmupPtm({ onPhase = () => {} } = {}) {
   const kernelReused = Boolean(kernelPromise);
@@ -100,14 +109,21 @@ export async function warmupPtm({ onPhase = () => {} } = {}) {
 export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, preparedNeighbors, types = frame.types,
   onPhase = () => {}, onAtoms = () => {}, ...range } = {}) {
   validatePtmParameters({ rmsdCutoff, flags });
+  const immutable = Boolean(frame.immutableAnalysisFrame);
+  const validated = immutable ? validatedNeighborInputs.get(frame) : null;
   const prepared = preparedNeighbors === undefined ? null : validatePreparedPtmNeighbors(frame, preparedNeighbors,
-    { ...range, flags, validateValues: true });
+    { ...range, flags, validateValues: !validated?.has(preparedNeighbors),
+      validateCoordinates: !immutable || !validatedCoordinateFrames.has(frame) });
+  if (prepared && immutable) {
+    const retained = validated ?? new WeakSet(); retained.add(prepared);
+    validatedNeighborInputs.set(frame, retained); validatedCoordinateFrames.add(frame);
+  }
   const startedAt = performance.now();
   const kernelReused = Boolean(kernelPromise);
   onPhase('initializing');
   const module = await getKernel();
   onPhase('indexing');
-  const search = prepared ? null : new NeighborSearch(frame);
+  const search = prepared ? null : (frame.neighborSearch ?? new NeighborSearch(frame));
   const { startAtom, endAtom } = atomRange(prepared ? frame.fractional.length / 3 : search.count, range);
   const count = endAtom - startAtom;
   const result = Object.fromEntries(Object.entries(PTM_FIELDS).map(([name, [Type, stride]]) => [name,
@@ -117,9 +133,15 @@ export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, prepare
   if (!output) throw new Error('PTM output allocation failed.');
   // Species of every atom a neighborhood may reach; only ordering uses them.
   const sourceCount = prepared ? frame.fractional.length / 3 : search.count;
-  const typePointer = ArrayBuffer.isView(types) && types.length === sourceCount ? module._malloc(sourceCount * 4) : 0;
+  const retainTypes = Boolean(frame.immutableAnalysisFrame);
+  let retainedTypes = retainTypes ? residentTypeInputs.get(frame) : null;
+  if (retainedTypes && retainedTypes.source !== types) { releasePtmFrame(frame); retainedTypes = null; }
+  const typePointer = retainedTypes?.pointer ?? (ArrayBuffer.isView(types) && types.length === sourceCount ? module._malloc(sourceCount * 4) : 0);
   if (typePointer) {
-    module.HEAP32.set(types, typePointer >> 2);
+    if (!retainedTypes) {
+      module.HEAP32.set(types, typePointer >> 2);
+      if (retainTypes) residentTypeInputs.set(frame, { source: types, pointer: typePointer, module });
+    }
     module._alloy_ptm_set_types(typePointer, sourceCount);
   }
   neighborContext = { search, cache, preparedNeighbors: prepared };
@@ -151,7 +173,7 @@ export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, prepare
     onAtoms(count, count);
   } finally {
     module._free(output);
-    if (typePointer) { module._alloy_ptm_set_types(0, 0); module._free(typePointer); }
+    if (typePointer) { module._alloy_ptm_set_types(0, 0); if (!retainTypes) module._free(typePointer); }
     // The reusable module must not retain coordinates from a closed source.
     neighborContext = null;
   }
@@ -170,7 +192,7 @@ export function validatePtmParameters({ rmsdCutoff = .1, flags = 31 } = {}) {
  * calculatePtm always validates scientific values in the fitting worker.
  */
 export function validatePreparedPtmNeighbors(frame, table,
-  { startAtom, endAtom, flags = 31, validateValues = true } = {}) {
+  { startAtom, endAtom, flags = 31, validateValues = true, validateCoordinates = true } = {}) {
   const count = frame.fractional?.length / 3;
   if (!Number.isInteger(count) || count < 1) throw new Error('Analysis requires at least one atom.');
   const tableStart = table?.startAtom ?? 0, tableEnd = table?.endAtom ?? tableStart + (table?.counts?.length ?? 0);
@@ -190,7 +212,7 @@ export function validatePreparedPtmNeighbors(frame, table,
   const heights = cellFaceHeights(frame.cell);
   if (heights.some(height => !Number.isFinite(height) || height <= 0)) throw new Error('Neighbor search requires a finite, non-singular cell.');
   if (!validateValues) return table;
-  for (const value of frame.fractional) if (!Number.isFinite(value)) throw new Error('PTM requires finite source coordinates.');
+  if (validateCoordinates) for (const value of frame.fractional) if (!Number.isFinite(value)) throw new Error('PTM requires finite source coordinates.');
   const required = frame.cell.pbc.some(Boolean) ? PTM_MAX_NEIGHBORS : Math.min(PTM_MAX_NEIGHBORS, count - 1);
   for (let atom = 0; atom < table.counts.length; atom++) {
     const length = table.counts[atom];

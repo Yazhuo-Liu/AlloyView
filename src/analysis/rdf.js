@@ -13,7 +13,7 @@ export function calculateRdf(frame, { cutoff, bins = 100, firstType = null, seco
   const { startAtom, endAtom } = atomRange(count, range);
   const normalization = rdfNormalization(frame, { cutoff, bins, firstType, secondType });
   onPhase('indexing');
-  const search = new NeighborSearch(frame);
+  const search = (frame.neighborSearch ?? new NeighborSearch(frame));
   const counts = new Float64Array(bins);
   onPhase('analyzing');
   for (let atom = startAtom; atom < endAtom; atom += 1) {

@@ -107,7 +107,7 @@ test('global bond output cap rejects even when each worker partial fits separate
   } finally { pool.close(); }
 });
 
-test('cancelling geometric shear during tensor construction prevents finalization and frees workers', async () => {
+test('cancelling geometric shear prevents finalization and returns its bounded Worker after ACK', async () => {
   const stats = { created: 0, active: 0, maximum: 0 }, controller = new AbortController();
   const pool = new AnalysisPool({ environment: { navigator: { hardwareConcurrency: 2 } }, workerFactory: workerFactory(stats) });
   let cancelled = null;
@@ -129,7 +129,10 @@ test('cancelling geometric shear during tensor construction prevents finalizatio
     assert.ok(phases.every((update) => update.stage < 2));
     assert.equal(secondResult.status, 'fulfilled');
     assert.deepEqual(secondResult.value.counts, calculateRdf(nextFrame, { cutoff: 3, bins: 16 }).counts);
+    const deadline = performance.now() + 5000;
+    while (pool.active.size && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(pool.active.size, 0); assert.equal(pool.queue.length, 0); assert.equal(pool.controllers.size, 0);
+    assert.equal(stats.created, 1, 'cancellation preserves the resident Worker');
     assert.equal(stats.maximum, 1);
   } finally { pool.close(); }
   assert.equal(stats.active, 0);

@@ -1,6 +1,7 @@
 import { parsePrimitiveColor } from './atom-primitives.js';
 import { dislocationSlicePlanes } from './dislocation-layer.js';
 import { MAX_SLICES, SLICE_EPSILON } from './slicing.js';
+import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms, scalarPreviewAtomVisible } from './scalar-colormap.js';
 
 /** `xray` (the default) keeps every cell translucent and fades deeper cells;
  * `surface` hides faces and edges behind the nearest cells. */
@@ -215,10 +216,15 @@ export function periodicCopies(mesh, positions) {
 const SAME_IMAGE = SAME_IMAGE_TOLERANCE.toFixed(2);
 // Shared GLSL: atom texture lookup and same-location test.
 const ATOM_LOOKUP = `
+${SCALAR_COLOR_GLSL}
+uniform sampler2D uScalarValues;
+uniform int uScalarTextureWidth;
 const uint NO_NEIGHBOR = 0xffffffffu;
 vec4 atomAt(uint index) {
   int atom = int(index);
-  return texelFetch(uAtoms, ivec2(atom % uAtomTextureWidth, atom / uAtomTextureWidth), 0);
+  vec4 value = texelFetch(uAtoms, ivec2(atom % uAtomTextureWidth, atom / uAtomTextureWidth), 0);
+  if (uScalarColorEnabled && !scalarShown(texelFetch(uScalarValues, ivec2(atom % uScalarTextureWidth, atom / uScalarTextureWidth), 0).r)) value.w = 0.0;
+  return value;
 }
 bool sameImage(vec3 a, vec3 b) { return all(lessThan(abs(a - b), vec3(${SAME_IMAGE}))); }`;
 
@@ -488,7 +494,7 @@ class VoronoiOutlineRenderer {
     this.gl = gl; this.program = createProgram(gl, OUTLINE_VERTEX, OUTLINE_FRAGMENT, 'Voronoi outline');
     this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uCenter', 'uBatched', 'uAtoms', 'uAtomTextureWidth',
       'uViewport', 'uEdgeWidth', 'uEdgeColor', 'uOutlineColor', 'uCoreRatio', 'uAlpha', 'uScale', 'uDepthRange', 'uDepthFade', 'uShortEdge',
-      'uAnchor', 'uSliceCount', 'uSlicePlanes[0]']
+      'uAnchor', 'uSliceCount', 'uSlicePlanes[0]', 'uScalarValues', 'uScalarTextureWidth', ...SCALAR_COLOR_UNIFORMS]
       .map(name => [name, gl.getUniformLocation(this.program, name)]));
   }
   // Each edge spans two 24-byte vertex slots: start, offset A, end, offset B.
@@ -503,6 +509,7 @@ class VoronoiOutlineRenderer {
   begin(renderer, planes, { batched = false, textureWidth = 1, scale = 1, depthFade = 0 } = {}) {
     const gl = this.gl, u = this.uniforms;
     gl.useProgram(this.program); gl.uniform1i(u.uBatched, Number(batched)); gl.uniform1i(u.uAtoms, batched ? 5 : 0);
+    applyVoronoiScalarPreview(gl, u, renderer);
     gl.uniform1i(u.uAtomTextureWidth, textureWidth);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
     const width = Math.max(1, renderer.canvas?.width ?? 1), height = Math.max(1, renderer.canvas?.height ?? 1);
@@ -536,7 +543,7 @@ function selectedCellAtoms(renderer) {
   const atoms = new Set([renderer.selected, ...(renderer.getSelectionHighlightAtoms?.() ?? renderer.selectedAtoms ?? []),
     ...(renderer.sliceSelectedAtoms ?? [])]);
   for (const atom of atoms) if (!Number.isInteger(atom) || atom < 0 || atom >= renderer.atomCount
-    || !renderer.visibility?.[atom]) atoms.delete(atom);
+    || !renderer.visibility?.[atom] || !scalarPreviewAtomVisible(renderer.scalarColorPreview, atom)) atoms.delete(atom);
   return atoms;
 }
 
@@ -547,7 +554,7 @@ export class VoronoiCellLayer {
   constructor(gl) {
     this.gl = gl;
     this.program = createProgram(gl);
-    this.uniforms = Object.fromEntries(FACE_UNIFORMS.map(name => [name, gl.getUniformLocation(this.program, name)]));
+    this.uniforms = Object.fromEntries([...FACE_UNIFORMS, 'uScalarValues', 'uScalarTextureWidth', ...SCALAR_COLOR_UNIFORMS].map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.vao = gl.createVertexArray(); this.buffer = gl.createBuffer(); this.indexBuffer = gl.createBuffer();
     gl.bindVertexArray(this.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
     for (let attribute = 0; attribute < 2; attribute++) {
@@ -590,10 +597,12 @@ export class VoronoiCellLayer {
   render(renderer) {
     this.renderedReplicaCount = this.highlightedCellCount = 0;
     const atom = this.geometry?.atomIndex;
-    if (!this.options.enabled || !this.indexCount || !renderer.frame || atom >= renderer.atomCount || !renderer.visibility?.[atom]) return;
+    if (!this.options.enabled || !this.indexCount || !renderer.frame || atom >= renderer.atomCount || !renderer.visibility?.[atom]
+      || !scalarPreviewAtomVisible(renderer.scalarColorPreview, atom)) return;
     const gl = this.gl, u = this.uniforms, planes = dislocationSlicePlanes(renderer);
     gl.useProgram(this.program); gl.bindVertexArray(this.vao);
     gl.uniform1i(u.uBatched, 0);
+    applyVoronoiScalarPreview(gl, u, renderer);
     gl.vertexAttribI4ui(2, 0, 0, 0, 0); gl.vertexAttribI4ui(3, NO_NEIGHBOR, 0, 0, 0);
     // The inspected cell keeps every face; its rear surfaces keep their own shading.
     gl.uniform1i(u.uAnchor, 2); gl.uniform1i(u.uFacing, 0); gl.uniform1i(u.uTwoSided, 0);
@@ -647,7 +656,7 @@ const ALL_CELL_EDGE_WIDTH = 1.6, ALL_CELL_SHORT_EDGE = 12;
 export class VoronoiAllCellLayer {
   constructor(gl) {
     this.gl = gl; this.program = createProgram(gl);
-    this.uniforms = Object.fromEntries(FACE_UNIFORMS.map(name => [name, gl.getUniformLocation(this.program, name)]));
+    this.uniforms = Object.fromEntries([...FACE_UNIFORMS, 'uScalarValues', 'uScalarTextureWidth', ...SCALAR_COLOR_UNIFORMS].map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.texture = gl.createTexture(); this.textureValues = null; this.textureWidth = 0;
     this.options = normalizeVoronoiCellOptions(); this.geometry = null; this.chunks = [];
     this.cellCount = this.renderedReplicaCount = this.renderedChunkCount = 0;
@@ -820,6 +829,7 @@ export class VoronoiAllCellLayer {
     const gl = this.gl, u = this.uniforms, planes = dislocationSlicePlanes(renderer);
     const { opacity, scale } = this.options, surface = this.options.style === 'surface';
     gl.useProgram(this.program); gl.uniform1i(u.uBatched, 1); gl.uniform1i(u.uAtoms, 5);
+    applyVoronoiScalarPreview(gl, u, renderer);
     gl.uniform1i(u.uAtomTextureWidth, this.textureWidth); gl.activeTexture(gl.TEXTURE0 + 5); gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
     const color = parsePrimitiveColor(this.options.color);
@@ -935,6 +945,17 @@ export class VoronoiAllCellLayer {
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
     gl.activeTexture(gl.TEXTURE0);
   }
+}
+
+function applyVoronoiScalarPreview(gl, uniforms, renderer) {
+  // Unit 5 holds the existing atom-position texture; unit 6 is the shared
+  // scalar field. Range changes touch uniforms rather than cell geometry.
+  gl.uniform1i(uniforms.uScalarValues, renderer.scalarColorPreview ? 6 : 0);
+  gl.uniform1i(uniforms.uScalarTextureWidth, renderer.scalarColorTextureWidth ?? 1);
+  if (renderer.scalarColorPreview) {
+    gl.activeTexture(gl.TEXTURE0 + 6); gl.bindTexture(gl.TEXTURE_2D, renderer.scalarColorTexture);
+  }
+  applyScalarColorUniforms(gl, uniforms, renderer.scalarColorPreview);
 }
 
 // Sort [anchor, first, count] draw ranges and join adjacent ones per anchor.

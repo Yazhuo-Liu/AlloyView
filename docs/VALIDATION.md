@@ -1,6 +1,82 @@
 # Validation record
 
-Validation date: 2026-10-07 (America/New_York)
+Latest validation: 2026-10-08 (UTC). Earlier entries retain their own dates.
+
+## P10, P13, P15 and P18 integration (2026-10-08)
+
+Reference: `cda3c41`. The checks below use Node.js 24.19 and headless Chromium
+in the cloud environment; they do not measure a physical GPU.
+
+- **P10 CPU reuse:** independent comparisons cover 164 scientific cases on
+  copied and shared-memory Workers, including fixed/adaptive CNA, manual/Auto
+  CSP, PTM and ordering, coordination, bonds/distributions, RDF, local shear,
+  reference strain, cached/fresh ideal strain and displacement. All arrays and
+  statistics match the reference with `Object.is`, including NaNs. Fixtures
+  include HEA, the Fe loop, FCC/BCC/HCP, mixed phases, thin periodic cells and
+  open/triclinic boundaries. Tests also cover mutations, concurrent resident
+  frames, canonical reductions, source cleanup, memory accounting and
+  foreground admission during background preparation. Another 56 paired PTM
+  Worker cases exercise prepared-neighbor tables, L1₂/B2 ordering, pure and
+  multi-species types, in-place type changes, repeated fits and dynamic slicing;
+  all seven PTM output fields remain identical.
+- **P13 rendering:** the 20,000-atom browser fixture has no repeated scalar,
+  color, mask or texture uploads, CPU color commits or scalar-array scans on
+  nine drag ticks after preparation. Preview pixels differ by at most one RGB
+  byte; committed pixels are byte-identical. Tests cover bond endpoints,
+  selection overrides, Voronoi faces/edges, both views, immediate PNG capture
+  before the next animation frame, keyboard/pointer cancellation, frame
+  changes and extreme-value CPU fallback. Closing the source clears all eight
+  atom buffers and shrinks the scalar texture while retaining reusable GL
+  objects. The view/Voronoi browser suite also passes on desktop and mobile,
+  including all 28,800 HEA cells and selected-cell highlights.
+- **P15 parsing:** 83 independent comparisons preserve every parsed field,
+  ID and property across all 44 examples, gzip inputs, late headers, malformed
+  trajectories and random/backward CFG checkpoints. Five physical replication
+  Worker fixtures match direct replication exactly, including triclinic cells,
+  escaped IDs and imported string/vector/category properties. The real-browser
+  test observes three concurrent parsers within a three-permit CPU budget,
+  foreground seeks during prefetch, buffered playback and pause, cancellation,
+  replicated next frames and source restoration. No permits remain after
+  close. Load/replication prewarm checks preserve Workers and native heaps.
+- **P18 DXA:** both rebuilt Wasm artifacts preserve the reference's normalized
+  complete-result SHA-256 in 12 serial comparisons covering perfect FCC/BCC/HCP,
+  a periodic screw, HEA and the real Fe loop. Native regression tests hold
+  serial Delaunay geometry fixed while comparing one versus three edge-pass
+  threads, including planar faults and a dislocation. They compare atom labels,
+  full line coordinates, Burgers vectors, lengths, junctions and diagnostic
+  regions. Parallel workers use private path scratch and defer graph-cache
+  writes to the original ordered commit. Measurements of candidate/path stages
+  fix Delaunay geometry to avoid attributing existing PDEL tie variation to
+  these changes; see [the CPU profile](DXA_CPU_PROFILE.md).
+
+The final build and all **1,286 Node tests** pass. Targeted browser checks pass
+for scalar legend preview, trajectory Workers, view/Voronoi and CPU prewarm.
+The last integration review also fixed cancellation during imported-property
+attachment and cancellation of an image-series export while awaiting its index.
+The complete browser smoke passes, including real Worker cancellation/source
+close, physically replicated trajectories, mobile input, immediate ZIP export
+cancellation, configuration replay and PNG output.
+Both DXA browser suites pass: complete extraction and 14 isolated/nonisolated
+parallel-stage checks covering pool reuse, cancellation/retry, exact private
+stage parity and initialization/protocol/stalled-Worker fallback. The rebuilt
+source checksum manifest matches the vendored files.
+
+Warm CPU timings below are medians of three alternating reference/current
+runs using **six Workers** and resident inputs. Worker count was explicitly
+configured for this comparison; these timings are not portable speedup claims.
+Updated warm calls report zero coordinate uploads and index builds.
+
+| Case | Private copies, before → after | Shared index, before → after |
+| --- | ---: | ---: |
+| HEA adaptive CNA | 65 → 60 ms | 69 → 62 ms |
+| HEA CSP (12 neighbors) | 58 → 40 ms | 47 → 35 ms |
+| Fe Auto CSP | 136 → 146 ms | 169 → 121 ms |
+| NiGB PTM | 869 → 784 ms | 839 → 730 ms |
+
+The private Fe Auto CSP measurement is slower. Initialization/preparation and
+these warm calculations have different costs; reuse does not guarantee every
+analysis is faster on every host. DXA stage measurements and exact-network
+checks are recorded separately in [the CPU profile](DXA_CPU_PROFILE.md).
 
 ## Backlog phase 1: performance and feature additions (2026-10-07)
 

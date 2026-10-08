@@ -1,48 +1,98 @@
 import { calculateCoordination } from '../analysis/coordination.js';
 import { cellFaceHeights, frameTransferables } from '../data/model.js';
 import { prepareSequenceBaseline, unwrapSequenceFrame } from '../data/trajectory.js';
-import { parseCfg } from '../io/cfg.js';
 import { isReadableLocalFile, normalizeLocalFiles } from '../io/local-files.js';
 import { detectStructureFormatHeader, inferStructureFormatFromPath } from '../io/file-sequences.js';
-import { assertGzipSupported, decompressToFile, readFileBytes, readFileText, readStructureHeader } from '../io/gzip.js';
+import { assertGzipSupported, decompressToFile, readStructureHeader } from '../io/gzip.js';
 import { indexLammpsDump, readLammpsFrame } from '../io/lammps-dump.js';
 import { indexLammpsDumpSeries, readLammpsSeriesFrame } from '../io/lammps-series.js';
 import { indexXyz, readXyzFrame } from '../io/xyz.js';
 import { indexPdb, readPdbFrame } from '../io/pdb.js';
 import { parseLammpsData } from '../io/lammps-data.js';
 import { parsePoscar } from '../io/poscar.js';
+import { FrameParserPool } from '../data/frame-parser-pool.js';
+import { openIndexedTrajectory } from './indexed-trajectory.js';
 
 const SINGLE_FRAME_PARSERS = { 'lammps-data': parseLammpsData, poscar: parsePoscar };
 
 let source = null;
 let wasmModulePromise;
+let parserPool = null;
+let parserBackgroundCount;
+let loadController = null;
+let useCpuBudget = false;
+let nextLeaseId = 1;
+const leases = new Map();
+const frameRequests = new Map();
+
+function acquireParserCpu({ background, signal, priority }) {
+  if (!useCpuBudget) return Promise.resolve(null);
+  const leaseId = nextLeaseId++;
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      if (!leases.delete(leaseId)) return;
+      self.postMessage({ event: 'cpu-cancel', leaseId });
+      reject(new DOMException('Frame parsing cancelled.', 'AbortError'));
+    };
+    leases.set(leaseId, { resolve, reject, signal, abort });
+    signal.addEventListener('abort', abort, { once: true });
+    self.postMessage({ event: 'cpu-acquire', leaseId, background, priority });
+  });
+}
+
+function getParserPool() {
+  if (!parserPool) parserPool = new FrameParserPool({ acquire: acquireParserCpu, backgroundCount: parserBackgroundCount });
+  return parserPool;
+}
 
 self.addEventListener('message', async (event) => {
-  const { id, type, payload } = event.data;
+  const { id, type, payload = {} } = event.data;
+  if (type === 'cpu-granted' || type === 'cpu-denied') {
+    const pending = leases.get(payload.leaseId);
+    if (!pending) {
+      if (type === 'cpu-granted') self.postMessage({ event: 'cpu-release', leaseId: payload.leaseId });
+      return;
+    }
+    leases.delete(payload.leaseId);
+    pending.signal.removeEventListener('abort', pending.abort);
+    if (type === 'cpu-granted') pending.resolve({ release: () => self.postMessage({ event: 'cpu-release', leaseId: payload.leaseId }) });
+    else pending.reject(Object.assign(new Error(payload.error), { name: payload.name ?? 'Error' }));
+    return;
+  }
+  if (type === 'cancel-prefetch' || type === 'cancel-frame') {
+    for (const [requestId, task] of frameRequests) {
+      if ((type === 'cancel-frame' && requestId === payload.id)
+        || (type === 'cancel-prefetch' && task.background)) task.controller.abort();
+    }
+    return;
+  }
+  let task, requestLoadController;
   try {
     if (type === 'load') {
-      // Older cached clients sent `file`, including an array during the
-      // transition to sequences. Accept both versions of the load message.
-      const result = await loadSource(payload.files ?? payload.file, id);
+      loadController?.abort();
+      for (const request of frameRequests.values()) request.controller.abort();
+      parserPool?.close(); parserPool = null;
+      requestLoadController = loadController = new AbortController();
+      useCpuBudget = Boolean(payload.cpuBudget);
+      parserBackgroundCount = payload.parserConcurrency;
+      const result = await loadSource(payload.files ?? payload.file, id, payload.incremental, requestLoadController);
+      if (requestLoadController.signal.aborted || requestLoadController !== loadController) throw new DOMException('Structure source closed.', 'AbortError');
+      getParserPool().setAtomCount(result.frame.ids.length);
       self.postMessage({ id, ok: true, result }, frameTransferables(result.frame));
+      return;
+    }
+    if (type === 'index-complete') {
+      assertSource();
+      await source.indexPromise;
+      self.postMessage({ id, ok: true, result: { frameCount: source.frameCount ?? source.offsets?.length ?? source.files?.length, indexComplete: true } });
       return;
     }
     if (type === 'frame') {
       assertSource();
-      let frame;
-      if (source.format === 'lammps-dump') {
-        frame = await readLammpsFrame(source.file, source.offsets, payload.index, source.file.name);
-      } else if (source.format === 'lammps-dump-sequence') {
-        frame = await readLammpsSeriesFrame(source, payload.index);
-      } else if (source.format === 'cfg-sequence') {
-        frame = await queueCfgSequenceFrame(payload.index, id);
-      } else if (['xyz', 'xyz-sequence', 'pdb', 'pdb-sequence'].includes(source.format)) {
-        frame = await readIndexedTextFrame(source, payload.index);
-      } else if (SINGLE_FRAME_PARSERS[source.format] && payload.index === 0) {
-        frame = SINGLE_FRAME_PARSERS[source.format](await readFileText(source.file), source.file.name);
-      } else {
-        throw new Error('A single CFG file contains only one frame. Select multiple numbered CFG files to load a sequence.');
-      }
+      task = { controller: new AbortController(), background: Boolean(payload.background) };
+      frameRequests.set(id, task);
+      const frame = await readSourceFrame(source, payload.index, id, task);
+      if (task.controller.signal.aborted) throw new DOMException('Frame parsing cancelled.', 'AbortError');
       self.postMessage({ id, ok: true, result: { frame, index: payload.index } }, frameTransferables(frame));
       return;
     }
@@ -53,15 +103,46 @@ self.addEventListener('message', async (event) => {
     }
     throw new Error(`Unknown Worker request: ${type}`);
   } catch (error) {
-    self.postMessage({
-      id,
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    if (type === 'load') requestLoadController?.abort();
+    self.postMessage({ id, ok: false, error: error instanceof Error ? error.message : String(error), name: error.name });
+  } finally {
+    if (task && frameRequests.get(id) === task) {
+      task.controller.abort(); // Also cancel unneeded CFG read-ahead after a malformed frame.
+      frameRequests.delete(id);
+    }
   }
 });
 
-async function loadSource(inputFiles, requestId) {
+async function readSourceFrame(current, index, requestId, task) {
+  const options = { background: task.background, signal: task.controller.signal };
+  if (current.descriptors) {
+    if (!current.descriptors[index] && !current.indexComplete) await current.indexPromise;
+    const descriptor = current.descriptors[index];
+    if (!Number.isInteger(index) || !descriptor) throw new Error(`Trajectory frame ${index} is outside the available range.`);
+    return getParserPool().parse(descriptor, options);
+  }
+  if (current.format === 'cfg-sequence') return readCfgSequenceFrame(current, index, requestId, options);
+  if (current.format === 'cfg' || SINGLE_FRAME_PARSERS[current.format]) {
+    if (index !== 0) throw new Error('A single structure contains only one frame.');
+    return getParserPool().parse({ format: current.format, file: current.file, index }, options);
+  }
+  let chunk = current;
+  let localIndex = index;
+  if (current.chunks) {
+    for (const candidate of current.chunks) { if (candidate.firstFrame <= index) chunk = candidate; else break; }
+    localIndex -= chunk.firstFrame;
+  }
+  const format = current.baseFormat ?? current.format.replace('-sequence', '');
+  const offsets = chunk.offsets ?? chunk.indexed?.offsets;
+  const descriptors = chunk.indexed?.frames;
+  const count = current.frameCount ?? current.offsets?.length;
+  if (!Number.isInteger(index) || index < 0 || index >= count) throw new Error(`Trajectory frame ${index} is outside the available range.`);
+  const descriptor = descriptors?.[localIndex] ?? { start: offsets[localIndex], end: offsets[localIndex + 1] ?? chunk.file.size };
+  return getParserPool().parse({ ...descriptor, format, file: chunk.file, index,
+    header: descriptor.header ?? chunk.indexed?.header }, options);
+}
+
+async function loadSource(inputFiles, requestId, incremental = false, controller = loadController) {
   const files = normalizeLocalFiles(inputFiles);
   if (files.length === 0 || files.some((file) => !isReadableLocalFile(file))) {
     throw new Error('No valid local file was provided.');
@@ -76,7 +157,9 @@ async function loadSource(inputFiles, requestId) {
       const header = await readStructureHeader(file);
       formats.push(detectStructureFormatHeader(header) ?? inferStructureFormatFromPath(file.name));
     }
-    if (formats.every((format) => format === 'cfg')) return loadCfgSequence(files, requestId);
+    if (controller.signal.aborted) throw new DOMException('Structure source closed.', 'AbortError');
+    if (formats.every((format) => format === 'cfg')) return loadCfgSequence(files, requestId, controller);
+    if (incremental && formats.every(format => format === formats[0]) && ['lammps-dump', 'xyz', 'pdb'].includes(formats[0])) return loadProgressive(files, formats[0], requestId, controller);
     if (formats.every((format) => format === 'lammps-dump')) return loadLammpsDumpSequence(await decompressFiles(files), requestId);
     if (formats.every((format) => format === 'xyz')) return loadIndexedTextSource(await decompressFiles(files), 'xyz', requestId);
     if (formats.every((format) => format === 'pdb')) return loadIndexedTextSource(await decompressFiles(files), 'pdb', requestId);
@@ -85,6 +168,8 @@ async function loadSource(inputFiles, requestId) {
   const [inputFile] = files;
   const header = await readStructureHeader(inputFile);
   const format = detectStructureFormatHeader(header) ?? inferStructureFormatFromPath(inputFile.name);
+  if (controller.signal.aborted) throw new DOMException('Structure source closed.', 'AbortError');
+  if (incremental && ['lammps-dump', 'xyz', 'pdb'].includes(format)) return loadProgressive(files, format, requestId, controller);
   if (format === 'lammps-dump') {
     const file = await decompressToFile(inputFile);
     const { offsets, indexMs } = await indexLammpsDump(file, ({ loaded, total }) => {
@@ -96,21 +181,31 @@ async function loadSource(inputFiles, requestId) {
   }
   if (format === 'cfg') {
     const startedAt = performance.now();
-    const bytes = await readFileBytes(inputFile);
     source = { file: inputFile, format: 'cfg', offsets: [0] };
-    const frame = parseCfg(bytes, inputFile.name);
+    const frame = await getParserPool().parse({ format, file: inputFile, index: 0 }, { signal: controller.signal });
     return { format: source.format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
   }
   if (format === 'xyz' || format === 'pdb') return loadIndexedTextSource(await decompressFiles(files), format, requestId);
   if (SINGLE_FRAME_PARSERS[format]) {
     const file = inputFile;
     const startedAt = performance.now();
-    const text = await readFileText(file);
     source = { file, format, offsets: [0] };
-    const frame = SINGLE_FRAME_PARSERS[format](text, file.name);
+    const frame = await getParserPool().parse({ format, file, index: 0 }, { signal: controller.signal });
     return { format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
   }
   throw new Error('Unrecognized file format. Supported structures are AtomEye CFG, LAMMPS text dump and data files, XYZ / Extended XYZ, PDB, and VASP POSCAR, uncompressed or gzip-compressed.');
+}
+
+async function loadProgressive(files, format, requestId, controller = loadController) {
+  const opened = await openIndexedTrajectory(files, format, {
+    signal: controller.signal,
+    parse: descriptor => getParserPool().parse(descriptor, { signal: controller.signal }),
+    onProgress: progress => self.postMessage({ id: requestId, event: 'progress', ...progress }),
+    onIndex: result => { if (controller === loadController && !controller.signal.aborted) self.postMessage({ event: 'source-info', loadId: requestId, result }); },
+  });
+  if (controller.signal.aborted) throw new DOMException('Structure source closed.', 'AbortError');
+  source = opened.source;
+  return opened.result;
 }
 
 async function decompressFiles(files) {
@@ -164,11 +259,12 @@ async function loadLammpsDumpSequence(inputFiles, requestId) {
   return { format: source.format, frameCount: source.frameCount, indexMs: source.indexMs, frame };
 }
 
-async function loadCfgSequence(inputFiles, requestId) {
+async function loadCfgSequence(inputFiles, requestId, controller = loadController) {
   const startedAt = performance.now();
   const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
   const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
   for (let index = 0; index < files.length; index += 1) {
+    if (controller.signal.aborted) throw new DOMException('Structure source closed.', 'AbortError');
     const header = await readStructureHeader(files[index], 4096);
     const format = detectStructureFormatHeader(header) ?? inferStructureFormatFromPath(files[index].name);
     if (format !== 'cfg') {
@@ -182,9 +278,9 @@ async function loadCfgSequence(inputFiles, requestId) {
       stage: 'sequence-index',
     });
   }
-  const first = parseCfg(await readFileBytes(files[0]), files[0].name);
+  const first = await getParserPool().parse({ format: 'cfg', file: files[0], index: 0 }, { signal: controller.signal });
   const continuity = prepareSequenceBaseline(first);
-  source = { files, format: 'cfg-sequence', continuity, checkpoints: new Map(), frameQueue: Promise.resolve() };
+  source = { files, format: 'cfg-sequence', continuity, checkpoints: new Map() };
   rememberContinuity(source, continuity);
   return {
     format: source.format,
@@ -192,13 +288,6 @@ async function loadCfgSequence(inputFiles, requestId) {
     indexMs: Math.max(0, performance.now() - startedAt - first.parseMs),
     frame: first,
   };
-}
-
-function queueCfgSequenceFrame(index, requestId) {
-  const sequenceSource = source;
-  const task = sequenceSource.frameQueue.then(() => readCfgSequenceFrame(sequenceSource, index, requestId));
-  sequenceSource.frameQueue = task.catch(() => {});
-  return task;
 }
 
 // Each sequence frame is unwrapped against the state of the frame before it.
@@ -216,7 +305,7 @@ function rememberContinuity(sequenceSource, state) {
   while (checkpoints.size > limit) checkpoints.delete(checkpoints.keys().next().value);
 }
 
-async function readCfgSequenceFrame(sequenceSource, index, requestId) {
+async function readCfgSequenceFrame(sequenceSource, index, requestId, options = {}) {
   if (!Number.isInteger(index) || index < 0 || index >= sequenceSource.files.length) {
     throw new Error(`CFG sequence frame ${index} is outside the available range.`);
   }
@@ -228,7 +317,7 @@ async function readCfgSequenceFrame(sequenceSource, index, requestId) {
   let start = continuity ? continuity.index + 1 : 1;
   let frame = null;
   if (!continuity) {
-    frame = parseCfg(await readFileBytes(sequenceSource.files[0]), sequenceSource.files[0].name);
+    frame = await getParserPool().parse({ format: 'cfg', file: sequenceSource.files[0], index: 0 }, options);
     continuity = prepareSequenceBaseline(frame);
     rememberContinuity(sequenceSource, continuity);
     if (index === 0) {
@@ -237,18 +326,26 @@ async function readCfgSequenceFrame(sequenceSource, index, requestId) {
     }
   }
 
+  // Read/parse ahead in parallel, but unwrap in original frame order. This
+  // preserves ID matching and checkpoint arithmetic across boundary crossings.
+  const ahead = Math.max(1, getParserPool().backgroundCount + 1);
+  const parsed = new Map();
+  const enqueue = current => {
+    const promise = getParserPool().parse({ format: 'cfg', file: sequenceSource.files[current], index: current },
+      { ...options, background: options.background || current !== start, priority: options.background ? -20 : 20 });
+    promise.catch(() => {});
+    parsed.set(current, promise);
+  };
+  for (let current = start; current <= Math.min(index, start + ahead - 1); current++) enqueue(current);
   for (let current = start; current <= index; current += 1) {
-    const file = sequenceSource.files[current];
-    frame = parseCfg(await readFileBytes(file), file.name);
+    if (options.signal?.aborted) throw new DOMException('Frame parsing cancelled.', 'AbortError');
+    frame = await parsed.get(current);
+    parsed.delete(current);
     continuity = unwrapSequenceFrame(frame, continuity, current);
     rememberContinuity(sequenceSource, continuity);
-    self.postMessage({
-      id: requestId,
-      event: 'progress',
-      loaded: current - start + 1,
-      total: index - start + 1,
-      stage: 'sequence-unwrap',
-    });
+    if (current + ahead <= index) enqueue(current + ahead);
+    self.postMessage({ id: requestId, event: 'progress', loaded: current - start + 1,
+      total: index - start + 1, stage: 'sequence-unwrap' });
   }
   sequenceSource.continuity = continuity;
   return frame;

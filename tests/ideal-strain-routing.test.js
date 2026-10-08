@@ -149,26 +149,35 @@ test('parallel PTM dispatch slices ordinary private tables, retains multishell s
         return { addEventListener(name, listener) { worker.on(name, data => listener(name === 'message' ? { data } : data)); },
           postMessage(data, transfer) {
             const table = data.preparedNeighbors;
-            payloads.push({ start: table.startAtom, end: table.endAtom, counts: table.counts.length,
-              sourceCount: table.sourceAtomCount, buffer: table.vectors.buffer });
-            assert.equal(table.vectors.buffer instanceof SharedArrayBuffer, shared);
-            if (!shared) assert.notStrictEqual(table.vectors.buffer, preparedNeighbors.vectors.buffer);
-            assert.deepEqual(table.vectors, preparedNeighbors.vectors.subarray(table.startAtom * 54, table.endAtom * 54));
+            payloads.push({ fitStart: data.startAtom, fitEnd: data.endAtom, ...(table ? {
+              start: table.startAtom, end: table.endAtom, counts: table.counts.length,
+              sourceCount: table.sourceAtomCount, buffer: table.vectors.buffer } : {}) });
+            if (table) {
+              assert.equal(table.vectors.buffer instanceof SharedArrayBuffer, shared);
+              if (!shared) assert.notStrictEqual(table.vectors.buffer, preparedNeighbors.vectors.buffer);
+              assert.deepEqual(table.vectors, preparedNeighbors.vectors.subarray(table.startAtom * 54, table.endAtom * 54));
+            }
             worker.postMessage(data, transfer);
           }, terminate() { worker.terminate(); } };
       } });
     try {
       const result = await pool.analyze(frame, { kind: 'ptm', preparedNeighbors, flags });
       assert.equal(result.workerCount, 2);
-      assert.equal(payloads.length, 2);
-      assert.ok(payloads.every(payload => payload.sourceCount === atomCount));
+      assert.equal(payloads.length, result.chunkCount);
+      assert.ok(payloads.length > result.workerCount, 'bounded chunks dynamically reuse resident fitters');
+      const tables = payloads.filter(payload => payload.buffer);
+      assert.ok(tables.every(payload => payload.sourceCount === atomCount));
       if (!shared && flags === 31) {
-        assert.deepEqual(payloads.map(payload => [payload.start, payload.end]).sort((a, b) => a[0] - b[0]),
-          [[0, Math.floor(atomCount / 2)], [Math.floor(atomCount / 2), atomCount]]);
-        assert.equal(payloads.reduce((sum, payload) => sum + payload.counts, 0), atomCount);
+        assert.equal(tables.length, result.chunkCount, 'ordinary private neighbor tables transfer only each chunk rows');
+        const sorted = tables.sort((a, b) => a.start - b.start);
+        assert.equal(sorted[0].start, 0); assert.equal(sorted.at(-1).end, atomCount);
+        assert.ok(sorted.every((payload, index) => payload.start === payload.fitStart && payload.end === payload.fitEnd
+          && (index === 0 || payload.start === sorted[index - 1].end)));
+        assert.equal(tables.reduce((sum, payload) => sum + payload.counts, 0), atomCount);
       } else {
-        assert.ok(payloads.every(payload => payload.start === 0 && payload.end === atomCount && payload.counts === atomCount));
-        if (shared) assert.strictEqual(payloads[0].buffer, payloads[1].buffer);
+        assert.equal(tables.length, result.workerCount, 'full source tables upload once per resident fitter');
+        assert.ok(tables.every(payload => payload.start === 0 && payload.end === atomCount && payload.counts === atomCount));
+        if (shared) assert.strictEqual(tables[0].buffer, tables[1].buffer);
       }
       for (const field of Object.keys(PTM_FIELDS)) assert.deepEqual(result[field], expected[field], `${shared}/${flags}/${field}`);
       assert.ok(preparedNeighbors.vectors.byteLength > 0);

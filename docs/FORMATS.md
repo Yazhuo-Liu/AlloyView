@@ -301,10 +301,24 @@ spherical-shell normalization.
 
 ## Trajectory memory behavior
 
-The structure Worker scans the local `File` in 4 MiB byte chunks for line-start
-`ITEM: TIMESTEP` markers. It records byte offsets but does not call `file.text()`
-for the complete trajectory. A requested frame is read with `Blob.slice(start,
+The structure Worker scans the local `File` in bounded byte chunks for frame
+boundaries. It records byte offsets but does not call `file.text()` for the
+complete trajectory. Each complete frame becomes available before indexing
+the remaining file finishes; the viewer's frame count grows as more complete
+frames are found. A requested frame is read with `Blob.slice(start,
 end).arrayBuffer()`, parsed, and transferred to the main thread.
+
+A dedicated foreground parser handles requested frames. Up to four background
+parsers can prepare nearby frames in parallel, within the shared logical-CPU
+and memory budgets. Changing the requested frame cancels obsolete prefetch;
+source generations prevent late results from reaching a different source.
+Queued parsing is cancelled immediately. An active synchronous parse finishes
+before its result is discarded and its Worker and CPU permit become available
+again, preserving the pool instead of recreating Workers while scrubbing.
+Malformed later frame boundaries are reported even if an earlier valid frame
+has already been displayed. Configuration replay waits for indexing before
+checking that its saved frame exists. gzip trajectories still require the
+existing full decompression before random-access indexing.
 
 The atom rows of LAMMPS dumps, CFG files and XYZ frames are converted directly
 from these bytes instead of splitting decoded lines into strings. Every value
@@ -328,11 +342,11 @@ XYZ frame-count blocks and PDB model boundaries are likewise indexed in the
 structure Worker, then requested frames are sliced and parsed. Numbered
 homogeneous XYZ/PDB sequences concatenate those per-file indexes.
 
-For a multi-file CFG sequence (including NEB image sets), the Worker retains
-the local `File` handles and one continuity state (IDs plus wrapped/unwrapped
-fractional coordinates).
-It parses forward on demand. A backward random access replays from the first
-image to reconstruct the same unwrapped state.
+For a multi-file CFG sequence (including NEB image sets), raw frames can be
+parsed in parallel. ID-based unwrapping retains ordered continuity states
+(IDs plus wrapped/unwrapped fractional coordinates), so completion order does
+not change the inferred images. Backward access resumes from bounded retained
+checkpoints or replays from the first image when necessary.
 
 After the first visible frame, the main thread estimates parsed bytes per frame
 and selects a cache limit from the browser heap limit/device-memory hints when
@@ -341,6 +355,9 @@ fits the budget, all remaining frames are parsed lazily during idle time. If it
 does not, only an LRU window around the displayed frame is prefetched. Adding an
 analysis array triggers another estimate and may shrink the cache. This policy
 is a heuristic, because browsers do not expose a portable exact memory counter.
+Playback prepares its next frame while the current one remains visible.
+Physical replication runs in a reusable Worker; it retains the same atom IDs,
+coordinates and properties as the direct implementation and supports cancellation.
 
 The folder opener examines conventional `.cfg`, `.dump`, `.lmp`, `.lammpstrj`,
 `.lammpstraj`, `.xyz`, `.extxyz`, `.pdb`, `.ent` and `.txt` paths, the same names

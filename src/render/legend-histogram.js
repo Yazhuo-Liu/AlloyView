@@ -36,12 +36,12 @@ export function scalarLegendHistogram(data, minimum, maximum, bins = LEGEND_HIST
 
 /** A faint per-band histogram behind the color gradient and a hover/tap probe
  * reporting the value under the pointer and how many atoms share its band. */
-export function createLegendScale(root, legend, { format = String } = {}) {
+export function createLegendScale(root, legend, { format = String, histogram: showHistogram = true } = {}) {
   const scale = root.createElement('div');
   scale.className = 'legend-scale';
   const { minimum, maximum } = legend, span = maximum - minimum;
   const position = value => span > 0 ? (value - minimum) / span : 0.5;
-  const histogram = legend.property?.data ? scalarLegendHistogram(legend.property.data, minimum, maximum) : null;
+  const histogram = showHistogram && legend.property?.data ? scalarLegendHistogram(legend.property.data, minimum, maximum) : null;
   if (histogram?.peak) {
     const svg = root.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('class', 'legend-histogram'); svg.setAttribute('aria-hidden', 'true');

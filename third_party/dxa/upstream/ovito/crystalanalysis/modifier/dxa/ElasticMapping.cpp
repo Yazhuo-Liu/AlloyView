@@ -39,30 +39,54 @@ bool ElasticMapping::generateTessellationEdges(ProgressingTask& operation)
 {
     operation.setProgressMaximum(tessellation().numberOfPrimaryTetrahedra());
 
-    // Generate list of tessellation edges.
-    for(DelaunayTessellation::CellIterator cellIter = tessellation().begin_cells(); cellIter != tessellation().end_cells(); ++cellIter) {
-        DelaunayTessellation::CellHandle cell = *cellIter;
+    // Six candidate bits per primary cell. The prepass only reads immutable
+    // geometry; all deduplication, first-seen orientations and adjacency-list
+    // insertion below retain the original cell/edge order. Keeping one byte
+    // per primary cell avoids a second full edge index or six endpoint arrays.
+    auto candidateMask = [&](DelaunayTessellation::CellHandle cell) {
+        DelaunayTessellation::VertexHandle handles[4];
+        size_t indices[4];
+        for(int vertex = 0; vertex < 4; ++vertex) {
+            handles[vertex] = tessellation().cellVertex(cell, vertex);
+            indices[vertex] = tessellation().vertexIndex(handles[vertex]);
+        }
+        uint8_t mask = 0;
+        for(int edgeIndex = 0; edgeIndex < 6; ++edgeIndex) {
+            const int a = edgeVertices[edgeIndex][0], b = edgeVertices[edgeIndex][1];
+            if(indices[a] == indices[b]) continue;
+            const Point3& p1 = tessellation().vertexPosition(handles[a]);
+            const Point3& p2 = tessellation().vertexPosition(handles[b]);
+            if(structureAnalysis().cell() && structureAnalysis().cell()->isWrappedVector(p1 - p2)) continue;
+            mask |= uint8_t(1u << edgeIndex);
+        }
+        return mask;
+    };
+    std::vector<uint8_t> candidates;
+    if(dxaThreadCount() > 1 && tessellation().numberOfPrimaryTetrahedra() >= 2048) {
+        try { candidates.resize(tessellation().numberOfPrimaryTetrahedra()); }
+        catch(const std::bad_alloc&) { /* The original serial path needs no mask. */ }
+        if(!candidates.empty()) {
+            if(!parallelForWithProgress(tessellation().numberOfTetrahedra(), [&](size_t index) {
+                const auto cell = static_cast<DelaunayTessellation::CellHandle>(index);
+                if(!tessellation().isGhostCell(cell)) candidates[tessellation().getCellIndex(cell)] = candidateMask(cell);
+            })) return false;
+            _parallelCandidateCells = candidates.size();
+        }
+    }
 
-        // Skip invalid cells (those not connecting four physical atoms) and ghost cells.
+    for(auto cellIter = tessellation().begin_cells(); cellIter != tessellation().end_cells(); ++cellIter) {
+        const auto cell = *cellIter;
         if(tessellation().isGhostCell(cell)) continue;
-
-        // Update progress indicator.
-        if(!operation.setProgressValueIntermittent(tessellation().getCellIndex(cell)))
-            return false;
-
-        // Create edge data structure for each of the six edges of the cell.
-        for(int edgeIndex = 0; edgeIndex < 6; edgeIndex++) {
-            size_t vertex1 = tessellation().vertexIndex(tessellation().cellVertex(cell, edgeVertices[edgeIndex][0]));
-            size_t vertex2 = tessellation().vertexIndex(tessellation().cellVertex(cell, edgeVertices[edgeIndex][1]));
-            if(vertex1 == vertex2)
-                continue;
-            Point3 p1 = tessellation().vertexPosition(tessellation().cellVertex(cell, edgeVertices[edgeIndex][0]));
-            Point3 p2 = tessellation().vertexPosition(tessellation().cellVertex(cell, edgeVertices[edgeIndex][1]));
-            if(structureAnalysis().cell() && structureAnalysis().cell()->isWrappedVector(p1 - p2))
-                continue;
-            TessellationEdge* edge = findEdge(vertex1, vertex2);
-            if(edge == nullptr) {
-                // Create a new edge.
+        if(!operation.setProgressValueIntermittent(tessellation().getCellIndex(cell))) return false;
+        const uint8_t mask = candidates.empty() ? candidateMask(cell) : candidates[tessellation().getCellIndex(cell)];
+        if(mask == 0) continue;
+        size_t indices[4];
+        for(int vertex = 0; vertex < 4; ++vertex)
+            indices[vertex] = tessellation().vertexIndex(tessellation().cellVertex(cell, vertex));
+        for(int edgeIndex = 0; edgeIndex < 6; ++edgeIndex) {
+            if(!(mask & (1u << edgeIndex))) continue;
+            const size_t vertex1 = indices[edgeVertices[edgeIndex][0]], vertex2 = indices[edgeVertices[edgeIndex][1]];
+            if(findEdge(vertex1, vertex2) == nullptr) {
                 TessellationEdge* edge12 = _edgePool.construct(vertex1, vertex2);
                 edge12->nextLeavingEdge = _vertexEdges[vertex1].first;
                 _vertexEdges[vertex1].first = edge12;
@@ -133,50 +157,111 @@ bool ElasticMapping::assignVerticesToClusters(ProgressingTask& operation)
 bool ElasticMapping::assignIdealVectorsToEdges(int crystalPathSteps, ProgressingTask& operation)
 {
     CrystalPathFinder pathFinder(_structureAnalysis, crystalPathSteps);
-
-    // Try to assign a reference vector to the tessellation edges.
     operation.setProgressMaximum(_vertexEdges.size());
+
+    // Graph cache writes are committed in the original vertex/linked-list order.
+    // Parallel searches only use transitions which already exist at the start
+    // of a batch. A missing transition defers the complete path search, because
+    // mutating/cache-filling the graph on workers can change tie resolution.
+    auto commit = [&](TessellationEdge* edge, const std::optional<ClusterVector>& idealVector) {
+        if(!idealVector) return;
+        Cluster* cluster1 = clusterOfVertex(edge->vertex1);
+        Cluster* cluster2 = clusterOfVertex(edge->vertex2);
+        Vector3 localVec;
+        if(idealVector->cluster() == cluster1) localVec = idealVector->localVec();
+        else {
+            ClusterTransition* transition = clusterGraph()->determineClusterTransition(idealVector->cluster(), cluster1);
+            if(!transition) return;
+            localVec = transition->transform(idealVector->localVec());
+        }
+        ClusterTransition* transition = clusterGraph()->determineClusterTransition(cluster1, cluster2);
+        if(transition) edge->assignClusterVector(localVec, transition);
+    };
+    const bool useParallel = dxaThreadCount() > 1 && _edgeCount >= 2048;
+    // Bound extra storage independent of atom count: 3 MiB in Wasm32.
+    // Unassigned edges already own vector storage. Each worker may write that
+    // storage, but clusterTransition remains null until the ordered commit.
+    constexpr size_t batchCapacity = 262144;
+    struct SearchResult { Cluster* cluster = nullptr; bool deferred = false; };
+    std::vector<TessellationEdge*> batch;
+    std::vector<SearchResult> results;
+    if(useParallel) {
+        try { batch.reserve(std::min(batchCapacity, _edgeCount)); results.resize(std::min(batchCapacity, _edgeCount)); }
+        catch(const std::bad_alloc&) { batch.clear(); results.clear(); }
+    }
+    auto flush = [&]() {
+        if(batch.empty()) return true;
+        if(!dxaParallelForWithContext(batch.size(),
+            [&] { return std::make_unique<CrystalPathFinder>(_structureAnalysis, crystalPathSteps); },
+            [&](std::unique_ptr<CrystalPathFinder>& finder, size_t index) {
+                const auto vector = finder->findPath(batch[index]->vertex1, batch[index]->vertex2,
+                    true, &results[index].deferred);
+                results[index].cluster = vector ? vector->cluster() : nullptr;
+                if(vector) batch[index]->clusterVector = vector->localVec();
+            }, true)) return false;
+        _parallelPathEdges += batch.size();
+        ++_parallelPathBatches;
+        for(size_t index = 0; index < batch.size(); ++index) {
+            if((index & 255) == 0 && operation.isCanceled()) return false;
+            // Each undirected edge appears in one leaving list. Also retain
+            // the serial already-assigned guard at commit for future imports.
+            if(batch[index]->hasClusterVector()) continue;
+            auto& result = results[index];
+            if(result.deferred) {
+                ++_deferredPathEdges;
+                commit(batch[index], pathFinder.findPath(batch[index]->vertex1, batch[index]->vertex2));
+            }
+            else if(result.cluster) {
+                TessellationEdge* edge = batch[index];
+                Cluster* cluster1 = clusterOfVertex(edge->vertex1);
+                if(result.cluster == cluster1) {
+                    // The worker wrote the exact reference vector into this
+                    // edge's otherwise unassigned storage. Commit only its
+                    // transition; no extra vector copy or optional is needed.
+                    ClusterTransition* transition = clusterGraph()->determineClusterTransition(cluster1, clusterOfVertex(edge->vertex2));
+                    if(transition) edge->clusterTransition = transition;
+                }
+                else commit(edge, ClusterVector(edge->clusterVector, result.cluster));
+            }
+        }
+        batch.clear();
+        return true;
+    };
     size_t progressCounter = 0;
     for(const auto& firstEdge : _vertexEdges) {
-
-        if(!operation.setProgressValueIntermittent(progressCounter++))
-            return false;
-
-        for(TessellationEdge* edge = firstEdge.first; edge != nullptr; edge = edge->nextLeavingEdge) {
-            // Check if the reference vector of this edge has already been determined.
+        if(!operation.setProgressValueIntermittent(progressCounter++)) return false;
+        for(TessellationEdge* edge = firstEdge.first; edge; edge = edge->nextLeavingEdge) {
             if(edge->hasClusterVector()) continue;
-
             Cluster* cluster1 = clusterOfVertex(edge->vertex1);
             Cluster* cluster2 = clusterOfVertex(edge->vertex2);
             OVITO_ASSERT(cluster1 && cluster2);
             if(cluster1->id == 0 || cluster2->id == 0) continue;
-
-            // Determine the ideal vector connecting the two atoms.
-            std::optional<ClusterVector> idealVector = pathFinder.findPath(edge->vertex1, edge->vertex2);
-            if(!idealVector)
-                continue;
-
-            // Translate vector to the frame of the vertex cluster.
-            Vector3 localVec;
-            if(idealVector->cluster() == cluster1)
-                localVec = idealVector->localVec();
+            if(results.empty()) commit(edge, pathFinder.findPath(edge->vertex1, edge->vertex2));
             else {
-                ClusterTransition* transition = clusterGraph()->determineClusterTransition(idealVector->cluster(), cluster1);
-                if(!transition)
-                    continue;
-                localVec = transition->transform(idealVector->localVec());
+                // Most perfect-bulk edges return at findPath's first neighbor
+                // test. Avoid staging that cheap work twice. This branch uses
+                // precisely that same lookup and reference vector. Existing
+                // self-transitions never mutate graph state; when a self-edge
+                // must be created, flush earlier searches first to preserve
+                // the original graph-cache insertion order.
+                if(cluster1 == cluster2 && _structureAnalysis.atomCluster(edge->vertex1) == cluster1) {
+                    const qint64 neighbor = _structureAnalysis.findNeighbor(edge->vertex1, edge->vertex2);
+                    if(neighbor != -1) {
+                        if(!cluster1->transitions || !cluster1->transitions->isSelfTransition()) {
+                            if(!flush()) return false;
+                        }
+                        edge->assignClusterVector(_structureAnalysis.neighborLatticeVector(edge->vertex1, neighbor),
+                            clusterGraph()->createSelfTransition(cluster1));
+                        ++_directPathEdges;
+                        continue;
+                    }
+                }
+                batch.push_back(edge);
+                if(batch.size() == results.size() && !flush()) return false;
             }
-
-            // Assign the cluster transition to the edge.
-            ClusterTransition* transition = clusterGraph()->determineClusterTransition(cluster1, cluster2);
-            // The two clusters may be part of two disconnected components of the cluster graph.
-            if(!transition)
-                continue;
-
-            // Assign cluster vector to the edge.
-            edge->assignClusterVector(localVec, transition);
         }
     }
+    if(!flush()) return false;
 
 #if 0
     _unassignedEdges = new BondsStorage();

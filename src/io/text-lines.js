@@ -27,9 +27,10 @@ export function isBlankLine(bytes, from = 0, to = bytes.length) {
  * without its newline, is `bytes[from, to)`; `start` and `end` are the file
  * offsets of the line and of the next one. Lines are split at LF only.
  * Indexers decode just the few lines they read as text. */
-export async function scanLineBytes(blob, visit, onProgress = () => {}, { chunkSize = 4 * 1024 * 1024 } = {}) {
+export async function scanLineBytes(blob, visit, onProgress = () => {}, { chunkSize = 4 * 1024 * 1024, signal } = {}) {
   let tail = new Uint8Array(0);
   for (let offset = 0; offset < blob.size; offset += chunkSize) {
+    if (signal?.aborted) throw new DOMException('Trajectory indexing cancelled.', 'AbortError');
     const end = Math.min(blob.size, offset + chunkSize);
     let chunk = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
     if (tail.length) {

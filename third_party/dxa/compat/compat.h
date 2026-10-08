@@ -266,6 +266,69 @@ inline void configureDxaThreads(int count) {
 }
 inline int dxaThreadCount() { return dxaRequestedThreads().load(std::memory_order_relaxed); }
 
+// Each native worker owns its scratch context for the lifetime of this pass.
+// Contexts never share path-finder queues or visited flags.
+template<class ContextFactory, class Function>
+bool dxaParallelForWithContext(size_t count, ContextFactory makeContext, Function function, bool checkCancellation) {
+    Task* const task = Task::current();
+#ifdef __EMSCRIPTEN_PTHREADS__
+    // Neighbor matching has irregular per-atom work. Small dynamic chunks avoid
+    // leaving one worker with a costly boundary/defect region. The coordinator
+    // runs the same loop, so N threads need only N-1 preloaded pthread Workers.
+    const size_t threadCount = count < 2048 ? 1 : std::min<size_t>(dxaThreadCount(), count / 256);
+    if(threadCount > 1) {
+        constexpr size_t chunkSize = 32;
+        std::atomic<size_t> next{0};
+        std::atomic<bool> failed{false};
+        std::exception_ptr error;
+        std::mutex errorMutex;
+        auto run = [&] {
+            try {
+                auto context = makeContext();
+                while(!failed.load(std::memory_order_relaxed) &&
+                        !(checkCancellation && task->isCanceled())) {
+                    const size_t first = next.fetch_add(chunkSize, std::memory_order_relaxed);
+                    if(first >= count) break;
+                    const size_t last = std::min(first + chunkSize, count);
+                    for(size_t index = first; index < last; ++index) {
+                        if(failed.load(std::memory_order_relaxed) ||
+                                (checkCancellation && task->isCanceled())) break;
+                        function(context, index);
+                    }
+                }
+            }
+            catch(...) {
+                // Preserve the original scientific error (for example a cell
+                // too thin for the selected neighbor shell) and join every
+                // worker before its captured objects leave scope.
+                std::lock_guard<std::mutex> lock(errorMutex);
+                if(!error) error = std::current_exception();
+                failed.store(true, std::memory_order_relaxed);
+            }
+        };
+        std::vector<std::thread> workers;
+        workers.reserve(threadCount - 1);
+        try {
+            for(size_t index = 1; index < threadCount; ++index) workers.emplace_back(run);
+            run();
+        }
+        catch(...) {
+            failed.store(true, std::memory_order_relaxed);
+            for(auto& worker : workers) worker.join();
+            throw;
+        }
+        for(auto& worker : workers) worker.join();
+        if(error) std::rethrow_exception(error);
+        return !(checkCancellation && task->isCanceled());
+    }
+#endif
+    auto context = makeContext();
+    for(size_t index = 0; index < count; ++index) {
+        if(checkCancellation && task->isCanceled()) return false;
+        function(context, index);
+    }
+    return true;
+}
 template<class Function> bool dxaParallelFor(size_t count, Function& function, bool checkCancellation) {
     Task* const task = Task::current();
 #ifdef __EMSCRIPTEN_PTHREADS__

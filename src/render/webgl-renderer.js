@@ -4,6 +4,7 @@ import { installCameraInteractions } from './camera-interactions.js';
 import { selectAtomsInRectangle } from './box-selection.js';
 import { VIEW_PRESETS } from './camera-presets.js';
 import { AtomPrimitiveLayer } from './atom-primitives.js';
+import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms, prepareScalarColorData, scalarColorSettings, scalarPreviewAtomVisible } from './scalar-colormap.js';
 import { effectivePeriodicOrigin, normalizePeriodicOrigin, periodicDisplayCoordinates } from './periodic-origin.js';
 import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
 import { VoronoiCellLayer, VoronoiAllCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
@@ -34,6 +35,9 @@ layout(location=2) in vec3 aColor;
 layout(location=3) in vec3 aFractional;
 layout(location=4) in float aVisible;
 layout(location=5) in float aRadius;
+layout(location=6) in float aScalar;
+layout(location=7) in float aColorOverride;
+${SCALAR_COLOR_GLSL}
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform float uRadiusScale;
@@ -60,7 +64,7 @@ void main() {
   vec4 cornerView = centerView + vec4(aCorner * radius, 0.0, 0.0);
   gl_Position = uProjection * cornerView;
   vCorner = aCorner;
-  vColor = aColor;
+  vColor = scalarColor(aScalar, aColorOverride > 0.5, aColor);
   vCenterView = centerView.xyz;
   bool sliceVisible = true;
   if (uSliceMode == 0) {
@@ -75,7 +79,7 @@ void main() {
       }
     }
   }
-  vVisible = aVisible > 0.5 && sliceVisible ? 1 : 0;
+  vVisible = aVisible > 0.5 && sliceVisible && scalarShown(aScalar) ? 1 : 0;
   // Filtered or sliced-away atoms are dropped before rasterization rather than
   // shading every covered pixel only to discard it.
   if (vVisible == 0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -177,6 +181,7 @@ export class WebGLRenderer {
     onCameraChange = () => {},
     onProjectionChange = () => {},
     onRender = () => {},
+    onBeforeCapture = () => {},
   } = {}) {
     this.canvas = canvas;
     this.gl = canvas.getContext('webgl2', {
@@ -195,6 +200,7 @@ export class WebGLRenderer {
     this.onCameraChange = onCameraChange;
     this.onProjectionChange = onProjectionChange;
     this.onRender = onRender;
+    this.onBeforeCapture = onBeforeCapture;
     this.frame = null;
     this.displayPositions = null;
     this.rawDisplayPositions = null;
@@ -223,6 +229,8 @@ export class WebGLRenderer {
     this.selectedAtoms = new Int32Array(16).fill(-1);
     this.sliceSelectedAtoms = new Int32Array(3).fill(-1);
     this.atomColors = null;
+    this.scalarColorPreview = null;
+    this.scalarColorInput = null;
     this.primitiveLayer = null;
     this.dislocationLayer = null;
     this.dislocationNetwork = null;
@@ -273,6 +281,8 @@ export class WebGLRenderer {
     this.fractionalBuffer = gl.createBuffer();
     this.visibilityBuffer = gl.createBuffer();
     this.radiusBuffer = gl.createBuffer();
+    this.scalarColorBuffer = gl.createBuffer();
+    this.colorOverrideBuffer = gl.createBuffer();
     this.cellVao = gl.createVertexArray();
     this.cellBuffer = gl.createBuffer();
 
@@ -320,6 +330,7 @@ export class WebGLRenderer {
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions',
       'uSliceMode', 'uSliceCount', 'uSlicePlanes[0]',
       'uSelectedAtoms[0]',
+      ...SCALAR_COLOR_UNIFORMS,
     ]);
     this.lineUniforms = uniforms(gl, this.lineProgram, ['uViewProjection', 'uColor']);
     gl.enable(gl.DEPTH_TEST);
@@ -330,6 +341,8 @@ export class WebGLRenderer {
   }
 
   setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions, { coordinateMode } = {}) {
+    this.clearScalarColorPreview();
+    this.scalarColorInput = null;
     this.cancelSelectionGesture();
     const startedAt = performance.now();
     const gl = this.gl;
@@ -337,6 +350,7 @@ export class WebGLRenderer {
     this.processDisplayCoordinates(displayPositions, coordinateMode);
     this.atomCount = frame.ids.length;
     this.atomColors = colors;
+    this.colorRevision = (this.colorRevision ?? 0) + 1;
     this.atomBonds = this.atomVectors = null;
     this.atomVectorFields = [];
     this.dislocationNetwork = null;
@@ -347,6 +361,7 @@ export class WebGLRenderer {
     Object.assign(this, createReplication(frame.cell, repetitions));
     this.displayAtomCount = this.atomCount * this.replicas.length;
     this.atomRadii = atomRadii ?? new Float32Array(this.atomCount).fill(0.7);
+    this.radiusRevision = (this.radiusRevision ?? 0) + 1;
     if (this.atomRadii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
     this.maximumAtomRadius = this.atomRadii.reduce((maximum, radius) => Math.max(maximum, radius), 0);
     this.visibility = new Uint8Array(this.atomCount).fill(255);
@@ -376,6 +391,8 @@ export class WebGLRenderer {
   }
 
   clearFrame() {
+    this.clearScalarColorPreview();
+    this.scalarColorInput = null;
     this.cancelSelectionGesture();
     this.selectionSourceBounds = null;
     this.frame = this.displayPositions = this.visibility = this.selectionVisibility = this.atomRadii = null;
@@ -420,21 +437,91 @@ export class WebGLRenderer {
     this.onProjectionChange(this.projectionMode);
     const gl = this.gl;
     for (const buffer of [this.positionBuffer, this.colorBuffer, this.fractionalBuffer,
-      this.visibilityBuffer, this.radiusBuffer, this.cellBuffer]) {
+      this.visibilityBuffer, this.radiusBuffer, this.cellBuffer, this.scalarColorBuffer, this.colorOverrideBuffer]) {
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
       gl.bufferData(gl.ARRAY_BUFFER, 0, gl.STATIC_DRAW);
+    }
+    if (this.scalarColorTexture) {
+      gl.activeTexture(gl.TEXTURE0 + 3); gl.bindTexture(gl.TEXTURE_2D, this.scalarColorTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, 1, 1, 0, gl.RED, gl.FLOAT, new Float32Array(1));
+      gl.activeTexture(gl.TEXTURE0);
+      this.scalarColorTextureWidth = 1;
     }
     this.requestRender();
   }
 
   setColors(colors) {
+    this.clearScalarColorPreview();
     if (this.frame && colors.length !== this.atomCount * 3) throw new Error('The color array does not match the current frame.');
     this.atomColors = colors;
+    this.colorRevision = (this.colorRevision ?? 0) + 1;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
     this.primitiveLayer?.updateColors(colors);
     this.requestRender();
+  }
+
+  /** Immutable data/override buffers are uploaded once per edit; subsequent
+   * slider ticks update only a few uniforms, independent of atom count. */
+  setScalarColorPreview(data, options = {}) {
+    if (!this.frame || data.length !== this.atomCount) throw new Error('The scalar array does not match the current frame.');
+    const input = options.input ?? (this.scalarColorInput?.data === data && this.scalarColorInput.colorOverrides === options.colorOverrides
+      ? this.scalarColorInput : prepareScalarColorData(data, options));
+    const preview = scalarColorSettings(input, options);
+    if (!preview.safe) { this.clearScalarColorPreview(); return null; }
+    if (input !== this.scalarColorInput) {
+      this.scalarColorInput = input;
+      const gl = this.gl;
+      gl.bindVertexArray(this.sphereVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.scalarColorBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, input.values, gl.STATIC_DRAW);
+      gl.vertexAttribPointer(6, 1, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribDivisor(6, 1);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.colorOverrideBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, input.colorOverrides, gl.STATIC_DRAW);
+      gl.vertexAttribPointer(7, 1, gl.UNSIGNED_BYTE, true, 0, 0);
+      gl.vertexAttribDivisor(7, 1);
+      gl.bindVertexArray(null);
+      // Bonds and batched Voronoi cells look up the same scalar field by atom
+      // index. A single resident texture serves all attached geometry.
+      const maximum = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+      this.scalarColorTextureWidth = Math.min(maximum, Math.max(1, Math.ceil(Math.sqrt(this.atomCount))));
+      const height = Math.max(1, Math.ceil(this.atomCount / this.scalarColorTextureWidth));
+      if (height > maximum) throw new Error('The scalar field exceeds this GPU’s atom texture capacity.');
+      this.scalarColorTexture ??= gl.createTexture();
+      const values = new Float32Array(this.scalarColorTextureWidth * height); values.set(input.values);
+      gl.activeTexture(gl.TEXTURE0 + 3); gl.bindTexture(gl.TEXTURE_2D, this.scalarColorTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, this.scalarColorTextureWidth, height, 0, gl.RED, gl.FLOAT, values);
+      gl.activeTexture(gl.TEXTURE0);
+    }
+    this.scalarColorPreview = preview;
+    this.gl.bindVertexArray(this.sphereVao);
+    this.gl.enableVertexAttribArray(6); this.gl.enableVertexAttribArray(7);
+    this.gl.bindVertexArray(null);
+    this.primitiveLayer?.updateScalarColorPreview(input);
+    this.cancelSelectionGesture();
+    this.requestRender();
+    return this.scalarColorPreview;
+  }
+
+  clearScalarColorPreview() {
+    this.scalarColorPreview = null;
+    if (!this.sphereVao) return;
+    const gl = this.gl;
+    gl.bindVertexArray(this.sphereVao);
+    gl.disableVertexAttribArray(6); gl.disableVertexAttribArray(7);
+    gl.bindVertexArray(null);
+  }
+
+  finishScalarColorPreview() {
+    const commit = this.scalarColorPreview?.onCommit;
+    if (commit) commit();
+    else this.clearScalarColorPreview();
   }
 
   setVisibility(visibility = null, { selectionVisibility = null } = {}) {
@@ -530,6 +617,7 @@ export class WebGLRenderer {
       maximum = Math.max(maximum, radius);
     }
     this.atomRadii = radii;
+    this.radiusRevision = (this.radiusRevision ?? 0) + 1;
     this.maximumAtomRadius = maximum;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.radiusBuffer);
@@ -936,6 +1024,7 @@ export class WebGLRenderer {
     gl.uniform1i(this.sphereUniforms.uSelected, this.selected);
     if (this.sphereUniforms['uSelectedAtoms[0]'] != null) gl.uniform1iv(this.sphereUniforms['uSelectedAtoms[0]'], this.getSelectionHighlightAtoms());
     gl.uniform3f(this.sphereUniforms.uRepetitions, ...this.repetitions);
+    applyScalarColorUniforms(gl, this.sphereUniforms, this.scalarColorPreview);
     // Reuse the same atom buffers for every image. Analysis, color updates and
     // visibility masks still have exactly one entry per original atom.
     for (const replica of this.replicas) {
@@ -1087,6 +1176,7 @@ export class WebGLRenderer {
 
   isAtomVisible(atom, replicaIndices = SOURCE_REPLICA) {
     if (!this.frame || atom < 0 || atom >= this.atomCount || this.visibility?.[atom] === 0) return false;
+    if (!scalarPreviewAtomVisible(this.scalarColorPreview, atom)) return false;
     if (this.sliceMode === 'planes') {
       const index = atom * 3;
       const vectors = this.frame.cell.vectors;
@@ -1125,6 +1215,7 @@ export class WebGLRenderer {
       const [ia, ib, ic] = replica.indices, [ox, oy, oz] = replica.offset;
       for (let atom = 0; atom < this.atomCount; atom += 1) {
         if (visibility?.[atom] === 0) continue;
+        if (!scalarPreviewAtomVisible(this.scalarColorPreview, atom)) continue;
         const index = atom * 3;
         if (planes) {
           const px = positions[index] + ia * vectors[0] + ib * vectors[3] + ic * vectors[6];
@@ -1164,6 +1255,9 @@ export class WebGLRenderer {
   }
 
   captureImage({ includeBackground = true, legend = null, includeAxes = false } = {}) {
+    // PNG/JPG and contact sheets always use the exact byte-rounded CPU palette.
+    this.onBeforeCapture?.();
+    this.finishScalarColorPreview();
     const gl = this.gl;
     let width;
     let height;

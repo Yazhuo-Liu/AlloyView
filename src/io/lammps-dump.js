@@ -35,15 +35,15 @@ const RESERVED_COLUMNS = new Set([
   ...IMAGE_COLUMNS,
 ]);
 
-export async function indexLammpsDump(blob, onProgress = () => {}) {
+export async function indexLammpsDump(blob, onProgress = () => {}, { onFrame = () => {}, chunkSize = 4 * 1024 * 1024, signal } = {}) {
   const startedAt = performance.now();
-  const chunkSize = 4 * 1024 * 1024;
   const overlap = TIMESTEP_MARKER.length + 1;
   const offsets = [];
   const seen = new Set();
   let tail = new Uint8Array(0);
 
   for (let offset = 0; offset < blob.size; offset += chunkSize) {
+    if (signal?.aborted) throw new DOMException('Trajectory indexing cancelled.', 'AbortError');
     const end = Math.min(blob.size, offset + chunkSize);
     const chunk = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
     const combined = new Uint8Array(tail.length + chunk.length);
@@ -65,6 +65,7 @@ export async function indexLammpsDump(blob, onProgress = () => {}) {
         const absolute = baseOffset + index;
         if (absolute >= 0 && !seen.has(absolute)) {
           seen.add(absolute);
+          if (offsets.length) onFrame({ start: offsets[offsets.length - 1], end: absolute, index: offsets.length - 1 });
           offsets.push(absolute);
         }
       }
@@ -78,6 +79,7 @@ export async function indexLammpsDump(blob, onProgress = () => {}) {
   if (offsets.length === 0 || offsets[0] !== 0) {
     throw dumpError('The file does not begin with “ITEM: TIMESTEP”.');
   }
+  onFrame({ start: offsets[offsets.length - 1], end: blob.size, index: offsets.length - 1 });
   return { offsets, indexMs: performance.now() - startedAt };
 }
 

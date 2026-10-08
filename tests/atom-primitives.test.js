@@ -66,6 +66,19 @@ function layerFixture() {
   return { layer, uploads };
 }
 
+test('clearing attached geometry releases its prepared scalar source and shrinks atom textures', () => {
+  const layer = Object.create(AtomPrimitiveLayer.prototype), uploads = [];
+  Object.assign(layer, { scalarColorInput: { data: new Float64Array(100), values: new Float32Array(100) },
+    positionValues: new Float32Array(400), fractionalValues: new Float32Array(400), colorValues: new Uint8Array(400), width: 10, height: 10,
+    gl: { RGBA32F: 1, RGBA8: 2, FLOAT: 3, UNSIGNED_BYTE: 4 }, clearInstances() {},
+    uploadTexture(index, values) { uploads.push([index, values.byteLength]); } });
+  layer.clear();
+  assert.equal(layer.scalarColorInput, null);
+  assert.equal(layer.positionValues, null); assert.equal(layer.fractionalValues, null); assert.equal(layer.colorValues, null);
+  assert.equal(layer.width, 1); assert.equal(layer.height, 1);
+  assert.deepEqual(uploads, [[0, 16], [1, 4], [2, 16]], 'source-sized texture storage is replaced by single pixels');
+});
+
 test('bond display options reuse analysis arrays and instance uploads', () => {
   const { layer, uploads } = layerFixture();
   const renderer = { atomCount: 2, frame: { cell, positions: new Float32Array([0, 0, 0, 1, 0, 0]) } };

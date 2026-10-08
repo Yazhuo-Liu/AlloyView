@@ -510,6 +510,12 @@ const char* alloy_dxa_finish() {
             out << "]}";
         }
         out << "],\"totalLength\":" << totalLength;
+        const auto& mapping = *session.mapping;
+        out << ",\"parallelEdgePasses\":{\"candidateCells\":" << mapping.parallelCandidateCells()
+            << ",\"pathSearchEdges\":" << mapping.parallelPathEdges()
+            << ",\"pathSearchBatches\":" << mapping.parallelPathBatches()
+            << ",\"deferredPathEdges\":" << mapping.deferredPathEdges()
+            << ",\"directPathEdges\":" << mapping.directPathEdges() << '}';
         BufferReadAccess<int32_t> structureAccess(structures);
         if (binaryStructureLabels) {
             resultStructureLabels.resize(static_cast<size_t>(count));

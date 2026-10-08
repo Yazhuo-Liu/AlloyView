@@ -10,6 +10,14 @@ Every categorical legend has a visibility checkbox for each class, including eac
 
 **Atom radius** scales element defaults; 100% uses their normal size. Drag its slider from 20% to 200%, or enter 5% to 500% numerically. The same control appears in **Voronoi → Cell display**, where reducing atom size reveals cell faces. Both copies stay synchronized and change one global radius percentage for both views. Element and per-atom overrides can set absolute radii before this overall scale. **Show cell box** controls the outline. Background and XYZ axes are independent display controls.
 
+Dragging a scalar legend's range slider previews colors and range visibility
+in the renderer, without recomputing all atom colors at each step. The main
+and second views stay synchronized, including selection-color overrides,
+bonds and Voronoi cells. The preview uses normalized floating-point scalars;
+releasing the slider, cancelling the pointer or exporting an image restores
+the exact CPU colors and histogram. Very narrow ranges that cannot be
+represented safely use the exact path throughout.
+
 ## Floating second view
 
 **Show a second view** opens a movable, resizable window looking at the same data. It starts on the left on desktop and on the right on phones, keeping the Details button accessible. Drag the window header to move it, or its resize corner to change its size. Focus either handle and use arrow keys for keyboard adjustment; Shift makes a larger step. Home restores the default layout, and Escape cancels an active drag or resize. Position and size remain bounded by the viewport.
