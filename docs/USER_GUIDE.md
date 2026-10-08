@@ -314,8 +314,8 @@ npm run dev
 Open <http://localhost:5173>. The development server sends COOP/COEP headers so
 that ordinary analysis Workers can share coordinate buffers and DXA can use
 one shared Wasm heap with its pthread pool when the browser supports
-`SharedArrayBuffer`. Non-isolated deployments, including
-GitHub Pages, use bounded private coordinate copies instead, prepared in chunks
+`SharedArrayBuffer`. Non-isolated deployments, such as GitHub Pages without a
+header proxy, use bounded private coordinate copies instead, prepared in chunks
 and transferred to Workers while allowing the UI to update. Both modes parse
 and calculate entirely on the user's device; the static host never receives
 structure data or performs analysis.
@@ -330,10 +330,11 @@ npm run preview
 The deployable files are in `dist/`. Any static server can host them. No backend
 API is used. Shared CPU snapshots and the existing threaded DXA kernel require
 COOP/COEP response headers. The build includes a Cloudflare Pages `_headers`
-file in the same artifact uploaded to GitHub Pages. Cloudflare interprets it as
-response-header configuration; GitHub Pages does not. Nonisolated DXA can use
-private CPU Workers for local stages while its global kernel runs serially. See
-[deployment](DEPLOYMENT.md#cross-origin-isolation-and-cloudflare-pages).
+file in the same artifact uploaded to GitHub Pages. Cloudflare Pages interprets
+it as response-header configuration; GitHub Pages does not. The production site
+adds the headers with a Cloudflare transform rule in front of GitHub Pages.
+Nonisolated DXA can use private CPU Workers for local stages while its global
+kernel runs serially. See [deployment](DEPLOYMENT.md#cross-origin-isolation-for-github-pages-through-cloudflare).
 
 ## Extend the modification tools
 
@@ -374,7 +375,9 @@ In the GitHub repository, open **Settings → Pages** and set **Source** to
 **GitHub Actions** once. Push to `main`, or start **Deploy AlloyView to GitHub
 Pages** manually from the Actions tab. No repository secret is required.
 After the first successful deployment, the project site is expected at
-<https://yazhuo-liu.github.io/AlloyView/>.
+<https://yazhuo-liu.github.io/AlloyView/>. With the custom domain configured,
+that address redirects to <https://yazhuoliu.com/AlloyView/>, where Cloudflare
+adds the cross-origin isolation headers.
 
 ## Crystal structure and atomic strain
 

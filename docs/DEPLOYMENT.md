@@ -127,7 +127,7 @@ the actual deployed application and browser settings.
 ## Other static hosts
 
 Serve the contents of `dist/` with correct MIME types, especially
-`application/wasm` when the optional native core has been built.
+`application/wasm` for the PTM, Voro++ and DXA modules.
 
 JavaScript module Workers and the checked-in PTM, Voro++ and DXA Wasm modules
 load from the same versioned runtime tree. Cross-origin isolation is optional:
@@ -150,14 +150,135 @@ the existing Emscripten pthreads DXA build. Every embedded resource must satisfy
 CORP/CORS response). AlloyView intentionally has no CDN resources, which keeps
 that deployment tractable.
 
-GitHub Pages does not allow custom response headers. That is compatible with the
-current Worker pool: it uses memory-budgeted resident private coordinate copies
-inside the user's browser when `crossOriginIsolated` is false. GitHub still only
-serves static files and never performs the calculation or receives the selected
-structure. Shared CPU snapshots and threaded DXA require a host that supplies
-the COOP and COEP headers above (or an isolation service worker whose tradeoffs
-have been validated). The current Pages workflow uses the nonisolated fallback;
-WebGPU preparation and analysis work independently of shared CPU memory.
+Every response under the viewer path needs these headers: the HTML document,
+module Workers, JavaScript and Wasm. A `_headers` file is read only by
+Cloudflare Pages (and Netlify); Apache, LiteSpeed, Nginx, WordPress hosting and
+GitHub Pages serve it as an ordinary file. On Apache or LiteSpeed with
+`mod_headers` and `.htaccess` overrides enabled, place this `.htaccess` next to
+the uploaded `index.html`; it affects only that directory and its subfolders:
+
+```apache
+<IfModule mod_headers.c>
+  Header always set Cross-Origin-Opener-Policy "same-origin"
+  Header always set Cross-Origin-Embedder-Policy "require-corp"
+  Header always set Cross-Origin-Resource-Policy "same-origin"
+</IfModule>
+AddType application/wasm .wasm
+```
+
+Nginx needs the equivalent in its server configuration. A nested `location`
+that declares its own `add_header` does not inherit these lines:
+
+```nginx
+location /AlloyView/ {
+  add_header Cross-Origin-Opener-Policy "same-origin" always;
+  add_header Cross-Origin-Embedder-Policy "require-corp" always;
+  add_header Cross-Origin-Resource-Policy "same-origin" always;
+}
+```
+
+A WordPress plugin or `functions.php` cannot provide them, because PHP handles
+only WordPress pages while the server returns AlloyView's static files
+directly. Embedding AlloyView in an `<iframe>` of an ordinary page is
+nonisolated unless that page itself sends COOP and COEP and the frame allows
+`cross-origin-isolated`; link to the standalone viewer instead.
+
+Without the headers, the Worker pool still runs analyses in parallel, using
+memory-budgeted resident private coordinate copies inside the user's browser
+when `crossOriginIsolated` is false. The host only serves static files and never
+performs the calculation or receives the selected structure. Shared CPU
+snapshots and threaded DXA require the COOP and COEP headers above (or an
+isolation service worker whose tradeoffs have been validated). WebGPU
+preparation and analysis work independently of shared CPU memory.
+
+## Cross-origin isolation for GitHub Pages through Cloudflare
+
+GitHub Pages cannot set response headers, but a custom domain proxied by
+Cloudflare can add them at the edge. The production viewer at
+<https://yazhuoliu.com/AlloyView/> is deployed this way and runs
+cross-origin isolated. The `https://yazhuo-liu.github.io/AlloyView/` address
+redirects to the custom domain and then to HTTPS, so visitors reach the
+isolated copy. The GitHub Actions workflow and build stay unchanged.
+
+Give the Pages site a custom domain and keep its DNS record **Proxied** in
+Cloudflare; Cloudflare rules do not run for DNS-only records. Then, on the
+Cloudflare **Rules Overview** page, select **Create rule → Response Header
+Transform Rule** and match the viewer path with a custom filter expression:
+
+```text
+(http.host eq "yazhuoliu.com" and starts_with(http.request.uri.path, "/AlloyView"))
+```
+
+GitHub Pages paths are case-sensitive, so the rule uses the path Pages serves,
+`/AlloyView`. Add three **Set static** operations and deploy the rule:
+
+| Header | Value |
+|---|---|
+| `Cross-Origin-Opener-Policy` | `same-origin` |
+| `Cross-Origin-Embedder-Policy` | `require-corp` |
+| `Cross-Origin-Resource-Policy` | `same-origin` |
+
+One rule for the whole path covers the HTML, Workers, JavaScript and Wasm under
+`assets/<hash>/`.
+
+Check a document and a runtime file; both should list the three headers:
+
+```sh
+curl -sI https://yazhuoliu.com/AlloyView/ | grep -i cross-origin
+curl -sI https://yazhuoliu.com/AlloyView/assets/<hash>/src/analysis/dxa-kernel-threaded.wasm | grep -i cross-origin
+```
+
+Then confirm `crossOriginIsolated` is `true` in the browser console. After a
+DXA calculation, the status line reads `Wasm CPU · N threads` when isolated,
+or `Wasm CPU · global 1 thread · local stages up to N Workers` without
+isolation.
+
+GitHub Pages has no setting for case-insensitive paths or server-side
+redirects. A Cloudflare **Redirect Rule** sends any other capitalization, such
+as `/alloyview/` or `/ALLOYVIEW/docs/`, to the canonical path. Create it from
+**Create rule → Redirect Rule** with a custom filter expression:
+
+```text
+(http.host eq "yazhuoliu.com"
+ and (http.request.uri.path wildcard "/alloyview" or http.request.uri.path wildcard "/alloyview/*")
+ and not (http.request.uri.path strict wildcard "/AlloyView" or http.request.uri.path strict wildcard "/AlloyView/*"))
+```
+
+The `wildcard` operator ignores case, while `strict wildcard` does not; the
+second clause keeps `/AlloyView` itself from redirecting to itself. Two
+patterns, rather than `/alloyview*`, leave unrelated paths such as
+`/alloyviewer/` alone. Use a **Dynamic** target with **Preserve query string**
+and status code 301:
+
+```text
+concat("https://yazhuoliu.com", wildcard_replace(http.request.uri.path, "/alloyview*", "/AlloyView${1}"))
+```
+
+`wildcard_replace()` also matches without regard to case and keeps the rest of
+the path, so `/AlLoYvIeW/docs/index.html?x=1` becomes
+`/AlloyView/docs/index.html?x=1`. Browsers cache a 301 permanently; test a new
+or changed rule with 302 first. The redirect itself needs no isolation headers,
+because the canonical response it leads to carries them. Check both forms:
+
+```sh
+curl -sI https://yazhuoliu.com/alloyview/ | grep -iE "^(HTTP|location)"
+curl -sI https://yazhuoliu.com/AlloyView/ | grep -iE "^(HTTP|location)"
+```
+
+The first returns a redirect to `https://yazhuoliu.com/AlloyView/`; the second
+returns 200 without a `location` header. Single Redirects with wildcard
+matching are available on the Free plan; see Cloudflare's documentation for
+[creating redirect rules](https://developers.cloudflare.com/rules/url-forwarding/single-redirects/create-dashboard/)
+and [Rules language operators](https://developers.cloudflare.com/ruleset-engine/rules-language/operators/).
+
+Cloudflare Web Analytics keeps working under these headers: its injected
+`beacon.min.js` loads with `crossorigin="anonymous"` and is served with
+`Access-Control-Allow-Origin: *` and `Cross-Origin-Resource-Policy: cross-origin`.
+To stop measuring the viewer, add a Configuration Rule with the same filter and
+turn on **Disable Real User Monitoring (RUM)**; configuration rules take
+precedence over Web Analytics rules. See Cloudflare's documentation for
+[response header transform rules](https://developers.cloudflare.com/rules/transform/response-header-modification/create-dashboard/)
+and [configuration rule settings](https://developers.cloudflare.com/rules/configuration-rules/settings/).
 
 ## Cross-origin isolation and Cloudflare Pages
 
@@ -178,9 +299,10 @@ does not cause the host to interpret it as response-header configuration.
 Cloudflare parses `_headers` as deployment configuration, rather than serving
 it as a downloadable asset. These rules apply to static asset responses;
 Pages Functions must set their own response headers. Other hosts need equivalent
-server or proxy settings. GitHub Pages does not interpret this file. Its DXA
-global kernel runs with one thread, while eligible local identification and
-tetrahedron classification can use the existing private CPU Worker pool. See the official
+server or proxy settings. GitHub Pages does not interpret this file; use the
+Cloudflare proxy rule above, or its DXA global kernel runs with one thread while
+eligible local identification and tetrahedron classification use the existing
+private CPU Worker pool. See the official
 [Cloudflare Pages headers documentation](https://developers.cloudflare.com/pages/configuration/headers/).
 GitHub describes artifact upload in its
 [custom Pages workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages);
@@ -224,7 +346,8 @@ See [MDN COOP](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Heade
 
 If a future third-party embed or popup workflow needs a nonisolated page,
 remove the COOP/COEP rules from `_headers`, or omit that file from the deployment
-output, and rebuild. The host must stop applying any equivalent response rules.
+output, and rebuild. The host must stop applying any equivalent response rules,
+including the Cloudflare transform rule for GitHub Pages.
 DXA then automatically uses its nonisolated CPU path, including private
 local-stage tasks when eligible; no backend switch is needed.
 
