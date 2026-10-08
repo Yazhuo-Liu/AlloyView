@@ -9,6 +9,7 @@ import { createReferenceMappingAsync, REFERENCE_STRAIN_FIELDS } from './analysis
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
 import { measureAtoms } from './measurements.js';
 import { createImageArchive, downloadBlob } from './export-archive.js';
+import { resolveExportSize } from './render/export-resolution.js';
 import { COLOR_TILE_CATEGORIES, colorTileLabels, MAX_COLOR_TILES, prepareDisplacements } from './analysis/displacement.js';
 import { registerVectorProperties, vectorPropertyNames } from './analysis/vector-properties.js';
 import { availableVectorSources, createVectorField, linkedArrowDimensions, renameVectorFieldProperty, vectorFieldData } from './vector-settings.js';
@@ -874,14 +875,29 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   async function exportViews() {
     if (!getFrame()) return;
     const camera = cameraSnapshot(renderer), views = ['front', 'back', 'left', 'right', 'top', 'bottom'];
-    const sheet = document.createElement('canvas'); sheet.width = renderer.canvas.width * 3; sheet.height = (renderer.canvas.height + 28) * 2;
+    const options = getExportOptions(), current = !options.resolution || options.resolution.mode === 'current';
+    const defaultWidth = renderer.canvas.width * 3, defaultHeight = (renderer.canvas.height + 28) * 2;
+    const size = current ? { width: defaultWidth, height: defaultHeight }
+      : resolveExportSize(options.resolution, renderer.canvas.width, renderer.canvas.height);
+    if (size.width < 3 || size.height < 4) throw new Error('A six-view sheet needs at least 3 × 4 pixels. Choose a larger image size.');
+    const sheet = document.createElement('canvas'); sheet.width = size.width; sheet.height = size.height;
     const context = sheet.getContext('2d');
+    if (!context) throw new Error('Unable to allocate the six-view image. Choose a smaller size.');
+    const scale = current ? 1 : sheet.height / defaultHeight;
     try {
       for (const [index, view] of views.entries()) {
-        renderer.setView(view); const image = renderer.captureImage(getExportOptions());
-        const x = index % 3 * image.width, y = Math.floor(index / 3) * (image.height + 28);
-        context.drawImage(image, x, y); context.fillStyle = '#ffffff'; context.fillRect(x, y + image.height, image.width, 28);
-        context.fillStyle = '#14252b'; context.font = '16px sans-serif'; context.fillText(view, x + 10, y + image.height + 20);
+        const column = index % 3, row = Math.floor(index / 3);
+        const x = Math.floor(column * sheet.width / 3), y = Math.floor(row * sheet.height / 2);
+        const slotWidth = Math.floor((column + 1) * sheet.width / 3) - x;
+        const slotHeight = Math.floor((row + 1) * sheet.height / 2) - y;
+        const caption = current ? 28 : Math.max(1, Math.min(slotHeight - 1, Math.round(28 * scale)));
+        const captureOptions = current ? options : { ...options,
+          resolution: { mode: 'custom', width: slotWidth, height: slotHeight - caption, lockAspect: false } };
+        renderer.setView(view); const image = renderer.captureImage(captureOptions);
+        context.drawImage(image, x, y); context.fillStyle = '#ffffff'; context.fillRect(x, y + image.height, image.width, caption);
+        context.fillStyle = '#14252b'; context.font = `${16 * scale}px sans-serif`;
+        context.fillText(view, x + 10 * scale, y + image.height + 20 * scale);
+        image.width = image.height = 1;
       }
       downloadBlob(await canvasBlob(sheet), `${getFileStem()}-six-views.png`);
     } finally { restoreCamera(renderer, camera); }
@@ -961,7 +977,11 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     if (comparison && $('compare-view').checked && view !== 'custom'
       && (id === 'compare-preset' || cameraViewPreset(comparison) !== view)) { comparison.setView(view); syncComparisonToolbar(); }
   });
-  $('export-jpg').addEventListener('click', () => { if (getFrame()) renderer.exportJpg(`${getFileStem()}-frame-${getFrameIndex() + 1}.jpg`, getExportOptions()); });
+  $('export-jpg').addEventListener('click', () => {
+    if (!getFrame()) return;
+    try { renderer.exportJpg(`${getFileStem()}-frame-${getFrameIndex() + 1}.jpg`, getExportOptions()); }
+    catch (error) { notify(error.message); }
+  });
   $('export-atom-indices').addEventListener('click', () => {
     const frame = getFrame(); if (!frame) return;
     const ids = Array.from(frame.ids).filter((_, index) => renderer.isAnyReplicaVisible(index));

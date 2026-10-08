@@ -30,6 +30,7 @@ export async function expandSelection(frame, selected, options = {}, {
   search = null, signal, pause = null, onProgress = () => {}, blockSize = 2048,
 } = {}) {
   const { mode, cutoff, count, iterations } = normalizeExpansionOptions(options);
+  if (signal?.aborted) throw abortError();
   const atomCount = frame.fractional.length / 3;
   if (!selected || selected.length !== atomCount) throw new Error('The selection mask does not match the frame.');
   const result = new Uint8Array(atomCount);

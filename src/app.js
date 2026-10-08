@@ -1,5 +1,7 @@
 import { FrameCache } from './data/frame-cache.js';
 import { ColorQuantityResolver, colorPropertyKey, initialColorQuantities } from './render/color-quantities.js';
+import { colorsByDiscreteProperty, discreteValues } from './render/discrete-colors.js';
+import { DEFAULT_ORIENTATION_SETTINGS, OrientationColorResolver, drawIpfKey, normalizeOrientationSettings, ORIENTATION_COLOR_MODES } from './render/orientation-colors.js';
 import { framePreparationSignal } from './data/frame-preparation.js';
 import { findAtomIndex } from './appearance.js';
 import { chooseFrameCachePolicy, estimateFrameBytes } from './data/cache-policy.js';
@@ -44,6 +46,8 @@ import { initializeBccLogo } from './render/bcc-logo.js';
 import { StructureWorkerClient } from './worker-client.js';
 import { initializeTheme } from './theme.js';
 import { initializeCameraControls } from './camera-controls.js';
+import { initializeExportResolutionControls } from './export-resolution-controls.js';
+import { initializeKeyboardControls } from './keyboard-controls.js';
 import { initializeExternalPropertyControls } from './external-property-controls.js';
 import { initializeExpressionControls } from './expression-controls.js';
 import { removeComputedProperties } from './computed-properties.js';
@@ -98,6 +102,9 @@ const cache = new FrameCache(3);
 const scalarColorRanges = new Map();
 const colorQuantityResolver = new ColorQuantityResolver();
 const scalarColorSchemes = new Map();
+const scalarColorModes = new Map();
+const orientationColorResolver = new OrientationColorResolver();
+let orientationSettings = normalizeOrientationSettings(DEFAULT_ORIENTATION_SETTINGS);
 const scalarHideOutside = new Map();
 const hiddenStructureTypes = new Set();
 const hiddenAtomTypes = new Set();
@@ -183,6 +190,7 @@ let latticeEstimateRequest = 0;
 let renderer;
 let atomEyeTools;
 let cameraControls;
+let exportResolutionControls;
 let externalProperties;
 let expressionTools;
 let topologyTools;
@@ -326,6 +334,9 @@ cameraControls = initializeCameraControls({
     atomEyeTools?.syncComparison();
   },
 });
+
+exportResolutionControls = initializeExportResolutionControls({ renderer,
+  onEdit: () => interruptConfigurationRestore('an image export size change'), notify: showToast });
 
 externalProperties = initializeExternalPropertyControls({
   getFrame: () => state.frame ? sourceFrame(state.frame) : null,
@@ -491,6 +502,7 @@ atomEyeTools = initializeAtomEyeTools({
   getColorChoiceVersion: () => colorChoiceVersion,
   getExportOptions: () => ({ includeBackground: elements['png-background'].checked,
     includeAxes: elements['png-axes'].checked, legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
+    ...exportResolutionControls.getOptions(),
     ...sliceOutlineExportOptions() }),
   showFrame, stopPlayback: stopFramePlayback,
   getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
@@ -782,6 +794,7 @@ elements['export-png'].addEventListener('click', () => {
       includeBackground: elements['png-background'].checked,
       includeAxes: elements['png-axes'].checked,
       legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
+      ...exportResolutionControls.getOptions(),
       ...sliceOutlineExportOptions(),
     });
   } catch (error) {
@@ -811,6 +824,12 @@ syncProjectionControls('perspective');
 updateCspMethodUi();
 setBackgroundColor(elements.background.value, { automatic: true });
 
+const keyboardControls = initializeKeyboardControls({
+  renderer,
+  getSliceControls: () => sliceControls,
+  onEdit: () => interruptConfigurationRestore('a keyboard view or slice edit'),
+});
+
 const fileDrop = initializeFileDrop({
   overlay: elements['file-drop-overlay'],
   onFiles: files => {
@@ -836,6 +855,7 @@ window.addEventListener('beforeunload', () => {
   void dxaClient.close();
   sliceGizmo.dispose();
   cameraControls?.dispose();
+  keyboardControls.dispose();
   externalProperties?.reset();
   topologyTools?.abortJobs();
   clusterTools?.abortJobs();
@@ -922,7 +942,8 @@ function closeSource() {
   state.selectionGroups = normalizeSelectionGroups();
   selectionGroupControls.refresh();
   toolPanels.setToolEnabled('selectionGroups', false);
-  scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear();
+  scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear(); scalarColorModes.clear();
+  orientationColorResolver.clear(); orientationSettings = normalizeOrientationSettings(DEFAULT_ORIENTATION_SETTINGS);
   hiddenStructureTypes.clear(); hiddenAtomTypes.clear(); hiddenCategories.clear();
   crystalVisibility.reset();
   currentColorLegend = null;
@@ -1324,6 +1345,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     scalarColorRanges.clear();
     scalarColorSchemes.clear();
     scalarHideOutside.clear();
+    scalarColorModes.clear(); orientationColorResolver.clear(); orientationSettings = normalizeOrientationSettings(DEFAULT_ORIENTATION_SETTINGS);
     setRadiusPercent(100);
     configureSuggestedCutoff(result.frame);
     elements['metric-index'].textContent = formatDuration(Math.max(0, result.indexMs));
@@ -1938,7 +1960,7 @@ async function refreshExternalProperties({ restoring = false, reason, oldName, n
   }
   if (reason === 'rename') {
     if (state.colorMode === `property:${oldName}`) state.colorMode = `property:${name}`;
-    for (const preferences of [scalarColorRanges, scalarColorSchemes, scalarHideOutside, hiddenCategories]) {
+    for (const preferences of [scalarColorRanges, scalarColorSchemes, scalarHideOutside, scalarColorModes, hiddenCategories]) {
       const oldKey = colorPropertyKey(oldName), key = colorPropertyKey(name);
       if (!preferences.has(oldKey)) continue;
       preferences.set(key, preferences.get(oldKey));
@@ -1968,7 +1990,7 @@ function refreshComputedProperties({ reason, name, removed = [] } = {}) {
   for (const oldName of removed) {
     const oldKey = colorPropertyKey(oldName), key = colorPropertyKey(name);
     const renamed = reason === 'replace' && name !== undefined;
-    for (const preferences of [scalarColorRanges, scalarColorSchemes, scalarHideOutside, hiddenCategories]) {
+    for (const preferences of [scalarColorRanges, scalarColorSchemes, scalarHideOutside, scalarColorModes, hiddenCategories]) {
       if (renamed && preferences.has(oldKey)) preferences.set(key, preferences.get(oldKey));
       preferences.delete(oldKey);
     }
@@ -2026,6 +2048,12 @@ function refreshColorOptions() {
     }
     elements['color-mode'].append(option(value, label));
   });
+  if (((state.analysis.ptm.enabled && !['Failed', 'Calculated'].includes(elements['ptm-state'].textContent))
+      || (state.analysis.strain.enabled && !['Failed', 'Calculated'].includes(elements['strain-state'].textContent)))
+      && ![...elements['color-mode'].options].some(item => item.value === 'builtin:ptm:ipf')) {
+    elements['color-mode'].append(option('builtin:ptm:ipf', 'PTM orientation · inverse pole figure (calculating…)'),
+      option('builtin:ptm:quaternion', 'PTM orientation · quaternion RGB (calculating…)'));
+  }
   // Keep a saved external quantity selected while its local file is pending,
   // or while a frame-scoped column is unavailable in the current frame.
   for (const file of externalProperties?.getState().files ?? []) {
@@ -2121,12 +2149,21 @@ function hiddenCategoriesFor(name) {
 }
 
 function paletteForCurrentMode() {
+  if (ORIENTATION_COLOR_MODES.includes(state.colorMode)) {
+    colorQuantityResolver.clear();
+    return orientationColorResolver.resolve(state.frame, state.colorMode, orientationSettings) ?? colorsByType(state.frame, hiddenAtomTypes);
+  }
+  orientationColorResolver.clear();
   if (state.colorMode === 'type') { colorQuantityResolver.clear(); return colorsByType(state.frame, hiddenAtomTypes); }
   const property = colorQuantityResolver.resolve(state.frame, state.colorMode, { coordinateMode: state.coordinateMode });
   if (!property) {
     return colorsByType(state.frame, hiddenAtomTypes);
   }
   if (property.categories) return colorsByCategory(property, hiddenCategoriesFor(property.name));
+  if (scalarColorModes.get(property.name) === 'discrete') {
+    const palette = colorsByDiscreteProperty(property, hiddenCategoriesFor(property.name));
+    if (palette) return palette;
+  }
   return colorsByProperty(
     property,
     scalarColorRanges.get(property.name),
@@ -2186,6 +2223,7 @@ function cancelAnalysis(kind) {
       scalarColorRanges.delete(name);
       scalarColorSchemes.delete(name);
       scalarHideOutside.delete(name);
+      scalarColorModes.delete(name);
       hiddenCategories.delete(name);
       if (isCrystalStructureProperty(name)) removedCrystalSources.add(name);
     }
@@ -2819,6 +2857,8 @@ function restoreSelection() {
 }
 
 function updateSelectionPanel(index = null) {
+  const previousHideClass = document.getElementById('hide-selected-class');
+  if (previousHideClass) previousHideClass.hidden = true;
   if (index === null && state.selectedId !== null && state.frame) {
     const found = state.frame.ids.indexOf(state.selectedId);
     if (found >= 0) index = found;
@@ -2868,6 +2908,30 @@ function updateSelectionPanel(index = null) {
     fragment.append(term, definition);
   }
   elements['selection-data'].replaceChildren(fragment);
+  let hideClass = document.getElementById('hide-selected-class');
+  if (!hideClass) {
+    hideClass = document.createElement('button');
+    hideClass.id = 'hide-selected-class';
+    hideClass.type = 'button';
+    hideClass.className = 'button button-secondary';
+    elements['selection-data'].after(hideClass);
+  }
+  const legend = currentColorLegend;
+  hideClass.hidden = legend?.kind !== 'types';
+  if (!hideClass.hidden) {
+    const raw = legend.atomTypes ? frame.typeLabels[frame.types[index]] : legend.property.data[index];
+    const value = typeof raw === 'number' && !Number.isFinite(raw) ? 'NaN' : raw;
+    const item = legend.items.find(item => (legend.atomTypes ? item.label : item.id) === value)
+      ?? legend.items.find(item => item.id === 'other');
+    hideClass.textContent = `Hide ${item?.label ?? String(value)} atoms`;
+    hideClass.onclick = () => {
+      interruptConfigurationRestore('a category visibility change');
+      const hidden = legend.atomTypes ? hiddenAtomTypes : hiddenCategoriesFor(legend.property.name);
+      hidden.add(legend.atomTypes ? value : item?.id ?? value);
+      applyColors();
+      atomEyeTools.syncComparison();
+    };
+  }
   elements['selection-empty'].hidden = true;
   elements['selection-data'].hidden = false;
   elements['clear-selection'].hidden = false;
@@ -2903,12 +2967,36 @@ function renderLegend(legend) {
   const label = document.createElement('strong');
   label.textContent = legend.title;
   title.append(label);
-  if (legend.kind === 'scalar' && legend.unit) {
+  if ((legend.kind === 'scalar' || legend.discrete) && legend.unit) {
     const unit = document.createElement('span');
     unit.textContent = legend.unit;
     title.append(unit);
   }
   elements['color-legend'].append(title);
+  if (legend.kind === 'orientation') {
+    renderOrientationLegend(legend);
+    elements.legend.hidden = false;
+    return;
+  }
+  if ((legend.property && !legend.property.categories) || legend.discrete) {
+    const eligible = discreteValues(legend.discrete ? { ...legend.property, categories: undefined } : legend.property);
+    if (eligible || scalarColorModes.get(legend.property.name) === 'discrete') {
+      const control = document.createElement('label');
+      control.className = 'legend-property';
+      const caption = document.createElement('span'); caption.textContent = 'Color scale';
+      const select = document.createElement('select'); select.id = 'legend-scale-mode';
+      select.append(option('continuous', 'Continuous'), option('discrete', `Discrete integer values (up to 32)`));
+      select.value = legend.discrete ? 'discrete' : 'continuous';
+      select.options[1].disabled = !eligible;
+      if (!eligible) select.title = 'This frame needs 1–32 distinct safe integer values for discrete colors.';
+      select.addEventListener('change', () => {
+        interruptConfigurationRestore('a color scale change');
+        scalarColorModes.set(legend.property.name, select.value);
+        applyColors(); updateSelectionPanel();
+      });
+      control.append(caption, select); elements['color-legend'].append(control);
+    }
+  }
   if (legend.kind === 'scalar' && legend.emptyRange) {
     const message = document.createElement('p');
     message.id = 'legend-empty-range';
@@ -3180,6 +3268,57 @@ function renderLegend(legend) {
   elements.legend.hidden = false;
 }
 
+function renderOrientationLegend(legend) {
+  if (legend.mode === 'ipf') {
+    const control = document.createElement('label'); control.className = 'legend-property';
+    const caption = document.createElement('span'); caption.textContent = 'Sample direction';
+    const select = document.createElement('select'); select.id = 'legend-ipf-direction';
+    for (const value of ['x', 'y', 'z', 'custom']) select.append(option(value, value === 'custom' ? 'Custom vector' : value.toUpperCase()));
+    select.value = orientationSettings.direction;
+    select.addEventListener('change', () => {
+      interruptConfigurationRestore('an orientation color change');
+      orientationSettings = normalizeOrientationSettings({ ...orientationSettings, direction: select.value }); applyColors();
+    });
+    control.append(caption, select); elements['color-legend'].append(control);
+    if (orientationSettings.direction === 'custom') {
+      const row = document.createElement('div'); row.className = 'legend-ipf-custom';
+      const inputs = ['X', 'Y', 'Z'].map((axis, component) => {
+        const label = document.createElement('label'); label.textContent = axis;
+        const input = document.createElement('input'); input.type = 'number'; input.step = '.1';
+        input.id = `legend-ipf-${axis.toLowerCase()}`; input.value = String(orientationSettings.custom[component]);
+        label.append(input); row.append(label); return input;
+      });
+      for (const input of inputs) input.addEventListener('change', () => {
+        try {
+          const custom = inputs.map(input => input.value.trim() === '' ? NaN : Number(input.value));
+          const settings = normalizeOrientationSettings({ direction: 'custom', custom });
+          interruptConfigurationRestore('an orientation color change'); orientationSettings = settings; applyColors();
+        } catch (error) { showToast(error.message); }
+      });
+      elements['color-legend'].append(row);
+    }
+    for (const key of legend.keys) {
+      const title = document.createElement('p'); title.className = 'legend-ipf-family'; title.textContent = key.title;
+      const canvas = document.createElement('canvas'); canvas.className = 'legend-ipf-key';
+      canvas.width = 240; canvas.height = 126; canvas.setAttribute('role', 'img');
+      canvas.setAttribute('aria-label', `${key.title} inverse pole figure key: ${key.labels.join(', ')}`);
+      const color = getComputedStyle(elements['color-legend']).getPropertyValue('--text-soft').trim() || '#355563';
+      drawIpfKey(canvas.getContext('2d'), key, 0, 0, canvas.width, canvas.height, { color, fontSize: 11 });
+      elements['color-legend'].append(title, canvas);
+    }
+  }
+  const explanation = document.createElement('p'); explanation.className = 'help';
+  explanation.textContent = legend.mode === 'ipf'
+    ? 'Crystal symmetry reduces the chosen sample direction to the RGB key. Other and unsupported structures are gray.'
+    : 'Red, green and blue encode the sign-canonical quaternion x, y and z components. This display is not an IPF key.';
+  elements['color-legend'].append(explanation);
+  if (legend.undefinedCount) {
+    const count = document.createElement('p'); count.className = 'help';
+    count.textContent = `Undefined: ${formatInteger(legend.undefinedCount)} · ${(100 * legend.undefinedCount / legend.atomCount).toFixed(1)}%`;
+    elements['color-legend'].append(count);
+  }
+}
+
 function legendNumberControl(name, value, step) {
   const label = document.createElement('label');
   const text = document.createElement('span');
@@ -3336,6 +3475,7 @@ function setControlsEnabled(enabled) {
   binningTools?.setEnabled(enabled);
   voronoiCells?.setEnabled(enabled);
   statisticsExports?.setEnabled(enabled);
+  exportResolutionControls?.setEnabled(enabled);
   selectionGroupControls?.setEnabled(enabled);
   syncSelectionGroupInteraction();
   for (const id of [
@@ -3419,7 +3559,8 @@ function captureConfiguration() {
         radiusPercent: state.radiusPercent, background: elements.background.value,
         showCell: elements['show-cell'].checked, showAxes: elements['show-axes'].checked,
         projectionMode: renderer.projectionMode,
-        png: { background: elements['png-background'].checked, legend: elements['png-legend'].checked, axes: elements['png-axes'].checked } },
+        png: { background: elements['png-background'].checked, legend: elements['png-legend'].checked, axes: elements['png-axes'].checked,
+          resolution: exportResolutionControls.getState() } },
       analyses: {
         coordination: { enabled: state.analysis.coordination.enabled, cutoff: elements.cutoff.valueAsNumber,
           preset: elements['coordination-cutoff-preset'].value },
@@ -3438,6 +3579,8 @@ function captureConfiguration() {
         ranges: [...scalarColorRanges].map(([property, range]) => ({ property, ...range })),
         schemes: [...scalarColorSchemes].map(([property, scheme]) => ({ property, scheme })),
         hideOutside: [...scalarHideOutside].map(([property, hide]) => ({ property, hide })),
+        modes: [...scalarColorModes].map(([property, mode]) => ({ property, mode })),
+        orientation: { ...orientationSettings, custom: [...orientationSettings.custom] },
         hiddenStructureTypes: [...hiddenStructureTypes],
         hiddenAtomTypes: [...hiddenAtomTypes],
         hiddenCategories: [...hiddenCategories].map(([property, ids]) => ({ property, ids: [...ids] })),
@@ -3543,6 +3686,7 @@ async function restoreConfiguration(config) {
       ['show-cell', saved.display.showCell], ['show-axes', saved.display.showAxes],
       ['png-background', saved.display.png.background], ['png-legend', saved.display.png.legend], ['png-axes', saved.display.png.axes],
     ]) elements[id].checked = value;
+    exportResolutionControls.restore(saved.display.png.resolution);
     renderer.setCellVisible(saved.display.showCell);
     renderer.setCellWireframeMode(saved.display.cellWireframeMode);
     state.periodicOrigin = [...saved.display.periodicOrigin];
@@ -3584,11 +3728,14 @@ async function restoreConfiguration(config) {
     state.referenceByLabel.clear();
     renderLatticeReferences();
     updateCnaMethodUi();
-    scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear();
+    scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear(); scalarColorModes.clear();
+    orientationSettings = normalizeOrientationSettings(saved.colors.orientation);
+    orientationColorResolver.clear();
     hiddenStructureTypes.clear(); hiddenAtomTypes.clear(); hiddenCategories.clear();
     for (const { property, minimum, maximum } of saved.colors.ranges) scalarColorRanges.set(property, { minimum, maximum });
     for (const { property, scheme } of saved.colors.schemes) scalarColorSchemes.set(property, scheme);
     for (const { property, hide } of saved.colors.hideOutside) scalarHideOutside.set(property, hide);
+    for (const { property, mode } of saved.colors.modes ?? []) scalarColorModes.set(property, mode);
     for (const id of saved.colors.hiddenStructureTypes) hiddenStructureTypes.add(id);
     // Older version 1 recipes used one shared crystal-type filter. Apply it
     // once to the crystal fields; new per-property choices override it below.

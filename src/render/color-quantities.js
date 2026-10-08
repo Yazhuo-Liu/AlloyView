@@ -1,8 +1,14 @@
 import { importedVectorComponents } from '../vector-settings.js';
+import { ORIENTATION_COLOR_MODES, ptmOrientationSource } from './orientation-colors.js';
 
-export const BUILTIN_COLOR_MODES = Object.freeze([
+export const BUILTIN_SCALAR_COLOR_MODES = Object.freeze([
   ...['x', 'y', 'z'].map(axis => `builtin:position:${axis}`),
   'builtin:velocity:magnitude',
+]);
+
+export const BUILTIN_COLOR_MODES = Object.freeze([
+  ...BUILTIN_SCALAR_COLOR_MODES,
+  ...ORIENTATION_COLOR_MODES,
 ]);
 
 /** Keep builtin range keys separate from even identically named file columns. */
@@ -25,6 +31,8 @@ export function initialColorQuantities(frame) {
   return [
     ...['x', 'y', 'z'].map(axis => ({ value: `builtin:position:${axis}`, label: `Position ${axis.toUpperCase()} [Å]` })),
     ...(velocity ? [{ value: 'builtin:velocity:magnitude', label: `Speed magnitude${velocity[0].unit && velocity.every(property => property.unit === velocity[0].unit) ? ` [${velocity[0].unit}]` : ''}` }] : []),
+    ...(ptmOrientationSource(frame) ? [{ value: 'builtin:ptm:ipf', label: 'PTM orientation · inverse pole figure' },
+      { value: 'builtin:ptm:quaternion', label: 'PTM orientation · quaternion RGB' }] : []),
     ...frame.properties.map(property => ({ value: `property:${property.name}`,
       label: `${velocityLabels.get(property.name) ?? property.displayName ?? property.name}${property.unit ? ` [${property.unit}]` : ''}` })),
   ];

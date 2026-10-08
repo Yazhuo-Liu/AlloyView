@@ -1,0 +1,26 @@
+.keyboard-shortcuts { width: min(700px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); padding: 0; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--text-soft); background: var(--overlay-strong); box-shadow: var(--shadow); }
+.keyboard-shortcuts::backdrop { background: rgb(0 0 0 / .45); }
+.keyboard-shortcuts > header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.keyboard-shortcuts h2 { margin: 0; font-size: 17px; }
+.keyboard-shortcuts > header button { font-size: 23px; }
+.keyboard-shortcuts-body { overflow-y: auto; max-height: calc(100dvh - 230px); padding: 8px 16px; overscroll-behavior: contain; }
+.keyboard-shortcuts p { font-size: 12px; line-height: 1.5; }
+.keyboard-shortcuts h3 { margin: 15px 0 8px; font-size: 13px; color: var(--cyan); }
+.keyboard-command { display: grid; grid-template-columns: minmax(0, 1fr) minmax(125px, auto) 100px; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.keyboard-command-keys { display: flex; flex-wrap: wrap; gap: 4px; }
+.keyboard-shortcuts kbd { font-family: ui-monospace, monospace; border: 1px solid var(--line-strong); border-radius: 4px; padding: 2px 5px; background: var(--surface-soft); }
+.keyboard-shortcuts button { min-height: 30px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--control-bg); color: var(--text-soft); padding: 3px 9px; cursor: pointer; }
+.keyboard-shortcuts button:focus-visible, .keyboard-shortcuts a:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.keyboard-shortcuts footer { padding: 12px 16px; border-top: 1px solid var(--line); }
+.keyboard-shortcuts footer a { font-size: 12px; margin-left: 16px; color: var(--cyan); }
+#keyboard-shortcuts-status { min-height: 18px; margin: 8px 0 0; }
+.keyboard-gear-indicator { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); pointer-events: none; z-index: 18; border: 1px solid var(--line-strong); border-radius: 6px; padding: 7px 12px; background: var(--overlay-strong); color: var(--text-soft); font-size: 12px; white-space: nowrap; }
+.keyboard-gear-indicator[hidden] { display: none; }
+@media (max-width: 920px) {
+  /* Four actions must retain the original 134px phone toolbar footprint so
+     the adjacent Details and View toggles keep their unobstructed targets. */
+  .view-toolbar:has(#show-keyboard-shortcuts) { gap: 1px; }
+  .view-toolbar:has(#show-keyboard-shortcuts) > button { width: 30px; }
+  .view-toolbar:has(#show-keyboard-shortcuts) > span { display: none; }
+}
+@media (max-width: 600px) { .keyboard-command { grid-template-columns: minmax(0, 1fr) 84px; gap: 6px; }.keyboard-command > span:first-child { grid-column: 1 / -1; }.keyboard-command-keys { min-width: 0; }.keyboard-shortcuts-body { padding: 8px 12px; } }

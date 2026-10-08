@@ -31,9 +31,24 @@ jobs:
         uses: actions/configure-pages@v6
 
       - name: Test
+        id: tests
+        shell: bash
         run: |
+          set -o pipefail
           node --version
-          npm test
+          npm test -- --test-reporter=spec 2>&1 | tee "$RUNNER_TEMP/alloyview-tests.log"
+
+      - name: Summarize tests
+        if: always() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure' || steps.tests.outcome == 'cancelled')
+        run: node scripts/ci-test-summary.mjs "$RUNNER_TEMP/alloyview-tests.log" "${{ steps.tests.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve failed test log
+        if: failure() && steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: node-test-log
+          path: ${{ runner.temp }}/alloyview-tests.log
+          retention-days: 7
 
       - name: Build static site
         run: npm run build

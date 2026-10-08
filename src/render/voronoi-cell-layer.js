@@ -512,8 +512,9 @@ class VoronoiOutlineRenderer {
     applyVoronoiScalarPreview(gl, u, renderer);
     gl.uniform1i(u.uAtomTextureWidth, textureWidth);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix); gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
-    const width = Math.max(1, renderer.canvas?.width ?? 1), height = Math.max(1, renderer.canvas?.height ?? 1);
-    this.pixelRatio = Math.max(1, width / Math.max(1, renderer.canvas?.clientWidth ?? width));
+    const width = Math.max(1, renderer.renderViewport?.tile.renderWidth ?? renderer.canvas?.width ?? 1);
+    const height = Math.max(1, renderer.renderViewport?.tile.renderHeight ?? renderer.canvas?.height ?? 1);
+    this.pixelRatio = renderer.renderViewport?.annotationScale ?? Math.max(1, width / Math.max(1, renderer.canvas?.clientWidth ?? width));
     gl.uniform2f(u.uViewport, width, height); gl.uniform1i(u.uSliceCount, planes.count); gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
     gl.uniform1f(u.uScale, scale); gl.uniform2f(u.uDepthRange, ...(renderer.depthRange ?? [0, 1])); gl.uniform1f(u.uDepthFade, depthFade);
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.disable(gl.CULL_FACE);

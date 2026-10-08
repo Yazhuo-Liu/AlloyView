@@ -72,6 +72,30 @@ test('quantity choices are the numeric Color by quantities', () => {
   assert.deepEqual(values, ['builtin:position:x', 'builtin:position:y', 'builtin:position:z', 'property:pe']);
 });
 
+test('binning excludes orientation RGB color modes but retains scalar quaternion components', () => {
+  const frame = layeredFrame();
+  const structures = new Uint8Array(frame.ids.length).fill(1);
+  frame.ptm = { structures, orientations: new Float64Array(frame.ids.length * 4) };
+  frame.properties.push({ name: 'ptmStructureType', data: structures, categories: [{ id: 1, label: 'FCC' }] },
+    { name: 'ptmOrientationW', data: new Float32Array(frame.ids.length).fill(1) });
+  const values = binningQuantityOptions(frame).map(option => option.value);
+  assert.ok(values.includes('property:ptmOrientationW'));
+  assert.ok(!values.includes('property:ptmStructureType'));
+  assert.ok(!values.includes('builtin:ptm:ipf'));
+  assert.ok(!values.includes('builtin:ptm:quaternion'));
+});
+
+test('binning recipes reject orientation colors as scalar quantities', () => {
+  for (const property of ['builtin:ptm:ipf', 'builtin:ptm:quaternion']) {
+    assert.throws(() => createConfiguration({ settings: {
+      extensions: { binning: { quantity: 'property', property } },
+    } }), /built-in scalar quantity/);
+  }
+  assert.equal(createConfiguration({ settings: {
+    extensions: { binning: { quantity: 'property', property: 'property:ptmOrientationW' } },
+  } }).settings.extensions.binning.property, 'property:ptmOrientationW');
+});
+
 test('a profile follows the displayed frame and exports a CSV of every bin', async t => {
   const h = harness(t, { frames: [layeredFrame(), layeredFrame({ shift: 1, frameIndex: 1 })] });
   assert.equal(await h.tools.run(), true);

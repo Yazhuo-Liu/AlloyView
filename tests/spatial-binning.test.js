@@ -245,13 +245,13 @@ test('layouts reject invalid vectors and bin counts', () => {
   assert.throws(() => finalizeSpatialBins(accumulateSpatialBins(frame, { axes: [0], bins: [2] }), { quantity: 'property' }), /Choose a property/);
 });
 
-function nodeWorkerFactory(created) {
+function nodeWorkerFactory(created, onDispatch = () => {}) {
   return () => {
     const worker = new Worker(new URL('./helpers/node-binning-worker.mjs', import.meta.url));
     created.push(worker);
     return {
       addEventListener(name, listener) { worker.on(name, data => listener(name === 'message' ? { data } : data)); },
-      postMessage(data, transfer) { worker.postMessage(data, transfer); },
+      postMessage(data, transfer) { worker.postMessage(data, transfer); onDispatch(data); },
       terminate() { void worker.terminate(); },
     };
   };
@@ -259,7 +259,8 @@ function nodeWorkerFactory(created) {
 
 test('a real Worker returns results identical to the direct kernel and keeps source arrays', async t => {
   const created = [];
-  const client = new SpatialBinningClient({ createWorker: nodeWorkerFactory(created), workerMinAtoms: 1 });
+  let onDispatch = () => {};
+  const client = new SpatialBinningClient({ createWorker: nodeWorkerFactory(created, data => onDispatch(data)), workerMinAtoms: 1 });
   t.after(() => client.dispose());
   const frame = randomFrame({ count: 5000, vectors: [18, 0, 0, 6, 15, 0, -4, 3, 11], pbc: [true, false, true], spread: [-0.2, 1.2], seed: 31 });
   const mask = Uint8Array.from({ length: 5000 }, (_, atom) => atom % 5 ? 1 : 0);
@@ -287,11 +288,18 @@ test('a real Worker returns results identical to the direct kernel and keeps sou
   controller.abort();
   await assert.rejects(pending, { name: 'AbortError' });
   const inFlight = new AbortController();
+  let confirmDispatch;
+  const dispatched = new Promise(resolve => { confirmDispatch = resolve; });
+  // Abort immediately after the actual postMessage. Waiting for setImmediate
+  // races a warm Worker's result: the computation may already have finished
+  // when a busy or descheduled parent gets its next event-loop turn.
+  onDispatch = confirmDispatch;
   const running = client.accumulate(frame, { axes: [1], bins: [3] }, { signal: inFlight.signal });
-  await new Promise(resolve => setImmediate(resolve));
+  await dispatched;
   assert.equal(client.pending.size, 1);
   inFlight.abort();
   await assert.rejects(running, { name: 'AbortError' });
+  onDispatch = () => {};
   assert.equal(client.worker, null);
   assertIdentical((await client.accumulate(frame, { axes: [0], bins: [3] })).counts, accumulateSpatialBins(frame, { axes: [0], bins: [3] }).counts, 'after cancel');
   assert.equal(created.length, 2, "only the in-flight cancellation replaced the Worker");

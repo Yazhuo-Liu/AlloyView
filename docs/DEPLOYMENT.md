@@ -65,6 +65,10 @@ Both jobs use the explicit `ubuntu-24.04` runner to avoid automatic operating
 system changes. The test step prints `node --version`, making the build runtime
 visible in the Actions log. `setup-node` selects Node.js 24 for shell commands;
 JavaScript actions have their own runtime declared in their `action.yml`.
+The test exit status is preserved when output is captured. The job summary
+includes bounded assertion diagnostics on failure, and the full test log is
+retained as a `node-test-log` artifact for seven days. This makes failures
+easier to inspect without searching through every successful test.
 The workflow uses `configure-pages@v6`, `upload-pages-artifact@v5` and
 `deploy-pages@v5`, which use Node.js 24 directly or through their upload action.
 Updating Node.js locally does not change these action versions. The deployed

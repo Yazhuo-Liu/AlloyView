@@ -16,6 +16,27 @@ Choose wrapped coordinates to place periodic atoms inside the simulation cell, o
 
 Every categorical legend has a visibility checkbox for each class, including each element in **Atom type**. Element choices are stored by label and continue to apply after switching color quantities or trajectory frames. Other categorical filters belong to their own property, so hiding a CNA class does not hide a PTM class with the same numeric ID. These display filters intersect with appearance and scalar-range filters, synchronize to the second view, and are saved in configuration JSON.
 
+For a numeric property containing at most **32 distinct safe integer values**,
+the legend also offers **Color scale → Discrete integer values**. Continuous
+colors remain the default. Discrete colors show one counted row and visibility
+checkbox per actual value, with an additional gray NaN row for undefined values.
+Negative integers work too. Colors and hidden values stay attached to the
+integer when values disappear, reappear or reorder between frames. If a later
+frame contains noninteger values or more than 32 classes, it uses continuous
+colors until the field becomes eligible again. Select an atom and use
+**Details → Hide … atoms** to hide its current element or discrete class in one
+click. These are display filters; analyses still use all atoms. Discrete scales,
+hidden values and color settings survive configuration export/import and also
+apply to the second view and image legend.
+
+Completed PTM adds **PTM orientation · inverse pole figure** and
+**PTM orientation · quaternion RGB** to Color by. The IPF legend selects a
+sample X/Y/Z axis or an editable custom Cartesian vector, and displays the
+appropriate cubic and/or hexagonal stereographic keys. See
+[PTM orientation coloring](./ptm.md#orientation-colors) for the conventions,
+supported structures and interpretation. IPF keys are included when exporting
+an image with its legend enabled.
+
 **Selections → Hide selected atoms** also hides their connected bonds and attached arrows. Hidden selection members are excluded from scalar **Auto** color limits. Showing the group again restores its values to the automatic range; fixed manual limits stay unchanged across hiding and frame changes. If every finite value is hidden, the legend reports **No visible finite values**. Calculations and statistical CSV exports still include the full analysis frame.
 
 **Atom radius** scales element defaults; 100% uses their normal size. Drag its slider from 20% to 200%, or enter 5% to 500% numerically. The same control appears in **Voronoi → Cell display**, where reducing atom size reveals cell faces. Both copies stay synchronized and change one global radius percentage for both views. Element and per-atom overrides can set absolute radii before this overall scale. **Show cell box** controls the outline. Background and XYZ axes are independent display controls.
@@ -65,6 +86,38 @@ The renderer draws instanced sphere impostors: each GPU instance is a camera-fac
 Wrapped/unwrapped display and clipping do not rewrite analysis coordinates. Analyses retain the original frame and its periodic cell.
 
 ## Image and trajectory exports
+
+Expand **Display → Export images and atom IDs → Image resolution** to choose
+**Current viewport**, **Full HD (1920 × 1080)**, **4K (3840 × 2160)**, twice or
+four times the current viewport, or a custom width and height. Current viewport
+keeps the existing canvas capture, including its device pixel ratio. Other
+choices render the scene at the requested size; enlarging an image therefore
+adds rendered detail instead of resizing a screenshot. The camera's vertical
+view angle or parallel scale stays fixed, and a changed image aspect ratio
+changes the horizontal field of view. The interactive canvas, picking and
+camera remain unchanged after export.
+
+For custom images, **Keep aspect ratio** links the dimensions to the current
+view's aspect ratio. Uncheck it to set width and height independently. A restored
+recipe preserves its saved dimensions exactly until a new edit. Resolution
+settings are shared by main PNG, JPG, the second view and every frame in a ZIP,
+and saved as `settings.display.png.resolution` in configuration JSON. Older
+recipes keep Current viewport.
+
+A chosen resolution sets the **final image size** of a six-view contact sheet;
+each camera renders into one of its six slots. Current viewport retains the
+existing sheet of three full-width views by two full-height views, with captions.
+Thus the 4K preset also produces a 3840 × 2160 six-view download rather than a
+six-times-larger bitmap.
+
+Chosen sizes must use whole pixels, at most 16,384 on either side and at most
+32 million pixels in total. WebGL2 multisample render targets use up to four
+samples where supported. Targets are tiled with overlapping boundaries when
+they exceed the GPU's dimension limit or a bounded 128 MiB working budget;
+tile pixels stream into the final image canvas. Legends, axes, cell boundaries,
+Voronoi edges and slice outlines scale with the image. Export allocation
+failures retry with smaller tiles; a lost graphics context or an unavailable
+image canvas reports an export error and releases temporary targets.
 
 PNG preserves alpha when **Include background in PNG** is unchecked. Legend and XYZ annotations are composited independently, so enabling a legend does not restore a solid canvas background. With a background, the legend panel uses the colors of the on-screen legend in the current light or dark theme. A scalar legend shows the quantity, color bar and limits; the color map's name is not written into the image. JPG uses an opaque background because the format has no alpha channel.
 

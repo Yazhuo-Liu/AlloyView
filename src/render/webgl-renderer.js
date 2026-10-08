@@ -3,7 +3,11 @@ import { createReplication } from './replication.js';
 import { installCameraInteractions } from './camera-interactions.js';
 import { selectAtomsInRectangle } from './box-selection.js';
 import { VIEW_PRESETS } from './camera-presets.js';
+import { drawIpfKey } from './orientation-colors.js';
 import { AtomPrimitiveLayer } from './atom-primitives.js';
+import { ExportLineLayer } from './export-line-layer.js';
+import { captureOffscreen } from './offscreen-export.js';
+import { normalizeExportResolution, resolveExportSize, tileProjection } from './export-resolution.js';
 import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms, prepareScalarColorData, scalarColorSettings, scalarPreviewAtomVisible } from './scalar-colormap.js';
 import { effectivePeriodicOrigin, normalizePeriodicOrigin, periodicDisplayCoordinates } from './periodic-origin.js';
 import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
@@ -1018,18 +1022,24 @@ export class WebGLRenderer {
 
   render(timestamp = performance.now(), { transparentBackground = false, trackStats = true, sliceOutlines = true } = {}) {
     const gl = this.gl;
-    this.resize();
+    if (!this.renderViewport) this.resize();
     this.updateMatrices();
     if (transparentBackground) gl.clearColor(0, 0, 0, 0);
     else gl.clearColor(...this.background, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (!this.frame) { this.onRender?.(this); return; }
+    if (!this.frame) { if (!this.renderViewport) this.onRender?.(this); return; }
 
     // Preserve an opaque alpha channel for the interactive view and normal PNG
     // exports. Transparent exports keep atom edge coverage in the alpha channel.
     if (!transparentBackground) gl.colorMask(true, true, true, false);
 
-    gl.disable(gl.BLEND);
+    if (this.renderViewport) {
+      // The legacy canvas path remains byte-for-byte unchanged. Offscreen
+      // targets blend smooth atom coverage so transparent RGB and MSAA resolve
+      // both use premultiplied color; readback unmultiples it for ImageData.
+      gl.enable(gl.BLEND);
+      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    } else gl.disable(gl.BLEND);
     gl.useProgram(this.sphereProgram);
     gl.bindVertexArray(this.sphereVao);
     gl.uniformMatrix4fv(this.sphereUniforms.uView, false, this.viewMatrix);
@@ -1064,8 +1074,7 @@ export class WebGLRenderer {
       gl.bindVertexArray(this.cellVao);
       gl.uniformMatrix4fv(this.lineUniforms.uViewProjection, false, this.viewProjectionMatrix);
       for (const draw of cellWireframeDraws(this.cellWireframeMode, this.cellColor)) {
-        gl.uniform3f(this.lineUniforms.uColor, ...draw.color);
-        gl.drawArrays(gl.LINES, draw.first, draw.count);
+        this.drawAnnotationLines(this.cellBuffer, draw.first, draw.count, draw.color);
       }
     }
     if (sliceOutlines && this.sliceOutlinesVisible) this.renderSliceOutlines();
@@ -1073,7 +1082,18 @@ export class WebGLRenderer {
     gl.bindVertexArray(null);
     gl.colorMask(true, true, true, true);
     if (trackStats) this.recordFrame(timestamp);
-    this.onRender?.(this);
+    if (!this.renderViewport) this.onRender?.(this);
+  }
+
+  drawAnnotationLines(buffer, first, count, color) {
+    const gl = this.gl;
+    if (this.renderViewport?.lineScale > 1) {
+      this.exportLineLayer ??= new ExportLineLayer(gl);
+      this.exportLineLayer.draw(this, buffer, first, count, color);
+    } else {
+      gl.uniform3f(this.lineUniforms.uColor, ...color);
+      gl.drawArrays(gl.LINES, first, count);
+    }
   }
 
   // Outlines are annotations: like the slice editing overlay, they stay on top
@@ -1095,14 +1115,13 @@ export class WebGLRenderer {
     gl.useProgram(this.lineProgram);
     gl.bindVertexArray(this.sliceOutlineVao);
     gl.uniformMatrix4fv(this.lineUniforms.uViewProjection, false, this.viewProjectionMatrix);
-    gl.uniform3f(this.lineUniforms.uColor, ...this.sliceOutlineColor);
-    gl.drawArrays(gl.LINES, 0, geometry.count);
+    this.drawAnnotationLines(this.sliceOutlineBuffer, 0, geometry.count, this.sliceOutlineColor);
     gl.enable(gl.DEPTH_TEST);
   }
 
   updateMatrices() {
-    const width = Math.max(1, this.canvas.width);
-    const height = Math.max(1, this.canvas.height);
+    const width = Math.max(1, this.renderViewport?.width ?? this.canvas.width);
+    const height = Math.max(1, this.renderViewport?.height ?? this.canvas.height);
     const aspect = width / height;
     const target = add(this.target, this.pan);
     const { offsetDirection, upHint } = this.cameraOrientation();
@@ -1139,8 +1158,9 @@ export class WebGLRenderer {
     } else {
       this.projectionMatrix = perspective(this.fov, aspect, near, far);
     }
+    if (this.renderViewport) this.projectionMatrix = tileProjection(this.projectionMatrix, width, height, this.renderViewport.tile);
     this.viewProjectionMatrix = multiply4(this.projectionMatrix, this.viewMatrix);
-    this.onCameraChange(axisDirectionsFromView(this.viewMatrix));
+    if (!this.renderViewport) this.onCameraChange(axisDirectionsFromView(this.viewMatrix));
   }
 
   resize() {
@@ -1299,10 +1319,14 @@ export class WebGLRenderer {
     return closest;
   }
 
-  captureImage({ includeBackground = true, legend = null, includeAxes = false, includeSliceOutlines = true } = {}) {
+  captureImage({ includeBackground = true, legend = null, includeAxes = false, includeSliceOutlines = true, resolution = null, tileSize = null } = {}) {
     // PNG/JPG and contact sheets always use the exact byte-rounded CPU palette.
     this.onBeforeCapture?.();
     this.finishScalarColorPreview();
+    const exportResolution = normalizeExportResolution(resolution ?? {});
+    if (exportResolution.mode !== 'current' || tileSize !== null) {
+      return this.captureOffscreenImage({ includeBackground, legend, includeAxes, includeSliceOutlines, resolution: exportResolution, tileSize });
+    }
     const gl = this.gl;
     let width;
     let height;
@@ -1338,6 +1362,33 @@ export class WebGLRenderer {
       drawLegendOverlay(context, legend, width, height, scale, { includeBackground, theme: legendExportTheme(this.canvas) });
     }
     if (includeAxes) drawAxesOverlay(context, axisDirectionsFromView(this.viewMatrix), width, height, scale);
+    return exportCanvas;
+  }
+
+  captureOffscreenImage({ includeBackground, legend, includeAxes, includeSliceOutlines, resolution, tileSize }) {
+    this.resize();
+    const { width, height } = resolveExportSize(resolution, this.canvas.width, this.canvas.height);
+    const exportCanvas = document.createElement('canvas'); exportCanvas.width = width; exportCanvas.height = height;
+    const context = exportCanvas.getContext('2d');
+    if (!context) throw new Error('This browser could not allocate the image canvas. Choose a smaller size.');
+    const oldViewport = this.renderViewport;
+    const cssWidth = Number(this.canvas.clientWidth) || this.canvas.width;
+    const annotationScale = Math.max(1, Math.min(3, this.canvas.width / cssWidth)) * height / this.canvas.height;
+    const lineScale = height / this.canvas.height;
+    try {
+      this.lastExportStats = { width, height, ...captureOffscreen(this.gl, context, width, height, tile => {
+        this.renderViewport = { width, height, tile, annotationScale, lineScale };
+        this.render(performance.now(), { transparentBackground: !includeBackground, trackStats: false, sliceOutlines: includeSliceOutlines });
+      }, { tileSize, unpremultiply: !includeBackground }) };
+    } finally {
+      this.renderViewport = oldViewport;
+      this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+      // Restore both the visible image and matrices used by picking/gizmos.
+      this.render(performance.now(), { trackStats: false });
+    }
+    if (legend) drawLegendOverlay(context, legend, width, height, annotationScale,
+      { includeBackground, theme: legendExportTheme(this.canvas) });
+    if (includeAxes) drawAxesOverlay(context, axisDirectionsFromView(this.viewMatrix), width, height, annotationScale);
     return exportCanvas;
   }
 
@@ -1398,6 +1449,8 @@ export function drawLegendOverlay(context, legend, width, height, scale = 1, { i
   if (legend.kind === 'types') {
     const columns = legend.items.length > 6 ? 2 : 1;
     panelHeight = (padding * 2) + titleHeight + Math.ceil(legend.items.length / columns) * 19 * scale;
+  } else if (legend.kind === 'orientation') {
+    panelHeight = (legend.mode === 'ipf' ? 53 + legend.keys.length * 138 : 76) * scale;
   } else {
     panelHeight = 82 * scale;
   }
@@ -1431,7 +1484,7 @@ export function drawLegendOverlay(context, legend, width, height, scale = 1, { i
   context.textBaseline = 'alphabetic';
   context.fillStyle = textColors.title;
   context.font = `600 ${11 * scale}px system-ui, sans-serif`;
-  const title = legend.kind === 'scalar' && legend.unit
+  const title = (legend.kind === 'scalar' || legend.discrete) && legend.unit
     ? `${legend.title} [${legend.unit}]`
     : legend.title;
   context.fillText(title, x + padding, y + 20 * scale, panelWidth - padding * 2);
@@ -1440,7 +1493,25 @@ export function drawLegendOverlay(context, legend, width, height, scale = 1, { i
     drawTypeLegend(context, legend, x, y, panelWidth, panelHeight, padding, scale, textColors);
   } else if (legend.kind === 'scalar') {
     drawScalarLegend(context, legend, x, y, panelWidth, padding, scale, textColors);
+  } else if (legend.kind === 'orientation') {
+    drawOrientationLegend(context, legend, x, y, panelWidth, panelHeight, padding, scale, textColors);
   }
+  context.restore();
+}
+
+function drawOrientationLegend(context, legend, x, y, panelWidth, panelHeight, padding, scale, textColors) {
+  context.save(); context.translate(x + padding, y + 32 * scale); context.scale(scale, scale);
+  const width = (panelWidth - padding * 2) / scale;
+  const keyHeight = legend.keys.length ? Math.min(138, (panelHeight / scale - 53) / legend.keys.length) : 0;
+  let offset = 0;
+  for (const key of legend.keys) {
+    context.font = '10px system-ui, sans-serif'; context.fillStyle = textColors.label;
+    context.fillText(key.title, 0, offset + 8);
+    if (keyHeight > 52) drawIpfKey(context, key, 0, offset + 12, width, keyHeight - 18, { color: textColors.label, fontSize: 9 });
+    offset += keyHeight;
+  }
+  context.font = '9px system-ui, sans-serif'; context.fillStyle = textColors.label;
+  context.fillText(legend.mode === 'quaternion' ? 'R: qx · G: qy · B: qz' : `Gray: ${legend.undefinedCount.toLocaleString('en-US')} undefined`, 0, offset + 10);
   context.restore();
 }
 
@@ -1474,19 +1545,27 @@ function drawScalarLegend(context, legend, x, y, panelWidth, padding, scale, tex
 }
 
 function drawTypeLegend(context, legend, x, y, panelWidth, panelHeight, padding, scale, textColors) {
-  const columns = legend.items.length > 6 ? 2 : 1;
+  const defaultColumns = legend.items.length > 6 ? 2 : 1;
+  let columns = defaultColumns;
+  const normalRows = Math.ceil(legend.items.length / columns);
+  if (38 * scale + (normalRows - 1) * 19 * scale > panelHeight - 8 * scale) {
+    const availableRows = Math.max(1, Math.floor((panelHeight - 46 * scale) / (19 * scale)) + 1);
+    const widthColumns = Math.max(defaultColumns, Math.floor((panelWidth - padding * 2) / (54 * scale)));
+    columns = Math.min(widthColumns, Math.max(defaultColumns, Math.ceil(legend.items.length / availableRows)));
+  }
   const rows = Math.ceil(legend.items.length / columns);
   const columnWidth = (panelWidth - padding * 2) / columns;
-  context.font = `${9 * scale}px system-ui, sans-serif`;
+  const rowStep = Math.min(19 * scale, Math.max(0, panelHeight - 46 * scale) / Math.max(1, rows - 1));
+  const rowScale = Math.min(scale, rowStep / 19 || scale * .1);
+  context.font = `${9 * rowScale}px system-ui, sans-serif`;
   for (let index = 0; index < legend.items.length; index += 1) {
     const column = Math.floor(index / rows);
     const row = index % rows;
     const itemX = x + padding + column * columnWidth;
-    const itemY = y + 38 * scale + row * 19 * scale;
-    if (itemY > y + panelHeight - 8 * scale) break;
+    const itemY = y + 38 * scale + row * rowStep;
     const item = legend.items[index];
     context.beginPath();
-    context.arc(itemX + 4 * scale, itemY - 3 * scale, 4 * scale, 0, Math.PI * 2);
+    context.arc(itemX + 4 * scale, itemY - 3 * rowScale, 4 * rowScale, 0, Math.PI * 2);
     context.fillStyle = `rgb(${item.color.join(' ')})`;
     context.fill();
     context.fillStyle = textColors.label;

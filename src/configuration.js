@@ -2,7 +2,9 @@
 // Local files must be selected again; source metadata is only used to match them.
 import { SCALAR_COLOR_SCHEMES } from './render/palette.js';
 import { DEFAULT_SLAB_THICKNESS, DEFAULT_SLICE_STEP, MAX_MILLER_INDEX, MAX_SLICE_LENGTH, MIN_SLICE_LENGTH } from './render/slicing.js';
-import { BUILTIN_COLOR_MODES } from './render/color-quantities.js';
+import { BUILTIN_COLOR_MODES, BUILTIN_SCALAR_COLOR_MODES } from './render/color-quantities.js';
+import { normalizeExportResolution } from './render/export-resolution.js';
+import { normalizeOrientationSettings } from './render/orientation-colors.js';
 import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from './selection-groups.js';
 import { DXA_DEFAULTS, DXA_FAMILIES } from './analysis/dxa.js';
 import { CRYSTAL_VISIBILITY_SOURCE_NAMES } from './crystal-visibility-controls.js';
@@ -416,7 +418,7 @@ function normalizeBinning(value, path) {
   let property = null;
   if (input.property !== undefined && input.property !== null) {
     property = string(input.property, `${path}.property`, 512);
-    if (!/^property:./.test(property) && !BUILTIN_COLOR_MODES.includes(property)) fail(`${path}.property`, 'must be a property: key or a built-in quantity');
+    if (!/^property:./.test(property) && !BUILTIN_SCALAR_COLOR_MODES.includes(property)) fail(`${path}.property`, 'must be a property: key or a built-in scalar quantity');
     if (FORBIDDEN_KEYS.has(property.replace(/^property:/, ''))) fail(`${path}.property`, 'is reserved');
   }
   if (quantity === 'property' && property === null) fail(`${path}.property`, 'is required when binning a property');
@@ -556,7 +558,10 @@ function ensureUnique(values, path) {
 
 function normalizeDisplay(value) {
   const input = record(value, 'settings.display', ['coordinateMode', 'colorMode', 'radiusPercent', 'background', 'showCell', 'showAxes', 'png', 'projectionMode', 'periodicOrigin', 'cellWireframeMode']);
-  const png = record(input.png ?? {}, 'settings.display.png', ['background', 'legend', 'axes']);
+  const png = record(input.png ?? {}, 'settings.display.png', ['background', 'legend', 'axes', 'resolution']);
+  let resolution;
+  try { resolution = normalizeExportResolution(png.resolution ?? {}); }
+  catch (error) { fail('settings.display.png.resolution', error.message); }
   const colorMode = string(input.colorMode ?? 'type', 'settings.display.colorMode', 512);
   if (colorMode !== 'type' && !BUILTIN_COLOR_MODES.includes(colorMode)
       && (!colorMode.startsWith('property:') || colorMode.length === 9)) fail('settings.display.colorMode', 'must select atom type, a coordinate, speed or a property');
@@ -575,6 +580,7 @@ function normalizeDisplay(value) {
       background: boolean(png.background, 'settings.display.png.background', true),
       legend: boolean(png.legend, 'settings.display.png.legend', true),
       axes: boolean(png.axes, 'settings.display.png.axes', false),
+      resolution,
     },
     projectionMode: choice(input.projectionMode ?? 'perspective', 'settings.display.projectionMode', new Set(['perspective', 'orthographic'])),
   };
@@ -680,7 +686,16 @@ function millerIndices(value, path) {
 }
 
 function normalizeColors(value) {
-  const input = record(value, 'settings.colors', ['ranges', 'schemes', 'hideOutside', 'hiddenStructureTypes', 'hiddenAtomTypes', 'hiddenCategories', 'crystalVisibilitySource']);
+  const input = record(value, 'settings.colors', ['ranges', 'schemes', 'hideOutside', 'hiddenStructureTypes', 'hiddenAtomTypes', 'hiddenCategories', 'crystalVisibilitySource', 'modes', 'orientation']);
+  const modes = input.modes === undefined ? null : propertyEntries(input.modes, 'settings.colors.modes', ['property', 'mode'], (entry, path) => ({
+    mode: choice(entry.mode, `${path}.mode`, new Set(['continuous', 'discrete'])),
+  }));
+  let orientation;
+  if (input.orientation !== undefined) {
+    const value = record(input.orientation, 'settings.colors.orientation', ['direction', 'custom']);
+    try { orientation = normalizeOrientationSettings(value); }
+    catch (error) { fail('settings.colors.orientation', error.message); }
+  }
   const ranges = propertyEntries(input.ranges ?? [], 'settings.colors.ranges', ['property', 'minimum', 'maximum'], (entry, path) => {
     const minimum = number(entry.minimum, `${path}.minimum`, -MAX_COORDINATE, MAX_COORDINATE);
     const maximum = number(entry.maximum, `${path}.maximum`, -MAX_COORDINATE, MAX_COORDINATE);
@@ -707,6 +722,7 @@ function normalizeColors(value) {
     return { ids };
   });
   return { ranges, schemes, hideOutside, hiddenStructureTypes, hiddenAtomTypes, hiddenCategories,
+    ...(modes ? { modes } : {}), ...(orientation ? { orientation } : {}),
     ...(input.crystalVisibilitySource === undefined ? {} : {
       crystalVisibilitySource: nullableChoice(input.crystalVisibilitySource, 'settings.colors.crystalVisibilitySource', new Set(CRYSTAL_VISIBILITY_SOURCE_NAMES)),
     }) };

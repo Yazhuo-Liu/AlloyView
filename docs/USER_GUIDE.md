@@ -164,6 +164,40 @@ limits and palette as the viewport. Range and palette changes apply immediately
 without rerunning an analysis. Categorical legends retain their separate
 class visibility checkboxes.
 
+For a numeric quantity with at most 32 distinct finite integer values, change
+**Color scale** from **Continuous** to **Discrete** to show one color, count and
+visibility checkbox per value. Continuous colors remain the default. Class
+filters follow the actual values across frames, including when rows disappear
+or reorder, and are saved in configuration JSON. Undefined values have a gray
+class. The selected atom's Details window also offers a shortcut to hide its
+current color class; hiding affects display and leaves analysis input intact.
+
+After PTM provides orientations, **Color by** offers **PTM orientation · inverse
+pole figure** and **PTM orientation · quaternion RGB**. IPF colors use the lattice direction parallel to a
+chosen sample **X**, **Y**, **Z** (default) or custom vector. Cubic FCC/BCC use
+the [001] red, [101] green and [111] blue key; HCP uses a hexagonal key. Other
+or unsupported structures are gray. The stereographic keys are shown in the
+viewport and image legends. Quaternion RGB is a component visualization,
+not a symmetry-reduced orientation measure. See [PTM](features/ptm.md) for the
+rotation convention, symmetry reduction and exact color definitions.
+
+## Keyboard navigation
+
+Press **?**, or click the viewport's shortcut button, to open the grouped
+command list and change bindings. Arrow keys orbit the camera, Shift + arrows
+pan, **Q/E** roll and **+/−** zoom. Digits **0–9** select a camera step gear;
+gear 5 is the default and each successive gear doubles the step. The camera
+panel follows these edits just as it follows mouse gestures.
+
+**[ / ]** change frames, **{ / }** go to the first/last frame, and **Space**
+plays or pauses a trajectory. **, / .** move the selected slice by its own
+step; **Shift + F** flips its retained side. **P** downloads a PNG using the
+current export settings. The dialog lists camera presets and the other keys.
+Shortcuts pause while typing or using a modal dialog, and browser modifier
+combinations remain available. Conflicting rebindings are refused; settings
+are saved locally when browser storage is available. See
+[Keyboard shortcuts](features/keyboard.md).
+
 ## Periodic display origin
 
 Expand **Visualization tools → Display → Periodic display origin** to shift
@@ -346,6 +380,11 @@ Spatial binning saves its enabled state, layout, cell vectors, bin counts,
 quantity (with the property's Color by key), reduction, selection group ID,
 trajectory averaging and map colors in `settings.extensions.binning`; binned
 values are recalculated after import.
+Optional discrete color modes and PTM sample-direction settings are saved in
+`settings.colors`; image resolution is saved in
+`settings.display.png.resolution`. Older configurations retain continuous
+coloring and current-viewport image sizes. Shortcut bindings are a local
+browser preference and are not part of a shared structure configuration.
 
 Click **Import JSON** and choose a saved configuration. If the matching source
 is already open, the viewer returns to the saved frame, restores the settings
@@ -939,6 +978,16 @@ movie encoding and a general command-script interpreter are not included.
 Each archive is limited to 500 images and 256 MiB; the selected frame and
 camera are restored when traversal ends.
 
+**Display → Image resolution** selects the current viewport (the default),
+1080p, 4K, 2×/4× the viewport, or a custom width and height. Custom sizes can
+lock their aspect ratio. Chosen sizes are limited to 16,384 pixels per side and
+32 megapixels; large images use offscreen antialiasing and tiled rendering
+without resizing the interactive viewport. The same setting applies to PNG,
+JPG, frame images and the second view. For **Six-view PNG**, a chosen size
+describes the final contact sheet; **Current view** retains the original
+3 × 2 sheet of viewport-sized images. Legends, axes and boundary annotations
+scale with the exported view. Camera controls and Details remain excluded.
+
 ## Feature help and documentation
 
 Hover or keyboard-focus the **?** beside a detailed settings heading to read a
@@ -967,6 +1016,12 @@ npm test
 npm run benchmark
 # With Node.js 24 and Chrome/Chromium, after npm run build:
 npm run test:browser
+# Real keys, gearbox, rebinding, frame and slice actions:
+npm run test:browser:keyboard
+# Integer classes, PTM orientation colors, legends and recipe replay:
+npm run test:browser:orientation-discrete
+# Custom image sizes, tiled pixels, transparency and every image export path:
+npm run test:browser:export-resolution
 # Miller planes, held stepping, flip, slabs, cut outlines in PNG and recipes:
 npm run test:browser:slice-sweep
 # Bond/Voronoi reference structures, CSV downloads and configuration replay:

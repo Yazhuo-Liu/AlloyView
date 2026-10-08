@@ -23,6 +23,7 @@ export class SelectionExpansionClient {
     if (signal?.aborted) throw abortError();
     const permit = await this.cpuBudget?.acquire(1, { signal });
     try {
+      if (signal?.aborted) throw abortError();
       if (!this.createWorker) return await expandSelection(frame, mask, normalized, { signal, pause: yieldToMain, onProgress });
       return await this.request(frame, mask, normalized, { signal, onProgress });
     } finally { permit?.release(); }

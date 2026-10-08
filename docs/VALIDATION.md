@@ -1,6 +1,68 @@
 # Validation record
 
-Latest validation: 2026-10-08 (UTC). Earlier entries retain their own dates.
+Latest validation: 2026-10-08 (America/New_York, EDT). Earlier entries retain their own dates.
+
+## Phase 2 completion and CI recovery (2026-10-08)
+
+Reference: `a07793e`, synchronized from `origin/main`. The unfinished batch
+recorded in the handoff was A3, A4, O14 and A7. Previously merged O5, O6, A5
+and O9 were reviewed rather than reimplemented; the O9 backlog status is now
+recorded as complete. These checks use Node.js 24.19 and Chromium in the cloud
+environment, with a software graphics adapter where applicable.
+
+- **Full validation:** all **1,412 Node tests** pass and the production build
+  succeeds. Fifteen browser suites pass: keyboard, orientation/discrete colors,
+  chosen-resolution exports, smoke, atom details, advanced tools, scalar legend
+  preview, initial colors, floating view/Voronoi, slice sweep, DXA visual,
+  clusters, spatial binning, expressions and selection hiding. The merged
+  cluster/binning browser checks also cover private and shared-memory Workers;
+  real Fe-frame binned values and CSV match the direct kernel.
+- **A3 keyboard:** real key events verify the camera gearbox, screen-space pan,
+  both projections, trajectory and slice actions, binding conflicts, local
+  persistence, input/modal protection and PNG capture. Rolling from the Bottom
+  preset now preserves the existing free-camera roll before applying the
+  requested increment. Ctrl/Command/Alt retain their browser behavior during
+  binding capture. At 390 px and 320 px, the expanded toolbar, Details and View
+  controls remain inside the viewport without overlap.
+- **A4 integer legends:** tests cover signed safe integers, stable colors and
+  hidden values across reordered frames, undefined values, continuous fallback
+  above 32 classes, and configuration replay. Browser checks exercise per-value
+  hiding, the selected-atom shortcut, second-view synchronization, and scrolling
+  a 32-class legend in a short desktop viewport. Image legends retain every
+  class, including NaN, when more rows require multiple columns.
+- **O14 orientation:** actual compiled PTM fixtures verify the inverse
+  template-to-sample rotation on rotated FCC, BCC and HCP. IPF atom colors and
+  stereographic keys share one formula; quaternion RGB treats opposite signs
+  identically. A completed strain-only fit supports IPF and configuration replay
+  with PTM disabled, while estimation-only caches remain unavailable. RGB modes
+  are excluded from scalar binning; quaternion components remain eligible.
+  Browser checks preserve scientific arrays and second-view colors. The
+  exported IPF legend contains both symmetry keys and all three corner colors.
+- **A7 images:** PNG, opaque JPG, independent second view, frame ZIP, six-view
+  contact sheets and configuration replay use the selected dimensions. Tests
+  cover current-size compatibility, custom aspect edits, invalid-input recovery
+  and the 32-megapixel limit. Composite scenes include atoms, bonds, vectors,
+  DXA, Voronoi, slices and annotations in both projections. Full versus tiled
+  rendering differs by more than 5/255 in only 0.03–0.06% of pixels; tile-boundary
+  differences stay below 0.04%. An independent simpler fixture matches byte for
+  byte across 35 tiles. Transparent edges composited on white differ by at most
+  2/255. A 6000 × 4000 PNG succeeds using 12 bounded tiles. Successful captures
+  and injected failures restore camera, canvas and GL state and free temporary
+  render targets. These are correctness checks, not physical-GPU benchmarks.
+- **Merged-batch review:** computed speed cache invalidation now follows all
+  three velocity component arrays. Selection expansion checks cancellation
+  after CPU-budget admission and before allocating a Worker, including empty
+  or already-complete selections. Regression tests cover both fixes.
+- **GitHub Actions failure:** the supplied Node.js 24.21 log identifies
+  `spatial-binning.test.js`'s real-Worker cancellation assertion: after
+  `setImmediate`, a warm Worker could already have completed, so pending size
+  was zero rather than one. An explicit dispatch handshake now aborts before
+  another message callback can settle the request, retaining the scientific
+  parity and recovery assertions. A forced parent-thread scheduling delay
+  reproduces the old failure and passes after the fix. The workflow retains
+  the existing action/runtime versions, preserves the test exit status through
+  `tee`, publishes a bounded assertion summary, and retains failed logs for
+  seven days. Five tests verify the summary formatter.
 
 ## Expressions, clusters and cutting-plane sweep (2026-10-08)
 

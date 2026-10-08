@@ -15,6 +15,8 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 | Task | Documentation |
 | --- | --- |
 | Adjust the view or compare two cameras | [Display](features/display.md) |
+| Navigate with keys or customize shortcuts | [Keyboard shortcuts](features/keyboard.md) |
+| Color integer classes or crystal orientations | [Color legends](features/display.md), [PTM](features/ptm.md) |
 | Show or analyze periodic copies, or clip the view | [Replicate](features/replicate.md), [Slices](features/slices.md) |
 | Select, color or hide atom groups | [Atom selections](features/selection-groups.md) |
 | Draw neighbor bonds or vectors | [Bonds](features/bonds.md), [Vector arrows](features/vectors.md) |

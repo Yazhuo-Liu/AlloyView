@@ -12,6 +12,18 @@ If the matching source is already open, restoration selects the saved frame, res
 
 Import validates allowed fields, finite numeric ranges, source metadata and individual feature parameters before applying them. Invalid input preserves the current settings. A user edit or frame selection interrupts an in-progress restore so newer actions take priority. Older version 1 settings receive defaults for optional extensions.
 
+`settings.colors.modes` stores opt-in discrete/continuous choices by property,
+and `settings.colors.hiddenCategories` stores hidden values rather than legend
+row numbers. `settings.colors.orientation` stores the IPF sample direction and
+custom vector. Orientation colors require restored PTM results; RGB color modes
+are not scalar quantities for spatial binning, but the individual quaternion
+components can be binned.
+
+`settings.display.png.resolution` stores the image mode, custom width/height and
+aspect lock. Older recipes keep current-viewport exports and continuous numeric
+color legends. Keyboard bindings remain a local browser preference and are not
+included in a shared configuration.
+
 External property files are recorded separately with their file metadata, ID or row-order mapping, import frame, and column names. Their numeric values are not embedded in the JSON. Files still loaded in the current session are reused. In a fresh session, reopen the source and select the requested property files under **Modification tools → External properties**. The panel shows which files are pending; colors and vector fields become available when their columns have been restored. Row-order imports use the original import frame to preserve the mapping when later frames reorder stable atom IDs.
 
 Computed properties are recorded in `settings.extensions.expressions.properties` as a list of `{ name, unit, expression }` in evaluation order. The values are not stored. Import checks the names and parses each expression with the safe expression parser, rejecting syntax errors, self-references and references to later properties before any setting is applied; nothing in the file is executed as code. The values are recalculated once the source frame and enabled analyses are restored. See [Expressions](expressions.md).

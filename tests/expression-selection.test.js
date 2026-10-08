@@ -155,6 +155,22 @@ test('the selection Worker reuses its neighbor index and the client cancels by t
   await assert.rejects(client.expand(frame, selected, { cutoff: -1 }), /positive distance/);
 });
 
+test('selection cancellation at CPU admission starts no Worker and releases its permit', async () => {
+  const frame = randomFrame(), controller = new AbortController();
+  let released = 0, created = 0;
+  const client = new SelectionExpansionClient({
+    cpuBudget: { acquire: async () => { controller.abort(); return { release: () => released++ }; } },
+    createWorker: () => { created++; throw new Error('A cancelled request must not create a Worker.'); },
+  });
+  await assert.rejects(client.expand(frame, seedMask(frame.ids.length), { cutoff: 2 }, { signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(created, 0);
+  assert.equal(released, 1);
+  assert.equal(client.pending.size, 0);
+  // Small or already complete selections must respect a pre-aborted signal too.
+  await assert.rejects(expandSelection(frame, new Uint8Array(frame.ids.length), { cutoff: 2 }, { signal: controller.signal }), { name: 'AbortError' });
+  await assert.rejects(expandSelection(frame, new Uint8Array(frame.ids.length).fill(1), { cutoff: 2 }, { signal: controller.signal }), { name: 'AbortError' });
+});
+
 function controlsHarness(target = randomFrame({ count: 12 })) {
   let current = target, groups = normalizeSelectionGroups();
   const changes = [], edits = [];

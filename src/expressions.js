@@ -263,11 +263,22 @@ export function expressionTypeNumbers(typeLabels = []) {
 }
 
 const derivedCache = new WeakMap();
+const speedCache = new WeakMap();
 function derived(owner, key, create) {
   let entries = derivedCache.get(owner);
   if (!entries) derivedCache.set(owner, entries = new Map());
   if (!entries.has(key)) entries.set(key, create());
   return entries.get(key);
+}
+
+function velocityMagnitude(sources, count) {
+  const previous = speedCache.get(sources[0]);
+  if (previous && sources.every((source, index) => source === previous.sources[index])) return previous.data;
+  const data = new Float64Array(count);
+  for (let index = 0; index < count; index++) data[index] = Math.hypot(sources[0][index], sources[1][index], sources[2][index]);
+  // Separate external files may replace Y or Z while leaving X unchanged.
+  speedCache.set(sources[0], { sources, data });
+  return data;
 }
 
 /** Variables of one frame. `properties` defaults to every frame property;
@@ -331,11 +342,7 @@ export function createExpressionScope(frame, { properties = frame?.properties ??
       }
       default: {
         const sources = velocity.map(property => property.data);
-        return atom(entry.name, sources, () => ({ data: derived(sources[0], 'speed', () => {
-          const data = new Float64Array(count);
-          for (let index = 0; index < count; index++) data[index] = Math.hypot(sources[0][index], sources[1][index], sources[2][index]);
-          return data;
-        }), stride: 1, offset: 0 }));
+        return atom(entry.name, sources, () => ({ data: velocityMagnitude(sources, count), stride: 1, offset: 0 }));
       }
     }
   }

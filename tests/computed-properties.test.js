@@ -83,6 +83,22 @@ test('missing analysis inputs wait, then appear when the analysis result arrives
   assert.deepEqual(computed(target), {});
 });
 
+test('velocity magnitude updates when only one external component is replaced', () => {
+  const target = frame(0, ['vx', 'vy', 'vz'].map((name, axis) => ({ name, data: new Float64Array(3).fill([1, 2, 2][axis]) })));
+  const recipe = definitions([{ name: 'speed', expression: 'Velocity.Magnitude' }]), cache = new WeakMap();
+  applyComputedProperties(target, recipe, cache);
+  assert.deepEqual(computed(target).speed, [3, 3, 3]);
+  const x = target.properties.find(property => property.name === 'vx').data;
+  for (const [name, value, expected] of [['vy', 6, Math.sqrt(41)], ['vz', 3, Math.sqrt(46)]]) {
+    const index = target.properties.findIndex(property => property.name === name);
+    target.properties[index] = { name, data: new Float64Array(3).fill(value) };
+    assert.equal(applyComputedProperties(target, recipe, cache).changed, true);
+    for (const value of computed(target).speed) assert.ok(Math.abs(value - expected) < 1e-12);
+    assert.equal(target.properties.find(property => property.name === 'vx').data, x);
+    assert.equal(applyComputedProperties(target, recipe, cache).changed, false, 'unchanged components still reuse computed values');
+  }
+});
+
 test('a column with the same name reports a conflict instead of being replaced', () => {
   const target = frame(0, [{ name: 'Pressure', data: Float64Array.of(7, 7, 7) }]);
   const result = applyComputedProperties(target, definitions([{ name: 'pressure', expression: 'stress' }]));

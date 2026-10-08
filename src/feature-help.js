@@ -1,5 +1,6 @@
 /** The same descriptions power panel help and the documentation navigation. */
 export const FEATURE_HELP = Object.freeze({
+  keyboard: { title: 'Keyboard shortcuts', page: 'keyboard', summary: 'Navigate the camera, trajectory and selected cutting plane with configurable keys and a 0–9 camera step gearbox. Open the viewport ? button to review or rebind commands.' },
   display: { title: 'Display', page: 'display', summary: 'Choose coordinates, atom colors and radii, image options, and an independent second camera. Display changes preserve the source data.' },
   replicate: { title: 'Replicate', page: 'replicate', summary: 'Repeat along periodic cell vectors. Display copies reuse source atoms; optional Replicate atoms enlarges the cell and analyzes the additional atoms.' },
   externalProperties: { title: 'External properties', page: 'external-properties', summary: 'Attach numeric per-atom columns from CSV or AUX files by stable ID or row order. Imported values are available for colors, atom details and vector fields; coordinates remain unchanged.' },

@@ -412,6 +412,13 @@ large trajectories. Also requested by AtomEye users.
 
 ### O9. Spatial binning profiles
 
+**Status:** Done 2026-10-08 (`src/analysis/spatial-binning.js`,
+`src/binning-tools.js`). One- and two-dimensional bins follow reduced cell
+coordinates, including tilted cells, with counts, number density and scalar
+reductions. Selection restrictions, trajectory averages, interactive charts,
+CSV exports and configuration replay are implemented. Large frames use a
+persistent Worker; scientific values are accumulated in atom order.
+
 **Effort:** M (new panel, chart and CSV). OVITO's binning is Pro-only; implement
 independently. Bin in reduced coordinates for triclinic cells.
 
@@ -440,10 +447,24 @@ series is Pro-only and must be implemented independently.
 
 ### O14. Orientation coloring
 
+**Status:** Done 2026-10-08 (`src/render/orientation-colors.js`). Completed PTM
+fits supply inverse-pole-figure colors for FCC/BCC and HCP, with separate
+stereographic keys and an editable sample direction, or sign-canonical
+quaternion RGB. Completed ideal-lattice strain fits can supply the same
+orientations. Unsupported or undefined fits remain neutral. Choices and
+directions round-trip through configurations and appear in image exports.
+
 **Effort:** M, after O1. Color by PTM orientation (inverse-pole-figure or
 quaternion RGB) through a new legend kind.
 
 ### A3. Global keyboard commands
+
+**Status:** Done 2026-10-08 (`src/keyboard-commands.js`,
+`src/keyboard-controls.js`). Camera orbit, roll, pan, zoom and presets use a
+0–9 step gearbox; frame, slice, PNG and theme commands reuse existing actions.
+An accessible dialog lists commands, captures replacement keys, refuses
+conflicts and saves versioned bindings locally. Typing, modal dialogs and
+browser modifier combinations retain their native behavior.
 
 **Effort:** M. AtomEye drives navigation from the keyboard with a step-size
 "gearbox" (0–9). AlloyView has no global shortcuts beyond Escape. Add a command
@@ -451,6 +472,13 @@ registry, a shortcut overlay and rebinding stored in localStorage; ignore keys
 while inputs have focus.
 
 ### A4. Discrete legends for integer properties
+
+**Status:** Done 2026-10-08 (`src/render/discrete-colors.js`). Color scale can
+optionally show 1–32 distinct safe-integer values as individually hideable
+categories, retaining a separate missing-value key. Hidden values, rather
+than row indices, are saved; larger populations fall back to a continuous
+scale. Atom details can hide the picked atom's class. Desktop and mobile
+legends scroll when their contents exceed the viewport.
 
 **Effort:** S–M. Show integer properties with few values (coordination, cluster
 or grain IDs) as categories with per-value hiding, and hide the clicked atom's
@@ -479,6 +507,14 @@ vertex shader during the drag and rebuilding bonds, vectors, DXA lines and
 Voronoi cells on release.
 
 ### A7. Export at a chosen resolution
+
+**Status:** Done 2026-10-08 (`src/render/offscreen-export.js`,
+`src/export-resolution-controls.js`). Current-size export retains its existing
+path; presets and custom sizes use antialiased offscreen rendering with
+bounded tiles, scaled annotations and camera/state restoration. Explicit
+sizes are limited to 16,384 pixels per side and 32 megapixels. PNG, JPG,
+second-view, frame-ZIP and six-view exports share the settings; a chosen
+six-view size is the final contact-sheet size.
 
 **Effort:** M. Render to an offscreen antialiased framebuffer at the requested
 size, tiling beyond GPU limits, and scale legends and axes. The current export

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { withWebGpuBrowser } from './webgpu-browser.mjs';
+import { DEFAULT_EXPORT_RESOLUTION } from '../src/render/export-resolution.js';
 
 // Small real CPU tessellations isolate display/camera regressions; the real
 // HEA example checks selected-only cells. SwiftShader validates graphics
@@ -178,7 +179,8 @@ try {
     const comparisonPixels = await evaluate('floatingChecks.encodedPixels("comparison")');
     assert.equal(ownPng.width, comparisonPixels.width); assert.equal(ownPng.height, comparisonPixels.height);
     assert.equal(ownPng.capture.kind, 'comparison');
-    assert.deepEqual(ownPng.capture.options, { includeBackground: false, includeAxes: false, legend: null });
+    assert.deepEqual(ownPng.capture.options, { includeBackground: false, includeAxes: false, legend: null,
+      resolution: DEFAULT_EXPORT_RESOLUTION });
     assertCamera(ownPng.capture.camera, secondCamera);
     assertCamera(await camera('comparison'), secondCamera);
     console.log(`Second-view PNG source comparison: ${JSON.stringify(ownPng.capture.encodingDiff)}`);

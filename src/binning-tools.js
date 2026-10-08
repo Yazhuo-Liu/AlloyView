@@ -1,7 +1,7 @@
 import { SpatialBinningClient } from './binning-client.js';
 import { BINNING_AXES, BINNING_REDUCTIONS, finalizeSpatialBins, mergeSpatialBins, normalizeBinningLayout } from './analysis/spatial-binning.js';
 import { renderBinningChart } from './render/binning-chart.js';
-import { ColorQuantityResolver, initialColorQuantities } from './render/color-quantities.js';
+import { BUILTIN_SCALAR_COLOR_MODES, ColorQuantityResolver, initialColorQuantities } from './render/color-quantities.js';
 import { SCALAR_COLOR_SCHEMES } from './render/palette.js';
 import { atomIdSet, hasAtomId } from './data/atom-ids.js';
 
@@ -24,7 +24,8 @@ export function binningQuantityOptions(frame) {
   const categorical = new Set(frame.properties.filter(property => property.categories?.length).map(property => `property:${property.name}`));
   const seen = new Set();
   return initialColorQuantities(frame).filter(({ value }) => {
-    if (categorical.has(value) || seen.has(value)) return false;
+    if (categorical.has(value) || seen.has(value)
+        || (value.startsWith('builtin:') && !BUILTIN_SCALAR_COLOR_MODES.includes(value))) return false;
     seen.add(value); return true;
   });
 }

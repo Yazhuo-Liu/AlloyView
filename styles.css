@@ -282,8 +282,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 
 .legend { position: absolute; z-index: 3; left: 18px; bottom: 18px; min-width: 190px; max-width: 300px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 12px; background: var(--overlay); backdrop-filter: blur(12px); box-shadow: var(--shadow); }
 .legend[hidden] { display: none; }
+@media (min-width: 921px) {
+  .legend { max-height: calc(100% - 36px); overflow-y: auto; overscroll-behavior: contain; }
+  .viewport-panel.trajectory-visible .legend { max-height: calc(100% - 130px); }
+}
 .legend-property { display: grid; min-width: 0; gap: 4px; margin-bottom: 10px; color: var(--muted); font-size: 9px; }
 .legend-property select { width: 100%; max-width: 100%; min-width: 0; height: 30px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text-soft); background: var(--control-bg); font-size: 11px; text-overflow: ellipsis; }
+.legend-ipf-key { display: block; width: 100%; max-width: 240px; height: auto; }
+.legend-ipf-family { margin: 8px 0 2px; color: var(--text-soft); font-size: 10px; }
+.legend-ipf-custom { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.legend-ipf-custom label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; }
+.legend-ipf-custom input { min-width: 0; width: 100%; height: 28px; font-size: 11px; }
 .legend-title { display: flex; justify-content: space-between; color: var(--text-soft); font-size: 11px; margin-bottom: 9px; }
 .legend-title span { color: var(--muted); }
 .legend-items { display: flex; flex-wrap: wrap; gap: 7px 12px; }

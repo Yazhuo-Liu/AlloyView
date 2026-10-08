@@ -326,6 +326,26 @@
             </details>
             <details class="tool-details">
               <summary>Export images and atom IDs</summary>
+              <label class="field">
+                <span>Image resolution</span>
+                <select id="export-resolution" disabled>
+                  <option value="current">Current viewport</option>
+                  <option value="1080p">Full HD · 1920 × 1080</option>
+                  <option value="4k">4K · 3840 × 2160</option>
+                  <option value="2x">2 × current viewport</option>
+                  <option value="4x">4 × current viewport</option>
+                  <option value="custom">Custom size</option>
+                </select>
+              </label>
+              <div id="export-custom-size" hidden>
+                <div class="paired-fields">
+                  <label class="field"><span>Width (pixels)</span><input id="export-width" type="number" min="1" max="16384" step="1" value="1920" disabled></label>
+                  <label class="field"><span>Height (pixels)</span><input id="export-height" type="number" min="1" max="16384" step="1" value="1080" disabled></label>
+                </div>
+                <label class="field checkbox-field"><input id="export-aspect-lock" type="checkbox" checked disabled><span>Keep aspect ratio</span></label>
+              </div>
+              <p id="export-size-status" class="help" role="status" aria-live="polite"></p>
+              <p class="help">Applies to PNG, JPG, the second view and frame images. Up to 32 megapixels; larger targets render in tiles. A chosen size is the final size of a six-view sheet.</p>
               <div class="export-actions">
                 <button id="export-jpg" class="button button-secondary" type="button" disabled>Export JPG</button>
                 <button id="export-atom-indices" class="button button-secondary" type="button" disabled>Visible atom IDs</button>

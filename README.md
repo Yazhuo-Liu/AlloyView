@@ -133,6 +133,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   Atom-type colors and ten scalar color maps, with an Auto range toggle,
   editable limits that stay fixed across frames, and optional filtering of
   out-of-range atoms.
+  Eligible integer quantities also offer opt-in discrete colors, counts and
+  per-value visibility. PTM orientations can be displayed as cubic/hexagonal
+  inverse pole figures along a chosen sample direction, or as quaternion RGB.
 - Independent crystal visibility from CNA, PTM, Auto central symmetry, ideal
   lattice strain or DXA, including when coloring by a scalar quantity. DXA
   lines use continuous tube surfaces while retaining the scientific network.
@@ -141,6 +144,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   trajectory image sequences packaged as ZIP files.
   Exported arrows are optional and off by default. Transparent
   exports keep the legend labels and color keys without a filled legend panel.
+  Image exports can use the current viewport, resolution presets or a custom
+  size up to 32 megapixels, with tiled rendering for larger GPU targets.
+- Configurable [keyboard shortcuts](docs/features/keyboard.md) for camera,
+  trajectory, selected slice and image actions, with a 0–9 camera step gearbox
+  and an accessible shortcut/rebinding dialog.
 - Light and dark themes with matching project logos and a saved preference.
 - A resizable controls panel with saved width, plus live display and legend
   edits and automatic coordination updates when the cutoff changes.
