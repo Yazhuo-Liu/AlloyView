@@ -2,6 +2,16 @@
 
 ## Controls
 
+The initial **Color by** list includes **Position X/Y/Z** without running an
+analysis. These Cartesian values follow the Display wrapped/unwrapped setting;
+moving the periodic display origin or adding display-only copies keeps each
+source atom's physical color value. Physical replication uses the enlarged
+frame's coordinates. Imported velocity components appear as **Velocity X/Y/Z**
+with their original column names; a complete triplet also enables **Speed
+magnitude**. Velocity units come from the imported fields. All these quantities
+use the usual palettes, Auto/manual bounds, selection hiding, second view and
+PNG legend, and their settings are saved in configuration JSON.
+
 Choose wrapped coordinates to place periodic atoms inside the simulation cell, or unwrapped coordinates to show the available trajectory positions. **Color by** selects atom types, imported scalar properties, or completed analysis fields. Scalar palettes, fixed ranges, automatic ranges and visibility filters also appear in the viewport legend. Set the range by typing **Min** and **Max** or by dragging the two-thumb slider above them. The slider spans the data range, widened to include any typed limit outside it; its ends give the exact data minimum and maximum. As with the number fields, moving one limit past the other pushes the other one along. A faint histogram behind a scalar gradient divides the displayed range into 48 equal value bands (one band per value for small integer ranges) and shows how many finite values fall in each; square-root heights keep sparse bands visible. Hover or tap the gradient to read the value at that position and how many atoms lie between the limits of its band, for example *6 atoms between 9.92 and 10.26*. The gradient's tooltip explains the bands and counts values outside the range.
 
 Every categorical legend has a visibility checkbox for each class, including each element in **Atom type**. Element choices are stored by label and continue to apply after switching color quantities or trajectory frames. Other categorical filters belong to their own property, so hiding a CNA class does not hide a PTM class with the same numeric ID. These display filters intersect with appearance and scalar-range filters, synchronize to the second view, and are saved in configuration JSON.

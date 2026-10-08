@@ -1,6 +1,7 @@
 // Portable processing recipes contain no coordinates or computed atom arrays.
 // Local files must be selected again; source metadata is only used to match them.
 import { SCALAR_COLOR_SCHEMES } from './render/palette.js';
+import { BUILTIN_COLOR_MODES } from './render/color-quantities.js';
 import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from './selection-groups.js';
 import { DXA_DEFAULTS, DXA_FAMILIES } from './analysis/dxa.js';
 import { CRYSTAL_VISIBILITY_SOURCE_NAMES } from './crystal-visibility-controls.js';
@@ -492,7 +493,8 @@ function normalizeDisplay(value) {
   const input = record(value, 'settings.display', ['coordinateMode', 'colorMode', 'radiusPercent', 'background', 'showCell', 'showAxes', 'png', 'projectionMode', 'periodicOrigin', 'cellWireframeMode']);
   const png = record(input.png ?? {}, 'settings.display.png', ['background', 'legend', 'axes']);
   const colorMode = string(input.colorMode ?? 'type', 'settings.display.colorMode', 512);
-  if (colorMode !== 'type' && (!colorMode.startsWith('property:') || colorMode.length === 9)) fail('settings.display.colorMode', 'must select atom type or a property');
+  if (colorMode !== 'type' && !BUILTIN_COLOR_MODES.includes(colorMode)
+      && (!colorMode.startsWith('property:') || colorMode.length === 9)) fail('settings.display.colorMode', 'must select atom type, a coordinate, speed or a property');
   const background = string(input.background ?? '#000000', 'settings.display.background', 7);
   if (!/^#[\da-f]{6}$/i.test(background)) fail('settings.display.background', 'must be a six-digit hex color');
   return {

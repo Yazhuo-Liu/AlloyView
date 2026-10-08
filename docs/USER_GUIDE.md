@@ -139,6 +139,10 @@ During a drag, colors and range hiding update in the renderer without a full
 atom-color recalculation at every step. Releasing the slider or exporting an
 image restores exact colors and histogram counts in both views. Selection
 colors, bonds and Voronoi cells keep following the same display filters.
+Immediately after loading, **Color by** also offers **Position X/Y/Z**, using
+the Cartesian coordinates in the selected wrapped/unwrapped mode. If the file
+contains velocity components, they are labeled **Velocity X/Y/Z**; a complete
+triplet additionally offers **Speed magnitude** without enabling a tool.
 Hover or tap the gradient to read the value at that position; the faint bars
 behind it count atoms in 48 equal value bands of the displayed range, and the
 probe names its band, for example *6 atoms between 9.92 and 10.26*.

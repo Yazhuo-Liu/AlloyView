@@ -2,6 +2,28 @@
 
 Latest validation: 2026-10-08 (UTC). Earlier entries retain their own dates.
 
+## Initial coordinate and velocity colors (2026-10-08)
+
+**Position X/Y/Z** uses Cartesian wrapped/unwrapped coordinates without an
+analysis. Existing CFG, dump/data and Extended XYZ velocity columns keep their
+original keys and are labeled **Velocity X/Y/Z**. A complete triplet enables
+**Speed magnitude**. Virtual fields leave source properties unchanged, retain
+only the selected derived array and distinguish their legend keys from
+identically named imported columns.
+
+- All **1,294 Node tests** and the production build pass. New cases cover
+  Cartesian/image coordinates, lazy reuse, absent/partial velocity data, units,
+  NaNs, physical replication, name collisions, hidden-atom Auto bounds and
+  configuration validation/round trips.
+- `test:browser:initial-colors` checks all six coordinate/velocity components
+  against independent expected palettes in the real renderer, with no WebGL
+  errors. A two-frame triclinic dump verifies wrapped/unwrapped bounds, fixed
+  limits across frames, speed magnitudes, configuration export/replay and a
+  PNG containing the speed legend. A plain XYZ has no velocity choices. No
+  vector tool is enabled and the imported scalar arrays remain unchanged.
+- `test:browser:legend-preview` also passes for the existing scalar preview,
+  exact commit/export, both views and Voronoi range filtering.
+
 ## P10, P13, P15 and P18 integration (2026-10-08)
 
 Reference: `cda3c41`. The checks below use Node.js 24.19 and headless Chromium

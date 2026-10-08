@@ -1,4 +1,5 @@
 import { FrameCache } from './data/frame-cache.js';
+import { ColorQuantityResolver, colorPropertyKey, initialColorQuantities } from './render/color-quantities.js';
 import { framePreparationSignal } from './data/frame-preparation.js';
 import { findAtomIndex } from './appearance.js';
 import { chooseFrameCachePolicy, estimateFrameBytes } from './data/cache-policy.js';
@@ -89,6 +90,7 @@ const elements = Object.fromEntries([
 
 const cache = new FrameCache(3);
 const scalarColorRanges = new Map();
+const colorQuantityResolver = new ColorQuantityResolver();
 const scalarColorSchemes = new Map();
 const scalarHideOutside = new Map();
 const hiddenStructureTypes = new Set();
@@ -804,6 +806,7 @@ function closeSource() {
   configurationRequest++;
   restorationOwner = null;
   commitScalarLegendEdit = null;
+  colorQuantityResolver.clear();
   sourceLoadingOwner = null;
   sourceOpenRequest++;
   sourceFetchController?.abort();
@@ -1854,9 +1857,10 @@ async function refreshExternalProperties({ restoring = false, reason, oldName, n
   if (reason === 'rename') {
     if (state.colorMode === `property:${oldName}`) state.colorMode = `property:${name}`;
     for (const preferences of [scalarColorRanges, scalarColorSchemes, scalarHideOutside, hiddenCategories]) {
-      if (!preferences.has(oldName)) continue;
-      preferences.set(name, preferences.get(oldName));
-      preferences.delete(oldName);
+      const oldKey = colorPropertyKey(oldName), key = colorPropertyKey(name);
+      if (!preferences.has(oldKey)) continue;
+      preferences.set(key, preferences.get(oldKey));
+      preferences.delete(oldKey);
     }
     atomEyeTools?.renameProperty(oldName, name);
   }
@@ -1886,6 +1890,7 @@ function updateCoordinateMode() {
   state.coordinateMode = requested;
   elements['metric-upload'].textContent = formatDuration(renderer.setDisplayPositions(displayPositionsForFrame(), { coordinateMode: state.coordinateMode }));
   renderer.resetCamera();
+  if (state.colorMode.startsWith('builtin:position:')) applyColors();
   restoreSelection();
   atomEyeTools.updateMeasurements();
   atomEyeTools.syncComparison();
@@ -1907,10 +1912,13 @@ function refreshColorOptions() {
   const previous = state.colorMode;
   elements['color-mode'].replaceChildren(option('type', 'Atom type'));
   const propertyNames = new Set();
-  state.frame.properties.forEach((property) => {
-    if (propertyNames.has(property.name)) return;
-    propertyNames.add(property.name);
-    elements['color-mode'].append(option(`property:${property.name}`, `${property.displayName ?? property.name}${property.unit ? ` [${property.unit}]` : ''}`));
+  initialColorQuantities(state.frame).forEach(({ value, label }) => {
+    if (value.startsWith('property:')) {
+      const name = value.slice(9);
+      if (propertyNames.has(name)) return;
+      propertyNames.add(name);
+    }
+    elements['color-mode'].append(option(value, label));
   });
   // Keep a saved external quantity selected while its local file is pending,
   // or while a frame-scoped column is unavailable in the current frame.
@@ -1998,9 +2006,8 @@ function hiddenCategoriesFor(name) {
 }
 
 function paletteForCurrentMode() {
-  if (state.colorMode === 'type') return colorsByType(state.frame, hiddenAtomTypes);
-  const propertyName = state.colorMode.slice('property:'.length);
-  const property = state.frame.properties.find((candidate) => candidate.name === propertyName);
+  if (state.colorMode === 'type') { colorQuantityResolver.clear(); return colorsByType(state.frame, hiddenAtomTypes); }
+  const property = colorQuantityResolver.resolve(state.frame, state.colorMode, { coordinateMode: state.coordinateMode });
   if (!property) {
     return colorsByType(state.frame, hiddenAtomTypes);
   }
