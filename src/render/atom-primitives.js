@@ -1,5 +1,5 @@
 import { invert3 } from '../data/model.js';
-import { MAX_SLICES, SLICE_EPSILON } from './slicing.js';
+import { MAX_SLICE_PLANES, SLICE_EPSILON } from './slicing.js';
 import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms } from './scalar-colormap.js';
 
 // Atom textures and instance buffers have source-frame sizes. Repeating a skew
@@ -27,7 +27,7 @@ uniform int uSliceAxis;
 uniform float uSliceMaximum;
 uniform int uSliceMode;
 uniform int uSliceCount;
-uniform vec4 uSlicePlanes[${MAX_SLICES}];
+uniform vec4 uSlicePlanes[${MAX_SLICE_PLANES}];
 uniform bool uVectorMode;
 uniform vec3 uVectorColor;
 uniform float uScale;
@@ -48,7 +48,7 @@ flat out int vVisible;
 ivec2 atomUV(uint atom) { return ivec2(int(atom) % uTextureWidth, int(atom) / uTextureWidth); }
 bool sliceVisible(vec3 position, vec3 fractional, vec3 replica) {
   if (uSliceMode == 0) return (fractional[uSliceAxis] + replica[uSliceAxis]) / uRepetitions[uSliceAxis] <= uSliceMaximum;
-  for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
+  for (int plane = 0; plane < ${MAX_SLICE_PLANES}; plane++) {
     if (plane >= uSliceCount) break;
     if (dot(uSlicePlanes[plane].xyz, position) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) return false;
   }
@@ -121,13 +121,13 @@ flat in vec3 vColorSecond;
 flat in int vVisible;
 uniform int uSliceMode;
 uniform int uSliceCount;
-uniform vec4 uSlicePlanes[${MAX_SLICES}];
+uniform vec4 uSlicePlanes[${MAX_SLICE_PLANES}];
 uniform bool uFlatMode;
 out vec4 outColor;
 void main() {
   if (vVisible == 0) discard;
   if (uSliceMode == 1) {
-    for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
+    for (int plane = 0; plane < ${MAX_SLICE_PLANES}; plane++) {
       if (plane >= uSliceCount) break;
       if (dot(uSlicePlanes[plane].xyz, vWorld) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) discard;
     }

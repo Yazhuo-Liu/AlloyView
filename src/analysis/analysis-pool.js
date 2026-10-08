@@ -18,7 +18,7 @@ const PTM_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_RESIDENT_KINDS = ['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch', 'voronoiPrepare'];
 const CPU_CACHED_INPUT_FIELDS = [...['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput',
-  'currentPositions', 'referencePositions'], 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex'];
+  'currentPositions', 'referencePositions'], 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex', 'clusterSelection'];
 const CPU_MODULES = ['voronoi', 'ptm', 'dxa'];
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
@@ -34,11 +34,13 @@ const PTM_NEIGHBOR_FIELDS = ['counts', 'indices', 'vectors'];
 export const GPU_PTM_NEIGHBOR_MAX_WORKERS = 3;
 const STRAIN_OUTPUT_FIELDS = Object.fromEntries(['atomicShearStrain', 'atomicHydrostaticStrain', 'atomicVolumeChange',
   'strainE11', 'strainE22', 'strainE33', 'strainE12', 'strainE13', 'strainE23'].map((name) => [name, [Float32Array, 1]]));
-const INPUT_ARRAY_FIELDS = ['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput', 'currentPositions', 'referencePositions'];
+const INPUT_ARRAY_FIELDS = ['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput', 'currentPositions', 'referencePositions',
+  'clusterSelection', 'clusterMasses'];
 const EXTRA_OUTPUT_FIELDS = {
   coordination: { coordination: [Uint32Array, 1] },
   bonds: { coordination: [Uint32Array, 1] },
   bondStatistics: { coordination: [Uint32Array, 1], q4: [Float32Array, 1], q6: [Float32Array, 1] },
+  clusterEdges: {},
   voronoi: VORONOI_FIELDS,
   rdf: {},
   localShearCoordination: { coordination: [Uint32Array, 1] },
@@ -342,6 +344,10 @@ export class AnalysisPool {
     if (signal?.aborted) throw abortError();
     const analysisStartedAt = performance.now();
     const gpuRequested = this.gpuEnabled;
+    // Connectivity has no GPU kernel; it is not a fallback from one.
+    if (parameters.kind === 'clusters') {
+      return { ...await this.analyzeClusters(frame, parameters, { onProgress, signal }), backend: 'cpu', gpuRequested };
+    }
     if (gpuRequested && parameters.kind === 'ptm') {
       return this.analyzePtmWithGpu(frame, parameters, { onProgress, signal, frameIndex });
     }
@@ -501,7 +507,7 @@ export class AnalysisPool {
       }
       extraBytes += parameters.structureInput.byteLength;
     }
-    if (['strain', 'bonds', 'rdf', 'bondStatistics'].includes(parameters.kind)) {
+    if (['strain', 'bonds', 'rdf', 'bondStatistics', 'clusterEdges'].includes(parameters.kind)) {
       inputs.types = frame.types;
       if (!ArrayBuffer.isView(frame.types) || frame.types.length !== atomCount) throw new Error('Analysis requires one element type per atom.');
       extraBytes += frame.types.byteLength;
@@ -677,14 +683,13 @@ export class AnalysisPool {
           warning: partials.find((partial) => partial.warning)?.warning ?? null };
       }
       if (EXTRA_OUTPUT_FIELDS[parameters.kind]) {
+        // Spanning forests stay in range order for the cluster labeling task.
+        if (parameters.kind === 'clusterEdges') return { ...metadata, partials };
         if (parameters.kind === 'voronoi') {
           return { ...metadata, ...mergeVoronoiPartials(partials, atomCount, { bins: parameters.bins ?? 50 }) };
         }
         const fields = EXTRA_OUTPUT_FIELDS[parameters.kind];
         const values = Object.fromEntries(Object.keys(fields).map(name => [name, merged[name]]));
-        for (const partial of partials) {
-          if (atomCount > 65_536) { await yieldToMain(); if (controller.signal.aborted) throw abortError(); }
-        }
         if (parameters.kind === 'rdf') {
           const counts = new Float64Array(parameters.bins ?? 100);
           for (const partial of partials) for (let bin = 0; bin < counts.length; bin += 1) counts[bin] += partial.counts[bin];
@@ -697,11 +702,13 @@ export class AnalysisPool {
           const count = partials.reduce((sum, partial) => sum + partial.count, 0), maxBonds = parameters.maxBonds ?? MAX_BONDS;
           if (count > maxBonds) throw new Error(`Bond output exceeds ${maxBonds.toLocaleString('en-US')} edges; reduce the cutoff.`);
           const indices = new Uint32Array(count * 2), vectors = new Float32Array(count * 3), shifts = new Int32Array(count * 3);
-          let offset = 0;
+          // Yield by copied volume, not per chunk: without scheduler.yield a
+          // yield is a clamped setTimeout, and there are 8 chunks per Worker.
+          let offset = 0, sinceYield = 0;
           for (const partial of partials) {
             indices.set(partial.indices, offset * 2); vectors.set(partial.vectors, offset * 3); shifts.set(partial.shifts, offset * 3);
-            offset += partial.count;
-            await yieldToMain(); if (controller.signal.aborted) throw abortError();
+            offset += partial.count; sinceYield += partial.count;
+            if (sinceYield >= 262_144) { sinceYield = 0; await yieldToMain(); if (controller.signal.aborted) throw abortError(); }
           }
           return { ...metadata, ...values, indices, vectors, shifts, count, ...await coordinationStatistics(values.coordination, controller.signal), warning: null };
         }
@@ -958,6 +965,58 @@ export class AnalysisPool {
     try { return await pending; } finally { if (snapshot.indexPending.get(cacheKey) === pending) snapshot.indexPending.delete(cacheKey); }
   }
 
+  /** Workers search disjoint central-atom ranges and reduce their edges to
+   * spanning forests. One Worker joins the forests in range order and labels
+   * clusters on its resident frame. Labels, unwrapped centers and percolation
+   * do not depend on the partition, so the arrays equal calculateClusters. */
+  async analyzeClusters(frame, parameters, { onProgress = () => {}, signal } = {}) {
+    const startedAt = performance.now(), atomCount = frame.fractional.length / 3;
+    if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
+    const { kind: _kind, clusterMasses = null, sortBySize = true, ...edgeParameters } = parameters;
+    for (const [name, value] of [['selection', edgeParameters.clusterSelection], ['masses', clusterMasses]]) {
+      if (value !== null && value !== undefined && (!ArrayBuffer.isView(value) || value.length !== atomCount)) {
+        throw new Error(`Cluster ${name} must contain one value per atom.`);
+      }
+    }
+    const controller = new AbortController(), abort = () => controller.abort();
+    this.controllers.add(controller);
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      const edges = await this.analyzeCPU(frame, { ...edgeParameters, kind: 'clusterEdges' }, { signal: controller.signal,
+        onProgress: update => onProgress({ ...update, stage: 'cluster-edges' }) });
+      const edgeCount = edges.partials.reduce((sum, partial) => sum + partial.edgeCount, 0);
+      const edgePairs = new Int32Array(edgeCount * 2), edgeShifts = new Int32Array(edgeCount * 3);
+      let offset = 0;
+      for (const partial of edges.partials) {
+        edgePairs.set(partial.pairs, offset * 2); edgeShifts.set(partial.shifts, offset * 3);
+        offset += partial.edgeCount;
+      }
+      const snapshot = await this.prepareCpuSnapshot(frame, edges.sharedMemory, controller.signal);
+      if (controller.signal.aborted) throw abortError();
+      const workerCount = edges.workerCount;
+      const report = phase => onProgress({ phase, stage: 'cluster-labels', completed: workerCount, total: workerCount, workerCount,
+        completedAtoms: atomCount, totalAtoms: atomCount, completedChunks: edges.chunkCount, totalChunks: edges.chunkCount });
+      report('finalizing');
+      const labeled = await this.runTask({ kind: 'clustersFinalize', fractional: snapshot.coordinates, cell: snapshot.cell,
+        types: snapshot.types, cpuFrameKey: snapshot.key, edgePairs, edgeShifts,
+        clusterSelection: edgeParameters.clusterSelection ?? null, clusterMasses, sortBySize },
+      controller.signal, signal, () => report('finalizing'), edges.sharedMemory);
+      if (controller.signal.aborted) throw abortError();
+      const { nativeHeapBytes: _heap, residentInputBytes: _resident, frameUploaded: _uploaded, indexBuilt: _built,
+        indexReused: _reused, elapsedMs: labelElapsedMs, ...result } = labeled;
+      return { ...result, acceptedEdges: edges.partials.reduce((sum, partial) => sum + partial.acceptedEdges, 0),
+        workerCount, sharedMemory: edges.sharedMemory, chunkSize: edges.chunkSize, chunkCount: edges.chunkCount, scheduling: 'dynamic',
+        engine: `js-worker${workerCount === 1 ? '' : `-pool×${workerCount}`}`, edgeElapsedMs: edges.elapsedMs, labelElapsedMs,
+        elapsedMs: performance.now() - startedAt };
+    } catch (error) {
+      controller.abort();
+      throw error;
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      this.controllers.delete(controller);
+    }
+  }
+
   async analyzeLocalShear(frame, parameters, { onProgress, signal }) {
     const startedAt = performance.now(), atomCount = frame.fractional.length / 3;
     const controller = new AbortController(), abort = () => controller.abort();
@@ -1207,6 +1266,7 @@ export class AnalysisPool {
           transferables.push(payload.fractional.buffer);
           if (payload.types) { payload.types = await copyCoordinates(payload.types, task.signal); transferables.push(payload.types.buffer); }
         }
+        if (payload.kind === 'clustersFinalize') transferables.push(payload.edgePairs.buffer, payload.edgeShifts.buffer);
         if (analysisReused) { for (const name of CPU_CACHED_INPUT_FIELDS) if (name !== 'types') delete payload[name]; }
         else if (!task.sharedMemory) {
           for (const name of INPUT_ARRAY_FIELDS) if (name !== 'types' && payload[name]) {

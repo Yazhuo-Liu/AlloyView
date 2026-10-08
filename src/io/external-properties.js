@@ -20,6 +20,9 @@ const RESERVED_NAMES = new Set([
 ].map(name => name.toLowerCase()));
 const ID_NAMES = new Set(['id', 'atom_id', 'atomid']);
 
+/** Input and calculated field names that added per-atom properties must not reuse. */
+export function isReservedPropertyName(name) { return RESERVED_NAMES.has(String(name).toLowerCase()) || BAD_NAMES.has(name); }
+
 export function validateExternalPropertyName(value, existingNames = []) {
   if (typeof value !== 'string') throw attributeError('Property names must be text.');
   const name = value.trim();

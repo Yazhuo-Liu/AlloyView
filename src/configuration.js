@@ -1,12 +1,15 @@
 // Portable processing recipes contain no coordinates or computed atom arrays.
 // Local files must be selected again; source metadata is only used to match them.
 import { SCALAR_COLOR_SCHEMES } from './render/palette.js';
+import { DEFAULT_SLAB_THICKNESS, DEFAULT_SLICE_STEP, MAX_MILLER_INDEX, MAX_SLICE_LENGTH, MIN_SLICE_LENGTH } from './render/slicing.js';
 import { BUILTIN_COLOR_MODES } from './render/color-quantities.js';
 import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from './selection-groups.js';
 import { DXA_DEFAULTS, DXA_FAMILIES } from './analysis/dxa.js';
 import { CRYSTAL_VISIBILITY_SOURCE_NAMES } from './crystal-visibility-controls.js';
 import { COORDINATION_CUTOFF_PRESETS } from './analysis/cutoff.js';
 import { normalizeExternalPropertyState } from './io/external-properties.js';
+import { normalizeComputedPropertyState } from './computed-properties.js';
+import { BINNING_AXES, BINNING_QUANTITIES, BINNING_REDUCTIONS, MAX_BINS_PER_AXIS, MAX_TOTAL_BINS } from './analysis/spatial-binning.js';
 
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
@@ -18,7 +21,7 @@ export const MAX_CONFIGURATION_SELECTION_GROUPS = MAX_SELECTION_GROUPS;
 export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
 
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'lammps-data', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence', 'poscar']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi', 'expressions', 'clusters', 'binning']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const COORDINATION_CUTOFF_CHOICES = new Set(['custom', ...COORDINATION_CUTOFF_PRESETS.map(preset => preset.symbol)]);
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
@@ -147,6 +150,14 @@ function normalizeConfiguration(value, fromSnapshot) {
     && displacement.referenceFrame >= configuration.source.frameCount) {
     fail('settings.extensions.displacement.referenceFrame', 'must be smaller than the source frame count');
   }
+  const clusterGroup = configuration.settings.extensions.clusters?.selectionGroupId;
+  if (clusterGroup != null && !configuration.settings.selectionGroups.groups.some(group => group.id === clusterGroup)) {
+    fail('settings.extensions.clusters.selectionGroupId', 'must identify a saved selection group');
+  }
+  const binningGroup = configuration.settings.extensions.binning?.selectionGroupId;
+  if (binningGroup != null && !configuration.settings.selectionGroups.groups.some(group => group.id === binningGroup)) {
+    fail('settings.extensions.binning.selectionGroupId', 'must identify a saved selection group');
+  }
   for (const [index, file] of (configuration.settings.extensions.externalProperties?.files ?? []).entries()) {
     if (configuration.source?.frameCount !== undefined && file.frameIndex >= configuration.source.frameCount) {
       fail(`settings.extensions.externalProperties.files[${index}].frameIndex`, 'must be smaller than the source frame count');
@@ -205,7 +216,7 @@ function normalizeSettings(value, fromSnapshot) {
     camera: normalizeCamera(input.camera ?? null),
     activeTool: input.activeTool === 'configuration' ? null : nullableChoice(
       input.activeTool === undefined || input.activeTool === 'selection' ? 'display' : input.activeTool, 'settings.activeTool', TOOLS),
-    activeCategory: choice(input.activeCategory ?? (['replicate', 'externalProperties'].includes(input.activeTool) ? 'modification' : 'visualization'),
+    activeCategory: choice(input.activeCategory ?? (['replicate', 'externalProperties', 'expressions'].includes(input.activeTool) ? 'modification' : 'visualization'),
       'settings.activeCategory', new Set(['visualization', 'modification'])),
     selectedAtomId: identifier(input.selectedAtomId ?? null, 'settings.selectedAtomId', true),
     theme: choice(input.theme ?? 'dark', 'settings.theme', new Set(['light', 'dark'])),
@@ -220,7 +231,7 @@ function normalizeSelections(value) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
   const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
   const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage', 'tiles']);
@@ -235,6 +246,10 @@ function normalizeExtensions(value, fromSnapshot) {
     : record(input.voronoiDisplay, `${path}.voronoiDisplay`, ['enabled', 'allEnabled', 'color', 'opacity', 'style', 'scale']);
   if (bondStatistics?.enabled === true && nullablePositive(bonds.cutoff, `${path}.bonds.cutoff`, fromSnapshot) === null) {
     fail(`${path}.bonds.cutoff`, 'is required for enabled bond statistics');
+  }
+  const clusters = input.clusters === undefined ? null : normalizeClusters(input.clusters, `${path}.clusters`, fromSnapshot);
+  if (clusters?.enabled && clusters.neighborMode === 'bonds' && nullablePositive(bonds.cutoff, `${path}.bonds.cutoff`, fromSnapshot) === null) {
+    fail(`${path}.bonds.cutoff`, 'is required for enabled clusters that use bond cutoffs');
   }
   const measurements = record(input.measurements ?? {}, `${path}.measurements`, ['enabled', 'minimumImage', 'atomIds']);
   const appearance = record(input.appearance ?? {}, `${path}.appearance`, ['elements', 'atoms']);
@@ -283,6 +298,8 @@ function normalizeExtensions(value, fromSnapshot) {
     // display choices only; its network is recalculated after import.
     ...(input.dxa === undefined ? {} : { dxa: normalizeDxa(input.dxa, `${path}.dxa`) }),
     ...(input.externalProperties === undefined ? {} : { externalProperties: normalizeExternalPropertyState(input.externalProperties) }),
+    // Expression text is parsed again by the safe expression parser; values are never stored.
+    ...(input.expressions === undefined ? {} : { expressions: normalizeExpressions(input.expressions, `${path}.expressions`) }),
     ...(bondStatistics === null ? {} : { bondStatistics: {
       enabled: boolean(bondStatistics.enabled, `${path}.bondStatistics.enabled`, false),
       lengthBins: number(bondStatistics.lengthBins ?? 100, `${path}.bondStatistics.lengthBins`, 1, 4096, true),
@@ -296,6 +313,8 @@ function normalizeExtensions(value, fromSnapshot) {
       selectedTypes: voronoi.selectedTypes == null ? null : [...new Set(list(voronoi.selectedTypes, `${path}.voronoi.selectedTypes`, 65535)
         .map((label, index) => string(label, `${path}.voronoi.selectedTypes[${index}]`, 256)))].sort(),
     } }),
+    ...(clusters === null ? {} : { clusters }),
+    ...(input.binning === undefined ? {} : { binning: normalizeBinning(input.binning, `${path}.binning`) }),
     ...(voronoiDisplay === null ? {} : { voronoiDisplay: {
       enabled: boolean(voronoiDisplay.enabled, `${path}.voronoiDisplay.enabled`, false),
       allEnabled: boolean(voronoiDisplay.allEnabled, `${path}.voronoiDisplay.allEnabled`, false),
@@ -361,6 +380,52 @@ function normalizeExtensions(value, fromSnapshot) {
       ...(comparisonLayout ? { layout: comparisonLayout } : {}),
     },
   };
+}
+
+function normalizeExpressions(value, path) {
+  try { return normalizeComputedPropertyState(value); }
+  catch (error) { throw new Error(error.message.replace(/^Computed properties:/, `Invalid AlloyView configuration: ${path}:`)); }
+}
+
+/** Cluster settings name a selection group by ID; the group itself is saved
+ * in settings.selectionGroups and checked once both are normalized. */
+function normalizeClusters(value, path, fromSnapshot) {
+  const input = record(value, path, ['enabled', 'neighborMode', 'cutoff', 'selectionGroupId', 'sortBySize']);
+  const enabled = boolean(input.enabled, `${path}.enabled`, false);
+  const neighborMode = choice(input.neighborMode ?? 'cutoff', `${path}.neighborMode`, new Set(['cutoff', 'bonds']));
+  const cutoff = nullablePositive(input.cutoff, `${path}.cutoff`, fromSnapshot);
+  if (enabled && neighborMode === 'cutoff' && cutoff === null) fail(`${path}.cutoff`, 'is required for enabled clusters');
+  return { enabled, neighborMode, cutoff,
+    selectionGroupId: input.selectionGroupId === undefined || input.selectionGroupId === null ? null
+      : sliceIdentifier(input.selectionGroupId, `${path}.selectionGroupId`),
+    sortBySize: boolean(input.sortBySize, `${path}.sortBySize`, true) };
+}
+
+/** Binning settings name their quantity by its Color by key; the property
+ * itself is resolved again in each frame. Both axes and bin counts are kept
+ * so switching between a profile and a map restores the second vector. */
+function normalizeBinning(value, path) {
+  const input = record(value, path, ['enabled', 'mode', 'axes', 'bins', 'quantity', 'property', 'reduction', 'selectionGroupId', 'averageFrames', 'colorScheme']);
+  const enabled = boolean(input.enabled, `${path}.enabled`, false);
+  const mode = choice(input.mode ?? '1d', `${path}.mode`, new Set(['1d', '2d']));
+  const axes = list(input.axes ?? ['a', 'b'], `${path}.axes`, 2, 2).map((axis, index) => choice(axis, `${path}.axes[${index}]`, new Set(BINNING_AXES)));
+  const bins = list(input.bins ?? [50, 50], `${path}.bins`, 2, 2).map((count, index) => number(count, `${path}.bins[${index}]`, 1, MAX_BINS_PER_AXIS, true));
+  if (mode === '2d' && axes[0] === axes[1]) fail(`${path}.axes`, 'must name two different cell vectors for a map');
+  if (mode === '2d' && bins[0] * bins[1] > MAX_TOTAL_BINS) fail(`${path}.bins`, `must not exceed ${MAX_TOTAL_BINS} bins in a map`);
+  const quantity = choice(input.quantity ?? 'density', `${path}.quantity`, new Set(BINNING_QUANTITIES));
+  let property = null;
+  if (input.property !== undefined && input.property !== null) {
+    property = string(input.property, `${path}.property`, 512);
+    if (!/^property:./.test(property) && !BUILTIN_COLOR_MODES.includes(property)) fail(`${path}.property`, 'must be a property: key or a built-in quantity');
+    if (FORBIDDEN_KEYS.has(property.replace(/^property:/, ''))) fail(`${path}.property`, 'is reserved');
+  }
+  if (quantity === 'property' && property === null) fail(`${path}.property`, 'is required when binning a property');
+  return { enabled, mode, axes, bins, quantity, property: quantity === 'property' ? property : null,
+    reduction: choice(input.reduction ?? 'mean', `${path}.reduction`, new Set(BINNING_REDUCTIONS)),
+    selectionGroupId: input.selectionGroupId === undefined || input.selectionGroupId === null ? null
+      : sliceIdentifier(input.selectionGroupId, `${path}.selectionGroupId`),
+    averageFrames: boolean(input.averageFrames, `${path}.averageFrames`, false),
+    colorScheme: choice(input.colorScheme ?? 'viridis', `${path}.colorScheme`, COLOR_SCHEMES) };
 }
 
 function normalizeComparisonLayout(value, path) {
@@ -572,10 +637,10 @@ function normalizeAnalyses(value, fromSnapshot) {
 }
 
 function normalizeSlices(value) {
-  const input = record(value, 'settings.slices', ['items', 'selectedId', 'showGizmo']);
+  const input = record(value, 'settings.slices', ['items', 'selectedId', 'showGizmo', 'showOutlines', 'exportOutlines']);
   const items = list(input.items ?? [], 'settings.slices.items', MAX_CONFIGURATION_SLICES).map((value, index) => {
     const path = `settings.slices.items[${index}]`;
-    const slice = record(value, path, ['id', 'name', 'normal', 'position', 'enabled', 'side', 'showGizmo']);
+    const slice = record(value, path, ['id', 'name', 'normal', 'position', 'enabled', 'side', 'showGizmo', 'slab', 'thickness', 'step', 'miller']);
     const normal = vector(slice.normal, `${path}.normal`, -1, 1);
     const length = Math.hypot(...normal);
     if (Math.abs(length - 1) > 1e-4) fail(`${path}.normal`, 'must be a unit vector');
@@ -589,6 +654,12 @@ function normalizeSlices(value) {
       enabled: boolean(slice.enabled, `${path}.enabled`, true),
       side: choice(slice.side ?? 'negative', `${path}.side`, new Set(['negative', 'positive'])),
       showGizmo: boolean(slice.showGizmo, `${path}.showGizmo`, true),
+      // Planes saved before slabs, sweep steps and Miller indices existed
+      // keep their half-space and Cartesian normal.
+      slab: boolean(slice.slab, `${path}.slab`, false),
+      thickness: number(slice.thickness ?? DEFAULT_SLAB_THICKNESS, `${path}.thickness`, MIN_SLICE_LENGTH, MAX_SLICE_LENGTH),
+      step: number(slice.step ?? DEFAULT_SLICE_STEP, `${path}.step`, MIN_SLICE_LENGTH, MAX_SLICE_LENGTH),
+      miller: millerIndices(slice.miller ?? null, `${path}.miller`),
     };
   });
   const ids = new Set(items.map(slice => slice.id));
@@ -596,7 +667,16 @@ function normalizeSlices(value) {
   const selectedId = input.selectedId === null ? null
     : sliceIdentifier(input.selectedId ?? (items[0]?.id ?? null), 'settings.slices.selectedId', true);
   if (selectedId !== null && !ids.has(selectedId)) fail('settings.slices.selectedId', 'must identify an existing slice');
-  return { items, selectedId, showGizmo: boolean(input.showGizmo, 'settings.slices.showGizmo', true) };
+  return { items, selectedId, showGizmo: boolean(input.showGizmo, 'settings.slices.showGizmo', true),
+    showOutlines: boolean(input.showOutlines, 'settings.slices.showOutlines', false),
+    exportOutlines: boolean(input.exportOutlines, 'settings.slices.exportOutlines', true) };
+}
+
+function millerIndices(value, path) {
+  if (value === null) return null;
+  const indices = vector(value, path, -MAX_MILLER_INDEX, MAX_MILLER_INDEX, true);
+  if (indices.every(index => index === 0)) fail(path, 'must not be all zero');
+  return indices.map(index => index + 0);
 }
 
 function normalizeColors(value) {

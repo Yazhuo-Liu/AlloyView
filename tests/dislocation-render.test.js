@@ -241,6 +241,9 @@ test('multiple slice intersections retain the visible middle of a dislocation se
   assert.deepEqual(clipped, [[-1, 0, 0], [1, 0, 0]]);
   assert.equal(clipDislocationSegment([-2, 3, 0], [-2, 5, 0], slices), null);
   assert.deepEqual(clipDislocationSegment([-2, 0, 0], [2, 0, 0], slices.map(slice => ({ ...slice, enabled: false }))), [[-2, 0, 0], [2, 0, 0]]);
+  const slab = validateSlices([{ normal: [1, 0, 0], position: 0.5, slab: true, thickness: 1 }]);
+  assert.deepEqual(clipDislocationSegment([-2, 0, 0], [2, 0, 0], slab, 0), [[0, 0, 0], [1, 0, 0]], 'a slab clips a crossing line at both faces');
+  assert.equal(clipDislocationSegment([2, 0, 0], [2, 3, 0], slab), null);
 });
 
 test('legacy slice planes use full inverse cell, origin and displayed repeat count', () => {

@@ -137,12 +137,39 @@ const CATEGORY_TABLE_SIZE = 256;
 // `(id | 0) === id` is Number.isInteger for this range, including -0.
 const isTableCategory = id => id >= 0 && id < CATEGORY_TABLE_SIZE && (id | 0) === id;
 
+// Open-ended integer categories, such as cluster IDs, list only some IDs in
+// `categories`. With `unlistedCategories: { label, legendLabel, colors }`,
+// other positive integer IDs cycle through `colors` and share one legend
+// entry whose visibility key is UNLISTED_CATEGORY_ID. Properties without it
+// keep the fallback color and per-ID legend exactly as before.
+export const UNLISTED_CATEGORY_ID = 'other';
+const isUnlistedCandidate = id => typeof id === 'number' && Number.isInteger(id) && id > 0;
+
+function categoryColorLookup(property, categories, fallback) {
+  const cycle = property.unlistedCategories?.colors;
+  if (!cycle?.length) return id => categories.get(id)?.color ?? fallback;
+  return id => categories.get(id)?.color ?? (isUnlistedCandidate(id) ? cycle[(id - 1) % cycle.length] : fallback);
+}
+
+function unlistedLegendItems(property, categories, tableCounts, counts, hiddenTypes) {
+  if (!property.unlistedCategories) return [];
+  let atoms = 0, ids = 0;
+  for (let id = 1; id < CATEGORY_TABLE_SIZE; id += 1) if (tableCounts[id] && !categories.has(id)) { atoms += tableCounts[id]; ids += 1; }
+  for (const [id, count] of counts) if (isUnlistedCandidate(id) && !categories.has(id)) { atoms += count; ids += 1; }
+  if (!ids) return [];
+  const { legendLabel = 'Other', label = 'Category' } = property.unlistedCategories;
+  return [{ id: UNLISTED_CATEGORY_ID, label: `${legendLabel} (${ids.toLocaleString('en-US')})`, color: [200, 200, 200],
+    description: `${ids.toLocaleString('en-US')} more ${label.toLowerCase()} IDs, each in its own cyclic color; show or hide them together`,
+    count: atoms, visible: !hiddenTypes.has(UNLISTED_CATEGORY_ID) }];
+}
+
 export function colorsByCategory(property, hiddenTypes = new Set()) {
   const colors = new Uint8Array(property.data.length * 3);
   const counts = new Map(), tableCounts = new Uint32Array(CATEGORY_TABLE_SIZE);
   const categories = new Map(property.categories.map((item) => [item.id, item]));
   const fallback = [242, 242, 242], table = new Uint8Array(CATEGORY_TABLE_SIZE * 3);
-  for (let id = 0; id < CATEGORY_TABLE_SIZE; id += 1) table.set(categories.get(id)?.color ?? fallback, id * 3);
+  const colorOf = categoryColorLookup(property, categories, fallback);
+  for (let id = 0; id < CATEGORY_TABLE_SIZE; id += 1) table.set(colorOf(id), id * 3);
   for (let atom = 0; atom < property.data.length; atom += 1) {
     const id = property.data[atom], offset = atom * 3;
     if (id >= 0 && id < CATEGORY_TABLE_SIZE && (id | 0) === id) {
@@ -150,7 +177,7 @@ export function colorsByCategory(property, hiddenTypes = new Set()) {
       colors[offset] = table[entry]; colors[offset + 1] = table[entry + 1]; colors[offset + 2] = table[entry + 2];
       tableCounts[id] += 1;
     } else {
-      colors.set(categories.get(id)?.color ?? fallback, offset);
+      colors.set(colorOf(id), offset);
       counts.set(id, (counts.get(id) ?? 0) + 1);
     }
   }
@@ -158,19 +185,22 @@ export function colorsByCategory(property, hiddenTypes = new Set()) {
   return { colors, legend: {
     kind: 'types', title: property.displayName ?? property.name, property,
     atomCount: property.data.length,
-    items: property.categories.map((item) => ({ ...item, count: countOf(item.id),
-      visible: !hiddenTypes.has(item.id) })),
+    items: [...property.categories.map((item) => ({ ...item, count: countOf(item.id),
+      visible: !hiddenTypes.has(item.id) })), ...unlistedLegendItems(property, categories, tableCounts, counts, hiddenTypes)],
   } };
 }
 
 export function visibilityByCategory(property, hiddenTypes) {
   if (hiddenTypes.size === 0) return null;
   const hidden = new Uint8Array(CATEGORY_TABLE_SIZE), mask = new Uint8Array(property.data.length);
-  for (let id = 0; id < CATEGORY_TABLE_SIZE; id += 1) hidden[id] = hiddenTypes.has(id) ? 1 : 0;
+  const listed = property.unlistedCategories && hiddenTypes.has(UNLISTED_CATEGORY_ID)
+    ? new Set(property.categories.map(item => item.id)) : null;
+  const hiddenUnlisted = id => listed !== null && isUnlistedCandidate(id) && !listed.has(id);
+  for (let id = 0; id < CATEGORY_TABLE_SIZE; id += 1) hidden[id] = hiddenTypes.has(id) || hiddenUnlisted(id) ? 1 : 0;
   for (let atom = 0; atom < mask.length; atom += 1) {
     const id = property.data[atom];
     const isHidden = id >= 0 && id < CATEGORY_TABLE_SIZE && (id | 0) === id
-      ? hidden[id] === 1 : hiddenTypes.has(Number.isFinite(id) ? id : 'NaN');
+      ? hidden[id] === 1 : hiddenTypes.has(Number.isFinite(id) ? id : 'NaN') || hiddenUnlisted(id);
     mask[atom] = isHidden ? 0 : 255;
   }
   return mask;

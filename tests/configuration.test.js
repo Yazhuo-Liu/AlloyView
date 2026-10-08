@@ -696,6 +696,44 @@ test('multi-plane validation enforces unit normals, unique string IDs, valid sel
   assert.equal(parseConfiguration(JSON.stringify(roundoff)).settings.slices.selectedId, null);
 });
 
+test('slab, sweep step, Miller indices and outline options round-trip and older planes keep their meaning', () => {
+  const snapshot = fullSnapshot();
+  Object.assign(snapshot.settings.slices.items[0], { slab: true, thickness: 2.0784609690826525, step: 2.0784609690826525, miller: [1, -1, 1] });
+  Object.assign(snapshot.settings.slices, { showOutlines: true, exportOutlines: false });
+  const recipe = createConfiguration(snapshot);
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.deepEqual(restored, recipe);
+  assert.deepEqual(restored.settings.slices.items[0], { ...snapshot.settings.slices.items[0] });
+  assert.deepEqual([restored.settings.slices.showOutlines, restored.settings.slices.exportOutlines], [true, false]);
+
+  // A recipe saved before these fields existed: half-spaces, 1 Å steps, no outlines.
+  const legacy = parseConfiguration(JSON.stringify(createConfiguration(fullSnapshot())));
+  for (const [index, item] of fullSnapshot().settings.slices.items.entries()) {
+    assert.deepEqual(legacy.settings.slices.items[index], { ...item, slab: false, thickness: 2, step: 1, miller: null });
+  }
+  assert.deepEqual([legacy.settings.slices.showOutlines, legacy.settings.slices.exportOutlines], [false, true]);
+
+  for (const mutation of [
+    value => { value.settings.slices.items[0].slab = 'true'; },
+    value => { value.settings.slices.items[0].thickness = 0; },
+    value => { value.settings.slices.items[0].thickness = -2; },
+    value => { value.settings.slices.items[0].step = '1'; },
+    value => { value.settings.slices.items[0].step = 1e-9; },
+    value => { value.settings.slices.items[0].miller = [0, 0, 0]; },
+    value => { value.settings.slices.items[0].miller = [1, 1.5, 0]; },
+    value => { value.settings.slices.items[0].miller = [1, 1]; },
+    value => { value.settings.slices.items[0].miller = [2e6, 0, 0]; },
+    value => { value.settings.slices.items[0].miller = '111'; },
+    value => { value.settings.slices.items[0].uvw = [1, 1, 1]; },
+    value => { value.settings.slices.showOutlines = 1; },
+    value => { value.settings.slices.exportOutlines = 'no'; },
+  ]) {
+    const mutated = structuredClone(recipe);
+    mutation(mutated);
+    assert.throws(() => parseConfiguration(JSON.stringify(mutated)), /Invalid AlloyView configuration/);
+  }
+});
+
 test('source metadata rejects invalid frame bounds, absolute paths and path traversal', () => {
   const recipe = createConfiguration(fullSnapshot());
   for (const mutation of [

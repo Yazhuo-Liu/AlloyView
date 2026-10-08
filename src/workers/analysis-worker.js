@@ -11,12 +11,13 @@ import { calculateRdf } from '../analysis/rdf.js';
 import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLocalShear } from '../analysis/local-shear.js';
 import { calculateReferenceStrain, prepareReferenceStrainContext } from '../analysis/reference-strain.js';
 import { calculatePreparedDisplacements } from '../analysis/displacement.js';
+import { calculateClusterEdges, finalizeClusters } from '../analysis/clusters.js';
 import { calculateDxaLocalRange, calculateDxaTetrahedraRange, releaseDxaCpuStageData, warmupDxaCpuStages, dxaCpuKernelMemoryBytes } from '../analysis/dxa-cpu-stages.js';
 
 import { NeighborSearch } from '../analysis/neighbors.js';
 
 const CPU_INPUT_FIELDS = ['structureInput', 'referenceFractional', 'referenceMapping', 'metricInput',
-  'currentPositions', 'referencePositions', 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex'];
+  'currentPositions', 'referencePositions', 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex', 'clusterSelection'];
 let cpuResident, cpuAnalysis;
 const cpuResidents = new Map(), cpuAnalyses = new Map();
 
@@ -79,7 +80,7 @@ self.addEventListener('message', async ({ data }) => {
           cpuIndexBuilt = true;
         }
         parameters.coordinationIndex = cpuResident.coordinationIndex;
-      } else if (!parameters.preparedNeighbors && !['warmup', 'displacement', 'localShearFinalize'].includes(kind)
+      } else if (!parameters.preparedNeighbors && !['warmup', 'displacement', 'localShearFinalize', 'clustersFinalize'].includes(kind)
           && !(kind === 'strain' && parameters.ptmInput) && kind !== 'referenceStrain') {
         if (!cpuResident.search) { cpuResident.search = new NeighborSearch(frame, { sharedMemory: parameters.sharedIndex }); cpuIndexBuilt = true; }
       }
@@ -147,6 +148,10 @@ self.addEventListener('message', async ({ data }) => {
       result = calculateBonds(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'bondStatistics') {
       result = calculateBondStatistics(frame, { ...parameters, onPhase, onAtoms });
+    } else if (kind === 'clusterEdges') {
+      result = calculateClusterEdges(frame, { ...parameters, onPhase, onAtoms });
+    } else if (kind === 'clustersFinalize') {
+      result = finalizeClusters(frame, { ...parameters, onPhase });
     } else if (kind === 'voronoiPrepare') {
       result = await prepareVoronoiFrame(frame, { ...parameters, onPhase });
       result.frameUploaded = frameUploaded;

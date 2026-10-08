@@ -2,7 +2,7 @@ import { invert3 } from '../data/model.js';
 import { DXA_FAMILIES, splitPeriodicPolyline } from '../analysis/dxa.js';
 import { parsePrimitiveColor } from './atom-primitives.js';
 import { appendDislocationTube, createDislocationCurve } from './dislocation-curves.js';
-import { MAX_SLICES, SLICE_EPSILON } from './slicing.js';
+import { MAX_SLICE_PLANES, SLICE_EPSILON, sliceHalfSpaces } from './slicing.js';
 import { translatePeriodicPoints } from './periodic-origin.js';
 
 // A dislocation is a geometric curve, not a bond between two atom indices.
@@ -37,10 +37,10 @@ in vec3 vNormal;
 in vec3 vWorld;
 flat in vec3 vColor;
 uniform int uSliceCount;
-uniform vec4 uSlicePlanes[${MAX_SLICES}];
+uniform vec4 uSlicePlanes[${MAX_SLICE_PLANES}];
 out vec4 outColor;
 void main() {
-  for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
+  for (int plane = 0; plane < ${MAX_SLICE_PLANES}; plane++) {
     if (plane >= uSliceCount) break;
     if (dot(uSlicePlanes[plane].xyz, vWorld) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) discard;
   }
@@ -156,11 +156,10 @@ export function createDislocationTubeGeometry(network, cell, options = {}, displ
 export function clipDislocationSegment(start, end, slices, epsilon = SLICE_EPSILON) {
   let lower = 0, upper = 1;
   const delta = end.map((value, axis) => value - start[axis]);
-  for (const slice of slices) {
-    if (!slice.enabled) continue;
-    const sign = slice.side === 'positive' ? -1 : 1;
-    const distance = sign * (slice.normal.reduce((sum, value, axis) => sum + value * start[axis], 0) - slice.position);
-    const slope = sign * slice.normal.reduce((sum, value, axis) => sum + value * delta[axis], 0);
+  // A slab contributes both of its faces; signs are folded into each normal.
+  for (const { normal, offset } of sliceHalfSpaces(slices)) {
+    const distance = normal.reduce((sum, value, axis) => sum + value * start[axis], 0) - offset;
+    const slope = normal.reduce((sum, value, axis) => sum + value * delta[axis], 0);
     if (Math.abs(slope) < 1e-12) { if (distance > epsilon) return null; }
     else if (slope > 0) upper = Math.min(upper, (epsilon - distance) / slope);
     else lower = Math.max(lower, (epsilon - distance) / slope);
@@ -173,14 +172,14 @@ export function clipDislocationSegment(start, end, slices, epsilon = SLICE_EPSIL
  * representation. The inverse column is essential for triclinic cells. */
 export function dislocationSlicePlanes(renderer) {
   if (renderer.sliceMode === 'planes') {
-    return { count: renderer.sliceCount ?? 0, values: renderer.slicePlaneValues ?? new Float32Array(MAX_SLICES * 4) };
+    return { count: renderer.sliceCount ?? 0, values: renderer.slicePlaneValues ?? new Float32Array(MAX_SLICE_PLANES * 4) };
   }
   const axis = renderer.sliceAxis ?? 2, inverse = invert3(renderer.frame.cell.vectors);
   const normal = [inverse[axis], inverse[3 + axis], inverse[6 + axis]], norm = Math.hypot(...normal);
   const origin = renderer.frame.cell.origin;
   const position = (renderer.sliceMaximum ?? 1) * (renderer.repetitions?.[axis] ?? 1)
     + normal.reduce((sum, value, component) => sum + value * origin[component], 0);
-  const values = new Float32Array(MAX_SLICES * 4);
+  const values = new Float32Array(MAX_SLICE_PLANES * 4);
   values.set(normal.map(value => value / norm));
   values[3] = position / norm;
   return { count: 1, values };

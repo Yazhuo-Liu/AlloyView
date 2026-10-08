@@ -70,8 +70,10 @@ export async function withWebGpuBrowser(run, { software = true, isolated = false
   // ANGLE can otherwise try to connect to an inherited SSH/X11 DISPLAY even
   // with Ozone headless, preventing the Vulkan GPU process from initializing.
   const { DISPLAY: ignoredDisplay, ...environment } = process.env;
+  // Basic password storage: on Linux, Chrome otherwise asks the desktop keyring
+  // over D-Bus before its first HTTP request, and a stuck keyring stalls it.
   const chrome = spawn(chromePath, [
-    '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--enable-unsafe-webgpu',
+    '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--password-store=basic', '--enable-unsafe-webgpu',
     '--remote-debugging-port=0', '--remote-allow-origins=*', '--ozone-platform=headless',
     ...(software ? ['--enable-unsafe-swiftshader', '--use-angle=swiftshader']
       : process.platform === 'linux' ? ['--enable-gpu', '--use-angle=vulkan',

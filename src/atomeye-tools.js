@@ -679,6 +679,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     comparison.setSliceSelectedAtoms(Array.from(renderer.sliceSelectedAtoms ?? []).filter(index => index >= 0));
     if (renderer.sliceMode === 'legacy') comparison.setSlice(renderer.sliceAxis, renderer.sliceMaximum);
     else comparison.setSlices(renderer.slices);
+    comparison.setSliceOutlines(renderer.sliceOutlinesVisible);
     comparison.setBackground(rgbHex(renderer.background.map(value => value * 255)));
     comparison.setCellVisible(renderer.cellVisible); comparison.setRadiusScale(renderer.radiusScale);
     comparison.setCellWireframeMode(renderer.cellWireframeMode ?? 'mono');

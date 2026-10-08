@@ -1,6 +1,6 @@
 import { parsePrimitiveColor } from './atom-primitives.js';
 import { dislocationSlicePlanes } from './dislocation-layer.js';
-import { MAX_SLICES, SLICE_EPSILON } from './slicing.js';
+import { MAX_SLICE_PLANES, SLICE_EPSILON } from './slicing.js';
 import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms, scalarPreviewAtomVisible } from './scalar-colormap.js';
 
 /** `xray` (the default) keeps every cell translucent and fades deeper cells;
@@ -311,7 +311,7 @@ uniform float uDepthFade;
 uniform bool uDepthOnly;
 uniform bool uTwoSided;
 uniform int uSliceCount;
-uniform vec4 uSlicePlanes[${MAX_SLICES}];
+uniform vec4 uSlicePlanes[${MAX_SLICE_PLANES}];
 out vec4 outColor;
 // Flat, outward face normals retain the physical facets. Distinct key and
 // fill lights make opposite faces read differently, including the rear
@@ -328,7 +328,7 @@ vec3 shade(vec3 normal, vec3 viewDirection) {
 }
 void main() {
   if (vVisible < 0.5) discard;
-  for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
+  for (int plane = 0; plane < ${MAX_SLICE_PLANES}; plane++) {
     if (plane >= uSliceCount) break;
     if (dot(uSlicePlanes[plane].xyz, vWorld) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) discard;
   }
@@ -470,11 +470,11 @@ uniform float uCoreRatio;
 uniform float uAlpha;
 uniform float uDepthFade;
 uniform int uSliceCount;
-uniform vec4 uSlicePlanes[${MAX_SLICES}];
+uniform vec4 uSlicePlanes[${MAX_SLICE_PLANES}];
 out vec4 outColor;
 void main() {
   if (vVisible < 0.5) discard;
-  for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
+  for (int plane = 0; plane < ${MAX_SLICE_PLANES}; plane++) {
     if (plane >= uSliceCount) break;
     if (dot(uSlicePlanes[plane].xyz, vWorld) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) discard;
   }

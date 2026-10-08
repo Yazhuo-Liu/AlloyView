@@ -219,6 +219,14 @@ export function initializeSelectionGroupControls({
     getInteractionState: interaction,
     selectAtoms,
     addGroup,
+    /** Edits from other tools, such as expression selections. Errors are thrown
+     * to the caller, which reports them in its own panel. */
+    apply(transform, reason = 'members') {
+      if (!enabled || !getFrame()) throw new Error('Open a structure to edit selections.');
+      const next = transform(readState());
+      onEdit(); writeState(next); render(); notify(reason);
+      return next;
+    },
   });
 }
 

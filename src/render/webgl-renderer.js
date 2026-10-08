@@ -8,7 +8,7 @@ import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms, pre
 import { effectivePeriodicOrigin, normalizePeriodicOrigin, periodicDisplayCoordinates } from './periodic-origin.js';
 import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
 import { VoronoiCellLayer, VoronoiAllCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
-import { MAX_SLICES, SLICE_EPSILON, pointVisible, validateSlices } from './slicing.js';
+import { MAX_SLICE_PLANES, SLICE_EPSILON, pointVisible, sliceHalfSpaces, sliceOutlineSegments, validateSlices } from './slicing.js';
 import {
   add,
   cross,
@@ -45,7 +45,7 @@ uniform int uSliceAxis;
 uniform float uSliceMaximum;
 uniform int uSliceMode;
 uniform int uSliceCount;
-uniform vec4 uSlicePlanes[${MAX_SLICES}];
+uniform vec4 uSlicePlanes[${MAX_SLICE_PLANES}];
 uniform int uSelected;
 uniform int uSelectedAtoms[${SELECTION_HIGHLIGHT_COUNT}];
 uniform vec3 uReplicaOffset;
@@ -71,7 +71,7 @@ void main() {
     float sliceCoordinate = (aFractional[uSliceAxis] + uReplicaIndex[uSliceAxis]) / uRepetitions[uSliceAxis];
     sliceVisible = sliceCoordinate <= uSliceMaximum;
   } else {
-    for (int plane = 0; plane < ${MAX_SLICES}; plane++) {
+    for (int plane = 0; plane < ${MAX_SLICE_PLANES}; plane++) {
       if (plane >= uSliceCount) break;
       if (dot(uSlicePlanes[plane].xyz, worldCenter) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) {
         sliceVisible = false;
@@ -161,6 +161,9 @@ const CELL_EDGES = [
 ];
 
 const CELL_BASIS_COLORS = [[0.96, 0.25, 0.28], [0.25, 0.85, 0.35], [0.28, 0.52, 1]];
+// Slice outlines use the interface accent (--cyan, #4fe2d0) on dark
+// backgrounds and a deeper teal on light ones, distinct from the cell box.
+const SLICE_OUTLINE_COLORS = { dark: [0.31, 0.886, 0.816], light: [0.016, 0.51, 0.565] };
 
 export function cellWireframeDraws(mode = 'mono', color = [0.62, 0.78, 0.81]) {
   if (!['mono', 'rgb', 'rgb-origin', 'rgb-black'].includes(mode)) throw new Error('Unknown cell wireframe mode.');
@@ -223,8 +226,11 @@ export class WebGLRenderer {
     this.sliceMaximum = 1;
     this.sliceMode = 'legacy';
     this.slices = [];
-    this.slicePlaneValues = new Float32Array(MAX_SLICES * 4);
+    this.slicePlaneValues = new Float32Array(MAX_SLICE_PLANES * 4);
     this.sliceCount = 0;
+    this.sliceOutlinesVisible = false;
+    this.sliceOutlineColor = SLICE_OUTLINE_COLORS.dark;
+    this.sliceOutlineGeometry = null;
     this.selected = -1;
     this.selectedAtoms = new Int32Array(16).fill(-1);
     this.sliceSelectedAtoms = new Int32Array(3).fill(-1);
@@ -285,6 +291,8 @@ export class WebGLRenderer {
     this.colorOverrideBuffer = gl.createBuffer();
     this.cellVao = gl.createVertexArray();
     this.cellBuffer = gl.createBuffer();
+    this.sliceOutlineVao = gl.createVertexArray();
+    this.sliceOutlineBuffer = gl.createBuffer();
 
     gl.bindVertexArray(this.sphereVao);
     const quadBuffer = gl.createBuffer();
@@ -321,6 +329,12 @@ export class WebGLRenderer {
 
     gl.bindVertexArray(this.cellVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.cellBuffer);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+
+    gl.bindVertexArray(this.sliceOutlineVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.sliceOutlineBuffer);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
@@ -423,6 +437,7 @@ export class WebGLRenderer {
     this.sliceAxis = 2;
     this.sliceMaximum = 1;
     this.slicePlaneValues?.fill(0);
+    this.sliceOutlineGeometry = null;
     this.target = this.pan = [0, 0, 0];
     this.distance = 10;
     this.orthographicScale = this.modelRadius = 5;
@@ -722,19 +737,22 @@ export class WebGLRenderer {
   setSlices(slices) {
     const normalized = validateSlices(slices);
     this.cancelSelectionGesture();
-    const values = new Float32Array(MAX_SLICES * 4);
-    let count = 0;
-    for (const slice of normalized) {
-      if (!slice.enabled) continue;
-      const direction = slice.side === 'positive' ? -1 : 1;
-      for (let axis = 0; axis < 3; axis += 1) values[count * 4 + axis] = slice.normal[axis] * direction;
-      values[count * 4 + 3] = slice.position * direction;
-      count += 1;
-    }
+    // Every half-space is kept where n · r ≤ w; a slab contributes two.
+    const halfSpaces = sliceHalfSpaces(normalized);
+    const values = new Float32Array(MAX_SLICE_PLANES * 4);
+    halfSpaces.forEach(({ normal, offset }, plane) => {
+      values.set(normal, plane * 4);
+      values[plane * 4 + 3] = offset;
+    });
     this.slices = normalized;
     this.sliceMode = 'planes';
     this.slicePlaneValues = values;
-    this.sliceCount = count;
+    this.sliceCount = halfSpaces.length;
+    this.requestRender();
+  }
+  /** Draw where enabled planes and slab faces meet the displayed cell. */
+  setSliceOutlines(visible) {
+    this.sliceOutlinesVisible = Boolean(visible);
     this.requestRender();
   }
   setSelected(index) { this.selected = index ?? -1; this.requestRender(); }
@@ -914,6 +932,7 @@ export class WebGLRenderer {
     this.background = [0, 2, 4].map((index) => Number.parseInt(value.slice(index, index + 2), 16) / 255);
     const luminance = 0.2126 * this.background[0] + 0.7152 * this.background[1] + 0.0722 * this.background[2];
     this.cellColor = luminance > 0.68 ? [0.22, 0.34, 0.38] : [0.62, 0.78, 0.81];
+    this.sliceOutlineColor = luminance > 0.68 ? SLICE_OUTLINE_COLORS.light : SLICE_OUTLINE_COLORS.dark;
     this.requestRender();
   }
 
@@ -997,7 +1016,7 @@ export class WebGLRenderer {
     });
   }
 
-  render(timestamp = performance.now(), { transparentBackground = false, trackStats = true } = {}) {
+  render(timestamp = performance.now(), { transparentBackground = false, trackStats = true, sliceOutlines = true } = {}) {
     const gl = this.gl;
     this.resize();
     this.updateMatrices();
@@ -1020,7 +1039,7 @@ export class WebGLRenderer {
     gl.uniform1f(this.sphereUniforms.uSliceMaximum, this.sliceMaximum);
     gl.uniform1i(this.sphereUniforms.uSliceMode, this.sliceMode === 'planes' ? 1 : 0);
     gl.uniform1i(this.sphereUniforms.uSliceCount, this.sliceCount ?? 0);
-    gl.uniform4fv(this.sphereUniforms['uSlicePlanes[0]'], this.slicePlaneValues ?? new Float32Array(MAX_SLICES * 4));
+    gl.uniform4fv(this.sphereUniforms['uSlicePlanes[0]'], this.slicePlaneValues ?? new Float32Array(MAX_SLICE_PLANES * 4));
     gl.uniform1i(this.sphereUniforms.uSelected, this.selected);
     if (this.sphereUniforms['uSelectedAtoms[0]'] != null) gl.uniform1iv(this.sphereUniforms['uSelectedAtoms[0]'], this.getSelectionHighlightAtoms());
     gl.uniform3f(this.sphereUniforms.uRepetitions, ...this.repetitions);
@@ -1049,11 +1068,36 @@ export class WebGLRenderer {
         gl.drawArrays(gl.LINES, draw.first, draw.count);
       }
     }
+    if (sliceOutlines && this.sliceOutlinesVisible) this.renderSliceOutlines();
     gl.disable(gl.BLEND);
     gl.bindVertexArray(null);
     gl.colorMask(true, true, true, true);
     if (trackStats) this.recordFrame(timestamp);
     this.onRender?.(this);
+  }
+
+  // Outlines are annotations: like the slice editing overlay, they stay on top
+  // of atoms. Geometry is rebuilt only when the slices or displayed cell change.
+  renderSliceOutlines() {
+    if (this.sliceMode !== 'planes' || !this.frame) return;
+    const gl = this.gl, cell = this.displayCell ?? this.frame.cell;
+    let geometry = this.sliceOutlineGeometry;
+    if (geometry?.slices !== this.slices || geometry.cell !== cell) {
+      const segments = sliceOutlineSegments(this.slices, cellVertices(cell));
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.sliceOutlineBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, segments, gl.DYNAMIC_DRAW);
+      geometry = this.sliceOutlineGeometry = { slices: this.slices, cell, count: segments.length / 3 };
+    }
+    if (!geometry.count) return;
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST);
+    gl.useProgram(this.lineProgram);
+    gl.bindVertexArray(this.sliceOutlineVao);
+    gl.uniformMatrix4fv(this.lineUniforms.uViewProjection, false, this.viewProjectionMatrix);
+    gl.uniform3f(this.lineUniforms.uColor, ...this.sliceOutlineColor);
+    gl.drawArrays(gl.LINES, 0, geometry.count);
+    gl.enable(gl.DEPTH_TEST);
   }
 
   updateMatrices() {
@@ -1224,7 +1268,8 @@ export class WebGLRenderer {
           let shown = true;
           for (const slice of slices) {
             const distance = slice.normal[0] * px + slice.normal[1] * py + slice.normal[2] * pz - slice.position;
-            if (slice.side === 'positive' ? distance < -SLICE_EPSILON : distance > SLICE_EPSILON) { shown = false; break; }
+            if (slice.slab ? Math.abs(distance) > slice.thickness / 2 + SLICE_EPSILON
+              : slice.side === 'positive' ? distance < -SLICE_EPSILON : distance > SLICE_EPSILON) { shown = false; break; }
           }
           if (!shown) continue;
         } else if (!((fractional[index + axis] + replica.indices[axis]) / repetition <= this.sliceMaximum)) continue;
@@ -1254,7 +1299,7 @@ export class WebGLRenderer {
     return closest;
   }
 
-  captureImage({ includeBackground = true, legend = null, includeAxes = false } = {}) {
+  captureImage({ includeBackground = true, legend = null, includeAxes = false, includeSliceOutlines = true } = {}) {
     // PNG/JPG and contact sheets always use the exact byte-rounded CPU palette.
     this.onBeforeCapture?.();
     this.finishScalarColorPreview();
@@ -1266,6 +1311,7 @@ export class WebGLRenderer {
       this.render(performance.now(), {
         transparentBackground: !includeBackground,
         trackStats: false,
+        ...(includeSliceOutlines ? {} : { sliceOutlines: false }),
       });
       width = this.canvas.width;
       height = this.canvas.height;

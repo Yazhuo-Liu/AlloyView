@@ -66,6 +66,10 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - External numeric CSV/AUX properties mapped by stable atom ID or row order,
   parsed and expanded in a persistent Worker, with rename/removal and access
   from colors, atom details and vector fields.
+- Safe per-atom expressions: computed properties such as von Mises stress,
+  recalculated for every frame, and selections such as `CSP > 8 && Type == 3`
+  written to selection groups, with invert and periodic expand-by-neighbors.
+  Expressions are parsed by AlloyView and never evaluated as code.
 - Replication along independent periodic cell vectors, including triclinic
   tilts. Display copies reuse analysis; optional **Replicate atoms for analysis**
   creates real atoms in an enlarged cell and recalculates enabled analyses.
@@ -89,6 +93,15 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   distributions, with optional input-type selection, neighbor-face area filters,
   folded interactive histograms and quantity-color shortcuts. Cell display
   optionally draws the selected cell or all analyzed cells; both default off.
+- Cluster analysis over cutoff neighbors or the bond cutoffs, optionally within
+  one named selection: cluster ID and size for coloring, sorting by size,
+  unwrapped centers of mass, radii of gyration and gyration tensors, detection
+  of clusters connected to their own periodic images, and a cluster table CSV.
+- Spatial binning profiles and 2D maps along the cell vectors, in reduced
+  coordinates so tilted cells bin along their own vectors: atom count, number
+  density, or the mean, sum, minimum, maximum or standard deviation of any
+  numeric property, optionally within one selection or averaged over a
+  trajectory, with an inspectable chart and a per-bin CSV.
 - CSV export for the complete statistical summary, scalar statistics,
   categorical populations, coordination/RDF and bond distributions, Q4/Q6,
   Voronoi cells/faces, DXA families/lines and per-atom properties. A persistent
@@ -133,7 +146,7 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   edits and automatic coordination updates when the cutoff changes.
 - Side-by-side **Visualization tools** and **Modification tools** tabs preserve
   enabled analyses and remember their settings panels. Modification tools
-  contain replication and external properties, with a registry for future atom
+  contain replication, external properties and expressions, with a registry for future atom
   editors. Phones keep the viewport above independently scrolling tools and
   collapsed camera/legend controls.
 - An optional movable, resizable second view reuses the current frame and
@@ -172,7 +185,7 @@ WebGL 2 support. No installation or account is needed.
    viewport color with **BG**, or hide the cell and axes. Trajectories expose
    wrapped/unwrapped coordinates and frame controls below the viewport.
    Under **Tools**, use **Visualization tools** for display and analysis and
-   **Modification tools** for Replicate and External properties. Categories
+   **Modification tools** for Replicate, External properties and Expressions. Categories
    remember their last settings panel and keep enabled analyses running.
    Select **Modification tools → Replicate** to set total copies along periodic
    **a/b/c** directions and click **Apply**. **Replicate atoms for analysis** is off by default;
@@ -218,6 +231,11 @@ WebGL 2 support. No installation or account is needed.
    Its type checkboxes choose the input sites for the tessellation. Optional
    selected-cell or all-cell display adds polygonal geometry independently of
    the analysis; all-cell display uses additional memory.
+   **Clusters** groups atoms connected through neighbors within a cutoff or the
+   bond cutoffs, optionally within one selection, and lists cluster sizes,
+   centers of mass and radii of gyration.
+   **Binning** profiles or maps atom counts, number density or a reduced
+   per-atom property in slabs or columns along the cell vectors.
    **Displacement** calculates Cartesian components and magnitude against a
    reference frame for atom coloring, independently of arrows.
    **Vector arrows** displays existing displacement, imported force/velocity,
@@ -227,7 +245,7 @@ WebGL 2 support. No installation or account is needed.
    **Statistics** shows coordination distributions and calculates total or
    element-pair RDF curves on fully periodic cells. Its CSV section exports
    current-frame summaries, every available classifier and scalar property,
-   and per-atom values; Bonds, Voronoi and DXA also offer specific CSV tables.
+   and per-atom values; Bonds, Voronoi, Clusters, Binning and DXA also offer specific CSV tables.
    **Enable GPU acceleration** in the top bar prefers WebGPU for coordination,
    adaptive/fixed CNA, manual/Auto central symmetry, displacement,
    reference-frame strain, RDF, local shear, bonds, bond statistics and ideal-strain
@@ -289,6 +307,7 @@ npm test
 npm run build
 npm run test:browser
 npm run test:browser:advanced-tools
+npm run test:browser:slice-sweep
 ```
 
 The browser regression requires Node.js 24 and Chrome/Chromium; set
@@ -298,7 +317,10 @@ and trajectory frames, exercises CNA/CSP/PTM/strain and crystal visibility
 filters, and decodes PNG exports to verify transparency and optional axes.
 The advanced tools regression exercises real pointer/touch controls, periodic
 copies, external-file mapping and replay, multiple vector fields, precise camera
-edits and PNG exclusion of the camera panel.
+edits and PNG exclusion of the camera panel. The slice sweep regression applies
+Miller-index planes to an FCC crystal, steps them with pointer, held and keyboard
+input, checks kept atoms for flipped sides and slabs, and decodes PNG exports
+with and without cut outlines.
 
 The included GitHub Actions workflow tests, builds and deploys on pushes to
 `main`. Set **Settings → Pages → Source → GitHub Actions** in the repository.

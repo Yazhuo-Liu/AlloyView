@@ -20,7 +20,10 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 | Draw neighbor bonds or vectors | [Bonds](features/bonds.md), [Vector arrows](features/vectors.md) |
 | Measure bond lengths, angles and local orientational order | [Bond distributions and Q4/Q6](features/bond-statistics.md) |
 | Inspect atomic volumes and face geometry | [Voronoi analysis](features/voronoi.md) |
+| Find connected groups of atoms, their sizes and centers | [Cluster analysis](features/clusters.md) |
+| Profile or map density and properties across the cell | [Spatial binning](features/binning.md) |
 | Attach numeric data from separate atom files | [External properties](features/external-properties.md) |
+| Compute properties or select atoms with formulas | [Expressions](features/expressions.md) |
 | Measure motion against a trajectory frame | [Displacement](features/displacement.md) |
 | Count and classify neighbor environments | [Coordination](features/coordination.md), [CNA](features/cna.md), [PTM](features/ptm.md) |
 | Inspect disorder and deformation | [Central symmetry](features/centrosymmetry.md), [Ideal lattice strain](features/ideal-strain.md), [Reference frame strain](features/reference-strain.md), [Local shear](features/local-shear.md) |

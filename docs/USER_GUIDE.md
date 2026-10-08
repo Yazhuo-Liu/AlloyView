@@ -50,7 +50,7 @@ to adjust its width. The browser saves the chosen width. Double-click the
 divider or press Enter while it is focused to reset it; Left/Right arrow keys
 also adjust it. **Tools** has two tabs side by side: **Visualization tools**
 contains Display, Slice, Vectors, selections and the analysis tools;
-**Modification tools** contains Replicate and External properties.
+**Modification tools** contains Replicate, External properties and Expressions.
 Select a button in either category to show that tool's settings.
 Only one configuration panel is shown at a time. A dot marks an enabled
 analysis; opening another tool or category keeps existing analyses running.
@@ -269,19 +269,53 @@ Switching tools or closing Slice hides the editing controls while retaining
 all enabled clipping planes. PNG export includes the sliced structure and
 omits translucent editing planes, arrows and guide spheres.
 
+## Cutting-plane sweep, slabs and Miller planes
+
+**Sweep along the normal** moves the selected plane in steps, like shifting an
+AtomEye cutting plane. **+** moves it one step along `n` and **−** one step
+back; hold either button to keep sweeping, or press Arrow Up/Down in the
+**Plane position** field. Each plane keeps its own step in Å (1 Å for a new
+plane). **Flip** keeps the other side of the same plane.
+
+Check **Slab · keep |n · r − d| ≤ t/2** to keep only atoms within half the
+thickness `t` of the plane, on both sides; the thickness field sits beside the
+check box. A slab is one of the slices that apply together, so it can be
+combined with half-spaces or other slabs. Side selection and **Flip** do not
+apply to a slab.
+
+Under **Normal from Miller indices (h k l)**, enter integer indices of the
+simulation cell. The preview shows the Cartesian normal `n = G/|G|` and the
+spacing `d = 1/|G|` in Å, where `G = h b₁ + k b₂ + l b₃` uses the reciprocal
+cell vectors (`bᵢ · aⱼ = δᵢⱼ`, valid for triclinic cells). **Apply** sets the
+normal, moves the plane onto the nearest (h k l) lattice plane, and sets the
+step and slab thickness to `d`, so each step shows the next lattice plane.
+Indices refer to the loaded cell: for a 10 × 10 × 10 FCC supercell, the crystal
+(111) planes are (10 10 10). Use **Move to atom** afterwards to put the plane
+through a particular atom. Editing the normal by hand clears the indices.
+
+**Show cut outlines on the cell** draws where each enabled plane, or both faces
+of a slab, meets the cell, clipped to the region the other slices keep. The
+outlines stay visible in every tool and in the second view. **Include outlines
+in exported images** decides whether shown outlines appear in PNG, JPG,
+six-view and frame-series exports. Configuration JSON saves the slab, step,
+Miller indices and both outline choices; older files restore unchanged
+half-spaces. See [Slices](features/slices.md#miller-index-normals) for the
+definitions.
+
 ## Save and restore a configuration
 
 Use **Export JSON** directly below **Structure** to save the current source file names,
 sizes, available relative paths and saved trajectory frame, together with the
 processing and view settings. The configuration includes enabled coordination,
 CNA, central symmetry, PTM, ideal-lattice/reference-frame strain, local shear,
-bonds, bond distributions and Q4/Q6, Voronoi tessellation, displacement and RDF
-analyses and their parameters, editable
+bonds, bond distributions and Q4/Q6, Voronoi tessellation, cluster analysis,
+spatial binning, displacement and RDF analyses and their parameters, editable
 lattice references, replication counts and physical/display mode, all slices
 and their names, named atom selection groups and their member IDs, color maps,
 per-property fixed ranges and Auto settings, visibility filters,
 wrapped/unwrapped mode, atom radius, cell/axis/background
-and PNG options, camera, selected atom, current tool and theme. Optional
+and PNG options, camera, selected atom, current tool and theme. Computed
+properties are saved as their names, units and expression text. Optional
 settings also retain element/atom appearance overrides, the displacement reference
 and minimum-image option, the vector display source,
 component and length scales, anchoring, linked arrow dimensions and 2D/3D mode,
@@ -304,6 +338,14 @@ without these extensions leave both analyses off.
 Selected-cell visibility, all-cell visibility, color and opacity are saved
 separately in `settings.extensions.voronoiDisplay`, without polygon arrays.
 Both cell-display options default off; older recipes include all input types.
+Cluster analysis saves its enabled state, neighbor mode (`cutoff` or `bonds`),
+cutoff, selection group ID and size sorting in `settings.extensions.clusters`;
+the group must be one of the saved selection groups, and bond mode uses the
+saved Bonds cutoffs.
+Spatial binning saves its enabled state, layout, cell vectors, bin counts,
+quantity (with the property's Color by key), reduction, selection group ID,
+trajectory averaging and map colors in `settings.extensions.binning`; binned
+values are recalculated after import.
 
 Click **Import JSON** and choose a saved configuration. If the matching source
 is already open, the viewer returns to the saved frame, restores the settings
@@ -384,7 +426,8 @@ Registration connects the button, panel visibility and category navigation.
 the host's `onDeactivateTool` callback. The editor controller supplies the atom
 operations, selection handling and undo behavior, and coordinates source
 changes with cached data and analysis recalculation. The current built-in
-modification tools provide replication and external attribute attachment.
+modification tools provide replication, external attribute attachment and
+expression-based properties and selections.
 
 ## Deploy to GitHub Pages
 
@@ -659,6 +702,44 @@ face rows include accepted/boundary flags and neighbor atom IDs. The CPU/Wasm
 Worker pool retains its kernel and memory between calculations. See
 [Voronoi](features/voronoi.md) for interpretation and boundary conventions.
 
+**Clusters**, in Visualization tools, groups atoms that are connected through
+chains of neighbors. Choose **Cutoff radius** for the panel's own cutoff or
+**Bond cutoffs** to reuse the Bonds default and element-pair cutoffs, and
+optionally restrict **Atoms** to one named selection; atoms outside it get
+cluster ID 0 and do not connect others. Periodic directions connect across
+cell faces, including tilted cells. With **Sort clusters by size**, cluster 1
+is the largest and equal sizes keep the order of their lowest atom row.
+**Cluster ID** colors the 20 lowest IDs individually in the legend, cycling
+through distinct hues, with one **Other clusters** entry for the rest; ID 0 is
+gray. **Cluster size** is a scalar color. The panel table lists atom counts,
+unwrapped centers of mass and radii of gyration, weighted by a `mass` property
+when the file provides one; **Table CSV** exports every cluster, including
+gyration tensors. A cluster connected to its own periodic image is marked
+**Periodic** and has no finite center. Neighbor search runs in the shared CPU
+Worker pool and the results are identical to a single-threaded calculation.
+See [Cluster analysis](features/clusters.md).
+
+**Binning**, in Visualization tools, divides the cell into equal slabs along
+one cell vector (**Profile (1D)**) or columns along two (**Map (2D)**) and
+reports, for each bin, the **Atom count**, the **Number density** in Å⁻³, or
+the **Mean**, **Sum**, **Minimum**, **Maximum** or population **Standard
+deviation** of any numeric Color by quantity: positions, speed, file columns,
+external and analysis properties, or computed expressions. Bins use reduced
+coordinates, so in a tilted cell a profile along a consists of slabs parallel
+to b and c, and every bin has the volume V/n. Periodic directions wrap atoms
+into the cell; open directions span the cell faces and report atoms outside
+them. NaN and infinite property values are skipped and counted, and bins
+without finite values report NaN. **Atoms** restricts the population to one
+selection. A profile is a step chart and a map a colored grid with a color
+bar; hover, tap, the **Inspect** sliders or the arrow keys report a bin's
+range in Å along the vector, its value and atom count. **Profile CSV** /
+**Map CSV** exports every bin with its bounds in reduced coordinates and Å.
+Once calculated, binning repeats on every displayed frame with the same
+settings. For trajectories, **Average over all trajectory frames** reads each
+frame in order and averages counts and densities per frame while pooling the
+samples of means and other statistics; it supports counts, density, positions,
+speed and file columns. See [Spatial binning](features/binning.md).
+
 Open **Displacement** to enable calculation against a selected reference frame.
 It uses stable atom IDs; equal-size frames without explicit IDs use row order
 with a warning that atom ordering must stay unchanged. Mixed ID schemes and
@@ -760,6 +841,44 @@ over earlier groups; per-atom color overrides take precedence over group color.
 Any hidden group hides its members along with the other visibility filters.
 See [Selections](features/selection-groups.md) for detailed controls and limits.
 
+## Computed properties and expression selection
+
+**Modification tools → Expressions** computes per-atom properties from
+arithmetic expressions and selects atoms by a condition. Under **Compute
+property**, enter a name such as `vonMises`, an optional unit and an
+expression, for example
+`sqrt(0.5*((c_s[1]-c_s[2])^2 + (c_s[2]-c_s[3])^2 + (c_s[3]-c_s[1])^2) + 3*(c_s[4]^2 + c_s[5]^2 + c_s[6]^2)) / atomicVolume / 1e4`.
+The result appears under **Color by** with every palette and range option, in
+atom details, Custom XYZ vector fields and the Statistics CSV exports. It is
+recalculated for each frame, after physical replication and when imported or
+analysis columns change; a frame that lacks an input shows the property as
+waiting. A property may use properties listed above it. **Edit**, **Remove**
+and **Color** act on listed properties; saving an existing name replaces it.
+
+Expressions support `+ - * / % ^`, comparisons, `&& || !`, `a ? b : c`,
+common functions (`sqrt`, `exp`, `log`, `min`, `max`, `atan2`, `round`, …) and
+the constants `pi`, `inf`, `N`, `CellVolume`, `CellLength.A/B/C`, `Timestep`
+and `Frame`. Variables are case-insensitive: `Position.X/Y/Z`,
+`ReducedPosition.X/Y/Z`, `Type` (LAMMPS type number, or 1, 2, … for element
+types; `Type == "Ni"` compares labels), `ID`, `Index`, `Velocity.X/Y/Z` and
+`Velocity.Magnitude` when velocities were imported, every numeric column by
+name (`c_pe`, `c_s[1]`, `centralSymmetry`, …) and `CSP` for central symmetry.
+Write other column names in backquotes. Division by zero follows IEEE
+arithmetic, and every comparison with NaN is false. Errors give the column
+and suggest close names. Expressions are interpreted by AlloyView's own
+parser and never run as code.
+
+Under **Select by expression**, enter a condition such as
+`CSP > 8 && Type == 3`, choose **New group** or an existing group and Replace,
+Add, Subtract or Intersect, and click **Select matching atoms**; the status
+reports the match count. **Invert within this frame** replaces a group with the
+frame's other atoms. **Expand group** adds atoms within a cutoff distance, or
+each member's *N* nearest neighbors, over periodic images for the chosen
+number of iterations; it runs in a background Worker and can be cancelled.
+Configurations save the expression text in `settings.extensions.expressions`
+and reparse it on import. See [Expressions](features/expressions.md) for the
+complete language reference.
+
 ## Measurements and appearance overrides
 
 The **Details** window floats over the viewport and starts collapsed on
@@ -848,11 +967,19 @@ npm test
 npm run benchmark
 # With Node.js 24 and Chrome/Chromium, after npm run build:
 npm run test:browser
+# Miller planes, held stepping, flip, slabs, cut outlines in PNG and recipes:
+npm run test:browser:slice-sweep
 # Bond/Voronoi reference structures, CSV downloads and configuration replay:
 npm run test:browser:topology-tools
+# Computed properties, expression selections, expansion Worker and recipe replay:
+npm run test:browser:expressions
 # Voronoi GPU numerical parity and result/cell inspection UI:
 npm run test:gpu:voronoi
 npm run test:browser:voronoi
+# Cluster IDs, unwrapped centers, CSV, recipes and pool parity (both isolation modes):
+npm run test:browser:clusters
+# Spatial binning of a known crystal, CSV, frame updates, averages, recipes, phone layout and Worker parity:
+npm run test:browser:binning
 # WebGPU execution checks and CPU/GPU timing (Node.js 24 and Chrome/Chromium):
 npm run test:gpu
 npm run benchmark:gpu

@@ -10,6 +10,8 @@ Select a group in the list to edit it. **Add atoms** retains its existing member
 
 **Member IDs and manual edits** shows a preview of the group's IDs and accepts space- or comma-separated IDs. The selected Add, Remove or Replace operation also applies to these entries. This allows editing hidden atoms and IDs absent from the current frame. Alternatively, check **Show group atoms** before picking members again. Group counts distinguish IDs present in the current frame from absent IDs.
 
+To select atoms by a condition such as `CSP > 8 && Type == 3`, or to invert a group or expand it by periodic neighbors, use **Modification tools → [Expressions](expressions.md)**. Its results are ordinary groups that this tool edits further.
+
 ## Viewport controls
 
 Group picking is active while **Selections** is open. In Click mode, dragging still rotates the camera. In Box mode, dragging with the primary mouse button or one finger draws the selection rectangle; right-drag, the wheel or two fingers navigate the view. **Escape** cancels the rectangle. Switching tools or closing Selections restores normal picking and camera controls while keeping group colors and visibility.
@@ -20,7 +22,7 @@ A box selects projected atom centers throughout the viewing depth, including ato
 
 Groups store stable atom IDs rather than row indices. They therefore follow reordered trajectory frames; IDs absent from a frame remain in the group for later frames. Display replicas refer to their source atom, so selecting several copies adds that ID once. With **Replicate atoms for analysis** enabled, physical copies have independent IDs and can belong to different groups.
 
-Group colors override the selected element/scalar/crystal palette. Later groups take color precedence when an atom belongs to several groups; a specific per-atom appearance override takes precedence over group color. Membership in any hidden group hides the atom, even if another group containing it is visible. Existing legend filters, individual visibility settings and clipping planes also apply. A group's color does not change the underlying analysis values or legend ranges.
+Group colors override the selected element/scalar/crystal palette. Later groups take color precedence when an atom belongs to several groups; a specific per-atom appearance override takes precedence over group color. Membership in any hidden group hides the atom, even if another group containing it is visible. Existing legend filters, individual visibility settings and clipping planes also apply. A group's color does not change the underlying analysis values or legend ranges. [Cluster analysis](clusters.md) can be restricted to one group: only its atoms are connected and measured, and editing the group recalculates the clusters. [Spatial binning](binning.md) can likewise count or reduce only one group's atoms in each bin.
 
 JSON configuration export/import saves group names, colors, visibility, member IDs and the selected group. Click/Box mode and Add/Remove/Replace are temporary editing controls. A new source clears groups; importing its saved configuration restores them after the matching files are opened. Older configurations start with no groups.
 

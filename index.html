@@ -254,9 +254,11 @@
               <button type="button" data-tool-button="coordination" aria-controls="tool-coordination" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Coordination</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="bonds" aria-controls="tool-bonds" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Bonds</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="voronoi" aria-controls="tool-voronoi" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Voronoi</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="clusters" aria-controls="tool-clusters" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Clusters</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="vectors" aria-controls="tool-vectors" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Vectors</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="displacement" aria-controls="tool-displacement" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Displacement</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="statistics" aria-controls="tool-statistics" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Statistics</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="binning" aria-controls="tool-binning" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Binning</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="cna" aria-controls="tool-cna" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">CNA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="dxa" aria-controls="tool-dxa" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">DXA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="centrosymmetry" aria-controls="tool-centrosymmetry" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Symmetry</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
@@ -270,6 +272,7 @@
             <div id="modification-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="modification" aria-labelledby="tool-category-modification" hidden>
               <button type="button" data-tool-button="replicate" aria-controls="tool-replicate" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Replicate</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="externalProperties" aria-controls="tool-external-properties" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">External properties</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="expressions" aria-controls="tool-expressions" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Expressions</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
             </div>
             <p class="help tool-selector-help">Select a tool to show its settings. Switching categories keeps analyses enabled. Close an analysis to cancel it and clear its results.</p>
           </section>
@@ -373,6 +376,59 @@
             <p id="external-property-status" class="help" role="status" aria-live="polite">Load a structure to attach external atom properties.</p>
           </section>
 
+          <section id="tool-expressions" class="side-section expression-section" data-tool-panel="expressions" hidden>
+            <div class="section-heading"><div><p class="section-kicker">PER-ATOM EXPRESSIONS</p><h3>Compute property</h3></div></div>
+            <div class="paired-fields">
+              <label class="field"><span>Property name</span><input id="expression-property-name" type="text" maxlength="64" placeholder="vonMises" autocomplete="off" autocapitalize="off" spellcheck="false" disabled></label>
+              <label class="field"><span>Unit (optional)</span><input id="expression-property-unit" type="text" maxlength="32" placeholder="GPa" autocomplete="off" spellcheck="false" disabled></label>
+            </div>
+            <label class="field"><span>Expression</span><textarea id="expression-property-text" rows="3" maxlength="4096" placeholder="sqrt(Position.X^2 + Position.Y^2)" autocomplete="off" autocapitalize="off" spellcheck="false" disabled></textarea></label>
+            <div class="paired-actions expression-property-actions-row">
+              <button id="save-expression-property" class="button button-accent" type="button" disabled>Compute property</button>
+              <button id="cancel-expression-edit" class="button button-secondary" type="button" hidden>Cancel edit</button>
+            </div>
+            <p id="expression-property-error" class="expression-error" role="alert" hidden></p>
+            <div id="expression-property-list" class="expression-property-list" aria-label="Computed properties"></div>
+            <p id="expression-property-status" class="help" role="status" aria-live="polite">Open a structure to compute properties.</p>
+            <p class="help">Results are per-atom values for Color by, atom details, vector fields and Statistics CSV exports. They are recalculated for every frame; configurations save only the expression text. A property may use properties listed above it.</p>
+
+            <div class="section-heading statistics-subheading"><div><h3>Select by expression</h3></div></div>
+            <label class="field"><span>Condition</span><textarea id="expression-selection-text" rows="2" maxlength="4096" placeholder="CSP &gt; 8 &amp;&amp; Type == 2" autocomplete="off" autocapitalize="off" spellcheck="false" disabled></textarea></label>
+            <div class="paired-fields">
+              <label class="field"><span>Target group</span><select id="expression-selection-group" disabled><option value="new">New group</option></select></label>
+              <label class="field"><span>Operation</span><select id="expression-selection-operation" disabled>
+                <option value="replace">Replace members</option>
+                <option value="add">Add matches</option>
+                <option value="remove">Subtract matches</option>
+                <option value="intersect">Intersect</option>
+              </select></label>
+            </div>
+            <button id="apply-expression-selection" class="button button-accent tool-run-button" type="button" disabled>Select matching atoms</button>
+            <p id="expression-selection-error" class="expression-error" role="alert" hidden></p>
+            <details class="tool-details expression-selection-tools">
+              <summary>Invert or expand the target group</summary>
+              <button id="invert-expression-selection" class="button button-secondary tool-run-button" type="button" disabled>Invert within this frame</button>
+              <div class="paired-fields">
+                <label class="field"><span>Expand by</span><select id="expand-selection-mode" disabled><option value="cutoff">Cutoff distance</option><option value="nearest">Nearest neighbors</option></select></label>
+                <label id="expand-selection-cutoff-field" class="field"><span>Cutoff</span><span class="input-unit"><input id="expand-selection-cutoff" type="number" value="3" min="0.01" step="0.1" disabled><i>Å</i></span></label>
+                <label id="expand-selection-count-field" class="field" hidden><span>Neighbors per atom</span><input id="expand-selection-count" type="number" value="12" min="1" max="256" step="1" disabled></label>
+                <label class="field"><span>Iterations</span><input id="expand-selection-iterations" type="number" value="1" min="1" max="100" step="1" disabled></label>
+              </div>
+              <div class="paired-actions">
+                <button id="expand-expression-selection" class="button button-secondary" type="button" disabled>Expand group</button>
+                <button id="cancel-expand-selection" class="button button-secondary" type="button" disabled>Cancel</button>
+              </div>
+              <p class="help">Invert keeps this frame's atoms that are not in the group. Expand adds periodic neighbors of the group's atoms in a background Worker; hidden atoms are included.</p>
+            </details>
+            <p id="expression-selection-status" class="help" role="status" aria-live="polite">Open a structure to select atoms by expression.</p>
+            <details class="tool-details expression-reference">
+              <summary>Variables, operators and functions</summary>
+              <p class="help">Click a name to insert it. Names are case-insensitive. Quote column names containing spaces or symbols with backticks, as in <code>`v_stress xx`</code>; <code>c_s[1]</code> needs no quotes.</p>
+              <div id="expression-variable-list" class="expression-variable-list" aria-label="Variables in this frame"></div>
+              <p class="help"><code>+ - * / % ^</code>, comparisons <code>&lt; &lt;= &gt; &gt;= == !=</code>, <code>&amp;&amp; || !</code> and <code>condition ? a : b</code>. Functions: abs, sqrt, exp, log, log10, sin, cos, tan, asin, acos, atan, atan2, min, max, pow, floor, ceil, round, isnan. Constants: pi, inf, N, CellVolume, CellLength.A/B/C, Timestep, Frame. Type also compares with labels, as in <code>Type == "Ni"</code>. NaN never satisfies a comparison.</p>
+            </details>
+          </section>
+
           <section id="tool-slice" class="side-section" data-tool-panel="slice" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">CLIPPING PLANES</p><h3>Slices</h3></div>
@@ -407,11 +463,39 @@
                   <label><span>Z</span><input id="slice-normal-z" type="number" value="1" step="0.1" aria-label="Slice normal Z" disabled></label>
                 </div>
               </div>
-              <label class="field"><span>Plane position · n · r = d</span><span class="input-unit"><input id="slice-offset" type="number" value="0" step="0.1" disabled><i>Å</i></span></label>
+              <div class="field slice-miller">
+                <span id="slice-miller-label">Normal from Miller indices (h k l) · cell reciprocal basis</span>
+                <div class="slice-miller-inputs" role="group" aria-labelledby="slice-miller-label">
+                  <label><span>h</span><input id="slice-miller-h" type="number" step="1" placeholder="h" aria-label="Miller index h" disabled></label>
+                  <label><span>k</span><input id="slice-miller-k" type="number" step="1" placeholder="k" aria-label="Miller index k" disabled></label>
+                  <label><span>l</span><input id="slice-miller-l" type="number" step="1" placeholder="l" aria-label="Miller index l" disabled></label>
+                  <button id="slice-apply-miller" class="button button-secondary" type="button" disabled>Apply</button>
+                </div>
+                <output id="slice-miller-result" class="help" for="slice-miller-h slice-miller-k slice-miller-l" aria-live="polite">Enter integer indices h, k and l to set the normal from the cell's reciprocal lattice.</output>
+              </div>
+              <label class="field"><span>Plane position · n · r = d</span><span class="input-unit"><input id="slice-offset" type="number" value="0" step="0.1" aria-describedby="slice-sweep-help" disabled><i>Å</i></span></label>
+              <div class="field slice-sweep">
+                <span id="slice-sweep-label">Sweep along the normal</span>
+                <div class="slice-sweep-controls" role="group" aria-labelledby="slice-sweep-label">
+                  <button id="slice-step-back" class="button button-secondary" type="button" aria-label="Move the plane back one step" title="Move against the normal by one step; hold to repeat" disabled>−</button>
+                  <span class="input-unit"><input id="slice-step" type="number" min="0.000001" value="1" step="any" aria-label="Sweep step" title="Step length in Å" disabled><i>Å</i></span>
+                  <button id="slice-step-forward" class="button button-secondary" type="button" aria-label="Move the plane forward one step" title="Move along the normal by one step; hold to repeat" disabled>+</button>
+                  <button id="slice-flip" class="button button-secondary" type="button" title="Keep the other side of the plane" disabled>Flip</button>
+                </div>
+                <p id="slice-sweep-help" class="help">Hold − or + to sweep. Arrow Up and Down in the position field also move one step.</p>
+              </div>
               <label class="field"><span>Keep atoms on</span><select id="slice-side" disabled><option value="negative">Negative side · n · r ≤ d</option><option value="positive">Positive side · n · r ≥ d</option></select></label>
+              <div class="slice-slab-row">
+                <label class="slice-toggle"><input id="slice-slab" type="checkbox" disabled><span>Slab · keep |n · r − d| ≤ t/2</span></label>
+                <span class="input-unit"><input id="slice-thickness" type="number" min="0.000001" value="2" step="any" aria-label="Slab thickness t" title="Slab thickness t in Å" disabled><i>Å</i></span>
+              </div>
               <label class="slice-toggle slice-gizmo-toggle"><input id="slice-show-gizmo" type="checkbox" checked disabled><span>Show plane and editing arrow</span></label>
               <p class="help">Normals are normalized on commit. Position is the signed distance from the Cartesian origin in Å. All enabled slices apply together.</p>
               <p class="help">Drag the arrow head to rotate the normal on a guide sphere. Drag the shaft to move the plane. Values above update while dragging.</p>
+            </div>
+            <div class="slice-outline-options">
+              <label class="slice-toggle"><input id="slice-show-outlines" type="checkbox" disabled><span>Show cut outlines on the cell</span></label>
+              <label class="slice-toggle"><input id="slice-export-outlines" type="checkbox" checked disabled><span>Include outlines in exported images</span></label>
             </div>
             <p id="slice-status" class="help" role="status" aria-live="polite">Up to 16 independent slices.</p>
             <div hidden aria-hidden="true">
@@ -574,6 +658,42 @@
             </div>
           </section>
 
+          <section id="tool-clusters" class="side-section analysis-section cluster-section" data-tool-panel="clusters" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">CONNECTED NEIGHBORS</p><h3>Cluster analysis</h3></div>
+              <div class="analysis-state-controls"><span id="clusters-state" class="state-pill">Not calculated</span><button id="cancel-clusters" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <p class="help">Group atoms that are connected through chains of neighbors. Periodic directions connect across cell boundaries, including tilted cells; open directions do not.</p>
+            <div class="paired-fields">
+              <label class="field"><span>Neighbors</span><select id="clusters-neighbor-mode" disabled><option value="cutoff">Cutoff radius</option><option value="bonds">Bond cutoffs</option></select></label>
+              <label id="clusters-cutoff-field" class="field"><span>Cutoff radius</span><span class="input-unit"><input id="clusters-cutoff" type="number" value="3.0" min="0.01" step="0.05" disabled><i>Å</i></span></label>
+            </div>
+            <p id="clusters-bond-help" class="help" hidden>Uses the default and element-pair cutoffs from Bonds; bonds do not need to be drawn.</p>
+            <label class="field"><span>Atoms</span><select id="clusters-selection" disabled><option value="">All atoms</option></select></label>
+            <label class="slice-toggle"><input id="clusters-sort" type="checkbox" checked disabled><span>Sort clusters by size (cluster 1 is the largest)</span></label>
+            <button id="run-clusters" class="button button-accent tool-run-button" type="button" disabled>Calculate clusters</button>
+            <div class="analysis-backend-row"><span>Backend</span><output id="clusters-backend">—</output></div>
+            <progress id="clusters-progress" class="analysis-progress" max="1" value="0" aria-label="Cluster calculation progress" hidden></progress>
+            <p id="clusters-status" class="help" role="status" aria-live="polite">Calculate on the complete structure, including atoms hidden in the display.</p>
+            <div id="clusters-results" class="analysis-statistics-results" hidden>
+              <p id="clusters-summary" class="help"></p>
+              <div class="paired-actions">
+                <button id="clusters-color-id" class="button button-secondary" type="button" disabled>Color by cluster</button>
+                <button id="clusters-color-size" class="button button-secondary" type="button" disabled>Color by size</button>
+              </div>
+              <div class="statistics-result-heading"><h4>Clusters</h4><button id="export-cluster-table" class="button button-secondary statistics-export-button" type="button" disabled>Table CSV</button></div>
+              <div class="cluster-table-wrap">
+                <table class="cluster-table" aria-label="Cluster sizes, radii of gyration and centers of mass">
+                  <thead><tr><th scope="col">ID</th><th scope="col">Atoms</th><th scope="col">R<sub>g</sub> (Å)</th><th scope="col">Center (Å)</th></tr></thead>
+                  <tbody id="clusters-table-body"></tbody>
+                </table>
+              </div>
+              <p id="clusters-table-caption" class="help"></p>
+              <button id="clusters-show-more" class="button button-secondary tool-run-button" type="button" hidden>Show more</button>
+              <p class="help">Centers of mass use unwrapped coordinates. A cluster connected to its own periodic image is marked <b>Periodic</b>; it has no finite center or radius of gyration. Atoms outside the chosen group have cluster ID 0.</p>
+            </div>
+          </section>
+
           <section id="tool-displacement" class="side-section analysis-section" data-tool-panel="displacement" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">TRAJECTORY MOTION</p><h3>Displacement</h3></div>
@@ -674,6 +794,42 @@
               <p class="help">Export the complete current structure and available analysis results. Scalar statistics include finite-value counts and missing values; atom tables include IDs, types, coordinates and properties.</p>
               <p id="statistics-export-status" class="help" role="status" aria-live="polite">Open a structure to export statistics. Distribution exports become available when their analysis is complete.</p>
             </details>
+          </section>
+
+          <section id="tool-binning" class="side-section analysis-section binning-section" data-tool-panel="binning" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">SPATIAL PROFILES</p><h3>Spatial binning</h3></div>
+              <div class="analysis-state-controls"><span id="binning-state" class="state-pill">Not calculated</span><button id="cancel-binning" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <p class="help">Divide the cell into equal slabs along one cell vector, or columns along two, and reduce a per-atom quantity in each bin. Bins use reduced coordinates, so tilted cells are binned along their own vectors.</p>
+            <div class="paired-fields">
+              <label class="field"><span>Layout</span><select id="binning-mode" disabled><option value="1d">Profile (1D)</option><option value="2d">Map (2D)</option></select></label>
+              <label class="field"><span>Atoms</span><select id="binning-selection" disabled><option value="">All atoms</option></select></label>
+            </div>
+            <div class="paired-fields">
+              <label class="field"><span>Cell vector</span><select id="binning-axis-1" disabled><option value="a">a</option><option value="b">b</option><option value="c">c</option></select></label>
+              <label class="field"><span>Bins</span><input id="binning-bins-1" type="number" value="50" min="1" max="4096" step="1" disabled></label>
+            </div>
+            <div id="binning-second-axis" class="paired-fields" hidden>
+              <label class="field"><span>Second vector</span><select id="binning-axis-2" disabled><option value="a">a</option><option value="b" selected>b</option><option value="c">c</option></select></label>
+              <label class="field"><span>Bins</span><input id="binning-bins-2" type="number" value="50" min="1" max="4096" step="1" disabled></label>
+            </div>
+            <div class="paired-fields">
+              <label class="field"><span>Quantity</span><select id="binning-quantity" disabled><option value="count">Atom count</option><option value="density" selected>Number density [Å⁻³]</option></select></label>
+              <label id="binning-reduction-field" class="field" hidden><span>In each bin</span><select id="binning-reduction" disabled><option value="mean">Mean</option><option value="sum">Sum</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="stddev">Standard deviation</option></select></label>
+            </div>
+            <label id="binning-scheme-field" class="field" hidden><span>Map colors</span><select id="binning-color-scheme" disabled></select></label>
+            <label id="binning-average-field" class="slice-toggle" hidden><input id="binning-average-frames" type="checkbox" disabled><span>Average over all trajectory frames</span></label>
+            <button id="run-binning" class="button button-accent tool-run-button" type="button" disabled>Calculate profile</button>
+            <div class="analysis-backend-row"><span>Backend</span><output id="binning-backend">—</output></div>
+            <progress id="binning-progress" class="analysis-progress" max="1" value="0" aria-label="Binning progress" hidden></progress>
+            <p id="binning-status" class="help" role="status" aria-live="polite">Bins the complete analyzed frame, including atoms hidden in the display.</p>
+            <div id="binning-results" class="analysis-statistics-results" hidden>
+              <p id="binning-summary" class="help"></p>
+              <div class="statistics-result-heading"><h4 id="binning-chart-title">Profile</h4><button id="export-binning" class="button button-secondary statistics-export-button" type="button" disabled>Profile CSV</button></div>
+              <div id="binning-chart" class="statistics-chart binning-chart" role="group" aria-label="Spatial binning chart"></div>
+              <p id="binning-geometry" class="help"></p>
+            </div>
           </section>
 
           <section id="tool-cna" class="side-section analysis-section" data-tool-panel="cna" hidden>

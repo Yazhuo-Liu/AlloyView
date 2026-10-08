@@ -54,8 +54,10 @@ await writeFile(resolve(profile, 'test-trajectory.dump'), dumpText([bcc, bcc]));
 // gzip input is recognized by content and decompressed in the structure Worker.
 await writeFile(resolve(profile, 'test-trajectory.dump.gz'), gzipSync(dumpText([bcc, bcc])));
 const { DISPLAY: ignoredDisplay, ...environment } = process.env;
+// Basic password storage: on Linux, Chrome otherwise asks the desktop keyring
+// over D-Bus before its first HTTP request, and a stuck keyring stalls it.
 const chrome = spawn(chromePath, [
-  '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+  '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--password-store=basic',
   '--remote-debugging-port=0', '--remote-allow-origins=*',
   '--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader-webgl',
   '--ozone-platform=headless', '--disable-features=Vulkan',

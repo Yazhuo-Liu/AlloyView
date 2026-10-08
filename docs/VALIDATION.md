@@ -2,6 +2,86 @@
 
 Latest validation: 2026-10-08 (UTC). Earlier entries retain their own dates.
 
+## Expressions, clusters and cutting-plane sweep (2026-10-08)
+
+These are backlog items O5, O6 and A5, merged together with the P10 review fixes
+below.
+
+- **Node tests:** all 1,350 pass and the build succeeds. New coverage:
+  - **Expressions (23 tests):** precedence, associativity and IEEE/NaN
+    behavior; error positions; length and depth limits; prototype names such
+    as `constructor` and `__proto__` resolve as unknown names; recalculation
+    across frames and replicas; recipe validation; all selection operations;
+    expansion compared against brute force in orthogonal, triclinic and
+    partially periodic cells.
+  - **Clusters (19 tests):** periodic chains with unwrapped centers; triclinic
+    and open cells; selection restriction; sorting and tie rules; percolation;
+    mass weighting. Pool results equal direct results (`Object.is`) for
+    private and shared memory, different range splits and reversed merge
+    order.
+  - **Slices (14 tests):** Miller normals and d for cubic, supercell,
+    hexagonal and triclinic cells; step and flip; slab half-space encoding
+    against the CPU visibility test; outline edge cases; configuration
+    round trip and loading of older files.
+- **Browser suites:** all pass after merging: slice sweep, smoke, view/Voronoi,
+  Voronoi, DXA visual, DXA, advanced tools, atom details, clusters,
+  expressions, initial colors, legend preview, selection/hide, topology,
+  coordination presets, trajectory Workers, CPU warm-up, Fe input and Fe loop.
+  The expressions suite also checks that a hostile recipe is rejected without
+  running anything, and that a 375 px phone layout has no horizontal overflow.
+- **Clusters, 120,458-atom Fe loop (2.85 Å, Node):** one thread takes
+  0.56–0.61 s; 30 warm Workers take 0.13–0.17 s; a first run, which starts
+  the Workers and builds the index, takes 0.41–0.51 s. The single-thread cost
+  is dominated by `NeighborSearch.within`.
+
+## Review of P10 CPU reuse and merge yields (2026-10-08)
+
+An independent review compared `cda3c41` with the P10/P13/P15/P18 commits on
+the local machine (32 threads, Node.js 26.10).
+
+- **Exactness:** the HEA screw, Fe loop and NiGB structures were compared
+  with `Object.is` across coordination, adaptive and fixed CNA, manual and Auto
+  CSP, PTM, bonds, local shear and RDF. The comparison covered copied and
+  shared-memory pools, the results matched, and a repeated call on a resident
+  frame also matched. The rebuilt plain and threaded DXA Wasm match the
+  committed binaries' serial scientific output in all 11 cases. Hashes differ
+  because Emscripten embeds absolute source paths. Main and 8-thread DXA show
+  the same PDEL variation as `cda3c41`.
+- **Regression found and fixed:** each chunk ended with a main-thread yield.
+  Without `scheduler.yield` (Firefox, Safari, Node) a yield is a clamped
+  `setTimeout`, so 112 chunks added up to about 0.45 s. One loop did nothing
+  but yield. The bond merge now yields by copied volume (every 262,144 bonds)
+  and the empty loop is gone. Compact coordination chunks measured every pair
+  from both sides; pairs inside a chunk are measured once again, and only pairs
+  that cross a chunk boundary are counted from each side.
+- **Median of 7 runs, 120,458-atom Fe loop (2×1×1), 14 Workers:**
+
+  | Analysis | `cda3c41` copied / shared | After review copied / shared |
+  |---|---|---|
+  | Coordination | 188 / 195 ms | 194 / 262 ms |
+  | Adaptive CNA | 191 / 153 ms | 152 / 151 ms |
+  | Fixed CNA | 118 / 94 ms | 89 / 91 ms |
+  | CSP (12) | 110 / 90 ms | 86 / 84 ms |
+  | PTM | 1,239 / 1,105 ms | 1,809 / 884 ms |
+  | Bonds | 199 / 185 ms | 119 / 121 ms |
+  | Local shear | 280 / 208 ms | 243 / 167 ms |
+
+  Before the fix, bonds took 410/389 ms and local shear 535/450 ms. Without
+  `performance.memory`, copied PTM now uses 6 Workers instead of 9. Each
+  private Worker can retain two resident frames, so the copy budget counts
+  two. Shared-memory PTM is faster. Shared-memory coordination traces vary
+  between 171 and 262 ms.
+- All 1,294 Node tests and the build pass. Before the fix, every browser
+  suite passed on main: initial colors, smoke, atom details, view/Voronoi,
+  selection/hide, topology, advanced tools, CPU warm-up, DXA, DXA parallel,
+  GPU and GPU bond statistics. After the fix, smoke, advanced tools,
+  topology, CPU warm-up and legend preview pass.
+- **Browser harness:** both Chrome launchers now pass
+  `--password-store=basic`. Without it, Chrome 154 on Linux asks the desktop
+  keyring over D-Bus before its first HTTP request. With a stuck keyring, every
+  `http://127.0.0.1` navigation hung: sockets opened but no request was sent,
+  and `Page.navigate` timed out.
+
 ## Initial coordinate and velocity colors (2026-10-08)
 
 **Position X/Y/Z** uses Cartesian wrapped/unwrapped coordinates without an

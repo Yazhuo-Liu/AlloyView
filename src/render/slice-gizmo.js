@@ -189,6 +189,17 @@ export function initializeSliceGizmo(renderer, { onChange = () => {}, onSelect =
         'pointer-events': 'stroke' }, planes);
       node.style.cursor = 'pointer';
       title(node, `Select ${slice.name}`);
+      // A slab also shows the two faces that bound the atoms it keeps.
+      if (slice.slab) for (const sign of [-1, 1]) {
+        const face = { ...slice, position: slice.position + sign * slice.thickness / 2 };
+        let outline = vertices ? planeCellPolygon(face, vertices) : [];
+        if (outline.length < 3) outline = planeBoxPolygon(face, bounds);
+        const projected = outline.map(project);
+        if (projected.length < 3 || projected.some(point => !point)) continue;
+        element('polygon', { class: 'slice-slab-face', points: projected.map(point => `${point.x},${point.y}`).join(' '),
+          fill: 'none', stroke: active ? ACTIVE_COLOR : PLANE_COLOR, 'stroke-opacity': slice.enabled ? 0.6 : 0.3,
+          'stroke-width': 1, 'stroke-dasharray': '4 3', 'pointer-events': 'none' }, planes);
+      }
     }
     const slice = slices.find(item => item.id === selectedId && item.showGizmo);
     controls.style.display = slice ? '' : 'none';
@@ -295,7 +306,8 @@ export function initializeSliceGizmo(renderer, { onChange = () => {}, onSelect =
       const spherePoint = arcballVector(point.x - drag.origin.x, point.y - drag.origin.y, drag.screenRadius, drag.hemisphere);
       const cameraNormal = rotateBetweenSpherePoints(drag.cameraNormal, drag.sphereStart, spherePoint);
       const normal = normalize(fromCamera(cameraNormal, drag.view));
-      onChange(drag.id, { normal, position: dot(normal, drag.center) });
+      // A freely rotated normal no longer follows Miller indices.
+      onChange(drag.id, { normal, position: dot(normal, drag.center), miller: null });
     } else {
       let offset;
       if (drag.parameter !== null) {
@@ -321,7 +333,7 @@ export function initializeSliceGizmo(renderer, { onChange = () => {}, onSelect =
       const angle = sign * (event.shiftKey ? 0.15 : 0.03), horizontal = ['ArrowLeft', 'ArrowRight'].includes(event.key);
       const normal = normalize(fromCamera(rotateBetweenSpherePoints(toCamera(slice.normal, view), [0, 0, 1],
         horizontal ? [Math.sin(angle), 0, Math.cos(angle)] : [0, Math.sin(angle), Math.cos(angle)]), view));
-      onChange(slice.id, { normal, position: dot(normal, center) });
+      onChange(slice.id, { normal, position: dot(normal, center), miller: null });
     }
   });
   listen(window, 'blur', finish);

@@ -7,9 +7,11 @@ export const BUILTIN_TOOLS = Object.freeze([
   { id: 'coordination', label: 'Coordination', analysis: true },
   { id: 'bonds', label: 'Bonds', analysis: true },
   { id: 'voronoi', label: 'Voronoi', analysis: true },
+  { id: 'clusters', label: 'Clusters', analysis: true },
   { id: 'vectors', label: 'Vectors' },
   { id: 'displacement', label: 'Displacement', analysis: true },
   { id: 'statistics', label: 'Statistics', analysis: true },
+  { id: 'binning', label: 'Binning', analysis: true },
   { id: 'cna', label: 'CNA', analysis: true },
   { id: 'dxa', label: 'DXA', analysis: true },
   { id: 'centrosymmetry', label: 'Symmetry', analysis: true },
@@ -21,6 +23,7 @@ export const BUILTIN_TOOLS = Object.freeze([
   { id: 'performance', label: 'Performance' },
   { id: 'replicate', label: 'Replicate', category: 'modification', changesStructure: true },
   { id: 'externalProperties', label: 'External properties', category: 'modification', changesProperties: true },
+  { id: 'expressions', label: 'Expressions', category: 'modification', changesProperties: true },
 ].map(tool => Object.freeze({ category: 'visualization', analysis: false, ...tool })));
 
 /**

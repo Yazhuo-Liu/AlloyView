@@ -244,6 +244,15 @@ retain a bounded private frame/index cache. Dynamic bounded chunks preserve
 the original reduction order, and PTM retains its native species buffer per
 resident frame. Shared input memory is charged once. Cancellation preserves
 healthy Workers and initialized Wasm modules. See [validation](VALIDATION.md).
+Review 2026-10-08 measured a 120k-atom Fe loop:
+- **CNA, CSP and bonds:** 19–40% faster.
+- **Local shear:** 13–20% faster.
+- **Shared-memory PTM:** 20% faster.
+- **Coordination:** unchanged with copied memory; slower with shared memory.
+- **Copied PTM:** uses 6 Workers instead of 9 without `performance.memory`, because each Worker retains two frames.
+
+The review also removed per-chunk merge yields: they cost 4 ms each without
+`scheduler.yield`.
 
 **Effort:** M. **Deployments:** mostly isolated.
 
@@ -345,6 +354,18 @@ JSON) before further DXA work.
 
 ### O5. Expressions: compute property and expression selection
 
+**Status:** Done 2026-10-08 (`src/expressions.js`, `src/computed-properties.js`,
+`src/expression-controls.js`). A tokenizer and Pratt parser feed a vectorized
+evaluator over typed arrays; there is no `eval`, `Function` or code generation,
+and names resolve only through Maps. Computed properties are stored as
+`{name, unit, expression}` recipes and recomputed for each frame and after
+replication. Expression selection writes into selection groups (new, replace,
+add, subtract, intersect). Invert and expand (cutoff or N nearest, iterated)
+run in a dedicated selection Worker. Follow-ups:
+- Expansion does not reuse the analysis pool's resident index.
+- Expression selections are evaluated once, on the current frame only.
+- Evaluation runs synchronously on the main thread (about 0.5 s for 1M atoms).
+
 **Effort:** M. Compute per-atom properties (for example von Mises stress from
 per-atom stress divided by Voronoi volume) and select atoms by expressions such
 as `CSP > 8 && Type == 3`, plus invert and expand-by-neighbors selection. Parse
@@ -354,6 +375,20 @@ expressions into a safe evaluator over typed arrays; never use `eval` or
 `particles/modifier/selection/ExpandSelectionModifier.cpp`.
 
 ### O6. Cluster analysis
+
+**Status:** Done 2026-10-08 (`src/analysis/clusters.js`, `src/cluster-tools.js`).
+Union-find with periodic image offsets over cutoff or Bonds-tool neighbors,
+optionally restricted to a selection group. Pool Workers reduce their atom
+ranges to spanning forests, and one Worker labels the clusters. Outputs are
+exact for any partition. Results:
+- Cluster ID (categorical legend: the 20 lowest IDs, then "Other clusters") and size.
+- A table of mass-weighted unwrapped centers, radius of gyration and gyration tensor.
+- Percolating clusters are flagged and their geometry is NaN.
+- CSV export.
+
+On 120k atoms with warm Workers it takes about 0.13 s. Follow-ups:
+- A dedicated cutoff loop instead of `NeighborSearch.within`.
+- OVITO's unwrapped-coordinates output.
 
 **Effort:** S–M. Union-find over cutoff neighbors or the bond graph, optionally
 restricted to a selection; outputs cluster ID, size, unwrapped center of mass,
@@ -422,6 +457,16 @@ or grain IDs) as categories with per-value hiding, and hide the clicked atom's
 class with one gesture. Store hidden values, not indices.
 
 ### A5. Cutting-plane sweep
+
+**Status:** Done 2026-10-08 (`src/render/slicing.js`, `src/slice-controls.js`).
+Each plane gets −/+ step buttons (hold to repeat; arrow keys in the position
+field), Flip, and a slab mode that keeps |n·r − d| ≤ t/2. Slab mode is
+encoded as two half-spaces, so the shaders hold 32. Miller indices (h k l)
+are relative to the simulation cell; n ∥ G = h b₁ + k b₂ + l b₃ and
+d = 1/|G|, correct for triclinic cells. Applying them snaps the plane to the
+nearest lattice plane and sets both the step and the slab thickness to d.
+Persistent plane-cell outlines can optionally be included in exports. Not
+done: [u v w] direction input and "keep outside the slab".
 
 **Effort:** S–M. Step, flip and slab controls for slices, a Miller-index normal,
 and the plane-cell outline (`planeCellPolygon` in `src/render/slicing.js`) drawn

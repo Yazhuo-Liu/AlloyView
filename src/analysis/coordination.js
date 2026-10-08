@@ -108,7 +108,11 @@ export function calculateCoordination(frameLike, cutoff, range = {}) {
 
     for (let neighborBin = 0; neighborBin < neighborBinCount; neighborBin += 1) {
       for (let other = heads[neighborBins[neighborBin]]; other >= 0; other = next[other]) {
-        if (other === atom || (!compactOutput && other < atom)) continue;
+        // A compact chunk owns only its own counts, so a pair with an atom
+        // outside the chunk is measured from both sides; pairs inside the
+        // chunk are measured once, as with full output.
+        const inRange = !compactOutput || (other >= startAtom && other < endAtom);
+        if (other === atom || (inRange && other < atom)) continue;
         const ownsPair = other > atom;
         if (ownsPair) candidatePairs += 1;
         const distanceSquared = minimumImageDistanceSquared(
@@ -119,10 +123,12 @@ export function calculateCoordination(frameLike, cutoff, range = {}) {
           fractionalBounds,
         );
         if (distanceSquared <= cutoffSquared) {
-          if (compactOutput) coordination[atom - startAtom] += 1;
-          else {
+          if (!compactOutput) {
             coordination[atom] += 1;
             coordination[other] += 1;
+          } else {
+            coordination[atom - startAtom] += 1;
+            if (inRange) coordination[other - startAtom] += 1;
           }
           if (ownsPair) acceptedPairs += 1;
         }

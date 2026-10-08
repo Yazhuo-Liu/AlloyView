@@ -86,7 +86,7 @@ export function selectSelectionGroup(state, id) {
 }
 
 export function setSelectionGroupMembers(state, id, atomIds, { operation = 'replace' } = {}) {
-  if (!['replace', 'add', 'remove'].includes(operation)) fail('operation', 'must be replace, add or remove');
+  if (!['replace', 'add', 'remove', 'intersect'].includes(operation)) fail('operation', 'must be replace, add, remove or intersect');
   const index = findGroup(state, id);
   const incoming = uniqueAtomIds(atomIds);
   const previous = state.groups[index];
@@ -96,9 +96,13 @@ export function setSelectionGroupMembers(state, id, atomIds, { operation = 'repl
     const seen = new Set(previous.atomIds.map(String));
     members = previous.atomIds.slice();
     for (const atomId of incoming) if (!seen.has(String(atomId))) { seen.add(String(atomId)); members.push(atomId); }
-  } else {
+  } else if (operation === 'remove') {
     const remove = new Set(incoming.map(String));
     members = previous.atomIds.filter((atomId) => !remove.has(String(atomId)));
+  } else {
+    // Intersection keeps the existing member order.
+    const keep = new Set(incoming.map(String));
+    members = previous.atomIds.filter((atomId) => keep.has(String(atomId)));
   }
   enforceBudget(state.groups, members.length - previous.atomIds.length);
   const groups = state.groups.slice();

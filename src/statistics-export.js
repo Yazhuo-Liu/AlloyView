@@ -40,6 +40,7 @@ const STAT_COLUMNS = ['analysis', 'property', 'unit', 'finite_count', 'nan_count
 export const STATISTICS_TABLES = Object.freeze([
   'summary', 'properties', 'categories', 'coordination', 'atoms', 'rdf', 'dxa-summary', 'dxa-lines',
   'bond-length', 'bond-angle', 'bond-order', 'bond-order-atoms', 'voronoi-distributions', 'voronoi-atoms', 'voronoi-faces',
+  'clusters', 'binning',
 ]);
 
 /** Select a table from already completed analyses. All atom scans and CSV
@@ -92,6 +93,21 @@ export function buildStatisticsTable(snapshot, kind = 'summary') {
       for (let atom = 0; atom < frame.ids.length; atom++) yield [frame.ids[atom], frame.typeLabels?.[frame.types[atom]], bonds.coordination[atom], bonds.q4[atom], bonds.q6[atom]];
     })());
   }
+  if (kind === 'binning') return binningTable(snapshot, required(result('binning'), 'Calculate a spatial profile before exporting it.'), prefix);
+  if (kind === 'clusters') {
+    const clusters = required(result('clusters'), 'Calculate clusters before exporting the cluster table.');
+    const weightUnit = clusters.weighting === 'mass' ? 'amu' : 'atoms';
+    return table(['cluster_id', 'atom_count', `total_weight [${weightUnit}]`, 'center_x [Å]', 'center_y [Å]', 'center_z [Å]',
+      'radius_of_gyration [Å]', 'gyration_xx [Å²]', 'gyration_yy [Å²]', 'gyration_zz [Å²]', 'gyration_xy [Å²]', 'gyration_xz [Å²]',
+      'gyration_yz [Å²]', 'percolating', 'first_atom_id'], (function* () {
+      for (let index = 0; index < clusters.clusterCount; index++) {
+        const atom = clusters.firstAtoms[index];
+        yield [index + 1, clusters.sizes[index], clusters.totalWeights[index], ...clusters.centers.subarray(index * 3, index * 3 + 3),
+          clusters.radiiOfGyration[index], ...clusters.gyrationTensors.subarray(index * 6, index * 6 + 6), Boolean(clusters.percolating[index]),
+          frame.ids?.[atom] ?? atom + 1];
+      }
+    })());
+  }
   const voronoi = required(result('voronoi'), 'Calculate Voronoi tessellation before exporting its results.');
   if (kind === 'voronoi-distributions') return table(['distribution', 'lower', 'upper', 'category', 'count', 'fraction', 'unit'], voronoiDistributionRows(voronoi));
   if (kind === 'voronoi-atoms') return table(['atom_id', 'type', 'volume [Å³]', 'surface_area [Å²]', 'coordination',
@@ -109,6 +125,32 @@ export function buildStatisticsTable(snapshot, kind = 'summary') {
       }
     }
   })());
+}
+
+/** One row per bin, in row-major order for maps (the first vector's bin is
+ * the outer loop). Bounds are reduced coordinates and distances along each
+ * cell vector from the cell origin. A trajectory average reports per-frame
+ * mean counts, and its context columns name the frame range instead. */
+function binningTable(snapshot, binning, prefix) {
+  const axes = binning.axes.map(axis => 'abc'[axis]), averaged = binning.frames > 1;
+  const context = averaged ? [prefix[0], `1-${binning.frames}`, ''] : prefix;
+  const columns = [...CONTEXT, ...axes.flatMap(axis => [`${axis}_bin`, `${axis}_lower_fraction`, `${axis}_upper_fraction`,
+    `${axis}_lower [Å]`, `${axis}_upper [Å]`, `${axis}_center [Å]`]),
+  columnWithUnit(binning.valueName ?? 'value', binning.unit), 'atom_count', 'skipped_non_finite', ...(averaged ? ['frames_averaged'] : [])];
+  const rows = (function* () {
+    const [, second = 1] = binning.bins;
+    for (let bin = 0; bin < binning.values.length; bin++) {
+      const indices = binning.bins.length === 1 ? [bin] : [Math.floor(bin / second), bin % second];
+      const bounds = indices.flatMap((index, dimension) => {
+        const count = binning.bins[dimension], length = binning.axisLengths[dimension];
+        return [index + 1, index / count, (index + 1) / count, index / count * length, (index + 1) / count * length, (index + 0.5) / count * length];
+      });
+      yield [...context, ...bounds, binning.values[bin], binning.counts[bin], binning.skipped?.[bin] ?? 0, ...(averaged ? [binning.frames] : [])];
+    }
+  })();
+  const stem = fileStem(snapshot.fileName);
+  return { kind: 'binning', columns, rows,
+    filename: averaged ? `${stem}-all-frames-binning.csv` : `${stem}-frame-${prefix[1]}-binning.csv` };
 }
 
 /** Subset arrays stay aligned with the physical frame. Included central cells
@@ -150,7 +192,8 @@ function* categoryRows(frame, properties) {
     // Invalid/missing classifications remain accounted for rather than silently
     // disappearing from exported populations.
     for (const [id, count] of counts) if (!known.has(id)) yield [property.analysisKind ?? property.name, property.name, id,
-      Number.isNaN(id) ? 'NaN' : 'Unclassified', count, count / property.data.length];
+      Number.isNaN(id) ? 'NaN' : property.unlistedCategories && Number.isInteger(id) && id > 0 ? property.unlistedCategories.label : 'Unclassified',
+      count, count / property.data.length];
   }
 }
 
@@ -235,6 +278,12 @@ function* summaryRows(snapshot, properties) {
       for (const [metric, value] of Object.entries(stats)) yield ['bondStatistics', `${name}.${metric}`, '', value, metric === 'count' ? '' : unit];
     }
     for (const [name, value] of Object.entries(bondStatistics.normalization ?? {})) if (typeof value !== 'object') yield ['bondStatistics', name, '', value, name.toLowerCase().includes('cutoff') ? 'Å' : ''];
+  }
+  const clusters = completedResult(snapshot, 'clusters');
+  if (clusters) {
+    for (const name of ['clusterCount', 'largestSize', 'percolatingCount', 'includedAtoms', 'excludedAtoms', 'weighting']) {
+      if (clusters[name] !== undefined) yield ['clusters', name.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`), '', clusters[name], ''];
+    }
   }
   const voronoi = completedResult(snapshot, 'voronoi');
   if (voronoi) {
