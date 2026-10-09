@@ -10,10 +10,12 @@ import { captureOffscreen } from './offscreen-export.js';
 import { normalizeExportResolution, resolveExportSize, tileProjection } from './export-resolution.js';
 import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms, prepareScalarColorData, scalarColorSettings, scalarPreviewAtomVisible } from './scalar-colormap.js';
 import { effectivePeriodicOrigin, normalizePeriodicOrigin, periodicDisplayCoordinates } from './periodic-origin.js';
+import { CRYSTAL_DRAG_GLSL, CRYSTAL_DRAG_UNIFORMS, applyCrystalDragUniforms, createCrystalDragState } from './crystal-drag.js';
 import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
 import { TrajectoryLineLayer, normalizeTrajectoryLineOptions } from './trajectory-line-layer.js';
 import { VoronoiCellLayer, VoronoiAllCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
 import { SiteMarkerLayer, normalizeSiteMarkerOptions } from './site-marker-layer.js';
+import { drawTextLabelsOverlay } from './text-label-overlay.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON, pointVisible, sliceHalfSpaces, sliceOutlineSegments, validateSlices } from './slicing.js';
 import {
   add,
@@ -43,7 +45,9 @@ layout(location=4) in float aVisible;
 layout(location=5) in float aRadius;
 layout(location=6) in float aScalar;
 layout(location=7) in float aColorOverride;
+layout(location=8) in float aOcclusion;
 ${SCALAR_COLOR_GLSL}
+${CRYSTAL_DRAG_GLSL}
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform float uRadiusScale;
@@ -57,6 +61,8 @@ uniform int uSelectedAtoms[${SELECTION_HIGHLIGHT_COUNT}];
 uniform vec3 uReplicaOffset;
 uniform vec3 uReplicaIndex;
 uniform vec3 uRepetitions;
+uniform bool uAmbientOcclusion;
+uniform float uOcclusionIntensity;
 out vec2 vCorner;
 out vec3 vColor;
 out vec3 vCenterView;
@@ -65,16 +71,21 @@ flat out int vSelected;
 flat out float vRadius;
 void main() {
   vec3 worldCenter = aCenter + uReplicaOffset;
+  // A crystal drag rewraps the display fractions; it is zero otherwise.
+  vec3 dragStep = crystalDragStep(aFractional);
+  if (uCrystalDrag) worldCenter += uCrystalCell * dragStep;
   vec4 centerView = uView * vec4(worldCenter, 1.0);
   float radius = aRadius * uRadiusScale;
   vec4 cornerView = centerView + vec4(aCorner * radius, 0.0, 0.0);
   gl_Position = uProjection * cornerView;
   vCorner = aCorner;
   vColor = scalarColor(aScalar, aColorOverride > 0.5, aColor);
+  // Ambient occlusion scales the atom color; when off, colors are untouched.
+  if (uAmbientOcclusion) vColor *= mix(1.0, aOcclusion, uOcclusionIntensity);
   vCenterView = centerView.xyz;
   bool sliceVisible = true;
   if (uSliceMode == 0) {
-    float sliceCoordinate = (aFractional[uSliceAxis] + uReplicaIndex[uSliceAxis]) / uRepetitions[uSliceAxis];
+    float sliceCoordinate = (aFractional[uSliceAxis] + dragStep[uSliceAxis] + uReplicaIndex[uSliceAxis]) / uRepetitions[uSliceAxis];
     sliceVisible = sliceCoordinate <= uSliceMaximum;
   } else {
     for (int plane = 0; plane < ${MAX_SLICE_PLANES}; plane++) {
@@ -216,6 +227,7 @@ export class WebGLRenderer {
     this.displayFractional = null;
     this.periodicOrigin = [0, 0, 0];
     this.coordinateMode = 'wrapped';
+    this.crystalDrag = null;
     this.visibility = null;
     this.selectionVisibility = null;
     this.atomCount = 0;
@@ -355,8 +367,8 @@ export class WebGLRenderer {
       'uView', 'uProjection', 'uRadiusScale', 'uSliceAxis', 'uSliceMaximum', 'uSelected',
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions',
       'uSliceMode', 'uSliceCount', 'uSlicePlanes[0]',
-      'uSelectedAtoms[0]',
-      ...SCALAR_COLOR_UNIFORMS,
+      'uSelectedAtoms[0]', 'uAmbientOcclusion', 'uOcclusionIntensity',
+      ...SCALAR_COLOR_UNIFORMS, ...CRYSTAL_DRAG_UNIFORMS,
     ]);
     this.lineUniforms = uniforms(gl, this.lineProgram, ['uViewProjection', 'uColor']);
     gl.enable(gl.DEPTH_TEST);
@@ -427,11 +439,13 @@ export class WebGLRenderer {
     this.rawDisplayPositions = this.displayFractional = null;
     this.periodicOrigin = [0, 0, 0];
     this.coordinateMode = 'wrapped';
+    this.crystalDrag = null;
     this.cellWireframeMode = 'mono';
     this.atomColors = null;
     this.atomBonds = this.atomVectors = null;
     this.atomVectorFields = [];
     this.primitiveLayer?.clear();
+    if (this.ambientOcclusionFactors) this.setAmbientOcclusion(null);
     this.dislocationNetwork = null;
     this.dislocationLayer?.clear();
     this.siteMarkers = null;
@@ -625,6 +639,15 @@ export class WebGLRenderer {
     return performance.now() - startedAt;
   }
 
+  /** Preview a periodic-origin change while the crystal is dragged. Only
+   * shader uniforms change; no coordinates are recomputed or uploaded. The
+   * shift is relative to the committed origin; null ends the preview. */
+  setCrystalDragShift(shift) {
+    this.crystalDrag = shift && this.frame ? createCrystalDragState(this, shift) : null;
+    this.onCrystalDrag?.(this.crystalDrag);
+    this.requestRender();
+  }
+
   setReplications(counts) {
     if (!this.frame) return;
     const replication = createReplication(this.frame.cell, counts);
@@ -656,6 +679,29 @@ export class WebGLRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.radiusBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, radii, gl.DYNAMIC_DRAW);
     this.requestRender();
+  }
+
+  /** Ambient occlusion brightness, one normalized value per displayed atom
+   * (replica-major: replica × atomCount + atom), or null for none. Factors
+   * of another size are ignored until a matching result arrives. */
+  setAmbientOcclusion(factors = null, { intensity = this.ambientOcclusionIntensity ?? 1 } = {}) {
+    if (factors !== null && !(factors instanceof Float32Array)) throw new Error('Ambient occlusion factors must be a Float32Array.');
+    if (typeof intensity !== 'number' || !(intensity >= 0 && intensity <= 1)) throw new Error('Ambient occlusion intensity must be between 0 and 1.');
+    this.ambientOcclusionIntensity = intensity;
+    if (factors !== (this.ambientOcclusionFactors ?? null)) {
+      // render() enables the attribute only while the size matches the view.
+      const gl = this.gl;
+      this.ambientOcclusionBuffer ??= gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.ambientOcclusionBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, factors ?? 0, gl.STATIC_DRAW);
+      this.ambientOcclusionFactors = factors;
+    }
+    this.requestRender();
+  }
+
+  ambientOcclusionActive() {
+    return Boolean(this.frame && this.ambientOcclusionFactors
+      && this.ambientOcclusionFactors.length === this.atomCount * this.replicas.length);
   }
 
   ensurePrimitiveLayer() {
@@ -1096,9 +1142,20 @@ export class WebGLRenderer {
     if (this.sphereUniforms['uSelectedAtoms[0]'] != null) gl.uniform1iv(this.sphereUniforms['uSelectedAtoms[0]'], this.getSelectionHighlightAtoms());
     gl.uniform3f(this.sphereUniforms.uRepetitions, ...this.repetitions);
     applyScalarColorUniforms(gl, this.sphereUniforms, this.scalarColorPreview);
+    applyCrystalDragUniforms(gl, this.sphereUniforms, this.crystalDrag);
+    const occlusion = this.ambientOcclusionActive();
+    gl.uniform1i(this.sphereUniforms.uAmbientOcclusion, occlusion ? 1 : 0);
+    if (occlusion) {
+      gl.uniform1f(this.sphereUniforms.uOcclusionIntensity, this.ambientOcclusionIntensity);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.ambientOcclusionBuffer);
+      gl.enableVertexAttribArray(8);
+      gl.vertexAttribDivisor(8, 1);
+    } else if (this.ambientOcclusionBuffer) gl.disableVertexAttribArray(8);
     // Reuse the same atom buffers for every image. Analysis, color updates and
     // visibility masks still have exactly one entry per original atom.
-    for (const replica of this.replicas) {
+    for (const [ordinal, replica] of this.replicas.entries()) {
+      // Each displayed copy reads its own occlusion values.
+      if (occlusion) gl.vertexAttribPointer(8, 1, gl.FLOAT, false, 0, ordinal * this.atomCount * 4);
       gl.uniform3f(this.sphereUniforms.uReplicaOffset, ...replica.offset);
       gl.uniform3f(this.sphereUniforms.uReplicaIndex, ...replica.indices);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.atomCount);
@@ -1107,9 +1164,13 @@ export class WebGLRenderer {
     this.dislocationLayer?.render(this);
     this.siteMarkerLayer?.render(this);
     this.trajectoryLineLayer?.render(this);
-    if (!(this.voronoiCellOptions.allEnabled && this.voronoiAllCellGeometry?.complete)) this.voronoiCellLayer?.render(this);
-    else if (this.voronoiCellLayer) this.voronoiCellLayer.renderedReplicaCount = 0;
-    this.voronoiAllCellLayer?.render(this);
+    // Voronoi cells are built for the committed origin; they reappear,
+    // rebuilt, when a crystal drag is released.
+    if (!this.crystalDrag) {
+      if (!(this.voronoiCellOptions.allEnabled && this.voronoiAllCellGeometry?.complete)) this.voronoiCellLayer?.render(this);
+      else if (this.voronoiCellLayer) this.voronoiCellLayer.renderedReplicaCount = 0;
+      this.voronoiAllCellLayer?.render(this);
+    }
 
     if (this.cellVisible) {
       gl.enable(gl.BLEND);
@@ -1172,8 +1233,9 @@ export class WebGLRenderer {
     // Project the cached cell/atom bounds onto the camera axis. Recompute these
     // six scalars while orbiting, rather than scanning every atom per draw.
     let closest = this.modelRadius, furthest = -this.modelRadius;
-    if (this.sceneBounds) {
-      const { minimum, maximum } = this.sceneBounds;
+    const bounds = this.crystalDrag?.bounds ?? this.sceneBounds;
+    if (bounds) {
+      const { minimum, maximum } = bounds;
       closest = furthest = 0;
       for (let axis = 0; axis < 3; axis++) {
         const a = (minimum[axis] - target[axis]) * offsetDirection[axis];
@@ -1363,13 +1425,13 @@ export class WebGLRenderer {
     return closest;
   }
 
-  captureImage({ includeBackground = true, legend = null, includeAxes = false, includeSliceOutlines = true, resolution = null, tileSize = null } = {}) {
+  captureImage({ includeBackground = true, legend = null, includeAxes = false, includeSliceOutlines = true, resolution = null, tileSize = null, textLabels = null } = {}) {
     // PNG/JPG and contact sheets always use the exact byte-rounded CPU palette.
     this.onBeforeCapture?.();
     this.finishScalarColorPreview();
     const exportResolution = normalizeExportResolution(resolution ?? {});
     if (exportResolution.mode !== 'current' || tileSize !== null) {
-      return this.captureOffscreenImage({ includeBackground, legend, includeAxes, includeSliceOutlines, resolution: exportResolution, tileSize });
+      return this.captureOffscreenImage({ includeBackground, legend, includeAxes, includeSliceOutlines, resolution: exportResolution, tileSize, textLabels });
     }
     const gl = this.gl;
     let width;
@@ -1406,10 +1468,11 @@ export class WebGLRenderer {
       drawLegendOverlay(context, legend, width, height, scale, { includeBackground, theme: legendExportTheme(this.canvas) });
     }
     if (includeAxes) drawAxesOverlay(context, axisDirectionsFromView(this.viewMatrix), width, height, scale);
+    if (textLabels?.length) drawTextLabelsOverlay(context, textLabels, width, height, scale, { includeBackground, theme: legendExportTheme(this.canvas) });
     return exportCanvas;
   }
 
-  captureOffscreenImage({ includeBackground, legend, includeAxes, includeSliceOutlines, resolution, tileSize }) {
+  captureOffscreenImage({ includeBackground, legend, includeAxes, includeSliceOutlines, resolution, tileSize, textLabels = null }) {
     this.resize();
     const { width, height } = resolveExportSize(resolution, this.canvas.width, this.canvas.height);
     const exportCanvas = document.createElement('canvas'); exportCanvas.width = width; exportCanvas.height = height;
@@ -1439,6 +1502,8 @@ export class WebGLRenderer {
     if (legend) drawLegendOverlay(context, legend, width, height, annotationScale,
       { includeBackground, theme: legendExportTheme(this.canvas) });
     if (includeAxes) drawAxesOverlay(context, axisDirectionsFromView(this.viewMatrix), width, height, annotationScale);
+    if (textLabels?.length) drawTextLabelsOverlay(context, textLabels, width, height, annotationScale,
+      { includeBackground, theme: legendExportTheme(this.canvas) });
     return exportCanvas;
   }
 

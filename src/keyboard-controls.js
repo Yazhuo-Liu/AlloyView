@@ -1,7 +1,8 @@
 import { KeyboardCommandRegistry, keyboardGearScale, normalizeShortcutKey, shouldIgnoreShortcut } from './keyboard-commands.js';
+import { CRYSTAL_NUDGE_STEP } from './render/crystal-drag.js';
 
 /** Register real camera/trajectory/slice actions and a viewport shortcut dialog. */
-export function initializeKeyboardControls({ renderer, getSliceControls = () => null, onEdit = () => {} } = {}) {
+export function initializeKeyboardControls({ renderer, getSliceControls = () => null, getCrystalDrag = () => null, onEdit = () => {} } = {}) {
   const document = renderer.canvas.ownerDocument;
   const viewport = renderer.canvas.parentElement;
   const toolbar = document.getElementById('export-png')?.parentElement;
@@ -83,6 +84,14 @@ export function initializeKeyboardControls({ renderer, getSliceControls = () => 
       handler: () => { onEdit(); getSliceControls().stepSelected(1); } },
     { id: 'slice.flip', label: 'Flip selected plane retained side', group: 'Slices', bindings: ['Shift+f'], enabled: () => sliceEnabled(true),
       handler: () => { onEdit(); getSliceControls().flipSelected(); } },
+    clickCommand('origin.move-crystal', 'Move crystal mode · drag through periodic boundaries', 'Periodic origin', ['m'], 'origin-drag-mode'),
+    // Each step moves the crystal along a periodic cell vector by 0.05 at gear 5.
+    ...['a', 'b', 'c'].flatMap((axis, index) => [1, -1].map(sign => ({
+      id: `origin.move-${axis}-${sign > 0 ? 'forward' : 'back'}`, label: `Move crystal ${sign > 0 ? '+' : '−'}${axis} by one step`,
+      group: 'Periodic origin', bindings: [`${sign > 0 ? '' : 'Shift+'}${'xyz'[index]}`],
+      enabled: () => Boolean(getCrystalDrag()?.canNudge(index)),
+      handler: ({ scale }) => getCrystalDrag().nudge(index, sign * CRYSTAL_NUDGE_STEP * scale),
+    }))),
     clickCommand('image.png', 'Download PNG', 'Interface', ['p'], 'export-png'),
     { id: 'interface.theme', label: 'Switch light / dark theme', group: 'Interface', bindings: ['d'],
       handler: () => document.getElementById(document.documentElement.dataset.theme === 'dark' ? 'theme-light' : 'theme-dark').click() },
@@ -103,6 +112,7 @@ export function initializeKeyboardControls({ renderer, getSliceControls = () => 
         const label = document.createElement('span'); label.textContent = command.label;
         const keys = document.createElement('span'); keys.className = 'keyboard-command-keys';
         for (const binding of command.bindings) { const key = document.createElement('kbd'); key.textContent = binding; keys.append(key); }
+        if (!command.bindings.length) keys.textContent = 'Not assigned';
         const change = document.createElement('button'); change.type = 'button'; change.textContent = capture === command.id ? 'Press a key…' : 'Change';
         change.setAttribute('aria-label', `Change shortcut for ${command.label}`);
         change.addEventListener('click', () => { capture = command.id; status.textContent = `Press a key for ${command.label}. Escape cancels.`; renderCommands(); groups.querySelector(`[data-command="${command.id}"] button`).focus(); });

@@ -43,12 +43,18 @@ play/pause act once per press.
 | Space | Play / pause trajectory |
 | , / . | Move selected slice back / forward by its own step |
 | Shift + F | Flip the selected slice's retained side |
+| M | Toggle Move crystal (drag through periodic boundaries) |
+| X / Y / Z | Move the crystal +a / +b / +c by 0.05 × gear scale |
+| Shift + X / Y / Z | Move the crystal −a / −b / −c |
 | P | Download PNG with the current image settings |
 | D | Switch light / dark theme |
 | ? | Open the shortcuts dialog |
 
-Slice steps use the plane's own step in Å and are independent of the camera
-gear. A selected plane can be moved after switching to another tool; flip is
+Crystal moves shift the periodic display origin by 0.05 of a cell vector at
+gear 5 and scale with the gear; they act once per press, are unavailable along
+nonperiodic directions, and apply exactly like a typed origin (see
+[Drag the crystal](display.md#drag-the-crystal)). Slice steps use the plane's
+own step in Å and are independent of the camera gear. A selected plane can be moved after switching to another tool; flip is
 unavailable for slabs. Frame commands use the existing trajectory controls,
 including the first/last boundary checks and incremental indexing.
 
@@ -64,8 +70,11 @@ If another command already uses the key, the dialog reports the conflict and
 keeps the existing assignments. Press another key or Escape to cancel capture.
 **Reset defaults** restores every initial binding and gear 5. Bindings and the
 gear are stored in versioned localStorage and survive reload; disabled browser
-storage still allows changes for the current session. Malformed or conflicting
-saved settings fall back to the defaults.
+storage still allows changes for the current session. Saved choices take
+precedence over defaults added in later versions. A new command whose default
+key you already use keeps only its other defaults, and may be shown as **Not
+assigned** until you give it a key. Saved settings that are malformed, or that
+conflict with each other, fall back to the defaults.
 
 The native modal dialog confines Tab focus, supports Escape and restores focus
 to the opener. It follows the theme and adapts to narrow screens. The dialog and

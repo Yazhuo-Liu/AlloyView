@@ -12,6 +12,8 @@ export const BUILTIN_TOOLS = Object.freeze([
   { id: 'displacement', label: 'Displacement', analysis: true },
   { id: 'statistics', label: 'Statistics', analysis: true },
   { id: 'binning', label: 'Binning', analysis: true },
+  { id: 'timeSeries', label: 'Time series' },
+  { id: 'textLabels', label: 'Labels' },
   { id: 'cna', label: 'CNA', analysis: true },
   { id: 'dxa', label: 'DXA', analysis: true },
   { id: 'centrosymmetry', label: 'Symmetry', analysis: true },

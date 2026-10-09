@@ -77,11 +77,10 @@ test('valid saved rebinding and gear survive reload, including keys freed by lat
 
 test('malformed, older, conflicting or reserved saved bindings preserve defaults', () => {
   for (const value of ['{', '{}', JSON.stringify({ version: 0, bindings: { 'camera.left': ['h'] } }),
-    JSON.stringify({ version: 1, bindings: { 'camera.left': ['+'] }, gear: 9 }),
+    JSON.stringify({ version: 1, bindings: { 'camera.left': ['+'], 'camera.zoom': ['+'] }, gear: 9 }),
     JSON.stringify({ version: 1, bindings: { 'camera.left': ['0'] } }),
     JSON.stringify({ version: 1, bindings: { 'camera.left': ['h', 'h'] } }),
     JSON.stringify({ version: 1, bindings: { 'camera.left': ['Ctrl+h'] } }),
-    JSON.stringify({ version: 1, bindings: { 'camera.left': [] } }),
     JSON.stringify({ version: 1, bindings: [] })]) {
     const registry = new KeyboardCommandRegistry(commands(), { storage: storage(value) });
     assert.deepEqual(registry.byId.get('camera.left').bindings, ['ArrowLeft']); assert.equal(registry.gear, 5);
@@ -124,4 +123,30 @@ test('scrolling keys stay with focused panels and scrollable regions, as on ordi
   assert.equal(ignored('ArrowLeft', legendButton), false, 'a region that only scrolls vertically keeps horizontal keys');
   assert.equal(ignored('q', button), false, 'letter shortcuts remain global');
   assert.equal(scrollKeyBelongsToFocus({ key: 'ArrowLeft', target: null }, viewport), false);
+});
+
+test('a newer default key never discards saved shortcuts: the new command yields the taken key', () => {
+  const calls = [];
+  // The user saved h for Orbit left before "camera.zoom" gained h as a default.
+  const withNewDefault = commands(calls).map(command => command.id === 'camera.zoom' ? { ...command, bindings: ['+', 'h'] } : command);
+  const saved = storage(JSON.stringify({ version: 1, gear: 7, bindings: { 'camera.left': ['h'], 'frames.next': [']'] } }));
+  const registry = new KeyboardCommandRegistry(withNewDefault, { storage: saved });
+  assert.deepEqual(registry.byId.get('camera.left').bindings, ['h'], 'the saved choice survives');
+  assert.deepEqual(registry.byId.get('camera.zoom').bindings, ['+'], 'the new command keeps only its untaken default');
+  assert.equal(registry.gear, 7);
+  // A command whose only default was taken starts unassigned and can be bound later.
+  const onlyDefault = commands(calls).map(command => command.id === 'camera.zoom' ? { ...command, bindings: ['h'] } : command);
+  const unassigned = new KeyboardCommandRegistry(onlyDefault, { storage: storage(JSON.stringify({ version: 1, bindings: { 'camera.left': ['h'] } })) });
+  assert.deepEqual(unassigned.byId.get('camera.zoom').bindings, []);
+  assert.equal(unassigned.execute('h', {}), true);
+  assert.equal(calls.length, 1, 'h runs the saved command, not the unassigned one');
+  unassigned.rebind('camera.zoom', 'z');
+  assert.deepEqual(unassigned.byId.get('camera.zoom').bindings, ['z']);
+  // Corrupt or self-conflicting saved data still falls back to all defaults.
+  const conflicting = new KeyboardCommandRegistry(commands(calls), { storage: storage(JSON.stringify({ version: 1,
+    bindings: { 'camera.left': ['+'], 'camera.zoom': ['+', '='] } })) });
+  assert.deepEqual(conflicting.byId.get('camera.left').bindings, ['ArrowLeft']);
+  // A saved empty list is a deliberate unassignment and round-trips.
+  const empty = new KeyboardCommandRegistry(commands(calls), { storage: storage(JSON.stringify({ version: 1, bindings: { 'camera.left': [] } })) });
+  assert.deepEqual(empty.byId.get('camera.left').bindings, []);
 });

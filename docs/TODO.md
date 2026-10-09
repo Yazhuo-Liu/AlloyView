@@ -1,6 +1,6 @@
 # Improvement backlog
 
-Last updated: 2026-10-08 (phase 1 completed; phase 2 in progress)
+Last updated: 2026-10-09 (phases 1 and 2 completed; A8 dropped)
 
 This backlog collects a performance and parallelism audit of AlloyView and a
 feature comparison with OVITO and AtomEye. Work through it in phase order.
@@ -485,11 +485,49 @@ weighted kernel and CPU/GPU parity tests.
 
 ### O12. Text labels and time series
 
+**Status:** Done 2026-10-09 (`src/global-attributes.js`, `src/text-labels.js`,
+`src/time-series.js`).
+- **Global attributes:** per-frame values such as Frame, Timestep, cell,
+  cell strain against a reference frame, type, CNA, PTM and other category
+  fractions, property means, DXA length, density and families, and cluster and
+  Wigner–Seitz counts. Wherever the summary CSV has the same value, the
+  attribute matches it exactly.
+- **Text labels:** templates like `[CNA.FCC.fraction:.1%]` are parsed safely,
+  without evaluation; unknown names render as `[?…]`. Labels appear on screen
+  and in PNG/JPG, chosen-resolution, six-view, second-view and frame-ZIP
+  images, each with its own frame's values.
+- **Time series:** file values are read in the background. Analysis values are
+  recorded from displayed frames, and "Visit frames" fills the rest. Units get
+  shared panels, missing points are shown, and the series exports to CSV.
+- **Follow-ups:**
+  - Background analysis of frames that are not displayed.
+  - Keeping on-screen labels clear of the toolbars.
+  - Chart PNG export.
+
 **Effort:** M. Stamp timestep, strain or phase fractions on PNG and frame-ZIP
 exports, and plot per-frame values. OVITO's text label overlay is Basic; time
 series is Pro-only and must be implemented independently.
 
 ### O13. Ambient occlusion
+
+**Status:** Done 2026-10-09 (`src/render/ambient-occlusion.js`,
+`src/ambient-occlusion-controls.js`).
+- **Method:** 16–200 seeded Fibonacci directions render orthographic
+  ID passes at 256–2048 px. Visible pixels are counted per atom and replica,
+  divided by r², and normalized by the maximum. The color is scaled by
+  1 − intensity + intensity·AO.
+- **Coverage:** visibility, slices, the origin and replicas are respected, and
+  bonds take their endpoints' factors.
+- **Scheduling:** it runs in the background in 12 ms slices behind fences;
+  exports finish it synchronously.
+- **AO off** is pixel-identical to the previous build (26/26 hashes on
+  SwiftShader and the GTX 1080 Ti).
+- **Speed:** about 0.6–0.9 s for 60k–1M atoms on the GTX 1080 Ti; SwiftShader
+  is very slow.
+- **Follow-ups:**
+  - GPU reduction instead of CPU counting.
+  - Slice-aware framing.
+  - Updating during a crystal drag.
 
 **Effort:** M. Per-atom brightness from offscreen passes (OVITO
 `AmbientOcclusionModifier.cpp`); recompute on visibility, slice or frame changes.
@@ -497,10 +535,11 @@ series is Pro-only and must be implemented independently.
 ### O14. Orientation coloring
 
 **Status:** Done 2026-10-08 (`src/render/orientation-colors.js`). Completed PTM
-fits supply inverse-pole-figure colors for FCC/BCC and HCP, with separate
-stereographic keys and an editable sample direction, or sign-canonical
-quaternion RGB. Completed ideal-lattice strain fits can supply the same
-orientations. Unsupported or undefined fits remain neutral. Choices and
+fits supply inverse-pole-figure colors for cubic (FCC, BCC, SC, cubic
+diamond) and hexagonal (HCP, hexagonal diamond, graphene) structures, with
+separate stereographic keys and an editable sample direction, or Rodrigues RGB
+in the m−3m/6/mmm fundamental zone. Completed ideal-lattice strain fits can
+supply the same orientations. Other and icosahedral atoms remain neutral. Choices and
 directions round-trip through configurations and appear in image exports.
 
 **Effort:** M, after O1. Color by PTM orientation (inverse-pole-figure or
@@ -551,6 +590,22 @@ persistently and optionally in exports.
 
 ### A6. Drag the crystal across periodic boundaries
 
+**Status:** Done 2026-10-09 (`src/render/crystal-drag.js`,
+`src/crystal-drag-controls.js`).
+- **Controls:** a "Move crystal" mode (toolbar or Display panel, including
+  touch), or Alt+drag. M toggles the mode, and X/Y/Z with Shift nudge the
+  crystal along a/b/c.
+- **Drag:** the screen drag maps to a reduced-origin shift along periodic axes
+  only, with triclinic cells handled correctly. Only shader uniforms change
+  during the drag, so there are no uploads and frames stay at vsync rate with
+  480k atoms. Bonds, arrows, site markers, trajectory lines and DXA lines are
+  previewed; Voronoi cells are hidden until release.
+- **Release and cancel:** release commits through `setPeriodicOrigin`, with
+  results bit-identical to typing the same origin. Escape cancels.
+- **Shortcut fix:** newer default keys now yield to saved shortcuts instead of
+  discarding them.
+- **Follow-up:** previewing Voronoi cells during the drag.
+
 **Effort:** M. Turn a screen drag into a periodic-origin shift, wrapping in the
 vertex shader during the drag and rebuilding bonds, vectors, DXA lines and
 Voronoi cells on release.
@@ -568,11 +623,6 @@ six-view size is the final contact-sheet size.
 **Effort:** M. Render to an offscreen antialiased framebuffer at the requested
 size, tiling beyond GPU limits, and scale legends and axes. The current export
 uses the canvas size with device pixel ratio capped at 2.
-
-### A8. Follow a growing trajectory
-
-**Effort:** M. Use File System Access handles to extend the byte index as a
-running simulation appends frames (Chromium only).
 
 ## Phase 3: large changes
 
@@ -626,6 +676,9 @@ and WebCodecs video encoding with a small vendored muxer.
 - AtomEye NetCDF, Python/Jupyter bridge (conflicts with browser-only, no-upload
   design), Voronoi polycrystal builder, EPS output, more native windows, MPI
   rendering and `.usr` color files.
+- Following a growing trajectory (former A8: extending the byte index while a
+  running simulation appends frames) was dropped on 2026-10-08; the project
+  does not need it.
 
 ## Sources
 

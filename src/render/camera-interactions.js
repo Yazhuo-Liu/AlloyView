@@ -25,12 +25,21 @@ export function installCameraInteractions(renderer) {
   }
   function reset() {
     const ids = [...touches.keys(), ...(drag ? [drag.id] : [])];
+    cancelCrystal();
     touches.clear();
     drag = gesture = lastTap = null;
     cancelBox();
     for (const id of ids) release(id);
   }
   function hideMarquee() { marquee?.remove(); marquee = null; }
+  // A "Move crystal" drag shifts the periodic display origin. Its controller
+  // (renderer.crystalDragController) previews in the shaders and commits on
+  // release; Escape, a second finger or an interrupted pointer cancel it.
+  function crystalPointer() {
+    return drag?.mode === 'crystal' ? drag : [...touches.values()].find(pointer => pointer.mode === 'crystal');
+  }
+  function cancelCrystal() { if (crystalPointer()) renderer.crystalDragController?.finish(false); }
+  function moveCrystal(pointer) { if (pointer.moved) renderer.crystalDragController?.update(pointer); }
   function cancelBox() {
     selectionJob += 1;
     renderer.selectionController?.abort();
@@ -72,7 +81,7 @@ export function installCameraInteractions(renderer) {
     });
   }
   function point(event) {
-    return { id: event.pointerId, x: event.clientX, y: event.clientY,
+    return { id: event.pointerId, x: event.clientX, y: event.clientY, pointerType: event.pointerType,
       startX: event.clientX, startY: event.clientY, moved: false, multi: false };
   }
   function update(pointer, event) {
@@ -131,10 +140,11 @@ export function installCameraInteractions(renderer) {
     canvas.focus?.({ preventScroll: true });
     if (event.pointerType === 'touch') {
       event.preventDefault();
-      if (drag) { const id = drag.id; drag = null; release(id); }
-      touches.set(event.pointerId, { ...point(event), mode: renderer.selectionInteraction?.mode === 'box' ? 'box' : 'rotate' });
+      if (drag) { cancelCrystal(); const id = drag.id; drag = null; release(id); }
+      const crystal = !touches.size && renderer.crystalDragController?.accepts(event);
+      touches.set(event.pointerId, { ...point(event), mode: crystal ? 'crystal' : renderer.selectionInteraction?.mode === 'box' ? 'box' : 'rotate' });
       if (touches.size >= 2) {
-        cancelBox();
+        cancelBox(); cancelCrystal();
         for (const pointer of touches.values()) { pointer.multi = true; pointer.mode = 'rotate'; }
       } else if (renderer.selectionInteraction?.mode === 'box') {
         cancelBox(); showMarquee(touches.get(event.pointerId));
@@ -144,7 +154,8 @@ export function installCameraInteractions(renderer) {
       if (touches.size || drag || ![0, 1, 2].includes(event.button)) return;
       cancelBox();
       drag = { ...point(event), mode: event.button !== 0 || event.shiftKey ? 'pan'
-        : renderer.selectionInteraction?.mode === 'box' ? 'box' : 'rotate', button: event.button };
+        : renderer.crystalDragController?.accepts(event) ? 'crystal'
+          : renderer.selectionInteraction?.mode === 'box' ? 'box' : 'rotate', button: event.button };
       if (drag.mode === 'box') { event.preventDefault(); showMarquee(drag); }
     }
     canvas.setPointerCapture(event.pointerId);
@@ -156,11 +167,13 @@ export function installCameraInteractions(renderer) {
       const [dx, dy] = update(pointer, event);
       if (touches.size >= 2) transformTouches(measure());
       else if (pointer.mode === 'box') showMarquee(pointer);
+      else if (pointer.mode === 'crystal') moveCrystal(pointer);
       else rotate(dx, dy);
     } else if (drag?.id === event.pointerId) {
       const [dx, dy] = update(drag, event);
       if (drag.mode === 'box') { event.preventDefault(); showMarquee(drag); }
       else if (drag.mode === 'pan') pan(dx, dy);
+      else if (drag.mode === 'crystal') moveCrystal(drag);
       else rotate(dx, dy);
     } else return;
     renderer.requestRender();
@@ -175,6 +188,8 @@ export function installCameraInteractions(renderer) {
     if (drag?.id === event.pointerId) drag = null;
     gesture = measure();
     release(event.pointerId);
+    // Release commits through the ordinary origin path; a tap still selects.
+    if (pointer.mode === 'crystal') renderer.crystalDragController?.finish(event.type === 'pointerup' && pointer.moved && !pointer.multi);
     if (pointer.mode === 'box') {
       if (event.type === 'pointerup' && pointer.moved && !pointer.multi && renderer.selectionInteraction?.mode === 'box') finishBox(pointer);
       else cancelBox();

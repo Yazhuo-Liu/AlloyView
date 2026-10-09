@@ -112,6 +112,13 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   density, or the mean, sum, minimum, maximum or standard deviation of any
   numeric property, optionally within one selection or averaged over a
   trajectory, with an inspectable chart and a per-bin CSV.
+- Text labels over the viewport and in every image export, filled per frame
+  from global attributes such as `[Timestep]`, `[Strain.a:+.3f]` or
+  `[CNA.FCC.fraction:.1%]`; templates are parsed safely, never run as code.
+- Time series of global attributes (cell, strain, timestep, property means,
+  crystal fractions, DXA density, defect and cluster counts) against frame or
+  timestep. File values are read in the background; analysis values are
+  recorded as frames are analyzed, with gaps shown and a CSV table.
 - CSV export for the complete statistical summary, scalar statistics,
   categorical populations, coordination/RDF and bond distributions, Q4/Q6,
   Voronoi cells/faces, DXA families/lines and per-atom properties. A persistent
@@ -156,6 +163,10 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   exports keep the legend labels and color keys without a filled legend panel.
   Image exports can use the current viewport, resolution presets or a custom
   size up to 32 megapixels, with tiled rendering for larger GPU targets.
+- Optional [ambient occlusion](docs/features/display.md#ambient-occlusion):
+  per-atom brightness from offscreen index renders in many directions,
+  respecting visibility, slices and display replication, shared by both views
+  and every image export.
 - Configurable [keyboard shortcuts](docs/features/keyboard.md) for camera,
   trajectory, selected slice and image actions, with a 0–9 camera step gearbox
   and an accessible shortcut/rebinding dialog.
@@ -254,6 +265,8 @@ WebGL 2 support. No installation or account is needed.
    centers of mass and radii of gyration.
    **Binning** profiles or maps atom counts, number density or a reduced
    per-atom property in slabs or columns along the cell vectors.
+   **Time series** plots per-frame values such as strain or the FCC fraction;
+   **Labels** stamps them on the viewport and on exported images.
    **Displacement** calculates Cartesian components and magnitude against a
    reference frame for atom coloring, independently of arrows.
    **Vector arrows** displays existing displacement, imported force/velocity,

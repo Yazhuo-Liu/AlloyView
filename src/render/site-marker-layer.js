@@ -1,5 +1,6 @@
 import { MAX_SLICE_PLANES, SLICE_EPSILON } from './slicing.js';
 import { periodicDisplayCoordinates } from './periodic-origin.js';
+import { CRYSTAL_DRAG_GLSL, CRYSTAL_DRAG_UNIFORMS, applyCrystalDragUniforms } from './crystal-drag.js';
 
 // Point markers at positions that carry no atom, such as vacant Wigner–Seitz
 // sites. They are camera-facing sphere impostors like atoms, with a dark rim so
@@ -11,6 +12,7 @@ layout(location=0) in vec2 aCorner;
 layout(location=1) in vec3 aCenter;
 layout(location=2) in vec3 aColor;
 layout(location=3) in vec3 aFractional;
+${CRYSTAL_DRAG_GLSL}
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform float uRadius;
@@ -27,6 +29,8 @@ out vec3 vColor;
 out vec3 vCenterView;
 void main() {
   vec3 worldCenter = aCenter + uReplicaOffset;
+  vec3 dragStep = crystalDragStep(aFractional);
+  if (uCrystalDrag) worldCenter += uCrystalCell * dragStep;
   vec4 centerView = uView * vec4(worldCenter, 1.0);
   gl_Position = uProjection * (centerView + vec4(aCorner * uRadius, 0.0, 0.0));
   vCorner = aCorner;
@@ -34,7 +38,7 @@ void main() {
   vCenterView = centerView.xyz;
   bool visible = true;
   if (uSliceMode == 0) {
-    visible = (aFractional[uSliceAxis] + uReplicaIndex[uSliceAxis]) / uRepetitions[uSliceAxis] <= uSliceMaximum;
+    visible = (aFractional[uSliceAxis] + dragStep[uSliceAxis] + uReplicaIndex[uSliceAxis]) / uRepetitions[uSliceAxis] <= uSliceMaximum;
   } else {
     for (int plane = 0; plane < ${MAX_SLICE_PLANES}; plane++) {
       if (plane >= uSliceCount) break;
@@ -84,7 +88,7 @@ export class SiteMarkerLayer {
     this.gl = gl;
     this.program = createProgram(gl);
     this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uRadius', 'uSliceAxis', 'uSliceMaximum', 'uSliceMode',
-      'uSliceCount', 'uSlicePlanes[0]', 'uReplicaOffset', 'uReplicaIndex', 'uRepetitions'].map(name => [name, gl.getUniformLocation(this.program, name)]));
+      'uSliceCount', 'uSlicePlanes[0]', 'uReplicaOffset', 'uReplicaIndex', 'uRepetitions', ...CRYSTAL_DRAG_UNIFORMS].map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.vao = gl.createVertexArray();
     this.quadBuffer = gl.createBuffer();
     this.positionBuffer = gl.createBuffer();
@@ -183,6 +187,8 @@ export class SiteMarkerLayer {
     gl.uniform1i(u.uSliceCount, renderer.sliceCount ?? 0);
     gl.uniform4fv(u['uSlicePlanes[0]'], renderer.slicePlaneValues ?? new Float32Array(MAX_SLICE_PLANES * 4));
     gl.uniform3f(u.uRepetitions, ...(renderer.repetitions ?? [1, 1, 1]));
+    // Markers are always wrapped, also beside unwrapped atoms.
+    applyCrystalDragUniforms(gl, u, renderer.crystalDrag, { markers: true });
     for (const replica of renderer.replicas ?? [{ indices: [0, 0, 0], offset: [0, 0, 0] }]) {
       gl.uniform3f(u.uReplicaOffset, ...replica.offset);
       gl.uniform3f(u.uReplicaIndex, ...replica.indices);

@@ -170,7 +170,9 @@ export class TrajectoryLineLayer {
   displayShift(renderer) {
     const cell = renderer.frame?.cell;
     if (!cell) return [0, 0, 0];
-    const origin = effectivePeriodicOrigin(renderer.periodicOrigin ?? [0, 0, 0], cell), h = cell.vectors;
+    // A crystal drag adds its (periodic-only) shift without rebuilding.
+    const drag = renderer.crystalDrag?.shift ?? [0, 0, 0];
+    const origin = effectivePeriodicOrigin(renderer.periodicOrigin ?? [0, 0, 0], cell).map((value, axis) => value + drag[axis]), h = cell.vectors;
     return [0, 1, 2].map(axis => -(origin[0] * h[axis] + origin[1] * h[3 + axis] + origin[2] * h[6 + axis]));
   }
 

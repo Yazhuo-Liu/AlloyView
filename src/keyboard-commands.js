@@ -81,7 +81,8 @@ export class KeyboardCommandRegistry {
   validateBindings(bindings) {
     const owners = new Map();
     for (let index = 0; index < this.commands.length; index++) {
-      if (!Array.isArray(bindings[index]) || !bindings[index].length || bindings[index].length > 8) throw new TypeError('Each command needs 1–8 shortcuts.');
+      // A command may be unassigned when a newer default was already taken by a saved choice.
+      if (!Array.isArray(bindings[index]) || bindings[index].length > 8) throw new TypeError('Each command takes at most 8 shortcuts.');
       for (const binding of bindings[index]) {
         if (!validateShortcutBinding(binding)) throw new TypeError('Use one key, optionally with Shift; 0–9 are reserved for step sizes.');
         if (owners.has(binding)) throw new TypeError(`${binding} is already assigned to ${this.commands[owners.get(binding)].label}.`);
@@ -95,7 +96,11 @@ export class KeyboardCommandRegistry {
     try {
       const saved = JSON.parse(this.storage?.getItem(this.storageKey) ?? 'null');
       if (!saved || saved.version !== SHORTCUT_STORAGE_VERSION || !saved.bindings || typeof saved.bindings !== 'object' || Array.isArray(saved.bindings)) return;
-      const candidate = this.commands.map(command => Object.hasOwn(saved.bindings, command.id) ? saved.bindings[command.id] : command.defaults);
+      // Saved choices win. A command added after the bindings were saved keeps
+      // only the defaults nobody has taken, so a new default never discards them.
+      const savedFor = command => Object.hasOwn(saved.bindings, command.id) ? saved.bindings[command.id] : null;
+      const claimed = new Set(this.commands.flatMap(command => Array.isArray(savedFor(command)) ? savedFor(command) : []));
+      const candidate = this.commands.map(command => savedFor(command) ?? command.defaults.filter(binding => !claimed.has(binding)));
       this.validateBindings(candidate); // Apply one valid map atomically, including keys freed by another command.
       this.commands.forEach((command, index) => { command.bindings = [...candidate[index]]; });
       if (Number.isInteger(saved.gear) && saved.gear >= 0 && saved.gear <= 9) this.gear = saved.gear;

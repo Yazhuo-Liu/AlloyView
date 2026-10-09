@@ -1,6 +1,7 @@
 import { invert3 } from '../data/model.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON } from './slicing.js';
 import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms } from './scalar-colormap.js';
+import { CRYSTAL_DRAG_GLSL, CRYSTAL_DRAG_UNIFORMS, applyCrystalDragUniforms } from './crystal-drag.js';
 
 // Atom textures and instance buffers have source-frame sizes. Repeating a skew
 // cell changes uniforms only; recoloring/filtering never walks every bond.
@@ -17,6 +18,7 @@ uniform sampler2D uColors;
 uniform sampler2D uFractional;
 uniform sampler2D uScalarValues;
 ${SCALAR_COLOR_GLSL}
+${CRYSTAL_DRAG_GLSL}
 uniform int uTextureWidth;
 uniform mat4 uView;
 uniform mat4 uProjection;
@@ -39,6 +41,12 @@ uniform bool uArrowHead;
 uniform bool uFlatMode;
 uniform bool uFixedUp;
 uniform vec3 uArrowUp;
+uniform bool uAmbientOcclusion;
+uniform float uOcclusionIntensity;
+uniform sampler2D uOcclusion;
+uniform int uOcclusionWidth;
+uniform int uAtomCount;
+uniform int uReplicaCount;
 out vec3 vNormal;
 out vec3 vWorld;
 out float vAlong;
@@ -46,6 +54,12 @@ flat out vec3 vColorFirst;
 flat out vec3 vColorSecond;
 flat out int vVisible;
 ivec2 atomUV(uint atom) { return ivec2(int(atom) % uTextureWidth, int(atom) / uTextureWidth); }
+// Bond halves take their atom's ambient occlusion in the displayed copy.
+float occlusion(vec3 replica, uint atom) {
+  int copy = clamp(int(replica.x + uRepetitions.x * (replica.y + uRepetitions.y * replica.z)), 0, uReplicaCount - 1);
+  int index = copy * uAtomCount + int(atom);
+  return texelFetch(uOcclusion, ivec2(index % uOcclusionWidth, index / uOcclusionWidth), 0).r;
+}
 bool sliceVisible(vec3 position, vec3 fractional, vec3 replica) {
   if (uSliceMode == 0) return (fractional[uSliceAxis] + replica[uSliceAxis]) / uRepetitions[uSliceAxis] <= uSliceMaximum;
   for (int plane = 0; plane < ${MAX_SLICE_PLANES}; plane++) {
@@ -58,7 +72,12 @@ void main() {
   ivec2 first = atomUV(aAtoms.x), second = atomUV(aAtoms.y);
   vec4 startData = texelFetch(uPositions, first, 0);
   vec4 endData = texelFetch(uPositions, second, 0);
+  vec3 firstFractional = texelFetch(uFractional, first, 0).xyz;
+  vec3 secondFractional = texelFetch(uFractional, second, 0).xyz;
+  // A crystal drag moves each endpoint with its atom's rewrapped image.
+  vec3 firstStep = crystalDragStep(firstFractional), secondStep = crystalDragStep(secondFractional);
   vec3 start = startData.xyz + uReplicaOffset;
+  if (uCrystalDrag) start += uCrystalCell * firstStep;
   bool validVector = !any(isnan(aVector)) && !any(isinf(aVector));
   vec3 delta = validVector ? aVector * uScale : vec3(0.0);
   float vectorLength = length(delta);
@@ -93,18 +112,21 @@ void main() {
   float secondScalar = uScalarColorEnabled ? texelFetch(uScalarValues, second, 0).r : 0.0;
   vColorFirst = uVectorMode ? uVectorColor : scalarColor(firstScalar, firstColor.a > 0.5, firstColor.rgb);
   vColorSecond = uVectorMode ? uVectorColor : scalarColor(secondScalar, secondColor.a > 0.5, secondColor.rgb);
-  vec3 firstFractional = texelFetch(uFractional, first, 0).xyz;
-  vec3 secondFractional = texelFetch(uFractional, second, 0).xyz;
   vec3 secondReplica = uReplicaIndex + aShift;
+  if (uCrystalDrag) secondReplica += round(firstStep - secondStep);
+  if (uAmbientOcclusion && !uVectorMode) {
+    vColorFirst *= mix(1.0, occlusion(uReplicaIndex, aAtoms.x), uOcclusionIntensity);
+    vColorSecond *= mix(1.0, occlusion(secondReplica, aAtoms.y), uOcclusionIntensity);
+  }
   bool endpointInDisplay = uVectorMode || (all(greaterThanEqual(secondReplica, vec3(0.0))) && all(lessThan(secondReplica, uRepetitions)));
   // Ordinary atom/category filters leave the independent arrow layer visible.
   // Selection hiding uses a negative flag to hide the atom's attached arrows.
   bool shown = (uVectorMode ? (startData.w >= 0.0 && endData.w >= 0.0)
       : (startData.w > 0.5 && endData.w > 0.5))
     && vectorLength > 1e-12 && segmentLength > 1e-12 && endpointInDisplay;
-  shown = shown && sliceVisible(start, firstFractional, uReplicaIndex);
+  shown = shown && sliceVisible(start, firstFractional + firstStep, uReplicaIndex);
   if (!uVectorMode) shown = shown && scalarShown(firstScalar) && scalarShown(secondScalar);
-  if (!uVectorMode) shown = shown && sliceVisible(start + delta, secondFractional, secondReplica);
+  if (!uVectorMode) shown = shown && sliceVisible(start + delta, secondFractional + secondStep, secondReplica);
   vVisible = shown ? 1 : 0;
   // Hidden bonds and arrows are dropped before rasterization.
   if (!shown) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -261,7 +283,8 @@ export class AtomPrimitiveLayer {
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions', 'uSliceAxis', 'uSliceMaximum', 'uSliceMode', 'uSliceCount',
       'uSlicePlanes[0]', 'uVectorMode', 'uVectorColor', 'uScale', 'uRadius', 'uExtent',
       'uAnchor', 'uHeadLength', 'uArrowHead', 'uFlatMode', 'uFixedUp', 'uArrowUp', 'uScalarValues',
-      ...SCALAR_COLOR_UNIFORMS].map(name => [name, gl.getUniformLocation(this.program, name)]));
+      'uAmbientOcclusion', 'uOcclusionIntensity', 'uOcclusion', 'uOcclusionWidth', 'uAtomCount', 'uReplicaCount',
+      ...SCALAR_COLOR_UNIFORMS, ...CRYSTAL_DRAG_UNIFORMS].map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.textures = Array.from({ length: 3 }, () => {
       const texture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -453,9 +476,38 @@ export class AtomPrimitiveLayer {
     this.setVectorFields({ atomCount: 0 }, []);
   }
 
+  /** Upload per-displayed-atom occlusion values once per result, when bonds draw. */
+  uploadOcclusion(factors) {
+    if (this.occlusionSource === factors) return;
+    const gl = this.gl, maximum = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    const width = Math.min(maximum, Math.max(1, Math.ceil(Math.sqrt(factors.length))));
+    const height = Math.max(1, Math.ceil(factors.length / width));
+    if (height > maximum) throw new Error('Ambient occlusion exceeds this GPU’s texture capacity for bonds.');
+    const values = new Float32Array(width * height); values.set(factors);
+    if (!this.occlusionTexture) {
+      this.occlusionTexture = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE0 + 4); gl.bindTexture(gl.TEXTURE_2D, this.occlusionTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+    gl.activeTexture(gl.TEXTURE0 + 4); gl.bindTexture(gl.TEXTURE_2D, this.occlusionTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, width, height, 0, gl.RED, gl.FLOAT, values);
+    gl.activeTexture(gl.TEXTURE0);
+    this.occlusionSource = factors; this.occlusionWidth = width;
+  }
+
   clear() {
     this.clearInstances();
     this.scalarColorInput = null;
+    if (this.occlusionTexture) {
+      // Release the source-sized texture; the object stays reusable.
+      this.gl.activeTexture(this.gl.TEXTURE0 + 4); this.gl.bindTexture(this.gl.TEXTURE_2D, this.occlusionTexture);
+      this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.R32F, 1, 1, 0, this.gl.RED, this.gl.FLOAT, new Float32Array(1));
+      this.gl.activeTexture(this.gl.TEXTURE0);
+      this.occlusionSource = null; this.occlusionWidth = 1;
+    }
     this.positionValues = this.colorValues = this.fractionalValues = null;
     this.width = this.height = 1;
     this.uploadTexture(0, new Float32Array(4), this.gl.RGBA32F, this.gl.FLOAT);
@@ -512,7 +564,17 @@ export class AtomPrimitiveLayer {
     gl.uniform1i(u.uPositions, 0); gl.uniform1i(u.uColors, 1); gl.uniform1i(u.uFractional, 2);
     gl.uniform1i(u.uScalarValues, renderer.scalarColorPreview ? 3 : 2);
     applyScalarColorUniforms(gl, u, renderer.scalarColorPreview);
+    applyCrystalDragUniforms(gl, u, renderer.crystalDrag);
     gl.uniform1i(u.uTextureWidth, this.width);
+    const occlusion = this.bonds && this.bondOptions.visible && renderer.ambientOcclusionActive?.() ? renderer.ambientOcclusionFactors : null;
+    gl.uniform1i(u.uAmbientOcclusion, occlusion ? 1 : 0);
+    if (occlusion) {
+      this.uploadOcclusion(occlusion);
+      gl.activeTexture(gl.TEXTURE0 + 4); gl.bindTexture(gl.TEXTURE_2D, this.occlusionTexture); gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(u.uOcclusion, 4); gl.uniform1i(u.uOcclusionWidth, this.occlusionWidth);
+      gl.uniform1i(u.uAtomCount, renderer.atomCount); gl.uniform1i(u.uReplicaCount, renderer.replicas.length);
+      gl.uniform1f(u.uOcclusionIntensity, renderer.ambientOcclusionIntensity);
+    } else gl.uniform1i(u.uOcclusion, 0);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix);
     gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
     gl.uniform3f(u.uRepetitions, ...renderer.repetitions);

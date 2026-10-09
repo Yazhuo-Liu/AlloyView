@@ -5,6 +5,7 @@ import { DEFAULT_SLAB_THICKNESS, DEFAULT_SLICE_STEP, MAX_MILLER_INDEX, MAX_SLICE
 import { BUILTIN_COLOR_MODES, BUILTIN_SCALAR_COLOR_MODES } from './render/color-quantities.js';
 import { normalizeExportResolution } from './render/export-resolution.js';
 import { normalizeOrientationSettings } from './render/orientation-colors.js';
+import { AMBIENT_OCCLUSION_DIRECTIONS, AMBIENT_OCCLUSION_RESOLUTIONS, DEFAULT_AMBIENT_OCCLUSION } from './render/ambient-occlusion.js';
 import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from './selection-groups.js';
 import { DXA_DEFAULTS, DXA_FAMILIES } from './analysis/dxa.js';
 import { CRYSTAL_VISIBILITY_SOURCE_NAMES } from './crystal-visibility-controls.js';
@@ -13,6 +14,9 @@ import { normalizeExternalPropertyState } from './io/external-properties.js';
 import { normalizeComputedPropertyState } from './computed-properties.js';
 import { BINNING_AXES, BINNING_QUANTITIES, BINNING_REDUCTIONS, MAX_BINS_PER_AXIS, MAX_TOTAL_BINS } from './analysis/spatial-binning.js';
 import { MAX_SMOOTHING_WINDOW, MAX_TRAJECTORY_LINE_WIDTH, MIN_TRAJECTORY_LINE_WIDTH } from './data/trajectory-tools.js';
+import { normalizeTextLabelState } from './text-labels.js';
+import { normalizeTimeSeriesState } from './time-series.js';
+import { normalizeGlobalAttributeState } from './global-attribute-source.js';
 
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
@@ -25,7 +29,7 @@ export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
 export const MAX_CONFIGURATION_TRAJECTORY_LINE_IDS = 100_000;
 
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'lammps-data', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence', 'poscar']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'trajectory']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'trajectory', 'timeSeries', 'textLabels']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const COORDINATION_CUTOFF_CHOICES = new Set(['custom', ...COORDINATION_CUTOFF_PRESETS.map(preset => preset.symbol)]);
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
@@ -176,6 +180,15 @@ function normalizeConfiguration(value, fromSnapshot) {
     && Math.max(trajectoryLines.firstFrame, trajectoryLines.lastFrame ?? 0) >= configuration.source.frameCount) {
     fail('settings.extensions.trajectory.lines', 'must use frames smaller than the source frame count');
   }
+  const timeSeries = configuration.settings.extensions.timeSeries;
+  if (timeSeries && configuration.source?.frameCount !== undefined
+    && Math.max(timeSeries.firstFrame, timeSeries.lastFrame ?? 0) >= configuration.source.frameCount) {
+    fail('settings.extensions.timeSeries', 'must use frames smaller than the source frame count');
+  }
+  const strainReference = configuration.settings.extensions.globalAttributes?.strainReferenceFrame;
+  if (strainReference !== undefined && configuration.source?.frameCount !== undefined && strainReference >= configuration.source.frameCount) {
+    fail('settings.extensions.globalAttributes.strainReferenceFrame', 'must be smaller than the source frame count');
+  }
   for (const [index, file] of (configuration.settings.extensions.externalProperties?.files ?? []).entries()) {
     if (configuration.source?.frameCount !== undefined && file.frameIndex >= configuration.source.frameCount) {
       fail(`settings.extensions.externalProperties.files[${index}].frameIndex`, 'must be smaller than the source frame count');
@@ -249,7 +262,7 @@ function normalizeSelections(value) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'trajectory']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'trajectory', 'textLabels', 'timeSeries', 'globalAttributes']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
   const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
   const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage', 'tiles']);
@@ -337,6 +350,10 @@ function normalizeExtensions(value, fromSnapshot) {
     ...(input.binning === undefined ? {} : { binning: normalizeBinning(input.binning, `${path}.binning`) }),
     ...(input.wignerSeitz === undefined ? {} : { wignerSeitz: normalizeWignerSeitz(input.wignerSeitz, `${path}.wignerSeitz`) }),
     ...(input.trajectory === undefined ? {} : { trajectory: normalizeTrajectory(input.trajectory, `${path}.trajectory`) }),
+    // Label templates are stored as text and parsed again by the safe template parser; no values are stored.
+    ...(input.textLabels === undefined ? {} : { textLabels: normalizeTextLabelState(input.textLabels, { path: `${path}.textLabels` }) }),
+    ...(input.timeSeries === undefined ? {} : { timeSeries: normalizeTimeSeriesState(input.timeSeries, { path: `${path}.timeSeries` }) }),
+    ...(input.globalAttributes === undefined ? {} : { globalAttributes: normalizeGlobalAttributeState(input.globalAttributes, { path: `${path}.globalAttributes` }) }),
     ...(voronoiDisplay === null ? {} : { voronoiDisplay: {
       enabled: boolean(voronoiDisplay.enabled, `${path}.voronoiDisplay.enabled`, false),
       allEnabled: boolean(voronoiDisplay.allEnabled, `${path}.voronoiDisplay.allEnabled`, false),
@@ -653,7 +670,7 @@ function normalizeVoronoiRadical(voronoi, path) {
 }
 
 function normalizeDisplay(value) {
-  const input = record(value, 'settings.display', ['coordinateMode', 'colorMode', 'radiusPercent', 'background', 'showCell', 'showAxes', 'png', 'projectionMode', 'periodicOrigin', 'cellWireframeMode']);
+  const input = record(value, 'settings.display', ['coordinateMode', 'colorMode', 'radiusPercent', 'background', 'showCell', 'showAxes', 'png', 'projectionMode', 'periodicOrigin', 'cellWireframeMode', 'ambientOcclusion']);
   const png = record(input.png ?? {}, 'settings.display.png', ['background', 'legend', 'axes', 'resolution']);
   let resolution;
   try { resolution = normalizeExportResolution(png.resolution ?? {}); }
@@ -679,6 +696,19 @@ function normalizeDisplay(value) {
       resolution,
     },
     projectionMode: choice(input.projectionMode ?? 'perspective', 'settings.display.projectionMode', new Set(['perspective', 'orthographic'])),
+    // Recipes saved before ambient occlusion stay byte-for-byte unchanged.
+    ...(input.ambientOcclusion === undefined ? {} : { ambientOcclusion: normalizeAmbientOcclusion(input.ambientOcclusion) }),
+  };
+}
+
+function normalizeAmbientOcclusion(value) {
+  const path = 'settings.display.ambientOcclusion';
+  const input = record(value, path, ['enabled', 'intensity', 'directions', 'resolution']);
+  return {
+    enabled: boolean(input.enabled, `${path}.enabled`, false),
+    intensity: number(input.intensity ?? DEFAULT_AMBIENT_OCCLUSION.intensity, `${path}.intensity`, 0, 1),
+    directions: choice(input.directions ?? DEFAULT_AMBIENT_OCCLUSION.directions, `${path}.directions`, new Set(AMBIENT_OCCLUSION_DIRECTIONS)),
+    resolution: choice(input.resolution ?? DEFAULT_AMBIENT_OCCLUSION.resolution, `${path}.resolution`, new Set(AMBIENT_OCCLUSION_RESOLUTIONS)),
   };
 }
 

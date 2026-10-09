@@ -1,0 +1,18 @@
+.view-toolbar #toggle-crystal-drag { display: grid; place-items: center; }
+.view-toolbar #toggle-crystal-drag[aria-pressed="true"] { color: var(--cyan); background: var(--accent-soft); box-shadow: inset 0 -2px var(--cyan); }
+.view-toolbar #toggle-crystal-drag:disabled { cursor: not-allowed; color: var(--disabled-text); background: transparent; box-shadow: none; }
+.periodic-origin-actions #origin-drag-mode { grid-column: 1 / -1; }
+.periodic-origin-actions #origin-drag-mode[aria-pressed="true"] { border-color: var(--cyan); background: var(--accent-soft); color: var(--accent-text); }
+/* The mode cursor wins over the selection crosshair: the mode owns left drags. */
+#viewport.crystal-drag-mode { cursor: grab !important; }
+#viewport.crystal-dragging { cursor: grabbing !important; }
+.crystal-drag-status { position: absolute; z-index: 18; bottom: 18px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; pointer-events: none; border: 1px solid var(--line-strong); border-radius: 6px; padding: 7px 12px; background: var(--overlay-strong); color: var(--text-soft); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.crystal-drag-status[hidden] { display: none; }
+.viewport-panel.trajectory-visible .crystal-drag-status { bottom: 108px; }
+@media (max-width: 920px) {
+  /* The phone toolbar keeps its four-button footprint beside Details and
+     View; phones toggle the mode from Display → Periodic display origin. */
+  .view-toolbar #toggle-crystal-drag { display: none; }
+  /* Below the top row, clear of the legend toggle and trajectory bar. */
+  .crystal-drag-status, .viewport-panel.trajectory-visible .crystal-drag-status { top: 58px; bottom: auto; font-size: 11px; }
+}

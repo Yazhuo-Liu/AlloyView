@@ -6,7 +6,7 @@ Configuration import/export is always available directly below the structure sum
 
 ## Restore logic
 
-The JSON stores file names, byte sizes, available relative paths, the frame index, and display/analysis parameters. It includes camera position/direction, roll, projection and field of view, periodic display origin, cell outline colors, theme, coloring, filters, appearance overrides, slices, replication, all named vector fields, measurements, the second view, the active tool category and enabled analyses. It excludes original atom data and computed result arrays.
+The JSON stores file names, byte sizes, available relative paths, the frame index, and display/analysis parameters. It includes camera position/direction, roll, projection and field of view, periodic display origin, cell outline colors, ambient occlusion settings, theme, coloring, filters, appearance overrides, slices, replication, all named vector fields, measurements, the second view, the active tool category and enabled analyses. It excludes original atom data and computed result arrays.
 
 If the matching source is already open, restoration selects the saved frame, restores parameters and recalculates enabled analyses. Otherwise the configuration remains pending and lists the required source files. Reopening files with the matching names and sizes triggers restoration; relative paths distinguish identical names in different folders when available.
 
@@ -21,7 +21,11 @@ components can be binned.
 
 `settings.display.png.resolution` stores the image mode, custom width/height and
 aspect lock. Older recipes keep current-viewport exports and continuous numeric
-color legends. Keyboard bindings remain a local browser preference and are not
+color legends. `settings.display.ambientOcclusion` stores `enabled`,
+`intensity` (0–1), `directions` (16, 40, 100 or 200) and `resolution` (256,
+512, 1024 or 2048); the per-atom values are recalculated after import, and
+recipes without the entry restore [ambient occlusion](display.md#ambient-occlusion)
+off. Keyboard bindings remain a local browser preference and are not
 included in a shared configuration.
 
 External property files are recorded separately with their file metadata, ID or row-order mapping, import frame, and column names. Their numeric values are not embedded in the JSON. Files still loaded in the current session are reused. In a fresh session, reopen the source and select the requested property files under **Modification tools → External properties**. The panel shows which files are pending; colors and vector fields become available when their columns have been restored. Row-order imports use the original import frame to preserve the mapping when later frames reorder stable atom IDs.
@@ -37,6 +41,8 @@ Wigner–Seitz defect analysis is recorded in `settings.extensions.wignerSeitz`:
 Trajectory tools are recorded in `settings.extensions.trajectory`: `smoothing` (`enabled`, `window` 1–50 frames on each side) and `lines` (`enabled`, `source` `ids` or `group`, `selectionGroupId`, up to 100,000 `atomIds`, `firstFrame`, `lastFrame` or `null` for the last frame, `stride`, `visible`, `color`, `width` 0.5–16 px, `colorByTime` and `colorScheme`). A group source must name a saved selection group, and enabled lines must lie within the source frame count. Smoothing is applied before the saved frame is prepared; enabled lines are recalculated. Recipes without the extension restore unsmoothed coordinates and no lines. Inferred unwrapping needs no setting: a saved Unwrapped display mode restores it for trajectories without image data. See [Trajectory tools](trajectory-tools.md).
 
 Spatial binning is recorded in `settings.extensions.binning`: enabled state, `mode` (`1d` or `2d`), two `axes` (`a`, `b` or `c`; they must differ for a map), two `bins` counts (1–4,096 each, at most 1,048,576 in a map), `quantity` (`count`, `density` or `property`), `property` (a `property:` key or built-in position/speed key, required for `property`), `reduction` (`mean`, `sum`, `min`, `max` or `stddev`), `selectionGroupId` (a saved selection group), `averageFrames` and `colorScheme`. The property is resolved again by name in each frame, and no binned values are stored. Older recipes without the extension leave binning off.
+
+Text labels are recorded in `settings.extensions.textLabels` as up to 16 `{ id, enabled, text, position, offset, fontSize, color, box, boxColor }` entries and the selected label ID. Template text is at most 1,000 characters, may contain line breaks but no other control characters, and is parsed again by the template parser when shown; it is never executed. Time series settings are recorded in `settings.extensions.timeSeries`: up to 8 attribute names, zero-based `firstFrame`, `lastFrame` (`null` for the last frame), `stride`, `xAxis`, `separatePanels` and `autoCollect`; collected values are not stored. `settings.extensions.globalAttributes.strainReferenceFrame` is the zero-based frame for `Strain.*` attributes. Frame numbers must be smaller than the source frame count. These extensions are written only when used; recipes without them restore no labels and the default time series. See [Text labels](text-labels.md) and [Time series](time-series.md).
 
 Restoration recalculates enabled bond statistics through the saved CPU/GPU preference and Voronoi through CPU/Wasm, after restoring the physical structure and replication mode. Calculated arrays, histograms and exported CSV files are excluded from JSON. Once the analyses finish, the Statistics, Bonds, Voronoi and DXA CSV controls export the restored frame's results using the standard table schemas.
 

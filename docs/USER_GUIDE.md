@@ -198,8 +198,9 @@ panel follows these edits just as it follows mouse gestures.
 
 **[ / ]** change frames, **{ / }** go to the first/last frame, and **Space**
 plays or pauses a trajectory. **, / .** move the selected slice by its own
-step; **Shift + F** flips its retained side. **P** downloads a PNG using the
-current export settings. The dialog lists camera presets and the other keys.
+step; **Shift + F** flips its retained side. **M** toggles Move crystal and
+**X/Y/Z** move the crystal along the cell vectors (Shift reverses). **P**
+downloads a PNG using the current export settings. The dialog lists camera presets and the other keys.
 Shortcuts pause while typing or using a modal dialog, and browser modifier
 combinations remain available. Conflicting rebindings are refused; settings
 are saved locally when browser storage is available. See
@@ -222,6 +223,20 @@ continuous motion. Both views and their bonds,
 vectors, slices, picking and image exports use the adjusted display.
 Source coordinates, cell geometry and analysis results remain unchanged.
 Configurations save the fractional origin.
+
+To move the crystal with the pointer instead, turn on **Move crystal** (the
+four-arrow toolbar button on desktop, or **Drag crystal in view** in the same
+section on any screen) and drag the structure with the left mouse button or
+one finger; Alt-drag (Option-drag on macOS) works without the mode, and **M**
+toggles it. The atom under the pointer follows it in the plane of the screen;
+only periodic directions move. Clicks and taps still select atoms. Releasing
+applies the origin, rounded to four decimals, exactly as if it had been typed,
+and rebuilds bonds, DXA lines and Voronoi cells (Voronoi cells are hidden
+while dragging).
+**Escape** or a second finger cancels the drag, **Reset origin** undoes it,
+and **X/Y/Z** (Shift to reverse) move the crystal in steps of 0.05 cell
+vector. Slice planes stay in place while the crystal moves through them. See
+[Display](features/display.md#drag-the-crystal).
 
 ## Display replication
 
@@ -428,6 +443,12 @@ Wigner–Seitz defect analysis saves its enabled state, zero-based reference
 frame, affine mapping, site-marker choice (`vacancies`, `defects` or `all`),
 marker visibility and marker radius in `settings.extensions.wignerSeitz`;
 occupancies are recalculated after import.
+Text labels (template text, position, offsets, font size and colors) are saved
+in `settings.extensions.textLabels`, time series attribute names, frame range,
+axis and panel choices in `settings.extensions.timeSeries`, and the strain
+reference frame in `settings.extensions.globalAttributes`. They are written
+only when used; label text is validated and parsed again, and collected values
+are not stored.
 
 Trajectory smoothing (enabled state and frames on each side) and trajectory
 line settings (atom IDs or selection group, frame range, step and appearance)
@@ -865,6 +886,40 @@ frame in order and averages counts and densities per frame while pooling the
 samples of means and other statistics; it supports counts, density, positions,
 speed and file columns. See [Spatial binning](features/binning.md).
 
+## Text labels and time series
+
+Every frame has **global attributes**: scalar values with stable names such as
+`Frame`, `Timestep`, `AtomCount`, `Cell.volume`, `Cell.a`, `Strain.a`
+(engineering strain of a cell vector relative to a chosen reference frame),
+`Strain.volumetric`, `Type.Ni.fraction`, `Mean.c_pe` (the mean of a numeric
+property, including computed expressions), and, once the analysis has finished
+for the frame, `CNA.FCC.fraction`, `PTM.BCC.count`, `DXA.total_length`,
+`DXA.line_density`, `Clusters.cluster_count` or `WignerSeitz.vacancy_count`.
+Values that also appear in the Statistics **Structure summary** CSV are equal
+to its rows. The full list is in [Text labels](features/text-labels.md#global-attributes).
+
+**Labels**, in Visualization tools, overlays text such as
+`Timestep [Timestep] · FCC [CNA.FCC.fraction:.1%]` on the viewport at a
+corner, an edge or the center, with offsets, font size, color and an optional
+theme or colored box. Placeholders take printf/Python number formats
+(`.3f`, `.2e`, `,d`, `.1%`); `[[` and `]]` are literal brackets, and unknown or
+unavailable names appear as `[?Name]` and are listed in the panel. Templates
+are parsed, never run as code. Labels are stamped into PNG and JPG exports,
+scaled with the legend at chosen resolutions, once on a six-view sheet, in the
+second view's PNG, and into every image of a **Frame images** ZIP with that
+frame's own values.
+
+**Time series** plots chosen attributes against the frame number or timestep
+over a frame range and step. **Read file values** reads frames in the
+background for file attributes (cell, strain, timestep, type fractions and
+means of file columns) without changing the displayed frame; progress is shown
+and **Cancel** keeps what was read. Analysis attributes are recorded whenever
+their analysis finishes on the displayed frame, while stepping, playing or
+exporting frame images; **Visit frames** displays the frames still missing a
+value and returns to the starting frame. Missing values are gaps in the chart
+and empty cells in **Series CSV**. Attributes with different units are drawn in
+separate panels with a shared crosshair. See [Time series](features/time-series.md).
+
 Open **Displacement** to enable calculation against a selected reference frame.
 It uses stable atom IDs; equal-size frames without explicit IDs use row order
 with a warning that atom ordering must stay unchanged. Mixed ID schemes and
@@ -1074,6 +1129,21 @@ describes the final contact sheet; **Current view** retains the original
 3 × 2 sheet of viewport-sized images. Legends, axes and boundary annotations
 scale with the exported view. Camera controls and Details remain excluded.
 
+**Display → Ambient occlusion** darkens atoms that the surrounding structure
+hides from most directions, which makes surfaces, grooves, cut faces and
+defect cores easier to read. Check **Darken occluded atoms**, then adjust
+**Intensity** (0–1, applied instantly), **Quality** (16–200 sample directions)
+and **Buffer resolution** (256–2048 pixels; use more for larger structures).
+Values are recomputed in the background after frame, coordinate, origin,
+visibility, slice, radius or replication changes, while the previous shading
+stays on screen; the status line shows progress and **Cancel** stops it.
+Hidden and sliced-away atoms do not occlude. Display copies occlude each other
+and are shaded individually; bonds take their atoms' values. Both views and
+every image export, including each frame of a ZIP, use a complete result for
+the current inputs. With the switch off, images are identical to those without
+the feature. Settings are saved in configuration JSON. See
+[Display](features/display.md#ambient-occlusion) for the method and limits.
+
 ## Feature help and documentation
 
 Hover or keyboard-focus the **?** beside a detailed settings heading to read a
@@ -1108,6 +1178,8 @@ npm run test:browser:keyboard
 npm run test:browser:orientation-discrete
 # Custom image sizes, tiled pixels, transparency and every image export path:
 npm run test:browser:export-resolution
+# Ambient occlusion: buried vs surface atoms, exact Off, updates, exports, recipes, timings (--hardware for the GPU):
+npm run test:browser:ambient-occlusion
 # Miller planes, held stepping, flip, slabs, cut outlines in PNG and recipes:
 npm run test:browser:slice-sweep
 # Bond/Voronoi reference structures, CSV downloads and configuration replay:
@@ -1123,6 +1195,8 @@ npm run test:browser:voronoi-radical
 npm run test:browser:clusters
 # Spatial binning of a known crystal, CSV, frame updates, averages, recipes, phone layout and Worker parity:
 npm run test:browser:binning
+# Label overlay, labels in PNG/HD/six-view/second-view/frame ZIP images, time series values and CSV, recipes and phone layout:
+npm run test:browser:text-labels
 # Wigner–Seitz vacancies, interstitials, antisites, markers in PNG, affine mapping, CSV and recipes:
 npm run test:browser:wigner-seitz
 # Inferred unwrapping, smoothed CNA, trajectory lines, exports, recipes and phone layout (both isolation modes):

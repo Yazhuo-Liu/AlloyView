@@ -2,7 +2,8 @@ import { applyAppearance, findAtomIndex, hexColor, rgbHex } from './appearance.j
 import { radiusForElement } from './render/atomic-radii.js';
 import { colorsByType } from './render/palette.js';
 import { analysisProgressText, analysisBackendLabel, analysisBackendDetails } from './analysis/status.js';
-import { WebGLRenderer } from './render/webgl-renderer.js';
+import { WebGLRenderer, legendExportTheme } from './render/webgl-renderer.js';
+import { drawTextLabelsOverlay } from './render/text-label-overlay.js';
 import { cameraViewPreset } from './render/camera-presets.js';
 import { replaceAnalysisProperty, clearAnalysisResults } from './analysis/results.js';
 import { createReferenceMappingAsync, REFERENCE_STRAIN_FIELDS } from './analysis/reference-strain.js';
@@ -37,7 +38,7 @@ const canvasBlob = (canvas, type = 'image/png') => new Promise((resolve, reject)
  * invalidate pending results on source/frame edits. */
 export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFrameAt,
   getFrameIndex, getFrameCount, getFrames, getSourceVersion, getSelectedIndex, ensureIndexed = async () => {},
-  selectAtom, refresh, chooseProperty, getColorMode, getSelectionGroups = () => [], getColorChoiceVersion = () => 0, getPendingAnalysisKinds = () => [], getAnalysisPropertyKind = () => null, getExportOptions, showFrame,
+  selectAtom, refresh, chooseProperty, getColorMode, getSelectionGroups = () => [], getColorChoiceVersion = () => 0, getPendingAnalysisKinds = () => [], getAnalysisPropertyKind = () => null, getExportOptions, prepareExport = async () => {}, showFrame,
   stopPlayback, getFileStem, notify = () => {}, onEdit = () => {}, onMemoryChange = () => {},
   onBondParametersChange = () => {}, onBondStateChange = () => {}, getBondStatisticsEnabled = () => false }) {
   const jobs = Object.fromEntries(Object.keys(JOBS).map(kind => [kind, { enabled: false, parameters: null, controller: null, request: 0 }]));
@@ -684,6 +685,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     comparison.setBackground(rgbHex(renderer.background.map(value => value * 255)));
     comparison.setCellVisible(renderer.cellVisible); comparison.setRadiusScale(renderer.radiusScale);
     comparison.setCellWireframeMode(renderer.cellWireframeMode ?? 'mono');
+    // Occlusion is view-independent: the second view reuses the main result.
+    comparison.setAmbientOcclusion(renderer.ambientOcclusionFactors ?? null, { intensity: renderer.ambientOcclusionIntensity ?? 1 });
     comparison.setBonds(renderer.atomBonds ?? null,
       { visible: $('show-bonds').checked, radius: number('bonds-radius') });
     comparison.setVectorFields(renderer.atomVectorFields ?? []);
@@ -703,6 +706,11 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     const preview = renderer.scalarColorPreview;
     if (preview) comparison.setScalarColorPreview(preview.input.data, { ...preview, input: preview.input });
     else comparison.clearScalarColorPreview();
+  }
+  // A crystal drag changes only shader uniforms; the second view follows.
+  function syncCrystalDrag() {
+    if (!comparison?.frame || !$('compare-view').checked) return;
+    comparison.setCrystalDragShift(renderer.crystalDrag?.shift ?? null);
   }
   function syncComparisonToolbar() {
     if (!comparison?.frame || !comparisonContainer || !$('compare-view').checked) return;
@@ -847,6 +855,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     $('export-series-status').textContent = 'Preparing trajectory index…';
     try {
       await ensureIndexed({ signal: task.controller.signal });
+      await prepareExport({ signal: task.controller.signal });
       if (task.cancelled || task.source !== getSourceVersion() || !getFrame()) return;
       const first = number('export-series-first') - 1, last = number('export-series-last') - 1, step = number('export-series-step');
       if (![first, last, step].every(Number.isInteger) || first < 0 || last < first || last >= getFrameCount()) throw new Error('Choose a valid frame range and integer step.');
@@ -877,7 +886,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   async function exportViews() {
     if (!getFrame()) return;
     const camera = cameraSnapshot(renderer), views = ['front', 'back', 'left', 'right', 'top', 'bottom'];
-    const options = getExportOptions(), current = !options.resolution || options.resolution.mode === 'current';
+    // Text labels are stamped once on the whole sheet rather than in every view.
+    const { textLabels, ...options } = getExportOptions(), current = !options.resolution || options.resolution.mode === 'current';
     const defaultWidth = renderer.canvas.width * 3, defaultHeight = (renderer.canvas.height + 28) * 2;
     const size = current ? { width: defaultWidth, height: defaultHeight }
       : resolveExportSize(options.resolution, renderer.canvas.width, renderer.canvas.height);
@@ -900,6 +910,14 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         context.fillStyle = '#14252b'; context.font = `${16 * scale}px sans-serif`;
         context.fillText(view, x + 10 * scale, y + image.height + 20 * scale);
         image.width = image.height = 1;
+      }
+      if (textLabels?.length) {
+        // The scale of one view: device pixels per CSS pixel, times the view's
+        // height relative to the viewport for a chosen sheet size.
+        const pixelRatio = Math.max(1, Math.min(3, renderer.canvas.width / (Number(renderer.canvas.clientWidth) || renderer.canvas.width)));
+        const viewHeight = Math.floor(sheet.height / 2) - (current ? 28 : Math.round(28 * scale));
+        drawTextLabelsOverlay(context, textLabels, sheet.width, sheet.height, pixelRatio * (current ? 1 : Math.max(1, viewHeight) / renderer.canvas.height),
+          { includeBackground: options.includeBackground !== false, theme: legendExportTheme(renderer.canvas) });
       }
       downloadBlob(await canvasBlob(sheet), `${getFileStem()}-six-views.png`);
     } finally { restoreCamera(renderer, camera); }
@@ -998,7 +1016,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   return { onFrame, reset, abortJobs, cancel, run, selected, customizePalette, filterVisibility, applyRadii,
     getBondParameters: () => getFrame() ? readParameters('bonds', getFrame()) : null,
     isEnabled: kind => Boolean(jobs[kind]?.enabled),
-    updateStatistics, updateVectors, renameProperty, cancelVectorDependency, runDisplacement, cancelDisplacement, updateMeasurements, syncComparison, syncScalarColorPreview, serialize, restore, setEnabled, cancelBatch,
+    updateStatistics, updateVectors, renameProperty, cancelVectorDependency, runDisplacement, cancelDisplacement, updateMeasurements, syncComparison, syncScalarColorPreview, syncCrystalDrag, serialize, restore, setEnabled, cancelBatch,
     refreshProperties: () => { const frame = getFrame(); if (frame) configureSelectors(frame); updateVectors(); updateMeasurements(); },
     refresh: () => { updateStatistics(); updateMeasurements(); applyRadii(); },
     deactivate: name => { if (name === 'statistics') cancel('rdf'); else if (name === 'displacement') cancelDisplacement(); else if (name === 'vectors') { for (const field of vectorFields) field.enabled = false; $('show-vectors').checked = false; updateVectors(); } else if (JOBS[name]) cancel(name); },

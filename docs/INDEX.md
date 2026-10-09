@@ -24,6 +24,8 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 | Inspect atomic volumes and face geometry | [Voronoi analysis](features/voronoi.md) |
 | Find connected groups of atoms, their sizes and centers | [Cluster analysis](features/clusters.md) |
 | Profile or map density and properties across the cell | [Spatial binning](features/binning.md) |
+| Plot strain, phase fractions or means against time | [Time series](features/time-series.md) |
+| Stamp timestep, strain or phase fractions on images | [Text labels](features/text-labels.md) |
 | Attach numeric data from separate atom files | [External properties](features/external-properties.md) |
 | Compute properties or select atoms with formulas | [Expressions](features/expressions.md) |
 | Measure motion against a trajectory frame | [Displacement](features/displacement.md) |

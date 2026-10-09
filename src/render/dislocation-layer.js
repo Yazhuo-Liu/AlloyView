@@ -4,6 +4,7 @@ import { parsePrimitiveColor } from './atom-primitives.js';
 import { appendDislocationTube, createDislocationCurve } from './dislocation-curves.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON, sliceHalfSpaces } from './slicing.js';
 import { translatePeriodicPoints } from './periodic-origin.js';
+import { crystalDragImages } from './crystal-drag.js';
 
 // A dislocation is a geometric curve, not a bond between two atom indices.
 // Keep the connected source-cell tube pieces in one indexed buffer. Periodic display
@@ -19,12 +20,16 @@ layout(location=3) in vec3 aColor;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform vec3 uReplicaOffset;
+uniform vec3 uDragOffset;
 uniform float uRadius;
 out vec3 vNormal;
 out vec3 vWorld;
+out vec3 vCenter;
 flat out vec3 vColor;
 void main() {
-  vWorld = aCenter + uReplicaOffset + aRadial * uRadius;
+  // A crystal drag translates the committed pieces (zero otherwise).
+  vCenter = aCenter + uReplicaOffset + uDragOffset;
+  vWorld = vCenter + aRadial * uRadius;
   vNormal = mat3(uView) * aNormal;
   vColor = aColor;
   gl_Position = uProjection * uView * vec4(vWorld, 1.0);
@@ -35,11 +40,23 @@ precision highp float;
 precision highp int;
 in vec3 vNormal;
 in vec3 vWorld;
+in vec3 vCenter;
 flat in vec3 vColor;
 uniform int uSliceCount;
 uniform vec4 uSlicePlanes[${MAX_SLICE_PLANES}];
+uniform bool uDragClip;
+uniform mat3 uInverseCell;
+uniform vec3 uCellOrigin;
+uniform vec3 uClipMinimum;
+uniform vec3 uClipMaximum;
 out vec4 outColor;
 void main() {
+  // While a wrapped crystal is dragged, neighboring images of each piece are
+  // drawn and cut where their centerline leaves the displayed cell.
+  if (uDragClip) {
+    vec3 fractional = uInverseCell * (vCenter - uCellOrigin);
+    if (any(lessThan(fractional, uClipMinimum)) || any(greaterThanEqual(fractional, uClipMaximum))) discard;
+  }
   for (int plane = 0; plane < ${MAX_SLICE_PLANES}; plane++) {
     if (plane >= uSliceCount) break;
     if (dot(uSlicePlanes[plane].xyz, vWorld) > uSlicePlanes[plane].w + ${SLICE_EPSILON}) discard;
@@ -189,7 +206,8 @@ export class DislocationLayer {
   constructor(gl) {
     this.gl = gl;
     this.program = createProgram(gl);
-    this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uReplicaOffset', 'uRadius', 'uSliceCount', 'uSlicePlanes[0]']
+    this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uReplicaOffset', 'uRadius', 'uSliceCount', 'uSlicePlanes[0]',
+      'uDragOffset', 'uDragClip', 'uInverseCell', 'uCellOrigin', 'uClipMinimum', 'uClipMaximum']
       .map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.vao = gl.createVertexArray();
     this.meshBuffer = gl.createBuffer();
@@ -260,9 +278,25 @@ export class DislocationLayer {
     gl.uniform1f(u.uRadius, this.options.radius);
     gl.uniform1i(u.uSliceCount, planes.count);
     gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
+    // A crystal drag previews the lines without rebuilding them: see
+    // crystalDragImages. Release rebuilds them for the committed origin.
+    const drag = renderer.crystalDrag, cell = renderer.frame.cell, clip = Boolean(drag?.wrap.some(Boolean));
+    const images = drag ? crystalDragImages(cell, drag) : [[0, 0, 0]];
+    gl.uniform1i(u.uDragClip, clip ? 1 : 0);
+    if (clip) {
+      gl.uniformMatrix3fv(u.uInverseCell, false, Float32Array.from(invert3(cell.vectors)));
+      gl.uniform3f(u.uCellOrigin, ...cell.origin);
+    }
     for (const replica of renderer.replicas) {
       gl.uniform3f(u.uReplicaOffset, ...replica.offset);
-      gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_INT, 0);
+      if (clip) {
+        gl.uniform3f(u.uClipMinimum, ...replica.indices.map((value, axis) => drag.wrap[axis] ? value : -1e30));
+        gl.uniform3f(u.uClipMaximum, ...replica.indices.map((value, axis) => drag.wrap[axis] ? value + 1 : 1e30));
+      }
+      for (const image of images) {
+        gl.uniform3f(u.uDragOffset, ...image);
+        gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_INT, 0);
+      }
     }
   }
 

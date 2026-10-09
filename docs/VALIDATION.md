@@ -1,6 +1,50 @@
 # Validation record
 
-Latest validation: 2026-10-08 (America/New_York, EDT). Earlier entries retain their own dates.
+Latest validation: 2026-10-09 (America/New_York, EDT). Earlier entries retain their own dates.
+
+## Text labels, time series, ambient occlusion and crystal drag (2026-10-09)
+
+Backlog items O12, O13 and A6 were merged together, which completes phase 2.
+A8 (following a growing trajectory) was dropped.
+
+- **Tests:** all 1,527 Node tests pass and the build succeeds. New tests: 18
+  for labels and time series, 15 for ambient occlusion, 15 for crystal drag,
+  and 1 for the shortcut-precedence fix.
+- **Browser and GPU suites:** after the merge all 34 pass:
+  - new: ambient occlusion, crystal drag and text labels;
+  - every earlier browser suite, from smoke through trajectory tools;
+  - GPU, GPU bond statistics and GPU Voronoi.
+- **Crystal drag and AO merge:** A6 and O13 edit the same bond vertex shader.
+  The drag replica correction runs first and the occlusion factor second;
+  bonds whose endpoint leaves the display are still hidden.
+- **Text labels and time series:**
+  - Every attribute that also appears in the summary CSV matches its row; a
+    test checks more than 60 attributes.
+  - Templates are only split and looked up, never evaluated; `constructor`
+    and `__proto__` are unknown names.
+  - With no labels enabled, export pixels are unchanged.
+  - Labels appear in PNG, 1080p, six-view (once per sheet), the second view
+    and every ZIP image, each with its own frame's text.
+  - Background reading of file values never changes the displayed frame.
+- **Ambient occlusion:**
+  - With AO off, images match the previous build in 26 of 26 SHA-256
+    hashes on SwiftShader and on the GTX 1080 Ti.
+  - Intensity 0 equals Off. An export at the canvas size equals the screen
+    with AO on, and a transparent export over white is within 1 level.
+  - Buried atoms are darker than face atoms, which are darker than corner
+    atoms; the result is deterministic.
+  - On the GTX 1080 Ti, 40 directions at 1024² take 0.64 s for 60k atoms and
+    0.89 s for 964k.
+- **Crystal drag:**
+  - During a drag nothing is uploaded; every GL upload call is instrumented.
+  - After release, positions, fractions and bond shifts hash-match a typed
+    origin, and the Fe-loop DXA lines hash-match too.
+  - With 482k displayed atoms, frames take 3.0 ms (GPU finish) and pointer
+    drags hold vsync.
+- **Shortcut precedence:** saved shortcuts now win over defaults added later.
+  A new command whose default is taken keeps only its untaken defaults, or
+  stays unassigned, instead of discarding all custom bindings. Mutually
+  conflicting saved data still falls back to the defaults.
 
 ## Radical Voronoi (2026-10-08)
 

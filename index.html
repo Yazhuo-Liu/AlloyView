@@ -259,6 +259,8 @@
               <button type="button" data-tool-button="displacement" aria-controls="tool-displacement" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Displacement</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="statistics" aria-controls="tool-statistics" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Statistics</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="binning" aria-controls="tool-binning" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Binning</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="timeSeries" aria-controls="tool-time-series" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Time series</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="textLabels" aria-controls="tool-text-labels" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Labels</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="cna" aria-controls="tool-cna" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">CNA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="dxa" aria-controls="tool-dxa" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">DXA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="centrosymmetry" aria-controls="tool-centrosymmetry" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Symmetry</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
@@ -300,8 +302,9 @@
               <div class="periodic-origin-actions">
                 <button id="origin-center-selected" class="button button-secondary" type="button" disabled>Center selected atom</button>
                 <button id="origin-reset" class="button button-secondary" type="button" disabled>Reset origin</button>
+                <button id="origin-drag-mode" class="button button-secondary" type="button" aria-pressed="false" disabled>Drag crystal in view</button>
               </div>
-              <p class="help">Shift the display origin along periodic cell vectors. Wrapped atoms rewrap into the cell; unwrapped positions translate continuously. Source coordinates and analyses stay unchanged.</p>
+              <p class="help">Shift the display origin along periodic cell vectors. Wrapped atoms rewrap into the cell; unwrapped positions translate continuously. Source coordinates and analyses stay unchanged. <b>Drag crystal in view</b> (or Alt-drag) moves the crystal through the periodic boundaries with the pointer or one finger; Escape cancels a drag.</p>
             </details>
             <label class="field">
               <span>Color by</span>
@@ -322,6 +325,44 @@
               <label><input id="png-axes" type="checkbox" disabled><span>Include XYZ arrows in PNG</span></label>
             </div>
             <label class="field"><span>Second view direction</span><select id="compare-preset" disabled><option value="front">Front</option><option value="back">Back</option><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option><option value="custom" disabled>Custom</option></select></label>
+            <details id="ambient-occlusion-controls" class="tool-details ambient-occlusion-controls">
+              <summary>Ambient occlusion</summary>
+              <div class="field display-options">
+                <label><input id="ambient-occlusion" type="checkbox" disabled><span>Darken occluded atoms</span></label>
+              </div>
+              <label class="field">
+                <span>Intensity</span>
+                <span class="range-number-row">
+                  <input id="ambient-occlusion-intensity" class="range" type="range" min="0" max="1" step="0.05" value="0.7" disabled>
+                  <output id="ambient-occlusion-intensity-value" for="ambient-occlusion-intensity">0.70</output>
+                </span>
+              </label>
+              <div class="paired-fields">
+                <label class="field"><span>Quality</span>
+                  <select id="ambient-occlusion-directions" disabled>
+                    <option value="16">Draft · 16 directions</option>
+                    <option value="40" selected>Standard · 40 directions</option>
+                    <option value="100">High · 100 directions</option>
+                    <option value="200">Very high · 200 directions</option>
+                  </select>
+                </label>
+                <label class="field"><span>Buffer resolution</span>
+                  <select id="ambient-occlusion-resolution" disabled>
+                    <option value="256">256 × 256</option>
+                    <option value="512">512 × 512</option>
+                    <option value="1024" selected>1024 × 1024</option>
+                    <option value="2048">2048 × 2048</option>
+                  </select>
+                </label>
+              </div>
+              <progress id="ambient-occlusion-progress" class="analysis-progress" max="1" value="0" hidden></progress>
+              <p id="ambient-occlusion-status" class="help" role="status" aria-live="polite">Off. Atom colors are unchanged.</p>
+              <div class="export-actions">
+                <button id="ambient-occlusion-recompute" class="button button-secondary" type="button" disabled>Recompute</button>
+                <button id="ambient-occlusion-cancel" class="button button-secondary" type="button" disabled>Cancel</button>
+              </div>
+              <p class="help">Renders the visible atoms from many directions and darkens each atom by how rarely it is seen. Recomputes after frame, visibility, slice, radius, origin or replication changes; applies to both views, bonds and every image export. Large structures need a higher resolution.</p>
+            </details>
             <details class="tool-details">
               <summary>Element colors and radii</summary>
               <div id="element-style-controls" class="element-style-controls"></div>
@@ -898,6 +939,88 @@
               <div id="binning-chart" class="statistics-chart binning-chart" role="group" aria-label="Spatial binning chart"></div>
               <p id="binning-geometry" class="help"></p>
             </div>
+          </section>
+
+          <section id="tool-time-series" class="side-section analysis-section time-series-section" data-tool-panel="timeSeries" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">TRAJECTORY</p><h3>Time series</h3></div>
+              <div class="analysis-state-controls"><span id="time-series-state" class="state-pill">Not collected</span><button id="cancel-time-series" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <p class="help">Plot global attributes such as Cell.volume, Strain.a, Mean.c_pe or CNA.FCC.fraction against the frame number or timestep. Type an attribute name or pick one from the list.</p>
+            <div class="time-series-add">
+              <label class="field"><span>Attribute</span><input id="time-series-attribute" list="time-series-attribute-options" type="text" maxlength="256" placeholder="Cell.volume" autocomplete="off" spellcheck="false" disabled></label>
+              <datalist id="time-series-attribute-options"></datalist>
+              <button id="add-time-series-attribute" class="button button-secondary" type="button" disabled>Add</button>
+            </div>
+            <ul id="time-series-attribute-list" class="time-series-attribute-list" aria-label="Plotted attributes"></ul>
+            <div class="triple-fields">
+              <label><span>First frame</span><input id="time-series-first" type="number" value="1" min="1" step="1" disabled></label>
+              <label><span>Last frame</span><input id="time-series-last" type="number" value="1" min="1" step="1" disabled></label>
+              <label><span>Step</span><input id="time-series-stride" type="number" value="1" min="1" step="1" disabled></label>
+            </div>
+            <div class="paired-fields">
+              <label class="field"><span>Horizontal axis</span><select id="time-series-x-axis" disabled><option value="frame">Frame</option><option value="timestep">Timestep</option></select></label>
+              <label class="field"><span>Strain reference frame</span><input id="time-series-strain-reference" type="number" value="1" min="1" step="1" disabled></label>
+            </div>
+            <label class="slice-toggle"><input id="time-series-separate" type="checkbox" disabled><span>One panel per attribute</span></label>
+            <div class="paired-actions">
+              <button id="collect-time-series" class="button button-accent" type="button" disabled>Read file values</button>
+              <button id="visit-time-series" class="button button-secondary" type="button" disabled>Visit frames</button>
+            </div>
+            <progress id="time-series-progress" class="analysis-progress" max="1" value="0" aria-label="Time series progress" hidden></progress>
+            <p id="time-series-status" class="help" role="status" aria-live="polite">File values (cell, strain, timestep, file columns) are read in the background. Analysis values are recorded when their analysis finishes on the displayed frame.</p>
+            <div id="time-series-results" class="analysis-statistics-results" hidden>
+              <div class="statistics-result-heading"><h4>Values per frame</h4><button id="export-time-series" class="button button-secondary statistics-export-button" type="button" disabled>Series CSV</button></div>
+              <div id="time-series-chart" class="statistics-chart time-series-chart" role="group" aria-label="Time series chart"></div>
+              <button id="clear-time-series" class="text-button" type="button" disabled>Clear collected values</button>
+            </div>
+          </section>
+
+          <section id="tool-text-labels" class="side-section text-labels-section" data-tool-panel="textLabels" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">IMAGE ANNOTATION</p><h3>Text labels</h3></div>
+            </div>
+            <p class="help">Show text over the viewport and stamp it into PNG, JPG, six-view, second-view and frame images. Placeholders such as [Timestep] or [CNA.FCC.fraction:.1%] show the values of the frame in each image.</p>
+            <div class="text-label-picker">
+              <label class="field"><span>Label</span><select id="text-label-list" disabled></select></label>
+              <button id="add-text-label" class="button button-secondary" type="button" disabled>Add label</button>
+              <button id="delete-text-label" class="button button-secondary" type="button" disabled>Delete</button>
+            </div>
+            <div id="text-label-editor" hidden>
+              <label class="slice-toggle"><input id="text-label-enabled" type="checkbox" checked disabled><span>Show label</span></label>
+              <label class="field"><span>Text</span><textarea id="text-label-text" rows="3" maxlength="1000" spellcheck="false" disabled></textarea></label>
+              <output id="text-label-preview" class="text-label-preview" aria-label="Label preview for this frame"></output>
+              <div class="paired-fields">
+                <label class="field"><span>Position</span><select id="text-label-position" disabled></select></label>
+                <label class="field"><span>Font size</span><span class="input-unit"><input id="text-label-size" type="number" value="16" min="6" max="144" step="1" disabled><i>px</i></span></label>
+              </div>
+              <div class="paired-fields">
+                <label class="field"><span>Offset right</span><span class="input-unit"><input id="text-label-offset-x" type="number" value="0" min="-4096" max="4096" step="1" disabled><i>px</i></span></label>
+                <label class="field"><span>Offset down</span><span class="input-unit"><input id="text-label-offset-y" type="number" value="0" min="-4096" max="4096" step="1" disabled><i>px</i></span></label>
+              </div>
+              <div class="paired-fields">
+                <label class="field"><span>Text color</span><select id="text-label-color-mode" disabled><option value="theme">Theme</option><option value="custom">Custom</option></select></label>
+                <label class="field"><span>Custom text color</span><input id="text-label-color" type="color" value="#ffffff" disabled></label>
+              </div>
+              <div class="paired-fields">
+                <label class="field"><span>Box</span><select id="text-label-box" disabled><option value="theme">Theme panel</option><option value="custom">Custom color</option><option value="none">None</option></select></label>
+                <label class="field"><span>Box color</span><input id="text-label-box-color" type="color" value="#ffffff" disabled></label>
+              </div>
+            </div>
+            <p id="text-label-problems" class="help" role="status" aria-live="polite">Add a label to stamp attributes such as the timestep or crystal fractions on images.</p>
+            <details class="tool-details text-label-attribute-details">
+              <summary>Available attributes</summary>
+              <div class="paired-fields">
+                <label class="field"><span>Strain reference frame</span><input id="attribute-strain-reference" type="number" value="1" min="1" step="1" disabled></label>
+                <label class="field"><span>Filter</span><input id="text-label-attribute-filter" type="search" placeholder="CNA, Cell, Mean…" disabled></label>
+              </div>
+              <div id="text-label-attributes" class="statistics-chart text-label-attributes"></div>
+              <p class="help">Click a name to insert it. File attributes come from the frame as read; analysis attributes appear once their analysis has finished for this frame.</p>
+            </details>
+            <details class="tool-details">
+              <summary>Template syntax</summary>
+              <p class="help">[Name] inserts a value; [Name:format] formats it, for example [Strain.a:+.3f], [Cell.volume:.4g], [CNA.FCC.fraction:.1%] or [AtomCount:,d]. Printf-style %.2f is also accepted. Write [[ and ]] for literal brackets. Unknown or unavailable names appear as [?Name] and are listed above. Templates are never run as code.</p>
+            </details>
           </section>
 
           <section id="tool-cna" class="side-section analysis-section" data-tool-panel="cna" hidden>

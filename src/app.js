@@ -47,6 +47,7 @@ import { StructureWorkerClient } from './worker-client.js';
 import { initializeTheme } from './theme.js';
 import { initializeCameraControls } from './camera-controls.js';
 import { initializeExportResolutionControls } from './export-resolution-controls.js';
+import { initializeAmbientOcclusionControls } from './ambient-occlusion-controls.js';
 import { initializeKeyboardControls } from './keyboard-controls.js';
 import { initializeExternalPropertyControls } from './external-property-controls.js';
 import { initializeExpressionControls } from './expression-controls.js';
@@ -56,6 +57,10 @@ import { initializeTopologyTools } from './topology-tools.js';
 import { initializeClusterTools } from './cluster-tools.js';
 import { initializeWignerSeitzTools } from './wigner-seitz-tools.js';
 import { initializeBinningTools } from './binning-tools.js';
+import { createGlobalAttributeSource } from './global-attribute-source.js';
+import { initializeTextLabels } from './text-label-controls.js';
+import { initializeTimeSeries } from './time-series-controls.js';
+import { TIME_SERIES_DEFAULTS } from './time-series.js';
 import { initializeTrajectoryToolControls } from './trajectory-tool-controls.js';
 import { INFERRED_UNWRAP_SOURCE } from './data/trajectory-tools.js';
 import { SpatialBinningClient } from './binning-client.js';
@@ -67,6 +72,7 @@ import { initializeMobileControls } from './mobile-controls.js';
 import { initializeFileDrop } from './file-drop.js';
 import { initializeSliceControls } from './slice-controls.js';
 import { initializeSliceGizmo } from './render/slice-gizmo.js';
+import { initializeCrystalDragControls } from './crystal-drag-controls.js';
 import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './configuration.js';
 import { initializeAtomEyeTools } from './atomeye-tools.js';
 import { initializeDxaTools, DXA_STRUCTURE_PROPERTY } from './dxa-tools.js';
@@ -194,6 +200,7 @@ let renderer;
 let atomEyeTools;
 let cameraControls;
 let exportResolutionControls;
+let ambientOcclusion;
 let externalProperties;
 let expressionTools;
 let topologyTools;
@@ -203,6 +210,9 @@ let binningTools;
 let trajectoryTools;
 let voronoiCells;
 let statisticsExports;
+let globalAttributes;
+let textLabelControls;
+let timeSeries;
 let dxaTools;
 let crystalVisibility;
 let currentColorLegend = null;
@@ -212,6 +222,7 @@ let colorChoiceVersion = 0;
 let backgroundCustomized = false;
 let sliceControls;
 let sliceGizmo;
+let crystalDrag;
 let pendingConfiguration = null;
 let configurationRequest = 0;
 let configurationReadRequest = 0;
@@ -253,6 +264,8 @@ const toolPanels = initializeToolPanels({
     if (name === 'selectionGroups') toolPanels.setToolEnabled(name, state.selectionGroups.groups.length > 0);
     if (name === 'externalProperties') toolPanels.setToolEnabled(name, externalProperties.getState().files.length > 0);
     if (name === 'expressions') toolPanels.setToolEnabled(name, expressionTools.getState().properties.length > 0);
+    if (name === 'textLabels') toolPanels.setToolEnabled(name, textLabelControls?.hasActiveLabels() ?? false);
+    if (name === 'timeSeries') toolPanels.setToolEnabled(name, timeSeries?.hasSeries() ?? false);
   },
   onSelectionChange: (name, { userInitiated = false } = {}) => {
     if (name !== 'slice') sliceControls?.setPicking(false);
@@ -324,8 +337,9 @@ try {
     onStats: ({ fps }) => { elements['metric-fps'].textContent = `${fps.toFixed(1)} FPS`; },
     onCameraChange: updateAxisTriad,
     onProjectionChange: syncProjectionControls,
-    onRender: () => sliceGizmo?.update(),
-    onBeforeCapture: () => commitScalarLegendEdit?.(),
+    onRender: () => { sliceGizmo?.update(); ambientOcclusion?.update(); },
+    // Exports wait for current ambient occlusion, after a legend edit commits.
+    onBeforeCapture: () => { commitScalarLegendEdit?.(); ambientOcclusion?.ensureCurrent(); },
   });
 } catch (error) {
   showToast(error.message);
@@ -344,6 +358,10 @@ cameraControls = initializeCameraControls({
 
 exportResolutionControls = initializeExportResolutionControls({ renderer,
   onEdit: () => interruptConfigurationRestore('an image export size change'), notify: showToast });
+
+ambientOcclusion = initializeAmbientOcclusionControls({ renderer,
+  onEdit: () => interruptConfigurationRestore('an ambient occlusion change'),
+  onChange: () => atomEyeTools?.syncComparison(), notify: showToast });
 
 externalProperties = initializeExternalPropertyControls({
   getFrame: () => state.frame ? sourceFrame(state.frame) : null,
@@ -516,7 +534,8 @@ atomEyeTools = initializeAtomEyeTools({
   getExportOptions: () => ({ includeBackground: elements['png-background'].checked,
     includeAxes: elements['png-axes'].checked, legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
     ...exportResolutionControls.getOptions(),
-    ...sliceOutlineExportOptions() }),
+    ...sliceOutlineExportOptions(), ...textLabelExportOptions() }),
+  prepareExport: options => textLabelControls?.prepareExport(options),
   showFrame, stopPlayback: stopFramePlayback,
   getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
   notify: showToast, onEdit: () => interruptConfigurationRestore('a settings edit'), onMemoryChange: reassessFrameCache,
@@ -524,6 +543,16 @@ atomEyeTools = initializeAtomEyeTools({
   onBondStateChange: () => topologyTools?.syncBondEnabled(),
   getBondStatisticsEnabled: () => (topologyTools?.isEnabled('bondStatistics') ?? false) || (clusterTools?.usesBondCutoffs() ?? false),
 });
+
+// Dragging the crystal previews the origin in both views' shaders and commits
+// through setPeriodicOrigin, exactly like a typed origin.
+crystalDrag = initializeCrystalDragControls({
+  renderer,
+  getOrigin: () => state.periodicOrigin,
+  getCoordinateMode: () => displayCoordinateMode(),
+  commit: origin => setPeriodicOrigin(origin),
+});
+renderer.onCrystalDrag = () => atomEyeTools?.syncCrystalDrag();
 
 crystalVisibility = initializeCrystalVisibilityControls({
   getFrame: () => state.frame,
@@ -558,6 +587,7 @@ dxaTools = initializeDxaTools({
   onDisplayChange: () => {
     atomEyeTools.syncComparison();
     statisticsExports?.refresh();
+    globalAttributes?.refresh();
   },
   onMemoryChange: reassessFrameCache, notify: showToast,
 });
@@ -689,6 +719,36 @@ statisticsExports = initializeStatisticsExports({
   getSelectionGroups: () => state.selectionGroups,
   getLegend: () => currentColorLegend,
   getResults: () => binningTools?.exportResults() ?? {},
+  notify: showToast,
+});
+
+globalAttributes = createGlobalAttributeSource({
+  getFrame: () => state.frame,
+  getFrameIndex: () => state.frameIndex,
+  getFrameCount: () => state.frameCount,
+  getFrameAt: (index, { signal } = {}) => getFrame(index, { background: true, cacheFrame: false, signal }),
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  getDxaNetwork: () => renderer.dislocationNetwork,
+});
+
+textLabelControls = initializeTextLabels({
+  renderer, tools: toolPanels, attributes: globalAttributes,
+  getFrameCount: () => state.frameCount,
+  onEdit: () => interruptConfigurationRestore('a text label edit'),
+  notify: showToast,
+});
+
+timeSeries = initializeTimeSeries({
+  tools: toolPanels, attributes: globalAttributes,
+  getFrame: () => state.frame,
+  getFrameAt: (index, { signal } = {}) => getFrame(index, { background: true, cacheFrame: false, signal }),
+  getFrameIndex: () => state.frameIndex,
+  getFrameCount: () => state.frameCount,
+  ensureIndexed: waitForSourceIndex,
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  getFileName: () => state.file?.name ?? 'structure',
+  showFrame, stopPlayback: stopFramePlayback,
+  onEdit: () => interruptConfigurationRestore('a time series edit'),
   notify: showToast,
 });
 
@@ -851,6 +911,7 @@ elements['export-png'].addEventListener('click', () => {
       legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
       ...exportResolutionControls.getOptions(),
       ...sliceOutlineExportOptions(),
+      ...textLabelExportOptions(),
     });
   } catch (error) {
     showToast(error.message);
@@ -882,6 +943,7 @@ setBackgroundColor(elements.background.value, { automatic: true });
 const keyboardControls = initializeKeyboardControls({
   renderer,
   getSliceControls: () => sliceControls,
+  getCrystalDrag: () => crystalDrag,
   onEdit: () => interruptConfigurationRestore('a keyboard view or slice edit'),
 });
 
@@ -982,6 +1044,8 @@ function closeSource() {
   binningTools?.reset();
   trajectoryTools?.reset();
   voronoiCells?.reset();
+  timeSeries?.reset();
+  globalAttributes?.reset();
   framePrefetchController?.abort();
   framePrefetchController = null;
   frameNavigationController?.abort();
@@ -1390,6 +1454,8 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     binningTools?.reset();
     trajectoryTools?.reset();
     voronoiCells?.reset();
+    timeSeries?.reset();
+    globalAttributes?.reset();
     for (const kind of Object.keys(state.analysis)) toolPanels.setToolEnabled(kind, false);
     toolPanels.setToolEnabled('replicate', false);
     state.references = result.frame.typeLabels.map(referenceForElement);
@@ -1638,6 +1704,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   applyScalarVisibility(palette.legend);
   renderLegend(palette.legend);
   statisticsExports?.refresh();
+  globalAttributes?.refresh();
   if (resetCamera) renderer.resetCamera();
   updateSlices();
   restoreSelection();
@@ -2008,6 +2075,7 @@ function configurePeriodicOriginUi(enabled = Boolean(state.frame) && sourceLoadi
   }
   document.getElementById('origin-reset').disabled = !enabled;
   document.getElementById('origin-center-selected').disabled = !enabled || state.selectedId === null;
+  crystalDrag?.setEnabled(enabled && Boolean(state.frame?.cell.pbc.some(Boolean)));
 }
 
 function setPeriodicOrigin(values, { preserveInput = false } = {}) {
@@ -2234,6 +2302,7 @@ function applyColors() {
     atomEyeTools.applyRadii();
     atomEyeTools.updateStatistics();
     statisticsExports?.refresh();
+    globalAttributes?.refresh();
     void binningTools?.refresh();
   } catch (error) {
     showToast(error.message);
@@ -3598,7 +3667,10 @@ function setControlsEnabled(enabled) {
   trajectoryTools?.setEnabled(enabled);
   voronoiCells?.setEnabled(enabled);
   statisticsExports?.setEnabled(enabled);
+  textLabelControls?.setEnabled(enabled);
+  timeSeries?.setEnabled(enabled);
   exportResolutionControls?.setEnabled(enabled);
+  ambientOcclusion?.setEnabled(enabled);
   selectionGroupControls?.setEnabled(enabled);
   syncSelectionGroupInteraction();
   for (const id of [
@@ -3645,6 +3717,13 @@ function sliceOutlineExportOptions() {
   return sliceControls.getState().exportOutlines ? {} : { includeSliceOutlines: false };
 }
 
+// Labels are resolved when each image is captured, so every frame of a
+// frame-image export stamps its own values. No labels leave options unchanged.
+function textLabelExportOptions() {
+  const labels = textLabelControls?.exportLabels();
+  return labels ? { textLabels: labels } : {};
+}
+
 function syncSliceGizmo() {
   if (!sliceControls || !sliceGizmo) return;
   sliceGizmo.setState({ ...sliceControls.getState(), visible: Boolean(state.frame) && sourceLoadingOwner === null
@@ -3683,7 +3762,8 @@ function captureConfiguration() {
         showCell: elements['show-cell'].checked, showAxes: elements['show-axes'].checked,
         projectionMode: renderer.projectionMode,
         png: { background: elements['png-background'].checked, legend: elements['png-legend'].checked, axes: elements['png-axes'].checked,
-          resolution: exportResolutionControls.getState() } },
+          resolution: exportResolutionControls.getState() },
+        ambientOcclusion: ambientOcclusion.getState() },
       analyses: {
         coordination: { enabled: state.analysis.coordination.enabled, cutoff: elements.cutoff.valueAsNumber,
           preset: elements['coordination-cutoff-preset'].value },
@@ -3715,10 +3795,21 @@ function captureConfiguration() {
       activeCategory: toolPanels.getActiveCategory(),
       extensions: { ...atomEyeTools.serialize(), ...topologyTools.serialize(), voronoiDisplay: voronoiCells.serialize(), dxa: dxaTools.serialize(), externalProperties: externalProperties.getState(),
         expressions: expressionTools.getState(),
-        clusters: clusterTools.serialize(), wignerSeitz: wignerSeitzTools.serialize(), binning: binningTools.serialize(), trajectory: trajectoryTools.serialize() },
+        clusters: clusterTools.serialize(), wignerSeitz: wignerSeitzTools.serialize(), binning: binningTools.serialize(), trajectory: trajectoryTools.serialize(),
+        ...attributeExtensions() },
       theme: document.documentElement.dataset.theme,
     },
   });
+}
+
+// Labels, time series and the strain reference are saved only when used, so
+// recipes that do not use them are unchanged.
+function attributeExtensions() {
+  const extensions = {}, labels = textLabelControls.serialize(), series = timeSeries.serialize();
+  if (labels) extensions.textLabels = labels;
+  if (series.autoCollect || JSON.stringify(series.attributes) !== JSON.stringify(TIME_SERIES_DEFAULTS.attributes)) extensions.timeSeries = series;
+  if (globalAttributes.getStrainReferenceFrame() !== 0) extensions.globalAttributes = globalAttributes.serialize();
+  return extensions;
 }
 
 function exportConfiguration() {
@@ -3803,6 +3894,8 @@ async function restoreConfiguration(config) {
     wignerSeitzTools?.reset();
     binningTools?.reset();
     voronoiCells?.reset();
+    globalAttributes.restore(saved.extensions.globalAttributes);
+    textLabelControls.restore(saved.extensions.textLabels);
     if (targetFrame) await commitReplicationFrame(targetFrame, repetitions, saved.replicateAtoms, targetIndex, { resetCamera: false });
     else { state.repetitions = [...repetitions]; state.replicateAtoms = saved.replicateAtoms; }
     if (!current()) return;
@@ -3818,6 +3911,7 @@ async function restoreConfiguration(config) {
       ['png-background', saved.display.png.background], ['png-legend', saved.display.png.legend], ['png-axes', saved.display.png.axes],
     ]) elements[id].checked = value;
     exportResolutionControls.restore(saved.display.png.resolution);
+    ambientOcclusion.restore(saved.display.ambientOcclusion);
     renderer.setCellVisible(saved.display.showCell);
     renderer.setCellWireframeMode(saved.display.cellWireframeMode);
     state.periodicOrigin = [...saved.display.periodicOrigin];
@@ -3920,6 +4014,7 @@ async function restoreConfiguration(config) {
       clusterTools.restore(saved.extensions.clusters, { isCurrent: current }),
       wignerSeitzTools.restore(saved.extensions.wignerSeitz, { isCurrent: current }),
       binningTools.restore(saved.extensions.binning, { isCurrent: current }),
+      timeSeries.restore(saved.extensions.timeSeries, { isCurrent: current }),
       trajectoryTools.restoreLines(saved.extensions.trajectory?.lines ?? null, { isCurrent: current })]);
     if (!current()) return;
     await voronoiCells.restore(saved.extensions.voronoiDisplay);
