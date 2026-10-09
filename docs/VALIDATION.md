@@ -2,6 +2,28 @@
 
 Latest validation: 2026-10-09 (America/New_York, EDT). Earlier entries retain their own dates.
 
+## Move crystal reset (2026-10-09)
+
+Reference: `c993ad6`, synchronized from `origin/main`. Move crystal now exposes
+a desktop circular-arrow reset button and a matching **Reset crystal** action
+in Display. Both restore the source origin to `(0, 0, 0)` through the existing
+origin-commit path; camera, coordinate mode, replication and analyses are kept.
+
+- All **1,529 Node tests** pass; the production build succeeds.
+- Two added regression tests cover wrapped/unwrapped resets, repeated resets,
+  disabled loading state, source/camera/replication preservation, and resetting
+  active mouse/touch drags followed by late movement or release.
+- The production crystal-drag browser suite passes on Chromium with a software
+  graphics adapter. The new toolbar action restores the original coordinate,
+  fractional-coordinate and bond-image hashes. Active reset clears the preview
+  and prevents later pointer events from shifting the crystal again. The second
+  view and all-cell Voronoi display follow the reset; bond-analysis data remain.
+  Existing checks also restore the 60,229-atom Fe loop's DXA geometry through the
+  Display action. Phone touch resets preserve the camera and toolbar footprint.
+  At 1366 px, the reset control stays clear of the standard-view controls.
+- Valid origin writeback clears stale input validation errors, including after
+  restoring the original position.
+
 ## Text labels, time series, ambient occlusion and crystal drag (2026-10-09)
 
 Backlog items O12, O13 and A6 were merged together, which completes phase 2.

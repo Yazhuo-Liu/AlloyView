@@ -216,7 +216,7 @@ are disabled. Actual cell vectors determine the shift in triclinic cells.
 
 Select an atom and press **Center selected atom** to place it at fractional
 coordinate `0.5` in each periodic direction. This brings a defect split by
-periodic boundaries into the center of the displayed cell. **Reset origin**
+periodic boundaries into the center of the displayed cell. **Reset crystal**
 sets all offsets to zero. Wrapped mode shifts and rewraps the coordinates;
 unwrapped mode applies the same translation without wrapping, preserving
 continuous motion. Both views and their bonds,
@@ -233,10 +233,16 @@ only periodic directions move. Clicks and taps still select atoms. Releasing
 applies the origin, rounded to four decimals, exactly as if it had been typed,
 and rebuilds bonds, DXA lines and Voronoi cells (Voronoi cells are hidden
 while dragging).
-**Escape** or a second finger cancels the drag, **Reset origin** undoes it,
+**Escape** or a second finger cancels the drag, **Reset crystal** undoes it,
 and **X/Y/Z** (Shift to reverse) move the crystal in steps of 0.05 cell
 vector. Slice planes stay in place while the crystal moves through them. See
 [Display](features/display.md#drag-the-crystal).
+
+On desktop, the circular-arrow **Reset crystal** button appears beside Move
+crystal while the mode is enabled or the crystal is shifted. It restores the
+source display origin to `(0, 0, 0)` without resetting the camera or calculations.
+The same action is available in **Display → Periodic display origin** on phones.
+It also stops an active drag so releasing the pointer cannot apply an old shift.
 
 ## Display replication
 

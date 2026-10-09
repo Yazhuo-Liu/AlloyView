@@ -23,6 +23,12 @@ export function initializeCrystalDragControls({ renderer, getOrigin, getCoordina
   toolbarButton.setAttribute('aria-pressed', 'false');
   toolbarButton.innerHTML = '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M4.5 6.5h15v11h-15z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2.2 1.8"/><path d="M12 3v18M3 12h18M12 3l-2.4 2.4M12 3l2.4 2.4M12 21l-2.4-2.4M12 21l2.4-2.4M3 12l2.4-2.4M3 12l2.4 2.4M21 12l-2.4-2.4M21 12l-2.4 2.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
   document.getElementById('reset-camera')?.after(toolbarButton);
+  const resetButton = document.createElement('button');
+  resetButton.id = 'reset-crystal'; resetButton.type = 'button'; resetButton.disabled = true; resetButton.hidden = true;
+  resetButton.title = 'Reset crystal: restore its original position without changing the camera.';
+  resetButton.setAttribute('aria-label', 'Reset crystal position');
+  resetButton.textContent = '↺';
+  toolbarButton.after(resetButton);
   const status = document.createElement('output');
   status.id = 'crystal-drag-status'; status.className = 'crystal-drag-status'; status.hidden = true;
   // Pointer moves update it continuously; the origin fields announce the result.
@@ -32,9 +38,9 @@ export function initializeCrystalDragControls({ renderer, getOrigin, getCoordina
   let mode = false, enabled = false, touch = false;
   const gesture = new CrystalDragGesture(renderer, {
     getOrigin, getCoordinateMode,
-    onChange: origin => showStatus(origin),
+    onChange: origin => { showStatus(origin); sync(); },
     onCommit: origin => commit(origin),
-    onEnd: () => { status.hidden = true; renderer.canvas.classList.remove('crystal-dragging'); },
+    onEnd: () => { status.hidden = true; renderer.canvas.classList.remove('crystal-dragging'); sync(); },
   });
   const periodic = () => Boolean(renderer.frame?.cell.pbc.some(Boolean));
 
@@ -50,6 +56,9 @@ export function initializeCrystalDragControls({ renderer, getOrigin, getCoordina
       button.disabled = !enabled;
       button.setAttribute('aria-pressed', String(mode));
     }
+    const shifted = Boolean(renderer.frame && getOrigin().some((value, axis) => renderer.frame.cell.pbc[axis] && value !== 0));
+    resetButton.hidden = !enabled || (!mode && !shifted && !gesture.active);
+    resetButton.disabled = !enabled || (!shifted && !gesture.active);
     renderer.canvas.classList.toggle('crystal-drag-mode', mode && enabled);
   }
   function setMode(value) {
@@ -88,18 +97,30 @@ export function initializeCrystalDragControls({ renderer, getOrigin, getCoordina
     const origin = [...getOrigin()];
     origin[axis] -= amount;
     commit(snapCrystalOrigin(origin, renderer.frame.cell, getCoordinateMode()));
+    sync();
+  }
+
+  /** Restore source coordinates, not the origin at the start of the last drag. */
+  function reset() {
+    if (!enabled || !renderer.frame) return;
+    renderer.cancelSelectionGesture?.();
+    gesture.cancel();
+    commit([0, 0, 0]);
+    sync();
   }
 
   const toggle = () => setMode(!mode);
   toolbarButton.addEventListener('click', toggle);
+  resetButton.addEventListener('click', reset);
   sidebarButton?.addEventListener('click', toggle);
   sync();
   return {
-    setMode, setEnabled, toggle, nudge, canNudge,
+    setMode, setEnabled, toggle, nudge, canNudge, reset,
     dispose() {
       gesture.cancel();
       toolbarButton.removeEventListener('click', toggle); sidebarButton?.removeEventListener('click', toggle);
-      toolbarButton.remove(); status.remove();
+      resetButton.removeEventListener('click', reset);
+      toolbarButton.remove(); resetButton.remove(); status.remove();
       if (renderer.crystalDragController) delete renderer.crystalDragController;
     },
   };

@@ -602,6 +602,10 @@ persistently and optionally in exports.
   previewed; Voronoi cells are hidden until release.
 - **Release and cancel:** release commits through `setPeriodicOrigin`, with
   results bit-identical to typing the same origin. Escape cancels.
+- **Reset:** a circular-arrow button beside Move crystal, or **Reset crystal**
+  in the Display panel, restores the source origin to zero without resetting
+  the camera, coordinate mode, replication or analysis. Active pointer drags
+  are cancelled before restoration.
 - **Shortcut fix:** newer default keys now yield to saved shortcuts instead of
   discarding them.
 - **Follow-up:** previewing Voronoi cells during the drag.

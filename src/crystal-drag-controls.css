@@ -1,4 +1,13 @@
 .view-toolbar #toggle-crystal-drag { display: grid; place-items: center; }
+.view-toolbar #reset-crystal { display: grid; place-items: center; }
+.view-toolbar #reset-crystal[hidden] { display: none; }
+.view-toolbar #reset-crystal:disabled { cursor: not-allowed; color: var(--disabled-text); }
+@media (min-width: 921px) {
+  /* Six compact actions occupy the same width as the original five, keeping
+     reset clear of both the standard-view controls and the floating view. */
+  .view-toolbar:has(#reset-crystal:not([hidden])) { gap: 2.5px; }
+  .view-toolbar:has(#reset-crystal:not([hidden])) > button { width: 30px; }
+}
 .view-toolbar #toggle-crystal-drag[aria-pressed="true"] { color: var(--cyan); background: var(--accent-soft); box-shadow: inset 0 -2px var(--cyan); }
 .view-toolbar #toggle-crystal-drag:disabled { cursor: not-allowed; color: var(--disabled-text); background: transparent; box-shadow: none; }
 .periodic-origin-actions #origin-drag-mode { grid-column: 1 / -1; }
@@ -12,7 +21,7 @@
 @media (max-width: 920px) {
   /* The phone toolbar keeps its four-button footprint beside Details and
      View; phones toggle the mode from Display → Periodic display origin. */
-  .view-toolbar #toggle-crystal-drag { display: none; }
+  .view-toolbar #toggle-crystal-drag, .view-toolbar #reset-crystal { display: none; }
   /* Below the top row, clear of the legend toggle and trajectory bar. */
   .crystal-drag-status, .viewport-panel.trajectory-visible .crystal-drag-status { top: 58px; bottom: auto; font-size: 11px; }
 }

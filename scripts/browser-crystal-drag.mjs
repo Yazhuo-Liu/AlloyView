@@ -164,6 +164,7 @@ try {
     await h.showTool('display');
     await h.expand('.periodic-origin-controls');
     const center = await evaluate('crystalChecks.canvasPoint()');
+    const original = await evaluate('crystalChecks.snapshot()');
 
     progress('The toolbar toggle makes a plain left drag move the crystal.');
     // The toolbar toggle makes a plain left drag move the crystal.
@@ -190,12 +191,42 @@ try {
     assert.ok(dragged.pixelDifference.foreground > 10_000 && dragged.pixelDifference.differing / dragged.pixelDifference.foreground < 0.002,
       `the preview frame matches the committed frame: ${JSON.stringify(dragged.pixelDifference)}`);
     // Typing the same origin reproduces the committed state exactly.
-    await h.press('#origin-reset');
-    assert.deepEqual((await evaluate('crystalChecks.snapshot()')).origin, [0, 0, 0], 'Reset origin undoes the drag');
+    await h.call('Emulation.setDeviceMetricsOverride', { width: 1366, height: 1000, deviceScaleFactor: 1, mobile: false });
+    await h.frames(3);
+    const resetLayout = await evaluate(`(() => {
+      const boxes = ['.view-toolbar', '#view-controls', '#reset-crystal'].map(selector => document.querySelector(selector).getBoundingClientRect());
+      const [toolbar, views, reset] = boxes;
+      const separate = (box, other) => box.right <= other.left || other.right <= box.left || box.bottom <= other.top || other.bottom <= box.top;
+      return boxes.every(box => box.left >= 0 && box.right <= innerWidth) && separate(toolbar, views) && separate(reset, views)
+        && reset.left >= toolbar.left && reset.right <= toolbar.right && reset.top >= toolbar.top && reset.bottom <= toolbar.bottom;
+    })()`);
+    assert.equal(resetLayout, true, 'Reset crystal and the toolbars do not overlap on a 1366px desktop');
+    await h.press('#reset-crystal');
+    const reset = await evaluate('crystalChecks.snapshot()');
+    assert.deepEqual(reset.origin, [0, 0, 0], 'the adjacent Reset crystal button undoes the drag');
+    for (const key of ['positions', 'fractional', 'bondShifts']) assert.equal(reset[key], original[key], `Reset crystal restores ${key}`);
+    assert.deepEqual(await evaluate('crystalChecks.camera()'), camera, 'Reset crystal preserves the camera');
+    assert.equal(await evaluate('document.getElementById("reset-crystal").disabled'), true);
+    await h.call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+    await h.frames(3);
     for (const [index, axis] of ['a', 'b', 'c'].entries()) await h.type(`#display-origin-${axis}`, String(dragged.origin[index]));
     const typed = await evaluate('crystalChecks.snapshot()');
     for (const key of ['origin', 'positions', 'fractional', 'bondShifts']) assert.deepEqual(typed[key], dragged[key], `${key} equals the typed-origin state`);
     result.desktopDrag = { origin: dragged.origin, pixelDifference: dragged.pixelDifference, uploadsDuringDrag: preview.uploads };
+
+    progress('Reset during a drag clears the preview and rejects later movement/release.');
+    const interrupted = await h.drag(line(center, 55, -15), { during: async () => {
+      assert.equal(await evaluate('Boolean(crystalChecks.renderer.crystalDrag)'), true);
+      await evaluate('document.getElementById("reset-crystal").click()');
+      await h.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: center.x + 90, y: center.y - 25, button: 'left', buttons: 1 });
+      await h.frames(2);
+      return evaluate('crystalChecks.snapshot()');
+    } });
+    assert.equal(interrupted.dragging, false);
+    const afterResetRelease = await evaluate('crystalChecks.snapshot()');
+    assert.deepEqual(afterResetRelease.origin, [0, 0, 0]);
+    assert.equal(afterResetRelease.positions, original.positions);
+    for (const [index, axis] of ['a', 'b', 'c'].entries()) await h.type(`#display-origin-${axis}`, String(dragged.origin[index]));
 
     progress('Escape cancels and restores; release after Escape commits nothing.');
     // Escape cancels and restores; release after Escape commits nothing.
@@ -256,6 +287,14 @@ try {
     assert.equal(voronoiAfter.comparisonDragging, false);
     assert.equal(voronoiAfter.comparisonMatches, true, 'the second view rebuilt the same display');
     result.layers = { voronoiBefore, voronoiAfter };
+    const bondResult = await evaluate('crystalChecks.renderer.frame.properties.find(p => p.name === "bondCoordination")?.data');
+    await h.press('#reset-crystal');
+    const resetLayers = await evaluate('crystalChecks.layers()');
+    assert.deepEqual((await evaluate('crystalChecks.snapshot()')).origin, [0, 0, 0]);
+    assert.equal(resetLayers.comparisonMatches, true, 'the second view follows Reset crystal');
+    assert.equal(resetLayers.voronoiPositionsCurrent, true, 'Voronoi cells follow Reset crystal');
+    assert.equal(resetLayers.comparisonDragging, false);
+    assert.deepEqual(await evaluate('crystalChecks.renderer.frame.properties.find(p => p.name === "bondCoordination")?.data'), bondResult, 'reset preserves the computed bond property');
     await h.press('#toggle-crystal-drag');
     await evaluate('(() => {const field=document.getElementById("compare-view");field.checked=false;field.dispatchEvent(new Event("change",{bubbles:true}));})()');
 
@@ -342,6 +381,11 @@ try {
     await h.drag([atom]);
     assert.equal(await evaluate('crystalChecks.renderer.selected'), atom.index, 'a tap in the mode still selects the atom');
     assert.deepEqual((await evaluate('crystalChecks.snapshot()')).origin, touched.origin, 'a tap does not move the crystal');
+    const phoneCamera = await evaluate('crystalChecks.camera()');
+    assert.equal(await evaluate('getComputedStyle(document.getElementById("reset-crystal")).display'), 'none', 'phone toolbar keeps its existing footprint');
+    await h.press('#origin-reset');
+    assert.deepEqual((await evaluate('crystalChecks.snapshot()')).origin, [0, 0, 0], 'the phone Reset crystal control restores the original position');
+    assert.deepEqual(await evaluate('crystalChecks.camera()'), phoneCamera);
     result.phone = { layout, origin: touched.origin, screenshot: touchPreview.screenshot };
     return result;
   }, { software: true, requireGpu: false });

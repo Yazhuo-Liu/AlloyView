@@ -445,6 +445,58 @@ test('keyboard nudges move the crystal along periodic cell vectors and snap the 
   assert.equal(controls.canNudge(0), false);
 });
 
+test('Reset crystal restores the source origin in both coordinate modes without changing the view or source', () => {
+  for (const mode of ['wrapped', 'unwrapped']) {
+    const f = controlsFixture(), r = f.renderer;
+    const reset = f.nodes['reset-camera'].next.next;
+    const source = structuredClone(f.frame);
+    r.coordinateMode = mode;
+    r.setReplications([2, 1, 1]);
+    const camera = r.getCameraState(), replication = [...r.repetitions];
+    assert.equal(reset.hidden, true);
+    f.controls.nudge(0, .35); f.controls.nudge(2, -1.2);
+    assert.equal(reset.hidden, false); assert.equal(reset.disabled, false);
+    reset.click();
+    assert.deepEqual(r.periodicOrigin, [0, 0, 0]);
+    assert.equal(r.displayPositions, f.frame.positions, 'the original source display is restored');
+    assert.equal(r.coordinateMode, mode);
+    assert.deepEqual(r.getCameraState(), camera);
+    assert.deepEqual(r.repetitions, replication);
+    assert.deepEqual(f.frame, source);
+    assert.equal(reset.hidden, true); assert.equal(reset.disabled, true);
+    f.controls.reset();
+    assert.deepEqual(r.periodicOrigin, [0, 0, 0], 'repeated reset does not accumulate shifts');
+    f.controls.nudge(0, .2);
+    const shifted = [...r.periodicOrigin], commits = f.commits.length;
+    f.controls.setEnabled(false); f.controls.reset();
+    assert.deepEqual(r.periodicOrigin, shifted);
+    assert.equal(f.commits.length, commits, 'reset is unavailable during source loading or closure');
+    f.controls.dispose();
+    assert.equal(reset.removed, true);
+  }
+});
+
+test('Reset crystal cancels mouse and touch drags so late movement or release cannot reapply the shift', () => {
+  for (const pointerType of ['mouse', 'touch']) {
+    const f = controlsFixture(), r = f.renderer;
+    f.controls.setMode(true);
+    f.controls.nudge(0, .25);
+    const [x, y] = screen(r, r.target), extra = { pointerType };
+    f.pointer('pointerdown', x, y, extra); f.pointer('pointermove', x + 55, y + 15, extra);
+    assert.ok(r.crystalDrag);
+    f.nodes['reset-camera'].next.next.click();
+    assert.equal(r.crystalDrag, null); assert.equal(f.captures.size, 0);
+    assert.deepEqual(r.periodicOrigin, [0, 0, 0]);
+    const commits = f.commits.length;
+    f.pointer('pointermove', x + 95, y + 20, extra); f.pointer('pointerup', x + 95, y + 20, extra);
+    assert.equal(f.commits.length, commits, 'the interrupted pointer cannot start another drag');
+    assert.deepEqual(r.periodicOrigin, [0, 0, 0]);
+    assert.equal(f.canvas.classList.contains('crystal-drag-mode'), true, 'reset keeps the selected interaction mode');
+    assert.equal(f.canvas.classList.contains('crystal-dragging'), false);
+    f.controls.dispose();
+  }
+});
+
 test('the source and every derived display stay independent of a drag preview', () => {
   const { renderer, frame } = rendererFixture(skewPeriodic, Float64Array.from({ length: 60 }, random(3)));
   const source = structuredClone({ positions: frame.positions, fractional: frame.fractional, cell: frame.cell });

@@ -804,7 +804,7 @@ for (const axis of ['a', 'b', 'c']) {
   document.getElementById(`display-origin-${axis}`).addEventListener('input', updatePeriodicOrigin);
   document.getElementById(`display-origin-${axis}`).addEventListener('change', updatePeriodicOrigin);
 }
-document.getElementById('origin-reset').addEventListener('click', () => setPeriodicOrigin([0, 0, 0]));
+document.getElementById('origin-reset').addEventListener('click', () => crystalDrag?.reset());
 document.getElementById('origin-center-selected').addEventListener('click', centerPeriodicOriginOnSelected);
 for (const prefix of ['', 'voronoi-']) {
   elements[`${prefix}radius-scale`].addEventListener('input', () => setRadiusPercent(elements[`${prefix}radius-scale`].value, { source: 'slider' }));
@@ -2086,7 +2086,11 @@ function setPeriodicOrigin(values, { preserveInput = false } = {}) {
   atomEyeTools?.cancelBatch({ restore: false });
   state.periodicOrigin = origin;
   renderer.setPeriodicOrigin(origin, { coordinateMode: displayCoordinateMode() });
-  if (!preserveInput) for (const [axis, name] of ['a', 'b', 'c'].entries()) document.getElementById(`display-origin-${name}`).value = String(origin[axis]);
+  if (!preserveInput) for (const [axis, name] of ['a', 'b', 'c'].entries()) {
+    const input = document.getElementById(`display-origin-${name}`);
+    input.value = String(origin[axis]);
+    input.setCustomValidity('');
+  }
   configurePeriodicOriginUi();
   sliceControls.refreshPickedAtoms();
   sliceGizmo?.update();
