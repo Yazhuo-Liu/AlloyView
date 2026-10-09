@@ -163,7 +163,7 @@ export class GpuRuntime {
           cna.CNA_FIXED_SHADER, cna.CNA_ADAPTIVE_SHADER,
           reference.REFERENCE_STRAIN_CLEAR_SHADER, reference.REFERENCE_STRAIN_SHADER,
           csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER, ptm.PTM_NEIGHBORS_SHADER, bondStatistics.BOND_STATISTICS_SHADER,
-          voronoi.VORONOI_INITIALIZE_SHADER, voronoi.VORONOI_CLIP_SHADER];
+          voronoi.VORONOI_INITIALIZE_SHADER, voronoi.VORONOI_CLIP_SHADER, voronoi.VORONOI_RADICAL_CLIP_SHADER];
         for (const source of sources) await this.compilePipeline(source);
       })();
       this.warmupPromise.catch(() => { this.warmupPromise = null; });

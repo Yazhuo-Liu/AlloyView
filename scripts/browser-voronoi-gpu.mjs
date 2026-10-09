@@ -43,6 +43,8 @@ async function runVoronoiChecks() {
     }
     check(requireGpu ? actual.backend === 'gpu' : actual.backend === 'cpu' && actual.fallbackReason,
       label + ': backend ' + actual.backend + ', reason ' + actual.fallbackReason);
+    check(actual.tessellation === expected.tessellation && actual.summary.emptyCellCount === expected.summary.emptyCellCount,
+      label + ' tessellation kind and empty radical cells');
     compare(frame.fractional, source, 0, label + ' unchanged source');
     const errors = { volume: compare(actual.atomicVolume, expected.atomicVolume, 5e-5, label + ' volume'),
       surface: compare(actual.voronoiSurfaceArea, expected.voronoiSurfaceArea, 5e-5, label + ' surface') };
@@ -170,11 +172,34 @@ async function runVoronoiChecks() {
     const highOrder = { fractional: Float64Array.from(polygon.flat()), types: new Uint16Array(polygon.length),
       cell: createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10], pbc: [false, false, false] }) };
     await run('Polygon capacity preserves complete topology through CPU fallback', highOrder, {}, { requireGpu: false });
+    // Radical (radius-weighted) cells use the same tolerances and topology checks.
+    const { voronoiRadiiForTypes } = await import('./src/analysis/voronoi-radii.js');
+    const cscl = crystalFrame('bcc', 2, 4); cscl.typeLabels = ['Cs', 'Cl'];
+    for (let atom = 0; atom < cscl.types.length; atom++) cscl.types[atom] = atom % 2;
+    const csclResult = await run('Radical CsCl', cscl, { radii: Float64Array.from(cscl.types, type => type ? 1 : 1.6) });
+    check(Math.abs(csclResult.atomicVolume[0] - 41.201816) < 5e-5 * 41.2 && csclResult.voronoiIndices.every(index => index === '<0,6,0,8>'), 'Radical CsCl analytic volume');
+    const rock = crystalFrame('sc', 2, 2.82); rock.typeLabels = ['Na', 'Cl'];
+    for (let atom = 0; atom < rock.types.length; atom++) rock.types[atom] = Math.round(2 * (rock.fractional[atom * 3] + rock.fractional[atom * 3 + 1] + rock.fractional[atom * 3 + 2])) % 2;
+    await run('Radical rock salt', rock, { radii: voronoiRadiiForTypes(rock, [{ label: 'Na', radius: 1.02 }, { label: 'Cl', radius: 1.81 }]) });
+    await run('Radical equal radii', crystalFrame('fcc', 2, 3.52), { radii: new Float64Array(32).fill(1.24) });
+    await run('Radical skew distorted random radii', distorted, { radii: Float64Array.from({ length: 32 }, (_, atom) => 1.1 + .3 * Math.abs(Math.sin(atom * 2.3))) });
+    await run('Radical mixed PBC random radii', mixed, { radii: Float64Array.from({ length: 32 }, (_, atom) => 1.1 + .3 * Math.abs(Math.sin(atom * 1.3))) });
+    await run('Radical binary subset compacts radii', binary, { selectedTypes: ['Cu'], radii: Float64Array.from(binary.types, (type, atom) => type ? 1 + atom / 20 : NaN) });
+    const crowded = crystalFrame('bcc', 2, 3), crowdedRadii = Float64Array.from({ length: 16 }, (_, atom) => atom % 2 ? 0 : 2.6);
+    const emptied = await run('Radical empty cells use exact recovery', crowded, { radii: crowdedRadii });
+    check(emptied.summary.emptyCellCount === 8 && emptied.gpuCorrectionReasons.emptyCell + emptied.gpuCorrectionReasons.geometry === 8, 'Empty radical cells recovered exactly');
+    const spread = await run('Radical radius spread beyond the GPU bound', crystalFrame('fcc', 2, 3.52),
+      { radii: Float64Array.from({ length: 32 }, (_, atom) => atom ? 0 : 11) }, { requireGpu: false });
+    check(/radius spread/.test(spread.fallbackReason), 'Radius spread fallback reason');
     // Real source structures remain complete; only central output ranges are sampled.
     const [{ parseCfg }, { parseLammpsFrame }] = await Promise.all([import('./src/io/cfg.js'), import('./src/io/lammps-dump.js')]);
     const fe = parseLammpsFrame(await (await fetch('./examples/Fe_disloc_loop.dump')).text(), 'Fe_disloc_loop.dump');
     await run('Real Fe dislocation-loop full-source BCC sample', fe, { startAtom: 0, endAtom: 256 });
     await run('Real Fe dislocation-loop defect-core full-source sample', fe, { startAtom: 53344, endAtom: 53408 });
+    await run('Radical real Fe loop per-atom radii', fe, { startAtom: 53344, endAtom: 53408,
+      radii: Float64Array.from({ length: fe.ids.length }, (_, atom) => 1.26 * (1 + .04 * Math.sin(1.7 * atom))) });
+    const hea = parseLammpsFrame(await (await fetch('./examples/hea-fcc-screw.dump')).text(), 'hea-fcc-screw.dump');
+    await run('Radical real HEA element radii', hea, { startAtom: 14000, endAtom: 14064, radii: voronoiRadiiForTypes(hea, []) });
     const ni = parseCfg(await (await fetch('./examples/NiGB_minimized.cfg')).text(), 'NiGB_minimized.cfg');
     const exteriorFailure = await gpu.gpuBackend.analyze(ni, { kind: 'voronoi', startAtom: 0, endAtom: 128 })
       .then(() => null, error => error);
@@ -187,6 +212,8 @@ async function runVoronoiChecks() {
       { startAtom: first, endAtom: first + 64 }, { allowPrecisionFallback: true });
     await run('Real Ni interior full-source eight-cell precision sample', ni,
       { startAtom: samples[0], endAtom: samples[0] + 8 });
+    await run('Radical real Ni interior per-atom radii', ni, { startAtom: samples[0], endAtom: samples[0] + 16,
+      radii: Float64Array.from({ length: ni.ids.length }, (_, atom) => 1.24 * (1 + .03 * Math.cos(2.1 * atom))) }, { allowPrecisionFallback: true });
     // Cancellation must leave the resident worker usable for other analyses.
     const controller = new AbortController(); controller.abort();
     const cancelled = await gpu.analyze(fcc, { kind: 'voronoi' }, { signal: controller.signal }).then(() => false, error => error.name === 'AbortError');

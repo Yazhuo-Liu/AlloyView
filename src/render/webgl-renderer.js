@@ -11,7 +11,9 @@ import { normalizeExportResolution, resolveExportSize, tileProjection } from './
 import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms, prepareScalarColorData, scalarColorSettings, scalarPreviewAtomVisible } from './scalar-colormap.js';
 import { effectivePeriodicOrigin, normalizePeriodicOrigin, periodicDisplayCoordinates } from './periodic-origin.js';
 import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
+import { TrajectoryLineLayer, normalizeTrajectoryLineOptions } from './trajectory-line-layer.js';
 import { VoronoiCellLayer, VoronoiAllCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
+import { SiteMarkerLayer, normalizeSiteMarkerOptions } from './site-marker-layer.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON, pointVisible, sliceHalfSpaces, sliceOutlineSegments, validateSlices } from './slicing.js';
 import {
   add,
@@ -245,12 +247,18 @@ export class WebGLRenderer {
     this.dislocationLayer = null;
     this.dislocationNetwork = null;
     this.dislocationOptions = normalizeDislocationOptions();
+    this.trajectoryLineLayer = null;
+    this.trajectoryLines = null;
+    this.trajectoryLineOptions = normalizeTrajectoryLineOptions();
     this.voronoiCellLayer = null;
     this.voronoiCellGeometry = null;
     this.voronoiCellOptions = normalizeVoronoiCellOptions();
     this.voronoiAllCellLayer = null;
     this.voronoiAllCellGeometry = null;
     this.voronoiDisplayRevision = 0;
+    this.siteMarkerLayer = null;
+    this.siteMarkers = null;
+    this.siteMarkerOptions = normalizeSiteMarkerOptions();
     this.atomBonds = this.atomVectors = null;
     this.atomVectorFields = [];
     this.bondOptions = { visible: true, radius: 0.08 };
@@ -373,6 +381,8 @@ export class WebGLRenderer {
     this.atomVectorFields = [];
     this.dislocationNetwork = null;
     this.dislocationLayer?.clear();
+    this.siteMarkers = null;
+    this.siteMarkerLayer?.clear();
     this.selected = -1;
     this.selectedAtoms?.fill(-1);
     this.sliceSelectedAtoms?.fill(-1);
@@ -424,6 +434,10 @@ export class WebGLRenderer {
     this.primitiveLayer?.clear();
     this.dislocationNetwork = null;
     this.dislocationLayer?.clear();
+    this.siteMarkers = null;
+    this.siteMarkerLayer?.clear();
+    this.trajectoryLines = null;
+    this.trajectoryLineLayer?.clear();
     this.voronoiCellGeometry = null;
     this.voronoiCellLayer?.clear();
     this.voronoiAllCellGeometry = null;
@@ -702,6 +716,37 @@ export class WebGLRenderer {
 
   setDislocations(network, options = {}) { this.setDislocationNetwork(network, options); }
 
+  /** Point markers without atoms, e.g. vacant Wigner–Seitz sites: Cartesian
+   * `positions` and byte RGB `colors`, wrapped into the displayed cell. */
+  setSiteMarkers(markers, options = {}) {
+    if (!markers && !this.siteMarkerLayer) {
+      this.siteMarkers = null;
+      this.siteMarkerOptions = normalizeSiteMarkerOptions(options, this.siteMarkerOptions);
+      this.requestRender();
+      return;
+    }
+    if (markers && !this.frame) throw new Error('Load a structure before displaying site markers.');
+    this.siteMarkerLayer ??= new SiteMarkerLayer(this.gl);
+    const previous = this.siteMarkerOptions;
+    this.siteMarkerLayer.setMarkers(this, markers, options);
+    const unchanged = (markers ?? null) === this.siteMarkers && this.siteMarkerLayer.options.visible === previous.visible
+      && this.siteMarkerLayer.options.radius === previous.radius;
+    this.siteMarkers = markers ?? null;
+    this.siteMarkerOptions = { ...this.siteMarkerLayer.options };
+    if (this.frame && !unchanged) this.updateSceneBounds();
+    this.requestRender();
+  }
+
+  /** Atom paths persist across frame changes; closing the source clears them. */
+  setTrajectoryLines(lines, options = {}) {
+    this.trajectoryLineOptions = normalizeTrajectoryLineOptions(options, this.trajectoryLineOptions);
+    if (lines && !this.trajectoryLineLayer) this.trajectoryLineLayer = new TrajectoryLineLayer(this.gl);
+    this.trajectoryLineLayer?.setLines(lines, this.trajectoryLineOptions);
+    this.trajectoryLines = lines ?? null;
+    if (this.frame) this.updateSceneBounds();
+    this.requestRender();
+  }
+
   setVoronoiCellGeometry(geometry, options = {}) {
     if (geometry && (!this.frame || geometry.atomIndex >= this.atomCount)) throw new Error('The inspected Voronoi cell is outside this frame.');
     const settings = normalizeVoronoiCellOptions(options, this.voronoiCellOptions);
@@ -962,6 +1007,8 @@ export class WebGLRenderer {
     }
     this.primitiveLayer?.extendBounds(this, minimum, maximum);
     this.dislocationLayer?.extendBounds(this, minimum, maximum);
+    this.siteMarkerLayer?.extendBounds(this, minimum, maximum);
+    this.trajectoryLineLayer?.extendBounds(this, minimum, maximum);
     this.voronoiCellLayer?.extendBounds(this, minimum, maximum);
     this.voronoiAllCellLayer?.extendBounds(this, minimum, maximum);
     this.sceneBounds = { minimum, maximum };
@@ -1033,13 +1080,8 @@ export class WebGLRenderer {
     // exports. Transparent exports keep atom edge coverage in the alpha channel.
     if (!transparentBackground) gl.colorMask(true, true, true, false);
 
-    if (this.renderViewport) {
-      // The legacy canvas path remains byte-for-byte unchanged. Offscreen
-      // targets blend smooth atom coverage so transparent RGB and MSAA resolve
-      // both use premultiplied color; readback unmultiples it for ImageData.
-      gl.enable(gl.BLEND);
-      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    } else gl.disable(gl.BLEND);
+    // Offscreen exports use this same pipeline, so they match the view.
+    gl.disable(gl.BLEND);
     gl.useProgram(this.sphereProgram);
     gl.bindVertexArray(this.sphereVao);
     gl.uniformMatrix4fv(this.sphereUniforms.uView, false, this.viewMatrix);
@@ -1063,6 +1105,8 @@ export class WebGLRenderer {
     }
     this.primitiveLayer?.render(this);
     this.dislocationLayer?.render(this);
+    this.siteMarkerLayer?.render(this);
+    this.trajectoryLineLayer?.render(this);
     if (!(this.voronoiCellOptions.allEnabled && this.voronoiAllCellGeometry?.complete)) this.voronoiCellLayer?.render(this);
     else if (this.voronoiCellLayer) this.voronoiCellLayer.renderedReplicaCount = 0;
     this.voronoiAllCellLayer?.render(this);
@@ -1376,10 +1420,16 @@ export class WebGLRenderer {
     const annotationScale = Math.max(1, Math.min(3, this.canvas.width / cssWidth)) * height / this.canvas.height;
     const lineScale = height / this.canvas.height;
     try {
-      this.lastExportStats = { width, height, ...captureOffscreen(this.gl, context, width, height, tile => {
+      // A transparent image is matted from black and white renders of the
+      // view's own pipeline; only the clear color changes, not cell or outline
+      // colors chosen for the real background.
+      const background = this.background;
+      this.lastExportStats = { width, height, ...captureOffscreen(this.gl, context, width, height, (tile, matteBackground) => {
         this.renderViewport = { width, height, tile, annotationScale, lineScale };
-        this.render(performance.now(), { transparentBackground: !includeBackground, trackStats: false, sliceOutlines: includeSliceOutlines });
-      }, { tileSize, unpremultiply: !includeBackground }) };
+        this.background = matteBackground ?? background;
+        try { this.render(performance.now(), { trackStats: false, sliceOutlines: includeSliceOutlines }); }
+        finally { this.background = background; }
+      }, { tileSize, matte: !includeBackground }) };
     } finally {
       this.renderViewport = oldViewport;
       this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -1511,7 +1561,7 @@ function drawOrientationLegend(context, legend, x, y, panelWidth, panelHeight, p
     offset += keyHeight;
   }
   context.font = '9px system-ui, sans-serif'; context.fillStyle = textColors.label;
-  context.fillText(legend.mode === 'quaternion' ? 'R: qx · G: qy · B: qz' : `Gray: ${legend.undefinedCount.toLocaleString('en-US')} undefined`, 0, offset + 10);
+  context.fillText(legend.mode === 'quaternion' ? 'RGB: Rodrigues x, y, z · symmetry-reduced' : `Gray: ${legend.undefinedCount.toLocaleString('en-US')} undefined`, 0, offset + 10);
   context.restore();
 }
 

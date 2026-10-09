@@ -54,7 +54,10 @@ import { removeComputedProperties } from './computed-properties.js';
 import { SelectionExpansionClient } from './selection-expansion-client.js';
 import { initializeTopologyTools } from './topology-tools.js';
 import { initializeClusterTools } from './cluster-tools.js';
+import { initializeWignerSeitzTools } from './wigner-seitz-tools.js';
 import { initializeBinningTools } from './binning-tools.js';
+import { initializeTrajectoryToolControls } from './trajectory-tool-controls.js';
+import { INFERRED_UNWRAP_SOURCE } from './data/trajectory-tools.js';
 import { SpatialBinningClient } from './binning-client.js';
 import { initializeVoronoiCellControls } from './voronoi-cell-controls.js';
 import { initializeStatisticsExports } from './statistics-export-controls.js';
@@ -195,7 +198,9 @@ let externalProperties;
 let expressionTools;
 let topologyTools;
 let clusterTools;
+let wignerSeitzTools;
 let binningTools;
+let trajectoryTools;
 let voronoiCells;
 let statisticsExports;
 let dxaTools;
@@ -234,6 +239,7 @@ const toolPanels = initializeToolPanels({
     if (kind === 'voronoi') topologyTools?.cancel('voronoi');
     else if (kind === 'dxa') dxaTools?.cancel();
     else if (kind === 'clusters') clusterTools?.cancel();
+    else if (kind === 'wignerSeitz') wignerSeitzTools?.cancel();
     else if (kind === 'binning') binningTools?.cancel();
     else if (kind === 'displacement') atomEyeTools?.cancelDisplacement();
     else if (state.analysis[kind]) cancelAnalysis(kind);
@@ -242,6 +248,7 @@ const toolPanels = initializeToolPanels({
   onDeactivateTool: (name) => {
     atomEyeTools?.deactivate(name);
     if (name === 'replicate') resetReplication();
+    if (name === 'trajectory') void trajectoryTools?.deactivate();
     if (name === 'slice') toolPanels.setToolEnabled('slice', sliceControls.getState().slices.some(slice => slice.enabled));
     if (name === 'selectionGroups') toolPanels.setToolEnabled(name, state.selectionGroups.groups.length > 0);
     if (name === 'externalProperties') toolPanels.setToolEnabled(name, externalProperties.getState().files.length > 0);
@@ -359,6 +366,7 @@ selectionGroupControls = initializeSelectionGroupControls({
     expressionTools?.refresh();
     if (state.frame && reason !== 'interaction' && reason !== 'selection') { applyColors(); restoreSelection(); }
     if (reason !== 'interaction' && reason !== 'selection') void clusterTools?.refreshSelectionGroups();
+    if (reason !== 'interaction' && reason !== 'selection') trajectoryTools?.refresh();
   },
   onError: error => showToast(error.message ?? String(error)),
 });
@@ -460,6 +468,10 @@ const worker = new StructureWorkerClient(({ loaded, total, stage }) => {
     setLoading(true, `Checking CFG sequence… ${loaded} / ${total}`);
   } else if (stage === 'sequence-unwrap') {
     setLoading(true, `Inferring continuous trajectory coordinates… ${loaded} / ${total}`);
+  } else if (stage === 'trajectory-unwrap') {
+    setLoading(true, `Unwrapping frames in order… ${loaded} / ${total}`);
+  } else if (stage === 'trajectory-smooth') {
+    setLoading(true, `Averaging frames… ${loaded} / ${total}`);
   } else if (stage === 'series-index') {
     const percentage = total > 0 ? Math.round(loaded / total * 100) : 0;
     setLoading(true, `Indexing numbered LAMMPS dumps… ${percentage}%`);
@@ -476,7 +488,8 @@ atomEyeTools = initializeAtomEyeTools({
   getPendingAnalysisKinds: () => [...Object.entries(state.analysis).filter(([kind, analysis]) => {
     const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
     return analysis.enabled && !['Failed', 'Calculated'].includes(elements[`${prefix}-state`].textContent);
-  }).map(([kind]) => kind), ...(topologyTools?.pendingKinds() ?? []), ...(clusterTools?.pendingKinds() ?? [])],
+  }).map(([kind]) => kind), ...(topologyTools?.pendingKinds() ?? []), ...(clusterTools?.pendingKinds() ?? []),
+    ...(wignerSeitzTools?.pendingKinds() ?? [])],
   getAnalysisPropertyKind: name => {
     for (const [kind, analysis] of Object.entries(state.analysis)) {
       if (!analysis.enabled) continue;
@@ -488,7 +501,7 @@ atomEyeTools = initializeAtomEyeTools({
               : [ANALYSES[kind].name];
       if (outputs.includes(name)) return kind;
     }
-    return topologyTools?.getPropertyKind(name) ?? clusterTools?.getPropertyKind(name) ?? null;
+    return topologyTools?.getPropertyKind(name) ?? clusterTools?.getPropertyKind(name) ?? wignerSeitzTools?.getPropertyKind(name) ?? null;
   },
   getSelectedIndex: () => state.selectedId === null || !state.frame ? -1 : findAtomIndex(state.frame.ids, state.selectedId),
   selectAtom: handleAtomPick,
@@ -601,6 +614,31 @@ clusterTools = initializeClusterTools({
   notify: showToast,
 });
 
+wignerSeitzTools = initializeWignerSeitzTools({
+  renderer, pool: analysisPool, tools: toolPanels,
+  getFrame: () => state.frame, getFrameAt: getFrame,
+  getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
+  getFrameCount: () => state.frameCount,
+  getFrameIndex: () => state.frameIndex,
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  getColorChoiceVersion: () => colorChoiceVersion,
+  chooseProperty: (name, { manual = false } = {}) => {
+    if (manual) { colorChoiceVersion++; interruptConfigurationRestore('a color quantity change'); }
+    state.colorMode = `property:${name}`; refreshColorOptions(); applyColors();
+  },
+  onBeforeClear: (kind, { clearSettings }) => {
+    if (clearSettings) atomEyeTools.cancelVectorDependency(kind);
+  },
+  onResultsChange: () => {
+    if (!state.frame) return;
+    refreshColorOptions(); applyColors(); updateMemoryMetric();
+    reassessFrameCache(state.frame);
+  },
+  onDisplayChange: () => atomEyeTools?.syncComparison(),
+  onEdit: () => interruptConfigurationRestore('a Wigner–Seitz analysis edit'),
+  notify: showToast,
+});
+
 binningTools = initializeBinningTools({
   tools: toolPanels,
   getFrame: () => state.frame,
@@ -614,6 +652,23 @@ binningTools = initializeBinningTools({
   onEdit: () => interruptConfigurationRestore('a spatial binning edit'),
   notify: showToast,
   client: new SpatialBinningClient({ cpuBudget }),
+});
+
+trajectoryTools = initializeTrajectoryToolControls({
+  tools: toolPanels, renderer, worker,
+  getFrame: () => state.frame,
+  getFrameIndex: () => state.frameIndex,
+  getFrameCount: () => state.frameCount,
+  ensureIndexed: waitForSourceIndex,
+  getSourceVersion: () => state.sourceVersion,
+  getSelectionGroups: () => state.selectionGroups.groups,
+  getCoordinateMode: () => state.coordinateMode,
+  canInferUnwrap: () => canInferUnwrap(),
+  onSmoothingChange: () => applyTrajectoryProcessing(),
+  onLinesChange: () => atomEyeTools?.syncComparison(),
+  onEdit: () => interruptConfigurationRestore('a trajectory tool edit'),
+  notify: showToast,
+  setBusy: text => { if (text) setLoading(true, text, 'trajectory-unwrap'); else if (loadingOwner === 'trajectory-unwrap') setLoading(false); },
 });
 
 voronoiCells = initializeVoronoiCellControls({
@@ -684,7 +739,7 @@ elements['frame-last'].addEventListener('click', async () => {
 elements['color-mode'].addEventListener('change', () => {
   selectColorMode(elements['color-mode'].value);
 });
-elements['coordinate-mode'].addEventListener('change', updateCoordinateMode);
+elements['coordinate-mode'].addEventListener('change', () => { void updateCoordinateMode().catch(error => showToast(error.message)); });
 for (const axis of ['a', 'b', 'c']) {
   document.getElementById(`display-origin-${axis}`).addEventListener('input', updatePeriodicOrigin);
   document.getElementById(`display-origin-${axis}`).addEventListener('change', updatePeriodicOrigin);
@@ -859,6 +914,7 @@ window.addEventListener('beforeunload', () => {
   externalProperties?.reset();
   topologyTools?.abortJobs();
   clusterTools?.abortJobs();
+  wignerSeitzTools?.abortJobs();
   binningTools?.dispose();
   voronoiCells?.abortJobs();
   statisticsExports?.dispose();
@@ -922,7 +978,9 @@ function closeSource() {
   dxaTools.reset();
   topologyTools?.reset();
   clusterTools?.reset();
+  wignerSeitzTools?.reset();
   binningTools?.reset();
+  trajectoryTools?.reset();
   voronoiCells?.reset();
   framePrefetchController?.abort();
   framePrefetchController = null;
@@ -1328,7 +1386,9 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     dxaTools.reset();
     topologyTools?.reset();
     clusterTools?.reset();
+    wignerSeitzTools?.reset();
     binningTools?.reset();
+    trajectoryTools?.reset();
     voronoiCells?.reset();
     for (const kind of Object.keys(state.analysis)) toolPanels.setToolEnabled(kind, false);
     toolPanels.setToolEnabled('replicate', false);
@@ -1458,6 +1518,7 @@ function updateSourceIndex(info) {
       input.max = String(state.frameCount);
     }
     updateCacheLabel();
+    trajectoryTools?.refresh();
     if (state.indexComplete) scheduleFramePrefetch(state.frameIndex);
   }
   if (info.error && info.error !== previousError) showToast(`Trajectory indexing stopped: ${info.error}`);
@@ -1515,6 +1576,13 @@ async function showFrame(index) {
     const frame = await getFrame(index, { signal: navigation.signal });
     if (request !== state.frameRequest) return false;
     if (!frame) return false;
+    if (state.coordinateMode === 'unwrapped' && trajectoryTools.needsInferredUnwrap(frame)) {
+      // A frame cached before Unwrapped was chosen: attach its inferred
+      // coordinates first, rather than showing it wrapped for a moment.
+      try { await trajectoryTools.ensureInferredUnwrap(frame, index, { signal: navigation.signal, showProgress: requiresLoad }); }
+      catch (error) { if (error.name === 'AbortError') return false; showToast(error.message); }
+      if (request !== state.frameRequest) return false;
+    }
     state.frameIndex = index;
     if (state.playing) preparePlaybackBuffer();
     await displayFrame(frame);
@@ -1556,7 +1624,14 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   refreshColorOptions();
   const palette = atomEyeTools.customizePalette(paletteForCurrentMode());
   const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), radiiByType(frame), displayRepetitions(),
-    { coordinateMode: state.coordinateMode });
+    { coordinateMode: displayCoordinateMode(frame) });
+  trajectoryTools?.onFrame();
+  if (state.coordinateMode === 'unwrapped' && trajectoryTools?.needsInferredUnwrap(frame)) {
+    // Frames shown outside normal navigation (replication, restore) catch up.
+    void trajectoryTools.ensureInferredUnwrap(frame, state.frameIndex, { showProgress: false }).then(ready => {
+      if (ready && state.frame === frame && state.coordinateMode === 'unwrapped') applyCoordinateMode({ resetCamera: false });
+    }).catch(() => {});
+  }
   configurePeriodicOriginUi();
   sliceControls.refreshPickedAtoms();
   configureReplicationUi();
@@ -1612,6 +1687,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   pending.push(dxaTools.onFrame());
   pending.push(topologyTools.onFrame());
   pending.push(clusterTools.onFrame({ suggestedCutoff: recommendCoordinationCutoff(frame).value }));
+  pending.push(wignerSeitzTools.onFrame());
   pending.push(binningTools.onFrame());
   syncCancelButton('coordination');
   await Promise.all(pending);
@@ -1633,7 +1709,10 @@ async function getFrame(index, { background = false, cacheFrame = true, signal, 
   const processingRevision = state.processingRevision;
   const physical = state.replicateAtoms, repetitions = [...state.repetitions];
   const pending = { cacheFrame, promise: null, background, signal };
-  pending.promise = worker.frame(index, { reportProgress: !background, background, signal })
+  // Smoothing and inferred unwrapping run in the structure Worker. Without
+  // them the request is unchanged; smoothing edits bump processingRevision.
+  const trajectory = trajectoryTools?.frameRequestOptions() ?? null;
+  pending.promise = worker.frame(index, { reportProgress: !background, background, signal, trajectory })
     .then(async (result) => {
       const preparationSignal = framePreparationSignal(signal, () =>
         sourceVersion === state.sourceVersion && processingRevision === state.processingRevision
@@ -1872,13 +1951,30 @@ function setRadiusPercent(rawValue, { source = 'number' } = {}) {
   atomEyeTools?.syncComparison();
 }
 
+/** File image data wins; inferred coordinates serve display paths only. */
+function unwrappedPositionsOf(frame) {
+  return frame?.unwrappedPositions ?? frame?.inferredUnwrap?.unwrappedPositions ?? null;
+}
+
+/** Inference needs more than one frame and the source atoms themselves:
+ * physical replication derives copies from image flags, so it is excluded. */
+function canInferUnwrap(frame = state.frame) {
+  return Boolean(frame) && !frame.unwrappedPositions && (state.frameCount > 1 || !state.indexComplete) && !state.replicateAtoms;
+}
+
+/** The mode actually drawn: Unwrapped waits for inferred coordinates. */
+function displayCoordinateMode(frame = state.frame) {
+  return state.coordinateMode === 'unwrapped' && unwrappedPositionsOf(frame) ? 'unwrapped' : 'wrapped';
+}
+
 function configureCoordinateMode(frame) {
   const unwrappedOption = elements['coordinate-mode'].querySelector('option[value="unwrapped"]');
-  const available = Boolean(frame.unwrappedPositions);
+  const inferable = canInferUnwrap(frame);
+  const available = Boolean(frame.unwrappedPositions) || inferable;
   unwrappedOption.disabled = !available;
-  unwrappedOption.textContent = available
+  unwrappedOption.textContent = frame.unwrappedPositions
     ? `Unwrapped coordinates (${frame.unwrapSource})`
-    : 'Unwrapped coordinates (not available)';
+    : inferable ? `Unwrapped coordinates (${INFERRED_UNWRAP_SOURCE})` : 'Unwrapped coordinates (not available)';
   if (!available && state.coordinateMode === 'unwrapped') {
     state.coordinateMode = 'wrapped';
     showToast('This frame has no unwrapped coordinates; display returned to wrapped coordinates.');
@@ -1887,9 +1983,7 @@ function configureCoordinateMode(frame) {
 }
 
 function displayPositionsForFrame(frame = state.frame) {
-  return state.coordinateMode === 'unwrapped' && frame?.unwrappedPositions
-    ? frame.unwrappedPositions
-    : frame?.positions;
+  return displayCoordinateMode(frame) === 'unwrapped' ? unwrappedPositionsOf(frame) : frame?.positions;
 }
 
 function displayedAtomPoint(id, replicaIndices = [0, 0, 0]) {
@@ -1923,7 +2017,7 @@ function setPeriodicOrigin(values, { preserveInput = false } = {}) {
   interruptConfigurationRestore('a periodic display origin edit');
   atomEyeTools?.cancelBatch({ restore: false });
   state.periodicOrigin = origin;
-  renderer.setPeriodicOrigin(origin, { coordinateMode: state.coordinateMode });
+  renderer.setPeriodicOrigin(origin, { coordinateMode: displayCoordinateMode() });
   if (!preserveInput) for (const [axis, name] of ['a', 'b', 'c'].entries()) document.getElementById(`display-origin-${name}`).value = String(origin[axis]);
   configurePeriodicOriginUi();
   sliceControls.refreshPickedAtoms();
@@ -2006,17 +2100,38 @@ function refreshComputedProperties({ reason, name, removed = [] } = {}) {
   updateMemoryMetric();
 }
 
-function updateCoordinateMode() {
+async function updateCoordinateMode() {
   if (!state.frame) return;
   const requested = elements['coordinate-mode'].value;
-  if (requested === 'unwrapped' && !state.frame.unwrappedPositions) {
+  if (requested === 'unwrapped' && !unwrappedPositionsOf(state.frame) && !canInferUnwrap()) {
     elements['coordinate-mode'].value = 'wrapped';
-    showToast('Unwrapped display requires explicit image data, meaningful out-of-cell CFG coordinates, or an ordered multi-CFG sequence.');
+    showToast('Unwrapped display requires explicit image data, meaningful out-of-cell CFG coordinates, or more than one trajectory frame.');
     return;
   }
+  if (requested !== 'unwrapped') trajectoryTools.cancelUnwrap();
   state.coordinateMode = requested;
-  elements['metric-upload'].textContent = formatDuration(renderer.setDisplayPositions(displayPositionsForFrame(), { coordinateMode: state.coordinateMode }));
-  renderer.resetCamera();
+  if (requested === 'unwrapped' && trajectoryTools.needsInferredUnwrap(state.frame)) {
+    const frame = state.frame, index = state.frameIndex;
+    // Neighboring frames prefetched from now on carry inferred coordinates.
+    scheduleFramePrefetch(index);
+    try {
+      if (!await trajectoryTools.ensureInferredUnwrap(frame, index)) throw new Error('Unwrapped coordinates could not be inferred for this frame.');
+    } catch (error) {
+      if (state.frame === frame && state.coordinateMode === 'unwrapped') {
+        state.coordinateMode = 'wrapped';
+        elements['coordinate-mode'].value = 'wrapped';
+        if (error.name !== 'AbortError') showToast(error.message);
+      }
+      return;
+    }
+    if (state.frame !== frame || state.coordinateMode !== 'unwrapped') return;
+  }
+  applyCoordinateMode();
+}
+
+function applyCoordinateMode({ resetCamera = true } = {}) {
+  elements['metric-upload'].textContent = formatDuration(renderer.setDisplayPositions(displayPositionsForFrame(), { coordinateMode: displayCoordinateMode() }));
+  if (resetCamera) renderer.resetCamera();
   if (state.colorMode.startsWith('builtin:position:')) applyColors();
   restoreSelection();
   atomEyeTools.updateMeasurements();
@@ -2052,7 +2167,7 @@ function refreshColorOptions() {
       || (state.analysis.strain.enabled && !['Failed', 'Calculated'].includes(elements['strain-state'].textContent)))
       && ![...elements['color-mode'].options].some(item => item.value === 'builtin:ptm:ipf')) {
     elements['color-mode'].append(option('builtin:ptm:ipf', 'PTM orientation · inverse pole figure (calculating…)'),
-      option('builtin:ptm:quaternion', 'PTM orientation · quaternion RGB (calculating…)'));
+      option('builtin:ptm:quaternion', 'PTM orientation · Rodrigues RGB (calculating…)'));
   }
   // Keep a saved external quantity selected while its local file is pending,
   // or while a frame-scoped column is unavailable in the current frame.
@@ -2098,6 +2213,9 @@ function refreshColorOptions() {
     if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
   }
   for (const { name, label } of clusterTools?.pendingColorProperties() ?? []) {
+    if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
+  }
+  for (const { name, label } of wignerSeitzTools?.pendingColorProperties() ?? []) {
     if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
   }
   const available = [...elements['color-mode'].options].some((item) => item.value === previous);
@@ -2179,6 +2297,7 @@ function abortAnalysisJobs() {
   dxaTools?.abortJobs();
   topologyTools?.abortJobs();
   clusterTools?.abortJobs();
+  wignerSeitzTools?.abortJobs();
   binningTools?.abortJobs();
   voronoiCells?.abortJobs();
   for (const controller of analysisControllers.values()) controller.abort();
@@ -2877,10 +2996,11 @@ function updateSelectionPanel(index = null) {
   }
   const frame = state.frame;
   const base = index * 3;
-  const coordinateRows = frame.unwrappedPositions
+  const inferred = !frame.unwrappedPositions && state.coordinateMode === 'unwrapped' ? frame.inferredUnwrap : null;
+  const coordinateRows = frame.unwrappedPositions || inferred
     ? [
         ['Cartesian (wrapped)', formatVector(frame.positions, base, ' Å')],
-        ['Cartesian (unwrapped)', formatVector(frame.unwrappedPositions, base, ' Å')],
+        [inferred ? 'Cartesian (unwrapped, inferred)' : 'Cartesian (unwrapped)', formatVector(unwrappedPositionsOf(frame), base, ' Å')],
         ['Fractional (wrapped)', formatVector(frame.fractional, base)],
       ]
     : [
@@ -2890,7 +3010,8 @@ function updateSelectionPanel(index = null) {
   const rows = [
     ['ID', String(frame.ids[index])],
     ['Type', frame.typeLabels[frame.types[index]]],
-    ...(frame.imageFlags ? [['Image flags (ix, iy, iz)', formatVector(frame.imageFlags, base)]] : []),
+    ...(frame.imageFlags ? [['Image flags (ix, iy, iz)', formatVector(frame.imageFlags, base)]]
+      : inferred ? [['Image counts (inferred)', formatVector(inferred.imageFlags, base)]] : []),
     ...coordinateRows,
     ...frame.properties.map((property) => [
       property.name,
@@ -3310,7 +3431,7 @@ function renderOrientationLegend(legend) {
   const explanation = document.createElement('p'); explanation.className = 'help';
   explanation.textContent = legend.mode === 'ipf'
     ? 'Crystal symmetry reduces the chosen sample direction to the RGB key. Other and unsupported structures are gray.'
-    : 'Red, green and blue encode the sign-canonical quaternion x, y and z components. This display is not an IPF key.';
+    : 'Red, green and blue encode the Rodrigues vector of the orientation reduced to the crystal\'s fundamental zone, scaled to the zone\'s extent. Symmetry-equivalent orientations share a color. This display is not an IPF key.';
   elements['color-legend'].append(explanation);
   if (legend.undefinedCount) {
     const count = document.createElement('p'); count.className = 'help';
@@ -3472,7 +3593,9 @@ function setControlsEnabled(enabled) {
   dxaTools?.setEnabled(enabled);
   topologyTools?.setEnabled(enabled);
   clusterTools?.setEnabled(enabled);
+  wignerSeitzTools?.setEnabled(enabled);
   binningTools?.setEnabled(enabled);
+  trajectoryTools?.setEnabled(enabled);
   voronoiCells?.setEnabled(enabled);
   statisticsExports?.setEnabled(enabled);
   exportResolutionControls?.setEnabled(enabled);
@@ -3592,7 +3715,7 @@ function captureConfiguration() {
       activeCategory: toolPanels.getActiveCategory(),
       extensions: { ...atomEyeTools.serialize(), ...topologyTools.serialize(), voronoiDisplay: voronoiCells.serialize(), dxa: dxaTools.serialize(), externalProperties: externalProperties.getState(),
         expressions: expressionTools.getState(),
-        clusters: clusterTools.serialize(), binning: binningTools.serialize() },
+        clusters: clusterTools.serialize(), wignerSeitz: wignerSeitzTools.serialize(), binning: binningTools.serialize(), trajectory: trajectoryTools.serialize() },
       theme: document.documentElement.dataset.theme,
     },
   });
@@ -3648,12 +3771,19 @@ async function restoreConfiguration(config) {
     if (config.source && targetIndex >= state.frameCount && !state.indexComplete) await waitForSourceIndex();
     if (!current()) return;
     if (config.source && targetIndex >= state.frameCount) throw new Error('The saved frame is not available in the loaded source.');
+    // Smoothing defines the analyzed coordinates, so it applies before the
+    // target frame is prepared. Recipes without it restore file coordinates.
+    if (state.frame && trajectoryTools.setSmoothing(saved.extensions.trajectory?.smoothing ?? { enabled: false })) {
+      abortAnalysisJobs();
+      invalidateProcessedFrames();
+    }
     const existingTarget = state.frame ? await getFrame(targetIndex) : null;
     const repetitions = existingTarget ? normalizeRepetitions(saved.replicate, sourceFrame(existingTarget).cell.pbc) : saved.replicate;
     const targetFrame = existingTarget ? await prepareAnalysisFrame(existingTarget, repetitions, saved.replicateAtoms,
       { signal: { get aborted() { return !current(); } } }) : null;
     if (!current()) return;
-    if (targetFrame && saved.display.coordinateMode === 'unwrapped' && !targetFrame.unwrappedPositions) {
+    if (targetFrame && saved.display.coordinateMode === 'unwrapped' && !targetFrame.unwrappedPositions
+      && !(state.frameCount > 1 && !saved.replicateAtoms)) {
       throw new Error('The saved unwrapped view requires coordinates that this source does not provide.');
     }
     const references = targetFrame ? targetFrame.typeLabels.map((label, type) => {
@@ -3670,6 +3800,7 @@ async function restoreConfiguration(config) {
     dxaTools.reset();
     topologyTools?.reset();
     clusterTools?.reset();
+    wignerSeitzTools?.reset();
     binningTools?.reset();
     voronoiCells?.reset();
     if (targetFrame) await commitReplicationFrame(targetFrame, repetitions, saved.replicateAtoms, targetIndex, { resetCamera: false });
@@ -3695,8 +3826,12 @@ async function restoreConfiguration(config) {
     state.coordinateMode = saved.display.coordinateMode;
     if (state.frame) {
       configureCoordinateMode(state.frame);
-      renderer.setDisplayPositions(displayPositionsForFrame(), { coordinateMode: state.coordinateMode });
-      renderer.setPeriodicOrigin(state.periodicOrigin, { coordinateMode: state.coordinateMode });
+      if (state.coordinateMode === 'unwrapped' && trajectoryTools.needsInferredUnwrap(state.frame)) {
+        await trajectoryTools.ensureInferredUnwrap(state.frame, state.frameIndex);
+        if (!current()) return;
+      }
+      renderer.setDisplayPositions(displayPositionsForFrame(), { coordinateMode: displayCoordinateMode() });
+      renderer.setPeriodicOrigin(state.periodicOrigin, { coordinateMode: displayCoordinateMode() });
       renderer.setReplications(displayRepetitions());
     }
     configureReplicationUi();
@@ -3783,7 +3918,9 @@ async function restoreConfiguration(config) {
       dxaTools.restore(saved.extensions.dxa, { isCurrent: current }),
       topologyTools.restore(saved.extensions, { isCurrent: current }),
       clusterTools.restore(saved.extensions.clusters, { isCurrent: current }),
-      binningTools.restore(saved.extensions.binning, { isCurrent: current })]);
+      wignerSeitzTools.restore(saved.extensions.wignerSeitz, { isCurrent: current }),
+      binningTools.restore(saved.extensions.binning, { isCurrent: current }),
+      trajectoryTools.restoreLines(saved.extensions.trajectory?.lines ?? null, { isCurrent: current })]);
     if (!current()) return;
     await voronoiCells.restore(saved.extensions.voronoiDisplay);
     if (!current()) return;
@@ -3794,7 +3931,7 @@ async function restoreConfiguration(config) {
     const failed = [...Object.keys(state.analysis).filter(kind => {
       const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
       return state.analysis[kind].enabled && elements[`${prefix}-state`].textContent === 'Failed';
-    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
+    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...wignerSeitzTools.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
     elements['configuration-status'].textContent = failed.length
       ? `Configuration restored; these analyses could not complete: ${failed.join(', ')}.`
       : externalProperties.getPendingFiles().length
@@ -3884,13 +4021,60 @@ async function prepareAnalysisFrame(frame, counts, physical, { signal, onProgres
   };
   // External columns expand in their persistent Worker, rather than being
   // copied once here and a second time when the property registry refreshes.
-  const replicationSource = physical ? { ...source, properties: source.properties.filter(property => !property.externalImportId) } : source;
+  // Display-only inferred coordinates describe the source atoms, not copies.
+  const replicationSource = physical ? { ...source, properties: source.properties.filter(property => !property.externalImportId),
+    inferredUnwrap: undefined } : source;
   const prepared = physical ? await worker.replicate(replicationSource, counts, { signal, onProgress: replicationProgress, background }) : source;
   analysisFrameSources.set(prepared, source);
   if (externalProperties && !signal?.aborted) await externalProperties.applyToFrame(prepared, { sourceFrame: source });
   if (signal?.aborted) throw new DOMException('Replication cancelled.', 'AbortError');
   if (prepared !== source) prepared.processingSourceBytes = estimateFrameBytes(source);
   return prepared;
+}
+
+/** Discard processed frames and every per-frame cache keyed by them. */
+function invalidateProcessedFrames() {
+  state.processingRevision++;
+  cancelFramePrefetch();
+  state.pendingFrames.clear();
+  analysisPool.clearVoronoiFrames();
+  void gpuPrefetch.clearSource();
+  cache.clear();
+}
+
+/** Smoothing replaces analyzed coordinates. Prepare the displayed frame
+ * again; analyses rerun on it and neighbors are prefetched as usual. */
+async function applyTrajectoryProcessing() {
+  if (!state.frame || sourceLoadingOwner !== null) return;
+  stopFramePlayback();
+  clearTimeout(frameTimer);
+  atomEyeTools.cancelBatch({ restore: false });
+  frameNavigationController?.abort();
+  const navigation = new AbortController();
+  frameNavigationController = navigation;
+  abortAnalysisJobs();
+  invalidateProcessedFrames();
+  const request = ++state.frameRequest, index = state.frameIndex;
+  setLoading(true, trajectoryTools.smoothingWindow() ? 'Averaging frames…' : 'Preparing frame…');
+  try {
+    const frame = await getFrame(index, { signal: navigation.signal });
+    if (!frame || request !== state.frameRequest) return;
+    if (state.coordinateMode === 'unwrapped' && trajectoryTools.needsInferredUnwrap(frame)) {
+      await trajectoryTools.ensureInferredUnwrap(frame, index, { signal: navigation.signal, showProgress: false });
+      if (request !== state.frameRequest) return;
+    }
+    await displayFrame(frame);
+    if (request === state.frameRequest) scheduleFramePrefetch(index);
+  } catch (error) {
+    if (error.name === 'AbortError' || request !== state.frameRequest) return;
+    if (!trajectoryTools.smoothingWindow()) throw error;
+    // For example, frames without explicit IDs whose atom counts differ.
+    trajectoryTools.setSmoothing({ enabled: false });
+    showToast(`Smoothing was turned off: ${error.message}`);
+    await applyTrajectoryProcessing();
+  } finally {
+    if (request === state.frameRequest) setLoading(false);
+  }
 }
 
 async function commitReplicationFrame(frame, counts, physical, index, { resetCamera = true } = {}) {

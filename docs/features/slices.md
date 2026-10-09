@@ -55,7 +55,7 @@ Coincident picks cannot define a bisector; three collinear picks cannot define a
 
 The committed normal `n` is normalized. Points on the plane satisfy `n · r = d`; the negative side retains `n · r ≤ d`, the positive side retains `n · r ≥ d`, and a slab of thickness `t` retains `|n · r − d| ≤ t/2`, each with a tolerance of 10⁻⁵ Å. Enabled slices apply together: visible atoms satisfy every enabled slice.
 
-Shaders test half-spaces of the form `m · r ≤ w`. A negative side is `(n, d)`, a positive side is `(−n, −d)`, and a slab contributes two: `(n, d + t/2)` and `(−n, t/2 − d)`. Sixteen slices therefore need at most 32 half-spaces. Atoms, bonds, vectors, Voronoi cells and dislocation lines use the same list, and picking applies the same rule in double precision.
+Shaders test half-spaces of the form `m · r ≤ w`. A negative side is `(n, d)`, a positive side is `(−n, −d)`, and a slab contributes two: `(n, d + t/2)` and `(−n, t/2 − d)`. Sixteen slices therefore need at most 32 half-spaces. Atoms, bonds, vectors, Voronoi cells, dislocation lines and Wigner–Seitz site markers use the same list, and picking applies the same rule in double precision.
 
 **Miller normal and spacing.** Let the cell matrix `H` have rows `a₁`, `a₂`, `a₃` (Å). The reciprocal vectors `bᵢ`, defined by `bᵢ · aⱼ = δᵢⱼ` without a factor of 2π, are the columns of `H⁻¹`; this holds for orthogonal and triclinic cells. For integer indices,
 

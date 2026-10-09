@@ -152,7 +152,7 @@ export function initializeKeyboardControls({ renderer, getSliceControls = () => 
     } catch (error) { status.textContent = error.message; }
   });
   listen(document, 'keydown', event => {
-    if (shouldIgnoreShortcut(event, { modalOpen: Boolean(document.querySelector('dialog[open], [aria-modal="true"]:not([hidden])')) })) return;
+    if (shouldIgnoreShortcut(event, { modalOpen: Boolean(document.querySelector('dialog[open], [aria-modal="true"]:not([hidden])')), viewport })) return;
     if (/^[0-9]$/.test(event.key) && !event.shiftKey) {
       if (!cameraEnabled()) return;
       event.preventDefault(); if (event.repeat) return;

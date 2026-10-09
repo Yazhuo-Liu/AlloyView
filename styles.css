@@ -694,12 +694,20 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
 .cluster-table th:first-child, .cluster-table td:first-child { text-align: left; }
 .cluster-table td:first-child .legend-swatch { display: inline-block; margin-right: 6px; vertical-align: middle; }
 .cluster-table .cluster-periodic { color: var(--muted); }
+.wigner-seitz-section .paired-actions .button { min-width: 0; font-size: 10px; }
+.wigner-seitz-table tbody th { padding: 5px 6px; border-bottom: 1px solid var(--line); font-size: 10px; text-align: left; }
+.wigner-seitz-table .wigner-seitz-total th, .wigner-seitz-table .wigner-seitz-total td { color: var(--text); font-weight: 650; }
+.wigner-seitz-marker-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 2px 0 6px; color: var(--text-soft); font-size: 10px; }
+.wigner-seitz-marker-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.wigner-seitz-marker-legend i { width: 9px; height: 9px; border: 1px solid rgba(0, 0, 0, .55); border-radius: 50%; }
 .binning-section .paired-fields .field { min-width: 0; }
 .binning-chart .binning-map-image { image-rendering: pixelated; }
 .binning-chart .binning-map-highlight { stroke: var(--text); stroke-width: 1.5; }
 .binning-chart .binning-colorbar { stroke: var(--line-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
 #voronoi-cell-status { display: block; }
 #voronoi-cell-display .paired-fields .field { min-width: 0; }
+#voronoi-radical-controls .field { min-width: 0; }
+#voronoi-radical-controls .paired-fields, #voronoi-reset-radii { margin-bottom: 9px; }
 @media (max-width: 920px) {
   .statistics-export-button { min-height: 38px; }
   .statistics-population-controls .button { min-height: 38px; }

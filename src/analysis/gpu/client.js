@@ -71,8 +71,9 @@ export class GpuAnalysisClient {
         // A type subset has independent coordinates/index buffers. Keep its own
         // input ID; sharing the trajectory's source ID would reuse wrong sites.
         if (index !== undefined) this.frameIndexes.set(compactFrame, index);
+        const radii = compactVoronoiRadii(parameters.radii, selection);
         return this.enqueue('analyze', { frame: compactFrame,
-          parameters: { ...parameters, ...range, selectedTypes: null }, signal, onProgress }, 1)
+          parameters: { ...parameters, ...range, selectedTypes: null, ...(radii ? { radii } : {}) }, signal, onProgress }, 1)
           .then(result => expandVoronoiResult(result, selection));
       } catch (error) { return Promise.reject(error); }
     }
@@ -410,6 +411,6 @@ async function copyArray(source, task) {
   return result;
 }
 function abortError() { return new DOMException('Analysis cancelled.', 'AbortError'); }
-import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult } from '../voronoi-selection.js';
+import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult, compactVoronoiRadii } from '../voronoi-selection.js';
 import { gpuPreparationKinds } from './preparation.js';
 import { yieldToMain } from '../../task-yield.js';

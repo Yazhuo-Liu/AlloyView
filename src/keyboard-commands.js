@@ -28,11 +28,36 @@ export function isShortcutEditingTarget(target) {
   return Boolean(target?.isContentEditable || target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]'));
 }
 
-export function shouldIgnoreShortcut(event, { modalOpen = false } = {}) {
+const VERTICAL_SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+const HORIZONTAL_SCROLL_KEYS = new Set(['ArrowLeft', 'ArrowRight']);
+
+function scrollsAlong(element, vertical) {
+  const style = element.ownerDocument?.defaultView?.getComputedStyle?.(element);
+  if (!style || !/(auto|scroll)/.test(vertical ? style.overflowY : style.overflowX)) return false;
+  return vertical ? element.scrollHeight > element.clientHeight : element.scrollWidth > element.clientWidth;
+}
+
+/** Scrolling keys follow the usual page convention: they drive the camera
+ * only while focus rests on the page itself or inside the 3D view. Focus in
+ * the sidebar, a panel or any scrollable region keeps browser scrolling. */
+export function scrollKeyBelongsToFocus(event, viewport) {
+  const vertical = VERTICAL_SCROLL_KEYS.has(event?.key);
+  if (!vertical && !HORIZONTAL_SCROLL_KEYS.has(event?.key)) return false;
+  const target = event.target, document = target?.ownerDocument;
+  if (!target || !document || target === document.body || target === document.documentElement) return false;
+  if (!viewport?.contains?.(target)) return true;
+  for (let element = target; element && element !== viewport; element = element.parentElement) {
+    if (scrollsAlong(element, vertical)) return true;
+  }
+  return false;
+}
+
+export function shouldIgnoreShortcut(event, { modalOpen = false, viewport = null } = {}) {
   if (!event || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || modalOpen) return true;
   if (isShortcutEditingTarget(event.target)) return true;
   // Native button activation must not also start trajectory playback.
   if ([' ', 'Enter'].includes(event.key) && event.target?.closest?.('button, a, summary, [role="button"]')) return true;
+  if (viewport && scrollKeyBelongsToFocus(event, viewport)) return true;
   return false;
 }
 

@@ -98,6 +98,13 @@ export const SCALAR_COLOR_SCHEMES = Object.freeze(Object.entries(COLOR_MAPS).map
   label: map.label,
 })));
 
+/** Anchors [position, red, green, blue] of a named scalar color map. */
+export function colorMapStops(scheme) {
+  const map = COLOR_MAPS[scheme];
+  if (!map) throw new Error(`Unknown scalar color scheme “${scheme}”.`);
+  return map.stops;
+}
+
 export function colorsByType(frame, hiddenLabels = new Set()) {
   const colors = new Uint8Array(frame.types.length * 3);
   const counts = new Uint32Array(frame.typeLabels.length);

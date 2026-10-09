@@ -12,6 +12,7 @@ import { COORDINATION_CUTOFF_PRESETS } from './analysis/cutoff.js';
 import { normalizeExternalPropertyState } from './io/external-properties.js';
 import { normalizeComputedPropertyState } from './computed-properties.js';
 import { BINNING_AXES, BINNING_QUANTITIES, BINNING_REDUCTIONS, MAX_BINS_PER_AXIS, MAX_TOTAL_BINS } from './analysis/spatial-binning.js';
+import { MAX_SMOOTHING_WINDOW, MAX_TRAJECTORY_LINE_WIDTH, MIN_TRAJECTORY_LINE_WIDTH } from './data/trajectory-tools.js';
 
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
@@ -21,9 +22,10 @@ export const MAX_CONFIGURATION_ATOM_OVERRIDES = 100_000;
 export const MAX_CONFIGURATION_RDF_BINS = 4096;
 export const MAX_CONFIGURATION_SELECTION_GROUPS = MAX_SELECTION_GROUPS;
 export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
+export const MAX_CONFIGURATION_TRAJECTORY_LINE_IDS = 100_000;
 
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'lammps-data', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence', 'poscar']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi', 'expressions', 'clusters', 'binning']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'trajectory']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const COORDINATION_CUTOFF_CHOICES = new Set(['custom', ...COORDINATION_CUTOFF_PRESETS.map(preset => preset.symbol)]);
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
@@ -152,6 +154,11 @@ function normalizeConfiguration(value, fromSnapshot) {
     && displacement.referenceFrame >= configuration.source.frameCount) {
     fail('settings.extensions.displacement.referenceFrame', 'must be smaller than the source frame count');
   }
+  const wignerSeitz = configuration.settings.extensions.wignerSeitz;
+  if (wignerSeitz?.enabled && configuration.source?.frameCount !== undefined
+    && wignerSeitz.referenceFrame >= configuration.source.frameCount) {
+    fail('settings.extensions.wignerSeitz.referenceFrame', 'must be smaller than the source frame count');
+  }
   const clusterGroup = configuration.settings.extensions.clusters?.selectionGroupId;
   if (clusterGroup != null && !configuration.settings.selectionGroups.groups.some(group => group.id === clusterGroup)) {
     fail('settings.extensions.clusters.selectionGroupId', 'must identify a saved selection group');
@@ -159,6 +166,15 @@ function normalizeConfiguration(value, fromSnapshot) {
   const binningGroup = configuration.settings.extensions.binning?.selectionGroupId;
   if (binningGroup != null && !configuration.settings.selectionGroups.groups.some(group => group.id === binningGroup)) {
     fail('settings.extensions.binning.selectionGroupId', 'must identify a saved selection group');
+  }
+  const trajectoryLines = configuration.settings.extensions.trajectory?.lines;
+  if (trajectoryLines?.source === 'group'
+    && !configuration.settings.selectionGroups.groups.some(group => group.id === trajectoryLines.selectionGroupId)) {
+    fail('settings.extensions.trajectory.lines.selectionGroupId', 'must identify a saved selection group');
+  }
+  if (trajectoryLines?.enabled && configuration.source?.frameCount !== undefined
+    && Math.max(trajectoryLines.firstFrame, trajectoryLines.lastFrame ?? 0) >= configuration.source.frameCount) {
+    fail('settings.extensions.trajectory.lines', 'must use frames smaller than the source frame count');
   }
   for (const [index, file] of (configuration.settings.extensions.externalProperties?.files ?? []).entries()) {
     if (configuration.source?.frameCount !== undefined && file.frameIndex >= configuration.source.frameCount) {
@@ -218,7 +234,7 @@ function normalizeSettings(value, fromSnapshot) {
     camera: normalizeCamera(input.camera ?? null),
     activeTool: input.activeTool === 'configuration' ? null : nullableChoice(
       input.activeTool === undefined || input.activeTool === 'selection' ? 'display' : input.activeTool, 'settings.activeTool', TOOLS),
-    activeCategory: choice(input.activeCategory ?? (['replicate', 'externalProperties', 'expressions'].includes(input.activeTool) ? 'modification' : 'visualization'),
+    activeCategory: choice(input.activeCategory ?? (['replicate', 'externalProperties', 'expressions', 'trajectory'].includes(input.activeTool) ? 'modification' : 'visualization'),
       'settings.activeCategory', new Set(['visualization', 'modification'])),
     selectedAtomId: identifier(input.selectedAtomId ?? null, 'settings.selectedAtomId', true),
     theme: choice(input.theme ?? 'dark', 'settings.theme', new Set(['light', 'dark'])),
@@ -233,7 +249,7 @@ function normalizeSelections(value) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'trajectory']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
   const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
   const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage', 'tiles']);
@@ -243,7 +259,8 @@ function normalizeExtensions(value, fromSnapshot) {
   const bondStatistics = input.bondStatistics === undefined ? null
     : record(input.bondStatistics, `${path}.bondStatistics`, ['enabled', 'lengthBins', 'angleBins']);
   const voronoi = input.voronoi === undefined ? null
-    : record(input.voronoi, `${path}.voronoi`, ['enabled', 'faceAreaThreshold', 'relativeFaceAreaThreshold', 'bins', 'selectedTypes']);
+    : record(input.voronoi, `${path}.voronoi`, ['enabled', 'faceAreaThreshold', 'relativeFaceAreaThreshold', 'bins', 'selectedTypes',
+      ...VORONOI_RADICAL_KEYS]);
   const voronoiDisplay = input.voronoiDisplay === undefined ? null
     : record(input.voronoiDisplay, `${path}.voronoiDisplay`, ['enabled', 'allEnabled', 'color', 'opacity', 'style', 'scale']);
   if (bondStatistics?.enabled === true && nullablePositive(bonds.cutoff, `${path}.bonds.cutoff`, fromSnapshot) === null) {
@@ -314,9 +331,12 @@ function normalizeExtensions(value, fromSnapshot) {
       bins: number(voronoi.bins ?? 50, `${path}.voronoi.bins`, 1, 4096, true),
       selectedTypes: voronoi.selectedTypes == null ? null : [...new Set(list(voronoi.selectedTypes, `${path}.voronoi.selectedTypes`, 65535)
         .map((label, index) => string(label, `${path}.voronoi.selectedTypes[${index}]`, 256)))].sort(),
+      ...normalizeVoronoiRadical(voronoi, `${path}.voronoi`),
     } }),
     ...(clusters === null ? {} : { clusters }),
     ...(input.binning === undefined ? {} : { binning: normalizeBinning(input.binning, `${path}.binning`) }),
+    ...(input.wignerSeitz === undefined ? {} : { wignerSeitz: normalizeWignerSeitz(input.wignerSeitz, `${path}.wignerSeitz`) }),
+    ...(input.trajectory === undefined ? {} : { trajectory: normalizeTrajectory(input.trajectory, `${path}.trajectory`) }),
     ...(voronoiDisplay === null ? {} : { voronoiDisplay: {
       enabled: boolean(voronoiDisplay.enabled, `${path}.voronoiDisplay.enabled`, false),
       allEnabled: boolean(voronoiDisplay.allEnabled, `${path}.voronoiDisplay.allEnabled`, false),
@@ -403,6 +423,20 @@ function normalizeClusters(value, path, fromSnapshot) {
     sortBySize: boolean(input.sortBySize, `${path}.sortBySize`, true) };
 }
 
+/** Wigner–Seitz settings hold a zero-based reference frame and display
+ * choices only; assignments and occupancies are recalculated after import. */
+function normalizeWignerSeitz(value, path) {
+  const input = record(value, path, ['enabled', 'referenceFrame', 'affineMapping', 'markers', 'showMarkers', 'markerRadius']);
+  return {
+    enabled: boolean(input.enabled, `${path}.enabled`, false),
+    referenceFrame: number(input.referenceFrame ?? 0, `${path}.referenceFrame`, 0, Number.MAX_SAFE_INTEGER, true),
+    affineMapping: boolean(input.affineMapping, `${path}.affineMapping`, false),
+    markers: choice(input.markers ?? 'vacancies', `${path}.markers`, new Set(['vacancies', 'defects', 'all'])),
+    showMarkers: boolean(input.showMarkers, `${path}.showMarkers`, true),
+    markerRadius: number(input.markerRadius ?? 0.6, `${path}.markerRadius`, 0.01, 100),
+  };
+}
+
 /** Binning settings name their quantity by its Color by key; the property
  * itself is resolved again in each frame. Both axes and bin counts are kept
  * so switching between a profile and a map restores the second vector. */
@@ -428,6 +462,45 @@ function normalizeBinning(value, path) {
       : sliceIdentifier(input.selectionGroupId, `${path}.selectionGroupId`),
     averageFrames: boolean(input.averageFrames, `${path}.averageFrames`, false),
     colorScheme: choice(input.colorScheme ?? 'viridis', `${path}.colorScheme`, COLOR_SCHEMES) };
+}
+
+/** Smoothing changes analyzed coordinates; line settings recompute paths
+ * after import. Explicit line IDs are bounded before they are copied. */
+function normalizeTrajectory(value, path) {
+  const input = record(value, path, ['smoothing', 'lines']);
+  const smoothing = record(input.smoothing ?? {}, `${path}.smoothing`, ['enabled', 'window']);
+  const lines = record(input.lines ?? {}, `${path}.lines`, ['enabled', 'source', 'selectionGroupId', 'atomIds', 'firstFrame', 'lastFrame',
+    'stride', 'visible', 'color', 'width', 'colorByTime', 'colorScheme']);
+  const enabled = boolean(lines.enabled, `${path}.lines.enabled`, false);
+  const source = choice(lines.source ?? 'ids', `${path}.lines.source`, new Set(['ids', 'group']));
+  const selectionGroupId = lines.selectionGroupId === undefined || lines.selectionGroupId === null ? null
+    : sliceIdentifier(lines.selectionGroupId, `${path}.lines.selectionGroupId`);
+  if (source === 'group' && selectionGroupId === null) fail(`${path}.lines.selectionGroupId`, 'is required for a selection group source');
+  const atomIds = list(lines.atomIds ?? [], `${path}.lines.atomIds`, MAX_CONFIGURATION_TRAJECTORY_LINE_IDS).map((id, index) => typeof id === 'number'
+    ? number(id, `${path}.lines.atomIds[${index}]`, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true)
+    : identifier(id, `${path}.lines.atomIds[${index}]`));
+  ensureUnique(atomIds.map(String), `${path}.lines.atomIds`);
+  if (enabled && source === 'ids' && !atomIds.length) fail(`${path}.lines.atomIds`, 'must list atoms for enabled lines');
+  const firstFrame = number(lines.firstFrame ?? 0, `${path}.lines.firstFrame`, 0, Number.MAX_SAFE_INTEGER, true);
+  const lastFrame = lines.lastFrame === undefined || lines.lastFrame === null ? null
+    : number(lines.lastFrame, `${path}.lines.lastFrame`, 0, Number.MAX_SAFE_INTEGER, true);
+  if (lastFrame !== null && lastFrame < firstFrame) fail(`${path}.lines.lastFrame`, 'must not precede the first frame');
+  return {
+    smoothing: {
+      enabled: boolean(smoothing.enabled, `${path}.smoothing.enabled`, false),
+      window: number(smoothing.window ?? 2, `${path}.smoothing.window`, 1, MAX_SMOOTHING_WINDOW, true),
+    },
+    lines: {
+      enabled, source, selectionGroupId: source === 'group' ? selectionGroupId : null, atomIds: source === 'ids' ? atomIds : [],
+      firstFrame, lastFrame,
+      stride: number(lines.stride ?? 1, `${path}.lines.stride`, 1, Number.MAX_SAFE_INTEGER, true),
+      visible: boolean(lines.visible, `${path}.lines.visible`, true),
+      color: hexColor(lines.color ?? '#ff9f1c', `${path}.lines.color`),
+      width: number(lines.width ?? 2, `${path}.lines.width`, MIN_TRAJECTORY_LINE_WIDTH, MAX_TRAJECTORY_LINE_WIDTH),
+      colorByTime: boolean(lines.colorByTime, `${path}.lines.colorByTime`, false),
+      colorScheme: choice(lines.colorScheme ?? 'viridis', `${path}.lines.colorScheme`, COLOR_SCHEMES),
+    },
+  };
 }
 
 function normalizeComparisonLayout(value, path) {
@@ -554,6 +627,29 @@ function hexColor(value, path) {
 
 function ensureUnique(values, path) {
   if (new Set(values).size !== values.length) fail(path, 'contains duplicates');
+}
+
+const VORONOI_RADICAL_KEYS = ['radical', 'radiusSource', 'typeRadii', 'radiusProperty'];
+
+/** Radical Voronoi settings are optional; recipes without them stay unweighted
+ * and normalize exactly as before. Radii are finite and nonnegative. */
+function normalizeVoronoiRadical(voronoi, path) {
+  if (VORONOI_RADICAL_KEYS.every(name => voronoi[name] === undefined)) return {};
+  const typeRadii = list(voronoi.typeRadii ?? [], `${path}.typeRadii`, MAX_PROPERTIES).map((value, index) => {
+    const entryPath = `${path}.typeRadii[${index}]`, entry = record(value, entryPath, ['label', 'radius']);
+    return { label: typeLabel(entry.label, `${entryPath}.label`), radius: number(entry.radius, `${entryPath}.radius`, 0, MAX_COORDINATE) };
+  });
+  ensureUnique(typeRadii.map(({ label }) => label), `${path}.typeRadii`);
+  let radiusProperty = voronoi.radiusProperty ?? null;
+  if (radiusProperty !== null) {
+    radiusProperty = string(radiusProperty, `${path}.radiusProperty`, 256);
+    if (FORBIDDEN_KEYS.has(radiusProperty)) fail(`${path}.radiusProperty`, 'is reserved');
+  }
+  return {
+    radical: boolean(voronoi.radical, `${path}.radical`, false),
+    radiusSource: choice(voronoi.radiusSource ?? 'types', `${path}.radiusSource`, new Set(['types', 'property'])),
+    typeRadii: typeRadii.sort((a, b) => a.label.localeCompare(b.label)), radiusProperty,
+  };
 }
 
 function normalizeDisplay(value) {

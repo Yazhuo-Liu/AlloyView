@@ -397,6 +397,22 @@ radius of gyration and a size table. OVITO:
 
 ### O7. Wigner–Seitz defect analysis
 
+**Status:** Done 2026-10-08 (`src/analysis/wigner-seitz.js`,
+`src/wigner-seitz-tools.js`, `src/render/site-marker-layer.js`).
+- **Assignment:** each current atom goes to the nearest reference site under
+  the reference cell's periodic images. An exact linked-cell search with a
+  Cholesky lower bound matched brute force on 24,000 random queries. Ties go
+  to the lower site index.
+- **Affine mapping:** optional; it uses reduced coordinates.
+- **Outputs:** vacancies, interstitials (excess atoms) and antisites by type
+  label; per-atom occupancy, class, site type, site index and distance.
+- **Markers:** site markers (vacant, defect or all sites) respect slices and
+  appear in exports and the second view.
+- **Pool:** pool runs equal direct runs with `Object.is`. 120k atoms take
+  about 0.1 s warm.
+- **Follow-ups:** a shared site index across Workers, marker picking, and an
+  external reference file.
+
 **Effort:** M. Assign atoms to the nearest reference-frame site; report
 vacancies, interstitials and antisites (per-type occupancy). Needs a rendered
 point set for empty sites. OVITO:
@@ -424,12 +440,45 @@ independently. Bin in reduced coordinates for triclinic cells.
 
 ### O10. Smooth trajectory, trajectory lines and unwrapping
 
+**Status:** Done 2026-10-08 (`src/data/trajectory-tools.js`,
+`src/workers/trajectory-processor.js`, `src/render/trajectory-line-layer.js`).
+- **Unwrapping:** inferred in frame order by ID from reduced-coordinate jumps,
+  incrementally, with a crossing log. File image flags or unwrapped columns
+  take precedence. It feeds the display only, never analyses.
+- **Smoothing:** ±w frames (truncated at the ends), minimum-image relative to
+  the central frame, with the cell averaged. It runs in the structure Worker,
+  and changing it invalidates every frame and analysis cache.
+- **Trajectory lines:** for a selection group or IDs over a frame range and
+  stride, continuous across boundaries. At most 2M points; they scale with
+  exports.
+- **Follow-ups:**
+  - Lines follow raw, not smoothed, coordinates.
+  - The first unwrapped view of a late frame parses all earlier frames.
+  - Integration briefly occupies the structure Worker (about 72 ms per
+    1M-atom frame).
+
 **Effort:** M. Time-averaged positions before CNA/PTM/DXA at high temperature;
 lines for solute and vacancy paths; unwrap from adjacent frames. OVITO:
 `SmoothTrajectoryModifier.cpp`, `GenerateTrajectoryLinesModifier.cpp`,
 `UnwrapTrajectoriesModifier.cpp`.
 
 ### O11. Radical (radius-weighted) Voronoi
+
+**Status:** Done 2026-10-08 (`src/analysis/voronoi-radii.js`, `clipRadicalCell`
+in `src/analysis/voronoi.js`, `VORONOI_RADICAL_CLIP_SHADER`).
+- **Plane:** the face between i and j lies at (|d|² + rᵢ² − rⱼ²)/(2|d|) from
+  i, as in Voro++'s `container_poly`. The Voro++ Wasm needs no rebuild,
+  because `nplane()` already takes the offset.
+- **Radii:** per element (prefilled from atomic radii) or from a numeric
+  per-atom property.
+- **Empty cells** have zero volume and no faces, and are counted.
+- **Search bound:** |d| < R + √(R² + r_max² − rᵢ²).
+- **GPU:** empty or degenerate cells are recovered exactly on the CPU. A wide
+  radius spread falls back to the CPU.
+- **Unweighted results:** CPU outputs are SHA-256 identical, and the GPU
+  shader sources and host command stream are identical.
+- **Follow-ups:** Cell scale for atoms outside their radical cell; recompute
+  automatically when the radius property changes.
 
 **Effort:** M. Voro++ supports it, but the WebGPU Voronoi path needs a matching
 weighted kernel and CPU/GPU parity tests.

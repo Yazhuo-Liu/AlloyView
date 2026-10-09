@@ -108,3 +108,23 @@ test('offscreen capture releases all allocated targets and restores GL bindings 
   assert.ok(calls.some(call => JSON.stringify(call) === JSON.stringify(['viewport', 1, 2, 640, 480])));
   assert.deepEqual(calls.at(-1), ['enable', gl.SCISSOR_TEST]);
 });
+
+test('black/white matte recovers straight color and alpha that composite back to both renders', async () => {
+  const { solveMatte } = await import('../src/render/offscreen-export.js');
+  // A view pixel is F + (1 − α)·B: solid, partial-coverage, translucent and empty pixels.
+  const cases = [[[200, 40, 10], 1], [[90, 180, 255], .5], [[255, 255, 255], .25], [[0, 0, 0], 0]];
+  const black = new Uint8Array(cases.length * 4), white = new Uint8Array(cases.length * 4);
+  cases.forEach(([color, alpha], pixel) => color.forEach((value, channel) => {
+    black[pixel * 4 + channel] = Math.round(value * alpha); white[pixel * 4 + channel] = Math.round(value * alpha + 255 * (1 - alpha));
+  }));
+  const output = solveMatte(black, white, new Uint8Array(black.length), cases.length);
+  cases.forEach(([color, alpha], pixel) => {
+    assert.ok(Math.abs(output[pixel * 4 + 3] - 255 * alpha) <= 1, `alpha ${pixel}`);
+    for (let channel = 0; channel < 3; channel++) {
+      const a = output[pixel * 4 + 3] / 255, composite = background => output[pixel * 4 + channel] * a + background * (1 - a);
+      assert.ok(Math.abs(composite(0) - black[pixel * 4 + channel]) <= 1.5, `over black ${pixel}`);
+      assert.ok(Math.abs(composite(255) - white[pixel * 4 + channel]) <= 1.5, `over white ${pixel}`);
+    }
+  });
+  assert.deepEqual([...output.subarray(12, 16)], [0, 0, 0, 0], 'fully transparent pixels carry no color');
+});

@@ -35,7 +35,8 @@ test('targeted GPU warmup shares just four Voronoi/index pipelines without alloc
     assert.ok(runtime.pipelines.has(VORONOI_CLIP_SHADER));
     await runtime.warmup({analysisKinds:['voronoi','voronoi']}); assert.equal(compiled.length,4);
     await runtime.warmup();
-    assert.equal(compiled.length,23);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
+    // The full warmup also prepares the radical (radius-weighted) clipping kernel.
+    assert.equal(compiled.length,24);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
     await assert.rejects(runtime.warmup({analysisKinds:['ptm']}),/analysisKinds/);
   } finally {runtime.close();}
 });
@@ -111,7 +112,8 @@ test('full warmup cancellation frees its task while shared pipelines finish with
     await until(()=>compiled.includes(COORDINATION_SHADER));controller.abort();await cancelled;
     await runtime.warmup({analysisKinds:['voronoi']});assert.ok(runtime.pipelines.has(VORONOI_CLIP_SHADER));
     release();await runtime.warmup();
-    assert.equal(compiled.length,23);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
+    // The full warmup also prepares the radical (radius-weighted) clipping kernel.
+    assert.equal(compiled.length,24);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
   } finally {release();runtime.close();}
 });
 

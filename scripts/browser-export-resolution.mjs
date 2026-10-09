@@ -88,9 +88,14 @@ try {
       assert.ok(result.tiles > 1 && result.samples >= 2); assert.equal(result.glError, 0);
       comparisons.push(result);
     }
+    for (const projection of ['perspective', 'orthographic']) {
+      const match = await evaluate(`exportChecks.screenMatch(${JSON.stringify(projection)})`);
+      assert.ok(match.changedFraction < 0.002, `offscreen export matches the view: ${JSON.stringify(match)}`);
+      comparisons.push(match);
+    }
     const alpha = await evaluate('exportChecks.transparentWhite()');
     assert.ok(alpha.partialPixels > 100, JSON.stringify(alpha));
-    assert.ok(alpha.changedFraction < 0.006, JSON.stringify(alpha));
+    assert.ok(alpha.maxDifference <= 2, `a transparent export over white reproduces the white render: ${JSON.stringify(alpha)}`);
     const outlines = await evaluate('exportChecks.scaledOutlines()');
     assert.ok(outlines.changedPixels > 100, JSON.stringify(outlines));
     const large = await evaluate('exportChecks.largeImage()', { timeoutMs: 180_000 });
@@ -176,6 +181,20 @@ async function installChecks() {
     }
     return { projection, transparent, tiles: stats.tiles, samples: stats.samples, maxDifference,
       changedFraction: changed / (aa.length / 4), seamChangedFraction: seamChanged / seamPixels, glError: r.gl.getError() };
+  };
+  // An offscreen render at the canvas size must look like the view: same
+  // pipeline, same samples, so only rare edge pixels may differ.
+  checks.screenMatch = projection => {
+    const r = checks.renderer; r.setProjection(projection); r.render();
+    const resolution = { mode: 'custom', width: r.canvas.width, height: r.canvas.height };
+    const screen = pixels(r.captureImage({ includeAxes: true })), offscreen = pixels(r.captureImage({ includeAxes: true, resolution }));
+    let changed = 0, maxDifference = 0;
+    for (let pixel = 0; pixel < screen.length / 4; pixel++) {
+      let difference = 0; for (let channel = 0; channel < 4; channel++) difference = Math.max(difference, Math.abs(screen[pixel * 4 + channel] - offscreen[pixel * 4 + channel]));
+      if (difference > 5) changed++; maxDifference = Math.max(maxDifference, difference);
+    }
+    return { projection, width: resolution.width, height: resolution.height, samples: r.lastExportStats.samples,
+      canvasSamples: r.gl.getParameter(r.gl.SAMPLES), maxDifference, changedFraction: changed / (screen.length / 4) };
   };
   checks.transparentWhite = () => {
     const r = checks.renderer; r.setBackground('#ffffff');

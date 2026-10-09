@@ -220,7 +220,8 @@ test('clearing a source frees input and index buffers while retaining the device
   const state = fixture(), { runtime } = state;
   try {
     await runtime.warmup();
-    assert.equal(state.compiled, 23);
+    // Including the radical (radius-weighted) Voronoi clipping kernel.
+    assert.equal(state.compiled, 24);
     for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER, CSP_SHADER, DISPLACEMENT_SHADER, PTM_NEIGHBORS_SHADER, BOND_STATISTICS_SHADER, VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER]) {
       assert.ok(runtime.pipelines.has(source), 'new analysis kernels compile during device warmup');
     }

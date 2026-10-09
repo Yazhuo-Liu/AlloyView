@@ -834,6 +834,38 @@ test('Voronoi recipes preserve type labels and independent selected/all-cell dis
   }
 });
 
+test('radical Voronoi recipes round-trip validated radii while older recipes keep their shape', () => {
+  const voronoi = { enabled: true, faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50, selectedTypes: null,
+    radical: true, radiusSource: 'types', typeRadii: [{ label: 'Zr', radius: 1.6 }, { label: 'Cu', radius: 1.28 }, { label: 'H', radius: 0 }],
+    radiusProperty: 'radius' };
+  const recipe = createConfiguration({ settings: { extensions: { voronoi } } });
+  assert.deepEqual(recipe.settings.extensions.voronoi.typeRadii, [{ label: 'Cu', radius: 1.28 }, { label: 'H', radius: 0 }, { label: 'Zr', radius: 1.6 }]);
+  assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
+  const property = createConfiguration({ settings: { extensions: { voronoi: { enabled: true, radical: true, radiusSource: 'property' } } } });
+  assert.deepEqual(property.settings.extensions.voronoi, { enabled: true, faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50,
+    selectedTypes: null, radical: true, radiusSource: 'property', typeRadii: [], radiusProperty: null });
+  const older = createConfiguration({ settings: { extensions: { voronoi: { enabled: true, bins: 20 } } } });
+  assert.equal(Object.hasOwn(older.settings.extensions.voronoi, 'radical'), false, 'recipes without radii remain standard Voronoi');
+  for (const mutate of [
+    value => { value.radical = 'yes'; },
+    value => { value.radiusSource = 'mass'; },
+    value => { value.typeRadii = [{ label: 'Cu', radius: -1 }]; },
+    value => { value.typeRadii = [{ label: 'Cu', radius: '1.2' }]; },
+    value => { value.typeRadii = [{ label: 'Cu', radius: 1 }, { label: 'Cu', radius: 2 }]; },
+    value => { value.typeRadii = [{ label: '', radius: 1 }]; },
+    value => { value.typeRadii = [{ label: 'Cu', radius: 1, color: 'red' }]; },
+    value => { value.typeRadii = { Cu: 1 }; },
+    value => { value.radiusProperty = '__proto__'; },
+    value => { value.radiusProperty = 7; },
+  ]) {
+    const invalid = structuredClone(recipe);
+    mutate(invalid.settings.extensions.voronoi);
+    assert.throws(() => parseConfiguration(JSON.stringify(invalid)), /Invalid AlloyView configuration: settings\.extensions\.voronoi/);
+  }
+  const infinite = JSON.stringify(recipe).replace('"radius":1.6', '"radius":1e400');
+  assert.throws(() => parseConfiguration(infinite), /typeRadii\[2\]\.radius/);
+});
+
 test('topology recipes reject invalid histograms, face filters and missing shared bond cutoff before restore', () => {
   const recipe = createConfiguration({ settings: { extensions: {
     bonds: { cutoff: 3 }, bondStatistics: { enabled: true }, voronoi: { enabled: true },
@@ -906,3 +938,55 @@ function fullSnapshot() {
     },
   };
 }
+
+test('trajectory recipes round-trip smoothing and line settings; older recipes omit them', () => {
+  const snapshot = fullSnapshot();
+  snapshot.settings.selectionGroups = { groups: [{ id: 'solutes', name: 'Solutes', color: '#22c1c3', visible: true, atomIds: [3, 'X7'] }], selectedGroupId: null };
+  snapshot.settings.activeTool = 'trajectory';
+  delete snapshot.settings.activeCategory;
+  snapshot.settings.extensions = { trajectory: {
+    smoothing: { enabled: true, window: 4 },
+    lines: { enabled: true, source: 'group', selectionGroupId: 'solutes', atomIds: [], firstFrame: 1, lastFrame: 9, stride: 2,
+      visible: false, color: '#AA3300', width: 3.5, colorByTime: true, colorScheme: 'magma' },
+  } };
+  const recipe = createConfiguration(snapshot);
+  const restored = parseConfiguration(JSON.stringify(recipe));
+  assert.deepEqual(restored, recipe);
+  assert.equal(restored.settings.activeCategory, 'modification');
+  assert.deepEqual(restored.settings.extensions.trajectory, { smoothing: { enabled: true, window: 4 },
+    lines: { enabled: true, source: 'group', selectionGroupId: 'solutes', atomIds: [], firstFrame: 1, lastFrame: 9, stride: 2,
+      visible: false, color: '#aa3300', width: 3.5, colorByTime: true, colorScheme: 'magma' } });
+  const explicit = createConfiguration({ ...snapshot, settings: { ...snapshot.settings, extensions: { trajectory: {
+    lines: { enabled: true, atomIds: [5, -2, 'Fe12'], lastFrame: null } } } } });
+  assert.deepEqual(explicit.settings.extensions.trajectory, { smoothing: { enabled: false, window: 2 },
+    lines: { enabled: true, source: 'ids', selectionGroupId: null, atomIds: [5, -2, 'Fe12'], firstFrame: 0, lastFrame: null, stride: 1,
+      visible: true, color: '#ff9f1c', width: 2, colorByTime: false, colorScheme: 'viridis' } });
+  assert.equal(Object.hasOwn(createConfiguration().settings.extensions, 'trajectory'), false);
+});
+
+test('trajectory recipes are validated before restoration', () => {
+  const recipe = createConfiguration(fullSnapshot());
+  const invalid = trajectory => {
+    const copy = structuredClone(recipe);
+    copy.settings.extensions.trajectory = trajectory;
+    return () => parseConfiguration(JSON.stringify(copy));
+  };
+  assert.throws(invalid({ smoothing: { enabled: true, window: 0 } }), /smoothing\.window/);
+  assert.throws(invalid({ smoothing: { enabled: true, window: 51 } }), /smoothing\.window/);
+  assert.throws(invalid({ smoothing: { enabled: 'yes' } }), /smoothing\.enabled/);
+  assert.throws(invalid({ smoothing: { code: 'x' } }), /smoothing\.code is not a supported setting/);
+  assert.throws(invalid({ lines: { enabled: true, atomIds: [] } }), /must list atoms/);
+  assert.throws(invalid({ lines: { atomIds: [1, 1] } }), /contains duplicates/);
+  assert.throws(invalid({ lines: { atomIds: Array.from({ length: 100_001 }, (_, index) => index) } }), /atomIds must contain 0–100000 entries/);
+  assert.throws(invalid({ lines: { atomIds: '1 2 3' } }), /atomIds must contain/);
+  assert.throws(invalid({ lines: { source: 'group' } }), /selectionGroupId is required/);
+  assert.throws(invalid({ lines: { source: 'group', selectionGroupId: 'missing' } }), /must identify a saved selection group/);
+  assert.throws(invalid({ lines: { firstFrame: 5, lastFrame: 4 } }), /must not precede/);
+  assert.throws(invalid({ lines: { enabled: true, atomIds: [1], firstFrame: 10 } }), /smaller than the source frame count/);
+  assert.throws(invalid({ lines: { stride: 0 } }), /stride/);
+  assert.throws(invalid({ lines: { width: 20 } }), /width/);
+  assert.throws(invalid({ lines: { color: 'red' } }), /color/);
+  assert.throws(invalid({ lines: { colorScheme: 'rainbow' } }), /colorScheme/);
+  // Disabled lines may keep frames beyond a shorter source for later reuse.
+  assert.doesNotThrow(invalid({ lines: { enabled: false, atomIds: [1], firstFrame: 10 } }));
+});

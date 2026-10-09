@@ -173,13 +173,20 @@ class. The selected atom's Details window also offers a shortcut to hide its
 current color class; hiding affects display and leaves analysis input intact.
 
 After PTM provides orientations, **Color by** offers **PTM orientation · inverse
-pole figure** and **PTM orientation · quaternion RGB**. IPF colors use the lattice direction parallel to a
-chosen sample **X**, **Y**, **Z** (default) or custom vector. Cubic FCC/BCC use
-the [001] red, [101] green and [111] blue key; HCP uses a hexagonal key. Other
-or unsupported structures are gray. The stereographic keys are shown in the
-viewport and image legends. Quaternion RGB is a component visualization,
-not a symmetry-reduced orientation measure. See [PTM](features/ptm.md) for the
-rotation convention, symmetry reduction and exact color definitions.
+pole figure** and **PTM orientation · Rodrigues RGB**.
+- IPF colors use the lattice direction parallel to a chosen sample **X**,
+  **Y**, **Z** (default) or custom vector.
+- Cubic structures (FCC, BCC, simple cubic, cubic diamond) use the [001] red,
+  [101] green and [111] blue key. Hexagonal structures (HCP, hexagonal
+  diamond, graphene) use a hexagonal key.
+- Other atoms and icosahedral environments are gray.
+- The stereographic keys are shown in the viewport and image legends.
+- Rodrigues RGB colors the whole orientation after reducing it to the
+  crystal's fundamental zone, so symmetry-equivalent orientations share a
+  color.
+
+See [PTM](features/ptm.md) for the rotation convention, symmetry reduction and
+exact color definitions.
 
 ## Keyboard navigation
 
@@ -248,6 +255,41 @@ replication. The original files remain unchanged.
 Validation and physical copying run in a reusable Worker. Cancelling an
 expansion leaves the source and previously displayed structure intact;
 background analysis preparation grows its existing pools during the copy.
+
+## Trajectory tools
+
+Select **Modification tools → Trajectory** for operations that use more than
+one frame. All three are off by default; with them off, frames and results are
+unchanged.
+
+- **Unwrapped coordinates.** When a LAMMPS dump, XYZ or PDB trajectory has no
+  image flags or unwrapped columns, **Display → Coordinates → Unwrapped
+  coordinates (inferred from adjacent frames)** counts every atom's periodic
+  crossings from frame 1 onward. A reduced-coordinate step larger than half a
+  cell on a periodic axis is a crossing, so triclinic and changing cells work;
+  atoms are matched by ID and an atom missing from some frames resumes from
+  its last position. Frames are integrated once and in order in the structure
+  Worker, so the result never depends on which frames were viewed first. The
+  inferred positions are used for display, Position colors, atom details and
+  the second view only; analyses use the file coordinates. File image data
+  always wins. Inference is unavailable with **Replicate atoms for analysis**.
+- **Smooth trajectory.** Each frame's coordinates are replaced by the average
+  over up to *w* frames before and after it (fewer at the trajectory ends),
+  using minimum-image displacements relative to that frame, in an averaged
+  cell. CNA, PTM, DXA and every other analysis then run on the averaged
+  coordinates, which suppresses thermal noise at high temperature. Changing
+  the setting discards cached frames and results; stepping through frames stays
+  responsive because averaging runs in the Worker and neighbours are
+  prefetched.
+- **Trajectory lines.** Draw continuous paths of a selection group or listed
+  atom IDs over a frame range, sampling every *N* frames: for example, solute
+  or vacancy-neighbour paths. Lines are unwrapped across boundaries, can be
+  colored by time, are clipped by slices, appear in the second view and image
+  exports (their width scales with the export size) and are limited to two
+  million points.
+
+See [Trajectory tools](features/trajectory-tools.md) for the algorithms,
+precedence rules, caches and limits.
 
 ## Arbitrary clipping planes
 
@@ -343,7 +385,7 @@ sizes, available relative paths and saved trajectory frame, together with the
 processing and view settings. The configuration includes enabled coordination,
 CNA, central symmetry, PTM, ideal-lattice/reference-frame strain, local shear,
 bonds, bond distributions and Q4/Q6, Voronoi tessellation, cluster analysis,
-spatial binning, displacement and RDF analyses and their parameters, editable
+spatial binning, Wigner–Seitz defects, displacement and RDF analyses and their parameters, editable
 lattice references, replication counts and physical/display mode, all slices
 and their names, named atom selection groups and their member IDs, color maps,
 per-property fixed ranges and Auto settings, visibility filters,
@@ -365,7 +407,9 @@ come from `settings.extensions.bonds`, even when bond cylinders are disabled.
 Voronoi saves its enabled state, histogram bins, absolute/relative face-area
 thresholds and input type labels in `settings.extensions.voronoi`.
 `selectedTypes: null` includes all atom types; a string list selects those
-labels as tessellation sites. Restoring either enabled analysis
+labels as tessellation sites. Radical cells add `radical`, `radiusSource`
+(`types` or `property`), `typeRadii` (`{ label, radius }` entries in Å, finite
+and nonnegative) and `radiusProperty`; recipes without them use standard cells. Restoring either enabled analysis
 recalculates its arrays and distributions from the saved physical frame;
 CSV files and computed arrays are not embedded in the recipe. Older recipes
 without these extensions leave both analyses off.
@@ -380,6 +424,16 @@ Spatial binning saves its enabled state, layout, cell vectors, bin counts,
 quantity (with the property's Color by key), reduction, selection group ID,
 trajectory averaging and map colors in `settings.extensions.binning`; binned
 values are recalculated after import.
+Wigner–Seitz defect analysis saves its enabled state, zero-based reference
+frame, affine mapping, site-marker choice (`vacancies`, `defects` or `all`),
+marker visibility and marker radius in `settings.extensions.wignerSeitz`;
+occupancies are recalculated after import.
+
+Trajectory smoothing (enabled state and frames on each side) and trajectory
+line settings (atom IDs or selection group, frame range, step and appearance)
+are saved in `settings.extensions.trajectory`. Smoothing is applied before the
+saved frame is prepared and lines are recalculated; recipes without this
+extension restore unsmoothed coordinates.
 Optional discrete color modes and PTM sample-direction settings are saved in
 `settings.colors`; image resolution is saved in
 `settings.display.png.resolution`. Older configurations retain continuous
@@ -555,7 +609,9 @@ Bond statistics and Voronoi have both CPU Worker and WebGPU paths. CPU Voronoi
 distributes bounded atom batches dynamically and reuses its Voro++ Wasm memory,
 coordinate snapshots and neighborhood indices. GPU Voronoi constructs cells
 on the GPU and reuses its device, linked-cell inputs and workspace; numerical
-or capacity limits recover through the exact CPU implementation.
+or capacity limits recover through the exact CPU implementation. Radical cells
+use a weighted GPU kernel whose neighbor search covers the larger radical
+reach; empty radical cells and very wide radius spreads use the CPU kernel.
 
 Rendering currently uses WebGL2: calculated scalar and vector arrays return to
 the application before colors and arrows are uploaded for drawing. Reusing
@@ -623,6 +679,30 @@ Both calculations partition atoms across the existing Worker pool. Local shear
 uses parallel stages with global reductions for its modal coordination,
 normalization and mean tensor. They retain per-frame results and support the
 same cancellation/reset behavior as the other analyses.
+
+## Wigner–Seitz point defects
+
+Select **Wigner–Seitz**, choose a **Reference frame** (numbered from 1), and
+press **Calculate defects**. Every atom of the displayed frame is assigned to
+the nearest site of the reference frame, using periodic images of the
+reference cell, including tilted cells. A site's occupancy is the number of
+atoms assigned to it: occupancy 0 is a vacancy, each atom beyond the first on
+a site is an interstitial, and a site holding a single atom of another element
+is an antisite. Atom IDs are not used, so the two frames may contain
+different numbers of atoms. Ties go to the lower reference row.
+
+Turn on **Affine mapping** when the cell deforms between the frames: the
+current cell is then mapped onto the reference cell, so a homogeneous strain
+does not appear as defects. Atoms receive **WS site occupancy**, **WS defect
+class** (Regular, Interstitial, Antisite), **WS site type**, **WS site index**
+and **WS distance to site** for Color by. **Site markers** draws vacant
+sites, all defect sites or all sites as small spheres with dark rims, in the
+current frame, in slices, the second view and image exports. Coloring by **WS
+defect class** and hiding **Regular** in the legend leaves only the defects
+and their sites. The panel counts defects per element, and **Defect sites
+CSV** lists every defect site with its per-element occupancy and positions.
+The analysis repeats for every displayed frame. See
+[Wigner–Seitz defects](features/wigner-seitz.md).
 
 ## Dislocation analysis (DXA)
 
@@ -702,8 +782,14 @@ geometry. Nonperiodic directions use the finite simulation-cell boundary.
 Results include atomic volume, surface area, neighbor coordination and the
 full Voronoi index `<n3,n4,n5,n6,…>`, which counts neighbor faces with each
 number of edges. Boundary faces are recorded separately and do not contribute
-to neighbor coordination or the index. This implementation is unweighted;
-species-dependent radius weighting is not applied.
+to neighbor coordination or the index. Under **Cell weighting**, **Radical
+(radius-weighted) Voronoi** divides space by the power distance
+`|x − p|² − r²` instead, with radii per element type (prefilled from the atomic
+radii and editable) or from a numeric per-atom property. Each face moves away
+from the larger atom of its pair; equal radii reproduce the standard cells. A
+small atom crowded by much larger neighbors can have an empty radical cell,
+reported with zero volume, no faces and an **Empty radical cells** count. See
+[radical cells](features/voronoi.md#radical-radius-weighted-cells).
 
 The **Element types** checkboxes choose the sites used to construct the
 tessellation. Excluding a type removes its cells and bisector planes, so the
@@ -1031,10 +1117,16 @@ npm run test:browser:expressions
 # Voronoi GPU numerical parity and result/cell inspection UI:
 npm run test:gpu:voronoi
 npm run test:browser:voronoi
+# Radical (radius-weighted) Voronoi panel, CPU/GPU parity, empty cells and recipes:
+npm run test:browser:voronoi-radical
 # Cluster IDs, unwrapped centers, CSV, recipes and pool parity (both isolation modes):
 npm run test:browser:clusters
 # Spatial binning of a known crystal, CSV, frame updates, averages, recipes, phone layout and Worker parity:
 npm run test:browser:binning
+# Wigner–Seitz vacancies, interstitials, antisites, markers in PNG, affine mapping, CSV and recipes:
+npm run test:browser:wigner-seitz
+# Inferred unwrapping, smoothed CNA, trajectory lines, exports, recipes and phone layout (both isolation modes):
+npm run test:browser:trajectory-tools
 # WebGPU execution checks and CPU/GPU timing (Node.js 24 and Chrome/Chromium):
 npm run test:gpu
 npm run benchmark:gpu
@@ -1172,9 +1264,11 @@ This is a provenance and risk statement, not legal advice.
   target, not a performance claim.
 - Coordination retains a global cutoff; the separate bond graph provides
   element-pair cutoff overrides.
-- Multi-CFG minimum-image unwrapping assumes adjacent images move by less than
-  half a periodic cell per axis. A single already-wrapped CFG cannot reveal
-  historical crossings without image flags or an adjacent reference frame.
+- Multi-CFG minimum-image unwrapping, inferred trajectory unwrapping and
+  trajectory lines without image data assume atoms move by less than half a
+  periodic cell per axis between the frames (or samples) compared. A single
+  already-wrapped frame cannot reveal historical crossings without image flags
+  or an adjacent reference frame.
 - Browser file permissions do not allow a normal single-file picker to enumerate
   sibling files as a native desktop application can. **Open local** offers both a file picker and a folder picker. Choose a folder
   to detect sibling sequences automatically, or select several files together.

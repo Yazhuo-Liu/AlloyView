@@ -4,17 +4,18 @@ import { createCell } from '../src/data/model.js';
 import { crystalFrame } from './helpers/crystals.js';
 import { calculateVoronoi } from '../src/analysis/voronoi.js';
 import { analyzeGpuVoronoi, prepareGpuVoronoi, voronoiGpuWorkspaceBytes, voronoiGpuBatchSize,
-  GPU_VORONOI_BATCH_ATOMS, GPU_VORONOI_SETTINGS_BYTES } from '../src/analysis/gpu/voronoi.js';
+  GPU_VORONOI_BATCH_ATOMS, GPU_VORONOI_SETTINGS_BYTES, GPU_VORONOI_MAX_RADIUS_SPREAD } from '../src/analysis/gpu/voronoi.js';
 import { GPU_VORONOI_MAX_FACES, GPU_VORONOI_MAX_FACE_VERTICES, GPU_VORONOI_STATE_WORDS,
-  VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER } from '../src/analysis/gpu/voronoi-shaders.js';
+  VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER, VORONOI_RADICAL_CLIP_SHADER, GPU_VORONOI_RADICAL_EMPTY_CODE } from '../src/analysis/gpu/voronoi-shaders.js';
+import { radicalReach } from '../src/analysis/voronoi-radii.js';
 import { GpuAnalysisClient } from '../src/analysis/gpu/client.js';
 import { prepareVoronoiSelection, expandVoronoiResult } from '../src/analysis/voronoi-selection.js';
 
 // These tests exercise host assembly/lifecycle, not numerical shader claims.
 // scripts/browser-voronoi-gpu.mjs independently runs real WGSL and compares
 // complete scalar, face/topology and geometric results against exact Wasm.
-async function hostFixture(frame, { flags = 0, onRun, onRead } = {}) {
-  const expected = await calculateVoronoi(frame), scale = Math.cbrt(expected.cellVolume / expected.sourceAtomCount);
+async function hostFixture(frame, { flags = 0, onRun, onRead, radii, rowState } = {}) {
+  const expected = await calculateVoronoi(frame, radii ? { radii } : {}), scale = Math.cbrt(expected.cellVolume / expected.sourceAtomCount);
   const allocations = [], contexts = [], runs = []; let pendingSignal;
   const runtime = {
     adapterInfo: { isFallbackAdapter: true },
@@ -22,7 +23,7 @@ async function hostFixture(frame, { flags = 0, onRun, onRead } = {}) {
     reserveWorkspace(bytes) { assert.ok(Number.isInteger(bytes) && bytes > 0); },
     createBuffer(bytes) { const buffer = { bytes, values: new Uint8Array(bytes), destroyed: false }; allocations.push(buffer); return buffer; },
     disposeBuffers(buffers) { for (const buffer of buffers) buffer.destroyed = true; },
-    write(buffer, values) { buffer.values.set(new Uint8Array(values.buffer, values.byteOffset, values.byteLength)); },
+    write(buffer, values, byteOffset = 0) { buffer.values.set(new Uint8Array(values.buffer, values.byteOffset, values.byteLength), byteOffset); },
     async prepareNeighbors(frame, cutoff) { const context = { cutoff, frame }; contexts.push(context); return context; },
     neighborBindings(context, extra) { return [context, null, null, null, null, ...extra]; },
     async run(source, bindings, count, options) {
@@ -34,6 +35,7 @@ async function hostFixture(frame, { flags = 0, onRun, onRead } = {}) {
         const atom = begin + row, offset = row * GPU_VORONOI_STATE_WORDS;
         const first = expected.faceOffsets[atom], last = expected.faceOffsets[atom + 1];
         states[offset] = last - first; states[offset + 1] = flags; states[offset + 2] = 1;
+        rowState?.({ atom, states, floats, offset, source, bindings });
         floats[offset + 4] = expected.atomicVolume[atom] / scale ** 3;
         floats[offset + 5] = expected.voronoiSurfaceArea[atom] / scale ** 2;
         for (let face = first; face < last; face++) {
@@ -242,5 +244,78 @@ test('GPU client transfers compact sites with an independent ID and restores sou
     assert.equal(messages[2].frame, undefined, 'unchanged subset reuses its acknowledged compact input');
     assert.deepEqual(subset.selectedTypes, ['Ni']); assert.deepEqual(reused.faceNeighbors, subset.faceNeighbors);
     assert.equal(frame.fractional.length, 24); assert.ok(subset.atomicVolume.some(Number.isNaN));
+  } finally { client.close(); }
+});
+
+test('radical GPU host binds weights behind the unchanged settings header and recovers empty cells exactly', async () => {
+  const frame = crystalFrame('bcc', 4, 3), radii = new Float64Array(frame.types.length).fill(1); radii[0] = 4;
+  const reference = await calculateVoronoi(frame, { radii }), empty = [...reference.atomicVolume.keys()].filter(atom => reference.atomicVolume[atom] === 0);
+  assert.ok(empty.length > 0 && empty.length <= 16, 'a few cells are empty');
+  const fixture = await hostFixture(frame, { radii, rowState: ({ atom, states, offset }) => {
+    // The radical kernel reports emptied cells for exact recovery.
+    if (empty.includes(atom)) { states[offset + 1] = 4; states[offset + 15] = GPU_VORONOI_RADICAL_EMPTY_CODE; }
+  } });
+  const output = await analyzeGpuVoronoi(fixture.runtime, frame, { radii, bins: 11 });
+  for (const name of ['faceOffsets', 'faceOrders', 'faceNeighbors', 'voronoiCoordination', 'voronoiIndices']) assert.deepEqual(output[name], reference[name], name);
+  for (const atom of empty) { assert.equal(output.atomicVolume[atom], 0); assert.equal(output.voronoiCoordination[atom], 0); }
+  assert.equal(output.tessellation, 'radical'); assert.equal(output.emptyCellCount, empty.length); assert.equal(output.summary.emptyCellCount, empty.length);
+  assert.equal(output.gpuCorrectionReasons.emptyCell, empty.length); assert.deepEqual(output.gpuCorrectionPrecisionCodes, {});
+  const clips = fixture.runs.filter(run => run.source !== VORONOI_INITIALIZE_SHADER);
+  assert.ok(clips.length && clips.every(run => run.source === VORONOI_RADICAL_CLIP_SHADER));
+  const settings = fixture.allocations.find(buffer => buffer.bytes === GPU_VORONOI_SETTINGS_BYTES + 8 * radii.length);
+  assert.ok(settings?.destroyed, 'the per-analysis weight buffer is released');
+  const scratch = fixture.allocations.find(buffer => buffer.bytes === GPU_VORONOI_SETTINGS_BYTES);
+  const header = new Uint32Array(settings.values.buffer, 0, GPU_VORONOI_SETTINGS_BYTES / 4), standard = new Uint32Array(scratch.values.buffer);
+  for (let word = 0; word < header.length; word++) if (word !== 29) assert.equal(header[word], standard[word], `header word ${word}`);
+  const floats = new Float32Array(settings.values.buffer), scale = prepareGpuVoronoi(frame).scale;
+  assert.ok(floats[29] >= 4 ** 2 / scale ** 2, 'maximum weight rounds upward');
+  for (const atom of [0, 1, 77]) {
+    const weight = floats[GPU_VORONOI_SETTINGS_BYTES / 4 + atom * 2] + floats[GPU_VORONOI_SETTINGS_BYTES / 4 + atom * 2 + 1];
+    assert.ok(Math.abs(weight - radii[atom] ** 2 / scale ** 2) < 1e-12, `double-float weight ${atom}`);
+  }
+  const runs = fixture.runs.length, standardResult = await analyzeGpuVoronoi(fixture.runtime, frame);
+  assert.equal(standardResult.tessellation, undefined); assert.equal(standardResult.gpuCorrectionReasons.emptyCell, undefined);
+  assert.ok(fixture.runs.slice(runs).filter(run => run.source !== VORONOI_INITIALIZE_SHADER).every(run => run.source === VORONOI_CLIP_SHADER));
+});
+
+test('radical GPU coverage grows to R + √(R² + r_max² − rᵢ²) and wide radius spreads use the CPU', async () => {
+  const frame = crystalFrame('fcc', 2, 3.52), radii = new Float64Array(frame.types.length).fill(1.2); radii[3] = 2;
+  const scale = prepareGpuVoronoi(frame).scale;
+  let clips = 0;
+  const fixture = await hostFixture(frame, { radii, rowState: ({ states, floats, offset, source }) => {
+    if (source === VORONOI_RADICAL_CLIP_SHADER && clips === 0) { states[offset + 2] = 0; floats[offset + 6] = 1; }
+  }, onRun: ({ source }) => { if (source === VORONOI_RADICAL_CLIP_SHADER) clips++; } });
+  await analyzeGpuVoronoi(fixture.runtime, frame, { radii });
+  const first = fixture.contexts[0].cutoff, second = fixture.contexts.at(-1).cutoff;
+  const reach = radicalReach(scale, 2 ** 2 - 1.2 ** 2);
+  assert.ok(Math.abs(second - Math.min(first * 1.8, Math.max(first * (1 + 1e-4), reach * (1 + 1e-4)))) < 1e-9 * second,
+    `coverage radius ${second} follows the radical reach ${reach}`);
+  assert.ok(reach > 2 * scale);
+  const wide = new Float64Array(frame.types.length).fill(0); wide[0] = GPU_VORONOI_MAX_RADIUS_SPREAD * scale * 1.01;
+  await assert.rejects(analyzeGpuVoronoi(fixture.runtime, frame, { radii: wide }), error => error.name === 'GpuUnavailableError' && /radius spread/.test(error.message));
+  await assert.rejects(analyzeGpuVoronoi(fixture.runtime, frame, { radii: wide.subarray(1) }), /one radius per analyzed atom/);
+});
+
+test('GPU subsets and the client compact radii with their sites', async () => {
+  const frame = checkerboardFrame(), selection = prepareVoronoiSelection(frame, ['Cu']);
+  const radii = Float64Array.from(frame.types, (type, atom) => type ? 1 + atom / 10 : NaN);
+  const compact = Float64Array.from(selection.atomIndices, atom => radii[atom]);
+  const fixture = await hostFixture(selection.frame, { radii: compact });
+  const result = await analyzeGpuVoronoi(fixture.runtime, frame, { selectedTypes: ['Cu'], radii });
+  const expected = await calculateVoronoi(frame, { selectedTypes: ['Cu'], radii });
+  assert.deepEqual(result.faceNeighbors, expected.faceNeighbors); assert.equal(result.tessellation, 'radical');
+  const messages = [], listeners = new Map();
+  const worker = { addEventListener(type, callback) { listeners.set(type, callback); }, terminate() {},
+    postMessage(data) {
+      if (data.type !== 'analyze') return;
+      messages.push(data);
+      setTimeout(() => listeners.get('message')({ data: { id: data.id, ok: true, result: structuredClone(fixture.expected), cachedFrameIds: [] } }), 0);
+    } };
+  const client = new GpuAnalysisClient({ environment: { navigator: { gpu: {} } }, workerFactory: () => worker });
+  try {
+    await client.analyze(frame, { kind: 'voronoi', selectedTypes: ['Cu'], radii }, { frameIndex: 0 });
+    assert.deepEqual(messages[0].parameters.radii, compact);
+    await client.analyze(frame, { kind: 'voronoi', selectedTypes: ['Cu'] }, { frameIndex: 0 });
+    assert.equal('radii' in messages[1].parameters, false, 'standard requests carry no radii');
   } finally { client.close(); }
 });

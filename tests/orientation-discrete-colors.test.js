@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { colorsByDiscreteProperty, discreteColor, discreteValues, MAX_DISCRETE_VALUES } from '../src/render/discrete-colors.js';
-import { ipfColor, ipfWeights, normalizeOrientationSettings, OrientationColorResolver, sampleToCrystalDirection } from '../src/render/orientation-colors.js';
+import { fundamentalZoneQuaternion, ipfColor, ipfWeights, normalizeOrientationSettings, OrientationColorResolver, rodriguesColor,
+  sampleToCrystalDirection } from '../src/render/orientation-colors.js';
 import { initialColorQuantities } from '../src/render/color-quantities.js';
 import { visibilityByCategory } from '../src/render/palette.js';
 import { calculatePtm } from '../src/analysis/ptm.js';
@@ -73,7 +74,10 @@ test('IPF uses the inverse of the active template-to-sample PTM rotation', () =>
   assert.ok(Math.abs(direction[2] - Math.SQRT1_2) < 1e-12);
   assert.deepEqual(ipfColor(q, 1), [0, 255, 0]);
   assert.equal(ipfWeights([0, 0, 0], 1), null);
-  for (const structure of [0, 4, 5, 6, 7, 8]) assert.deepEqual(ipfColor(identity, structure), [130, 130, 130]);
+  for (const structure of [0, 4]) assert.deepEqual(ipfColor(identity, structure), [130, 130, 130]);
+  // SC and cubic diamond share the cubic key; hexagonal diamond and graphene the hexagonal one.
+  for (const structure of [5, 6]) assert.deepEqual(ipfColor(identity, structure, [1, 1, 1]), [0, 0, 255]);
+  for (const structure of [7, 8]) assert.deepEqual(ipfColor(identity, structure, [1, 0, 0]), [0, 0, 255]);
   assert.deepEqual(ipfColor([NaN, 0, 0, 0], 1), [130, 130, 130]);
 });
 
@@ -195,4 +199,55 @@ test('any 18 consecutive integers, including negative ones, receive distinct dis
   }
   assert.deepEqual(discreteColor(-0), discreteColor(0));
   assert.deepEqual(discreteColor('NaN'), [130, 130, 130]);
+});
+
+const multiply = ([aw, ax, ay, az], [bw, bx, by, bz]) => [aw * bw - ax * bx - ay * by - az * bz,
+  aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx, aw * bz + ax * by - ay * bx + az * bw];
+const axisAngle = (axis, angle) => { const norm = Math.hypot(...axis); return [Math.cos(angle / 2), ...axis.map(value => value / norm * Math.sin(angle / 2))]; };
+
+test('Rodrigues RGB is invariant under every crystal symmetry operation and the quaternion sign', () => {
+  const q = axisAngle([1, 2, 3], .37);
+  const cubicOperators = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].flatMap(axis => [1, 2, 3].map(turn => axisAngle(axis, turn * Math.PI / 2)))
+    .concat([[1, 1, 0], [1, -1, 0], [1, 0, 1], [1, 0, -1], [0, 1, 1], [0, 1, -1]].map(axis => axisAngle(axis, Math.PI)))
+    .concat([[1, 1, 1], [1, 1, -1], [1, -1, 1], [-1, 1, 1]].flatMap(axis => [1, 2].map(turn => axisAngle(axis, turn * 2 * Math.PI / 3))));
+  assert.equal(cubicOperators.length, 23);
+  for (const structure of [1, 3, 5, 6]) {
+    const expected = rodriguesColor(q, structure);
+    for (const g of cubicOperators) assert.deepEqual(rodriguesColor(multiply(q, g), structure), expected);
+    assert.deepEqual(rodriguesColor(q.map(value => -value), structure), expected);
+  }
+  const hexagonalOperators = [1, 2, 3, 4, 5].map(turn => axisAngle([0, 0, 1], turn * Math.PI / 3))
+    .concat([0, 1, 2, 3, 4, 5].map(step => axisAngle([Math.cos(step * Math.PI / 6), Math.sin(step * Math.PI / 6), 0], Math.PI)));
+  for (const structure of [2, 7, 8]) {
+    const expected = rodriguesColor(q, structure);
+    for (const g of hexagonalOperators) assert.deepEqual(rodriguesColor(multiply(q, g), structure), expected);
+  }
+  assert.deepEqual(rodriguesColor(q, 4), [130, 130, 130], 'icosahedral environments have no lattice orientation');
+});
+
+test('Rodrigues RGB spans each fundamental zone: identity is mid-gray, zone faces saturate', () => {
+  assert.deepEqual(rodriguesColor(identity, 1), [128, 128, 128]);
+  assert.deepEqual(rodriguesColor(axisAngle([0, 0, 1], Math.PI / 4), 1), [128, 128, 255], 'cubic zone face at 45° about [001]');
+  assert.deepEqual(rodriguesColor(axisAngle([0, 0, 1], Math.PI / 6), 2), [128, 128, 255], 'hexagonal zone face at 30° about c');
+  assert.deepEqual(rodriguesColor(axisAngle([1, 0, 0], -Math.PI / 2), 2), [0, 128, 128], 'basal axes reach the zone face at 90°');
+  const reduced = fundamentalZoneQuaternion(axisAngle([0, 0, 1], .9 * Math.PI), 'cubic');
+  assert.ok(reduced[0] > Math.cos(Math.PI / 8) - 1e-12, 'a large rotation reduces into the cubic zone');
+});
+
+test('compiled PTM orientations already lie in the fundamental zone, so the reduction leaves them unchanged', async () => {
+  const q = axisAngle([1, 2, 3], 2.4), [w, x, y, z] = q;
+  const rotation = [1 - 2 * (y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y),
+    2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x), 2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)];
+  for (const [kind, family] of [['fcc', 'cubic'], ['hcp', 'hexagonal']]) {
+    const original = crystalFrame(kind, 3), vectors = [];
+    for (let vector = 0; vector < 3; vector++) for (let row = 0; row < 3; row++) {
+      vectors.push(rotation.slice(row * 3, row * 3 + 3).reduce((sum, value, column) => sum + value * original.cell.vectors[vector * 3 + column], 0));
+    }
+    const cell = createCell({ vectors, pbc: original.cell.pbc, triclinic: true });
+    const result = await calculatePtm({ ...original, cell, positions: fractionalToCartesian(original.fractional, cell) });
+    for (let atom = 0; atom < result.structures.length; atom++) {
+      const output = Array.from(result.orientations.subarray(atom * 4, atom * 4 + 4));
+      fundamentalZoneQuaternion(output, family).forEach((value, axis) => assert.ok(Math.abs(value - output[axis]) < 1e-9, `${kind} atom ${atom}`));
+    }
+  }
 });

@@ -57,6 +57,22 @@ test('late selected-cell responses cannot display a previous selection, source o
   assert.equal(h.rendered.at(-1).geometry, null);
 });
 
+test('radical results rebuild geometry with their radii and report empty cells without polygons', async () => {
+  const h = harness(), radii = Float64Array.of(0, 2.6);
+  h.setResult({ atomicVolume: new Float64Array([0, 9]), voronoiCoordination: new Uint32Array([0, 12]), radicalRadii: radii });
+  const ready = h.controls.restore({ enabled: true });
+  assert.equal(h.jobs[0].parameters.radii, radii);
+  h.jobs[0].resolve({ atomIndex: 0, empty: true, vertices: new Float64Array(0), faceOffsets: Uint32Array.of(0), faceVertices: new Uint32Array(0) }); await ready;
+  assert.equal(h.rendered.at(-1).geometry, null);
+  assert.match(h.elements['voronoi-cell-status'].textContent, /Atom 10 has an empty radical cell/);
+  const all = h.controls.restore({ enabled: false, allEnabled: true }), job = h.jobs[1];
+  assert.equal(job.parameters.kind, 'voronoiGeometryBatch'); assert.equal(job.parameters.radii, radii);
+  await job.options.onGeometryChunk([h.geometry(1)], { completedAtoms: 2, totalAtoms: 2 });
+  job.resolve({ cells: [], emptyCellCount: 1, analyzedAtomIndices: Uint32Array.of(0, 1) }); await all;
+  assert.equal(h.allRendered.at(-1).geometry.complete, true, 'empty cells are not missing cells');
+  assert.equal(h.allRendered.at(-1).geometry.cellCount, 1);
+});
+
 test('cell display recipe stays optional, validates appearance and contains no geometry payload', () => {
   assert.equal(Object.hasOwn(createConfiguration().settings.extensions, 'voronoiDisplay'), false);
   const recipe = createConfiguration({ settings: { extensions: { voronoiDisplay: { enabled: true, color: '#abcdef', opacity: .4 } } } });

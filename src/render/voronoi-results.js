@@ -62,6 +62,8 @@ export function voronoiOverview(result) {
     boundaryFraction: count ? (summary.boundaryAtomCount ?? 0) / count : 0,
     volumeError: error !== null && error !== undefined && Number.isFinite(error) ? error : null,
     totalVolume: summary.totalVolume, cellVolume: summary.cellVolume,
+    radical: summary.tessellation === 'radical', emptyCellCount: summary.emptyCellCount ?? 0,
+    minRadius: summary.minRadius, maxRadius: summary.maxRadius,
   };
 }
 
@@ -78,6 +80,8 @@ function renderCards(container, result) {
       Math.abs(values.volumeError) <= 1e-4 ? 'Within 0.01%' : `${percent(Math.abs(values.volumeError))} difference`,
     values.volumeError === null ? 'Complete-domain totals required' :
       `Relative error ${values.volumeError === 0 ? '0' : values.volumeError.toExponential(2)}`],
+    ...(values.radical ? [['radical', 'Empty radical cells', population(values.emptyCellCount),
+      `Radii ${number(values.minRadius)}–${number(values.maxRadius)} Å`]] : []),
   ];
   container.replaceChildren(...cards.map(([key, label, value, detail]) => {
     const card = node(root, 'div', undefined, 'voronoi-stat-card');

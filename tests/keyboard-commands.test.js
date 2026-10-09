@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DEFAULT_KEYBOARD_GEAR, KeyboardCommandRegistry, SHORTCUT_STORAGE_KEY, keyboardGearScale,
-  normalizeShortcutKey, validateShortcutBinding, isShortcutEditingTarget, shouldIgnoreShortcut } from '../src/keyboard-commands.js';
+  normalizeShortcutKey, validateShortcutBinding, isShortcutEditingTarget, scrollKeyBelongsToFocus, shouldIgnoreShortcut } from '../src/keyboard-commands.js';
 
 function commands(calls = []) {
   return [
@@ -101,4 +101,27 @@ test('duplicate command IDs or bindings are rejected during registration', () =>
   assert.throws(() => new KeyboardCommandRegistry(duplicateIds), /IDs must be unique/);
   const duplicateKeys = commands(); duplicateKeys[1].bindings = ['ArrowLeft'];
   assert.throws(() => new KeyboardCommandRegistry(duplicateKeys), /already assigned/);
+});
+
+test('scrolling keys stay with focused panels and scrollable regions, as on ordinary pages', () => {
+  const styles = new Map();
+  const document = { defaultView: { getComputedStyle: element => styles.get(element) ?? { overflowX: 'visible', overflowY: 'visible' } } };
+  const element = (parentElement, size = {}) => ({ ownerDocument: document, parentElement, closest: () => null,
+    scrollHeight: 100, clientHeight: 100, scrollWidth: 100, clientWidth: 100, ...size });
+  document.body = element(null); document.documentElement = element(null);
+  const viewport = element(document.body), canvas = element(viewport), sidebar = element(document.body), button = element(sidebar);
+  const legend = element(viewport, { scrollHeight: 400 }), legendButton = element(legend);
+  styles.set(legend, { overflowX: 'hidden', overflowY: 'auto' });
+  viewport.contains = target => { for (let node = target; node; node = node.parentElement) if (node === viewport) return true; return false; };
+  const ignored = (key, target) => shouldIgnoreShortcut({ key, target }, { viewport });
+  for (const key of ['ArrowLeft', 'ArrowUp', 'PageDown', 'Home', 'End']) {
+    assert.equal(ignored(key, document.body), false, `${key} on the page drives the view`);
+    assert.equal(ignored(key, canvas), false, `${key} with the canvas focused drives the view`);
+    assert.equal(ignored(key, button), true, `${key} with sidebar focus scrolls the sidebar`);
+  }
+  assert.equal(ignored(' ', sidebar), true, 'Space scrolls a focused panel');
+  assert.equal(ignored('ArrowDown', legendButton), true, 'vertical keys scroll a scrollable overlay in the view');
+  assert.equal(ignored('ArrowLeft', legendButton), false, 'a region that only scrolls vertically keeps horizontal keys');
+  assert.equal(ignored('q', button), false, 'letter shortcuts remain global');
+  assert.equal(scrollKeyBelongsToFocus({ key: 'ArrowLeft', target: null }, viewport), false);
 });

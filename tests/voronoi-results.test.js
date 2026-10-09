@@ -47,6 +47,17 @@ test('Voronoi overview retains actual ranges, complete population and unavailabl
   assert.deepEqual(Array.from(input.atomicVolume), [1, 2, 3]);
 });
 
+test('radical overviews add an empty-cell card with the radius range', () => {
+  const root = documentRoot(), cards = root.createElement('div');
+  const view = initializeVoronoiResults({ getElement: id => id === 'voronoi-stat-cards' ? cards : null });
+  view.render(result()); assert.equal(cards.children.length, 6, 'standard results keep six cards');
+  const radical = result(); radical.summary = { ...radical.summary, tessellation: 'radical', emptyCellCount: 2, minRadius: 0, maxRadius: 1.6 };
+  assert.deepEqual([voronoiOverview(radical).radical, voronoiOverview(radical).emptyCellCount], [true, 2]);
+  view.render(radical);
+  assert.equal(cards.children.length, 7);
+  assert.match(cards.text(), /Empty radical cells 2 Radii 0–1.6 Å/);
+});
+
 test('interactive Voronoi bins expose exact counts and update through touch, slider and keyboard', () => {
   const root = documentRoot(), container = root.createElement('div');
   renderVoronoiHistogram(container, [{ lower: 0, upper: 1, count: 163840 }, { lower: 1, upper: 2, count: 491520 }], { label: 'Volumes', unit: 'Å³' });

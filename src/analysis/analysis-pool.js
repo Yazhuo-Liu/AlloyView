@@ -3,7 +3,8 @@ import { MAX_BONDS } from './bonds.js';
 import { mergeBondStatisticsPartials } from './bond-statistics.js';
 import { VORONOI_FIELDS, mergeVoronoiPartials } from './voronoi.js';
 import { prepareVoronoiSelection, expandVoronoiResult, mapVoronoiGeometry,
-  compactVoronoiAtomIndices } from './voronoi-selection.js';
+  compactVoronoiAtomIndices, compactVoronoiRadii } from './voronoi-selection.js';
+import { validateVoronoiRadii } from './voronoi-radii.js';
 import { finalizeRdf } from './rdf.js';
 import { modalCoordination, shearInvariant } from './local-shear.js';
 import { REFERENCE_STRAIN_FIELDS } from './reference-strain.js';
@@ -13,6 +14,7 @@ import { validatePtmParameters, validatePreparedPtmNeighbors } from './ptm.js';
 import { CpuBudget, cpuWorkerLimit } from './cpu-budget.js';
 import { yieldToMain } from '../task-yield.js';
 import { analyzeDxaStagePool, DXA_STAGE_KINDS } from './dxa-cpu-pool.js';
+import { finishWignerSeitz } from './wigner-seitz.js';
 
 const PTM_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
@@ -48,6 +50,7 @@ const EXTRA_OUTPUT_FIELDS = {
   localShearFinalize: { localShear: [Float32Array, 1] },
   referenceStrain: Object.fromEntries(REFERENCE_STRAIN_FIELDS.map((name) => [name, [Float32Array, 1]])),
   displacement: { vectors: [Float32Array, 3], magnitudes: [Float64Array, 1] },
+  wignerSeitzAssign: { siteIndex: [Int32Array, 1], siteDistance: [Float64Array, 1] },
 };
 
 /** `coordinateBytes` is held by every worker. `sharedBytes` does not grow
@@ -89,6 +92,8 @@ export class AnalysisPool {
     this.voronoiSnapshotPending = null;
     this.voronoiSnapshotGeneration = 0;
     this.nextVoronoiFrameKey = 1;
+    this.voronoiRadiiSnapshot = null;
+    this.nextVoronoiRadiiKey = 1;
     this.cpuSnapshots = []; this.cpuSnapshotPending = null; this.nextCpuFrameKey = 1; this.nextCpuAnalysisKey = 1;
     this.cpuSnapshotGeneration = 0;
     this.closed = false;
@@ -107,6 +112,7 @@ export class AnalysisPool {
     this.clearCpuFrames();
     this.cpuFramePreparation?.controller.abort();
     this.voronoiSnapshot = null;
+    this.voronoiRadiiSnapshot = null;
     this.voronoiSnapshotGeneration++;
     for (const slot of this.slots) {
       if (slot.task) slot.voronoiReleasePending = true;
@@ -132,6 +138,7 @@ export class AnalysisPool {
   releaseVoronoiFrame(slot) {
     if (!slot.terminated) slot.worker.postMessage({ kind: 'voronoiRelease' });
     delete slot.voronoiFrameKey;
+    delete slot.voronoiRadiiKey;
     slot.voronoiReleasePending = false;
     slot.residentInputBytes = 0;
   }
@@ -348,6 +355,9 @@ export class AnalysisPool {
     if (parameters.kind === 'clusters') {
       return { ...await this.analyzeClusters(frame, parameters, { onProgress, signal }), backend: 'cpu', gpuRequested };
     }
+    if (parameters.kind === 'wignerSeitz') {
+      return { ...await this.analyzeWignerSeitz(frame, parameters, { onProgress, signal }), backend: 'cpu', gpuRequested };
+    }
     if (gpuRequested && parameters.kind === 'ptm') {
       return this.analyzePtmWithGpu(frame, parameters, { onProgress, signal, frameIndex });
     }
@@ -554,7 +564,8 @@ export class AnalysisPool {
     let workerCount = Math.min(this.limit, chooseWorkerCount(atomCount,
       copyBytes, this.environment,
       parameters.kind === 'voronoi' ? 512
-        : ['coordination', 'displacement'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000 : 4_096, { sharedBytes: outputBytes }));
+        : ['coordination', 'displacement'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000
+          : parameters.kind === 'wignerSeitzAssign' ? 16_384 : 4_096, { sharedBytes: outputBytes }));
     // Common PTM phases need only their central-atom rows. Their aggregate
     // private tables occupy one table, while multishell templates need a full
     // source table in each worker for neighbors-of-neighbors callbacks.
@@ -573,7 +584,7 @@ export class AnalysisPool {
     // between Workers, but Welford/normalization sums continue in the exact
     // original atom order inside each partition before the ordered merge.
     const orderedReduction = ['bondStatistics', 'localShearMetrics'].includes(parameters.kind);
-    const maxChunk = ['coordination', 'displacement', 'localShearFinalize'].includes(parameters.kind) ? 8192
+    const maxChunk = ['coordination', 'displacement', 'localShearFinalize', 'wignerSeitzAssign'].includes(parameters.kind) ? 8192
       : parameters.kind === 'ptm' || parameters.kind === 'strain' ? 4096 : 2048;
     const chunkSize = Math.max(128, Math.min(maxChunk, Math.ceil(atomCount / (workerCount * (['ptm', 'strain'].includes(parameters.kind) ? 4 : 8)))));
     const chunks = [];
@@ -606,7 +617,7 @@ export class AnalysisPool {
     try {
       report(null, 'preparing');
       const needsIndex = !inputs.preparedNeighbors && !(parameters.kind === 'strain' && inputs.ptmInput)
-        && !['displacement', 'localShearFinalize', 'referenceStrain', 'coordination'].includes(parameters.kind);
+        && !['displacement', 'localShearFinalize', 'referenceStrain', 'coordination', 'wignerSeitzAssign'].includes(parameters.kind);
       const snapshot = await this.prepareCpuSnapshot(frame, sharedMemory, controller.signal);
       let sharedIndexBuilds = 0;
       if (sharedMemory && (needsIndex || parameters.kind === 'coordination')) {
@@ -725,6 +736,7 @@ export class AnalysisPool {
           return { ...metadata, ...values, metricSum, normalizationSum: partials.reduce((sum, partial) => sum + partial.normalizationSum, 0),
             normalizationParticipants: partials.reduce((sum, partial) => sum + partial.normalizationParticipants, 0) };
         }
+        if (parameters.kind === 'wignerSeitzAssign') return { ...metadata, ...values, siteCount: partials[0]?.siteCount, warning: null };
         if (parameters.kind === 'displacement') {
           const matched = partials.reduce((sum, partial) => sum + partial.matched, 0);
           return { ...metadata, ...values, matched, unmatched: atomCount - matched,
@@ -782,6 +794,9 @@ export class AnalysisPool {
       ? compactVoronoiAtomIndices(selection, geometryOnly ? [parameters.atomIndex] : parameters.atomIndices) : null;
     const workCount = geometryIndices?.length ?? atomCount;
     const sharedMemory = Boolean(this.environment.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
+    // Radical radii follow the compact sites and stay resident beside them.
+    const radii = compactVoronoiRadii(parameters.radii, selection);
+    if (radii) validateVoronoiRadii(radii, atomCount);
     // Coordinate snapshot, linked index, per-worker output, and resident Wasm
     // buffers. Face CSR is streamed in bounded chunks rather than a full
     // frame-sized private output in each Worker.
@@ -817,6 +832,7 @@ export class AnalysisPool {
       report(null, 'preparing', undefined, true);
       const snapshot = await this.prepareVoronoiSnapshot(frame, sharedMemory, controller.signal);
       if (sharedMemory) await this.prepareCpuIndex(snapshot.cpuSnapshot, undefined, controller.signal, signal);
+      const radiiSnapshot = radii ? await this.prepareVoronoiRadii(radii, sharedMemory, controller.signal) : null;
       if (controller.signal.aborted) throw abortError();
       const partials = new Array(chunkCount);
       const runners = Array.from({ length: workerCount }, (_, index) => (async () => {
@@ -826,7 +842,8 @@ export class AnalysisPool {
           const startAtom = geometryOnly ? geometryIndices[0] : chunk * chunkSize,
             endAtom = geometryOnly ? startAtom + 1 : Math.min(workCount, startAtom + chunkSize);
           processed[index] = 0;
-          const partial = await this.runTask({ ...parameters, selectedTypes: null, fractional: snapshot.coordinates, cell: snapshot.cell,
+          const partial = await this.runTask({ ...parameters, selectedTypes: null,
+            ...(radiiSnapshot ? { radii: radiiSnapshot.values, radiiKey: radiiSnapshot.key } : {}), fractional: snapshot.coordinates, cell: snapshot.cell,
             residentFrameKey: snapshot.key, cpuFrameKey: snapshot.cpuSnapshot.key, types: snapshot.cpuSnapshot.types,
             cpuNeighborIndex: snapshot.cpuSnapshot.neighborIndex, startAtom, endAtom,
             ...(geometryOnly ? { atomIndex: geometryIndices[0] } : geometryBatch
@@ -850,6 +867,7 @@ export class AnalysisPool {
       else if (geometryBatch) output = { cells: retainCells ? partials.flatMap(partial => partial.cells) : [],
         analyzedAtomIndices: Uint32Array.from(geometryIndices, index => selection.isAll ? index : selection.atomIndices[index]),
         selectedTypes: selection.selectedTypes, kernelInitializations: partials.filter(partial => !partial.kernelReused).length,
+        ...(radii ? { emptyCellCount: partials.reduce((sum, partial) => sum + (partial.emptyCellCount ?? 0), 0) } : {}),
         indexBuilds: partials.filter(partial => !partial.indexReused).length, frameUploads: partials.filter(partial => partial.frameUploaded).length };
       else {
         report(null, 'finalizing', undefined, true);
@@ -889,6 +907,20 @@ export class AnalysisPool {
     this.voronoiSnapshotPending = pending;
     try { return await pending; }
     finally { if (this.voronoiSnapshotPending === pending) this.voronoiSnapshotPending = null; }
+  }
+
+  /** Radical radii are resident in each Worker beside the source snapshot.
+   * Identical radii keep their key, so chunk messages carry only that key. */
+  async prepareVoronoiRadii(radii, sharedMemory, signal) {
+    const previous = this.voronoiRadiiSnapshot;
+    if (previous?.sharedMemory === sharedMemory && previous.values.length === radii.length) {
+      let identical = true;
+      for (let index = 0; index < radii.length; index++) if (!Object.is(radii[index], previous.values[index])) { identical = false; break; }
+      if (identical) return previous;
+    }
+    const values = await copyCoordinates(radii instanceof Float64Array ? radii : Float64Array.from(radii), signal, sharedMemory);
+    if (signal?.aborted || this.closed) throw abortError();
+    return this.voronoiRadiiSnapshot = { values, sharedMemory, key: this.nextVoronoiRadiiKey++ };
   }
 
   async createVoronoiSnapshot(frame, sharedMemory, signal) {
@@ -1015,6 +1047,31 @@ export class AnalysisPool {
       signal?.removeEventListener('abort', abort);
       this.controllers.delete(controller);
     }
+  }
+
+  /** Workers assign disjoint ranges of current atoms to their nearest
+   * reference sites, each building the site index once per calculation.
+   * Occupancies and classes are then counted in atom order, so every array
+   * equals calculateWignerSeitz for any partition and Worker count. */
+  async analyzeWignerSeitz(frame, parameters, { onProgress = () => {}, signal } = {}) {
+    const startedAt = performance.now(), atomCount = frame.fractional.length / 3;
+    if (!Number.isInteger(atomCount) || atomCount < 1) throw new Error('Analysis requires at least one atom.');
+    const { referenceFractional, referenceCell, referenceTypes, referenceTypeLabels, affineMapping = false } = parameters;
+    const siteCount = referenceFractional?.length / 3;
+    if (!ArrayBuffer.isView(referenceFractional) || !Number.isInteger(siteCount) || siteCount < 1) throw new Error('Wigner–Seitz analysis requires reference site coordinates.');
+    if (!ArrayBuffer.isView(referenceTypes) || referenceTypes.length !== siteCount) throw new Error('Wigner–Seitz analysis requires one type per reference site.');
+    if (typeof affineMapping !== 'boolean') throw new Error('The Wigner–Seitz affine mapping option must be a boolean.');
+    if (!referenceCell?.pbc || [0, 1, 2].some(axis => Boolean(referenceCell.pbc[axis]) !== Boolean(frame.cell.pbc[axis]))) {
+      throw new Error('Reference and current frames must use the same periodic boundary axes.');
+    }
+    const assigned = await this.analyzeCPU(frame, { kind: 'wignerSeitzAssign', referenceFractional, referenceCell, affineMapping },
+      { signal, onProgress });
+    if (signal?.aborted || this.closed) throw abortError();
+    const result = finishWignerSeitz(frame, { siteIndex: assigned.siteIndex, siteDistance: assigned.siteDistance, siteCount },
+      { referenceTypes, referenceTypeLabels, affineMapping });
+    return { ...result, workerCount: assigned.workerCount, sharedMemory: assigned.sharedMemory, chunkSize: assigned.chunkSize,
+      chunkCount: assigned.chunkCount, scheduling: 'dynamic', engine: assigned.engine, assignElapsedMs: assigned.elapsedMs,
+      elapsedMs: performance.now() - startedAt, warning: null };
   }
 
   async analyzeLocalShear(frame, parameters, { onProgress, signal }) {
@@ -1233,6 +1290,9 @@ export class AnalysisPool {
       if (task.done) return;
       let payload = task.payload;
       const transferables = [];
+      if (payload.radiiKey !== undefined && task.slot.voronoiRadiiKey === payload.radiiKey) {
+        payload = { ...payload }; delete payload.radii;
+      }
       if (DXA_STAGE_KINDS.includes(payload.kind)) {
         // The stage supplies a private input (usually a MessagePort answered
         // by the DXA coordinator Worker) only for a slot without it.
@@ -1341,6 +1401,7 @@ export class AnalysisPool {
         if (VORONOI_RESIDENT_KINDS.includes(task.payload.kind) && !result?.preparationCancelled) {
           task.slot.voronoiWarmed = true;
           task.slot.voronoiFrameKey = task.payload.residentFrameKey;
+          if (task.payload.radiiKey !== undefined) task.slot.voronoiRadiiKey = task.payload.radiiKey;
         }
         if (task.payload.cpuFrameKey !== undefined && !result?.preparationCancelled) { task.slot.cpuFrameKey = task.payload.cpuFrameKey;
           task.slot.cpuFrameKeys.delete(task.payload.cpuFrameKey); task.slot.cpuFrameKeys.add(task.payload.cpuFrameKey);

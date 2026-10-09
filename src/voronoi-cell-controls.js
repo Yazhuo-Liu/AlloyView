@@ -56,6 +56,10 @@ export function initializeVoronoiCellControls({ renderer, pool, getFrame, getSel
     if (request && request.atomIndex === atomIndex) { sync(); return request.promise; }
     request?.controller.abort(); request = null;
     function publish(geometry) {
+      if (geometry.empty) {
+        clearSelected(); onChange();
+        sync(`Atom ${String(id)} has an empty radical cell: larger neighbors take all of its space.`); return;
+      }
       renderer.setVoronoiCellGeometry(geometry, options); onChange();
       const volume = result.atomicVolume?.[atomIndex], coordination = result.voronoiCoordination?.[atomIndex];
       sync(`Atom ${String(id)} · ${geometry.faceOffsets.length - 1} faces${Number.isFinite(volume) ? ` · volume ${volume.toPrecision(6)} Å³` : ''}${Number.isFinite(coordination) ? ` · coordination ${coordination}` : ''}`);
@@ -69,6 +73,7 @@ export function initializeVoronoiCellControls({ renderer, pool, getFrame, getSel
       try {
         const parameters = { kind: 'voronoiGeometry', atomIndex };
         if (result.selectedTypes != null) parameters.selectedTypes = result.selectedTypes;
+        if (result.radicalRadii) parameters.radii = result.radicalRadii;
         const geometry = await pool.analyzeCPU(frame, parameters, { signal: job.controller.signal });
         if (request !== job || !active(job) || !options.enabled || getSelectedId() !== id) return;
         cache.cells.set(atomIndex, geometry); if (cache.cells.size > 8) cache.cells.delete(cache.cells.keys().next().value);
@@ -102,6 +107,7 @@ export function initializeVoronoiCellControls({ renderer, pool, getFrame, getSel
       try {
         const parameters = { kind: 'voronoiGeometryBatch', atomIndices: result.analyzedAtomIndices ?? null };
         if (result.selectedTypes != null) parameters.selectedTypes = result.selectedTypes;
+        if (result.radicalRadii) parameters.radii = result.radicalRadii;
         const batch = await pool.analyzeCPU(frame, parameters, { signal: job.controller.signal, retainCells: false,
           async onGeometryChunk(cells, progress = {}) {
             if (allRequest !== job || !active(job) || !options.allEnabled) return;
@@ -130,7 +136,9 @@ export function initializeVoronoiCellControls({ renderer, pool, getFrame, getSel
           const chunk = createVoronoiCellBatch(batch.cells.slice(start, start + 128));
           geometry.chunks.push(chunk); geometry.cellCount += chunk.cellCount;
         }
-        const expected = batch.analyzedAtomIndices?.length ?? result.analyzedAtomIndices?.length;
+        // Empty radical cells have no polygons and are not displayed.
+        const analyzed = batch.analyzedAtomIndices?.length ?? result.analyzedAtomIndices?.length;
+        const expected = analyzed === undefined ? undefined : analyzed - (batch.emptyCellCount ?? 0);
         if (expected !== undefined && geometry.cellCount !== expected) throw new Error(`Received ${geometry.cellCount} of ${expected} analyzed cells.`);
         geometry.complete = true; cache.allGeometry = geometry;
         renderer.setVoronoiAllCellGeometry(geometry, options); onChange();

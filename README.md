@@ -41,6 +41,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   perspective/orthographic projection, cell outlines and Cartesian axes.
 - Wrapped and unwrapped trajectory views, atom-ID search/centering, and
   distance, bond-angle and dihedral measurements with optional periodic images.
+- Trajectory tools: unwrapped coordinates inferred from consecutive frames
+  when a file has no image flags, a minimum-image moving average of positions
+  and cell that every analysis (CNA, PTM, DXA, …) then uses, and continuous
+  atom-path lines for selection groups or IDs, colored by time, in the second
+  view and image exports.
 - Fractional periodic display origins along triclinic cell vectors, with
   selected-atom centering and synchronized atoms, bonds, vectors and DXA lines.
 - A folded **Adjust view** panel beside download provides precise camera
@@ -97,6 +102,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   one named selection: cluster ID and size for coloring, sorting by size,
   unwrapped centers of mass, radii of gyration and gyration tensors, detection
   of clusters connected to their own periodic images, and a cluster table CSV.
+- Wigner–Seitz defect analysis against any trajectory frame: per-site
+  occupancy, vacancy, interstitial and antisite counts per element, optional
+  affine mapping of a deformed cell, per-atom occupancy and defect-class
+  coloring, drawn vacancy markers and a defect-site CSV. Atom counts may
+  differ between frames.
 - Spatial binning profiles and 2D maps along the cell vectors, in reduced
   coordinates so tilted cells bin along their own vectors: atom count, number
   density, or the mean, sum, minimum, maximum or standard deviation of any
@@ -250,10 +260,12 @@ WebGL 2 support. No installation or account is needed.
    other complete vector families, or custom Cartesian components.
    **Frame strain** compares against a chosen trajectory frame;
    **Local shear** measures the current neighbor geometry without a reference.
+   **Wigner–Seitz** assigns atoms to the sites of a chosen trajectory frame and
+   counts vacancies, interstitials and antisites, drawing the vacant sites.
    **Statistics** shows coordination distributions and calculates total or
    element-pair RDF curves on fully periodic cells. Its CSV section exports
    current-frame summaries, every available classifier and scalar property,
-   and per-atom values; Bonds, Voronoi, Clusters, Binning and DXA also offer specific CSV tables.
+   and per-atom values; Bonds, Voronoi, Clusters, Binning, Wigner–Seitz and DXA also offer specific CSV tables.
    **Enable GPU acceleration** in the top bar prefers WebGPU for coordination,
    adaptive/fixed CNA, manual/Auto central symmetry, displacement,
    reference-frame strain, RDF, local shear, bonds, bond statistics and ideal-strain

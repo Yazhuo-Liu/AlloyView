@@ -27,6 +27,8 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 | Attach numeric data from separate atom files | [External properties](features/external-properties.md) |
 | Compute properties or select atoms with formulas | [Expressions](features/expressions.md) |
 | Measure motion against a trajectory frame | [Displacement](features/displacement.md) |
+| Count vacancies, interstitials and antisites | [Wigner–Seitz defects](features/wigner-seitz.md) |
+| Unwrap, smooth or trace atom paths through a trajectory | [Trajectory tools](features/trajectory-tools.md) |
 | Count and classify neighbor environments | [Coordination](features/coordination.md), [CNA](features/cna.md), [PTM](features/ptm.md) |
 | Inspect disorder and deformation | [Central symmetry](features/centrosymmetry.md), [Ideal lattice strain](features/ideal-strain.md), [Reference frame strain](features/reference-strain.md), [Local shear](features/local-shear.md) |
 | Extract and display dislocation networks | [Dislocation analysis (DXA)](features/dislocations.md) |

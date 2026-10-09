@@ -154,7 +154,8 @@ test('type-filtered Voronoi CSV keeps selected source IDs and original neighbor 
     faceOffsets: Uint32Array.of(0, 2, 2, 4), faceAreas: Float64Array.of(2, 3, 4, 5),
     faceOrders: Uint32Array.of(4, 4, 6, 6), faceNeighbors: Int32Array.of(-1, 2, 0, 2),
     faceBoundary: Uint8Array.of(1, 0, 0, 0), faceAccepted: Uint8Array.of(0, 1, 1, 1),
-    summary: { atomCount: 2, totalVolume: 60, cellVolume: 60, volumeError: 0, meanVolume: 30 },
+    summary: { atomCount: 2, totalVolume: 60, cellVolume: 60, volumeError: 0, meanVolume: 30,
+      tessellation: 'radical', emptyCellCount: 0, minRadius: 1.2, maxRadius: 1.3 },
     coordinationHistogram: [{ value: 6, count: 1, fraction: .5 }, { value: 8, count: 1, fraction: .5 }],
     volumeHistogram: [{ lower: 25, upper: 35, count: 2, fraction: 1 }],
     faceAreaHistogram: [{ lower: 3, upper: 5, count: 3, fraction: 1 }],
@@ -172,6 +173,8 @@ test('type-filtered Voronoi CSV keeps selected source IDs and original neighbor 
   assert.ok(summary.some(row => row[0] === 'input' && row[1] === 'atom_count' && row[3] === 3));
   assert.ok(summary.some(row => row[0] === 'voronoi' && row[1] === 'atomCount' && row[3] === 2));
   assert.ok(summary.some(row => row[0] === 'voronoi' && row[1] === 'selected_types' && row[3] === 'Fe'));
+  assert.ok(summary.some(row => row[0] === 'voronoi' && row[1] === 'tessellation' && row[3] === 'radical'));
+  assert.ok(summary.some(row => row[0] === 'voronoi' && row[1] === 'maxRadius' && row[3] === 1.3 && row[4] === 'Å'), 'radical radii are exported in Å');
   assert.equal(rows(data, 'voronoi-distributions').map(payload).filter(row => row[0] === 'voronoi_index').reduce((sum, row) => sum + row[4], 0), 2);
   assert.deepEqual(Array.from(voronoi.analyzedAtomIndices), [0, 2]);
   assert.ok(Number.isNaN(voronoi.atomicVolume[1]));

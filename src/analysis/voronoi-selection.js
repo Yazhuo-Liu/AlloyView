@@ -68,6 +68,16 @@ export function voronoiSelectionRange(selection, { startAtom = 0, endAtom = sele
   return { startAtom: start, endAtom: end };
 }
 
+/** Radical radii follow the compact tessellation sites; null stays unweighted. */
+export function compactVoronoiRadii(radii, selection) {
+  if (radii == null) return null;
+  if (radii.length !== selection.originalAtomCount) throw new Error('Radical Voronoi needs one radius per source atom.');
+  if (selection.isAll) return radii;
+  const compact = new Float64Array(selection.atomIndices.length);
+  for (let index = 0; index < compact.length; index++) compact[index] = radii[selection.atomIndices[index]];
+  return compact;
+}
+
 /** Keep compact statistics; excluded source rows have NaN and an empty CSR. */
 export function expandVoronoiResult(result, selection) {
   const count = result.atomicVolume.length, start = result.startAtom ?? 0,

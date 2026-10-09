@@ -36,11 +36,12 @@ export function scalarStatistics(values) {
 }
 
 const CONTEXT = ['source_file', 'frame_number', 'timestep'];
+const WIGNER_SEITZ_SITE_LABELS = Object.freeze(['vacancy', 'regular', 'interstitial', 'antisite']);
 const STAT_COLUMNS = ['analysis', 'property', 'unit', 'finite_count', 'nan_count', 'infinite_count', 'minimum', 'maximum', 'mean', 'population_stddev'];
 export const STATISTICS_TABLES = Object.freeze([
   'summary', 'properties', 'categories', 'coordination', 'atoms', 'rdf', 'dxa-summary', 'dxa-lines',
   'bond-length', 'bond-angle', 'bond-order', 'bond-order-atoms', 'voronoi-distributions', 'voronoi-atoms', 'voronoi-faces',
-  'clusters', 'binning',
+  'clusters', 'binning', 'wigner-seitz',
 ]);
 
 /** Select a table from already completed analyses. All atom scans and CSV
@@ -105,6 +106,18 @@ export function buildStatisticsTable(snapshot, kind = 'summary') {
         yield [index + 1, clusters.sizes[index], clusters.totalWeights[index], ...clusters.centers.subarray(index * 3, index * 3 + 3),
           clusters.radiiOfGyration[index], ...clusters.gyrationTensors.subarray(index * 6, index * 6 + 6), Boolean(clusters.percolating[index]),
           frame.ids?.[atom] ?? atom + 1];
+      }
+    })());
+  }
+  if (kind === 'wigner-seitz') {
+    const sites = required(result('wignerSeitz')?.exportSites, 'Calculate Wigner–Seitz defects before exporting defect sites.');
+    const typeCount = sites.typeLabels.length;
+    return table(['site_index', 'site_id', 'site_type', 'site_class', 'occupancy', ...sites.typeLabels.map(label => `occupancy_${label}`),
+      'reference_x [Å]', 'reference_y [Å]', 'reference_z [Å]', 'current_x [Å]', 'current_y [Å]', 'current_z [Å]'], (function* () {
+      for (let index = 0; index < sites.sites.length; index++) {
+        yield [sites.sites[index], sites.ids[index], sites.types[index], WIGNER_SEITZ_SITE_LABELS[sites.classes[index]], sites.occupancy[index],
+          ...sites.typeOccupancy.subarray(index * typeCount, (index + 1) * typeCount),
+          ...sites.referencePositions.subarray(index * 3, index * 3 + 3), ...sites.currentPositions.subarray(index * 3, index * 3 + 3)];
       }
     })());
   }
@@ -285,11 +298,23 @@ function* summaryRows(snapshot, properties) {
       if (clusters[name] !== undefined) yield ['clusters', name.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`), '', clusters[name], ''];
     }
   }
+  const wignerSeitz = completedResult(snapshot, 'wignerSeitz');
+  if (wignerSeitz) {
+    for (const [metric, name] of [['reference_frame', 'referenceFrame'], ['affine_mapping', 'affineMapping'], ['site_count', 'siteCount'],
+      ['atom_count', 'atomCount'], ['vacancy_count', 'vacancyCount'], ['interstitial_count', 'interstitialCount'], ['antisite_count', 'antisiteCount'],
+      ['multiply_occupied_sites', 'multiplyOccupiedSites'], ['atoms_on_shared_sites', 'sharedSiteAtoms']]) {
+      if (wignerSeitz[name] !== undefined) yield ['wignerSeitz', metric, '', name === 'referenceFrame' ? wignerSeitz[name] + 1 : wignerSeitz[name], ''];
+    }
+    for (const row of wignerSeitz.typeSummary ?? []) {
+      for (const [metric, name] of [['site_count', 'sites'], ['atom_count', 'atoms'], ['vacancy_count', 'vacancies'], ['antisite_count', 'antisites'],
+        ['antisite_atoms', 'antisiteAtoms'], ['atoms_on_shared_sites', 'sharedSiteAtoms']]) yield ['wignerSeitz', metric, row.label, row[name], ''];
+    }
+  }
   const voronoi = completedResult(snapshot, 'voronoi');
   if (voronoi) {
     if (Array.isArray(voronoi.selectedTypes)) yield ['voronoi', 'selected_types', '', voronoi.selectedTypes.join('; '), ''];
     for (const [name, value] of Object.entries(voronoi.summary ?? voronoi.statistics?.summary ?? {})) yield ['voronoi', name, '', value,
-      name === 'volumeError' ? '' : /volume/i.test(name) ? 'Å³' : /area/i.test(name) ? 'Å²' : ''];
+      name === 'volumeError' ? '' : /volume/i.test(name) ? 'Å³' : /area/i.test(name) ? 'Å²' : /radius/i.test(name) ? 'Å' : ''];
     for (const [distribution, lower, upper, category, count, fraction, unit] of voronoiDistributionRows(voronoi)) {
       const label = category === '' ? `[${lower}, ${upper}] ${unit}` : category;
       yield ['voronoi', `${distribution}.population`, label, count, ''];

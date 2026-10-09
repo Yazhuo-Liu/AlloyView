@@ -2,9 +2,70 @@ export const ORIENTATION_COLOR_MODES = Object.freeze(['builtin:ptm:ipf', 'builti
 export const DEFAULT_ORIENTATION_SETTINGS = Object.freeze({ direction: 'z', custom: Object.freeze([0, 0, 1]) });
 export const UNDEFINED_ORIENTATION_COLOR = Object.freeze([130, 130, 130]);
 export const IPF_KEYS = Object.freeze({
-  cubic: { title: 'Cubic · FCC / BCC', labels: ['[001]', '[101]', '[111]'] },
-  hexagonal: { title: 'Hexagonal · HCP', labels: ['[0001]', '[10−10]', '[2−1−10]'] },
+  cubic: { title: 'Cubic · FCC / BCC / SC / diamond', labels: ['[001]', '[101]', '[111]'] },
+  hexagonal: { title: 'Hexagonal · HCP / hex. diamond / graphene', labels: ['[0001]', '[10−10]', '[2−1−10]'] },
 });
+
+// PTM_MATCH_* types with a crystal lattice. PTM aligns the cubic templates'
+// cube axes with x/y/z, and the hexagonal templates' c axis with z and a1 with
+// x. Icosahedral environments have no lattice orientation and stay gray.
+const CUBIC_STRUCTURES = new Set([1, 3, 5, 6]); // FCC, BCC, SC, cubic diamond
+const HEXAGONAL_STRUCTURES = new Set([2, 7, 8]); // HCP, hexagonal diamond, graphene
+export function orientationFamily(structure) {
+  return CUBIC_STRUCTURES.has(structure) ? 'cubic' : HEXAGONAL_STRUCTURES.has(structure) ? 'hexagonal' : null;
+}
+
+// Proper rotations of the m-3m and 6/mmm Laue groups as (w, x, y, z), in the
+// order PTM uses for its hexagonal group (ptm_quat.cpp).
+const h = Math.SQRT1_2, s3 = Math.sqrt(3) / 2;
+const SYMMETRY = Object.freeze({
+  cubic: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1],
+    [h, h, 0, 0], [h, -h, 0, 0], [h, 0, h, 0], [h, 0, -h, 0], [h, 0, 0, h], [h, 0, 0, -h],
+    [0, h, h, 0], [0, h, -h, 0], [0, h, 0, h], [0, h, 0, -h], [0, 0, h, h], [0, 0, h, -h],
+    ...[[1, 1, 1], [1, 1, -1], [1, -1, 1], [1, -1, -1], [-1, 1, 1], [-1, 1, -1], [-1, -1, 1], [-1, -1, -1]]
+      .map(axis => [.5, ...axis.map(value => value / 2)])],
+  hexagonal: [[1, 0, 0, 0], [s3, 0, 0, .5], [s3, 0, 0, -.5], [.5, 0, 0, s3], [.5, 0, 0, -s3],
+    [0, 1, 0, 0], [0, s3, .5, 0], [0, s3, -.5, 0], [0, .5, s3, 0], [0, .5, -s3, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+});
+
+/** The symmetry-equivalent q ⊗ g closest to the identity (largest |w|, the
+ * first such g on ties), with w ≥ 0 — the same rule as PTM's fundamental zone. */
+export function fundamentalZoneQuaternion(quaternion, family) {
+  const operators = SYMMETRY[family];
+  const length = Math.hypot(...quaternion);
+  if (!operators || !Number.isFinite(length) || length < 1e-12) return null;
+  const [w, x, y, z] = Array.from(quaternion, value => value / length);
+  let best = null, largest = -1;
+  for (const [gw, gx, gy, gz] of operators) {
+    const rw = w * gw - x * gx - y * gy - z * gz;
+    if (Math.abs(rw) > largest + 1e-12) {
+      largest = Math.abs(rw);
+      best = [rw, w * gx + x * gw + y * gz - z * gy, w * gy - x * gz + y * gw + z * gx, w * gz + x * gy - y * gx + z * gw];
+    }
+  }
+  return best[0] < 0 ? best.map(value => -value) : best;
+}
+
+// Rodrigues components r = (x, y, z)/w inside each fundamental zone are
+// bounded by tan(π/8) for cubic axes, and by tan(π/12) along c and tan(π/4)
+// in the basal plane for hexagonal crystals.
+const RODRIGUES_LIMITS = Object.freeze({ cubic: Array(3).fill(Math.SQRT2 - 1), hexagonal: [1, 1, 2 - Math.sqrt(3)] });
+
+/** RGB from the fundamental-zone Rodrigues vector, each component scaled by
+ * its zone half-width: equivalent orientations always get the same color. */
+export function rodriguesColor(quaternion, structure) {
+  return rodriguesRgb(quaternion, orientationFamily(structure)) ?? [...UNDEFINED_ORIENTATION_COLOR];
+}
+
+function rodriguesRgb(quaternion, family) {
+  const reduced = family && fundamentalZoneQuaternion(quaternion, family);
+  if (!reduced || !(reduced[0] > 0)) return null;
+  return reduced.slice(1).map((value, axis) => {
+    // Round-off around an ideal orientation must not flip 127/128 speckles.
+    const rodrigues = Math.abs(value / reduced[0]) < 1e-9 ? 0 : value / reduced[0];
+    return Math.round(255 * Math.max(0, Math.min(1, .5 + .5 * rodrigues / RODRIGUES_LIMITS[family][axis])));
+  });
+}
 
 export function normalizeOrientationSettings(value = {}) {
   const direction = value.direction ?? 'z';
@@ -45,11 +106,12 @@ export function ipfWeights(direction, structure) {
   if (!direction?.every(Number.isFinite)) return null;
   const norm = Math.hypot(...direction);
   if (norm < 1e-12) return null;
-  if (structure === 1 || structure === 3) {
+  const family = orientationFamily(structure);
+  if (family === 'cubic') {
     const [y, x, z] = direction.map(value => Math.abs(value) / norm).sort((a, b) => a - b);
     return [Math.max(0, z - x), Math.max(0, Math.SQRT2 * (x - y)), Math.sqrt(3) * y];
   }
-  if (structure === 2) {
+  if (family === 'hexagonal') {
     const [x, y, z] = direction;
     const period = Math.PI / 3;
     const angle = ((Math.atan2(y, x) % period) + period) % period;
@@ -109,26 +171,21 @@ export class OrientationColorResolver {
     let undefinedCount = 0, cubic = 0, hexagonal = 0;
     for (let atom = 0; atom < frame.ids.length; atom++) {
       for (let axis = 0; axis < 4; axis++) quaternion[axis] = source.orientations?.[atom * 4 + axis] ?? source.components?.[axis][atom];
-      const structure = source.structures[atom], crystal = sampleToCrystalDirection(quaternion, sample);
-      let rgb;
-      if (mode === ORIENTATION_COLOR_MODES[1] && crystal && (structure === 1 || structure === 2 || structure === 3)) {
-        const norm = Math.hypot(...quaternion);
-        // Quaternion sign is redundant. Canonicalize q and -q before mapping.
-        const sign = quaternion.find(value => Math.abs(value) > 1e-12) < 0 ? -1 : 1;
-        rgb = quaternion.slice(1).map(value => {
-          const component = Math.abs(value / norm) < 1e-12 ? 0 : value * sign / norm;
-          return Math.round(255 * Math.max(0, Math.min(1, .5 + .5 * component)));
-        });
-      } else if (crystal && (structure === 1 || structure === 3 || structure === 2)) {
-        rgb = ipfColorFromWeights(ipfWeights(crystal, structure));
-      } else { rgb = UNDEFINED_ORIENTATION_COLOR; undefinedCount++; }
+      const structure = source.structures[atom], family = orientationFamily(structure);
+      let rgb = null;
+      if (family && mode === ORIENTATION_COLOR_MODES[1]) rgb = rodriguesRgb(quaternion, family);
+      else if (family) {
+        const weights = ipfWeights(sampleToCrystalDirection(quaternion, sample), structure);
+        if (weights && Math.max(...weights) > 0) rgb = ipfColorFromWeights(weights);
+      }
+      if (!rgb) { rgb = UNDEFINED_ORIENTATION_COLOR; undefinedCount++; }
       colors.set(rgb, atom * 3);
-      if (structure === 1 || structure === 3) cubic++;
-      if (structure === 2) hexagonal++;
+      if (family === 'cubic') cubic++;
+      if (family === 'hexagonal') hexagonal++;
     }
     const palette = { colors, legend: { kind: 'orientation', title: mode === ORIENTATION_COLOR_MODES[0]
       ? `PTM inverse pole figure · ${normalized.direction === 'custom' ? sample.map(value => Number(value.toPrecision(3))).join(', ') : normalized.direction.toUpperCase()}`
-      : 'PTM quaternion RGB', mode: mode === ORIENTATION_COLOR_MODES[0] ? 'ipf' : 'quaternion',
+      : 'PTM orientation · Rodrigues RGB', mode: mode === ORIENTATION_COLOR_MODES[0] ? 'ipf' : 'quaternion',
       sample, undefinedCount, atomCount: frame.ids.length,
       keys: mode === ORIENTATION_COLOR_MODES[0] ? [ ...(cubic ? [{ ...IPF_KEYS.cubic, family: 'cubic' }] : []),
         ...(hexagonal ? [{ ...IPF_KEYS.hexagonal, family: 'hexagonal' }] : []) ] : [] } };

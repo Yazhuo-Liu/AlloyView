@@ -2,6 +2,9 @@ import { clearAnalysisResults, replaceAnalysisProperty } from './analysis/result
 import { analysisBackendLabel, analysisBackendDetails, analysisProgressText } from './analysis/status.js';
 import { renderDistributionChart, renderStatisticsTable } from './render/distribution-chart.js';
 import { initializeVoronoiResults } from './render/voronoi-results.js';
+import { voronoiRadiiForTypes, voronoiRadiiFingerprint } from './analysis/voronoi-radii.js';
+import { radiusForElement } from './render/atomic-radii.js';
+import { COMPUTED_PROPERTY_KIND } from './computed-properties.js';
 
 export const TOPOLOGY_PROPERTIES = Object.freeze({
   bondStatistics: Object.freeze([
@@ -24,9 +27,38 @@ const DEFINITIONS = {
     defaults: { lengthBins: 100, angleBins: 180 }, help: 'Uses the default and element-pair bond cutoffs above.' },
   voronoi: { prefix: 'voronoi', tool: 'voronoi', property: 'atomicVolume',
     fields: { faceAreaThreshold: 'voronoi-face-area-threshold', relativeFaceAreaThreshold: 'voronoi-relative-face-area-threshold' },
-    defaults: { faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50, selectedTypes: null },
+    defaults: { faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50, selectedTypes: null,
+      radical: false, radiusSource: 'types', typeRadii: [], radiusProperty: null },
     help: 'Calculate using the checked element types, including their atoms hidden in the display.' },
 };
+// Panel-only radical settings; the analysis receives one radius per atom.
+const VORONOI_RADICAL_SETTINGS = ['radical', 'radiusSource', 'typeRadii', 'radiusProperty'];
+
+/** Numeric per-atom properties usable as radical radii: source columns,
+ * external attributes and expressions, never another analysis's output. */
+export function voronoiRadiusProperties(frame) {
+  return (frame?.properties ?? []).filter(property => !property.categories && ArrayBuffer.isView(property.data)
+    && property.data.length === frame.ids?.length && (!property.analysisKind || property.analysisKind === COMPUTED_PROPERTY_KIND));
+}
+
+/** One validated radius per source atom; only tessellated atoms must be valid. */
+export function voronoiRadicalRadii(frame, settings) {
+  const included = settings.selectedTypes == null ? null : new Set(settings.selectedTypes);
+  const counted = atom => included === null || included.has(frame.typeLabels?.[frame.types[atom]]);
+  if (settings.radiusSource === 'property') {
+    const property = voronoiRadiusProperties(frame).find(entry => entry.name === settings.radiusProperty);
+    if (!property) throw new Error('Choose a numeric per-atom property for the radical Voronoi radii.');
+    const radii = Float64Array.from(property.data);
+    for (let atom = 0; atom < radii.length; atom++) if (counted(atom) && !(Number.isFinite(radii[atom]) && radii[atom] >= 0)) {
+      throw new Error(`Radius property ${property.name} of atom ${String(frame.ids[atom])} must be finite and at least 0 Å.`);
+    }
+    return radii;
+  }
+  for (const entry of settings.typeRadii ?? []) if (!(Number.isFinite(entry.radius) && entry.radius >= 0)) {
+    throw new Error(`The radical Voronoi radius of ${entry.label} must be finite and at least 0 Å.`);
+  }
+  return voronoiRadiiForTypes(frame, settings.typeRadii);
+}
 
 const format = value => value !== null && value !== undefined && Number.isFinite(Number(value))
   ? Number(value).toLocaleString('en-US', { maximumSignificantDigits: 5 }) : '—';
@@ -46,6 +78,67 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
   let controlsEnabled = false;
   let generation = 0;
   let typeFrame = null, typeChoices = [];
+  let radiusFrame = null, radiusRows = [], radiusPropertyNames = '';
+
+  function rerunRadical() {
+    onEdit(); updateRadicalControls();
+    if (jobs.voronoi.enabled) void run('voronoi', { automatic: true });
+  }
+
+  function updateRadicalControls() {
+    const settings = jobs.voronoi.settings, frame = getFrame(), available = controlsEnabled && Boolean(frame);
+    const container = $('voronoi-type-radii');
+    if (container && radiusFrame !== frame) {
+      radiusFrame = frame; radiusRows = [];
+      const root = container.ownerDocument;
+      for (const label of frame?.typeLabels ?? []) {
+        const row = root.createElement('label'), text = root.createElement('span'), unit = root.createElement('span'),
+          input = root.createElement('input'), suffix = root.createElement('i');
+        row.className = 'field'; text.textContent = label; unit.className = 'input-unit'; suffix.textContent = 'Å';
+        Object.assign(input, { type: 'number', min: '0', step: '0.01' });
+        input.setAttribute('data-voronoi-radius-type', label);
+        input.setAttribute('aria-label', `${label} radical Voronoi radius in angstroms`);
+        input.addEventListener('change', () => {
+          const value = input.valueAsNumber;
+          if (input.value === '' || !Number.isFinite(value) || value < 0) {
+            notify('Radical Voronoi radii must be finite and at least 0 Å.'); updateRadicalControls(); return;
+          }
+          jobs.voronoi.settings.typeRadii = [...jobs.voronoi.settings.typeRadii.filter(entry => entry.label !== label), { label, radius: value }]
+            .sort((a, b) => a.label.localeCompare(b.label));
+          if (jobs.voronoi.settings.radical) rerunRadical(); else { onEdit(); updateRadicalControls(); }
+        });
+        unit.append(input, suffix); row.append(text, unit); radiusRows.push({ label, input, row });
+      }
+      container.replaceChildren(...radiusRows.map(({ row }) => row));
+    }
+    const typeSource = settings.radiusSource !== 'property';
+    for (const { label, input } of radiusRows) {
+      const entry = settings.typeRadii.find(value => value.label === label);
+      input.value = String(entry?.radius ?? radiusForElement(label));
+      input.disabled = !available || !settings.radical || !typeSource;
+    }
+    const properties = voronoiRadiusProperties(frame), select = $('voronoi-radius-property');
+    if (select && radiusPropertyNames !== properties.map(property => property.name).join('\n')) {
+      radiusPropertyNames = properties.map(property => property.name).join('\n');
+      const root = select.ownerDocument;
+      select.replaceChildren(...properties.map(property => {
+        const option = root.createElement('option'); option.value = property.name;
+        option.textContent = property.unit ? `${property.displayName ?? property.name} (${property.unit})` : property.displayName ?? property.name;
+        return option;
+      }));
+    }
+    if (select) {
+      select.value = settings.radiusProperty ?? '';
+      select.disabled = !available || !settings.radical || typeSource || !properties.length;
+    }
+    if ($('voronoi-radical')) { $('voronoi-radical').checked = settings.radical; $('voronoi-radical').disabled = !available; }
+    if ($('voronoi-radius-source')) { $('voronoi-radius-source').value = typeSource ? 'types' : 'property'; $('voronoi-radius-source').disabled = !available || !settings.radical; }
+    if ($('voronoi-reset-radii')) { $('voronoi-reset-radii').disabled = !available || !settings.radical || !typeSource; $('voronoi-reset-radii').hidden = !typeSource; }
+    if (container) container.hidden = !typeSource;
+    if ($('voronoi-radius-property-field')) $('voronoi-radius-property-field').hidden = typeSource;
+    if ($('voronoi-radical-summary')) $('voronoi-radical-summary').textContent = !settings.radical ? 'Standard Voronoi'
+      : typeSource ? 'Radical · element radii' : `Radical · ${settings.radiusProperty ?? 'no property'}`;
+  }
 
   function updateTypeControls() {
     const container = $('voronoi-type-options'), frame = getFrame(), selected = jobs.voronoi.settings.selectedTypes;
@@ -84,7 +177,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     for (const id of Object.values(definition.fields)) if ($(id)) $(id).disabled = !available;
     if ($(`run-${prefix}`)) $(`run-${prefix}`).disabled = !available || Boolean(job.controller) || job.queued;
     if ($(`cancel-${prefix}`)) $(`cancel-${prefix}`).disabled = !available || (!job.enabled && !job.failed);
-    if (kind === 'voronoi') { voronoiView.setEnabled(available && Boolean(job.result)); updateTypeControls(); }
+    if (kind === 'voronoi') { voronoiView.setEnabled(available && Boolean(job.result)); updateTypeControls(); updateRadicalControls(); }
   }
 
   function state(kind, label, text = '') {
@@ -130,6 +223,17 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     }
     if (result.selectedTypes !== null && !result.selectedTypes.length) throw new Error('Select at least one element type for Voronoi analysis.');
     return result;
+  }
+
+  /** Analysis parameters and cache identity. Standard Voronoi requests keep
+   * exactly their previous parameters and keys; radical requests add the
+   * per-atom radii and their content fingerprint. */
+  function analysisRequest(kind, settings, frame) {
+    if (kind !== 'voronoi') return { analysis: settings, identity: settings, radii: null };
+    const analysis = Object.fromEntries(Object.entries(settings).filter(([name]) => !VORONOI_RADICAL_SETTINGS.includes(name)));
+    if (!settings.radical) return { analysis, identity: analysis, radii: null };
+    const radii = voronoiRadicalRadii(frame, settings);
+    return { analysis: { ...analysis, radii }, identity: { ...analysis, radical: voronoiRadiiFingerprint(radii) }, radii };
   }
 
   function abort(kind) {
@@ -200,7 +304,8 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     } else {
       const summary = result.summary ?? {};
       if ($(`${prefix}-summary`)) $(`${prefix}-summary`).textContent =
-        `${format(summary.atomCount ?? frame.ids.length)} cells · mean volume ${format(summary.meanVolume)} Å³ · mean coordination ${format(summary.meanCoordination)} · ${format(summary.boundaryAtomCount ?? 0)} boundary atoms`;
+        `${format(summary.atomCount ?? frame.ids.length)} cells · mean volume ${format(summary.meanVolume)} Å³ · mean coordination ${format(summary.meanCoordination)} · ${format(summary.boundaryAtomCount ?? 0)} boundary atoms${summary.tessellation === 'radical'
+          ? ` · radical (radius-weighted) · ${format(summary.emptyCellCount ?? 0)} empty cell${summary.emptyCellCount === 1 ? '' : 's'}` : ''}`;
       voronoiView.render(result);
     }
     const backend = { ...result, engine: result.engine ?? (result.backend === 'gpu' ? 'WebGPU' : 'CPU Workers') };
@@ -220,8 +325,8 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
   async function run(kind, { automatic = false, isCurrent = () => true } = {}) {
     const job = jobs[kind], frame = getFrame();
     if (!job || !frame || !isCurrent()) return false;
-    let settings;
-    try { settings = parameters(kind); }
+    let settings, call;
+    try { settings = parameters(kind); call = analysisRequest(kind, settings, frame); }
     catch (error) {
       abort(kind); job.failed = true;
       if (kind === 'voronoi') { clearFrames(kind); clearView(kind); onResultsChange({ kind, clearSettings: false }); }
@@ -237,7 +342,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     const controller = new AbortController(); job.controller = controller; job.queued = false;
     const current = () => request === job.serial && token === generation && source === getSourceVersion()
       && frame === getFrame() && job.enabled && !controller.signal.aborted && isCurrent();
-    const key = JSON.stringify({ ...settings, sourceVersion: source, gpuRequested: Boolean(pool.gpuEnabled) });
+    const key = JSON.stringify({ ...call.identity, sourceVersion: source, gpuRequested: Boolean(pool.gpuEnabled) });
     const prefix = DEFINITIONS[kind].prefix;
     try {
       let cached = frame.atomeyeResults?.[kind];
@@ -247,7 +352,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
         clearView(kind); job.frame = frame;
         state(kind, 'Calculating…', 'Waiting for available analysis Workers…');
         onResultsChange({ kind, frame, clearSettings: false });
-        const result = await pool.analyze(frame, { kind, ...settings }, {
+        const result = await pool.analyze(frame, { kind, ...call.analysis }, {
           signal: controller.signal, frameIndex: getFrameIndex(),
           onProgress: progress => {
             if (!current()) return;
@@ -270,6 +375,8 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
             throw new Error(`The ${kind} output does not match the current atom population.`);
           }
         }
+        // Cell displays rebuild geometry with exactly the analyzed radii.
+        if (call.radii) result.radicalRadii = call.radii;
         cached = { key, result };
         frame.atomeyeResults ??= {}; frame.atomeyeResults[kind] = cached;
       }
@@ -310,13 +417,25 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
       jobs[kind].settings = { ...DEFINITIONS[kind].defaults };
       for (const [name, id] of Object.entries(DEFINITIONS[kind].fields)) if ($(id)) $(id).value = String(DEFINITIONS[kind].defaults[name]);
     }
+    updateRadicalControls();
     onResultsChange({ clearSettings: true });
   }
 
   function serialize() {
+    const output = serializeSettings(), voronoi = output.voronoi;
+    // Recipes that never used radical cells keep their previous shape.
+    if (!voronoi.radical && voronoi.radiusSource === 'types' && !voronoi.typeRadii.length && voronoi.radiusProperty === null) {
+      for (const name of VORONOI_RADICAL_SETTINGS) delete voronoi[name];
+    }
+    return output;
+  }
+
+  function serializeSettings() {
     return Object.fromEntries(Object.entries(DEFINITIONS).map(([kind, definition]) => [kind,
       { enabled: jobs[kind].enabled, ...Object.fromEntries(Object.entries(definition.defaults).map(([name, fallback]) => {
         if (name === 'selectedTypes') return [name, jobs[kind].settings.selectedTypes?.slice() ?? null];
+        if (name === 'typeRadii') return [name, jobs[kind].settings.typeRadii.map(entry => ({ ...entry }))];
+        if (VORONOI_RADICAL_SETTINGS.includes(name)) return [name, jobs[kind].settings[name]];
         const input = $(definition.fields[name]);
         const value = input ? input.valueAsNumber : jobs[kind].settings[name];
         const valid = name.endsWith('Bins') || name === 'bins'
@@ -332,10 +451,12 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     for (const [kind, definition] of Object.entries(DEFINITIONS)) {
       cancel(kind, { clearSettings: false, silent: true });
       const settings = saved[kind] ?? { enabled: false, ...definition.defaults };
-      jobs[kind].settings = Object.fromEntries(Object.entries(definition.defaults).map(([name, fallback]) => [name, settings[name] ?? fallback]));
+      jobs[kind].settings = Object.fromEntries(Object.entries(definition.defaults).map(([name, fallback]) => [name,
+        name === 'typeRadii' ? (settings.typeRadii ?? fallback).map(entry => ({ ...entry })) : settings[name] ?? fallback]));
       for (const [name, id] of Object.entries(definition.fields)) if ($(id)) $(id).value = String(settings[name] ?? definition.defaults[name]);
       jobs[kind].enabled = Boolean(settings.enabled); jobs[kind].queued = jobs[kind].enabled; syncTool(kind);
     }
+    updateRadicalControls();
     onResultsChange({ clearSettings: false });
     await Promise.all(Object.keys(jobs).filter(kind => jobs[kind].enabled && isCurrent()).map(kind => run(kind, { automatic: true, isCurrent })));
   }
@@ -350,6 +471,36 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
       onEdit(); updateTypeControls();
       if (jobs.voronoi.enabled) void run('voronoi', { automatic: true });
     });
+  }
+
+  $('voronoi-radical')?.addEventListener('change', () => {
+    jobs.voronoi.settings.radical = Boolean($('voronoi-radical').checked);
+    if (jobs.voronoi.settings.radical && jobs.voronoi.settings.radiusSource === 'property' && jobs.voronoi.settings.radiusProperty === null) {
+      jobs.voronoi.settings.radiusProperty = defaultRadiusProperty();
+    }
+    rerunRadical();
+  });
+  $('voronoi-radius-source')?.addEventListener('change', () => {
+    jobs.voronoi.settings.radiusSource = $('voronoi-radius-source').value === 'property' ? 'property' : 'types';
+    if (jobs.voronoi.settings.radiusSource === 'property' && jobs.voronoi.settings.radiusProperty === null) {
+      jobs.voronoi.settings.radiusProperty = defaultRadiusProperty();
+    }
+    rerunRadical();
+  });
+  $('voronoi-radius-property')?.addEventListener('change', () => {
+    jobs.voronoi.settings.radiusProperty = $('voronoi-radius-property').value || null;
+    rerunRadical();
+  });
+  // Expressions and external attributes can add radius properties at any time.
+  $('voronoi-radical-controls')?.addEventListener('toggle', () => updateRadicalControls());
+  $('voronoi-reset-radii')?.addEventListener('click', () => {
+    jobs.voronoi.settings.typeRadii = [];
+    rerunRadical();
+  });
+
+  function defaultRadiusProperty() {
+    const properties = voronoiRadiusProperties(getFrame());
+    return (properties.find(property => /^radius$/i.test(property.name)) ?? properties[0])?.name ?? null;
   }
 
   for (const [kind, definition] of Object.entries(DEFINITIONS)) {

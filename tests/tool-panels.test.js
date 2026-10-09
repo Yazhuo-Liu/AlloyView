@@ -149,7 +149,7 @@ test('registry provides built-in classification and rejects ambiguous registrati
   assert.equal(registry.categoryFor('replicate'), 'modification');
   assert.equal(registry.isAnalysis('coordination'), true);
   assert.equal(registry.isAnalysis('vectors'), false);
-  assert.deepEqual(registry.list('modification').map(tool => tool.id), ['replicate', 'externalProperties', 'expressions']);
+  assert.deepEqual(registry.list('modification').map(tool => tool.id), ['replicate', 'externalProperties', 'expressions', 'trajectory']);
   assert.throws(() => registry.register({ id: 'display' }), /already registered/);
   assert.throws(() => registry.register({ id: 'invalid tool' }), /stable/);
   assert.throws(() => registry.register({ id: 'newTool', category: 'unknown' }), /category/);

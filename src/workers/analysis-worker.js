@@ -12,6 +12,7 @@ import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLo
 import { calculateReferenceStrain, prepareReferenceStrainContext } from '../analysis/reference-strain.js';
 import { calculatePreparedDisplacements } from '../analysis/displacement.js';
 import { calculateClusterEdges, finalizeClusters } from '../analysis/clusters.js';
+import { assignWignerSeitzSites, prepareWignerSeitzContext } from '../analysis/wigner-seitz.js';
 import { calculateDxaLocalRange, calculateDxaTetrahedraRange, releaseDxaCpuStageData, warmupDxaCpuStages, dxaCpuKernelMemoryBytes } from '../analysis/dxa-cpu-stages.js';
 
 import { NeighborSearch } from '../analysis/neighbors.js';
@@ -23,7 +24,8 @@ const cpuResidents = new Map(), cpuAnalyses = new Map();
 
 // One immutable source snapshot and linked-cell index per resident Worker.
 // Chunk messages reuse these arrays; results never transfer source buffers.
-let voronoiResident;
+// Radical radii are retained the same way under their own pool key.
+let voronoiResident, voronoiRadii;
 
 function residentInputBytes() {
   const buffers = new Set(), visited = new Set();
@@ -34,13 +36,13 @@ function residentInputBytes() {
     if (value instanceof Map) { for (const child of value.values()) visit(child); }
     else for (const child of Object.values(value)) visit(child);
   };
-  visit(cpuResidents); visit(cpuAnalyses); visit(voronoiResident);
+  visit(cpuResidents); visit(cpuAnalyses); visit(voronoiResident); visit(voronoiRadii);
   return [...buffers].reduce((sum, buffer) => sum + buffer.byteLength, 0);
 }
 
 self.addEventListener('message', async ({ data }) => {
   if (data.kind === 'cpuRelease') { for (const retained of cpuResidents.values()) releasePtmFrame(retained.frame); cpuResident = null; cpuAnalysis = null; cpuResidents.clear(); cpuAnalyses.clear(); return; }
-  if (data.kind === 'voronoiRelease') { voronoiResident = null; return; }
+  if (data.kind === 'voronoiRelease') { voronoiResident = null; voronoiRadii = null; return; }
   if (data.kind === 'dxaRelease') { await releaseDxaCpuStageData(data.dxaResidentKey); return; }
   const { id, fractional, cell, kind, types, residentFrameKey, cpuFrameKey, cpuAnalysisKey, cpuNeighborIndex,
     cpuCoordinationIndex, ...parameters } = data;
@@ -80,7 +82,7 @@ self.addEventListener('message', async ({ data }) => {
           cpuIndexBuilt = true;
         }
         parameters.coordinationIndex = cpuResident.coordinationIndex;
-      } else if (!parameters.preparedNeighbors && !['warmup', 'displacement', 'localShearFinalize', 'clustersFinalize'].includes(kind)
+      } else if (!parameters.preparedNeighbors && !['warmup', 'displacement', 'localShearFinalize', 'clustersFinalize', 'wignerSeitzAssign'].includes(kind)
           && !(kind === 'strain' && parameters.ptmInput) && kind !== 'referenceStrain') {
         if (!cpuResident.search) { cpuResident.search = new NeighborSearch(frame, { sharedMemory: parameters.sharedIndex }); cpuIndexBuilt = true; }
       }
@@ -93,6 +95,11 @@ self.addEventListener('message', async ({ data }) => {
         cpuAnalysis.referenceContext = prepareReferenceStrainContext(frame, { ...parameters, referenceSearch });
       }
       if (kind === 'referenceStrain') parameters.preparedContext = cpuAnalysis.referenceContext;
+      // The reference site index is built once per Worker and calculation.
+      if (kind === 'wignerSeitzAssign') {
+        if (!cpuAnalysis.wignerSeitzContext) { self.postMessage({ id, phase: 'indexing' }); cpuAnalysis.wignerSeitzContext = prepareWignerSeitzContext(frame, parameters); }
+        parameters.preparedContext = cpuAnalysis.wignerSeitzContext;
+      }
     }
     if (['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch', 'voronoiPrepare'].includes(kind) && residentFrameKey !== undefined) {
       if (fractional || (cpuFrameKey !== undefined && voronoiResident?.key !== residentFrameKey)) {
@@ -103,6 +110,12 @@ self.addEventListener('message', async ({ data }) => {
       frame = retained.frame;
       parameters.context = retained.context;
       parameters.onContext = context => { retained.context = context; };
+      if (parameters.radiiKey !== undefined) {
+        if (parameters.radii) voronoiRadii = { key: parameters.radiiKey, radii: parameters.radii };
+        else if (voronoiRadii?.key !== parameters.radiiKey) throw new Error('The resident Voronoi radii are unavailable.');
+        parameters.radii = voronoiRadii.radii;
+        delete parameters.radiiKey;
+      }
     }
     const onPhase = (phase) => self.postMessage({ id, phase });
     let lastProgressAt = -Infinity;
@@ -179,6 +192,9 @@ self.addEventListener('message', async ({ data }) => {
       // worker copy would duplicate it or transfer a SharedArrayBuffer.
       const { referenceMapping: _mapping, ...partial } = calculated;
       result = partial;
+    } else if (kind === 'wignerSeitzAssign') {
+      onPhase('analyzing');
+      result = assignWignerSeitzSites(frame, { ...parameters, onAtoms });
     } else if (kind === 'localShearCoordination') {
       result = calculateLocalShearCoordination(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'localShearMetrics') {

@@ -51,9 +51,10 @@ try {
     const before = await camera();
     await key('ArrowLeft'); const gear5 = await camera();
     assert.ok(Math.abs(gear5.yaw - before.yaw - 5 * Math.PI / 180) < 1e-10, 'gear 5 orbits 5 degrees');
-    await key('7'); await key('ArrowLeft'); const gear7 = await camera();
+    // The indicator hides after 1.6 s; check it before the next key so a busy machine cannot miss it.
+    await key('7'); assert.equal(await evaluate('document.getElementById("keyboard-gear-indicator").hidden'), false, 'gear indicator appears');
+    await key('ArrowLeft'); const gear7 = await camera();
     assert.ok(Math.abs(gear7.yaw - gear5.yaw - 20 * Math.PI / 180) < 1e-10, 'gear 7 multiplies camera step by four');
-    assert.equal(await evaluate('document.getElementById("keyboard-gear-indicator").hidden'), false, 'gear indicator appears');
     await delay(1700);
     assert.equal(await evaluate('document.getElementById("keyboard-gear-indicator").hidden'), true, 'gear indicator clears');
     await key('5'); await key('ArrowLeft', { shift: true }); const panned = await camera();
@@ -72,6 +73,14 @@ try {
     assert.equal((await camera()).yaw, focused.yaw, 'focused numeric input blocks camera movement');
     assert.equal(await evaluate('JSON.parse(localStorage.getItem("alloyview-shortcuts")).gear'), 5, 'focused input blocks gear change');
     await blur(); await key('ArrowLeft', { ctrl: true }); assert.equal((await camera()).yaw, focused.yaw, 'Ctrl combinations remain browser shortcuts');
+    // Scrolling keys stay with a focused sidebar control; the scrollable sidebar moves instead of the camera.
+    await evaluate(`(() => { const sidebar = document.getElementById('sidebar'); sidebar.scrollTop = 0;
+      const button = [...sidebar.querySelectorAll('button')].find(item => item.getClientRects().length && !item.disabled); button.focus(); })()`);
+    const beforeScroll = await camera(); await key('ArrowDown'); await key('PageDown');
+    await waitFor('document.getElementById("sidebar").scrollTop > 0', 'arrow and page keys scroll the focused sidebar', 5_000);
+    assert.equal((await camera()).pitch, beforeScroll.pitch, 'sidebar focus keeps arrows away from the camera');
+    await click('#viewport'); await key('ArrowLeft'); assert.notEqual((await camera()).yaw, beforeScroll.yaw, 'clicking the view returns arrows to the camera');
+    await evaluate('document.getElementById("sidebar").scrollTop = 0'); await blur();
 
     await key(']'); await waitFor('document.getElementById("frame-label").textContent.startsWith("2 / 3") && document.getElementById("loading").hidden', 'next frame key');
     await key('}', { shift: true }); await waitFor('document.getElementById("frame-label").textContent.startsWith("3 / 3") && document.getElementById("loading").hidden', 'last frame key');

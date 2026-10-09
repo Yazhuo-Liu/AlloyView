@@ -32,7 +32,7 @@ export function initialColorQuantities(frame) {
     ...['x', 'y', 'z'].map(axis => ({ value: `builtin:position:${axis}`, label: `Position ${axis.toUpperCase()} [Å]` })),
     ...(velocity ? [{ value: 'builtin:velocity:magnitude', label: `Speed magnitude${velocity[0].unit && velocity.every(property => property.unit === velocity[0].unit) ? ` [${velocity[0].unit}]` : ''}` }] : []),
     ...(ptmOrientationSource(frame) ? [{ value: 'builtin:ptm:ipf', label: 'PTM orientation · inverse pole figure' },
-      { value: 'builtin:ptm:quaternion', label: 'PTM orientation · quaternion RGB' }] : []),
+      { value: 'builtin:ptm:quaternion', label: 'PTM orientation · Rodrigues RGB' }] : []),
     ...frame.properties.map(property => ({ value: `property:${property.name}`,
       label: `${velocityLabels.get(property.name) ?? property.displayName ?? property.name}${property.unit ? ` [${property.unit}]` : ''}` })),
   ];
@@ -57,7 +57,8 @@ export class ColorQuantityResolver {
     const axis = ['x', 'y', 'z'].indexOf(mode.slice('builtin:position:'.length));
     let sources, displayName, unit;
     if (mode.startsWith('builtin:position:') && axis >= 0) {
-      const unwrapped = coordinateMode === 'unwrapped' && frame.unwrappedPositions;
+      // File image data wins; otherwise display-only inferred coordinates.
+      const unwrapped = coordinateMode === 'unwrapped' && (frame.unwrappedPositions || frame.inferredUnwrap?.unwrappedPositions);
       sources = [unwrapped || frame.positions];
       if (sources[0]?.length !== frame.ids.length * 3) return null;
       displayName = `Position ${'XYZ'[axis]} (${unwrapped ? 'unwrapped' : 'wrapped'})`;

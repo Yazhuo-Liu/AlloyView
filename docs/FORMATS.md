@@ -162,8 +162,10 @@ When wrapped columns are present, they define the canonical in-cell positions.
 Otherwise, explicit unwrapped columns are wrapped only on periodic axes to build
 the canonical positions. Unwrapped display coordinates come from explicit
 `xu/yu/zu` or `xsu/ysu/zsu`, or are reconstructed from wrapped coordinates plus
-complete `ix/iy/iz` flags. If none of those sources is present, the UI disables
-unwrapped display; it does not infer boundary crossings from adjacent frames.
+complete `ix/iy/iz` flags. If none of those sources is present in a trajectory,
+choosing Unwrapped infers display-only coordinates from consecutive frames
+([Trajectory tools](features/trajectory-tools.md)); file data always takes
+precedence, and analyses never use the inferred values.
 For restricted triclinic cells, image flags translate along the three cell
 vectors rather than the Cartesian axes.
 

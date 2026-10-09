@@ -265,6 +265,7 @@
               <button type="button" data-tool-button="ptm" aria-controls="tool-ptm" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">PTM</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="strain" aria-controls="tool-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="referenceStrain" aria-controls="tool-reference-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Frame strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="wignerSeitz" aria-controls="tool-wigner-seitz" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Wigner–Seitz</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="localShear" aria-controls="tool-local-shear" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Local shear</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="selectionGroups" aria-controls="tool-selection-groups" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Selections</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="performance" aria-controls="tool-performance" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Performance</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
@@ -273,6 +274,7 @@
               <button type="button" data-tool-button="replicate" aria-controls="tool-replicate" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Replicate</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="externalProperties" aria-controls="tool-external-properties" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">External properties</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="expressions" aria-controls="tool-expressions" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Expressions</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="trajectory" aria-controls="tool-trajectory" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Trajectory</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
             </div>
             <p class="help tool-selector-help">Select a tool to show its settings. Switching categories keeps analyses enabled. Close an analysis to cancel it and clear its results.</p>
           </section>
@@ -449,6 +451,43 @@
             </details>
           </section>
 
+          <section id="tool-trajectory" class="side-section trajectory-tools-section" data-tool-panel="trajectory" hidden>
+            <div class="section-heading"><div><p class="section-kicker">TRAJECTORY</p><h3>Unwrap, smooth and trace</h3></div></div>
+            <div class="section-heading statistics-subheading"><div><h3>Unwrapped coordinates</h3></div></div>
+            <p id="trajectory-unwrap-status" class="help" role="status" aria-live="polite">Open a trajectory to unwrap, smooth or trace atom paths.</p>
+            <button id="cancel-trajectory-unwrap" class="text-button" type="button" disabled>Cancel unwrapping</button>
+            <p class="help">Image flags or unwrapped columns in the file are used as they are. Otherwise each atom's periodic crossings are counted from frame 1 in order, by atom ID. Inferred coordinates are for display, Position colors and atom details; analyses keep using the file coordinates.</p>
+
+            <div class="section-heading statistics-subheading"><div><h3>Smooth trajectory</h3></div></div>
+            <label class="slice-toggle"><input id="trajectory-smooth-enabled" type="checkbox" disabled><span>Replace coordinates by a moving average</span></label>
+            <label class="field"><span>Frames on each side</span><input id="trajectory-smooth-window" type="number" min="1" max="50" step="1" value="2" disabled></label>
+            <p id="trajectory-smooth-status" class="help" role="status" aria-live="polite">Off. Displayed and analyzed coordinates are the file coordinates.</p>
+            <p class="help">Each frame becomes the average of itself and up to this many frames before and after it (fewer at the ends). Displacements use the minimum image relative to that frame, and the cell is averaged too. CNA, PTM, DXA and every other analysis then use the averaged coordinates.</p>
+
+            <div class="section-heading statistics-subheading"><div><h3>Trajectory lines</h3></div></div>
+            <label class="field"><span>Atoms</span><select id="trajectory-lines-source" disabled><option value="ids">Atom IDs below</option></select></label>
+            <label id="trajectory-lines-ids-field" class="field"><span>Atom IDs</span><textarea id="trajectory-lines-ids" rows="2" maxlength="2000000" placeholder="12 57 301" autocomplete="off" spellcheck="false" disabled></textarea></label>
+            <div class="triple-fields">
+              <label><span>First frame</span><input id="trajectory-lines-first" type="number" value="1" min="1" step="1" disabled></label>
+              <label><span>Last frame</span><input id="trajectory-lines-last" type="number" value="1" min="1" step="1" disabled></label>
+              <label><span>Every</span><input id="trajectory-lines-stride" type="number" value="1" min="1" step="1" disabled></label>
+            </div>
+            <div class="paired-fields trajectory-line-style">
+              <label id="trajectory-lines-color-field" class="field"><span>Color</span><input id="trajectory-lines-color" type="color" value="#ff9f1c" disabled></label>
+              <label id="trajectory-lines-scheme-field" class="field" hidden><span>Time colors</span><select id="trajectory-lines-scheme" disabled></select></label>
+              <label class="field"><span>Width (px)</span><input id="trajectory-lines-width" type="number" value="2" min="0.5" max="16" step="0.5" disabled></label>
+            </div>
+            <label class="slice-toggle"><input id="trajectory-lines-time" type="checkbox" disabled><span>Color by time along each path</span></label>
+            <label class="slice-toggle"><input id="trajectory-lines-visible" type="checkbox" checked disabled><span>Show lines</span></label>
+            <div class="paired-actions">
+              <button id="generate-trajectory-lines" class="button button-accent" type="button" disabled>Generate lines</button>
+              <button id="cancel-trajectory-lines" class="button button-secondary" type="button" disabled>Cancel</button>
+            </div>
+            <button id="clear-trajectory-lines" class="text-button" type="button" disabled>Remove lines</button>
+            <p id="trajectory-lines-status" class="help" role="status" aria-live="polite">Generate lines to trace the chosen atoms.</p>
+            <p class="help">Paths join each atom's positions at the sampled frames without breaking at periodic boundaries; they use the file's unwrapped coordinates when present, otherwise the minimum-image step between samples. Choose a step small enough that atoms move less than half a cell between samples. At most 2,000,000 points (atoms × sampled frames).</p>
+          </section>
+
           <section id="tool-slice" class="side-section" data-tool-panel="slice" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">CLIPPING PLANES</p><h3>Slices</h3></div>
@@ -599,6 +638,15 @@
               </div>
               <div id="voronoi-type-options" class="legend-items" role="group" aria-label="Element types included in Voronoi analysis"></div>
               <p class="help">Only checked types contribute atoms and neighbors to the tessellation. Unchecked types keep their atoms in the structure, with no Voronoi values. Display hiding does not affect this selection.</p>
+            </details>
+            <details id="voronoi-radical-controls" class="tool-details">
+              <summary>Cell weighting · <span id="voronoi-radical-summary">Standard Voronoi</span></summary>
+              <label class="slice-toggle"><input id="voronoi-radical" type="checkbox" disabled><span>Radical (radius-weighted) Voronoi</span></label>
+              <label class="field"><span>Radius source</span><select id="voronoi-radius-source" disabled><option value="types">Radius per element type</option><option value="property">Per-atom property</option></select></label>
+              <div id="voronoi-type-radii" class="paired-fields" role="group" aria-label="Radical Voronoi radius per element type"></div>
+              <button id="voronoi-reset-radii" class="button button-secondary" type="button" disabled>Reset to atomic radii</button>
+              <label id="voronoi-radius-property-field" class="field" hidden><span>Radius property <small>Å</small></span><select id="voronoi-radius-property" disabled></select></label>
+              <p class="help">Radical (power) cells split space by the power distance |x − p|² − r² instead of the distance, so a face moves away from the larger atom of each pair. Equal radii give standard Voronoi cells. Element radii start from the display's atomic radii; radii must be finite and at least 0 Å. A small atom crowded by much larger neighbors can lose its whole cell: it is reported with zero volume and no faces.</p>
             </details>
             <details class="tool-details voronoi-face-filter-controls">
               <summary>Small-face filters</summary>
@@ -965,6 +1013,42 @@
             <button id="run-reference-strain" class="button button-accent tool-run-button" type="button" disabled>Calculate frame strain</button>
             <p class="help">Fit the current neighbor vectors to a selected reference frame using stable atom IDs. Green–Lagrange strain uses Cartesian axes; insufficient or unmatched neighborhoods receive NaN.</p>
             <p id="reference-strain-status" class="help" role="status" aria-live="polite">Open a trajectory and choose a reference frame.</p>
+          </section>
+
+          <section id="tool-wigner-seitz" class="side-section analysis-section wigner-seitz-section" data-tool-panel="wignerSeitz" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">POINT DEFECTS</p><h3>Wigner–Seitz defects</h3></div>
+              <div class="analysis-state-controls"><span id="wigner-seitz-state" class="state-pill">Not calculated</span><button id="cancel-wigner-seitz" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <p class="help">Assign every atom to the nearest site of a reference frame. A site without atoms is a vacancy, each extra atom on a site is an interstitial, and a site holding one atom of another element is an antisite. Frames may have different atom counts; atom IDs are not used.</p>
+            <label class="field"><span>Reference frame</span><input id="wigner-seitz-reference-frame" type="number" value="1" min="1" step="1" disabled></label>
+            <label class="slice-toggle"><input id="wigner-seitz-affine" type="checkbox" disabled><span>Affine mapping: map the current cell onto the reference cell</span></label>
+            <button id="run-wigner-seitz" class="button button-accent tool-run-button" type="button" disabled>Calculate defects</button>
+            <div class="analysis-backend-row"><span>Backend</span><output id="wigner-seitz-backend">—</output></div>
+            <progress id="wigner-seitz-progress" class="analysis-progress" max="1" value="0" aria-label="Wigner–Seitz calculation progress" hidden></progress>
+            <p id="wigner-seitz-status" class="help" role="status" aria-live="polite">Every atom of the displayed frame is assigned to its nearest reference site, including hidden atoms.</p>
+            <div class="paired-fields">
+              <label class="field"><span>Site markers</span><select id="wigner-seitz-markers" disabled><option value="vacancies">Vacant sites</option><option value="defects">Defect sites</option><option value="all">All sites</option></select></label>
+              <label class="field"><span>Marker radius</span><span class="input-unit"><input id="wigner-seitz-marker-radius" type="number" value="0.6" min="0.01" max="100" step="0.05" disabled><i>Å</i></span></label>
+            </div>
+            <label class="slice-toggle"><input id="wigner-seitz-show-markers" type="checkbox" checked disabled><span>Show site markers</span></label>
+            <div id="wigner-seitz-marker-legend" class="wigner-seitz-marker-legend" role="list" aria-label="Site marker colors"></div>
+            <p id="wigner-seitz-marker-status" class="help" role="status" aria-live="polite"></p>
+            <div id="wigner-seitz-results" class="analysis-statistics-results" hidden>
+              <p id="wigner-seitz-summary" class="help"></p>
+              <div class="paired-actions">
+                <button id="wigner-seitz-color-class" class="button button-secondary" type="button" disabled>Color by defect class</button>
+                <button id="wigner-seitz-color-occupancy" class="button button-secondary" type="button" disabled>Color by occupancy</button>
+              </div>
+              <div class="statistics-result-heading"><h4>Sites and defects by element</h4><button id="export-wigner-seitz-sites" class="button button-secondary statistics-export-button" type="button" disabled>Defect sites CSV</button></div>
+              <div class="cluster-table-wrap">
+                <table class="cluster-table wigner-seitz-table" aria-label="Wigner–Seitz sites, atoms and defects by element">
+                  <thead><tr><th scope="col">Element</th><th scope="col">Sites</th><th scope="col">Atoms</th><th scope="col">Vacancies</th><th scope="col">Antisites</th><th scope="col">Shared sites</th></tr></thead>
+                  <tbody id="wigner-seitz-table-body"></tbody>
+                </table>
+              </div>
+              <p class="help">Sites, vacancies and antisites count reference sites of each element. Atoms and <b>Shared sites</b> count current atoms of each element; the latter are atoms on a site with two or more atoms. The interstitial count is the number of excess atoms, Σ (occupancy − 1). To see only defects, color by <b>WS defect class</b> and hide <b>Regular</b> in the legend.</p>
+            </div>
           </section>
 
           <section id="tool-local-shear" class="side-section analysis-section" data-tool-panel="localShear" hidden>

@@ -12,6 +12,7 @@ import { parseLammpsData } from '../io/lammps-data.js';
 import { parsePoscar } from '../io/poscar.js';
 import { FrameParserPool } from '../data/frame-parser-pool.js';
 import { openIndexedTrajectory } from './indexed-trajectory.js';
+import { TrajectoryProcessor } from './trajectory-processor.js';
 
 const SINGLE_FRAME_PARSERS = { 'lammps-data': parseLammpsData, poscar: parsePoscar };
 
@@ -19,6 +20,7 @@ let source = null;
 let wasmModulePromise;
 let parserPool = null;
 let parserBackgroundCount;
+let trajectory = null;
 let loadController = null;
 let useCpuBudget = false;
 let nextLeaseId = 1;
@@ -72,6 +74,7 @@ self.addEventListener('message', async (event) => {
       loadController?.abort();
       for (const request of frameRequests.values()) request.controller.abort();
       parserPool?.close(); parserPool = null;
+      trajectory?.close(); trajectory = null;
       requestLoadController = loadController = new AbortController();
       useCpuBudget = Boolean(payload.cpuBudget);
       parserBackgroundCount = payload.parserConcurrency;
@@ -93,7 +96,30 @@ self.addEventListener('message', async (event) => {
       frameRequests.set(id, task);
       const frame = await readSourceFrame(source, payload.index, id, task);
       if (task.controller.signal.aborted) throw new DOMException('Frame parsing cancelled.', 'AbortError');
-      self.postMessage({ id, ok: true, result: { frame, index: payload.index } }, frameTransferables(frame));
+      if (payload.trajectory) {
+        await trajectoryProcessor().prepare(frame, payload.index, { ...payload.trajectory, signal: task.controller.signal,
+          background: task.background, onProgress: progress => { if (!task.background) self.postMessage({ id, event: 'progress', ...progress }); } });
+        if (task.controller.signal.aborted) throw new DOMException('Frame parsing cancelled.', 'AbortError');
+      }
+      self.postMessage({ id, ok: true, result: { frame, index: payload.index } }, trajectoryTransferables(frame));
+      return;
+    }
+    if (type === 'trajectory-unwrap' || type === 'trajectory-lines') {
+      assertSource();
+      task = { controller: new AbortController(), background: Boolean(payload.background) };
+      frameRequests.set(id, task);
+      const onProgress = progress => self.postMessage({ id, event: 'progress', ...progress });
+      if (type === 'trajectory-unwrap') {
+        const inferred = await trajectoryProcessor().inferredUnwrap(payload.index, { smoothing: payload.smoothing,
+          signal: task.controller.signal, background: task.background, onProgress });
+        if (task.controller.signal.aborted) throw new DOMException('Trajectory processing cancelled.', 'AbortError');
+        self.postMessage({ id, ok: true, result: { inferredUnwrap: inferred } },
+          inferred ? [inferred.imageFlags.buffer, inferred.unwrappedPositions.buffer] : []);
+      } else {
+        const lines = await trajectoryProcessor().lines(payload, { signal: task.controller.signal, onProgress });
+        if (task.controller.signal.aborted) throw new DOMException('Trajectory processing cancelled.', 'AbortError');
+        self.postMessage({ id, ok: true, result: lines }, [lines.vertices.buffer, lines.lineOffsets.buffer, lines.frames.buffer]);
+      }
       return;
     }
     if (type === 'analyze-coordination') {
@@ -113,8 +139,39 @@ self.addEventListener('message', async (event) => {
   }
 });
 
+function trajectoryTransferables(frame) {
+  const transferables = frameTransferables(frame);
+  if (frame.inferredUnwrap) transferables.push(frame.inferredUnwrap.imageFlags.buffer, frame.inferredUnwrap.unwrappedPositions.buffer);
+  return [...new Set(transferables)];
+}
+
+/** Created per source on first use; frames it reads are raw parser output. */
+function trajectoryProcessor() {
+  if (!trajectory) {
+    const current = source;
+    trajectory = new TrajectoryProcessor({
+      readFrame: (index, { signal, background, priority }) => readSourceFrame(current, index, null,
+        { background, priority, controller: { signal } }),
+      getFrameCount: options => sourceFrameCount(current, options),
+    });
+  }
+  return trajectory;
+}
+
+/** Frames known so far; waits for progressive indexing to reach `atLeast`. */
+async function sourceFrameCount(current, { atLeast = 0, signal } = {}) {
+  while (current.descriptors && !current.indexComplete && current.descriptors.length < atLeast) {
+    if (signal?.aborted) throw new DOMException('Trajectory processing cancelled.', 'AbortError');
+    await Promise.race([current.indexPromise.catch(() => {}), new Promise(resolve => setTimeout(resolve, 50))]);
+  }
+  if (current.descriptors) return current.descriptors.length;
+  if (current.format === 'cfg-sequence') return current.files.length;
+  return current.frameCount ?? current.offsets?.length ?? 1;
+}
+
 async function readSourceFrame(current, index, requestId, task) {
-  const options = { background: task.background, signal: task.controller.signal };
+  const options = { background: task.background, signal: task.controller.signal,
+    ...(task.priority === undefined ? {} : { priority: task.priority }) };
   if (current.descriptors) {
     if (!current.descriptors[index] && !current.indexComplete) await current.indexPromise;
     const descriptor = current.descriptors[index];

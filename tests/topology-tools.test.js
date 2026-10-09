@@ -47,7 +47,9 @@ function harness(t) {
   }
   for (const [id, value] of Object.entries({ 'bond-statistics-length-bins': 100, 'bond-statistics-angle-bins': 180,
     'voronoi-face-area-threshold': 0, 'voronoi-relative-face-area-threshold': 0 })) fields[id] = new Element(value);
-  for (const id of ['voronoi-type-options', 'voronoi-type-summary', 'voronoi-select-all-types', 'voronoi-clear-types']) fields[id] = new Element();
+  for (const id of ['voronoi-type-options', 'voronoi-type-summary', 'voronoi-select-all-types', 'voronoi-clear-types',
+    'voronoi-radical', 'voronoi-radius-source', 'voronoi-type-radii', 'voronoi-reset-radii', 'voronoi-radius-property',
+    'voronoi-radius-property-field', 'voronoi-radical-summary', 'voronoi-radical-controls']) fields[id] = new Element();
   globalThis.document = { getElementById: id => fields[id] ?? null,
     createElement() { const element = new Element(); element.ownerDocument = this; return element; } };
   for (const element of Object.values(fields)) element.ownerDocument = globalThis.document;
@@ -338,4 +340,53 @@ test('histogram adapters retain physical edges, empty bins and normalized popula
     { lower: 8, upper: 8, center: 8, count: 3, probability: 1, density: null },
   ]);
   assert.deepEqual(distributionRows([{ value: 6, count: 1 }, { value: 12, count: 3 }]).map(row => row.probability), [.25, .75]);
+});
+
+test('radical Voronoi sends validated per-atom radii under a distinct cache key and round-trips its settings', async t => {
+  const h = harness(t), structure = { ...frame(), fractional: new Float64Array(9), types: Uint16Array.from([0, 1, 0]), typeLabels: ['Ni', 'Al'],
+    properties: [{ name: 'radius', data: Float64Array.of(1.1, 1.4, 1.2) },
+      { name: 'atomicVolume', analysisKind: 'voronoi', data: new Float64Array(3) }, { name: 'phase', categories: ['a'], data: new Uint8Array(3) }] };
+  h.setFrame(structure); h.tools.setEnabled(true);
+  const standard = h.tools.run('voronoi');
+  assert.equal('radii' in h.pending[0].settings, false); assert.equal('radical' in h.pending[0].settings, false);
+  h.pending[0].resolve(voronoiResult()); await standard;
+  assert.equal(h.fields['voronoi-radical-summary'].textContent, 'Standard Voronoi');
+  const radiusInput = label => h.fields['voronoi-type-radii'].children.map(row => row.children[1].children[0])
+    .find(input => input.attributes.get('data-voronoi-radius-type') === label);
+  assert.equal(radiusInput('Al').value, '1.43', 'type radii start from the atomic radii'); assert.equal(radiusInput('Al').disabled, true);
+  h.fields['voronoi-radical'].checked = true; h.fields['voronoi-radical'].dispatch('change');
+  assert.equal(h.pending.length, 2, 'switching to radical cells recomputes');
+  assert.deepEqual(h.pending[1].settings.radii, Float64Array.of(1.24, 1.43, 1.24));
+  assert.equal(radiusInput('Al').disabled, false);
+  const radical = voronoiResult(); radical.summary = { ...radical.summary, tessellation: 'radical', emptyCellCount: 1 };
+  h.pending[1].resolve(radical); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.tools.getResult('voronoi').radicalRadii, h.pending[1].settings.radii, 'cell displays reuse the analyzed radii');
+  assert.match(h.fields['voronoi-summary'].textContent, /radical \(radius-weighted\) · 1 empty cell$/);
+  radiusInput('Al').value = '1.5'; radiusInput('Al').dispatch('change');
+  assert.deepEqual(h.pending[2].settings.radii, Float64Array.of(1.24, 1.5, 1.24));
+  h.pending[2].resolve(voronoiResult()); await new Promise(resolve => setImmediate(resolve));
+  for (const value of ['-1', '', 'x']) { radiusInput('Ni').value = value; radiusInput('Ni').dispatch('change'); }
+  assert.equal(h.pending.length, 3, 'invalid radii never reach the workers');
+  assert.equal(h.notifications.length, 3); assert.equal(radiusInput('Ni').value, '1.24', 'the table restores the valid radius');
+  h.fields['voronoi-radius-source'].value = 'property'; h.fields['voronoi-radius-source'].dispatch('change');
+  assert.deepEqual(h.fields['voronoi-radius-property'].children.map(option => option.value), ['radius'], 'only source numeric properties');
+  assert.deepEqual(h.pending[3].settings.radii, Float64Array.of(1.1, 1.4, 1.2));
+  assert.equal(h.fields['voronoi-radical-summary'].textContent, 'Radical · radius');
+  h.pending[3].resolve(voronoiResult()); await new Promise(resolve => setImmediate(resolve));
+  const saved = h.tools.serialize().voronoi;
+  assert.deepEqual({ radical: saved.radical, radiusSource: saved.radiusSource, typeRadii: saved.typeRadii, radiusProperty: saved.radiusProperty },
+    { radical: true, radiusSource: 'property', typeRadii: [{ label: 'Al', radius: 1.5 }], radiusProperty: 'radius' });
+  structure.properties[0].data[1] = -2;
+  assert.equal(await h.tools.run('voronoi'), false);
+  assert.match(h.fields['voronoi-status'].textContent, /Radius property radius of atom 2 must be finite and at least 0/);
+  structure.properties[0].data[1] = 1.4;
+  h.tools.reset();
+  assert.equal(h.tools.serialize().voronoi.radical, undefined, 'standard recipes keep their previous shape');
+  const restored = h.tools.restore({ voronoi: { enabled: true, faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50, selectedTypes: null, ...saved,
+    radiusSource: 'types' } });
+  assert.deepEqual(h.pending.at(-1).settings.radii, Float64Array.of(1.24, 1.5, 1.24));
+  assert.equal(h.fields['voronoi-radical'].checked, true);
+  h.pending.at(-1).resolve(voronoiResult()); await restored;
+  h.fields['voronoi-radical'].checked = false; h.fields['voronoi-radical'].dispatch('change');
+  assert.equal('radii' in h.pending.at(-1).settings, false);
 });

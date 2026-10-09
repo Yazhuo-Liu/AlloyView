@@ -6,6 +6,14 @@ availability check. Shortcuts do not run while an input, select, editable text
 area or modal dialog has focus. Ctrl, Command and Alt combinations remain browser
 or operating-system shortcuts. Escape keeps its existing panel behavior.
 
+Scrolling keys follow the usual page convention: Arrow keys, Page Up/Down,
+Home, End and Space move the camera or trajectory only while focus is on the
+page itself or inside the 3D view (click the view to give it focus). When a
+sidebar control, panel or any scrollable region has focus, these keys scroll it
+as usual. A scrollable overlay inside the view, such as a long legend, keeps
+the keys for the direction in which it scrolls. Letter and symbol shortcuts
+work wherever focus is, except in text fields and dialogs.
+
 ## Camera step gearbox
 
 Press **0–9** with the structure loaded to choose a camera step size. Gear 5 is

@@ -129,7 +129,12 @@ export async function withWebGpuBrowser(run, { software = true, isolated = false
     }
     const adapter = requireGpu ? await evaluate(`(async () => {
       if (!navigator.gpu) return { available: false, reason: 'This browser does not expose WebGPU.' };
-      const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+      // A hardware GPU process can still be initializing Vulkan on the first request.
+      let adapter = null;
+      for (let attempt = 0; attempt < 20 && !adapter; attempt++) {
+        adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+        if (!adapter) await new Promise(resolve => setTimeout(resolve, 250));
+      }
       if (!adapter) return { available: false, reason: 'WebGPU found no usable adapter.' };
       const info = adapter.info ?? (adapter.requestAdapterInfo ? await adapter.requestAdapterInfo() : {});
       return { available: true, vendor: info.vendor, architecture: info.architecture, device: info.device,

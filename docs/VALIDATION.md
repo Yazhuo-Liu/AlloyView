@@ -2,6 +2,142 @@
 
 Latest validation: 2026-10-08 (America/New_York, EDT). Earlier entries retain their own dates.
 
+## Radical Voronoi (2026-10-08)
+
+This is backlog item O11, merged after O7 and O10.
+
+- **Plane offset:** the CPU path passes |d|²/s + (wᵢ − wⱼ), with w = r²/s, as
+  the Voro++ `nplane` offset. This is Voro++'s `container_poly` rule, so the
+  committed Voronoi Wasm is unchanged. The GPU radical clip shader applies the
+  same shift.
+- **Unweighted results unchanged:**
+  - **CPU:** SHA-256 of all 24 output fields and the cell-geometry arrays is
+    identical to `HEAD`. This covers HEA, the Fe loop, NiGB, and synthetic
+    FCC, BCC, HCP, triclinic and mixed-PBC crystals. Pool output equals
+    direct.
+  - **GPU:** real-GPU output already varies between runs on `HEAD`, because the
+    linked-cell build uses `atomicExchange`. Identity was therefore shown on
+    what the GPU receives:
+    - the standard shader sources (SHA-256);
+    - the complete host command stream and outputs against a deterministic
+      fake runtime;
+    - unchanged hardware timings.
+- **Radical parity:** `test:gpu:voronoi` on SwiftShader compares GPU against
+  Voro++. Cases:
+  - CsCl against its analytic volume, rock salt, and equal radii;
+  - triclinic and mixed-PBC cells with random radii, and a type subset;
+  - empty cells recovered exactly, and the spread fallback;
+  - Fe loop, HEA and NiGB samples.
+
+  The maximum volume error is 2.6×10⁻⁵ Å³ with no topology mismatches. On the
+  GTX 1080 Ti the Fe loop has 0 mismatches and HEA 9 of 28,800, within the
+  unweighted kernel's own mismatch rate on that card.
+- **Node tests:** all 1,478 pass and the build succeeds.
+- **Browser and GPU suites:** after merging O7, O10 and O11, every suite
+  passes, 31 in all:
+  - **New:** radical Voronoi, Wigner–Seitz, trajectory tools.
+  - **Voronoi and topology:** Voronoi, view/Voronoi, topology, coordination
+    presets.
+  - **Display and export:** smoke, export resolution, keyboard, orientation
+    and discrete colors, legend preview, initial colors, atom details,
+    selection/hide, slice sweep.
+  - **Tools:** advanced tools, clusters, binning, expressions.
+  - **Trajectory and warm-up:** trajectory Workers, CPU warm-up.
+  - **Fe fixtures:** Fe input, Fe loop, Fe lattice GPU.
+  - **DXA:** DXA, DXA visual, DXA parallel.
+  - **GPU:** GPU, GPU bond statistics, GPU Voronoi.
+- **CPU timing (pool, 7 Workers, unweighted → radical):** HEA 265 → 323 ms,
+  Fe loop 513 → 580 ms.
+- **Known before O11:** `test:gpu:voronoi -- --hardware` fails its unweighted
+  "Periodic FCC" check identically on `HEAD`. Perfect crystals exceed the
+  exact-recovery budget on that card and fall back to the CPU.
+
+## Wigner–Seitz defects and trajectory tools (2026-10-08)
+
+These are backlog items O7 and O10, merged together.
+
+- **Node tests:** all 1,463 pass, including 20 Wigner–Seitz and 24 trajectory
+  tests, and the build succeeds.
+- **Wigner–Seitz** (13 kernel and 7 panel tests):
+  - Covered cases: a perfect crystal, a removed atom, an added atom, swapped
+    types, periodic wrap, triclinic and mixed boundaries, affine-mapped strain,
+    ties and different atom counts.
+  - The invariant atoms − sites = interstitials − vacancies holds.
+  - Assignments matched exhaustive brute force on 24,000 random queries.
+  - Pool equals direct (`Object.is`) with private and shared memory.
+- **Trajectory tools** (24 tests):
+  - Unwrapping: crossings in both directions, repeated crossings, triclinic
+    and changing cells, open axes, missing and new atoms, and text, sparse
+    and huge IDs. Out-of-order and truncated-log replays equal in-order
+    integration.
+  - Smoothing: window truncation, averaging across a boundary, ID reordering,
+    and w = 0 returning the raw arrays.
+  - Lines: stride, continuity and limits.
+- **Browser suites:** all pass after the merge: Wigner–Seitz, trajectory tools,
+  smoke, trajectory Workers, view/Voronoi, export resolution, orientation and
+  discrete colors, keyboard, advanced tools, DXA, Fe loop, slice sweep,
+  clusters, binning, expressions, initial colors, atom details and
+  selection/hide.
+  - **Wigner–Seitz** (both isolation modes), on a B2 FeNi fixture:
+    - 1 vacancy, 2 interstitials and 2 antisites, with the marker at the
+      removed site;
+    - 0 defects for a 15% stretched frame with affine mapping, 16/16 without;
+    - markers in PNG and in the second view.
+  - **Trajectory tools** (both isolation modes):
+    - inferred unwrapped positions within 6×10⁻⁷ Å of the true path when
+      frames are visited out of order;
+    - raw CNA 119/256 FCC against 256/256 smoothed;
+    - continuous lines, which scale in 2× exports.
+- **Timing (Node unless noted):**
+  - Wigner–Seitz on 120,458 atoms: 0.10–0.15 s on one thread, 0.05–0.13 s
+    with 8 warm Workers.
+  - A 108k-atom × 24-frame dump: unwrapping takes 9.4 ms per frame and w = 2
+    smoothing 63 ms per frame.
+  - Inferred image flags on `fixed_end_climb` equal the existing CFG-sequence
+    inference.
+
+## Keyboard focus, export matting and orientation colors (2026-10-08)
+
+These are follow-ups to the A3/A7/O14 review.
+
+- **Scrolling keys** (arrows, Page Up/Down, Home, End, Space) drive the camera
+  and trajectory only while focus is on the page or inside the 3D view. Focus
+  in the sidebar or a panel, or in a scrollable overlay along the key's
+  direction, keeps normal browser scrolling. Letter shortcuts stay global.
+  - A browser check focuses a sidebar button and presses ↓ and Page Down: the
+    sidebar scrolls and the camera does not move. Clicking the view returns the
+    arrows to the camera.
+  - Two keyboard-suite checks that depended on timing were made robust: the
+    gear indicator is now checked before the next key, and scrolling is
+    awaited.
+- **Exports now match the view.** Chosen-size images use the view's own
+  pipeline (no blending).
+  - An export at the canvas size now equals the Current viewport image pixel
+    for pixel (maximum difference 0) in perspective and parallel projections.
+    Before, 0.20% of pixels differed, by up to 61 levels.
+  - Transparent images are matted from black and white renders per tile:
+    α = 1 − mean(w − k), color = k/α. Over white, a transparent export matches
+    the white render within 1 level.
+  - Tiled-versus-single comparisons and the 6000×4000 export are unchanged.
+- **IPF coverage:** simple cubic and cubic diamond use the cubic key;
+  hexagonal diamond and graphene use the hexagonal key. The PTM templates put
+  cube axes along x/y/z, and for the hexagonal types c along z and a₁ along x.
+  Only Other and icosahedral atoms stay gray.
+- **Rodrigues RGB** replaces raw quaternion RGB under the same configuration
+  ID.
+  - Orientations are reduced to the m−3m (24) or 6/mmm (12) fundamental zone:
+    the q ⊗ g with the largest |w| is kept, with w ≥ 0, which is PTM's rule.
+    The Rodrigues components are then scaled by the zone half-widths.
+  - Tests check invariance under all 24 cubic and 12 hexagonal operators and
+    under q → −q, and saturation at the zone faces.
+  - The reduction leaves compiled PTM output unchanged on rotated FCC and HCP
+    crystals, because PTM already outputs fundamental-zone quaternions. The
+    old documentation implied otherwise.
+  - Round-off near the ideal orientation no longer produces 127/128 speckles.
+- **Tests:** all 1,419 Node tests and the build pass. These browser suites pass:
+  orientation and discrete colors, keyboard, export resolution, legend
+  preview, smoke, view/Voronoi, DXA visual and slice sweep.
+
 ## Review of A3, A4, A7 and O14 (2026-10-08)
 
 This is an independent review of `01e88f8`. The commit as delivered passes all

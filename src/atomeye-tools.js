@@ -688,6 +688,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       { visible: $('show-bonds').checked, radius: number('bonds-radius') });
     comparison.setVectorFields(renderer.atomVectorFields ?? []);
     comparison.setDislocationNetwork(renderer.dislocationNetwork, renderer.dislocationOptions);
+    comparison.setSiteMarkers(renderer.siteMarkers, renderer.siteMarkerOptions);
+    comparison.setTrajectoryLines(renderer.trajectoryLines ?? null, renderer.trajectoryLineOptions ?? {});
     comparison.setVoronoiCellGeometry(renderer.voronoiCellGeometry, renderer.voronoiCellOptions);
     comparison.setVoronoiAllCellGeometry(renderer.voronoiAllCellGeometry, renderer.voronoiCellOptions);
     syncScalarColorPreview();

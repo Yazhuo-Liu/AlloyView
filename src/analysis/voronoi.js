@@ -2,7 +2,8 @@ import createVoronoi from './voronoi-kernel.mjs';
 import { determinant3, invert3 } from '../data/model.js';
 import { NeighborSearch, atomRange } from './neighbors.js';
 import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult,
-  mapVoronoiGeometry, compactVoronoiAtomIndices } from './voronoi-selection.js';
+  mapVoronoiGeometry, compactVoronoiAtomIndices, compactVoronoiRadii } from './voronoi-selection.js';
+import { validateVoronoiRadii, radicalWeights, radicalReach } from './voronoi-radii.js';
 
 export const VORONOI_FIELDS = Object.freeze({
   atomicVolume: [Float64Array, 1],
@@ -113,18 +114,21 @@ export function validateVoronoiParameters({ faceAreaThreshold = 0, relativeFaceA
  * Open directions use the finite simulation-cell domain. No neighbor cutoff
  * changes this geometry: a search completes only once it covers twice the
  * farthest remaining cell vertex, so any omitted bisector lies outside it.
+ * With per-atom `radii` (Å), radical (power) cells use the radius-shifted
+ * planes instead; a site dominated by larger neighbors has an empty cell.
  */
 export async function calculateVoronoi(frame, options = {}) {
   if (options.selectedTypes != null) {
     const selection = prepareVoronoiSelection(frame, options.selectedTypes), range = voronoiSelectionRange(selection, options);
-    const result = await calculateVoronoiCore(selection.frame, { ...options, selectedTypes: null, ...range });
+    const radii = compactVoronoiRadii(options.radii, selection);
+    const result = await calculateVoronoiCore(selection.frame, { ...options, selectedTypes: null, ...range, ...(radii ? { radii } : {}) });
     return expandVoronoiResult(result, selection);
   }
   return calculateVoronoiCore(frame, options);
 }
 
 async function calculateVoronoiCore(frame, { faceAreaThreshold = 0, relativeFaceAreaThreshold = 0,
-  bins = 50, onPhase = () => {}, onAtoms = () => {}, context, onContext = () => {}, skipStatistics = false, ...range } = {}) {
+  bins = 50, onPhase = () => {}, onAtoms = () => {}, context, onContext = () => {}, skipStatistics = false, radii = null, ...range } = {}) {
   validateVoronoiParameters({ faceAreaThreshold, relativeFaceAreaThreshold, bins });
   const startedAt = performance.now(), kernelReused = Boolean(kernelPromise);
   if (!kernelReused) onPhase('initializing');
@@ -135,17 +139,24 @@ async function calculateVoronoiCore(frame, { faceAreaThreshold = 0, relativeFace
   onContext(prepared);
   const { search, count, cellVolume, scale, areaScale, volumeScale } = prepared;
   const { startAtom, endAtom } = atomRange(count, range), size = endAtom - startAtom;
+  const weighting = radii == null ? null : radicalWeighting(prepared, radii);
   const result = Object.fromEntries(Object.entries(VORONOI_FIELDS).map(([name, [Type]]) => [name, new Type(size)]));
   const faceOffsets = new Uint32Array(size + 1), faceAreas = [], faceOrders = [],
     faceNeighbors = [], faceBoundary = [], faceAccepted = [], voronoiIndices = new Array(size);
-  let candidateCount = 0;
+  let candidateCount = 0, emptyCellCount = 0;
   growPlanes(kernel, 6);
   onPhase('analyzing');
   onAtoms(0, size);
   let lastProgressAt = performance.now();
   for (let atom = startAtom; atom < endAtom; atom++) {
     const index = atom - startAtom;
-    candidateCount += clipVoronoiCell(kernel, prepared, atom);
+    if (weighting) {
+      const clipped = clipRadicalCell(kernel, prepared, atom, weighting);
+      candidateCount += clipped.candidateCount;
+      // Larger neighbors can take the complete power cell of a small site:
+      // report zero volume, area and neighbors with an empty face list.
+      if (clipped.empty) { emptyCellCount++; voronoiIndices[index] = indexLabel(new Map()); faceOffsets[index + 1] = faceAreas.length; continue; }
+    } else candidateCount += clipVoronoiCell(kernel, prepared, atom);
     const faces = module._alloy_voronoi_summary(kernel.summary);
     if (faces < 0) throw new Error('Voronoi topology output is inconsistent.');
     growFaces(kernel, faces);
@@ -154,6 +165,10 @@ async function calculateVoronoiCore(frame, { faceAreaThreshold = 0, relativeFace
     }
     const volume = module.HEAPF64[kernel.summary >> 3] * volumeScale,
       surface = module.HEAPF64[(kernel.summary >> 3) + 1] * areaScale;
+    if (weighting && !(volume > 0) && Number.isFinite(surface)) {
+      // A degenerate power cell that Voro++ retains with zero volume is empty.
+      emptyCellCount++; voronoiIndices[index] = indexLabel(new Map()); faceOffsets[index + 1] = faceAreas.length; continue;
+    }
     if (!(volume > 0) || !Number.isFinite(surface)) throw new Error(`Voronoi cell ${atom + 1} has invalid geometry.`);
     result.atomicVolume[index] = volume;
     result.voronoiSurfaceArea[index] = surface;
@@ -186,6 +201,7 @@ async function calculateVoronoiCore(frame, { faceAreaThreshold = 0, relativeFace
     voronoiIndices, startAtom, endAtom, sourceAtomCount: count, cellVolume,
     boundaryMode: frame.cell.pbc.every(Boolean) ? 'periodic' : 'finite-cell',
     faceAreaThreshold, relativeFaceAreaThreshold, candidateCount, kernelReused, indexReused,
+    ...(weighting ? radicalMetadata(weighting, emptyCellCount) : {}),
     engine: 'voro++-wasm', elapsedMs: performance.now() - startedAt };
   return skipStatistics ? output : { ...output, ...finalizeVoronoiStatistics(output, { bins }) };
 }
@@ -197,26 +213,63 @@ async function calculateVoronoiCore(frame, { faceAreaThreshold = 0, relativeFace
 export async function calculateVoronoiGeometry(frame, options = {}) {
   if (options.selectedTypes != null) {
     const selection = prepareVoronoiSelection(frame, options.selectedTypes),
-      atomIndex = compactVoronoiAtomIndices(selection, [options.atomIndex])[0];
-    return mapVoronoiGeometry(await calculateVoronoiGeometryCore(selection.frame, { ...options, atomIndex, selectedTypes: null }), selection);
+      atomIndex = compactVoronoiAtomIndices(selection, [options.atomIndex])[0], radii = compactVoronoiRadii(options.radii, selection);
+    return mapVoronoiGeometry(await calculateVoronoiGeometryCore(selection.frame,
+      { ...options, atomIndex, selectedTypes: null, ...(radii ? { radii } : {}) }), selection);
   }
   return calculateVoronoiGeometryCore(frame, options);
 }
 
-async function calculateVoronoiGeometryCore(frame, { atomIndex, context,
+async function calculateVoronoiGeometryCore(frame, { atomIndex, context, radii = null,
   onPhase = () => {}, onAtoms = () => {}, onContext = () => {} } = {}) {
   const startedAt = performance.now(), kernelReused = Boolean(kernelPromise);
   onPhase('initializing');
   const kernel = await getKernel(), { module } = kernel;
   onPhase('indexing');
-  const prepared = resolveContext(frame, context), { count, scale, search } = prepared;
+  const prepared = resolveContext(frame, context), { count, search } = prepared;
   onContext(prepared);
   if (!Number.isInteger(atomIndex) || atomIndex < 0 || atomIndex >= count) {
     throw new Error('Voronoi geometry requires a valid atom index.');
   }
   growPlanes(kernel, 6);
   onPhase('analyzing'); onAtoms(0, 1);
+  if (radii != null) {
+    // Faces are labeled by plane so that each neighbor's actual image vector
+    // is known: radical faces are not midway between the two atoms.
+    const planeLog = [], clipped = clipRadicalCell(kernel, prepared, atomIndex, radicalWeighting(prepared, radii), planeLog);
+    if (clipped.empty || !(module._alloy_voronoi_summary(kernel.summary) >= 0 && module.HEAPF64[kernel.summary >> 3] > 0)) {
+      onAtoms(1, 1);
+      return { atomIndex, center: atomCenter(frame, search, atomIndex), empty: true, vertices: new Float64Array(0),
+        faceOffsets: Uint32Array.of(0), faceVertices: new Uint32Array(0), faceNeighbors: new Int32Array(0), faceBoundary: new Uint8Array(0),
+        candidateCount: clipped.candidateCount, kernelReused, indexReused: Boolean(context), engine: 'voro++-wasm-geometry',
+        elapsedMs: performance.now() - startedAt };
+    }
+    const geometry = extractVoronoiGeometry(kernel, frame, prepared, atomIndex, clipped.candidateCount,
+      { kernelReused, indexReused: Boolean(context), startedAt, onAtoms });
+    const neighborVectors = new Float64Array(geometry.faceNeighbors.length * 3).fill(NaN);
+    for (let face = 0; face < geometry.faceNeighbors.length; face++) {
+      const label = geometry.faceNeighbors[face];
+      if (label < count) continue;
+      const [neighbor, x, y, z] = planeLog[label - count];
+      geometry.faceNeighbors[face] = neighbor; neighborVectors.set([x, y, z], face * 3);
+    }
+    return { ...geometry, neighborVectors };
+  }
   const candidateCount = clipVoronoiCell(kernel, prepared, atomIndex);
+  return extractVoronoiGeometry(kernel, frame, prepared, atomIndex, candidateCount,
+    { kernelReused, indexReused: Boolean(context), startedAt, onAtoms });
+}
+
+function atomCenter(frame, search, atomIndex) {
+  const fractional = search.coordinates.subarray(atomIndex * 3, atomIndex * 3 + 3),
+    center = new Float64Array(3), vectors = frame.cell.vectors;
+  for (let axis = 0; axis < 3; axis++) center[axis] = (frame.cell.origin?.[axis] ?? 0)
+    + fractional[0] * vectors[axis] + fractional[1] * vectors[3 + axis] + fractional[2] * vectors[6 + axis];
+  return center;
+}
+
+function extractVoronoiGeometry(kernel, frame, prepared, atomIndex, candidateCount, { kernelReused, indexReused, startedAt, onAtoms }) {
+  const { module } = kernel, { scale, search } = prepared;
   growGeometry(kernel, 0, 0, 0);
   const faceCount = module._alloy_voronoi_geometry_sizes(kernel.geometrySizes);
   const vertexCount = module.HEAPU32[kernel.geometrySizes >> 2],
@@ -235,36 +288,38 @@ async function calculateVoronoiGeometryCore(frame, { atomIndex, context,
     faceNeighbors = module.HEAP32.slice(kernel.geometryNeighbors >> 2, (kernel.geometryNeighbors >> 2) + faceCount),
     faceBoundary = Uint8Array.from(faceNeighbors, neighbor => Number(neighbor < 0));
   for (let face = 0; face < faceCount; face++) if (faceBoundary[face]) faceNeighbors[face] = -1;
-  const fractional = search.coordinates.subarray(atomIndex * 3, atomIndex * 3 + 3),
-    center = new Float64Array(3), vectors = frame.cell.vectors;
-  for (let axis = 0; axis < 3; axis++) center[axis] = (frame.cell.origin?.[axis] ?? 0)
-    + fractional[0] * vectors[axis] + fractional[1] * vectors[3 + axis] + fractional[2] * vectors[6 + axis];
+  const center = atomCenter(frame, search, atomIndex);
   onAtoms(1, 1);
   return { atomIndex, center, vertices, faceOffsets, faceVertices, faceNeighbors, faceBoundary,
-    candidateCount, kernelReused, indexReused: Boolean(context), engine: 'voro++-wasm-geometry',
+    candidateCount, kernelReused, indexReused, engine: 'voro++-wasm-geometry',
     elapsedMs: performance.now() - startedAt };
 }
 
 /** One Worker chunk of selected polygon cells sharing a source index/kernel. */
-export async function calculateVoronoiGeometryBatch(frame, { atomIndices = null, selectedTypes = null, context,
+export async function calculateVoronoiGeometryBatch(frame, { atomIndices = null, selectedTypes = null, context, radii = null,
   onPhase = () => {}, onAtoms = () => {}, onContext = () => {} } = {}) {
   const startedAt = performance.now(), kernelReused = Boolean(kernelPromise), indexReused = Boolean(context),
-    selection = prepareVoronoiSelection(frame, selectedTypes), indices = compactVoronoiAtomIndices(selection, atomIndices);
+    selection = prepareVoronoiSelection(frame, selectedTypes), indices = compactVoronoiAtomIndices(selection, atomIndices),
+    compactRadii = compactVoronoiRadii(radii, selection);
   if (!kernelReused) onPhase('initializing');
   await getKernel();
   if (!context) onPhase('indexing');
   const prepared = resolveContext(selection.frame, context);
   onContext(prepared); onPhase('analyzing'); onAtoms(0, indices.length);
   const cells = [];
-  let candidateCount = 0;
+  let candidateCount = 0, emptyCellCount = 0;
   for (let index = 0; index < indices.length; index++) {
-    const cell = await calculateVoronoiGeometryCore(selection.frame, { atomIndex: indices[index], context: prepared });
-    cells.push(mapVoronoiGeometry(cell, selection)); candidateCount += cell.candidateCount;
+    const cell = await calculateVoronoiGeometryCore(selection.frame, { atomIndex: indices[index], context: prepared,
+      ...(compactRadii ? { radii: compactRadii } : {}) });
+    // Empty radical cells have no polygons to display.
+    if (cell.empty) emptyCellCount++;
+    else cells.push(mapVoronoiGeometry(cell, selection));
+    candidateCount += cell.candidateCount;
     if (index && index % 64 === 0) onAtoms(index, indices.length);
   }
   onAtoms(indices.length, indices.length);
-  return { cells, candidateCount, kernelReused, indexReused, engine: 'voro++-wasm-geometry-batch',
-    elapsedMs: performance.now() - startedAt };
+  return { cells, candidateCount, kernelReused, indexReused, ...(compactRadii ? { emptyCellCount } : {}),
+    engine: 'voro++-wasm-geometry-batch', elapsedMs: performance.now() - startedAt };
 }
 
 /** Build once per resident source snapshot; all central-atom chunks share it. */
@@ -359,6 +414,95 @@ function clipVoronoiCell(kernel, prepared, atom) {
   }
   if (!complete) throw new Error(`Voronoi neighbor search could not complete cell ${atom + 1}.`);
   return candidateCount;
+}
+
+/** Squared radii, validated once per resident context and radius array. */
+function radicalWeighting(prepared, radii) {
+  prepared.radicalWeights ??= new WeakMap();
+  let weighting = prepared.radicalWeights.get(radii);
+  if (!weighting) {
+    validateVoronoiRadii(radii, prepared.count);
+    weighting = radicalWeights(radii, prepared.areaScale);
+    prepared.radicalWeights.set(radii, weighting);
+  }
+  return weighting;
+}
+
+function radicalMetadata(weighting, emptyCellCount) {
+  return { tessellation: 'radical', emptyCellCount, minRadius: weighting.minRadius, maxRadius: weighting.maxRadius };
+}
+
+/** The radical counterpart of clipVoronoiCell. Planes use Voro++'s rsq
+ * argument exactly as container_poly does: |d|² + rᵢ² − rⱼ² (scaled), so
+ * equal radii pass the unweighted value unchanged. The completeness search
+ * covers R + √(R² + r_max² − rᵢ²) instead of 2R (see radicalReach). */
+function clipRadicalCell(kernel, prepared, atom, weighting, planeLog = null) {
+  const { module } = kernel;
+  const { search, geometry, scale, areaScale, exactSingleSiteCell } = prepared;
+  const { weights, squared, maxSquared } = weighting, weight = weights[atom], spreadSquared = maxSquared - squared[atom];
+  let candidateCount = 0;
+  // The initial cell uses the atom's own images and domain walls, which are
+  // unaffected by radii.
+  const { planes, ids, radius } = initialCell(geometry, search.coordinates.subarray(atom * 3, atom * 3 + 3), atom, scale);
+  module._alloy_voronoi_init(radius / scale);
+  module.HEAPF64.set(planes, kernel.planes >> 3);
+  module.HEAP32.set(ids, kernel.neighbors >> 2);
+  if (!module._alloy_voronoi_clip(kernel.planes, kernel.neighbors, 6)) {
+    throw new Error(`Voronoi initialization failed for atom ${atom + 1}.`);
+  }
+  let previousRadiusSquared = -1;
+  let farthestRadius = Math.sqrt(module._alloy_voronoi_radius_squared()) * scale;
+  let radiusToSearch = Math.min(search.initialRadius, radicalReach(farthestRadius, spreadSquared) * (1 + 1e-10));
+  let complete = exactSingleSiteCell;
+  for (let attempt = 0; !complete && attempt < 48; attempt++) {
+    let neighbors = search.within(atom, radiusToSearch, MAX_CANDIDATES + 1);
+    if (neighbors.length > MAX_CANDIDATES) throw new Error('Voronoi cell has too many candidate images; reduce the cell skew, thin-cell aspect ratio or radius spread.');
+    if (neighbors.length >= 256) {
+      growPlanes(kernel, neighbors.length);
+      for (let index = 0; index < neighbors.length; index++) {
+        const neighbor = neighbors[index], offset = (kernel.planes >> 3) + index * 4;
+        if (neighbor.distanceSquared < 1e-20 * areaScale) {
+          throw new Error(`Voronoi is undefined for coincident atoms ${atom + 1} and ${neighbor.atom + 1}.`);
+        }
+        module.HEAPF64[offset] = neighbor.x / scale; module.HEAPF64[offset + 1] = neighbor.y / scale;
+        module.HEAPF64[offset + 2] = neighbor.z / scale;
+        module.HEAPF64[offset + 3] = neighbor.distanceSquared / areaScale + (weight - weights[neighbor.atom]);
+      }
+      module._alloy_voronoi_filter_planes(kernel.planes, kernel.keep, neighbors.length);
+      neighbors = neighbors.filter((_, index) => module.HEAPU8[kernel.keep + index]);
+    }
+    neighbors.sort((a, b) => a.distanceSquared - b.distanceSquared || a.atom - b.atom
+      || a.imageA - b.imageA || a.imageB - b.imageB || a.imageC - b.imageC);
+    growPlanes(kernel, Math.max(6, neighbors.length));
+    const reachSquared = radicalReach(farthestRadius, spreadSquared) ** 2 * (1 + 1e-10);
+    let planeCount = 0;
+    for (const neighbor of neighbors) {
+      if (neighbor.distanceSquared < 1e-20 * areaScale) {
+        throw new Error(`Voronoi is undefined for coincident atoms ${atom + 1} and ${neighbor.atom + 1}.`);
+      }
+      if (neighbor.distanceSquared <= previousRadiusSquared * (1 - 1e-12)) continue;
+      // Sorted by distance: no farther site can reach a current vertex.
+      if (neighbor.distanceSquared > reachSquared) break;
+      const offset = (kernel.planes >> 3) + planeCount * 4;
+      module.HEAPF64[offset] = neighbor.x / scale;
+      module.HEAPF64[offset + 1] = neighbor.y / scale;
+      module.HEAPF64[offset + 2] = neighbor.z / scale;
+      module.HEAPF64[offset + 3] = neighbor.distanceSquared / areaScale + (weight - weights[neighbor.atom]);
+      // Labels never affect Voro++ geometry; geometry requests use plane labels.
+      module.HEAP32[(kernel.neighbors >> 2) + planeCount] = planeLog
+        ? prepared.count + planeLog.push([neighbor.atom, neighbor.x, neighbor.y, neighbor.z]) - 1 : neighbor.atom;
+      planeCount++;
+    }
+    candidateCount += planeCount;
+    // Voro++ reports a deleted cell when every vertex lies beyond a plane.
+    if (planeCount && !module._alloy_voronoi_clip(kernel.planes, kernel.neighbors, planeCount)) return { candidateCount, empty: true };
+    farthestRadius = Math.sqrt(module._alloy_voronoi_radius_squared()) * scale;
+    if (radiusToSearch >= radicalReach(farthestRadius, spreadSquared) * (1 - 1e-10)) { complete = true; break; }
+    previousRadiusSquared = radiusToSearch ** 2;
+    radiusToSearch = Math.min(radiusToSearch * 1.8, radicalReach(farthestRadius, spreadSquared) * (1 + 1e-10));
+  }
+  if (!complete) throw new Error(`Voronoi neighbor search could not complete cell ${atom + 1}.`);
+  return { candidateCount, empty: false };
 }
 
 function orthogonalBasis(vectors) {
@@ -463,6 +607,8 @@ export function mergeVoronoiPartials(partials, atomCount, { bins = 50, consumePa
     faceAreaThreshold: first.faceAreaThreshold, relativeFaceAreaThreshold: first.relativeFaceAreaThreshold,
     candidateCount: sorted.reduce((sum, partial) => sum + partial.candidateCount, 0),
     kernelInitializations: sorted.filter(partial => !partial.kernelReused).length, warning: null };
+  if (first.tessellation === 'radical') Object.assign(output, { tessellation: 'radical', minRadius: first.minRadius, maxRadius: first.maxRadius,
+    emptyCellCount: sorted.reduce((sum, partial) => sum + partial.emptyCellCount, 0) });
   output.indexBuilds = sorted.filter(partial => !partial.indexReused).length;
   output.frameUploads = sorted.filter(partial => partial.frameUploaded).length;
   return { ...output, ...finalizeVoronoiStatistics(output, { bins }) };
@@ -490,7 +636,9 @@ export function finalizeVoronoiStatistics(result, { bins = 50 } = {}) {
       meanVolume: volumeStats.mean, minVolume: volumeStats.min, maxVolume: volumeStats.max,
       meanSurfaceArea: surfaceStats.mean, meanCoordination: coordinationStats.mean,
       minCoordination: coordinationStats.min, maxCoordination: coordinationStats.max,
-      boundaryAtomCount, neighborFaceCount, acceptedFaceCount, boundaryMode: result.boundaryMode },
+      boundaryAtomCount, neighborFaceCount, acceptedFaceCount, boundaryMode: result.boundaryMode,
+      ...(result.tessellation === 'radical' ? { tessellation: 'radical', emptyCellCount: result.emptyCellCount,
+        minRadius: result.minRadius, maxRadius: result.maxRadius } : {}) },
     coordinationHistogram: [...coordination].sort((a, b) => a[0] - b[0])
       .map(([value, population]) => ({ value, count: population, fraction: population / count })),
     volumeHistogram: histogram(result.atomicVolume, bins),

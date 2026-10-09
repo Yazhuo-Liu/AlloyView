@@ -34,13 +34,17 @@ the forward rotation. This convention follows `calc_rmsd` in the bundled
 to measured neighbors, and is tested with the actual compiled PTM kernel on
 rotated FCC, BCC and HCP crystals.
 
-For FCC and BCC, full **m−3m cubic symmetry** reduces the absolute direction
-components to `0 ≤ y ≤ x ≤ z`. The key corners are **[001] red**, **[101]
+For FCC, BCC, simple cubic and cubic diamond, full **m−3m cubic symmetry**
+reduces the absolute direction components to `0 ≤ y ≤ x ≤ z`. Diamond uses its
+Laue class, as is usual for orientation maps, although the local environment
+of one atom is tetrahedral. The key corners are **[001] red**, **[101]
 green** and **[111] blue**. The RGB weights are `z−x`, `√2(x−y)` and `√3y`,
 normalized by their maximum and square-root corrected for brightness.
 
-For HCP, **6/mmm hexagonal symmetry** reduces the direction to the hemisphere
-and a 0–30° basal wedge. The corners are **[0001] red**, **[10−10] green** and
+For HCP, hexagonal diamond and graphene, **6/mmm hexagonal symmetry** reduces
+the direction to the hemisphere and a 0–30° basal wedge. PTM aligns each of
+these templates with c along z and a₁ along x; for graphene, c is the sheet
+normal. The corners are **[0001] red**, **[10−10] green** and
 **[2−1−10] blue**. PTM's Cartesian basal x axis is `a₁ = [2−1−10]`; `[10−10]`
 is 30° away with `a₂=(-1/2, √3/2, 0)` and `a₃=−a₁−a₂`. The red weight is
 the absolute c-axis component; the two basal weights split the in-plane
@@ -50,17 +54,28 @@ the same color.
 
 The live and exported keys show the **stereographic fundamental sectors**,
 including their curved boundary. Every key pixel uses the same direction-to-RGB
-formula as the atoms. A mixed FCC/BCC/HCP frame shows both keys. Other,
-unmatched, and currently unsupported PTM structures are neutral gray. IPF colors
+formula as the atoms. A frame with both cubic and hexagonal structures shows
+both keys. Other (unmatched) atoms and icosahedral environments, which have no
+lattice orientation, are neutral gray. IPF colors
 represent orientation relative to the chosen sample direction; they do not
 independently identify crystal structures or uniquely distinguish every grain.
 
-**PTM orientation · quaternion RGB** is a supplementary view: red, green and
-blue encode `qx`, `qy` and `qz` on a −1 to 1 scale after normalizing and choosing
-the first nonzero quaternion component positive. This makes `q` and `−q`
-equivalent. It colors the same FCC/BCC/HCP structures, with unsupported or
-undefined atoms gray. This view has no IPF key and can depend on the PTM choice
-of symmetry-equivalent quaternion; use IPF for crystal-symmetry-invariant colors.
+**PTM orientation · Rodrigues RGB** is a supplementary view that does not
+depend on a sample direction.
+- Each orientation is reduced to the crystal's fundamental zone with the
+  proper rotations of its Laue group: 24 for cubic structures, 12 for
+  hexagonal ones. The equivalent quaternion q ⊗ g closest to the identity
+  (largest |w|) is kept with w ≥ 0, the same rule PTM applies to its own
+  output.
+- Red, green and blue then encode the Rodrigues vector r = (x, y, z)/w. Each
+  component is scaled by the zone's half-width: tan(π/8) for cubic axes, and
+  for hexagonal crystals tan(π/12) along c and 1 in the basal plane. The
+  result maps from −1…1 onto 0…255.
+- Symmetry-equivalent orientations and q/−q therefore share a color, and the
+  ideal orientation is mid-gray (128, 128, 128).
+- Orientations on a zone boundary can still jump between opposite faces, as
+  in any fundamental-zone color map; use IPF colors for smooth grain contrast.
+- The configuration value keeps its earlier ID, `builtin:ptm:quaternion`.
 
 **PTM chemical ordering** compares the element types of an atom and its matched neighbors, as PTM defines for binary chemistry:
 

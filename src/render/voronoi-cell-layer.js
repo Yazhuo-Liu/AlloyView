@@ -87,9 +87,12 @@ export function createVoronoiCellMesh(cell, { shared = false } = {}) {
     const neighbor = shared ? cell.faceNeighbors?.[face] ?? -1 : -1;
     if (neighbor >= 0 && neighbor !== atom) {
       // The neighbor's image lies across the bisector plane, at twice the
-      // plane's distance from this atom along the outward normal.
+      // plane's distance from this atom along the outward normal. Radical
+      // faces are not midway; their cells carry the actual image vectors.
       const distance = normal.reduce((sum, value, axis) => sum + value * points[0][axis], 0);
-      neighbors[face] = neighbor; offsets[face] = normal.map(value => 2 * distance * value);
+      const vector = cell.neighborVectors?.subarray(face * 3, face * 3 + 3);
+      neighbors[face] = neighbor;
+      offsets[face] = vector?.every(Number.isFinite) ? Array.from(vector) : normal.map(value => 2 * distance * value);
       if (neighbor < atom) continue;
     }
     const first = values.length / 6, firstIndex = indices.length;

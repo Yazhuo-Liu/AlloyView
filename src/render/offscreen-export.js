@@ -37,7 +37,25 @@ function allocateTarget(gl, width, height, samples) {
 /** Render tiles directly into the final 2D canvas: no full-size JS pixel copy,
  * texture, or multisample framebuffer is retained alongside that image. The
  * caller supplies the scene drawing and owns the interactive camera state. */
-export function captureOffscreen(gl, context, width, height, renderTile, { tileSize = null, unpremultiply = false } = {}) {
+const MATTE_BLACK = Object.freeze([0, 0, 0]), MATTE_WHITE = Object.freeze([1, 1, 1]);
+
+/** Recover straight color and alpha from the same view rendered on black (k)
+ * and white (w) backgrounds: the view equals k + (1 − α)·B for any background
+ * B, so α = 1 − mean(w − k) and color = k / α. The transparent image then
+ * composites over any background exactly like the view rendered on it. */
+export function solveMatte(black, white, output, count) {
+  for (let pixel = 0; pixel < count * 4; pixel += 4) {
+    const transmission = (white[pixel] - black[pixel] + white[pixel + 1] - black[pixel + 1] + white[pixel + 2] - black[pixel + 2]) / 765;
+    const alpha = Math.round(255 * Math.min(1, Math.max(0, 1 - transmission)));
+    for (let channel = 0; channel < 3; channel++) {
+      output[pixel + channel] = alpha ? Math.min(255, Math.round(black[pixel + channel] * 255 / alpha)) : 0;
+    }
+    output[pixel + 3] = alpha;
+  }
+  return output;
+}
+
+export function captureOffscreen(gl, context, width, height, renderTile, { tileSize = null, matte = false } = {}) {
   if (gl.isContextLost()) throw new Error('The graphics context was lost. Reload the structure before exporting.');
   const saved = { draw: gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING), read: gl.getParameter(gl.READ_FRAMEBUFFER_BINDING),
     renderbuffer: gl.getParameter(gl.RENDERBUFFER_BINDING), viewport: gl.getParameter(gl.VIEWPORT),
@@ -63,28 +81,26 @@ export function captureOffscreen(gl, context, width, height, renderTile, { tileS
     gl.disable(gl.SCISSOR_TEST);
     const bufferWidth = Math.max(...tiles.map(tile => tile.width)), bufferHeight = Math.max(...tiles.map(tile => tile.height));
     const pixels = new Uint8Array(bufferWidth * bufferHeight * 4);
+    const black = matte ? new Uint8Array(pixels.length) : null;
     let image;
-    for (const tile of tiles) {
+    const renderInto = (tile, buffer, background) => {
       gl.bindFramebuffer(gl.FRAMEBUFFER, target.draw);
       gl.viewport(0, 0, tile.renderWidth, tile.renderHeight);
-      renderTile(tile);
+      renderTile(tile, background);
       if (target.samples) {
         gl.bindFramebuffer(gl.READ_FRAMEBUFFER, target.draw); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, target.resolved);
         gl.blitFramebuffer(0, 0, tile.renderWidth, tile.renderHeight, 0, 0, tile.renderWidth, tile.renderHeight,
           gl.COLOR_BUFFER_BIT, gl.NEAREST);
       }
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, target.resolved);
-      gl.readPixels(tile.readX, tile.readY, tile.width, tile.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      gl.readPixels(tile.readX, tile.readY, tile.width, tile.height, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
       if (gl.isContextLost() || gl.getError() !== gl.NO_ERROR) throw new Error('The GPU could not finish this image export. Try a smaller size.');
-      // Blending and MSAA resolution store color multiplied by alpha, whereas
-      // ImageData expects straight RGB. Unmultiply once, before the 2D canvas
-      // performs its own premultiplication, to avoid dark transparent edges.
-      if (unpremultiply) for (let pixel = 0; pixel < tile.width * tile.height * 4; pixel += 4) {
-        const alpha = pixels[pixel + 3];
-        if (alpha > 0 && alpha < 255) for (let channel = 0; channel < 3; channel++) {
-          pixels[pixel + channel] = Math.min(255, Math.round(pixels[pixel + channel] * 255 / alpha));
-        }
-      }
+    };
+    for (const tile of tiles) {
+      if (matte) {
+        renderInto(tile, black, MATTE_BLACK); renderInto(tile, pixels, MATTE_WHITE);
+        solveMatte(black, pixels, pixels, tile.width * tile.height);
+      } else renderInto(tile, pixels);
       // Reuse both CPU buffers across every tile instead of depending on GC
       // to release one allocation per tile during a large synchronous export.
       image ??= context.createImageData(bufferWidth, bufferHeight);

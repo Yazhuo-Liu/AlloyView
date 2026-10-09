@@ -18,12 +18,14 @@ export const BUILTIN_TOOLS = Object.freeze([
   { id: 'ptm', label: 'PTM', analysis: true },
   { id: 'strain', label: 'Strain', analysis: true },
   { id: 'referenceStrain', label: 'Frame strain', analysis: true },
+  { id: 'wignerSeitz', label: 'Wigner–Seitz', analysis: true },
   { id: 'localShear', label: 'Local shear', analysis: true },
   { id: 'selectionGroups', label: 'Selections' },
   { id: 'performance', label: 'Performance' },
   { id: 'replicate', label: 'Replicate', category: 'modification', changesStructure: true },
   { id: 'externalProperties', label: 'External properties', category: 'modification', changesProperties: true },
   { id: 'expressions', label: 'Expressions', category: 'modification', changesProperties: true },
+  { id: 'trajectory', label: 'Trajectory', category: 'modification', changesStructure: true },
 ].map(tool => Object.freeze({ category: 'visualization', analysis: false, ...tool })));
 
 /**

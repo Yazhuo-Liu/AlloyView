@@ -76,8 +76,17 @@ export class StructureWorkerClient {
       parserConcurrency: Math.max(1, Math.min(4, (this.cpuBudget?.limit ?? cpuWorkerLimit()) - 1)) });
   }
 
-  frame(index, { reportProgress = true, background = !reportProgress, signal } = {}) {
-    return this.request('frame', { index, background }, { reportProgress, background, signal });
+  frame(index, { reportProgress = true, background = !reportProgress, signal, trajectory = null } = {}) {
+    return this.request('frame', { index, background, ...(trajectory ? { trajectory } : {}) }, { reportProgress, background, signal });
+  }
+
+  /** Display-only unwrapped coordinates inferred for an already delivered frame. */
+  trajectoryUnwrap(index, { smoothing = 0, background = false, signal, onProgress } = {}) {
+    return this.request('trajectory-unwrap', { index, smoothing, background }, { reportProgress: false, background, signal, onProgress });
+  }
+
+  trajectoryLines(request, { signal, onProgress } = {}) {
+    return this.request('trajectory-lines', request, { reportProgress: false, signal, onProgress });
   }
 
   waitForIndex({ signal } = {}) { return this.request('index-complete', {}, { reportProgress: false, signal }); }

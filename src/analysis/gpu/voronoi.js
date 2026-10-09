@@ -1,14 +1,19 @@
 import { determinant3 } from '../../data/model.js';
 import { atomRange } from '../neighbors.js';
 import { VORONOI_FIELDS, validateVoronoiParameters, initialGeometry, finalizeVoronoiStatistics, calculateVoronoi, createVoronoiContext } from '../voronoi.js';
-import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult } from '../voronoi-selection.js';
+import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult, compactVoronoiRadii } from '../voronoi-selection.js';
+import { validateVoronoiRadii, radicalWeights, radicalReach } from '../voronoi-radii.js';
 import { GpuRuntime, checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
 import { GPU_VORONOI_MAX_FACES, GPU_VORONOI_MAX_FACE_VERTICES, GPU_VORONOI_STATE_WORDS, GPU_VORONOI_MAX_PLANES,
-  VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER } from './voronoi-shaders.js';
+  VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER, VORONOI_RADICAL_CLIP_SHADER, GPU_VORONOI_RADICAL_EMPTY_CODE } from './voronoi-shaders.js';
 
 export const GPU_VORONOI_BATCH_ATOMS = 512;
 export const GPU_VORONOI_SETTINGS_BYTES = 336;
 export const MAX_GPU_VORONOI_CORRECTIONS = 2048;
+// Radical cells need candidates within R + √(R² + r_max² − rᵢ²) ≥ √(r_max² − r_min²).
+// A spread beyond four mean atomic spacings makes every cell's search sphere
+// hold hundreds of sites; the sorted CPU search is then the better engine.
+export const GPU_VORONOI_MAX_RADIUS_SPREAD = 4;
 
 /** Temporary convex geometry depends on the batch, not on trajectory size.
  * One resident workspace survives repeated runs alongside the shared device. */
@@ -154,13 +159,14 @@ export async function analyzeGpuVoronoi(runtime, frame, parameters = {}, { signa
   checkSignal(signal);
   const selection = prepareVoronoiSelection(frame, parameters.selectedTypes);
   if (selection.isAll) return expandVoronoiResult(await analyzeGpuVoronoiCells(runtime, frame, parameters, { signal, onProgress }), selection);
+  const radii = compactVoronoiRadii(parameters.radii, selection);
   // The normal client compacts before transferring input. Direct/runtime users
   // receive the same scientific behavior, with a separate resident cache key.
   if (selection.frame.gpuFrameId === undefined) selection.frame.gpuFrameId = -++GpuRuntime.frameSerial;
   const release = runtime.pinFrames?.([selection.frame]);
   try {
     const result = await analyzeGpuVoronoiCells(runtime, selection.frame,
-      { ...parameters, ...voronoiSelectionRange(selection, parameters), selectedTypes: null }, { signal, onProgress });
+      { ...parameters, ...voronoiSelectionRange(selection, parameters), selectedTypes: null, ...(radii ? { radii } : {}) }, { signal, onProgress });
     return expandVoronoiResult(result, selection);
   } finally { release?.(); }
 }
@@ -170,16 +176,57 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
   const prepared = prepareGpuVoronoi(frame, parameters);
   const { count, startAtom, endAtom, cellVolume, scale, geometry, exactSingleSite,
     faceAreaThreshold, relativeFaceAreaThreshold, bins } = prepared;
+  const radii = parameters.radii ?? null, weighting = radii == null ? null : gpuRadicalWeighting(radii, count, scale);
   await runtime.initialize(signal);
   const size = endAtom - startAtom, kernelReused = Boolean(runtime.voronoiWorkspace);
   const scratch = workspace(runtime, voronoiGpuBatchSize(runtime, size));
   const settingsWords = voronoiSettings(frame, prepared), settingsFloats = new Float32Array(settingsWords.buffer);
+  // Radical clipping binds one header-plus-weights buffer in place of settings.
+  const radicalSettings = weighting ? runtime.createBuffer(GPU_VORONOI_SETTINGS_BYTES + weighting.packed.byteLength) : null;
+  try {
+    if (radicalSettings) runtime.write(radicalSettings, weighting.packed, GPU_VORONOI_SETTINGS_BYTES);
+    return await analyzeGpuVoronoiBatches(runtime, frame, { ...prepared, radii, weighting, radicalSettings, size, kernelReused,
+      scratch, settingsWords, settingsFloats }, { signal, onProgress });
+  } finally { if (radicalSettings) runtime.disposeBuffers([radicalSettings]); }
+}
+
+/** Validate radii and pack r²/scale² as double-float (high, low) pairs. */
+function gpuRadicalWeighting(radii, count, scale) {
+  validateVoronoiRadii(radii, count);
+  const weighting = radicalWeights(radii, scale * scale);
+  let minimumSquared = Infinity;
+  for (const value of weighting.squared) minimumSquared = Math.min(minimumSquared, value);
+  if (Math.sqrt(weighting.maxSquared - minimumSquared) > GPU_VORONOI_MAX_RADIUS_SPREAD * scale) {
+    throw new GpuUnavailableError('The radical radius spread exceeds the GPU Voronoi search bound; using exact CPU workers.');
+  }
+  const packed = new Float32Array(count * 2);
+  for (let atom = 0; atom < count; atom++) {
+    const value = weighting.weights[atom], high = Math.fround(value);
+    packed[atom * 2] = high; packed[atom * 2 + 1] = value - high;
+  }
+  // Rounded upward, the shader's completeness test can only search farther.
+  const maxWeight = Math.fround(weighting.maxWeight);
+  return { ...weighting, packed, maxWeight: maxWeight < weighting.maxWeight ? maxWeight * (1 + 2 ** -22) : maxWeight };
+}
+
+async function analyzeGpuVoronoiBatches(runtime, frame, prepared, { signal, onProgress }) {
+  const { count, startAtom, endAtom, cellVolume, scale, exactSingleSite, faceAreaThreshold, relativeFaceAreaThreshold, bins,
+    radii, weighting, radicalSettings, size, kernelReused, scratch, settingsWords, settingsFloats } = prepared;
+  const clipShader = weighting ? VORONOI_RADICAL_CLIP_SHADER : VORONOI_CLIP_SHADER;
+  if (weighting) settingsFloats[29] = weighting.maxWeight;
+  const clipBindings = context => runtime.neighborBindings(context,
+    [radicalSettings ?? scratch.settings, scratch.geometry, scratch.faces, scratch.states, scratch.planes]);
+  const writeSettings = () => {
+    runtime.write(scratch.settings, settingsWords);
+    if (radicalSettings) runtime.write(radicalSettings, settingsWords);
+  };
   const result = Object.fromEntries(Object.entries(VORONOI_FIELDS).map(([name, [Type]]) => [name, new Type(size)]));
   const faceOffsets = new Uint32Array(size + 1), faceAreas = [], faceOrders = [], faceNeighbors = [],
     faceBoundary = [], faceAccepted = [], voronoiIndices = new Array(size);
-  let candidateCount = 0, dispatches = 0, correctionAtoms = 0;
+  let candidateCount = 0, dispatches = 0, correctionAtoms = 0, emptyCellCount = 0;
   const correctionLimit = Math.min(MAX_GPU_VORONOI_CORRECTIONS, Math.max(16, Math.floor(size * .1)));
-  const needsCorrection = new Map(), correctionReasons = { geometry: 0, threshold: 0, coverage: 0 }, correctionPrecisionCodes = {};
+  const needsCorrection = new Map(), correctionReasons = { geometry: 0, threshold: 0, coverage: 0, ...(weighting ? { emptyCell: 0 } : {}) },
+    correctionPrecisionCodes = {};
   const correctCell = async (atom, reason) => {
     if (++correctionAtoms > correctionLimit) {
       const pending = {};
@@ -194,8 +241,9 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
     onProgress({ phase: 'precisionCorrection', completedAtoms: atom - startAtom, totalAtoms: size,
       correctionAtoms, correctionLimit });
     const local = await calculateVoronoi(frame, { startAtom: atom, endAtom: atom + 1, context: cached.context,
-      skipStatistics: true, faceAreaThreshold, relativeFaceAreaThreshold, bins });
+      skipStatistics: true, faceAreaThreshold, relativeFaceAreaThreshold, bins, ...(radii ? { radii } : {}) });
     checkSignal(signal); correctionReasons[reason]++;
+    if (weighting) emptyCellCount += local.emptyCellCount;
     const row = atom - startAtom;
     for (const name of Object.keys(VORONOI_FIELDS)) result[name][row] = local[name][0];
     for (let face = 0; face < local.faceAreas.length; face++) {
@@ -214,7 +262,7 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
     const end = Math.min(endAtom, begin + scratch.capacity), batchCount = end - begin;
     settingsWords[26] = begin; settingsFloats[25] = 0;
     let radius = initialRadius, context = await runtime.prepareNeighbors(frame, radius, { signal });
-    runtime.write(scratch.settings, settingsWords);
+    writeSettings();
     let bindings = runtime.neighborBindings(context, [scratch.settings, scratch.geometry, scratch.faces, scratch.states, scratch.planes]);
     // Clipping and the state readback are queued behind initialization.
     await runtime.run(VORONOI_INITIALIZE_SHADER, bindings, batchCount,
@@ -233,9 +281,9 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
           }
           break;
         }
-        bindings = runtime.neighborBindings(context, [scratch.settings, scratch.geometry, scratch.faces, scratch.states, scratch.planes]);
-        runtime.write(scratch.settings, settingsWords);
-        await runtime.run(VORONOI_CLIP_SHADER, bindings, batchCount,
+        bindings = clipBindings(context);
+        writeSettings();
+        await runtime.run(clipShader, bindings, batchCount,
           { signal, startAtom: begin, endAtom: end, batchSize: 0, workgroupSize: 32, wait: false }); dispatches++;
       }
       states = await runtime.read(scratch.states, Uint32Array, batchCount * GPU_VORONOI_STATE_WORDS, { signal });
@@ -247,6 +295,7 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
           if (!needsCorrection.has(begin + row)) {
             const code = states[offset + 15], reason = ({ 1: 'edgeProof', 2: 'capPrecision', 3: 'adjacentPrecision',
               4: 'closingPrecision', 6: 'nearContact', 10: 'illConditionedProof', 11: 'weakTurn', 12: 'nativeMarginalContact' })[code] ?? `code${code}`;
+            if (weighting && code === GPU_VORONOI_RADICAL_EMPTY_CODE) { needsCorrection.set(begin + row, 'emptyCell'); continue; }
             correctionPrecisionCodes[reason] = (correctionPrecisionCodes[reason] ?? 0) + 1;
             needsCorrection.set(begin + row, 'geometry');
           }
@@ -256,11 +305,16 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
           const reason = flags & 1 ? 'face or polygon capacity' : flags & 4 ? 'geometric precision' : 'degenerate geometry';
           throw new GpuUnavailableError(`Voronoi atom ${begin + row + 1} exceeds GPU ${reason}; using exact CPU workers.`);
         }
-        if (!states[offset + 2]) { remaining++; farthest = Math.max(farthest, floats[offset + 6] * scale); }
+        if (!states[offset + 2]) {
+          remaining++;
+          farthest = Math.max(farthest, weighting ? radicalReach(floats[offset + 6] * scale,
+            weighting.maxSquared - weighting.squared[begin + row]) / 2 : floats[offset + 6] * scale);
+        }
       }
       if (!remaining) break;
       if (attempt === 31) throw new GpuUnavailableError('GPU Voronoi neighbor coverage did not complete; using exact CPU workers.');
       settingsFloats[25] = radius;
+      // Radical farthest values are half the reach; 2 × farthest is that reach.
       radius = Math.min(radius * 1.8, Math.max(radius * (1 + 1e-4), 2 * farthest * (1 + 1e-4)));
     }
     const descriptors = await runtime.read(scratch.faces, Uint32Array, batchCount * GPU_VORONOI_MAX_FACES * 4, { signal });
@@ -307,6 +361,7 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
     faceNeighbors: Int32Array.from(faceNeighbors), faceBoundary: Uint8Array.from(faceBoundary), faceAccepted: Uint8Array.from(faceAccepted),
     voronoiIndices, startAtom, endAtom, sourceAtomCount: count, cellVolume,
     boundaryMode: frame.cell.pbc.every(Boolean) ? 'periodic' : 'finite-cell', faceAreaThreshold, relativeFaceAreaThreshold,
+    ...(weighting ? { tessellation: 'radical', emptyCellCount, minRadius: weighting.minRadius, maxRadius: weighting.maxRadius } : {}),
     candidateCount, kernelReused, gpuDispatches: dispatches, gpuBatchCapacity: scratch.capacity, gpuCorrectionAtoms: correctionAtoms, gpuCorrectionLimit: correctionLimit, gpuCorrectionReasons: correctionReasons, gpuCorrectionPrecisionCodes: correctionPrecisionCodes,
     engine: correctionAtoms ? 'webgpu-voronoi+exact-cell-correction' : 'webgpu-voronoi',
     autoRangeRelativeTolerance: { atomicVolume: 32 * 2 ** -23, voronoiSurfaceArea: 32 * 2 ** -23 } };

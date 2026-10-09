@@ -60,7 +60,7 @@ The **Enable GPU acceleration** switch beside **Light / Dark** is on by default 
 | Local geometric shear | WebGPU neighbor geometry and per-atom shear |
 | Bonds | WebGPU periodic neighbor counts and compact bond graph, including element-pair cutoffs |
 | Bond distributions and Q4/Q6 | WebGPU bond lengths, angular histograms and local spherical-harmonic reductions |
-| Voronoi | WebGPU convex-cell clipping with complete periodic images; exact CPU recovery for uncertain geometry or resource limits |
+| Voronoi | WebGPU convex-cell clipping (standard or radical planes) with complete periodic images; exact CPU recovery for uncertain geometry or resource limits |
 | Ideal lattice strain | WebGPU neighbors, CPU PTM fit, then WebGPU ideal-reference conversion and tensor invariants; compatible PTM fits/uploads are reused |
 | Standalone PTM | Existing CPU neighbor search and Wasm correspondence fit |
 | DXA | Complete CPU Wasm extraction; shared-memory pthreads on isolated hosts, private CPU Workers for eligible local stages on nonisolated hosts |
