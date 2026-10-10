@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { GpuRuntime } from '../src/analysis/gpu/runtime.js';
 import { GpuAnalysisClient } from '../src/analysis/gpu/client.js';
 import { prepareGpuVoronoi, voronoiGpuInitialRadius, voronoiGpuWorkspaceBytes } from '../src/analysis/gpu/voronoi.js';
-import { VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER } from '../src/analysis/gpu/voronoi-shaders.js';
+import { VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER, VORONOI_RADICAL_CLIP_SHADER } from '../src/analysis/gpu/voronoi-shaders.js';
 import { COORDINATION_SHADER } from '../src/analysis/gpu/coordination.js';
 import { crystalFrame } from './helpers/crystals.js';
 import { frameUploadBytes } from '../src/analysis/gpu/cache-policy.js';
@@ -35,9 +35,27 @@ test('targeted GPU warmup shares just four Voronoi/index pipelines without alloc
     assert.ok(runtime.pipelines.has(VORONOI_CLIP_SHADER));
     await runtime.warmup({analysisKinds:['voronoi','voronoi']}); assert.equal(compiled.length,4);
     await runtime.warmup();
-    // The full warmup also prepares the radical (radius-weighted) clipping kernel.
-    assert.equal(compiled.length,24);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
+    // The general warmup adds the 19 kernels it does not share with Voronoi.
+    assert.equal(compiled.length,23);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
+    assert.equal(runtime.pipelines.has(VORONOI_RADICAL_CLIP_SHADER),false,'the radical clip kernel waits for radical radii');
+    await runtime.warmup({analysisKinds:['voronoi','voronoiRadical']});
+    assert.equal(compiled.length,24);assert.ok(runtime.pipelines.has(VORONOI_RADICAL_CLIP_SHADER));
     await assert.rejects(runtime.warmup({analysisKinds:['ptm']}),/analysisKinds/);
+  } finally {runtime.close();}
+});
+
+test('general warmup compiles no Voronoi pipeline, and an empty list prepares the device alone', async () => {
+  const {runtime,compiled,allocations}=fixture();
+  try {
+    const device=await runtime.warmup({analysisKinds:[]});
+    assert.equal(device.pipelineCount,0);assert.equal(compiled.length,0);
+    const status=await runtime.warmup();
+    assert.equal(status.pipelineCount,21);assert.equal(compiled.length,21);assert.equal(allocations.length,0);
+    for (const source of [VORONOI_INITIALIZE_SHADER,VORONOI_CLIP_SHADER,VORONOI_RADICAL_CLIP_SHADER]) assert.equal(runtime.pipelines.has(source),false);
+    assert.ok(runtime.pipelines.has(COORDINATION_SHADER));
+    // A radical request compiles its own clip kernel, not the standard one.
+    await runtime.warmup({analysisKinds:['voronoiRadical']});
+    assert.equal(compiled.length,23);assert.ok(runtime.pipelines.has(VORONOI_RADICAL_CLIP_SHADER));assert.equal(runtime.pipelines.has(VORONOI_CLIP_SHADER),false);
   } finally {runtime.close();}
 });
 
@@ -68,6 +86,26 @@ test('load-time preparation primes source indexing and one discarded cell, and r
     await runtime.prepareFrame(frame,{frameIndex:0,analysisKinds:['voronoi']});assert.notEqual(runtime.voronoiWorkspace,workspace);
     runtime.clearFrames();assert.equal(runtime.allocatedBytes,0);assert.deepEqual(runtime.cacheStatus().preparedVoronoiFrameIds,[]);
     assert.equal(runtime.pipelines.size,4,'source clear retains warmed pipelines');
+  } finally {runtime.close();}
+  assert.ok(allocations.every(buffer=>buffer.destroyed));
+});
+
+test('a withdrawn Voronoi request frees its workspace and readiness while the frame, index and pipelines stay', async () => {
+  const {runtime,compiled,allocations}=fixture(), frame=crystalFrame('fcc',2);
+  frame.gpuFrameId=104;runtime.configureCache({frameCount:1,currentIndex:0});
+  try {
+    await runtime.prepareFrame(frame,{frameIndex:0,analysisKinds:['voronoi']});
+    const workspace=runtime.voronoiWorkspace, allocated=runtime.allocatedBytes, index=[...runtime.indexes.values()][0];
+    assert.ok(workspace.bytes>0);assert.ok(workspace.buffers.every(buffer=>!buffer.destroyed));
+    runtime.releaseVoronoi();
+    const status=runtime.cacheStatus();
+    assert.ok(workspace.buffers.every(buffer=>buffer.destroyed));assert.equal(runtime.allocatedBytes,allocated-workspace.bytes);
+    assert.equal(status.voronoiWorkspaceAtoms,0);assert.deepEqual(status.preparedVoronoiFrameIds,[]);
+    assert.deepEqual(status.cachedFrameIndexes,[0]);assert.equal(status.uploadCount,1);assert.equal([...runtime.indexes.values()][0],index);
+    assert.equal(status.pipelineCount,4);
+    runtime.releaseVoronoi();assert.equal(runtime.allocatedBytes,allocated-workspace.bytes,'releasing twice is harmless');
+    const again=await runtime.prepareFrame(frame,{frameIndex:0,analysisKinds:['voronoi']});
+    assert.deepEqual(again.preparedVoronoiFrameIds,[104]);assert.equal(again.uploadCount,1);assert.equal(compiled.length,4);
   } finally {runtime.close();}
   assert.ok(allocations.every(buffer=>buffer.destroyed));
 });
@@ -112,8 +150,7 @@ test('full warmup cancellation frees its task while shared pipelines finish with
     await until(()=>compiled.includes(COORDINATION_SHADER));controller.abort();await cancelled;
     await runtime.warmup({analysisKinds:['voronoi']});assert.ok(runtime.pipelines.has(VORONOI_CLIP_SHADER));
     release();await runtime.warmup();
-    // The full warmup also prepares the radical (radius-weighted) clipping kernel.
-    assert.equal(compiled.length,24);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
+    assert.equal(compiled.length,23);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
   } finally {release();runtime.close();}
 });
 
@@ -156,5 +193,32 @@ test('client keeps full warmup behind foreground analyses and separates targeted
     worker.answer(worker.messages.at(-1),{cacheStatus:{preparedVoronoiFrameIds:[1],preparedVoronoiFrameIndexes:[0]}});await preparation;
     const status=client.cacheStatus;status.preparedVoronoiFrameIndexes.push(999);
     assert.deepEqual(client.cacheStatus.preparedVoronoiFrameIndexes,[0]);
+  } finally {client.close();}
+});
+
+test('client asks for the device once, and a finished general warmup does not stand in for the Voronoi pipelines', async () => {
+  const worker=new FakeWorker(),client=new GpuAnalysisClient({environment:{navigator:{gpu:{}}},workerFactory:()=>worker});
+  try {
+    const device=client.warmup({analysisKinds:[]});await until(()=>worker.messages.length===1);
+    assert.deepEqual(worker.messages[0].options.analysisKinds,[]);worker.answer(worker.messages[0]);await device;
+    await client.warmup({analysisKinds:[]});assert.equal(worker.messages.length,1,'the device is already initialized');
+    const general=client.warmup();await until(()=>worker.messages.length===2);
+    assert.equal(worker.messages[1].options.analysisKinds,null);worker.answer(worker.messages[1]);await general;
+    await client.warmup();assert.equal(worker.messages.length,2);
+    const voronoi=client.warmup({analysisKinds:['voronoi']});await until(()=>worker.messages.length===3);
+    assert.deepEqual(worker.messages[2].options.analysisKinds,['voronoi']);worker.answer(worker.messages[2]);await voronoi;
+    const radical=client.warmup({analysisKinds:['voronoi','voronoiRadical']});await until(()=>worker.messages.length===4);
+    assert.deepEqual(worker.messages[3].options.analysisKinds,['voronoi','voronoiRadical']);worker.answer(worker.messages[3]);await radical;
+    await client.warmup({analysisKinds:['voronoiRadical']});assert.equal(worker.messages.length,4);
+    // Withdrawing the Voronoi request frees the workspace; the pipelines stay warm.
+    const freed=client.releaseVoronoi();await until(()=>worker.messages.length===5);
+    assert.equal(worker.messages[4].type,'release-voronoi');worker.answer(worker.messages[4],{cacheStatus:{voronoiWorkspaceAtoms:0}});
+    assert.equal((await freed).voronoiWorkspaceAtoms,0);
+    await client.warmup({analysisKinds:['voronoi']});assert.equal(worker.messages.length,5);
+    client.release();
+    assert.equal(worker.messages.length,5);await client.releaseVoronoi();assert.equal(client.worker,null,'an unused GPU is not started to release nothing');
+    const again=client.warmup({analysisKinds:[]});await until(()=>worker.messages.length===6);
+    assert.deepEqual(worker.messages[5].options.analysisKinds,[],'a released device is initialized again');
+    worker.answer(worker.messages[5]);await again;
   } finally {client.close();}
 });

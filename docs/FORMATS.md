@@ -17,7 +17,9 @@ Each parsed frame contains:
 
 Explicit atom identifiers are distinguished from generated row-order IDs.
 Only explicit stable IDs establish cross-frame correspondence for reference
-strain: CFG `id`, native LAMMPS IDs, Extended XYZ `id`, and PDB serial numbers.
+strain and for imported external properties: CFG `id`, native LAMMPS IDs
+(the `id` column that every text dump must have, and the atom IDs of a data
+file), Extended XYZ `id`, and PDB serial numbers.
 
 Cell vectors follow the AtomEye CFG convention `x = origin + s * H`, where each
 row of `H` is a cell edge. Canonical wrapped coordinates are used for slicing and
@@ -319,7 +321,8 @@ before its result is discarded and its Worker and CPU permit become available
 again, preserving the pool instead of recreating Workers while scrubbing.
 Malformed later frame boundaries are reported even if an earlier valid frame
 has already been displayed. Configuration replay waits for indexing before
-checking that its saved frame exists. gzip trajectories still require the
+checking that its saved frame exists, and exports that cover the whole
+trajectory wait for it too. gzip trajectories still require the
 existing full decompression before random-access indexing.
 
 The atom rows of LAMMPS dumps, CFG files and XYZ frames are converted directly
@@ -332,7 +335,15 @@ token, such as `1e-30`, `0x10` or `nan`, is converted by `Number()` from its
 text. A frame whose atom rows contain a non-ASCII byte, which might belong to a
 Unicode space, or any malformed row is parsed again from its decoded text by
 the line-based parser, so results and error messages do not depend on the
-input path.
+input path. PDB, LAMMPS data and POSCAR files are always parsed from decoded
+text.
+
+In Chrome on a 32-thread workstation, reading and parsing one frame in a
+parser Worker takes 21 ms for the 28,800-atom HEA dump, 74 ms for the
+60,229-atom Fe loop dump and 106 ms for the 129,904-atom Ni grain-boundary
+CFG; line-based parsing took 54, 238 and 348 ms. See
+[performance](features/performance.md#measured-effects) for parser scaling
+with the number of Workers.
 
 For a numbered set of LAMMPS dump files, files are naturally sorted by the
 varying numeric filename field. Each file receives its own byte-offset index,

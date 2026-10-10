@@ -5,10 +5,10 @@
 The [DXA tool](features/dislocations.md) extracts an independent
 dislocation line network with Burgers vectors and junction connectivity. Its
 retained CPU/Wasm topology session uses a dedicated Worker rather than the
-atom-range analysis pool described below. With GPU acceleration enabled,
-nearest-neighbor search, local crystal correspondence and tetrahedron
-classification can run on GPU; crystal mapping, periodic tessellation and
-line tracing remain on CPU, with independent fallback for GPU stages.
+atom-range analysis pool described below. Extraction runs entirely on the
+CPU: with shared-memory pthreads on a cross-origin isolated host, or with
+local crystal identification and tetrahedron classification sent to the
+analysis pool's Workers elsewhere. The GPU preference does not affect it.
 
 Load a structure and open **Common neighbor analysis** in the right panel.
 **Identify structure** runs adaptive CNA by default and selects **Crystal
@@ -140,7 +140,9 @@ GPU reference evaluation chooses each atom's element and phase, restores its
 absolute deformation using editable `a`/`c`, then calculates the strain fields.
 Raw PTM arrays retain their GPU upload across compatible reference edits;
 CPU preparation does not compute per-atom lattice factors. Fresh calculations
-can also use GPU neighbors before the CPU PTM fit. See
+can also use GPU neighbors before the CPU PTM fit. The shader carries each
+value as a pair of 32-bit numbers; a device self-test confirms that the shader
+compiler kept this arithmetic exact, and otherwise the stage runs on CPU. See
 [ideal lattice strain](features/ideal-strain.md) for backend stages and limits.
 
 The default scalar view is shear strain; choose hydrostatic strain, volume
@@ -266,31 +268,46 @@ can use GPU neighbor preparation followed by CPU Wasm correspondence fitting in
 the shared pool. Fresh ideal strain uses the same hybrid fit, then applies its
 reference and tensor operations on GPU. Compatible cached fits skip neighbor
 preparation and correspondence fitting.
+Displacement, reference-frame strain and the ideal-strain tensor stage compute
+with pairs of 32-bit numbers (double-float arithmetic). Each GPU device checks
+at creation that its shader compiler preserves the rounding-error terms of
+this arithmetic; if it does not, these three run on CPU Workers while the
+other kernels stay on the GPU.
 See [CNA](features/cna.md), [central symmetry](features/centrosymmetry.md),
 [displacement](features/displacement.md),
 [reference-frame strain](features/reference-strain.md) and
 [performance](features/performance.md) for backend and precision details.
 
 Successful Workers remain in a bounded idle pool, and PTM initializes its Wasm
-kernel once per Worker. Cancellation and failures terminate the affected Worker;
+kernel once per Worker. Cancelling rejects the job at once; chunks already
+posted finish in their Worker, which returns to the pool with its kernel,
+coordinate snapshot and neighbor index. A failed Worker is terminated, and
 later jobs create a replacement. Each task carries an ID, so late results or
-progress cannot be applied to another job. Coordinates and neighbor contexts
-are released after processing; only the reusable kernel remains.
+progress cannot be applied to another job. A Worker keeps the coordinates and
+neighbor index of up to two frames for later compatible analyses and chunks.
+Changed coordinates, types or cell geometry replace them, and closing the
+source releases them while the reusable kernel remains.
 
 Progress separates waiting for a slot, preparing inputs, initializing the
 kernel, constructing the neighbor search and processing atoms. PTM and strain
 report actual processed-atom counts, throttled to avoid flooding the UI.
 Non-isolated deployments copy private input arrays in 4 MiB pieces with yields
-to the main thread before transferring them. Shared-buffer preparation also
+to the main thread before transferring them, once per Worker and frame; later
+chunks of the same frame carry only their atom range. Shared-buffer preparation also
 supports cancellation. This reduces repeated startup work and keeps controls
 responsive during preparation; it does not remove neighbor-search or fitting
 cost.
 
 Coordination, CNA, central symmetry, PTM, ideal/reference strain and displacement
 share `AnalysisPool`. Independent central atom ranges execute in module Workers;
-the main thread uploads results and updates controls. CNA/CSP/PTM/fresh strain
-use 4,096 atoms per target range; cheaper coordination, displacement and
-cached-fit strain target 50,000 atoms. Each PTM Worker
+the main thread uploads results and updates controls. The Worker count targets
+one Worker per 4,096 atoms for CNA/CSP/PTM/fresh strain and one per 50,000
+atoms for cheaper coordination, displacement and cached-fit strain. Each
+Worker's share is split into bounded chunks of 128 to 8,192 atoms that idle
+Workers claim dynamically. Reductions that depend on summation order, such as
+bond-distribution moments and the local-shear normalization, keep their
+logical partitions and atom order, so a result does not depend on which Worker
+ran a chunk. Each PTM Worker
 has its own Wasm instance, avoiding pthread/shared-Wasm hosting requirements.
 There is one total concurrency limit across
 all analyses, `hardwareConcurrency − 2` Workers (at least one), which leaves two
@@ -299,11 +316,14 @@ threads count against the same budget. Copy and scratch-memory
 estimates further reduce each job's range count. Different analyses may run
 concurrently within that budget.
 
-On isolated local development servers, inputs use SharedArrayBuffer when
-available; ordinary hosting uses bounded coordinate copies. Float32/Float64
+On cross-origin isolated hosts (see [deployment](DEPLOYMENT.md)), a frame's
+coordinates and linked-cell neighbor index are placed in SharedArrayBuffers
+once; every Worker and every compatible analysis of that frame reads them.
+Other hosting gives each Worker a bounded private copy and its own resident
+index. Float32/Float64
 input precision is preserved. Partial structure/scalar outputs cover only
 their own central range; coordination retains its symmetric pair reduction.
-Source/frame/parameter changes terminate stale structure jobs and remove queued
+Source/frame/parameter changes cancel stale structure jobs and remove queued
 tasks. Closing the pool settles every pending promise and releases its Workers.
 The legacy coordination facade preserves its latest-request queue while using
 the same global scheduler.

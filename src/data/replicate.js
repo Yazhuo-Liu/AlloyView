@@ -55,6 +55,10 @@ export function physicalReplicationPlan(frame, values, {
  * Cell vectors are rows, so tilted repeats follow a,b,c rather than Cartesian
  * axes. Continuous source images are rewrapped in the enlarged cell; otherwise
  * crossing an old internal cell boundary would look like a displacement jump.
+ * A source without image data cannot be made continuous: its copies repeat
+ * every wrap of the source atom. `physicalReplication.wrappedSource` records
+ * this, and analyses that compare two frames then resolve periodic images
+ * against the source lattice (see wrappedSourceRepetitions in model.js).
  */
 export async function replicateFrame(frame, values, { signal, onProgress = () => {}, yieldTask = yieldToMain, ...limits } = {}) {
   checkSignal(signal);
@@ -146,7 +150,7 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
   checkSignal(signal);
   const result = { ...frame, ids, types, typeLabels: structuredClone(frame.typeLabels), fractional, positions,
     unwrappedPositions, imageFlags, cell, properties,
-    physicalReplication: { repetitions: repetitions.slice(), sourceAtomCount: count } };
+    physicalReplication: { repetitions: repetitions.slice(), sourceAtomCount: count, wrappedSource: !imageFlags } };
   for (const name of ANALYSIS_FIELDS) delete result[name];
   onProgress({ phase: 'replicating', completedAtoms: atomCount, totalAtoms: atomCount });
   return validateFrame(result);

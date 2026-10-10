@@ -67,6 +67,7 @@ async function exercise({ isolated }) {
     await waitFor('document.readyState === "complete" && document.getElementById("generate-trajectory-lines")', 'Production page startup');
     await evaluate(`(${initializeChecks.toString()})()`);
     await waitFor('window.trajectoryChecks?.ready', 'Check modules');
+    await evaluate(`trajectoryChecks.hold(${frameCount - 1})`);
     await evaluate(`if (document.getElementById('enable-gpu-computing').getAttribute('aria-pressed') === 'true') document.getElementById('enable-gpu-computing').click()`);
     if (isolated) assert.equal(await evaluate('crossOriginIsolated && typeof SharedArrayBuffer === "function"'), true);
     else assert.equal(await evaluate('crossOriginIsolated'), false);
@@ -78,6 +79,21 @@ async function exercise({ isolated }) {
       && document.getElementById('frame-count').textContent === '${frameCount}' && document.getElementById('loading').hidden`, 'Trajectory import');
     const change = (id, value, checkbox = false) => evaluate(`trajectoryChecks.change(${JSON.stringify(id)}, ${JSON.stringify(value)}, ${checkbox})`);
     const atom = index => evaluate(`trajectoryChecks.atom(${index})`);
+    const loading = () => evaluate(`({ hidden: document.getElementById('loading').hidden, text: document.getElementById('loading-text').textContent })`);
+
+    // A frame request that is superseded by a cached frame hides the loading
+    // indicator it showed. The last frame is held back, so it is still loading.
+    await change('frame-slider', '1');
+    await waitFor('trajectoryChecks.renderer.frame.frameIndex === 1 && document.getElementById("loading").hidden', 'Frame 2');
+    await evaluate('document.getElementById("frame-last").click()');
+    await waitFor(`!document.getElementById('loading').hidden && document.getElementById('loading-text').textContent === 'Preparing frame ${frameCount}…'`,
+      'Loading indicator of the held frame');
+    await evaluate('document.getElementById("frame-first").click()');
+    await waitFor('trajectoryChecks.renderer.frame.frameIndex === 0', 'Cached first frame');
+    assert.equal((await loading()).hidden, true, 'a superseded frame request must not leave the loading indicator on');
+    await evaluate('trajectoryChecks.release()');
+    await delay(300);
+    assert.equal((await loading()).hidden, true);
 
     // Unwrapping off: requests carry no trajectory options.
     assert.equal(await evaluate('trajectoryChecks.requests.every(request => !request.trajectory)'), true);
@@ -189,6 +205,52 @@ async function exercise({ isolated }) {
     assert.equal(await evaluate('trajectoryChecks.fccCount()'), raw, 'restoring unsmoothed coordinates restores the raw CNA');
     assert.equal(await evaluate('document.getElementById("trajectory-smooth-enabled").checked'), false);
 
+    // A recipe rejected after its smoothing setting was applied leaves the
+    // setting on the displayed frame's coordinates, in both directions.
+    const rejected = structuredClone(recipe);
+    Object.assign(rejected.settings, { replicate: [2, 1, 1], replicateAtoms: true });
+    rejected.settings.display.coordinateMode = 'unwrapped';
+    const importRejected = async enabled => {
+      rejected.settings.extensions.trajectory.smoothing = { enabled, window: 2 };
+      await evaluate(`document.getElementById('toast').textContent = ''; trajectoryChecks.importRecipe(${JSON.stringify(JSON.stringify(rejected))})`);
+      await waitFor(`document.getElementById('toast').textContent.includes('saved unwrapped view')`, 'Rejected recipe');
+      return evaluate(`({ checked: document.getElementById('trajectory-smooth-enabled').checked, window: document.getElementById('trajectory-smooth-window').value,
+        status: document.getElementById('trajectory-smooth-status').textContent, shown: trajectoryChecks.renderer.frame.smoothing?.window ?? 0 })`);
+    };
+    const rejectedOff = await importRejected(true);
+    assert.deepEqual([rejectedOff.checked, rejectedOff.window, rejectedOff.shown], [false, '3', 0], JSON.stringify(rejectedOff));
+    assert.match(rejectedOff.status, /^Off\./);
+    // A recipe that turns smoothing on announces its own wait for the saved
+    // frame and ends it. Frame 3 is held back for the reference read below.
+    await evaluate('trajectoryChecks.hold(2)');
+    recipe.settings.extensions.trajectory.smoothing.enabled = true;
+    await evaluate(`document.getElementById('configuration-status').textContent = ''; trajectoryChecks.importRecipe(${JSON.stringify(JSON.stringify(recipe))})`);
+    await waitFor(`document.getElementById("configuration-status").textContent.includes("restored") && trajectoryChecks.renderer.frame.smoothing?.frameCount === 7
+      && document.getElementById('cna-state').textContent === 'Calculated'`, 'Recipe that turns smoothing on');
+    assert.equal((await loading()).hidden, true, 'restoring a smoothed frame must not leave the loading indicator on');
+    // A tool that reads its own reference frame reports in its panel; the
+    // averaging progress of that read does not show the indicator.
+    await evaluate('trajectoryChecks.showTool("displacement")');
+    await change('displacement-reference-frame', '3');
+    await evaluate('document.getElementById("run-displacement").click()');
+    await delay(200);
+    assert.equal(await evaluate(`trajectoryChecks.requests.some(request => request.index === 2 && request.foreground && request.trajectory?.smoothing === 3)`), true,
+      'the reference frame must be read in the foreground with smoothing');
+    await evaluate('trajectoryChecks.release()');
+    await waitFor(`document.getElementById('displacement-state').textContent === 'Calculated'`, 'Displacement from a smoothed reference');
+    assert.equal((await loading()).hidden, true, 'a reference frame read must not leave the loading indicator on');
+    await evaluate('trajectoryChecks.showTool("trajectory")');
+    const rejectedOn = await importRejected(false);
+    assert.deepEqual([rejectedOn.checked, rejectedOn.window, rejectedOn.shown], [true, '3', 3], JSON.stringify(rejectedOn));
+    assert.match(rejectedOn.status, /average of 7 frames \(5–11\)/);
+    assert.deepEqual((await evaluate('trajectoryChecks.exportRecipe()')).settings.extensions.trajectory.smoothing, { enabled: true, window: 3 });
+    // The next frame is requested with the setting that is shown.
+    await change('frame-slider', '8');
+    await waitFor('trajectoryChecks.renderer.frame.frameIndex === 8 && trajectoryChecks.renderer.frame.smoothing?.window === 3', 'Smoothed frame after a rejected recipe');
+    await change('trajectory-smooth-enabled', false, true);
+    await waitFor(`!trajectoryChecks.renderer.frame.smoothing && document.getElementById('cna-state').textContent === 'Calculated'
+      && document.getElementById('loading').hidden`, 'Smoothing off after the rejected recipes');
+
     // Phone layout keeps the panel inside the viewport.
     await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await evaluate('trajectoryChecks.showTool("trajectory"); document.getElementById("generate-trajectory-lines").scrollIntoView({ block: "center" })');
@@ -224,9 +286,13 @@ async function initializeChecks() {
     return setFrame.apply(this, args);
   };
   const frame = StructureWorkerClient.prototype.frame;
+  // hold(index) keeps every read of one frame waiting until release().
+  let held = null, gate = null, open = null;
+  checks.hold = index => { held = index; gate = new Promise(resolve => { open = resolve; }); };
+  checks.release = () => { held = null; open?.(); };
   StructureWorkerClient.prototype.frame = function(index, options = {}) {
-    checks.requests.push({ index, trajectory: options.trajectory ?? null });
-    return frame.call(this, index, options);
+    checks.requests.push({ index, trajectory: options.trajectory ?? null, foreground: options.reportProgress !== false && !options.background });
+    return index === held ? gate.then(() => frame.call(this, index, options)) : frame.call(this, index, options);
   };
   checks.change = (id, value, checkbox = false) => {
     const input = document.getElementById(id);

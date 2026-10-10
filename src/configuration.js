@@ -280,7 +280,7 @@ function normalizeExtensions(value, fromSnapshot) {
     : record(input.bondStatistics, `${path}.bondStatistics`, ['enabled', 'lengthBins', 'angleBins']);
   const voronoi = input.voronoi === undefined ? null
     : record(input.voronoi, `${path}.voronoi`, ['enabled', 'faceAreaThreshold', 'relativeFaceAreaThreshold', 'bins', 'selectedTypes',
-      ...VORONOI_RADICAL_KEYS]);
+      ...VORONOI_RADICAL_KEYS, 'gpuKernel']);
   const voronoiDisplay = input.voronoiDisplay === undefined ? null
     : record(input.voronoiDisplay, `${path}.voronoiDisplay`, ['enabled', 'allEnabled', 'color', 'opacity', 'style', 'scale']);
   if (bondStatistics?.enabled === true && nullablePositive(bonds.cutoff, `${path}.bonds.cutoff`, fromSnapshot) === null) {
@@ -352,6 +352,9 @@ function normalizeExtensions(value, fromSnapshot) {
       selectedTypes: voronoi.selectedTypes == null ? null : [...new Set(list(voronoi.selectedTypes, `${path}.voronoi.selectedTypes`, 65535)
         .map((label, index) => string(label, `${path}.voronoi.selectedTypes[${index}]`, 256)))].sort(),
       ...normalizeVoronoiRadical(voronoi, `${path}.voronoi`),
+      // The WebGPU Voronoi kernel is an explicit request. Recipes without the
+      // key, including every older one, restore with CPU Workers.
+      ...(voronoi.gpuKernel === undefined ? {} : { gpuKernel: boolean(voronoi.gpuKernel, `${path}.voronoi.gpuKernel`, false) }),
     } }),
     ...(clusters === null ? {} : { clusters }),
     ...(input.binning === undefined ? {} : { binning: normalizeBinning(input.binning, `${path}.binning`) }),

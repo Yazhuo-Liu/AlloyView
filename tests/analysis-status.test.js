@@ -13,6 +13,14 @@ test('analysis status reports actual GPU phases and CPU fallback without calling
   assert.match(analysisProgressText({ backend: 'cpu', phase: 'analyzing', workerCount: 6, total: 6 }), /6 Workers/);
 });
 
+test('a backend chosen by routing is described without being called a fallback', () => {
+  const routed = { engine: 'voro++-wasm-worker-pool×6', routeReason: 'Voronoi runs on CPU Workers.' };
+  assert.equal(analysisBackendLabel(routed), 'voro++-wasm-worker-pool×6');
+  assert.equal(analysisBackendDetails(routed), 'voro++-wasm-worker-pool×6 · Voronoi runs on CPU Workers.');
+  assert.equal(analysisBackendDetails({ ...routed, fallbackReason: 'The GPU failed.' }), 'CPU fallback: The GPU failed.');
+  assert.equal(analysisBackendDetails({ engine: 'webgpu' }), 'webgpu');
+});
+
 test('ideal strain status distinguishes GPU neighbor preparation, CPU template fitting, and GPU reference tensors', () => {
   assert.equal(analysisProgressText({ backend: 'gpu', phase: 'indexing', stage: 'ptm-neighbors' }),
     'Preparing PTM neighbors with WebGPU for frame 1…');

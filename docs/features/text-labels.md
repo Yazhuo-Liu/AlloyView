@@ -136,6 +136,12 @@ text turns dark, as for the legend; custom boxes and colors are kept. With no
 enabled label, exports are unchanged. The on-screen labels are not part of the
 viewport's WebGL image and are never captured twice.
 
+## Limitations
+
+On screen, a label is positioned relative to the whole viewport and is not kept
+clear of the viewport toolbars and other overlays, so it can overlap them; use
+the offsets to move it. Exported images contain no toolbars.
+
 ## Configuration
 
 Labels are saved in `settings.extensions.textLabels` as

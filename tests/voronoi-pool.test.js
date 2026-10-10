@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Worker } from 'node:worker_threads';
-import { AnalysisPool } from '../src/analysis/analysis-pool.js';
+import { AnalysisPool, VORONOI_CPU_ROUTE_REASON } from '../src/analysis/analysis-pool.js';
 import { calculateVoronoi, VORONOI_FIELDS } from '../src/analysis/voronoi.js';
 import { crystalFrame } from './helpers/crystals.js';
 
@@ -80,18 +80,75 @@ test('resident Voronoi snapshots detect mutable coordinate and cell input while 
   } finally { pool.close(); }
 });
 
-test('Voronoi uses shared CPU workers when GPU is enabled and reports the deliberate fallback', async () => {
-  const stats = { created: 0 };
+test('with GPU acceleration on, Voronoi is routed to the CPU pool and returns exactly the GPU-off result', async () => {
+  const stats = { created: 0 }, gpuCalls = [];
   const pool = new AnalysisPool({ environment: { crossOriginIsolated: true }, workerFactory: nodeFactory(stats),
-    gpuBackend: { supports: () => false, close() {} } });
-  pool.setGpuEnabled(true);
+    gpuBackend: { supports: kind => kind === 'voronoi', close() {},
+      async analyze(_frame, parameters) { gpuCalls.push(parameters.kind); throw new Error('The GPU must not be asked.'); } } });
+  const frame = crystalFrame('bcc', 4), radii = Float64Array.from(frame.types, (_, atom) => 1 + (atom % 3) * .2);
+  frame.fractional[5] += .004;
+  // Typed arrays and derived statistics; timings and reuse counters differ between runs.
+  const scientific = result => Object.fromEntries(Object.entries(result).filter(([name, value]) => ArrayBuffer.isView(value)
+    || ['voronoiIndices', 'summary', 'statistics', 'coordinationHistogram', 'volumeHistogram', 'faceAreaHistogram', 'indexCounts', 'tessellation', 'atomIndex'].includes(name))
+    .concat(result.cells ? [['cells', result.cells.map(scientific)]] : []));
   try {
-    const result = await pool.analyze(crystalFrame('bcc', 3), { kind: 'voronoi' });
-    assert.equal(result.backend, 'cpu');
-    assert.equal(result.gpuRequested, true);
-    assert.equal(result.sharedMemory, true);
-    assert.match(result.fallbackReason, /no GPU kernel/);
-    assert.ok(result.voronoiCoordination.every(value => value === 14));
-    assert.ok(Math.abs(result.summary.volumeError) < 1e-12);
+    const off = {};
+    for (const [name, parameters] of [['standard', { kind: 'voronoi' }], ['radical', { kind: 'voronoi', radii }],
+      ['filtered', { kind: 'voronoi', faceAreaThreshold: .01, relativeFaceAreaThreshold: .005, bins: 17 }], ['geometry', { kind: 'voronoiGeometry', atomIndex: 7 }],
+      ['batch', { kind: 'voronoiGeometryBatch', atomIndices: null }]]) off[name] = [parameters, await pool.analyze(frame, parameters)];
+    assert.equal(off.standard[1].gpuRequested, false); assert.equal(off.standard[1].routeReason, undefined);
+    pool.setGpuEnabled(true);
+    assert.equal(pool.gpuVoronoi, false, 'the GPU Voronoi kernel is off unless requested');
+    for (const [name, [parameters, expected]] of Object.entries(off)) {
+      const progress = [], result = await pool.analyze(frame, parameters, { onProgress: update => progress.push(update) });
+      assert.equal(result.backend, 'cpu', name); assert.equal(result.gpuRequested, true);
+      assert.equal(result.fallbackReason, undefined, 'routing to the CPU is not a fallback');
+      assert.equal(result.routeReason, VORONOI_CPU_ROUTE_REASON);
+      assert.equal(result.engine, expected.engine); assert.equal(result.sharedMemory, true);
+      assert.ok(progress.length > 0 && progress.every(update => update.backend === 'cpu' && update.fallbackReason === undefined));
+      assert.deepEqual(scientific(result), scientific(expected), `${name}: identical to the result with GPU acceleration off`);
+      for (const [field, value] of Object.entries(scientific(expected))) if (ArrayBuffer.isView(value)) {
+        assert.equal(result[field].constructor, value.constructor);
+        assert.ok(value.every((entry, index) => Object.is(entry, result[field][index])), `${name}.${field} is bit-identical`);
+      }
+    }
+    assert.deepEqual(gpuCalls, []);
+    assert.ok(off.standard[1].voronoiCoordination.length === frame.types.length && Math.abs(off.standard[1].summary.volumeError) < 1e-12);
+  } finally { pool.close(); }
+});
+
+test('the explicit option sends Voronoi to the GPU kernel, with the CPU pool as its fallback', async () => {
+  const stats = { created: 0 }, gpuCalls = [];
+  let fail = false, releases = 0;
+  const pool = new AnalysisPool({ environment: { crossOriginIsolated: true }, workerFactory: nodeFactory(stats),
+    gpuBackend: { supports: kind => kind === 'voronoi', close() {}, async releaseVoronoi() { releases++; },
+      async analyze(_frame, parameters) {
+        gpuCalls.push(parameters.kind);
+        if (fail) throw new Error('Too many Voronoi cells need exact recovery; using parallel CPU workers.');
+        return { engine: 'webgpu-voronoi', atomicVolume: new Float32Array(1) };
+      } } });
+  const frame = crystalFrame('bcc', 3);
+  try {
+    pool.setGpuVoronoi(true);
+    const off = await pool.analyze(frame, { kind: 'voronoi' });
+    assert.equal(off.backend, 'cpu'); assert.equal(off.gpuRequested, false); assert.equal(off.routeReason, undefined);
+    assert.deepEqual(gpuCalls, [], 'the request has no effect while GPU acceleration is off');
+    pool.setGpuEnabled(true);
+    const gpu = await pool.analyze(frame, { kind: 'voronoi' });
+    assert.equal(gpu.backend, 'gpu'); assert.equal(gpu.engine, 'webgpu-voronoi'); assert.equal(gpu.routeReason, undefined);
+    fail = true;
+    const fallback = await pool.analyze(frame, { kind: 'voronoi' });
+    assert.equal(fallback.backend, 'cpu'); assert.match(fallback.fallbackReason, /exact recovery/); assert.equal(fallback.routeReason, undefined);
+    assert.ok(fallback.voronoiCoordination.every(value => value === 14));
+    // Cell geometry has no GPU kernel under either setting.
+    const geometry = await pool.analyze(frame, { kind: 'voronoiGeometry', atomIndex: 3 });
+    assert.equal(geometry.backend, 'cpu'); assert.match(geometry.fallbackReason, /no GPU kernel/);
+    assert.deepEqual(gpuCalls, ['voronoi', 'voronoi']);
+    assert.equal(releases, 0);
+    pool.setGpuVoronoi(false); pool.setGpuVoronoi(false);
+    assert.equal(releases, 1, 'withdrawing the request frees the GPU Voronoi workspace once');
+    const routed = await pool.analyze(frame, { kind: 'voronoi' });
+    assert.equal(routed.backend, 'cpu'); assert.equal(routed.fallbackReason, undefined); assert.equal(gpuCalls.length, 2);
+    assert.deepEqual(routed.atomicVolume, fallback.atomicVolume);
   } finally { pool.close(); }
 });

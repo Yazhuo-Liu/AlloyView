@@ -89,6 +89,8 @@ async function checkCores(cores) {
       checks.snapshot = () => ({ events: checks.events, analyses: checks.analyses,
         workers: cpuWorkerEvents.filter(row => /\\/(analysis|dxa)-worker\\.js(?:$|[?#])/.test(row.url)),
         status: checks.analysis?.cpuWarmupStatus, limit: checks.analysis?.limit,
+        gpuEnabled: checks.analysis?.gpuEnabled, gpu: checks.analysis?.gpuCacheStatus,
+        voronoiTarget: checks.renderer ? checks.analysis?.voronoiWorkerCount(checks.renderer.frame) : null,
         dxaCoordinator: checks.dxa?.worker !== null, atomCount: checks.renderer?.frame.ids.length,
         sharedBudget: checks.analysis?.cpuBudget === checks.dxa?.cpuBudget });
     })()`);
@@ -101,7 +103,16 @@ async function checkCores(cores) {
       await waitFor(`['analysis','dxa'].every(backend => cpuWarmupChecks.events.some(row => row.backend === backend && row.atoms === ${atoms} && row.status))`, 'Loaded-source CPU and DXA prewarm');
     }
     await load();
+    // GPU acceleration is on by default. Voronoi still runs on CPU Workers, so
+    // its resident frame is prepared there, and the GPU prepares nothing for it.
+    await waitFor('cpuWarmupChecks.analysis.cpuWarmupStatus.preparedVoronoiWorkers >= 1 && !cpuWarmupChecks.analysis.cpuFramePreparation', 'CPU Voronoi frame preparation with GPU acceleration on');
+    await waitFor('cpuWarmupChecks.analysis.gpuCacheStatus.cachedFrameIndexes.includes(0)', 'GPU frame upload');
     const loaded = await evaluate('cpuWarmupChecks.snapshot()');
+    assert.equal(loaded.gpuEnabled, true);
+    assert.ok(loaded.voronoiTarget >= 1 && loaded.status.readyModules.voronoi >= loaded.voronoiTarget, 'the Voro++ modules are warm');
+    assert.equal(loaded.status.preparedVoronoiWorkers, loaded.voronoiTarget, 'the displayed frame is resident in every Voronoi Worker it will use');
+    assert.equal(loaded.gpu.voronoiWorkspaceAtoms, 0, 'no GPU Voronoi workspace');
+    assert.deepEqual(loaded.gpu.preparedVoronoiFrameIndexes, []);
     assert.equal(loaded.limit, cores - 2);
     assert.equal(loaded.sharedBudget, true, 'Both analysis systems must share one application concurrency budget.');
     assert.equal(loaded.analyses, 0, 'Loading prewarms modules without running any analysis.');

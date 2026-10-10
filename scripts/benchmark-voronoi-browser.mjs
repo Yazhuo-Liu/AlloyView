@@ -6,7 +6,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { withWebGpuBrowser } from './webgpu-browser.mjs';
 
 // Real browser/Worker timing; SwiftShader supplies graphics and the optional
-// GPU preparation probe, never a claim about physical GPU performance.
+// GPU preparation probe, never a claim about physical GPU performance. With GPU
+// acceleration on, Voronoi still runs on CPU Workers, so every mode times the
+// same CPU calculation; the GPU mode adds what the device prepares meanwhile.
 const root = resolve(import.meta.dirname, '..');
 const outputArgument = process.argv.indexOf('--output');
 const output = (outputArgument >= 0 ? process.argv[outputArgument + 1] : null) || '/tmp/alloyview-voronoi-browser-benchmark.json';
@@ -50,33 +52,33 @@ for (const mode of modes) {
       stage('Wait CPU resident frame');
       await wait('voronoiTiming.cpuFrames.some(event=>event.complete) && voronoiTiming.cpuFrames.every(event=>event.complete||event.error)');
     }
-    if (mode.gpu) {
-      await wait('voronoiTiming.pool.gpuCacheStatus?.cachedFrameIndexes?.includes(0)');
-      if (await evaluate('"preparedVoronoiFrameIndexes" in voronoiTiming.pool.gpuCacheStatus'))
-        await wait('voronoiTiming.pool.gpuCacheStatus.preparedVoronoiFrameIndexes.includes(0)');
-    }
+    if (mode.gpu) await wait('voronoiTiming.pool.gpuCacheStatus?.cachedFrameIndexes?.includes(0)');
     await evaluate('voronoiTiming.backgroundReadyAt=performance.now();voronoiTiming.before={cpu:voronoiTiming.pool.cpuWarmupStatus,gpu:voronoiTiming.pool.gpuCacheStatus,snapshot:!!voronoiTiming.pool.voronoiSnapshot,workers:voronoiTiming.workersCreated};document.querySelector("[data-tool-button=voronoi]").click()');
-    // The GPU baseline records load/preparation only. Software-GPU full-cell
-    // timings would not quantify a physical adapter's speedup over CPU.
-    if (!mode.gpu) for (let repeat = 0; repeat < 1; repeat++) {
+    for (let repeat = 0; repeat < 1; repeat++) {
       stage('Click Voronoi');
       await evaluate('document.getElementById("run-voronoi").click()');
       await wait(`voronoiTiming.jobs.length===${repeat + 1} && voronoiTiming.jobs[${repeat}].complete`);
       await wait('document.getElementById("voronoi-state").textContent==="Calculated"');
     }
     if (mode.gpu) {
-      await wait('voronoiTiming.gpuWarms.some(event=>!event.analysisKinds?.length && event.complete)');
+      await wait('voronoiTiming.gpuWarms.some(event=>event.analysisKinds===undefined && event.complete)');
       await evaluate('voronoiTiming.generalGpuReadyAt=performance.now()');
     }
     return evaluate('voronoiTiming.report()');
   }, { software: true, isolated: mode.isolated });
-  if (!mode.gpu && run.cpuFrames.length) {
+  if (run.cpuFrames.length) {
     assert.equal(run.before.cpu.preparedVoronoiWorkers, run.cpuFrames.find(frame => frame.complete)?.status.targetWorkers, 'all admitted CPU slots contain the displayed frame');
     for (const field of ['kernelInitializations', 'indexBuilds', 'frameUploads'])
       assert.equal(run.jobs[0].result[field], 0, `prepared first analysis reuses ${field}`);
   }
-  if (reference && !mode.gpu) {
-    const previous = reference.runs.find(previous => previous.gpu === mode.gpu && previous.isolated === mode.isolated);
+  if (mode.gpu) {
+    assert.equal(run.jobs[0].result.backend, 'cpu', 'automatic selection keeps Voronoi on CPU Workers');
+    assert.equal(run.before.gpu.voronoiWorkspaceAtoms, 0, 'the GPU reserves no Voronoi workspace');
+    assert.deepEqual(run.before.gpu.preparedVoronoiFrameIndexes, []);
+  }
+  if (reference) {
+    // The same CPU result in every mode: compare with the reference's CPU run.
+    const previous = reference.runs.find(previous => !previous.gpu && previous.isolated === mode.isolated);
     assert.ok(previous?.jobs[0]?.scientificDigest, 'reference includes the same mode and scientific digest');
     assert.deepEqual(run.jobs[0].scientificDigest, previous.jobs[0].scientificDigest, 'preparation preserves all scientific arrays and face topology exactly');
     run.scientificReferenceMatched = true;

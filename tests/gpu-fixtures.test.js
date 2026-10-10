@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { cnaDirectFixtures, cnaFixtures, cloneFrame, cspFixtures, displacementFixtures, displacementValidationFixtures,
-  idealStrainFixtures, pointFrame, referenceStrainFixtures, reorderFrame, transformFrame } from '../scripts/gpu-fixtures.js';
+  idealStrainFixtures, pointFrame, referenceStrainFixtures, reorderFrame, replicatedDisplacementFixtures,
+  replicatedReferenceStrainFixtures, transformFrame } from '../scripts/gpu-fixtures.js';
 import { calculateCna } from '../src/analysis/cna.js';
 import { calculateAtomicStrain, STRAIN_FIELDS } from '../src/analysis/atomic-strain.js';
 import { calculateCentrosymmetry } from '../src/analysis/centrosymmetry.js';
@@ -128,7 +129,7 @@ function analyticStrain(F) {
     referenceD2min: 0 };
 }
 
-for (const fixture of referenceStrainFixtures()) {
+for (const fixture of [...referenceStrainFixtures(), ...await replicatedReferenceStrainFixtures()]) {
   test(`GPU scientific fixture: ${fixture.label} matches its affine strain or undefined fit`, () => {
     const result = calculateReferenceStrain(fixture.frame, fixture.parameters);
     const nanAtoms = new Set(fixture.expectedNaNAtoms ?? []);
@@ -189,7 +190,7 @@ for (const fixture of cspFixtures()) {
   });
 }
 
-for (const fixture of displacementFixtures()) {
+for (const fixture of [...displacementFixtures(), ...await replicatedDisplacementFixtures()]) {
   test(`GPU scientific fixture: ${fixture.label} has its expected Cartesian displacement`, async () => {
     const sourcePositions = fixture.frame.positions.slice(), referencePositions = fixture.reference.positions.slice();
     const parameters = await prepareDisplacements(fixture.frame, fixture.reference, fixture.options);
@@ -232,6 +233,20 @@ for (const fixture of displacementFixtures()) {
     assert.deepEqual(fixture.reference.positions, referencePositions);
   });
 }
+
+test('replicated wrapped fixtures need the source lattice: the enlarged cell alone leaves source-vector jumps', async () => {
+  for (const fixture of await replicatedDisplacementFixtures()) {
+    const parameters = await prepareDisplacements(fixture.frame, fixture.reference, fixture.options);
+    assert.deepEqual(parameters.sourceRepetitions, fixture.frame.physicalReplication.repetitions);
+    const enlarged = calculatePreparedDisplacements(fixture.frame, { ...parameters, sourceRepetitions: null });
+    assert.ok(enlarged.vectors.some((value, k) => Math.abs(value - fixture.expectedVectors[k]) > 1), `${fixture.label} crosses a source cell face.`);
+  }
+  for (const fixture of await replicatedReferenceStrainFixtures()) {
+    assert.deepEqual(fixture.parameters.sourceRepetitions, fixture.frame.physicalReplication.repetitions);
+    const enlarged = calculateReferenceStrain(fixture.frame, { ...fixture.parameters, sourceRepetitions: null });
+    assert.ok(enlarged.referenceShearStrain.some(value => !(Math.abs(value) < 1)), `${fixture.label} stretches bonds across a source cell face.`);
+  }
+});
 
 for (const fixture of displacementValidationFixtures()) {
   test(`GPU scientific validation fixture: ${fixture.label}`, async () => {

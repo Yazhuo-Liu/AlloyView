@@ -308,3 +308,14 @@ function assertArrayClose(actual, expected, tolerance = 1e-5) {
     );
   }
 }
+
+test('LAMMPS dump atoms carry explicit IDs, so ID-anchored data follows them across frames', async () => {
+  const { parseExternalProperties } = await import('../src/io/external-properties.js');
+  const dump = (timestep, rows) => `ITEM: TIMESTEP\n${timestep}\nITEM: NUMBER OF ATOMS\n2\nITEM: BOX BOUNDS pp pp pp\n0 4\n0 4\n0 4\nITEM: ATOMS id type x y z\n${rows}\n`;
+  const first = parseLammpsFrame(dump(0, '7 1 0 0 0\n3 1 2 2 2')), second = parseLammpsFrame(new TextEncoder().encode(dump(1, '3 1 2 2 2\n7 1 0 0 0')));
+  // Text and byte inputs both declare the file's own id column.
+  assert.equal(first.idSource, 'explicit');
+  assert.equal(second.idSource, 'explicit');
+  const bundle = parseExternalProperties('id,score\n7,0.5\n3,1.5\n', { frameIds: first.ids, idSource: first.idSource, frameIndex: 0 });
+  assert.equal(bundle.manifest.scope, 'all-frames');
+});

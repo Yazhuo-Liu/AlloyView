@@ -9,7 +9,7 @@ const MAX_TASKS_IN_FLIGHT = 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
   frameCount: 0, currentIndex: 0, budgetBytes: 0, allocatedBytes: 0, residentBytes: 0, frameBytes: 0, workspaceBytes: 0,
   preparedVoronoiFrameIds: [], preparedVoronoiFrameIndexes: [], voronoiWorkspaceAtoms: 0,
-  neighborIndexCount: 0, neighborIndexBuildCount: 0, voronoiKernelWarmupCount: 0, bufferLimitBytes: 0 };
+  neighborIndexCount: 0, neighborIndexBuildCount: 0, voronoiKernelWarmupCount: 0, bufferLimitBytes: 0, exactPairs: null };
 
 /** Keep one worker/device alive, and copy only the task currently being sent.
  * Results arrive in posting order because the worker runs tasks serially. */
@@ -36,6 +36,7 @@ export class GpuAnalysisClient {
     this._cacheStatus = { ...EMPTY_CACHE };
     this.generation = 0;
     this.warmedUp = false;
+    this.deviceWarmed = false;
     this.warmedAnalysisKinds = new Set();
     this.releaseWhenIdle = false;
     this.closed = false;
@@ -85,7 +86,10 @@ export class GpuAnalysisClient {
     let kinds;
     try { kinds = gpuPreparationKinds(analysisKinds); } catch (error) { return Promise.reject(error); }
     this.resume();
-    if (this.warmedUp || kinds?.every(kind => this.warmedAnalysisKinds.has(kind))) return Promise.resolve(this.cacheStatus);
+    // General warmup leaves the targeted (Voronoi) pipelines alone, so each
+    // request is answered from its own record. An empty list asks for the
+    // device, which any completed warmup has initialized.
+    if (kinds ? this.deviceWarmed && kinds.every(kind => this.warmedAnalysisKinds.has(kind)) : this.warmedUp) return Promise.resolve(this.cacheStatus);
     return this.enqueue('warmup', { signal, onProgress, options:{analysisKinds:kinds} }, 2);
   }
 
@@ -107,6 +111,13 @@ export class GpuAnalysisClient {
   }
 
   configureCache(options = {}) { return this.enqueue('configure-cache', { options }, 0); }
+
+  /** Free the Voronoi cell workspace behind running work; compiled pipelines
+   * stay. An unused GPU is not started for it. */
+  releaseVoronoi() {
+    if (!this.worker || this.closed) return Promise.resolve(this.cacheStatus);
+    return this.enqueue('release-voronoi', {}, 0, { resume: false });
+  }
 
   /** A source barrier: invalidate old uploads before accepting the new source. */
   clearFrames() {
@@ -165,8 +176,9 @@ export class GpuAnalysisClient {
         for (const [frameId, fit] of this.ptmSources) if (!this.cachedFrameIds.has(frameId) || this.cachedPtmFits.get(frameId) !== fit.id) this.ptmSources.delete(frameId);
         if (data.cacheStatus) this._cacheStatus = { ...data.cacheStatus };
         if (data.ok && task.type === 'warmup') {
+          this.deviceWarmed = true;
           if (task.options?.analysisKinds) for (const kind of task.options.analysisKinds) this.warmedAnalysisKinds.add(kind);
-          else { this.warmedUp = true; this.warmedAnalysisKinds.add('voronoi'); }
+          else this.warmedUp = true;
         }
       }
       if (data.ok) this.settle(task, null, task.type === 'analyze' ? data.result : this.cacheStatus);
@@ -180,7 +192,7 @@ export class GpuAnalysisClient {
       this.worker?.terminate(); this.worker = null; this.active = [];
       this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
       this.ptmSources.clear(); this.cachedPtmFits.clear();
-      this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false; this.warmedAnalysisKinds.clear(); this.pump();
+      this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = this.deviceWarmed = false; this.warmedAnalysisKinds.clear(); this.pump();
     };
     this.worker.addEventListener('error', fail);
     this.worker.addEventListener('messageerror', fail);
@@ -393,7 +405,7 @@ export class GpuAnalysisClient {
     this.queue.length = 0; this.worker?.terminate(); this.worker = null; this.active = [];
     this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
     this.ptmSources.clear(); this.cachedPtmFits.clear();
-    this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = false; this.warmedAnalysisKinds.clear();
+    this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = this.deviceWarmed = false; this.warmedAnalysisKinds.clear();
     this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexFrameIds.clear();
     this.referenceFrames = new WeakMap();
   }

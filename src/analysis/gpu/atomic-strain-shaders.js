@@ -1,18 +1,28 @@
 /** Double-single arithmetic preserves PTM's Float64 scale and deformation.
  * Ordinary f32 matrix products create artificial strain in ideal crystals;
  * retaining the residual keeps the CPU's 1e-12 numerical-zero convention.
+ *
+ * Shader compilers cancel a rounded value against its own operands, e.g.
+ * (a + b) - a becomes b on NVIDIA/Vulkan, which reduces the pair to single
+ * precision. The five such values (sum, recovered operand and high word of an
+ * addition; product and high word of a multiplication) are multiplied by
+ * runtimeOne(), exactly 1.0 at run time but opaque to the compiler. Each
+ * including shader defines runtimeOne() from the length of a bound buffer;
+ * neighbor kernels inherit it from NEIGHBOR_BINDINGS_WGSL.
  */
 export const DOUBLE_SINGLE_WGSL = `
 fn dsAdd(a: vec2f, b: vec2f) -> vec2f {
-  let sum = a.x + b.x;
-  let recovered = sum - a.x;
+  let one = runtimeOne();
+  let sum = (a.x + b.x) * one;
+  let recovered = (sum - a.x) * one;
   let residual = (a.x - (sum - recovered)) + (b.x - recovered) + a.y + b.y;
-  let high = sum + residual;
+  let high = (sum + residual) * one;
   return vec2f(high, residual - (high - sum));
 }
 fn dsSubtract(a: vec2f, b: vec2f) -> vec2f { return dsAdd(a, -b); }
 fn dsMultiply(a: vec2f, b: vec2f) -> vec2f {
-  let product = a.x * b.x;
+  let one = runtimeOne();
+  let product = (a.x * b.x) * one;
   // WGSL permits a non-fused fma, which can discard the entire product error.
   // Split the significands instead. Bit truncation avoids the overflow of
   // multiplying a large input by the conventional Dekker splitter (4097).
@@ -22,7 +32,7 @@ fn dsMultiply(a: vec2f, b: vec2f) -> vec2f {
   let bLow = b.x - bHigh;
   let productError = ((aHigh * bHigh - product) + aHigh * bLow + aLow * bHigh) + aLow * bLow;
   let residual = productError + a.x * b.y + a.y * b.x + a.y * b.y;
-  let high = product + residual;
+  let high = (product + residual) * one;
   return vec2f(high, residual - (high - product));
 }
 fn dsValue(a: vec2f) -> f32 { return a.x + a.y; }
@@ -73,6 +83,7 @@ struct IdealReference {
 @group(0) @binding(5) var<storage, read> references: array<IdealReference>;
 @group(0) @binding(6) var<storage, read_write> strainValues: array<f32>;
 @group(0) @binding(7) var<storage, read_write> diagnostics: array<atomic<u32>>;
+fn runtimeOne() -> f32 { return f32(min(arrayLength(&parameters), 1u)); }
 ${DOUBLE_SINGLE_WGSL}
 fn supportedDs(value: vec2f) -> bool {
   let highBits = bitcast<u32>(value.x) & 0x7fffffffu;

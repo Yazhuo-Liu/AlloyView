@@ -122,6 +122,35 @@ export function createCell({ origin = [0, 0, 0], vectors, pbc = [true, true, tru
   return normalized;
 }
 
+/** Repeat counts of the source cell along a, b and c when a difference between
+ * two frames must be resolved against the source lattice, otherwise null.
+ * Physical replication builds its copies from wrapped coordinates when the
+ * source has neither image flags nor unwrapped coordinates. An atom that
+ * crosses a source cell face then jumps by one source vector in every copy,
+ * which is only 1/n of the enlarged cell vector. Copies built from image data
+ * stay continuous across source faces and keep the enlarged cell's lattice.
+ */
+export function wrappedSourceRepetitions(frame, reference = frame) {
+  const repetitions = frame.physicalReplication?.repetitions;
+  if (!repetitions?.some(count => count !== 1)) return null;
+  const continuous = candidate => candidate.physicalReplication?.wrappedSource === false;
+  return continuous(frame) && continuous(reference) ? null : Array.from(repetitions);
+}
+
+/** The cell whose lattice translations are removed from a difference between
+ * two frames: the cell itself, or the source cell of a replicated wrapped
+ * frame, whose vectors are the enlarged ones divided by the repeat counts.
+ */
+export function imageLatticeCell(cell, sourceRepetitions = null) {
+  if (!sourceRepetitions) return cell;
+  if (sourceRepetitions.length !== 3 || !Array.from(sourceRepetitions).every((count, axis) => Number.isSafeInteger(count)
+      && count >= 1 && (count === 1 || cell.pbc[axis]))) {
+    throw new Error('Source repeat counts must be positive integers, and 1 along non-periodic cell vectors.');
+  }
+  return { origin: cell.origin, pbc: cell.pbc, triclinic: cell.triclinic,
+    vectors: Float64Array.from(cell.vectors, (value, index) => value / sourceRepetitions[Math.floor(index / 3)]) };
+}
+
 export function validateFrame(frame) {
   const count = frame.ids?.length ?? 0;
   if (!Number.isInteger(count) || count <= 0) throw new Error('The structure contains no atoms.');

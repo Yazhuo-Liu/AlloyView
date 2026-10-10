@@ -19,6 +19,10 @@ import { finishWignerSeitz } from './wigner-seitz.js';
 const PTM_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_RESIDENT_KINDS = ['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch', 'voronoiPrepare'];
+const VORONOI_ANALYSIS_KINDS = ['voronoi', 'voronoiGeometry', 'voronoiGeometryBatch'];
+// The Voro++ Worker pool is several times faster than the WebGPU Voronoi
+// kernel on current adapters, so automatic selection keeps Voronoi on the CPU.
+export const VORONOI_CPU_ROUTE_REASON = 'Voronoi runs on CPU Workers, the faster backend for it. Its WebGPU kernel is used only when it is turned on.';
 const CPU_CACHED_INPUT_FIELDS = [...['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput',
   'currentPositions', 'referencePositions'], 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex', 'clusterSelection'];
 const CPU_MODULES = ['voronoi', 'ptm', 'dxa'];
@@ -100,10 +104,19 @@ export class AnalysisPool {
     this.cpuSnapshotGeneration = 0;
     this.closed = false;
     this.gpuEnabled = false;
+    this.gpuVoronoi = false;
     this.gpuBackend = gpuBackend ?? new GpuAnalysisClient({ environment });
   }
 
   setGpuEnabled(enabled) { this.gpuEnabled = Boolean(enabled); if (this.gpuEnabled) this.gpuBackend.resume?.(); }
+  /** Explicit request for the GPU Voronoi kernel. It takes effect only while
+   * GPU acceleration is on; otherwise Voronoi runs on the CPU pool. */
+  setGpuVoronoi(enabled) {
+    const released = this.gpuVoronoi && !enabled;
+    this.gpuVoronoi = Boolean(enabled);
+    // A withdrawn request returns the kernel's GPU workspace.
+    if (released) this.gpuBackend.releaseVoronoi?.()?.catch(() => {});
+  }
   releaseGpuResources(options) { return this.gpuBackend.release?.(options); }
   warmupGpu(options) { return this.gpuBackend.warmup?.(options) ?? Promise.resolve(this.gpuCacheStatus); }
   configureGpuCache(options) { return this.gpuBackend.configureCache?.(options) ?? Promise.resolve(this.gpuCacheStatus); }
@@ -359,6 +372,12 @@ export class AnalysisPool {
     }
     if (parameters.kind === 'wignerSeitz') {
       return { ...await this.analyzeWignerSeitz(frame, parameters, { onProgress, signal }), backend: 'cpu', gpuRequested };
+    }
+    // A routing choice rather than a fallback: no GPU attempt is made, and
+    // the CPU pool runs exactly as it does with GPU acceleration off.
+    if (gpuRequested && !this.gpuVoronoi && VORONOI_ANALYSIS_KINDS.includes(parameters.kind)) {
+      const result = await this.analyzeCPU(frame, parameters, { signal, onProgress: update => onProgress({ ...update, backend: 'cpu' }) });
+      return { ...result, backend: 'cpu', gpuRequested, elapsedMs: performance.now() - analysisStartedAt, routeReason: VORONOI_CPU_ROUTE_REASON };
     }
     if (gpuRequested && parameters.kind === 'ptm') {
       return this.analyzePtmWithGpu(frame, parameters, { onProgress, signal, frameIndex });

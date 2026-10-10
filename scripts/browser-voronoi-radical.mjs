@@ -115,8 +115,16 @@ try {
     assert.equal(await evaluate('radicalChecks.jobs().length'), jobs, 'invalid radii never start an analysis');
     assert.equal(await evaluate('document.querySelector("[data-voronoi-radius-type=Cu]").value'), '0.6');
 
+    // GPU acceleration alone keeps radical cells on CPU Workers, unchanged.
     await useGpu(true); jobs = await evaluate('radicalChecks.jobs().length');
     await press('#run-voronoi');
+    const routed = await completed(jobs, 'radical Voronoi routed to CPU Workers');
+    assert.equal(routed.backend, 'cpu'); assert.equal(routed.fallbackReason, undefined); assert.match(routed.routeReason, /CPU Workers/);
+    for (const field of ['atomicVolume', 'voronoiSurfaceArea', 'voronoiIndices', 'faceAreas', 'faceNeighbors', 'faceOffsets']) assert.deepEqual(routed[field], cpu[field], `routed ${field}`);
+    assert.match(await evaluate('document.getElementById("voronoi-backend").textContent'), /^CPU · \d+ Workers?$/);
+    // The panel's request selects the WebGPU kernel and repeats the analysis.
+    jobs = await evaluate('radicalChecks.jobs().length');
+    await expand('#voronoi-backend-controls'); await setValue('#voronoi-gpu-kernel', true, { checkbox: true });
     const gpu = await completed(jobs, 'radical WebGPU Voronoi');
     assert.equal(gpu.backend, 'gpu', gpu.fallbackReason); assert.equal(gpu.tessellation, 'radical');
     close(gpu.atomicVolume, cpu.atomicVolume, 2e-5, 'GPU volume'); assert.deepEqual(gpu.voronoiIndices, cpu.voronoiIndices);
@@ -165,6 +173,7 @@ try {
       finally { URL.createObjectURL = create; HTMLAnchorElement.prototype.click = click; }
     })()`));
     const savedVoronoi = recipe.settings.extensions.voronoi;
+    assert.equal(savedVoronoi.gpuKernel, true, 'the recipe keeps the WebGPU kernel request');
     assert.deepEqual({ radical: savedVoronoi.radical, radiusSource: savedVoronoi.radiusSource, radiusProperty: savedVoronoi.radiusProperty, typeRadii: savedVoronoi.typeRadii },
       { radical: true, radiusSource: 'property', radiusProperty: 'radius', typeRadii: [{ label: 'Cu', radius: 0 }, { label: 'Ni', radius: 2.4 }] });
     await writeFile(resolve(fixtures, 'radical-recipe.json'), JSON.stringify(recipe));
@@ -174,6 +183,7 @@ try {
     await load();
     await waitFor('document.getElementById("configuration-status").textContent.includes("restored")', 'radical recipe restored');
     const restored = await completed(jobs, 'restored radical analysis');
+    assert.equal(restored.backend, 'gpu', restored.fallbackReason);
     close(restored.atomicVolume, property.atomicVolume, 2e-5, 'restored property volume');
     assert.equal(await evaluate('document.getElementById("voronoi-radical").checked && document.getElementById("voronoi-radius-source").value==="property"'), true);
     await showTool('voronoi'); await expand('#voronoi-radical-controls');

@@ -194,7 +194,7 @@ let interactionHintTimer = null;
 let interactionHintFadeTimer = null;
 let cutoffTimer = null;
 let coordinationQueue = Promise.resolve();
-let loadingOwner = null;
+let loadingOwner = null, loadingReadProgress = false;
 let sourceOpenRequest = 0;
 let sourceFetchController = null;
 let sourceLoadingOwner = null;
@@ -310,6 +310,8 @@ function setGpuComputing(enabled) {
   if (enabled && state.frame && sourceLoadingOwner === null) scheduleGpuFramePrefetch();
   void gpuPrefetch.setEnabled(enabled);
   if (!enabled) analysisPool.releaseGpuResources({ whenIdle: true });
+  // The Voronoi panel's WebGPU kernel option is usable only while this is on.
+  topologyTools?.syncGpuAcceleration();
   updateCacheLabel();
   updateGpuComputingTitle();
 }
@@ -322,7 +324,9 @@ function updateGpuComputingTitle() {
       ? `GPU preparation unavailable: ${status.error} Supported analyses will use CPU Workers if needed.`
       : status?.phase === 'warming'
         ? 'Preparing the GPU device and analysis pipelines in the background.'
-        : 'GPU acceleration is on. Structure frames are prepared in the background; calculate again to use this preference.';
+        : analysisPool.gpuCacheStatus?.exactPairs === false
+          ? 'GPU acceleration is on. This GPU failed the exact double-float self-test, so Voronoi, strain and displacement analyses use CPU Workers.'
+          : 'GPU acceleration is on. Structure frames are prepared in the background; calculate again to use this preference. Voronoi analysis uses CPU Workers unless its WebGPU kernel is turned on in the Voronoi panel.';
 }
 
 function scheduleGpuFramePrefetch({ committedFrame = null } = {}) {
@@ -336,6 +340,7 @@ function scheduleGpuFramePrefetch({ committedFrame = null } = {}) {
     frameCount: state.frameCount,
     currentIndex: state.frameIndex,
     frame: state.frame,
+    playing: state.playing,
   });
 }
 
@@ -496,18 +501,18 @@ sliceGizmo = initializeSliceGizmo(renderer, {
 const worker = new StructureWorkerClient(({ loaded, total, stage }) => {
   if (stage === 'index') {
     const percentage = total > 0 ? Math.round(loaded / total * 100) : 0;
-    setLoading(true, `Indexing trajectory frames… ${percentage}%`);
+    reportReadProgress(`Indexing trajectory frames… ${percentage}%`);
   } else if (stage === 'sequence-index') {
-    setLoading(true, `Checking CFG sequence… ${loaded} / ${total}`);
+    reportReadProgress(`Checking CFG sequence… ${loaded} / ${total}`);
   } else if (stage === 'sequence-unwrap') {
-    setLoading(true, `Inferring continuous trajectory coordinates… ${loaded} / ${total}`);
+    reportReadProgress(`Inferring continuous trajectory coordinates… ${loaded} / ${total}`);
   } else if (stage === 'trajectory-unwrap') {
-    setLoading(true, `Unwrapping frames in order… ${loaded} / ${total}`);
+    reportReadProgress(`Unwrapping frames in order… ${loaded} / ${total}`);
   } else if (stage === 'trajectory-smooth') {
-    setLoading(true, `Averaging frames… ${loaded} / ${total}`);
+    reportReadProgress(`Averaging frames… ${loaded} / ${total}`);
   } else if (stage === 'series-index') {
     const percentage = total > 0 ? Math.round(loaded / total * 100) : 0;
-    setLoading(true, `Indexing numbered LAMMPS dumps… ${percentage}%`);
+    reportReadProgress(`Indexing numbered LAMMPS dumps… ${percentage}%`);
   }
 }, { cpuBudget, onSourceInfo: updateSourceIndex });
 
@@ -634,6 +639,8 @@ topologyTools = initializeTopologyTools({
     if (kind === 'voronoi') void voronoiCells?.refresh();
   },
   onEdit: () => interruptConfigurationRestore('a topology analysis edit'),
+  // GPU prewarm prepares the Voronoi kernel only while the panel requests it.
+  onGpuPreparationChange: kinds => { void gpuPrefetch.setAnalysisKinds(kinds); },
   notify: showToast,
 });
 
@@ -1736,9 +1743,7 @@ function sourceFormatLabel(format) {
 async function showFrame(index) {
   if (sourceLoadingOwner !== null) return false;
   if (!Number.isInteger(index) || index < 0 || index >= state.frameCount) return false;
-  frameNavigationController?.abort();
-  const navigation = new AbortController();
-  frameNavigationController = navigation;
+  const navigation = beginFrameNavigation();
   if (index !== state.frameIndex) cancelLatticeEstimation();
   const interruptedReplication = Boolean(replicationController);
   if (interruptedReplication) {
@@ -1748,7 +1753,9 @@ async function showFrame(index) {
   }
   const request = state.frameRequest + 1;
   state.frameRequest = request;
-  if (index === state.frameIndex) {
+  // The displayed frame is kept unless a smoothing change has not reached it,
+  // for example when this request interrupts the one that applies the change.
+  if (index === state.frameIndex && displayedSmoothingWindow() === trajectoryTools.smoothingWindow()) {
     elements['frame-slider'].value = String(index);
     elements['frame-label'].textContent = `${index + 1} / ${state.frameCount}`;
     setRangeProgress(elements['frame-slider']);
@@ -1761,7 +1768,7 @@ async function showFrame(index) {
   gpuPrefetch.cancel();
   cancelFramePrefetch();
   const requiresLoad = !cache.has(index);
-  if (requiresLoad) setLoading(true, `Preparing frame ${index + 1}…`);
+  if (requiresLoad) setLoading(true, `Preparing frame ${index + 1}…`, navigation, true);
   try {
     const frame = await getFrame(index, { signal: navigation.signal });
     if (request !== state.frameRequest) return false;
@@ -1777,17 +1784,18 @@ async function showFrame(index) {
     if (state.playing) preparePlaybackBuffer();
     await displayFrame(frame);
     if (request !== state.frameRequest) return false;
-    if (requiresLoad) setLoading(false);
     scheduleFramePrefetch(index);
     return true;
   } catch (error) {
     if (request === state.frameRequest) {
-      if (requiresLoad) setLoading(false);
       elements['frame-slider'].value = String(state.frameIndex);
       showToast(error.message);
       scheduleGpuFramePrefetch();
     }
     return false;
+  } finally {
+    // Also when another request took over without showing the indicator.
+    if (loadingOwner === navigation) setLoading(false);
   }
 }
 
@@ -2079,6 +2087,8 @@ function stopFramePlayback() {
   if (!state.playing) return;
   state.playing = false;
   updatePlaybackButton();
+  // The frame playback stopped on stays displayed: prepare it without the playback delay.
+  scheduleGpuFramePrefetch();
 }
 
 function updatePlaybackButton() {
@@ -2101,6 +2111,8 @@ function updateCacheLabel() {
   label.dataset.gpuCachedFrames = String(cachedFrames);
   label.dataset.gpuCacheCapacity = String(gpuCache?.capacity ?? 0);
   label.dataset.gpuCacheIndexes = JSON.stringify(gpuCache?.cachedFrameIndexes ?? []);
+  // The device self-test of double-float pairs: true, false, or unknown before it ran.
+  label.dataset.gpuExactPairs = String(gpuCache?.exactPairs ?? 'unknown');
   const gpuLabel = status?.phase === 'warming' ? ' · GPU preparing'
     : status?.phase === 'unavailable' ? ' · GPU unavailable'
       : gpuCache && state.frameCount > 0
@@ -4061,6 +4073,8 @@ async function restoreConfiguration(config) {
   const current = () => request === configurationRequest && sourceVersion === state.sourceVersion && sourceRequest === sourceOpenRequest;
   const saved = config.settings;
   const targetIndex = config.source?.frameIndex ?? state.frameIndex;
+  const previousSmoothing = trajectoryTools.getSmoothing();
+  let displayed = false, smoothingRequest = null;
   restorationOwner = request;
   try {
     clearTimeout(frameTimer);
@@ -4073,10 +4087,22 @@ async function restoreConfiguration(config) {
       abortAnalysisJobs();
       invalidateProcessedFrames();
     }
-    const existingTarget = state.frame ? await getFrame(targetIndex) : null;
-    const repetitions = existingTarget ? normalizeRepetitions(saved.replicate, sourceFrame(existingTarget).cell.pbc) : saved.replicate;
-    const targetFrame = existingTarget ? await prepareAnalysisFrame(existingTarget, repetitions, saved.replicateAtoms,
-      { signal: { get aborted() { return !current(); } } }) : null;
+    if (state.frame) smoothingRequest = state.frameRequest;
+    let existingTarget = null, repetitions = saved.replicate, targetFrame = null;
+    if (state.frame) {
+      const preparation = {};
+      if (!cache.has(targetIndex)) setLoading(true, `Preparing frame ${targetIndex + 1}…`, preparation, true);
+      try {
+        existingTarget = await getFrame(targetIndex);
+        if (existingTarget) {
+          repetitions = normalizeRepetitions(saved.replicate, sourceFrame(existingTarget).cell.pbc);
+          targetFrame = await prepareAnalysisFrame(existingTarget, repetitions, saved.replicateAtoms,
+            { signal: { get aborted() { return !current(); } } });
+        }
+      } finally {
+        if (loadingOwner === preparation) setLoading(false);
+      }
+    }
     if (!current()) return;
     if (targetFrame && saved.display.coordinateMode === 'unwrapped' && !targetFrame.unwrappedPositions
       && !(state.frameCount > 1 && !saved.replicateAtoms)) {
@@ -4106,8 +4132,10 @@ async function restoreConfiguration(config) {
     // Saved scripts replace the panel's scripts and wait for Run; a recipe without scripts keeps them.
     if (saved.extensions.scripts) scriptControls.restore(saved.extensions.scripts);
     movieControls.restore(saved.extensions.movie);
-    if (targetFrame) await commitReplicationFrame(targetFrame, repetitions, saved.replicateAtoms, targetIndex, { resetCamera: false });
-    else { state.repetitions = [...repetitions]; state.replicateAtoms = saved.replicateAtoms; }
+    if (targetFrame) {
+      await commitReplicationFrame(targetFrame, repetitions, saved.replicateAtoms, targetIndex, { resetCamera: false });
+      displayed = true;
+    } else { state.repetitions = [...repetitions]; state.replicateAtoms = saved.replicateAtoms; }
     if (!current()) return;
 
     document.getElementById(`theme-${saved.theme}`).click();
@@ -4248,7 +4276,31 @@ async function restoreConfiguration(config) {
         : 'Configuration restored. Enabled analyses and saved display settings are ready.';
   } finally {
     if (restorationOwner === request) restorationOwner = null;
+    // A recipe that was rejected or interrupted before its frame was shown
+    // has already applied its smoothing setting. Unless a newer restoration,
+    // source or frame request takes over, the setting returns to the one of
+    // the frame still on screen.
+    if (!displayed && smoothingRequest === state.frameRequest && restorationOwner === null
+      && sourceVersion === state.sourceVersion && sourceRequest === sourceOpenRequest) {
+      matchSmoothingToDisplayedFrame(previousSmoothing.window);
+    }
   }
+}
+
+/** Half window of the average that produced the displayed frame; 0 for file coordinates. */
+function displayedSmoothingWindow() {
+  return state.frame ? sourceFrame(state.frame).smoothing?.window ?? 0 : 0;
+}
+
+/** Make the smoothing setting describe the displayed frame, after a change
+ * that never reached the screen. `window` is kept for a disabled setting. */
+function matchSmoothingToDisplayedFrame(window) {
+  if (!state.frame) return;
+  const shown = displayedSmoothingWindow();
+  if (!trajectoryTools.setSmoothing(shown ? { enabled: true, window: shown } : { enabled: false, window })) return;
+  abortAnalysisJobs();
+  invalidateProcessedFrames();
+  scheduleFramePrefetch(state.frameIndex);
 }
 
 function configureReplicationUi(enabled = Boolean(state.frame)) {
@@ -4358,13 +4410,11 @@ async function applyTrajectoryProcessing() {
   stopFramePlayback();
   clearTimeout(frameTimer);
   atomEyeTools.cancelBatch({ restore: false });
-  frameNavigationController?.abort();
-  const navigation = new AbortController();
-  frameNavigationController = navigation;
+  const navigation = beginFrameNavigation();
   abortAnalysisJobs();
   invalidateProcessedFrames();
   const request = ++state.frameRequest, index = state.frameIndex;
-  setLoading(true, trajectoryTools.smoothingWindow() ? 'Averaging frames…' : 'Preparing frame…');
+  setLoading(true, trajectoryTools.smoothingWindow() ? 'Averaging frames…' : 'Preparing frame…', navigation, true);
   try {
     const frame = await getFrame(index, { signal: navigation.signal });
     if (!frame || request !== state.frameRequest) return;
@@ -4382,7 +4432,7 @@ async function applyTrajectoryProcessing() {
     showToast(`Smoothing was turned off: ${error.message}`);
     await applyTrajectoryProcessing();
   } finally {
-    if (request === state.frameRequest) setLoading(false);
+    if (loadingOwner === navigation) setLoading(false);
   }
 }
 
@@ -4490,10 +4540,31 @@ function dismissInteractionHint() {
   }, 300);
 }
 
-function setLoading(visible, text = '', owner = null) {
+/** Show or hide the loading indicator. Whoever shows it hides it; a caller
+ * that others can interrupt passes an `owner`, and hides it only while
+ * `loadingOwner` is still that owner. `readProgress` lets structure Worker
+ * progress replace the text. */
+function setLoading(visible, text = '', owner = null, readProgress = owner === null) {
   elements.loading.hidden = !visible;
   loadingOwner = visible ? owner : null;
+  loadingReadProgress = visible && readProgress;
   if (text) elements['loading-text'].textContent = text;
+}
+
+/** Progress of a structure Worker read describes a wait that some caller
+ * announced and will end. A read nobody announced stays silent, rather than
+ * showing an indicator that nothing hides. */
+function reportReadProgress(text) {
+  if (loadingReadProgress) elements['loading-text'].textContent = text;
+}
+
+/** Abort the frame request in flight, hide the indicator it showed, and
+ * return the controller that owns the next request. */
+function beginFrameNavigation() {
+  const interrupted = frameNavigationController;
+  interrupted?.abort();
+  if (interrupted && loadingOwner === interrupted) setLoading(false);
+  return frameNavigationController = new AbortController();
 }
 
 function showToast(message, success = false) {

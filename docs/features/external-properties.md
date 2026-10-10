@@ -32,7 +32,7 @@ Rows may be shuffled when an ID column is used. IDs must be unique non-negative 
 
 **Automatic** uses the ID column when present, otherwise the file's row order. **Atom ID** requires an ID header. **Row order** attaches the first row to the first source atom, and so on, anchoring that correspondence to the source IDs at the import frame.
 
-When the structure has explicit stable IDs, values follow those IDs across trajectory frames, including when rows are reordered. Every mapped frame must contain the same atom IDs. Structures with generated row numbers have no reliable cross-frame correspondence, so their imported attributes apply only to the import frame. The file list states this restriction.
+When the structure has explicit stable IDs, values follow those IDs across trajectory frames, including when rows are reordered. Every mapped frame must contain the same atom IDs. LAMMPS dumps always qualify, because their `id` column is required. Structures with generated row numbers have no reliable cross-frame correspondence, so their imported attributes apply only to the import frame. The file list states this restriction.
 
 Display copies inherit their source atoms' attributes. Physical replication repeats each source attribute for its corresponding atom copies. Updating imported attributes leaves existing analysis results intact.
 

@@ -3,7 +3,8 @@ import { DOUBLE_SINGLE_WGSL } from './atomic-strain-shaders.js';
 export const MAX_GPU_DISPLACEMENT_IMAGE_CANDIDATES = 512;
 
 /** Cartesian inputs are anchored high/low pairs, never drawing positions or
- * wrapped fractional coordinates. The current cell determines all images.
+ * wrapped fractional coordinates. The settings' image lattice determines all
+ * images: the current cell, or the source cell of a replicated wrapped frame.
  */
 export const DISPLACEMENT_SHADER = `
 struct DisplacementSettings {
@@ -18,6 +19,7 @@ struct DisplacementSettings {
 @group(0) @binding(4) var<storage, read_write> vectors: array<f32>;
 @group(0) @binding(5) var<storage, read_write> magnitudes: array<vec4f>;
 @group(0) @binding(6) var<storage, read_write> flags: array<u32>;
+fn runtimeOne() -> f32 { return f32(min(arrayLength(&mapping), 1u)); }
 ${DOUBLE_SINGLE_WGSL}
 fn displacementTransform(value: array<vec2f, 3>, inverse: bool) -> array<vec2f, 3> {
   var result: array<vec2f, 3>;
@@ -139,6 +141,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     squared = dsAdd(squared, dsMultiply(normalized, normalized));
   }
   let root = sqrt(max(0.0, dsValue(squared)));
+  // The largest normalized component is exactly 1, so the root is at least 1.
+  // A driver that divides through the reciprocal of a scale near the f32
+  // maximum flushes that subnormal to zero and returns 0 here. Those atoms
+  // take the exact CPU path instead of dividing by the zero root.
+  if (!(root >= 0.5)) { flags[index] = 2u; return; }
   let error = dsSubtract(squared, dsMultiply(vec2f(root, 0.0), vec2f(root, 0.0)));
   let norm = dsAdd(vec2f(root, 0.0), dsDivide(error, vec2f(2.0 * root, 0.0)));
   magnitudes[index] = vec4f(norm, scale, 0.0);

@@ -1,4 +1,4 @@
-import { cellFaceHeights } from '../../data/model.js';
+import { cellFaceHeights, imageLatticeCell } from '../../data/model.js';
 import { atomRange } from '../neighbors.js';
 import { REFERENCE_STRAIN_FIELDS, calculateReferenceStrain, prepareReferenceStrainContext } from '../reference-strain.js';
 import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
@@ -8,7 +8,8 @@ export const MAX_GPU_REFERENCE_CORRECTION_ATOMS = 16_384;
 
 /** Fit both covariance matrices on GPU, using reference-neighbor images and
  * stable CPU-prepared correspondences. Only uncertain numerical decisions
- * receive a bounded exact CPU correction; no PTM is involved.
+ * receive a bounded exact CPU correction; no PTM is involved. A replicated
+ * wrapped frame (sourceRepetitions) resolves images in its source lattice.
  */
 export async function analyzeGpuReferenceStrain(runtime, frame, parameters = {}, { signal, onProgress = () => {} } = {}) {
   const prepared = prepareGpuReferenceParameters(frame, parameters);
@@ -83,18 +84,22 @@ export function prepareGpuReferenceParameters(frame, parameters = {}) {
     }
     if (reference >= 0) inverseMapping[reference] = atom;
   }
-  const heights = Array.from(cellFaceHeights(frame.cell));
+  // Bond images step through the image lattice: imageScale of its periods
+  // span one current cell vector, and heights are its face heights.
+  const imageScale = parameters.sourceRepetitions ?? [1, 1, 1];
+  const heights = Array.from(cellFaceHeights(imageLatticeCell(frame.cell, parameters.sourceRepetitions)));
   const vectors = Array.from(frame.cell.vectors);
   const scale = Math.max(...vectors.map(Math.abs));
   if (heights.some(value => !Number.isFinite(value) || value <= 0) || !Number.isFinite(scale)
     || scale / Math.min(...heights) > 1e6) {
     throw new GpuUnavailableError('The current cell exceeds the GPU reference-image precision range.');
   }
-  const settings = new ArrayBuffer(240), integers = new Uint32Array(settings), floats = new Float32Array(settings);
+  const settings = new ArrayBuffer(256), integers = new Uint32Array(settings), floats = new Float32Array(settings);
   integers.set([atomCount, startAtom, endAtom, 0x7fc00000]);
   integers.set(frame.cell.pbc.map(Boolean).map(Number), 4);
   floats.set(heights, 8);
   for (let axis = 0; axis < 3; axis += 1) floats.set(vectors.slice(axis * 3, axis * 3 + 3), 12 + axis * 4);
+  floats.set(imageScale, 60);
   for (let component = 0; component < 18; component += 1) {
     const value = component < 9 ? referenceCell.vectors[component] : vectors[component - 9];
     const high = Math.fround(value), low = Math.fround(value - high);

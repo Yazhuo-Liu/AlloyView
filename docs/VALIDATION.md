@@ -1,6 +1,127 @@
 # Validation record
 
-Latest validation: 2026-10-09 (America/New_York, EDT). Earlier entries retain their own dates.
+Latest validation: 2026-10-10 (America/New_York, EDT). Earlier entries retain their own dates.
+
+## Defect fixes B1–B6 and B10, and Voronoi routing G1 (2026-10-10)
+
+Reference: `dbe6055`. Seven defects from the audit of 2026-10-10 are fixed and
+removed from the [backlog](TODO.md). The audit's reproduction scripts are in
+`../AlloyView-audit-2026-10-10/bugs/` on the reference machine; the longer
+reports of this work are in `../AlloyView-audit-2026-10-10/fixes/`.
+
+- **B1, physical copies of a wrapped trajectory.** Copies built from a source
+  without image flags or unwrapped coordinates repeat every wrap of their
+  source atom, which is a jump of one source cell vector, not of the enlarged
+  cell. Displacement and frame strain now resolve periodic images against the
+  source lattice for such frames, on CPU Workers and in both WebGPU kernels
+  (`physicalReplication.wrappedSource`, `wrappedSourceRepetitions`,
+  `imageLatticeCell`). On the audit's wrapped dump with 2 × 1 × 1 copies,
+  displacement is 0.1 Å for every atom (before: up to 14.3 Å) and shear strain
+  is 0 with no non-finite value (before: up to 23.09, 64 non-finite). On the
+  60,229-atom Fe loop with wrapped copies, the largest displacement is 0.59 Å
+  instead of 90 Å, and frame strain has no NaN instead of 1,518.
+- **B1, unchanged results.** Frames that are not replicated, copies built from
+  image flags or unwrapped columns, and 1 × 1 × 1 are element-wise identical
+  (`Object.is`) on CPU: 13 cases, 21.4 million values. On the software GPU
+  adapter, 72 of 75 analyses have identical SHA-256 hashes; the other three
+  (frame strain on 6,912 and 60,229 atoms) already differ between two runs of
+  the previous build, by at most 1.5×10⁻⁸ in 7–11 of 1,144,351 values
+  (backlog B34).
+- **B2, rejected configuration.** A configuration that is rejected or
+  interrupted after its smoothing setting was applied now leaves the setting
+  that produced the displayed frame. Selecting the displayed frame again while
+  a smoothing change is pending prepares it with the new setting. The audit
+  script shows the panel, the exported recipe and the displayed position hash
+  in agreement (`324:ffb539a0`, smoothing on).
+- **B3, loading indicator.** The indicator has an owner: a frame request that
+  is superseded hides the indicator it showed, structure Worker progress only
+  updates the text of a wait that some caller announced, and a configuration
+  import shows and hides its own wait for the saved frame. Reference frames
+  read by tools no longer show it. The audit scripts pass for superseded
+  navigation on a 53 MB trajectory and for six smoothing triggers (import,
+  Wigner–Seitz, displacement, reference strain, time-series visit, trajectory
+  lines): the indicator is hidden in every sample, `wait-analyses` finishes
+  and the movie export saves.
+- **B4, script IDs.** Only `script-` followed by 1–9 digits advances the
+  script counter, so a saved ID at or above 2⁵³ cannot stall **New**. Saved
+  IDs are otherwise kept as they are.
+- **B5, double-float arithmetic.** The rounded values of every error-free
+  transform (`dsAdd`, `dsMultiply`, `ddAdd`, `ddMul`, `deltaResidual`) are
+  multiplied by a runtime 1.0 that the shader compiler cannot fold. Each
+  device runs a self-test of 96 fixed operand pairs at initialization; if it
+  fails, Voronoi, ideal strain, frame strain and displacement raise
+  `GpuUnavailableError` and run on CPU Workers, while other kernels stay on the
+  GPU and remain prewarmed. On the GTX 1080 Ti the helpers are exact for
+  65,536 of 65,536 pairs (before: 38% for additions, 0% for products).
+  HEA Voronoi (28,800 atoms) on the GPU needs 8–11 exact recoveries instead of
+  258–286 and has no topology mismatch (before: 8–12 wrong Voronoi indices).
+- **B5, intended numerical changes.** On affected hardware, results of the
+  pair kernels move toward the CPU reference (frame strain error 3.8×10⁻⁵ →
+  ≤ 7.5×10⁻⁹). On the software adapter, frame strain, displacement and ideal
+  strain are element-wise identical (950,400 values), and every Voronoi suite
+  row keeps its backend and recovery count. The guard in `deltaResidual` also
+  removes a cancellation that the software adapter's compiler performed, so
+  GPU bond vectors, Q4 and local shear change there by at most 2.5×10⁻⁷,
+  toward the CPU values.
+- **B5, cost on the GTX 1080 Ti.** Cold compilation of each Voronoi clip
+  pipeline takes 17–20 s instead of 6–7 s (warm: 0.13–0.17 s), Voronoi GPU time
+  is 16–24% higher, and device initialization takes 0.10–0.19 s instead of
+  0.04–0.05 s. Other warm kernel times are unchanged within noise. The fix was
+  withdrawn once for this cost and applied again together with G1, which
+  keeps Voronoi off the GPU unless the user asks for it.
+- **B6, displacement near the Float32 maximum.** The GPU magnitude was NaN on
+  the GTX 1080 Ti for components near 3×10³⁸, because the driver divides
+  through a reciprocal that underflows. The kernel now sends an atom whose
+  normalized root is not at least 0.5 (it is at least 1 in exact arithmetic)
+  to the exact CPU correction. On the software adapter the fixture stays on
+  the GPU as before. The Voronoi cancellation check now sizes its crystal from
+  the reported batch capacity (2,916 atoms on hardware, 2,048 on software).
+- **G1, Voronoi backend.** With GPU acceleration on, Voronoi analysis and cell
+  geometry now run on CPU Workers; the WebGPU kernel is used only with
+  **Voronoi → Calculation backend → Use the WebGPU kernel**
+  (`settings.extensions.voronoi.gpuKernel`, off by default and when absent).
+  GPU prewarming follows the choice: without the option it prepares the
+  device, frame uploads and 21 general pipelines; with it, the Voronoi
+  pipelines, index and workspace as before, and the radical clip pipeline only
+  while radical cells are selected. CPU prewarming is unchanged: the Workers
+  hold the frame before the first click, and the first job reports no kernel
+  initialization, index build or upload.
+- **G1, measured on the GTX 1080 Ti** (application, GPU acceleration on, 6
+  Workers, click to "Calculated"): HEA 0.42–0.60 s instead of 5.4–6.0 s, Fe
+  loop 0.73–0.94 s instead of 10.0–10.3 s, NiGB 11.4–11.7 s instead of
+  25.8–26.0 s. On a cold shader cache all pipelines are ready after 7.3–7.4 s
+  instead of 42–45 s, and GPU memory for HEA is 1.0 MiB instead of 99.3 MiB.
+  With the option on, a frame whose first batch already exceeds the recovery
+  limit goes to the CPU after 0.13–0.21 s instead of about 15 s (NiGB), and
+  playback prepares GPU Voronoi inputs only after a frame has been shown for
+  1.25 s or playback stops.
+- **G1, identical results.** SHA-256 digests of every Voronoi result array,
+  the index list and the statistics are equal between the new default route
+  (GPU acceleration on) and the previous build with GPU acceleration off, for
+  HEA, the Fe loop and NiGB, isolated and non-isolated. The GPU kernel's
+  shaders are unchanged; the previous and new drivers, run alternately on one
+  device and one uploaded frame, give equal digests for HEA and the Fe loop.
+- **B10, LAMMPS dump IDs.** Dump frames are marked as having explicit IDs, as
+  the other formats are, so imported external properties follow atoms across
+  frames ("Values follow stable atom IDs across frames") instead of applying
+  to the import frame only.
+- All **1,723 Node tests** pass (1,668 before); the production build succeeds.
+  New test files: `tests/replicated-trajectory.test.js`,
+  `tests/gpu-exact-pairs.test.js` and `tests/gpu-exact-pairs-fallback.test.js`;
+  additions cover dump IDs, script IDs, replication, GPU fixtures, Voronoi
+  routing and its option, prewarm targets, the fail-fast rule and the
+  configuration round trip.
+- All **37 browser and GPU suites** pass on Chromium with the software
+  adapter. `browser-trajectory-tools` gained checks for superseded navigation,
+  rejected recipes in both directions, a recipe that turns smoothing on and a
+  smoothed reference-frame read; they fail on the previous build and pass
+  isolated and non-isolated. `browser-advanced-tools` gained wrapped physical
+  copies, the GPU suite ten replicated fixtures, and the Voronoi suites the
+  routed run, the option and its prewarm targets.
+- **Hardware (GTX 1080 Ti).** `npm run test:gpu -- --hardware` and
+  `npm run test:gpu:voronoi -- --hardware` both pass unmodified (261 kernel
+  rows; 45 Voronoi rows). Before this work the first stopped at the exact-zero
+  HCP ideal-strain check and the second at "Periodic FCC".
 
 ## Move crystal reset (2026-10-09)
 

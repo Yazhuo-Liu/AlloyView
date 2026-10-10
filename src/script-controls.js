@@ -425,7 +425,10 @@ export function initializeScriptControls({ host, registry, tools = null, lock = 
     restore(saved) {
       stop();
       state = normalizeScriptState(saved ?? {});
-      sequence = Math.max(0, ...state.scripts.map(script => Number(/^script-(\d+)$/.exec(script.id)?.[1] ?? 0)));
+      // Saved IDs are free-form. Only suffixes of at most nine digits advance the
+      // counter: at 2^53 and beyond ++sequence would stop changing and the
+      // search for an unused ID would never end.
+      sequence = Math.max(0, ...state.scripts.map(script => Number(/^script-(\d{1,9})$/.exec(script.id)?.[1] ?? 0)));
       if (controls.text) controls.text.value = selected()?.text ?? '';
       if (controls.name) controls.name.value = selected()?.name ?? '';
       message = state.scripts.length ? 'Scripts restored. Review the commands, then select Run.' : '';

@@ -92,16 +92,24 @@ try {
       await waitFor(`document.getElementById('file-name').textContent===${JSON.stringify(filename)} && document.getElementById('loading').hidden && voronoiChecks.renderer?.atomCount===${count}`, `load ${filename}`);
       await delay(100);
     }
-    async function run({ gpu = false, hold = null } = {}) {
+    // `gpu` is the GPU acceleration switch; `kernel` is the Voronoi panel's
+    // request for the WebGPU kernel, which automatic selection never makes.
+    async function run({ gpu = false, kernel = gpu, hold = null } = {}) {
       if (await evaluate(`document.getElementById('enable-gpu-computing').getAttribute('aria-pressed')===${JSON.stringify(String(!gpu))}`)) await press('#enable-gpu-computing');
       await showTool('voronoi');
+      assert.equal(await evaluate('document.getElementById("voronoi-gpu-kernel").disabled'), !gpu, 'the WebGPU kernel option needs GPU acceleration');
+      if (gpu && await evaluate(`document.getElementById('voronoi-gpu-kernel').checked!==${kernel}`)) {
+        await expand('#voronoi-backend-controls'); await press('#voronoi-gpu-kernel');
+        // A calculated analysis repeats itself with the changed request.
+        await waitFor('!document.getElementById("run-voronoi").disabled', 'Voronoi backend change');
+      }
       if (hold) await evaluate(`voronoiChecks.holdKind=${JSON.stringify(hold)}`);
       await press('#run-voronoi');
       await waitFor(hold === 'voronoi' ? 'voronoiChecks.held?.kind==="voronoi"'
-        : 'document.getElementById("voronoi-state").textContent==="Calculated"', `${gpu ? 'GPU' : 'CPU'} Voronoi`);
+        : 'document.getElementById("voronoi-state").textContent==="Calculated"', `${gpu && kernel ? 'GPU' : 'CPU'} Voronoi`);
       if (!hold) {
-        assert.equal(await evaluate('voronoiChecks.result().backend'), gpu ? 'gpu' : 'cpu', 'requested backend executes the real Voronoi kernel');
-        assert.match(await evaluate('document.getElementById("voronoi-backend").textContent'), gpu ? /GPU/i : /CPU|worker|wasm/i);
+        assert.equal(await evaluate('voronoiChecks.result().backend'), gpu && kernel ? 'gpu' : 'cpu', 'requested backend executes the real Voronoi kernel');
+        assert.match(await evaluate('document.getElementById("voronoi-backend").textContent'), gpu && kernel ? /GPU/i : /^CPU · \d+ Workers?$/);
       }
     }
     async function pointerPick(replica = null) {
@@ -151,7 +159,29 @@ try {
     assert.ok(await evaluate(`document.querySelector('${volumeChart} .chart-readout').textContent.length>0`), 'selected histogram bin exposes numerical values');
     console.log('Voronoi UI: CPU domain volume, summary cards, quantity shortcuts and readable distributions passed.');
 
+    // GPU acceleration alone keeps Voronoi on CPU Workers: the same result,
+    // named as the CPU backend and not as a fallback.
+    assert.equal(await evaluate('document.getElementById("voronoi-gpu-kernel").checked'), false, 'the WebGPU kernel is not requested by default');
+    await run({ gpu: true, kernel: false });
+    const routedResult = await result();
+    assert.equal(routedResult.fallbackReason, undefined); assert.match(routedResult.routeReason, /CPU Workers/);
+    for (const field of ['atomicVolume', 'voronoiSurfaceArea', 'voronoiCoordination', 'voronoiBoundaryFaces', 'voronoiMaxFaceOrder', 'voronoiIndices', 'faceAreas', 'faceNeighbors', 'faceOffsets']) {
+      assert.deepEqual(routedResult[field], cpuResult[field], `routed ${field} equals the result with GPU acceleration off`);
+    }
+    assert.match(await evaluate('document.getElementById("voronoi-status").title'), /Voronoi runs on CPU Workers/);
+    assert.doesNotMatch(await evaluate('document.getElementById("voronoi-status").textContent'), /fallback/i);
+    assert.equal(await evaluate('document.getElementById("voronoi-gpu-kernel-summary").textContent'), 'CPU Workers');
+    // GPU preparation follows the router: the frame is uploaded for the other
+    // kernels, without a Voronoi neighbor index, workspace or kernel warmup.
+    await waitFor('voronoiChecks.gpuStatus().cachedFrameIndexes.includes(0)', 'GPU frame upload without the Voronoi request');
+    const routedGpu = await evaluate('voronoiChecks.gpuStatus()');
+    assert.equal(routedGpu.voronoiWorkspaceAtoms, 0); assert.deepEqual(routedGpu.preparedVoronoiFrameIndexes, []);
+    assert.equal(routedGpu.voronoiKernelWarmupCount, 0);
+
     await run({ gpu: true });
+    assert.equal(await evaluate('document.getElementById("voronoi-gpu-kernel-summary").textContent'), 'WebGPU kernel');
+    await waitFor('voronoiChecks.gpuStatus().preparedVoronoiFrameIndexes.includes(0) && voronoiChecks.gpuStatus().voronoiWorkspaceAtoms>0',
+      'the requested kernel is prepared in the background');
     const gpuResult = await result();
     close(gpuResult.atomicVolume, cpuResult.atomicVolume, 2e-4);
     close(gpuResult.voronoiSurfaceArea, cpuResult.voronoiSurfaceArea, 2e-4);
@@ -371,6 +401,7 @@ try {
     assert.equal(await evaluate('document.querySelector("[data-voronoi-type=Ni]").checked && !document.querySelector("[data-voronoi-type=Cu]").checked'), true);
     const subsetRecipe = JSON.parse((await download('#export-configuration')).text);
     assert.deepEqual(subsetRecipe.settings.extensions.voronoi.selectedTypes, ['Ni']);
+    assert.equal(subsetRecipe.settings.extensions.voronoi.gpuKernel, true, 'the recipe keeps the WebGPU kernel request');
     assert.equal(subsetRecipe.settings.extensions.voronoiDisplay.allEnabled, true);
     await writeFile(resolve(fixtures, 'voronoi-subset-recipe.json'), JSON.stringify(subsetRecipe));
     await press('#close-file'); await inputFile('#configuration-file', 'voronoi-subset-recipe.json');
@@ -378,6 +409,8 @@ try {
     await load('binary-voronoi.xyz', 8);
     await waitFor('document.getElementById("configuration-status").textContent.includes("restored") && voronoiChecks.allGeometry()?.atomIndices.join(",")==="1,2,4,7"', 'recipe restores selected types, saved frame and all-cell mesh');
     assert.equal(await evaluate('document.getElementById("show-all-voronoi-cells").checked'), true);
+    assert.equal(await evaluate('document.getElementById("voronoi-gpu-kernel").checked'), true, 'the recipe restores the WebGPU kernel request');
+    assert.equal((await result()).backend, 'gpu', 'and recalculates with it');
     await showTool('voronoi'); await expand('#voronoi-type-selection'); await press('#voronoi-clear-types');
     await waitFor('voronoiChecks.allGeometry()===null && document.getElementById("voronoi-results").hidden', 'empty element selection clears previous results and cells');
     assert.equal(await evaluate('document.getElementById("export-voronoi-csv").disabled'), true);
@@ -486,7 +519,7 @@ async function initializeChecks() {
   };
   AnalysisPool.prototype.analyze = async function(frame, parameters, options) {
     const entry = { frame, kind: parameters.kind, parameters, signal: options?.signal };
-    checks.history.push(entry);
+    checks.history.push(entry); checks.pool = this;
     const hold = checks.holdKind === parameters.kind; if (hold) checks.holdKind = null;
     const result = await analyze.call(this, frame, parameters, options); entry.result = result;
     if (hold) { checks.held = entry; await new Promise(resolve => { checks.release = () => { checks.held = null; resolve(); }; }); }
@@ -505,6 +538,7 @@ async function initializeChecks() {
   };
   const plain = value => JSON.parse(JSON.stringify(value, (_key, item) => ArrayBuffer.isView(item) ? Array.from(item) : item));
   checks.result = () => plain(checks.renderer.frame.atomeyeResults.voronoi.result);
+  checks.gpuStatus = () => plain(checks.pool.gpuCacheStatus);
   // Renderer-selected geometry is a scientific local-offset polyhedron. It
   // must be available to both the main viewport and comparison view.
   checks.geometry = (kind = 'renderer') => plain(checks[kind]?.voronoiCellGeometry ?? null);

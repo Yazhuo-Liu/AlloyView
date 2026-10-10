@@ -74,9 +74,35 @@ as well.
 Results and caches are keyed on the radii themselves, so radical and standard
 results, or results for different radii, never replace each other. Editing a
 radius, changing the source or switching the option recalculates an enabled
-analysis. Radical cells change volumes, neighbors and indices by design; use
+analysis. A later change to the values of the chosen per-atom property, such
+as an edited computed property or a newly imported external attribute, does
+not recalculate by itself; calculate again to use the new radii. Radical cells
+change volumes, neighbors and indices by design; use
 the standard tessellation for comparisons with tools that report unweighted
 Voronoi cells.
+
+## Calculation backend
+
+Voronoi cells are calculated by CPU Workers running Voro++, whether **Enable
+GPU acceleration** is on or off. This is a deliberate choice of the faster
+backend, not a fallback: the **Backend** line reads `CPU · N Workers`, and
+the status tooltip adds that Voronoi runs on CPU Workers. The results are
+exactly those obtained with GPU acceleration off.
+
+Expand **Calculation backend** and check **Use the WebGPU kernel** to construct
+the cells on the GPU instead. The option is off by default and can be changed
+only while GPU acceleration is on; with acceleration off the request is kept
+but has no effect. Checking or clearing it recalculates an enabled analysis.
+Loading another source resets it with the other Voronoi settings.
+
+Expect the WebGPU kernel to be slower on current graphics adapters. On the
+reference GTX 1080 Ti it takes 4.3–6.0 s for the 28,800-atom HEA example and
+10–11 s for the 60,229-atom Fe loop, against 0.4–0.6 s and 0.7–0.9 s with six
+CPU Workers; see
+[Performance](performance.md#voronoi-backend-choice). Its volumes and areas
+agree with Voro++ within the tolerances listed under
+[WebGPU acceleration](#webgpu-acceleration), with equal neighbors and indices.
+Cell geometry for the cell display always comes from the CPU kernel.
 
 ## Per-atom quantities
 
@@ -206,7 +232,10 @@ radius }` entries in Å, finite and nonnegative; omitted labels use the atomic
 radii) and `radiusProperty` (a property name or `null`). Recipes without these
 fields restore the standard tessellation, and recipes that never used radical
 cells are exported without them. Radii are validated when a recipe is loaded;
-property values are read again from the matching source. Selected-cell visibility, all-cell visibility, color, opacity, all-cell view
+property values are read again from the matching source. `gpuKernel: true`
+records a request for the [WebGPU kernel](#calculation-backend); it must be
+`true` or `false`, is written only when checked, and recipes without it,
+including all older ones, restore with CPU Workers. Selected-cell visibility, all-cell visibility, color, opacity, all-cell view
 (`style`: `xray` or `surface`) and cell `scale` are stored in
 `settings.extensions.voronoiDisplay`; polygon arrays are regenerated
 when the corresponding display option is enabled. Atom radius remains one
@@ -220,10 +249,21 @@ Loading a structure starts preparing its current frame before Voronoi is
 calculated. The CPU pool initializes reusable Voro++ modules and prepares a
 coordinate snapshot, neighbor index and native context in an adaptive number
 of Workers. Cross-origin isolation allows a shared snapshot; otherwise each
-Worker retains a private copy. Enabled GPU acceleration prepares the device,
-Voronoi pipelines, uploaded coordinates, initial neighbor index and bounded
-clipping workspace. A single discarded GPU-cell dispatch warms driver
-execution without publishing scientific results.
+Worker retains a private copy. This CPU preparation is the same with GPU
+acceleration on or off.
+
+GPU preparation follows the backend that will run. Without a request for the
+WebGPU kernel it uploads the frame for the other GPU analyses and compiles
+their pipelines, but no Voronoi pipeline, neighbor index or clipping
+workspace. Once **Use the WebGPU kernel** is checked, it prepares the Voronoi
+pipelines, uploaded coordinates, initial neighbor index and bounded clipping
+workspace, and a single discarded GPU-cell dispatch warms driver execution
+without publishing scientific results. The radical clipping pipeline is
+compiled only while radical cells are selected. During trajectory playback
+each frame is uploaded at once, but its Voronoi index and workspace are
+prepared only if it stays displayed for 1.25 s, which is longer than the
+playback interval, or as soon as playback stops on it. Clearing the option
+frees the clipping workspace.
 
 Preparation does not activate this tool, color the atoms, calculate whole-frame
 statistics or build the optional display meshes. Foreground calculations have
@@ -286,7 +326,8 @@ rejected rather than producing a truncated tessellation.
 
 ### WebGPU acceleration
 
-With **Enable GPU acceleration** enabled, Voronoi can construct the cells on
+With **Enable GPU acceleration** on and **Use the WebGPU kernel** checked (see
+[Calculation backend](#calculation-backend)), Voronoi constructs the cells on
 WebGPU. Each GPU invocation incrementally clips one convex polyhedron against
 atomic bisector planes. Neighbor lookup uses the existing resident GPU
 linked-cell index, and the search expands until it covers twice the farthest
@@ -310,6 +351,13 @@ detecting ambiguous tiny faces and face-area threshold decisions. Independently
 different intersections inside the 32-bit uncertainty band require exact-cell
 recovery instead of being merged into one vertex.
 
+The paired arithmetic is only exact if the shader compiler keeps its rounding
+error terms, so the helpers guard them and each GPU device verifies them with
+a self-test when it is created; see
+[how the GPU backend works](performance.md#how-the-gpu-backend-works). On a
+device that fails the test, Voronoi uses the parallel CPU path, and the Backend
+status reports that the GPU does not preserve exact double-float arithmetic.
+
 An isolated ambiguous cell is recalculated by Voro++ inside the existing GPU
 Worker. That recovery reuses one Wasm kernel and a complete-source CPU neighbor
 context; it does not create a new Worker or rerun the whole frame. Its complete
@@ -317,21 +365,31 @@ scientific face data and quantities replace only the affected cell's output.
 The Backend label reports the number of cells receiving exact recovery. The
 recovery budget is `min(2048, max(16, floor(0.1 × analyzed atom count)))`.
 
+Recovery runs one cell at a time, and a frame over the budget is recalculated
+by the CPU Workers anyway, so the kernel gives up early. After each readback
+of a batch's cell states, before recovering any of its cells, it stops when
+the cells flagged so far exceed the budget. It also stops when the first
+batch flags a larger share of its cells than the budget allows over the whole
+range, because the remaining batches would then be expected to exceed it. The
+second rule is a projection: a structure whose first atoms are unusually hard,
+but which would have stayed within the budget, also goes to the CPU Workers.
+
 Capacity and coverage guards also protect the topology: the GPU stores at most
 64 faces per cell, 32 vertices per face and 512 relevant source planes per
 cell. These are resource bounds, not coordination cutoffs. If these bounds,
 the sparse recovery budget, or the verified precision and neighbor coverage
 cannot be satisfied, the whole analysis automatically uses the parallel
 Voro++ CPU path. The Backend status identifies that fallback. Cells are never
-silently truncated to fit the GPU buffers. Disabling GPU acceleration always
-selects the CPU implementation.
+silently truncated to fit the GPU buffers. Clearing **Use the WebGPU kernel**
+or disabling GPU acceleration always selects the CPU implementation.
 
 Relaxed configurations with many microscopic faces, extreme thin directions,
 or large vacuum regions can exceed the bounded precision-recovery or neighbor
-coverage budget. Such structures can use the parallel CPU path even with GPU
-acceleration enabled. The bundled relaxed Ni grain-boundary example exercises
-this conservative fallback; it is not evidence of GPU acceleration for that
-structure.
+coverage budget. Such structures use the parallel CPU path even when the
+WebGPU kernel is requested. The bundled relaxed Ni grain-boundary example
+exercises this conservative fallback: about 1,800 of its first 2,048 cells
+are flagged at the first state readback, so the kernel stops there, 0.1–0.2 s
+into the analysis.
 
 Radical cells use a separate clipping kernel; the standard kernel is
 unchanged. The cell initialization is shared, because an atom's periodic

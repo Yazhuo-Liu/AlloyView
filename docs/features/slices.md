@@ -71,6 +71,11 @@ The (h k l) lattice planes are `G · (r − o) = m` for integers `m`, where `o` 
 
 Clipping uses the atom center at its actual displayed Cartesian position. Replicas use their translated positions and unwrapped coordinates use their displayed positions. The source data and analysis input remain intact. Sliced-out atoms cannot be picked, and image exports include clipping while excluding editing overlays.
 
+## Limitations
+
+- A normal can be entered as Cartesian components or as Miller indices (h k l) of a plane. Lattice directions [u v w] are not accepted; enter the Cartesian vector `u a₁ + v a₂ + w a₃` instead.
+- A slab keeps the atoms inside it. There is no mode that removes the slab and keeps the atoms outside; two half-space slices cannot express it either, because enabled slices always intersect.
+
 ## Configuration
 
 Each item in `settings.slices.items` stores `id`, `name`, `normal` (unit Cartesian vector), `position` (Å), `enabled`, `side` (`negative` or `positive`) and `showGizmo`, and also:

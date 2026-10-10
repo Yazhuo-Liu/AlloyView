@@ -114,6 +114,15 @@ the GPU preference does not affect it.
 
 An atom may have at most 100,000 neighbors within the cutoff, as in Bonds.
 
+## Limitations
+
+- Per-atom outputs are the cluster ID and size. Unwrapped positions are used
+  for the centers and gyration tensors only; OVITO's option to output
+  unwrapped atom coordinates is not provided.
+- Neighbors come from the general periodic neighbor search shared with the
+  other analyses, not from a dedicated cutoff loop. That search accounts for
+  most of the single-thread time.
+
 ## Configuration
 
 `settings.extensions.clusters` stores `enabled`, `neighborMode` (`cutoff` or

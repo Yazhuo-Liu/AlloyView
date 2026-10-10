@@ -9,7 +9,7 @@ struct ReferenceSettings {
   count: u32, startAtom: u32, endAtom: u32, nanBits: u32,
   pbc: vec4u, heights: vec4f,
   currentA: vec4f, currentB: vec4f, currentC: vec4f,
-  cells: array<vec2f, 18>,
+  cells: array<vec2f, 18>, imageScale: vec4f,
 };
 @group(0) @binding(4) var<storage, read> currentPositions: array<vec4f>;
 @group(0) @binding(5) var<storage, read> inverseMapping: array<i32>;
@@ -43,22 +43,32 @@ fn referenceSquaredLength(fractional: array<vec2f, 3>) -> vec2f {
 struct ReferenceImage {
   fractional: array<vec2f, 3>, uncertain: bool, candidates: u32,
 };
+// Image shifts count periods of the image lattice. One current cell vector
+// spans imageScale periods: 1, or the repeat count of a replicated wrapped
+// frame, whose images are resolved in its source lattice (settings.heights).
+fn referenceImageShift(shift: i32, axis: u32) -> vec2f {
+  let whole = vec2f(f32(shift), 0.0);
+  if (settings.imageScale[axis] == 1.0) { return whole; }
+  return dsDivide(whole, vec2f(settings.imageScale[axis], 0.0));
+}
 fn referenceMinimumImage(change: array<vec2f, 3>) -> ReferenceImage {
   var result: ReferenceImage;
   result.candidates = 0u;
   var shifts = vec3i(0);
+  var periods = vec3f(0.0);
   for (var axis = 0u; axis < 3u; axis += 1u) {
-    if (settings.pbc[axis] != 0u) { shifts[axis] = -i32(floor(dsValue(change[axis]) + 0.5)); }
-    result.fractional[axis] = dsAdd(change[axis], vec2f(f32(shifts[axis]), 0.0));
+    periods[axis] = dsValue(change[axis]) * settings.imageScale[axis];
+    if (settings.pbc[axis] != 0u) { shifts[axis] = -i32(floor(periods[axis] + 0.5)); }
+    result.fractional[axis] = dsAdd(change[axis], referenceImageShift(shifts[axis], axis));
   }
   var best = referenceSquaredLength(result.fractional);
   let radius = sqrt(max(0.0, dsValue(best)));
   var minimum = vec3i(0); var maximum = vec3i(0);
   for (var axis = 0u; axis < 3u; axis += 1u) {
     if (settings.pbc[axis] != 0u) {
-      let bound = radius / settings.heights[axis] + 1e-6;
-      minimum[axis] = i32(ceil(-bound - dsValue(change[axis])));
-      maximum[axis] = i32(floor(bound - dsValue(change[axis])));
+      let bound = radius / settings.heights[axis] + 1e-6 * settings.imageScale[axis];
+      minimum[axis] = i32(ceil(-bound - periods[axis]));
+      maximum[axis] = i32(floor(bound - periods[axis]));
     }
   }
   let spans = maximum - minimum + vec3i(1);
@@ -74,7 +84,7 @@ fn referenceMinimumImage(change: array<vec2f, 3>) -> ReferenceImage {
         let candidateShift = vec3i(a, b, c);
         if (all(candidateShift == shifts)) { continue; }
         var candidate: array<vec2f, 3>;
-        for (var axis = 0u; axis < 3u; axis += 1u) { candidate[axis] = dsAdd(change[axis], vec2f(f32(candidateShift[axis]), 0.0)); }
+        for (var axis = 0u; axis < 3u; axis += 1u) { candidate[axis] = dsAdd(change[axis], referenceImageShift(candidateShift[axis], axis)); }
         let distance = referenceSquaredLength(candidate);
         let difference = dsValue(dsSubtract(distance, best));
         if (abs(difference) <= max(1e-20, abs(dsValue(best)) * 1e-6)) { result.uncertain = true; }

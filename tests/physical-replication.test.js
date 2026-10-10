@@ -26,7 +26,7 @@ test('physical repetition enlarges tilted cell rows and atom arrays without chan
   assert.deepEqual([...result.cell.vectors], [8, 2, 0, -6, 9, 3, 2, -2, 10]);
   assert.deepEqual([...result.cell.origin], [3, -2, 1]);
   assert.deepEqual(result.cell.pbc, frame.cell.pbc);
-  assert.deepEqual(result.physicalReplication, { repetitions: [2, 3, 2], sourceAtomCount: 2 });
+  assert.deepEqual(result.physicalReplication, { repetitions: [2, 3, 2], sourceAtomCount: 2, wrappedSource: true });
   near([...result.positions.slice(0, 6)], [...frame.positions]);
   near([...result.positions.slice(-6)], [...frame.positions].map((value, axis) => value + [1, 6, 7][axis % 3]));
   near([...result.fractional.slice(-6)], [.625, .7333333333, .65, .875, .8666666667, .9]);
@@ -123,6 +123,7 @@ test('physical trajectories rewrap old images in the expanded cell and retain co
   near([...current.positions], [10.5, 2, 3, .5, 2, 3]);
   near([...current.unwrappedPositions], [10.5, 2, 3, 20.5, 2, 3]);
   assert.deepEqual([...current.imageFlags], [0, 0, 0, 1, 0, 0]);
+  assert.equal(current.physicalReplication.wrappedSource, false);
   const result = await computeDisplacements(current, reference);
   near([...result.vectors], [1, 0, 0, 1, 0, 0]);
   const withoutFlags = source(.05, 1);
@@ -130,10 +131,19 @@ test('physical trajectories rewrap old images in the expanded cell and retain co
   const inferred = await replicateFrame(withoutFlags, [2, 1, 1]);
   near([...inferred.positions], [...current.positions]);
   assert.deepEqual([...inferred.imageFlags], [...current.imageFlags]);
+  assert.equal(inferred.physicalReplication.wrappedSource, false);
   const withoutUnwrapped = source(.05, 1);
   delete withoutUnwrapped.unwrappedPositions;
   const reconstructed = await replicateFrame(withoutUnwrapped, [2, 1, 1]);
   near([...reconstructed.unwrappedPositions], [...current.unwrappedPositions]);
+  // Without image data every copy repeats the wrap of its source atom. The
+  // jump is one source vector, which only the source lattice can remove.
+  const wrapped = fraction => { const frame = source(fraction, 0); delete frame.imageFlags; delete frame.unwrappedPositions; return frame; };
+  const wrappedReference = await replicateFrame(wrapped(.95), [2, 1, 1]), wrappedCurrent = await replicateFrame(wrapped(.05), [2, 1, 1]);
+  near([...wrappedCurrent.positions], [.5, 2, 3, 10.5, 2, 3]);
+  assert.equal(wrappedCurrent.imageFlags, undefined);
+  assert.equal(wrappedCurrent.physicalReplication.wrappedSource, true);
+  near([...(await computeDisplacements(wrappedCurrent, wrappedReference)).vectors], [1, 0, 0, 1, 0, 0]);
 });
 
 test('reference strain accepts replicated IDs and remains zero for an unchanged expanded crystal', async () => {

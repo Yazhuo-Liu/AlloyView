@@ -43,7 +43,7 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 
 ## Understand and verify the implementation
 
-[Analysis implementation](STRUCTURE_ANALYSIS.md) explains crystal classification, ideal lattice strain and the Worker scheduler. [Validation](VALIDATION.md) describes tests and comparisons. [Deployment](DEPLOYMENT.md) explains the static build, including these documentation pages. The [improvement backlog](TODO.md) lists planned performance work and features from OVITO and AtomEye, in priority order.
+[Analysis implementation](STRUCTURE_ANALYSIS.md) explains crystal classification, ideal lattice strain and the Worker scheduler. [Validation](VALIDATION.md) describes tests and comparisons. [Deployment](DEPLOYMENT.md) explains the static build, including these documentation pages. The [improvement backlog](TODO.md) lists known defects and planned performance work from the latest audit, in priority order; completed features are described in the feature pages.
 
 [DXA implementation review](DXA_REVIEW.md) records the source, licensing and
 CPU/Wasm algorithm and historical WebGPU research. The current DXA tool uses

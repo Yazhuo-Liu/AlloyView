@@ -102,6 +102,8 @@ Write a column whose name is not a plain identifier between backquotes. Names su
 
 Errors name the problem and its column (and line, for multi-line text), and the panel highlights the offending text: unknown variables and functions list close matches, wrong argument counts state the expected number, and a missing velocity or analysis output says what to calculate. Expressions are limited to 4,096 characters, 64 nested levels of parentheses, function calls, unary operators, conditionals and powers, and 256 operations in any chain. Names never reach JavaScript objects, so `constructor` or `__proto__` are ordinary unknown names.
 
+Expressions are evaluated synchronously on the page thread: computing a property or applying a condition takes about 0.5 s for 1,000,000 atoms, during which the page does not respond. A selection condition is evaluated once, on the frame displayed when the button is pressed; it is not applied again on later frames. Expansion builds its own neighbor index in the selection Worker and does not reuse the index that the analysis Workers keep for the same frame.
+
 ## Configuration files
 
 Exported configurations record each computed property's name, unit and expression text in `settings.extensions.expressions.properties`, in evaluation order. They contain no computed values. Import validates the names and parses every expression with the same safe parser, rejecting syntax errors, cycles and forward references before anything is applied; values are recalculated after the source and its analyses are restored. Selections created by expressions are stored as ordinary selection groups. Loading a different source clears the computed properties, as it clears analyses and groups.

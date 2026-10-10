@@ -93,6 +93,13 @@ machine. Visiting is dominated by displaying each frame and its analyses. Readin
 grows with frame size and count, since each frame is parsed again; frames
 already in the trajectory cache are reused.
 
+## Limitations
+
+- Analysis values exist only for frames that have been displayed with the
+  analysis enabled; **Visit frames** is the way to fill the rest.
+- The chart has no image export. Use **Series CSV** to plot the values
+  elsewhere.
+
 ## Configuration
 
 `settings.extensions.timeSeries` stores `attributes` (up to 8 names of at most

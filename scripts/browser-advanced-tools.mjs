@@ -28,7 +28,18 @@ const skewAtoms = skewFractional.map(fractional => [0, 1, 2].map(axis =>
 const sliceAtoms = [[2, 2, 2], [6, 2, 2], [2, 6, 2], [4, 2, 2], [7, 7, 7], [7, 3, 5]];
 const csv = ['id,temperature,quality,x', '606,60,6,900', '101,10,1,901', '303,NaN,3,902',
   '202,20,2,903', '505,50,5,904', '404,40,4,905', ''].join('\n');
+// FCC, 3 × 3 × 3 cells of 3.6 Å. In the second frame every atom has moved by
+// −0.1 Å along x, so the x = 0 plane wraps to the opposite face. There are no
+// image flags: the dump only stores the wrapped coordinates.
+const wrappedCells = 3, wrappedLength = 3.6 * wrappedCells, wrappedSites = [];
+for (let i = 0; i < wrappedCells; i++) for (let j = 0; j < wrappedCells; j++) for (let k = 0; k < wrappedCells; k++) {
+  for (const [x, y, z] of [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]]) wrappedSites.push([(i + x) * 3.6, (j + y) * 3.6, (k + z) * 3.6]);
+}
+const wrappedDump = [0, 1].map(step => ['ITEM: TIMESTEP', step, 'ITEM: NUMBER OF ATOMS', wrappedSites.length, 'ITEM: BOX BOUNDS pp pp pp',
+  ...[0, 1, 2].map(() => `0 ${wrappedLength}`), 'ITEM: ATOMS id type x y z',
+  ...wrappedSites.map(([x, y, z], atom) => `${atom + 1} 1 ${((x - .1 * step + wrappedLength) % wrappedLength).toFixed(6)} ${y.toFixed(6)} ${z.toFixed(6)}`), ''].join('\n')).join('');
 await Promise.all([
+  writeFile(resolve(temporary, 'advanced-wrapped.dump'), wrappedDump),
   writeFile(resolve(temporary, 'advanced-trajectory.xyz'), xyz(atoms) + xyz(atoms, lattice, 'T T T', 1, [5, 3, 1, 4, 2, 0])),
   writeFile(resolve(temporary, 'advanced-skew.xyz'), xyz(skewAtoms, skewLattice, 'T F T')),
   writeFile(resolve(temporary, 'advanced-slices.xyz'), xyz(sliceAtoms)),
@@ -85,10 +96,10 @@ try {
     async function expand(selector) {
       if (await evaluate(`!document.querySelector(${JSON.stringify(selector)}).open`)) await press(`${selector} > summary`);
     }
-    async function load(name, { allowAnalyses = false } = {}) {
+    async function load(name, { allowAnalyses = false, atomCount = 6 } = {}) {
       const before = await evaluate('advancedToolsChecks.analyses');
       await inputFiles('#file-input', [name]);
-      await waitFor(`document.getElementById('file-name').textContent===${JSON.stringify(name)} && document.getElementById('loading').hidden && advancedToolsChecks.renderer?.atomCount===6`, `load ${name}`);
+      await waitFor(`document.getElementById('file-name').textContent===${JSON.stringify(name)} && document.getElementById('loading').hidden && advancedToolsChecks.renderer?.atomCount===${atomCount}`, `load ${name}`);
       if (!allowAnalyses) assert.equal(await evaluate('advancedToolsChecks.analyses'), before, 'source loading does not calculate properties');
       await delay(100);
     }
@@ -456,6 +467,38 @@ try {
       compactPhones.push({ width, height, screenshot: await screenshot(`tools-${width}x${height}.png`) });
     }
 
+    // Replicate atoms for analysis on a wrapped trajectory. Each physical copy
+    // repeats the wrap of its source atom as a jump of one source cell vector,
+    // which is half the enlarged cell vector here. Displacement and frame strain
+    // must still report the uniform 0.1 Å shift and no strain.
+    mobile = false;
+    await call('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile });
+    await closeOverlays();
+    await load('advanced-wrapped.dump', { allowAnalyses: true, atomCount: wrappedSites.length });
+    await change('frame-slider', '1', { event: 'input' });
+    await waitFor('advancedToolsChecks.renderer.frame.frameIndex===1 && document.getElementById("loading").hidden', 'second frame of the wrapped trajectory');
+    assert.equal(await evaluate('Boolean(advancedToolsChecks.renderer.frame.imageFlags || advancedToolsChecks.renderer.frame.unwrappedPositions)'), false, 'the wrapped fixture carries no image data');
+    // Opening Displacement starts it; frame strain waits for its button.
+    await showTool('displacement'); await change('displacement-reference-frame', '1');
+    await waitFor('document.getElementById("displacement-state").textContent==="Calculated"', 'displacement of the wrapped trajectory');
+    await showTool('referenceStrain'); await change('reference-frame', '1'); await change('reference-cutoff', '3.0'); await press('#run-reference-strain');
+    const wrappedAnalyses = async (count, label) => {
+      await waitFor(`advancedToolsChecks.renderer.atomCount===${count} && document.getElementById('loading').hidden`
+        + ` && ['displacement-state','reference-strain-state'].every(id => document.getElementById(id).textContent==='Calculated')`
+        + ` && ['displacementMagnitude','referenceShearStrain'].every(name => advancedToolsChecks.renderer.frame.properties.find(property => property.name===name)?.data.length===${count})`, label);
+      const [magnitudes, shear] = await Promise.all(['displacementMagnitude', 'referenceShearStrain'].map(name => evaluate(`advancedToolsChecks.propertyValues(${JSON.stringify(name)})`)));
+      assert.ok(magnitudes.every(value => Math.abs(value - .1) < 1e-5), `${label}: every atom moved by 0.1 Å, got ${Math.min(...magnitudes)} to ${Math.max(...magnitudes)}`);
+      assert.ok(shear.every(value => Math.abs(value) < 1e-5), `${label}: a uniform shift has no frame strain, got ${shear.filter(value => !(Math.abs(value) < 1e-5)).slice(0, 4)}`);
+      return { atoms: count, displacement: [Math.min(...magnitudes), Math.max(...magnitudes)], shearStrain: [Math.min(...shear), Math.max(...shear)] };
+    };
+    const wrappedSource = await wrappedAnalyses(wrappedSites.length, 'wrapped source trajectory');
+    await showTool('replicate'); await change('replicate-a', '2'); await press('#apply-replicate');
+    await change('replicate-atoms', true, { checkbox: true });
+    const wrappedCopies = await wrappedAnalyses(wrappedSites.length * 2, 'physical copies of the wrapped trajectory');
+    assert.deepEqual(await evaluate('advancedToolsChecks.renderer.frame.physicalReplication'), { repetitions: [2, 1, 1], sourceAtomCount: wrappedSites.length, wrappedSource: true });
+    console.log('Advanced tools: displacement and frame strain on physical copies of a wrapped trajectory passed.');
+
     async function drag(start, end, button = 'left') {
       const buttons = button === 'right' ? 2 : 1;
       await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button, buttons, clickCount: 1 });
@@ -469,9 +512,11 @@ try {
     return { softwareBrowser: true, compute: 'CPU Workers', adapter, atoms: 6,
       checks: ['periodic display origin', 'mixed-PBC skew cell', 'slice planes from real picks', 'multiple independent vector fields',
         'ID-mapped external attributes', 'metadata recipe and local file reselection', 'physical copies of external data',
-        'precise camera controls', 'real viewport gestures and synchronized numeric controls', 'PNG excludes camera popup', 'compact phone category navigation and scrolling'],
+        'precise camera controls', 'real viewport gestures and synchronized numeric controls', 'PNG excludes camera popup', 'compact phone category navigation and scrolling',
+        'displacement and frame strain on physical copies of a wrapped trajectory'],
       modelCoverage: ['tests/periodic-origin.test.js: periodic bond image shifts and DXA curve continuity'],
-      screenshots: { sliceScreenshot, vectorScreenshot, externalScreenshot, cameraScreenshot }, compactPhones };
+      screenshots: { sliceScreenshot, vectorScreenshot, externalScreenshot, cameraScreenshot }, compactPhones,
+      wrappedReplication: { source: wrappedSource, physicalCopies: wrappedCopies } };
   }, { software: true });
   const reportPath = resolve(artifacts, 'report.json');
   await writeFile(reportPath, JSON.stringify(report, null, 2) + '\n');

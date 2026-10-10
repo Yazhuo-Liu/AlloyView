@@ -187,8 +187,43 @@ test('precision recovery replaces whole flagged cells, retaining complete scalar
 });
 
 test('excessive precision recovery explicitly falls back to the parallel CPU pool', async () => {
-  const frame = crystalFrame('fcc', 3, 3.52), fixture = await hostFixture(frame, { flags: 4 });
+  const frame = crystalFrame('fcc', 3, 3.52), reads = [], fixture = await hostFixture(frame, { flags: 4, onRead: read => reads.push(read) });
   await assert.rejects(analyzeGpuVoronoi(fixture.runtime, frame), error => error.name === 'GpuUnavailableError' && /Too many/.test(error.message));
+  // 108 flagged cells exceed the limit of 16: nothing is recovered first.
+  assert.equal(fixture.runtime.voronoiCpuContext, undefined, 'no exact cell was computed');
+  assert.equal(reads.length, 1, 'the state readback decides; face descriptors are not read');
+  assert.equal(fixture.runs.length, 2);
+});
+
+test('exact recovery fails fast: the first batch speaks for the range, and later batches stop at the limit before recovering', async () => {
+  // 864 cells in software batches of 512 and 352; at most 86 may be recovered (9.95%).
+  const frame = crystalFrame('fcc', 6, 3.52);
+  const run = async (flagged, onProgress) => {
+    const fixture = await hostFixture(frame, { rowState: ({ atom, states, offset }) => { if (flagged(atom)) states[offset + 1] = 4; } });
+    const corrected = [];
+    const outcome = await analyzeGpuVoronoi(fixture.runtime, frame, {}, { onProgress: update => {
+      if (update.phase === 'precisionCorrection') corrected.push(update.completedAtoms);
+      onProgress?.(update);
+    } }).then(result => ({ result }), error => ({ error }));
+    return { ...outcome, fixture, corrected };
+  };
+  // 50 of the first 512 cells is 9.8%, within the rate: all are recovered and the range completes on the GPU.
+  const within = await run(atom => atom < 50);
+  assert.equal(within.result.gpuCorrectionAtoms, 50); assert.equal(within.result.gpuCorrectionLimit, 86);
+  assert.deepEqual(within.result.voronoiIndices, within.fixture.expected.voronoiIndices);
+  assert.deepEqual(within.result.faceOffsets, within.fixture.expected.faceOffsets);
+  // 60 of the first 512 is 11.7%. The whole range would stay under the limit, but the projection does not.
+  const first = await run(atom => atom < 60);
+  assert.equal(first.error?.name, 'GpuUnavailableError'); assert.match(first.error.message, /Too many Voronoi cells need exact recovery \(\{"geometry":60\}/);
+  assert.deepEqual(first.corrected, [], 'no cell is recovered before the frame goes to the CPU pool');
+  assert.equal(first.fixture.runs.length, 2, 'the second batch is never dispatched');
+  // 40 in the first batch pass; 50 more in the second exceed the limit as soon as its states are read.
+  const later = await run(atom => atom < 40 || (atom >= 512 && atom < 562));
+  assert.equal(later.error?.name, 'GpuUnavailableError'); assert.match(later.error.message, /"geometry":90/);
+  assert.equal(later.corrected.length, 40, 'only the first batch was recovered');
+  // A range that fits one batch has no projection: half of its 32 cells are recovered, up to the limit of 16.
+  const small = crystalFrame('fcc', 2, 3.52), single = await hostFixture(small, { rowState: ({ atom, states, offset }) => { if (atom < 16) states[offset + 1] = 4; } });
+  assert.equal((await analyzeGpuVoronoi(single.runtime, small)).gpuCorrectionAtoms, 16);
 });
 
 function checkerboardFrame() {

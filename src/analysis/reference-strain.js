@@ -1,4 +1,4 @@
-import { cellFaceHeights, determinant3, invert3 } from '../data/model.js';
+import { cellFaceHeights, determinant3, imageLatticeCell, invert3 } from '../data/model.js';
 import { atomRange, NeighborSearch } from './neighbors.js';
 import { yieldToMain } from '../task-yield.js';
 
@@ -122,12 +122,15 @@ function throwIfAborted(signal) {
  * are resolved in the full triclinic metric, keeping distinct reference images
  * in primitive cells. Periodic relative motion must remain within the nearest
  * image of its reference bond; a wrapped trajectory cannot resolve larger slips.
+ * sourceRepetitions (see wrappedSourceRepetitions) makes those images the
+ * source lattice of a replicated wrapped frame, whose copies jump by source
+ * vectors when their source atom wraps.
  *
  * Unlike ideal-lattice PTM strain, this calculation follows atom IDs and can use
  * an arbitrary reference configuration. Undefined fits remain NaN silently.
  */
 export function calculateReferenceStrain(frame, {
-  referenceFractional, referenceCell, referenceMapping, cutoff,
+  referenceFractional, referenceCell, referenceMapping, cutoff, sourceRepetitions = null,
   preparedContext = null, onPhase = () => {}, onAtoms = () => {}, ...range
 } = {}) {
   const startedAt = performance.now();
@@ -139,8 +142,8 @@ export function calculateReferenceStrain(frame, {
     throw new Error('Reference-strain prepared context does not match its inputs.');
   }
   onPhase('indexing');
-  const { inverseMapping, search, referenceInverse, currentHeights, currentFractional }
-    = preparedContext ?? prepareReferenceStrainContext(frame, { referenceFractional, referenceCell, referenceMapping });
+  const { inverseMapping, search, referenceInverse, imageCell, imageHeights, imageScale, currentFractional }
+    = preparedContext ?? prepareReferenceStrainContext(frame, { referenceFractional, referenceCell, referenceMapping, sourceRepetitions });
   const length = endAtom - startAtom;
   const result = Object.fromEntries(REFERENCE_STRAIN_FIELDS.map(name => [name, new Float32Array(length).fill(NaN)]));
   const covariance = new Float64Array(9), crossCovariance = new Float64Array(9);
@@ -173,7 +176,7 @@ export function calculateReferenceStrain(frame, {
         const referenceDifference = search.coordinates[neighbor.atom * 3 + axis] - search.coordinates[referenceAtom * 3 + axis];
         change[axis] = currentDifference - referenceDifference;
       }
-      minimumImageChange(change, frame.cell, currentHeights);
+      minimumImageChange(change, imageCell, imageHeights, imageScale);
       // Recover the reference image from its full vector instead of discarding
       // image information with a second minimum-image operation on the bond.
       for (let axis = 0; axis < 3; axis += 1) {
@@ -221,7 +224,8 @@ export function calculateReferenceStrain(frame, {
 
 /** Reuse the double-precision index and correspondence for sparse GPU
  * corrections, instead of rebuilding the complete frame for each atom. */
-export function prepareReferenceStrainContext(frame, { referenceFractional, referenceCell, referenceMapping, referenceSearch }) {
+export function prepareReferenceStrainContext(frame, { referenceFractional, referenceCell, referenceMapping, referenceSearch,
+  sourceRepetitions = null }) {
   const count = frame.fractional.length / 3;
   const referenceCount = referenceFractional?.length / 3;
   if (!Number.isInteger(referenceCount) || referenceCount < 1 || referenceMapping?.length !== count) {
@@ -242,13 +246,15 @@ export function prepareReferenceStrainContext(frame, { referenceFractional, refe
 
   const search = referenceSearch ?? new NeighborSearch({ fractional: referenceFractional, cell: referenceCell });
   const referenceInverse = invert3(referenceCell.vectors);
-  const currentHeights = cellFaceHeights(frame.cell);
+  const imageCell = imageLatticeCell(frame.cell, sourceRepetitions);
+  const imageHeights = cellFaceHeights(imageCell);
+  const imageScale = sourceRepetitions ? Float64Array.from(sourceRepetitions) : null;
   const currentFractional = Float64Array.from(frame.fractional, (value, k) => {
     if (!Number.isFinite(value)) throw new Error('Reference-frame strain requires finite current coordinates.');
     return frame.cell.pbc[k % 3] ? value - Math.floor(value) : value;
   });
   return { frame, referenceFractional, referenceCell, referenceMapping, inverseMapping, search,
-    referenceInverse, currentHeights, currentFractional };
+    referenceInverse, imageCell, imageHeights, imageScale, currentFractional };
 }
 
 // Scale first so the singularity threshold is independent of the input units.
@@ -265,7 +271,10 @@ function invertCovariance(matrix, output) {
   return true;
 }
 
-function minimumImageChange(change, cell, heights) {
+// change is in reduced coordinates of the current cell. scale converts it to
+// those of the image lattice (cell, heights) when that is a source cell.
+function minimumImageChange(change, cell, heights, scale) {
+  if (scale) for (let axis = 0; axis < 3; axis += 1) change[axis] *= scale[axis];
   const h = cell.vectors;
   const shifts = Array.from(change, (value, axis) => cell.pbc[axis] ? -Math.round(value) : 0);
   const squaredLength = (a, b, c) => (a * h[0] + b * h[3] + c * h[6]) ** 2
@@ -289,4 +298,5 @@ function minimumImageChange(change, cell, heights) {
     }
   }
   for (let axis = 0; axis < 3; axis += 1) change[axis] += shifts[axis];
+  if (scale) for (let axis = 0; axis < 3; axis += 1) change[axis] /= scale[axis];
 }

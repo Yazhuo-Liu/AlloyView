@@ -30,7 +30,9 @@ colors until the field becomes eligible again. Select an atom and use
 **Details → Hide … atoms** to hide its current element or discrete class in one
 click. These are display filters; analyses still use all atoms. Discrete scales,
 hidden values and color settings survive configuration export/import and also
-apply to the second view and image legend.
+apply to the second view and image legend. Configurations store the hidden
+values themselves, not their row positions in the legend. A legend taller than
+the viewport scrolls, on desktop and on phones.
 
 Completed PTM adds **PTM orientation · inverse pole figure** and
 **PTM orientation · quaternion RGB** to Color by. The IPF legend selects a
@@ -48,9 +50,18 @@ Dragging a scalar legend's range slider previews colors and range visibility
 in the renderer, without recomputing all atom colors at each step. The main
 and second views stay synchronized, including selection-color overrides,
 bonds and Voronoi cells. The preview uses normalized floating-point scalars;
-releasing the slider, cancelling the pointer or exporting an image restores
-the exact CPU colors and histogram. Very narrow ranges that cannot be
+releasing the slider, finishing a keyboard adjustment, cancelling the pointer
+or exporting an image restores the exact CPU colors and histogram. Very narrow ranges that cannot be
 represented safely use the exact path throughout.
+
+Other legend edits, such as a typed limit, a new color map or a category
+checkbox, recolor every atom exactly on the page thread, coalesced to one
+update per animation frame. Category IDs from 0 to 255 are colored and masked
+through lookup tables, with a map for any other value, and each color map's
+stops are flattened once; the bytes are the same as with per-atom lookups. For
+1,000,000 atoms this takes about 30 ms for category colors, 19 ms for a
+category mask and 37 ms for scalar colors on a 32-thread workstation; see
+[performance](performance.md#measured-effects).
 
 ## Ambient occlusion
 
@@ -137,6 +148,13 @@ pixels the latter took 3.0 s. Software WebGL (SwiftShader) needed about 45 s for
 background slice can exceed its 12 ms budget by one image readback, about
 60 ms at 2048 pixels.
 
+Visible pixels are counted on the CPU after each image is read back; there is
+no reduction on the GPU. The buffer always frames the complete unhidden
+structure, also when slices leave only a small part visible, so a heavily
+sliced view has fewer pixels per atom: raise the buffer resolution for it.
+Values are not updated while the crystal is dragged; they are recomputed for
+the new origin after the release.
+
 **Configuration.** `settings.display.ambientOcclusion` stores `enabled`,
 `intensity` (0–1), `directions` (16, 40, 100 or 200) and `resolution` (256,
 512, 1024 or 2048). Older recipes without this entry restore the feature off.
@@ -178,7 +196,7 @@ ends an active drag, so later pointer movement or release cannot reapply it.
 It keeps the camera, coordinate mode, replication settings and scientific
 results, and updates both views and their attached geometry.
 
-While the pointer moves, nothing is recomputed on the CPU and no buffer or texture is uploaded. The vertex shaders shift each atom's display fraction by the drag and rewrap it on periodic axes. Bonds and arrows move with their atoms, and the bond shader re-evaluates which periodic image of each bond end is displayed. Wigner–Seitz site markers rewrap and trajectory lines translate in the same way. DXA lines are cut at the cell faces for the committed origin; during a drag their pieces are translated and also drawn one cell away along each wrapped direction, clipped to the displayed cell, so a line pushed through a face reappears at the opposite face; pieces cut at the previous faces meet there until the release. Voronoi cells are hidden during a drag. The release rebuilds both. The second view previews the same shift. In unwrapped mode the drag translates the crystal continuously without wrapping. Display replication repeats the shifted crystal. Slice planes are Cartesian and stay in place, as with a typed origin: the crystal moves through them. A fractional-coordinate slice stays attached to the cell.
+While the pointer moves, nothing is recomputed on the CPU and no buffer or texture is uploaded, so a drag keeps the display's refresh rate: on a GTX 1080 Ti, a frame of the Fe loop example in 2 × 2 × 2 display copies (481,832 atoms) takes about 3 ms. The vertex shaders shift each atom's display fraction by the drag and rewrap it on periodic axes. Bonds and arrows move with their atoms, and the bond shader re-evaluates which periodic image of each bond end is displayed. Wigner–Seitz site markers rewrap and trajectory lines translate in the same way. DXA lines are cut at the cell faces for the committed origin; during a drag their pieces are translated and also drawn one cell away along each wrapped direction, clipped to the displayed cell, so a line pushed through a face reappears at the opposite face; pieces cut at the previous faces meet there until the release. Voronoi cells are hidden during a drag. The release rebuilds both. The second view previews the same shift. In unwrapped mode the drag translates the crystal continuously without wrapping. Display replication repeats the shifted crystal. Slice planes are Cartesian and stay in place, as with a typed origin: the crystal moves through them. A fractional-coordinate slice stays attached to the cell.
 
 With the keyboard, **X**, **Y** and **Z** move the crystal by 0.05 of the **a**, **b** or **c** vector, and Shift moves it back. The camera gear (0–9) scales the step. The drag is a display operation; analyses never use the display origin. The configuration stores only the resulting `periodicOrigin`.
 

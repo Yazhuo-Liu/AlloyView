@@ -866,6 +866,24 @@ test('radical Voronoi recipes round-trip validated radii while older recipes kee
   assert.throws(() => parseConfiguration(infinite), /typeRadii\[2\]\.radius/);
 });
 
+test('the WebGPU Voronoi kernel request round-trips as a validated boolean and is absent from older recipes', () => {
+  const requested = createConfiguration({ settings: { extensions: { voronoi: { enabled: true, gpuKernel: true } } } });
+  assert.deepEqual(requested.settings.extensions.voronoi, { enabled: true, faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50,
+    selectedTypes: null, gpuKernel: true });
+  assert.deepEqual(parseConfiguration(JSON.stringify(requested)), requested);
+  const declined = parseConfiguration(JSON.stringify(createConfiguration({ settings: { extensions: { voronoi: { gpuKernel: false } } } })));
+  assert.equal(declined.settings.extensions.voronoi.gpuKernel, false);
+  const older = createConfiguration({ settings: { extensions: { voronoi: { enabled: true, bins: 20 } } } });
+  assert.equal(Object.hasOwn(older.settings.extensions.voronoi, 'gpuKernel'), false, 'recipes without the request use CPU Workers');
+  assert.deepEqual(parseConfiguration(JSON.stringify(older)), older);
+  for (const value of ['true', 1, null, {}, ['voronoi']]) {
+    const invalid = structuredClone(requested); invalid.settings.extensions.voronoi.gpuKernel = value;
+    assert.throws(() => parseConfiguration(JSON.stringify(invalid)), /Invalid AlloyView configuration: settings\.extensions\.voronoi\.gpuKernel must be true or false/);
+  }
+  const misplaced = structuredClone(requested); misplaced.settings.compute.gpuVoronoi = true;
+  assert.throws(() => parseConfiguration(JSON.stringify(misplaced)), /settings\.compute/);
+});
+
 test('topology recipes reject invalid histograms, face filters and missing shared bond cutoff before restore', () => {
   const recipe = createConfiguration({ settings: { extensions: {
     bonds: { cutoff: 3 }, bondStatistics: { enabled: true }, voronoi: { enabled: true },

@@ -9,6 +9,8 @@ const BATCH_ATOMS = 16_384;
 /** CPU-prepared stable correspondences feed GPU Cartesian subtraction,
  * current-cell image selection and scalar magnitudes. Exact CPU correction is
  * limited to numerically ambiguous or unusually expensive image decisions.
+ * The shader receives the CPU context's image lattice, so a replicated wrapped
+ * frame resolves images in its source cell on both backends.
  */
 export async function analyzeGpuDisplacement(runtime, frame, parameters = {}, { signal, onProgress = () => {} } = {}) {
   checkSignal(signal);
@@ -115,8 +117,8 @@ export function prepareGpuDisplacementParameters(frame, parameters = {}) {
   integers[7] = Number(parameters.currentPositions === parameters.referencePositions);
   integers.set([Number(context.minimumImage), Number(context.orthogonal), startAtom, endAtom], 8);
   if (context.minimumImage && frame.cell.pbc.some(Boolean)) {
-    const heights = context.heights ?? cellFaceHeights(frame.cell);
-    const vectors = frame.cell.vectors, scale = Math.max(...Array.from(vectors, Math.abs));
+    const heights = context.heights ?? cellFaceHeights(context.imageCell);
+    const vectors = context.imageCell.vectors, scale = Math.max(...Array.from(vectors, Math.abs));
     if (heights.some(height => !Number.isFinite(height) || height <= 0) || !Number.isFinite(scale)
       || scale / Math.min(...heights) > 1e6) {
       throw new GpuUnavailableError('The current cell exceeds the GPU displacement image precision range.');

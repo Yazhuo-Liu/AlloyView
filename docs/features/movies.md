@@ -225,6 +225,10 @@ remains available for one image per trajectory frame.
   the displayed frame while it runs, which records analysis values in
   [time series](time-series.md) like any other frame visit.
 - Closing or replacing the structure during an export cancels it.
+- Exported files were read back with an independent container parser,
+  decoded with the browser's `VideoDecoder` and a `<video>` element, and
+  inspected with ffprobe. Playback in QuickTime and PowerPoint has not been
+  tested.
 
 ## Configuration
 

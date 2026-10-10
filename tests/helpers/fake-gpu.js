@@ -1,8 +1,9 @@
 /** Test doubles for WebGPU: no shader executes, but queue order, buffer
  * contents written by the host, copies and mappings are reproduced. */
 /** A queue-ordered fake device: writes, dispatches, clears and copies are
- * logged in submission order, and completion promises can be held. */
-export function fakeDevice({ holdCompletions = false } = {}) {
+ * logged in submission order, and completion promises can be held. `execute`
+ * may stand in for a shader: it receives each dispatch's bound buffers. */
+export function fakeDevice({ holdCompletions = false, execute } = {}) {
   const log = [], completions = [];
   let maps = 0;
   const device = {
@@ -18,6 +19,7 @@ export function fakeDevice({ holdCompletions = false } = {}) {
         for (const { operations } of commands) for (const operation of operations) {
           if (operation.type === 'copy') operation.target.data.set(operation.source.data.subarray(operation.sourceOffset, operation.sourceOffset + operation.size), operation.targetOffset);
           if (operation.type === 'clear') operation.buffer.data.fill(0, operation.offset, operation.offset + (operation.size ?? operation.buffer.size));
+          if (operation.type === 'dispatch') execute?.(operation.buffers);
           log.push(operation);
         }
       },
@@ -36,9 +38,11 @@ export function fakeDevice({ holdCompletions = false } = {}) {
     },
     createCommandEncoder() {
       const operations = [];
+      let buffers = [];
       return {
-        beginComputePass: () => ({ setPipeline() {}, setBindGroup() {}, end() {},
-          dispatchWorkgroups(workgroups) { operations.push({ type: 'dispatch', workgroups }); } }),
+        beginComputePass: () => ({ setPipeline() {}, end() {},
+          setBindGroup(_index, group) { buffers = (group?.entries ?? []).map(entry => entry.resource.buffer); },
+          dispatchWorkgroups(workgroups) { operations.push({ type: 'dispatch', workgroups, buffers }); } }),
         copyBufferToBuffer(source, sourceOffset, target, targetOffset, size) { operations.push({ type: 'copy', source, sourceOffset, target, targetOffset, size }); },
         clearBuffer(buffer, offset = 0, size) { operations.push({ type: 'clear', buffer, offset, size }); },
         finish: () => ({ operations }),

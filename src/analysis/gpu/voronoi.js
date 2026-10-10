@@ -127,6 +127,7 @@ export async function prepareGpuVoronoiFrame(runtime, source, parameters = {}, {
   try {
     await runtime.warmup({ analysisKinds:['voronoi'], signal });
     checkSignal(signal);
+    runtime.requireExactPairs?.();
     await runtime.uploadFrame(frame, {signal, frameIndex});
     const frameKey = runtime.frameKey(frame);
     if (runtime.cacheStatus().preparedVoronoiFrameIds.includes(frameKey)) return runtime.cacheStatus();
@@ -178,6 +179,8 @@ async function analyzeGpuVoronoiCells(runtime, frame, parameters = {}, { signal,
     faceAreaThreshold, relativeFaceAreaThreshold, bins } = prepared;
   const radii = parameters.radii ?? null, weighting = radii == null ? null : gpuRadicalWeighting(radii, count, scale);
   await runtime.initialize(signal);
+  // The contact predicates need exact pairs; fail before reserving a workspace.
+  runtime.requireExactPairs?.();
   const size = endAtom - startAtom, kernelReused = Boolean(runtime.voronoiWorkspace);
   const scratch = workspace(runtime, voronoiGpuBatchSize(runtime, size));
   const settingsWords = voronoiSettings(frame, prepared), settingsFloats = new Float32Array(settingsWords.buffer);
@@ -227,12 +230,23 @@ async function analyzeGpuVoronoiBatches(runtime, frame, prepared, { signal, onPr
   const correctionLimit = Math.min(MAX_GPU_VORONOI_CORRECTIONS, Math.max(16, Math.floor(size * .1)));
   const needsCorrection = new Map(), correctionReasons = { geometry: 0, threshold: 0, coverage: 0, ...(weighting ? { emptyCell: 0 } : {}) },
     correctionPrecisionCodes = {};
+  const tooManyCorrections = () => {
+    const pending = {};
+    for (const reason of needsCorrection.values()) pending[reason] = (pending[reason] ?? 0) + 1;
+    return new GpuUnavailableError(`Too many Voronoi cells need exact recovery (${JSON.stringify(pending)}; precision ${JSON.stringify(correctionPrecisionCodes)}); using parallel CPU workers.`);
+  };
+  // Every flagged cell is recovered one at a time on this Worker, and past
+  // the limit the whole frame is recomputed by the CPU pool anyway. Stop
+  // before any recovery once the cells flagged so far exceed the limit, or
+  // the first batch flags a larger share of its cells than the limit allows
+  // over the whole range.
+  const checkRecoveryBudget = (flaggedBefore, first, batchCount) => {
+    const flagged = needsCorrection.size - flaggedBefore;
+    if (correctionAtoms + flagged > correctionLimit
+        || (first && batchCount < size && flagged * size > correctionLimit * batchCount)) throw tooManyCorrections();
+  };
   const correctCell = async (atom, reason) => {
-    if (++correctionAtoms > correctionLimit) {
-      const pending = {};
-      for (const reason of needsCorrection.values()) pending[reason] = (pending[reason] ?? 0) + 1;
-      throw new GpuUnavailableError(`Too many Voronoi cells need exact recovery (${JSON.stringify(pending)}; precision ${JSON.stringify(correctionPrecisionCodes)}); using parallel CPU workers.`);
-    }
+    if (++correctionAtoms > correctionLimit) throw tooManyCorrections();
     checkSignal(signal);
     let cached = runtime.voronoiCpuContext;
     if (!cached || cached.context.frame.fractional !== frame.fractional || cached.context.frame.cell !== frame.cell) {
@@ -259,7 +273,7 @@ async function analyzeGpuVoronoiBatches(runtime, frame, prepared, { signal, onPr
   const initialRadius = voronoiGpuInitialRadius(prepared);
   for (let begin = startAtom; begin < endAtom; begin += scratch.capacity) {
     checkSignal(signal);
-    const end = Math.min(endAtom, begin + scratch.capacity), batchCount = end - begin;
+    const end = Math.min(endAtom, begin + scratch.capacity), batchCount = end - begin, flaggedBefore = needsCorrection.size;
     settingsWords[26] = begin; settingsFloats[25] = 0;
     let radius = initialRadius, context = await runtime.prepareNeighbors(frame, radius, { signal });
     writeSettings();
@@ -279,6 +293,7 @@ async function analyzeGpuVoronoiBatches(runtime, frame, prepared, { signal, onPr
           for (let row = 0; row < batchCount; row++) {
             if (!states[row * GPU_VORONOI_STATE_WORDS + 2] && !needsCorrection.has(begin + row)) needsCorrection.set(begin + row, 'coverage');
           }
+          checkRecoveryBudget(flaggedBefore, begin === startAtom, batchCount);
           break;
         }
         bindings = clipBindings(context);
@@ -311,6 +326,7 @@ async function analyzeGpuVoronoiBatches(runtime, frame, prepared, { signal, onPr
             weighting.maxSquared - weighting.squared[begin + row]) / 2 : floats[offset + 6] * scale);
         }
       }
+      checkRecoveryBudget(flaggedBefore, begin === startAtom, batchCount);
       if (!remaining) break;
       if (attempt === 31) throw new GpuUnavailableError('GPU Voronoi neighbor coverage did not complete; using exact CPU workers.');
       settingsFloats[25] = radius;

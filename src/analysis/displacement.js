@@ -1,4 +1,4 @@
-import { cellFaceHeights, fractionalToCartesian, invert3 } from '../data/model.js';
+import { cellFaceHeights, fractionalToCartesian, imageLatticeCell, invert3, wrappedSourceRepetitions } from '../data/model.js';
 import { createReferenceMappingAsync } from './reference-strain.js';
 import { yieldToMain } from '../task-yield.js';
 
@@ -10,6 +10,9 @@ const derivedCartesianPositions = new WeakMap();
  * fallback. This assumes the source keeps atom order stable between frames.
  * Cell deformation and origin changes contribute to displacement: no affine
  * cell remapping is applied. Minimum images use the current triclinic metric.
+ * Physically replicated frames built from wrapped coordinates use the lattice
+ * of their source cell instead: a wrapped atom jumps by a source vector, not
+ * by a vector of the enlarged cell.
  * Unmatched current atoms remain NaN; they do not produce arrow fragments.
  * Disable minimumImage when trajectory coordinates have already been unwrapped.
  */
@@ -105,14 +108,16 @@ export async function prepareDisplacements(frame, reference, {
   const referencePositions = frame === reference ? currentPositions : displacementPositions(reference, minimumImage, cacheDerivedPositions);
   throwIfAborted(signal);
   return { referenceFrame: reference, referenceFractional: reference.fractional, referenceCell: reference.cell,
-    referenceMapping, currentPositions, referencePositions, minimumImage, mappingMode };
+    referenceMapping, currentPositions, referencePositions, minimumImage, mappingMode,
+    sourceRepetitions: minimumImage ? wrappedSourceRepetitions(frame, reference) : null };
 }
 
 /** Reusable double-precision geometry for CPU worker ranges and sparse GPU
  * image corrections. Matching is already complete when this helper runs.
  */
 export function prepareDisplacementCalculation(frame, parameters) {
-  const { referenceMapping, currentPositions, referencePositions, minimumImage = true, mappingMode = 'id' } = parameters;
+  const { referenceMapping, currentPositions, referencePositions, minimumImage = true, mappingMode = 'id',
+    sourceRepetitions = null } = parameters;
   if (typeof minimumImage !== 'boolean') throw new Error('The displacement minimum-image option must be a boolean.');
   const count = coordinateCount(frame), referenceCount = referencePositions?.length / 3;
   if (!(referenceMapping instanceof Int32Array) || referenceMapping.length !== count
@@ -121,11 +126,12 @@ export function prepareDisplacementCalculation(frame, parameters) {
   }
   if (mappingMode !== 'id' && mappingMode !== 'row-order') throw new Error('The displacement mapping mode is invalid.');
   for (const atom of referenceMapping) if (atom < -1 || atom >= referenceCount) throw new Error('Displacement mapping is outside the reference frame.');
-  const inverse = minimumImage ? invert3(frame.cell.vectors) : null;
-  const orthogonal = minimumImage && orthogonalBasis(frame.cell.vectors);
-  const heights = minimumImage && !orthogonal ? cellFaceHeights(frame.cell) : null;
+  const imageCell = minimumImage ? imageLatticeCell(frame.cell, sourceRepetitions) : null;
+  const inverse = minimumImage ? invert3(imageCell.vectors) : null;
+  const orthogonal = minimumImage && orthogonalBasis(imageCell.vectors);
+  const heights = minimumImage && !orthogonal ? cellFaceHeights(imageCell) : null;
   return { frame, referenceMapping, currentPositions, referencePositions, minimumImage, mappingMode,
-    inverse, orthogonal, heights, change: new Float64Array(3) };
+    imageCell, inverse, orthogonal, heights, change: new Float64Array(3) };
 }
 
 /** Synchronous atom ranges run inside CPU workers without repeating ID maps. */
@@ -159,14 +165,14 @@ export function calculatePreparedDisplacements(frame, parameters, { signal, onPr
 }
 
 function calculateDisplacementAtom(context, atom, vectors, offset) {
-  const { referenceMapping, currentPositions, referencePositions, change, minimumImage, frame, inverse, heights, orthogonal } = context;
+  const { referenceMapping, currentPositions, referencePositions, change, minimumImage, imageCell, inverse, heights, orthogonal } = context;
   const referenceAtom = referenceMapping[atom];
   if (referenceAtom < 0) return false;
   for (let axis = 0; axis < 3; axis += 1) {
     change[axis] = currentPositions[atom * 3 + axis] - referencePositions[referenceAtom * 3 + axis];
     if (!Number.isFinite(change[axis])) throw new Error('Displacement requires finite atom coordinates.');
   }
-  if (minimumImage) resolveMinimumImage(change, frame.cell, inverse, heights, orthogonal);
+  if (minimumImage) resolveMinimumImage(change, imageCell, inverse, heights, orthogonal);
   vectors.set(change, offset);
   return true;
 }
@@ -201,15 +207,17 @@ function displacementPositions(frame, minimumImage, cacheDerivedPositions) {
 
 /** Return the shortest Cartesian image, including strongly skewed cells and
  * mixed periodic/open axes. Componentwise fractional rounding alone is wrong
- * when the basis vectors are not orthogonal.
+ * when the basis vectors are not orthogonal. sourceRepetitions selects the
+ * source lattice of a replicated wrapped frame (see imageLatticeCell).
  */
-export function minimumImageDisplacement(displacement, cell) {
+export function minimumImageDisplacement(displacement, cell, sourceRepetitions = null) {
   if (displacement?.length !== 3 || !Array.from(displacement).every(Number.isFinite)) {
     throw new Error('A displacement requires three finite Cartesian components.');
   }
   const result = Float64Array.from(displacement);
-  const orthogonal = orthogonalBasis(cell.vectors);
-  resolveMinimumImage(result, cell, invert3(cell.vectors), orthogonal ? null : cellFaceHeights(cell), orthogonal);
+  const imageCell = imageLatticeCell(cell, sourceRepetitions);
+  const orthogonal = orthogonalBasis(imageCell.vectors);
+  resolveMinimumImage(result, imageCell, invert3(imageCell.vectors), orthogonal ? null : cellFaceHeights(imageCell), orthogonal);
   return result;
 }
 

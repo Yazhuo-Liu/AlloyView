@@ -86,7 +86,10 @@ and `image.png` wait for the frame or the image like `frame` and `export png`.
 
 `frame` does not reload a frame that is already displayed and then does not
 wait; `wait-analyses` waits for analyses that were started in another way,
-for example by a button just before **Run**.
+for example by a button just before **Run**. “A frame is loading” means that
+the loading indicator over the view is shown. The operation that shows it
+always hides it, also when another frame request replaces it, so the wait
+ends when the work does.
 
 `camera set` takes its values at face value. Azimuth 0° with elevation 0° is
 the front view; elevation 90° is the top view. With `upright on` the elevation

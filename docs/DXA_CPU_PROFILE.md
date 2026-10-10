@@ -7,7 +7,7 @@ historical profiles. GPU snapshot packing and accelerator experiments describe
 earlier revisions; they are no longer part of production extraction. Their
 numerical records remain unchanged.
 
-## Ordered edge passes, P18 (2026-10-08)
+## Ordered edge passes (2026-10-08)
 
 Tessellation-edge construction now prepares a byte-sized candidate mask per
 primary tetrahedron with shared-memory threads, then keeps the original
@@ -55,6 +55,13 @@ Fe mapping remains effectively unchanged. These measurements support bounded
 parallel search without a universal whole-frame speedup claim. Full protocol,
 kernel hashes, samples and diagnostics are in
 [dxa-p18-ordered-edges.json](benchmarks/dxa-p18-ordered-edges.json).
+
+Before this change, an eight-thread HEA extraction spent about 275 ms in
+serial stages: 61 ms building edges, 87 ms mapping them, 90 ms tracing Burgers
+circuits, 14 ms building clusters and 23 ms serializing the result. The
+Delaunay tessellation ran only 2.1 times faster than with one thread. With
+tracing, clusters and junction merging still serial, the estimated floor for
+this example is about 400 ms.
 
 Burgers tracing, cluster traversal, junction merging and ordered graph/mesh
 commits still require further work. The complete extraction continues to reuse
@@ -126,6 +133,49 @@ and 197–355 ms for the Fe loop, and the four-Worker stage 104–154 and
 253–331 ms, while the native classification it replaces takes about 180 and
 520 ms. A faster packer, or skipping this stage, would help more than further
 transfer changes.
+
+## Build flags, binary labels and thread count (2026-10-07)
+
+`wasm/build-dxa.sh` builds both kernels with Emscripten 3.1.69 and
+`-O3 -flto -msimd128 -fwasm-exceptions`. The earlier build used
+`-O3 -fexceptions` with `-sDISABLE_EXCEPTION_CATCHING=0`, which routes C++
+exceptions through JavaScript `invoke_*` trampolines, and enabled neither SIMD
+nor link-time optimization. The plain kernel shrank from 753 to 611 KB and the
+threaded one from 791 to 654 KB; later changes, mainly the surface and defect
+meshes, brought them to 668 and 720 KB. Native WebAssembly exceptions need Chrome 95,
+Firefox 100 or Safari 15.2, and SIMD needs Chrome 91, Firefox 89 or Safari
+16.4, so DXA requires Chrome 95, Firefox 100 or Safari 16.4.
+
+Complete extraction in Node on the reference machine (32 logical processors),
+milliseconds, including JavaScript:
+
+| Case | Before | After |
+| --- | ---: | ---: |
+| HEA, 28,800 atoms, 1 thread | 1,113 | 952 |
+| Fe loop, 60,229 atoms, 1 thread | 2,869 | 2,490 |
+| HEA, 30 threads | 558 | 473 |
+| Fe loop, 30 threads | 921 | 744 |
+
+Across the verification cases, wall time fell by 5–19%. One-thread SHA-256
+hashes of the complete normalized result are identical to the previous build
+for 14 cases on both kernels: the four examples (NiGB replicated 1×1×2), six
+NEB frames, synthetic FCC, BCC and HCP crystals, and the HEA example analyzed
+as HCP. The same flags gave the PTM kernel no measurable gain, so PTM is still
+built with `-O3` alone. Linking mimalloc gave DXA no single-thread gain and
+could change pointer ordering, so the default allocator remains.
+
+The kernel used to write one structure label per atom into its JSON result
+text, which the host then parsed; this is the serialization stage of the
+baseline tables below. With `alloy_dxa_binary_labels(1)` it keeps the labels
+in a byte buffer instead. The host copies them with `HEAPU8.slice`, and the DXA
+Worker transfers that buffer to the page. A caller that does not set the
+switch still receives the JSON array. Labels and networks are unchanged in the
+same 14 cases.
+
+`dxaWorkerCount()` requests one native thread per 2,048 atoms instead of one
+per 4,096: 15 threads instead of 8 for the 28,800-atom HEA example. In Node,
+16 threads took 516 ms against 555 ms with 8. The shared CPU budget still caps
+the total, and structures below 2,048 atoms use one thread.
 
 ## Historical pthread optimizations
 
@@ -328,7 +378,8 @@ to deduplicate the six edges of each local tetrahedron. A future replacement
 could collect immutable edge candidates in parallel, then deduplicate and
 commit them in the original cell/edge order. It must retain first-seen edge
 orientation, linked-list order, and reference-frame mapping; a shared mutable
-unordered map is not a safe drop-in change.
+unordered map is not a safe drop-in change. This is the design since adopted
+in [ordered edge passes](#ordered-edge-passes-2026-10-08).
 
 Ideal-vector mapping uses a mutable crystal path-finder scratch pool and may
 cache new transitions in the cluster graph. Atom-cluster construction is an
@@ -337,7 +388,9 @@ orientation matrices. Dislocation tracing also mutates search state, circuits
 and shared lines. These stages need an explicit algorithm redesign before
 parallel execution; independent frame fragments would change global DXA
 topology. NiGB makes the serial tracer's cost visible even though it produces
-no final segments.
+no final segments. Edge mapping has since been parallelized with private
+path-finder scratch and deferred transitions, as described in the same
+section; cluster construction and tracing remain serial.
 
 ## Alpha-cache experiment
 

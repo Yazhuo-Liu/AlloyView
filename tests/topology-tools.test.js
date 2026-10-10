@@ -49,15 +49,18 @@ function harness(t) {
     'voronoi-face-area-threshold': 0, 'voronoi-relative-face-area-threshold': 0 })) fields[id] = new Element(value);
   for (const id of ['voronoi-type-options', 'voronoi-type-summary', 'voronoi-select-all-types', 'voronoi-clear-types',
     'voronoi-radical', 'voronoi-radius-source', 'voronoi-type-radii', 'voronoi-reset-radii', 'voronoi-radius-property',
-    'voronoi-radius-property-field', 'voronoi-radical-summary', 'voronoi-radical-controls']) fields[id] = new Element();
+    'voronoi-radius-property-field', 'voronoi-radical-summary', 'voronoi-radical-controls',
+    'voronoi-gpu-kernel', 'voronoi-gpu-kernel-summary']) fields[id] = new Element();
   globalThis.document = { getElementById: id => fields[id] ?? null,
     createElement() { const element = new Element(); element.ownerDocument = this; return element; } };
   for (const element of Object.values(fields)) element.ownerDocument = globalThis.document;
   t.after(() => { globalThis.document = previousDocument; });
   let currentFrame = frame(), version = 'source-a', frameIndex = 0, bondCutoff = 3, graphEnabled = false, colorVersion = 0;
   const frames = new Set([currentFrame]), pending = [], changes = [], pendingSnapshots = [], selected = [], notifications = [], beforeClear = [], toolFlags = new Map();
+  const preparation = [];
   const pool = {
-    gpuEnabled: false,
+    gpuEnabled: false, gpuVoronoi: false,
+    setGpuVoronoi(enabled) { this.gpuVoronoi = enabled; },
     analyze(inputFrame, settings, options) {
       return new Promise((resolve, reject) => pending.push({ frame: inputFrame, settings, options, resolve, reject }));
     },
@@ -74,9 +77,10 @@ function harness(t) {
       enabled: tools.isEnabled(kind),
       properties: currentFrame.properties.filter(property => property.analysisKind === kind) }),
     notify: message => notifications.push(message),
+    onGpuPreparationChange: kinds => preparation.push(kinds),
   });
   tools.setEnabled(true);
-  return { tools, fields, pool, pending, changes, pendingSnapshots, selected, notifications, beforeClear, toolFlags, frames,
+  return { tools, fields, pool, preparation, pending, changes, pendingSnapshots, selected, notifications, beforeClear, toolFlags, frames,
     getFrame: () => currentFrame,
     setFrame(next, index = frameIndex + 1) { currentFrame = next; frameIndex = index; frames.add(next); },
     setSourceVersion(next) { version = next; },
@@ -389,4 +393,63 @@ test('radical Voronoi sends validated per-atom radii under a distinct cache key 
   h.pending.at(-1).resolve(voronoiResult()); await restored;
   h.fields['voronoi-radical'].checked = false; h.fields['voronoi-radical'].dispatch('change');
   assert.equal('radii' in h.pending.at(-1).settings, false);
+});
+
+test('the WebGPU Voronoi kernel is an explicit request: off by default, usable only with GPU acceleration, keyed, saved and reset', async t => {
+  const h = harness(t), option = h.fields['voronoi-gpu-kernel'], summary = h.fields['voronoi-gpu-kernel-summary'];
+  const structure = { ...frame(), fractional: new Float64Array(9), types: Uint16Array.from([0, 1, 0]), typeLabels: ['Ni', 'Al'], properties: [] };
+  h.setFrame(structure); h.tools.setEnabled(true);
+  assert.equal(option.checked, false); assert.equal(option.disabled, true, 'the option needs GPU acceleration');
+  assert.equal(summary.textContent, 'CPU Workers'); assert.deepEqual(h.tools.gpuPreparationKinds(), []);
+  assert.equal(h.tools.serialize().voronoi.gpuKernel, undefined, 'recipes without the request keep their previous shape');
+  h.pool.gpuEnabled = true; h.tools.syncGpuAcceleration();
+  assert.equal(option.disabled, false); assert.equal(h.pool.gpuVoronoi, false);
+  const routed = h.tools.run('voronoi');
+  assert.equal('gpuKernel' in h.pending[0].settings, false, 'the request is not an analysis parameter');
+  h.pending[0].resolve({ ...voronoiResult(), engine: 'voro++-wasm-worker-pool×6', workerCount: 6, gpuRequested: true, fallbackReason: undefined,
+    routeReason: 'Voronoi runs on CPU Workers.' }); await routed;
+  assert.equal(h.fields['voronoi-backend'].textContent, 'CPU · 6 Workers', 'the CPU is named without calling it a fallback');
+  assert.equal(h.fields['voronoi-status'].title, 'voro++-wasm-worker-pool×6 · Voronoi runs on CPU Workers.');
+  assert.equal(await h.tools.run('voronoi'), true); assert.equal(h.pending.length, 1, 'the routed result is cached');
+
+  option.checked = true; option.dispatch('change');
+  assert.equal(h.pool.gpuVoronoi, true); assert.deepEqual(h.preparation.at(-1), ['voronoi']);
+  assert.equal(summary.textContent, 'WebGPU kernel');
+  assert.equal(h.pending.length, 2, 'the calculated analysis is repeated with the requested kernel');
+  assert.equal('gpuKernel' in h.pending[1].settings, false);
+  h.pending[1].resolve({ ...voronoiResult(), backend: 'gpu', engine: 'webgpu-voronoi', fallbackReason: undefined, gpuRequested: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.fields['voronoi-backend'].textContent, 'WebGPU');
+  assert.equal(h.tools.serialize().voronoi.gpuKernel, true);
+  h.fields['voronoi-radical'].checked = true; h.fields['voronoi-radical'].dispatch('change');
+  assert.deepEqual(h.preparation.at(-1), ['voronoi', 'voronoiRadical'], 'radical radii add the radical clip kernel');
+  assert.deepEqual(h.tools.gpuPreparationKinds(), ['voronoi', 'voronoiRadical']);
+  h.pending[2].resolve({ ...voronoiResult(), backend: 'gpu', engine: 'webgpu-voronoi', fallbackReason: undefined }); await new Promise(resolve => setImmediate(resolve));
+  h.fields['voronoi-radical'].checked = false; h.fields['voronoi-radical'].dispatch('change');
+  assert.deepEqual(h.preparation.at(-1), ['voronoi']);
+  h.pending[3].resolve({ ...voronoiResult(), backend: 'gpu', engine: 'webgpu-voronoi', fallbackReason: undefined }); await new Promise(resolve => setImmediate(resolve));
+
+  // Without GPU acceleration the request is kept but cannot run or change.
+  h.pool.gpuEnabled = false; h.tools.syncGpuAcceleration();
+  assert.equal(option.checked, true); assert.equal(option.disabled, true);
+  assert.equal(summary.textContent, 'CPU Workers · GPU acceleration is off');
+  const cpu = h.tools.run('voronoi');
+  assert.equal(h.pending.length, 5, 'a CPU run does not reuse the GPU kernel result');
+  h.pending[4].resolve({ ...voronoiResult(), fallbackReason: undefined }); await cpu;
+
+  const saved = h.tools.serialize().voronoi;
+  h.tools.reset();
+  assert.equal(option.checked, false); assert.equal(h.pool.gpuVoronoi, false); assert.deepEqual(h.preparation.at(-1), []);
+  assert.equal(h.tools.serialize().voronoi.gpuKernel, undefined);
+  h.pool.gpuEnabled = true;
+  const restored = h.tools.restore({ voronoi: saved });
+  assert.equal(option.checked, true); assert.equal(option.disabled, false);
+  assert.equal(h.pool.gpuVoronoi, true, 'the pool is told before the restored analysis starts');
+  assert.deepEqual(h.preparation.at(-1), ['voronoi']);
+  h.pending.at(-1).resolve({ ...voronoiResult(), backend: 'gpu', engine: 'webgpu-voronoi', fallbackReason: undefined }); await restored;
+  // An older recipe has no key and restores with CPU Workers.
+  const older = { ...saved }; delete older.gpuKernel;
+  const legacy = h.tools.restore({ voronoi: older });
+  assert.equal(option.checked, false); assert.equal(h.pool.gpuVoronoi, false); assert.deepEqual(h.preparation.at(-1), []);
+  h.pending.at(-1).resolve({ ...voronoiResult(), fallbackReason: undefined }); await legacy;
 });

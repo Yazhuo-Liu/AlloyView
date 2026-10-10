@@ -1,12 +1,22 @@
 # Improvement backlog
 
-Last updated: 2026-10-09 (all three phases completed; A8 dropped)
+Last updated: 2026-10-10. Audited commit: `dbe6055`.
 
-This backlog collects a performance and parallelism audit of AlloyView and a
-feature comparison with OVITO and AtomEye. Work through it in phase order.
-Within a phase, items are ordered by expected benefit per unit of effort.
-Update an item's **Status** line, and add a dated entry to
-[VALIDATION.md](VALIDATION.md), when you finish it.
+The feature plan is complete, so this backlog now tracks defects and
+performance work only. Earlier backlog items (P1–P18, O1–O16, A1–A9,
+D1) are described in the feature pages, [performance](features/performance.md),
+[analysis implementation](STRUCTURE_ANALYSIS.md) and the
+[DXA CPU profile](DXA_CPU_PROFILE.md); [VALIDATION.md](VALIDATION.md) keeps
+their dated records under those labels. The labels are retired and are not
+reused here.
+
+This backlog comes from a whole-project audit on 2026-10-10: six read-only
+audits (CPU analyses, WebGPU compute, rendering, file and trajectory flow,
+application shell, feature interactions) with measurements and prototypes. It lists
+defects first, then performance work in three phases. Within a part, items are
+ordered by expected benefit per unit of effort. When you finish an item, move
+its durable description into the relevant document, add a dated entry to
+VALIDATION.md and delete the item here.
 
 ## Rules for every change
 
@@ -15,743 +25,1110 @@ Update an item's **Status** line, and add a dated entry to
   examples and synthetic crystals. State any intended numerical change and its
   tolerance.
 - Keep the nonisolated path working. Production
-  (<https://yazhuoliu.com/AlloyView/>) is cross-origin isolated, but the plain
-  GitHub Pages address and other static hosts may not be; see
-  [Deployment](DEPLOYMENT.md). Code must branch on `crossOriginIsolated` and
-  `SharedArrayBuffer`, never on the host name.
-- Keep background prewarming of Workers, Wasm modules and GPU preparation. It
-  avoids cold starts and is a deliberate design choice, not waste.
-- Update the feature page under `docs/features/`, the user guide and tests in
-  the same change. Run `npm test` and the relevant `npm run test:browser:*`
-  suites after `npm run build`.
-- Never evaluate user-provided text as code. Configuration JSON is shared
-  between users.
-
-Measurement notes: the reference machine has 32 logical CPUs and a GTX 1080
-Ti. Emscripten 3.1.69 is installed at `~/emsdk` (`source emsdk_env.sh`).
-`scripts/webgpu-browser.mjs` drives headless Chrome; pass `isolated: true` for
-COOP/COEP and `software: false` for the real GPU. GPU timings inflate when GPU
-calls follow CPU calls in the same page, so compare GPU variants in separate
-pages. Multithreaded DXA is nondeterministic run to run; compare hashes with
-one thread.
-
-Evidence tags: **[M]** measured in Node on the reference machine (median of
-3–9 runs, machine under shared load, ±10% for multithreaded timings);
-**[C]** confirmed by reading the code; **[E]** estimate.
-
-Effort: **S** is a contained change to a few modules with no new tool panel;
-**M** adds a panel, a parser family, a GPU/CPU pair or cross-module plumbing;
-**L** changes an algorithm's structure.
-
-## Phase 1: small changes
-
-### P1. DXA Wasm build flags
-
-**Status:** Done 2026-10-07. Both kernels rebuilt (plain 753 → 611 KB, threaded 791 → 654 KB). One-thread hashes of the complete normalized result were identical to the previous build for 14 cases on both kernels: the four examples (NiGB replicated 1×1×2), six NEB frames, synthetic FCC/BCC/HCP and HEA analyzed as HCP. Node wall time including JavaScript fell 5–19% [M]. **Effort:** S. **Deployments:** both.
-
-`wasm/build-dxa.sh` builds with `-O3 -fexceptions` and
-`-sDISABLE_EXCEPTION_CATCHING=0`, which routes C++ exceptions through
-JavaScript `invoke_*` trampolines. It enables neither SIMD nor LTO [C].
-Building with `-fwasm-exceptions -msimd128 -flto` gave, single-threaded,
-HEA (28,800 atoms) 1113 → 952 ms and the Fe loop 2869 → 2490 ms; with 30
-threads, 558 → 473 ms and 921 → 744 ms [M]. Atom-label and line hashes were
-identical, and the binary shrank from 791 to 654 KB [M]. Native Wasm
-exceptions need Chrome 95, Firefox 100 or Safari 15.2; SIMD needs Chrome 91,
-Firefox 89 or Safari 16.4. PTM showed no gain from SIMD or LTO [M]; mimalloc
-gave no single-thread gain and may change pointer ordering [M].
-
-Acceptance: both kernels rebuilt; single-thread hashes of atom labels, segment
-points, lengths and junctions identical on every example and test structure;
-`npm test` and the DXA browser suites pass; browser minimums documented.
-
-### P2. Binary DXA atom labels
-
-**Status:** Done 2026-10-07. `alloy_dxa_binary_labels(1)` switches the kernel to a byte buffer read with `HEAPU8.slice`; headless callers keep the JSON array. Same 14-case hash check. **Effort:** S. **Deployments:** both.
-
-The kernel returns per-atom structure labels inside the JSON result text
-(`wasm/dxa.cpp` result serialization, parsed in `src/analysis/dxa.js`) [C].
-Return them as a typed array and transfer it, so neither side formats or
-parses one number per atom.
-
-Acceptance: identical labels and network; Worker message transfers the buffer.
-
-### P3. DXA thread count heuristic
-
-**Status:** Done 2026-10-07. One thread per 2,048 atoms; the unit test expectation changed from 3 to 5 threads for 10,000 atoms. **Effort:** S. **Deployments:** isolated.
-
-`dxaWorkerCount()` in `src/analysis/dxa.js` uses `ceil(count / 4096)` threads,
-which is 8 for the 28,800-atom HEA example. Using 2048 (16 threads) took
-555 → 516 ms in Node [M]. The shared CPU budget still caps the total.
-
-Acceptance: thread-count unit tests updated; one-thread hashes unchanged.
-
-### P4. Frame-commit overhead in the renderer
-
-**Status:** Partly done 2026-10-07. Both `gl.finish()` calls are removed; **GPU upload** now reports submission time (user guide updated). The duplicate radius upload remains: avoiding it needs an O(N) comparison or a reordered frame commit, and the upload is only 4 bytes per atom. **Effort:** S. **Deployments:** both.
-
-`src/render/webgl-renderer.js` calls `gl.finish()` twice per frame commit only
-to time the upload for the Performance panel, which stalls the CPU until the
-GPU drains [C]. Atom radii and the position texture are uploaded twice per
-frame [C]. Remove the synchronous waits (report CPU-side upload time and say
-so) and the duplicate uploads.
-
-Acceptance: identical rendered pixels in the browser suites; Performance panel
-text documents what the upload metric measures.
-
-### P5. Vector-arrow index construction
-
-**Status:** Done 2026-10-07, together with the same callback pattern in `translatePeriodicPoints()`. **Effort:** S. **Deployments:** both.
-
-`src/render/atom-primitives.js` builds the arrow index with
-`Uint32Array.from({ length }, callback)`: 18 ms at 130k atoms [M]. A plain loop
-fills the same array in under 1 ms [E].
-
-### P6. Selection-group ID matching on new frames
-
-**Status:** Done 2026-10-07 in `src/data/atom-ids.js`. At 1M atoms: hidden-group mask 371 → 38 ms, group summary 443 → 79 ms (sorted typed-array search), appearance lookup 609 → 205 ms [M]. Tests compare every helper with `String(id)` matching, including `07`, `-0`, NaN, 1e21 and BigInt IDs. **Effort:** S. **Deployments:** both.
-
-With a hidden group, `selectionGroupVisibility()` in `src/selection-groups.js`
-converts every frame ID to a string and looks it up in a string set on each new
-frame: 37 ms at 130k atoms, 412 ms at 1M [M]. Group summaries and appearance
-lookups by ID repeat similar string work (55 ms and 60 ms at 130k) [M]. Match
-numeric IDs against a numeric set. Keep string matching only for IDs whose
-canonical string form differs from their number, so results are unchanged.
-
-### P7. Legend recoloring on the main thread
-
-**Status:** Done 2026-10-07 (exact part). Categories use 256-entry tables with a Map fallback for other values; color-map stops are flattened once. At 1M atoms: category colors 101 → 30 ms, category mask 145 → 19 ms, scalar colors about 51 → 37 ms; all outputs byte-identical across every color map and category edge case [M]. Caching data limits was not done: it saves under 10% and would rely on property arrays never changing in place. **Effort:** S (exact part). **Deployments:** both.
-
-Each legend edit or slider tick (already coalesced to one animation frame)
-recomputes every color, the data minimum/maximum, masks and the histogram, then
-re-uploads whole buffers: 11 ms per tick at 130k atoms, 75–90 ms at 1M [M].
-`colorsByCategory()` takes 11 ms and `visibilityByCategory()` 17 ms at 130k;
-table-driven versions took 0.8 ms and 0.3 ms [M]. Cache data limits per data
-array and visibility mask; use lookup tables for categories.
-
-Acceptance: identical color and mask bytes; unit tests for categories with
-NaN, hidden IDs and unknown IDs.
-
-### P8. Parser tokenizing
-
-**Status:** Done 2026-10-07 with typed arrays and loops; NiGB CFG about 460 → 410 ms, dumps unchanged within noise [M]. A manual tokenizer matching `\s` exactly was tried and dropped: it was 20% slower than the native split on two dumps. All 44 example files and six malformed variants give identical frames and errors. **Effort:** S. **Deployments:** both.
-
-`src/io/cfg.js` and `src/io/lammps-dump.js` split every line with a regular
-expression, grow plain arrays and copy them with `Float64Array.from` /
-`Uint16Array.from` callbacks [C]. A manual whitespace tokenizer and preallocated
-typed arrays took NiGB (CFG, 130k atoms) 449 → 380 ms with identical output
-[M]. Keep every validation and error message; an earlier prototype dropped
-element-symbol validation and must not be copied.
-
-Acceptance: element-wise identical frames on all examples; existing parser
-error tests unchanged.
-
-### P9. Bond-statistics GPU correction buffer
-
-**Status:** Done 2026-10-07; `zeroBuffer(buffer, offset, size)` clears only the 16-byte header. RDF had the same pattern and was changed too. **Effort:** S. **Deployments:** both, WebGPU only.
-
-`src/analysis/gpu/bond-statistics.js` clears the whole 12.6 MB correction
-buffer for every 2,048-atom batch [C]. Clear only the region the next batch
-reads (its header), leaving results unchanged.
-
-### O1. PTM orientation and chemical ordering outputs
-
-**Status:** Done 2026-10-07. New properties `ptmOrderingType` and `ptmOrientationW/X/Y/Z`. The five existing PTM outputs are identical to the previous kernel on examples and synthetic crystals; L1₂, B2, pure and three-species fixtures give the expected classes. **Effort:** S. **Deployments:** both.
-
-`wasm/ptm.cpp` exports type, RMSD, scale, interatomic distance and F only. The
-vendored PTM library already computes the lattice orientation quaternion and
-the binary ordering type (L1₂, L1₀, B2, …), but the orientation is discarded and
-neighbor atom types are never supplied, so ordering cannot be found [C]. Export
-both, using atom types as PTM's numbers, and publish them as per-atom
-properties: four quaternion components and an ordering category. OVITO
-reference: `particles/modifier/analysis/ptm/PolyhedralTemplateMatchingModifier.cpp`
-(options `outputOrientation`, `outputOrderingTypes`; OVITO Basic, GPLv3/MIT).
-
-Pitfalls: ordering is defined by PTM for binary chemistry, so multi-element
-alloys mostly report "Other"; quaternions jump across fundamental-zone
-boundaries; existing PTM outputs and ideal-lattice strain must stay identical.
-
-### O2. D²min in reference-frame strain
-
-**Status:** Done 2026-10-07 as `referenceD2min` (Å²), using the same expansion on CPU and GPU. Tests check zero for affine deformation and agreement with a direct per-neighbor sum. **Effort:** S. **Deployments:** both.
-
-`docs/features/reference-strain.md` states that Frame strain does not report
-non-affine D²min [C]. After fitting F, add
-D²min = Σ |dᵢ − F·Dᵢ|² over the same neighbors (OVITO's definition, not divided
-by the neighbor count; OVITO `particles/modifier/analysis/strain/AtomicStrainModifier.cpp`).
-Compute it in both the CPU and WGSL paths and test CPU/GPU agreement.
-
-### O3. LAMMPS data file import
-
-**Status:** Done 2026-10-07 (`src/io/lammps-data.js`); styles atomic, charge, molecular, bond, angle, full, sphere and dipole; documented in [file formats](FORMATS.md#lammps-data-file). **Effort:** S. **Deployments:** both.
-
-`docs/FORMATS.md` rejects LAMMPS data files, yet most metal simulations start
-from `write_data` or Atomsk output. Parse the header (atom count, types, box with
-tilt factors), `Masses` (with optional comment type names) and `Atoms` in the
-common styles (`atomic`, `charge`, and the `# style` hint), plus optional image
-flags and `Velocities`. OVITO reference:
-`particles/import/lammps/LAMMPSDataImporter.cpp`.
-
-### O4. VASP POSCAR/CONTCAR import
-
-**Status:** Done 2026-10-07 (`src/io/poscar.js`); documented in [file formats](FORMATS.md#vasp-poscar-and-contcar). XDATCAR remains phase 2. **Effort:** S. **Deployments:** both.
-
-DFT and SQS alloy cells usually come as POSCAR. Support VASP 5 species lines,
-VASP 4 files without them, a negative scale factor (target volume), selective
-dynamics, and Direct or Cartesian coordinates. XDATCAR trajectories belong to
-phase 2. OVITO reference: `particles/import/vasp/POSCARImporter.cpp`.
-
-### A1. Double-click an atom to make it the rotation center
-
-**Status:** Done 2026-10-07 in the shared pick path, so mouse double-clicks and touch double-taps behave the same in both views. It is off while measuring or picking slice or group atoms, and a press anywhere else starts the sequence over. **Effort:** S. **Deployments:** both.
-
-AtomEye makes a right-clicked atom the rotation and zoom anchor. AlloyView needs
-the Center button inside the folded Details window
-(`src/atomeye-tools.js`, `centerOnAtom`) [C]. Double-click or double-tap an atom
-in `src/render/camera-interactions.js` to center the camera on the picked
-replica without changing the selection mode.
-
-Pitfalls: must not fire during box selection, slice picking or measurement
-picking; the first click of the pair still selects as today.
-
-### A2. Color-tiling tracer
-
-**Status:** Done 2026-10-07 as **Displacement → Color tiles per cell vector**, publishing the categorical **Color tile** property; settings are saved in configuration JSON. **Effort:** S. **Deployments:** both.
-
-AtomEye F2 paints an n₁×n₂×n₃ checkerboard in reduced coordinates and F3
-re-applies those colors to later frames by atom (`A3/scratch.c`). AlloyView has
-no equivalent (`docs/ATOMEYE_REVIEW.md`). Compute tile parity from the reduced
-coordinates of a chosen frame, store it by stable atom ID, and publish it as a
-categorical property, so slip steps and shear bands show in later frames.
-
-### D1. Documentation corrections
-
-**Status:** Done 2026-10-07. **Effort:** S.
-
-- `docs/STRUCTURE_ANALYSIS.md` (around line 296) states "at most six Workers,
-  `hardwareConcurrency − 1`". `cpuWorkerLimit()` in `src/analysis/cpu-budget.js`
-  uses `hardwareConcurrency − 2` without a six-Worker cap.
-- `docs/ATOMEYE_REVIEW.md` lists multiple vector overlays as a gap; vectors
-  already support multiple fields (`docs/features/vectors.md`). Sixteen cutting
-  planes and the periodic display origin are also implemented.
-
-## Phase 2: medium changes
-
-### P10. Shared neighbor index and dynamic chunks for CPU analyses
-
-**Status:** Done 2026-10-08. Compatible analyses reuse frame-keyed coordinates
-and neighbor indices. Isolated Workers share one index; nonisolated Workers
-retain a bounded private frame/index cache. Dynamic bounded chunks preserve
-the original reduction order, and PTM retains its native species buffer per
-resident frame. Shared input memory is charged once. Cancellation preserves
-healthy Workers and initialized Wasm modules. See [validation](VALIDATION.md).
-Review 2026-10-08 measured a 120k-atom Fe loop:
-- **CNA, CSP and bonds:** 19–40% faster.
-- **Local shear:** 13–20% faster.
-- **Shared-memory PTM:** 20% faster.
-- **Coordination:** unchanged with copied memory; slower with shared memory.
-- **Copied PTM:** uses 6 Workers instead of 9 without `performance.memory`, because each Worker retains two frames.
-
-The review also removed per-chunk merge yields: they cost 4 ms each without
-`scheduler.yield`.
-
-**Effort:** M. **Deployments:** mostly isolated.
-
-Each analysis splits atoms into static equal ranges, every Worker rebuilds a
-full-frame `NeighborSearch` per call, and on isolated hosts the main thread
-copies inputs into a fresh SharedArrayBuffer per call
-(`src/analysis/analysis-pool.js` ~518–578, `src/analysis/neighbors.js`) [C]. At
-130k atoms the index build is about 45% of an adaptive-CNA range and 10% of a
-PTM range; slowest/mean range time is 1.18 for PTM and 1.37 for CNA [M].
-`chooseWorkerCount` charges 48 B/atom against 15% of the JS heap, so 1M-atom
-PTM gets 7 of 30 Workers when isolated [M]. Build the cell list once into a
-frame-keyed shared buffer (as the Voronoi snapshot does), hand out bounded
-chunks dynamically, and keep one resident private index per Worker when
-nonisolated. Expected: CNA/CSP/bonds −30–45%, PTM −15–25%, up to ~3× for 1M-atom
-PTM [E].
-
-### P11. WebGPU batch pipelining
-
-**Status:** Done 2026-10-08. Up to three dispatches stay queued; hardware batches start at 64k atoms and adapt toward about 60 ms per dispatch (4,096–262,144); the neighbor index is one clear plus one index dispatch. On the GTX 1080 Ti, 1M-atom FCC coordination 217 → 51 ms, fixed CNA 309 → 86 ms, adaptive CNA 427 → 129 ms, local shear 425 → 121 ms [M]. Deterministic outputs are bit-identical (121 analyses, 1,592 fields); fields that already varied between runs of the old build (atomic-race order) vary the same way. See [performance](features/performance.md).
-
-**Effort:** S–M. Every 16,384-atom batch submits and then awaits
-`onSubmittedWorkDone()` before the next (`src/analysis/gpu/runtime.js` ~701–715);
-the neighbor-index build is batched the same way (62 round trips at 1M atoms)
-[C]. Build the index in one dispatch, keep two or three batches in flight, and
-use 64k+ batches on hardware adapters. Light kernels 2–5×, CNA/CSP 5–20% [E].
-Watch driver watchdog limits.
-
-### P12. WebGPU readbacks and task queueing
-
-**Status:** Done 2026-10-08. Pooled staging buffers with one map per batch, 16k-atom bond-statistics ranges with adaptive dispatches, one pipelined GPU task behind the running one when its frames are resident, and a per-frame exact-f64 coordinate cache shared by CSP and PTM neighbors. NiGB bond statistics 2,141 → 495 ms, PTM neighbors 852 → 477 ms, RDF 49 → 16 ms [M]. Bond-statistics moments may differ in the last bits (merge order, already nondeterministic). Known issue, not caused by this change: `npm run test:gpu -- --hardware` fails its HCP ideal-strain exact-zero check on the unmodified baseline too.
-
-**Effort:** S–M. Each read creates a staging buffer and maps it in its own
-`mapAsync` (coordination 3–4, local shear 5, bonds 3, RDF 2–3 per batch;
-`runtime.js` ~721–732). Bond statistics uses 2,048-atom batches. The GPU client
-keeps one task in flight (`src/analysis/gpu/client.js` ~180–196) [C]. Pool
-staging buffers and map once per batch, use 16k+ bond-statistics batches, post
-the next task as soon as its frame is resident, and share exact-f64 coordinates
-between CSP and PTM. 5–50 ms per analysis, 2–5× for bond statistics [E].
-Bond-statistics moments may change in the last bit; their merge order is
-already nondeterministic.
-
-### P13. Shader-side colormap while dragging legend limits
-
-**Status:** Done 2026-10-08. Dragging prepares one scalar buffer and updates
-shader uniforms for atom/bond colors and range visibility in both views,
-including Voronoi face/edge visibility. Selection color overrides remain
-active. Release, cancellation, keyboard completion and PNG capture commit the
-exact CPU palette; ranges unsafe for the preview use the CPU path. The
-20,000-atom browser check records no per-tick scalar/color/mask uploads or
-full-array color scans after preparation.
-
-**Effort:** M. Upload one scalar per atom and map colors in the vertex shader
-during a drag; recompute exact CPU colors when the drag ends. Removes the
-75–90 ms per tick at 1M atoms [M].
-
-### P14. Byte-level parsers
-
-**Status:** Done 2026-10-08 (`src/io/ascii-rows.js`). Plain decimals use the exact mantissa × 10^k fast path (mantissa < 2^53, |k| ≤ 22); everything else, and every error, goes through the original text code. Identical frames on all 44 examples, 397 whole-file variants and 180,000 fuzzed inputs. Worker read+parse in Chrome: HEA 54 → 21 ms, Fe loop 238 → 74 ms, NiGB 348 → 106 ms [M]. PDB, LAMMPS data and POSCAR keep their text parsers.
-
-**Effort:** M. A prototype that parses the dump atom block from bytes matched
-`Number()` on every value and took HEA 50 → 15 ms and Fe 250 → 50 ms [M]. Apply
-to dump, CFG and XYZ with the same validation and error messages.
-
-### P15. Parallel trajectory parsing and prefetch
-
-**Status:** Done 2026-10-08. A foreground parser lane and up to four background
-parsers share the CPU budget. Dump, XYZ and PDB indexing publishes complete
-frames incrementally; CFG raw frames parse in parallel while ordered
-checkpoints preserve unwrapped coordinates. Playback buffers the next frame,
-and physical replication runs in a reusable Worker. Source/seek cancellation
-rejects requests and removes queued work immediately; an active synchronous
-parse finishes before its Worker and permit are reused. Gzip still requires
-complete decompression before random-access indexing. Configuration replay
-and whole-trajectory export await indexing completion.
-
-**Effort:** M. One structure Worker parses frames serially, prefetch cannot be
-cancelled (`src/worker-client.js`), the first frame waits for the whole file
-index (`src/workers/structure-worker.js` ~78–82), playback is not double
-buffered, and replication runs on the main thread (0.9 s at 1M atoms) [C/M].
-Parsing with 1/2/4/8 Workers took HEA 71/36/18/13 and Fe 312/152/87/46 ms per
-frame [M]. Add prefetch Workers with one reserved for the requested frame,
-incremental indexing, and replication in a Worker.
-
-### P16. Nonisolated DXA fallback
-
-**Status:** Done 2026-10-08. Stage inputs stay in the DXA Worker and reach stage Workers through transferred MessageChannel ports; local identification may use up to 8 Workers and tetrahedron classification up to 4. Main-thread time per run: HEA 115–177 → 31–60 ms, Fe 292–344 → 67–107 ms [M]. Open question for the owner: tetrahedron-classification offload is still about break-even (packing tables 63–98 ms on HEA, 197–355 ms on Fe), so either a faster native packer (C++ rebuild) or skipping that stage could help; left unchanged.
-
-**Effort:** S–M. The tetrahedron snapshot is copied on the main thread once per
-stage Worker (about 4 × 23 MiB for HEA) [M]. Send it from the DXA Worker to stage
-Workers over a MessagePort and give each stage its own Worker cap. Tens of ms [E].
-
-### P17. Browser versus Node DXA gap
-
-**Status:** Done 2026-10-08. The gap was a cold first extraction (lazy Wasm compilation and tier-up), not the browser: first runs took about 900–940 ms in both Chrome and Node, later runs 540–600 ms. A background code warm-up after the existing prewarm extracts a built-in 2,560-atom screw dislocation on at most 2 threads (low priority, preempted by a real Extract), bringing the first HEA run to 554–598 ms [M]. Breakdown in [DXA CPU profile](DXA_CPU_PROFILE.md).
-
-**Effort:** S (investigation). Production reported 854 ms for HEA with 8 threads;
-Node took 555–650 ms [M]. Profile the browser run (pool growth, snapshot copies,
-JSON) before further DXA work.
-
-### O5. Expressions: compute property and expression selection
-
-**Status:** Done 2026-10-08 (`src/expressions.js`, `src/computed-properties.js`,
-`src/expression-controls.js`). A tokenizer and Pratt parser feed a vectorized
-evaluator over typed arrays; there is no `eval`, `Function` or code generation,
-and names resolve only through Maps. Computed properties are stored as
-`{name, unit, expression}` recipes and recomputed for each frame and after
-replication. Expression selection writes into selection groups (new, replace,
-add, subtract, intersect). Invert and expand (cutoff or N nearest, iterated)
-run in a dedicated selection Worker. Follow-ups:
-- Expansion does not reuse the analysis pool's resident index.
-- Expression selections are evaluated once, on the current frame only.
-- Evaluation runs synchronously on the main thread (about 0.5 s for 1M atoms).
-
-**Effort:** M. Compute per-atom properties (for example von Mises stress from
-per-atom stress divided by Voronoi volume) and select atoms by expressions such
-as `CSP > 8 && Type == 3`, plus invert and expand-by-neighbors selection. Parse
-expressions into a safe evaluator over typed arrays; never use `eval` or
-`new Function`. OVITO references: `stdmod/modifiers/ComputePropertyModifier.cpp`,
-`stdmod/modifiers/ExpressionSelectionModifier.cpp`,
-`particles/modifier/selection/ExpandSelectionModifier.cpp`.
-
-### O6. Cluster analysis
-
-**Status:** Done 2026-10-08 (`src/analysis/clusters.js`, `src/cluster-tools.js`).
-Union-find with periodic image offsets over cutoff or Bonds-tool neighbors,
-optionally restricted to a selection group. Pool Workers reduce their atom
-ranges to spanning forests, and one Worker labels the clusters. Outputs are
-exact for any partition. Results:
-- Cluster ID (categorical legend: the 20 lowest IDs, then "Other clusters") and size.
-- A table of mass-weighted unwrapped centers, radius of gyration and gyration tensor.
-- Percolating clusters are flagged and their geometry is NaN.
-- CSV export.
-
-On 120k atoms with warm Workers it takes about 0.13 s. Follow-ups:
-- A dedicated cutoff loop instead of `NeighborSearch.within`.
-- OVITO's unwrapped-coordinates output.
-
-**Effort:** S–M. Union-find over cutoff neighbors or the bond graph, optionally
-restricted to a selection; outputs cluster ID, size, unwrapped center of mass,
-radius of gyration and a size table. OVITO:
-`particles/modifier/analysis/cluster/ClusterAnalysisModifier.cpp`.
-
-### O7. Wigner–Seitz defect analysis
-
-**Status:** Done 2026-10-08 (`src/analysis/wigner-seitz.js`,
-`src/wigner-seitz-tools.js`, `src/render/site-marker-layer.js`).
-- **Assignment:** each current atom goes to the nearest reference site under
-  the reference cell's periodic images. An exact linked-cell search with a
-  Cholesky lower bound matched brute force on 24,000 random queries. Ties go
-  to the lower site index.
-- **Affine mapping:** optional; it uses reduced coordinates.
-- **Outputs:** vacancies, interstitials (excess atoms) and antisites by type
-  label; per-atom occupancy, class, site type, site index and distance.
-- **Markers:** site markers (vacant, defect or all sites) respect slices and
-  appear in exports and the second view.
-- **Pool:** pool runs equal direct runs with `Object.is`. 120k atoms take
-  about 0.1 s warm.
-- **Follow-ups:** a shared site index across Workers, marker picking, and an
-  external reference file.
-
-**Effort:** M. Assign atoms to the nearest reference-frame site; report
-vacancies, interstitials and antisites (per-type occupancy). Needs a rendered
-point set for empty sites. OVITO:
-`particles/modifier/analysis/wignerseitz/WignerSeitzAnalysisModifier.cpp`.
-
-### O8. gzip input
-
-**Status:** Done 2026-10-08 (`src/io/gzip.js`). Detected by the gzip signature; trajectories are decompressed once into a Blob made of 8 MiB parts, single-frame files on each read. No OPFS spill: the decompressed size must fit in browser storage/memory (documented in [file formats](FORMATS.md)). Concatenated gzip members are rejected with an explanation.
-
-**Effort:** M. Decompress with `DecompressionStream` in the parser Worker and
-keep random access by indexing the decompressed stream, spilling to OPFS for
-large trajectories. Also requested by AtomEye users.
-
-### O9. Spatial binning profiles
-
-**Status:** Done 2026-10-08 (`src/analysis/spatial-binning.js`,
-`src/binning-tools.js`). One- and two-dimensional bins follow reduced cell
-coordinates, including tilted cells, with counts, number density and scalar
-reductions. Selection restrictions, trajectory averages, interactive charts,
-CSV exports and configuration replay are implemented. Large frames use a
-persistent Worker; scientific values are accumulated in atom order.
-
-**Effort:** M (new panel, chart and CSV). OVITO's binning is Pro-only; implement
-independently. Bin in reduced coordinates for triclinic cells.
-
-### O10. Smooth trajectory, trajectory lines and unwrapping
-
-**Status:** Done 2026-10-08 (`src/data/trajectory-tools.js`,
-`src/workers/trajectory-processor.js`, `src/render/trajectory-line-layer.js`).
-- **Unwrapping:** inferred in frame order by ID from reduced-coordinate jumps,
-  incrementally, with a crossing log. File image flags or unwrapped columns
-  take precedence. It feeds the display only, never analyses.
-- **Smoothing:** ±w frames (truncated at the ends), minimum-image relative to
-  the central frame, with the cell averaged. It runs in the structure Worker,
-  and changing it invalidates every frame and analysis cache.
-- **Trajectory lines:** for a selection group or IDs over a frame range and
-  stride, continuous across boundaries. At most 2M points; they scale with
-  exports.
-- **Follow-ups:**
-  - Lines follow raw, not smoothed, coordinates.
-  - The first unwrapped view of a late frame parses all earlier frames.
-  - Integration briefly occupies the structure Worker (about 72 ms per
-    1M-atom frame).
-
-**Effort:** M. Time-averaged positions before CNA/PTM/DXA at high temperature;
-lines for solute and vacancy paths; unwrap from adjacent frames. OVITO:
-`SmoothTrajectoryModifier.cpp`, `GenerateTrajectoryLinesModifier.cpp`,
-`UnwrapTrajectoriesModifier.cpp`.
-
-### O11. Radical (radius-weighted) Voronoi
-
-**Status:** Done 2026-10-08 (`src/analysis/voronoi-radii.js`, `clipRadicalCell`
-in `src/analysis/voronoi.js`, `VORONOI_RADICAL_CLIP_SHADER`).
-- **Plane:** the face between i and j lies at (|d|² + rᵢ² − rⱼ²)/(2|d|) from
-  i, as in Voro++'s `container_poly`. The Voro++ Wasm needs no rebuild,
-  because `nplane()` already takes the offset.
-- **Radii:** per element (prefilled from atomic radii) or from a numeric
-  per-atom property.
-- **Empty cells** have zero volume and no faces, and are counted.
-- **Search bound:** |d| < R + √(R² + r_max² − rᵢ²).
-- **GPU:** empty or degenerate cells are recovered exactly on the CPU. A wide
-  radius spread falls back to the CPU.
-- **Unweighted results:** CPU outputs are SHA-256 identical, and the GPU
-  shader sources and host command stream are identical.
-- **Follow-ups:** Cell scale for atoms outside their radical cell; recompute
-  automatically when the radius property changes.
-
-**Effort:** M. Voro++ supports it, but the WebGPU Voronoi path needs a matching
-weighted kernel and CPU/GPU parity tests.
-
-### O12. Text labels and time series
-
-**Status:** Done 2026-10-09 (`src/global-attributes.js`, `src/text-labels.js`,
-`src/time-series.js`).
-- **Global attributes:** per-frame values such as Frame, Timestep, cell,
-  cell strain against a reference frame, type, CNA, PTM and other category
-  fractions, property means, DXA length, density and families, and cluster and
-  Wigner–Seitz counts. Wherever the summary CSV has the same value, the
-  attribute matches it exactly.
-- **Text labels:** templates like `[CNA.FCC.fraction:.1%]` are parsed safely,
-  without evaluation; unknown names render as `[?…]`. Labels appear on screen
-  and in PNG/JPG, chosen-resolution, six-view, second-view and frame-ZIP
-  images, each with its own frame's values.
-- **Time series:** file values are read in the background. Analysis values are
-  recorded from displayed frames, and "Visit frames" fills the rest. Units get
-  shared panels, missing points are shown, and the series exports to CSV.
-- **Follow-ups:**
-  - Background analysis of frames that are not displayed.
-  - Keeping on-screen labels clear of the toolbars.
-  - Chart PNG export.
-
-**Effort:** M. Stamp timestep, strain or phase fractions on PNG and frame-ZIP
-exports, and plot per-frame values. OVITO's text label overlay is Basic; time
-series is Pro-only and must be implemented independently.
-
-### O13. Ambient occlusion
-
-**Status:** Done 2026-10-09 (`src/render/ambient-occlusion.js`,
-`src/ambient-occlusion-controls.js`).
-- **Method:** 16–200 seeded Fibonacci directions render orthographic
-  ID passes at 256–2048 px. Visible pixels are counted per atom and replica,
-  divided by r², and normalized by the maximum. The color is scaled by
-  1 − intensity + intensity·AO.
-- **Coverage:** visibility, slices, the origin and replicas are respected, and
-  bonds take their endpoints' factors.
-- **Scheduling:** it runs in the background in 12 ms slices behind fences;
-  exports finish it synchronously.
-- **AO off** is pixel-identical to the previous build (26/26 hashes on
-  SwiftShader and the GTX 1080 Ti).
-- **Speed:** about 0.6–0.9 s for 60k–1M atoms on the GTX 1080 Ti; SwiftShader
-  is very slow.
-- **Follow-ups:**
-  - GPU reduction instead of CPU counting.
-  - Slice-aware framing.
-  - Updating during a crystal drag.
-
-**Effort:** M. Per-atom brightness from offscreen passes (OVITO
-`AmbientOcclusionModifier.cpp`); recompute on visibility, slice or frame changes.
-
-### O14. Orientation coloring
-
-**Status:** Done 2026-10-08 (`src/render/orientation-colors.js`). Completed PTM
-fits supply inverse-pole-figure colors for cubic (FCC, BCC, SC, cubic
-diamond) and hexagonal (HCP, hexagonal diamond, graphene) structures, with
-separate stereographic keys and an editable sample direction, or Rodrigues RGB
-in the m−3m/6/mmm fundamental zone. Completed ideal-lattice strain fits can
-supply the same orientations. Other and icosahedral atoms remain neutral. Choices and
-directions round-trip through configurations and appear in image exports.
-
-**Effort:** M, after O1. Color by PTM orientation (inverse-pole-figure or
-quaternion RGB) through a new legend kind.
-
-### A3. Global keyboard commands
-
-**Status:** Done 2026-10-08 (`src/keyboard-commands.js`,
-`src/keyboard-controls.js`). Camera orbit, roll, pan, zoom and presets use a
-0–9 step gearbox; frame, slice, PNG and theme commands reuse existing actions.
-An accessible dialog lists commands, captures replacement keys, refuses
-conflicts and saves versioned bindings locally. Typing, modal dialogs and
-browser modifier combinations retain their native behavior.
-
-**Effort:** M. AtomEye drives navigation from the keyboard with a step-size
-"gearbox" (0–9). AlloyView has no global shortcuts beyond Escape. Add a command
-registry, a shortcut overlay and rebinding stored in localStorage; ignore keys
-while inputs have focus.
-
-### A4. Discrete legends for integer properties
-
-**Status:** Done 2026-10-08 (`src/render/discrete-colors.js`). Color scale can
-optionally show 1–32 distinct safe-integer values as individually hideable
-categories, retaining a separate missing-value key. Hidden values, rather
-than row indices, are saved; larger populations fall back to a continuous
-scale. Atom details can hide the picked atom's class. Desktop and mobile
-legends scroll when their contents exceed the viewport.
-
-**Effort:** S–M. Show integer properties with few values (coordination, cluster
-or grain IDs) as categories with per-value hiding, and hide the clicked atom's
-class with one gesture. Store hidden values, not indices.
-
-### A5. Cutting-plane sweep
-
-**Status:** Done 2026-10-08 (`src/render/slicing.js`, `src/slice-controls.js`).
-Each plane gets −/+ step buttons (hold to repeat; arrow keys in the position
-field), Flip, and a slab mode that keeps |n·r − d| ≤ t/2. Slab mode is
-encoded as two half-spaces, so the shaders hold 32. Miller indices (h k l)
-are relative to the simulation cell; n ∥ G = h b₁ + k b₂ + l b₃ and
-d = 1/|G|, correct for triclinic cells. Applying them snaps the plane to the
-nearest lattice plane and sets both the step and the slab thickness to d.
-Persistent plane-cell outlines can optionally be included in exports. Not
-done: [u v w] direction input and "keep outside the slab".
-
-**Effort:** S–M. Step, flip and slab controls for slices, a Miller-index normal,
-and the plane-cell outline (`planeCellPolygon` in `src/render/slicing.js`) drawn
-persistently and optionally in exports.
-
-### A6. Drag the crystal across periodic boundaries
-
-**Status:** Done 2026-10-09 (`src/render/crystal-drag.js`,
-`src/crystal-drag-controls.js`).
-- **Controls:** a "Move crystal" mode (toolbar or Display panel, including
-  touch), or Alt+drag. M toggles the mode, and X/Y/Z with Shift nudge the
-  crystal along a/b/c.
-- **Drag:** the screen drag maps to a reduced-origin shift along periodic axes
-  only, with triclinic cells handled correctly. Only shader uniforms change
-  during the drag, so there are no uploads and frames stay at vsync rate with
-  480k atoms. Bonds, arrows, site markers, trajectory lines and DXA lines are
-  previewed; Voronoi cells are hidden until release.
-- **Release and cancel:** release commits through `setPeriodicOrigin`, with
-  results bit-identical to typing the same origin. Escape cancels.
-- **Reset:** a circular-arrow button beside Move crystal, or **Reset crystal**
-  in the Display panel, restores the source origin to zero without resetting
-  the camera, coordinate mode, replication or analysis. Active pointer drags
-  are cancelled before restoration.
-- **Shortcut fix:** newer default keys now yield to saved shortcuts instead of
-  discarding them.
-- **Follow-up:** previewing Voronoi cells during the drag.
-
-**Effort:** M. Turn a screen drag into a periodic-origin shift, wrapping in the
-vertex shader during the drag and rebuilding bonds, vectors, DXA lines and
-Voronoi cells on release.
-
-### A7. Export at a chosen resolution
-
-**Status:** Done 2026-10-08 (`src/render/offscreen-export.js`,
-`src/export-resolution-controls.js`). Current-size export retains its existing
-path; presets and custom sizes use antialiased offscreen rendering with
-bounded tiles, scaled annotations and camera/state restoration. Explicit
-sizes are limited to 16,384 pixels per side and 32 megapixels. PNG, JPG,
-second-view, frame-ZIP and six-view exports share the settings; a chosen
-six-view size is the final contact-sheet size.
-
-**Effort:** M. Render to an offscreen antialiased framebuffer at the requested
-size, tiling beyond GPU limits, and scale legends and axes. The current export
-uses the canvas size with device pixel ratio capped at 2.
-
-## Phase 3: large changes
-
-### P18. Parallel DXA edge building and edge mapping
-
-**Status:** Done 2026-10-08 for the edge candidate/path-search passes. Immutable
-tetrahedron masks and independent lattice searches run in pthreads; original
-edge deduplication, first-seen orientation and graph-transition creation retain
-their ordered commits. Cheap direct neighbors bypass staging, and bounded
-batches reuse temporary storage. Serial complete-network hashes match the
-reference for both Wasm artifacts. Burgers tracing, cluster traversal and
-junction merging still need the algorithm redesign described below; this item
-does not claim they are parallel. See [CPU profile](DXA_CPU_PROFILE.md).
-
-**Effort:** L. With 8 threads, about 275 ms of the HEA run stays serial: edge
-building 61, edge mapping 87, Burgers tracing 90, clusters 14, serialization
-23 ms; Delaunay scales only 2.1× [M]. Collect edge candidates and path-finder
-results in parallel, then commit in the original order. Burgers tracing and
-junction merging need an algorithm redesign. Expected floor for HEA about 400 ms.
-
-### O15. Grain segmentation
-
-**Status:** Done 2026-10-09 (`src/analysis/grains.js`,
-`src/analysis/disorientation.js`, `src/grain-tools.js`). This is a JS port of
-OVITO 3.9.4.
-- **Algorithm:** PTM neighbor bonds, symmetry-reduced disorientation, node
-  pair sampling or a minimum spanning tree, the automatic merge threshold,
-  minimum grain size, orphan adoption and coherent-interface handling.
-- **PTM kernel:** it gains a neighbor-list export; all other PTM outputs are
-  unchanged.
-- **Agreement with `ovito==3.9.4`:** on OVITO's own PTM output, all 70
-  comparisons give the same partition (ARI 1). The automatic threshold is
-  equal to the last bit on 8 noisy structures.
-- **Outputs:** grain IDs, grain-orientation colors, a grain table with CSV,
-  the merge plot and `Grains.*` attributes.
-- **Deviations:** listed in [grains](features/grains.md). They include a fixed
-  order where OVITO leaves it open, and IDs ranked after orphan adoption.
-- **Follow-ups:** multithreaded clustering; a GPU-prepared neighbor path test
-  in the browser.
-
-**Effort:** M–L, after O1. Port OVITO's
-`crystalanalysis/modifier/grains/GrainSegmentationEngine.cpp` next to the PTM
-kernel. Validate the automatic merge threshold against OVITO.
-
-### O16. Surface mesh and DXA defect mesh
-
-**Status:** Done 2026-10-09 (`wasm/surface.cpp`,
-`src/analysis/surface-mesh.js`, `src/render/surface-mesh-layer.js`,
-`src/surface-tools.js`).
-- **Surface mesh:** an alpha-shape surface ported from OVITO's engine,
-  compiled into both DXA kernels. It reports area, solid and void volumes and
-  regions.
-- **Defect mesh:** `InterfaceMesh::generateDefectMesh()` is an optional DXA
-  output with Taubin smoothing. DXA line results are identical with the option
-  off or on, in both kernels.
-- **Rendering:** a mesh layer with watertight periodic caps, slices,
-  replication, second view, crystal-drag preview and exports. An offscreen
-  export equals the screen.
-- **Mesh export:** STL, PLY and OBJ for the surface; STL and PLY for the
-  defect mesh.
-- **Follow-ups:**
-  - OBJ for the defect mesh.
-  - Caps for open-boundary defect meshes.
-  - Capping at slices.
-  - The Gaussian-density method.
-  - Moving wrap/cut/cap work off the main thread.
-
-**Effort:** M–L. Alpha-shape surfaces for voids, nanoparticles and fracture,
-reusing the vendored Geogram Delaunay; export the existing but unused
-`InterfaceMesh::generateDefectMesh()` from the DXA port. Handle periodic capping.
-
-### A9. Command scripts and movies
-
-**Status:** Done 2026-10-09 (`src/command-script.js`, `src/camera-path.js`,
-`src/movie-export.js`, `src/video/`).
-- **Scripts:** a line-oriented language over the keyboard registry plus
-  parameterized camera, frame, color, tool, slice, export, keyframe, wait and
-  repeat commands.
-  - It is tokenized against a fixed command map, never evaluated.
-  - Limits are checked statically before a run and again while running.
-  - Nothing runs on import or configuration restore.
-- **Camera keyframes:** upright azimuth/elevation or quaternion slerp for
-  orientation; monotone cubic interpolation of center, distance and FOV.
-- **Movies:** frames come from the existing image export and are encoded with
-  WebCodecs.
-  - Formats: MP4 (H.264, AV1, VP9) or WebM (VP9, VP8, AV1), written by
-    in-repo muxers instead of a vendored one.
-  - Outputs were checked with an independent parser, `VideoDecoder` and
-    ffprobe.
-  - Without WebCodecs it falls back to a PNG ZIP.
-- **Follow-ups:**
-  - Recording the second view.
-  - Scripts that start analyses.
-  - Testing playback in QuickTime and PowerPoint.
-
-**Effort:** L. A strict command grammar over the A3 registry, camera keyframes,
-and WebCodecs video encoding with a small vendored muxer.
+  (<https://yazhuoliu.com/AlloyView/>) is cross-origin isolated, but other
+  static hosts may not be; see [Deployment](DEPLOYMENT.md). Code must branch on
+  `crossOriginIsolated` and `SharedArrayBuffer`, never on the host name.
+- Keep background prewarming and prefetching of Workers, Wasm modules, frames
+  and GPU preparation. They are a deliberate design choice. Items below make
+  them cheaper or better targeted; none removes them.
+- A canvas-size image export must stay pixel-identical to the screen.
+- Update the feature page, the user guide and tests in the same change. Run
+  `npm test` and the relevant `npm run test:browser:*` suites after
+  `npm run build`.
+- Never evaluate user-provided text as code. Configuration JSON and scripts
+  are shared between users: validate before use, and check lengths before
+  copying array-like values.
+
+## How to read the evidence
+
+Measurements were taken on the reference machine: 40 logical CPUs, one GTX
+1080 Ti, headless Chrome 154, Node.js 26. The machine is shared, so timings are
+medians of interleaved runs and counts are preferred over wall time.
+
+Structures: HEA 28,800 atoms (`examples/hea-fcc-screw.dump`), Fe loop 60,229
+(`examples/Fe_disloc_loop.dump`), NiGB 129,904 (`examples/NiGB_minimized.cfg`),
+and the Fe loop replicated to 120,458 ("120k") and 963,664 ("1M") atoms.
+"6w" and "14w" mean CPU pools of 6 and 14 Workers.
+
+Evidence tags: **[M]** measured or reproduced by a script; **[C]** confirmed by
+reading the code; **[E]** estimate. Effort: **S** touches a few modules, **M**
+adds cross-module plumbing or a protocol change, **L** changes an algorithm's
+structure.
+
+The audit's reproduction scripts and prototypes are not part of the
+repository. On the reference machine they are archived beside it, in
+`../AlloyView-audit-2026-10-10/` (`cpu/`, `gpu/`, `render/`, `io/`, `shell/`,
+`bugs/`, and
+one `REPORT-*.md` per audit). Items name the script that reproduces them.
+Prototype gains quoted as "verified" had outputs equal to the current code.
+
+## Suggested order
+
+The items with the best return, drawn from all parts below:
+
+| Order | Item | What it gives | Effort |
+| --- | --- | --- | --- |
+| 1 | C1 | Fast CPU analyses run 2–3× faster in the application; fewer layouts during every analysis | S |
+| 2 | S2, S3 | Frame-change long task −50–60% (857 → 418 ms at 1M atoms) | S–M |
+| 3 | C2 | Large structures keep their Workers (1M-atom PTM: about 5 s instead of about 80 s on Firefox/Safari) | S |
+| 4 | R1 | Frames with bonds 2.4–2.7× faster, pixels unchanged | S |
+| 5 | C3, C4, C5 | Bond statistics, CSP, RDF, frame strain and displacement 2–6× faster at 1M atoms | S |
+| 6 | T1, T5 | Prefetch fills the cache; stepping 1.66× faster at 1M atoms; fixes B12 | S + M |
+| 7 | C9 | PTM, CNA, CSP and bonds about 2× faster on BCC, 1.1–1.4× on FCC | M |
+| 8 | S1, S4 | Cold start transfers 0.9 MB instead of 11.5 MB; revisits skip 200 conditional requests | S |
+| 9 | R2, R3, R4 | Orientation colors 9× faster; frame commit and picking 3–5× faster at 1M atoms | S |
+
+## Part 1: defects
+
+Fix these before performance work. B1–B6 and B10 were fixed on 2026-10-10,
+and G1 was done with them
+(see `docs/VALIDATION.md`); their numbers are not reused.
+
+### B7. Time series mix values computed with different analysis settings
+
+**Severity:** medium-high (inconsistent CSV with no marker). **Effort:** S.
+
+- **Where:** `src/global-attributes.js` builds a property's signature from
+  `analysisKind` and `analysisKey`; coordination, bonds, frame strain, local
+  shear and displacement properties carry no `analysisKey`.
+- **Evidence [M]:** `bugs/C-labels-ao-export/t14-series-settings-change.mjs`:
+  with cutoff 3 Å, `Mean.coordination` is 12 on frames 1–3; after changing the
+  cutoff to 4.2 Å on frame 3 the CSV reads 12, 12, 18. The CNA column in the
+  same run correctly drops its old points.
+- **Fix:** set `analysisKey` (the parameter key already used for caching) on
+  every analysis property, and refuse an empty key for analysis kinds.
+
+### B8. Surface mesh caps are open or wrong when atoms lie exactly on a cell face
+
+**Severity:** medium-high (wrong picture; exported STL is not closed).
+**Effort:** M.
+
+- **Where:** `src/render/surface-mesh-geometry.js` `buildSurfaceDisplayMesh`.
+- **Evidence [M]:** `bugs/B-mesh-grains/k7-ideal-lattice-caps.mjs 0 40 1`: 11
+  of 40 ideal FCC structures with voids have open edges or a wrong enclosed
+  volume at display origin 0. In the app
+  (`b13-ideal-lattice-caps-app.mjs`): 8 open edges and volume 11,861 against a
+  solid volume of 17,834; at origin (0.013, 0.017, 0.019) the mesh is closed.
+  Jittered atoms never fail. `k10-shared-edge-minimal.mjs`: two boxes sharing
+  one edge, cut through that edge, give volume 57 instead of 72.
+- **Cause:** vertices exactly on the cut plane are classified inconsistently,
+  and edges shared by two sheets are paired wrongly when cap loops are built.
+- **Fix:** classify on-plane vertices to one fixed side for every face (or
+  choose a cut offset that avoids all vertex coordinates), and split
+  non-manifold edge vertices per sheet before cutting.
+- **Test:** k7, k4 and k10 as randomized unit tests: no open edge, and volume
+  equal to the kernel's solid volume at origin 0 and at random origins.
+
+### B9. Cancelling DXA kills a surface job, and its status stays "Calculating…"
+
+**Severity:** medium-high. **Effort:** S–M.
+
+- **Where:** `src/analysis/dxa-client.js` terminates the shared Worker and
+  aborts every task; `src/surface-tools.js` returns on `AbortError` without
+  updating its state.
+- **Evidence [M]:** `bugs/B-mesh-grains/b1-dxa-cancel-kills-surface.mjs`: start
+  Surface and DXA, cancel DXA. Surface still shows "Calculating… preparing"
+  20 s later and `wait-analyses` never ends.
+- **Fix:** when the Worker is terminated for one task, redispatch the other
+  queued tasks on a new Worker; in the surface tool, tell a foreign abort from
+  its own and requeue or reset.
+
+### B11. A validation error from one analysis terminates the warm Worker pool
+
+**Severity:** medium (results stay correct; prewarming is undone).
+**Effort:** S.
+
+- **Where:** `src/analysis/analysis-pool.js` `finish()`: any error, including a
+  controlled `{ ok: false }` reply, terminates the Worker.
+- **Evidence [M]:** `cpu/error-kills-pool.mjs`: PTM on the HEA example, then
+  RDF (which fails with "Normalized RDF requires periodic boundaries…"). The
+  pool goes from 8 Workers to 0, and the next PTM needs 8 kernel
+  initializations: 521 ms instead of 312 ms. Every Worker-side validation
+  message does this. With WebGPU on, a GPU validation error becomes a CPU
+  fallback that then fails in every Worker.
+- **Fix:** terminate only on `error`/`messageerror` events, on close, or when
+  the Worker flags a fatal failure. Run cheap preconditions once on the main
+  thread, and do not fall back to the CPU for validation errors.
+
+### B12. Navigation aborts unrelated background frame reads
+
+**Severity:** medium. **Effort:** fixed by T5.
+
+- **Evidence [M]:** `io/b-series.mjs data/fe120k_30.dump --nogpu --interrupt`:
+  one "next frame" click during Time series **Read file values** ends the
+  collection silently ("Partial … 18 missing"), with no error and no retry.
+  Binning trajectory averages, the strain reference and GPU prefetch use the
+  same background path.
+- **Cause:** one shared controller and a blanket "abort every background
+  request" on each frame change. See T5 for the fix.
+
+### B13. Time series keep a stale last frame and lose settings in configurations
+
+**Severity:** medium. **Effort:** S.
+
+- **Stale range [M]:** `io/b-ranges.mjs`: on a 30-frame file whose index
+  finishes after the first frame appears, **Last frame** stays "8 (max 8)" and
+  **Read file values** reports "8 frames · every value collected".
+  `updateSourceIndex` in `src/app.js` refreshes the trajectory and movie
+  controls but not the time series, and `readRange()` runs before
+  `ensureIndexed()` in `src/time-series-controls.js`.
+- **Lost settings [M]:** `bugs/X-cross/roundtrip.mjs`: range, stride, x axis
+  and "separate panels" are saved only if auto-collect is on or the attribute
+  list differs from the default.
+- **Fix:** refresh the time series when the frame count grows; read the range
+  after indexing; compare the whole serialized state with the defaults.
+
+### B14. The surface of "Visible atoms" is stale after a frame change
+
+**Severity:** medium (frame series, scripts and movies can export it).
+**Effort:** M.
+
+- **Evidence [M]:** `bugs/B-mesh-grains/b2-visible-atoms-stale.mjs`: with a
+  CNA legend filter hiding "Other", each new frame's surface is first computed
+  from every atom, shows "Calculated", and is recomputed 0.6–1.8 s later from
+  the filtered set. An export in between uses the wrong surface.
+- **Fix:** when the restriction is "Visible atoms" and visibility depends on an
+  analysis that has not finished for the frame, hold the surface in a waiting
+  state.
+
+### B15. Escape closes the movie progress window while the export continues
+
+**Severity:** medium. **Effort:** S.
+
+- **Evidence [M]:** `bugs/A-movies/b6-movie-cancel-escape.mjs`: after Escape
+  the dialog is closed, the export keeps running, Cancel is unreachable, and
+  the theme and frame can be changed mid-export.
+- **Fix:** reopen the dialog or treat its `close` as Cancel; add
+  `closedby="none"`; make the application root `inert` during an export.
+
+### B16. Coordination with a cutoff far larger than the cell never finishes
+
+**Severity:** medium (Cancel works; a configuration can carry the value).
+**Effort:** S.
+
+- **Where:** `src/analysis/coordination.js` `minimumImageDistanceSquared` loops
+  over every periodic image within the cutoff for every pair; the input has no
+  maximum and configurations accept up to 10¹⁵.
+- **Evidence [M]:** `bugs/X-cross/repro-coordination-huge-cutoff.mjs` (500
+  atoms, 18 Å cell): 100 Å takes 1.4 s, 300 Å is still running after 25 s.
+  Other analyses reject the same value at once.
+- **Fix:** bound the loop to the images that can be closest, or reject like the
+  other analyses.
+
+### B17. A binning profile in "Waiting" blocks scripts and movie export forever
+
+**Severity:** medium. **Effort:** S.
+
+- **Evidence [M]:** `bugs/A-movies/b7-waiting-hang.mjs`: binning waits for a
+  quantity no enabled analysis will produce; `wait-analyses` and movie
+  preparation count it as pending.
+- **Fix:** use a distinct non-pending state when nothing will produce the
+  quantity; name what is awaited and time out.
+
+### B18. WebGL context loss is not handled in the main view
+
+**Severity:** medium. **Effort:** M.
+
+- **Evidence [M]:** `bugs/C-labels-ao-export/t6-context-loss.mjs`
+  (`WEBGL_lose_context`): no notice is shown; the event is not
+  default-prevented, so the context cannot be restored; a PNG at the current
+  size downloads as a fully transparent image with no error; later frame
+  changes fail with shader errors.
+- **Fix:** prevent the default on loss, show a banner, stop rendering and
+  refuse exports with one message; on restore, rebuild programs and buffers
+  from the retained frame.
+
+### B19. A second configuration import during a restore can leave it unfinished
+
+**Severity:** medium, intermittent (5 of 8 runs). **Effort:** S–M.
+
+- **Evidence [M]:** `bugs/X-cross/import-concurrency.mjs double <gapMs>` on a
+  cold page: the status stays "Restoring configuration…" although every
+  analysis is calculated, and Color by ends as "type". The root cause was not
+  isolated.
+- **Fix:** serialize restores, and always write a final status in `finally`.
+
+### B20. A file that fails to open leaves the previous trajectory displayed but dead
+
+**Severity:** medium. **Effort:** S (minimal) or M.
+
+- **Where:** `src/app.js` `loadFiles`: the old structure Worker is reset and
+  the file name changed before the new file is known to parse.
+- **Evidence [M]:** `bugs/X-cross/repro-bad-second-file.mjs` and
+  `shell/bugs2.mjs`: the header shows the broken file's name over the old
+  atoms, and frame navigation fails with "Open a structure or trajectory file
+  first."
+- **Fix:** load the new source in a second Worker and swap on the first frame
+  (this also gives S6); minimal: close the source cleanly on failure.
+
+### B21. Export JSON fails after opening a shorter trajectory
+
+**Severity:** medium. **Effort:** S.
+
+- **Evidence [M]:** `bugs/X-cross/repro-export-after-shorter-file.mjs`: a
+  strain reference frame or time-series first frame of 5, then a 3-frame file;
+  **Export JSON** fails validation and nothing downloads.
+- **Fix:** reset or clamp both in `loadFiles` and `closeSource`, and clamp
+  again in `captureConfiguration`.
+
+### B22. Voronoi cell opacity is applied twice on multisampled canvases
+
+**Severity:** medium (wrong opacity; images depend on the device).
+**Effort:** S.
+
+- **Where:** `src/render/voronoi-cell-layer.js` enables blending for faces and
+  outlines while `SAMPLE_ALPHA_TO_COVERAGE` is enabled globally in
+  `src/render/webgl-renderer.js`. The surface mesh layer already disables it.
+- **Evidence [M]:** `render/m4.mjs --only=a2c`: one white cell on black. With
+  4× multisampling the center pixels read 21, 75 and 150 at opacity 0.25, 0.5
+  and 0.75; with coverage disabled, or without multisampling, they read 83,
+  150 and 200. The ratio is exactly the opacity.
+- **Fix:** disable alpha-to-coverage around the Voronoi face and outline
+  passes and restore it afterwards; check the cell and slice-outline lines
+  (alpha 0.92 with blending) the same way.
+- **Intended visual change:** on multisampled canvases Voronoi faces and
+  outlines become as opaque as the slider says and lose the dither pattern.
+  Exports follow the screen.
+
+### Lower-severity defects
+
+| ID | Problem | Evidence | Fix | Effort |
+| --- | --- | --- | --- | --- |
+| B23 | Camera-path preview does not return to its starting frame when frames load slowly | `bugs/A-movies/b8-preview-restore.mjs`, 4 of 4 [M] | On stop, show the starting frame whenever a load is pending | S |
+| B24 | Radical Voronoi with radii from an expression of an analysis output fails on every frame change | `bugs/D-kernels-inputs/b09-radical-radius-expression-frame-change.mjs` [M] | Wait while the radius property has a pending dependency; rerun when computed properties refresh | S–M |
+| B25 | Transparent PNG at "Current viewport" has edge fringes (1,927 of 290,700 pixels, up to 53 levels) | `bugs/C-labels-ao-export/t5-transparent-matte.mjs` [M] | Use the offscreen black/white matte for this path too; this changes that export's pixels | S |
+| B26 | Importing a configuration while a script runs is cut short by the script's next command | `bugs/A-movies/b4-import-during-script.mjs` [M] | Refuse the import while the automation lock is held | S |
+| B27 | Bonds on a large frame run to the end and then fail at the 1,000,000-edge cap | 964k atoms [M] | Sum counts as chunks finish and stop early | S |
+| B28 | With the Voronoi WebGPU kernel turned on, a failed GPU Voronoi preparation cancels all other GPU prewarming, and the status wrongly says "unavailable" (the default CPU routing no longer reaches this) | `gpu/prefetch-memory.mjs --scenario=slab`: 4 of 24 pipelines [M] | Catch the Voronoi-specific failure, continue the general warm-up, report status per kernel | S |
+| B29 | Device loss or any uncaptured GPU error disables WebGPU for the session | `src/analysis/gpu/runtime.js` [C] | Re-create the Worker once on the next request; treat validation errors as failed tasks | S–M |
+| B30 | Every refresh rebuilds the legend and drops keyboard focus; the legend cannot be edited during playback | `shell/bugs2.mjs` [M] | Update the legend in place when its kind, property and items are unchanged | M |
+| B31 | LAMMPS dumps with `ITEM: UNITS`/`ITEM: TIME`, or without a `type` column, are rejected; rows beyond NUMBER OF ATOMS are dropped silently | `io/bench-smooth-robust.mjs` [M] | Accept the optional blocks; default the type; raise an error on extra rows | S |
+| B32 | Small touch targets on phones (text buttons 28×11 px, help links 19×19) | `shell/mobile.mjs` [M] | 32–44 px hit areas under the mobile media query | S |
+| B33 | The Movie panel's image-size mirror keeps its old value after an import | `bugs/X-cross/roundtrip.mjs` [M] | Refresh it with the export-resolution control | S |
+| B34 | GPU results that depend on neighbor order are not reproducible between runs: frame strain on 6,912 and 60,229 atoms differs in 7–11 of 1,144,351 values (at most 1.5×10⁻⁸), HEA bonds and Q4/Q6 differ between two pools, and GPU Voronoi digests differ between page loads | Found while fixing B1 and B5; the GPU neighbor grid is filled with `atomicExchange`, so the order of each cell's list varies [M] | Sort each cell's list, or accumulate in an order-independent way; decide first whether run-to-run identity is required on the GPU | M |
+| B36 | `npm run test:gpu:voronoi` on the software adapter takes 285–320 s on the reference machine against a 360 s evaluate timeout, so a loaded machine can fail it without a defect | Measured on 2026-10-10 [M] | Split the page evaluation into two calls, or raise the timeout for this suite | S |
+| B35 | Trajectory lines for a selection group of physical copies find no atoms ("IDs not found (@AlloyView:copy…)"); lines work for source IDs | Seen while fixing B1 [M] | Map copy IDs to their source atom and add the copy's cell offset, or state the restriction in the panel | S–M |
+
+Suspected but not reproduced: the movie frame range persists across files
+beyond the new frame count. The expression variable `ID` is NaN for physical
+copies (may be by design; B35 is its visible consequence).
+
+## Part 2: performance, phase 1 (small changes)
+
+### C1. Coalesce analysis progress updates
+
+**Effort:** S. **Deployments:** all CPU paths.
+
+- **Where:** `src/analysis/status.js` (`toLocaleString('en-US')` twice per
+  event), every progress caller in `src/app.js` and the tool modules, the
+  event sources in `analysis-pool.js` and `workers/analysis-worker.js`.
+- **Evidence [M]:** `toLocaleString` costs 29.7 µs per call against 0.92 µs for
+  a cached `Intl.NumberFormat` with identical text. A chunk produces about 7
+  events: 1,681 for CSP at 120k atoms, up to 8,800 at 1M. Because chunks are
+  dispatched from the main thread, Workers wait while it formats stale text.
+  `cpu/progress-ab.mjs`, 120k, 30 Workers: CSP 68 ms with a no-op handler,
+  191 ms with text per event, 73 ms throttled to 20 Hz; local shear
+  170 / 525 / 174 ms. In the browser each event also costs a layout: PTM at
+  120k spends 84–162 ms formatting and 209–227 ms in 48–52 layouts.
+- **Change:** one module-level number formatter; keep only the latest progress
+  and write it at most once per animation frame, always passing phase changes
+  and the final event; make the Worker's 80 ms throttle span chunks.
+- **Gain:** fast analyses at 120k become 2–3× faster in the application.
+- **Verify:** `progress-ab.mjs`; old and new text equal for a list of values.
+
+### C2. Worker-count policy collapses to one Worker
+
+**Effort:** S (cliff and budget), M (nonisolated residency).
+**Deployments:** all; worst on Firefox/Safari and nonisolated hosts.
+
+- **Where:** `src/analysis/analysis-pool.js` `chooseWorkerCount` and its
+  callers.
+- **Evidence [M]:** `cpu/worker-counts.mjs`, limit 30. PTM gets 30 Workers at
+  120k atoms and 20 at 1M in isolated Chrome, but 1 Worker at 2M. Without
+  `performance.memory` (Firefox, Safari) isolated PTM gets 13 at 120k and 1 at
+  1M. Nonisolated CNA gets 30 → 4 → 2 → 1 from 120k to 4M. One Worker at 1M
+  PTM means about 80 s instead of about 5 s.
+- **Cause:** the count-independent `sharedBytes` sits inside the loop
+  condition, so once it alone exceeds the budget the count falls to 1 although
+  fewer Workers save nothing. The budget is a fixed 256 MiB without
+  `performance.memory`. PTM charges a 16 MiB initial heap per Worker, and
+  nonisolated Workers are charged two resident frames plus a second wrapped
+  coordinate copy.
+- **Change:** `count = min(limit, ceil(N / target), floor(budget / perWorker))`,
+  with shared bytes deciding only whether to warn or refuse. Derive the budget
+  from the larger of 256 MiB, 15% of the heap limit, a share of
+  `navigator.deviceMemory` and a per-core amount (constants are the owner's
+  call). Nonisolated: keep one resident frame when two would reduce the count,
+  and wrap the private copy in place.
+- **Gain [E]:** isolated Firefox/Safari PTM at 1M goes from 1 to 15–30
+  Workers; nonisolated Chrome CNA at 1M from 4 to about 14.
+- **Verify:** `worker-counts.mjs` as a unit-test table; peak memory at 1M and
+  4M in Chrome and Firefox.
+
+### C3. Validate inputs once per frame, not once per chunk
+
+**Effort:** S. **Deployments:** all CPU paths.
+
+- **Where:** `bond-statistics.js` (`types.some`), `centrosymmetry.js`
+  (`structureInput.some`), `rdf.js` (`rdfNormalization`), `displacement.js`
+  (mapping scan).
+- **Evidence [M]:** `cpu/hoist-ab.mjs`, 1M atoms, 471 chunks: bond statistics
+  spends 14.0 ms per chunk in validation, 6.6 s of Worker CPU against a 6.4 s
+  kernel; CSP auto with CNA input 12.6 ms per chunk; RDF 3.2 ms. The cost grows
+  as N² because chunk count and scan length both grow with N.
+- **Change:** validate once per resident frame and input set (the Worker
+  already caches inputs per analysis); compute the RDF normalization once on
+  the main thread.
+- **Gain (verified, pool, 1M, with C9):** bond statistics 800 → 277 ms, CSP
+  auto with input 798 → 328 ms, RDF 1,052 → 630 ms.
+
+### C4. Reference-frame strain: remove per-neighbor allocation
+
+**Effort:** S. **Deployments:** hosts without WebGPU and CPU fallback.
+
+- **Where:** `src/analysis/reference-strain.js` `minimumImageChange` and the
+  loops around it.
+- **Evidence [M]:** `minimumImageChange` is 62% of self time; the kernel costs
+  60.7 µs per atom against 5.4 µs for local-shear metrics on the same
+  neighbors.
+- **Change (verified):** the same arithmetic in scalars, in the same order.
+- **Gain:** kernel 60.7 → 7.2 µs per atom; pool 120k 607 → 158 ms and 1M
+  4,743 → 848 ms; all 19 output fields hash-identical.
+- **Also:** each Worker keeps a private wrapped copy of the current
+  coordinates that the memory budget does not count (about 720 MB across 30
+  Workers at 1M); share it when isolated.
+
+### C5. Light kernels: scalar loops and cheaper transport
+
+**Effort:** S (kernels), M (transport). **Deployments:** all CPU paths.
+
+- **Displacement [M]:** per-atom `map`, `subarray`, `every` and spread
+  `Math.hypot`. Verified prototype: 1.74 → 0.17 µs per atom; pool 120k
+  169 → 62 ms, 1M 443 → 184 ms.
+- **Ideal-strain tensor from a stored PTM fit [M]:** 5.3 µs per atom for a 3×3
+  product (`atomic-strain.js`); not prototyped, at least 10× expected [E].
+- **Local-shear finalize [M]:** a third pool pass takes 142 ms at 1M for 70 ms
+  of single-thread arithmetic; nonisolated Workers each receive the whole
+  metrics array.
+- **Change:** scalar kernels. For kernels under about 0.3 µs per atom, use one
+  chunk per Worker and fewer Workers, and send only the chunk's rows.
+
+### C6. Coordination kernel and Worker target
+
+**Effort:** S. **Deployments:** hosts without WebGPU; runs at load and on
+every cutoff edit.
+
+- **Evidence [M]:** 54% of kernel time is outside the distance test: each atom
+  rebuilds its 27 neighbor bins with a pairwise duplicate scan. Only 3 Workers
+  run at 120k (50,000-atom target). The cutoff index build is serial, 193 ms at
+  1M. Shared-memory reads are not the cause of "shared slower than copied".
+- **Change (kernel verified):** scan for duplicate bins only when a periodic
+  axis has fewer than 3 bins, rebuild the bin list only when the atom's bin
+  changes, inline the minimum-image test; lower the target to 8,192–16,384
+  atoms per Worker after C2.
+- **Gain:** kernel 3.91 → 2.26 µs per atom; pool 120k 180 → 112 ms, about
+  40–50 ms with 12 or more Workers [E].
+
+### C7. Main-thread post-processing
+
+**Effort:** S. **Deployments:** all.
+
+- **Expressions [M]:** `Float64Array.from(types, callback)` takes 149 ms
+  against 7 ms for a loop at 1M; the first use of `ID` costs 294 ms. This is
+  most of the "0.5 s at 1M" noted in the expressions page.
+- **Statistics [M]:** `coordinationStatistics` uses a `Map` keyed by number
+  (35 ms against 8 ms for a count table, plus 15 yields).
+- **Wigner–Seitz summary [M]:** 64 ms synchronous at 1M; move it into the
+  Worker as cluster labeling already is.
+
+### C8. Match atom IDs with typed tables, off the string path
+
+**Effort:** S–M. **Deployments:** all, including WebGPU (matching precedes the
+GPU kernels).
+
+- **Where:** `reference-strain.js` `createReferenceMappingAsync`, used by
+  displacement and frame strain.
+- **Evidence [M]:** `cpu/main-thread.mjs`, 1M numeric IDs: 1,578 ms in 31 slices
+  of about 51 ms, longer than the displacement analysis itself (443 ms). A
+  dense table takes 55 ms and returns the same mapping. The reference-side map
+  is rebuilt for every current frame.
+- **Change:** for numeric typed IDs, a dense `Int32Array` table when the ID
+  range is at most 4N + 1024, otherwise a numeric `Map`; keep the string path
+  for other IDs; cache the reference-side table per reference ID array; slice
+  by time or move the match to the structure Worker.
+- **Verify:** equality with the current mapping on shuffled, missing,
+  duplicate and string IDs, including the same error messages.
+
+### G2. A routing table, and a memory of fallbacks
+
+**Effort:** S (static table), M (measured model). **Deployments:** WebGPU on.
+
+- **Evidence [M]:** warm medians in ms, GPU / CPU 6w / CPU 14w:
+
+| Kernel | 28.8k | 60k | 130k | 1M | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Coordination | 11 / 142 / 206 | 11 / 203 / 242 | 11–15 / 181 / 286 | 52 / 911 / 481 | GPU |
+| CNA fixed | 11 / 36 / 35 | 16 / 93 / 51 | 25–30 / 115 / 81 | 178 / 1482 / 639 | GPU |
+| CNA adaptive | 39 / 60 / 60 | 30 / 134 / 78 | 128–136 / 203 / 120 | 347 / 2153 / 851 | GPU; tie with 14w at 130k |
+| Central symmetry, 12 | 58 / 39 / 41 | 57 / 72 / 41 | 134–146 / 150 / 93 | 714–1594 / 1276 / 472 | CPU with 14w |
+| Central symmetry, Auto | 78 / 57 / 84 | 82 / 109 / 61 | 166 / 227 / 139 | 811–1659 / 1889 / 848 | Tie |
+| Bonds | 50 / 48 / 48 | 83 / 109 / 80 | 127–149 / 170 / 117 | not run | Tie |
+| Bond distributions | 67 / 71 / 84 | 124 / 190 / 132 | 442–499 / 280 / 183 | 1531 / 3588 / 1828 | CPU at 130k |
+| RDF | not periodic | 25 / 182 / 106 | 86 / 58 / 57 | 842 / 3854 / 1629 | GPU unless it falls back |
+| Local shear | 11 / 62 / 67 | 15 / 131 / 106 | 49–52 / 151 / 138 | 380 / 1962 / 981 | GPU |
+| Displacement | 8 / 33 / 37 | 13 / 64 / 62 | 22–24 / 57 / 70 | 109 / 653 / 372 | GPU |
+| Reference strain | 21 / 245 / 192 | 47 / 568 / 335 | 229 / 1000 / 741 | 1650 / 9874 / 4670 | GPU |
+| Ideal strain tensor | 17 / 119 / 106 | 15 / 179 / 198 | 25–30 / 315 / 356 | 245 / 2518 / 2176 | GPU |
+| Voronoi | 2560–4700 / 230–350 / 240–260 | 5700–8900 / 500–660 / 480–600 | 25,600 / 11,000 / – | not run | CPU (done: Voronoi runs on the CPU unless its WebGPU kernel is turned on) |
+
+- **Also [M]:** every call retries a GPU path that failed before. RDF on NiGB
+  costs 86 ms instead of 57; on NiGB 2×2×2 adaptive CNA costs 3.6 s instead of
+  2.5 s.
+- **Change:** start with a static table (bond distributions to
+  CPU from 100k atoms with 6 or more Workers; central symmetry to CPU with 12
+  or more Workers), then a per-kernel cost model corrected by measured times.
+  Remember a `GpuUnavailableError` per source revision, kernel and parameters
+  and go straight to the CPU until they change. Pin the backend within one
+  batch or time series, because backends agree only within documented
+  tolerances.
+- **Note:** the CPU columns will move after C3–C6 and C9; re-measure before
+  fixing thresholds.
+
+### T1. Restart frame prefetch when indexing completes
+
+**Effort:** S. **Deployments:** all.
+
+- **Where:** `src/app.js` `updateSourceIndex` calls `scheduleFramePrefetch`
+  only inside `if (previousCount !== state.frameCount)`;
+  `src/workers/indexed-trajectory.js` publishes completion with an unchanged
+  count.
+- **Evidence [M]:** `io/b-fill.mjs`: the cache stays at 10 of 50 frames (60k
+  atoms), 8 of 30 (120k) and 4 of 10 (1M) for at least 12–60 s after load.
+  Small test fixtures finish indexing before the first frame and hide it.
+- **Change:** reschedule when `indexComplete` flips, and when new frames
+  appear while the lanes are idle.
+- **Gain (prototype):** 50 of 50 frames cached 1.7 s after the drop at 60k.
+
+### T2. Smoothing: size the coordinate store to the window
+
+**Effort:** S. **Deployments:** all.
+
+- **Where:** `src/workers/trajectory-processor.js` (192 MiB LRU store).
+- **Evidence [M]:** at 1M atoms the store holds 10.4 snapshots, so each
+  consecutive smoothed frame re-reads 1 frame at w = 3, 4 at w = 5 and the
+  whole window of 20 at w = 10; one read is a 390 ms parse.
+- **Change:** budget = max(192 MiB, (2w + 2 + read-ahead) snapshots) with a
+  hard cap and a status note; share one ID array between snapshots with equal
+  IDs; evict by distance from the current window. A sliding sum was rejected
+  because it changes the summation order.
+
+### T3. Frame-ZIP: faster CRC
+
+**Effort:** S. **Deployments:** all.
+
+- **Evidence [M]:** `crc32` in `src/export-archive.js` iterates a `Uint8Array`
+  with `for…of`: 97.4 ms per 4 MiB against 11.7 ms with an indexed loop and
+  the same result. It runs in one synchronous block at the end: 445 ms for 24
+  frames, about 6 s at the 256 MiB cap.
+- **Change:** indexed loop, computed per frame. See T9 for PNG encoding.
+
+### T4. Dump parser: fused tail pass and coordinate-only reads
+
+**Effort:** S. **Deployments:** all.
+
+- **Evidence [M]:** `finishDumpFrame` spends 59 ms in a `Set` and per-atom
+  `Map.get` for types and 42 ms in three coordinate passes, of about 395 ms
+  for a 1M frame.
+- **Change (verified, `io/proto/lammps-dump-opt.js`):** a dense type table and
+  one fused pass with the same rounding points; identical arrays on 8 files.
+  Parse 387 → 323 ms at 1M and 22.5 → 17.5 ms at 60k. A coordinate-only
+  projection (IDs and wrapped coordinates) is 1.39–1.6× faster than a full
+  parse; use it for unwrap integration, smoothing neighbors and trajectory
+  lines. Add a same-order fast path to `unwrapSequenceFrame`, which builds a
+  130k-entry `Map` per CFG frame.
+
+### R1. Bonds: indexed geometry without hidden caps
+
+**Effort:** S. **Deployments:** every GPU.
+
+- **Where:** `src/render/atom-primitives.js` `createPrimitiveMesh` and
+  `drawMesh`.
+- **Evidence [M]:** a bond is a 10-sided cylinder stored as 120 non-indexed
+  vertices with two caps, and every vertex repeats 6–10 texel fetches. 60,229
+  atoms with 421,315 bonds issue 50.8 million vertex invocations per frame:
+  11.4–19.8 ms against 1.0 ms without bonds. 481,832 atoms with 3.37 million
+  bond instances take 131–135 ms per frame (about 7.5 FPS on a GTX 1080 Ti).
+- **Change (verified, no differing pixel in 4 scenes):** indexed cylinder and
+  cone drawn with `drawElementsInstanced`, and a capless cylinder whenever the
+  smallest drawn atom radius is at least the bond radius (the caps then sit
+  inside the atom spheres). Track the minimum radius next to
+  `maximumAtomRadius` for that guard.
+- **Gain:** 60k atoms with bonds 19.7 → 14.0 (indexed) → 8.3 ms (no caps);
+  482k atoms with bonds 135 → 95 → 50 ms. Vertices per bond 120 → 46 → 22.
+- **Verify:** `render/m2.mjs`, `render/m7.mjs`; the bonds row of
+  `scripts/browser-crystal-drag.mjs --performance`.
+
+### R2. Orientation colors: scalar per-atom loop
+
+**Effort:** S. **Deployments:** all.
+
+- **Where:** `src/render/orientation-colors.js`, the resolver loop and its
+  helpers.
+- **Evidence [M]:** at 963,664 atoms the inverse-pole-figure colors take
+  2,206 ms on the main thread and Rodrigues colors 3,107 ms: about ten
+  short-lived arrays per atom, plus 24 symmetry candidates in Rodrigues mode.
+- **Change:** normalize in locals, sort three values with compare-swaps and
+  write bytes straight into the color array; flatten the symmetry table.
+  Keep `Math.hypot` and the operation order so bytes stay identical, and keep
+  the exported helpers as the reference for a byte-comparison test.
+- **Gain (verified for IPF):** 2,206 → 236 ms with no differing byte;
+  Rodrigues 5–10× expected [E].
+
+### R3. Scene bounds and radius loops at frame commit
+
+**Effort:** S. **Deployments:** all.
+
+- **Where:** `src/render/webgl-renderer.js` `updateSceneBounds`, called by
+  `setFrame`, `setDisplayPositions` and nine other setters (always by
+  `setSurfaceMesh` and `setTrajectoryLines`, even with nothing to show);
+  `atomRadii.reduce` and the `setAtomRadii` validation.
+- **Evidence [M]:** at 963,664 atoms `updateSceneBounds` takes 60–87 ms, the
+  radius maximum 19.6 ms and the radius validation 21 of `setAtomRadii`'s
+  24 ms. The uploads are cheap: 29 MB in about 10 ms. `setFrame` costs
+  113–133 ms of JavaScript in total. With the second view open, every sync
+  triggers one more full bounds scan.
+- **Change:** compute atom bounds in one indexed pass, cached by the display
+  position array and invalidated when display coordinates change; combine it
+  with the cell, replica offsets and layer extensions; cache arrow bounds per
+  field; indexed loops for the radius maximum and validation; skip the bounds
+  update when nothing changed.
+- **Gain:** the scan drops from 60.1 to 12.9 ms with identical bounds
+  (prototype) and to about zero when cached; `setFrame` about 35–45 ms [E].
+
+### R4. Picking: tighten the per-atom loop
+
+**Effort:** S. **Deployments:** all.
+
+- **Evidence [M]:** a click costs 62.9–77.5 ms at 963,664 atoms and 89 ms with
+  a plane slice (`pick()` in `src/render/webgl-renderer.js`): every atom gets
+  the full projection, the edge projection and the radius arithmetic.
+- **Change:** hoist state into locals, skip atoms not nearer than the current
+  hit, reject by a screen-distance bound before the exact radius, and run the
+  slice test only on survivors. Acceptance rules stay as they are.
+- **Gain (prototype):** 62.9 → 11.5 ms, same atom at 12 of 12 probe points.
+  Add a randomized comparison with the current function as a unit test.
+
+### R5. Transparent export: shortcut empty and opaque pixels in the matte
+
+**Effort:** S. **Deployments:** all.
+
+- **Evidence [M]:** a transparent 4K export of 963,664 atoms takes 396 ms
+  against 159 ms opaque; `solveMatte` in `src/render/offscreen-export.js`
+  takes 182 ms for 8.09 million pixels although 78% are empty and 21.5%
+  opaque.
+- **Change:** compare 32-bit views. Equal color on black and white is opaque;
+  black 0 with white 0xFFFFFF is empty; otherwise use the existing formula.
+  Both shortcuts equal the formula exactly.
+- **Gain (verified, no differing byte):** 182 → 63 ms.
+
+### R6. Second view: reuse processed arrays and display meshes
+
+**Effort:** S. **Deployments:** all.
+
+- **Evidence:** enabling the second view at 60k atoms with bonds takes 173 ms
+  and uploads 16.8 MB [M]; each surface mesh is wrapped, cut and capped again
+  for it, and display coordinates and scene bounds are recomputed [C].
+- **Change:** cache the display mesh on the mesh object by cell, origin and
+  caps; let the second renderer adopt the main renderer's processed display
+  arrays, atom bounds and bond shifts (treated as immutable).
+
+### S1. Shrink the logo assets
+
+**Effort:** S. **Deployments:** all; phones most.
+
+- **Where:** `src/asserts/logo/`, `index.html`, `src/theme.js`.
+- **Evidence [M]:** `AlloyView_logo_only.png` is 2400×2400 and 4.4 MB; it is
+  the favicon and the empty-state fallback image, fetched even when hidden.
+  Each wordmark SVG is 4.4 MB and embeds the same 2048×2048 PNG twice for a
+  190 px mark; light-theme users download both. A cold start transfers
+  11.46 MB, of which code, CSS and HTML are 0.86 MB. The main thread spends
+  127 ms parsing the SVG and 113 ms decoding images.
+- **Change:** a 32–180 px favicon; a ≤264 px fallback inserted only when WebGL
+  fails; one small SVG whose lettering follows the theme; a build check that
+  rejects assets over 200 KB.
+- **Gain (prototype):** transfer 11,460 → 901 KB; about 40 MB less decoded
+  bitmap memory [E].
+
+### S2. Coalesce the color, legend and radius refresh on a frame change
+
+**Effort:** S–M. **Deployments:** all.
+
+- **Where:** `src/app.js` `displayFrame`, the cached-result paths of
+  `runStructureAnalysis` and `runCoordination`, every tool's
+  `onResultsChange`; `src/dxa-tools.js` `clearNetwork` (it triggers a refresh
+  even when DXA is off, so a frame change with no analyses recolors twice).
+- **Evidence [M]:** a frame change with four cached analyses calls
+  `applyColors` 5 times, builds the palette and legend 6 times, runs
+  `refreshColorOptions` and `updateVectors` 9 times and uploads radii 6 times:
+  a 230–277 ms long task at 120k atoms and 847–900 ms at 1M (74 MB of GL
+  uploads).
+- **Change:** `requestDisplayRefresh` with dirty flags. `displayFrame` opens a
+  batch and flushes once; asynchronous completions flush once per animation
+  frame; exports and `analysesSettled` force a flush. Then attach cached
+  results before the first palette so `setFrame` uploads final colors.
+- **Gain (prototype, final state identical in 6 of 6 runs):** long task
+  217 → 84 ms at 120k and 857 → 418 ms at 1M.
+- **Verify:** hashes of the color, visibility and radius buffers and the
+  legend markup against the current build; `test:browser`,
+  `test:browser:initial-colors`, `test:browser:legend-preview`.
+
+### S3. One appearance pass per refresh, and skip unchanged radius uploads
+
+**Effort:** S. **Deployments:** all.
+
+- **Evidence [M]:** `applyAppearance` (`src/appearance.js`) always copies
+  colors, allocates a visibility mask and rebuilds radii, and is called three
+  times per `applyColors`: 28–36 ms at 1M with no overrides, including a
+  3.85 MB radius upload. `updateVectors` rebuilds three selects and
+  regex-normalizes every property name on each refresh (22–29 ms per frame
+  change).
+- **Change:** resolve once per refresh, with an identity fast path when there
+  are no element, atom or group styles; a radius revision so unchanged radii
+  are not uploaded; memoize normalized property names.
+
+### S4. Cache content-hashed assets as immutable
+
+**Effort:** S (deployment configuration). **Deployments:** production.
+
+- **Evidence [M]:** production serves hashed JS and CSS with
+  `max-age=14400` and HTML and Wasm with `max-age=600`; Wasm is not cached at
+  the edge. After expiry a revisit sends 204–206 conditional requests through
+  the same waterfall: ready in 570 ms against 302 ms.
+- **Change:** for `/AlloyView/assets/*`, a Cloudflare cache rule and
+  `Cache-Control: public, max-age=31536000, immutable`; the same line in
+  `_headers`; keep `index.html` short-lived; document it in DEPLOYMENT.md.
+
+## Part 2: performance, phase 2 (medium changes)
+
+### C9. Neighbor queries without per-neighbor allocation
+
+**Effort:** M. **Deployments:** all CPU paths, CPU fallback and exact
+corrections. **The largest CPU gain.**
+
+- **Where:** `src/analysis/neighbors.js` (`within`, `nearest`) and every
+  caller: CNA, CSP, PTM preparation, bonds, bond statistics, local shear, RDF,
+  clusters.
+- **Evidence [M]:** `within()` allocates an object with four boxed doubles per
+  neighbor. For k = 18 the first search radius is 1.408 a, just inside the BCC
+  third shell at 1.414 a, so BCC needs 1.9–2.0 passes and 113–126 candidates
+  per atom against 18–23 in FCC. PTM on BCC spends about 59% of its CPU in
+  JavaScript neighbor preparation. CNA spends 33% in `classify`, in a string
+  `Map` and a new array per atom. A slab with two-thirds vacuum doubles the
+  candidate count.
+- **Change (verified, `cpu/proto-changed/`):** `collect()` fills typed scratch
+  arrays in the same order; `nearestInto()` keeps the k best by bounded
+  insertion with the existing comparator; the start radius is learned from
+  the last k-th neighbor distance with the original ladder as fallback; CNA
+  uses integer counters; pair keys are numeric.
+- **Exactness:** 159,696 queries over 17 frames and 845 kernel checks match
+  with `Object.is`; pool hashes are identical for 13 analyses at 120k in both
+  deployments and 10 at 1M.
+- **Gain, single thread on the Fe loop:** PTM 82.7 → 39.6 µs per atom, CNA
+  adaptive 12.9 → 5.8, CSP auto 14.0 → 6.7, bonds 5.4 → 2.3; FCC gains are
+  1.1–1.4× except bonds (2.4×). Pool with 30 Workers: 120k CNA 117 → 59 ms and
+  PTM 496 → 251 ms; 1M CNA 761 → 313 ms and PTM 4,737 → 2,936 ms.
+- **Risks:** scratch arrays are reused, so nested queries must copy first; the
+  numeric pair key needs type IDs below 2²⁶; in thin cells the smaller sphere
+  may succeed where the current code reports "cell is too thin".
+
+### C10. CPU Voronoi: JavaScript overhead and index labels
+
+**Effort:** M. **Deployments:** all hosts: Voronoi runs on CPU Workers unless
+its WebGPU kernel is turned on.
+
+- **Evidence [M]:** of 51.9 µs per atom, `initialCell` is 16%, `within` 11%,
+  the clip and core loops 15%, `indexLabel` 7%; Wasm is about 28%. In a fully
+  periodic cell `initialCell` returns the same planes for every atom. One
+  index string per atom crosses three message hops: `structuredClone` of 1M
+  strings takes 214 ms per hop, against 1.3 ms for interned IDs plus a label
+  table.
+- **Change:** cache the initial planes per context; use `collect()` (C9);
+  write faces into growable typed buffers; return index IDs plus a table of
+  unique labels and expand lazily.
+- **Gain [E]:** 30–35% of kernel CPU and 0.2–0.4 s of main-thread time at 1M.
+
+### T5. Shared in-flight frame requests
+
+**Effort:** M. **Deployments:** all. Fixes B12.
+
+- **Where:** `src/app.js` (`cancelFramePrefetch`, pending-request reuse,
+  idle-callback restart), `src/worker-client.js`,
+  `src/workers/structure-worker.js`, `src/data/frame-parser-pool.js`.
+- **Evidence [M]:** `io/b-eager.mjs`. Stepping a 1M-atom trajectory every
+  0.7 s makes 17 frame requests for 8 frames; 8 are aborted and 3.1 s of
+  in-flight parsing is discarded. With back-to-back steps (frame ZIP, movie,
+  Visit frames) every request is a serial foreground parse while four
+  background parsers idle. A 24-frame ZIP at 60k makes 93 requests, 53
+  aborted. Playback itself is a fixed 1 s timer started after each display.
+- **Change (prototype, `io/patched-app.js`):** one shared request per frame
+  index that consumers join; a foreground join promotes it; a frame change
+  aborts only prefetch-owned requests outside the new window; sequential steps
+  start the lanes at once.
+- **Gain (prototype, includes T1):** 1M, 8 back-to-back steps 6,551 → 3,941 ms;
+  60k, 24 steps 2,178 → 1,321 ms; the ZIP makes no extra request.
+- **Risks:** up to about 8 requests briefly in flight; stale-source handling
+  must stay on the source version and processing revision.
+
+### T6. Header-only frame reads for time series
+
+**Effort:** M. **Deployments:** all.
+
+- **Evidence [M]:** the default attribute `Cell.volume` costs a full parse per
+  frame, serially: 23 parses in 1.70 s at 120k and about 0.5 s per frame at 1M.
+  A header parse from a 2 KB slice takes 0.35–0.52 ms at any size and returns
+  the same timestep, atom count and cell.
+- **Change:** a structure-Worker request `frame-header(index)` for dump, XYZ,
+  PDB and CFG. Use it when every requested attribute is header-derived (Frame,
+  Timestep, AtomCount, `Cell.*`, NumberDensity, `Strain.*`); otherwise use the
+  coordinate projection of T4 on idle lanes. Smoothing forces the full path
+  because it averages the cell.
+- **Gain:** 50–800×; a 10,000-frame trajectory takes about 5 s [E].
+
+### T7. Replicated frames: reuse the ID array
+
+**Effort:** S (estimate cache), S–M (reuse), L (typed IDs).
+**Deployments:** all.
+
+- **Where:** `src/data/replicate.js`, `src/workers/replication-worker.js`,
+  `src/worker-client.js`, `src/data/cache-policy.js`.
+- **Evidence [M]:** physical replication gives every copy a string ID. For
+  120,458 × 2×2×2 atoms, 380 ms of the 723 ms replication is ID validation and
+  string building, and posting the result takes 471 ms because 843,206 strings
+  are cloned. Receiving a 1M-entry ID array costs 243–382 ms on the main
+  thread per frame, including background prefetch arrivals.
+  `estimateFrameBytes` loops over every ID: 20–95 ms per frame change at 1M,
+  after every analysis completion. IDs are identical between consecutive
+  frames of an ID-stable trajectory.
+- **Change:** cache the byte estimate per ID array. When the source ID sequence
+  and repetitions match the previous frame, skip the ID work and send a token;
+  the page reuses the previous array by reference. Longer term: a typed source
+  ID plus a copy index, formatting strings only at the UI and configuration
+  boundary.
+- **Gain [E]:** about 0.85 s of 1.2 s per replicated frame after the first,
+  and about 60 MB per cached frame.
+
+### T8. gzip trajectories: index while decompressing
+
+**Effort:** M. **Deployments:** all.
+
+- **Evidence [M]:** a 57 MB gzip trajectory shows its first frame after
+  1,040 ms against 303 ms uncompressed, and this grows with file size. A
+  streaming scan parses frame 0 after 2.4 MB of decompressed data, with an
+  identical result.
+- **Change:** scan each decompressed chunk for frame markers while staging the
+  parts, and publish each descriptor with a Blob composed of slices of the
+  parts already built. Memory limits are unchanged; no OPFS.
+
+### T9. Frame-ZIP: encode PNGs in a Worker
+
+**Effort:** M. **Deployments:** all.
+
+- **Evidence [M]:** 147 ms per frame at 60k atoms and 1050×928, of which
+  `toBlob` is 62 ms on the main thread.
+- **Change:** hand each frame as an `ImageBitmap` to a Worker
+  (`OffscreenCanvas.convertToBlob` plus CRC) with a queue of 2 and a
+  main-thread fallback. About 70–80 ms per frame [E]. ZIP bytes must stay
+  identical.
+
+### T10. Per-frame summary from the parser
+
+**Effort:** M. **Deployments:** all.
+
+- **Evidence [M]:** at 1M atoms a cached frame change costs 290–530 ms on the
+  main thread: `updateSceneBounds` 92 ms, `colorsByType` 50 ms, radii 74 ms,
+  type controls 30 ms. Types are counted three separate times, and nonisolated
+  Workers each get their own coordinate copy (`copyCoordinates`, 511 ms over 4
+  steps).
+- **Change:** compute type counts and the position bounds in the parser's row
+  loop and ship them with the frame; bounds, legend and type controls read the
+  summary; copy coordinates once per frame for nonisolated Workers. Recompute
+  after smoothing and replication.
+- **Gain [E]:** 150–250 ms per frame at 1M. Combine with S2, S3 and R3.
+
+### S5. Bundle the page and each Worker entry
+
+**Effort:** M. **Deployments:** all.
+
+- **Evidence [M]:** the build only copies `src/`: 158 static modules from
+  `app.js` in a five-level waterfall, 187 requests, and each analysis Worker
+  reloads 25 modules. Cold start at 20 Mbit/s and 40 ms round trip; every row
+  includes S1 except the HTTP/1.1 "Current" row:
+
+| Build | Protocol, CPU | Requests | Ready |
+| --- | --- | --- | --- |
+| Current | HTTP/2, 1× | 187 | 1,052 ms |
+| Bundled | HTTP/2, 1× | 14 | 619 ms |
+| Current | HTTP/2, 4× slower CPU | 187 | 1,870 ms |
+| Bundled | HTTP/2, 4× slower CPU | 14 | 1,678 ms |
+| Current | HTTP/1.1, 4× slower CPU | 187 | 3,280 ms |
+| Bundled | HTTP/1.1, 4× slower CPU | 14 | 1,841 ms |
+
+- **Also [M]:** sixteen analysis Workers start in 318–323 ms from a warm HTTP
+  cache, and in 61–69 ms when bundled.
+- **Change (prototype, `shell/bundle/build.mjs`):** esbuild as a development
+  dependency, one bundle per entry (the page and 11 Worker entries) written to
+  its original path, with a plugin that keeps `new URL(…, import.meta.url)`
+  and the Emscripten glue pointing at the original kernel and Wasm files.
+  `npm run dev` and the Node tests keep using `src/`.
+- **Risks:** URL relocation broke PTM Wasm loading in the first prototype;
+  add a browser test that every Worker and kernel loads from the bundled tree.
+- **Not worth doing [M]:** `modulepreload` for all modules (no gain, slower
+  first paint), lazy-loading rarely used panels (15% of the code), and
+  minification as a requirement (no ready-time gain).
+
+### S6. Keep a standby structure Worker
+
+**Effort:** S. **Deployments:** all.
+
+- **Evidence [M]:** the structure Worker created at startup is terminated on
+  the first open, and its parser pool is closed on each load; a 60k file has
+  about 80–120 ms of unexplained overhead per open.
+- **Change:** let the Worker's own load handler replace the source, or keep
+  one standby Worker with a prewarmed parser and swap it in. Combine with B20.
+
+### G3. Keep thin cells and slabs on the GPU
+
+**Effort:** S–M. **Deployments:** WebGPU.
+
+- **Where:** `src/analysis/gpu/runtime.js`: an axis whose height is between
+  one and two search radii gets one long bin, and the occupancy limit is a
+  hard failure.
+- **Evidence [M]:** NiGB 2×2×2 (9.96 Å thick) fails for adaptive CNA, central
+  symmetry and RDF and falls back to the CPU; a vacuum slab fails for the
+  Voronoi radius.
+- **Change:** turn the limit into an input to the initial batch size (batches
+  already adapt to dispatch time) and fail only at a much higher bound.
+
+### G4. Bound GPU trajectory prefetch
+
+**Effort:** S–M. **Deployments:** WebGPU.
+
+- **Evidence [M]:** a 160-frame, 130k-atom trajectory fills 812 MiB of GPU
+  memory and 278 MiB in the GPU Worker, with 159 background frame reads; the
+  budget is a fixed 2 GiB, and the Worker keeps the CPU-side input of every
+  resident frame.
+- **Change:** a window of a few frames around the current one; a budget from
+  the adapter limits and `navigator.deviceMemory`; drop the Worker's CPU copy
+  for frames that are not current or pinned.
+
+### R7. Early depth rejection for atom impostors
+
+**Effort:** S–M. **Deployments:** largest on HiDPI, integrated and mobile
+GPUs; none where `EXT_conservative_depth` is missing.
+
+- **Where:** the sphere shaders in `src/render/webgl-renderer.js` write
+  `gl_FragDepth`, which disables early depth testing; the same pattern is in
+  `site-marker-layer.js` and the ambient-occlusion ID pass.
+- **Evidence [M]:** at 963,664 atoms a frame takes 4.4 ms at the default zoom
+  (vertex-bound), 11–13 ms zoomed in, and 37–50 ms at device pixel ratio 2. A
+  flat-color fragment shader changes nothing; removing the depth write halves
+  the time; turning multisampling off saves at most 30%.
+- **Change:** with the extension, declare
+  `layout(depth_greater) out highp float gl_FragDepth` and rasterize the
+  billboard at the depth of the sphere's nearest point (with a 0.1% margin,
+  only when the center is inside the clip range). Keep the current shader as
+  the fallback. Draw display replicas nearest-first.
+- **Gain (interleaved A/B, no differing pixel in 7 scenes):** zoom 3× at 1M
+  atoms 11.1 → 5.9 ms, and 37.1 → 15.4 ms at pixel ratio 2; nearest-first
+  replicas take zoom 10× from 10.0 to 6.1 ms.
+- **Risk:** a fragment depth below the rasterized depth is undefined; recheck
+  pixel identity on other GPU vendors.
+
+### R8. Bond and arrow layer: update lazily, and store visibility separately
+
+**Effort:** S–M. **Deployments:** all.
+
+- **Where:** `src/render/atom-primitives.js` mirrors every position, color and
+  visibility update into textures, and packs visibility into the 16-byte
+  position texel. The layer is created on the first bonds or arrows and never
+  destroyed.
+- **Evidence [M]:** with the layer present at 963,664 atoms, `setVisibility`
+  goes from 0.3 to 28.6 ms and from 0.9 to 15.6 MB uploaded; `setFrame` from
+  113 to 236 ms and from 29.4 to 62.5 MB. This is paid even when no bond or
+  arrow is drawn, and it multiplies with the repeated refreshes of S2.
+- **Change:** setters only mark data dirty; the layer flushes when it is about
+  to draw visible bonds or arrows; allocate CPU mirrors lazily; move
+  visibility into its own one-byte texture.
+
+### R9. Ambient occlusion: count on the GPU
+
+**Effort:** M. **Deployments:** desktop and integrated GPUs; the current path
+stays as the fallback where float blending is missing.
+
+- **Where:** `src/render/ambient-occlusion.js` reads back a 4–16 MB ID image
+  and counts it on the CPU for every direction.
+- **Evidence [M]:** per direction at 1M instances and 1024²: 8.8 ms render
+  with readback and 3.5 ms counting; 47.4 ms in total at 2048². Forty
+  directions take 0.7–1.3 s in the background.
+- **Change:** render IDs to a texture, then draw one point per texel that
+  adds 1 to its instance's texel in a float count texture; accumulate all
+  directions on the GPU and read the counts back once. Use it only while
+  counts stay exact in single precision.
+- **Gain (prototype, counts equal for all 963,664 instances):** per direction
+  12.3 → 5.1 ms at 1024² and 47.4 → 12.3 ms at 2048²; about 0.1–0.2 s of GPU
+  time for 40 directions [E].
+
+### R10. All-cell Voronoi display: merge chunk buffers
+
+**Effort:** M. **Deployments:** all.
+
+- **Evidence [M]:** 60,229 displayed cells arrive in 471 chunks, each with its
+  own vertex array; a frame makes 1,419 draws and about 10,000 GL calls and
+  takes 22.1 ms against 2.7 ms without cells.
+- **Change:** when the geometry is complete, merge the chunk buffers into a
+  few large ones in chunk order (faces are translucent, so triangle order must
+  be preserved) and draw three times per replica.
+
+### K1. Grain segmentation: reuse the PTM fit and speed up clustering
+
+**Effort:** S (reuse), M (clustering). **Deployments:** all.
+
+- **Evidence:** when PTM ran before Grains was enabled, the whole PTM fit is
+  repeated to get neighbor lists [C]. Clustering is single-threaded
+  JavaScript: 1.0–1.1 s for 105,520 atoms and 2.2–2.8 s for 259,808 [M].
+- **Change:** request neighbor lists whenever memory allows (65 B per atom);
+  profile the clustering before choosing between typed-array tuning and a Wasm
+  port.
+
+### K2. Surface mesh: move wrap, cut and cap off the main thread
+
+**Effort:** M. **Deployments:** all.
+
+- **Evidence [M]:** the display build runs on the main thread: 8–26 ms for the
+  HEA mesh and 0.12–0.19 s for 124,352 faces. About three quarters of the
+  surface analysis is the Delaunay tessellation, and a surface job and a DXA
+  run execute one after the other in the shared Worker.
+- **Change:** build the display mesh in the Worker that already holds the
+  surface. Fix B8 first.
+
+### K3. Local shear: one neighbor pass
+
+**Effort:** M. **Deployments:** all CPU paths.
+
+- **Evidence [M]:** the coordination pass (466 ms) and the metrics pass
+  (774 ms at 1M, 12 Workers) search the same neighbors. A sampled mode guess
+  with a fallback could remove one pass with identical results [E]; not
+  prototyped.
+
+## Part 2: performance, phase 3 (large changes and decisions)
+
+### K4. DXA: remaining serial stages
+
+**Effort:** L. See [DXA CPU profile](DXA_CPU_PROFILE.md#prioritized-further-work).
+
+- **Evidence [M]:** Burgers circuit tracing, cluster traversal, junction
+  merging and the ordered graph and mesh commits are serial; the estimated
+  floor for HEA is about 400 ms. The global Delaunay tessellation scales 2.1×
+  with threads. Without isolation, tetrahedron-classification offload is about
+  break-even because of table packing (63–98 ms on HEA).
+- **Change:** profile the periodic Delaunay construction and elastic
+  classification first; consider a compact immutable edge representation;
+  investigate the serial circuit search on the NiGB mesh (0.9 s for an empty
+  network). Any change must preserve visited state, junctions and search
+  order.
+
+### G5. Double-float guard cost
+
+**Effort:** M.
+
+- **Measured [M]** on the GTX 1080 Ti after the guards were added (2026-10-10):
+  the cold compile of each Voronoi clip pipeline is 17–20 s instead of 6–7 s
+  (warm: 0.13–0.17 s instead of 0.09–0.12 s), and Voronoi GPU time is 16–24%
+  higher. The strain kernels pay little: reference strain compiles in
+  0.8–0.9 s instead of 0.5 s, and warm kernel times on 129,904 atoms are
+  unchanged within noise.
+- The cost is the pair arithmetic itself, which the driver's compiler used to
+  delete. Removing the product guard, or supplying the runtime 1.0 through a
+  private variable, changes nothing measurable.
+- Since GPU Voronoi is now an explicit option, only users who turn it on pay
+  this. If the GPU kernel is redesigned (G6), look for a cheaper formulation
+  of the clip kernel's pair products.
+
+### G6. GPU Voronoi kernel redesign
+
+**Effort:** L. **Do not schedule unless a faster adapter class changes the
+picture.**
+
+- **Evidence [M]:** dispatch time barely depends on batch size (512 cells
+  125–140 ms, 8,192 cells 216 ms), so 2,048-cell batches leave the GPU mostly
+  idle; the GPU clips 44.5 planes per cell against 18.1 in Voro++.
+- **Change:** a compact workspace so 8,192–32,768 cells fit one dispatch, and a
+  nearest-shell pass first. Estimated 0.7 s for HEA, still 2× slower than 6
+  CPU Workers.
+
+### R11. A non-instanced draw path for software rendering
+
+**Effort:** M–L. **Deployments:** SwiftShader only (virtual machines, CI and
+this project's browser suites). Low priority for users.
+
+- **Evidence [M]:** SwiftShader pays 16–20 µs per instance: 60,229 atoms take
+  about 1 s per frame. The same quads drawn without instancing, fetching
+  per-atom data by vertex index, take 16.9 ms with no differing pixel
+  (`render/m6.mjs`).
+
+### C11. Bond-statistics moments independent of the Worker count
+
+**Effort:** M. **Needs an owner decision: it changes the last bits.**
+
+- Fixed-size Welford blocks would make the moments independent of the Worker
+  count and remove the ordered-reduction serialization. Rejected by the audit
+  as a silent change; listed for a decision.
 
 ## Deferred or rejected
 
-- Skipping WebGPU Voronoi preparation when Voronoi is unused would save GPU work
-  but contradicts the prewarming design; needs an explicit owner decision.
+- Removing or delaying prewarm and prefetch. Measured: opening a 130k-atom
+  file reaches its first frame in 519 ms with prewarm and 484 ms with it
+  deferred (overlapping ranges), and a first analysis clicked 100 ms after
+  load is faster with prewarm (259–359 ms against 379–399 ms) [M].
+- `modulepreload` for all modules, lazy-loading rarely used panels, required
+  minification, a single file with inlined Workers, and a service worker for
+  caching (S4 gives the revisit gain without the lifecycle risk) [M].
+- Caching the legend histogram, discrete values or data limits per property
+  array: it depends on arrays never changing in place.
+- Larger pool chunks: after C1 the per-chunk cost is small, and larger chunks
+  lengthen cancellation (a 4,096-atom PTM chunk already takes about 0.35 s).
+- Moving the k-nearest search into the PTM Wasm kernel: after C9 the
+  JavaScript share is about 10% in FCC.
+- Raising the GPU Voronoi recovery budget: recovery is not the cost.
+- Sharing the CPU `SharedArrayBuffer` snapshot with the GPU Worker: the copy
+  is 1–20 ms.
+- Predictive trajectory indexing (not exact), sliding-sum smoothing (changes
+  the summation order), parallel segment unwrapping (serial append is under
+  20% of the cost), and an OPFS spill for gzip.
+- Rendering: skipping bonds hidden inside atoms (they still change pixels),
+  occlusion queries or run-length counting for ambient occlusion, deriving
+  fractional coordinates in the shader (rounding risk at slice boundaries),
+  one WebGL context for both views, GPU ID-buffer picking (different
+  semantics) and dropping multisampling while interacting [M].
 - PTM SIMD/LTO and mimalloc for DXA: no measured gain [M].
-- OVITO elastic strain (duplicates ideal-lattice strain), Ackland–Jones and
-  diamond identification (covered by CNA/PTM), Chill+, VoroTop, rings, bond
-  order, Bader, structure factor, coordination polyhedra (Voronoi cells cover
-  it), spatial correlation, combine datasets, affine transformation, freeze
-  property, GSD/GROMACS/MOL2/CIF/Cube/VTK formats, NetCDF, Python modifiers,
-  OSPRay/Tachyon rendering and other Pro-only features.
+- OVITO features outside the project's scope (elastic strain duplicate,
+  Ackland–Jones, Chill+, VoroTop, rings, bond order, Bader, structure factor,
+  spatial correlation, combine datasets, affine transformation, freeze
+  property, GSD/GROMACS/MOL2/CIF/Cube/VTK/NetCDF formats, Python modifiers,
+  OSPRay/Tachyon rendering and other Pro-only features); AtomEye NetCDF, a
+  Python/Jupyter bridge, a polycrystal builder, EPS output and `.usr` color
+  files; following a growing trajectory.
 - OVITO's current tree no longer contains DXA; keep the v3.9.4 pin in
   `third_party/dxa`.
-- AtomEye NetCDF, Python/Jupyter bridge (conflicts with browser-only, no-upload
-  design), Voronoi polycrystal builder, EPS output, more native windows, MPI
-  rendering and `.usr` color files.
-- Following a growing trajectory (former A8: extending the byte index while a
-  running simulation appends frames) was dropped on 2026-10-08; the project
-  does not need it.
+
+Feature-level limitations that are not performance work (for example OBJ
+export for the defect mesh, [u v w] slice input, recording the second view)
+are listed in the "Limitations" section of each feature page.
 
 ## Sources
 
-- OVITO GitLab master at commit `81d76297` (September 2026) and documentation
-  version 3.16.1: <https://docs.ovito.org/reference/pipelines/modifiers/index.html>,
-  <https://docs.ovito.org/reference/file_formats/file_formats_input.html>.
-- AtomEye: <http://li.mit.edu/Archive/Graphics/A/>,
-  <http://li.mit.edu/Archive/Graphics/A3/A3.html>,
+- Audit of 2026-10-10 against commit `dbe6055`; reports in
+  `../AlloyView-audit-2026-10-10/REPORT-*.md` on the reference machine.
+- OVITO v3.9.4 (`939f5d9`) and documentation 3.16.1; AtomEye
+  <http://li.mit.edu/Archive/Graphics/A/> and
   <https://github.com/jameskermode/AtomEye> at `c418eb2`.
-- Measurements: performance-audit scripts run on 2026-10-07 against commit
-  `cfa3338`.

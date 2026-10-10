@@ -1,3 +1,27 @@
+/** High/low coordinate differences over the `positions` binding, shared by
+ * every neighbor kernel and by the device self-test in exact-pairs.js.
+ *
+ * Shader compilers cancel a rounded value against its own operands: NVIDIA's
+ * Vulkan compiler turns (a + b) - a into b, and SPIRV-Tools (SwiftShader)
+ * turns b + (a - b) into a. Either removes the error term of an error-free
+ * transform. Such values are therefore multiplied by runtimeOne(), which is
+ * exactly 1.0 for every bound frame but unknown to the compiler. */
+export const NEIGHBOR_RESIDUAL_WGSL = `
+fn fractionalHigh(atom: u32) -> vec3f { return positions[atom * 2u].xyz; }
+fn runtimeOne() -> f32 { return f32(min(arrayLength(&positions), 1u)); }
+// Error-free subtraction plus a low residual retains the source coordinate
+// precision in large cells without requiring unsupported shader f64. The
+// guarded values are the rounded difference and the recovered second operand.
+fn deltaResidual(other: u32, atom: u32, highDelta: vec3f) -> vec3f {
+  let first = fractionalHigh(other); let second = fractionalHigh(atom);
+  let one = runtimeOne();
+  let difference = highDelta * one;
+  let recoveredSecond = (first - difference) * one;
+  let subtractionError = (first - (difference + recoveredSecond)) + (recoveredSecond - second);
+  return subtractionError + positions[other * 2u + 1u].xyz - positions[atom * 2u + 1u].xyz;
+}
+`;
+
 /** Shared WGSL linked-cell traversal. Each invocation owns one central atom;
  * atom images remain explicit so triclinic cells and thin periodic boxes use
  * the same geometry as the CPU kernels. */
@@ -29,17 +53,7 @@ fn positionBin(value: vec3f) -> vec3i {
 }
 fn toCartesian(value: vec3f) -> vec3f {
   return value.x * config.cellA.xyz + value.y * config.cellB.xyz + value.z * config.cellC.xyz;
-}
-fn fractionalHigh(atom: u32) -> vec3f { return positions[atom * 2u].xyz; }
-// Error-free subtraction plus a low residual retains the source coordinate
-// precision in large cells without requiring unsupported shader f64.
-fn deltaResidual(other: u32, atom: u32, highDelta: vec3f) -> vec3f {
-  let first = fractionalHigh(other); let second = fractionalHigh(atom);
-  let recoveredSecond = first - highDelta;
-  let subtractionError = (first - (highDelta + recoveredSecond)) + (recoveredSecond - second);
-  return subtractionError + positions[other * 2u + 1u].xyz - positions[atom * 2u + 1u].xyz;
-}
-`;
+}${NEIGHBOR_RESIDUAL_WGSL}`;
 
 export function makeNeighborShader({ declarations = '', initialize = '', candidateVisit = '', visit = '', finish = '', mode = 'nearest' } = {}) {
   if (!['nearest', 'images'].includes(mode)) throw new Error('Unknown GPU neighbor traversal mode.');

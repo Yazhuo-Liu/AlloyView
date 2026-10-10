@@ -380,6 +380,8 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
 
   return validateFrame({
     ids,
+    // The id column is required, so dump IDs are always the file's own.
+    idSource: 'explicit',
     types,
     typeLabels,
     positions,

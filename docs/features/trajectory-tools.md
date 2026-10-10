@@ -114,6 +114,14 @@ uses 16 bytes in the result and the same in the GPU buffer, so the limit bounds
 each copy to 32 MiB; the request is rejected before any frame is read when it
 would exceed it.
 
+## Limitations
+
+- Inferred unwrapping integrates the frames in order, so the first Unwrapped
+  view of a late frame reads and parses every earlier frame once. Later views
+  of any frame reuse the crossing log.
+- The integration runs in the structure Worker and occupies it for about
+  72 ms per 1,000,000-atom frame.
+
 ## Configuration
 
 `settings.extensions.trajectory` stores `smoothing.enabled`, `smoothing.window`
@@ -123,6 +131,14 @@ would exceed it.
 `colorByTime` and `colorScheme`. Smoothing is applied before the saved frame is
 prepared; enabled lines are recalculated after import. Configurations without
 the extension restore unsmoothed coordinates and no lines.
+
+The smoothing setting always describes the displayed frame. A configuration
+that is rejected or interrupted before its frame is shown (for example, one
+that asks for an unwrapped view the source cannot provide) leaves the setting
+that produced the frame on screen, and analyses keep using those coordinates.
+Selecting the displayed frame again while a smoothing change is still being
+applied prepares that frame with the new setting instead of keeping the old
+one.
 
 ## Implementation
 

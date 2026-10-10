@@ -11,7 +11,8 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
     const { crystalFrame } = await import('./tests/helpers/crystals.js');
     const { createCell, fractionalToCartesian } = await import('./src/data/model.js');
     const { bondVectorTolerance, compareGpuBonds, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, compareGpuPreparedNeighbors, compareGpuPtm, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
-    const { cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures, idealStrainFixtures } = await import('./scripts/gpu-fixtures.js');
+    const { cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures, idealStrainFixtures,
+      replicatedDisplacementFixtures, replicatedReferenceStrainFixtures } = await import('./scripts/gpu-fixtures.js');
     const { prepareDisplacements } = await import('./src/analysis/displacement.js');
     const { NeighborSearch } = await import('./src/analysis/neighbors.js');
     const { calculatePtm } = await import('./src/analysis/ptm.js');
@@ -20,7 +21,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
     window.gpuTests = { AnalysisPool, crystalFrame, createCell, fractionalToCartesian, bondVectorTolerance, compareGpuBonds, compareGpuFields,
       compareGpuCentrosymmetry, compareGpuDisplacements, compareGpuPreparedNeighbors, compareGpuPtm, prepareDisplacements, snapshotGpuInputs, NeighborSearch, calculatePtm,
       cnaFixtures, cnaDirectFixtures, referenceStrainFixtures, cspFixtures, displacementFixtures, displacementValidationFixtures, idealStrainFixtures,
-      STRAIN_FIELDS, REFERENCE_STRAIN_FIELDS, rows: [] };
+      replicatedDisplacementFixtures, replicatedReferenceStrainFixtures, STRAIN_FIELDS, REFERENCE_STRAIN_FIELDS, rows: [] };
     window.gpuTests.cpu = new AnalysisPool();
     window.gpuTests.cpu.setGpuEnabled(false);
     // These checks validate the GPU PTM-neighbor stage on any host size.
@@ -278,8 +279,10 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
           }
         } finally { runtime.close(); }
       }
-      for (const fixture of window.gpuTests.referenceStrainFixtures()) {
+      for (const fixture of [...window.gpuTests.referenceStrainFixtures(), ...await window.gpuTests.replicatedReferenceStrainFixtures()]) {
         const result = await run(fixture.label, fixture.frame, fixture.parameters, null, 2e-6, !fixture.allowFallback);
+        // Source-lattice images must come from the shader, not from CPU corrections.
+        if (fixture.expectedCorrectionAtoms !== undefined) check(result.correctedAtoms === fixture.expectedCorrectionAtoms, fixture.label + ' sparse corrections differ: ' + result.correctedAtoms);
         if (fixture.expectedF) for (let k = 0; k < 9; k++) {
           const values = result['referenceF' + (Math.floor(k / 3) + 1) + (k % 3 + 1)];
           for (const value of values) if (Number.isFinite(value)) check(Math.abs(value - fixture.expectedF[k]) < 2e-6, fixture.label + ' affine F component ' + k + ' differs from prescribed deformation.');
@@ -342,7 +345,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
           rows.at(-1).classificationInput = parameters.structureInput ? 'cached-gpu-cna' : 'fresh-gpu-cna';
         }
       }
-      for (const fixture of window.gpuTests.displacementFixtures()) {
+      for (const fixture of [...window.gpuTests.displacementFixtures(), ...await window.gpuTests.replicatedDisplacementFixtures()]) {
         const prepared = await window.gpuTests.prepareDisplacements(fixture.frame, fixture.reference, fixture.options);
         const result = await run(fixture.label, fixture.frame, { kind: 'displacement', ...prepared }, null, 2e-6);
         window.gpuTests.compare(result.vectors, Float32Array.from(fixture.expectedVectors), 2e-6);

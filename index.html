@@ -699,6 +699,11 @@
               <label class="field"><span>Minimum fraction of cell surface</span><input id="voronoi-relative-face-area-threshold" type="number" value="0" min="0" max="1" step="0.005" disabled></label>
               <p class="help">Count faces only when they exceed both thresholds. Filters change neighbor counts and indices; volumes and surface areas retain the full geometry. Cell boundary faces are reported separately from neighbors.</p>
             </details>
+            <details id="voronoi-backend-controls" class="tool-details">
+              <summary>Calculation backend · <span id="voronoi-gpu-kernel-summary">CPU Workers</span></summary>
+              <label class="slice-toggle"><input id="voronoi-gpu-kernel" type="checkbox" disabled><span>Use the WebGPU kernel</span></label>
+              <p class="help">Voronoi cells are calculated by CPU Workers, which are several times faster than the WebGPU kernel on current graphics adapters. Check this to use the WebGPU kernel instead; it needs GPU acceleration to be on. Cells it cannot resolve are corrected on the CPU, and a frame with too many of them is calculated by CPU Workers.</p>
+            </details>
             <button id="run-voronoi" class="button button-accent tool-run-button" type="button" disabled>Calculate Voronoi cells</button>
             <div class="analysis-backend-row"><span>Backend</span><output id="voronoi-backend">—</output></div>
             <progress id="voronoi-progress" class="analysis-progress" max="1" value="0" aria-label="Voronoi calculation progress" hidden></progress>

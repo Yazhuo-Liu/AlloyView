@@ -154,6 +154,9 @@ single-threaded calculation with and without shared memory.
   **WS site index**, atom details and the defect-site CSV.
 - Occupancies and classes are summarized on the main thread after the
   Workers finish (about 0.01 s per 100,000 atoms).
+- Every Worker builds its own index of the reference sites for each
+  calculation; the index is not shared between Workers, also with shared
+  memory.
 
 ## Configuration
 

@@ -28,6 +28,9 @@ export function analysisBackendLabel(result) {
   return `${result.engine}${result.fallbackReason ? ' · CPU fallback' : ''}`;
 }
 
+/** A fallback names the failed GPU attempt. A route reason explains a backend
+ * that was chosen without one. */
 export function analysisBackendDetails(result) {
-  return result.fallbackReason ? `CPU fallback: ${result.fallbackReason}` : result.engine;
+  return result.fallbackReason ? `CPU fallback: ${result.fallbackReason}`
+    : result.routeReason ? `${result.engine} · ${result.routeReason}` : result.engine;
 }

@@ -204,3 +204,25 @@ test('configurations carry scripts and the camera path only as validated data', 
     assert.throws(() => parseConfiguration(JSON.stringify(value)), /Invalid AlloyView configuration: settings\.extensions\.(scripts|movie)/, mutate.toString());
   }
 });
+
+test('a saved script ID beyond 2^53 cannot stall New; unsafe suffixes do not advance the counter', async () => {
+  const { initializeScriptControls } = await import('../src/script-controls.js');
+  const listeners = new Map();
+  // A permissive element: any DOM method the panel calls is a no-op.
+  const element = id => new Proxy({ id, value: '', dataset: {}, style: {}, options: [], classList: { toggle() {}, add() {}, remove() {} },
+    addEventListener(name, listener) { listeners.set(`${id}:${name}`, listener); }, closest: () => null },
+  { get: (target, key) => key in target ? target[key] : () => undefined });
+  const elements = new Map(), documentRoot = { createElement: element, head: null,
+    getElementById(id) { if (id === 'script-movie-styles') return null; if (!elements.has(id)) elements.set(id, element(id)); return elements.get(id); } };
+  const controls = initializeScriptControls({ host: {}, registry: { commands: [] }, documentRoot });
+  for (const id of ['script-9007199254740992', `script-${'9'.repeat(40)}`]) {
+    controls.restore({ scripts: [{ id, name: 'Imported', text: 'camera view top' }, { id: 'script-7', name: 'Seven', text: '' }], selectedId: id });
+    const startedAt = performance.now();
+    listeners.get('add-script:click')();
+    assert.ok(performance.now() - startedAt < 1000, 'New returns at once');
+    const state = controls.getState();
+    assert.equal(state.scripts.length, 3);
+    assert.equal(state.selectedId, 'script-8', 'the counter continues after the largest small suffix');
+    assert.ok(state.scripts.some(script => script.id === id), 'the imported script keeps its ID');
+  }
+});

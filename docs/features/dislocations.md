@@ -281,6 +281,17 @@ are rejected before extraction rather than analyzed partially. Only the latest
 DXA network is cached. Idle pools and Wasm heap capacity remain available for
 reuse until backend shutdown or page closure.
 
+The defect mesh can be saved as STL or PLY, not OBJ. Its caps close periodic
+cell faces only: a defect region that reaches an open boundary stays
+uncapped, and a slice leaves the mesh open.
+
+Without cross-origin isolation, sending tetrahedron classification to private
+Workers is about break-even with the single-thread native stage: packing the
+tetrahedron tables and running the four-Worker stage together take about as
+long as the native classification they replace (167–252 ms against about
+180 ms for the HEA example). Local crystal identification is the stage that
+gains.
+
 ## Implementation
 
 [CPU kernel](https://github.com/Yazhuo-Liu/AlloyView/blob/main/wasm/dxa.cpp),
@@ -293,3 +304,11 @@ reuse until backend shutdown or page closure.
 The [source review](../DXA_REVIEW.md) records the algorithm, pinned upstream
 source, per-file MIT option and Geogram BSD license. Preserve all upstream
 notices when rebuilding the numerical module.
+
+`npm run build:dxa` and `npm run build:dxa:threaded` rebuild the two kernels
+with Emscripten 3.1.69 through `wasm/build-dxa.sh`, using link-time
+optimization, WebAssembly SIMD and native WebAssembly exceptions. The kernel
+returns per-atom structure labels as a byte buffer that the Worker transfers,
+instead of JSON text. The [CPU profile](../DXA_CPU_PROFILE.md) records the
+flags, kernel sizes and measured effects of these choices, the thread-count
+rule, the first-extraction warm-up and the parallel edge passes.

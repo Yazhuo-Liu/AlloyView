@@ -220,11 +220,15 @@ test('clearing a source frees input and index buffers while retaining the device
   const state = fixture(), { runtime } = state;
   try {
     await runtime.warmup();
-    // Including the radical (radius-weighted) Voronoi clipping kernel.
-    assert.equal(state.compiled, 24);
-    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER, CSP_SHADER, DISPLACEMENT_SHADER, PTM_NEIGHBORS_SHADER, BOND_STATISTICS_SHADER, VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER]) {
+    assert.equal(state.compiled, 21);
+    for (const source of [CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, REFERENCE_STRAIN_CLEAR_SHADER, REFERENCE_STRAIN_SHADER, CSP_SHADER, DISPLACEMENT_SHADER, PTM_NEIGHBORS_SHADER, BOND_STATISTICS_SHADER]) {
       assert.ok(runtime.pipelines.has(source), 'new analysis kernels compile during device warmup');
     }
+    // Voronoi runs on the GPU only by explicit request; so do its pipelines.
+    for (const source of [VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER]) assert.equal(runtime.pipelines.has(source), false);
+    await runtime.warmup({ analysisKinds: ['voronoi'] });
+    assert.equal(state.compiled, 23);
+    for (const source of [VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER]) assert.ok(runtime.pipelines.has(source));
     const pipelines = [...runtime.pipelines.values()], device = runtime.device;
     runtime.configureCache({ frameCount: 2 });
     await runtime.uploadFrame(input(0), { frameIndex: 0 });

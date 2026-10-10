@@ -177,6 +177,10 @@ workspace, and `ClusterGraph::determineClusterTransition()` creates cached
 transitions during lookup. A parallel implementation first resolves/freezes
 the required transition graph, then gives each edge search independent scratch
 space. Simply parallelizing the existing loop would introduce shared writes.
+The CPU kernel has since adopted a variant of this for its pthread pool: each
+thread searches with private path-finder scratch, and a search that needs a
+transition not yet cached is deferred to the original ordered commit, so no
+worker writes the graph. See [ordered edge passes](DXA_CPU_PROFILE.md#ordered-edge-passes-2026-10-08).
 
 Circuit search has a similar constraint: the current tracer writes visited
 vertices, claimed edges and shared junction rings. Starting a workgroup at
@@ -426,7 +430,11 @@ for a successful calculation.
 The initial research change vendored no upstream algorithm. The subsequent CPU
 port includes pinned, adapted DXA and Geogram sources with their license notices
 under `third_party/dxa/` and a prebuilt Wasm module. Current executed checks are
-recorded in [Validation](VALIDATION.md). GPU local crystal correspondence and
-tetrahedron classification accelerate extraction through a staged Wasm/WebGPU
-interface. Fully GPU-resident periodic geometry, mesh construction and tracing
-remain future work.
+recorded in [Validation](VALIDATION.md). Earlier revisions accelerated local
+crystal correspondence and tetrahedron classification through a staged
+Wasm/WebGPU interface; production extraction is now CPU/Wasm only, as stated
+at the top. Fully GPU-resident periodic geometry, mesh construction and tracing
+remain unimplemented research. The current kernel build (link-time
+optimization, SIMD, native exceptions, binary atom labels), thread-count rule,
+first-extraction warm-up, nonisolated stage transfer and parallel edge passes
+are measured in the [CPU profile](DXA_CPU_PROFILE.md).

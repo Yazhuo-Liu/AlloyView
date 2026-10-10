@@ -41,6 +41,13 @@ export class GpuUnavailableError extends Error {
   constructor(message) { super(message); this.name = 'GpuUnavailableError'; }
 }
 
+// Analyses whose kernels compute with double-float pairs (dsAdd/dsMultiply or
+// ddAdd/ddMul). They need the error terms that exact-pairs.js verifies on each
+// device; every other kernel tolerates single-precision differences.
+export const EXACT_PAIR_ANALYSIS_KINDS = ['voronoi', 'strain', 'referenceStrain', 'displacement'];
+const EXACT_PAIRS_UNAVAILABLE = 'The shader compiler of this GPU does not preserve exact double-float arithmetic; using CPU workers.';
+export function usesExactPairs(source) { return /\bfn (?:dsAdd|ddAdd)\(/.test(source); }
+
 /** SwiftShader/llvmpipe and fallback adapters keep conservative batch sizes. */
 export function isSoftwareGpuAdapter(info = {}) {
   return Boolean(info.isFallbackAdapter) || /swiftshader|software|llvmpipe/i.test(`${info.vendor ?? ''} ${info.architecture ?? ''} ${info.description ?? ''}`);
@@ -93,6 +100,8 @@ export class GpuRuntime {
     this.voronoiPreparations = new Map();
     this.neighborIndexBuildCount = this.voronoiKernelWarmupCount = 0;
     this.softwareAdapter = false;
+    // Result of the device self-test of double-float pairs; null until it ran.
+    this.exactPairs = null;
     // Measured per-pipeline batch sizes (atoms) for range-batched kernels.
     this.batchHints = new Map();
     this.stagingPool = [];
@@ -129,42 +138,59 @@ export class GpuRuntime {
     // Uncaptured errors must not become silent incorrect output. Every run
     // also uses error scopes, which provide the actual operation's rejection.
     this.device.addEventListener('uncapturederror', (event) => { this.lost = event.error?.message || 'A WebGPU device error occurred.'; });
+    // One tiny dispatch decides whether double-float kernels may use this device.
+    const { verifyExactPairs } = await import('./exact-pairs.js');
+    this.exactPairs = await verifyExactPairs(this.device);
   }
 
+  /** Double-float kernels refuse a device that failed the self-test, so the
+   * analysis pool runs them on CPU workers. Other kernels are unaffected. */
+  requireExactPairs() {
+    if (this.exactPairs === false) throw new GpuUnavailableError(EXACT_PAIRS_UNAVAILABLE);
+  }
+
+  /** Without `analysisKinds`: compile the general pipelines. With a list:
+   * initialize the device and compile only the pipelines of those kinds. */
   async warmup({ signal, analysisKinds } = {}) {
     const kinds = gpuPreparationKinds(analysisKinds);
     await this.initialize(signal);
+    // Pipelines that could never run on this device are not compiled.
+    const usable = source => this.exactPairs !== false || !usesExactPairs(source);
     if (kinds) {
-      if (kinds.includes('voronoi')) {
+      if (kinds.length) {
         const voronoi = await waitForGpu(import('./voronoi-shaders.js'), signal);
         // compilePipeline shares native promises with general warmup and
         // foreground dispatches. A cancelled caller need not wait for the
         // driver to finish compilation before releasing the worker queue.
         checkSignal(signal);
-        await waitForGpu(Promise.all([CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER,
-          voronoi.VORONOI_INITIALIZE_SHADER, voronoi.VORONOI_CLIP_SHADER].map(source => this.compilePipeline(source))), signal);
+        // Each clip kernel is compiled only for the tessellation that uses it.
+        await waitForGpu(Promise.all([CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, voronoi.VORONOI_INITIALIZE_SHADER,
+          ...(kinds.includes('voronoi') ? [voronoi.VORONOI_CLIP_SHADER] : []),
+          ...(kinds.includes('voronoiRadical') ? [voronoi.VORONOI_RADICAL_CLIP_SHADER] : []),
+        ].filter(usable).map(source => this.compilePipeline(source))), signal);
       }
       checkSignal(signal);
       return this.cacheStatus();
     }
     if (!this.warmupPromise) {
       this.warmupPromise = (async () => {
-        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm, bondStatistics, voronoi] = await Promise.all([
+        const [{ COORDINATION_SHADER }, { RDF_SHADER }, shear, bonds, strain, cna, reference, csp, displacement, ptm, bondStatistics] = await Promise.all([
           import('./coordination.js'), import('./rdf.js'), import('./local-shear-shaders.js'),
           import('./bonds-shaders.js'), import('./atomic-strain-shaders.js'),
           import('./cna-shaders.js'), import('./reference-strain-shaders.js'),
           import('./centrosymmetry-shaders.js'), import('./displacement-shaders.js'), import('./ptm-neighbors-shaders.js'),
-          import('./bond-statistics-shaders.js'), import('./voronoi-shaders.js'),
+          import('./bond-statistics-shaders.js'),
         ]);
+        // The kernels automatic selection runs. Voronoi goes to the GPU only
+        // by explicit request, so its pipelines belong to targeted warmup.
         const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
           shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
           shear.SHEAR_CORRECTION_SHADER, shear.SHEAR_REDUCTION_SHADER, shear.SHEAR_FINALIZE_SHADER,
           bonds.BONDS_COUNT_SHADER, bonds.BONDS_WRITE_SHADER, strain.ATOMIC_STRAIN_SHADER,
           cna.CNA_FIXED_SHADER, cna.CNA_ADAPTIVE_SHADER,
           reference.REFERENCE_STRAIN_CLEAR_SHADER, reference.REFERENCE_STRAIN_SHADER,
-          csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER, ptm.PTM_NEIGHBORS_SHADER, bondStatistics.BOND_STATISTICS_SHADER,
-          voronoi.VORONOI_INITIALIZE_SHADER, voronoi.VORONOI_CLIP_SHADER, voronoi.VORONOI_RADICAL_CLIP_SHADER];
-        for (const source of sources) await this.compilePipeline(source);
+          csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER, ptm.PTM_NEIGHBORS_SHADER, bondStatistics.BOND_STATISTICS_SHADER];
+        for (const source of sources.filter(usable)) await this.compilePipeline(source);
       })();
       this.warmupPromise.catch(() => { this.warmupPromise = null; });
     }
@@ -207,7 +233,7 @@ export class GpuRuntime {
       fullTrajectory: this.frameCount > 0 && this.frameBytes > 0 && capacity >= this.frameCount,
       fullyCached: this.frameCount > 0 && cachedFrameIndexes.length === this.frameCount
         && cachedFrameIndexes[0] === 0 && cachedFrameIndexes.at(-1) === this.frameCount - 1,
-      memoryLimited: this.memoryLimited, neighborIndexCount: this.indexes.size, neighborIndexBuildCount: this.neighborIndexBuildCount,
+      memoryLimited: this.memoryLimited, exactPairs: this.exactPairs, neighborIndexCount: this.indexes.size, neighborIndexBuildCount: this.neighborIndexBuildCount,
       voronoiWorkspaceAtoms: this.voronoiWorkspace?.capacity ?? 0, voronoiKernelWarmupCount: this.voronoiKernelWarmupCount,
       preparedVoronoiFrameIds: preparedVoronoi.map(([frameKey]) => frameKey), preparedVoronoiFrameIndexes };
   }
@@ -288,8 +314,13 @@ export class GpuRuntime {
   async prepareFrame(frame, options = {}) {
     const kinds = gpuPreparationKinds(options.analysisKinds);
     if (kinds?.includes('voronoi')) {
-      const { prepareGpuVoronoiFrame } = await waitForGpu(import('./voronoi.js'), options.signal);
-      return prepareGpuVoronoiFrame(this, frame, { selectedTypes: options.selectedTypes }, options);
+      await this.initialize(options.signal);
+      // Without exact pairs Voronoi runs on CPU workers. The upload below
+      // still keeps the frame resident for the other kernels.
+      if (this.exactPairs !== false) {
+        const { prepareGpuVoronoiFrame } = await waitForGpu(import('./voronoi.js'), options.signal);
+        return prepareGpuVoronoiFrame(this, frame, { selectedTypes: options.selectedTypes }, options);
+      }
     }
     return this.uploadFrame(frame, options);
   }
@@ -688,6 +719,7 @@ export class GpuRuntime {
   compilePipeline(source) {
     const device = this.device;
     if (this.pipelines.has(source)) return Promise.resolve(this.pipelines.get(source));
+    if (this.exactPairs === false && usesExactPairs(source)) return Promise.reject(new GpuUnavailableError(EXACT_PAIRS_UNAVAILABLE));
     const existing = this.pipelineCompilations.get(source);
     if (existing) return existing;
     const compilation = (async () => {
@@ -909,11 +941,16 @@ export class GpuRuntime {
       buffer.destroy();
     }
   }
-  releaseFrames() {
+  /** Free the Voronoi cell workspace and its recovery context once the kernel
+   * is no longer requested. Uploaded frames, indexes and pipelines stay. */
+  releaseVoronoi() {
     this.voronoiPreparations.clear();
+    this.disposeBuffers(this.voronoiWorkspace?.buffers ?? []); this.voronoiWorkspace = null; this.voronoiCpuContext = null;
+  }
+  releaseFrames() {
+    this.releaseVoronoi();
     this.releaseStagingPool();
     this.exactCoordinateCache = new WeakMap();
-    this.disposeBuffers(this.voronoiWorkspace?.buffers ?? []); this.voronoiWorkspace = null; this.voronoiCpuContext = null;
     this.clearIndexes();
     for (const frame of this.frames.values()) this.disposeBuffers([frame.positionsBuffer, frame.typesBuffer,
       frame.ptm?.metadataBuffer, frame.ptm?.scalesBuffer, frame.ptm?.deformationBuffer,

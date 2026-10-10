@@ -325,8 +325,9 @@ not guarantee multithreading. See
 
 Selection follows browser capabilities, not the host name: a normally isolated
 Cloudflare deployment keeps the existing shared-heap pthread path and skips
-private stage snapshots. The four-Worker automatic limit applies only to the
-nonisolated private stages; it does not cap shared native threads. Private stage
+private stage snapshots. The automatic limits of eight Workers for local
+crystal identification and four for tetrahedron classification apply only to the
+nonisolated private stages; they do not cap shared native threads. Private stage
 inputs, tables and temporary outputs are released when their stage ends, while
 Workers and initialized Wasm heap capacity remain reusable. Freeing native
 allocations does not shrink Wasm memory. Keeping or discarding a module is a

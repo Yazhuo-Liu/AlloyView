@@ -13,6 +13,8 @@ async function runVoronoiChecks() {
     import('./src/analysis/analysis-pool.js'), import('./tests/helpers/crystals.js'), import('./src/data/model.js'), import('./src/analysis/voronoi.js'),
   ]);
   const cpu = new AnalysisPool(), gpu = new AnalysisPool(); cpu.setGpuEnabled(false); gpu.setGpuEnabled(true);
+  // Automatic selection keeps Voronoi on CPU Workers; this suite asks for the WebGPU kernel.
+  gpu.setGpuVoronoi(true);
   const rows = [], preparations = [], check = (condition, message) => { if (!condition) throw new Error(message); };
   const compare = (actual, expected, tolerance, label) => {
     check(actual.length === expected.length, label + ' array length'); let error = 0;
@@ -81,6 +83,30 @@ async function runVoronoiChecks() {
     return actual;
   };
   try {
+    // With GPU acceleration on and no request for the kernel, Voronoi is the
+    // CPU pool's exact result and the device prepares nothing for it.
+    const automatic = new AnalysisPool(); automatic.setGpuEnabled(true);
+    try {
+      const routedFrame = crystalFrame('bcc', 3, 2.86); routedFrame.fractional[4] += .01;
+      for (const [label, options] of [['standard', {}], ['radical', { radii: Float64Array.from(routedFrame.types, (_, atom) => 1.1 + .2 * (atom % 2)) }]]) {
+        const expected = await cpu.analyze(routedFrame, { kind: 'voronoi', ...options }), actual = await automatic.analyze(routedFrame, { kind: 'voronoi', ...options });
+        check(actual.backend === 'cpu' && actual.gpuRequested === true && actual.fallbackReason === undefined && /CPU Workers/.test(actual.routeReason),
+          'Automatic ' + label + ' Voronoi must be routed to CPU Workers without a fallback: ' + JSON.stringify({ backend: actual.backend, fallbackReason: actual.fallbackReason, routeReason: actual.routeReason }));
+        check(actual.engine === expected.engine, 'Routed Voronoi uses the CPU engine');
+        for (const [field, values] of Object.entries(expected)) if (ArrayBuffer.isView(values)) {
+          check(actual[field].length === values.length && values.every((value, index) => Object.is(value, actual[field][index])), 'Routed ' + label + ' ' + field + ' must be bit-identical to the CPU result');
+        }
+        check(JSON.stringify(actual.voronoiIndices) === JSON.stringify(expected.voronoiIndices), 'Routed ' + label + ' Voronoi indices');
+      }
+      check(automatic.gpuBackend.worker === null, 'Routed Voronoi must not start the GPU worker');
+      // The device alone: no pipeline is compiled and no Voronoi workspace is
+      // reserved. Which pipelines each warmup compiles is covered by the Node
+      // tests; compiling them again here would cost this suite half a minute.
+      const device = await automatic.warmupGpu({ analysisKinds: [] });
+      check(device.initialized && device.pipelineCount === 0 && device.voronoiWorkspaceAtoms === 0 && device.uploadCount === 0,
+        'Device preparation must compile and allocate nothing for Voronoi: ' + JSON.stringify({ pipelines: device.pipelineCount, atoms: device.voronoiWorkspaceAtoms }));
+      rows.push({ label: 'Automatic selection routes Voronoi to CPU Workers without touching the GPU', backend: 'cpu', devicePipelines: device.pipelineCount });
+    } finally { automatic.close(); }
     await run('SC self-image cube', crystalFrame('sc', 1, 2));
     // Included types are the tessellation's sites, not a mask applied after a
     // full-source calculation. Checkerboard SC splits into two FCC lattices.
@@ -218,23 +244,32 @@ async function runVoronoiChecks() {
     const controller = new AbortController(); controller.abort();
     const cancelled = await gpu.analyze(fcc, { kind: 'voronoi' }, { signal: controller.signal }).then(() => false, error => error.name === 'AbortError');
     check(cancelled, 'Voronoi cancel must reject AbortError');
-    const longFrame = crystalFrame('fcc', 8, 3.52), beforeCancellation = longFrame.fractional.slice(), inProgress = new AbortController();
-    let partialProgress = false;
-    const interrupted = await gpu.analyze(longFrame, { kind: 'voronoi' }, { signal: inProgress.signal,
-      onProgress: value => {
-        if (value.phase === 'analyzing' && value.completedAtoms > 0 && value.completedAtoms < longFrame.types.length) {
-          partialProgress = true; inProgress.abort();
-        }
-      },
-    }).then(() => false, error => error.name === 'AbortError');
+    // Progress is reported per batch, so the frame must span at least two
+    // batches. A hardware batch holds all 2,048 atoms of the first frame; the
+    // frame is then rebuilt from the batch capacity which that run reported.
+    let longFrame, beforeCancellation, interrupted = false, partialProgress = false;
+    for (let cells = 8, attempt = 0; attempt < 2 && !interrupted; attempt += 1) {
+      longFrame = crystalFrame('fcc', cells, 3.52); beforeCancellation = longFrame.fractional.slice();
+      const frame = longFrame, inProgress = new AbortController();
+      const outcome = await gpu.analyze(frame, { kind: 'voronoi' }, { signal: inProgress.signal,
+        onProgress: value => {
+          if (value.phase === 'analyzing' && value.completedAtoms > 0 && value.completedAtoms < frame.types.length) {
+            partialProgress = true; inProgress.abort();
+          }
+        },
+      }).then(result => result, error => error);
+      interrupted = outcome?.name === 'AbortError';
+      if (!interrupted && !(outcome?.gpuBatchCapacity >= frame.types.length)) break;
+      if (!interrupted) cells = Math.floor(Math.cbrt(outcome.gpuBatchCapacity / 4)) + 1;
+    }
     check(interrupted && partialProgress, 'Abort must interrupt a started multi-batch GPU analysis');
     compare(longFrame.fractional, beforeCancellation, 0, 'cancelled source coordinates');
     const resumed = await gpu.analyze(longFrame, { kind: 'voronoi' });
     check(resumed.backend === 'gpu' && resumed.kernelReused && resumed.gpuInputReused, 'Cancelled GPU job must retain device, frame buffer and cell workspace: ' + JSON.stringify({backend:resumed.backend,kernelReused:resumed.kernelReused,gpuInputReused:resumed.gpuInputReused,fallbackReason:resumed.fallbackReason}));
     check(resumed.voronoiCoordination.every(value => value === 12) && resumed.voronoiIndices.every(value => value === '<0,12,0,0>'),
-      'Resumed 2048-atom FCC cells must retain exact complete topology');
-    check(Math.abs(resumed.summary.volumeError) < 5e-5, 'Resumed 2048-atom FCC volume conservation');
-    rows.push({ label: 'Cancel an active 2048-atom GPU job and reuse its inputs/workspace', backend: resumed.backend,
+      'Resumed FCC cells must retain exact complete topology');
+    check(Math.abs(resumed.summary.volumeError) < 5e-5, 'Resumed FCC volume conservation');
+    rows.push({ label: 'Cancel an active multi-batch GPU job and reuse its inputs/workspace', backend: resumed.backend,
       atoms: longFrame.types.length, gpuMs: resumed.elapsedMs, gpuDispatches: resumed.gpuDispatches });
     await gpu.analyze(fcc, { kind: 'voronoi' });
     const queued = await Promise.all([gpu.analyze(fcc, { kind: 'voronoi' }), gpu.analyze(fcc, { kind: 'cna' })]);

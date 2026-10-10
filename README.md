@@ -41,6 +41,7 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   perspective/orthographic projection, cell outlines and Cartesian axes.
 - Wrapped and unwrapped trajectory views, atom-ID search/centering, and
   distance, bond-angle and dihedral measurements with optional periodic images.
+  Double-click or double-tap an atom to make it the center of rotation.
 - Trajectory tools: unwrapped coordinates inferred from consecutive frames
   when a file has no image flags, a minimum-image moving average of positions
   and cell that every analysis (CNA, PTM, DXA, …) then uses, and continuous
@@ -48,6 +49,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   view and image exports.
 - Fractional periodic display origins along triclinic cell vectors, with
   selected-atom centering and synchronized atoms, bonds, vectors and DXA lines.
+  **Move crystal**, Alt+drag or the X/Y/Z keys drag the crystal through its
+  periodic boundaries; only shader uniforms change until the release.
 - A folded **Adjust view** panel beside download provides precise camera
   position/direction, roll, projection and field of view, plus a draggable
   orientation globe and sliders that follow viewport gestures.
@@ -59,7 +62,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   radius. The same cutoffs drive bond-length and bond-angle distributions and
   local Steinhardt Q4/Q6 orientational order, using parallel CPU Workers or WebGPU.
   Independent displacement analysis provides physical Cartesian components
-  and magnitude for coloring against a selected reference frame.
+  and magnitude for coloring against a selected reference frame, plus
+  AtomEye-style color tiles that follow atoms between frames.
 - Up to 16 named vector fields draw displacement, imported force/velocity and
   custom XYZ data simultaneously, with independent colors, visibility and sizes,
   per-component scales, Tail/Head/Center anchors, and 3D or camera-facing/fixed-plane
@@ -67,7 +71,9 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   visible when atoms are hidden; display scales leave physical properties unchanged.
 - Up to 16 independent clipping planes with arbitrary Cartesian normals,
   editable names and positions, draggable plane/normal controls, and two- or
-  three-atom plane construction using the clicked periodic image.
+  three-atom plane construction using the clicked periodic image. Planes can
+  be swept in steps, flipped, turned into slabs and aligned with Miller
+  indices of the simulation cell, with optional cut outlines on the cell.
 - External numeric CSV/AUX properties mapped by stable atom ID or row order,
   parsed and expanded in a persistent Worker, with rename/removal and access
   from colors, atom details and vector fields.
@@ -84,6 +90,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   crystal colors and per-class visibility checkboxes with live counts.
 - Real polyhedral template matching (PTM) in Wasm Workers, with eight crystal
   templates, an adjustable RMSD threshold and the same crystal visibility controls.
+  It also reports each atom's lattice orientation and binary chemical ordering
+  (L1₀, L1₂, B2, …).
 - Grain segmentation of polycrystals from PTM orientations, ported from OVITO
   3.9.4: automatic or manual merge threshold, minimum grain size, orphan
   adoption and stacking-fault handling. Grain IDs and mean orientations color
@@ -91,15 +99,17 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Atomic elastic strain relative to an ideal lattice, with editable element-based
   or geometry-estimated lattice constants, shear/hydrostatic strain, volume change
   and tensor components. Missing numeric-type references can be estimated with PTM.
-- Reference-frame least-squares strain using stable atom IDs, plus AtomEye-style
+- Reference-frame least-squares strain using stable atom IDs, with the
+  non-affine squared displacement D²min, plus AtomEye-style
   single-frame local geometric shear with optional mean-tensor subtraction.
 - Coordination histograms and total/element-pair radial distribution functions
   with CSV export. Normalized RDF requires three periodic axes and a cutoff
   within half the shortest cell face height.
 - Voronoi tessellation in Visualization tools, using dynamically scheduled
-  CPU/Wasm Workers or WebGPU for periodic or finite-cell geometry. Results include atomic
+  CPU/Wasm Workers (or, on request, a WebGPU kernel) for periodic or finite-cell geometry. Results include atomic
   volume, surface area, coordination, full Voronoi indices and population
-  distributions, with optional input-type selection, neighbor-face area filters,
+  distributions, with optional input-type selection, radical (radius-weighted)
+  cells, neighbor-face area filters,
   folded interactive histograms and quantity-color shortcuts. Cell display
   optionally draws the selected cell or all analyzed cells; both default off.
 - Cluster analysis over cutoff neighbors or the bond cutoffs, optionally within
@@ -155,7 +165,8 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   shared heap and a pthread pool on isolated hosts. Nonisolated hosts can
   offload local crystal identification and tetrahedron classification to the
   existing CPU Worker pool while one coordinator retains the global network.
-  Automatic private stages use at most four Workers, subject to memory limits.
+  Automatic private stages use at most eight Workers for local identification
+  and four for tetrahedron classification, subject to memory limits.
   Small jobs and unavailable Workers use native CPU stages.
   Its backend is independent of the GPU preference. Other analyses keep
   their CPU implementation; unavailable GPU support falls back to CPU.
@@ -399,8 +410,8 @@ are not supported; ordinary `.gz` files of every supported format open directly.
 files and VASP POSCAR/CONTCAR open as single structures.
 Coordination uses one global cutoff; bond graphs have separate element-pair
 overrides. Reference-frame strain requires explicit stable atom IDs.
-Voronoi has CPU/Wasm and GPU paths, with exact CPU recovery when GPU geometry
-exceeds numerical or resource limits. Q4/Q6 describe bond orientation rather than
+Voronoi runs on CPU/Wasm Workers by default; its optional GPU kernel uses exact
+CPU recovery when GPU geometry exceeds numerical or resource limits. Q4/Q6 describe bond orientation rather than
 chemical bond multiplicity.
 Million-atom interactive performance has
 not been verified; see the guide for memory and trajectory limitations.

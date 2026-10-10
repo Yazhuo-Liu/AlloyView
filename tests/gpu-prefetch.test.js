@@ -16,7 +16,7 @@ test('GPU enable warms without a source; a displayed frame is uploaded before ba
   const pool = fakePool(6), reads = [], statuses = [];
   const scheduler = makeScheduler(pool, { reads, statuses });
   await scheduler.setEnabled(true);
-  assert.equal(pool.warmups, 1);
+  assert.deepEqual(pool.warmed, [[], undefined], 'the idle device compiles the general pipelines');
   assert.deepEqual(pool.uploads, []);
   assert.equal(statuses.at(-1).phase, 'ready');
   await scheduler.setFrame(source('A', 6, 2));
@@ -24,6 +24,91 @@ test('GPU enable warms without a source; a displayed frame is uploaded before ba
   assert.deepEqual(reads, [3, 1, 4, 0, 5]);
   assert.equal(statuses.at(-1).phase, 'ready');
   assert.deepEqual(statuses.at(-1).cacheStatus.cachedFrameIndexes, [0, 1, 2, 3, 4, 5]);
+});
+
+test('prewarm follows the router: without the Voronoi kernel request it prepares uploads and general pipelines only', async () => {
+  const pool = fakePool(3), calls = recordCalls(pool);
+  const scheduler = makeScheduler(pool);
+  scheduler.setFrame(source('HEA', 3, 1));
+  await scheduler.setEnabled(true);
+  assert.deepEqual(calls, [{ kind: 'warm', analyses: [] }, { kind: 'prepare', index: 1, analyses: undefined },
+    { kind: 'prepare', index: 2, analyses: undefined }, { kind: 'prepare', index: 0, analyses: undefined },
+    { kind: 'warm', analyses: undefined }]);
+  assert.deepEqual(pool.preparations, [], 'no Voronoi index, workspace or kernel warmup');
+  assert.deepEqual(pool.uploads, [1, 2, 0]);
+  calls.length = 0;
+  await scheduler.setFrame(source('HEA', 3, 1));
+  assert.deepEqual(calls.filter(call => call.kind === 'prepare'), [], 'a resident frame is not uploaded again');
+});
+
+test('requesting the Voronoi kernel restarts preparation for it; radical radii add the radical clip kernel', async () => {
+  const pool = fakePool(2), calls = recordCalls(pool);
+  const scheduler = makeScheduler(pool);
+  scheduler.setFrame(source('HEA', 2, 0));
+  await scheduler.setEnabled(true);
+  assert.deepEqual(pool.preparations, []);
+  calls.length = 0;
+  await scheduler.setAnalysisKinds(['voronoi']);
+  assert.deepEqual(calls[0], { kind: 'warm', analyses: ['voronoi'] });
+  assert.deepEqual(calls[1], { kind: 'prepare', index: 0, analyses: ['voronoi'] });
+  assert.deepEqual(pool.preparations, [0]);
+  assert.deepEqual(pool.uploads, [0, 1], 'resident coordinates are reused');
+  const unchanged = scheduler.pending;
+  assert.equal(scheduler.setAnalysisKinds(['voronoi']), unchanged, 'an unchanged request does not restart');
+  calls.length = 0;
+  await scheduler.setAnalysisKinds(['voronoi', 'voronoiRadical']);
+  assert.deepEqual(calls[0], { kind: 'warm', analyses: ['voronoi', 'voronoiRadical'] });
+  assert.deepEqual(calls.filter(call => call.kind === 'prepare'), [], 'the frame preparation is already resident');
+  calls.length = 0;
+  await scheduler.setAnalysisKinds([]);
+  assert.deepEqual(calls.map(call => call.analyses), [[], undefined]);
+  await scheduler.setFrame(source('HEA', 2, 1));
+  assert.deepEqual(pool.preparations, [0], 'later frames are not prepared for Voronoi');
+});
+
+test('a disabled scheduler records the requested kinds without starting a device', async () => {
+  const pool = fakePool(2), scheduler = makeScheduler(pool);
+  await scheduler.setAnalysisKinds(['voronoi']);
+  assert.deepEqual(pool.warmed, []);
+  scheduler.setFrame(source('HEA', 1, 0));
+  await scheduler.setEnabled(true);
+  assert.deepEqual(pool.warmed, [['voronoi'], undefined]); assert.deepEqual(pool.preparations, [0]);
+});
+
+test('playback uploads each frame at once and builds Voronoi inputs only for a frame that stays displayed', async () => {
+  const pool = fakePool(4), calls = recordCalls(pool), waits = [];
+  const scheduler = new GpuPrefetchScheduler({ pool, getFrame: async index => ({ index }), yieldBackground: async () => {},
+    settlePlayback: () => { const wait = deferred(); waits.push(wait); return wait.promise; } });
+  await scheduler.setAnalysisKinds(['voronoi']);
+  scheduler.setFrame({ ...source('traj', 4, 0), playing: true });
+  const first = scheduler.setEnabled(true);
+  await until(() => pool.uploads.length === 4);
+  assert.equal(waits.length, 1); assert.deepEqual(pool.preparations, [], 'the Voronoi preparation waits');
+  assert.deepEqual(calls.filter(call => call.kind === 'prepare')[0], { kind: 'prepare', index: 0, analyses: undefined });
+  const second = scheduler.setFrame({ ...source('traj', 4, 1), playing: true });
+  waits[0].resolve(); await first;
+  assert.deepEqual(pool.preparations, [], 'a replaced frame is never prepared');
+  await until(() => waits.length === 2);
+  waits[1].resolve(); await second;
+  assert.deepEqual(pool.preparations, [1], 'the frame that stays displayed is prepared');
+  // A frame shown outside playback is prepared at once.
+  await scheduler.setFrame(source('traj', 4, 2));
+  assert.equal(waits.length, 2); assert.deepEqual(pool.preparations, [1, 2]);
+  // The same frame becomes current again when playback stops on it.
+  const playing = scheduler.setFrame({ ...source('traj', 4, 3), playing: true });
+  await until(() => waits.length === 3);
+  const stopped = scheduler.setFrame({ ...scheduler.source, playing: false });
+  assert.notEqual(stopped, playing); await stopped;
+  assert.deepEqual(pool.preparations, [1, 2, 3]);
+});
+
+test('playback without the Voronoi kernel request never waits', async () => {
+  const pool = fakePool(2), waits = [];
+  const scheduler = new GpuPrefetchScheduler({ pool, getFrame: async index => ({ index }), yieldBackground: async () => {},
+    settlePlayback: () => { waits.push(1); return new Promise(() => {}); } });
+  scheduler.setFrame({ ...source('traj', 2, 0), playing: true });
+  await scheduler.setEnabled(true);
+  assert.deepEqual(pool.uploads, [0, 1]); assert.equal(waits.length, 0);
 });
 
 test('capacity is chosen after the first upload and a bounded GPU window never reads the rest', async () => {
@@ -38,6 +123,7 @@ test('capacity is chosen after the first upload and a bounded GPU window never r
 test('already resident GPU frames do not need CPU reparse on later visits', async () => {
   const pool = fakePool(5), reads = [];
   const scheduler = makeScheduler(pool, { reads });
+  scheduler.setAnalysisKinds(['voronoi']);
   scheduler.setFrame(source('A', 5, 0));
   await scheduler.setEnabled(true);
   const uploadCount = pool.uploads.length, readCount = reads.length;
@@ -47,15 +133,10 @@ test('already resident GPU frames do not need CPU reparse on later visits', asyn
   assert.deepEqual(pool.preparations, [0, 4], 'visiting a coordinate-only cached frame still prepares its analysis inputs');
 });
 
-test('GPU frame preparation warms Voronoi first and reuses prepared indices, not just uploaded coordinates', async () => {
-  const pool = fakePool(3), calls = [];
-  const warmup = pool.warmupGpu.bind(pool), prepare = pool.prepareGpuFrame.bind(pool);
-  pool.warmupGpu = async options => { calls.push({ kind: 'warm', analyses: options.analysisKinds }); return warmup(options); };
-  pool.prepareGpuFrame = async (frame, options) => {
-    calls.push({ kind: 'prepare', index: options.frameIndex, analyses: options.analysisKinds });
-    return prepare(frame, options);
-  };
+test('a requested Voronoi kernel is warmed first and reuses prepared indices, not just uploaded coordinates', async () => {
+  const pool = fakePool(3), calls = recordCalls(pool);
   const scheduler = makeScheduler(pool);
+  scheduler.setAnalysisKinds(['voronoi']);
   scheduler.setFrame(source('HEA', 3, 1));
   await scheduler.setEnabled(true);
   assert.deepEqual(calls[0], { kind: 'warm', analyses: ['voronoi'] });
@@ -90,7 +171,7 @@ test('finishing a source load joins the same in-flight frame preparation instead
   assert.equal(scheduler.setFrame(committed), pending);
   assert.equal(preparationSignal.aborted, false);
   release.resolve(); await pending;
-  assert.deepEqual(pool.preparations, [0]);
+  assert.deepEqual(pool.preparations, []);
   assert.deepEqual(pool.uploads, [0]);
 });
 
@@ -220,6 +301,21 @@ function deferred() {
   return { promise, resolve };
 }
 
+async function until(test) {
+  for (let attempt = 0; attempt < 200; attempt++) { if (test()) return; await new Promise(resolve => setTimeout(resolve, 0)); }
+  assert.fail('timed out');
+}
+
+function recordCalls(pool) {
+  const calls = [], warmup = pool.warmupGpu.bind(pool), prepare = pool.prepareGpuFrame.bind(pool);
+  pool.warmupGpu = async options => { calls.push({ kind: 'warm', analyses: options.analysisKinds }); return warmup(options); };
+  pool.prepareGpuFrame = async (frame, options) => {
+    calls.push({ kind: 'prepare', index: options.frameIndex, analyses: options.analysisKinds });
+    return prepare(frame, options);
+  };
+  return calls;
+}
+
 function makeScheduler(pool, { reads = [], statuses = [] } = {}) {
   return new GpuPrefetchScheduler({ pool, onStatus: status => statuses.push(status),
     getFrame: async index => { reads.push(index); return { index }; }, yieldBackground: async () => {},
@@ -228,9 +324,9 @@ function makeScheduler(pool, { reads = [], statuses = [] } = {}) {
 
 function fakePool(capacity) {
   return {
-    uploads: [], preparations: [], warmups: 0,
+    uploads: [], preparations: [], warmups: 0, warmed: [],
     gpuCacheStatus: { capacity: 1, frameCount: 0, cachedFrameIndexes: [] },
-    async warmupGpu() { this.warmups += 1; return this.gpuCacheStatus; },
+    async warmupGpu({ analysisKinds } = {}) { this.warmups += 1; this.warmed.push(analysisKinds); return this.gpuCacheStatus; },
     async configureGpuCache({ frameCount, currentIndex }) {
       this.gpuCacheStatus = { ...this.gpuCacheStatus, frameCount, currentIndex };
       return this.gpuCacheStatus;

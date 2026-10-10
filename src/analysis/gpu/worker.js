@@ -1,4 +1,4 @@
-import { GpuRuntime, checkSignal, GpuUnavailableError } from './runtime.js';
+import { GpuRuntime, checkSignal, GpuUnavailableError, EXACT_PAIR_ANALYSIS_KINDS } from './runtime.js';
 import { analyzeGpuCoordination } from './coordination.js';
 import { analyzeGpuRdf } from './rdf.js';
 
@@ -15,7 +15,7 @@ let queue = Promise.resolve();
 
 self.addEventListener('message', ({ data }) => {
   if (data.type === 'cancel') { controllers.get(data.id)?.abort(); return; }
-  if (!['analyze', 'warmup', 'configure-cache', 'prepare-frame', 'clear-frames'].includes(data.type)) return;
+  if (!['analyze', 'warmup', 'configure-cache', 'prepare-frame', 'clear-frames', 'release-voronoi'].includes(data.type)) return;
   const controller = new AbortController(); controllers.set(data.id, controller);
   const retained = [...new Set([data.frameId, data.referenceFrameId].filter(id => id !== undefined))];
   for (const id of retained) receivedFrameIds.set(id, (receivedFrameIds.get(id) ?? 0) + 1);
@@ -63,6 +63,11 @@ async function run(data, controller) {
       self.postMessage({ id: data.id, ok: true, ...cacheState() });
       return;
     }
+    if (data.type === 'release-voronoi') {
+      runtime.releaseVoronoi();
+      self.postMessage({ id: data.id, ok: true, ...cacheState() });
+      return;
+    }
     progress({ phase: 'initializing', completedAtoms: 0, totalAtoms: data.frame?.fractional.length / 3 || 0 });
     if (data.type === 'warmup') {
       await runtime.warmup({ ...data.options, signal: controller.signal });
@@ -71,6 +76,9 @@ async function run(data, controller) {
       return;
     }
     await runtime.initialize(controller.signal);
+    // A double-float kernel stops before its inputs are retained or uploaded
+    // to a device that cannot run it; the pool then uses CPU workers.
+    if (data.type === 'analyze' && EXACT_PAIR_ANALYSIS_KINDS.includes(data.parameters?.kind)) runtime.requireExactPairs();
     if (data.frame) frames.set(data.frameId, data.frame);
     const frame = frames.get(data.frameId);
     activeFrame = frame;

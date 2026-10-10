@@ -43,6 +43,14 @@ available. Cancelling prefetch discards obsolete results and stops queued work;
 an active synchronous parse finishes before its reusable Worker and CPU
 capacity are released.
 
+The loading indicator over the view belongs to the operation that showed it:
+opening a file, a frame change, a smoothing change, inferring unwrapped
+coordinates, a configuration import, replication or the coordination analysis. That operation hides it when it
+ends, fails or is replaced; for example, choosing a cached frame while another
+frame is still being read hides it at once. A reference frame that a tool
+reads for itself (displacement, reference strain, Wigner–Seitz, time series,
+trajectory lines) is reported in that tool's panel and never shows it.
+
 ## Live controls and panel width
 
 On desktop, drag the divider between the viewport and the right controls panel
@@ -268,6 +276,12 @@ Enable **Replicate atoms for analysis** to enlarge the cell and create physical
 copies with independent atom IDs. All enabled analyses recalculate using the
 additional atoms and enlarged cell; this increases memory and calculation
 work. Copies still follow the actual cell vectors for triclinic geometry.
+In a trajectory without image flags or unwrapped coordinates, an atom that
+wraps across a face of the original cell jumps by one original cell vector in
+every copy. **Displacement** and **Frame strain** resolve those jumps against
+the original cell's lattice, so each copy gets the result of its source atom;
+as without replication, motion between the two frames must stay below half an
+original cell vector.
 The structure summary and crystal legend then report physical atom counts,
 and selection groups can edit different copies independently. Turning the
 checkbox off returns to analysis of the source atoms with display copies.
@@ -430,7 +444,9 @@ thresholds and input type labels in `settings.extensions.voronoi`.
 `selectedTypes: null` includes all atom types; a string list selects those
 labels as tessellation sites. Radical cells add `radical`, `radiusSource`
 (`types` or `property`), `typeRadii` (`{ label, radius }` entries in Å, finite
-and nonnegative) and `radiusProperty`; recipes without them use standard cells. Restoring either enabled analysis
+and nonnegative) and `radiusProperty`; recipes without them use standard cells.
+`gpuKernel: true` records a request for the WebGPU Voronoi kernel; recipes
+without it, including older ones, calculate with CPU Workers. Restoring either enabled analysis
 recalculates its arrays and distributions from the saved physical frame;
 CSV files and computed arrays are not embedded in the recipe. Older recipes
 without these extensions leave both analyses off.
@@ -625,7 +641,9 @@ It prefers WebGPU for coordination, adaptive/fixed-cutoff CNA,
 manual/Auto central symmetry, displacement, reference-frame strain, RDF,
 local geometric shear, bonds, bond-length/angle distributions, local Q4/Q6,
 PTM neighbor preparation and ideal lattice strain
-neighbor/reference/tensor stages. DXA always performs complete CPU/Wasm
+neighbor/reference/tensor stages. Voronoi stays on CPU Workers, which are
+faster for it, unless **Use the WebGPU kernel** is checked under **Calculation
+backend** in the Voronoi panel. DXA always performs complete CPU/Wasm
 extraction and automatically uses shared-memory threads when available; its
 backend and results are independent of the GPU switch. PTM and fresh ideal strain
 prepare neighbors on GPU when supported, then fit PTM correspondence with the
@@ -633,8 +651,11 @@ shared CPU Wasm Worker pool. Strain can reuse a compatible fit and its GPU uploa
 editing lattice parameters updates the element-reference table without
 repeating the geometric fit.
 Other analyses keep their existing CPU implementation, and unavailable or
-unsupported GPU execution falls back to CPU. The switch affects the next
-calculation; completed results remain available. Click **Calculate** again
+unsupported GPU execution falls back to CPU. A GPU that fails the start-up
+check of exact double-float arithmetic runs displacement, both strain analyses
+and a requested WebGPU Voronoi kernel on CPU Workers; the switch's tooltip
+then says so. The switch
+affects the next calculation; completed results remain available. Click **Calculate** again
 to rerun a supported analysis with the new preference. JSON configuration
 export/import saves the preference. An explicit saved off preference stays off;
 configurations without a GPU preference use the enabled default.
@@ -647,11 +668,15 @@ layout in `src/analysis/gpu/`.
 
 Bond statistics and Voronoi have both CPU Worker and WebGPU paths. CPU Voronoi
 distributes bounded atom batches dynamically and reuses its Voro++ Wasm memory,
-coordinate snapshots and neighborhood indices. GPU Voronoi constructs cells
-on the GPU and reuses its device, linked-cell inputs and workspace; numerical
-or capacity limits recover through the exact CPU implementation. Radical cells
-use a weighted GPU kernel whose neighbor search covers the larger radical
-reach; empty radical cells and very wide radius spreads use the CPU kernel.
+coordinate snapshots and neighborhood indices. It is the backend Voronoi uses
+by default, with or without GPU acceleration, and its inputs are prepared in
+the background when a structure loads. The optional WebGPU Voronoi kernel
+constructs cells on the GPU and reuses its device, linked-cell inputs and
+workspace; numerical or capacity limits recover through the exact CPU
+implementation, and a frame with too many such cells is calculated by CPU
+Workers. Its radical cells use a weighted GPU kernel whose neighbor search
+covers the larger radical reach; empty radical cells and very wide radius
+spreads use the CPU kernel.
 
 Rendering currently uses WebGL2: calculated scalar and vector arrays return to
 the application before colors and arrows are uploaded for drawing. Reusing
@@ -858,6 +883,12 @@ from the larger atom of its pair; equal radii reproduce the standard cells. A
 small atom crowded by much larger neighbors can have an empty radical cell,
 reported with zero volume, no faces and an **Empty radical cells** count. See
 [radical cells](features/voronoi.md#radical-radius-weighted-cells).
+
+The cells are calculated by CPU Workers, and the **Backend** line says so.
+**Calculation backend → Use the WebGPU kernel** switches to the GPU kernel
+while GPU acceleration is on. It is off by default because the CPU Workers are
+several times faster on current graphics adapters; see
+[calculation backend](features/voronoi.md#calculation-backend).
 
 The **Element types** checkboxes choose the sites used to construct the
 tessellation. Excluding a type removes its cells and bisector planes, so the
@@ -1367,8 +1398,19 @@ for adapter options and timing interpretation.
   partial image flags, and non-numeric custom columns (except `element`) are
   rejected explicitly. Format recognition is content-based; conventional
   `.dump`, `.lmp`, `.lammpstrj`, and `.lammpstraj` names are shown as candidates.
-  A `.lmp` containing a LAMMPS data/input file rather than `ITEM:` dump blocks
-  is not silently treated as a trajectory and is not supported yet.
+  A `.lmp` that holds a LAMMPS data file rather than `ITEM:` dump blocks is
+  recognized by its header and read as a data file. A LAMMPS input script is
+  not a structure and is rejected.
+- LAMMPS data files: one configuration written by `write_data`, Atomsk or
+  similar tools, in the atom styles `atomic`, `charge`, `molecular`, `bond`,
+  `angle`, `full`, `sphere` and `dipole`, with restricted triclinic tilt
+  factors, optional image flags, type names from `Masses` comments or
+  `Atom Type Labels`, and `Velocities`. See
+  [LAMMPS data file](FORMATS.md#lammps-data-file).
+- VASP POSCAR/CONTCAR: VASP 5 species lines or VASP 4 files without them,
+  negative (target-volume) and three-component scale factors, selective
+  dynamics, and Direct or Cartesian coordinates. XDATCAR trajectories are not
+  supported. See [VASP POSCAR and CONTCAR](FORMATS.md#vasp-poscar-and-contcar).
 - XYZ: plain rows and Extended XYZ `Properties`, row-vector `Lattice`,
   per-axis `pbc`, and numeric auxiliary/vector columns. An explicit `id`
   property supplies stable correspondence. XYZ without a lattice uses a padded
@@ -1475,9 +1517,11 @@ This is a provenance and risk statement, not legal advice.
 - Browser file permissions do not allow a normal single-file picker to enumerate
   sibling files as a native desktop application can. **Open local** offers both a file picker and a folder picker. Choose a folder
   to detect sibling sequences automatically, or select several files together.
-- NetCDF, Python/ASE integration, arbitrary command scripts, live monitoring
-  of growing files, atom color/radius file imports and
-  Voronoi polycrystal construction are not implemented. The initial DXA module
+- NetCDF, XDATCAR, Python/ASE integration, AtomEye's own command scripts, atom
+  color/radius file imports and Voronoi polycrystal construction are not
+  implemented. AlloyView has its own [command scripts](features/scripts.md).
+  Following a trajectory file while a running simulation appends frames is not
+  supported and is no longer planned. The initial DXA module
   comes from the separately reviewed OVITO core, not the reviewed AtomEye
   snapshot. See [DXA implementation review](DXA_REVIEW.md) for the source-backed
   CPU/Wasm algorithm and historical GPU research, and

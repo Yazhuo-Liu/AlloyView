@@ -7,6 +7,7 @@ import { drawTextLabelsOverlay } from './render/text-label-overlay.js';
 import { cameraViewPreset } from './render/camera-presets.js';
 import { replaceAnalysisProperty, clearAnalysisResults } from './analysis/results.js';
 import { createReferenceMappingAsync, REFERENCE_STRAIN_FIELDS } from './analysis/reference-strain.js';
+import { wrappedSourceRepetitions } from './data/model.js';
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
 import { measureAtoms } from './measurements.js';
 import { createImageArchive, downloadBlob } from './export-archive.js';
@@ -170,6 +171,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
             input.referenceFractional = reference.fractional; input.referenceCell = reference.cell;
             input.referenceFrame = reference;
             input.referenceFrameIndex = parameters.frameIndex;
+            // Copies of a wrapped source jump by source vectors between frames.
+            input.sourceRepetitions = wrappedSourceRepetitions(frame, reference);
             input.referenceMapping = await createReferenceMappingAsync(frame, reference, { signal: controller.signal,
               onProgress: ({ completed, total }) => { if (current()) $('reference-strain-status').textContent = `Matching atom IDs… ${completed} / ${total}`; } });
             if (!current()) return;

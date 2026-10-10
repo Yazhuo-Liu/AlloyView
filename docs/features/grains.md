@@ -296,6 +296,15 @@ IDs 4 bytes per atom. While it builds a merge sequence the Worker holds
 roughly 0.7 kB per atom, an estimate from its array sizes; afterwards it
 keeps about a third of that.
 
+## Limitations
+
+- Building the merge sequence runs on one thread in the grain Worker, while
+  OVITO's engine is multithreaded. Only the preceding PTM fit uses the Worker
+  pool.
+- The browser tests run grain segmentation with GPU acceleration off. Grains
+  from a PTM fit whose neighbors were prepared with WebGPU are not yet covered
+  by a browser test.
+
 ## Configuration
 
 `settings.extensions.grains` stores `enabled`, `algorithm` (`automatic`,

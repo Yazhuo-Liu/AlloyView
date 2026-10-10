@@ -1,7 +1,7 @@
 # AtomEye source review
 
 Review date: 2026-10-01  
-Browser migration status updated: 2026-10-07 (remaining work: [improvement backlog](TODO.md))
+Browser migration status updated: 2026-10-10 (the AtomEye-derived viewer features listed under [viewer workflow migration](#viewer-workflow-migration-and-remaining-gaps) are implemented)
 Upstream: <https://github.com/jameskermode/AtomEye>  
 Pinned commit: `c418eb2553f6793460d4a956236fc698c39fbe74`
 
@@ -69,8 +69,9 @@ described precisely:
 
 The initial AlloyView release used one Web Worker. The current analysis modules
 share a bounded Worker pool with independent atom ranges; PTM uses a separate
-Wasm instance per Worker. Parsing and WebGL rendering remain distinct stages.
-Wasm pthreads would require separate profiling and hosting changes.
+Wasm instance per Worker. Parsing has its own pool of parser Workers, and WebGL
+rendering remains a distinct stage. Wasm pthreads are used by the DXA kernel
+only, on cross-origin isolated hosts; no other analysis depends on them.
 
 ## License and distribution finding
 
@@ -110,7 +111,7 @@ PTM, to this source tree.
 | Reference-frame least-squares deformation and strain | `Atoms/LeastSquareStrain.c:ComputeLeastSquareDeformationGradient()` and `A3/LeastSquareStrain.c:LeastSquareStrain_Append()` produce `eta_Mises`, `eta_hydro`, and nine `J` components from an imprinted isoatomic reference. | **Implemented independently.** A chosen trajectory frame and explicit stable IDs define PBC-aware correspondence. Parallel local least-squares fits return Green–Lagrange strain, volume change and all nine deformation-gradient components. Missing/singular/inverted fits become NaN without defect-count warnings. |
 | Partial radial distribution functions, `g(r)` | `Atoms/Gr.c` owns species-pair cutoffs, meshes, accumulation, normalization, and save logic. | **Implemented independently.** Worker histograms combine into total or element-pair curves and CSV output. Normalization uses exact spherical shells and finite populations; it requires all three periodic axes and a cutoff no greater than half the shortest cell face height. This upstream evidence is in the numerical library, not necessarily a viewer panel. |
 | Pair cutoffs, neighbor/bond graph, and coordination-based visibility | `Atoms/Neighborlist.c`, `A3/rcut_patch.c`, and `A3/utils.c` maintain species-pair cutoffs and bond/coordination display state. | **Implemented independently for bonds.** Worker-built graphs support element-pair cutoff overrides and periodic images; WebGL instanced cylinders reuse the source graph under display replication. The original coordination tool retains its separate uniform-cutoff, distinct-ID convention. |
-| Auxiliary scalar coloring and thresholds | `A3/A.c` and `A3/utils.c` select auxiliary arrays, colormaps, saturation, and visibility thresholds. | **Implemented in browser form.** Numeric source/analysis properties share ten color maps, per-property Auto/fixed limits, and optional out-of-range hiding. |
+| Auxiliary scalar coloring and thresholds | `A3/A.c` and `A3/utils.c` select auxiliary arrays, colormaps, saturation, and visibility thresholds. | **Implemented in browser form.** Numeric source/analysis properties share ten color maps, per-property Auto/fixed limits, and optional out-of-range hiding. Integer properties with at most 32 distinct values can use a discrete legend with one hideable row per value, and atom details can hide the picked atom's class (see [display](features/display.md)). |
 | Distance, bond-angle, dihedral, and local atom inquiry | `doc/atomeye.html` and `A3/info.c` document last-2/3/4 atom geometric queries. | **Implemented independently.** Multi-picking measures distance, angle and dihedral with selectable periodic-image treatment. Atom ID lookup, camera centering and single-atom appearance overrides extend the existing inquiry panel. |
 | Vector-field arrows | Upstream README documents `draw_arrows` for consecutive auxiliary triplets and overlays. | **Implemented independently, with multiple fields.** Displacement follows stable IDs and a chosen reference frame; force/velocity use imported vector families, and custom XYZ has per-axis scales. Arrows support anchoring, linked/independent dimensions and 3D or camera-facing 2D geometry. Several fields can be shown at once, each with its own source and style (see [vectors](features/vectors.md)). |
 | Voronoi grain construction | `Atoms/Voronoi.c` rotates/cuts copies around seed sites to generate polycrystals and removes close GB atoms. | **Do not mislabel as Voronoi analysis.** It is a structure-construction tool, not per-atom Voronoi volume/index computation. It belongs in a future builder module, if at all. |
@@ -132,13 +133,15 @@ documented separately in [Structure analysis](STRUCTURE_ANALYSIS.md).
 
 | Upstream workflow | Browser status |
 | --- | --- |
-| Extended XYZ and PDB input; optional NetCDF | Plain/Extended XYZ and fixed-width PDB, including indexed trajectories and numbered sequences, are implemented independently. NetCDF remains unsupported. |
+| Extended XYZ and PDB input; optional NetCDF | Plain/Extended XYZ and fixed-width PDB, including indexed trajectories and numbered sequences, are implemented independently. gzip-compressed files of every supported format open directly. NetCDF remains unsupported. |
 | Element/single-atom colors, radii and hiding | Editable type and atom overrides are implemented and saved in recipes. AtomEye's color-tiling tracer is implemented as **Displacement → Color tiles** (see [displacement](features/displacement.md#color-tiles)). External color/radius-file import remains unsupported. |
 | Find an atom and anchor the camera | ID lookup, selected-atom camera centering and double-click/double-tap anchoring on the picked image are implemented. Numeric and drag-based crystal-origin shifts are implemented as the periodic display origin (Move crystal mode, Alt-drag and X/Y/Z keys); the native command interface is not reproduced. |
 | Multiple viewports | A movable, resizable second view shares frame/results with an independent camera, its own PNG export and an Apply to main control. Recipes retain its viewport-relative layout; six-view PNG contact sheets are also available. The native arbitrary-window/thread model remains separate. |
-| Screenshots and animation scripts | PNG/JPG and cancellable selected-frame PNG ZIP export are implemented. JSON recipes restore processing, but do not interpret arbitrary AtomEye commands or encode movies. |
+| Keyboard navigation with a step-size gearbox | Implemented as global [keyboard shortcuts](features/keyboard.md): camera orbit, roll, pan, zoom and standard views with a 0–9 step gearbox, plus frame, slice, crystal-move, PNG and theme commands. A dialog lists the commands and rebinds keys, refusing conflicts; bindings are saved in the browser. The key assignments are AlloyView's own. |
+| Cutting planes: shift, flip and slabs | Up to 16 planes with arbitrary normals. Each has step buttons and keys for sweeping, Flip, a slab mode, Miller-index normals relative to the simulation cell and optional cut outlines on the cell that image exports can include (see [slices](features/slices.md)). |
+| Screenshots and animation scripts | PNG/JPG at the viewport size or a chosen resolution (presets or custom sizes up to 32 megapixels, rendered offscreen in tiles), six-view sheets and cancellable selected-frame PNG ZIP export are implemented. [Command scripts](features/scripts.md) drive the camera, frames, colors, slices, keyframes and PNG downloads with AlloyView's own line-oriented commands, which are matched against a fixed command table and never evaluated. [Camera paths and movies](features/movies.md) encode MP4 or WebM in the browser. AtomEye's own script files and commands are not interpreted. |
 | Save atom indices | Visible source-ID list export is implemented; display replicas do not duplicate IDs. |
-| Python/ASE/Jupyter bridge and live reload of growing trajectories | Not implemented; selected browser File objects remain static local inputs. |
+| Python/ASE/Jupyter bridge and live reload of growing trajectories | Not implemented; selected browser File objects remain static local inputs. A Python bridge conflicts with the browser-only, no-upload design. Following a trajectory file while a running simulation appends frames was considered and dropped, because the project does not need it. |
 | Structure construction and native file tools | Voronoi polycrystal construction, full native format coverage, and processed-coordinate export remain future work. |
 
 The browser's source-sized analyses always precede display replication. All

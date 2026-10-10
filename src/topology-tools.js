@@ -28,11 +28,13 @@ const DEFINITIONS = {
   voronoi: { prefix: 'voronoi', tool: 'voronoi', property: 'atomicVolume',
     fields: { faceAreaThreshold: 'voronoi-face-area-threshold', relativeFaceAreaThreshold: 'voronoi-relative-face-area-threshold' },
     defaults: { faceAreaThreshold: 0, relativeFaceAreaThreshold: 0, bins: 50, selectedTypes: null,
-      radical: false, radiusSource: 'types', typeRadii: [], radiusProperty: null },
+      radical: false, radiusSource: 'types', typeRadii: [], radiusProperty: null, gpuKernel: false },
     help: 'Calculate using the checked element types, including their atoms hidden in the display.' },
 };
 // Panel-only radical settings; the analysis receives one radius per atom.
 const VORONOI_RADICAL_SETTINGS = ['radical', 'radiusSource', 'typeRadii', 'radiusProperty'];
+// `gpuKernel` chooses the backend through the pool; it is not a parameter either.
+const VORONOI_PANEL_SETTINGS = [...VORONOI_RADICAL_SETTINGS, 'gpuKernel'];
 
 /** Numeric per-atom properties usable as radical radii: source columns,
  * external attributes and expressions, never another analysis's output. */
@@ -69,7 +71,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
   getSourceVersion = () => 0, getFrameIndex = () => 0, getBondParameters = () => ({ cutoff: 3, pairCutoffs: [] }),
   getBondEnabled = () => Boolean(getFrame()?.atomeyeResults?.bonds),
   getColorChoiceVersion = () => 0, chooseProperty = () => {}, onResultsChange = () => {},
-  notify = () => {}, onEdit = () => {}, onBeforeClear = () => {} }) {
+  notify = () => {}, onEdit = () => {}, onBeforeClear = () => {}, onGpuPreparationChange = () => {} }) {
   const $ = id => globalThis.document?.getElementById(id) ?? null;
   const voronoiView = initializeVoronoiResults({ getElement: $, chooseProperty });
   const jobs = Object.fromEntries(Object.keys(DEFINITIONS).map(kind => [kind,
@@ -81,8 +83,31 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
   let radiusFrame = null, radiusRows = [], radiusPropertyNames = '';
 
   function rerunRadical() {
-    onEdit(); updateRadicalControls();
+    onEdit(); updateRadicalControls(); syncGpuKernel();
     if (jobs.voronoi.enabled) void run('voronoi', { automatic: true });
+  }
+
+  /** GPU kernels to prepare for the Voronoi panel: none unless its WebGPU
+   * kernel is requested; the radical clip kernel only with radical radii. */
+  function gpuPreparationKinds() {
+    const settings = jobs.voronoi.settings;
+    return settings.gpuKernel ? ['voronoi', ...(settings.radical ? ['voronoiRadical'] : [])] : [];
+  }
+
+  /** The request is kept while GPU acceleration is off, but it can only be
+   * changed, and only takes effect, while acceleration is on. */
+  function updateGpuKernelControls() {
+    const settings = jobs.voronoi.settings, input = $('voronoi-gpu-kernel');
+    if (input) { input.checked = settings.gpuKernel; input.disabled = !controlsEnabled || !getFrame() || !pool.gpuEnabled; }
+    if ($('voronoi-gpu-kernel-summary')) $('voronoi-gpu-kernel-summary').textContent = !settings.gpuKernel ? 'CPU Workers'
+      : pool.gpuEnabled ? 'WebGPU kernel' : 'CPU Workers · GPU acceleration is off';
+  }
+
+  /** The pool routes Voronoi, and GPU preparation follows the router. */
+  function syncGpuKernel() {
+    pool.setGpuVoronoi?.(jobs.voronoi.settings.gpuKernel);
+    updateGpuKernelControls();
+    onGpuPreparationChange(gpuPreparationKinds());
   }
 
   function updateRadicalControls() {
@@ -177,7 +202,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     for (const id of Object.values(definition.fields)) if ($(id)) $(id).disabled = !available;
     if ($(`run-${prefix}`)) $(`run-${prefix}`).disabled = !available || Boolean(job.controller) || job.queued;
     if ($(`cancel-${prefix}`)) $(`cancel-${prefix}`).disabled = !available || (!job.enabled && !job.failed);
-    if (kind === 'voronoi') { voronoiView.setEnabled(available && Boolean(job.result)); updateTypeControls(); updateRadicalControls(); }
+    if (kind === 'voronoi') { voronoiView.setEnabled(available && Boolean(job.result)); updateTypeControls(); updateRadicalControls(); updateGpuKernelControls(); }
   }
 
   function state(kind, label, text = '') {
@@ -230,7 +255,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
    * per-atom radii and their content fingerprint. */
   function analysisRequest(kind, settings, frame) {
     if (kind !== 'voronoi') return { analysis: settings, identity: settings, radii: null };
-    const analysis = Object.fromEntries(Object.entries(settings).filter(([name]) => !VORONOI_RADICAL_SETTINGS.includes(name)));
+    const analysis = Object.fromEntries(Object.entries(settings).filter(([name]) => !VORONOI_PANEL_SETTINGS.includes(name)));
     if (!settings.radical) return { analysis, identity: analysis, radii: null };
     const radii = voronoiRadicalRadii(frame, settings);
     return { analysis: { ...analysis, radii }, identity: { ...analysis, radical: voronoiRadiiFingerprint(radii) }, radii };
@@ -342,7 +367,9 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     const controller = new AbortController(); job.controller = controller; job.queued = false;
     const current = () => request === job.serial && token === generation && source === getSourceVersion()
       && frame === getFrame() && job.enabled && !controller.signal.aborted && isCurrent();
-    const key = JSON.stringify({ ...call.identity, sourceVersion: source, gpuRequested: Boolean(pool.gpuEnabled) });
+    // Standard requests keep their previous keys; a requested GPU kernel adds its own.
+    const gpuKernel = kind === 'voronoi' && settings.gpuKernel && Boolean(pool.gpuEnabled);
+    const key = JSON.stringify({ ...call.identity, sourceVersion: source, gpuRequested: Boolean(pool.gpuEnabled), ...(gpuKernel ? { gpuKernel } : {}) });
     const prefix = DEFINITIONS[kind].prefix;
     try {
       let cached = frame.atomeyeResults?.[kind];
@@ -417,7 +444,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
       jobs[kind].settings = { ...DEFINITIONS[kind].defaults };
       for (const [name, id] of Object.entries(DEFINITIONS[kind].fields)) if ($(id)) $(id).value = String(DEFINITIONS[kind].defaults[name]);
     }
-    updateRadicalControls();
+    updateRadicalControls(); syncGpuKernel();
     onResultsChange({ clearSettings: true });
   }
 
@@ -427,6 +454,8 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     if (!voronoi.radical && voronoi.radiusSource === 'types' && !voronoi.typeRadii.length && voronoi.radiusProperty === null) {
       for (const name of VORONOI_RADICAL_SETTINGS) delete voronoi[name];
     }
+    // Likewise for the WebGPU kernel: absent means CPU Workers.
+    if (!voronoi.gpuKernel) delete voronoi.gpuKernel;
     return output;
   }
 
@@ -435,7 +464,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
       { enabled: jobs[kind].enabled, ...Object.fromEntries(Object.entries(definition.defaults).map(([name, fallback]) => {
         if (name === 'selectedTypes') return [name, jobs[kind].settings.selectedTypes?.slice() ?? null];
         if (name === 'typeRadii') return [name, jobs[kind].settings.typeRadii.map(entry => ({ ...entry }))];
-        if (VORONOI_RADICAL_SETTINGS.includes(name)) return [name, jobs[kind].settings[name]];
+        if (VORONOI_PANEL_SETTINGS.includes(name)) return [name, jobs[kind].settings[name]];
         const input = $(definition.fields[name]);
         const value = input ? input.valueAsNumber : jobs[kind].settings[name];
         const valid = name.endsWith('Bins') || name === 'bins'
@@ -456,7 +485,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
       for (const [name, id] of Object.entries(definition.fields)) if ($(id)) $(id).value = String(settings[name] ?? definition.defaults[name]);
       jobs[kind].enabled = Boolean(settings.enabled); jobs[kind].queued = jobs[kind].enabled; syncTool(kind);
     }
-    updateRadicalControls();
+    updateRadicalControls(); syncGpuKernel();
     onResultsChange({ clearSettings: false });
     await Promise.all(Object.keys(jobs).filter(kind => jobs[kind].enabled && isCurrent()).map(kind => run(kind, { automatic: true, isCurrent })));
   }
@@ -491,6 +520,11 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     jobs.voronoi.settings.radiusProperty = $('voronoi-radius-property').value || null;
     rerunRadical();
   });
+  $('voronoi-gpu-kernel')?.addEventListener('change', () => {
+    jobs.voronoi.settings.gpuKernel = Boolean($('voronoi-gpu-kernel').checked);
+    onEdit(); syncGpuKernel();
+    if (jobs.voronoi.enabled) void run('voronoi', { automatic: true });
+  });
   // Expressions and external attributes can add radius properties at any time.
   $('voronoi-radical-controls')?.addEventListener('toggle', () => updateRadicalControls());
   $('voronoi-reset-radii')?.addEventListener('click', () => {
@@ -518,6 +552,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     syncBondEnabled: () => syncTool('bondStatistics'),
     isEnabled: kind => Boolean(jobs[kind]?.enabled),
     setEnabled(value) { controlsEnabled = Boolean(value); for (const kind of Object.keys(jobs)) updateControls(kind); },
+    gpuPreparationKinds, syncGpuAcceleration: updateGpuKernelControls,
     getResult: kind => jobs[kind]?.result ?? null,
     getPropertyKind: name => Object.keys(TOPOLOGY_PROPERTIES).find(kind => jobs[kind].enabled && !jobs[kind].failed
       && TOPOLOGY_PROPERTIES[kind].some(field => field.name === name)) ?? null,

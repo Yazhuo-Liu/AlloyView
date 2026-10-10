@@ -1,5 +1,6 @@
 import { crystalFrame } from '../tests/helpers/crystals.js';
-import { cartesianToFractional, createCell, fractionalToCartesian } from '../src/data/model.js';
+import { cartesianToFractional, createCell, fractionalToCartesian, wrapFractional, wrappedSourceRepetitions } from '../src/data/model.js';
+import { replicateFrame } from '../src/data/replicate.js';
 import { createReferenceMapping } from '../src/analysis/reference-strain.js';
 import { calculateCna } from '../src/analysis/cna.js';
 import { NeighborSearch } from '../src/analysis/neighbors.js';
@@ -201,13 +202,18 @@ export function cnaDirectFixtures() {
     parameters: { kind: 'cna', mode: 'adaptive', startAtom: 0, endAtom: 1 }, expectedCenter: 4, expectedCorrectionAtoms: 1 }];
 }
 
+/** Parameters as the application prepares them for one current/reference pair. */
+function referenceStrainFixture(label, reference, frame = cloneFrame(reference), cutoff = 2.8, expectations = {}) {
+  return { label, frame, reference, parameters: { kind: 'referenceStrain', cutoff, referenceFractional: reference.fractional,
+    referenceCell: reference.cell, referenceMapping: createReferenceMapping(frame, reference),
+    sourceRepetitions: wrappedSourceRepetitions(frame, reference) }, ...expectations };
+}
+
 /** Ready-to-run scientific cases. All matrices are physical Cartesian F, not
  * cell-storage matrices. Missing or undefined fits intentionally have NaN. */
 export function referenceStrainFixtures() {
   const fixtures = [];
-  const add = (label, reference, frame = cloneFrame(reference), cutoff = 2.8, expectations = {}) => fixtures.push({ label, frame, reference,
-    parameters: { kind: 'referenceStrain', cutoff, referenceFractional: reference.fractional,
-      referenceCell: reference.cell, referenceMapping: createReferenceMapping(frame, reference) }, ...expectations });
+  const add = (...fixture) => fixtures.push(referenceStrainFixture(...fixture));
   const fcc = crystalFrame('fcc', 2, 3.52);
   for (const [kind, lattice, cutoff] of [['fcc', 3.52, 2.8], ['bcc', 2.86, 3.05], ['hcp', 2.5, 2.7], ['sc', 2, 2.1]]) {
     const reference = crystalFrame(kind, kind === 'sc' ? 1 : 2, lattice);
@@ -393,19 +399,21 @@ export function cspFixtures() {
  * minimum-image implementation. Float64 magnitudes are evaluated from the
  * application's rounded Float32 vectors, preserving zeros and unmatched NaNs
  * even when their combined length exceeds the Float32 numeric range. */
+function displacementFixture(label, reference, frame, expectedVectors, options = {}, expectations = {}) {
+  const vectors = Float64Array.from(expectedVectors);
+  const expectedMapping = reference.idSource === 'row-order' && frame.idSource === 'row-order'
+    ? Int32Array.from({ length: frame.ids.length }, (_, atom) => atom) : createReferenceMapping(frame, reference);
+  const f32Vectors = Float32Array.from(vectors);
+  return { label, frame, reference, options: { minimumImage: true, ...options }, expectedVectors: vectors, expectedMapping,
+    expectedMappingMode: reference.idSource === 'row-order' ? 'row-order' : 'id',
+    expectedMagnitudes: Float64Array.from({ length: frame.ids.length }, (_, atom) => Math.hypot(...f32Vectors.subarray(atom * 3, atom * 3 + 3))),
+    ...expectations };
+}
+
 export function displacementFixtures() {
   const fixtures = [];
   const cell = createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10] });
-  const add = (label, reference, frame, expectedVectors, options = {}, expectations = {}) => {
-    const vectors = Float64Array.from(expectedVectors);
-    const expectedMapping = reference.idSource === 'row-order' && frame.idSource === 'row-order'
-      ? Int32Array.from({ length: frame.ids.length }, (_, atom) => atom) : createReferenceMapping(frame, reference);
-    const f32Vectors = Float32Array.from(vectors);
-    fixtures.push({ label, frame, reference, options: { minimumImage: true, ...options }, expectedVectors: vectors, expectedMapping,
-      expectedMappingMode: reference.idSource === 'row-order' ? 'row-order' : 'id',
-      expectedMagnitudes: Float64Array.from({ length: frame.ids.length }, (_, atom) => Math.hypot(...f32Vectors.subarray(atom * 3, atom * 3 + 3))),
-      ...expectations });
-  };
+  const add = (...fixture) => fixtures.push(displacementFixture(...fixture));
   const reference = pointFrame([[1, 2, 3], [4, 5, 6]], { cell });
   add('Matched zero displacements', cloneFrame(reference), cloneFrame(reference), [0, 0, 0, 0, 0, 0]);
   add('Cartesian translation and origin change', cloneFrame(reference), transformFrame(reference, undefined, { translation: [.25, -.5, .125] }),
@@ -505,6 +513,61 @@ export function displacementValidationFixtures() {
   add('Incomplete displacement coordinate rows are rejected', shortCoordinates, undefined, 'atom count');
   add('Displacement minimum-image option must be boolean', cloneFrame(reference), undefined, 'boolean', { minimumImage: 'yes' });
   return fixtures;
+}
+
+/** Two-frame sources that store wrapped coordinates only, replicated as the
+ * application does for **Replicate atoms for analysis**. The current frame is
+ * an affine deformation of the reference plus a uniform reduced shift, so its
+ * expected displacement and deformation gradient are known without any image
+ * search. Atoms that cross a source cell face jump by a source cell vector in
+ * every copy; the enlarged cell's own lattice cannot remove that jump. */
+async function replicatedWrappedSources() {
+  const fcc = crystalFrame('fcc', 2, 3.52), hcp = crystalFrame('hcp', 3, 2.5);
+  const mixed = crystalFrame('fcc', 2, 3.52);
+  mixed.cell = createCell({ ...mixed.cell, pbc: [true, false, true] });
+  const affine = [1.02, .012, .003, 0, .98, .005, 0, 0, 1.04];
+  const sources = [];
+  // offset places reference atoms beside the faces that shift then carries them across.
+  for (const [label, crystal, cutoff, repetitions, matrix, offset, shift] of [
+    ['uniform shift across a face, 2x1x1', fcc, 2.8, [2, 1, 1], IDENTITY, [0, 0, 0], [-.02, 0, 0]],
+    ['crossings in both directions, 2x3x2', fcc, 2.8, [2, 3, 2], IDENTITY, [.23, .02, .23], [.03, -.04, .05]],
+    ['triclinic cell, 3x1x2', hcp, 2.7, [3, 1, 2], IDENTITY, [.1, 0, .15], [.07, -.05, .03]],
+    ['changed triclinic cell, 3x2x1', hcp, 2.7, [3, 2, 1], affine, [0, .2, 0], [-.04, .06, .05]],
+    ['mixed periodic and open axes, 3x1x2', mixed, 2.8, [3, 1, 2], [1.01, 0, 0, 0, 1, 0, 0, 0, .99], [.2, 0, 0], [.06, 0, -.04]],
+  ]) {
+    const source = transformFrame(crystal, IDENTITY, { fractionalShift: offset });
+    const moved = transformFrame(source, matrix, { fractionalShift: shift });
+    const wrapped = cloneFrame(moved);
+    wrapped.fractional = wrapFractional(moved.fractional, moved.cell.pbc, new Float64Array(moved.fractional.length));
+    wrapped.positions = fractionalToCartesian(wrapped.fractional, wrapped.cell, new Float64Array(wrapped.fractional.length));
+    const [reference, frame] = await Promise.all([source, wrapped].map(input => replicateFrame(input, repetitions)));
+    // Copy (i, j, k) of an atom moves with its source atom and with the cell.
+    const count = source.ids.length, expectedVectors = new Float64Array(frame.ids.length * 3);
+    let copy = 0;
+    for (let k = 0; k < repetitions[2]; k += 1) for (let j = 0; j < repetitions[1]; j += 1) for (let i = 0; i < repetitions[0]; i += 1) {
+      for (let atom = 0; atom < count; atom += 1) for (let axis = 0; axis < 3; axis += 1) {
+        let value = moved.cell.origin[axis] - source.cell.origin[axis];
+        for (const [direction, image] of [i, j, k].entries()) {
+          value += (moved.fractional[atom * 3 + direction] + image) * moved.cell.vectors[direction * 3 + axis]
+            - (source.fractional[atom * 3 + direction] + image) * source.cell.vectors[direction * 3 + axis];
+        }
+        expectedVectors[(copy * count + atom) * 3 + axis] = value;
+      }
+      copy += 1;
+    }
+    sources.push({ label: `Replicated wrapped source: ${label}`, reference, frame, cutoff, matrix, expectedVectors });
+  }
+  return sources;
+}
+
+export async function replicatedDisplacementFixtures() {
+  return (await replicatedWrappedSources()).map(({ label, reference, frame, expectedVectors }) =>
+    displacementFixture(label, reference, frame, expectedVectors, {}, { expectedCorrectionAtoms: 0 }));
+}
+
+export async function replicatedReferenceStrainFixtures() {
+  return (await replicatedWrappedSources()).map(({ label, reference, frame, cutoff, matrix }) =>
+    referenceStrainFixture(label, reference, frame, cutoff, { expectedF: matrix, expectedCorrectionAtoms: 0 }));
 }
 
 function clonePtmInput(input) {
