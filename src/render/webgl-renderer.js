@@ -15,6 +15,7 @@ import { DislocationLayer, normalizeDislocationOptions } from './dislocation-lay
 import { TrajectoryLineLayer, normalizeTrajectoryLineOptions } from './trajectory-line-layer.js';
 import { VoronoiCellLayer, VoronoiAllCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
 import { SiteMarkerLayer, normalizeSiteMarkerOptions } from './site-marker-layer.js';
+import { SurfaceMeshLayer } from './surface-mesh-layer.js';
 import { drawTextLabelsOverlay } from './text-label-overlay.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON, pointVisible, sliceHalfSpaces, sliceOutlineSegments, validateSlices } from './slicing.js';
 import {
@@ -271,6 +272,7 @@ export class WebGLRenderer {
     this.siteMarkerLayer = null;
     this.siteMarkers = null;
     this.siteMarkerOptions = normalizeSiteMarkerOptions();
+    this.surfaceMeshLayer = null;
     this.atomBonds = this.atomVectors = null;
     this.atomVectorFields = [];
     this.bondOptions = { visible: true, radius: 0.08 };
@@ -395,6 +397,7 @@ export class WebGLRenderer {
     this.dislocationLayer?.clear();
     this.siteMarkers = null;
     this.siteMarkerLayer?.clear();
+    this.surfaceMeshLayer?.clear();
     this.selected = -1;
     this.selectedAtoms?.fill(-1);
     this.sliceSelectedAtoms?.fill(-1);
@@ -450,6 +453,7 @@ export class WebGLRenderer {
     this.dislocationLayer?.clear();
     this.siteMarkers = null;
     this.siteMarkerLayer?.clear();
+    this.surfaceMeshLayer?.clear();
     this.trajectoryLines = null;
     this.trajectoryLineLayer?.clear();
     this.voronoiCellGeometry = null;
@@ -634,6 +638,8 @@ export class WebGLRenderer {
     }
     this.primitiveLayer?.updatePositions(this);
     if (this.dislocationNetwork) this.dislocationLayer?.setNetwork(this, this.dislocationNetwork, this.dislocationOptions);
+    // Surface meshes are cut at the displayed cell; a new origin cuts them again.
+    this.surfaceMeshLayer?.refresh(this);
     this.updateSceneBounds();
     this.requestRender();
     return performance.now() - startedAt;
@@ -781,6 +787,32 @@ export class WebGLRenderer {
     this.siteMarkerOptions = { ...this.siteMarkerLayer.options };
     if (this.frame && !unchanged) this.updateSceneBounds();
     this.requestRender();
+  }
+
+  /** A closed triangle mesh of the current frame: `id` is 'surface' (alpha
+   * shape) or 'dxaDefect'. `mesh` holds Cartesian `vertices`, `triangles`
+   * and optionally `reverse` and `spaceFilling`; null removes it. Options:
+   * visible, color, interiorColor, capColor, opacity and caps. */
+  setSurfaceMesh(id, mesh, options = {}) {
+    if (!mesh && !this.surfaceMeshLayer) return null;
+    if (mesh && !this.frame) throw new Error('Load a structure before displaying a surface mesh.');
+    this.surfaceMeshLayer ??= new SurfaceMeshLayer(this.gl);
+    const entry = this.surfaceMeshLayer.setMesh(this, id, mesh ?? null, options);
+    if (this.frame) this.updateSceneBounds();
+    this.requestRender();
+    return entry;
+  }
+
+  /** The displayed meshes as { id, mesh, options, display, error }. */
+  surfaceMeshes() { return [...(this.surfaceMeshLayer?.entries.values() ?? [])].filter(entry => entry.mesh); }
+
+  /** Show the same meshes and styles as another renderer (the second view). */
+  copySurfaceMeshes(source) {
+    const meshes = new Map(source.surfaceMeshes().map(entry => [entry.id, entry]));
+    for (const id of new Set([...meshes.keys(), ...this.surfaceMeshes().map(entry => entry.id)])) {
+      const entry = meshes.get(id);
+      this.setSurfaceMesh(id, entry?.mesh ?? null, entry?.options ?? {});
+    }
   }
 
   /** Atom paths persist across frame changes; closing the source clears them. */
@@ -1054,6 +1086,7 @@ export class WebGLRenderer {
     this.primitiveLayer?.extendBounds(this, minimum, maximum);
     this.dislocationLayer?.extendBounds(this, minimum, maximum);
     this.siteMarkerLayer?.extendBounds(this, minimum, maximum);
+    this.surfaceMeshLayer?.extendBounds(this, minimum, maximum);
     this.trajectoryLineLayer?.extendBounds(this, minimum, maximum);
     this.voronoiCellLayer?.extendBounds(this, minimum, maximum);
     this.voronoiAllCellLayer?.extendBounds(this, minimum, maximum);
@@ -1164,6 +1197,8 @@ export class WebGLRenderer {
     this.dislocationLayer?.render(this);
     this.siteMarkerLayer?.render(this);
     this.trajectoryLineLayer?.render(this);
+    // Opaque meshes write depth like atoms; translucent ones blend over them.
+    this.surfaceMeshLayer?.render(this);
     // Voronoi cells are built for the committed origin; they reappear,
     // rebuilt, when a crystal drag is released.
     if (!this.crystalDrag) {

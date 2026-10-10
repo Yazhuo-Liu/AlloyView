@@ -255,16 +255,20 @@
               <button type="button" data-tool-button="bonds" aria-controls="tool-bonds" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Bonds</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="voronoi" aria-controls="tool-voronoi" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Voronoi</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="clusters" aria-controls="tool-clusters" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Clusters</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="surfaceMesh" aria-controls="tool-surface-mesh" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Surface</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="vectors" aria-controls="tool-vectors" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Vectors</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="displacement" aria-controls="tool-displacement" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Displacement</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="statistics" aria-controls="tool-statistics" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Statistics</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="binning" aria-controls="tool-binning" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Binning</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="timeSeries" aria-controls="tool-time-series" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Time series</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="textLabels" aria-controls="tool-text-labels" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Labels</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="scripts" aria-controls="tool-scripts" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Scripts</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="movie" aria-controls="tool-movie" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Movie</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="cna" aria-controls="tool-cna" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">CNA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="dxa" aria-controls="tool-dxa" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">DXA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="centrosymmetry" aria-controls="tool-centrosymmetry" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Symmetry</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="ptm" aria-controls="tool-ptm" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">PTM</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="grains" aria-controls="tool-grains" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Grains</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="strain" aria-controls="tool-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="referenceStrain" aria-controls="tool-reference-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Frame strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="wignerSeitz" aria-controls="tool-wigner-seitz" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Wigner–Seitz</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
@@ -803,6 +807,56 @@
             </div>
           </section>
 
+          <section id="tool-surface-mesh" class="side-section analysis-section surface-mesh-section" data-tool-panel="surfaceMesh" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">SURFACES AND VOIDS</p><h3>Surface mesh</h3></div>
+              <div class="analysis-state-controls"><span id="surface-mesh-state" class="state-pill">Not calculated</span><button id="cancel-surface-mesh" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <p class="help">A probe sphere is rolled over the atoms. Space it cannot enter is solid; the surface separates solid from empty space, and enclosed empty regions are voids. Periodic directions connect across cell boundaries.</p>
+            <div class="paired-fields">
+              <label class="field"><span>Probe sphere radius</span><span class="input-unit"><input id="surface-mesh-radius" type="number" value="" min="0.01" step="0.05" disabled><i>Å</i></span></label>
+              <label class="field"><span>Smoothing level</span><input id="surface-mesh-smoothing" type="number" value="8" min="0" max="100" step="1" disabled></label>
+            </div>
+            <p class="help"><span id="surface-mesh-radius-help">Open a structure for a suggested radius.</span> <button id="surface-mesh-suggest" class="text-button" type="button" disabled>Use suggestion</button></p>
+            <label class="field"><span>Atoms</span><select id="surface-mesh-selection" disabled><option value="all">All atoms</option><option value="visible">Visible atoms</option></select></label>
+            <button id="run-surface-mesh" class="button button-accent tool-run-button" type="button" disabled>Construct surface</button>
+            <div class="analysis-backend-row"><span>Backend</span><output id="surface-mesh-backend">—</output></div>
+            <progress id="surface-mesh-progress" class="analysis-progress" max="1" value="0" aria-label="Surface construction progress" hidden></progress>
+            <p id="surface-mesh-status" class="help" role="status" aria-live="polite">Uses every atom of the frame unless a restriction is chosen, including atoms hidden by slices.</p>
+            <div class="section-heading statistics-subheading"><h3>Display</h3></div>
+            <label class="slice-toggle"><input id="surface-mesh-visible" type="checkbox" checked disabled><span>Show surface</span></label>
+            <label class="slice-toggle"><input id="surface-mesh-caps" type="checkbox" checked disabled><span>Cap the solid at periodic cell faces</span></label>
+            <div class="triple-fields">
+              <label><span>Surface</span><input id="surface-mesh-color" type="color" value="#c9d4e3" disabled></label>
+              <label><span>Interior</span><input id="surface-mesh-interior-color" type="color" value="#b5524a" disabled></label>
+              <label><span>Caps</span><input id="surface-mesh-cap-color" type="color" value="#8fa3bf" disabled></label>
+            </div>
+            <label class="field"><span>Opacity</span><input id="surface-mesh-opacity" type="range" min="0" max="1" step="0.01" value="1" disabled></label>
+            <p id="surface-mesh-display-status" class="help" role="status" aria-live="polite"></p>
+            <div id="surface-mesh-results" class="analysis-statistics-results" hidden>
+              <p id="surface-mesh-summary" class="help"></p>
+              <div class="cluster-table-wrap">
+                <table class="cluster-table surface-mesh-table" aria-label="Surface area, volumes and region counts">
+                  <tbody id="surface-mesh-table-body"></tbody>
+                </table>
+              </div>
+              <div class="statistics-result-heading"><h4>Regions</h4></div>
+              <div class="cluster-table-wrap">
+                <table class="cluster-table" aria-label="Volumes and surface areas of solid regions, voids and exterior space">
+                  <thead><tr><th scope="col">ID</th><th scope="col">Kind</th><th scope="col">Volume (Å³)</th><th scope="col">Area (Å²)</th></tr></thead>
+                  <tbody id="surface-mesh-region-body"></tbody>
+                </table>
+              </div>
+              <p id="surface-mesh-region-caption" class="help"></p>
+              <div class="paired-actions statistics-export-actions">
+                <button id="export-surface-mesh-stl" class="button button-secondary" type="button" disabled>Mesh STL</button>
+                <button id="export-surface-mesh-ply" class="button button-secondary" type="button" disabled>Mesh PLY</button>
+                <button id="export-surface-mesh-obj" class="button button-secondary" type="button" disabled>Mesh OBJ</button>
+              </div>
+              <p class="help">Area is measured on the smoothed surface; volumes come from the tessellation before smoothing. In a fully periodic cell every empty region counts as a void. Exported meshes are the displayed surface: wrapped into the cell at the current periodic origin, with caps if they are shown.</p>
+            </div>
+          </section>
+
           <section id="tool-displacement" class="side-section analysis-section" data-tool-panel="displacement" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">TRAJECTORY MOTION</p><h3>Displacement</h3></div>
@@ -1023,6 +1077,94 @@
             </details>
           </section>
 
+          <section id="tool-scripts" class="side-section scripts-section" data-tool-panel="scripts" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">AUTOMATION</p><h3>Command scripts</h3></div>
+              <span id="script-state" class="state-pill">Idle</span>
+            </div>
+            <p class="help">Run camera, frame, color, slice and image commands, one per line. Scripts use the command names of the keyboard shortcuts and are read as text, never run as code.</p>
+            <div class="script-picker">
+              <label class="field"><span>Script</span><select id="script-list" disabled></select></label>
+              <button id="add-script" class="button button-secondary" type="button" disabled>New</button>
+              <button id="delete-script" class="button button-secondary" type="button" disabled>Delete</button>
+            </div>
+            <label class="field"><span>Name</span><input id="script-name" type="text" maxlength="64" autocomplete="off" spellcheck="false" disabled></label>
+            <label class="field"><span>Commands</span><textarea id="script-text" rows="10" maxlength="20000" placeholder="camera view front&#10;export png front" autocomplete="off" autocapitalize="off" spellcheck="false" wrap="off" disabled></textarea></label>
+            <p id="script-error" class="expression-error" role="alert" hidden></p>
+            <div class="script-actions">
+              <button id="run-script" class="button button-accent" type="button" disabled>Run</button>
+              <button id="stop-script" class="button button-secondary" type="button" disabled>Stop</button>
+              <button id="check-script" class="button button-secondary" type="button" disabled>Check</button>
+            </div>
+            <p id="script-status" class="help" role="status" aria-live="polite">Open a structure to run scripts.</p>
+            <div class="paired-fields script-insert">
+              <label class="field"><span>Insert example</span><select id="script-example" disabled><option value="">Choose…</option></select></label>
+              <button id="insert-script-view" class="button button-secondary" type="button" disabled>Insert current view</button>
+            </div>
+            <div class="paired-actions">
+              <button id="import-script" class="button button-secondary" type="button" disabled>Import text file</button>
+              <button id="export-script" class="button button-secondary" type="button" disabled>Export text file</button>
+            </div>
+            <input id="script-file" type="file" accept=".txt,.alloyscript,text/plain" hidden>
+            <details class="tool-details script-reference">
+              <summary>Command reference</summary>
+              <div id="script-reference" class="script-reference-list"></div>
+              <p class="help">One command per line; # starts a comment; quote names that contain spaces. Angles are in degrees, lengths in the structure's units, frames count from 1. A script holds up to 20,000 characters, runs at most 100,000 commands and 30 minutes, and downloads at most 100 images. Scripts saved in a configuration never start by themselves.</p>
+            </details>
+          </section>
+
+          <section id="tool-movie" class="side-section movie-section" data-tool-panel="movie" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">ANIMATION</p><h3>Camera path and movie</h3></div>
+              <span id="movie-state" class="state-pill">Idle</span>
+            </div>
+            <p class="help">Save views as keyframes; the camera moves smoothly from one to the next. Export the motion, the trajectory, or both as a video.</p>
+            <div id="movie-keyframes" class="movie-keyframes" role="list" aria-label="Camera keyframes"></div>
+            <div class="paired-actions">
+              <button id="add-movie-keyframe" class="button button-accent" type="button" disabled>Add keyframe</button>
+              <button id="clear-movie-keyframes" class="button button-secondary" type="button" disabled>Remove all</button>
+            </div>
+            <label class="field"><span>Motion</span><select id="movie-easing" disabled>
+              <option value="linear">Steady through keyframes</option>
+              <option value="ease">Ease in and out at keyframes</option>
+            </select></label>
+            <button id="preview-movie" class="button button-secondary tool-run-button" type="button" disabled>Preview</button>
+            <label class="field"><span>Trajectory frames during the movie</span><select id="movie-frame-mode" disabled>
+              <option value="current">Keep the displayed frame</option>
+              <option value="rate">Play frames at a rate</option>
+              <option value="fit">Spread frames over the camera path</option>
+              <option value="keyframes">Use the frame saved with each keyframe</option>
+            </select></label>
+            <div id="movie-frame-range" class="triple-fields movie-frame-range" hidden>
+              <label><span>First frame</span><input id="movie-frame-first" type="number" value="1" min="1" step="1" disabled></label>
+              <label><span>Last frame</span><input id="movie-frame-last" type="number" value="1" min="1" step="1" disabled></label>
+              <label><span>Step</span><input id="movie-frame-step" type="number" value="1" min="1" step="1" disabled></label>
+            </div>
+            <label id="movie-frame-rate-field" class="field" hidden><span>Trajectory frames per second</span><input id="movie-frame-rate" type="number" value="10" min="0.01" max="1000" step="any" disabled></label>
+            <div class="section-heading statistics-subheading"><div><h3>Video file</h3></div></div>
+            <div class="paired-fields">
+              <label class="field"><span>Format</span><select id="movie-format" disabled></select></label>
+              <label class="field"><span>Frames per second</span><input id="movie-fps" type="number" value="30" min="1" max="120" step="1" disabled></label>
+            </div>
+            <div class="paired-fields">
+              <label class="field"><span>Quality</span><select id="movie-quality" disabled></select></label>
+              <label class="field"><span>Seek point every</span><span class="input-unit"><input id="movie-keyframe-seconds" type="number" value="2" min="0.1" max="10" step="0.1" disabled><i>s</i></span></label>
+            </div>
+            <label id="movie-bitrate-field" class="field" hidden><span>Bitrate</span><span class="input-unit"><input id="movie-bitrate" type="number" value="12" min="0.1" max="400" step="0.1" disabled><i>Mbit/s</i></span></label>
+            <label class="field"><span>Image size</span><select id="movie-resolution" disabled>
+              <option value="current">Current viewport</option>
+              <option value="1080p">Full HD · 1920 × 1080</option>
+              <option value="4k">4K · 3840 × 2160</option>
+              <option value="2x">2 × current viewport</option>
+              <option value="4x">4 × current viewport</option>
+              <option value="custom">Custom size · set under Display</option>
+            </select></label>
+            <p id="movie-summary" class="help" role="status" aria-live="polite"></p>
+            <button id="export-movie" class="button button-accent tool-run-button" type="button" disabled>Export movie</button>
+            <p id="movie-status" class="help" role="status" aria-live="polite">Open a structure to record a movie.</p>
+            <p class="help">Frames are rendered like PNG exports, with the legend, axes, labels, slices and ambient occlusion chosen under Display, and always with the background. The image size is shared with the image exports.</p>
+          </section>
+
           <section id="tool-cna" class="side-section analysis-section" data-tool-panel="cna" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">CRYSTAL STRUCTURE</p><h3>Common neighbor analysis</h3></div>
@@ -1053,6 +1195,10 @@
               <label class="field"><span>Point spacing · neighbor units</span><input id="dxa-point-interval" type="number" value="2.5" min="0" step="0.1" disabled></label>
             </div>
             <label class="slice-toggle"><input id="dxa-perfect-only" type="checkbox" disabled><span>Perfect dislocations only</span></label>
+            <div class="paired-fields">
+              <label class="slice-toggle"><input id="dxa-defect-mesh" type="checkbox" disabled><span>Output defect mesh</span></label>
+              <label class="field"><span>Mesh smoothing level</span><input id="dxa-defect-mesh-smoothing" type="number" value="8" min="0" max="100" step="1" disabled></label>
+            </div>
             <button id="run-dxa" class="button button-accent tool-run-button" type="button" disabled>Extract dislocations</button>
             <p class="help">Experimental. CPU threads are chosen automatically. Select the crystal surrounding the defects. Thin periodic cells may require Replicate atoms for analysis.</p>
             <p id="dxa-status" class="help" role="status" aria-live="polite">Extract lines and Burgers vectors from the complete structure.</p>
@@ -1066,6 +1212,23 @@
                 <button id="export-dxa-lines" class="button button-secondary" type="button" disabled>Dislocation lines CSV</button>
               </div>
               <p class="help">Line visibility is independent of atom visibility. Length and density describe the analyzed cell before display replication or slicing.</p>
+              <div id="dxa-defect-mesh-controls" hidden>
+                <div class="section-heading statistics-subheading"><h3>Defect mesh</h3></div>
+                <label class="slice-toggle"><input id="dxa-defect-mesh-visible" type="checkbox" checked disabled><span>Show defect mesh</span></label>
+                <label class="slice-toggle"><input id="dxa-defect-mesh-caps" type="checkbox" checked disabled><span>Cap the defect regions at periodic cell faces</span></label>
+                <div class="triple-fields">
+                  <label><span>Crystal side</span><input id="dxa-defect-mesh-color" type="color" value="#d9c06a" disabled></label>
+                  <label><span>Defect side</span><input id="dxa-defect-mesh-interior-color" type="color" value="#c7ae5c" disabled></label>
+                  <label><span>Caps</span><input id="dxa-defect-mesh-cap-color" type="color" value="#b39b52" disabled></label>
+                </div>
+                <label class="field"><span>Opacity</span><input id="dxa-defect-mesh-opacity" type="range" min="0" max="1" step="0.01" value="1" disabled></label>
+                <p id="dxa-defect-mesh-summary" class="help" role="status" aria-live="polite"></p>
+                <div class="paired-actions statistics-export-actions">
+                  <button id="export-dxa-defect-mesh-stl" class="button button-secondary" type="button" disabled>Defect mesh STL</button>
+                  <button id="export-dxa-defect-mesh-ply" class="button button-secondary" type="button" disabled>Defect mesh PLY</button>
+                </div>
+                <p class="help">The defect mesh encloses the regions that are not the reference crystal and were not resolved into dislocation lines: grain boundaries, stacking faults, precipitates and surfaces. The space outside a free surface is a defect region, so a free surface shows its defect side.</p>
+              </div>
             </div>
           </section>
 
@@ -1104,6 +1267,50 @@
             </div>
             <p class="help">Matches local polyhedra to crystal templates. Fits above the RMSD threshold are Other; 0 disables this threshold. Diamond and graphene templates use additional neighbor shells.</p>
             <p id="ptm-status" class="help" role="status" aria-live="polite">Results include structure type, RMSD, nearest-neighbor distance, lattice orientation and binary chemical ordering.</p>
+          </section>
+
+          <section id="tool-grains" class="side-section analysis-section grain-section" data-tool-panel="grains" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">POLYCRYSTALS</p><h3>Grain segmentation</h3></div>
+              <div class="analysis-state-controls"><span id="grains-state" class="state-pill">Not calculated</span><button id="cancel-grains" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <p class="help">Groups neighboring atoms of similar lattice orientation into grains, using the structure types and orientations from PTM. Grain 1 is the largest; atoms in no grain have ID 0.</p>
+            <label class="field"><span>Algorithm</span><select id="grains-algorithm" disabled>
+              <option value="automatic">Graph clustering (automatic)</option>
+              <option value="manual">Graph clustering (manual)</option>
+              <option value="mst">Minimum spanning tree</option>
+            </select></label>
+            <div class="paired-fields">
+              <label class="field"><span id="grains-threshold-label">Merge threshold (automatic)</span><span class="input-unit"><input id="grains-threshold" type="number" step="0.1" placeholder="Calculated" disabled><i id="grains-threshold-unit">log d</i></span></label>
+              <label class="field"><span>Minimum grain size</span><span class="input-unit"><input id="grains-min-size" type="number" value="100" min="1" step="1" disabled><i>atoms</i></span></label>
+            </div>
+            <label class="slice-toggle"><input id="grains-orphans" type="checkbox" checked disabled><span>Adopt orphan atoms into the nearest grain</span></label>
+            <label class="slice-toggle"><input id="grains-interfaces" type="checkbox" checked disabled><span>Handle coherent interfaces and stacking faults</span></label>
+            <button id="run-grains" class="button button-accent tool-run-button" type="button" disabled>Find grains</button>
+            <div class="analysis-backend-row"><span>Backend</span><output id="grains-backend">—</output></div>
+            <progress id="grains-progress" class="analysis-progress" max="1" value="0" aria-label="Grain segmentation progress" hidden></progress>
+            <p id="grains-status" class="help" role="status" aria-live="polite">Uses the templates and RMSD threshold chosen in PTM, on the complete structure including hidden atoms.</p>
+            <div id="grains-results" class="analysis-statistics-results" hidden>
+              <p id="grains-summary" class="help"></p>
+              <div class="grain-color-actions">
+                <button id="grains-color-id" class="button button-secondary" type="button" disabled>Color by grain</button>
+                <button id="grains-color-ipf" class="button button-secondary" type="button" disabled>Orientation · IPF</button>
+                <button id="grains-color-rodrigues" class="button button-secondary" type="button" disabled>Orientation · RGB</button>
+              </div>
+              <div class="statistics-result-heading"><h4>Merge distances</h4><button id="export-grain-merges" class="button button-secondary statistics-export-button" type="button" disabled>Plot CSV</button></div>
+              <div id="grains-chart" class="statistics-chart grain-chart"></div>
+              <p id="grains-chart-caption" class="help"></p>
+              <div class="statistics-result-heading"><h4>Grains</h4><button id="export-grain-table" class="button button-secondary statistics-export-button" type="button" disabled>Table CSV</button></div>
+              <div class="cluster-table-wrap">
+                <table class="cluster-table grain-table" aria-label="Grain sizes, structure types and mean orientations">
+                  <thead><tr><th scope="col">ID</th><th scope="col">Atoms</th><th scope="col">Structure</th><th scope="col">Orientation</th></tr></thead>
+                  <tbody id="grains-table-body"></tbody>
+                </table>
+              </div>
+              <p id="grains-table-caption" class="help"></p>
+              <button id="grains-show-more" class="button button-secondary tool-run-button" type="button" hidden>Show more</button>
+              <p class="help">An orientation is the rotation that takes the ideal lattice into the simulation frame, averaged over the grain. Orphan atoms are atoms left without a grain, mostly in grain boundaries; adoption gives each to the grain reached by the shortest chain of neighbor bonds.</p>
+            </div>
           </section>
 
           <section id="tool-strain" class="side-section analysis-section" data-tool-panel="strain" hidden>

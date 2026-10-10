@@ -62,6 +62,21 @@ export function validateDxaParameters(parameters = {}) {
   return settings;
 }
 
+/** OVITO's default number of defect-mesh smoothing iterations. */
+export const DXA_DEFECT_MESH_SMOOTHING = 8;
+
+/** The optional defect mesh is requested per calculation, outside the DXA
+ * parameters, so the line network and its settings are identical with and
+ * without it. Returns null (no mesh) or { smoothingLevel }. */
+export function normalizeDefectMeshRequest(request) {
+  if (request === undefined || request === null || request === false) return null;
+  const smoothingLevel = request === true ? DXA_DEFECT_MESH_SMOOTHING : request.smoothingLevel ?? DXA_DEFECT_MESH_SMOOTHING;
+  if (!Number.isInteger(smoothingLevel) || smoothingLevel < 0 || smoothingLevel > 100) {
+    throw new Error('DXA defect mesh smoothing must be an integer between 0 and 100.');
+  }
+  return { smoothingLevel };
+}
+
 export function classifyBurgersVector(vector, lattice, tolerance = 1e-3) {
   if (!DXA_FAMILIES[lattice]) throw new Error('Unknown DXA crystal lattice.');
   if (vector?.length !== 3 || !Array.from(vector).every(Number.isFinite)) throw new Error('A Burgers vector requires three finite crystal coordinates.');
@@ -429,6 +444,27 @@ async function initializeDxa({ atomCount = 1, workerCount: requestedWorkers,
   return kernelMetadata(module, workerCount);
 }
 
+/** Run another whole-frame analysis in the DXA kernel: the same heap, pthread
+ * pool, thread limits and cancellation word. `task` receives the module and
+ * the prepared thread count, and must leave the native workspace released.
+ */
+export async function runDxaKernelTask({ atomCount, workerCount, memoryBudgetBytes, onProgress, onControl,
+  resetCancellation, signal, startupTimeoutMs } = {}, task) {
+  if (activeDxaCalculation) throw new Error('A DXA calculation is already using the native workspace.');
+  activeDxaCalculation = true;
+  try {
+    const ready = await initializeDxa({ atomCount, workerCount, memoryBudgetBytes, onProgress, onControl,
+      resetCancellation, signal, startupTimeoutMs });
+    const module = await getKernel();
+    checkSignal(signal);
+    module._alloy_dxa_set_threads(ready.workerCount);
+    return await task(module, { workerCount: ready.workerCount,
+      checkCancellation: () => { checkSignal(signal); checkDxaCancellation(module); },
+      canceled: () => Boolean(module.HEAP32[module._alloy_dxa_cancel_ptr() / 4]),
+      metadata: () => ({ ...kernelMetadata(module, ready.workerCount), threaded: Boolean(module.dxaShared) }) });
+  } finally { activeDxaCalculation = false; }
+}
+
 /** Explicit shutdown for benchmarks and clients that are themselves closing.
  * Frame changes, replication and normal cancellation retain this one heap.
  */
@@ -456,9 +492,11 @@ export async function calculateDxa(frame, parameters = {}, options = {}) {
 }
 
 async function performDxaCalculation(frame, parameters = {}, { onProgress = () => {}, onControl = () => {}, resetCancellation = true,
-  memoryBudgetBytes, workerCount: requestedWorkers, signal, startupTimeoutMs, runCpuStage, yieldBetweenStages = false } = {}) {
+  memoryBudgetBytes, workerCount: requestedWorkers, signal, startupTimeoutMs, runCpuStage, yieldBetweenStages = false,
+  defectMesh: defectMeshRequest } = {}) {
   checkSignal(signal);
   const settings = validateDxaParameters(parameters), count = validateDxaFrame(frame);
+  const defectMesh = normalizeDefectMeshRequest(defectMeshRequest);
   const memoryEstimateBytes = preflightDxaMemory(count, memoryBudgetBytes);
   let workerCount = dxaWorkerCount(count, requestedWorkers);
   const startedAt = performance.now();
@@ -585,6 +623,8 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       } catch (error) { fallback('tetrahedra', error); }
       finally { if (regionsPointer) module._free(regionsPointer); }
     }
+    // The request persists in the retained module; state it for every run.
+    module._alloy_dxa_defect_mesh(defectMesh ? 1 : 0, defectMesh?.smoothingLevel ?? 0);
     const output = module._alloy_dxa_finish();
     if (!output) throw nativeDxaError(module);
     checkSignal(signal);
@@ -599,6 +639,7 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
       raw.atomStructureTypes = module.HEAPU8.slice(pointer, pointer + length);
       delete raw.atomStructureTypesBinary;
     }
+    if (raw.defectMesh) raw.defectMesh = readDefectMesh(module, raw.defectMesh);
     const result = normalizeDxaResult(raw, frame.cell, settings, count);
     hostTimings.collectMs = performance.now() - hostStarted;
     // A completed extraction has compiled this code path and queued its
@@ -646,6 +687,17 @@ function openDxaCpuSnapshot(module, budgetBytes, atomCount) {
     return { snapshot: { atomCount, vertexCount, tetrahedronCount, edgeCount, transitionCount,
       alpha: module._alloy_dxa_worker_alpha(), arrays }, release };
   } catch (error) { release(); throw error; }
+}
+
+/** Copy the defect mesh out of the native heap. Its faces are oriented as
+ * OVITO's interface mesh: normals point out of the good crystal, into the
+ * defect region (OVITO displays it with reversed orientation). */
+function readDefectMesh(module, summary) {
+  const vertexCount = module._alloy_dxa_defect_vertex_count(), triangleCount = module._alloy_dxa_defect_triangle_count();
+  if (vertexCount !== summary.vertexCount || triangleCount !== summary.triangleCount) throw new Error('DXA returned an inconsistent defect mesh.');
+  const vertices = module._alloy_dxa_defect_vertices_ptr() / 8, triangles = module._alloy_dxa_defect_triangles_ptr() / 4;
+  return { ...summary, vertices: module.HEAPF64.slice(vertices, vertices + vertexCount * 3),
+    triangles: module.HEAPU32.slice(triangles, triangles + triangleCount * 3) };
 }
 
 function nativeDxaError(module) {

@@ -1,4 +1,5 @@
-import { DXA_CODE_WARMUP_MIN_ATOMS, dxaWorkerCount, preflightDxaMemory, validateDxaFrame, validateDxaParameters } from './dxa.js';
+import { DXA_CODE_WARMUP_MIN_ATOMS, dxaWorkerCount, normalizeDefectMeshRequest, preflightDxaMemory, validateDxaFrame, validateDxaParameters } from './dxa.js';
+import { validateSurfaceMask, validateSurfaceMeshParameters } from './surface-mesh.js';
 import { CpuBudget } from './cpu-budget.js';
 
 const COPY_CHUNK_VALUES = 512 * 1024;
@@ -6,6 +7,8 @@ const COPY_CHUNK_VALUES = 512 * 1024;
 // 4,096 atoms up to these caps and the CPU budget.
 const DEFAULT_STAGE_WORKER_LIMITS = Object.freeze({ local: 8, tetrahedra: 4 });
 const abortError = () => new DOMException('The DXA calculation was cancelled.', 'AbortError');
+// Warmups are background tasks; DXA and surface jobs run in the foreground.
+const foreground = task => task.type !== 'warmup';
 
 /** One coordinator and one growable Wasm heap per client. Shared-memory jobs
  * cancel cooperatively and keep their pool; static-host jobs must terminate
@@ -86,11 +89,12 @@ export class DxaClient {
     return this.enqueue({ type: 'warmup', warmCode: true, count: atomCount, workerCount, signal, onProgress }).then(result);
   }
 
-  analyze(frame, parameters = {}, { signal, onProgress = () => {}, workerCount = this.workerCount } = {}) {
+  analyze(frame, parameters = {}, { signal, onProgress = () => {}, workerCount = this.workerCount, defectMesh } = {}) {
     if (signal?.aborted || this.closed) return Promise.reject(abortError());
-    let settings, count, workers;
+    let settings, count, workers, defectMeshRequest;
     try {
       settings = validateDxaParameters(parameters);
+      defectMeshRequest = normalizeDefectMeshRequest(defectMesh);
       count = validateDxaFrame(frame, { validateCoordinates: false });
       preflightDxaMemory(count, this.memoryBudgetBytes);
       workers = this.requestedWorkers(count, workerCount);
@@ -106,7 +110,23 @@ export class DxaClient {
       && Math.max(...Object.values(stageWorkerCounts)) > 1
       && typeof this.cpuStageBackend?.analyzeDxaLocal === 'function' && typeof this.cpuStageBackend?.analyzeDxaTetrahedra === 'function';
     return this.enqueue({ type: 'analyze', frame, parameters: settings, count, workerCount: workers,
-      stageWorkerCounts, cpuOffload, signal, onProgress });
+      stageWorkerCounts, cpuOffload, signal, onProgress, defectMesh: defectMeshRequest });
+  }
+
+  /** Alpha-shape surface construction in the same Worker, heap and pthread
+   * pool as DXA. `mask` restricts the tessellation to nonzero atoms. Jobs of
+   * both kinds run one after the other. */
+  surface(frame, parameters = {}, { mask, signal, onProgress = () => {}, workerCount = this.workerCount } = {}) {
+    if (signal?.aborted || this.closed) return Promise.reject(abortError());
+    let settings, count, workers, selection;
+    try {
+      settings = validateSurfaceMeshParameters(parameters);
+      count = validateDxaFrame(frame, { validateCoordinates: false });
+      selection = validateSurfaceMask(mask, count);
+      preflightDxaMemory(count, this.memoryBudgetBytes);
+      workers = this.requestedWorkers(count, workerCount);
+    } catch (error) { return Promise.reject(error); }
+    return this.enqueue({ type: 'surface', frame, mask: selection, parameters: settings, count, workerCount: workers, signal, onProgress });
   }
 
   enqueue(values) {
@@ -115,7 +135,7 @@ export class DxaClient {
     task.abort = () => this.cancel(task);
     task.signal?.addEventListener('abort', task.abort, { once: true });
     this.pending.set(task.id, task); this.queue.push(task);
-    if (task.type === 'analyze' && this.current?.type === 'warmup' && !this.current.settled) this.cancel(this.current);
+    if (foreground(task) && this.current?.type === 'warmup' && !this.current.settled) this.cancel(this.current);
     this.pump();
     return task.promise;
   }
@@ -134,7 +154,7 @@ export class DxaClient {
         if (!data.control) this.singleThreadOnly = true;
         if (task.settled) {
           if (data.control) this.setCancellation(1);
-          else if (task.type === 'analyze' && !task.cpuStageWaiting) { this.terminateWorker(); this.retire(task); }
+          else if (foreground(task) && !task.cpuStageWaiting) { this.terminateWorker(); this.retire(task); }
         }
         return;
       }
@@ -191,8 +211,8 @@ export class DxaClient {
 
   pump() {
     if (this.current || this.closed) return;
-    const foreground = this.queue.findIndex(task => task.type === 'analyze');
-    const task = this.queue.splice(foreground < 0 ? 0 : foreground, 1)[0];
+    const first = this.queue.findIndex(foreground);
+    const task = this.queue.splice(first < 0 ? 0 : first, 1)[0];
     if (!task) return;
     if (task.settled) { this.pump(); return; }
     this.current = task;
@@ -219,7 +239,7 @@ export class DxaClient {
       if (task.settled || this.current !== task) { this.retire(task); return; }
       let frame;
       const transfer = [];
-      if (task.type === 'analyze') {
+      if (foreground(task)) {
         const source = task.frame.fractional ?? task.frame.positions;
         const coordinates = new Float64Array(source.length);
         for (let offset = 0; offset < source.length; offset += COPY_CHUNK_VALUES) {
@@ -233,13 +253,16 @@ export class DxaClient {
           cell: { vectors: Float64Array.from(task.frame.cell.vectors), origin: Float64Array.from(task.frame.cell.origin), pbc: Array.from(task.frame.cell.pbc, Boolean) } };
         transfer.push(coordinates.buffer, frame.cell.vectors.buffer, frame.cell.origin.buffer);
       }
+      const mask = task.mask ? task.mask.slice() : undefined;
+      if (mask) transfer.push(mask.buffer);
       const worker = this.ensureWorker();
       // Only the host clears the retained cancellation word. Resetting it in
       // the receiving Worker could erase an abort that raced with delivery.
       this.setCancellation(0);
       worker.postMessage({ id: task.id, type: task.type, frame, atomCount: task.count,
         parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes, workerCount: task.workerCount,
-        cpuOffload: Boolean(task.cpuOffload), warmCode: Boolean(task.warmCode) }, transfer);
+        cpuOffload: Boolean(task.cpuOffload), warmCode: Boolean(task.warmCode),
+        ...(task.defectMesh ? { defectMesh: task.defectMesh } : {}), ...(mask ? { mask } : {}) }, transfer);
       task.dispatched = true;
     } catch (error) {
       if (!task.settled) this.settle(task, error);
@@ -332,7 +355,7 @@ export class DxaClient {
   settle(task, error, result) {
     if (task.settled) return;
     task.settled = true; task.signal?.removeEventListener('abort', task.abort); this.pending.delete(task.id);
-    task.frame = null;
+    task.frame = task.mask = null;
     if (error) task.reject(error); else task.resolve(result);
   }
 

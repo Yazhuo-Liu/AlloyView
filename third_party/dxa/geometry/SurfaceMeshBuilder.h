@@ -97,6 +97,13 @@ public:
     int countManifolds(edge_index e) const { return _mesh->topo.countManifolds(e); }
     const std::vector<edge_index>& firstFaceEdges() const { return _mesh->topo.firstFaceEdges(); }
     int makeManifold();
+    /// Returns the vector of a half-edge, taking the periodic domain into account (upstream SurfaceMeshReadAccess).
+    Vector3 edgeVector(edge_index edge) const {
+        Vector3 delta = _mesh->points[vertex2(edge)] - _mesh->points[vertex1(edge)];
+        return domain() ? domain()->wrapVector(delta) : delta;
+    }
+    /// Fairs a closed mesh (upstream SurfaceMeshBuilder::smoothMesh).
+    bool smoothMesh(int numIterations, ProgressingTask& task, FloatType k_PB = FloatType(0.1), FloatType lambda = FloatType(0.5));
     template<typename Range> vertex_index createVerticesRange(const Range& coords) {
         vertex_index first = vertexCount();
         for(const Point3& point : coords) { _mesh->topo.createVertex(); _mesh->points.push_back(point); }

@@ -76,7 +76,7 @@ export function createGlobalAttributeSource({ getFrame, getFrameIndex = () => 0,
     if (!frame) { registry = null; signature = []; return null; }
     const cell = referenceCell(), network = getDxaNetwork(), results = frame.atomeyeResults ?? {};
     const next = [frame, getFrameIndex(), getFrameCount(), cell, strainReferenceFrame, network, frame.timestep, frame.properties,
-      results.clusters, results.wignerSeitz, ...(frame.properties ?? []).flatMap(property => [property, property.data, property.analysisKey])];
+      results.clusters, results.wignerSeitz, results.grains, results.surfaceMesh, ...(frame.properties ?? []).flatMap(property => [property, property.data, property.analysisKey])];
     if (!registry || next.length !== signature.length || next.some((entry, index) => !Object.is(entry, signature[index]))) {
       signature = next;
       registry = createAttributeRegistry({ ...contextFor(frame, getFrameIndex()), referenceCell: cell, dxaNetwork: network });

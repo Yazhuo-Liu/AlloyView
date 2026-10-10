@@ -1,5 +1,5 @@
 import { importedVectorComponents } from '../vector-settings.js';
-import { ORIENTATION_COLOR_MODES, ptmOrientationSource } from './orientation-colors.js';
+import { ORIENTATION_COLOR_MODES, grainOrientationSource, ptmOrientationSource } from './orientation-colors.js';
 
 export const BUILTIN_SCALAR_COLOR_MODES = Object.freeze([
   ...['x', 'y', 'z'].map(axis => `builtin:position:${axis}`),
@@ -33,6 +33,8 @@ export function initialColorQuantities(frame) {
     ...(velocity ? [{ value: 'builtin:velocity:magnitude', label: `Speed magnitude${velocity[0].unit && velocity.every(property => property.unit === velocity[0].unit) ? ` [${velocity[0].unit}]` : ''}` }] : []),
     ...(ptmOrientationSource(frame) ? [{ value: 'builtin:ptm:ipf', label: 'PTM orientation · inverse pole figure' },
       { value: 'builtin:ptm:quaternion', label: 'PTM orientation · Rodrigues RGB' }] : []),
+    ...(grainOrientationSource(frame) ? [{ value: 'builtin:grains:ipf', label: 'Grain orientation · inverse pole figure' },
+      { value: 'builtin:grains:quaternion', label: 'Grain orientation · Rodrigues RGB' }] : []),
     ...frame.properties.map(property => ({ value: `property:${property.name}`,
       label: `${velocityLabels.get(property.name) ?? property.displayName ?? property.name}${property.unit ? ` [${property.unit}]` : ''}` })),
   ];

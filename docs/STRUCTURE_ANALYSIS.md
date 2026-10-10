@@ -339,7 +339,13 @@ it is not a CNA alias or a distance-only heuristic. For scientific use cite
 Larsen, Schmidt & Schiøtz, *Modell. Simul. Mater. Sci. Eng.* **24**, 055007 (2016),
 [doi:10.1088/0965-0393/24/5/055007](https://doi.org/10.1088/0965-0393/24/5/055007).
 
-`wasm/ptm.cpp` provides the integration ABI and neighbor callback. The generated
+`wasm/ptm.cpp` provides the integration ABI and neighbor callback. Besides the
+fit of one atom (`alloy_ptm_atom`), it returns the neighbors of the template
+matched by the last fit, in template order (`alloy_ptm_neighbors`), which
+[grain segmentation](features/grains.md) uses for its neighbor graph. The
+build maps the checkout directory to `.` (`-ffile-prefix-map`,
+`-fmacro-prefix-map`), so the binary does not depend on where it was built.
+The generated
 `src/analysis/ptm-kernel.mjs` / `.wasm` are included, so ordinary development,
 tests and static-site builds do not require a compiler. After changing C++, run
 `npm run build:ptm` with Emscripten (validated: Debian 3.1.69 / LLVM 19), then

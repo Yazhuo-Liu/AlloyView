@@ -6,6 +6,7 @@ const POSITION_LABELS = { 'top-left': 'Top left', top: 'Top', 'top-right': 'Top 
   right: 'Right', 'bottom-left': 'Bottom left', bottom: 'Bottom', 'bottom-right': 'Bottom right' };
 const HINTS = new Map([['CNA', 'Calculate CNA for this frame.'], ['PTM', 'Calculate PTM for this frame.'], ['DXA', 'Calculate DXA for this frame.'],
   ['Clusters', 'Calculate clusters for this frame.'], ['WignerSeitz', 'Calculate Wigner–Seitz defects for this frame.'],
+  ['Grains', 'Find grains for this frame.'],
   ['Strain', 'The strain reference frame is being read, or it is beyond the frames indexed so far.'],
   ['Timestep', 'This file stores no timestep.'], ['Mean', 'No numeric property with this name in this frame.']]);
 const CONTROL_IDS = ['text-label-list', 'add-text-label', 'delete-text-label', 'text-label-enabled', 'text-label-text', 'text-label-position',

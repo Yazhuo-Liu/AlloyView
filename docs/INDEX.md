@@ -23,17 +23,21 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 | Measure bond lengths, angles and local orientational order | [Bond distributions and Q4/Q6](features/bond-statistics.md) |
 | Inspect atomic volumes and face geometry | [Voronoi analysis](features/voronoi.md) |
 | Find connected groups of atoms, their sizes and centers | [Cluster analysis](features/clusters.md) |
+| Find the grains of a polycrystal and their orientations | [Grain segmentation](features/grains.md) |
 | Profile or map density and properties across the cell | [Spatial binning](features/binning.md) |
 | Plot strain, phase fractions or means against time | [Time series](features/time-series.md) |
 | Stamp timestep, strain or phase fractions on images | [Text labels](features/text-labels.md) |
+| Automate views, frames and image downloads with a text script | [Command scripts](features/scripts.md) |
+| Animate the camera and export an MP4 or WebM video | [Camera path and movie](features/movies.md) |
 | Attach numeric data from separate atom files | [External properties](features/external-properties.md) |
 | Compute properties or select atoms with formulas | [Expressions](features/expressions.md) |
 | Measure motion against a trajectory frame | [Displacement](features/displacement.md) |
 | Count vacancies, interstitials and antisites | [Wigner–Seitz defects](features/wigner-seitz.md) |
+| Find free surfaces and voids, and measure areas and volumes | [Surface mesh](features/surface-mesh.md) |
 | Unwrap, smooth or trace atom paths through a trajectory | [Trajectory tools](features/trajectory-tools.md) |
 | Count and classify neighbor environments | [Coordination](features/coordination.md), [CNA](features/cna.md), [PTM](features/ptm.md) |
 | Inspect disorder and deformation | [Central symmetry](features/centrosymmetry.md), [Ideal lattice strain](features/ideal-strain.md), [Reference frame strain](features/reference-strain.md), [Local shear](features/local-shear.md) |
-| Extract and display dislocation networks | [Dislocation analysis (DXA)](features/dislocations.md) |
+| Extract and display dislocation networks and the defect mesh | [Dislocation analysis (DXA)](features/dislocations.md) |
 | Measure geometry and distributions | [Details](features/selection.md), [Statistics and RDF](features/statistics.md) |
 | Save settings and export figures | [Configuration](features/configuration.md), [Display exports](features/display.md#image-and-trajectory-exports) |
 

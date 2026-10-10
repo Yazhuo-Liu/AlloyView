@@ -80,4 +80,14 @@ The native modal dialog confines Tab focus, supports Escape and restores focus
 to the opener. It follows the theme and adapts to narrow screens. The dialog and
 gear indicator are HTML overlays and do not appear in exported images.
 
+## Command names in scripts
+
+Every command of the dialog has a name such as `camera.yaw-left`,
+`camera.view-top`, `frames.next`, `slice.next` or `interface.theme`. A
+[command script](scripts.md) runs a command by writing its name on a line, so
+shortcuts and scripts share one vocabulary. The Scripts panel's **Command
+reference** lists the names. In a script the step size comes from the script's
+own `gear` command (5 at the start), not from the keyboard gear, and rebinding
+a key does not change a name.
+
 Implementation: `src/keyboard-commands.js`, `src/keyboard-controls.js`.

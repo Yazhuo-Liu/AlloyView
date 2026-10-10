@@ -62,11 +62,33 @@ and private worker heaps are bounded separately from the global topology heap.
 Cancellation and session disposal retain warmed modules where possible.
 
 It does not classify defective atoms and substitute their bonds for dislocation
-lines. Defect surface output is not currently returned by the entry point.
+lines. On request (`alloy_dxa_defect_mesh`), `alloy_dxa_finish` also returns
+upstream's defect mesh: `InterfaceMesh::generateDefectMesh()` after tracing,
+then `SurfaceMeshBuilder::smoothMesh()`, before the lines are smoothed. The
+request is off by default and only reads the traced network.
+
+Two adaptations support it. `geometry/SurfaceMeshBuilder` restores upstream's
+`smoothMesh()` (Taubin smoothing, from
+`src/ovito/mesh/surface/SurfaceMeshBuilder.cpp`) and `edgeVector()` (from
+`SurfaceMeshReadAccess.h`) on the headless mesh storage. In
+`InterfaceMesh.cpp`, the `OVITO_ASSERT(false)` for a defect mesh that cannot
+be closed is replaced by an `Exception`: assertions are live in the Wasm build
+and would abort the module, whereas the entry point reports the open mesh and
+keeps the dislocation lines. The file is otherwise identical to upstream.
+
+`wasm/surface.cpp` reuses `geometry/` for AlloyView's alpha-shape surface
+analysis (after upstream's `ConstructSurfaceModifier` alpha-shape engine):
+`DelaunayTessellation`, the one-sided `ManifoldConstructionHelper`,
+`makeManifold()` and `smoothMesh()`. Its filled and empty regions follow the
+definitions of upstream's `formFilledRegions()` and `formEmptyRegions()` with
+AlloyView's own bookkeeping; see `docs/features/surface-mesh.md`. It is
+compiled into both DXA binaries and does not change the DXA code path.
 
 `UPSTREAM_SHA256SUMS` records the original core files before the headless port.
 `SHA256SUMS` verifies the vendored and adapted sources used by `wasm/build-dxa.sh`.
 Rebuild with Emscripten by running `bash wasm/build-dxa.sh` from the repository.
+The build maps the checkout directory to `.` in embedded source paths
+(`-ffile-prefix-map`), so the binaries do not depend on where it is checked out.
 
 This version predates OVITO 3.15's low-c/a HCP correction. HCP and diamond retain
 the capabilities and limitations of the pinned release; new datasets require

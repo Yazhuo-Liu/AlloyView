@@ -32,6 +32,47 @@ lines independently of these atom filters.
 removing other analyses. Configuration export/import includes DXA processing
 and display settings; restoring an enabled tool recomputes its network.
 
+## Defect mesh
+
+**Output defect mesh** adds OVITO's *defect mesh* to the extraction: the
+closed surface around every region that is not the reference crystal and was
+not resolved into a dislocation line. It shows grain boundaries, stacking
+faults, precipitates of another structure and free surfaces. It is off by
+default, so extractions run and time as before unless it is switched on.
+
+The mesh is built from DXA's interface mesh after tracing: faces swept by
+Burgers circuits are removed, the openings at dislocation ends are closed
+with fans to the line ends, and the result is smoothed with **Mesh smoothing
+level** iterations of the Taubin filter (default 8, as in OVITO; λ = 0.5,
+pass-band 0.1) before the lines themselves are smoothed. The dislocation
+network, Burgers vectors and atom labels are the same with and without the
+mesh: with one thread they are bit-identical, on both kernels and through the
+Worker. Generating it takes 5–14 ms for the 28,800-atom HEA example (4,384
+triangles) and for the 60,229-atom Fe loop, within the run-to-run variation
+of the extraction.
+
+Switching the mesh on, or changing its smoothing level, starts a new
+extraction; switching it off only hides it. **Show defect mesh**, the
+**Crystal side**, **Defect side** and **Caps** colors, **Opacity** and **Cap
+the defect regions at periodic cell faces** only change the display. As in
+OVITO, the defect region is the solid side of the mesh: it is drawn and capped
+like a [surface mesh](surface-mesh.md#display-and-periodic-caps), follows the
+periodic display origin, crystal drag, display replication and slices, and
+appears in the second view and image exports. The space outside a free
+surface is a defect region too, so a free surface shows its defect side and,
+because that region is unbounded in a cell with open boundaries, has no caps.
+**Defect mesh STL** and **Defect mesh PLY** save the displayed mesh.
+
+The panel reports the triangle count and surface area; the area is also the
+`DXA.defect_mesh_area` global attribute and the `defect_mesh_area` row of the
+statistics summary and the family statistics CSV. A frame whose defect
+regions were all resolved into lines, such as the Fe loop example, has no
+defect mesh. If the kernel cannot close the mesh, the panel says so and the
+dislocation result is kept. The configuration stores the request and style in
+`settings.extensions.dxa.defectMesh` (`enabled`, `smoothingLevel` 0–100,
+`visible`, `caps`, `opacity`, `color`, `interiorColor`, `capColor`), written
+only once the mesh has been used; older recipes leave it off.
+
 ## Algorithm
 
 DXA identifies ordered local lattice environments and their crystal orientation
@@ -247,7 +288,8 @@ reuse until backend shutdown or page closure.
 [CPU execution](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/dxa.js),
 [private stage scheduling](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/dxa-cpu-pool.js),
 [private native stage kernels](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/dxa-cpu-stages.js),
-[line renderer](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/dislocation-layer.js).
+[line renderer](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/dislocation-layer.js),
+[defect mesh display](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/surface-mesh-layer.js).
 The [source review](../DXA_REVIEW.md) records the algorithm, pinned upstream
 source, per-file MIT option and Geogram BSD license. Preserve all upstream
 notices when rebuilding the numerical module.

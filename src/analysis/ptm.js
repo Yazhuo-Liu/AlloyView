@@ -1,7 +1,7 @@
 import createPtm from './ptm-kernel.mjs';
 import { NeighborSearch, atomRange } from './neighbors.js';
 import { STRUCTURE_TYPES } from './cna.js';
-import { cellFaceHeights } from '../data/model.js';
+import { cellFaceHeights, invert3 } from '../data/model.js';
 
 export const PTM_MAX_NEIGHBORS = 18;
 
@@ -29,6 +29,14 @@ export const PTM_ORDERING_TYPES = Object.freeze([
 export const PTM_FIELDS = Object.freeze({ structures: [Uint8Array, 1], rmsd: [Float32Array, 1],
   scales: [Float64Array, 1], deformation: [Float64Array, 9], distances: [Float32Array, 1],
   orientations: [Float64Array, 4], orderings: [Uint8Array, 1] });
+// Optional neighbor lists for grain segmentation, as OVITO's PTMNeighborFinder
+// reports them: the neighbors of a matched atom in template order (12 FCC/HCP/
+// ICO, 14 BCC, 6 SC, 16 diamond, 9 graphene), or the nearest eight of an
+// unmatched or rejected atom, by increasing distance.
+export const PTM_TEMPLATE_NEIGHBORS = 16;
+export const PTM_UNMATCHED_NEIGHBORS = 8;
+export const PTM_NEIGHBOR_LIST_FIELDS = Object.freeze({ neighborCounts: [Uint8Array, 1],
+  neighborIndices: [Uint32Array, PTM_TEMPLATE_NEIGHBORS] });
 // One packed kernel record: see alloy_ptm_atom in wasm/ptm.cpp.
 const PTM_RECORD_DOUBLES = 18;
 
@@ -106,9 +114,14 @@ export async function warmupPtm({ onPhase = () => {} } = {}) {
   return { warmed: true, kernelReused, wasmMemoryBytes: module.HEAPU8.byteLength };
 }
 
+/** `neighborLists: true` adds PTM_NEIGHBOR_LIST_FIELDS and `neighborSpan`, the
+ * largest |fractional component| of any listed neighbor vector along each
+ * periodic cell vector. A list is unambiguous only while that stays below ½.
+ * The seven PTM_FIELDS outputs do not depend on this option. */
 export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, preparedNeighbors, types = frame.types,
-  onPhase = () => {}, onAtoms = () => {}, ...range } = {}) {
+  neighborLists = false, onPhase = () => {}, onAtoms = () => {}, ...range } = {}) {
   validatePtmParameters({ rmsdCutoff, flags });
+  if (typeof neighborLists !== 'boolean') throw new Error('The PTM neighbor-list option must be a boolean.');
   const immutable = Boolean(frame.immutableAnalysisFrame);
   const validated = immutable ? validatedNeighborInputs.get(frame) : null;
   const prepared = preparedNeighbors === undefined ? null : validatePreparedPtmNeighbors(frame, preparedNeighbors,
@@ -131,6 +144,49 @@ export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, prepare
   const cache = new Map();
   const output = module._malloc(PTM_RECORD_DOUBLES * 8);
   if (!output) throw new Error('PTM output allocation failed.');
+  // Indices, then vectors, of one matched environment.
+  const listBuffer = neighborLists ? module._malloc(PTM_TEMPLATE_NEIGHBORS * (4 + 24)) : 0;
+  if (neighborLists && !listBuffer) { module._free(output); throw new Error('PTM neighbor-list allocation failed.'); }
+  const lists = neighborLists ? { neighborCounts: new Uint8Array(count),
+    neighborIndices: new Uint32Array(count * PTM_TEMPLATE_NEIGHBORS), neighborSpan: new Float64Array(3) } : null;
+  const inverse = neighborLists ? invert3(frame.cell.vectors) : null, periodic = frame.cell.pbc;
+  const listNeighbor = (index, slot, neighbor, x, y, z) => {
+    lists.neighborIndices[index * PTM_TEMPLATE_NEIGHBORS + slot] = neighbor;
+    for (let axis = 0; axis < 3; axis += 1) {
+      if (!periodic[axis]) continue;
+      const fraction = Math.abs(x * inverse[axis] + y * inverse[3 + axis] + z * inverse[6 + axis]);
+      if (fraction > lists.neighborSpan[axis]) lists.neighborSpan[axis] = fraction;
+    }
+  };
+  const listMatched = index => {
+    const length = module._alloy_ptm_neighbors(listBuffer, listBuffer + PTM_TEMPLATE_NEIGHBORS * 4);
+    const indices = module.HEAPU32, vectors = module.HEAPF64, first = listBuffer >> 2;
+    const vector = (listBuffer + PTM_TEMPLATE_NEIGHBORS * 4) >> 3;
+    for (let slot = 0; slot < length; slot += 1) {
+      listNeighbor(index, slot, indices[first + slot], vectors[vector + slot * 3], vectors[vector + slot * 3 + 1], vectors[vector + slot * 3 + 2]);
+    }
+    lists.neighborCounts[index] = length;
+  };
+  const listUnmatched = (index, atom) => {
+    let length = 0;
+    if (prepared) {
+      const localAtom = atom - (prepared.startAtom ?? 0), row = localAtom * PTM_MAX_NEIGHBORS;
+      length = Math.min(PTM_UNMATCHED_NEIGHBORS, prepared.counts[localAtom]);
+      for (let slot = 0; slot < length; slot += 1) {
+        const offset = (row + slot) * 3;
+        listNeighbor(index, slot, prepared.indices[row + slot], prepared.vectors[offset], prepared.vectors[offset + 1], prepared.vectors[offset + 2]);
+      }
+    } else {
+      let neighbors = cache.get(atom);
+      if (!neighbors) {
+        neighbors = search.nearest(atom, PTM_MAX_NEIGHBORS);
+        if (neighbors.some((n) => n.distanceSquared < 1e-20)) neighbors = [];
+      }
+      length = Math.min(PTM_UNMATCHED_NEIGHBORS, neighbors.length);
+      for (let slot = 0; slot < length; slot += 1) listNeighbor(index, slot, neighbors[slot].atom, neighbors[slot].x, neighbors[slot].y, neighbors[slot].z);
+    }
+    lists.neighborCounts[index] = length;
+  };
   // Species of every atom a neighborhood may reach; only ordering uses them.
   const sourceCount = prepared ? frame.fractional.length / 3 : search.count;
   const retainTypes = Boolean(frame.immutableAnalysisFrame);
@@ -162,7 +218,9 @@ export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, prepare
       if (error) throw new Error(`PTM failed for atom ${atom + 1} (code ${error}).`);
       const data = module.HEAPF64.subarray(output >> 3, (output >> 3) + PTM_RECORD_DOUBLES);
       result.rmsd[index] = data[1]; // Retain best-fit RMSD even for rejected fits.
-      if (!data[0] || (rmsdCutoff > 0 && data[1] > rmsdCutoff)) continue;
+      const rejected = !data[0] || (rmsdCutoff > 0 && data[1] > rmsdCutoff);
+      if (lists) { if (rejected) listUnmatched(index, atom); else listMatched(index); }
+      if (rejected) continue;
       result.structures[index] = data[0];
       result.scales[index] = data[2];
       result.distances[index] = data[3];
@@ -173,11 +231,12 @@ export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, prepare
     onAtoms(count, count);
   } finally {
     module._free(output);
+    if (listBuffer) module._free(listBuffer);
     if (typePointer) { module._alloy_ptm_set_types(0, 0); if (!retainTypes) module._free(typePointer); }
     // The reusable module must not retain coordinates from a closed source.
     neighborContext = null;
   }
-  return { ...result, startAtom, endAtom, kernelReused, elapsedMs: performance.now() - startedAt };
+  return { ...result, ...(lists ?? {}), startAtom, endAtom, kernelReused, elapsedMs: performance.now() - startedAt };
 }
 
 export function validatePtmParameters({ rmsdCutoff = .1, flags = 31 } = {}) {

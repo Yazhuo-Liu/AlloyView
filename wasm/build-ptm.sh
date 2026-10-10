@@ -12,13 +12,16 @@ else
   exit 1
 fi
 (cd "$project_root/third_party/ptm" && sha256sum --check --quiet SHA256SUMS)
+# Assertions embed __FILE__; map the checkout to "." so the binary does not
+# depend on where the project was built.
 # Compilation is capped for cloud machines; each live Worker gets its own Wasm
 # instance. No pthread/shared-Wasm requirement on ordinary static hosting.
 export EMCC_CORES="${EMCC_CORES:-3}"
 "${compiler[@]}" "$project_root/wasm/ptm.cpp" "$project_root"/third_party/ptm/*.cpp \
   -I "$project_root/third_party/ptm" -O3 -std=c++17 \
+  -ffile-prefix-map="$project_root"=. -fmacro-prefix-map="$project_root"=. \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker \
   -sALLOW_MEMORY_GROWTH=1 -sFILESYSTEM=0 \
-  -sEXPORTED_FUNCTIONS='["_malloc","_free","_alloy_ptm_init","_alloy_ptm_atom","_alloy_ptm_set_types"]' \
+  -sEXPORTED_FUNCTIONS='["_malloc","_free","_alloy_ptm_init","_alloy_ptm_atom","_alloy_ptm_set_types","_alloy_ptm_neighbors"]' \
   -o "$project_root/src/analysis/ptm-kernel.mjs"
 chmod 644 "$project_root/src/analysis/ptm-kernel.mjs" "$project_root/src/analysis/ptm-kernel.wasm"

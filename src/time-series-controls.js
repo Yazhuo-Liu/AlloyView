@@ -7,7 +7,7 @@ import { yieldToMain } from './task-yield.js';
 
 const integer = value => Number(value).toLocaleString('en-US');
 const HELP = 'File values (cell, strain, timestep, file columns) are read in the background. Analysis values are recorded when their analysis finishes on the displayed frame.';
-const ANALYSIS_GROUPS = new Set(['CNA', 'PTM', 'DXA', 'Clusters', 'WignerSeitz', 'Symmetry', 'IdealStrain']);
+const ANALYSIS_GROUPS = new Set(['CNA', 'PTM', 'DXA', 'Clusters', 'WignerSeitz', 'Symmetry', 'IdealStrain', 'Grains']);
 const CONTROL_IDS = ['time-series-attribute', 'add-time-series-attribute', 'time-series-first', 'time-series-last', 'time-series-stride',
   'time-series-x-axis', 'time-series-separate', 'time-series-strain-reference', 'collect-time-series', 'visit-time-series',
   'export-time-series', 'clear-time-series'];

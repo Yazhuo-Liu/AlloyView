@@ -12,6 +12,8 @@ The geometric fit can be reused by ideal lattice strain when template candidates
 
 Identification depends on enabled templates, local disorder and RMSD tolerance. A recognized crystal template does not establish composition or a stress-free reference lattice.
 
+[Grain segmentation](grains.md) uses the same templates and RMSD threshold. While it is on, a fit also returns each atom's neighbor list: the neighbors of the matched template in template order, or the eight nearest neighbors of an unmatched atom. The seven ordinary outputs are identical with and without these lists, and one fit serves both tools.
+
 ## Orientation and chemical ordering
 
 Every matched atom also receives its lattice orientation as a unit quaternion, **PTM orientation qw, qx, qy, qz**, rotated into the fundamental zone nearest the identity. An axis-aligned crystal has qw = ±1. Unmatched atoms have no orientation (NaN). The components are ordinary scalar properties for Color by, Details and CSV export; adjacent grains differ in at least one component.

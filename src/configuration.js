@@ -13,10 +13,13 @@ import { COORDINATION_CUTOFF_PRESETS } from './analysis/cutoff.js';
 import { normalizeExternalPropertyState } from './io/external-properties.js';
 import { normalizeComputedPropertyState } from './computed-properties.js';
 import { BINNING_AXES, BINNING_QUANTITIES, BINNING_REDUCTIONS, MAX_BINS_PER_AXIS, MAX_TOTAL_BINS } from './analysis/spatial-binning.js';
+import { GRAIN_ALGORITHMS, GRAIN_DEFAULTS, GRAIN_DEFAULT_MST_THRESHOLD, MAX_GRAIN_SIZE_LIMIT } from './analysis/grains.js';
 import { MAX_SMOOTHING_WINDOW, MAX_TRAJECTORY_LINE_WIDTH, MIN_TRAJECTORY_LINE_WIDTH } from './data/trajectory-tools.js';
 import { normalizeTextLabelState } from './text-labels.js';
 import { normalizeTimeSeriesState } from './time-series.js';
 import { normalizeGlobalAttributeState } from './global-attribute-source.js';
+import { normalizeScriptState } from './command-script.js';
+import { normalizeMovieState } from './movie-settings.js';
 
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
@@ -29,7 +32,7 @@ export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
 export const MAX_CONFIGURATION_TRAJECTORY_LINE_IDS = 100_000;
 
 const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'lammps-data', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence', 'poscar']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'trajectory', 'timeSeries', 'textLabels']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'timeSeries', 'textLabels', 'scripts', 'movie', 'grains']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const COORDINATION_CUTOFF_CHOICES = new Set(['custom', ...COORDINATION_CUTOFF_PRESETS.map(preset => preset.symbol)]);
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
@@ -163,6 +166,10 @@ function normalizeConfiguration(value, fromSnapshot) {
     && wignerSeitz.referenceFrame >= configuration.source.frameCount) {
     fail('settings.extensions.wignerSeitz.referenceFrame', 'must be smaller than the source frame count');
   }
+  const surfaceMesh = configuration.settings.extensions.surfaceMesh;
+  if (surfaceMesh?.atoms === 'group' && !configuration.settings.selectionGroups.groups.some(group => group.id === surfaceMesh.selectionGroupId)) {
+    fail('settings.extensions.surfaceMesh.selectionGroupId', 'must identify a saved selection group');
+  }
   const clusterGroup = configuration.settings.extensions.clusters?.selectionGroupId;
   if (clusterGroup != null && !configuration.settings.selectionGroups.groups.some(group => group.id === clusterGroup)) {
     fail('settings.extensions.clusters.selectionGroupId', 'must identify a saved selection group');
@@ -262,7 +269,7 @@ function normalizeSelections(value) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'trajectory', 'textLabels', 'timeSeries', 'globalAttributes']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'textLabels', 'timeSeries', 'globalAttributes', 'scripts', 'movie', 'grains']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
   const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
   const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage', 'tiles']);
@@ -349,11 +356,16 @@ function normalizeExtensions(value, fromSnapshot) {
     ...(clusters === null ? {} : { clusters }),
     ...(input.binning === undefined ? {} : { binning: normalizeBinning(input.binning, `${path}.binning`) }),
     ...(input.wignerSeitz === undefined ? {} : { wignerSeitz: normalizeWignerSeitz(input.wignerSeitz, `${path}.wignerSeitz`) }),
+    ...(input.grains === undefined ? {} : { grains: normalizeGrains(input.grains, `${path}.grains`) }),
+    ...(input.surfaceMesh === undefined ? {} : { surfaceMesh: normalizeSurfaceMesh(input.surfaceMesh, `${path}.surfaceMesh`, fromSnapshot) }),
     ...(input.trajectory === undefined ? {} : { trajectory: normalizeTrajectory(input.trajectory, `${path}.trajectory`) }),
     // Label templates are stored as text and parsed again by the safe template parser; no values are stored.
     ...(input.textLabels === undefined ? {} : { textLabels: normalizeTextLabelState(input.textLabels, { path: `${path}.textLabels` }) }),
     ...(input.timeSeries === undefined ? {} : { timeSeries: normalizeTimeSeriesState(input.timeSeries, { path: `${path}.timeSeries` }) }),
     ...(input.globalAttributes === undefined ? {} : { globalAttributes: normalizeGlobalAttributeState(input.globalAttributes, { path: `${path}.globalAttributes` }) }),
+    // Script text is stored verbatim, compiled only by the command parser and never run on import.
+    ...(input.scripts === undefined ? {} : { scripts: normalizeScriptState(input.scripts, { path: `${path}.scripts` }) }),
+    ...(input.movie === undefined ? {} : { movie: normalizeMovieState(input.movie, { path: `${path}.movie` }) }),
     ...(voronoiDisplay === null ? {} : { voronoiDisplay: {
       enabled: boolean(voronoiDisplay.enabled, `${path}.voronoiDisplay.enabled`, false),
       allEnabled: boolean(voronoiDisplay.allEnabled, `${path}.voronoiDisplay.allEnabled`, false),
@@ -440,6 +452,23 @@ function normalizeClusters(value, path, fromSnapshot) {
     sortBySize: boolean(input.sortBySize, `${path}.sortBySize`, true) };
 }
 
+/** Grain segmentation settings only; PTM templates and its RMSD threshold
+ * are saved under analyses.ptm, and grains are recalculated after import.
+ * mergeThreshold is the manual log merge distance, mstThreshold the
+ * disorientation in degrees of the minimum spanning tree. */
+function normalizeGrains(value, path) {
+  const input = record(value, path, ['enabled', 'algorithm', 'mergeThreshold', 'mstThreshold', 'minGrainSize', 'adoptOrphans', 'handleCoherentInterfaces']);
+  return {
+    enabled: boolean(input.enabled, `${path}.enabled`, false),
+    algorithm: choice(input.algorithm ?? GRAIN_DEFAULTS.algorithm, `${path}.algorithm`, new Set(GRAIN_ALGORITHMS)),
+    mergeThreshold: number(input.mergeThreshold ?? GRAIN_DEFAULTS.mergeThreshold, `${path}.mergeThreshold`, -1e6, 1e6),
+    mstThreshold: number(input.mstThreshold ?? GRAIN_DEFAULT_MST_THRESHOLD, `${path}.mstThreshold`, 0, 1e6),
+    minGrainSize: number(input.minGrainSize ?? GRAIN_DEFAULTS.minGrainSize, `${path}.minGrainSize`, 1, MAX_GRAIN_SIZE_LIMIT, true),
+    adoptOrphans: boolean(input.adoptOrphans, `${path}.adoptOrphans`, GRAIN_DEFAULTS.adoptOrphans),
+    handleCoherentInterfaces: boolean(input.handleCoherentInterfaces, `${path}.handleCoherentInterfaces`, GRAIN_DEFAULTS.handleCoherentInterfaces),
+  };
+}
+
 /** Wigner–Seitz settings hold a zero-based reference frame and display
  * choices only; assignments and occupancies are recalculated after import. */
 function normalizeWignerSeitz(value, path) {
@@ -452,6 +481,38 @@ function normalizeWignerSeitz(value, path) {
     showMarkers: boolean(input.showMarkers, `${path}.showMarkers`, true),
     markerRadius: number(input.markerRadius ?? 0.6, `${path}.markerRadius`, 0.01, 100),
   };
+}
+
+/** Colors, opacity and cap choice of a displayed mesh, with its defaults. */
+function normalizeMeshStyle(input, path, defaults) {
+  return {
+    visible: boolean(input.visible, `${path}.visible`, true),
+    caps: boolean(input.caps, `${path}.caps`, true),
+    opacity: number(input.opacity ?? 1, `${path}.opacity`, 0, 1),
+    color: hexColor(input.color ?? defaults.color, `${path}.color`),
+    interiorColor: hexColor(input.interiorColor ?? defaults.interiorColor, `${path}.interiorColor`),
+    capColor: hexColor(input.capColor ?? defaults.capColor, `${path}.capColor`),
+  };
+}
+const MESH_STYLE_KEYS = ['visible', 'caps', 'opacity', 'color', 'interiorColor', 'capColor'];
+const SURFACE_MESH_STYLE = { color: '#c9d4e3', interiorColor: '#b5524a', capColor: '#8fa3bf' };
+const DEFECT_MESH_STYLE = { color: '#d9c06a', interiorColor: '#c7ae5c', capColor: '#b39b52' };
+
+/** Surface settings hold the probe radius, smoothing, atom restriction and
+ * display style; the mesh and its statistics are recalculated after import.
+ * A null radius follows the suggestion for the opened structure. */
+function normalizeSurfaceMesh(value, path, fromSnapshot) {
+  const input = record(value, path, ['enabled', 'radius', 'smoothingLevel', 'atoms', 'selectionGroupId', ...MESH_STYLE_KEYS]);
+  const enabled = boolean(input.enabled, `${path}.enabled`, false);
+  const radius = nullablePositive(input.radius, `${path}.radius`, fromSnapshot);
+  if (radius !== null && radius > 1e6) fail(`${path}.radius`, 'must not exceed 1000000');
+  if (enabled && radius === null) fail(`${path}.radius`, 'is required for an enabled surface mesh');
+  const atoms = choice(input.atoms ?? 'all', `${path}.atoms`, new Set(['all', 'visible', 'group']));
+  const selectionGroupId = input.selectionGroupId === undefined || input.selectionGroupId === null ? null
+    : sliceIdentifier(input.selectionGroupId, `${path}.selectionGroupId`);
+  if (atoms === 'group' && selectionGroupId === null) fail(`${path}.selectionGroupId`, 'is required for a selection group restriction');
+  return { enabled, radius, smoothingLevel: number(input.smoothingLevel ?? 8, `${path}.smoothingLevel`, 0, 100, true),
+    atoms, selectionGroupId: atoms === 'group' ? selectionGroupId : null, ...normalizeMeshStyle(input, path, SURFACE_MESH_STYLE) };
 }
 
 /** Binning settings name their quantity by its Color by key; the property
@@ -537,7 +598,10 @@ function normalizeComparisonLayout(value, path) {
 
 function normalizeDxa(value, path) {
   const input = record(value, path, ['enabled', 'lattice', 'trialCircuitLength', 'circuitStretchability',
-    'onlyPerfectDislocations', 'lineSmoothingIterations', 'linePointInterval', 'radius', 'visibleFamilies', 'familyColors']);
+    'onlyPerfectDislocations', 'lineSmoothingIterations', 'linePointInterval', 'radius', 'visibleFamilies', 'familyColors', 'defectMesh']);
+  // The optional defect mesh: requested per extraction, with its own style.
+  const defectMesh = input.defectMesh === undefined ? null
+    : record(input.defectMesh, `${path}.defectMesh`, ['enabled', 'smoothingLevel', ...MESH_STYLE_KEYS]);
   const lattice = choice(input.lattice ?? DXA_DEFAULTS.lattice, `${path}.lattice`, new Set(Object.keys(DXA_FAMILIES)));
   const families = new Set(DXA_FAMILIES[lattice].map(family => family.id));
   const visibleFamilies = list(input.visibleFamilies ?? [...families], `${path}.visibleFamilies`, 32)
@@ -557,6 +621,11 @@ function normalizeDxa(value, path) {
     linePointInterval: number(input.linePointInterval ?? DXA_DEFAULTS.linePointInterval, `${path}.linePointInterval`, 0, 1e6),
     radius: number(input.radius ?? 0.25, `${path}.radius`, 1e-12, MAX_COORDINATE),
     visibleFamilies, familyColors,
+    ...(defectMesh === null ? {} : { defectMesh: {
+      enabled: boolean(defectMesh.enabled, `${path}.defectMesh.enabled`, false),
+      smoothingLevel: number(defectMesh.smoothingLevel ?? 8, `${path}.defectMesh.smoothingLevel`, 0, 100, true),
+      ...normalizeMeshStyle(defectMesh, `${path}.defectMesh`, DEFECT_MESH_STYLE),
+    } }),
   };
 }
 

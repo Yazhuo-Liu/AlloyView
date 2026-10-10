@@ -175,6 +175,17 @@ function addFrameAttributes(frame, context, add) {
         csv: ['clusters', name, ''], compute: () => clusters[field] });
     }
   }
+  const grains = completed(frame, 'grains');
+  if (grains) {
+    const signature = analysisKey(frame, 'grains') ?? 'grains';
+    for (const [name, field, unit, description] of [['grain_count', 'grainCount', '', 'Number of grains'],
+      ['mean_size', 'meanSize', 'atoms', 'Mean number of atoms per grain'], ['largest_size', 'largestSize', 'atoms', 'Atoms in the largest grain'],
+      ['unassigned_atoms', 'unassignedAtoms', '', 'Atoms that belong to no grain'],
+      ['merge_threshold', 'mergeThreshold', grains.algorithm === 'mst' ? '°' : '', 'Merge threshold applied by grain segmentation']]) {
+      if (Number.isFinite(grains[field])) add(`Grains.${name}`, { kind: 'analysis', signature, unit, description,
+        csv: ['grains', name, ''], compute: () => grains[field] });
+    }
+  }
   const wignerSeitz = completed(frame, 'wignerSeitz');
   if (wignerSeitz) {
     const signature = analysisKey(frame, 'wignerSeitz') ?? `wignerSeitz:${wignerSeitz.referenceFrame}:${wignerSeitz.affineMapping}`;
@@ -185,7 +196,33 @@ function addFrameAttributes(frame, context, add) {
         csv: ['wignerSeitz', name, ''], compute: () => wignerSeitz[field] });
     }
   }
+  const surface = completed(frame, 'surfaceMesh');
+  if (surface) {
+    // Names follow OVITO's ConstructSurfaceMesh attributes.
+    const signature = `surfaceMesh:${frame.atomeyeResults?.surfaceMesh?.key ?? ''}`;
+    for (const [name, field, unit, description] of SURFACE_ATTRIBUTES) {
+      if (Number.isFinite(surface[field])) add(`Surface.${name}`, { kind: 'analysis', signature, unit, description,
+        csv: ['surfaceMesh', name, ''], compute: () => surface[field] });
+    }
+  }
 }
+
+/** [attribute and summary metric, result field, unit, description]. */
+export const SURFACE_ATTRIBUTES = Object.freeze([
+  ['surface_area', 'surfaceArea', 'Å²', 'Area of the surface between solid and empty space'],
+  ['specific_surface_area', 'specificSurfaceArea', 'Å⁻¹', 'Surface area per solid plus empty volume'],
+  ['filled_volume', 'filledVolume', 'Å³', 'Volume of the solid regions'],
+  ['filled_fraction', 'filledFraction', '', 'Solid fraction of the solid plus empty volume (0–1)'],
+  ['empty_volume', 'emptyVolume', 'Å³', 'Volume of all empty regions inside the cell'],
+  ['empty_fraction', 'emptyFraction', '', 'Empty fraction of the solid plus empty volume (0–1)'],
+  ['void_volume', 'voidVolume', 'Å³', 'Volume of empty regions that do not reach an open cell boundary'],
+  ['void_fraction', 'voidFraction', '', 'Void fraction of the solid plus empty volume (0–1)'],
+  ['cell_volume', 'totalVolume', 'Å³', 'Solid plus empty volume'],
+  ['filled_region_count', 'filledRegionCount', '', 'Number of separate solid regions'],
+  ['empty_region_count', 'emptyRegionCount', '', 'Number of separate empty regions'],
+  ['void_region_count', 'voidRegionCount', '', 'Number of empty regions that do not reach an open cell boundary'],
+  ['surface_component_count', 'surfaceComponentCount', '', 'Number of connected surface sheets'],
+].map(Object.freeze));
 
 function addCategoryAttributes(frame, prefix, propertyName, values, categories, { kind, analysis, signature }, add) {
   if (!values?.length || !categories?.length) return;
@@ -214,6 +251,10 @@ function addDxaAttributes(frame, network, add) {
     compute: () => network.density });
   add('DXA.segment_count', { ...common, description: 'Number of dislocation segments', csv: ['dxa', 'segment_count', ''],
     compute: () => network.segmentCount ?? network.segments?.length ?? 0 });
+  if (network.defectMesh && !network.defectMesh.error) {
+    add('DXA.defect_mesh_area', { ...common, unit: 'Å²', description: 'Surface area of the defect mesh', csv: ['dxa', 'defect_mesh_area', ''],
+      compute: () => network.defectMesh.surfaceArea ?? 0 });
+  }
   const families = new Set([...Object.keys(network.counts ?? {}), ...Object.keys(network.familyLengths ?? {})]);
   for (const family of families) {
     const entry = network.counts?.[family], segment = attributeSegment(family);

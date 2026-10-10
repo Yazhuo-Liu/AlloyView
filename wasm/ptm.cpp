@@ -16,6 +16,11 @@ static ptm_local_handle_t handle = nullptr;
 // every environment reads as one species, which leaves ordering undetermined.
 static const int32_t* atom_types = nullptr;
 static int atom_type_count = 0;
+// Environment of the template matched by the last alloy_ptm_atom call: the
+// central atom, then its neighbors in template order. Grain segmentation
+// builds its neighbor graph from these lists.
+static ptm_atomicenv_t matched_env;
+static int matched_neighbors = 0;
 
 static int32_t type_of(size_t atom) {
     return atom_types && atom < static_cast<size_t>(atom_type_count) ? atom_types[atom] : -1;
@@ -66,7 +71,9 @@ void alloy_ptm_set_types(const int32_t* types, int count) {
 // Unmatched environments carry NaN numerical outputs, never invented zeros.
 int alloy_ptm_atom(int atom, int flags, double* output) {
     ptm_result_t result;
-    int error = ptm_index(handle, atom, get_neighbors, nullptr, flags, true, &result, nullptr);
+    matched_neighbors = 0;
+    int error = ptm_index(handle, atom, get_neighbors, nullptr, flags, true, &result, &matched_env);
+    if (!error && result.structure_type) matched_neighbors = matched_env.num - 1;
     output[0] = result.structure_type;
     for (int i = 1; i < 17; ++i) output[i] = NAN;
     output[17] = 0;
@@ -79,5 +86,17 @@ int alloy_ptm_atom(int atom, int flags, double* output) {
         output[17] = result.ordering_type;
     }
     return error;
+}
+
+// Neighbors of the atom fitted by the last alloy_ptm_atom call, in the order
+// of the matched template (12 FCC/HCP/ICO, 14 BCC, 6 SC, 16 diamond, 9
+// graphene): atom indices and vectors from the central atom. Returns their
+// number, or 0 when no template matched.
+int alloy_ptm_neighbors(uint32_t* indices, double* vectors) {
+    for (int i = 0; i < matched_neighbors; ++i) {
+        indices[i] = static_cast<uint32_t>(matched_env.atom_indices[i + 1]);
+        std::memcpy(vectors + 3 * i, matched_env.points[i + 1], 3 * sizeof(double));
+    }
+    return matched_neighbors;
 }
 }

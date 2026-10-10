@@ -1,4 +1,6 @@
-export const ORIENTATION_COLOR_MODES = Object.freeze(['builtin:ptm:ipf', 'builtin:ptm:quaternion']);
+/** Mean orientation of the grain each atom belongs to, after grain segmentation. */
+export const GRAIN_ORIENTATION_COLOR_MODES = Object.freeze(['builtin:grains:ipf', 'builtin:grains:quaternion']);
+export const ORIENTATION_COLOR_MODES = Object.freeze(['builtin:ptm:ipf', 'builtin:ptm:quaternion', ...GRAIN_ORIENTATION_COLOR_MODES]);
 export const DEFAULT_ORIENTATION_SETTINGS = Object.freeze({ direction: 'z', custom: Object.freeze([0, 0, 1]) });
 export const UNDEFINED_ORIENTATION_COLOR = Object.freeze([130, 130, 130]);
 export const IPF_KEYS = Object.freeze({
@@ -156,11 +158,74 @@ export function ptmOrientationSource(frame) {
   return { structures: property.data, components };
 }
 
+/** Per-grain mean orientations of a completed grain segmentation, with the
+ * grain of each atom; null until the frame carries a consistent result. */
+export function grainOrientationSource(frame) {
+  if (!frame?.ids) return null;
+  const property = frame.properties?.find(item => item.name === 'grainId' && item.analysisKind === 'grains');
+  const result = frame.atomeyeResults?.grains?.result;
+  if (!property || !result || property.data !== result.grainId || result.grainId.length !== frame.ids.length
+      || result.structureTypes?.length !== result.grainCount || result.orientations?.length !== result.grainCount * 4) return null;
+  return { grainId: result.grainId, structures: result.structureTypes, orientations: result.orientations, grainCount: result.grainCount };
+}
+
+/** Whether a mode can be shown for this frame. */
+export function orientationColorSource(frame, mode) {
+  return GRAIN_ORIENTATION_COLOR_MODES.includes(mode) ? grainOrientationSource(frame) : ptmOrientationSource(frame);
+}
+
+/** One color per grain, applied to its atoms; atoms of no grain are gray. */
+function resolveGrainOrientations(frame, source, ipf, sample, normalized) {
+  const table = new Uint8Array((source.grainCount + 1) * 3);
+  table.set(UNDEFINED_ORIENTATION_COLOR, 0);
+  const defined = new Uint8Array(source.grainCount + 1), quaternion = [0, 0, 0, 0];
+  let cubic = 0, hexagonal = 0;
+  for (let grain = 0; grain < source.grainCount; grain++) {
+    for (let axis = 0; axis < 4; axis++) quaternion[axis] = source.orientations[grain * 4 + axis];
+    const structure = source.structures[grain], family = orientationFamily(structure);
+    let rgb = null;
+    if (family && !ipf) rgb = rodriguesRgb(quaternion, family);
+    else if (family) {
+      const weights = ipfWeights(sampleToCrystalDirection(quaternion, sample), structure);
+      if (weights && Math.max(...weights) > 0) rgb = ipfColorFromWeights(weights);
+    }
+    table.set(rgb ?? UNDEFINED_ORIENTATION_COLOR, (grain + 1) * 3);
+    defined[grain + 1] = rgb ? 1 : 0;
+    if (family === 'cubic') cubic++;
+    if (family === 'hexagonal') hexagonal++;
+  }
+  const colors = new Uint8Array(frame.ids.length * 3);
+  let undefinedCount = 0;
+  for (let atom = 0; atom < frame.ids.length; atom++) {
+    const grain = source.grainId[atom] <= source.grainCount ? source.grainId[atom] : 0, entry = grain * 3;
+    colors[atom * 3] = table[entry]; colors[atom * 3 + 1] = table[entry + 1]; colors[atom * 3 + 2] = table[entry + 2];
+    if (!defined[grain]) undefinedCount++;
+  }
+  return { colors, legend: { kind: 'orientation', title: ipf
+    ? `Grain inverse pole figure · ${normalized.direction === 'custom' ? sample.map(value => Number(value.toPrecision(3))).join(', ') : normalized.direction.toUpperCase()}`
+    : 'Grain orientation · Rodrigues RGB', mode: ipf ? 'ipf' : 'quaternion', source: 'grains',
+    sample, undefinedCount, atomCount: frame.ids.length,
+    keys: ipf ? [ ...(cubic ? [{ ...IPF_KEYS.cubic, family: 'cubic' }] : []),
+      ...(hexagonal ? [{ ...IPF_KEYS.hexagonal, family: 'hexagonal' }] : []) ] : [] } };
+}
+
 /** Retain only the current color array. A render/export does not recompute it. */
 export class OrientationColorResolver {
   clear() { this.current = null; }
 
   resolve(frame, mode, settings = DEFAULT_ORIENTATION_SETTINGS) {
+    if (GRAIN_ORIENTATION_COLOR_MODES.includes(mode)) {
+      const source = grainOrientationSource(frame);
+      if (!source) { this.clear(); return null; }
+      const normalized = normalizeOrientationSettings(settings), sample = orientationSampleDirection(normalized);
+      const ipf = mode === GRAIN_ORIENTATION_COLOR_MODES[0];
+      const key = ipf ? `${mode}:${normalized.direction}:${sample.join(',')}` : mode;
+      const sources = [source.grainId, source.structures, source.orientations];
+      if (this.current?.frame === frame && this.current.key === key && sources.every((value, index) => value === this.current.sources[index])) return this.current.palette;
+      const palette = resolveGrainOrientations(frame, source, ipf, sample, normalized);
+      this.current = { frame, key, sources, palette };
+      return palette;
+    }
     const source = ptmOrientationSource(frame);
     if (!source || !ORIENTATION_COLOR_MODES.includes(mode)) { this.clear(); return null; }
     const normalized = normalizeOrientationSettings(settings), sample = orientationSampleDirection(normalized);

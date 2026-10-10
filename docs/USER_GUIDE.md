@@ -406,7 +406,7 @@ sizes, available relative paths and saved trajectory frame, together with the
 processing and view settings. The configuration includes enabled coordination,
 CNA, central symmetry, PTM, ideal-lattice/reference-frame strain, local shear,
 bonds, bond distributions and Q4/Q6, Voronoi tessellation, cluster analysis,
-spatial binning, Wigner–Seitz defects, displacement and RDF analyses and their parameters, editable
+spatial binning, Wigner–Seitz defects, surface mesh, displacement and RDF analyses and their parameters, editable
 lattice references, replication counts and physical/display mode, all slices
 and their names, named atom selection groups and their member IDs, color maps,
 per-property fixed ranges and Auto settings, visibility filters,
@@ -441,6 +441,10 @@ Cluster analysis saves its enabled state, neighbor mode (`cutoff` or `bonds`),
 cutoff, selection group ID and size sorting in `settings.extensions.clusters`;
 the group must be one of the saved selection groups, and bond mode uses the
 saved Bonds cutoffs.
+Grain segmentation saves its enabled state, algorithm, manual and minimum
+spanning tree thresholds, minimum grain size, orphan adoption and
+coherent-interface handling in `settings.extensions.grains`; it uses the
+saved PTM templates and RMSD threshold.
 Spatial binning saves its enabled state, layout, cell vectors, bin counts,
 quantity (with the property's Color by key), reduction, selection group ID,
 trajectory averaging and map colors in `settings.extensions.binning`; binned
@@ -449,12 +453,21 @@ Wigner–Seitz defect analysis saves its enabled state, zero-based reference
 frame, affine mapping, site-marker choice (`vacancies`, `defects` or `all`),
 marker visibility and marker radius in `settings.extensions.wignerSeitz`;
 occupancies are recalculated after import.
+The surface mesh saves its enabled state, probe radius, smoothing level, atom
+restriction and display style in `settings.extensions.surfaceMesh`, and the
+DXA defect mesh its request and style in `settings.extensions.dxa.defectMesh`;
+both are written only once used and recalculated after import.
 Text labels (template text, position, offsets, font size and colors) are saved
 in `settings.extensions.textLabels`, time series attribute names, frame range,
 axis and panel choices in `settings.extensions.timeSeries`, and the strain
 reference frame in `settings.extensions.globalAttributes`. They are written
 only when used; label text is validated and parsed again, and collected values
 are not stored.
+Command scripts (names and text) are saved in `settings.extensions.scripts`
+and the camera keyframes, motion, trajectory link and video settings in
+`settings.extensions.movie`, also only when used. Import checks their sizes
+and ranges and shows them in the Scripts and Movie panels; it never runs a
+script or starts an export.
 
 Trajectory smoothing (enabled state and frames on each side) and trajectory
 line settings (atom IDs or selection group, frame range, step and appearance)
@@ -731,6 +744,29 @@ CSV** lists every defect site with its per-element occupancy and positions.
 The analysis repeats for every displayed frame. See
 [Wigner–Seitz defects](features/wigner-seitz.md).
 
+## Surface mesh, voids and free surfaces
+
+Select **Surface**, check the **Probe sphere radius** and press **Construct
+surface**. Space that a sphere of this radius cannot enter without touching an
+atom center is solid; the surface between solid and empty space is drawn as a
+mesh. The suggested radius is about 1.3 nearest-neighbor distances, which
+keeps single vacancies filled and opens larger voids. The panel reports the
+surface area, the solid, empty and void volumes with their fractions, the
+number of solid regions, voids and surface sheets, and a table of regions.
+In a fully periodic cell every empty region is a void, including the gap of a
+slab; with open boundaries the space outside is exterior and not a void.
+
+**Atoms** restricts the input to the visible atoms or a selection group.
+**Smoothing level** rounds the mesh (area changes, volumes do not). The mesh
+is wrapped into the displayed cell, cut at periodic cell faces and closed
+there with caps in their own color, so the solid can be looked at from
+outside and, with caps off, a slice or lower opacity, from inside. It follows
+the periodic origin, crystal drag, display replication and slices, appears in
+the second view and exported images, and can be saved with **Mesh STL**,
+**Mesh PLY** or **Mesh OBJ**. The statistics are also in the summary CSV and
+available to labels and time series as `Surface.*` attributes. The analysis
+repeats for every displayed frame. See [Surface mesh](features/surface-mesh.md).
+
 ## Dislocation analysis (DXA)
 
 Open **DXA**, choose a reference crystal and click **Extract dislocations**.
@@ -747,6 +783,11 @@ The summary reports source line count, length and length-per-cell-volume density
 **Cancel** stops extraction and clears this tool; other analyses remain available.
 Configurations preserve parameters and line-display preferences and recompute
 an enabled DXA tool when restored.
+**Output defect mesh** additionally returns the closed surface around the
+regions that are neither the reference crystal nor resolved into lines (grain
+boundaries, stacking faults, other phases, free surfaces), with its own
+smoothing level, colors, opacity, caps and STL/PLY export. It is off by
+default and does not change the lines.
 
 DXA requires sufficient periodic cell thickness. For `NiGB_minimized.cfg`,
 repeat Z twice with **Replicate atoms for analysis** enabled; display copies
@@ -871,6 +912,25 @@ gyration tensors. A cluster connected to its own periodic image is marked
 Worker pool and the results are identical to a single-threaded calculation.
 See [Cluster analysis](features/clusters.md).
 
+**Grains**, in Visualization tools, divides a polycrystal into grains: regions
+of one lattice with nearly one orientation. It runs PTM with the templates
+and RMSD threshold of the PTM panel and reuses a matching fit. **Graph
+clustering (automatic)** chooses the merge threshold from the data; the
+manual variant takes a log merge distance, and **Minimum spanning tree** a
+disorientation in degrees. Clusters below the **Minimum grain size** are not
+grains; **Adopt orphan atoms** gives boundary atoms to the nearest grain, and
+**Handle coherent interfaces and stacking faults** keeps the HCP layers of
+faults and twin boundaries in their FCC grain. **Grain ID** colors grains
+with distinct hues, largest grain first, and atoms in no grain gray; **Grain
+orientation** colors each grain by its mean orientation as an inverse pole
+figure or Rodrigues RGB. The panel plots the merge distances with the applied
+threshold and lists every grain's size, structure and orientation; both
+export as CSV. Grain count and mean grain size are available to labels and
+time series. A cell thinner than two neighbor distances along a periodic
+vector must first be replicated with **Replicate atoms for analysis**; the
+nickel example needs 1 × 1 × 2. Results follow OVITO 3.9.4. See
+[Grain segmentation](features/grains.md).
+
 **Binning**, in Visualization tools, divides the cell into equal slabs along
 one cell vector (**Profile (1D)**) or columns along two (**Map (2D)**) and
 reports, for each bin, the **Atom count**, the **Number density** in Å⁻³, or
@@ -900,7 +960,8 @@ Every frame has **global attributes**: scalar values with stable names such as
 `Strain.volumetric`, `Type.Ni.fraction`, `Mean.c_pe` (the mean of a numeric
 property, including computed expressions), and, once the analysis has finished
 for the frame, `CNA.FCC.fraction`, `PTM.BCC.count`, `DXA.total_length`,
-`DXA.line_density`, `Clusters.cluster_count` or `WignerSeitz.vacancy_count`.
+`DXA.line_density`, `Clusters.cluster_count`, `Grains.grain_count`,
+`WignerSeitz.vacancy_count` or `Surface.void_volume`.
 Values that also appear in the Statistics **Structure summary** CSV are equal
 to its rows. The full list is in [Text labels](features/text-labels.md#global-attributes).
 
@@ -1120,10 +1181,10 @@ duplicating IDs for display replicas.
 
 **Frame images** traverses the requested first/last frame and step, completes
 the enabled processing for each frame, and packages the PNG images in a ZIP.
-**Cancel frame export** stops traversal. This is image-sequence export;
-movie encoding and a general command-script interpreter are not included.
-Each archive is limited to 500 images and 256 MiB; the selected frame and
-camera are restored when traversal ends.
+**Cancel frame export** stops traversal. Each archive is limited to 500
+images and 256 MiB; the selected frame and camera are restored when traversal
+ends. For a video file or a moving camera, use the Movie tool described in
+[Command scripts and movies](#command-scripts-and-movies).
 
 **Display → Image resolution** selects the current viewport (the default),
 1080p, 4K, 2×/4× the viewport, or a custom width and height. Custom sizes can
@@ -1149,6 +1210,61 @@ every image export, including each frame of a ZIP, use a complete result for
 the current inputs. With the switch off, images are identical to those without
 the feature. Settings are saved in configuration JSON. See
 [Display](features/display.md#ambient-occlusion) for the method and limits.
+
+## Command scripts and movies
+
+**Visualization tools → Scripts** runs a list of commands, one per line:
+
+```text
+# Six images of the displayed frame
+camera view front
+export png front
+repeat 3
+  camera orbit 90 0
+  export png
+end
+```
+
+Commands change the frame (`frame 12`, `frame next`), move the camera
+(`camera view top`, `camera orbit 30 -10`, `camera roll 15`, `camera zoom 2`,
+`camera pan 1 0`, `camera set …`), choose the projection and the coloring
+(`projection orthographic`, `color-by c_pe`), open a tool (`tool slice`), step
+the selected slice (`slice step -2`), download an image (`export png name`),
+add camera keyframes (`keyframe`, `keyframe 4.5`, `keyframe clear`) and wait
+(`wait 0.5`, `wait-analyses`). Every keyboard command name, such as
+`camera.yaw-left` or `frames.next`, is also a command, with `gear 0`–`gear 9`
+setting its step size. `frame` waits until the frame's enabled analyses have
+finished, so the next line sees their results. **Check** validates a script
+without running it; errors give the line and column and select the text.
+**Insert current view** writes the view on screen as a `camera set` line.
+
+Scripts are parsed against a fixed command list and are never run as code.
+They cannot open files, reach the network or start analyses. A script is
+limited to 20,000 characters, 100,000 executed commands, 30 minutes and 100
+image downloads, and **Stop** ends it. Scripts are saved in configuration
+JSON as text and never start on import. See
+[Command scripts](features/scripts.md) for the full reference.
+
+**Visualization tools → Movie** animates the camera. Set a view and select
+**Add keyframe**; repeat for each pose; edit the times in the list.
+**Preview** plays the path in the viewport. Between two upright keyframes the
+camera stays upright and turns the shorter way; rolled views are joined by
+quaternion slerp; the center and zoom follow a smooth spline that never
+overshoots a keyframe. **Trajectory frames during the movie** keeps the
+displayed frame, plays a range at a rate, spreads a range over the camera
+path, or uses the frame saved with each keyframe.
+
+**Export movie** renders every frame like a PNG export, with the legend,
+axes, labels, slices and ambient occlusion of the Display settings and that
+frame's finished analyses, at the Display image resolution, and encodes it in
+the browser with WebCodecs. **Format** lists what the browser can encode at
+that size: MP4 with H.264 (the most compatible), WebM with VP9 or VP8, and
+AV1 where available; **Quality** sets the bitrate. Video sizes are made even.
+A progress window shows the frame, size and time left, and **Cancel** stops
+the export; the frame and camera are restored afterwards. Without a video
+encoder (an old browser or a page that is not served over HTTPS), the panel
+offers **PNG frames · ZIP** with the same frames, up to 500. See
+[Camera path and movie](features/movies.md).
 
 ## Feature help and documentation
 
@@ -1199,12 +1315,19 @@ npm run test:browser:voronoi
 npm run test:browser:voronoi-radical
 # Cluster IDs, unwrapped centers, CSV, recipes and pool parity (both isolation modes):
 npm run test:browser:clusters
+# Grains of a known polycrystal, orientation colors, merge plot, CSV, recipes, PTM reuse, the replicated nickel example and Worker parity (both isolation modes):
+npm run test:browser:grains
 # Spatial binning of a known crystal, CSV, frame updates, averages, recipes, phone layout and Worker parity:
 npm run test:browser:binning
 # Label overlay, labels in PNG/HD/six-view/second-view/frame ZIP images, time series values and CSV, recipes and phone layout:
 npm run test:browser:text-labels
+# Command scripts, camera keyframes, MP4/WebM export decoded again in the page, cancel, recipes and phone layout
+# (--timing adds 1080p exports, --keep <directory> saves the movies, --hardware uses the GPU):
+npm run test:browser:movies
 # Wigner–Seitz vacancies, interstitials, antisites, markers in PNG, affine mapping, CSV and recipes:
 npm run test:browser:wigner-seitz
+# Surface mesh parity, caps, pixels, mesh files, recipes and the DXA defect mesh (both isolation modes):
+npm run test:browser:surface-mesh
 # Inferred unwrapping, smoothed CNA, trajectory lines, exports, recipes and phone layout (both isolation modes):
 npm run test:browser:trajectory-tools
 # WebGPU execution checks and CPU/GPU timing (Node.js 24 and Chrome/Chromium):

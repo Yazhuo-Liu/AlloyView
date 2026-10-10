@@ -692,6 +692,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     comparison.setVectorFields(renderer.atomVectorFields ?? []);
     comparison.setDislocationNetwork(renderer.dislocationNetwork, renderer.dislocationOptions);
     comparison.setSiteMarkers(renderer.siteMarkers, renderer.siteMarkerOptions);
+    comparison.copySurfaceMeshes?.(renderer);
     comparison.setTrajectoryLines(renderer.trajectoryLines ?? null, renderer.trajectoryLineOptions ?? {});
     comparison.setVoronoiCellGeometry(renderer.voronoiCellGeometry, renderer.voronoiCellOptions);
     comparison.setVoronoiAllCellGeometry(renderer.voronoiAllCellGeometry, renderer.voronoiCellOptions);

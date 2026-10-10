@@ -1,6 +1,10 @@
 import { DxaClient } from './analysis/dxa-client.js';
-import { DXA_DEFAULTS, DXA_FAMILIES, DXA_LATTICES, validateDxaParameters } from './analysis/dxa.js';
+import { DXA_DEFAULTS, DXA_DEFECT_MESH_SMOOTHING, DXA_FAMILIES, DXA_LATTICES, validateDxaParameters } from './analysis/dxa.js';
 import { clearAnalysisResults, replaceAnalysisProperty } from './analysis/results.js';
+import { downloadBlob } from './export-archive.js';
+import { createMeshExport } from './io/mesh-export.js';
+import { buildSurfaceDisplayMesh } from './render/surface-mesh-geometry.js';
+import { SURFACE_MESH_DEFAULTS, surfaceMeshDisplayState } from './render/surface-mesh-layer.js';
 
 export const DXA_STRUCTURE_PROPERTY = 'dxaStructureType';
 export const DXA_STRUCTURE_LABEL = 'Crystal structure (DXA)';
@@ -21,6 +25,10 @@ const PARAMETER_FIELDS = {
   circuitStretchability: 'dxa-stretchability', lineSmoothingIterations: 'dxa-smoothing',
   linePointInterval: 'dxa-point-interval', onlyPerfectDislocations: 'dxa-perfect-only',
 };
+/** The optional defect mesh: OVITO's surface around the regions that are not
+ * the reference crystal and were not resolved into dislocation lines. */
+export const DXA_DEFECT_MESH_DEFAULTS = Object.freeze({ enabled: false, smoothingLevel: DXA_DEFECT_MESH_SMOOTHING, ...SURFACE_MESH_DEFAULTS.dxaDefect });
+const DEFECT_STYLE_FIELDS = { color: 'dxa-defect-mesh-color', interiorColor: 'dxa-defect-mesh-interior-color', capColor: 'dxa-defect-mesh-cap-color' };
 const toHex = color => `#${Array.from(color, value => Math.round(value).toString(16).padStart(2, '0')).join('')}`;
 const duration = ms => ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 const integer = value => Number(value).toLocaleString('en-US');
@@ -30,11 +38,60 @@ const integer = value => Number(value).toLocaleString('en-US');
 export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion,
   onEdit = () => {}, onDisplayChange = () => {},
   getColorMode = () => 'type', getColorChoiceVersion = () => 0, onResultsChange = () => {},
-  onMemoryChange = () => {}, notify = () => {}, client = new DxaClient() }) {
+  onMemoryChange = () => {}, notify = () => {}, client = new DxaClient(),
+  getFileStem = () => 'structure', getFrameIndex = () => 0, onDownload = downloadBlob }) {
   let enabled = false, controlsEnabled = false, controller = null, request = 0;
   let network = null, failure = false, radius = 0.25;
   let visibleFamilies = new Set(), familyColors = new Map(), cachedResult = null;
   let atomStructureFrame = null, colorDefaultPending = true;
+  let defectMesh = { ...DXA_DEFECT_MESH_DEFAULTS };
+  // Display meshes of results, so that redrawing never rebuilds geometry.
+  const defectDisplays = new WeakMap();
+
+  /** Defect mesh settings from the panel; panels without these controls
+   * keep the stored values (the mesh is off by default). */
+  function readDefectMesh() {
+    const level = $('dxa-defect-mesh-smoothing')?.valueAsNumber, opacity = $('dxa-defect-mesh-opacity')?.valueAsNumber;
+    const next = { ...defectMesh,
+      enabled: $('dxa-defect-mesh') ? Boolean($('dxa-defect-mesh').checked) : defectMesh.enabled,
+      smoothingLevel: Number.isInteger(level) && level >= 0 && level <= 100 ? level : defectMesh.smoothingLevel,
+      visible: $('dxa-defect-mesh-visible') ? Boolean($('dxa-defect-mesh-visible').checked) : defectMesh.visible,
+      caps: $('dxa-defect-mesh-caps') ? Boolean($('dxa-defect-mesh-caps').checked) : defectMesh.caps,
+      opacity: Number.isFinite(opacity) && opacity >= 0 && opacity <= 1 ? opacity : defectMesh.opacity };
+    for (const [name, id] of Object.entries(DEFECT_STYLE_FIELDS)) {
+      const value = $(id)?.value;
+      if (/^#[0-9a-f]{6}$/i.test(value ?? '')) next[name] = value.toLowerCase();
+    }
+    defectMesh = next;
+    return next;
+  }
+
+  function writeDefectMesh() {
+    if ($('dxa-defect-mesh')) $('dxa-defect-mesh').checked = defectMesh.enabled;
+    if ($('dxa-defect-mesh-smoothing')) $('dxa-defect-mesh-smoothing').value = String(defectMesh.smoothingLevel);
+    if ($('dxa-defect-mesh-visible')) $('dxa-defect-mesh-visible').checked = defectMesh.visible;
+    if ($('dxa-defect-mesh-caps')) $('dxa-defect-mesh-caps').checked = defectMesh.caps;
+    if ($('dxa-defect-mesh-opacity')) $('dxa-defect-mesh-opacity').value = String(defectMesh.opacity);
+    for (const [name, id] of Object.entries(DEFECT_STYLE_FIELDS)) if ($(id)) $(id).value = defectMesh[name];
+  }
+
+  /** The mesh of a result as the renderer takes it. OVITO displays the defect
+   * mesh with reversed orientation: its solid side is the defect region. */
+  function defectDisplay(result) {
+    const mesh = result?.defectMesh;
+    if (!mesh?.triangles?.length) return null;
+    if (!defectDisplays.has(mesh)) defectDisplays.set(mesh, { vertices: mesh.vertices, triangles: mesh.triangles, reverse: true, spaceFilling: false });
+    return defectDisplays.get(mesh);
+  }
+
+  function describeDefectMesh() {
+    const controls = $('dxa-defect-mesh-controls'), summary = $('dxa-defect-mesh-summary'), mesh = network?.defectMesh;
+    if (controls) controls.hidden = !mesh || !defectMesh.enabled;
+    if (!summary) return;
+    summary.textContent = !mesh ? '' : mesh.error ? `The defect mesh could not be generated: ${mesh.error}`
+      : !mesh.triangleCount ? (mesh.defectCellCount ? 'No defect mesh: every defect region was resolved into dislocation lines.' : 'No defect mesh: the structure contains no defect region.')
+        : `${integer(mesh.triangleCount)} triangles · ${Number(mesh.surfaceArea ?? 0).toPrecision(5)} Å² surface area · smoothing ${mesh.smoothingLevel}`;
+  }
 
   function parameters() {
     return validateDxaParameters(Object.fromEntries(Object.entries(PARAMETER_FIELDS).map(([key, id]) => {
@@ -60,6 +117,9 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
 
   function updateControls() {
     for (const id of [...Object.values(PARAMETER_FIELDS), 'dxa-line-radius']) $(id).disabled = !controlsEnabled;
+    for (const id of ['dxa-defect-mesh', 'dxa-defect-mesh-smoothing', 'dxa-defect-mesh-visible', 'dxa-defect-mesh-caps', 'dxa-defect-mesh-opacity',
+      ...Object.values(DEFECT_STYLE_FIELDS)]) if ($(id)) $(id).disabled = !controlsEnabled;
+    for (const id of ['export-dxa-defect-mesh-stl', 'export-dxa-defect-mesh-ply']) if ($(id)) $(id).disabled = !controlsEnabled || !network?.defectMesh?.triangleCount;
     $('run-dxa').disabled = !controlsEnabled || Boolean(controller);
     $('cancel-dxa').disabled = !controlsEnabled || (!enabled && !failure);
     for (const input of $('dxa-families').querySelectorAll('input')) input.disabled = !controlsEnabled;
@@ -76,6 +136,13 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
       enabled: Boolean(network) && enabled, radius,
       visibleFamilies: [...visibleFamilies], familyColors: Object.fromEntries(familyColors),
     });
+    const style = readDefectMesh(), shown = Boolean(network) && enabled && style.enabled;
+    try {
+      renderer.setSurfaceMesh?.('dxaDefect', shown ? defectDisplay(network) : null, { visible: style.visible, caps: style.caps, opacity: style.opacity,
+        color: style.color, interiorColor: style.interiorColor, capColor: style.capColor });
+    } catch (error) { notify(error.message); }
+    describeDefectMesh();
+    updateControls();
     onDisplayChange();
   }
 
@@ -192,8 +259,15 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     clearNetwork();
     const serial = request, sourceVersion = getSourceVersion();
     const current = () => serial === request && frame === getFrame() && sourceVersion === getSourceVersion() && enabled;
+    // The defect mesh is requested apart from the DXA parameters: lines and
+    // structure labels are the same with and without it. A cached result is
+    // reused unless a mesh is wanted that it does not contain.
+    const meshRequest = readDefectMesh().enabled ? { smoothingLevel: defectMesh.smoothingLevel } : null;
     const key = JSON.stringify(settings), cached = cachedResult;
-    if (cached?.frame === frame && cached.key === key) { showResult(cached.result, frame, key, shouldSelectStructures()); return true; }
+    if (cached?.frame === frame && cached.key === key
+      && (!meshRequest || cached.result.defectMesh?.smoothingLevel === meshRequest.smoothingLevel)) {
+      showResult(cached.result, frame, key, shouldSelectStructures()); return true;
+    }
     // Global line graphs can be large. Keep only the latest frame/result,
     // rather than adding unaccounted graph arrays to the trajectory cache.
     cachedResult = null;
@@ -202,7 +276,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     $('dxa-status').textContent = `Preparing CPU DXA for ${integer(frame.ids.length)} atoms…`;
     try {
       const result = await client.analyze(frame, settings, {
-        signal: job.signal,
+        signal: job.signal, ...(meshRequest ? { defectMesh: meshRequest } : {}),
         onProgress: progress => {
           if (!current() || job.signal.aborted) return;
           const stage = String(progress.phase ?? 'Analyzing').replace(/[-_]/g, ' ');
@@ -238,8 +312,12 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   }
 
   function serialize() {
+    const mesh = readDefectMesh();
     return { enabled, ...parameters(), radius,
-      visibleFamilies: [...visibleFamilies], familyColors: [...familyColors].map(([family, color]) => ({ family, color })) };
+      visibleFamilies: [...visibleFamilies], familyColors: [...familyColors].map(([family, color]) => ({ family, color })),
+      // Untouched defect mesh settings are left out, as in recipes saved
+      // before the mesh existed.
+      ...(Object.keys(DXA_DEFECT_MESH_DEFAULTS).some(name => mesh[name] !== DXA_DEFECT_MESH_DEFAULTS[name]) ? { defectMesh: { ...mesh } } : {}) };
   }
 
   async function restore(saved, { isCurrent = () => true } = {}) {
@@ -247,6 +325,8 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     // Configuration color filters have already been restored by the caller.
     // Replace DXA's computed result without discarding those saved choices.
     cancel({ clearSettings: false }); writeParameters(saved); radius = saved.radius;
+    defectMesh = { ...DXA_DEFECT_MESH_DEFAULTS, ...(saved.defectMesh ?? {}) };
+    writeDefectMesh();
     $('dxa-line-radius').value = String(radius);
     resetFamilies();
     visibleFamilies = new Set(saved.visibleFamilies);
@@ -257,7 +337,22 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
 
   function reset() {
     cancel(); writeParameters(DXA_DEFAULTS); radius = 0.25;
+    defectMesh = { ...DXA_DEFECT_MESH_DEFAULTS };
+    writeDefectMesh();
     $('dxa-line-radius').value = String(radius); resetFamilies(); renderFamilies();
+  }
+
+  function exportDefectMesh(format) {
+    const frame = getFrame(), mesh = defectDisplay(network);
+    if (!frame || !mesh) { notify('Extract dislocations with the defect mesh before exporting it.'); return null; }
+    try {
+      const style = readDefectMesh(), view = renderer.frame === frame ? surfaceMeshDisplayState(renderer) : { origin: [0, 0, 0], translation: [0, 0, 0] };
+      const display = buildSurfaceDisplayMesh(mesh, frame.cell, { origin: view.origin, caps: style.caps, reverse: true });
+      const file = createMeshExport(display, format, { caps: style.caps, translation: view.translation,
+        stem: `${getFileStem()}-frame-${getFrameIndex() + 1}-dxa-defect-mesh`, title: 'AlloyView DXA defect mesh' });
+      onDownload(file.blob, file.filename);
+      return file;
+    } catch (error) { notify(error.message); return null; }
   }
 
   $('run-dxa').addEventListener('click', () => { void run(); });
@@ -267,13 +362,27 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     if (id === 'dxa-lattice') { resetFamilies(); renderFamilies(); }
     if (enabled) void run({ automatic: true });
   });
+  // Requesting the mesh or changing its smoothing needs a new extraction;
+  // switching it off only hides it. Styles never recalculate.
+  for (const id of ['dxa-defect-mesh', 'dxa-defect-mesh-smoothing']) $(id)?.addEventListener('change', () => {
+    onEdit();
+    const wanted = readDefectMesh().enabled;
+    if (enabled && wanted && network?.defectMesh?.smoothingLevel !== defectMesh.smoothingLevel) void run({ automatic: true });
+    else draw();
+  });
+  for (const id of ['dxa-defect-mesh-visible', 'dxa-defect-mesh-caps', ...Object.values(DEFECT_STYLE_FIELDS)]) {
+    $(id)?.addEventListener('change', () => { onEdit(); draw(); });
+  }
+  for (const id of ['dxa-defect-mesh-opacity', ...Object.values(DEFECT_STYLE_FIELDS)]) $(id)?.addEventListener('input', () => { onEdit(); draw(); });
+  $('export-dxa-defect-mesh-stl')?.addEventListener('click', () => { exportDefectMesh('stl'); });
+  $('export-dxa-defect-mesh-ply')?.addEventListener('click', () => { exportDefectMesh('ply'); });
   $('dxa-line-radius').addEventListener('change', () => {
     const value = $('dxa-line-radius').valueAsNumber;
     if (!Number.isFinite(value) || value <= 0) { $('dxa-line-radius').value = String(radius); notify('Enter a positive line radius.'); return; }
     onEdit(); radius = value; draw();
   });
   reset();
-  return Object.freeze({ run, onFrame, cancel, abortJobs, reset, serialize, restore,
+  return Object.freeze({ run, onFrame, cancel, abortJobs, reset, serialize, restore, exportDefectMesh,
     pendingColorProperties: () => enabled && !failure ? [{ name: DXA_STRUCTURE_PROPERTY, label: DXA_STRUCTURE_LABEL }] : [],
     setEnabled(value) { controlsEnabled = Boolean(value); updateControls(); },
     failed: () => enabled && failure,

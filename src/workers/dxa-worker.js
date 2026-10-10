@@ -1,4 +1,5 @@
 import { calculateDxa, warmupDxa } from '../analysis/dxa.js';
+import { calculateSurfaceMesh, surfaceMeshTransferables } from '../analysis/surface-mesh.js';
 import { dxaStageMetadata, serveDxaStageInput } from '../analysis/dxa-cpu-stages.js';
 
 // Deliberately separate from the reusable atom-range worker pool. A native
@@ -49,9 +50,15 @@ async function handleRequest(data) {
       self.postMessage({ id, ok: true, result });
       return;
     }
-    const result = await calculateDxa(frame, parameters, options);
+    if (type === 'surface') {
+      const result = await calculateSurfaceMesh(frame, parameters, { ...options, mask: data.mask });
+      self.postMessage({ id, ok: true, result }, surfaceMeshTransferables(result));
+      return;
+    }
+    const result = await calculateDxa(frame, parameters, { ...options, defectMesh: data.defectMesh });
     const buffers = result.segments.map(segment => segment.points.buffer);
     if (result.atomStructureTypes) buffers.push(result.atomStructureTypes.buffer);
+    if (result.defectMesh?.vertices) buffers.push(result.defectMesh.vertices.buffer, result.defectMesh.triangles.buffer);
     buffers.push(result.cell.vectors.buffer, result.cell.origin.buffer);
     self.postMessage({ id, ok: true, result }, [...new Set(buffers)]);
   } catch (error) {
@@ -83,6 +90,6 @@ self.addEventListener('message', ({ data }) => {
   // Cancellation bypasses the queue while startup/pool preparation is awaiting
   // asynchronous work. Native calculations use the client's atomic control.
   if (data.type === 'cancel') { controllers.get(data.id)?.abort(); return; }
-  if (data.type !== 'warmup' && data.type !== 'analyze') return;
+  if (data.type !== 'warmup' && data.type !== 'analyze' && data.type !== 'surface') return;
   requests = requests.then(() => handleRequest(data));
 });

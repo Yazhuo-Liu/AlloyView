@@ -24,6 +24,56 @@ origin-commit path; camera, coordinate mode, replication and analyses are kept.
 - Valid origin writeback clears stale input validation errors, including after
   restoring the original position.
 
+## Grain segmentation, surface meshes, scripts and movies (2026-10-09)
+
+Backlog items O15, O16 and A9 were merged together, which completes phase 3.
+
+- **Tests:** all 1,668 Node tests pass and the build succeeds. New tests: 58
+  for grains, 38 for meshes, 43 for scripts and movies.
+- **Browser and GPU suites:** all 37 pass after the merge, including the new
+  grains, surface-mesh and movies suites.
+- **Rebuilt Wasm is reproducible:** the PTM kernel and both DXA kernels were
+  rebuilt from the merged source in a different directory with emsdk 3.1.69.
+  All six `.wasm`/`.mjs` files are byte-identical to the merged ones. The
+  build scripts now pass `-ffile-prefix-map`, so binaries no longer embed the
+  checkout path.
+- **Existing results unchanged against `5157918`:**
+  - CPU pool analyses match with `Object.is` on HEA, the Fe loop and NiGB, with
+    copied and shared memory: coordination, both CNA modes, both CSP modes,
+    PTM, bonds, local shear and RDF.
+  - Single-thread DXA scientific output is identical on 11 cases for the plain
+    and threaded kernels. The defect-mesh option leaves the lines identical,
+    whether it is off or on.
+  - The agent's PTM check found 0 differences in 245 arrays (11.9M elements)
+    over 35 cases.
+- **Grain segmentation against `ovito==3.9.4`** (10 structures × 7 settings):
+  - **On OVITO's own PTM output:**
+    - the partition is identical in 70/70 (ARI 1);
+    - mean orientations agree within 4×10⁻⁶°;
+    - the automatic threshold is bit-equal on the 8 noisy structures;
+    - on the two ideal structures OVITO itself varies run to run, and the
+      result lies inside its range.
+  - **End to end with AlloyView's PTM:**
+    - grain counts are equal in 70/70 and partitions identical in 59/70;
+    - the other 11 have ARI ≥ 0.9965, where atoms equidistant between two
+      grains go to the other one.
+- **Surface mesh:**
+  - Periodic fcc, bcc and hcp crystals give no surface.
+  - A cube and a periodic or triclinic slab give exact areas and volumes
+    (10⁻⁹–10⁻¹⁰ relative).
+  - Sphere and void volumes lie within their analytic brackets.
+  - Capped display meshes are closed, and their volume equals the solid volume
+    to 10⁻⁹ at smoothing 0.
+  - Offscreen exports equal the screen, with a maximum difference of 0.
+- **Scripts and movies:**
+  - The script sources contain no `eval`, `Function` or dynamic import.
+  - A tampered recipe script neither moves the camera nor downloads until Run
+    is pressed.
+  - All six video formats were re-read by an independent parser, decoded with
+    `VideoDecoder` and a `<video>` element, and checked with ffprobe.
+  - Movie frames match the PNG export of the same pose (mean difference
+    1.1–1.5 of 255) and carry each frame's own label values.
+
 ## Text labels, time series, ambient occlusion and crystal drag (2026-10-09)
 
 Backlog items O12, O13 and A6 were merged together, which completes phase 2.

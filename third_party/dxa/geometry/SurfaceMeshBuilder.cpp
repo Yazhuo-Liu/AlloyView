@@ -163,4 +163,60 @@ SurfaceMesh::size_type SurfaceMeshBuilder::makeManifold()
 
     return numSharedVertices;
 }
+
+/******************************************************************************
+* Fairs a closed triangle mesh.
+******************************************************************************/
+bool SurfaceMeshBuilder::smoothMesh(int numIterations, ProgressingTask& task, FloatType k_PB, FloatType lambda)
+{
+    // This is the implementation of the mesh smoothing algorithm:
+    //
+    // Gabriel Taubin
+    // A Signal Processing Approach To Fair Surface Design
+    // In SIGGRAPH 95 Conference Proceedings, pages 351-358 (1995)
+
+    // Performs one iteration of the smoothing algorithm.
+    auto smoothMeshIteration = [this](FloatType prefactor) {
+
+        // Compute displacement for each vertex.
+        std::vector<Vector3> displacements(vertexCount());
+        parallelFor(vertexCount(), [&](vertex_index vertex) {
+            Vector3 d = Vector3::Zero();
+
+            // Go in positive direction around vertex, facet by facet.
+            edge_index currentEdge = firstVertexEdge(vertex);
+            if(currentEdge != InvalidIndex) {
+                int numManifoldEdges = 0;
+                do {
+                    OVITO_ASSERT(currentEdge != InvalidIndex);
+                    OVITO_ASSERT(adjacentFace(currentEdge) != InvalidIndex);
+                    d += edgeVector(currentEdge);
+                    numManifoldEdges++;
+                    currentEdge = oppositeEdge(prevFaceEdge(currentEdge));
+                }
+                while(currentEdge != firstVertexEdge(vertex));
+                d *= (prefactor / numManifoldEdges);
+            }
+
+            displacements[vertex] = d;
+        });
+
+        // Apply computed displacements.
+        auto d = displacements.cbegin();
+        for(Point3& vertex : _mesh->points)
+            vertex += *d++;
+    };
+
+    FloatType mu = FloatType(1) / (k_PB - FloatType(1)/lambda);
+    task.setProgressMaximum(numIterations);
+
+    for(int iteration = 0; iteration < numIterations; iteration++) {
+        if(!task.setProgressValue(iteration))
+            return false;
+        smoothMeshIteration(lambda);
+        smoothMeshIteration(mu);
+    }
+
+    return !task.isCanceled();
+}
 }

@@ -1,4 +1,5 @@
 import { determinant3 } from './data/model.js';
+import { quaternionAxisAngle, quaternionBungeEuler } from './analysis/grains.js';
 
 /** CSV values use JavaScript's shortest round-trip decimal representation.
  * Undefined/null are empty cells; NaN and infinities retain their identities.
@@ -41,8 +42,9 @@ const STAT_COLUMNS = ['analysis', 'property', 'unit', 'finite_count', 'nan_count
 export const STATISTICS_TABLES = Object.freeze([
   'summary', 'properties', 'categories', 'coordination', 'atoms', 'rdf', 'dxa-summary', 'dxa-lines',
   'bond-length', 'bond-angle', 'bond-order', 'bond-order-atoms', 'voronoi-distributions', 'voronoi-atoms', 'voronoi-faces',
-  'clusters', 'binning', 'wigner-seitz',
+  'clusters', 'binning', 'wigner-seitz', 'grains', 'grains-merge',
 ]);
+const GRAIN_STRUCTURES = Object.freeze(['Other', 'FCC', 'HCP', 'BCC', 'ICO', 'SC', 'Diamond', 'Hex. diamond', 'Graphene']);
 
 /** Select a table from already completed analyses. All atom scans and CSV
  * formatting can run in the persistent statistics Worker. No neighbor search
@@ -108,6 +110,33 @@ export function buildStatisticsTable(snapshot, kind = 'summary') {
           frame.ids?.[atom] ?? atom + 1];
       }
     })());
+  }
+  if (kind === 'grains') {
+    const grains = required(result('grains'), 'Find grains before exporting the grain table.');
+    const atomCount = frame.ids?.length ?? frame.atomCount, volumes = grains.volumes;
+    // Orientation (w, x, y, z) rotates the ideal lattice into the simulation
+    // frame; Euler angles are Bunge Z–X–Z of the inverse, sample → crystal.
+    return table(['grain_id', 'atom_count', 'atom_fraction', 'structure_type', 'structure_type_id', 'orientation_w', 'orientation_x',
+      'orientation_y', 'orientation_z', 'euler_phi1 [°]', 'euler_Phi [°]', 'euler_phi2 [°]', 'axis_x', 'axis_y', 'axis_z', 'angle [°]',
+      'volume [Å³]', 'volume_source'], (function* () {
+      for (let index = 0; index < grains.grainCount; index++) {
+        const { angle, axis } = quaternionAxisAngle(grains.orientations, index * 4);
+        yield [index + 1, grains.sizes[index], grains.sizes[index] / atomCount, GRAIN_STRUCTURES[grains.structureTypes[index]] ?? 'Other',
+          grains.structureTypes[index], ...grains.orientations.subarray(index * 4, index * 4 + 4),
+          ...quaternionBungeEuler(grains.orientations, index * 4), ...axis, angle,
+          volumes ? volumes[index] : '', volumes ? grains.volumeSource === 'voronoi' ? 'Voronoi atomic volumes' : 'atoms × mean atomic volume' : ''];
+      }
+    })());
+  }
+  if (kind === 'grains-merge') {
+    const grains = required(result('grains'), 'Find grains before exporting the merge distances.');
+    const degrees = grains.plot.unit === 'degrees';
+    return table([degrees ? 'disorientation [°]' : 'log_merge_distance', 'merge_size [atoms]', 'merged', degrees ? 'threshold [°]' : 'threshold'],
+      (function* () {
+        for (let index = 0; index < grains.plot.distance.length; index++) {
+          yield [grains.plot.distance[index], grains.plot.size[index], grains.plot.distance[index] <= grains.mergeThreshold, grains.mergeThreshold];
+        }
+      })());
   }
   if (kind === 'wigner-seitz') {
     const sites = required(result('wignerSeitz')?.exportSites, 'Calculate Wigner–Seitz defects before exporting defect sites.');
@@ -298,6 +327,16 @@ function* summaryRows(snapshot, properties) {
       if (clusters[name] !== undefined) yield ['clusters', name.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`), '', clusters[name], ''];
     }
   }
+  const grains = completedResult(snapshot, 'grains');
+  if (grains) {
+    for (const [metric, name, unit] of [['grain_count', 'grainCount', ''], ['mean_size', 'meanSize', 'atoms'], ['largest_size', 'largestSize', 'atoms'],
+      ['assigned_atoms', 'assignedAtoms', ''], ['unassigned_atoms', 'unassignedAtoms', ''], ['adopted_atoms', 'adoptedAtoms', ''],
+      ['merge_threshold', 'mergeThreshold', grains.algorithm === 'mst' ? '°' : ''], ['automatic_merge_threshold', 'suggestedThreshold', ''],
+      ['algorithm', 'algorithm', ''], ['minimum_grain_size', 'minGrainSize', 'atoms'], ['adopt_orphan_atoms', 'adoptOrphans', ''],
+      ['handle_coherent_interfaces', 'handleCoherentInterfaces', '']]) {
+      if (grains[name] !== undefined && grains[name] !== null) yield ['grains', metric, '', grains[name], unit];
+    }
+  }
   const wignerSeitz = completedResult(snapshot, 'wignerSeitz');
   if (wignerSeitz) {
     for (const [metric, name] of [['reference_frame', 'referenceFrame'], ['affine_mapping', 'affineMapping'], ['site_count', 'siteCount'],
@@ -310,6 +349,8 @@ function* summaryRows(snapshot, properties) {
         ['antisite_atoms', 'antisiteAtoms'], ['atoms_on_shared_sites', 'sharedSiteAtoms']]) yield ['wignerSeitz', metric, row.label, row[name], ''];
     }
   }
+  const surface = completedResult(snapshot, 'surfaceMesh');
+  if (surface) yield* surfaceSummaryRows(surface);
   const voronoi = completedResult(snapshot, 'voronoi');
   if (voronoi) {
     if (Array.isArray(voronoi.selectedTypes)) yield ['voronoi', 'selected_types', '', voronoi.selectedTypes.join('; '), ''];
@@ -327,11 +368,31 @@ function* summaryRows(snapshot, properties) {
   }
 }
 
+/** Surface mesh measurements; metric names follow OVITO's attributes. Each
+ * region adds its volume and area, labeled by kind and region ID. */
+function* surfaceSummaryRows(surface) {
+  for (const [metric, name, unit] of [['probe_radius', 'radius', 'Å'], ['smoothing_level', 'smoothingLevel', ''], ['input_atom_count', 'inputCount', ''],
+    ['vertex_count', 'vertexCount', ''], ['face_count', 'faceCount', ''],
+    ['surface_area', 'surfaceArea', 'Å²'], ['specific_surface_area', 'specificSurfaceArea', 'Å⁻¹'],
+    ['filled_volume', 'filledVolume', 'Å³'], ['filled_fraction', 'filledFraction', ''], ['empty_volume', 'emptyVolume', 'Å³'],
+    ['empty_fraction', 'emptyFraction', ''], ['void_volume', 'voidVolume', 'Å³'], ['void_fraction', 'voidFraction', ''],
+    ['cell_volume', 'totalVolume', 'Å³'], ['filled_region_count', 'filledRegionCount', ''], ['empty_region_count', 'emptyRegionCount', ''],
+    ['void_region_count', 'voidRegionCount', ''], ['surface_component_count', 'surfaceComponentCount', '']]) {
+    if (surface[name] !== undefined) yield ['surfaceMesh', metric, '', surface[name], unit];
+  }
+  for (let region = 0; region < (surface.regionVolumes?.length ?? 0); region++) {
+    const label = `${surface.regionFilled[region] ? 'filled' : surface.regionExterior[region] ? 'exterior' : 'void'} ${region}`;
+    yield ['surfaceMesh', 'region_volume', label, surface.regionVolumes[region], 'Å³'];
+    yield ['surfaceMesh', 'region_surface_area', label, surface.regionAreas[region], 'Å²'];
+  }
+}
+
 function* dxaSummaryRows(network) {
   yield ['segment_count', '', network.segmentCount ?? network.segments?.length ?? 0, ''];
   yield ['total_length', '', network.totalLength ?? 0, 'Å'];
   yield ['cell_volume', '', network.volume, 'Å³'];
   yield ['line_density', '', network.density, 'Å⁻²'];
+  if (network.defectMeshArea !== undefined) yield ['defect_mesh_area', '', network.defectMeshArea, 'Å²'];
   const families = new Set([...Object.keys(network.counts ?? {}), ...Object.keys(network.familyLengths ?? {})]);
   for (const family of families) {
     const entry = network.counts?.[family];

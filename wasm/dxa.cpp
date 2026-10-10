@@ -33,6 +33,18 @@ std::string lastError;
 // omits one number per atom. Headless callers keep the complete JSON.
 bool binaryStructureLabels = false;
 std::vector<uint8_t> resultStructureLabels;
+// Optional defect mesh (OVITO's "defect mesh" output). A negative level leaves
+// it out, so the staged pipeline and its JSON are unchanged by default.
+int defectMeshSmoothing = -1;
+struct DefectMeshOutput {
+    std::vector<double> vertices;      // xyz per vertex
+    std::vector<uint32_t> triangles;   // three vertices per triangle
+    std::string error;
+    size_t goodCells = 0, badCells = 0;
+    double surfaceArea = 0;
+    void clear() { *this = DefectMeshOutput(); }
+};
+DefectMeshOutput defectMeshOutput;
 
 void vectorJson(std::ostream& out, const Vector3& v) {
     out << '[' << v.x() << ',' << v.y() << ',' << v.z() << ']';
@@ -267,6 +279,64 @@ void buildCpuMapping(DxaSession& session) {
     session.mappingReady = true;
 }
 
+// Upstream DislocationAnalysisEngine::perform(): generate the defect mesh from
+// the interface mesh after tracing, then fair it. The traced network and the
+// interface mesh are only read. A mesh that cannot be closed is reported in the
+// result and never fails the dislocation analysis.
+void buildDefectMesh(DxaSession& session, int smoothingLevel) {
+    defectMeshOutput.clear();
+    try {
+        const auto& tessellation = session.tessellation;
+        for(size_t cell = 0; cell < tessellation.numberOfTetrahedra(); ++cell) {
+            if(tessellation.isGhostCell(cell)) continue;
+            if(tessellation.getUserField(cell) == SurfaceMesh::InvalidIndex) ++defectMeshOutput.badCells;
+            else ++defectMeshOutput.goodCells;
+        }
+        SurfaceMesh mesh;
+        SurfaceMeshBuilder builder(&mesh);
+        requireStage(session.interfaceMesh->generateDefectMesh(*session.tracer, builder, session.operation));
+        if(smoothingLevel > 0) requireStage(builder.smoothMesh(smoothingLevel, session.operation));
+        // Keep only vertices that belong to a face; swept interface faces
+        // leave their vertices behind.
+        std::vector<uint32_t> vertexMap(builder.vertexCount(), std::numeric_limits<uint32_t>::max());
+        auto& vertices = defectMeshOutput.vertices;
+        auto& triangles = defectMeshOutput.triangles;
+        const auto outputVertex = [&](SurfaceMesh::vertex_index vertex) {
+            if(vertexMap[vertex] == std::numeric_limits<uint32_t>::max()) {
+                vertexMap[vertex] = static_cast<uint32_t>(vertices.size() / 3);
+                for(int axis = 0; axis < 3; ++axis) vertices.push_back(mesh.points[vertex][axis]);
+            }
+            return vertexMap[vertex];
+        };
+        double area = 0;
+        for(int face = 0; face < builder.faceCount(); ++face) {
+            if((face & 4095) == 0) requireStage(true);
+            const auto first = builder.firstFaceEdge(face);
+            const uint32_t apex = outputVertex(builder.vertex1(first));
+            // Minimum-image edge vectors: faces may connect atoms across a
+            // periodic boundary.
+            Vector3 previous = builder.edgeVector(first);
+            for(auto edge = builder.nextFaceEdge(first); builder.nextFaceEdge(edge) != first; edge = builder.nextFaceEdge(edge)) {
+                triangles.push_back(apex);
+                triangles.push_back(outputVertex(builder.vertex1(edge)));
+                triangles.push_back(outputVertex(builder.vertex2(edge)));
+                const Vector3 next = previous + builder.edgeVector(edge);
+                area += previous.cross(next).length() / 2;
+                previous = next;
+            }
+        }
+        defectMeshOutput.surfaceArea = area;
+    } catch (const std::exception& error) {
+        if(Task::current()->isCanceled()) throw;
+        const size_t goodCells = defectMeshOutput.goodCells, badCells = defectMeshOutput.badCells;
+        defectMeshOutput.clear();
+        defectMeshOutput.goodCells = goodCells; defectMeshOutput.badCells = badCells;
+        defectMeshOutput.error = dynamic_cast<const std::bad_alloc*>(&error)
+            ? "Insufficient memory for the DXA defect mesh." : error.what();
+        if(defectMeshOutput.error.empty()) defectMeshOutput.error = "The DXA defect mesh could not be generated.";
+    }
+}
+
 void saveCurrentError(bool dispose) {
     try { throw; }
     catch (const std::bad_alloc&) {
@@ -296,10 +366,20 @@ void alloy_dxa_dispose() {
     activeSession.reset();
     std::string().swap(resultJson);
     std::vector<uint8_t>().swap(resultStructureLabels);
+    defectMeshOutput.clear();
 }
 void alloy_dxa_binary_labels(int enabled) { binaryStructureLabels = enabled != 0; }
 const uint8_t* alloy_dxa_result_labels_ptr() { return resultStructureLabels.data(); }
 int alloy_dxa_result_labels_count() { return static_cast<int>(resultStructureLabels.size()); }
+// Request the defect mesh for later alloy_dxa_finish() calls, with upstream's
+// number of smoothing iterations (OVITO's default is 8); disabled by default.
+void alloy_dxa_defect_mesh(int enabled, int smoothingLevel) {
+    defectMeshSmoothing = enabled ? std::max(0, std::min(smoothingLevel, 1000)) : -1;
+}
+int alloy_dxa_defect_vertex_count() { return static_cast<int>(defectMeshOutput.vertices.size() / 3); }
+int alloy_dxa_defect_triangle_count() { return static_cast<int>(defectMeshOutput.triangles.size() / 3); }
+const double* alloy_dxa_defect_vertices_ptr() { return defectMeshOutput.vertices.data(); }
+const uint32_t* alloy_dxa_defect_triangles_ptr() { return defectMeshOutput.triangles.data(); }
 
 // Vectors are column vectors; cell[9..11] is the Cartesian origin. Periodicity
 // is encoded in bits 0, 1 and 2, including for a tilted simulation cell.
@@ -310,6 +390,7 @@ int alloy_dxa_prepare(const double* coordinates, int count,
     lastError.clear();
     std::string().swap(resultJson);
     std::vector<uint8_t>().swap(resultStructureLabels);
+    defectMeshOutput.clear();
     try {
         requireStage(true);
         if (!coordinates || !cellData || count < 1)
@@ -436,6 +517,7 @@ const char* alloy_dxa_finish() {
     lastError.clear();
     std::string().swap(resultJson);
     std::vector<uint8_t>().swap(resultStructureLabels);
+    defectMeshOutput.clear();
     try {
         requireStage(true);
         if (!activeSession) throw std::runtime_error("DXA has no active staged analysis.");
@@ -459,6 +541,11 @@ const char* alloy_dxa_finish() {
         alloy_dxa_progress("Connect dislocation junctions", 9, 11);
         tracer.finishDislocationSegments(lattice);
         requireStage(true);
+        const bool withDefectMesh = defectMeshSmoothing >= 0;
+        if (withDefectMesh) {
+            alloy_dxa_progress("Generate defect mesh", 9, 11);
+            buildDefectMesh(session, defectMeshSmoothing);
+        }
         alloy_dxa_progress("Smooth and coarsen dislocation lines", 10, 11);
         if (smoothing > 0 || coarsening > 0)
             requireStage(tracer.network()->smoothDislocationLines(smoothing, coarsening, operation));
@@ -516,6 +603,21 @@ const char* alloy_dxa_finish() {
             << ",\"pathSearchBatches\":" << mapping.parallelPathBatches()
             << ",\"deferredPathEdges\":" << mapping.deferredPathEdges()
             << ",\"directPathEdges\":" << mapping.directPathEdges() << '}';
+        if (withDefectMesh) {
+            out << ",\"defectMesh\":{\"smoothingLevel\":" << defectMeshSmoothing
+                << ",\"vertexCount\":" << defectMeshOutput.vertices.size() / 3
+                << ",\"triangleCount\":" << defectMeshOutput.triangles.size() / 3
+                << ",\"surfaceArea\":" << defectMeshOutput.surfaceArea
+                << ",\"goodCellCount\":" << defectMeshOutput.goodCells
+                << ",\"defectCellCount\":" << defectMeshOutput.badCells;
+            if (!defectMeshOutput.error.empty()) {
+                out << ",\"error\":\"";
+                for (const char character : defectMeshOutput.error)
+                    out << (character == '"' || character == '\\' || static_cast<unsigned char>(character) < 0x20 ? ' ' : character);
+                out << '"';
+            }
+            out << '}';
+        }
         BufferReadAccess<int32_t> structureAccess(structures);
         if (binaryStructureLabels) {
             resultStructureLabels.resize(static_cast<size_t>(count));

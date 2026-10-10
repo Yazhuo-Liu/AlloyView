@@ -274,7 +274,10 @@ bool InterfaceMesh::generateDefectMesh(const DislocationTracer& tracer, SurfaceM
 
     // Link dangling half-edges to their opposite edges.
     if(!defectMesh.connectOppositeHalfedges()) {
-        OVITO_ASSERT(false);    // Mesh is not closed.
+        // AlloyView: assertions are live in the Wasm build and upstream's
+        // OVITO_ASSERT(false) would abort the whole module. Report the open
+        // mesh instead; the caller keeps the dislocation lines.
+        throw Exception("The DXA defect mesh is not a closed manifold.");
     }
 
     return true;

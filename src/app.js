@@ -49,13 +49,18 @@ import { initializeCameraControls } from './camera-controls.js';
 import { initializeExportResolutionControls } from './export-resolution-controls.js';
 import { initializeAmbientOcclusionControls } from './ambient-occlusion-controls.js';
 import { initializeKeyboardControls } from './keyboard-controls.js';
+import { cameraCommand, createAutomationLock, createScriptHost, initializeScriptControls } from './script-controls.js';
+import { initializeMovieControls } from './movie-controls.js';
 import { initializeExternalPropertyControls } from './external-property-controls.js';
 import { initializeExpressionControls } from './expression-controls.js';
 import { removeComputedProperties } from './computed-properties.js';
 import { SelectionExpansionClient } from './selection-expansion-client.js';
 import { initializeTopologyTools } from './topology-tools.js';
 import { initializeClusterTools } from './cluster-tools.js';
+import { initializeGrainTools } from './grain-tools.js';
+import { GrainSegmentationClient } from './grains-client.js';
 import { initializeWignerSeitzTools } from './wigner-seitz-tools.js';
+import { initializeSurfaceTools } from './surface-tools.js';
 import { initializeBinningTools } from './binning-tools.js';
 import { createGlobalAttributeSource } from './global-attribute-source.js';
 import { initializeTextLabels } from './text-label-controls.js';
@@ -205,7 +210,9 @@ let externalProperties;
 let expressionTools;
 let topologyTools;
 let clusterTools;
+let grainTools;
 let wignerSeitzTools;
+let surfaceTools;
 let binningTools;
 let trajectoryTools;
 let voronoiCells;
@@ -213,6 +220,8 @@ let statisticsExports;
 let globalAttributes;
 let textLabelControls;
 let timeSeries;
+let scriptControls;
+let movieControls;
 let dxaTools;
 let crystalVisibility;
 let currentColorLegend = null;
@@ -250,7 +259,9 @@ const toolPanels = initializeToolPanels({
     if (kind === 'voronoi') topologyTools?.cancel('voronoi');
     else if (kind === 'dxa') dxaTools?.cancel();
     else if (kind === 'clusters') clusterTools?.cancel();
+    else if (kind === 'grains') grainTools?.cancel();
     else if (kind === 'wignerSeitz') wignerSeitzTools?.cancel();
+    else if (kind === 'surfaceMesh') surfaceTools?.cancel();
     else if (kind === 'binning') binningTools?.cancel();
     else if (kind === 'displacement') atomEyeTools?.cancelDisplacement();
     else if (state.analysis[kind]) cancelAnalysis(kind);
@@ -266,10 +277,13 @@ const toolPanels = initializeToolPanels({
     if (name === 'expressions') toolPanels.setToolEnabled(name, expressionTools.getState().properties.length > 0);
     if (name === 'textLabels') toolPanels.setToolEnabled(name, textLabelControls?.hasActiveLabels() ?? false);
     if (name === 'timeSeries') toolPanels.setToolEnabled(name, timeSeries?.hasSeries() ?? false);
+    if (name === 'scripts') toolPanels.setToolEnabled(name, scriptControls?.isRunning() ?? false);
+    if (name === 'movie') toolPanels.setToolEnabled(name, movieControls?.hasKeyframes() ?? false);
   },
   onSelectionChange: (name, { userInitiated = false } = {}) => {
     if (name !== 'slice') sliceControls?.setPicking(false);
     if (name === 'binning') binningTools?.warm();
+    if (name === 'grains') grainTools?.warm();
     syncSliceGizmo();
     selectionGroupControls?.setActive(name === 'selectionGroups');
     syncSelectionGroupInteraction();
@@ -384,6 +398,7 @@ selectionGroupControls = initializeSelectionGroupControls({
     expressionTools?.refresh();
     if (state.frame && reason !== 'interaction' && reason !== 'selection') { applyColors(); restoreSelection(); }
     if (reason !== 'interaction' && reason !== 'selection') void clusterTools?.refreshSelectionGroups();
+    if (reason !== 'interaction' && reason !== 'selection') void surfaceTools?.refreshSelectionGroups();
     if (reason !== 'interaction' && reason !== 'selection') trajectoryTools?.refresh();
   },
   onError: error => showToast(error.message ?? String(error)),
@@ -507,7 +522,7 @@ atomEyeTools = initializeAtomEyeTools({
     const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
     return analysis.enabled && !['Failed', 'Calculated'].includes(elements[`${prefix}-state`].textContent);
   }).map(([kind]) => kind), ...(topologyTools?.pendingKinds() ?? []), ...(clusterTools?.pendingKinds() ?? []),
-    ...(wignerSeitzTools?.pendingKinds() ?? [])],
+    ...(wignerSeitzTools?.pendingKinds() ?? []), ...(grainTools?.pendingKinds() ?? [])],
   getAnalysisPropertyKind: name => {
     for (const [kind, analysis] of Object.entries(state.analysis)) {
       if (!analysis.enabled) continue;
@@ -519,7 +534,8 @@ atomEyeTools = initializeAtomEyeTools({
               : [ANALYSES[kind].name];
       if (outputs.includes(name)) return kind;
     }
-    return topologyTools?.getPropertyKind(name) ?? clusterTools?.getPropertyKind(name) ?? wignerSeitzTools?.getPropertyKind(name) ?? null;
+    return topologyTools?.getPropertyKind(name) ?? clusterTools?.getPropertyKind(name) ?? wignerSeitzTools?.getPropertyKind(name)
+      ?? grainTools?.getPropertyKind(name) ?? null;
   },
   getSelectedIndex: () => state.selectedId === null || !state.frame ? -1 : findAtomIndex(state.frame.ids, state.selectedId),
   selectAtom: handleAtomPick,
@@ -590,6 +606,8 @@ dxaTools = initializeDxaTools({
     globalAttributes?.refresh();
   },
   onMemoryChange: reassessFrameCache, notify: showToast,
+  getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
+  getFrameIndex: () => state.frameIndex,
 });
 
 topologyTools = initializeTopologyTools({
@@ -644,6 +662,36 @@ clusterTools = initializeClusterTools({
   notify: showToast,
 });
 
+grainTools = initializeGrainTools({
+  client: new GrainSegmentationClient({ cpuBudget }), tools: toolPanels,
+  getFrame: () => state.frame,
+  getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  getFrameIndex: () => state.frameIndex,
+  getPtmParameters: () => ptmParameters(),
+  ensurePtm: ptmForGrains,
+  releasePtm: () => {
+    if (state.analysis.ptm.enabled || state.analysis.strain.enabled) return;
+    for (const frame of new Set([state.frame, ...cache.frames.values()])) if (frame) delete frame.ptm;
+  },
+  getColorChoiceVersion: () => colorChoiceVersion,
+  chooseProperty: (name, { manual = false } = {}) => {
+    if (manual) { colorChoiceVersion++; interruptConfigurationRestore('a color quantity change'); }
+    state.colorMode = `property:${name}`; refreshColorOptions(); applyColors();
+  },
+  chooseColorMode: (mode) => {
+    colorChoiceVersion++; interruptConfigurationRestore('a color quantity change');
+    state.colorMode = mode; refreshColorOptions(); applyColors();
+  },
+  onResultsChange: () => {
+    if (!state.frame) return;
+    refreshColorOptions(); applyColors(); updateMemoryMetric();
+    reassessFrameCache(state.frame);
+  },
+  onEdit: () => interruptConfigurationRestore('a grain segmentation edit'),
+  notify: showToast,
+});
+
 wignerSeitzTools = initializeWignerSeitzTools({
   renderer, pool: analysisPool, tools: toolPanels,
   getFrame: () => state.frame, getFrameAt: getFrame,
@@ -666,6 +714,26 @@ wignerSeitzTools = initializeWignerSeitzTools({
   },
   onDisplayChange: () => atomEyeTools?.syncComparison(),
   onEdit: () => interruptConfigurationRestore('a Wigner–Seitz analysis edit'),
+  notify: showToast,
+});
+
+surfaceTools = initializeSurfaceTools({
+  renderer, tools: toolPanels, client: dxaClient,
+  getFrame: () => state.frame,
+  getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  getFrameIndex: () => state.frameIndex,
+  getSelectionGroups: () => state.selectionGroups.groups,
+  getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
+  onResultsChange: () => {
+    if (!state.frame) return;
+    updateMemoryMetric();
+    reassessFrameCache(state.frame);
+    statisticsExports?.refresh();
+    globalAttributes?.refresh();
+  },
+  onDisplayChange: () => atomEyeTools?.syncComparison(),
+  onEdit: () => interruptConfigurationRestore('a surface mesh edit'),
   notify: showToast,
 });
 
@@ -947,6 +1015,51 @@ const keyboardControls = initializeKeyboardControls({
   onEdit: () => interruptConfigurationRestore('a keyboard view or slice edit'),
 });
 
+// A script, a camera-path preview or a movie export runs one at a time. Their
+// frame changes behave like the trajectory buttons and resolve once the
+// frame's analyses have finished.
+const automationLock = createAutomationLock();
+// Every analysis panel reports its work in a state pill; a frame being read shows the loading overlay.
+const analysesSettled = () => elements.loading.hidden && ![...document.querySelectorAll('.analysis-section .state-pill')]
+  .some(pill => /…$|^Queued$|^Waiting$/.test(pill.textContent.trim()));
+const showFrameForAutomation = (index) => {
+  atomEyeTools.cancelBatch({ restore: false });
+  interruptConfigurationRestore('a frame change');
+  stopFramePlayback();
+  return showFrame(index);
+};
+movieControls = initializeMovieControls({
+  renderer, tools: toolPanels, lock: automationLock,
+  getFrameIndex: () => state.frameIndex, getFrameCount: () => state.frameCount,
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  ensureIndexed: waitForSourceIndex, showFrame: showFrameForAutomation, stopPlayback: stopFramePlayback,
+  getExportOptions: imageExportOptions, getResolution: () => exportResolutionControls.getState(), analysesSettled,
+  prepareExport: options => textLabelControls?.prepareExport(options),
+  getFileStem: exportFileStem,
+  onEdit: () => interruptConfigurationRestore('a camera path or movie edit'), notify: showToast,
+});
+scriptControls = initializeScriptControls({
+  registry: keyboardControls.registry, tools: toolPanels, lock: automationLock,
+  getToolIds: () => [...document.querySelectorAll('[data-tool-panel]')].map(panel => panel.dataset.toolPanel),
+  getCameraCommand: () => (state.frame ? cameraCommand(renderer) : ''),
+  getFileStem: exportFileStem,
+  onEdit: () => interruptConfigurationRestore('a script edit'), notify: showToast,
+  host: createScriptHost({
+    renderer, registry: keyboardControls.registry, tools: toolPanels,
+    getFrameIndex: () => state.frameIndex, getFrameCount: () => state.frameCount,
+    showFrame: showFrameForAutomation, ensureIndexed: waitForSourceIndex,
+    getColorOptions: () => [...elements['color-mode'].options].map(item => ({ value: item.value, label: item.textContent })),
+    chooseColor: selectColorMode,
+    getSliceControls: () => sliceControls,
+    captureImage: () => renderer.captureImage(imageExportOptions()),
+    getImageName: () => `${exportFileStem()}-frame-${state.frameIndex + 1}`,
+    addKeyframe: options => movieControls.addKeyframe(options),
+    clearKeyframes: () => movieControls.clearKeyframes(),
+    analysesSettled,
+    onEdit: () => interruptConfigurationRestore('a script command'),
+  }),
+});
+
 const fileDrop = initializeFileDrop({
   overlay: elements['file-drop-overlay'],
   onFiles: files => {
@@ -973,10 +1086,14 @@ window.addEventListener('beforeunload', () => {
   sliceGizmo.dispose();
   cameraControls?.dispose();
   keyboardControls.dispose();
+  scriptControls?.stop();
+  movieControls?.dispose();
   externalProperties?.reset();
   topologyTools?.abortJobs();
   clusterTools?.abortJobs();
+  grainTools?.dispose();
   wignerSeitzTools?.abortJobs();
+  surfaceTools?.abortJobs();
   binningTools?.dispose();
   voronoiCells?.abortJobs();
   statisticsExports?.dispose();
@@ -1040,11 +1157,14 @@ function closeSource() {
   dxaTools.reset();
   topologyTools?.reset();
   clusterTools?.reset();
+  grainTools?.reset();
   wignerSeitzTools?.reset();
+  surfaceTools?.reset();
   binningTools?.reset();
   trajectoryTools?.reset();
   voronoiCells?.reset();
   timeSeries?.reset();
+  movieControls?.reset();
   globalAttributes?.reset();
   framePrefetchController?.abort();
   framePrefetchController = null;
@@ -1450,11 +1570,14 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     dxaTools.reset();
     topologyTools?.reset();
     clusterTools?.reset();
+    grainTools?.reset();
     wignerSeitzTools?.reset();
+    surfaceTools?.reset();
     binningTools?.reset();
     trajectoryTools?.reset();
     voronoiCells?.reset();
     timeSeries?.reset();
+    movieControls?.reset();
     globalAttributes?.reset();
     for (const kind of Object.keys(state.analysis)) toolPanels.setToolEnabled(kind, false);
     toolPanels.setToolEnabled('replicate', false);
@@ -1585,6 +1708,7 @@ function updateSourceIndex(info) {
     }
     updateCacheLabel();
     trajectoryTools?.refresh();
+    movieControls?.refresh();
     if (state.indexComplete) scheduleFramePrefetch(state.frameIndex);
   }
   if (info.error && info.error !== previousError) showToast(`Trajectory indexing stopped: ${info.error}`);
@@ -1754,7 +1878,9 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   pending.push(dxaTools.onFrame());
   pending.push(topologyTools.onFrame());
   pending.push(clusterTools.onFrame({ suggestedCutoff: recommendCoordinationCutoff(frame).value }));
+  pending.push(grainTools.onFrame());
   pending.push(wignerSeitzTools.onFrame());
+  pending.push(surfaceTools.onFrame());
   pending.push(binningTools.onFrame());
   syncCancelButton('coordination');
   await Promise.all(pending);
@@ -2287,6 +2413,12 @@ function refreshColorOptions() {
   for (const { name, label } of clusterTools?.pendingColorProperties() ?? []) {
     if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
   }
+  for (const { name, label } of grainTools?.pendingColorProperties() ?? []) {
+    if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
+  }
+  for (const { value, label } of grainTools?.pendingColorModes() ?? []) {
+    if (![...elements['color-mode'].options].some(item => item.value === value)) elements['color-mode'].append(option(value, `${label} (calculating…)`));
+  }
   for (const { name, label } of wignerSeitzTools?.pendingColorProperties() ?? []) {
     if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
   }
@@ -2331,6 +2463,8 @@ function applyScalarVisibility(legend, { includeScalarRange = true } = {}) {
   renderer.setVisibility(atomEyeTools.filterVisibility(mask), {
     selectionVisibility: selectionGroupVisibility(state.frame, state.selectionGroups.groups),
   });
+  // A surface restricted to the visible atoms follows the display filters.
+  surfaceTools?.refreshVisibility();
   restoreSelection();
 }
 
@@ -2370,7 +2504,9 @@ function abortAnalysisJobs() {
   dxaTools?.abortJobs();
   topologyTools?.abortJobs();
   clusterTools?.abortJobs();
+  grainTools?.abortJobs();
   wignerSeitzTools?.abortJobs();
+  surfaceTools?.abortJobs();
   binningTools?.abortJobs();
   voronoiCells?.abortJobs();
   for (const controller of analysisControllers.values()) controller.abort();
@@ -2419,7 +2555,7 @@ function cancelAnalysis(kind) {
       hiddenCategories.delete(name);
       if (isCrystalStructureProperty(name)) removedCrystalSources.add(name);
     }
-    if (['ptm', 'strain'].includes(kind) && !state.analysis.ptm.enabled && !state.analysis.strain.enabled) delete frame.ptm;
+    if (['ptm', 'strain'].includes(kind) && !state.analysis.ptm.enabled && !state.analysis.strain.enabled && !grainTools?.isEnabled()) delete frame.ptm;
   }
   for (const name of removedCrystalSources) crystalVisibility.forgetSource(name);
   if (!state.analysis.cna.enabled && !state.analysis.ptm.enabled
@@ -2487,6 +2623,39 @@ function ptmParameters() {
 function updatePtmSettings() {
   if (state.analysis.ptm.enabled) runStructureAnalysis('ptm');
   if (state.analysis.strain.enabled) runStructureAnalysis('strain');
+  void grainTools?.refreshPtmParameters();
+}
+
+/** A PTM fit of this frame with its template neighbor lists, for grain
+ * segmentation. It uses the PTM panel's templates and RMSD threshold. A
+ * completed fit with the same settings is reused; one that the PTM tool is
+ * calculating is awaited rather than repeated. */
+async function ptmForGrains(frame, { signal, onProgress = () => {} } = {}) {
+  const parameters = ptmParameters(), key = JSON.stringify({ flags: parameters.flags, rmsdCutoff: parameters.rmsdCutoff });
+  const stopped = () => { if (signal?.aborted) throw new DOMException('Grain segmentation was cancelled.', 'AbortError'); };
+  const fitted = () => frame.ptm?.key === key && frame.ptm.neighborIndices?.length === frame.ids.length * 16
+    && frame.ptm.neighborCounts?.length === frame.ids.length ? frame.ptm : null;
+  if (fitted()) return { ptm: frame.ptm, reused: true };
+  // A PTM or strain run started in this same task registers itself before this resumes.
+  await Promise.resolve();
+  for (const kind of ['ptm', 'strain']) {
+    const analysis = state.analysis[kind], running = analysisTasks.get(kind);
+    if (!analysis.enabled || running?.frame !== frame || !analysis.parameters
+        || JSON.stringify({ flags: analysis.parameters.flags, rmsdCutoff: analysis.parameters.rmsdCutoff }) !== key) continue;
+    try { await running.promise; } catch { /* Cancelling that tool does not cancel a separate grain request. */ }
+    stopped();
+    if (fitted()) return { ptm: frame.ptm, reused: true };
+  }
+  const result = await analysisPool.analyze(frame, { kind: 'ptm', ...parameters, neighborLists: true },
+    { signal, frameIndex: state.frameIndex, onProgress });
+  stopped();
+  const previous = frame.ptm?.key === key ? frame.ptm : null;
+  if (previous && previous.structures.length === result.structures.length && previous.structures.every((type, atom) => type === result.structures[atom])) {
+    // The PTM tool shows this fit; keep its arrays and add the lists.
+    Object.assign(previous, { neighborCounts: result.neighborCounts, neighborIndices: result.neighborIndices, neighborSpan: result.neighborSpan });
+  } else storePtmResult(frame, result, parameters, false);
+  reassessFrameCache(frame);
+  return { ptm: frame.ptm, reused: false, engine: result.engine };
 }
 
 const LATTICE_ESTIMATE_HELP = 'Missing references can be estimated from PTM geometry. Existing values are kept. Estimates include the current frame’s bulk strain; edit them to use a known stress-free lattice.';
@@ -2667,10 +2836,16 @@ function renderLatticeReferences(frame = state.frame) {
 
 function storePtmResult(frame, result, parameters, expose = true) {
   if (!result.structures) return;
-  frame.ptm = { key: JSON.stringify({ flags: parameters.flags, rmsdCutoff: parameters.rmsdCutoff }),
+  const key = JSON.stringify({ flags: parameters.flags, rmsdCutoff: parameters.rmsdCutoff });
+  // Neighbor lists for grain segmentation belong to the fit, not to one run:
+  // an identical later fit without them keeps the lists already stored.
+  const lists = result.neighborIndices ? result : frame.ptm?.key === key && frame.ptm.structures?.length === result.structures.length
+    && frame.ptm.structures.every((type, atom) => type === result.structures[atom]) ? frame.ptm : null;
+  frame.ptm = { key,
     structures: result.structures, rmsd: result.rmsd, scales: result.scales,
     deformation: result.deformation, distances: result.distances,
-    orientations: result.orientations, orderings: result.orderings };
+    orientations: result.orientations, orderings: result.orderings,
+    ...(lists?.neighborIndices ? { neighborCounts: lists.neighborCounts, neighborIndices: lists.neighborIndices, neighborSpan: lists.neighborSpan } : {}) };
   if (!expose) return;
   const fromStrain = Boolean(result.atomicShearStrain);
   const metadata = { analysisKind: 'ptm', analysisMs: fromStrain ? (result.ptmElapsedMs ?? result.elapsedMs) : result.elapsedMs,
@@ -2828,6 +3003,8 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       ? frame.properties.find(property => property.name === 'structureType' && property.analysisKind === 'cna'
         && property.analysisKey === JSON.stringify({ mode: 'adaptive' })) : null;
     const inputs = { kind, ...parameters,
+      // Grain segmentation reuses this fit when it also returns neighbor lists.
+      ...(['ptm', 'strain'].includes(kind) && grainTools?.isEnabled() ? { neighborLists: true } : {}),
       ...(adaptiveCna ? { structureInput: adaptiveCna.data } : {}),
       ...(kind === 'strain' && frame.ptm?.key === ptmKey ? { ptmInput: frame.ptm } : {}) };
     const task = analysisPool.analyze(frame, inputs, {
@@ -3506,6 +3683,11 @@ function renderOrientationLegend(legend) {
     ? 'Crystal symmetry reduces the chosen sample direction to the RGB key. Other and unsupported structures are gray.'
     : 'Red, green and blue encode the Rodrigues vector of the orientation reduced to the crystal\'s fundamental zone, scaled to the zone\'s extent. Symmetry-equivalent orientations share a color. This display is not an IPF key.';
   elements['color-legend'].append(explanation);
+  if (legend.source === 'grains') {
+    const grains = document.createElement('p'); grains.className = 'help';
+    grains.textContent = 'Every atom has the color of its grain\'s mean orientation. Atoms in no grain are gray.';
+    elements['color-legend'].append(grains);
+  }
   if (legend.undefinedCount) {
     const count = document.createElement('p'); count.className = 'help';
     count.textContent = `Undefined: ${formatInteger(legend.undefinedCount)} · ${(100 * legend.undefinedCount / legend.atomCount).toFixed(1)}%`;
@@ -3666,13 +3848,17 @@ function setControlsEnabled(enabled) {
   dxaTools?.setEnabled(enabled);
   topologyTools?.setEnabled(enabled);
   clusterTools?.setEnabled(enabled);
+  grainTools?.setEnabled(enabled);
   wignerSeitzTools?.setEnabled(enabled);
+  surfaceTools?.setEnabled(enabled);
   binningTools?.setEnabled(enabled);
   trajectoryTools?.setEnabled(enabled);
   voronoiCells?.setEnabled(enabled);
   statisticsExports?.setEnabled(enabled);
   textLabelControls?.setEnabled(enabled);
   timeSeries?.setEnabled(enabled);
+  scriptControls?.setEnabled(enabled);
+  movieControls?.setEnabled(enabled);
   exportResolutionControls?.setEnabled(enabled);
   ambientOcclusion?.setEnabled(enabled);
   selectionGroupControls?.setEnabled(enabled);
@@ -3727,6 +3913,15 @@ function textLabelExportOptions() {
   const labels = textLabelControls?.exportLabels();
   return labels ? { textLabels: labels } : {};
 }
+
+// The PNG button's options, for script and movie images.
+function imageExportOptions() {
+  return { includeBackground: elements['png-background'].checked, includeAxes: elements['png-axes'].checked,
+    legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
+    ...exportResolutionControls.getOptions(), ...sliceOutlineExportOptions(), ...textLabelExportOptions() };
+}
+
+function exportFileStem() { return (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''); }
 
 function syncSliceGizmo() {
   if (!sliceControls || !sliceGizmo) return;
@@ -3799,7 +3994,9 @@ function captureConfiguration() {
       activeCategory: toolPanels.getActiveCategory(),
       extensions: { ...atomEyeTools.serialize(), ...topologyTools.serialize(), voronoiDisplay: voronoiCells.serialize(), dxa: dxaTools.serialize(), externalProperties: externalProperties.getState(),
         expressions: expressionTools.getState(),
-        clusters: clusterTools.serialize(), wignerSeitz: wignerSeitzTools.serialize(), binning: binningTools.serialize(), trajectory: trajectoryTools.serialize(),
+        clusters: clusterTools.serialize(), grains: grainTools.serialize(), wignerSeitz: wignerSeitzTools.serialize(), binning: binningTools.serialize(), trajectory: trajectoryTools.serialize(),
+        // The surface mesh is saved only once it is used or changed.
+        ...(surfaceTools.isUntouched() ? {} : { surfaceMesh: surfaceTools.serialize() }),
         ...attributeExtensions() },
       theme: document.documentElement.dataset.theme,
     },
@@ -3813,6 +4010,10 @@ function attributeExtensions() {
   if (labels) extensions.textLabels = labels;
   if (series.autoCollect || JSON.stringify(series.attributes) !== JSON.stringify(TIME_SERIES_DEFAULTS.attributes)) extensions.timeSeries = series;
   if (globalAttributes.getStrainReferenceFrame() !== 0) extensions.globalAttributes = globalAttributes.serialize();
+  // Scripts and the camera path are saved as text and numbers; importing never runs a script.
+  const scripts = scriptControls?.serialize(), movie = movieControls?.serialize();
+  if (scripts) extensions.scripts = scripts;
+  if (movie) extensions.movie = movie;
   return extensions;
 }
 
@@ -3895,11 +4096,16 @@ async function restoreConfiguration(config) {
     dxaTools.reset();
     topologyTools?.reset();
     clusterTools?.reset();
+    grainTools?.reset();
     wignerSeitzTools?.reset();
+    surfaceTools?.reset();
     binningTools?.reset();
     voronoiCells?.reset();
     globalAttributes.restore(saved.extensions.globalAttributes);
     textLabelControls.restore(saved.extensions.textLabels);
+    // Saved scripts replace the panel's scripts and wait for Run; a recipe without scripts keeps them.
+    if (saved.extensions.scripts) scriptControls.restore(saved.extensions.scripts);
+    movieControls.restore(saved.extensions.movie);
     if (targetFrame) await commitReplicationFrame(targetFrame, repetitions, saved.replicateAtoms, targetIndex, { resetCamera: false });
     else { state.repetitions = [...repetitions]; state.replicateAtoms = saved.replicateAtoms; }
     if (!current()) return;
@@ -4010,13 +4216,17 @@ async function restoreConfiguration(config) {
     syncSelectionGroupInteraction();
     syncSliceGizmo();
     if (state.frame) { refreshColorOptions(); applyColors(); restoreSelection(); }
+    // Grains is restored first, so a PTM run started below also returns the
+    // neighbor lists it needs and one fit serves both tools.
+    const grainRestore = grainTools.restore(saved.extensions.grains, { isCurrent: current });
     const tasks = Object.keys(state.analysis).filter(kind => state.analysis[kind].enabled).map(kind => kind === 'coordination'
       ? runCoordination({ automatic: true }) : runStructureAnalysis(kind, { automatic: true }));
-    await Promise.all([...tasks, atomEyeTools.restore(saved.extensions, { isCurrent: current }),
+    await Promise.all([...tasks, grainRestore, atomEyeTools.restore(saved.extensions, { isCurrent: current }),
       dxaTools.restore(saved.extensions.dxa, { isCurrent: current }),
       topologyTools.restore(saved.extensions, { isCurrent: current }),
       clusterTools.restore(saved.extensions.clusters, { isCurrent: current }),
       wignerSeitzTools.restore(saved.extensions.wignerSeitz, { isCurrent: current }),
+      surfaceTools.restore(saved.extensions.surfaceMesh, { isCurrent: current }),
       binningTools.restore(saved.extensions.binning, { isCurrent: current }),
       timeSeries.restore(saved.extensions.timeSeries, { isCurrent: current }),
       trajectoryTools.restoreLines(saved.extensions.trajectory?.lines ?? null, { isCurrent: current })]);
@@ -4030,7 +4240,7 @@ async function restoreConfiguration(config) {
     const failed = [...Object.keys(state.analysis).filter(kind => {
       const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
       return state.analysis[kind].enabled && elements[`${prefix}-state`].textContent === 'Failed';
-    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...wignerSeitzTools.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
+    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...grainTools.failed(), ...wignerSeitzTools.failed(), ...surfaceTools.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
     elements['configuration-status'].textContent = failed.length
       ? `Configuration restored; these analyses could not complete: ${failed.join(', ')}.`
       : externalProperties.getPendingFiles().length

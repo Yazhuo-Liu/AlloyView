@@ -84,6 +84,10 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   crystal colors and per-class visibility checkboxes with live counts.
 - Real polyhedral template matching (PTM) in Wasm Workers, with eight crystal
   templates, an adjustable RMSD threshold and the same crystal visibility controls.
+- Grain segmentation of polycrystals from PTM orientations, ported from OVITO
+  3.9.4: automatic or manual merge threshold, minimum grain size, orphan
+  adoption and stacking-fault handling. Grain IDs and mean orientations color
+  atoms; a merge-distance plot and a grain table export as CSV.
 - Atomic elastic strain relative to an ideal lattice, with editable element-based
   or geometry-estimated lattice constants, shear/hydrostatic strain, volume change
   and tensor components. Missing numeric-type references can be estimated with PTM.
@@ -107,6 +111,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   affine mapping of a deformed cell, per-atom occupancy and defect-class
   coloring, drawn vacancy markers and a defect-site CSV. Atom counts may
   differ between frames.
+- Surface mesh of the solid region (alpha shape with a probe sphere, after
+  OVITO's Construct surface mesh): surface area, solid, empty and void
+  volumes, separate regions and voids, optional smoothing and atom
+  restriction, a lit two-sided mesh that is cut and capped at periodic cell
+  faces, and STL, PLY and OBJ export. DXA can also output its defect mesh.
 - Spatial binning profiles and 2D maps along the cell vectors, in reduced
   coordinates so tilted cells bin along their own vectors: atom count, number
   density, or the mean, sum, minimum, maximum or standard deviation of any
@@ -115,6 +124,14 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Text labels over the viewport and in every image export, filled per frame
   from global attributes such as `[Timestep]`, `[Strain.a:+.3f]` or
   `[CNA.FCC.fraction:.1%]`; templates are parsed safely, never run as code.
+- Command scripts: a small line-oriented language for camera moves, frames,
+  coloring, slice steps, keyframes and PNG downloads that shares its command
+  names with the keyboard shortcuts. Scripts are parsed against a fixed
+  command list, never run as code, and bounded in size, loops and run time.
+- Camera keyframes with smooth interpolation and a viewport preview, and
+  movie export of a camera path, a trajectory or both: frames are rendered
+  like PNG exports and encoded in the browser with WebCodecs to MP4 (H.264,
+  AV1, VP9) or WebM (VP9, VP8, AV1), with PNG frames in a ZIP as a fallback.
 - Time series of global attributes (cell, strain, timestep, property means,
   crystal fractions, DXA density, defect and cluster counts) against frame or
   timestep. File values are read in the background; analysis values are
@@ -263,6 +280,8 @@ WebGL 2 support. No installation or account is needed.
    **Clusters** groups atoms connected through neighbors within a cutoff or the
    bond cutoffs, optionally within one selection, and lists cluster sizes,
    centers of mass and radii of gyration.
+   **Grains** divides a polycrystal into grains from PTM orientations and lists
+   their sizes, structures and mean orientations.
    **Binning** profiles or maps atom counts, number density or a reduced
    per-atom property in slabs or columns along the cell vectors.
    **Time series** plots per-frame values such as strain or the FCC fraction;
@@ -275,10 +294,12 @@ WebGL 2 support. No installation or account is needed.
    **Local shear** measures the current neighbor geometry without a reference.
    **Wigner–Seitz** assigns atoms to the sites of a chosen trajectory frame and
    counts vacancies, interstitials and antisites, drawing the vacant sites.
+   **Surface** constructs the surface of the solid, measures its area and the
+   solid and void volumes, and draws it as a mesh capped at periodic faces.
    **Statistics** shows coordination distributions and calculates total or
    element-pair RDF curves on fully periodic cells. Its CSV section exports
    current-frame summaries, every available classifier and scalar property,
-   and per-atom values; Bonds, Voronoi, Clusters, Binning, Wigner–Seitz and DXA also offer specific CSV tables.
+   and per-atom values; Bonds, Voronoi, Clusters, Grains, Binning, Wigner–Seitz and DXA also offer specific CSV tables.
    **Enable GPU acceleration** in the top bar prefers WebGPU for coordination,
    adaptive/fixed CNA, manual/Auto central symmetry, displacement,
    reference-frame strain, RDF, local shear, bonds, bond statistics and ideal-strain
@@ -397,5 +418,6 @@ AlloyView is distributed under the [MIT License](LICENSE). AtomEye informed
 format conventions and neighbor-search design; no AtomEye C source or asset
 is copied into this repository. The vendored PTM library is MIT licensed and
 its embedded Voro++ code is BSD licensed; [third-party notices](licenses/)
-ship with the static build. Voro++ also supplies the per-atom Voronoi clipping
+ship with the static build. Dislocation analysis and grain segmentation
+derive from OVITO 3.9.4 under the MIT option of its dual license. Voro++ also supplies the per-atom Voronoi clipping
 kernel. See the [provenance review](docs/ATOMEYE_REVIEW.md).

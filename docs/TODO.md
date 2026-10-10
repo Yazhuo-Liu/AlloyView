@@ -1,6 +1,6 @@
 # Improvement backlog
 
-Last updated: 2026-10-09 (phases 1 and 2 completed; A8 dropped)
+Last updated: 2026-10-09 (all three phases completed; A8 dropped)
 
 This backlog collects a performance and parallelism audit of AlloyView and a
 feature comparison with OVITO and AtomEye. Work through it in phase order.
@@ -649,17 +649,78 @@ junction merging need an algorithm redesign. Expected floor for HEA about 400 ms
 
 ### O15. Grain segmentation
 
+**Status:** Done 2026-10-09 (`src/analysis/grains.js`,
+`src/analysis/disorientation.js`, `src/grain-tools.js`). This is a JS port of
+OVITO 3.9.4.
+- **Algorithm:** PTM neighbor bonds, symmetry-reduced disorientation, node
+  pair sampling or a minimum spanning tree, the automatic merge threshold,
+  minimum grain size, orphan adoption and coherent-interface handling.
+- **PTM kernel:** it gains a neighbor-list export; all other PTM outputs are
+  unchanged.
+- **Agreement with `ovito==3.9.4`:** on OVITO's own PTM output, all 70
+  comparisons give the same partition (ARI 1). The automatic threshold is
+  equal to the last bit on 8 noisy structures.
+- **Outputs:** grain IDs, grain-orientation colors, a grain table with CSV,
+  the merge plot and `Grains.*` attributes.
+- **Deviations:** listed in [grains](features/grains.md). They include a fixed
+  order where OVITO leaves it open, and IDs ranked after orphan adoption.
+- **Follow-ups:** multithreaded clustering; a GPU-prepared neighbor path test
+  in the browser.
+
 **Effort:** M–L, after O1. Port OVITO's
 `crystalanalysis/modifier/grains/GrainSegmentationEngine.cpp` next to the PTM
 kernel. Validate the automatic merge threshold against OVITO.
 
 ### O16. Surface mesh and DXA defect mesh
 
+**Status:** Done 2026-10-09 (`wasm/surface.cpp`,
+`src/analysis/surface-mesh.js`, `src/render/surface-mesh-layer.js`,
+`src/surface-tools.js`).
+- **Surface mesh:** an alpha-shape surface ported from OVITO's engine,
+  compiled into both DXA kernels. It reports area, solid and void volumes and
+  regions.
+- **Defect mesh:** `InterfaceMesh::generateDefectMesh()` is an optional DXA
+  output with Taubin smoothing. DXA line results are identical with the option
+  off or on, in both kernels.
+- **Rendering:** a mesh layer with watertight periodic caps, slices,
+  replication, second view, crystal-drag preview and exports. An offscreen
+  export equals the screen.
+- **Mesh export:** STL, PLY and OBJ for the surface; STL and PLY for the
+  defect mesh.
+- **Follow-ups:**
+  - OBJ for the defect mesh.
+  - Caps for open-boundary defect meshes.
+  - Capping at slices.
+  - The Gaussian-density method.
+  - Moving wrap/cut/cap work off the main thread.
+
 **Effort:** M–L. Alpha-shape surfaces for voids, nanoparticles and fracture,
 reusing the vendored Geogram Delaunay; export the existing but unused
 `InterfaceMesh::generateDefectMesh()` from the DXA port. Handle periodic capping.
 
 ### A9. Command scripts and movies
+
+**Status:** Done 2026-10-09 (`src/command-script.js`, `src/camera-path.js`,
+`src/movie-export.js`, `src/video/`).
+- **Scripts:** a line-oriented language over the keyboard registry plus
+  parameterized camera, frame, color, tool, slice, export, keyframe, wait and
+  repeat commands.
+  - It is tokenized against a fixed command map, never evaluated.
+  - Limits are checked statically before a run and again while running.
+  - Nothing runs on import or configuration restore.
+- **Camera keyframes:** upright azimuth/elevation or quaternion slerp for
+  orientation; monotone cubic interpolation of center, distance and FOV.
+- **Movies:** frames come from the existing image export and are encoded with
+  WebCodecs.
+  - Formats: MP4 (H.264, AV1, VP9) or WebM (VP9, VP8, AV1), written by
+    in-repo muxers instead of a vendored one.
+  - Outputs were checked with an independent parser, `VideoDecoder` and
+    ffprobe.
+  - Without WebCodecs it falls back to a PNG ZIP.
+- **Follow-ups:**
+  - Recording the second view.
+  - Scripts that start analyses.
+  - Testing playback in QuickTime and PowerPoint.
 
 **Effort:** L. A strict command grammar over the A3 registry, camera keyframes,
 and WebCodecs video encoding with a small vendored muxer.

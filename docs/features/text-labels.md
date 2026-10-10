@@ -98,6 +98,7 @@ exactly; the last column names the row as *analysis / metric / label*.
 | `DXA.segment_count` | | Dislocation segments | dxa / segment_count |
 | `DXA.<family>.length`, `.count` | Å, — | Per Burgers-vector family, such as `DXA.shockley.length` | dxa / total_length, segment_count with the family |
 | `Clusters.cluster_count`, `Clusters.largest_size`, `Clusters.percolating_count` | | Cluster analysis | clusters / … |
+| `Grains.grain_count`, `Grains.mean_size`, `Grains.largest_size`, `Grains.unassigned_atoms`, `Grains.merge_threshold` | —, atoms, atoms, —, — or ° | Grain segmentation | grains / … |
 | `WignerSeitz.vacancy_count`, `.interstitial_count`, `.antisite_count`, `.site_count` | | Wigner–Seitz defects | wignerSeitz / … |
 
 Category labels become name segments with other characters replaced by an

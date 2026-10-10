@@ -10,7 +10,7 @@ import { modalCoordination, shearInvariant } from './local-shear.js';
 import { REFERENCE_STRAIN_FIELDS } from './reference-strain.js';
 import { GpuAnalysisClient } from './gpu/client.js';
 import { validateReferences } from './lattice.js';
-import { validatePtmParameters, validatePreparedPtmNeighbors } from './ptm.js';
+import { validatePtmParameters, validatePreparedPtmNeighbors, PTM_NEIGHBOR_LIST_FIELDS } from './ptm.js';
 import { CpuBudget, cpuWorkerLimit } from './cpu-budget.js';
 import { yieldToMain } from '../task-yield.js';
 import { analyzeDxaStagePool, DXA_STAGE_KINDS } from './dxa-cpu-pool.js';
@@ -28,6 +28,8 @@ const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1]
 // Standalone PTM also returns orientations and chemical ordering; strain
 // reuses only the fields above as its PTM input.
 const PTM_RESULT_FIELDS = { ...PTM_OUTPUT_FIELDS, orientations: [Float64Array, 4], orderings: [Uint8Array, 1] };
+// Grain segmentation asks a PTM fit for its matched neighbor lists.
+const ptmResultFields = parameters => parameters.neighborLists ? { ...PTM_RESULT_FIELDS, ...PTM_NEIGHBOR_LIST_FIELDS } : PTM_RESULT_FIELDS;
 const PTM_NEIGHBOR_FIELDS = ['counts', 'indices', 'vectors'];
 // GPU PTM neighbors order candidates in emulated binary64 on one device queue,
 // while CPU workers search neighbors in parallel within the fit. On NiGB the
@@ -551,8 +553,8 @@ export class AnalysisPool {
       neighborBytes = PTM_NEIGHBOR_FIELDS.reduce((bytes, field) => bytes + sharedNeighborTable[field].byteLength, 0);
       if (fullNeighborTable) extraBytes += neighborBytes;
     }
-    const outputFields = EXTRA_OUTPUT_FIELDS[parameters.kind] ?? (parameters.kind === 'ptm' ? PTM_RESULT_FIELDS
-      : parameters.kind === 'strain' ? { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : PTM_RESULT_FIELDS) }
+    const outputFields = EXTRA_OUTPUT_FIELDS[parameters.kind] ?? (parameters.kind === 'ptm' ? ptmResultFields(parameters)
+      : parameters.kind === 'strain' ? { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : ptmResultFields(parameters)) }
         : autoCentrosymmetry ? { centrosymmetry: [Float32Array, 1], cspStructureTypes: [Uint8Array, 1], cspNeighborCounts: [Uint8Array, 1] }
           : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] });
     const outputBytesPerAtom = Object.values(outputFields).reduce((sum, [Type, stride]) => sum + Type.BYTES_PER_ELEMENT * stride, 0);
@@ -746,12 +748,18 @@ export class AnalysisPool {
         return { ...metadata, ...values, incomplete: partials.reduce((sum, partial) => sum + (partial.incomplete ?? 0), 0), warning: null };
       }
       if (parameters.kind === 'ptm' || parameters.kind === 'strain') {
-        const fields = parameters.kind === 'ptm' ? PTM_RESULT_FIELDS
-          : { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : PTM_RESULT_FIELDS) };
+        const fields = parameters.kind === 'ptm' ? ptmResultFields(parameters)
+          : { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : ptmResultFields(parameters)) };
         const values = Object.fromEntries(Object.keys(fields).map(name => [name, merged[name]]));
         let incomplete = 0;
         for (const partial of partials) {
           incomplete += partial.incomplete ?? 0;
+        }
+        if (parameters.neighborLists && (parameters.kind === 'ptm' || !parameters.ptmInput)) {
+          values.neighborSpan = new Float64Array(3);
+          for (const partial of partials) for (let axis = 0; axis < 3; axis += 1) {
+            values.neighborSpan[axis] = Math.max(values.neighborSpan[axis], partial.neighborSpan[axis]);
+          }
         }
         return { ...metadata, ...values, incomplete, warning: null };
       }
