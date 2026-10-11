@@ -191,10 +191,12 @@ export function createPrimitiveMesh(cone = false, sides = 10) {
 /** Share only identical position/normal rows. Caps keep their hard normals and
  * the cone keeps each tip normal; the original triangles and seam bits remain
  * unchanged, including when small atoms expose a bond's end caps. */
-export function createIndexedPrimitiveMesh(cone = false, sides = 10) {
+export function createIndexedPrimitiveMesh(cone = false, sides = 10, capless = false) {
+  if (cone && capless) throw new Error('Only bond cylinders can omit their caps.');
   const raw = createPrimitiveMesh(cone, sides), words = new Uint32Array(raw.buffer, raw.byteOffset, raw.length);
   const unique = new Map(), vertices = [], indices = [];
   for (let offset = 0; offset < raw.length; offset += 6) {
+    if (capless && raw[offset + 5] !== 0) continue;
     const key = Array.from(words.subarray(offset, offset + 6)).join(',');
     let index = unique.get(key);
     if (index === undefined) {
@@ -300,6 +302,11 @@ export function bondDisplayShifts(result, frame, positions = frame.positions) {
 export class AtomPrimitiveLayer {
   constructor(gl) {
     this.gl = gl;
+    // Multisampling can expose a nominally occluded, edge-on cap in a covered
+    // sample even when its pixel-center geometry is behind the sphere impostor.
+    // Retain the original caps for those contexts and all offscreen exports.
+    this.singleSampleDefault = gl.getParameter(gl.FRAMEBUFFER_BINDING) === null && gl.getParameter(gl.SAMPLES) === 0
+      && gl.getParameter(gl.DEPTH_BITS) >= 16;
     this.program = program(gl, VERTEX, FRAGMENT);
     this.uniforms = Object.fromEntries(['uPositions', 'uColors', 'uFractional', 'uVisibility', 'uTextureWidth', 'uView', 'uProjection',
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions', 'uSliceAxis', 'uSliceMaximum', 'uSliceMode', 'uSliceCount',
@@ -318,6 +325,7 @@ export class AtomPrimitiveLayer {
     });
     this.textureSizes = [null, null, null, null];
     this.cylinder = this.mesh(false);
+    this.caplessCylinder = this.mesh(false, false, true);
     this.cone = this.mesh(true);
     this.flatShaft = this.mesh(false, true);
     this.flatHead = this.mesh(true, true);
@@ -329,8 +337,8 @@ export class AtomPrimitiveLayer {
     this.vectorOptions = normalizeVectorOptions();
   }
 
-  mesh(cone, flat = false) {
-    const gl = this.gl, data = flat ? { vertices: createFlatArrowMesh(cone) } : createIndexedPrimitiveMesh(cone);
+  mesh(cone, flat = false, capless = false) {
+    const gl = this.gl, data = flat ? { vertices: createFlatArrowMesh(cone) } : createIndexedPrimitiveMesh(cone, 10, capless);
     const buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, data.vertices, gl.STATIC_DRAW);
@@ -428,6 +436,7 @@ export class AtomPrimitiveLayer {
       return this[name];
     };
     if (dirty.position) {
+      this.bondCapCoverage = null;
       const values = storage('positionValues', Float32Array, pixels * 4), positions = renderer.displayPositions;
       for (let atom = 0; atom < count; atom++) {
         const index = atom * 3, target = atom * 4;
@@ -436,6 +445,7 @@ export class AtomPrimitiveLayer {
       this.uploadTexture(0, values, gl.RGBA32F, gl.FLOAT);
     }
     if (dirty.fractional) {
+      this.bondCapCoverage = null;
       const values = storage('fractionalValues', Float32Array, pixels * 4), positions = renderer.displayFractional ?? renderer.frame.fractional;
       for (let atom = 0; atom < count; atom++) {
         const index = atom * 3, target = atom * 4;
@@ -445,9 +455,15 @@ export class AtomPrimitiveLayer {
     }
     if (dirty.visibility) {
       const values = storage('visibilityValues', Int8Array, pixels);
+      this.bondSphereVisibilityCompatible = true;
       // Keep arrows independent of ordinary atom/category hiding; selection
       // hiding suppresses every attached primitive with a distinct signed flag.
       for (let atom = 0; atom < count; atom++) {
+        // Sphere visibility is a normalized byte tested against 0.5, whereas
+        // primitive visibility uses an integer flag. Noncanonical small bytes
+        // must never let a visible bond rely on a sphere that was discarded.
+        const visible = renderer.visibility?.[atom] ?? 255;
+        if (visible !== 0 && visible <= 127 && renderer.selectionVisibility?.[atom] !== 0) this.bondSphereVisibilityCompatible = false;
         values[atom] = renderer.selectionVisibility?.[atom] === 0 ? -1 : renderer.visibility?.[atom] === 0 ? 0 : 1;
       }
       this.uploadTexture(3, values, gl.R8I, gl.BYTE, gl.RED_INTEGER);
@@ -482,6 +498,11 @@ export class AtomPrimitiveLayer {
   }
 
   uploadShifts(buffers, shifts) {
+    // Default antialiased contexts never need this CPU descriptor. In
+    // particular, do not retain an additional bond-sized unwrapped-shift array
+    // for a guard which cannot run on that context.
+    buffers.displayShifts = buffers === this.bondBuffers && this.singleSampleDefault ? shifts : null;
+    if (buffers === this.bondBuffers) this.bondCapCoverage = null;
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffers.shifts);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, shifts, this.gl.STATIC_DRAW);
   }
@@ -493,6 +514,7 @@ export class AtomPrimitiveLayer {
     const radius = options.radius ?? this.bondOptions.radius;
     if (!Number.isFinite(radius) || radius <= 0) throw new Error('Bond radius must be greater than zero.');
     this.bonds = bonds;
+    if (!unchanged) this.bondCapCoverage = null;
     this.bondOptions = { visible: options.visible ?? this.bondOptions.visible, radius };
     if (bonds && !unchanged) {
       this.uploadInstances(this.bondBuffers, bonds.indices, bonds.vectors);
@@ -553,6 +575,8 @@ export class AtomPrimitiveLayer {
   releaseInstances(buffers) {
     const gl = this.gl;
     buffers.count = 0;
+    buffers.displayShifts = null;
+    if (buffers === this.bondBuffers) this.bondCapCoverage = null;
     for (const name of ['indices', 'vectors', 'shifts']) {
       gl.bindBuffer(gl.ARRAY_BUFFER, buffers[name]);
       gl.bufferData(gl.ARRAY_BUFFER, 0, gl.STATIC_DRAW);
@@ -684,10 +708,11 @@ export class AtomPrimitiveLayer {
     gl.uniform1i(u.uSliceCount, renderer.sliceCount ?? 0);
     gl.uniform4fv(u['uSlicePlanes[0]'], renderer.slicePlaneValues);
     const firstOptions = this.vectorOptions;
+    const bondMesh = this.coveredBondMesh(renderer);
     for (const replica of renderer.replicas) {
       gl.uniform3f(u.uReplicaOffset, ...replica.offset);
       gl.uniform3f(u.uReplicaIndex, ...replica.indices);
-      if (this.bonds && this.bondOptions.visible) this.drawMesh(this.bondBuffers, this.cylinder, this.bondOptions.radius, 1, [0, 1], false);
+      if (this.bonds && this.bondOptions.visible) this.drawMesh(this.bondBuffers, bondMesh, this.bondOptions.radius, 1, [0, 1], false);
       for (const field of fields) if (field.options.visible) {
         this.vectorOptions = field.options;
         gl.uniform3f(u.uVectorColor, ...field.options.color);
@@ -703,6 +728,20 @@ export class AtomPrimitiveLayer {
     }
     this.vectorOptions = firstOptions;
     gl.activeTexture(gl.TEXTURE0);
+  }
+
+  coveredBondMesh(renderer) {
+    if (!this.bonds?.count || !this.bondOptions.visible || !this.caplessCylinder || renderer.crystalDrag
+      || this.bondSphereVisibilityCompatible === false
+      || !this.singleSampleDefault || renderer.renderViewport
+      || !(renderer.atomRadii instanceof Float32Array) || !(renderer.visibility instanceof Uint8Array)
+      || renderer.sliceMode === 'planes' && renderer.sliceCount) return this.cylinder;
+    if (!this.bondCapCoverage || this.bondCapCoverage.radiusRevision !== renderer.radiusRevision
+      || this.bondCapCoverage.radii !== renderer.atomRadii) {
+      this.bondCapCoverage = analyzeBondCapCoverage(renderer, this.bonds, this.bondBuffers.displayShifts,
+        this.positionValues, this.fractionalValues);
+    }
+    return bondCapsAreCovered(renderer, this.bondCapCoverage, this.bondOptions.radius) ? this.caplessCylinder : this.cylinder;
   }
 
   extendBounds(renderer, minimum, maximum) {
@@ -748,6 +787,96 @@ export class AtomPrimitiveLayer {
       }
     }
   }
+}
+
+/** Describe the geometry that was uploaded, once per position/radius change.
+ * The second cap follows the Float32 bond displacement, which need not end
+ * exactly at its atom's displayed periodic image. Preserve that discrepancy. */
+export function analyzeBondCapCoverage(renderer, bonds, shifts, positions, fractions) {
+  if (!positions || !fractions || !shifts || !renderer.atomRadii) return null;
+  const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
+  const fractionalMaximum = [-Infinity, -Infinity, -Infinity], cell = renderer.frame.cell.vectors;
+  let minimumRadius = Infinity, maximumRadius = 0, endpointError = 0, coordinateMagnitude = 1;
+  for (let bond = 0; bond < bonds.count; bond++) {
+    const first = bonds.indices[bond * 2], second = bonds.indices[bond * 2 + 1], offset = bond * 3;
+    let errorSquared = 0;
+    for (let endpoint = 0; endpoint < 2; endpoint++) {
+      const atom = endpoint === 0 ? first : second;
+      minimumRadius = Math.min(minimumRadius, renderer.atomRadii[atom]);
+      maximumRadius = Math.max(maximumRadius, renderer.atomRadii[atom]);
+      for (let axis = 0; axis < 3; axis++) {
+        const position = positions[atom * 4 + axis];
+        minimum[axis] = Math.min(minimum[axis], position); maximum[axis] = Math.max(maximum[axis], position);
+        fractionalMaximum[axis] = Math.max(fractionalMaximum[axis], fractions[atom * 4 + axis]);
+        coordinateMagnitude = Math.max(coordinateMagnitude, Math.abs(position));
+      }
+    }
+    for (let axis = 0; axis < 3; axis++) {
+      const image = shifts[offset] * cell[axis] + shifts[offset + 1] * cell[axis + 3] + shifts[offset + 2] * cell[axis + 6];
+      const error = positions[first * 4 + axis] + bonds.vectors[offset + axis] - positions[second * 4 + axis] - image;
+      errorSquared += error * error;
+      coordinateMagnitude = Math.max(coordinateMagnitude, Math.abs(image), Math.abs(bonds.vectors[offset + axis]));
+    }
+    endpointError = Math.max(endpointError, Math.sqrt(errorSquared));
+  }
+  return { minimum, maximum, fractionalMaximum, minimumRadius, maximumRadius, endpointError, coordinateMagnitude,
+    radii: renderer.atomRadii, radiusRevision: renderer.radiusRevision };
+}
+
+/** Conservative whole-batch guard. A sphere is a camera-facing impostor, not a
+ * triangulated sphere: radius alone cannot prove cap occlusion in perspective.
+ * Bound each cap's projection inside the opaque inner 90% of that impostor,
+ * and require a depth gap larger than even a 16-bit depth buffer's rounding.
+ * Slicing/interactive wrapping retain caps; hidden bonds are discarded using
+ * the same endpoint visibility/scalar conditions as their spheres. No bond
+ * arrays are partitioned or uploaded again when orbiting or changing styles. */
+export function bondCapsAreCovered(renderer, coverage, radius) {
+  if (!coverage || renderer.crystalDrag || renderer.sliceMode === 'planes' && renderer.sliceCount) return false;
+  if (renderer.sliceMode !== 'planes' && (!(renderer.sliceMaximum >= 1)
+    || !(coverage.fractionalMaximum[renderer.sliceAxis] <= 1))) return false;
+  const view = renderer.viewMatrix, projection = renderer.projectionMatrix;
+  if (!view || !projection || !renderer.depthRange || !renderer.minimumOffset || !renderer.maximumOffset) return false;
+  const epsilon = 2 ** -23, scale = Math.fround(renderer.radiusScale), smallest = Math.fround(coverage.minimumRadius * scale);
+  const largest = Math.fround(coverage.maximumRadius * scale), minimum = [], maximum = [];
+  let magnitude = coverage.coordinateMagnitude;
+  for (let axis = 0; axis < 3; axis++) {
+    minimum[axis] = coverage.minimum[axis] + renderer.minimumOffset[axis];
+    maximum[axis] = coverage.maximum[axis] + renderer.maximumOffset[axis];
+    magnitude = Math.max(magnitude, Math.abs(minimum[axis]), Math.abs(maximum[axis]), Math.abs(view[12 + axis]));
+  }
+  // Cover Float32 endpoint additions, rotated bases and view transforms. Very
+  // large coordinates naturally reject this path instead of dropping caps.
+  const roundoff = 128 * epsilon * magnitude;
+  const extent = Math.fround(radius) * (1 + 128 * epsilon) + coverage.endpointError + roundoff;
+  const low = [], high = [];
+  for (let row = 0; row < 3; row++) {
+    let lo = Math.fround(view[12 + row]), hi = lo;
+    for (let axis = 0; axis < 3; axis++) {
+      const coefficient = Math.fround(view[axis * 4 + row]);
+      const a = minimum[axis] * coefficient, b = maximum[axis] * coefficient;
+      lo += Math.min(a, b); hi += Math.max(a, b);
+    }
+    low[row] = lo - roundoff; high[row] = hi + roundoff;
+  }
+  const closest = -high[2], furthest = -low[2], near = renderer.depthRange[0], far = renderer.depthRange[1];
+  if (!(smallest > 0 && extent < smallest && closest - largest > near + roundoff
+    && furthest + largest < far - roundoff)) return false;
+  const perspective = renderer.projectionMode === 'perspective';
+  const offAxis = Math.hypot(Math.max(Math.abs(low[0]), Math.abs(high[0])), Math.max(Math.abs(low[1]), Math.abs(high[1])));
+  if (perspective && !(closest > extent)) return false;
+  const projected = perspective ? extent * (1 + (offAxis + extent) / (closest - extent)) : extent;
+  const viewport = renderer.renderViewport, width = viewport?.tile?.renderWidth ?? viewport?.width ?? renderer.canvas?.width;
+  const height = viewport?.tile?.renderHeight ?? viewport?.height ?? renderer.canvas?.height;
+  // Default multisample interpolation can evaluate at the pixel center just
+  // outside a covered triangle. Reserve two pixel diagonals in world units.
+  const pixelPad = 4 * Math.hypot(1 / (Math.abs(projection[0]) * width), 1 / (Math.abs(projection[5]) * height))
+    * (perspective ? furthest : 1);
+  if (!(projected + pixelPad < smallest * .9)) return false;
+  const gap = Math.sqrt(smallest * smallest - (projected + pixelPad) ** 2) - extent;
+  if (!(gap > roundoff)) return false;
+  const depthGap = perspective ? Math.abs(projection[14]) * gap / (2 * furthest * furthest) : Math.abs(projection[10]) * gap / 2;
+  const depthRoundoff = 64 * epsilon * (1 + Math.abs(projection[10]) + Math.abs(projection[14]) / closest);
+  return depthGap > 8 / 65535 + depthRoundoff;
 }
 
 function vectorGeometryBounds(vectors, positions, selections, scale, shift) {

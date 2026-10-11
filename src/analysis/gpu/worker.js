@@ -4,7 +4,7 @@ import { analyzeGpuRdf } from './rdf.js';
 import { validateAnalysisParameters } from '../analysis-validation.js';
 import { fatalAnalysisError } from '../errors.js';
 
-const runtime = new GpuRuntime();
+const runtime = new GpuRuntime({ onDeviceLost: error => self.postMessage({ type: 'device-lost', error, gpuDeviceLost: true }) });
 const controllers = new Map();
 // Double precision inputs stay available for the kernels' sparse corrections,
 // and are released after their actual GPU buffers are evicted.
@@ -41,9 +41,10 @@ function cacheState() {
   const cacheStatus = runtime.cacheStatus();
   // The client may omit a payload only if both its f64 input and GPU upload exist.
   const cachedFrameIds = cacheStatus.cachedFrameIds.filter(frameId => frames.has(frameId));
-  const cachedCartesianFrames = [...runtime.frames].filter(([frameId]) => frames.has(frameId))
+  const resident = new Set(cachedFrameIds);
+  const cachedCartesianFrames = [...runtime.frames].filter(([frameId]) => resident.has(frameId))
     .map(([frameId, frame]) => ({ frameId, variants: [...(frame.cartesian?.keys() ?? [])] }));
-  const cachedPtmFits = [...runtime.frames].filter(([frameId, frame]) => frame.ptm?.fitId !== undefined
+  const cachedPtmFits = [...runtime.frames].filter(([frameId, frame]) => resident.has(frameId) && frame.ptm?.fitId !== undefined
     && frames.get(frameId)?.ptmFit?.id === frame.ptm.fitId).map(([frameId, frame]) => ({ frameId, fitId: frame.ptm.fitId }));
   return { cacheStatus: { ...cacheStatus, cachedFrameIds }, cachedFrameIds, cachedCartesianFrames, cachedPtmFits };
 }
@@ -78,6 +79,7 @@ async function run(data, controller) {
     if (data.type === 'warmup') {
       await runtime.warmup({ ...data.options, signal: controller.signal });
       checkSignal(controller.signal);
+      runtime.checkDeviceErrors();
       self.postMessage({ id: data.id, ok: true, ...cacheState() });
       return;
     }
@@ -109,6 +111,7 @@ async function run(data, controller) {
         checkSignal(controller.signal); await prepare();
       }
       checkSignal(controller.signal);
+      runtime.checkDeviceErrors();
       releasePins?.(); releasePins = null; runtime.finishAnalysis();
       progress({phase:'complete',completedAtoms:frame.fractional.length / 3,totalAtoms:frame.fractional.length / 3});
       self.postMessage({id:data.id,ok:true,...cacheState()});
@@ -202,6 +205,7 @@ async function run(data, controller) {
       }
     }
     checkSignal(controller.signal);
+    runtime.checkDeviceErrors();
     if (data.type === 'analyze') { releasePins?.(); releasePins = null; runtime.finishAnalysis(); }
     progress({ phase: 'complete', completedAtoms: frame.fractional.length / 3, totalAtoms: frame.fractional.length / 3 });
     const buffers = [...new Set(Object.values(result).filter(ArrayBuffer.isView).map((value) => value.buffer))];
@@ -221,6 +225,7 @@ async function run(data, controller) {
     }
     if (['analyze','prepare-frame'].includes(data.type)) { releasePins?.(); releasePins = null; runtime.finishAnalysis(); }
     self.postMessage({ id: data.id, ok: false, error: error.message || String(error), name: error.name,
-      errorKind: error.analysisErrorKind, fatal: fatalAnalysisError(error), ...cacheState() });
+      errorKind: error.analysisErrorKind, fatal: fatalAnalysisError(error), gpuDeviceLost: Boolean(error.gpuDeviceLost),
+      gpuDeviceUnavailable: Boolean(error.gpuDeviceUnavailable), gpuAnalysisKind: error.gpuAnalysisKind, ...cacheState() });
   } finally { releasePins?.(); controllers.delete(data.id); }
 }

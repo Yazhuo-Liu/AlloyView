@@ -68,16 +68,15 @@ The items with the best return, drawn from all parts below:
 
 | Order | Item | What it gives | Effort |
 | --- | --- | --- | --- |
-| 1 | R1 | Remaining guarded cap removal; indexed geometry is complete | S–M |
-| 2 | C5 | Remaining compact transport for light kernels; scalar kernels are complete | M |
-| 3 | T1 | Prefetch fills the cache and overlaps playback preparation | S |
-| 4 | C9 | Migrate remaining object-returning neighbor consumers | M |
-| 5 | S4, S5 | Cache immutable assets and bundle Worker entries while keeping prewarm | S–M |
-| 6 | R2, R4 | Remaining orientation-color and picking loops; bounds/radius work is complete | S |
+| 1 | B15, B19 | Keep movie cancellation reachable and serialize configuration restores | S |
+| 2 | R1 | MSAA cap removal still needs a coverage proof; single-sample guard is complete | M |
+| 3 | C7, C8 | Main-thread post-processing and typed numeric-ID matching | S–M |
+| 4 | S4 | Cache immutable assets while keeping background prewarm | S |
+| 5 | R2, R4 | Remaining orientation-color and picking loops | S |
 
-C1–C4, R3/R8, S1–S3 and T3/T5 have moved to the feature documentation and the dated
-[validation record](VALIDATION.md). Remaining timing estimates above retain
-the original audit's scope; they are not measurements of these completed fixes.
+C1–C6/C9, R3/R8, S1–S3/S5, T1/T3/T5 and K2 have moved to the feature
+documentation and dated [validation record](VALIDATION.md). R1 retains its MSAA
+restriction below; measurements are scoped to the tested deployment and hardware.
 
 ## Part 1: defects
 
@@ -85,23 +84,10 @@ Fix these before performance work. B1–B6 and B10, and G1, were completed
 on 2026-10-10. B7, B11 and B12/T5, and C1–C3 and S2/S3, were completed
 on 2026-10-11; B2 rollback was also rechecked. See the process and validation
 record in [VALIDATION.md](VALIDATION.md). B31, B8, B9, B14, B17, B18 and B20
-were completed in the next 2026-10-11 batch. Completed labels are not reused.
-
-### B13. Time series keep a stale last frame and lose settings in configurations
-
-**Severity:** medium. **Effort:** S.
-
-- **Stale range [M]:** `io/b-ranges.mjs`: on a 30-frame file whose index
-  finishes after the first frame appears, **Last frame** stays "8 (max 8)" and
-  **Read file values** reports "8 frames · every value collected".
-  `updateSourceIndex` in `src/app.js` refreshes the trajectory and movie
-  controls but not the time series, and `readRange()` runs before
-  `ensureIndexed()` in `src/time-series-controls.js`.
-- **Lost settings [M]:** `bugs/X-cross/roundtrip.mjs`: range, stride, x axis
-  and "separate panels" are saved only if auto-collect is on or the attribute
-  list differs from the default.
-- **Fix:** refresh the time series when the frame count grows; read the range
-  after indexing; compare the whole serialized state with the defaults.
+were completed in the next 2026-10-11 batch. B13/T1, B16/B37 and B28/B29
+were completed in the following batch, along with C5/C6/C9, S5 and K2.
+R1 gained a single-sample capless guard; MSAA remains capped. Completed labels
+are not reused.
 
 ### B15. Escape closes the movie progress window while the export continues
 
@@ -112,20 +98,6 @@ were completed in the next 2026-10-11 batch. Completed labels are not reused.
   the theme and frame can be changed mid-export.
 - **Fix:** reopen the dialog or treat its `close` as Cancel; add
   `closedby="none"`; make the application root `inert` during an export.
-
-### B16. Coordination with a cutoff far larger than the cell never finishes
-
-**Severity:** medium (Cancel works; a configuration can carry the value).
-**Effort:** S.
-
-- **Where:** `src/analysis/coordination.js` `minimumImageDistanceSquared` loops
-  over every periodic image within the cutoff for every pair; the input has no
-  maximum and configurations accept up to 10¹⁵.
-- **Evidence [M]:** `bugs/X-cross/repro-coordination-huge-cutoff.mjs` (500
-  atoms, 18 Å cell): 100 Å takes 1.4 s, 300 Å is still running after 25 s.
-  Other analyses reject the same value at once.
-- **Fix:** bound the loop to the images that can be closest, or reject like the
-  other analyses.
 
 ### B19. A second configuration import during a restore can leave it unfinished
 
@@ -175,55 +147,18 @@ were completed in the next 2026-10-11 batch. Completed labels are not reused.
 | B25 | Transparent PNG at "Current viewport" has edge fringes (1,927 of 290,700 pixels, up to 53 levels) | `bugs/C-labels-ao-export/t5-transparent-matte.mjs` [M] | Use the offscreen black/white matte for this path too; this changes that export's pixels | S |
 | B26 | Importing a configuration while a script runs is cut short by the script's next command | `bugs/A-movies/b4-import-during-script.mjs` [M] | Refuse the import while the automation lock is held | S |
 | B27 | Bonds on a large frame run to the end and then fail at the 1,000,000-edge cap | 964k atoms [M] | Sum counts as chunks finish and stop early | S |
-| B28 | With the Voronoi WebGPU kernel turned on, a failed GPU Voronoi preparation cancels all other GPU prewarming, and the status wrongly says "unavailable" (the default CPU routing no longer reaches this) | `gpu/prefetch-memory.mjs --scenario=slab`: 4 of 24 pipelines [M] | Catch the Voronoi-specific failure, continue the general warm-up, report status per kernel | S |
-| B29 | Device loss or any uncaptured GPU error disables WebGPU for the session | `src/analysis/gpu/runtime.js` [C] | Re-create the Worker once on the next request; treat validation errors as failed tasks | S–M |
 | B30 | Every refresh rebuilds the legend and drops keyboard focus; the legend cannot be edited during playback | `shell/bugs2.mjs` [M] | Update the legend in place when its kind, property and items are unchanged | M |
 | B32 | Small touch targets on phones (text buttons 28×11 px, help links 19×19) | `shell/mobile.mjs` [M] | 32–44 px hit areas under the mobile media query | S |
 | B33 | The Movie panel's image-size mirror keeps its old value after an import | `bugs/X-cross/roundtrip.mjs` [M] | Refresh it with the export-resolution control | S |
 | B34 | GPU results that depend on neighbor order are not reproducible between runs: frame strain on 6,912 and 60,229 atoms differs in 7–11 of 1,144,351 values (at most 1.5×10⁻⁸), HEA bonds and Q4/Q6 differ between two pools, and GPU Voronoi digests differ between page loads | Found while fixing B1 and B5; the GPU neighbor grid is filled with `atomicExchange`, so the order of each cell's list varies [M] | Sort each cell's list, or accumulate in an order-independent way; decide first whether run-to-run identity is required on the GPU | M |
 | B36 | `npm run test:gpu:voronoi` on the software adapter takes 285–320 s on the reference machine against a 360 s evaluate timeout, so a loaded machine can fail it without a defect | Measured on 2026-10-10 [M] | Split the page evaluation into two calls, or raise the timeout for this suite | S |
 | B35 | Trajectory lines for a selection group of physical copies find no atoms ("IDs not found (@AlloyView:copy…)"); lines work for source IDs | Seen while fixing B1 [M] | Map copy IDs to their source atom and add the copy's cell offset, or state the restriction in the panel | S–M |
-| B37 | Extremely large finite skew-cell displacement image bounds can exceed safe integers; an image loop then cannot advance | CPU C5 boundary probe: `[3e38,3e38,3e38]`, basis `[10,0,0,9,1,0,.7,-.8,10]`, periodic axes; isolated probe Worker does not return [M] | Reject unsafe image-coefficient bounds before enumeration; preserve finite large open/orthogonal displacement support | S |
 
 Suspected but not reproduced: the movie frame range persists across files
 beyond the new frame count. The expression variable `ID` is NaN for physical
 copies (may be by design; B35 is its visible consequence).
 
 ## Part 2: performance, phase 1 (small changes)
-
-### C5. Remaining transport for light CPU kernels
-
-**Effort:** M. **Deployments:** private-memory CPU paths.
-
-Displacement and cached ideal-strain scalar kernels are complete, as is
-range-only metric transport and bounded chunking for local-shear finalization.
-See [performance](features/performance.md) and the 2026-10-11
-[validation](VALIDATION.md).
-
-- **Remaining:** displacement and cached ideal-strain still retain full input
-  tables per Worker. Evaluate compact row transport with explicit source-range
-  offsets and smaller degrees now that their kernels are much cheaper.
-- **Constraints:** preserve unmatched NaNs, reference mapping, PTM matrix
-  strides, retained contexts and cancellation; measure whole-pool time in both
-  isolation modes before choosing thresholds. Do not enlarge heavy PTM chunks.
-- The old audit's kernel and pool timing estimates are superseded by the new
-  kernel measurements; they are not a measurement of this remaining transport.
-
-### C6. Coordination kernel and Worker target
-
-**Effort:** S. **Deployments:** hosts without WebGPU; runs at load and on
-every cutoff edit.
-
-- **Evidence [M]:** 54% of kernel time is outside the distance test: each atom
-  rebuilds its 27 neighbor bins with a pairwise duplicate scan. Only 3 Workers
-  run at 120k (50,000-atom target). The cutoff index build is serial, 193 ms at
-  1M. Shared-memory reads are not the cause of "shared slower than copied".
-- **Change (kernel verified):** scan for duplicate bins only when a periodic
-  axis has fewer than 3 bins, rebuild the bin list only when the atom's bin
-  changes, inline the minimum-image test; lower the target to 8,192–16,384
-  atoms per Worker using the completed C2 memory admission.
-- **Gain:** kernel 3.91 → 2.26 µs per atom; pool 120k 180 → 112 ms, about
-  40–50 ms with 12 or more Workers [E].
 
 ### C7. Main-thread post-processing
 
@@ -287,23 +222,8 @@ GPU kernels).
   and go straight to the CPU until they change. Pin the backend within one
   batch or time series, because backends agree only within documented
   tolerances.
-- **Note:** these are pre-fix audit CPU timings. C3/C4 and the C5 scalar kernels are complete; C5 transport, C6 and
-  remaining C9 consumers need whole-pool measurements before fixing thresholds.
-
-### T1. Restart frame prefetch when indexing completes
-
-**Effort:** S. **Deployments:** all.
-
-- **Where:** `src/app.js` `updateSourceIndex` calls `scheduleFramePrefetch`
-  only inside `if (previousCount !== state.frameCount)`;
-  `src/workers/indexed-trajectory.js` publishes completion with an unchanged
-  count.
-- **Evidence [M]:** `io/b-fill.mjs`: the cache stays at 10 of 50 frames (60k
-  atoms), 8 of 30 (120k) and 4 of 10 (1M) for at least 12–60 s after load.
-  Small test fixtures finish indexing before the first frame and hide it.
-- **Change:** reschedule when `indexComplete` flips, and when new frames
-  appear while the lanes are idle.
-- **Gain (prototype):** 50 of 50 frames cached 1.7 s after the drop at 60k.
+- **Note:** these are pre-fix audit CPU timings. C3/C4 and the C5 scalar kernels are complete; the following C5/C6/C9 completion batch measured whole-pool effects separately.
+  See VALIDATION.md for its CPU-quota and cold-start limitations.
 
 ### T2. Smoothing: size the coordinate store to the window
 
@@ -333,21 +253,24 @@ GPU kernels).
   lines. Add a same-order fast path to `unwrapSequenceFrame`, which builds a
   130k-entry `Map` per CFG frame.
 
-### R1. Remaining capless-bond guard
+### R1. MSAA capless-bond coverage
 
-**Effort:** S–M. **Deployments:** WebGL.
+**Effort:** M. **Deployments:** multisampled WebGL.
 
-Indexed capped cylinders and cones are complete (120 → 46 and 60 → 33 vertex
-rows), with exact pixels in the new browser suite. See
-[performance](features/performance.md).
+Indexed primitives and the conservative single-sample bond guard are complete.
+Safe single-sample bonds use 60 rather than 120 indices; hidden or undersized
+endpoints, slices, uncertain bounds and all offscreen exports keep caps. Camera
+moves use a constant-size projection/depth check, without scanning every bond.
 
-- **Remaining:** select a capless cylinder only when both endpoints' actual
-  drawn spheres cover every cap. Atom hiding, per-atom radii, selections and
-  slices can expose an endpoint; a minimum-radius check alone is insufficient.
-- **Verify:** small-radius, partially hidden, skew-periodic and sliced scenes
-  must remain pixel-identical, including exported images. Keep the capped mesh
-  as the fallback. The old audit's 2.4–2.7× combined gain includes cap removal
-  and is not a timing claim for the indexed-only implementation.
+- **Remaining:** prove cap coverage under MSAA before removing those caps.
+  A real-browser negative control produced one differing pixel (three RGB
+  bytes, maximum difference 12) even when analytic geometry put the cap behind
+  an endpoint sphere. This is an observed difference, not a demonstrated
+  driver mechanism. Default antialiasing therefore retains capped geometry.
+- **Verify:** strict pixel equality for current and exported views, periodic
+  shifts, per-atom radii, hiding, slices and context restoration. Avoid an
+  O(bond-count) coverage scan on every camera move without measuring its cost.
+- See [performance](features/performance.md) and [validation](VALIDATION.md).
 
 ### R2. Orientation colors: scalar per-atom loop
 
@@ -415,26 +338,6 @@ rows), with exact pixels in the new browser suite. See
   `_headers`; keep `index.html` short-lived; document it in DEPLOYMENT.md.
 
 ## Part 2: performance, phase 2 (medium changes)
-
-### C9. Remaining neighbor-buffer consumers
-
-**Effort:** M. **Deployments:** CPU and exact GPU corrections.
-
-Reusable typed candidate buffers and stable nearest selection, integer CNA
-signatures, Bonds and trusted bond-statistics numeric pair lookup are complete.
-Public object-returning queries and the string-key GPU oracle remain supported.
-See [performance](features/performance.md) and [validation](VALIDATION.md).
-
-- **Remaining:** move RDF, local shear, clusters and the final object-returning
-  PTM/CSP consumers onto owned typed rows. Nested queries must not overwrite an
-  outer row; preserve neighbor order, image shifts, self images and reductions.
-- **Decision:** retain the original radius ladder. Learning the previous
-  k-th-neighbor radius can turn an existing thin-cell rejection into success;
-  it needs a separate equivalence proof or an explicit numerical-behavior
-  decision. It was not silently included in this optimization.
-- Compare against the current production buffers, not the original audit's
-  combined prototype. Recent CNA/Bonds kernel gains are about 1.4–1.5× in the
-  measured samples; they exclude Worker preparation and rendering.
 
 ### C10. CPU Voronoi: JavaScript overhead and index labels
 
@@ -528,37 +431,6 @@ its WebGPU kernel is turned on.
   after smoothing and replication.
 - **Gain [E]:** 150–250 ms per frame at 1M in the original audit. Re-measure
   after the completed S2/S3 batching and R3 bounds/radius work.
-
-### S5. Bundle the page and each Worker entry
-
-**Effort:** M. **Deployments:** all.
-
-- **Evidence [M]:** the build only copies `src/`: 158 static modules from
-  `app.js` in a five-level waterfall, 187 requests, and each analysis Worker
-  reloads 25 modules. Cold start at 20 Mbit/s and 40 ms round trip; every row
-  includes S1 except the HTTP/1.1 "Current" row:
-
-| Build | Protocol, CPU | Requests | Ready |
-| --- | --- | --- | --- |
-| Current | HTTP/2, 1× | 187 | 1,052 ms |
-| Bundled | HTTP/2, 1× | 14 | 619 ms |
-| Current | HTTP/2, 4× slower CPU | 187 | 1,870 ms |
-| Bundled | HTTP/2, 4× slower CPU | 14 | 1,678 ms |
-| Current | HTTP/1.1, 4× slower CPU | 187 | 3,280 ms |
-| Bundled | HTTP/1.1, 4× slower CPU | 14 | 1,841 ms |
-
-- **Also [M]:** sixteen analysis Workers start in 318–323 ms from a warm HTTP
-  cache, and in 61–69 ms when bundled.
-- **Change (prototype, `shell/bundle/build.mjs`):** esbuild as a development
-  dependency, one bundle per entry (the page and 11 Worker entries) written to
-  its original path, with a plugin that keeps `new URL(…, import.meta.url)`
-  and the Emscripten glue pointing at the original kernel and Wasm files.
-  `npm run dev` and the Node tests keep using `src/`.
-- **Risks:** URL relocation broke PTM Wasm loading in the first prototype;
-  add a browser test that every Worker and kernel loads from the bundled tree.
-- **Not worth doing [M]:** `modulepreload` for all modules (no gain, slower
-  first paint), lazy-loading rarely used panels (15% of the code), and
-  minification as a requirement (no ready-time gain).
 
 ### S6. Keep a standby structure Worker
 
@@ -659,17 +531,6 @@ stays as the fallback where float blending is missing.
 - **Change:** request neighbor lists whenever memory allows (65 B per atom);
   profile the clustering before choosing between typed-array tuning and a Wasm
   port.
-
-### K2. Surface mesh: move wrap, cut and cap off the main thread
-
-**Effort:** M. **Deployments:** all.
-
-- **Evidence [M]:** the display build runs on the main thread: 8–26 ms for the
-  HEA mesh and 0.12–0.19 s for 124,352 faces. About three quarters of the
-  surface analysis is the Delaunay tessellation, and a surface job and a DXA
-  run execute one after the other in the shared Worker.
-- **Change:** build the display mesh in the Worker that already holds the
-  surface. B8 is complete; preserve its sheet ownership and closed STL caps.
 
 ### K3. Local shear: one neighbor pass
 

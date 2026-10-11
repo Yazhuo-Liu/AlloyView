@@ -61,6 +61,20 @@ function fakeHost({ frameCount = 10, size = [320, 240], showFrame = null } = {})
 const h264 = movieFormat('mp4-h264'), config = { codec: 'avc1.64001e', width: 320, height: 240, bitrate: 1e6, framerate: 10 };
 const bytesOf = async file => new Uint8Array(await new Blob(file.parts).arrayBuffer());
 
+test('movie frames await asynchronous Surface capture before encoding or advancing the camera', async () => {
+  const codec = fakeCodec(), { host, log, app } = fakeHost();
+  let pending = 0;
+  const capture = host.capture;
+  host.capture = async () => {
+    assert.equal(pending++, 0, 'only one prepared frame is pending');
+    const canvas = capture(); await new Promise(resolve => setTimeout(resolve, 2)); pending--; return canvas;
+  };
+  const plan = planMovie(cameraPath(), { fps: 3, frameCount: 10 });
+  const file = await renderMovie({ plan, format: h264, config: { ...config, framerate: 3 }, host, ...codec });
+  assert.equal(file.frames, 4); assert.equal(app.released, 4);
+  assert.equal(log.filter(entry => entry[0] === 'capture').length, 4); assert.equal(pending, 0);
+});
+
 test('a camera path renders every frame in order into a playable MP4 with forced keyframes', async () => {
   const codec = fakeCodec(), { host, log, app } = fakeHost(), progress = [];
   const plan = planMovie(cameraPath(), { fps: 10, frameCount: 10 });

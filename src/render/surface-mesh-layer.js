@@ -5,6 +5,7 @@ import { dislocationSlicePlanes } from './dislocation-layer.js';
 import { effectivePeriodicOrigin } from './periodic-origin.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON } from './slicing.js';
 import { buildSurfaceDisplayMesh } from './surface-mesh-geometry.js';
+import { sharedSurfaceGeometryClient } from './surface-geometry-client.js';
 
 /** Closed triangle meshes: the alpha-shape surface and the DXA defect mesh.
  * Each mesh is wrapped into the displayed cell, cut at its periodic faces and
@@ -119,8 +120,9 @@ export function surfaceMeshDisplayState(renderer) {
 }
 
 export class SurfaceMeshLayer {
-  constructor(gl) {
+  constructor(gl, { geometryClient = sharedSurfaceGeometryClient() } = {}) {
     this.gl = gl;
+    this.geometryClient = geometryClient;
     this.program = createProgram(gl);
     this.uniforms = Object.fromEntries(UNIFORMS.map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.entries = new Map();
@@ -131,7 +133,8 @@ export class SurfaceMeshLayer {
     if (!entry) {
       const gl = this.gl;
       entry = { id, mesh: null, display: null, options: normalizeSurfaceMeshOptions({}, SURFACE_MESH_DEFAULTS[id] ?? SURFACE_MESH_DEFAULTS.surface),
-        vao: gl.createVertexArray(), buffer: gl.createBuffer(), indexBuffer: gl.createBuffer(), displayKey: null, cell: null, error: null };
+        vao: gl.createVertexArray(), buffer: gl.createBuffer(), indexBuffer: gl.createBuffer(), displayKey: null, cell: null, error: null,
+        controller: null, ready: null, releaseSource: null, revision: 0, pending: false };
       gl.bindVertexArray(entry.vao);
       gl.bindBuffer(gl.ARRAY_BUFFER, entry.buffer);
       for (let attribute = 0; attribute < 2; attribute += 1) {
@@ -156,14 +159,39 @@ export class SurfaceMeshLayer {
     const state = surfaceMeshDisplayState(renderer);
     const displayKey = JSON.stringify([state.origin, entry.options.caps]);
     if (entry.mesh !== mesh || entry.cell !== renderer.frame.cell || entry.displayKey !== displayKey) {
+      entry.controller?.abort(); entry.revision++;
+      if (entry.mesh !== mesh || entry.cell !== renderer.frame.cell) {
+        entry.releaseSource?.();
+        entry.releaseSource = this.geometryClient.available ? this.geometryClient.retainSource(mesh, renderer.frame.cell) : null;
+      }
       entry.mesh = mesh; entry.cell = renderer.frame.cell; entry.displayKey = displayKey;
-      this.upload(entry, state);
+      this.upload(entry, state, renderer);
     }
     entry.translation = state.translation;
     return entry;
   }
 
-  upload(entry, state) {
+  upload(entry, state, renderer) {
+    if (this.geometryClient.available) {
+      const revision = entry.revision, controller = new AbortController(); entry.controller = controller;
+      entry.display = null; entry.error = null; entry.pending = true;
+      entry.ready = this.geometryClient.prepare(entry.mesh, entry.cell, { origin: state.origin, caps: entry.options.caps }, { signal: controller.signal })
+        .then(result => {
+          if (controller.signal.aborted || revision !== entry.revision || renderer.surfaceMeshLayer !== this || renderer.graphicsUnavailable?.()) return;
+          entry.display = result.display; entry.buildMs = result.buildMs;
+          this.uploadBuffers(entry, result.values);
+        }).catch(error => {
+          if (controller.signal.aborted || revision !== entry.revision) return;
+          entry.display = null; entry.error = error.message || String(error);
+        }).finally(() => {
+          if (revision !== entry.revision) return;
+          entry.pending = false;
+          if (renderer.surfaceMeshLayer === this && !renderer.graphicsUnavailable?.()) {
+            renderer.updateSceneBounds?.({ reuseSourceBounds: true }); renderer.requestRender?.();
+          }
+        });
+      return;
+    }
     const gl = this.gl, startedAt = performance.now();
     try {
       entry.display = buildSurfaceDisplayMesh(entry.mesh, entry.cell, { origin: state.origin, caps: entry.options.caps,
@@ -180,17 +208,24 @@ export class SurfaceMeshLayer {
       values[vertex * 6 + 3] = display.normals[vertex * 3]; values[vertex * 6 + 4] = display.normals[vertex * 3 + 1];
       values[vertex * 6 + 5] = display.normals[vertex * 3 + 2];
     }
+    this.uploadBuffers(entry, values);
+    entry.buildMs = performance.now() - startedAt;
+  }
+
+  uploadBuffers(entry, values) {
+    const gl = this.gl, display = entry.display;
     gl.bindVertexArray(entry.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, entry.buffer);
     gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, entry.indexBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, display?.indices ?? new Uint32Array(0), gl.STATIC_DRAW);
     gl.bindVertexArray(null);
-    entry.buildMs = performance.now() - startedAt;
   }
 
   release(entry) {
     if (!entry.mesh && !entry.display) return;
+    entry.controller?.abort(); entry.revision++; entry.pending = false; entry.ready = null;
+    entry.releaseSource?.(); entry.releaseSource = null;
     entry.mesh = entry.display = entry.cell = entry.displayKey = entry.error = null;
     const gl = this.gl;
     gl.bindVertexArray(entry.vao);
@@ -200,6 +235,27 @@ export class SurfaceMeshLayer {
   }
 
   clear() { for (const entry of this.entries.values()) this.release(entry); }
+
+  /** Context loss cancels subscriptions without touching invalid GL objects or
+   * resetting the retained geometry Worker. Restoration reuses its snapshots. */
+  detach() {
+    for (const entry of this.entries.values()) {
+      entry.controller?.abort(); entry.revision++; entry.pending = false;
+      entry.releaseSource?.(); entry.releaseSource = null;
+    }
+  }
+
+  get pending() { return [...this.entries.values()].some(entry => entry.pending); }
+
+  async ready() {
+    while (this.pending) await Promise.all([...this.entries.values()].filter(entry => entry.pending).map(entry => entry.ready));
+    this.assertReady();
+  }
+
+  assertReady() {
+    const failed = [...this.entries.values()].find(entry => entry.mesh && entry.options.visible && entry.error);
+    if (failed) throw new Error(failed.error);
+  }
 
   /** Rebuild after the periodic origin or coordinate mode changed. */
   refresh(renderer) {

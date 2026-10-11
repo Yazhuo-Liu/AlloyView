@@ -12,10 +12,24 @@ const numericalZero = value => Math.abs(value) < 1e-12 ? 0 : value;
 /** Local elastic strain relative to an ideal PTM lattice, not trajectory strain.
  * Restore the absolute scale removed by PTM before computing E=(FᵀF-I)/2.
  */
-export async function calculateAtomicStrain(frame, { references, ptmInput = null, onAtoms = () => {}, ...parameters }) {
+export async function calculateAtomicStrain(frame, { references, ptmInput = null, sourceRange = null, onAtoms = () => {}, ...parameters }) {
+  if (sourceRange) {
+    const rows = sourceRange.endAtom - sourceRange.startAtom;
+    if (!ptmInput || !Number.isSafeInteger(sourceRange.totalAtoms) || sourceRange.totalAtoms < 1
+        || !Number.isSafeInteger(sourceRange.startAtom) || !Number.isSafeInteger(sourceRange.endAtom)
+        || sourceRange.startAtom < 0 || sourceRange.endAtom > sourceRange.totalAtoms || rows < 0
+        || !ArrayBuffer.isView(frame.types) || frame.types.length !== rows
+        || !(ptmInput.structures instanceof Uint8Array) || ptmInput.structures.length !== rows
+        || !(ptmInput.scales instanceof Float64Array) || ptmInput.scales.length !== rows
+        || !(ptmInput.deformation instanceof Float64Array) || ptmInput.deformation.length !== rows * 9) {
+      throw new Error('Cached PTM source rows are incomplete or have an invalid source range.');
+    }
+  }
   validateReferences(references, frame.types);
   const startedAt = performance.now();
-  const { startAtom, endAtom } = atomRange(frame.fractional.length / 3, parameters);
+  const { startAtom, endAtom } = atomRange(sourceRange?.totalAtoms ?? frame.fractional.length / 3,
+    { ...parameters, startAtom: parameters.startAtom ?? sourceRange?.startAtom, endAtom: parameters.endAtom ?? sourceRange?.endAtom });
+  if (sourceRange && (startAtom < sourceRange.startAtom || endAtom > sourceRange.endAtom)) throw new Error('The strain atom range is outside its source rows.');
   const count = endAtom - startAtom;
   const ptm = ptmInput ?? await calculatePtm(frame, { ...parameters, onAtoms });
   const result = Object.fromEntries(STRAIN_FIELDS.map((name) => [name, new Float32Array(count).fill(NaN)]));
@@ -29,9 +43,9 @@ export async function calculateAtomicStrain(frame, { references, ptmInput = null
       onAtoms(i, count);
       lastProgressAt = performance.now();
     }
-    const p = ptmInput ? atom : i;
+    const p = ptmInput ? atom - (sourceRange?.startAtom ?? 0) : i;
     const type = ptm.structures[p];
-    const reference = references[frame.types[atom]];
+    const reference = references[frame.types[atom - (sourceRange?.startAtom ?? 0)]];
     if (type !== reference.structure || !Number.isFinite(ptm.scales[p])) { incomplete += 1; continue; }
     const radiusPerA = referenceRadiusPerA(type);
     const factor = 1 / (ptm.scales[p] * reference.a * radiusPerA);

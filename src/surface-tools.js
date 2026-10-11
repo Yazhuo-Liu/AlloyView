@@ -54,8 +54,9 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
   const job = { enabled: false, failed: false, queued: false, controller: null, serial: 0, cached: null, frame: null,
     settings: { ...SURFACE_MESH_TOOL_DEFAULTS } };
   const memberSerials = new WeakMap();
+  const displayStatusRequests = new WeakMap();
   let controlsEnabled = false, generation = 0, nextMemberSerial = 1, visibilityTimer = null, radiusEdited = false;
-  let visibilityKey = null;
+  let visibilityKey = null, meshExportController = null;
   const visibilityWaiters = new Set();
 
   function visibilityDependencies(frame) {
@@ -194,16 +195,24 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
     const shown = cached && frame && job.frame === frame && renderer.frame === frame && cached.result.faceCount > 0;
     try {
       const entry = renderer.setSurfaceMesh('surface', shown ? cached.mesh : null, display);
-      if ($('surface-mesh-display-status')) {
+      const updateStatus = () => { if ($('surface-mesh-display-status')) {
         $('surface-mesh-display-status').textContent = entry?.error ? `The surface cannot be displayed: ${entry.error}`
+          : entry?.pending ? 'Preparing surface display…'
           : cached && !cached.result.faceCount ? (cached.result.spaceFilling ? 'The solid fills the whole cell: there is no surface to draw.'
             : 'No solid region was found: there is no surface to draw.') : '';
+      } };
+      updateStatus();
+      if (entry?.ready && displayStatusRequests.get(entry) !== entry.ready) {
+        displayStatusRequests.set(entry, entry.ready);
+        const revision = entry.revision;
+        void entry.ready.then(() => { if (job.cached === cached && getFrame() === frame && entry.revision === revision) updateStatus(); });
       }
     } catch (error) { notify(error.message); }
     onDisplayChange();
   }
 
   function clearView() {
+    meshExportController?.abort(); meshExportController = null;
     job.cached = null;
     if ($('surface-mesh-results')) $('surface-mesh-results').hidden = true;
     if ($('surface-mesh-summary')) $('surface-mesh-summary').textContent = '';
@@ -468,9 +477,21 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
     if (!cached || !frame || job.frame !== frame) { notify('Construct the surface before exporting it.'); return null; }
     try {
       const display = displaySettings(), view = renderer?.frame === frame ? surfaceMeshDisplayState(renderer) : { origin: [0, 0, 0], translation: [0, 0, 0] };
+      const settings = { caps: display.caps, translation: view.translation,
+        stem: `${getFileStem()}-frame-${getFrameIndex() + 1}-surface`, title: `AlloyView surface mesh, probe radius ${cached.result.radius} A` };
+      if (renderer?.surfaceGeometryClient?.available) {
+        meshExportController?.abort(); meshExportController = new AbortController();
+        const controller = meshExportController;
+        const recipe = JSON.stringify([view, display.caps]);
+        return renderer.surfaceGeometryClient.export(cached.mesh, frame.cell, { origin: view.origin, caps: display.caps }, format, settings, { signal: controller.signal })
+          .then(file => {
+            if (job.cached !== cached || getFrame() !== frame || JSON.stringify([surfaceMeshDisplayState(renderer), displaySettings().caps]) !== recipe) return null;
+            onDownload(file.blob, file.filename); return file;
+          }).catch(error => { if (error.name !== 'AbortError') notify(error.message); return null; })
+          .finally(() => { if (meshExportController === controller) meshExportController = null; });
+      }
       const mesh = buildSurfaceDisplayMesh(cached.mesh, frame.cell, { origin: view.origin, caps: display.caps, spaceFilling: cached.mesh.spaceFilling });
-      const file = createMeshExport(mesh, format, { caps: display.caps, translation: view.translation,
-        stem: `${getFileStem()}-frame-${getFrameIndex() + 1}-surface`, title: `AlloyView surface mesh, probe radius ${cached.result.radius} A` });
+      const file = createMeshExport(mesh, format, settings);
       onDownload(file.blob, file.filename);
       return file;
     } catch (error) { notify(error.message); return null; }

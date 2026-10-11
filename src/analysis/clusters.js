@@ -1,4 +1,4 @@
-import { NeighborSearch, atomRange } from './neighbors.js';
+import { NeighborSearch, NeighborBuffer, atomRange } from './neighbors.js';
 import { MAX_NEIGHBORS_PER_ATOM } from './bonds.js';
 
 export const CLUSTER_NEIGHBOR_MODES = Object.freeze(['cutoff', 'bonds']);
@@ -162,19 +162,20 @@ export function calculateClusterEdges(frame, { cutoff, pairCutoffs = [], neighbo
   onPhase('analyzing');
   const forest = new ImageForest(startAtom, endAtom);
   let acceptedEdges = 0;
+  const neighbors = new NeighborBuffer();
   for (let atom = startAtom; atom < endAtom; atom += 1) {
     if (!selected || selected[atom]) {
-      const neighbors = search.within(atom, rule.maximumCutoff, MAX_NEIGHBORS_PER_ATOM + 1);
+      search.collect(atom, rule.maximumCutoff, neighbors, MAX_NEIGHBORS_PER_ATOM + 1);
       if (neighbors.length > MAX_NEIGHBORS_PER_ATOM) throw new Error('Too many cluster neighbors; reduce the cutoff.');
-      for (const neighbor of neighbors) {
-        const other = neighbor.atom;
+      for (let row = 0; row < neighbors.length; row += 1) {
+        const other = neighbors.atoms[row];
         // Each undirected edge once: from its lower atom, or for a periodic
         // self image, from the positive one of the opposite translations.
-        if (other < atom || (other === atom && !positiveShift(neighbor.imageA, neighbor.imageB, neighbor.imageC))) continue;
+        if (other < atom || (other === atom && !positiveShift(neighbors.imageA[row], neighbors.imageB[row], neighbors.imageC[row]))) continue;
         if (selected && !selected[other]) continue;
-        if (!rule.accepts(atom, other, neighbor.distanceSquared)) continue;
+        if (!rule.accepts(atom, other, neighbors.distanceSquared[row])) continue;
         acceptedEdges += 1;
-        forest.add(atom, other, neighbor.imageA, neighbor.imageB, neighbor.imageC);
+        forest.add(atom, other, neighbors.imageA[row], neighbors.imageB[row], neighbors.imageC[row]);
       }
     }
     if ((atom - startAtom + 1) % 256 === 0) onAtoms(atom - startAtom + 1, endAtom - startAtom);

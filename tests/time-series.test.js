@@ -177,7 +177,7 @@ class Element {
   dispatch(name) { return this.listeners.get(name)?.({ target: this }); }
 }
 
-function harness(t, { frameCount = 5 } = {}) {
+function harness(t, { frameCount = 5, initialFrameCount = frameCount, ensureIndexed = async () => {} } = {}) {
   const ids = ['time-series-state', 'time-series-status', 'time-series-attribute', 'add-time-series-attribute', 'time-series-attribute-list',
     'time-series-attribute-options', 'time-series-first', 'time-series-last', 'time-series-stride', 'time-series-x-axis', 'time-series-separate',
     'time-series-strain-reference', 'collect-time-series', 'visit-time-series', 'cancel-time-series', 'export-time-series', 'clear-time-series',
@@ -195,14 +195,15 @@ function harness(t, { frameCount = 5 } = {}) {
       item.properties.push({ name: 'structureType', data: Uint8Array.from([1, 1, 1, item.frameIndex % 2]), categories: STRUCTURE_TYPES, analysisKind: 'cna', analysisKey: 'k' });
     }
   };
-  const view = { index: 0, displayed: [], reads: [] };
+  const view = { index: 0, count: initialFrameCount, displayed: [], reads: [] };
   analyze(frames[0]);
   const scheduled = [];
-  const attributes = createGlobalAttributeSource({ getFrame: () => frames[view.index], getFrameIndex: () => view.index, getFrameCount: () => frameCount,
+  const attributes = createGlobalAttributeSource({ getFrame: () => frames[view.index], getFrameIndex: () => view.index, getFrameCount: () => view.count,
     getFrameAt: async index => { view.reads.push(index); return frames[index]; }, schedule: callback => scheduled.push(callback) });
   const downloads = [], notices = [];
   const series = initializeTimeSeries({ attributes, documentRoot, getFrame: () => frames[view.index], getFrameIndex: () => view.index,
-    getFrameCount: () => frameCount, getFrameAt: async (index, { signal } = {}) => {
+    getFrameCount: () => view.count, ensureIndexed: options => ensureIndexed({ ...options, view, fields, documentRoot, getSeries: () => series }),
+    getFrameAt: async (index, { signal } = {}) => {
       view.reads.push(index);
       await Promise.resolve();
       if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
@@ -212,10 +213,92 @@ function harness(t, { frameCount = 5 } = {}) {
     getFileName: () => 'run.dump', notify: message => notices.push(message), onDownload: (blob, filename) => downloads.push({ blob, filename }) });
   function flush() { while (scheduled.length) scheduled.shift()(); }
   series.setEnabled(true);
+  attributes.refresh(); flush(); series.refresh();
   const add = name => { fields['time-series-attribute'].value = name; fields['add-time-series-attribute'].dispatch('click'); };
   t.after(() => series.reset());
-  return { fields, series, attributes, view, add, flush, downloads, notices, frames };
+  return { fields, series, attributes, view, add, flush, downloads, notices, frames, documentRoot };
 }
+
+test('collection waits for the full index before interpreting an open-ended partial range', async t => {
+  const { fields, series, view } = harness(t, { initialFrameCount: 2, frameCount: 5,
+    ensureIndexed: async ({ view }) => { await Promise.resolve(); view.count = 5; } });
+  assert.equal(fields['time-series-last'].value, '2');
+  assert.equal(await series.collect(), true);
+  assert.deepEqual(series.getData().frames, [0, 1, 2, 3, 4]);
+  assert.deepEqual(view.reads, [1, 2, 3, 4]);
+  assert.equal(fields['time-series-last'].value, '5');
+  assert.equal(fields['time-series-last'].max, '5');
+  assert.equal(series.serialize().lastFrame, null);
+  assert.equal(fields['time-series-state'].textContent, 'Complete');
+  assert.deepEqual(view.displayed, [], 'indexing and file-value collection do not change the view');
+});
+
+test('index growth refreshes bounds and partial status even when recorded values have not changed', t => {
+  const { fields, series, view, documentRoot } = harness(t, { initialFrameCount: 1, frameCount: 5 });
+  assert.equal(fields['time-series-state'].textContent, 'Complete');
+  const revision = series.store.revision;
+  documentRoot.activeElement = fields['time-series-last'];
+  view.count = 5; series.refresh();
+  assert.equal(series.store.revision, revision);
+  assert.equal(fields['time-series-last'].max, '5');
+  assert.equal(fields['time-series-last'].value, '1', 'focused input is retained');
+  assert.equal(fields['time-series-state'].textContent, 'Partial');
+  assert.match(fields['time-series-status'].textContent, /5 frames.*4 missing/);
+});
+
+test('focused automatic tail remains open during index growth, while an edited shorter range stays fixed', async t => {
+  const { fields, series, documentRoot, view } = harness(t, { initialFrameCount: 2, frameCount: 5,
+    ensureIndexed: async ({ view, getSeries }) => { view.count = 5; getSeries().refresh(); } });
+  documentRoot.activeElement = fields['time-series-last'];
+  assert.equal(await series.collect(), true);
+  assert.equal(series.serialize().lastFrame, null);
+  assert.deepEqual(view.reads, [1, 2, 3, 4]);
+  documentRoot.activeElement = null; series.refresh();
+  fields['time-series-last'].value = '2'; fields['time-series-last'].dispatch('change');
+  assert.equal(series.serialize().lastFrame, 1, 'a deliberately entered smaller endpoint is fixed');
+});
+
+test('visiting an explicit range uses the completed index and preserves every uncollected setting', async t => {
+  const { fields, series, view, add } = harness(t, { initialFrameCount: 4, frameCount: 6,
+    ensureIndexed: async ({ view, getSeries }) => { view.count = 6; getSeries().refresh(); } });
+  add('CNA.FCC.fraction');
+  fields['time-series-first'].value = '2'; fields['time-series-last'].value = '3'; fields['time-series-stride'].value = '2';
+  fields['time-series-last'].dispatch('change');
+  fields['time-series-x-axis'].value = 'timestep'; fields['time-series-x-axis'].dispatch('change');
+  fields['time-series-separate'].checked = true; fields['time-series-separate'].dispatch('change');
+  const uncollected = series.serialize();
+  assert.equal(uncollected.autoCollect, false);
+  const saved = createConfiguration({ settings: { extensions: { timeSeries: uncollected } } });
+  assert.deepEqual(parseConfiguration(JSON.stringify(saved)).settings.extensions.timeSeries, uncollected);
+  assert.equal(await series.visit(), true);
+  assert.deepEqual(view.displayed, [1, 0]);
+  assert.deepEqual(series.getData().frames, [1]);
+  assert.equal(fields['time-series-last'].max, '6');
+  assert.equal(fields['time-series-last'].value, '3');
+  await series.restore(uncollected);
+  assert.deepEqual(series.serialize(), uncollected);
+});
+
+test('cancelling an index wait preserves the reusable controller and later collection sees the completed tail', async t => {
+  let release;
+  const indexed = new Promise(resolve => { release = resolve; });
+  const { fields, series, view } = harness(t, { initialFrameCount: 2, frameCount: 5,
+    ensureIndexed: async ({ signal, view }) => {
+      await Promise.race([indexed, new Promise((_, reject) => signal.addEventListener('abort',
+        () => reject(new DOMException('Cancelled', 'AbortError')), { once: true }))]);
+      view.count = 5;
+    } });
+  const running = series.collect();
+  assert.equal(fields['cancel-time-series'].disabled, false);
+  series.cancel();
+  assert.equal(await running, false);
+  assert.deepEqual(view.reads, []);
+  assert.equal(series.store.has('Cell.volume', 0), true);
+  release();
+  assert.equal(await series.collect(), true);
+  assert.deepEqual(view.reads, [1, 2, 3, 4]);
+  assert.equal(fields['time-series-state'].textContent, 'Complete');
+});
 
 test('time-series controls read file values without changing the displayed frame', async t => {
   const { fields, series, view, add, downloads } = harness(t);

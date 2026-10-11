@@ -291,6 +291,75 @@ test('device failures settle in a visible unavailable state without generating r
   assert.deepEqual(pool.uploads, []);
 });
 
+test('a failed targeted Voronoi warmup leaves uploads and the general pipelines usable and reports only its kernel', async () => {
+  const pool = fakePool(2), calls = recordCalls(pool), statuses = [], warmup = pool.warmupGpu;
+  pool.warmupGpu = async options => {
+    if (options.analysisKinds?.includes('voronoi')) throw new Error('Voronoi clip shader rejected');
+    return warmup(options);
+  };
+  const scheduler = makeScheduler(pool, { statuses });
+  scheduler.setFrame(source('A', 2, 0)); scheduler.setAnalysisKinds(['voronoi']);
+  await scheduler.setEnabled(true);
+  assert.deepEqual(pool.uploads, [0, 1]); assert.deepEqual(pool.preparations, []);
+  assert.equal(calls.at(-1).kind, 'warm'); assert.equal(calls.at(-1).analyses, undefined);
+  assert.equal(statuses.at(-1).phase, 'ready');
+  assert.deepEqual(statuses.at(-1).kernelFailures, [{ kind: 'voronoi', phase: 'warming', error: 'Voronoi clip shader rejected' }]);
+  assert.ok(statuses.every(status => status?.phase !== 'unavailable'));
+  await scheduler.clearSource(); await scheduler.pending;
+  assert.equal(statuses.at(-1).phase, 'ready', 'a failed optional shader also leaves no-source general warmup available');
+});
+
+test('failed Voronoi frame preparation reuses its partial upload and does not suppress other kernels or frames', async () => {
+  const pool = fakePool(2), statuses = [], prepare = pool.prepareGpuFrame;
+  pool.prepareGpuFrame = async (frame, options) => {
+    if (options.analysisKinds?.includes('voronoi')) {
+      await prepare.call(pool, frame, { ...options, analysisKinds: undefined });
+      throw new Error('Voronoi neighbor occupancy exceeded');
+    }
+    return prepare.call(pool, frame, options);
+  };
+  const scheduler = makeScheduler(pool, { statuses });
+  scheduler.setFrame(source('A', 2, 0)); scheduler.setAnalysisKinds(['voronoi']);
+  await scheduler.setEnabled(true);
+  assert.deepEqual(pool.uploads, [0, 1]); assert.equal(pool.warmed.at(-1), undefined);
+  assert.equal(statuses.at(-1).phase, 'ready');
+  assert.deepEqual(statuses.at(-1).kernelFailures, [{ kind: 'voronoi', phase: 'preparing', error: 'Voronoi neighbor occupancy exceeded' }]);
+  scheduler.setAnalysisKinds([]); await scheduler.pending;
+  assert.equal(statuses.at(-1).kernelFailures, undefined, 'withdrawn per-frame failures do not survive an unrelated new run');
+});
+
+test('true device failures in targeted warmup stay global failures rather than masquerading as a Voronoi limit', async () => {
+  for (const properties of [{ name: 'GpuDeviceLostError', gpuDeviceLost: true }, { gpuDeviceUnavailable: true }]) {
+    const pool = fakePool(2), statuses = [];
+    pool.warmupGpu = async () => { throw Object.assign(new Error('GPU device unavailable'), properties); };
+    const scheduler = makeScheduler(pool, { statuses });
+    scheduler.setFrame(source('A', 2, 0)); scheduler.setAnalysisKinds(['voronoi']);
+    await scheduler.setEnabled(true);
+    assert.deepEqual(statuses.at(-1), { phase: 'unavailable', error: 'GPU device unavailable' });
+    assert.deepEqual(pool.uploads, []);
+  }
+});
+
+test('source replacement and GPU-off ignore late optional-kernel failures without starting obsolete general warmup', async () => {
+  const pool = fakePool(1), blocked = deferred(), statuses = [], entered = deferred(), warmup = pool.warmupGpu;
+  let first = true;
+  pool.warmupGpu = async options => {
+    if (first && options.analysisKinds?.includes('voronoi')) {
+      first = false; entered.resolve(); await blocked.promise; throw new Error('obsolete Voronoi failure');
+    }
+    return warmup.call(pool, options);
+  };
+  const scheduler = makeScheduler(pool, { statuses });
+  scheduler.setFrame(source('old', 1, 0)); scheduler.setAnalysisKinds(['voronoi']);
+  const previous = scheduler.setEnabled(true); await entered.promise;
+  await scheduler.setEnabled(false); const count = statuses.length;
+  blocked.resolve(); await previous;
+  assert.equal(statuses.length, count); assert.deepEqual(pool.uploads, []); assert.deepEqual(pool.warmed, []);
+  scheduler.setFrame(source('new', 1, 0)); await scheduler.setEnabled(true);
+  assert.equal(statuses.at(-1).phase, 'ready'); assert.equal(statuses.at(-1).kernelFailures, undefined);
+  assert.deepEqual(pool.uploads, [0]);
+});
+
 function source(sourceKey, frameCount, currentIndex) {
   return { sourceKey, frameCount, currentIndex, frame: { index: currentIndex } };
 }

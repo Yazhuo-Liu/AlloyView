@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell } from '../src/data/model.js';
-import { AtomPrimitiveLayer, bondDisplayShifts, createFlatArrowMesh, createIndexedPrimitiveMesh, createPrimitiveMesh, normalizeVectorOptions,
+import { AtomPrimitiveLayer, analyzeBondCapCoverage, bondCapsAreCovered, bondDisplayShifts, createFlatArrowMesh, createIndexedPrimitiveMesh, createPrimitiveMesh, normalizeVectorOptions,
   parsePrimitiveColor, validateBonds, vectorArrowEndpoints } from '../src/render/atom-primitives.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 
@@ -59,6 +59,84 @@ test('indexed cylinders and cones preserve every triangle and Float32 attribute 
   }
   assert.equal(createIndexedPrimitiveMesh(false).vertices.length / 6, 46);
   assert.equal(createIndexedPrimitiveMesh(true).vertices.length / 6, 33);
+});
+
+test('capless indexed cylinders preserve the exact side triangles and never alter arrow cones', () => {
+  for (const sides of [3, 8, 10, 32]) {
+    const raw = createPrimitiveMesh(false, sides), { vertices, indices } = createIndexedPrimitiveMesh(false, sides, true);
+    const expected = Float32Array.from([...raw].filter((_, index) => raw[Math.floor(index / 6) * 6 + 5] === 0));
+    const expanded = new Float32Array(indices.length * 6);
+    for (let index = 0; index < indices.length; index++) expanded.set(vertices.subarray(indices[index] * 6, indices[index] * 6 + 6), index * 6);
+    assert.deepEqual(new Uint32Array(expanded.buffer), new Uint32Array(expected.buffer));
+    assert.equal(indices.length, sides * 6);
+  }
+  assert.equal(createIndexedPrimitiveMesh(false, 10, true).vertices.length / 6, 22);
+  assert.throws(() => createIndexedPrimitiveMesh(true, 10, true), /Only bond cylinders/);
+});
+
+test('cap coverage uses uploaded endpoint coordinates, periodic shifts and actual per-atom radii', () => {
+  const positions = new Float32Array([0, 0, 0, 0, 9, 2, 3, 0]), fractions = new Float32Array([0, 0, 0, 0, .8, .2, .3, 0]);
+  const radii = new Float32Array([.7, .3]);
+  const renderer = { frame: { cell }, atomRadii: radii, radiusRevision: 3 };
+  const bonds = { count: 1, indices: new Uint32Array([0, 1]), vectors: new Float32Array([-1, 2, 3]) };
+  const coverage = analyzeBondCapCoverage(renderer, bonds, new Int32Array([-1, 0, 0]), positions, fractions);
+  assert.equal(coverage.minimumRadius, radii[1]); assert.equal(coverage.maximumRadius, radii[0]);
+  assert.equal(coverage.endpointError, 0); assert.equal(coverage.radiusRevision, 3);
+  bonds.vectors[0] = -.75;
+  assert.equal(analyzeBondCapCoverage(renderer, bonds, new Int32Array([-1, 0, 0]), positions, fractions).endpointError, .25);
+});
+
+test('capless guard requires opaque projected sphere interiors, clip coverage and a resolvable depth gap', () => {
+  const view = Float32Array.from([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-10,1]);
+  const projection = Float32Array.from([1,0,0,0, 0,1,0,0, 0,0,-.2,0, 0,0,-1.1,1]);
+  const renderer = { viewMatrix: view, projectionMatrix: projection, projectionMode: 'orthographic', depthRange: [1,20],
+    radiusScale: 1, minimumOffset: [0,0,0], maximumOffset: [0,0,0], canvas: { width: 800, height: 800 },
+    sliceMode: 'planes', sliceCount: 0 };
+  const coverage = { minimum: [0,0,0], maximum: [1,0,0], minimumRadius: .7, maximumRadius: .7,
+    endpointError: 0, coordinateMagnitude: 1, fractionalMaximum: [.5,.5,.5] };
+  assert.equal(bondCapsAreCovered(renderer, coverage, .1), true);
+  for (const patch of [{ radiusScale: .2 }, { crystalDrag: {} }, { sliceCount: 1 }, { depthRange: [9.5,20] },
+    { canvas: { width: 4, height: 4 } }, { projectionMatrix: Float32Array.from(projection, (x,i)=>i===10?-.00001:x) }]) {
+    assert.equal(bondCapsAreCovered({ ...renderer, ...patch }, coverage, .1), false);
+  }
+  assert.equal(bondCapsAreCovered(renderer, { ...coverage, endpointError: .6 }, .1), false);
+  assert.equal(bondCapsAreCovered(renderer, { ...coverage, coordinateMagnitude: 1e7 }, .1), false);
+  assert.equal(bondCapsAreCovered({ ...renderer, sliceMode: 'legacy', sliceAxis: 0, sliceMaximum: .5 }, coverage, .1), false);
+  assert.equal(bondCapsAreCovered({ ...renderer, sliceMode: 'legacy', sliceAxis: 0, sliceMaximum: 1 }, coverage, .1), true);
+  const perspective = Float32Array.from([2,0,0,0, 0,2,0,0, 0,0,-1.2,-1, 0,0,-2.2,0]);
+  assert.equal(bondCapsAreCovered({ ...renderer, projectionMode: 'perspective', projectionMatrix: perspective }, coverage, .1), true);
+  assert.equal(bondCapsAreCovered({ ...renderer, projectionMode: 'perspective', projectionMatrix: perspective },
+    { ...coverage, minimum: [80,0,0], maximum: [81,0,0] }, .1), false, 'an off-axis perspective cap can escape a sphere billboard');
+});
+
+test('capless batch selection caches geometry, refreshes explicit data edits and retains caps for MSAA, exports and hidden sphere bytes', () => {
+  const { layer } = layerFixture();
+  const renderer = { frame: { cell, fractional: new Float32Array(6) }, atomCount: 2, atomRadii: new Float32Array([.7,.7]),
+    radiusRevision: 1, radiusScale: 1, displayPositions: new Float32Array([0,0,0, 1,0,0]), visibility: new Uint8Array([255,255]),
+    viewMatrix: Float32Array.from([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-10,1]),
+    projectionMatrix: Float32Array.from([1,0,0,0, 0,1,0,0, 0,0,-.2,0, 0,0,-1.1,1]),
+    projectionMode: 'orthographic', depthRange: [1,20], minimumOffset: [0,0,0], maximumOffset: [0,0,0],
+    canvas: { width:800,height:800 }, sliceMode: 'planes', sliceCount: 0 };
+  Object.assign(layer,{ singleSampleDefault: true, cylinder: { count:120 }, caplessCylinder: { count:60 },
+    positionValues: new Float32Array([0,0,0,0, 1,0,0,0]), fractionalValues: new Float32Array(8), width:2,height:1,
+    uploadTexture() {}, colorSource: new Uint8Array(6) });
+  layer.setBonds(renderer,{ count:1, indices:new Uint32Array([0,1]), vectors:new Float32Array([1,0,0]), shifts:new Int32Array(3) });
+  assert.equal(layer.coveredBondMesh(renderer),layer.caplessCylinder);
+  const cached=layer.bondCapCoverage;
+  renderer.viewMatrix[12]=.1;
+  assert.equal(layer.coveredBondMesh(renderer),layer.caplessCylinder);
+  assert.equal(layer.bondCapCoverage,cached,'orbit/pan rechecks only the compact projection/depth bounds');
+  layer.singleSampleDefault=false; assert.equal(layer.coveredBondMesh(renderer),layer.cylinder);
+  layer.singleSampleDefault=true; renderer.renderViewport={width:800,height:800}; assert.equal(layer.coveredBondMesh(renderer),layer.cylinder);
+  renderer.renderViewport=null;
+  renderer.atomRadii[0]=.02;renderer.radiusRevision++;assert.equal(layer.coveredBondMesh(renderer),layer.cylinder);
+  renderer.atomRadii[0]=.7;renderer.radiusRevision++;assert.equal(layer.coveredBondMesh(renderer),layer.caplessCylinder);
+  renderer.visibility[0]=1;layer.updateVisibility(renderer);layer.flushTextures(renderer);
+  assert.equal(layer.coveredBondMesh(renderer),layer.cylinder,'a primitive flag cannot substitute for an actually displayed sphere');
+  renderer.visibility[0]=255;layer.updateVisibility(renderer);layer.flushTextures(renderer);assert.equal(layer.coveredBondMesh(renderer),layer.caplessCylinder);
+  renderer.displayPositions[3]=4;layer.updatePositions(renderer);layer.flushTextures(renderer);
+  assert.equal(layer.coveredBondMesh(renderer),layer.cylinder,'same-array position changes recompute endpoint mismatch after upload');
+  layer.clearInstances();assert.equal(layer.bondCapCoverage,null);assert.equal(layer.bondBuffers.displayShifts,null);
 });
 
 test('indexed mesh uploads preserve the active VAO element binding', () => {

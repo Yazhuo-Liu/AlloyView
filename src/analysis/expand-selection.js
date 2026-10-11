@@ -1,4 +1,4 @@
-import { NeighborSearch } from './neighbors.js';
+import { NeighborSearch, NeighborBuffer } from './neighbors.js';
 
 export const EXPAND_SELECTION_MODES = Object.freeze(['cutoff', 'nearest']);
 export const MAX_EXPAND_ITERATIONS = 100;
@@ -39,14 +39,17 @@ export async function expandSelection(frame, selected, options = {}, {
   if (!frontier.length || frontier.length === atomCount) return { mask: result, added: 0, iterationsRun: 0 };
   search ??= new NeighborSearch(frame);
   let added = 0, iteration = 0;
+  const neighbors = new NeighborBuffer();
   for (; iteration < iterations && frontier.length; iteration++) {
     const next = [], frontierSize = frontier.length;
     for (let index = 0; index < frontierSize; index++) {
-      const neighbors = mode === 'cutoff' ? search.within(frontier[index], cutoff) : search.nearest(frontier[index], count);
-      for (const neighbor of neighbors) {
-        if (result[neighbor.atom]) continue;
-        result[neighbor.atom] = 1;
-        next.push(neighbor.atom);
+      if (mode === 'cutoff') search.collect(frontier[index], cutoff, neighbors);
+      else search.nearestInto(frontier[index], count, neighbors);
+      for (let row = 0; row < neighbors.length; row += 1) {
+        const other = neighbors.atoms[row];
+        if (result[other]) continue;
+        result[other] = 1;
+        next.push(other);
       }
       if ((index + 1) % blockSize === 0) {
         onProgress({ iteration: iteration + 1, iterations, processed: index + 1, frontier: frontierSize });

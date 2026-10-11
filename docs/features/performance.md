@@ -143,8 +143,11 @@ numeric pair keys where the type IDs can be encoded exactly, with a string
 fallback for large IDs. Public object-returning queries remain supported.
 The original search-radius ladder is retained, including thin-cell failure
 boundaries; learning a radius was not adopted without a stronger equivalence
-proof. RDF, local shear, clusters and some object-returning callers still have
-allocation work left.
+proof. RDF, local shear, clusters, the remaining PTM/CSP paths, ordinary and
+radical Voronoi, and selection expansion now consume owned typed rows too.
+Nested queries retain independent buffers; PTM's bounded multishell cache is
+released after the fit. Public object queries and GPU exact-correction helpers
+keep their compatible interfaces.
 
 Reference-frame strain removes per-neighbor temporary vectors and shares
 normalized current coordinates and inverse IDs on isolated hosts. Private
@@ -157,6 +160,23 @@ Local-shear finalization receives disjoint metric rows in private-memory mode
 and uses bounded 65,536-atom chunks, with a 50,000-atom Worker target. The two
 neighbor passes keep their earlier logical reduction partitions; no global
 increase in PTM/CNA chunk size or cancellation latency was introduced.
+Private displacement jobs transfer only each chunk's matched current/reference
+Cartesian rows. Cached ideal strain transfers only its structure, scale,
+nine deformation components and species rows. Explicit source offsets preserve
+unmatched values and matrix strides; these lightweight jobs do not pretend to
+upload a full resident frame. Shared inputs still reuse the full shared tables.
+Cached strain uses at most 32,768 rows per chunk; direct or orthogonal
+displacement uses at most 16,384. Skew-cell searches and fresh template fitting
+retain their previous smaller chunks.
+
+Coordination and its local-shear coordination stage target 16,384 atoms per
+Worker and at most 8,192 atoms per chunk. The hardware and retained-memory
+limits still apply; a 119,164-atom test with sixteen advertised logical cores
+uses eight Workers rather than three. Neighbor-bin lists are reused within a
+bin, and duplicate checks run only for collapsed periodic grids. At a tight
+private-memory budget an idle input may be released and uploaded again to fit
+the next job; its Worker and Wasm heap remain reusable. Active inputs stay
+charged and cannot be evicted by that admission retry.
 
 Atom bounds use one indexed xyz pass; coordinate setters invalidate the cache,
 including an explicit setter with the same modified array. Internal layer or
@@ -170,6 +190,13 @@ hiding keeps the existing independent-arrow behavior.
 Bonds and arrow heads use indexed geometry with caps and separate normals:
 the ten-sided cylinder has 46 vertex rows instead of 120 and its cone 33
 instead of 60. Caps remain necessary with small radii, hidden atoms or slices.
+On a single-sample framebuffer, bonds can omit caps only when a conservative
+batch-wide test proves both drawn endpoint spheres cover them, including
+coordinate rounding, PBC shifts, current projection and clipping. Small radii,
+hidden endpoints, slices, crystal drags and uncertain bounds keep caps. MSAA
+and offscreen exports retain caps: a real browser exposed one differing pixel
+when an apparently covered cap was omitted under MSAA. This path avoids a
+per-bond scan on every camera move. Arrow shafts and heads retain their caps.
 The primitive layer allocates atom mirrors only when needed and uploads dirty
 textures just before visible drawing. Visibility occupies one byte per padded
 atom texel, rather than updating the sixteen-byte position texel. Hiding every
@@ -622,6 +649,37 @@ return when editing ends or an image is exported. This temporary rendering
 preview does not alter scientific values or analysis backends.
 
 Browsers provide no portable way to use a WebGPU `GPUBuffer` directly as a WebGL buffer. A future WebGPU renderer could draw from retained analysis buffers on the same `GPUDevice`, avoiding the full array round trip for supported displays. It would need to keep those buffers alive, map colors on GPU and write any CPU precision corrections back before drawing. The present analysis Worker owns its device and releases temporary output buffers after returning results, so this would require a change to device ownership and rendering. Legends, atom inspection and data export would still need summary statistics or selected values on the CPU.
+
+## Startup, failure recovery and background geometry
+
+The production build bundles the page and each Worker independently at their
+original versioned paths. `import.meta.url` continues to resolve relative to
+each original source module, so Worker URLs, dynamic assets and native loaders
+remain valid at a Pages subpath. PTM, Voro++ and DXA glue, Wasm and pthread
+loaders remain beside their binaries. Development and Node tests use source
+modules. The build's `runtime-manifest.json` records every actual entry.
+
+Index completion refreshes time-series frame bounds and restarts eligible
+frame prefetch, even when completion does not change the final frame count.
+One active cache-fill batch continues when indexing adds a new tail. User
+range, stride, axis and panel settings survive configuration replay even
+with automatic collection off.
+
+A failed GPU kernel warm-up is recorded for that kernel while the other
+pipelines and uploaded frames remain usable. Validation and allocation errors
+fail the affected operation. Actual device loss expires input acknowledgments;
+the next request creates one replacement Worker/device and uploads its inputs
+again. An in-flight analysis fails and follows its existing CPU fallback rules;
+cancellation never starts a CPU retry. There is no repeated idle recovery loop.
+The GPU toggle tooltip reports kernel-specific preparation failures separately.
+
+Surface and DXA defect-mesh wrapping, periodic cuts, caps, upload-array packing
+and STL/PLY/OBJ formatting run in a persistent geometry Worker shared by both
+viewports. It retains bounded source/display recipes and shares the global CPU
+permit budget. Superseded or cancelled tasks cannot publish old meshes; a
+posted task retains its permit until acknowledgment. Loading prewarms that
+Worker. The page uploads the completed geometry to WebGL, and image exports
+wait for the current geometry before capturing it.
 
 ## Compare CPU and GPU time
 

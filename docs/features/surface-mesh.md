@@ -42,6 +42,13 @@ Surface and DXA cancel their own requests in the shared native queue. Cancelling
 one tool leaves the other's queued or running request intact; an externally
 aborted surface request leaves a terminal **Cancelled** state.
 
+Periodic display wrapping, cuts and caps are prepared in a persistent geometry
+Worker shared by the main and second views. Appearance edits reuse that
+geometry; changing the display recipe cancels obsolete work without recreating
+the Worker. It shares the application's CPU budget and warms in the background
+after structure loading. Mesh and image exports wait for the current geometry,
+and STL, PLY and OBJ formatting also runs in that Worker.
+
 ## Method
 
 The construction follows the alpha-shape method of OVITO 3.9.4's *Construct

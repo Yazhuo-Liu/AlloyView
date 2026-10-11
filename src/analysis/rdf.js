@@ -1,5 +1,5 @@
 import { cellFaceHeights, determinant3 } from '../data/model.js';
-import { NeighborSearch, atomRange } from './neighbors.js';
+import { NeighborSearch, NeighborBuffer, atomRange } from './neighbors.js';
 import { MAX_NEIGHBORS_PER_ATOM } from './bonds.js';
 const preparedContexts = new WeakMap();
 
@@ -41,15 +41,16 @@ export function calculatePreparedRdf(context, { onPhase = () => {}, onAtoms = ()
   const { startAtom, endAtom } = atomRange(count, range);
   onPhase('indexing');
   const search = (frame.neighborSearch ?? new NeighborSearch(frame));
-  const counts = new Float64Array(bins);
+  const counts = new Float64Array(bins), neighbors = new NeighborBuffer();
   onPhase('analyzing');
   for (let atom = startAtom; atom < endAtom; atom += 1) {
     if (firstType === null || frame.types[atom] === firstType) {
-      const neighbors = search.within(atom, cutoff, MAX_NEIGHBORS_PER_ATOM + 1);
+      search.collect(atom, cutoff, neighbors, MAX_NEIGHBORS_PER_ATOM + 1);
       if (neighbors.length > MAX_NEIGHBORS_PER_ATOM) throw new Error('Too many RDF neighbors; reduce the cutoff.');
-      for (const neighbor of neighbors) {
-        if (neighbor.atom === atom || (secondType !== null && frame.types[neighbor.atom] !== secondType)) continue;
-        const bin = Math.floor(Math.sqrt(neighbor.distanceSquared) / cutoff * bins);
+      for (let row = 0; row < neighbors.length; row += 1) {
+        const other = neighbors.atoms[row];
+        if (other === atom || (secondType !== null && frame.types[other] !== secondType)) continue;
+        const bin = Math.floor(Math.sqrt(neighbors.distanceSquared[row]) / cutoff * bins);
         if (bin < bins) counts[bin] += 1;
       }
     }

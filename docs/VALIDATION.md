@@ -2,6 +2,144 @@
 
 Latest validation: 2026-10-11 (UTC). Earlier entries retain their own dates.
 
+## Index/GPU recovery and remaining transport, startup and surface work (2026-10-11)
+
+Baseline: `9b290bf`, the preceding audit-fix batch, committed and pushed before
+this work. Node 24.19.0, Chromium and SwiftShader were used. This container has
+four CPU equivalents of quota (`cpu.max=400000 100000`), although `nproc`
+reports five. Tests advertising sixteen logical cores verify scheduling limits;
+they cannot measure a real sixteen-core host. SwiftShader verifies correctness,
+not physical-GPU speed.
+
+### Work process and decisions
+
+1. **B13/T1.** Refresh Time series as progressive indexing adds frames; read
+   the collection range after indexing completes. Save the full serialized
+   nondefault state, including settings with auto-collect off. Restart cache
+   fill when indexing completes even if the frame count stays the same, and
+   continue a running fill after a new tail arrives. A real 30-frame file held
+   at its 4 MiB indexing boundary exposed seven initial frames, then all thirty;
+   cancellation/retry, Last-frame limits, complete collection, configuration
+   replay and the 29/30 to 30/30 cache transition were checked.
+2. **B28/B29.** Record individual warm-up failures and continue other kernels.
+   Keep task validation/OOM separate from device loss. Expire every resident
+   acknowledgment on actual loss, fail posted work, and create one replacement
+   Worker on the next request. Test source/off-on/cancellation races and full
+   retransmission of PTM fits and paired Cartesian frames. A real browser
+   destroyed its GPUDevice, recovered coordination on the next request, and
+   reused the replacement; captured and uncaptured validation errors left the
+   device usable. No repeated idle recovery loop or cancelled CPU retry was added.
+3. **B16/B37.** Restrict excessive coordination searches to images that can
+   be closer than a trial image; preserve ordinary traversal and integer
+   counting. Reject overflowing cutoffs, unsafe integer coefficients and
+   excessive image work. Independent review found a nearly collinear valid
+   cell whose face-height rounding could empty one axis and make the work
+   product zero while the outer loops remained enormous. Ill-conditioned
+   cells now retain bounded original enumeration or fail the work limit;
+   every axis must be nonempty. The exact old bounded result and prompt
+   real-Worker rejection/recovery are regression tested. Skew displacement
+   independently rejects unsafe image bounds; huge finite open/orthogonal
+   displacements and Float64 magnitudes remain supported.
+4. **C5.** Send only owned Cartesian or PTM tensor rows to private Workers,
+   with explicit source offsets. Do not advertise these row jobs as resident
+   full-frame uploads. Retain shared tables, NaNs, signed zero, species,
+   original matrix strides, cancellation and warm Worker/Wasm ownership.
+   Bound cheap strain/displacement chunks separately from heavy fitting and
+   skew searches. Real copied/shared Workers validate all fields and failures.
+5. **C9.** Migrate RDF, local shear, clusters, remaining PTM/CSP, ordinary and
+   radical Voronoi, and selection expansion to owned typed neighbor rows.
+   Nested queries have independent buffers. Keep the original radius ladder,
+   stable ties, PBC/self images and arithmetic/reduction order; release PTM's
+   bounded multishell arena after fitting. Compare 295 kernel groups with
+   160,058 `Object.is` values, plus twelve private/shared two-Worker groups
+   containing 1,151,544 values. Public object APIs and GPU exact oracles remain.
+6. **C6.** Cache each bin's neighbor-bin list and skip duplicate scans when
+   the grid cannot repeat a periodic bin. Use a 16,384-atom Worker target and
+   8,192-atom chunks only for coordination stages. Keep the existing hardware,
+   heap and copy-memory limits and the prewarmed maximum pool. A 32 MiB test
+   with a retained PTM heap exposed an overly conservative repeat-job rejection:
+   retry admission may release only idle private input, retaining the Worker
+   and Wasm. A busy leased input remains charged and protected through ACK.
+7. **S5.** Pin esbuild/acorn and add `npm ci` to CI. Bundle every real page and
+   Worker entry at its versioned original path; AST rewriting preserves actual
+   module URLs while leaving quoted text/comments alone. Keep Emscripten glue,
+   Wasm and pthread loaders external at their original paths. Test module
+   identities, independent Worker realms, dynamic assets, export facades,
+   compatibility source paths and content-hash invalidation. A real Pages
+   subpath probe executes all thirteen entries, both serial and isolated
+   two-thread DXA, native PTM/Voro and GPU coordination; its ordinary page JS
+   request is the single app bundle, with native glue requests counted separately.
+8. **K2.** Put Surface/DXA display wrapping, clipping, caps, upload-array
+   packing and STL/PLY/OBJ formatting into a shared persistent geometry Worker.
+   It uses the existing CPU budget, bounded retained recipes, one posted job
+   and cancellation/ACK ownership; main/second views share prepared outputs.
+   Structure load prewarms it. Captures and exports wait for current geometry.
+   Native FCC-void UI checks cover caps, scientific parity, slices/replicas,
+   second view, PNG and all mesh exports, recipe replay, frames and cancellation.
+   Context restoration reuploads the prepared mesh without redoing geometry.
+9. **R1, partial completion.** Add a batch-wide conservative capless guard
+   for single-sample bond rendering, including endpoint visibility/radii,
+   coordinate encoding, image shifts, projection and clipping. Indexed
+   cylinders use 120→60 indices and 46→22 referenced vertices. Both sampling
+   modes cover 21 strict pixel-comparison scenes, eight image-export cases
+   and context recovery. A negative MSAA control differs at one pixel, so
+   MSAA, offscreen exports and uncertain coverage remain capped. No per-bond
+   scan was added to every camera move; arrows retain their caps.
+
+### Measured effects and limits
+
+For 200,003 atoms with four Workers, private input bytes per calculation fell
+from **75.36 to 16.60 MB** for cached strain and **41.60 to 10.40 MB** for
+displacement. Warm medians in separate container trials were 89.58→34.94 ms
+and 24.09→22.21 ms; shared cached strain was 77.76→32.21 ms. These compare
+whole pool calls and include transfer, but are environment-specific timings.
+
+Coordination on 119,164 FCC atoms, with sixteen advertised cores, uses eight
+slots and sixteen chunks rather than three slots. Private cold/warm times
+were 279.63/53.64 ms; shared 203.97/48.08 ms. The old three-slot values were
+149.93/57.00 and 148.28/49.56 ms. More Workers increase cold-start cost on this
+four-CPU container; the preserved load-time preparation is intended to avoid
+that first-analysis startup. A tight-budget input release requires about
+3.10 MB of retransmission and a new index; normal warmed jobs copy zero inputs.
+
+HEA (28,800 atoms), two warm Workers, three warm-ups and seven interleaved runs:
+
+| Analysis | Private before→after | Shared before→after |
+| --- | ---: | ---: |
+| Auto CSP | 64.52→54.14 ms | 72.76→62.86 ms |
+| Local shear | 63.59→66.75 ms | 61.55→67.11 ms |
+
+Shear task/transfer counts and bytes were unchanged and warm input/index
+preparation remained zero; no typed scratch was transferred. Cloud load
+affected timings, but this does not demonstrate a shear end-to-end speedup.
+Controlled browser profiling remains necessary. C9's completed claim is the
+allocation/consumer migration and exact results, not universal speed gains.
+
+A 48k-face Surface stress fixture reduced the synchronous page setter from
+roughly 45–123 ms of warmed geometry work to 0.08–0.4 ms. First Worker display
+completion took 202–265 ms, and cached toggles 0.5–4.75 ms. This improves page
+responsiveness and reuse; it does not claim lower first-result total time.
+
+### Final integrated validation
+
+- `npm ci --cache /tmp/alloyview-npm-cache --no-audit`: passed with the pinned
+  build dependencies; `npm run build`: passed.
+- `npm test`: **1,965 passed, zero failures**, including real private/shared
+  Workers, native Wasm, bounded searches, transport ownership, cancellation,
+  device recovery and geometry/export lifetime tests.
+- Production browser checks passed: the complete `test:browser` smoke suite,
+  `test:browser:bundled-runtime`, `test:browser:progressive-series`,
+  `test:browser:gpu-recovery`, `test:browser:atom-primitives`,
+  `test:browser:surface-mesh`, `test:browser:renderer-context` and
+  `test:browser:trajectory-workers`. These use the generated runtime at a
+  Pages subpath, not only development source modules.
+- The full smoke run initially exposed an outdated arrow coverage observer:
+  it intercepted only `drawArraysInstanced`, while indexed primitives use
+  `drawElementsInstanced`. The observer now measures both paths with the same
+  sample queries; assertions were retained. Focused and complete smoke reruns
+  passed, including hidden-atom arrow coverage in both views.
+- Documentation/build fixture tests: **six passed**. `git diff --check`: clean.
+
 ## Audit fixes B31, B8/B9/B14/B17/B18/B20 and CPU/render work (2026-10-11)
 
 Baseline: `3fafad10210d6814fb13565707be51f5026daba5`. Fetch and a fast-forward

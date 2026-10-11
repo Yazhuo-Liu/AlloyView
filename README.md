@@ -340,9 +340,11 @@ frames together or choose their folder to open a sequence.
 
 ## Run locally
 
-Development requires Node.js 20 or newer. The viewer has no npm dependencies.
+Development requires Node.js 20 or newer. Install the pinned build dependencies
+before running tests or building; the deployed viewer requires no package manager.
 
 ```bash
+npm ci
 npm run dev
 ```
 
@@ -356,6 +358,8 @@ npm run preview
 Open <http://localhost:4173>. The deployable site is in `dist/`.
 Documentation is available at `/docs/` in development and preview; the build
 renders its Markdown sources into static HTML pages in `dist/docs/`.
+Production bundles the page and each Worker independently, preserving their
+original asset URLs and reusable Wasm modules. Development serves source modules.
 
 The compiled PTM, CPU DXA and Voronoi kernels are included in the repository. Normal
 development and CI need no compiler. To rebuild their C++ integration, install

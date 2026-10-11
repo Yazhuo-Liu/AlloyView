@@ -33,6 +33,16 @@ Atoms are indexed in fractional linked cells. Cell-face heights bound candidate 
 
 Accepted pairs increment both atoms' counts. This calculation counts the closest image of each unique neighboring atom ID, once per neighbor. For periodic cells shorter than twice the cutoff it does not count multiple images of the same ID; the viewer reports that convention explicitly. It differs from bond and local-geometry neighbor searches, where distinct images can be retained.
 
+A very large cutoff does not enumerate every image inside that radius. A
+candidate image supplies a distance bound, and cell-face heights restrict the
+remaining search to images that can be closer. Overflowing squared distances,
+unsafe integer image coefficients and searches requiring more than 50,000
+image candidates are rejected explicitly. This protects extremely thin or
+skewed cells without returning truncated counts.
+
+CPU jobs target 16,384 atoms per Worker with bounded 8,192-atom chunks, subject
+to the shared core and memory budgets. Workers and Wasm heaps are retained.
+
 Coordination depends on the chosen cutoff and the physical length units of the input. Display replication, slicing and visibility filters do not alter the original calculation.
 
 ## Implementation

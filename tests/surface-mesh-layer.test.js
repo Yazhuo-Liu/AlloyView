@@ -7,6 +7,7 @@ import {
   SURFACE_MESH_DEFAULTS, SURFACE_MESH_IDS, SurfaceMeshLayer, normalizeSurfaceMeshOptions, surfaceMeshDisplayState,
 } from '../src/render/surface-mesh-layer.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
+import { buildSurfaceDisplayMesh } from '../src/render/surface-mesh-geometry.js';
 
 const cell = createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10] });
 
@@ -52,6 +53,79 @@ function rendererFor(repetitions = [1, 1, 1], frameCell = cell) {
     coordinateMode: 'wrapped', sliceMode: 'planes', sliceCount: 0, slicePlaneValues: new Float32Array(128), crystalDrag: null,
     ...createReplication(frameCell, repetitions) };
 }
+
+function deferredGeometry() {
+  const requests = [], references = new Set();
+  const client = { available: true,
+    retainSource(mesh) { references.add(mesh); return () => references.delete(mesh); },
+    prepare(mesh, cell, options, { signal }) {
+      return new Promise(resolve => requests.push({ mesh, cell, options, signal, resolve }));
+    },
+  };
+  const finish = request => {
+    const display = buildSurfaceDisplayMesh(request.mesh, request.cell, request.options);
+    request.resolve({ display, values: new Float32Array(display.vertexCount * 6), buildMs: 1 });
+  };
+  return { client, requests, references, finish };
+}
+
+test('asynchronous Surface edits publish only their current recipe and leave color, slicing and replication as uniforms', async () => {
+  const { gl, calls } = mockGl(), geometry = deferredGeometry(), layer = new SurfaceMeshLayer(gl, { geometryClient: geometry.client });
+  const renderer = rendererFor(), mesh = crossingBox(); renderer.surfaceMeshLayer = layer;
+  let notifications = 0; renderer.requestRender = () => notifications++;
+  const entry = layer.setMesh(renderer, 'surface', mesh);
+  assert.equal(entry.pending, true); assert.equal(entry.display, null); assert.equal(calls.data.length, 0);
+  layer.setMesh(renderer, 'surface', mesh, { opacity: .5, color: '#ff0000' });
+  renderer.sliceCount = 1; Object.assign(renderer, createReplication(cell, [2,1,1]));
+  assert.equal(geometry.requests.length, 1, 'uniform-only edits never reprepare geometry');
+  renderer.periodicOrigin = [.2,0,0]; layer.refresh(renderer);
+  assert.equal(geometry.requests.length, 2); assert.equal(geometry.requests[0].signal.aborted, true);
+  geometry.finish(geometry.requests[0]); await Promise.resolve(); await Promise.resolve();
+  assert.equal(entry.display, null); assert.equal(calls.data.length, 0, 'old geometry cannot upload into the current view');
+  geometry.finish(geometry.requests[1]); await layer.ready();
+  assert.deepEqual(entry.display, buildSurfaceDisplayMesh(mesh, cell, { origin: [.2,0,0] }));
+  assert.equal(calls.data.length, 2); assert.equal(notifications, 1);
+  layer.clear(); assert.equal(geometry.references.size, 0); assert.equal(entry.mesh, null);
+});
+
+test('frame clearing and context detachment reject late Surface uploads without destroying the retained client', async () => {
+  const { gl, calls } = mockGl(), geometry = deferredGeometry(), layer = new SurfaceMeshLayer(gl, { geometryClient: geometry.client });
+  const renderer = rendererFor(); renderer.surfaceMeshLayer = layer;
+  const entry = layer.setMesh(renderer, 'surface', crossingBox());
+  layer.clear(); const clearedUploads = calls.data.length;
+  geometry.finish(geometry.requests[0]); await Promise.resolve(); await Promise.resolve();
+  assert.equal(entry.display, null); assert.equal(calls.data.length, clearedUploads); assert.equal(geometry.references.size, 0);
+  layer.setMesh(renderer, 'surface', crossingBox());
+  layer.detach(); renderer.surfaceMeshLayer = null;
+  const detachedUploads = calls.data.length;
+  geometry.finish(geometry.requests[1]); await Promise.resolve(); await Promise.resolve();
+  assert.equal(calls.data.length, detachedUploads, 'lost GL buffers are never touched');
+  assert.equal(geometry.references.size, 0); assert.equal(layer.geometryClient, geometry.client);
+});
+
+test('image capture waits for current Surface geometry and suppresses an export whose frame or recipe changes', async () => {
+  const renderer = Object.create(WebGLRenderer.prototype), canvas = { width: 320, height: 240 };
+  let resolve, captures = 0;
+  const entry = { revision: 1 }, layer = { pending: true, entries: new Map([['surface', entry]]), ready: () => entry.ready };
+  const pending = () => {
+    layer.pending = entry.pending = true;
+    entry.ready = new Promise(done => { resolve = () => { layer.pending = entry.pending = false; done(); }; });
+  };
+  pending();
+  Object.assign(renderer, { frame: {}, surfaceMeshLayer: layer, assertGraphicsAvailable() {}, finishScalarColorPreview() {},
+    captureOffscreenImage() { captures++; return canvas; } });
+  const options = { resolution: { mode: 'custom', width: 320, height: 240 } };
+  const first = renderer.captureImage(options);
+  assert.ok(first instanceof Promise); assert.equal(captures, 0);
+  resolve(); assert.equal(await first, canvas); assert.equal(captures, 1);
+  assert.equal(renderer.captureImage(options), canvas, 'legacy ready capture remains synchronous');
+  pending();
+  const oldFrame = renderer.captureImage(options); renderer.frame = {}; resolve();
+  await assert.rejects(oldFrame, { name: 'AbortError' }); assert.equal(captures, 2);
+  pending();
+  const oldRecipe = renderer.captureImage(options); entry.revision++; resolve();
+  await assert.rejects(oldRecipe, { name: 'AbortError' }); assert.equal(captures, 2);
+});
 
 test('mesh style options are validated and merged with the defaults of each mesh', () => {
   assert.deepEqual(SURFACE_MESH_IDS, ['surface', 'dxaDefect']);

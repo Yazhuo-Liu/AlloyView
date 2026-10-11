@@ -16,6 +16,7 @@ import { TrajectoryLineLayer, normalizeTrajectoryLineOptions } from './trajector
 import { VoronoiCellLayer, VoronoiAllCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
 import { SiteMarkerLayer, normalizeSiteMarkerOptions } from './site-marker-layer.js';
 import { SurfaceMeshLayer, normalizeSurfaceMeshOptions, SURFACE_MESH_DEFAULTS } from './surface-mesh-layer.js';
+import { sharedSurfaceGeometryClient } from './surface-geometry-client.js';
 import { drawTextLabelsOverlay } from './text-label-overlay.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON, pointVisible, sliceHalfSpaces, sliceOutlineSegments, validateSlices } from './slicing.js';
 import {
@@ -203,6 +204,8 @@ export class WebGLRenderer {
     onProjectionChange = () => {},
     onRender = () => {},
     onBeforeCapture = () => {},
+    cpuBudget = null,
+    surfaceGeometryClient = null,
   } = {}) {
     this.canvas = canvas;
     this.gl = canvas.getContext('webgl2', {
@@ -273,6 +276,7 @@ export class WebGLRenderer {
     this.siteMarkers = null;
     this.siteMarkerOptions = normalizeSiteMarkerOptions();
     this.surfaceMeshLayer = null;
+    this.surfaceGeometryClient = surfaceGeometryClient ?? sharedSurfaceGeometryClient(cpuBudget);
     this.atomBonds = this.atomVectors = null;
     this.atomVectorFields = [];
     this.bondOptions = { visible: true, radius: 0.08 };
@@ -423,6 +427,7 @@ export class WebGLRenderer {
     if (this.contextLost) return;
     this.retainedSurfaceMeshes = new Map([...(this.surfaceMeshLayer?.entries.values() ?? [])].filter(entry => entry.mesh).map(entry => [entry.id,
       { id: entry.id, mesh: entry.mesh, options: { ...entry.options } }]));
+    this.surfaceMeshLayer?.detach?.();
     this.contextLost = true;
     if (this.renderHandle !== undefined) cancelAnimationFrame(this.renderHandle);
     this.renderHandle = undefined; this.renderRequested = false;
@@ -972,7 +977,7 @@ export class WebGLRenderer {
     }
     if (!mesh && !this.surfaceMeshLayer) return null;
     if (mesh && !this.frame) throw new Error('Load a structure before displaying a surface mesh.');
-    this.surfaceMeshLayer ??= new SurfaceMeshLayer(this.gl);
+    this.surfaceMeshLayer ??= new SurfaceMeshLayer(this.gl, { geometryClient: this.surfaceGeometryClient });
     const entry = this.surfaceMeshLayer.setMesh(this, id, mesh ?? null, options);
     if (this.frame) this.updateSceneBounds({ reuseSourceBounds: true });
     this.requestRender();
@@ -982,8 +987,22 @@ export class WebGLRenderer {
   /** The displayed meshes as { id, mesh, options, display, error }. */
   surfaceMeshes() { return [...(this.graphicsUnavailable() ? this.retainedSurfaceMeshes?.values() ?? [] : this.surfaceMeshLayer?.entries.values() ?? [])].filter(entry => entry.mesh); }
 
+  /** Rendering stays interactive while topology runs in its retained Worker.
+   * Downloads await this barrier; source changes never export a newer frame
+   * under the old frame's filename. */
+  async whenSurfaceMeshesReady() {
+    const frame = this.frame, layer = this.surfaceMeshLayer;
+    await layer?.ready();
+    if (this.frame !== frame || this.surfaceMeshLayer !== layer) throw new DOMException('The displayed surface changed during image preparation.', 'AbortError');
+    this.assertGraphicsAvailable();
+  }
+
   /** Show the same meshes and styles as another renderer (the second view). */
   copySurfaceMeshes(source) {
+    if (source.surfaceGeometryClient) {
+      this.surfaceGeometryClient = source.surfaceGeometryClient;
+      if (this.surfaceMeshLayer) this.surfaceMeshLayer.geometryClient = this.surfaceGeometryClient;
+    }
     const meshes = new Map(source.surfaceMeshes().map(entry => [entry.id, entry]));
     for (const id of new Set([...meshes.keys(), ...this.surfaceMeshes().map(entry => entry.id)])) {
       const entry = meshes.get(id);
@@ -1641,6 +1660,19 @@ export class WebGLRenderer {
     // PNG/JPG and contact sheets always use the exact byte-rounded CPU palette.
     this.onBeforeCapture?.();
     this.assertGraphicsAvailable();
+    if (this.surfaceMeshLayer?.pending) {
+      const frame = this.frame, layer = this.surfaceMeshLayer, revisions = [...layer.entries.values()].map(entry => [entry, entry.revision]);
+      const readiness = [...layer.entries.values()].filter(entry => entry.pending).map(entry => entry.ready);
+      // Await only the recipes this capture requested. An edit cancels those
+      // subscriptions promptly; it need not wait for a replacement recipe.
+      return Promise.all(readiness).then(() => {
+        if (this.frame !== frame || this.surfaceMeshLayer !== layer || revisions.some(([entry, revision]) => entry.revision !== revision)) {
+          throw new DOMException('The displayed surface changed during image preparation.', 'AbortError');
+        }
+        return this.captureImage({ includeBackground, legend, includeAxes, includeSliceOutlines, resolution, tileSize, textLabels });
+      });
+    }
+    this.surfaceMeshLayer?.assertReady?.();
     this.finishScalarColorPreview();
     const exportResolution = normalizeExportResolution(resolution ?? {});
     if (exportResolution.mode !== 'current' || tileSize !== null) {
@@ -1723,18 +1755,19 @@ export class WebGLRenderer {
 
   exportImage(filename, options, format) {
     const exportCanvas = this.captureImage(options);
-    exportCanvas.toBlob((blob) => {
-      if (!blob) return;
-      const link = document.createElement('a');
-      link.download = filename;
-      link.href = URL.createObjectURL(blob);
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 0);
-    }, format);
+    const save = canvas => new Promise((resolve, reject) => canvas.toBlob((blob) => {
+      if (!blob) { resolve(); return; }
+      try {
+        const link = document.createElement('a');
+        link.download = filename; link.href = URL.createObjectURL(blob); link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 0); resolve();
+      } catch (error) { reject(error); }
+    }, format));
+    return exportCanvas?.then ? exportCanvas.then(save) : save(exportCanvas);
   }
 
-  exportPng(filename = 'alloyview.png', options = {}) { this.exportImage(filename, options, 'image/png'); }
-  exportJpg(filename = 'alloyview.jpg', options = {}) { this.exportImage(filename, { ...options, includeBackground: true }, 'image/jpeg'); }
+  exportPng(filename = 'alloyview.png', options = {}) { return this.exportImage(filename, options, 'image/png'); }
+  exportJpg(filename = 'alloyview.jpg', options = {}) { return this.exportImage(filename, { ...options, includeBackground: true }, 'image/jpeg'); }
 
   recordFrame(timestamp) {
     this.frameTimes.push(timestamp);

@@ -130,18 +130,25 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   async function arrowGpuCoverage(rendererExpression) {
     return evaluate(`(async () => {
       const renderer = ${rendererExpression}, gl = renderer.gl, layer = renderer.primitiveLayer;
-      const originalDraw = gl.drawArraysInstanced, cellVisible = renderer.cellVisible;
+      const drawMethods = ['drawArraysInstanced', 'drawElementsInstanced'];
+      const originalDraws = new Map(drawMethods.map(name => [name, gl[name]])), cellVisible = renderer.cellVisible;
       const queries = [];
-      gl.drawArraysInstanced = function(...args) {
-        const vectors = gl.getParameter(gl.CURRENT_PROGRAM) === layer.program && Boolean(gl.getUniform(layer.program, layer.uniforms.uVectorMode));
-        if (!vectors) return originalDraw.apply(gl, args);
-        const query = gl.createQuery(); queries.push(query);
-        gl.beginQuery(gl.ANY_SAMPLES_PASSED, query);
-        try { return originalDraw.apply(gl, args); } finally { gl.endQuery(gl.ANY_SAMPLES_PASSED); }
-      };
+      for (const name of drawMethods) {
+        const originalDraw = originalDraws.get(name);
+        gl[name] = function(...args) {
+          const vectors = gl.getParameter(gl.CURRENT_PROGRAM) === layer.program && Boolean(gl.getUniform(layer.program, layer.uniforms.uVectorMode));
+          if (!vectors) return originalDraw.apply(gl, args);
+          const query = gl.createQuery(); queries.push(query);
+          gl.beginQuery(gl.ANY_SAMPLES_PASSED, query);
+          try { return originalDraw.apply(gl, args); } finally { gl.endQuery(gl.ANY_SAMPLES_PASSED); }
+        };
+      }
       try {
         renderer.setCellVisible(false); renderer.render(performance.now(), { trackStats: false });
-      } finally { gl.drawArraysInstanced = originalDraw; renderer.setCellVisible(cellVisible); }
+      } finally {
+        for (const [name, originalDraw] of originalDraws) gl[name] = originalDraw;
+        renderer.setCellVisible(cellVisible);
+      }
       for (let attempt = 0; attempt < 100 && queries.some(query => !gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE)); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
       const results = queries.map(query => Boolean(gl.getQueryParameter(query, gl.QUERY_RESULT)));
       queries.forEach(query => gl.deleteQuery(query));

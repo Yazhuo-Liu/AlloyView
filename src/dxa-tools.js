@@ -176,6 +176,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   }
 
   function clearNetwork({ clearSettings = false } = {}) {
+    meshExportController?.abort(); meshExportController = null;
     const hadResult = Boolean(network || atomStructureFrame);
     network = null;
     if (atomStructureFrame) clearAnalysisResults(atomStructureFrame, 'dxa');
@@ -345,14 +346,27 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     $('dxa-line-radius').value = String(radius); resetFamilies(); renderFamilies();
   }
 
+  let meshExportController = null;
   function exportDefectMesh(format) {
     const frame = getFrame(), mesh = defectDisplay(network);
     if (!frame || !mesh) { notify('Extract dislocations with the defect mesh before exporting it.'); return null; }
     try {
       const style = readDefectMesh(), view = renderer.frame === frame ? surfaceMeshDisplayState(renderer) : { origin: [0, 0, 0], translation: [0, 0, 0] };
+      const settings = { caps: style.caps, translation: view.translation,
+        stem: `${getFileStem()}-frame-${getFrameIndex() + 1}-dxa-defect-mesh`, title: 'AlloyView DXA defect mesh' };
+      if (renderer?.surfaceGeometryClient?.available) {
+        meshExportController?.abort(); meshExportController = new AbortController();
+        const controller = meshExportController;
+        const source = network, recipe = JSON.stringify([view, style.caps]);
+        return renderer.surfaceGeometryClient.export(mesh, frame.cell, { origin: view.origin, caps: style.caps }, format, settings, { signal: controller.signal })
+          .then(file => {
+            if (network !== source || getFrame() !== frame || JSON.stringify([surfaceMeshDisplayState(renderer), readDefectMesh().caps]) !== recipe) return null;
+            onDownload(file.blob, file.filename); return file;
+          }).catch(error => { if (error.name !== 'AbortError') notify(error.message); return null; })
+          .finally(() => { if (meshExportController === controller) meshExportController = null; });
+      }
       const display = buildSurfaceDisplayMesh(mesh, frame.cell, { origin: view.origin, caps: style.caps, reverse: true });
-      const file = createMeshExport(display, format, { caps: style.caps, translation: view.translation,
-        stem: `${getFileStem()}-frame-${getFrameIndex() + 1}-dxa-defect-mesh`, title: 'AlloyView DXA defect mesh' });
+      const file = createMeshExport(display, format, settings);
       onDownload(file.blob, file.filename);
       return file;
     } catch (error) { notify(error.message); return null; }

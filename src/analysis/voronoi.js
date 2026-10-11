@@ -1,6 +1,6 @@
 import createVoronoi from './voronoi-kernel.mjs';
 import { determinant3, invert3 } from '../data/model.js';
-import { NeighborSearch, atomRange } from './neighbors.js';
+import { NeighborSearch, NeighborBuffer, atomRange } from './neighbors.js';
 import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult,
   mapVoronoiGeometry, compactVoronoiAtomIndices, compactVoronoiRadii } from './voronoi-selection.js';
 import { validateVoronoiRadii, radicalWeights, radicalReach } from './voronoi-radii.js';
@@ -368,39 +368,41 @@ function clipVoronoiCell(kernel, prepared, atom) {
   let radiusToSearch = Math.min(search.initialRadius, 2 * farthestRadius * (1 + 1e-10));
   let complete = exactSingleSiteCell;
   for (let attempt = 0; !complete && attempt < 48; attempt++) {
-    let neighbors = search.within(atom, radiusToSearch, MAX_CANDIDATES + 1);
+    const neighbors = search.collect(atom, radiusToSearch, prepared.neighborColumns ??= new NeighborBuffer(), MAX_CANDIDATES + 1);
+    let keep = null;
     if (neighbors.length > MAX_CANDIDATES) throw new Error('Voronoi cell has too many candidate images; reduce the cell skew or thin-cell aspect ratio.');
     if (neighbors.length >= 256) {
       growPlanes(kernel, neighbors.length);
       for (let index = 0; index < neighbors.length; index++) {
-        const neighbor = neighbors[index], offset = (kernel.planes >> 3) + index * 4;
-        if (neighbor.distanceSquared < 1e-20 * areaScale) {
-          throw new Error(`Voronoi is undefined for coincident atoms ${atom + 1} and ${neighbor.atom + 1}.`);
+        const offset = (kernel.planes >> 3) + index * 4;
+        if (neighbors.distanceSquared[index] < 1e-20 * areaScale) {
+          throw new Error(`Voronoi is undefined for coincident atoms ${atom + 1} and ${neighbors.atoms[index] + 1}.`);
         }
-        module.HEAPF64[offset] = neighbor.x / scale; module.HEAPF64[offset + 1] = neighbor.y / scale;
-        module.HEAPF64[offset + 2] = neighbor.z / scale; module.HEAPF64[offset + 3] = neighbor.distanceSquared / areaScale;
+        module.HEAPF64[offset] = neighbors.xs[index] / scale; module.HEAPF64[offset + 1] = neighbors.ys[index] / scale;
+        module.HEAPF64[offset + 2] = neighbors.zs[index] / scale; module.HEAPF64[offset + 3] = neighbors.distanceSquared[index] / areaScale;
       }
       module._alloy_voronoi_filter_planes(kernel.planes, kernel.keep, neighbors.length);
-      neighbors = neighbors.filter((_, index) => module.HEAPU8[kernel.keep + index]);
+      keep = index => module.HEAPU8[kernel.keep + index];
     }
-    neighbors.sort((a, b) => a.distanceSquared - b.distanceSquared || a.atom - b.atom
-      || a.imageA - b.imageA || a.imageB - b.imageB || a.imageC - b.imageC);
-    growPlanes(kernel, Math.max(6, neighbors.length));
+    const order = neighbors.sortedIndices((a, b) => neighbors.distanceSquared[a] - neighbors.distanceSquared[b]
+      || neighbors.atoms[a] - neighbors.atoms[b] || neighbors.imageA[a] - neighbors.imageA[b]
+      || neighbors.imageB[a] - neighbors.imageB[b] || neighbors.imageC[a] - neighbors.imageC[b], keep);
+    growPlanes(kernel, Math.max(6, order.length));
     let planeCount = 0;
-    for (const neighbor of neighbors) {
-      if (neighbor.distanceSquared < 1e-20 * areaScale) {
-        throw new Error(`Voronoi is undefined for coincident atoms ${atom + 1} and ${neighbor.atom + 1}.`);
+    for (const index of order) {
+      if (neighbors.distanceSquared[index] < 1e-20 * areaScale) {
+        throw new Error(`Voronoi is undefined for coincident atoms ${atom + 1} and ${neighbors.atoms[index] + 1}.`);
       }
-      if (neighbor.distanceSquared <= previousRadiusSquared * (1 - 1e-12)) continue;
+      if (neighbors.distanceSquared[index] <= previousRadiusSquared * (1 - 1e-12)) continue;
       // Current vertices already lie within the initial bound. Sorting lets
       // us omit farther planes without changing the final polyhedron.
-      if (neighbor.distanceSquared > 4 * farthestRadius ** 2 * (1 + 1e-10)) break;
+      if (neighbors.distanceSquared[index] > 4 * farthestRadius ** 2 * (1 + 1e-10)) break;
       const offset = (kernel.planes >> 3) + planeCount * 4;
-      module.HEAPF64[offset] = neighbor.x / scale;
-      module.HEAPF64[offset + 1] = neighbor.y / scale;
-      module.HEAPF64[offset + 2] = neighbor.z / scale;
-      module.HEAPF64[offset + 3] = neighbor.distanceSquared / areaScale;
-      module.HEAP32[(kernel.neighbors >> 2) + planeCount] = neighbor.atom;
+      module.HEAPF64[offset] = neighbors.xs[index] / scale;
+      module.HEAPF64[offset + 1] = neighbors.ys[index] / scale;
+      module.HEAPF64[offset + 2] = neighbors.zs[index] / scale;
+      module.HEAPF64[offset + 3] = neighbors.distanceSquared[index] / areaScale;
+      module.HEAP32[(kernel.neighbors >> 2) + planeCount] = neighbors.atoms[index];
       planeCount++;
     }
     candidateCount += planeCount;
@@ -455,42 +457,44 @@ function clipRadicalCell(kernel, prepared, atom, weighting, planeLog = null) {
   let radiusToSearch = Math.min(search.initialRadius, radicalReach(farthestRadius, spreadSquared) * (1 + 1e-10));
   let complete = exactSingleSiteCell;
   for (let attempt = 0; !complete && attempt < 48; attempt++) {
-    let neighbors = search.within(atom, radiusToSearch, MAX_CANDIDATES + 1);
+    const neighbors = search.collect(atom, radiusToSearch, prepared.neighborColumns ??= new NeighborBuffer(), MAX_CANDIDATES + 1);
+    let keep = null;
     if (neighbors.length > MAX_CANDIDATES) throw new Error('Voronoi cell has too many candidate images; reduce the cell skew, thin-cell aspect ratio or radius spread.');
     if (neighbors.length >= 256) {
       growPlanes(kernel, neighbors.length);
       for (let index = 0; index < neighbors.length; index++) {
-        const neighbor = neighbors[index], offset = (kernel.planes >> 3) + index * 4;
-        if (neighbor.distanceSquared < 1e-20 * areaScale) {
-          throw new Error(`Voronoi is undefined for coincident atoms ${atom + 1} and ${neighbor.atom + 1}.`);
+        const offset = (kernel.planes >> 3) + index * 4;
+        if (neighbors.distanceSquared[index] < 1e-20 * areaScale) {
+          throw new Error(`Voronoi is undefined for coincident atoms ${atom + 1} and ${neighbors.atoms[index] + 1}.`);
         }
-        module.HEAPF64[offset] = neighbor.x / scale; module.HEAPF64[offset + 1] = neighbor.y / scale;
-        module.HEAPF64[offset + 2] = neighbor.z / scale;
-        module.HEAPF64[offset + 3] = neighbor.distanceSquared / areaScale + (weight - weights[neighbor.atom]);
+        module.HEAPF64[offset] = neighbors.xs[index] / scale; module.HEAPF64[offset + 1] = neighbors.ys[index] / scale;
+        module.HEAPF64[offset + 2] = neighbors.zs[index] / scale;
+        module.HEAPF64[offset + 3] = neighbors.distanceSquared[index] / areaScale + (weight - weights[neighbors.atoms[index]]);
       }
       module._alloy_voronoi_filter_planes(kernel.planes, kernel.keep, neighbors.length);
-      neighbors = neighbors.filter((_, index) => module.HEAPU8[kernel.keep + index]);
+      keep = index => module.HEAPU8[kernel.keep + index];
     }
-    neighbors.sort((a, b) => a.distanceSquared - b.distanceSquared || a.atom - b.atom
-      || a.imageA - b.imageA || a.imageB - b.imageB || a.imageC - b.imageC);
-    growPlanes(kernel, Math.max(6, neighbors.length));
+    const order = neighbors.sortedIndices((a, b) => neighbors.distanceSquared[a] - neighbors.distanceSquared[b]
+      || neighbors.atoms[a] - neighbors.atoms[b] || neighbors.imageA[a] - neighbors.imageA[b]
+      || neighbors.imageB[a] - neighbors.imageB[b] || neighbors.imageC[a] - neighbors.imageC[b], keep);
+    growPlanes(kernel, Math.max(6, order.length));
     const reachSquared = radicalReach(farthestRadius, spreadSquared) ** 2 * (1 + 1e-10);
     let planeCount = 0;
-    for (const neighbor of neighbors) {
-      if (neighbor.distanceSquared < 1e-20 * areaScale) {
-        throw new Error(`Voronoi is undefined for coincident atoms ${atom + 1} and ${neighbor.atom + 1}.`);
+    for (const index of order) {
+      if (neighbors.distanceSquared[index] < 1e-20 * areaScale) {
+        throw new Error(`Voronoi is undefined for coincident atoms ${atom + 1} and ${neighbors.atoms[index] + 1}.`);
       }
-      if (neighbor.distanceSquared <= previousRadiusSquared * (1 - 1e-12)) continue;
+      if (neighbors.distanceSquared[index] <= previousRadiusSquared * (1 - 1e-12)) continue;
       // Sorted by distance: no farther site can reach a current vertex.
-      if (neighbor.distanceSquared > reachSquared) break;
+      if (neighbors.distanceSquared[index] > reachSquared) break;
       const offset = (kernel.planes >> 3) + planeCount * 4;
-      module.HEAPF64[offset] = neighbor.x / scale;
-      module.HEAPF64[offset + 1] = neighbor.y / scale;
-      module.HEAPF64[offset + 2] = neighbor.z / scale;
-      module.HEAPF64[offset + 3] = neighbor.distanceSquared / areaScale + (weight - weights[neighbor.atom]);
+      module.HEAPF64[offset] = neighbors.xs[index] / scale;
+      module.HEAPF64[offset + 1] = neighbors.ys[index] / scale;
+      module.HEAPF64[offset + 2] = neighbors.zs[index] / scale;
+      module.HEAPF64[offset + 3] = neighbors.distanceSquared[index] / areaScale + (weight - weights[neighbors.atoms[index]]);
       // Labels never affect Voro++ geometry; geometry requests use plane labels.
       module.HEAP32[(kernel.neighbors >> 2) + planeCount] = planeLog
-        ? prepared.count + planeLog.push([neighbor.atom, neighbor.x, neighbor.y, neighbor.z]) - 1 : neighbor.atom;
+        ? prepared.count + planeLog.push([neighbors.atoms[index], neighbors.xs[index], neighbors.ys[index], neighbors.zs[index]]) - 1 : neighbors.atoms[index];
       planeCount++;
     }
     candidateCount += planeCount;

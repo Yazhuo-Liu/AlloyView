@@ -1,5 +1,5 @@
-import { NeighborSearch, atomRange } from './neighbors.js';
-import { classifyAdaptiveEnvironment } from './cna.js';
+import { NeighborSearch, NeighborBuffer, atomRange } from './neighbors.js';
+import { classifyAdaptiveNeighborBuffer } from './cna.js';
 
 export const CSP_SUMMARY_FIELDS = Object.freeze(['fcc', 'hcp', 'bcc', 'other', 'ico', 'inferred', 'unresolved']);
 const TYPE_NAMES = ['other', 'fcc', 'hcp', 'bcc', 'ico'];
@@ -60,9 +60,13 @@ export function calculatePreparedCentrosymmetry(context, { onPhase = () => {}, o
   // A range owns central atoms only. Neighbor classification is allowed across
   // every range boundary and cached by original atom ID, including PBC images.
   const classifications = auto && !structureInput ? (frame.adaptiveCnaClassifications ?? new Uint8Array(search.count).fill(255)) : structureInput;
+  // Neighbor classification queries must never overwrite the central shell
+  // while its votes are being traversed, including duplicate periodic images.
+  const centralShell = new NeighborBuffer(), classificationShell = new NeighborBuffer();
+  const classificationBonds = new Uint16Array(14), paired = new Uint8Array(32);
   const classifyAtom = (atom, shell) => {
     if (classifications[atom] !== 255) return classifications[atom];
-    const type = classifyAdaptiveEnvironment(shell ?? search.nearest(atom, 14));
+    const type = classifyAdaptiveNeighborBuffer(shell ?? search.nearestInto(atom, 14, classificationShell), classificationBonds);
     classifications[atom] = type;
     return type;
   };
@@ -73,15 +77,15 @@ export function calculatePreparedCentrosymmetry(context, { onPhase = () => {}, o
     let shell;
     let shellCount = neighbors;
     if (auto) {
-      shell = search.nearest(atom, 14);
+      shell = search.nearestInto(atom, 14, centralShell);
       const type = classifyAtom(atom, shell);
       cspStructureTypes[atom - startAtom] = type;
       cspSummary[TYPE_NAMES[type]] += 1;
       shellCount = NEIGHBOR_COUNTS[type];
       if (type === 0) {
         const votes = [0, 0, 0, 0];
-        for (const neighbor of shell) {
-          const localType = classifyAtom(neighbor.atom);
+        for (let row = 0; row < shell.length; row += 1) {
+          const localType = classifyAtom(shell.atoms[row]);
           if (localType > 0 && localType < 4) votes[localType] += 1;
         }
         // FCC and HCP share the same CSP shell, so their votes reinforce one
@@ -94,11 +98,11 @@ export function calculatePreparedCentrosymmetry(context, { onPhase = () => {}, o
         }
       }
       cspNeighborCounts[atom - startAtom] = shellCount;
-    } else shell = search.nearest(atom, shellCount);
+    } else shell = search.nearestInto(atom, shellCount, centralShell);
     if (shellCount) {
       if (shell.length < shellCount) incomplete += 1;
       else {
-        const value = normalizedCentrosymmetry(shell.slice(0, shellCount));
+        const value = normalizedCentrosymmetryColumns(shell, shellCount, paired);
         centrosymmetry[atom - startAtom] = value;
         if (!Number.isFinite(value)) incomplete += 1;
       }
@@ -133,6 +137,28 @@ export function normalizedCentrosymmetry(shell) {
       const x = shell[i].x + shell[j].x;
       const y = shell[i].y + shell[j].y;
       const z = shell[i].z + shell[j].z;
+      const value = x * x + y * y + z * z;
+      if (value < minimum) { minimum = value; best = j; }
+    }
+    used[i] = used[best] = 1;
+    sum += minimum;
+  }
+  return sum / denominator;
+}
+
+function normalizedCentrosymmetryColumns(shell, count, used) {
+  let squaredLengths = 0;
+  for (let row = 0; row < count; row += 1) squaredLengths += shell.distanceSquared[row];
+  const denominator = 2 * squaredLengths;
+  if (denominator <= 0) return NaN;
+  used.fill(0, 0, count);
+  let sum = 0;
+  for (let i = 0; i < count; i += 1) {
+    if (used[i]) continue;
+    let best = -1, minimum = Infinity;
+    for (let j = i + 1; j < count; j += 1) {
+      if (used[j]) continue;
+      const x = shell.xs[i] + shell.xs[j], y = shell.ys[i] + shell.ys[j], z = shell.zs[i] + shell.zs[j];
       const value = x * x + y * y + z * z;
       if (value < minimum) { minimum = value; best = j; }
     }

@@ -56,10 +56,11 @@ is uploaded.
 also be run manually. The workflow:
 
 1. checks out the repository and selects Node.js 24;
-2. runs the test suite;
-3. creates `dist/` with `npm run build`;
-4. uploads the Pages artifact;
-5. deploys it to the protected `github-pages` environment.
+2. installs the pinned build dependencies with `npm ci`;
+3. runs the test suite;
+4. creates `dist/` with `npm run build`;
+5. uploads the Pages artifact;
+6. deploys it to the protected `github-pages` environment.
 
 Both jobs use the explicit `ubuntu-24.04` runner to avoid automatic operating
 system changes. The test step prints `node --version`, making the build runtime
@@ -91,6 +92,14 @@ mixing incompatible file-loading message formats after a deployment. The
 current loader also accepts the earlier single-file message format.
 Unversioned entrypoints remain available for an older cached HTML document
 during the transition; newly generated HTML always uses the versioned tree.
+
+Production uses esbuild to bundle the page and every discovered Worker entry
+independently. Module URLs retain their original source locations, including
+dynamic `new URL(path, import.meta.url)` assets. Native `.mjs` glue and Wasm
+files keep their original paths; pthread workers keep resolving beside the
+threaded DXA loader. The versioned `runtime-manifest.json` records entry sizes.
+The content hash includes generated bundle bytes. Development and the
+unversioned compatibility tree retain the original source modules.
 
 ## WebGPU on GitHub Pages
 

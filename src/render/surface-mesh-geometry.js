@@ -19,14 +19,17 @@ function grown(array, length) {
   return next;
 }
 
-function validateMesh(mesh) {
+function validateMesh(mesh, checkCancelled = null) {
   const { vertices, triangles } = mesh ?? {};
   if (!ArrayBuffer.isView(vertices) || vertices.length % 3 || !ArrayBuffer.isView(triangles) || triangles.length % 3) {
     throw new Error('A surface mesh needs XYZ vertices and triangle indices.');
   }
   const count = vertices.length / 3;
   if (count >= MAX_VERTEX_KEY) throw new Error('The surface mesh has too many vertices to display.');
-  for (const vertex of triangles) if (vertex >= count) throw new Error('A surface mesh triangle refers to a missing vertex.');
+  for (let index = 0; index < triangles.length; index++) {
+    if (checkCancelled && index % 3072 === 0) checkCancelled();
+    if (triangles[index] >= count) throw new Error('A surface mesh triangle refers to a missing vertex.');
+  }
   return count;
 }
 
@@ -38,11 +41,12 @@ function validateMesh(mesh) {
  * temporary adjacency maps cover one vertex at a time, rather than retaining
  * a JavaScript object for every edge of a large surface.
  * Manifold meshes keep their original arrays and vertex/triangle order. */
-function separateSurfaceSheets(mesh, count) {
+function separateSurfaceSheets(mesh, count, checkCancelled = null) {
   const { triangles } = mesh, corners = triangles.length;
   if (!corners) return mesh;
   const heads = new Int32Array(count).fill(-1), next = new Int32Array(corners), parents = new Int32Array(corners);
   for (let corner = 0; corner < corners; corner++) {
+    if (checkCancelled && corner % 1024 === 0) checkCancelled();
     const vertex = triangles[corner];
     next[corner] = heads[vertex]; heads[vertex] = corner; parents[corner] = corner;
   }
@@ -59,6 +63,7 @@ function separateSurfaceSheets(mesh, count) {
   const first = new Map(), second = new Map(), fans = new Map(), copies = [];
   let outputTriangles = null;
   for (let vertex = 0; vertex < count; vertex++) {
+    if (checkCancelled && vertex % 1024 === 0) checkCancelled();
     if (heads[vertex] < 0) continue;
     first.clear(); second.clear();
     for (let corner = heads[vertex]; corner >= 0; corner = next[corner]) {
@@ -91,6 +96,7 @@ function separateSurfaceSheets(mesh, count) {
   const vertices = new Float64Array((count + copies.length) * 3);
   vertices.set(mesh.vertices);
   for (let index = 0; index < copies.length; index++) {
+    if (checkCancelled && index % 1024 === 0) checkCancelled();
     const from = copies[index] * 3, to = (count + index) * 3;
     vertices[to] = mesh.vertices[from]; vertices[to + 1] = mesh.vertices[from + 1]; vertices[to + 2] = mesh.vertices[from + 2];
   }
@@ -261,7 +267,7 @@ function bridgeHole(ring, outerStart, holeStart) {
   return outerStart;
 }
 
-function clipEars(ring, start, triangles) {
+function clipEars(ring, start, triangles, checkCancelled = null) {
   let remaining = 0, node = start;
   do { remaining += 1; node = ring.next[node]; } while (node !== start);
   const emit = (a, b, c) => { triangles.push(ring.point[a], ring.point[b], ring.point[c]); };
@@ -276,6 +282,7 @@ function clipEars(ring, start, triangles) {
   let mode = 0, sinceEar = 0;
   node = start;
   while (remaining > 3) {
+    checkCancelled?.();
     const a = ring.previous[node], c = ring.next[node];
     const au = ring.u(a), av = ring.v(a), bu = ring.u(node), bv = ring.v(node), cu = ring.u(c), cv = ring.v(c);
     const area = cross(au, av, bu, bv, cu, cv);
@@ -283,6 +290,7 @@ function clipEars(ring, start, triangles) {
     if (ear && mode < 2) {
       const minimumU = Math.min(au, bu, cu), maximumU = Math.max(au, bu, cu), minimumV = Math.min(av, bv, cv), maximumV = Math.max(av, bv, cv);
       for (let other = ring.next[c]; other !== a; other = ring.next[other]) {
+        if (checkCancelled && other % 1024 === 0) checkCancelled();
         const u = ring.u(other), v = ring.v(other);
         if (u < minimumU || u > maximumU || v < minimumV || v > maximumV) continue;
         if ((u === au && v === av) || (u === bu && v === bv) || (u === cu && v === cv)) continue;
@@ -306,7 +314,7 @@ function clipEars(ring, start, triangles) {
 
 /** Triangles (point index triples, counterclockwise) filling the solid side
  * of the oriented loops. */
-export function triangulateLoops(pu, pv, loops) {
+export function triangulateLoops(pu, pv, loops, checkCancelled = null) {
   const outers = [], holes = [];
   for (const source of loops) {
     // Repeated positions carry no area and confuse corner tests.
@@ -327,6 +335,7 @@ export function triangulateLoops(pu, pv, loops) {
   }
   const triangles = [];
   for (const outer of outers) {
+    checkCancelled?.();
     const ring = new Ring(pu, pv);
     const start = ring.fromLoop(outer.loop);
     const rightmost = loop => loop.reduce((maximum, point) => Math.max(maximum, pu[point]), -Infinity);
@@ -334,7 +343,7 @@ export function triangulateLoops(pu, pv, loops) {
       // Each hole is a separate ring in the same node arrays until bridged.
       bridgeHole(ring, start, ring.fromLoop(hole.loop));
     }
-    clipEars(ring, start, triangles);
+    clipEars(ring, start, triangles, checkCancelled);
   }
   return triangles;
 }
@@ -405,7 +414,7 @@ function closeOpenContours(points, open, periodicU, periodicV) {
  * they meet tell whether the cell is solid just above the lower face and
  * just below the upper face. Both must hold: a surface lying in the face
  * itself bounds the solid on one side only and needs no cap. */
-function faceInsideSolid(reduced, triangles, triangleCount, axis, orientation) {
+function faceInsideSolid(reduced, triangles, triangleCount, axis, orientation, checkCancelled = null) {
   if (!triangleCount) return null;
   const uAxis = (axis + 1) % 3, vAxis = (axis + 2) % 3, samples = Math.min(9, triangleCount);
   let votes = 0;
@@ -417,6 +426,7 @@ function faceInsideSolid(reduced, triangles, triangleCount, axis, orientation) {
     const v = 0.5 * reduced[a + vAxis] + 0.3 * reduced[b + vAxis] + 0.2 * reduced[c + vAxis];
     let first = Infinity, last = -Infinity, firstFacing = 0, lastFacing = 0;
     for (let index = 0; index < triangleCount * 3; index += 3) {
+      if (checkCancelled && index % 3072 === 0) checkCancelled();
       const p = triangles[index] * 3, q = triangles[index + 1] * 3, r = triangles[index + 2] * 3;
       const pu = reduced[p + uAxis] - u, pv = reduced[p + vAxis] - v, qu = reduced[q + uAxis] - u, qv = reduced[q + vAxis] - v;
       const ru = reduced[r + uAxis] - u, rv = reduced[r + vAxis] - v;
@@ -441,7 +451,7 @@ function faceInsideSolid(reduced, triangles, triangleCount, axis, orientation) {
  * triangle A→B→C can collapse to an outline midpoint. Put B into the adjacent
  * nonzero-area triangle: exporters may omit the collapsed triangle, and must
  * still retain both outline edges. No position or scientific face is moved. */
-function refineCollapsedDisplay(display, cell) {
+function refineCollapsedDisplay(display, cell, checkCancelled = null) {
   const { positions, indices, normals, capRanges } = display;
   const scale = Math.max(...Array.from(cell.vectors, Math.abs)), points = new Map(), extraIds = new Map();
   let pointIds = null;
@@ -468,6 +478,7 @@ function refineCollapsedDisplay(display, cell) {
   };
   const collapsed = [], wanted = new Set(), key = (a, b) => a * MAX_VERTEX_KEY + b;
   for (let index = 0; index < indices.length; index += 3) {
+    if (checkCancelled && index % 3072 === 0) checkCancelled();
     const a = indices[index], b = indices[index + 1], c = indices[index + 2];
     if (!flat(a, b, c) || id(a) === id(b) || id(b) === id(c) || id(c) === id(a)) continue;
     const ab = distance(a, b), bc = distance(b, c), ca = distance(c, a);
@@ -489,6 +500,7 @@ function refineCollapsedDisplay(display, cell) {
   };
   for (let part = 0; part < parts.length; part++) {
     for (let index = parts[part].first; index < parts[part].first + parts[part].count; index += 3) {
+      if (checkCancelled && index % 3072 === 0) checkCancelled();
       const corners = [indices[index], indices[index + 1], indices[index + 2]];
       if (!part) for (const vertex of corners) { const point = id(vertex); if (middleIds.has(point)) middleSources.set(point, vertex); }
       if (flat(...corners)) continue;
@@ -503,6 +515,7 @@ function refineCollapsedDisplay(display, cell) {
   // inward; a later split can expose the edge needed by an earlier midpoint.
   let pending = collapsed;
   while (pending.length) {
+    checkCancelled?.();
     const deferred = [];
     for (const candidate of pending) {
       const { index, corners: [a, middle, c] } = candidate;
@@ -566,10 +579,11 @@ function refineCollapsedDisplay(display, cell) {
  * triangles first, then the caps of each periodic cell face. `capRanges`
  * lists those faces as { axis, side, first, count } in index units.
  */
-export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps = true, reverse = false, spaceFilling = false } = {}) {
-  const originalVertices = validateMesh(mesh);
+export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps = true, reverse = false, spaceFilling = false, checkCancelled = null } = {}) {
+  const originalVertices = validateMesh(mesh, checkCancelled);
   if (origin?.length !== 3 || !Array.from(origin).every(Number.isFinite)) throw new Error('The periodic display origin needs three finite fractions.');
-  mesh = separateSurfaceSheets(mesh, originalVertices);
+  checkCancelled?.();
+  mesh = separateSurfaceSheets(mesh, originalVertices, checkCancelled);
   const sourceVertices = mesh.vertices.length / 3, sourceTriangles = mesh.triangles.length / 3;
   const periodic = Array.from(cell.pbc, Boolean), h = cell.vectors, cellOrigin = cell.origin;
   const orientation = determinant3(h) < 0 ? -1 : 1;
@@ -580,6 +594,7 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
   let triangles = new Uint32Array(Math.ceil(sourceTriangles * 1.5) * 3 + 96);
   if (reverse) {
     for (let index = 0; index < sourceTriangles * 3; index += 3) {
+      if (checkCancelled && index % 3072 === 0) checkCancelled();
       triangles[index] = mesh.triangles[index]; triangles[index + 1] = mesh.triangles[index + 2]; triangles[index + 2] = mesh.triangles[index + 1];
     }
   } else triangles.set(mesh.triangles);
@@ -603,6 +618,7 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
       return periodic[component] ? delta - Math.floor(delta + 0.5) : delta;
     };
     for (let index = 0; index < sourceTriangles * 3; index += 3) {
+      if (checkCancelled && index % 3072 === 0) checkCancelled();
       const a = triangles[index], b = triangles[index + 1], c = triangles[index + 2];
       if (!Number.isInteger(reduced[a * 3 + axis]) || !Number.isInteger(reduced[b * 3 + axis]) || !Number.isInteger(reduced[c * 3 + axis])) continue;
       const normal = image(a, b, uAxis) * image(a, c, vAxis) - image(a, b, vAxis) * image(a, c, uAxis);
@@ -619,6 +635,7 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
   for (let axis = 0; axis < 3; axis += 1) {
     if (!periodic[axis]) continue;
     for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+      if (checkCancelled && vertex % 1024 === 0) checkCancelled();
       const offset = vertex * 3 + axis, value = (cutReduced ?? reduced)[offset], image = Math.floor(value), wrapped = value - image;
       const upper = wrapped === 0 && (upperFace[vertex] & (1 << axis));
       reduced[offset] = upper ? 1 : reduced[offset] - image;
@@ -628,6 +645,7 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
     // enough to distinguish the limiting contour in floating-point tests.
     const inward = FACE_SNAP / 4;
     for (let vertex = 0; vertex < vertexCount; vertex++) {
+      if (checkCancelled && vertex % 1024 === 0) checkCancelled();
       const offset = vertex * 3 + axis, value = (cutReduced ?? reduced)[offset];
       if (value === 0 || value === 1) {
         cutReduced ??= reduced.slice();
@@ -681,6 +699,7 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
     const corner = [0, 0, 0], long = [false, false, false], nearStart = [0, 0, 0], nearEnd = [0, 0, 0];
     const before = triangleCount;
     for (let triangle = 0; triangle < before; triangle += 1) {
+      if (checkCancelled && triangle % 1024 === 0) checkCancelled();
       for (let index = 0; index < 3; index += 1) corner[index] = triangles[triangle * 3 + index];
       let crossing = 0;
       for (let index = 0; index < 3; index += 1) {
@@ -708,6 +727,7 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
   if (caps && periodic.some(Boolean)) {
     const edges = [[], [], []];
     for (let index = 0; index < triangleCount * 3; index += 3) {
+      if (checkCancelled && index % 3072 === 0) checkCancelled();
       for (let side = 0; side < 3; side += 1) {
         const from = triangles[index + side], to = triangles[index + (side + 1) % 3], shared = flags[from] & flags[to] & 0b010101;
         if (!shared) continue;
@@ -748,7 +768,7 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
           let largest = 0;
           for (const loop of loops) { const area = loopArea(points.u, points.v, loop); if (Math.abs(area) > Math.abs(largest)) largest = area; }
           inside = largest < 0;
-        } else inside = triangleCount ? faceInsideSolid(reduced, triangles, triangleCount, axis, orientation) === true : Boolean(spaceFilling);
+        } else inside = triangleCount ? faceInsideSolid(reduced, triangles, triangleCount, axis, orientation, checkCancelled) === true : Boolean(spaceFilling);
         if (inside) {
           const first = points.u.length;
           points.u.push(0, 1, 1, 0); points.v.push(0, 0, 1, 1);
@@ -760,7 +780,7 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
       for (let index = points.physicalU.length; index < points.u.length; index++) {
         points.physicalU.push(points.u[index]); points.physicalV.push(points.v[index]);
       }
-      let filled = triangulateLoops(points.u, points.v, loops);
+      let filled = triangulateLoops(points.u, points.v, loops, checkCancelled);
 
       if (filled.length) { capPoints[axis] = points; capTriangles[axis] = filled; }
     }
@@ -796,6 +816,7 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
     for (let side = 0; side < 2; side += 1) {
       const firstVertex = vertexCursor, firstIndex = indexCursor, coordinates = [0, 0, 0];
       for (let index = 0; index < pu.length; index += 1) {
+        if (checkCancelled && index % 1024 === 0) checkCancelled();
         coordinates[axis] = side; coordinates[uAxis] = pu[index]; coordinates[vAxis] = pv[index];
         cartesian(coordinates[0], coordinates[1], coordinates[2], vertexCursor);
         for (let component = 0; component < 3; component += 1) outputNormals[vertexCursor * 3 + component] = (side ? normal[component] : -normal[component]) || 0;
@@ -805,6 +826,7 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
       // face; both caps face out of the cell.
       const flip = (side === 0) === (orientation > 0);
       for (let index = 0; index < filled.length; index += 3) {
+        if (checkCancelled && index % 3072 === 0) checkCancelled();
         indices[indexCursor++] = firstVertex + filled[index];
         indices[indexCursor++] = firstVertex + filled[index + (flip ? 2 : 1)];
         indices[indexCursor++] = firstVertex + filled[index + (flip ? 1 : 2)];
@@ -814,13 +836,15 @@ export function buildSurfaceDisplayMesh(mesh, cell, { origin = [0, 0, 0], caps =
   }
   const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
   for (let index = 0; index < positions.length; index += 1) {
+    if (checkCancelled && index % 1024 === 0) checkCancelled();
     const axis = index % 3;
     if (positions[index] < minimum[axis]) minimum[axis] = positions[index];
     if (positions[index] > maximum[axis]) maximum[axis] = positions[index];
   }
   const display = { positions, normals: outputNormals, indices, vertexCount: totalVertices, surfaceVertexCount: vertexCount,
     surfaceIndexCount: triangleCount * 3, capRanges, capIndexCount, minimum, maximum };
-  return refineCollapsedDisplay(display, cell);
+  checkCancelled?.();
+  return refineCollapsedDisplay(display, cell, checkCancelled);
 }
 
 /** Signed volume enclosed by display triangles (divergence theorem); with

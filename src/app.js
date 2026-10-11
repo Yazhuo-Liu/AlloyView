@@ -389,15 +389,27 @@ function setGpuComputing(enabled) {
 
 function updateGpuComputingTitle() {
   const status = gpuPreparationStatus;
-  elements['enable-gpu-computing'].title = !analysisPool.gpuEnabled
+  const cacheStatus = analysisPool.gpuCacheStatus;
+  const title = !analysisPool.gpuEnabled
     ? 'GPU acceleration is off. Analyses use CPU Workers.'
     : status?.phase === 'unavailable'
       ? `GPU preparation unavailable: ${status.error} Supported analyses will use CPU Workers if needed.`
       : status?.phase === 'warming'
         ? 'Preparing the GPU device and analysis pipelines in the background.'
-        : analysisPool.gpuCacheStatus?.exactPairs === false
+        : cacheStatus?.exactPairs === false
           ? 'GPU acceleration is on. This GPU failed the exact double-float self-test, so Voronoi, strain and displacement analyses use CPU Workers.'
           : 'GPU acceleration is on. Structure frames are prepared in the background; calculate again to use this preference. Voronoi analysis uses CPU Workers unless its WebGPU kernel is turned on in the Voronoi panel.';
+  // Compilation failures disappear after a successful on-demand retry. Frame
+  // preparation failures remain scoped to that preparation, not the device.
+  const reportedCompilationFailures = new Set((status?.cacheStatus?.kernelFailures ?? [])
+    .map(failure => JSON.stringify([failure.kind, failure.phase, failure.error])));
+  const failures = [...new Map([...(cacheStatus?.kernelFailures ?? []),
+    ...(status?.kernelFailures ?? []).filter(failure => failure.phase !== 'warming'
+      || !reportedCompilationFailures.has(JSON.stringify([failure.kind, failure.phase, failure.error])))]
+    .map(failure => [JSON.stringify([failure.kind, failure.phase, failure.error]), failure])).values()];
+  elements['enable-gpu-computing'].title = title + (analysisPool.gpuEnabled && failures.length
+    ? ` Background preparation issues: ${failures.map(failure => `${failure.kind} (${failure.phase}): ${failure.error}`).join('; ')}. Other GPU analyses remain available.`
+    : '');
 }
 
 function scheduleGpuFramePrefetch({ committedFrame = null } = {}) {
@@ -423,6 +435,7 @@ setGpuComputing(true);
 
 try {
   renderer = new WebGLRenderer(elements.viewport, {
+    cpuBudget,
     onPick: handleAtomPick,
     onStats: ({ fps }) => { elements['metric-fps'].textContent = `${fps.toFixed(1)} FPS`; },
     onCameraChange: updateAxisTriad,
@@ -1048,12 +1061,12 @@ for (const eventName of ['pointerdown', 'wheel', 'touchstart']) {
 for (const button of document.querySelectorAll('[data-view]')) {
   button.addEventListener('click', () => renderer.setView(button.dataset.view));
 }
-elements['export-png'].addEventListener('click', () => {
+elements['export-png'].addEventListener('click', async () => {
   if (!state.frame) return;
   displayRefresh.flush();
   const stem = (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, '');
   try {
-    renderer.exportPng(`${stem}-frame-${state.frameIndex + 1}.png`, {
+    await renderer.exportPng(`${stem}-frame-${state.frameIndex + 1}.png`, {
       includeBackground: elements['png-background'].checked,
       includeAxes: elements['png-axes'].checked,
       legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
@@ -1786,6 +1799,7 @@ function configureSourceUi(result) {
 function updateSourceIndex(info) {
   if (!state.file || !state.frame || sourceLoadingOwner !== null || info.format !== state.format) return;
   const previousCount = state.frameCount;
+  const previousComplete = state.indexComplete;
   const previousError = state.indexError;
   state.frameCount = Math.max(1, info.frameCount);
   state.indexComplete = info.indexComplete !== false;
@@ -1812,7 +1826,13 @@ function updateSourceIndex(info) {
     updateCacheLabel();
     trajectoryTools?.refresh();
     movieControls?.refresh();
-    if (state.indexComplete) scheduleFramePrefetch(state.frameIndex);
+  }
+  const completed = !previousComplete && state.indexComplete;
+  if (previousCount !== state.frameCount || completed) {
+    timeSeries?.refresh();
+    // Completion can have exactly the last partial notification's count.
+    // Also fill newly indexed frames whenever the prefetch lanes are idle.
+    if (completed || !framePrefetchController) scheduleFramePrefetch(state.frameIndex);
   }
   if (info.error && info.error !== previousError) showToast(`Trajectory indexing stopped: ${info.error}`);
   updateFrameNavigation();
@@ -1910,6 +1930,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   try {
   abortAnalysisJobs();
   state.frame = frame;
+  void renderer.surfaceGeometryClient?.warm();
   // Prepare modules, snapshots and neighbour indices alongside the first
   // render. Automatic analyses retain priority over both background queues.
   void cpuPrefetch.setFrame({ sourceKey: state.sourceVersion, frame });
@@ -2071,6 +2092,7 @@ function scheduleFramePrefetch(centerIndex) {
   framePrefetchController = controller;
   const token = state.prefetchToken;
   const indices = prefetchOrder(centerIndex, state.frameCount, state.cachePlan.limit, state.cachePlan.fullTrajectory);
+  const indexedCount = state.frameCount;
   const concurrency = Math.max(1, Math.min(4, cpuBudget.limit - 1, state.cachePlan.limit - 1,
     Math.floor(128 * 1024 ** 2 / Math.max(1, state.cachePlan.estimatedFrameBytes))));
   let cursor = 0;
@@ -2096,7 +2118,15 @@ function scheduleFramePrefetch(centerIndex) {
       }
     }
   };
-  const run = () => { if (!controller.signal.aborted) void Promise.all(Array.from({ length: concurrency }, lane)); };
+  const run = () => {
+    if (controller.signal.aborted) return;
+    void Promise.all(Array.from({ length: concurrency }, lane)).finally(() => {
+      if (framePrefetchController !== controller) return;
+      framePrefetchController = null;
+      // Index growth during an active batch must not strand the new tail.
+      if (!controller.signal.aborted && indexedCount !== state.frameCount) scheduleFramePrefetch(state.frameIndex);
+    });
+  };
   queueMicrotask(run);
 }
 
@@ -4193,7 +4223,7 @@ function captureConfiguration() {
 function attributeExtensions() {
   const extensions = {}, labels = textLabelControls.serialize(), series = timeSeries.serialize();
   if (labels) extensions.textLabels = labels;
-  if (series.autoCollect || JSON.stringify(series.attributes) !== JSON.stringify(TIME_SERIES_DEFAULTS.attributes)) extensions.timeSeries = series;
+  if (JSON.stringify(series) !== JSON.stringify({ ...TIME_SERIES_DEFAULTS, autoCollect: false })) extensions.timeSeries = series;
   if (globalAttributes.getStrainReferenceFrame() !== 0) extensions.globalAttributes = globalAttributes.serialize();
   // Scripts and the camera path are saved as text and numbers; importing never runs a script.
   const scripts = scriptControls?.serialize(), movie = movieControls?.serialize();

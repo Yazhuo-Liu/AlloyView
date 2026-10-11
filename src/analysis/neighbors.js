@@ -23,6 +23,25 @@ export class NeighborBuffer {
     this.distanceSquared[to] = source.distanceSquared[at];
     this.imageA[to] = source.imageA[at]; this.imageB[to] = source.imageB[at]; this.imageC[to] = source.imageC[at];
   }
+  /** Stable row ordering without moving Cartesian/image columns. The view is
+   * owned by this buffer and remains valid through queries into other buffers. */
+  sortedIndices(compare = (a, b) => compareRows(this, a, this, b), keep = null) {
+    if (!this.order || this.order.length < this.length) this.order = new Uint32Array(this.capacity);
+    let count = 0;
+    for (let row = 0; row < this.length; row += 1) if (!keep || keep(row)) this.order[count++] = row;
+    const order = this.order.subarray(0, count);
+    // Ordinary coordination shells are short. Insertion sorting avoids the
+    // native typed-sort callback overhead and keeps exact ties in source order.
+    if (count <= 64) {
+      for (let index = 1; index < count; index += 1) {
+        const row = order[index];
+        let at = index;
+        while (at && compare(row, order[at - 1]) < 0) { order[at] = order[at - 1]; at -= 1; }
+        order[at] = row;
+      }
+    } else order.sort(compare);
+    return order;
+  }
 }
 function compareRows(first, a, second, b) {
   return first.distanceSquared[a] - second.distanceSquared[b] || first.atoms[a] - second.atoms[b]
@@ -251,7 +270,7 @@ export class NeighborSearch {
                   continue;
                 }
                 const i = output.length;
-                output.reserve(i + 1);
+                if (i >= output.capacity) output.reserve(i + 1);
                 output.atoms[i] = other; output.xs[i] = x; output.ys[i] = y; output.zs[i] = z;
                 output.distanceSquared[i] = distanceSquared;
                 output.imageA[i] = a; output.imageB[i] = b; output.imageC[i] = c;

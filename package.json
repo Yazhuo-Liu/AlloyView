@@ -63,10 +63,17 @@
     "build:ptm": "bash wasm/build-ptm.sh",
     "build:voronoi": "bash wasm/build-voronoi.sh",
     "build:dxa": "bash wasm/build-dxa.sh",
-    "build:dxa:threaded": "bash wasm/build-dxa-threaded.sh"
+    "build:dxa:threaded": "bash wasm/build-dxa-threaded.sh",
+    "test:browser:progressive-series": "node scripts/browser-progressive-series.mjs",
+    "test:browser:bundled-runtime": "node scripts/browser-bundled-runtime.mjs",
+    "test:browser:gpu-recovery": "node scripts/browser-gpu-recovery.mjs"
   },
   "engines": {
     "node": ">=20"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "acorn": "8.15.0",
+    "esbuild": "0.25.12"
+  }
 }

@@ -1,4 +1,4 @@
-import { NeighborSearch, atomRange } from './neighbors.js';
+import { NeighborSearch, NeighborBuffer, atomRange } from './neighbors.js';
 import { MAX_NEIGHBORS_PER_ATOM } from './bonds.js';
 
 /** AtomEye A3/geo.c geometric shear: use the most populous coordination,
@@ -26,9 +26,10 @@ export function calculateLocalShearCoordination(frame, { cutoff, onPhase = () =>
   onPhase('indexing');
   const search = (frame.neighborSearch ?? new NeighborSearch(frame)), coordination = new Uint32Array(endAtom - startAtom), histogram = [];
   let coordinationSum = 0;
+  const scratch = new NeighborBuffer();
   onPhase('analyzing');
   for (let atom = startAtom; atom < endAtom; atom += 1) {
-    const neighbors = boundedNeighbors(search, atom, cutoff);
+    const neighbors = boundedNeighbors(search, atom, cutoff, scratch);
     coordination[atom - startAtom] = neighbors.length;
     coordinationSum += neighbors.length;
     histogram[neighbors.length] = (histogram[neighbors.length] ?? 0) + 1;
@@ -45,13 +46,15 @@ export function calculateLocalShearMetrics(frame, { cutoff, coordinationMode, re
   onPhase('indexing');
   const search = (frame.neighborSearch ?? new NeighborSearch(frame)), metrics = new Float64Array((endAtom - startAtom) * 6), metricSum = reductionInput?.metricSum.slice() ?? new Array(6).fill(0);
   let normalizationSum = reductionInput?.normalizationSum ?? 0, normalizationParticipants = reductionInput?.normalizationParticipants ?? 0;
+  const scratch = new NeighborBuffer();
   onPhase('analyzing');
   for (let atom = startAtom; atom < endAtom; atom += 1) {
-    const neighbors = boundedNeighbors(search, atom, cutoff);
-    neighbors.sort((a, b) => a.distanceSquared - b.distanceSquared || a.atom - b.atom || a.x - b.x || a.y - b.y || a.z - b.z);
+    const neighbors = boundedNeighbors(search, atom, cutoff, scratch);
+    const order = neighbors.sortedIndices();
     const participants = Math.min(coordinationMode, neighbors.length), offset = (atom - startAtom) * 6;
     for (let index = 0; index < participants; index += 1) {
-      const { x, y, z, distanceSquared } = neighbors[index];
+      const row = order[index], x = neighbors.xs[row], y = neighbors.ys[row], z = neighbors.zs[row],
+        distanceSquared = neighbors.distanceSquared[row];
       metrics[offset] += x * x; metrics[offset + 1] += x * y; metrics[offset + 2] += x * z;
       metrics[offset + 3] += y * y; metrics[offset + 4] += y * z; metrics[offset + 5] += z * z;
       if (participants === coordinationMode) { normalizationSum += distanceSquared; normalizationParticipants += 1; }
@@ -94,8 +97,8 @@ export function shearInvariant([xx, xy, xz, yy, yz, zz]) {
 function validateCutoff(cutoff) {
   if (!Number.isFinite(cutoff) || cutoff <= 0) throw new Error('Geometric shear cutoff must be positive and finite.');
 }
-function boundedNeighbors(search, atom, cutoff) {
-  const neighbors = search.within(atom, cutoff, MAX_NEIGHBORS_PER_ATOM + 1);
+function boundedNeighbors(search, atom, cutoff, neighbors) {
+  search.collect(atom, cutoff, neighbors, MAX_NEIGHBORS_PER_ATOM + 1);
   if (neighbors.length > MAX_NEIGHBORS_PER_ATOM) throw new Error('Too many geometric shear neighbors; reduce the cutoff.');
   return neighbors;
 }

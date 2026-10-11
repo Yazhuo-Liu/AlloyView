@@ -716,9 +716,9 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       const actions = document.createElement('div'); actions.className = 'comparison-actions';
       const exportPng = document.createElement('button'); exportPng.id = 'export-comparison-png'; exportPng.type = 'button'; exportPng.textContent = 'PNG';
       exportPng.setAttribute('aria-label', 'Export second view as PNG'); exportPng.title = 'Export this view as PNG';
-      exportPng.addEventListener('click', () => {
+      exportPng.addEventListener('click', async () => {
         if (!comparison?.frame) return;
-        try { comparison.exportPng(`${getFileStem()}-frame-${getFrameIndex() + 1}-second-view.png`, getExportOptions()); }
+        try { await comparison.exportPng(`${getFileStem()}-frame-${getFrameIndex() + 1}-second-view.png`, getExportOptions()); }
         catch (error) { notify(error.message); }
       });
       const applyCamera = document.createElement('button'); applyCamera.id = 'apply-comparison-camera'; applyCamera.type = 'button'; applyCamera.textContent = 'Apply to main';
@@ -744,6 +744,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       resizeHandle.textContent = '◢';
       comparisonContainer.append(header, toolbar, surface, resizeHandle); renderer.canvas.parentElement.append(comparisonContainer);
       comparison = new WebGLRenderer(canvas, { onPick: index => selectAtom(index), onProjectionChange: syncComparisonToolbar, onCameraChange: syncComparisonToolbar,
+        surfaceGeometryClient: renderer.surfaceGeometryClient,
         onBeforeCapture: () => renderer.onBeforeCapture?.() });
       comparisonWindow = initializeFloatingWindow({ element: comparisonContainer, dragHandle: header, resizeHandle,
         onEdit: changed, onChange: () => comparison.requestRender() });
@@ -962,7 +963,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         $('export-series-status').textContent = `Rendering frame ${index + 1} · ${archive.count} / ${count} exported`;
         if (!await showFrame(index)) throw new Error(`Could not load frame ${index + 1}.`);
         if (task.cancelled || task.source !== getSourceVersion()) return;
-        const image = renderer.captureImage(getExportOptions()), blob = await canvasBlob(image), bytes = new Uint8Array(await blob.arrayBuffer());
+        const image = await renderer.captureImage(getExportOptions()), blob = await canvasBlob(image), bytes = new Uint8Array(await blob.arrayBuffer());
         total += bytes.length;
         if (total > 256 * 1024 ** 2) throw new Error('Image export exceeds 256 MiB. Select fewer frames.');
         archive.add({ name: `${getFileStem()}-frame-${String(index + 1).padStart(6, '0')}.png`, bytes }, { signal: task.controller.signal });
@@ -1002,7 +1003,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         const caption = current ? 28 : Math.max(1, Math.min(slotHeight - 1, Math.round(28 * scale)));
         const captureOptions = current ? options : { ...options,
           resolution: { mode: 'custom', width: slotWidth, height: slotHeight - caption, lockAspect: false } };
-        renderer.setView(view); const image = renderer.captureImage(captureOptions);
+        renderer.setView(view); const image = await renderer.captureImage(captureOptions);
         context.drawImage(image, x, y); context.fillStyle = '#ffffff'; context.fillRect(x, y + image.height, image.width, caption);
         context.fillStyle = '#14252b'; context.font = `${16 * scale}px sans-serif`;
         context.fillText(view, x + 10 * scale, y + image.height + 20 * scale);
@@ -1094,9 +1095,9 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     if (comparison && $('compare-view').checked && view !== 'custom'
       && (id === 'compare-preset' || cameraViewPreset(comparison) !== view)) { comparison.setView(view); syncComparisonToolbar(); }
   });
-  $('export-jpg').addEventListener('click', () => {
+  $('export-jpg').addEventListener('click', async () => {
     if (!getFrame()) return;
-    try { renderer.exportJpg(`${getFileStem()}-frame-${getFrameIndex() + 1}.jpg`, getExportOptions()); }
+    try { await renderer.exportJpg(`${getFileStem()}-frame-${getFrameIndex() + 1}.jpg`, getExportOptions()); }
     catch (error) { notify(error.message); }
   });
   $('export-atom-indices').addEventListener('click', () => {

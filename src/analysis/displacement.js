@@ -118,9 +118,14 @@ export async function prepareDisplacements(frame, reference, {
  */
 export function prepareDisplacementCalculation(frame, parameters) {
   const { referenceMapping, currentPositions, referencePositions, minimumImage = true, mappingMode = 'id',
-    sourceRepetitions = null } = parameters;
+    sourceRepetitions = null, sourceRange = null } = parameters;
   if (typeof minimumImage !== 'boolean') throw new Error('The displacement minimum-image option must be a boolean.');
-  const count = coordinateCount(frame), referenceCount = referencePositions?.length / 3;
+  const count = sourceRange ? sourceRange.endAtom - sourceRange.startAtom : coordinateCount(frame);
+  const referenceCount = sourceRange ? sourceRange.referenceCount : referencePositions?.length / 3;
+  if (sourceRange && (!Number.isSafeInteger(sourceRange.totalAtoms) || sourceRange.totalAtoms < 1
+      || !Number.isSafeInteger(sourceRange.startAtom) || !Number.isSafeInteger(sourceRange.endAtom)
+      || sourceRange.startAtom < 0 || sourceRange.endAtom > sourceRange.totalAtoms || count < 0
+      || referencePositions?.length !== count * 3)) throw new Error('The displacement source range is invalid.');
   if (!(referenceMapping instanceof Int32Array) || referenceMapping.length !== count
     || currentPositions?.length !== count * 3 || !Number.isInteger(referenceCount) || referenceCount < 1) {
     throw new Error('Displacement coordinates or atom mapping are incomplete.');
@@ -132,6 +137,7 @@ export function prepareDisplacementCalculation(frame, parameters) {
   const orthogonal = minimumImage && orthogonalBasis(imageCell.vectors);
   const heights = minimumImage && !orthogonal ? cellFaceHeights(imageCell) : null;
   const context = Object.freeze({ frame, referenceMapping, currentPositions, referencePositions, minimumImage, mappingMode,
+    sourceRange: sourceRange ? Object.freeze({ ...sourceRange }) : null,
     sourceRepetitions: sourceRepetitions ? Object.freeze(Array.from(sourceRepetitions)) : null,
     imageCell, inverse, orthogonal, heights, change: new Float64Array(3) });
   preparedContexts.add(context);
@@ -144,12 +150,13 @@ export function calculatePreparedDisplacements(frame, parameters, { signal, onPr
   if (!preparedContexts.has(context) || context.frame !== frame || context.referenceMapping !== parameters.referenceMapping
     || context.currentPositions !== parameters.currentPositions || context.referencePositions !== parameters.referencePositions
     || context.minimumImage !== (parameters.minimumImage ?? true) || context.mappingMode !== (parameters.mappingMode ?? 'id')
+    || JSON.stringify(context.sourceRange) !== JSON.stringify(parameters.sourceRange ?? null)
     || JSON.stringify(context.sourceRepetitions) !== JSON.stringify(parameters.sourceRepetitions ?? null)) {
     throw new Error('The prepared displacement context does not match these inputs.');
   }
-  const count = context.referenceMapping.length;
-  const startAtom = parameters.startAtom ?? 0, endAtom = parameters.endAtom ?? count;
-  if (!Number.isInteger(startAtom) || !Number.isInteger(endAtom) || startAtom < 0 || endAtom > count || endAtom < startAtom) {
+  const first = context.sourceRange?.startAtom ?? 0, last = context.sourceRange?.endAtom ?? context.referenceMapping.length;
+  const startAtom = parameters.startAtom ?? first, endAtom = parameters.endAtom ?? last;
+  if (!Number.isInteger(startAtom) || !Number.isInteger(endAtom) || startAtom < first || endAtom > last || endAtom < startAtom) {
     throw new Error('The displacement atom range is invalid.');
   }
   const vectors = new Float32Array((endAtom - startAtom) * 3).fill(NaN);
@@ -174,10 +181,11 @@ export function calculatePreparedDisplacements(frame, parameters, { signal, onPr
 
 function calculateDisplacementAtom(context, atom, vectors, offset) {
   const { referenceMapping, currentPositions, referencePositions, change, minimumImage, imageCell, inverse, heights, orthogonal } = context;
-  const referenceAtom = referenceMapping[atom];
+  const row = atom - (context.sourceRange?.startAtom ?? 0);
+  const referenceAtom = referenceMapping[row];
   if (referenceAtom < 0) return false;
   for (let axis = 0; axis < 3; axis += 1) {
-    change[axis] = currentPositions[atom * 3 + axis] - referencePositions[referenceAtom * 3 + axis];
+    change[axis] = currentPositions[row * 3 + axis] - referencePositions[(context.sourceRange ? row : referenceAtom) * 3 + axis];
     if (!Number.isFinite(change[axis])) throw new Error('Displacement requires finite atom coordinates.');
   }
   if (minimumImage) resolveMinimumImage(change, imageCell, inverse, heights, orthogonal);
@@ -251,11 +259,14 @@ function resolveMinimumImage(change, cell, inverse, heights, orthogonal) {
     change[2] = f0 * h[2] + f1 * h[5] + f2 * h[8];
     return;
   }
+  if (![f0, f1, f2].every(Number.isFinite)) throw new Error('Displacement periodic-image coordinates are not finite.');
   let s0 = pbc[0] ? -Math.round(f0) : 0;
   let s1 = pbc[1] ? -Math.round(f1) : 0;
   let s2 = pbc[2] ? -Math.round(f2) : 0;
+  if (![s0, s1, s2].every(Number.isSafeInteger)) throw new Error('Displacement periodic-image indices exceed the safe integer range.');
   let best = squaredImageLength(f0 + s0, f1 + s1, f2 + s2, h);
   const radius = Math.sqrt(best);
+  if (!Number.isFinite(best) || !Number.isFinite(radius)) throw new Error('Displacement periodic-image distance is not finite.');
   // Face heights bound every candidate that can improve the initial image.
   // Retain a/b/c traversal and strict improvement so equal-distance ties do
   // not change when these temporary arrays become scalar locals.
@@ -265,7 +276,10 @@ function resolveMinimumImage(change, cell, inverse, heights, orthogonal) {
   const hi1 = pbc[1] ? Math.floor(radius / heights[1] - f1 + 1e-12) : 0;
   const lo2 = pbc[2] ? Math.ceil(-radius / heights[2] - f2 - 1e-12) : 0;
   const hi2 = pbc[2] ? Math.floor(radius / heights[2] - f2 + 1e-12) : 0;
-  if ((hi0 - lo0 + 1) * (hi1 - lo1 + 1) * (hi2 - lo2 + 1) > MAX_IMAGE_CANDIDATES) {
+  if (![lo0, hi0, lo1, hi1, lo2, hi2].every(Number.isSafeInteger)) throw new Error('Displacement periodic-image bounds exceed the safe integer range.');
+  const spans = [hi0 - lo0 + 1, hi1 - lo1 + 1, hi2 - lo2 + 1];
+  const candidates = spans[0] * spans[1] * spans[2];
+  if (spans.some(span => span < 0 || span > MAX_IMAGE_CANDIDATES) || !Number.isFinite(candidates) || candidates > MAX_IMAGE_CANDIDATES) {
     throw new Error('The cell is too thin to resolve displacement periodic images.');
   }
   for (let a = lo0; a <= hi0; a += 1) for (let b = lo1; b <= hi1; b += 1) for (let c = lo2; c <= hi2; c += 1) {

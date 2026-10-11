@@ -11,6 +11,7 @@ const MAX_TASKS_IN_FLIGHT = 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
   frameCount: 0, currentIndex: 0, budgetBytes: 0, allocatedBytes: 0, residentBytes: 0, frameBytes: 0, workspaceBytes: 0,
   preparedVoronoiFrameIds: [], preparedVoronoiFrameIndexes: [], voronoiWorkspaceAtoms: 0,
+  kernelFailures: [],
   neighborIndexCount: 0, neighborIndexBuildCount: 0, voronoiKernelWarmupCount: 0, bufferLimitBytes: 0, exactPairs: null };
 
 /** Keep one worker/device alive, and copy only the task currently being sent.
@@ -51,7 +52,8 @@ export class GpuAnalysisClient {
     cachedPtmFits: [...this.cachedPtmFits].map(([frameId, fitId]) => ({ frameId, fitId })),
     cachedFrameIndexes: [...(this._cacheStatus.cachedFrameIndexes ?? [])],
     preparedVoronoiFrameIds: [...(this._cacheStatus.preparedVoronoiFrameIds ?? [])],
-    preparedVoronoiFrameIndexes: [...(this._cacheStatus.preparedVoronoiFrameIndexes ?? [])] }; }
+    preparedVoronoiFrameIndexes: [...(this._cacheStatus.preparedVoronoiFrameIndexes ?? [])],
+    kernelFailures: (this._cacheStatus.kernelFailures ?? []).map(failure => ({ ...failure })) }; }
 
   associateFrame(frame, frameIndex) {
     if (!Number.isInteger(frameIndex) || frameIndex < 0) throw validationError('The GPU frame index must be a nonnegative integer.');
@@ -179,6 +181,10 @@ export class GpuAnalysisClient {
     const worker = this.worker;
     this.worker.addEventListener('message', ({ data }) => {
       if (this.worker !== worker) return;
+      if (data.type === 'device-lost' || data.gpuDeviceLost === true) {
+        fail({ message: data.error || 'The WebGPU device was lost.', name: 'GpuDeviceLostError', gpuDeviceLost: true });
+        return;
+      }
       const task = this.pending.get(data.id) ?? this.active.find(active => active.id === data.id) ?? null;
       if (!task) return;
       if (data.progress) {
@@ -225,13 +231,21 @@ export class GpuAnalysisClient {
       }
       if (data.ok) this.settle(task, null, task.type === 'analyze' ? data.result : this.cacheStatus);
       else { const error = new Error(data.error || 'GPU analysis failed.'); error.name = data.name || 'Error';
-        error.analysisErrorKind = data.errorKind; this.settle(task, error); }
+        error.analysisErrorKind = data.errorKind;
+        error.gpuDeviceUnavailable = Boolean(data.gpuDeviceUnavailable);
+        error.gpuAnalysisKind = data.gpuAnalysisKind;
+        this.settle(task, error); }
       this.finishDispatch(task);
     });
     const fail = (event) => {
       if (this.worker !== worker) return;
       const error = new Error(event.message || 'The GPU analysis worker failed.');
+      if (event.name) error.name = event.name;
+      if (event.gpuDeviceLost) error.gpuDeviceLost = true;
       for (const task of this.active) this.settle(task, error);
+      // GPU-off keeps accepted analyses alive for CPU fallback, but it must
+      // not start a replacement device merely to run their queued GPU jobs.
+      if (this.releaseWhenIdle) for (const task of this.queue) this.settle(task, error);
       this.worker?.terminate(); this.worker = null; this.active = [];
       this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
       this.ptmSources.clear(); this.cachedPtmFits.clear();

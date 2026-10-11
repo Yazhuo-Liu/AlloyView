@@ -1,5 +1,5 @@
 import createPtm from './ptm-kernel.mjs';
-import { NeighborSearch, atomRange } from './neighbors.js';
+import { NeighborSearch, NeighborBuffer, atomRange } from './neighbors.js';
 import { STRUCTURE_TYPES } from './cna.js';
 import { cellFaceHeights, invert3 } from '../data/model.js';
 
@@ -39,6 +39,7 @@ export const PTM_NEIGHBOR_LIST_FIELDS = Object.freeze({ neighborCounts: [Uint8Ar
   neighborIndices: [Uint32Array, PTM_TEMPLATE_NEIGHBORS] });
 // One packed kernel record: see alloy_ptm_atom in wasm/ptm.cpp.
 const PTM_RECORD_DOUBLES = 18;
+const PTM_NEIGHBOR_COLUMNS = ['atoms', 'xs', 'ys', 'zs', 'distanceSquared', 'imageA', 'imageB', 'imageC'];
 
 // The generated module targets browsers without static Node imports. Node's
 // scientific tests supply the same binary directly (fetch cannot read file:).
@@ -59,7 +60,7 @@ function getKernel() {
     kernelPromise = (async () => {
       let module;
       module = await createPtm({ ...await kernelOptions(), fetchNeighbors(atom, requested, points, indices) {
-        const { search, cache, preparedNeighbors } = neighborContext;
+        const { preparedNeighbors } = neighborContext;
         if (preparedNeighbors) {
           const localAtom = atom - (preparedNeighbors.startAtom ?? 0);
           const count = Math.min(requested, preparedNeighbors.counts[localAtom]);
@@ -68,21 +69,13 @@ function getKernel() {
           module.HEAPU32.set(preparedNeighbors.indices.subarray(row, row + count), indices >> 2);
           return count;
         }
-        let neighbors = cache.get(atom);
-        if (!neighbors) {
-          neighbors = search.nearest(atom, 18);
-          // Degenerate/coincident environments must not enter the Voronoi sorter.
-          if (neighbors.some((n) => n.distanceSquared < 1e-20)) neighbors = [];
-          if (cache.size >= 512) cache.delete(cache.keys().next().value);
-          cache.set(atom, neighbors);
-        }
+        const neighbors = cachedNeighborColumns(neighborContext, atom);
         const count = Math.min(requested, neighbors.length);
         // Read the heap views per call: Wasm memory growth replaces them.
         const heapF64 = module.HEAPF64, heapU32 = module.HEAPU32, point = points >> 3, index = indices >> 2;
         for (let i = 0; i < count; i += 1) {
-          const n = neighbors[i];
-          heapF64[point + i * 3] = n.x; heapF64[point + i * 3 + 1] = n.y; heapF64[point + i * 3 + 2] = n.z;
-          heapU32[index + i] = n.atom;
+          heapF64[point + i * 3] = neighbors.xs[i]; heapF64[point + i * 3 + 1] = neighbors.ys[i]; heapF64[point + i * 3 + 2] = neighbors.zs[i];
+          heapU32[index + i] = neighbors.atoms[i];
         }
         return count;
       } });
@@ -95,6 +88,35 @@ function getKernel() {
     });
   }
   return kernelPromise;
+}
+
+// Each cached row owns its columns. Diamond/graphene can fetch neighbors of
+// neighbors; a single shared output buffer would corrupt earlier cached rows.
+// Recycle only the evicted row after its values have been copied into Wasm.
+function cachedNeighborColumns(context, atom) {
+  const { search, cache } = context;
+  let neighbors = cache.get(atom);
+  if (neighbors) return neighbors;
+  if (cache.size >= 512) {
+    const first = cache.keys().next().value;
+    neighbors = cache.get(first);
+    cache.delete(first);
+  } else {
+    // One bounded arena avoids allocating eight backing stores for each of
+    // the up to 512 rows. Every cached row still owns a disjoint 32-slot view.
+    const columns = context.columns ??= new NeighborBuffer(Math.min(512, search.count) * 32);
+    const first = cache.size * 32;
+    neighbors = new NeighborBuffer();
+    neighbors.capacity = 32;
+    for (const name of PTM_NEIGHBOR_COLUMNS) neighbors[name] = columns[name].subarray(first, first + 32);
+  }
+  search.nearestInto(atom, PTM_MAX_NEIGHBORS, neighbors);
+  for (let row = 0; row < neighbors.length; row += 1) if (neighbors.distanceSquared[row] < 1e-20) {
+    neighbors.length = 0;
+    break;
+  }
+  cache.set(atom, neighbors);
+  return neighbors;
 }
 
 export function ptmKernelMemoryBytes() { return residentModule?.HEAPU8.byteLength ?? 0; }
@@ -177,13 +199,9 @@ export async function calculatePtm(frame, { rmsdCutoff = .1, flags = 31, prepare
         listNeighbor(index, slot, prepared.indices[row + slot], prepared.vectors[offset], prepared.vectors[offset + 1], prepared.vectors[offset + 2]);
       }
     } else {
-      let neighbors = cache.get(atom);
-      if (!neighbors) {
-        neighbors = search.nearest(atom, PTM_MAX_NEIGHBORS);
-        if (neighbors.some((n) => n.distanceSquared < 1e-20)) neighbors = [];
-      }
+      const neighbors = cachedNeighborColumns(neighborContext, atom);
       length = Math.min(PTM_UNMATCHED_NEIGHBORS, neighbors.length);
-      for (let slot = 0; slot < length; slot += 1) listNeighbor(index, slot, neighbors[slot].atom, neighbors[slot].x, neighbors[slot].y, neighbors[slot].z);
+      for (let slot = 0; slot < length; slot += 1) listNeighbor(index, slot, neighbors.atoms[slot], neighbors.xs[slot], neighbors.ys[slot], neighbors.zs[slot]);
     }
     lists.neighborCounts[index] = length;
   };

@@ -8,6 +8,13 @@ import { calculateBondStatistics, calculateBondStatisticsAtom, createBondStatist
   calculatePreparedBondStatistics, bondStatisticsScratchBytes } from '../src/analysis/bond-statistics.js';
 import { createCell } from '../src/data/model.js';
 import { crystalFrame } from './helpers/crystals.js';
+import { calculateRdf } from '../src/analysis/rdf.js';
+import { calculateLocalShear } from '../src/analysis/local-shear.js';
+import { calculateClusters } from '../src/analysis/clusters.js';
+import { calculateCentrosymmetry, normalizedCentrosymmetry } from '../src/analysis/centrosymmetry.js';
+import { calculatePtm, PTM_FIELDS, PTM_NEIGHBOR_LIST_FIELDS } from '../src/analysis/ptm.js';
+import { calculateVoronoi, calculateVoronoiGeometry, createVoronoiContext } from '../src/analysis/voronoi.js';
+import { expandSelection } from '../src/analysis/expand-selection.js';
 
 const fields = { atom: 'atoms', x: 'xs', y: 'ys', z: 'zs', distanceSquared: 'distanceSquared',
   imageA: 'imageA', imageB: 'imageB', imageC: 'imageC' };
@@ -137,4 +144,106 @@ test('typed bond environments reject oversized coordination before enumerating t
     ? .3 + Math.floor(k / 3) * .00005 : .3), types: new Uint16Array(1026),
   cell: createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10], pbc: [false, false, false] }) };
   assert.throws(() => calculateBondStatistics(frame, { cutoff: 1, endAtom: 1 }), /at most 1024 neighbors/);
+});
+
+test('ordered column views retain stable object ordering and owned rows across nested queries', () => {
+  for (const frame of [crystalFrame('fcc', 1), crystalFrame('hcp', 2), crystalFrame('sc', 1)]) {
+    const search = new NeighborSearch(frame), outer = new NeighborBuffer(), inner = new NeighborBuffer();
+    for (const radius of [3.5, 8]) {
+      const rows = search.within(0, radius), retained = structuredClone(rows);
+      search.collect(0, radius, outer);
+      const expected = rows.map((row, index) => ({ row, index })).filter(({ index }) => index % 3)
+        .sort((a, b) => compare(a.row, b.row)).map(({ index }) => index);
+      const order = outer.sortedIndices(undefined, row => row % 3);
+      assert.deepEqual([...order], expected);
+      search.nearestInto(search.count - 1, 18, inner);
+      inner.sortedIndices();
+      assert.deepEqual([...order], expected, 'the inner query must not overwrite the outer ordering');
+      equalRows(outer, retained);
+      const oldAllocation = outer.order;
+      outer.sortedIndices();
+      assert.equal(outer.order, oldAllocation, 'ordering storage is reused');
+      assert.deepEqual(search.within(0, radius), retained, 'the public object API returns independent owned rows');
+    }
+  }
+});
+
+function columnsOnly(frame) {
+  const search = new NeighborSearch(frame);
+  search.within = search.nearest = () => { throw new Error('A hot CPU consumer requested object neighbors.'); };
+  return { ...frame, neighborSearch: search };
+}
+
+test('RDF, shear, clusters, CSP and selection consume owned columns while preserving exact scientific results', async () => {
+  const pristine = crystalFrame('fcc', 4), fractional = pristine.fractional.slice(3);
+  fractional[17] += .008;
+  const frame = { ...pristine, fractional, ids: pristine.ids.slice(1), types: pristine.types.slice(1) };
+  const typed = columnsOnly(frame);
+  for (const [calculate, options] of [[calculateRdf, { cutoff: 3.2, bins: 31 }],
+    [calculateLocalShear, { cutoff: 3.2, subtractMean: true }],
+    [calculateClusters, { cutoff: 3.2 }], [calculateCentrosymmetry, { mode: 'auto' }]]) {
+    const actual = calculate(typed, options), expected = calculate(frame, options);
+    delete actual.elapsedMs; delete expected.elapsedMs;
+    assert.deepEqual(actual, expected);
+  }
+  const oracle = new NeighborSearch(frame);
+  for (const neighbors of [2, 8, 12, 14, 32]) {
+    const actual = calculateCentrosymmetry(typed, { neighbors });
+    for (let atom = 0; atom < actual.centrosymmetry.length; atom++) {
+      const expected = Math.fround(normalizedCentrosymmetry(oracle.nearest(atom, neighbors)));
+      assert.ok(Object.is(actual.centrosymmetry[atom], expected), `CSP ${neighbors}, atom ${atom}`);
+    }
+  }
+  const selected = new Uint8Array(frame.types.length); selected[0] = 1;
+  for (const options of [{ mode: 'cutoff', cutoff: 3.2, iterations: 3 }, { mode: 'nearest', count: 14, iterations: 3 }]) {
+    assert.deepEqual(await expandSelection(frame, selected, options, { search: typed.neighborSearch }),
+      await expandSelection(frame, selected, options));
+  }
+});
+
+test('PTM multishell FIFO eviction and ordinary/radical Voronoi retain exact fields without object queries', async () => {
+  // More than 512 rows exercises recycling while diamond's native callbacks
+  // request neighbors of neighbors; one shared scratch row would corrupt fits.
+  const frame = crystalFrame('diamond', 5, 3.6), typed = columnsOnly(frame);
+  const ordinary = await calculatePtm(frame, { flags: 255, neighborLists: true });
+  const actual = await calculatePtm(typed, { flags: 255, neighborLists: true });
+  assert.ok(actual.structures.every(value => value === 6));
+  for (const field of [...Object.keys(PTM_FIELDS), ...Object.keys(PTM_NEIGHBOR_LIST_FIELDS), 'neighborSpan']) {
+    assert.deepEqual(actual[field], ordinary[field], field);
+  }
+  const context = createVoronoiContext(frame);
+  context.search.within = context.search.nearest = typed.neighborSearch.within;
+  for (const radii of [null, Float64Array.from({ length: frame.types.length }, (_, atom) => .8 + atom % 3 * .04)]) {
+    const parameters = { radii, endAtom: 9 };
+    const expected = await calculateVoronoi(frame, parameters), result = await calculateVoronoi(frame, { ...parameters, context });
+    for (const field of ['atomicVolume', 'voronoiCoordination', 'voronoiSurfaceArea', 'faceAreas', 'faceNeighbors', 'faceOrders', 'faceOffsets', 'voronoiIndices']) {
+      assert.deepEqual(result[field], expected[field], field);
+    }
+    const mesh = await calculateVoronoiGeometry(frame, { atomIndex: 7, radii, context });
+    const original = await calculateVoronoiGeometry(frame, { atomIndex: 7, radii });
+    for (const field of ['vertices', 'faceOffsets', 'faceVertices', 'faceNeighbors', 'faceBoundary', 'center']) assert.deepEqual(mesh[field], original[field]);
+  }
+  assert.ok(context.neighborColumns.order.byteLength > 0, 'retained ordering scratch stays visible for memory accounting');
+});
+
+test('large Voronoi candidate sets retain native pruning and equal-radius geometry exactly', async () => {
+  let seed = 709;
+  const frame = { fractional: Float64Array.from({ length: 300 * 3 }, () => {
+    seed = Math.imul(seed, 1664525) + 1013904223 >>> 0;
+    return .48 + .04 * seed / 2 ** 32;
+  }), types: new Uint16Array(300), cell: createCell({ vectors: [100, 0, 0, 0, 100, 0, 0, 0, 100] }) };
+  const context = createVoronoiContext(frame), collect = context.search.collect.bind(context.search);
+  let largestCandidates = 0;
+  context.search.collect = (...args) => {
+    const neighbors = collect(...args);
+    largestCandidates = Math.max(largestCandidates, neighbors.length);
+    return neighbors;
+  };
+  context.search.within = context.search.nearest = () => { throw new Error('Object neighbors are unnecessary for the native prefilter.'); };
+  const ordinary = await calculateVoronoi(frame, { context, endAtom: 8 });
+  const radical = await calculateVoronoi(frame, { context, endAtom: 8, radii: new Float64Array(300).fill(.7) });
+  assert.ok(largestCandidates >= 256, 'this fixture must take the native pruning branch');
+  for (const field of ['atomicVolume', 'voronoiCoordination', 'voronoiSurfaceArea', 'faceAreas', 'faceNeighbors', 'faceOrders', 'faceOffsets', 'voronoiIndices']) {
+    assert.deepEqual(radical[field], ordinary[field], field);
+  }
 });

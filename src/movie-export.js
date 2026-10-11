@@ -81,7 +81,7 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
       }
       const camera = plan.cameraAt(index);
       if (camera) host.setCamera(camera);
-      const canvas = host.capture();
+      const canvas = await host.capture();
       try {
         if (archive) {
           const bytes = await host.encodeImage(canvas);

@@ -25,7 +25,7 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
   const $ = id => documentRoot?.getElementById(id) ?? null;
   const store = new TimeSeriesStore();
   let settings = normalizeTimeSeriesState({}), controlsEnabled = false, source = null, job = null, drawn = -1, drawTimer = null;
-  let collected = false;
+  let collected = false, displayedTail = null;
   // A series keeps its color while others are added or removed.
   const slots = new Map();
 
@@ -156,13 +156,23 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
     const stride = read('time-series-stride', settings.stride);
     if (![first, last, stride].every(Number.isInteger) || first < 1 || last < first || stride < 1) throw new Error('Choose a valid frame range and integer step.');
     settings.firstFrame = first - 1; settings.stride = stride;
-    settings.lastFrame = last >= count ? null : last - 1;
+    // A displayed tail may still show the preceding partial index's maximum
+    // when the host finishes indexing without a separate control refresh.
+    // Keep that open-ended choice; explicit shorter ranges stay fixed.
+    const openTail = settings.lastFrame === null && last === displayedTail;
+    settings.lastFrame = last >= count || openTail ? null : last - 1;
   }
 
   function writeRange() {
     const count = Math.max(1, getFrameCount());
     // A value being typed is not replaced while frames load.
-    const write = (id, value) => { const input = $(id); if (input && documentRoot.activeElement !== input) input.value = value; };
+    const write = (id, value) => {
+      const input = $(id);
+      if (input && documentRoot.activeElement !== input) {
+        input.value = value;
+        if (id === 'time-series-last') displayedTail = Number(value);
+      }
+    };
     write('time-series-first', String(settings.firstFrame + 1));
     write('time-series-last', String(Math.min(count, (settings.lastFrame ?? count - 1) + 1)));
     write('time-series-stride', String(settings.stride));
@@ -192,7 +202,6 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
   /** Read file-derived values in the background. */
   async function collect({ automatic = false } = {}) {
     if (!getFrame() || job) return false;
-    try { readRange(); } catch (error) { if (!automatic) notify(error.message); return false; }
     if (!automatic) onEdit();
     collected = true; tools?.setToolEnabled('timeSeries', settings.attributes.length > 0);
     const task = startJob('collect'), started = now();
@@ -201,6 +210,7 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
     try {
       await ensureIndexed({ signal: task.controller.signal });
       if (!current()) return false;
+      readRange(); writeRange();
       syncSource();
       const names = settings.attributes.filter(name => kindOf(name) === 'file');
       if (names.some(name => name.startsWith('Strain.'))) await attributes.ensureReference({ signal: task.controller.signal });
@@ -231,7 +241,6 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
   /** Display each frame that lacks an analysis value, then return. */
   async function visit() {
     if (!getFrame() || job) return false;
-    try { readRange(); } catch (error) { notify(error.message); return false; }
     onEdit(); stopPlayback();
     collected = true; tools?.setToolEnabled('timeSeries', settings.attributes.length > 0);
     const task = startJob('visit'), original = getFrameIndex();
@@ -240,6 +249,7 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
     try {
       await ensureIndexed({ signal: task.controller.signal });
       if (!current()) return false;
+      readRange(); writeRange();
       const names = settings.attributes.filter(name => kindOf(name) === 'analysis');
       const pending = frames().filter(index => names.some(name => !store.has(name, index)));
       for (const index of pending) {
@@ -321,7 +331,7 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
 
   return Object.freeze({
     collect, visit, cancel, exportCsv,
-    refresh: () => { renderAttributeList(); writeRange(); updateControls(); },
+    refresh: () => { renderAttributeList(); writeRange(); updateControls(); draw({ force: true }); },
     setEnabled(value) { controlsEnabled = Boolean(value); syncSource(); writeRange(); renderAttributeList(); updateControls(); draw({ force: true }); },
     /** Drop collected values and stop work, keeping the settings. */
     reset() { if (job) { job.controller.abort(); finishJob(job); } store.clear(); collected = false; tools?.setToolEnabled('timeSeries', false); draw({ force: true }); },

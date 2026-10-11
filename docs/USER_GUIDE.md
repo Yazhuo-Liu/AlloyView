@@ -524,9 +524,10 @@ priority. Invalid configurations leave the current settings intact.
 ## Run locally
 
 Development requires Node.js 20 or newer. End users only need a WebGL 2 capable
-browser.
+browser. Install the pinned build dependencies before running tests or building.
 
 ```bash
+npm ci
 npm run dev
 ```
 
@@ -1518,6 +1519,21 @@ for adapter options and timing interpretation.
   coordination analysis
   is recomputed automatically on a newly displayed frame. Display unwrapping
   never changes the coordinates used for analysis.
+
+Coordination searches closest images within a bounded workload, including for
+large cutoffs; overflowing distances, unsafe integer image coefficients and
+extreme thin-cell searches fail explicitly. Its CPU scheduling uses 16,384
+atoms per Worker and bounded 8,192-atom chunks under the existing core/memory
+budget. The pools and Wasm heaps remain prewarmed and reusable. Private
+displacement and cached ideal strain transfer only owned rows; isolated hosts
+continue sharing their full input tables.
+
+Production bundles the page and each Worker to reduce startup requests while
+preserving source-relative native assets. A failed GPU kernel warm-up leaves
+the other kernels available, and actual device loss recovers on the next
+request. Surface display geometry and mesh-file formatting run in a persistent
+Worker shared by both views; image exports wait for the corresponding mesh.
+See [performance](features/performance.md) for verified effects and limits.
 
 More detail is in [docs/FORMATS.md](FORMATS.md) and actual executed results
 are in [docs/VALIDATION.md](VALIDATION.md).

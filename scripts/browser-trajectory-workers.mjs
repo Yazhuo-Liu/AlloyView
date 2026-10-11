@@ -7,7 +7,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { withWebGpuBrowser } from './webgpu-browser.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-assert.ok(existsSync(resolve(root, 'dist/index.html')), 'Run npm run build first.');
+const source = process.argv.includes('--source');
+if (!source) assert.ok(existsSync(resolve(root, 'dist/index.html')), 'Run npm run build first.');
 const directory = await mkdtemp(resolve(tmpdir(), 'alloyview-trajectory-workers-'));
 const file = resolve(directory, 'trajectory.xyz');
 const header = 'Lattice="10 0 0 2 10 0 1 1 10" Properties=species:S:1:pos:R:3:id:I:1 pbc="T T T"';
@@ -20,7 +21,7 @@ try {
       Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', { configurable: true, get: () => 5 });
     ` });
     const origin = await evaluate('location.origin');
-    await call('Page.navigate', { url: `${origin}/AlloyView/dist/index.html` });
+    await call('Page.navigate', { url: `${origin}/AlloyView/${source ? '' : 'dist/'}index.html` });
     async function waitFor(expression, label, timeoutMs = 60_000) {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
@@ -180,5 +181,5 @@ try {
     await waitFor('!trajectoryChecks.client.worker && !trajectoryChecks.client.replicationWorker', 'Closing the source releases parser/replication Workers');
     return { ...beforeClose, direct, playbackPausedAt: paused };
   }, { requireGpu: false });
-  console.log(JSON.stringify({ result: 'passed', ...result }, null, 2));
+  console.log(JSON.stringify({ result: 'passed', tree:source?'source':'production', ...result }, null, 2));
 } finally { await rm(directory, { recursive: true, force: true }); }

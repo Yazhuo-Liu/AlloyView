@@ -74,8 +74,12 @@ self.addEventListener('message', async ({ data }) => {
   if (data.kind === 'voronoiRelease') { voronoiResident = null; voronoiRadii = null; return; }
   if (data.kind === 'dxaRelease') { await releaseDxaCpuStageData(data.dxaResidentKey); return; }
   const { id, fractional, cell, kind, types, residentFrameKey, cpuFrameKey, cpuAnalysisKey, cpuNeighborIndex,
-    cpuCoordinationIndex, ...parameters } = data;
+    cpuCoordinationIndex, cpuOwnedRange, ...parameters } = data;
   try {
+    if (cpuOwnedRange && (cpuFrameKey !== undefined || fractional !== undefined || !parameters.sourceRange
+        || kind !== 'displacement' && !(kind === 'strain' && parameters.ptmInput))) {
+      throw new Error('The owned CPU source rows do not match this analysis.');
+    }
     let frame = { fractional, cell, types }, frameUploaded = false, cpuIndexBuilt = false, cpuIndexReused = false, inputPreparations = 0;
     if (cpuFrameKey !== undefined) {
       cpuResident = cpuResidents.get(cpuFrameKey);

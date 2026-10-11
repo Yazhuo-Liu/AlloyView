@@ -41,6 +41,10 @@ export class GpuUnavailableError extends Error {
   constructor(message) { super(message); this.name = 'GpuUnavailableError'; }
 }
 
+export class GpuDeviceLostError extends GpuUnavailableError {
+  constructor(message) { super(message); this.name = 'GpuDeviceLostError'; this.gpuDeviceLost = true; }
+}
+
 // Analyses whose kernels compute with double-float pairs (dsAdd/dsMultiply or
 // ddAdd/ddMul). They need the error terms that exact-pairs.js verifies on each
 // device; every other kernel tolerates single-precision differences.
@@ -70,12 +74,16 @@ export async function readGpuBuffers(runtime, requests, options = {}) {
 
 /** One device and queue shared by all GPU analyses in the dedicated worker. */
 export class GpuRuntime {
-  constructor({ environment = globalThis } = {}) {
+  constructor({ environment = globalThis, onDeviceLost = () => {} } = {}) {
     this.environment = environment;
+    this.onDeviceLost = onDeviceLost;
+    this.closed = false;
+    this.uncapturedError = null;
     this.device = null;
     this.adapterInfo = null;
     this.pipelines = new Map();
     this.pipelineCompilations = new Map();
+    this.kernelWarmupFailures = new Map();
     this.frames = new Map();
     this.indexes = new Map();
     this.configContexts = new WeakMap();
@@ -113,11 +121,39 @@ export class GpuRuntime {
 
   async initialize(signal) {
     checkSignal(signal);
-    if (this.lost) throw new GpuUnavailableError(this.lost);
+    this.checkDeviceErrors();
     if (!this.initialization) this.initialization = this.initializeDevice();
-    await waitForGpu(this.initialization, signal);
+    try { await waitForGpu(this.initialization, signal); }
+    catch (error) {
+      if (error.name === 'AbortError') throw error;
+      if (this.lost) throw new GpuDeviceLostError(this.lost);
+      if (!error.gpuValidationError && !error.gpuOutOfMemory) error.gpuDeviceUnavailable = true;
+      // A failed acquisition can be tried once by a later request. Validation
+      // during initialization keeps the device but refuses this operation.
+      this.initialization = this.device && !this.closed ? Promise.resolve() : null;
+      throw error;
+    }
     checkSignal(signal);
+    this.checkDeviceErrors();
     return this.device;
+  }
+
+  checkDeviceErrors() {
+    if (this.closed) throw new GpuUnavailableError('The WebGPU device was released.');
+    if (this.lost) throw new GpuDeviceLostError(this.lost);
+    if (this.uncapturedError) {
+      const error = this.uncapturedError;
+      this.uncapturedError = null;
+      throw error;
+    }
+  }
+
+  deviceLost(device, message) {
+    if (this.device !== device || this.closed || this.lost) return;
+    this.lost = message;
+    // Notify the owner even while idle: it must expire resident-input ACKs and
+    // warmup shortcuts before the next request can reuse a dead device.
+    this.onDeviceLost(message);
   }
 
   async initializeDevice() {
@@ -125,22 +161,38 @@ export class GpuRuntime {
     if (!gpu) throw new GpuUnavailableError('WebGPU is unavailable in this browser or context.');
     const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) throw new GpuUnavailableError('No WebGPU adapter is available.');
+    this.checkDeviceErrors();
     this.adapterInfo = adapter.info ? { vendor: adapter.info.vendor, architecture: adapter.info.architecture,
       device: adapter.info.device, description: adapter.info.description, isFallbackAdapter: Boolean(adapter.info.isFallbackAdapter) } : {};
     this.softwareAdapter = isSoftwareGpuAdapter(this.adapterInfo);
     if (!this.explicitBudget) this.budgetBytes = conservativeGpuBudget(adapter.limits, this.adapterInfo);
-    this.device = await adapter.requestDevice({ requiredLimits: {
+    const device = await adapter.requestDevice({ requiredLimits: {
       maxStorageBuffersPerShaderStage: Math.min(10, adapter.limits.maxStorageBuffersPerShaderStage),
       maxStorageBufferBindingSize: Math.min(MAX_INPUT_BYTES, adapter.limits.maxStorageBufferBindingSize),
       maxBufferSize: Math.min(MAX_INPUT_BYTES, adapter.limits.maxBufferSize),
     } });
-    this.device.lost.then((info) => { this.lost = `WebGPU device was lost${info.message ? `: ${info.message}` : '.'}`; });
-    // Uncaptured errors must not become silent incorrect output. Every run
-    // also uses error scopes, which provide the actual operation's rejection.
-    this.device.addEventListener('uncapturederror', (event) => { this.lost = event.error?.message || 'A WebGPU device error occurred.'; });
+    if (this.closed) { device.destroy(); throw new GpuUnavailableError('The WebGPU device was released.'); }
+    this.device = device;
+    device.lost.then(info => this.deviceLost(device, `WebGPU device was lost${info.message ? `: ${info.message}` : '.'}`));
+    // Validation belongs to one operation; it does not invalidate the device.
+    // An internal driver error is treated like loss and recovered by the owner.
+    device.addEventListener('uncapturederror', event => {
+      if (this.device !== device || this.closed || this.lost) return;
+      event.preventDefault?.();
+      const names = [event.error?.name, event.error?.constructor?.name];
+      const validation = names.includes('GPUValidationError'), outOfMemory = names.includes('GPUOutOfMemoryError');
+      const message = event.error?.message || 'A WebGPU device error occurred.';
+      if (validation || outOfMemory) {
+        const error = new GpuUnavailableError(message);
+        error.gpuValidationError = validation;
+        error.gpuOutOfMemory = outOfMemory;
+        this.uncapturedError = error;
+      } else this.deviceLost(device, message);
+    });
     // One tiny dispatch decides whether double-float kernels may use this device.
     const { verifyExactPairs } = await import('./exact-pairs.js');
-    this.exactPairs = await verifyExactPairs(this.device);
+    this.exactPairs = await verifyExactPairs(device);
+    this.checkDeviceErrors();
   }
 
   /** Double-float kernels refuse a device that failed the self-test, so the
@@ -164,10 +216,12 @@ export class GpuRuntime {
         // driver to finish compilation before releasing the worker queue.
         checkSignal(signal);
         // Each clip kernel is compiled only for the tessellation that uses it.
-        await waitForGpu(Promise.all([CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, voronoi.VORONOI_INITIALIZE_SHADER,
-          ...(kinds.includes('voronoi') ? [voronoi.VORONOI_CLIP_SHADER] : []),
-          ...(kinds.includes('voronoiRadical') ? [voronoi.VORONOI_RADICAL_CLIP_SHADER] : []),
-        ].filter(usable).map(source => this.compilePipeline(source))), signal);
+        const sources = [[CLEAR_NEIGHBORS_SHADER, 'neighbors'], [INDEX_NEIGHBORS_SHADER, 'neighbors'],
+          [voronoi.VORONOI_INITIALIZE_SHADER, 'voronoi'],
+          ...(kinds.includes('voronoi') ? [[voronoi.VORONOI_CLIP_SHADER, 'voronoi']] : []),
+          ...(kinds.includes('voronoiRadical') ? [[voronoi.VORONOI_RADICAL_CLIP_SHADER, 'voronoiRadical']] : [])];
+        await waitForGpu(Promise.all(sources.filter(([source]) => usable(source)).map(([source, kind]) =>
+          this.compilePipeline(source).catch(error => { this.recordWarmupFailure(source, kind, error); throw error; }))), signal);
       }
       checkSignal(signal);
       return this.cacheStatus();
@@ -183,20 +237,36 @@ export class GpuRuntime {
         ]);
         // The kernels automatic selection runs. Voronoi goes to the GPU only
         // by explicit request, so its pipelines belong to targeted warmup.
-        const sources = [CLEAR_NEIGHBORS_SHADER, INDEX_NEIGHBORS_SHADER, COORDINATION_SHADER, RDF_SHADER,
-          shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
-          shear.SHEAR_CORRECTION_SHADER, shear.SHEAR_REDUCTION_SHADER, shear.SHEAR_FINALIZE_SHADER,
-          bonds.BONDS_COUNT_SHADER, bonds.BONDS_WRITE_SHADER, strain.ATOMIC_STRAIN_SHADER,
-          cna.CNA_FIXED_SHADER, cna.CNA_ADAPTIVE_SHADER,
-          reference.REFERENCE_STRAIN_CLEAR_SHADER, reference.REFERENCE_STRAIN_SHADER,
-          csp.CSP_SHADER, displacement.DISPLACEMENT_SHADER, ptm.PTM_NEIGHBORS_SHADER, bondStatistics.BOND_STATISTICS_SHADER];
-        for (const source of sources.filter(usable)) await this.compilePipeline(source);
+        const sources = [[CLEAR_NEIGHBORS_SHADER, 'neighbors'], [INDEX_NEIGHBORS_SHADER, 'neighbors'],
+          [COORDINATION_SHADER, 'coordination'], [RDF_SHADER, 'rdf'],
+          ...[shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
+            shear.SHEAR_CORRECTION_SHADER, shear.SHEAR_REDUCTION_SHADER, shear.SHEAR_FINALIZE_SHADER].map(source => [source, 'localShear']),
+          [bonds.BONDS_COUNT_SHADER, 'bonds'], [bonds.BONDS_WRITE_SHADER, 'bonds'], [strain.ATOMIC_STRAIN_SHADER, 'strain'],
+          [cna.CNA_FIXED_SHADER, 'cna'], [cna.CNA_ADAPTIVE_SHADER, 'cna'],
+          [reference.REFERENCE_STRAIN_CLEAR_SHADER, 'referenceStrain'], [reference.REFERENCE_STRAIN_SHADER, 'referenceStrain'],
+          [csp.CSP_SHADER, 'centrosymmetry'], [displacement.DISPLACEMENT_SHADER, 'displacement'],
+          [ptm.PTM_NEIGHBORS_SHADER, 'ptmNeighbors'], [bondStatistics.BOND_STATISTICS_SHADER, 'bondStatistics']];
+        for (const [source, kind] of sources.filter(([source]) => usable(source))) {
+          try { await this.compilePipeline(source); }
+          catch (error) {
+            this.recordWarmupFailure(source, kind, error);
+            if (this.lost || this.closed || error.gpuDeviceUnavailable) throw error;
+            // One shader rejection leaves unrelated kernels usable. A later
+            // foreground calculation may retry this pipeline, or use CPU.
+          }
+        }
       })();
       this.warmupPromise.catch(() => { this.warmupPromise = null; });
     }
     await waitForGpu(this.warmupPromise, signal);
     checkSignal(signal);
     return this.cacheStatus();
+  }
+
+  recordWarmupFailure(source, kind, error) {
+    if (error.name === 'AbortError' || error.gpuDeviceLost || this.lost || this.closed) return;
+    error.gpuAnalysisKind ??= kind;
+    this.kernelWarmupFailures.set(source, { kind, phase: 'warming', error: error.message || String(error) });
   }
 
   configureCache({ frameCount = this.frameCount, currentIndex = this.currentIndex, budgetBytes } = {}) {
@@ -218,8 +288,8 @@ export class GpuRuntime {
     const workspaceBytes = Math.max(gpuWorkspaceBytes(this.frameBytes), this.voronoiWorkspace?.bytes ?? 0);
     const capacity = trajectoryCapacity({ frameCount: this.frameCount, frameBytes: this.frameBytes,
       budgetBytes: this.budgetBytes, workspaceBytes });
-    const cachedFrameIndexes = [...new Set([...this.frames.values()].map(frame => frame.frameIndex).filter(Number.isInteger))].sort((a, b) => a - b);
-    const preparedVoronoi = [...this.voronoiPreparations].filter(([frameKey, prepared]) => this.frames.has(frameKey)
+    const cachedFrameIndexes = this.lost ? [] : [...new Set([...this.frames.values()].map(frame => frame.frameIndex).filter(Number.isInteger))].sort((a, b) => a - b);
+    const preparedVoronoi = this.lost ? [] : [...this.voronoiPreparations].filter(([frameKey, prepared]) => this.frames.has(frameKey)
       && this.indexes.has(`${frameKey}:${prepared.radius}`) && this.voronoiWorkspace?.capacity >= prepared.capacity
       && prepared.sources.every(source => this.pipelines.has(source)));
     const preparedVoronoiFrameIndexes = [...new Set(preparedVoronoi.map(([frameKey]) => this.frames.get(frameKey).frameIndex)
@@ -229,13 +299,14 @@ export class GpuRuntime {
       bufferLimitBytes: this.device ? Math.min(this.device.limits.maxBufferSize, this.device.limits.maxStorageBufferBindingSize) : 0,
       workspaceBytes, frameBudgetBytes: Math.max(0, this.budgetBytes - workspaceBytes), capacity,
       frameCount: this.frameCount, currentIndex: this.currentIndex,
-      cachedFrameIds: [...this.frames.keys()], cachedFrameIndexes,
+      cachedFrameIds: this.lost ? [] : [...this.frames.keys()], cachedFrameIndexes,
       fullTrajectory: this.frameCount > 0 && this.frameBytes > 0 && capacity >= this.frameCount,
       fullyCached: this.frameCount > 0 && cachedFrameIndexes.length === this.frameCount
         && cachedFrameIndexes[0] === 0 && cachedFrameIndexes.at(-1) === this.frameCount - 1,
       memoryLimited: this.memoryLimited, exactPairs: this.exactPairs, neighborIndexCount: this.indexes.size, neighborIndexBuildCount: this.neighborIndexBuildCount,
       voronoiWorkspaceAtoms: this.voronoiWorkspace?.capacity ?? 0, voronoiKernelWarmupCount: this.voronoiKernelWarmupCount,
-      preparedVoronoiFrameIds: preparedVoronoi.map(([frameKey]) => frameKey), preparedVoronoiFrameIndexes };
+      preparedVoronoiFrameIds: preparedVoronoi.map(([frameKey]) => frameKey), preparedVoronoiFrameIndexes,
+      kernelFailures: [...this.kernelWarmupFailures.values()].map(failure => ({ ...failure })) };
   }
 
   frameKey(frame) {
@@ -595,18 +666,31 @@ export class GpuRuntime {
   }
 
   async withErrors(callback) {
+    this.checkDeviceErrors();
     // Lightweight tests can use a buffer-only fake device. Real WebGPU always
     // supplies scopes, so allocation failures are captured before residency.
-    if (!this.device?.pushErrorScope) return callback();
+    if (!this.device?.pushErrorScope) {
+      const result = await callback();
+      this.checkDeviceErrors();
+      return result;
+    }
     this.device.pushErrorScope('out-of-memory');
     this.device.pushErrorScope('validation');
     let result, failure;
     try { result = await callback(); } catch (error) { failure = error; }
-    const validation = await this.device.popErrorScope(), memory = await this.device.popErrorScope();
+    // Pop both immediately, even when device loss rejects one scope. Leaving
+    // an old scope on the device could hide a later task's validation failure.
+    const [validationResult, memoryResult] = await Promise.allSettled([this.device.popErrorScope(), this.device.popErrorScope()]);
+    const validation = validationResult.status === 'fulfilled' ? validationResult.value : null;
+    const memory = memoryResult.status === 'fulfilled' ? memoryResult.value : null;
     if (failure) {
+      if (failure.name !== 'AbortError' && this.lost) throw new GpuDeviceLostError(this.lost);
       if (memory && failure.name !== 'AbortError') failure.gpuOutOfMemory = true;
       throw failure;
     }
+    this.checkDeviceErrors();
+    if (validationResult.status === 'rejected') throw validationResult.reason;
+    if (memoryResult.status === 'rejected') throw memoryResult.reason;
     if (validation || memory) {
       // An allocation OOM can also make a later write validate against an
       // invalid buffer. Retain the original allocation cause for recovery.
@@ -745,9 +829,11 @@ export class GpuRuntime {
       if (validation) throw new GpuUnavailableError(validation.message);
       if (failure) throw failure;
       const pipeline = compiled.value;
-      if (this.device !== device || this.lost) throw new GpuUnavailableError(this.lost || 'The WebGPU device was released during compilation.');
+      this.checkDeviceErrors();
+      if (this.device !== device) throw new GpuUnavailableError('The WebGPU device was released during compilation.');
       if (this.pipelines.size > 32) this.pipelines.delete(this.pipelines.keys().next().value);
       this.pipelines.set(source, pipeline);
+      this.kernelWarmupFailures.delete(source);
       return pipeline;
     })();
     this.pipelineCompilations.set(source, compilation);
@@ -966,7 +1052,8 @@ export class GpuRuntime {
     this.indexes.clear();
   }
   close() {
-    this.releaseFrames(); this.pipelines.clear(); this.pipelineCompilations.clear();
+    this.closed = true;
+    this.releaseFrames(); this.pipelines.clear(); this.pipelineCompilations.clear(); this.kernelWarmupFailures.clear();
     this.device?.destroy(); this.device = null; this.warmupPromise = null;
   }
 }

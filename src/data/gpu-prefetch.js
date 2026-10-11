@@ -109,11 +109,14 @@ export class GpuPrefetchScheduler {
     this.running = true;
     const generation = this.generation;
     const source = this.source;
+    const kernelFailures = [];
     const current = () => this.enabled && generation === this.generation && !controller.signal.aborted;
     const report = (phase, cacheStatus) => {
-      if (current()) this.onStatus({ phase, cacheStatus });
+      const failures = [...new Map([...(cacheStatus?.kernelFailures ?? []), ...kernelFailures]
+        .map(failure => [JSON.stringify([failure.kind, failure.phase, failure.error]), failure])).values()];
+      if (current()) this.onStatus({ phase, cacheStatus, ...(failures.length ? { kernelFailures: failures } : {}) });
     };
-    this.pending = this.run(source, controller.signal, current, report).catch(error => {
+    this.pending = this.run(source, controller.signal, current, report, kernelFailures).catch(error => {
       if (current() && error.name !== 'AbortError') this.onStatus({ phase: 'unavailable', error: error.message });
     }).finally(() => {
       if (this.controller === controller) {
@@ -124,19 +127,30 @@ export class GpuPrefetchScheduler {
     return this.pending;
   }
 
-  async run(source, signal, current, report) {
+  async run(source, signal, current, report, kernelFailures) {
     report('warming');
     await this.clearBarrier;
     if (!current()) return;
     // Prepare what the router will run. A requested Voronoi kernel comes
     // before every unrelated pipeline; an empty list initializes the device
     // alone. Source changes can interrupt the later general warmup.
-    const kinds = this.analysisKinds, voronoi = kinds.includes('voronoi');
-    let status = await this.retryPreparation(() => this.pool.warmupGpu({ signal, analysisKinds: kinds }), current);
+    const kinds = this.analysisKinds;
+    const kernelFailure = (error, phase) => {
+      if (error.name === 'AbortError' || error.name === 'GpuDeviceLostError' || error.gpuDeviceLost || error.gpuDeviceUnavailable) throw error;
+      kernelFailures.push({ kind: error.gpuAnalysisKind ?? 'voronoi', phase, error: error.message || String(error) });
+    };
+    let status, voronoi = kinds.includes('voronoi');
+    try { status = await this.retryPreparation(() => this.pool.warmupGpu({ signal, analysisKinds: kinds }), current); }
+    catch (error) {
+      if (!kinds.length) throw error;
+      kernelFailure(error, 'warming');
+      voronoi = false;
+      status = this.pool.gpuCacheStatus;
+    }
     if (!current()) return;
     if (!source || !source.frameCount || !source.frame) {
       // With nothing targeted, the idle device compiles the general pipelines.
-      if (!kinds.length) status = await this.retryPreparation(() => this.pool.warmupGpu({ signal }), current) ?? status;
+      if (!kinds.length || kernelFailures.length) status = await this.retryPreparation(() => this.pool.warmupGpu({ signal }), current) ?? status;
       if (current()) report('ready', status);
       return;
     }
@@ -148,12 +162,22 @@ export class GpuPrefetchScheduler {
         { frameIndex: source.currentIndex, signal, ...(analysisKinds ? { analysisKinds } : {}) }), current);
       if (current()) report('preparing', status);
     };
+    const prepareVoronoi = async () => {
+      try { await prepareCurrent(['voronoi']); }
+      catch (error) {
+        kernelFailure(error, 'preparing');
+        status = this.pool.gpuCacheStatus ?? status;
+        // Geometry/precision limits can reject Voronoi after its upload. Keep
+        // that useful input, or upload coordinates alone if it failed earlier.
+        if (current() && !status?.cachedFrameIndexes?.includes(source.currentIndex)) await prepareCurrent();
+      }
+    };
     // Uploaded coordinates alone do not establish a resident neighbour index
     // or Voronoi workspace. Prepare those even for a prefetched trajectory
     // frame, unless the runtime confirms they still survive cache eviction.
     const needsVoronoi = voronoi && !status?.preparedVoronoiFrameIndexes?.includes(source.currentIndex);
     const settled = needsVoronoi && source.playing ? this.settlePlayback() : null;
-    if (needsVoronoi && !settled) await prepareCurrent(['voronoi']);
+    if (needsVoronoi && !settled) await prepareVoronoi();
     else if (!status?.cachedFrameIndexes?.includes(source.currentIndex)) await prepareCurrent();
     if (!current()) return;
     const targets = gpuPrefetchOrder(source.currentIndex, source.frameCount, status?.capacity);
@@ -179,13 +203,14 @@ export class GpuPrefetchScheduler {
       // The next playback frame restarts this run before the wait ends.
       await settled;
       if (!current()) return;
-      await prepareCurrent(['voronoi']);
+      await prepareVoronoi();
       if (!current()) return;
       report('ready', status);
     }
     // Remaining analyses also benefit from reuse. This job stays background
     // priority and yields its queue immediately to foreground calculations.
-    await this.retryPreparation(() => this.pool.warmupGpu({ signal }), current);
+    status = await this.retryPreparation(() => this.pool.warmupGpu({ signal }), current) ?? status;
+    if (current()) report('ready', status);
   }
 
   async retryPreparation(prepare, current) {

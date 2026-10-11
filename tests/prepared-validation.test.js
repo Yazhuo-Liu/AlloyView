@@ -93,10 +93,12 @@ for (const sharedMemory of [false, true]) test(`resident Worker chunks prepare i
       { kind: 'centrosymmetry', mode: 'auto', structureInput }, { kind: 'rdf', cutoff: 3, bins: 17 },
       { kind: 'displacement', ...await prepareDisplacements(frame, frame) }]) {
       const result = await pool.analyzeCPU(frame, parameters);
-      assert.ok(result.chunkCount > result.workerCount);
+      const ownedDisplacement = parameters.kind === 'displacement' && !sharedMemory;
+      assert.ok(parameters.kind === 'displacement' ? result.chunkCount >= result.workerCount : result.chunkCount > result.workerCount);
       // A single dynamic runner can rotate through previously warmed slots.
       // Preparation is bounded by those resident slots, never chunk count.
-      assert.ok(result.inputPreparations > 0 && result.inputPreparations <= pool.slots.size, parameters.kind);
+      if (ownedDisplacement) assert.equal(result.inputPreparations, 0, 'owned row messages do not retain full-frame displacement contexts');
+      else assert.ok(result.inputPreparations > 0 && result.inputPreparations <= pool.slots.size, parameters.kind);
       const direct = parameters.kind === 'bondStatistics' ? calculateBondStatistics(frame, parameters)
         : parameters.kind === 'centrosymmetry' ? calculateCentrosymmetry(frame, parameters)
           : parameters.kind === 'rdf' ? calculateRdf(frame, parameters) : calculatePreparedDisplacements(frame, parameters);

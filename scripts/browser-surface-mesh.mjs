@@ -125,7 +125,7 @@ async function exercise({ isolated }) {
     assert.equal(uncapped.blue, 0);
     assert.ok(uncapped.green > 300, JSON.stringify(uncapped));
     assert.ok(uncapped.red > 300, `the open cut shows the inside of the solid (${JSON.stringify(uncapped)})`);
-    assert.equal(await evaluate('meshChecks.geometry("surface").openEdges > 0'), true);
+    assert.equal(await evaluate('(async () => (await meshChecks.geometry("surface")).openEdges > 0)()'), true);
     await change('surface-mesh-caps', true, true);
     await change('surface-mesh-visible', false, true);
     assert.deepEqual(await evaluate('meshChecks.pixels()'), { red: 0, green: 0, blue: 0, other: 0 });
@@ -415,7 +415,8 @@ async function initializeChecks() {
       surfaceArea: current.surfaceArea, filledVolume: current.filledVolume, voidVolume: current.voidVolume, inputCount: current.inputCount,
       smoothingLevel: current.smoothingLevel, counts: [current.filledRegionCount, current.emptyRegionCount, current.voidRegionCount, current.surfaceComponentCount] };
   };
-  checks.geometry = id => {
+  checks.geometry = async id => {
+    await checks.renderer.whenSurfaceMeshesReady();
     const display = checks.shown(id).display, capTriangles = display.capIndexCount / 3;
     // Cap triangles that are not on the two a faces, for the replication count.
     const offA = display.capRanges.filter(range => range.axis !== 0).reduce((sum, range) => sum + range.count / 3, 0);
@@ -423,8 +424,9 @@ async function initializeChecks() {
       surfaceArea: displayMeshArea(display, 0, display.surfaceIndexCount), capArea: displayMeshArea(display, display.surfaceIndexCount, display.capIndexCount),
       triangles: display.indices.length / 3, capTriangles, capTrianglesOffA: offA };
   };
-  checks.drawn = () => {
+  checks.drawn = async () => {
     const renderer = checks.renderer;
+    await renderer.whenSurfaceMeshesReady();
     renderer.render();
     const bounds = renderer.getDisplayBounds();
     return { triangles: renderer.surfaceMeshLayer.renderedTriangleCount, bounds: [bounds.minimum, bounds.maximum] };
@@ -462,7 +464,7 @@ async function initializeChecks() {
           canvas = document.createElement('canvas');
           canvas.width = bitmap.width; canvas.height = bitmap.height; canvas.getContext('2d').drawImage(bitmap, 0, 0); bitmap.close();
         } finally { URL.createObjectURL = createUrl; HTMLAnchorElement.prototype.click = click; }
-      } else canvas = renderer.captureImage({ includeBackground: true });
+      } else canvas = await renderer.captureImage({ includeBackground: true });
       const counts = classify(canvas);
       if (png || sample) {
         // The image center lies on the front cap.
@@ -482,11 +484,11 @@ async function initializeChecks() {
     try { return await checks.pixels(); } finally { checks.renderer.setCrystalDragShift(null); }
   };
   // An offscreen render at the canvas size must look like the view.
-  checks.screenMatch = () => {
+  checks.screenMatch = async () => {
     const renderer = checks.renderer; renderer.render();
     const pixels = canvas => canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
     const resolution = { mode: 'custom', width: renderer.canvas.width, height: renderer.canvas.height };
-    const screen = pixels(renderer.captureImage({ includeAxes: true })), offscreen = pixels(renderer.captureImage({ includeAxes: true, resolution }));
+    const screen = pixels(await renderer.captureImage({ includeAxes: true })), offscreen = pixels(await renderer.captureImage({ includeAxes: true, resolution }));
     let changed = 0, maxDifference = 0;
     for (let pixel = 0; pixel < screen.length / 4; pixel += 1) {
       let difference = 0;

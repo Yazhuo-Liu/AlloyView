@@ -39,6 +39,12 @@ not change. Frames whose values are already known, including the displayed
 frame and frames seen earlier, are not read again. Progress is shown and the
 reading can be cancelled at any time.
 
+When a large trajectory initially opens before indexing finishes, frame
+limits refresh as the index grows. **Read file values** waits for the completed
+index before choosing its final range. Range, stride, axis and panel settings
+are saved even when automatic collection is off. Index completion also resumes
+eligible trajectory-cache prefetch in the background.
+
 Stepping to another frame does not cancel this collection. Readers of the
 same frame share its in-flight parse, but each reader can cancel independently;
 only departure of the last reader cancels the underlying work. Changing the
