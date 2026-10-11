@@ -10,7 +10,7 @@ import { createReferenceMappingAsync, REFERENCE_STRAIN_FIELDS } from './analysis
 import { wrappedSourceRepetitions } from './data/model.js';
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
 import { measureAtoms } from './measurements.js';
-import { createImageArchive, downloadBlob } from './export-archive.js';
+import { ImageArchiveBuilder, downloadBlob } from './export-archive.js';
 import { resolveExportSize } from './render/export-resolution.js';
 import { COLOR_TILE_CATEGORIES, colorTileLabels, MAX_COLOR_TILES, prepareDisplacements } from './analysis/displacement.js';
 import { registerVectorProperties, vectorPropertyNames } from './analysis/vector-properties.js';
@@ -945,7 +945,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     // completed index produces an await boundary before the first image.
     const task = { cancelled: false, restore: true, source: getSourceVersion(), controller: new AbortController() };
     batch = task;
-    const original = getFrameIndex(), camera = cameraSnapshot(renderer), entries = []; let total = 0;
+    const original = getFrameIndex(), camera = cameraSnapshot(renderer), archive = new ImageArchiveBuilder(); let total = 0;
     let completed = false, failure = null;
     stopPlayback(); $('cancel-frame-series').disabled = false; $('export-frame-series').disabled = true;
     $('export-series-status').textContent = 'Preparing trajectory index…';
@@ -959,22 +959,23 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       if (count > 500) throw new Error('Export at most 500 frames in one archive.');
       for (let index = first; index <= last; index += step) {
         if (task.cancelled || task.source !== getSourceVersion()) return;
-        $('export-series-status').textContent = `Rendering frame ${index + 1} · ${entries.length} / ${count} exported`;
+        $('export-series-status').textContent = `Rendering frame ${index + 1} · ${archive.count} / ${count} exported`;
         if (!await showFrame(index)) throw new Error(`Could not load frame ${index + 1}.`);
         if (task.cancelled || task.source !== getSourceVersion()) return;
         const image = renderer.captureImage(getExportOptions()), blob = await canvasBlob(image), bytes = new Uint8Array(await blob.arrayBuffer());
         total += bytes.length;
         if (total > 256 * 1024 ** 2) throw new Error('Image export exceeds 256 MiB. Select fewer frames.');
-        entries.push({ name: `${getFileStem()}-frame-${String(index + 1).padStart(6, '0')}.png`, bytes });
+        archive.add({ name: `${getFileStem()}-frame-${String(index + 1).padStart(6, '0')}.png`, bytes }, { signal: task.controller.signal });
         await new Promise(resolve => setTimeout(resolve, 0));
       }
-      if (!task.cancelled && task.source === getSourceVersion()) { downloadBlob(createImageArchive(entries), `${getFileStem()}-frames.zip`); completed = true; }
+      if (!task.cancelled && task.source === getSourceVersion()) { downloadBlob(archive.finish({ signal: task.controller.signal }), `${getFileStem()}-frames.zip`); completed = true; }
     } catch (error) {
       failure = error;
       if (!task.cancelled) throw error;
     } finally {
       if (task.restore && task.source === getSourceVersion()) { await showFrame(original); restoreCamera(renderer, camera); }
-      $('export-series-status').textContent = completed ? `Exported ${entries.length} frames in one ZIP archive.` : failure && !task.cancelled ? `Export failed: ${failure.message}` : 'Export cancelled.';
+      $('export-series-status').textContent = completed ? `Exported ${archive.count} frames in one ZIP archive.` : failure && !task.cancelled ? `Export failed: ${failure.message}` : 'Export cancelled.';
+      archive.clear();
       if (batch === task) batch = null;
       $('cancel-frame-series').disabled = true; $('export-frame-series').disabled = !getFrame();
     }

@@ -1,4 +1,4 @@
-import { NeighborSearch, atomRange } from './neighbors.js';
+import { NeighborSearch, NeighborBuffer, atomRange } from './neighbors.js';
 
 export const STRUCTURE_TYPES = Object.freeze([
   { id: 0, label: 'Other', description: 'Unrecognized or defective', color: [242, 242, 242] },
@@ -17,15 +17,15 @@ export function calculateCna(frame, { mode = 'adaptive', cutoff = 3, ...range } 
   if (mode === 'fixed' && (!Number.isFinite(cutoff) || cutoff <= 0)) throw new Error('CNA cutoff must be positive and finite.');
   const search = (frame.neighborSearch ?? new NeighborSearch(frame));
   const { startAtom, endAtom } = atomRange(search.count, range);
-  const structures = new Uint8Array(endAtom - startAtom);
+  const structures = new Uint8Array(endAtom - startAtom), scratch = new NeighborBuffer(), bonds = new Uint16Array(14);
   for (let atom = startAtom; atom < endAtom; atom += 1) {
     if (mode === 'fixed') {
       // More than 14 neighbors cannot match any supported CNA signature.
-      const neighbors = search.within(atom, cutoff, 15);
-      structures[atom - startAtom] = classify(neighbors, cutoff);
+      const neighbors = search.collect(atom, cutoff, scratch, 15);
+      structures[atom - startAtom] = classifyNeighborBuffer(neighbors, cutoff, neighbors.length, bonds);
       continue;
     }
-    structures[atom - startAtom] = classifyAdaptiveEnvironment(search.nearest(atom, 14));
+    structures[atom - startAtom] = classifyAdaptiveNeighborBuffer(search.nearestInto(atom, 14, scratch), bonds);
   }
   return { structures, startAtom, endAtom, elapsedMs: performance.now() - startedAt };
 }
@@ -68,7 +68,53 @@ export function classify(neighbors, radius) {
       }
     }
   }
-  const signatures = new Map();
+  return classifyBondGraph(bonds, count);
+}
+
+function popcount(value) {
+  let count = 0;
+  while (value) { value &= value - 1; count += 1; }
+  return count;
+}
+
+export function classifyAdaptiveNeighborBuffer(neighbors, bonds = new Uint16Array(14)) {
+  if (neighbors.length < 12) return 0;
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += Math.sqrt(neighbors.distanceSquared[i]);
+  const closePackedRadius = sum / 12 * (1 + Math.SQRT2) / 2;
+  const closePackedType = classifyNeighborBuffer(neighbors, closePackedRadius, 12, bonds);
+  if (closePackedType) return closePackedType;
+  if (neighbors.length !== 14) return 0;
+  sum = 0;
+  for (let i = 0; i < 14; i++) sum += Math.sqrt(neighbors.distanceSquared[i]) * (i < 8 ? 2 / Math.sqrt(3) : 1);
+  const bccRadius = sum / 14 * (1 + Math.SQRT2) / 2;
+  return classifyNeighborBuffer(neighbors, bccRadius, 14, bonds);
+}
+
+export function classifyNeighborBuffer(neighbors, radius, count = neighbors.length, bonds = new Uint16Array(14)) {
+  if ((count !== 12 && count !== 14) || radius <= 0) return 0;
+  const cutoffSquared = radius * radius;
+  bonds.fill(0);
+  for (let i = 0; i < count; i += 1) {
+    for (let j = i + 1; j < count; j += 1) {
+      const dx = neighbors.xs[i] - neighbors.xs[j];
+      const dy = neighbors.ys[i] - neighbors.ys[j];
+      const dz = neighbors.zs[i] - neighbors.zs[j];
+      // Compare local displacement vectors; wrapping these bonds again would
+      // incorrectly join different periodic images in small cells.
+      if (dx * dx + dy * dy + dz * dz <= cutoffSquared) {
+        bonds[i] |= 1 << j;
+        bonds[j] |= 1 << i;
+      }
+    }
+  }
+  return classifyBondGraph(bonds, count);
+}
+
+// Only these five integer triples can match a supported lattice. Count them
+// directly while retaining the graph traversal and connected-component order.
+function classifyBondGraph(bonds, count) {
+  let s421 = 0, s422 = 0, s555 = 0, s666 = 0, s444 = 0;
   for (let i = 0; i < count; i += 1) {
     const common = bonds[i];
     const commonCount = popcount(common);
@@ -94,19 +140,16 @@ export function classify(neighbors, radius) {
       bondCount += componentBonds;
       longestChain = Math.max(longestChain, componentBonds);
     }
-    const signature = `${commonCount}${bondCount}${longestChain}`;
-    signatures.set(signature, (signatures.get(signature) ?? 0) + 1);
+    if (commonCount === 4 && bondCount === 2 && longestChain === 1) s421++;
+    else if (commonCount === 4 && bondCount === 2 && longestChain === 2) s422++;
+    else if (commonCount === 5 && bondCount === 5 && longestChain === 5) s555++;
+    else if (commonCount === 6 && bondCount === 6 && longestChain === 6) s666++;
+    else if (commonCount === 4 && bondCount === 4 && longestChain === 4) s444++;
   }
   if (count === 12) {
-    if (signatures.get('421') === 12) return 1;
-    if (signatures.get('421') === 6 && signatures.get('422') === 6) return 2;
-    if (signatures.get('555') === 12) return 4;
-  } else if (signatures.get('666') === 8 && signatures.get('444') === 6) return 3;
+    if (s421 === 12) return 1;
+    if (s421 === 6 && s422 === 6) return 2;
+    if (s555 === 12) return 4;
+  } else if (s666 === 8 && s444 === 6) return 3;
   return 0;
-}
-
-function popcount(value) {
-  let count = 0;
-  while (value) { value &= value - 1; count += 1; }
-  return count;
 }

@@ -52,6 +52,35 @@ function bruteExpand(frame, selected, { mode, cutoff, count, iterations }) {
 
 const seedMask = count => Uint8Array.from({ length: count }, (_, index) => index % 37 === 0 ? 1 : 0);
 
+test('computed dependency inspection reads frozen parsed references and current evaluation status', () => {
+  const frame = randomFrame({ count: 4 });
+  const controls = initializeExpressionControls({ getFrame: () => frame, documentRoot: null });
+  controls.setState({ properties: [
+    { name: 'scaled', expression: 'energy * 2 + Position.X', unit: 'eV' },
+    { name: 'delayed', expression: 'scaled + csp', unit: '' },
+  ] });
+  assert.equal(controls.getPropertyStatus('missing'), null);
+  assert.equal(controls.getPropertyReferences('missing'), null);
+  assert.equal(controls.getPropertyStatus('SCALED').state, 'waiting');
+  const references = controls.getPropertyReferences('delayed');
+  assert.deepEqual(references.map(reference => reference.name).sort(), ['csp', 'scaled']);
+  assert.equal(controls.getPropertyReferences('DELAYED'), references, 'repeated inspection reuses parsed metadata');
+  assert.ok(Object.isFrozen(references) && references.every(Object.isFrozen));
+  assert.throws(() => { references[0].name = 'energy'; }, TypeError);
+  controls.sync(frame);
+  assert.equal(controls.getPropertyStatus('scaled').state, 'ready');
+  const waiting = controls.getPropertyStatus('delayed');
+  assert.equal(waiting.state, 'waiting'); assert.match(waiting.message, /csp/);
+  assert.ok(Object.isFrozen(waiting));
+  frame.properties.push({ name: 'csp', data: new Float64Array(4).fill(3) });
+  controls.sync(frame);
+  assert.equal(controls.getPropertyStatus('delayed').state, 'ready');
+  assert.equal(controls.getPropertyReferences('delayed'), references);
+  controls.reset();
+  assert.equal(controls.getPropertyStatus('delayed'), null);
+  assert.equal(controls.getPropertyReferences('delayed'), null);
+});
+
 test('selection groups support intersection without reordering members', () => {
   let state = addSelectionGroup(normalizeSelectionGroups(), { atomIds: [5, 'a', 3, 9] });
   state = setSelectionGroupMembers(state, state.selectedGroupId, [9, 5, 77], { operation: 'intersect' });

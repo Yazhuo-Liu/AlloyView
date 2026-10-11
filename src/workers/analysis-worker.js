@@ -4,7 +4,7 @@ import { calculateCentrosymmetry, prepareCentrosymmetryContext, calculatePrepare
 import { calculatePtm, warmupPtm, ptmKernelMemoryBytes, releasePtmFrame } from '../analysis/ptm.js';
 import { calculateAtomicStrain } from '../analysis/atomic-strain.js';
 import { calculateBonds } from '../analysis/bonds.js';
-import { calculateBondStatistics, prepareBondStatisticsContext, calculatePreparedBondStatistics } from '../analysis/bond-statistics.js';
+import { calculateBondStatistics, prepareBondStatisticsContext, calculatePreparedBondStatistics, bondStatisticsScratchBytes } from '../analysis/bond-statistics.js';
 import { calculateVoronoi, calculateVoronoiGeometry, calculateVoronoiGeometryBatch, mergeVoronoiPartials,
   warmupVoronoi, prepareVoronoiFrame, voronoiKernelMemoryBytes } from '../analysis/voronoi.js';
 import { calculateRdf, prepareRdfContext, calculatePreparedRdf } from '../analysis/rdf.js';
@@ -22,7 +22,8 @@ const atomProgressDue = createAtomProgressThrottle();
 import { fatalAnalysisError } from '../analysis/errors.js';
 
 const CPU_INPUT_FIELDS = ['structureInput', 'referenceFractional', 'referenceMapping', 'metricInput',
-  'currentPositions', 'referencePositions', 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex', 'clusterSelection', 'rdfNormalization'];
+  'currentPositions', 'referencePositions', 'referenceCurrentFractional', 'referenceInverseMapping',
+  'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex', 'clusterSelection', 'rdfNormalization'];
 let cpuResident, cpuAnalysis;
 const cpuResidents = new Map(), cpuAnalyses = new Map();
 
@@ -46,6 +47,12 @@ function inputBuffers(value) {
 
 function residentInputMemory() {
   const buffers = inputBuffers([cpuResidents, cpuAnalyses, voronoiResident, voronoiRadii]);
+  // The trusted bond-statistics context deliberately hides mutable scratch.
+  // Count its retained private buffers without exposing those arrays to callers.
+  let scratchBytes = 0;
+  for (const analysis of cpuAnalyses.values()) for (const context of analysis.preparedCalculations?.values() ?? []) {
+    scratchBytes += bondStatisticsScratchBytes(context);
+  }
   const sharedBytes = value => inputBuffers(value).filter(buffer => !(buffer instanceof ArrayBuffer)).reduce((sum, buffer) => sum + buffer.byteLength, 0);
   const privateBytes = value => inputBuffers(value).filter(buffer => buffer instanceof ArrayBuffer).reduce((sum, buffer) => sum + buffer.byteLength, 0);
   const cpuGroups = [...[...cpuResidents].map(([key, value]) => [`frame:${key}`, sharedBytes(value)]),
@@ -53,11 +60,11 @@ function residentInputMemory() {
   const otherGroups = [...(voronoiResident ? [[`frame:${voronoiResident.cpuFrameKey ?? `voronoi-${voronoiResident.key}`}`, sharedBytes(voronoiResident)]] : []),
     ...(voronoiRadii ? [[`radii:${voronoiRadii.key}`, sharedBytes(voronoiRadii)]] : [])];
   const totalBytes = value => inputBuffers(value).reduce((sum, buffer) => sum + buffer.byteLength, 0);
-  return { residentInputBytes: buffers.reduce((sum, buffer) => sum + buffer.byteLength, 0),
+  return { residentInputBytes: scratchBytes + buffers.reduce((sum, buffer) => sum + buffer.byteLength, 0),
     residentSharedInputBytes: sharedBytes([cpuResidents, cpuAnalyses, voronoiResident, voronoiRadii]),
     cpuFramePrivateBytes: [...cpuResidents].map(([key, value]) => [key, privateBytes(value)]),
     residentSharedGroups: [...cpuGroups, ...otherGroups],
-    cpuResidentInputBytes: totalBytes([cpuResidents, cpuAnalyses]), cpuResidentSharedInputBytes: sharedBytes([cpuResidents, cpuAnalyses]),
+    cpuResidentInputBytes: scratchBytes + totalBytes([cpuResidents, cpuAnalyses]), cpuResidentSharedInputBytes: sharedBytes([cpuResidents, cpuAnalyses]),
     otherResidentInputBytes: totalBytes([voronoiResident, voronoiRadii]), otherResidentSharedInputBytes: sharedBytes([voronoiResident, voronoiRadii]),
     cpuResidentSharedGroups: cpuGroups, otherResidentSharedGroups: otherGroups };
 }
@@ -136,8 +143,14 @@ self.addEventListener('message', async ({ data }) => {
         frame.adaptiveCnaClassifications ??= new Uint8Array(frame.fractional.length / 3).fill(255);
       }
       if (kind === 'referenceStrain' && !cpuAnalysis.referenceContext) {
-        const referenceSearch = parameters.referenceNeighborIndex ? NeighborSearch.fromIndex(parameters.referenceNeighborIndex) : undefined;
-        cpuAnalysis.referenceContext = prepareReferenceStrainContext(frame, { ...parameters, referenceSearch });
+        const referenceSearch = parameters.referenceNeighborIndex ? NeighborSearch.fromIndex(parameters.referenceNeighborIndex)
+          : new NeighborSearch({ fractional: parameters.referenceFractional, cell: parameters.referenceCell }, {
+            reuseCoordinates: parameters.referenceFractional instanceof Float64Array
+              && parameters.referenceFractional.buffer instanceof ArrayBuffer,
+          });
+        cpuAnalysis.referenceContext = prepareReferenceStrainContext(frame, { ...parameters, referenceSearch,
+          normalizedCurrentFractional: parameters.referenceCurrentFractional,
+          inverseMappingInput: parameters.referenceInverseMapping });
       }
       if (kind === 'referenceStrain') parameters.preparedContext = cpuAnalysis.referenceContext;
       // The reference site index is built once per Worker and calculation.

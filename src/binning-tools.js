@@ -35,11 +35,13 @@ export function binningQuantityOptions(frame) {
  * is kept until the source, settings or selection change. */
 export function initializeBinningTools({ tools, getFrame, getFrameAt = async () => null, getFrameCount = () => 1,
   ensureIndexed = async () => {}, getSourceVersion = () => 0, getFrameIndex = () => 0, getSelectionGroups = () => [],
+  getPropertyDependency = () => null,
   onEdit = () => {}, onResultsChange = () => {}, notify = () => {}, client = new SpatialBinningClient(),
   renderChart = renderBinningChart, now = () => performance.now() } = {}) {
   const $ = id => globalThis.document?.getElementById(id) ?? null;
   const job = { enabled: false, failed: false, controller: null, serial: 0, result: null, exported: null, signature: null,
-    average: null, averaging: null, settings: { ...BINNING_DEFAULTS, axes: [...BINNING_DEFAULTS.axes], bins: [...BINNING_DEFAULTS.bins] } };
+    average: null, averaging: null, dependency: null,
+    settings: { ...BINNING_DEFAULTS, axes: [...BINNING_DEFAULTS.axes], bins: [...BINNING_DEFAULTS.bins] } };
   const resolver = new ColorQuantityResolver();
   const memberSets = new WeakMap(), memberSerials = new WeakMap();
   let controlsEnabled = false, generation = 0, nextMemberSerial = 1, warmed = false;
@@ -101,7 +103,8 @@ export function initializeBinningTools({ tools, getFrame, getFrameAt = async () 
       ...binningQuantityOptions(getFrame()).map(({ value, label }) => [value, label])];
     // A saved quantity stays selected while a frame or analysis provides it.
     if (chosen && !entries.some(([value]) => value === chosen)) {
-      entries.push([chosen, `${chosen.replace(/^property:/, '').replace(/^builtin:position:/, 'Position ')} (waiting for data…)`]);
+      const dependency = propertyDependency(getFrame(), chosen);
+      entries.push([chosen, `${chosen.replace(/^property:/, '').replace(/^builtin:position:/, 'Position ')} (${dependency.state === 'pending' ? 'waiting for data…' : 'unavailable'})`]);
     }
     // Rebuilding an unchanged list would close it while the user browses it.
     const signature = JSON.stringify(entries);
@@ -172,6 +175,17 @@ export function initializeBinningTools({ tools, getFrame, getFrameAt = async () 
     return property && property.data?.length === frame.ids.length ? property : null;
   }
 
+  /** A missing quantity can wait only while its producer is actually active.
+   * Imports and frame changes can still make an unavailable quantity appear;
+   * refresh() retries it when those inputs change. No background job or timer
+   * is kept for a quantity which nothing is going to produce. */
+  function propertyDependency(frame, key) {
+    const dependency = getPropertyDependency(key, frame);
+    if (dependency?.state === 'pending') return { state: 'pending', name: dependency.name ?? key.replace(/^property:/, '') };
+    return { state: 'unavailable', name: dependency?.name ?? key.replace(/^property:/, ''),
+      message: dependency?.message ?? `${key.replace(/^property:/, '')} is unavailable in this frame. No active calculation will produce it. Calculate it, import it, or choose another quantity.` };
+  }
+
   function describeQuantity(settings, property) {
     if (settings.quantity === 'count') return { valueLabel: 'Atom count', unit: '', csvName: 'count', zero: true };
     if (settings.quantity === 'density') return { valueLabel: 'Number density', unit: 'Å⁻³', csvName: 'number_density', zero: true };
@@ -190,6 +204,7 @@ export function initializeBinningTools({ tools, getFrame, getFrameAt = async () 
     job.serial++;
     job.controller?.abort();
     job.controller = null;
+    job.dependency = null;
     if ($('binning-progress') && !job.averaging) $('binning-progress').hidden = true;
     updateControls();
   }
@@ -286,7 +301,8 @@ export function initializeBinningTools({ tools, getFrame, getFrameAt = async () 
   }
 
   function signatureOf(frame, prepared, property) {
-    return [frame, property?.data ?? null, prepared.key, String(getSourceVersion())];
+    const dependency = prepared.settings.quantity === 'property' && !property ? propertyDependency(frame, prepared.settings.property) : null;
+    return [frame, property?.data ?? null, prepared.key, String(getSourceVersion()), dependency?.state ?? null, dependency?.message ?? null];
   }
 
   function sameSignature(first, second) {
@@ -312,7 +328,10 @@ export function initializeBinningTools({ tools, getFrame, getFrameAt = async () 
     const signature = signatureOf(frame, prepared, property);
     if (prepared.settings.quantity === 'property' && !property) {
       abort(); clearView(); job.signature = signature;
-      state('Waiting', `Waiting for ${prepared.settings.property.replace(/^property:/, '')} in this frame. Calculate it, or choose another quantity.`);
+      job.dependency = propertyDependency(frame, prepared.settings.property);
+      job.failed = job.dependency.state === 'unavailable';
+      state(job.failed ? 'Unavailable' : 'Waiting', job.failed ? job.dependency.message
+        : `Waiting for ${job.dependency.name} to provide ${prepared.settings.property.replace(/^property:/, '')} in this frame.`);
       onResultsChange({ clearSettings: false });
       return false;
     }
@@ -508,5 +527,7 @@ export function initializeBinningTools({ tools, getFrame, getFrameAt = async () 
     /** The current result for the statistics CSV exporter. */
     exportResults: () => job.exported && (job.exported.averaged || job.exported.frameIndex === getFrameIndex()) ? { binning: job.exported } : {},
     failed: () => job.failed ? ['binning'] : [],
+    pendingKinds: () => job.enabled && !job.failed && (job.controller || job.averaging || job.dependency?.state === 'pending') ? ['binning'] : [],
+    getAutomationError: () => job.enabled && job.dependency?.state === 'unavailable' ? `Binning: ${job.dependency.message}` : null,
   });
 }

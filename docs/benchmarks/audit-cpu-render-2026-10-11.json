@@ -1,0 +1,540 @@
+{
+  "date": "2026-10-11",
+  "baseline": "3fafad10210d6814fb13565707be51f5026daba5",
+  "environment": "Node 24.19.0 cloud container; browser correctness uses Chromium SwiftShader; no physical GPU speed claim.",
+  "scope": "Interleaved kernel-only microbenchmarks and numerical/topological comparisons. Excludes full Worker preparation/transport/UI time; original audit reference-machine gains are separate.",
+  "reports": {
+    "reference-strain": {
+      "note": "Production CPU kernel vs captured pre-change reference kernel; shared container microbenchmarks exclude prepared-context creation and full Worker/UI stages.",
+      "fixtures": 31,
+      "ranges": 37,
+      "fieldsCompared": 34428,
+      "ObjectIs": true,
+      "timings": [
+        {
+          "kind": "fcc",
+          "atoms": 2048,
+          "runs": 7,
+          "baselineMedianMs": 42.45933100000002,
+          "scalarMedianMs": 9.99337800000012,
+          "raw": [
+            [
+              42.22037999999998,
+              44.58997700000009,
+              42.90388600000006,
+              42.45933100000002,
+              42.397230000000036,
+              42.38754599999993,
+              42.800783999999794
+            ],
+            [
+              9.738213000000087,
+              9.99337800000012,
+              10.111491999999998,
+              10.13072000000011,
+              9.596532999999908,
+              10.248053000000027,
+              9.643052000000125
+            ]
+          ]
+        },
+        {
+          "kind": "bcc",
+          "atoms": 1024,
+          "runs": 7,
+          "baselineMedianMs": 25.648909000000003,
+          "scalarMedianMs": 5.515370999999959,
+          "raw": [
+            [
+              22.556448000000046,
+              24.708265999999867,
+              25.648909000000003,
+              24.57575399999996,
+              29.67233299999998,
+              39.102937999999995,
+              39.518342000000075
+            ],
+            [
+              5.022682000000032,
+              5.387830000000122,
+              5.1704100000001745,
+              5.515370999999959,
+              6.065514000000121,
+              8.345778999999993,
+              8.515590000000202
+            ]
+          ]
+        }
+      ]
+    },
+    "cna": {
+      "fixtures": 29,
+      "cases": 145,
+      "compared": 14360,
+      "ObjectIs": true,
+      "timings": [
+        {
+          "name": "fcc",
+          "atoms": 2048,
+          "centers": 512,
+          "runs": 7,
+          "baselineMedianMs": 2.7423780000000306,
+          "typedMedianMs": 1.9180580000000873,
+          "raw": [
+            [
+              13.094007000000033,
+              2.6065269999999146,
+              2.793403000000012,
+              2.7423780000000306,
+              2.591184999999996,
+              2.5614799999999605,
+              3.134147999999982
+            ],
+            [
+              1.9180580000000873,
+              2.4542320000000473,
+              1.9135319999999183,
+              1.9551040000000057,
+              1.9129609999999957,
+              1.95317,
+              1.9096660000000156
+            ]
+          ]
+        },
+        {
+          "name": "bcc",
+          "atoms": 1024,
+          "centers": 512,
+          "runs": 7,
+          "baselineMedianMs": 2.397668000000067,
+          "typedMedianMs": 1.7081570000000283,
+          "raw": [
+            [
+              2.570754000000079,
+              2.3660110000000714,
+              2.397668000000067,
+              2.368084999999951,
+              2.4420639999999594,
+              2.3720200000000204,
+              2.776818999999932
+            ],
+            [
+              1.6857949999999846,
+              1.7473859999998922,
+              1.691434000000072,
+              1.7505800000000136,
+              1.7047619999999597,
+              1.7766989999998941,
+              1.7081570000000283
+            ]
+          ]
+        },
+        {
+          "name": "Fe-loop",
+          "atoms": 60229,
+          "centers": 512,
+          "runs": 7,
+          "baselineMedianMs": 2.762126999999964,
+          "typedMedianMs": 2.0248569999999972,
+          "raw": [
+            [
+              2.8367880000000696,
+              2.723540000000071,
+              2.772291999999993,
+              2.6973319999999603,
+              3.0431029999999737,
+              2.7474359999999933,
+              2.762126999999964
+            ],
+            [
+              1.9738509999999678,
+              2.0580850000000055,
+              1.983015000000023,
+              2.085136000000034,
+              1.976835000000051,
+              2.104995000000031,
+              2.0248569999999972
+            ]
+          ]
+        }
+      ]
+    },
+    "bonds-and-statistics": {
+      "fixtures": 30,
+      "cases": 180,
+      "compared": 869572,
+      "ObjectIs": true,
+      "unchangedMomentOrder": true,
+      "timings": [
+        {
+          "name": "FCC",
+          "operation": "bonds",
+          "atoms": 2048,
+          "centers": 512,
+          "baselineMedianMs": 1.4664000000000215,
+          "typedMedianMs": 0.9899950000000217,
+          "raw": [
+            [
+              1.4664000000000215,
+              2.2086980000000267,
+              1.4834960000000592,
+              1.4111779999999499,
+              1.4787579999999707,
+              1.441402999999923,
+              1.4647180000000617
+            ],
+            [
+              2.0841540000000123,
+              1.1372129999999743,
+              0.9463910000000624,
+              0.9532010000000355,
+              1.0393280000000686,
+              0.9899950000000217,
+              0.9315679999999702
+            ]
+          ]
+        },
+        {
+          "name": "FCC",
+          "operation": "statistics",
+          "atoms": 2048,
+          "centers": 512,
+          "baselineMedianMs": 2.248066999999992,
+          "typedMedianMs": 1.9196509999999307,
+          "raw": [
+            [
+              2.2627689999999347,
+              2.248066999999992,
+              2.3346349999999347,
+              2.1677989999999454,
+              2.189029000000005,
+              2.1611580000000004,
+              2.4800199999999677
+            ],
+            [
+              2.041700999999989,
+              2.0367330000000265,
+              1.8775190000000066,
+              1.9282739999999876,
+              1.908023000000071,
+              1.9196509999999307,
+              1.90649099999996
+            ]
+          ]
+        },
+        {
+          "name": "BCC",
+          "operation": "bonds",
+          "atoms": 1024,
+          "centers": 512,
+          "baselineMedianMs": 1.5831929999999375,
+          "typedMedianMs": 1.0702440000000024,
+          "raw": [
+            [
+              1.5561529999999948,
+              1.5074809999999843,
+              1.5671189999999342,
+              1.5831929999999375,
+              1.6418100000000777,
+              1.5908239999999978,
+              1.9534709999999222
+            ],
+            [
+              0.9688539999999648,
+              1.0702440000000024,
+              0.9598399999999856,
+              1.0941699999999628,
+              1.0248660000000882,
+              1.154258000000027,
+              1.0808600000000297
+            ]
+          ]
+        },
+        {
+          "name": "BCC",
+          "operation": "statistics",
+          "atoms": 1024,
+          "centers": 512,
+          "baselineMedianMs": 2.8242099999999937,
+          "typedMedianMs": 2.5166650000001027,
+          "raw": [
+            [
+              2.822316999999998,
+              2.7582109999999602,
+              2.8242099999999937,
+              2.809338000000025,
+              3.09676300000001,
+              2.9336009999999533,
+              2.8243999999999687
+            ],
+            [
+              2.5144709999999577,
+              2.545427000000018,
+              2.462955000000079,
+              2.5191490000001977,
+              2.467581999999993,
+              2.5166650000001027,
+              2.6288700000000063
+            ]
+          ]
+        },
+        {
+          "name": "Fe-loop",
+          "operation": "bonds",
+          "atoms": 60229,
+          "centers": 512,
+          "baselineMedianMs": 1.7521930000000339,
+          "typedMedianMs": 1.1181249999999636,
+          "raw": [
+            [
+              1.8090170000000398,
+              1.7521930000000339,
+              1.8027779999999893,
+              1.7175919999999678,
+              2.210751000000073,
+              1.714146000000028,
+              1.7038219999999455
+            ],
+            [
+              1.1650840000002063,
+              1.1709630000000288,
+              1.105195999999978,
+              1.1870969999999943,
+              1.1181249999999636,
+              1.0795180000000073,
+              0.9839460000000599
+            ]
+          ]
+        },
+        {
+          "name": "Fe-loop",
+          "operation": "statistics",
+          "atoms": 60229,
+          "centers": 512,
+          "baselineMedianMs": 2.9806170000001657,
+          "typedMedianMs": 2.5814989999998943,
+          "raw": [
+            [
+              2.9816229999998995,
+              2.899840999999924,
+              2.985053999999991,
+              3.238055999999915,
+              2.9416899999998805,
+              2.9806170000001657,
+              2.9672069999999167
+            ],
+            [
+              2.559526999999889,
+              2.6734460000000126,
+              2.5784889999999905,
+              2.6726340000000164,
+              2.5814989999998943,
+              2.6853430000001026,
+              2.570504000000028
+            ]
+          ]
+        }
+      ]
+    },
+    "light-kernels": {
+      "node": "v24.19.0",
+      "comparedExactNumbers": 234338,
+      "timing": [
+        {
+          "name": "displacement/orthogonal/120k",
+          "baselineMs": 44.339147000000025,
+          "prototypeMs": 9.32352400000002,
+          "raw": {
+            "baseline": [
+              45.41677099999998,
+              48.17873700000001,
+              44.20942500000001,
+              44.339147000000025,
+              43.68264599999998,
+              44.081185000000005,
+              69.8791819999999,
+              45.193741000000045,
+              44.02912900000001
+            ],
+            "prototype": [
+              9.32352400000002,
+              9.082817000000034,
+              10.395028999999965,
+              9.056258000000014,
+              9.00315999999998,
+              9.198207999999909,
+              13.000903999999991,
+              10.190976999999975,
+              9.776213999999982
+            ]
+          }
+        },
+        {
+          "name": "displacement/triclinic/120k",
+          "baselineMs": 146.9925470000003,
+          "prototypeMs": 43.72287499999993,
+          "raw": {
+            "baseline": [
+              146.56276900000012,
+              146.285128,
+              144.92986299999984,
+              154.4137840000003,
+              146.20331799999985,
+              162.91572399999995,
+              146.9925470000003,
+              149.32348600000023,
+              149.58200899999974
+            ],
+            "prototype": [
+              43.11380400000007,
+              43.72287499999993,
+              42.75944900000013,
+              60.03413200000023,
+              47.20104200000014,
+              87.05324000000019,
+              45.1863800000001,
+              43.04497300000003,
+              42.98342099999991
+            ]
+          }
+        },
+        {
+          "name": "displacement/open/120k",
+          "baselineMs": 32.97811900000033,
+          "prototypeMs": 6.51638099999991,
+          "raw": {
+            "baseline": [
+              43.05923299999995,
+              39.54447399999981,
+              33.64481599999999,
+              35.057816,
+              31.639517999999953,
+              32.60010999999986,
+              31.634901999999784,
+              32.97811900000033,
+              32.68455499999982
+            ],
+            "prototype": [
+              10.032391999999618,
+              12.114382000000205,
+              6.51638099999991,
+              7.137951000000157,
+              6.105973000000176,
+              6.230457999999999,
+              6.092353000000003,
+              6.183367999999973,
+              6.649817999999868
+            ]
+          }
+        },
+        {
+          "name": "cached ideal strain/120k",
+          "baselineMs": 270.70574399999987,
+          "prototypeMs": 13.5032369999999,
+          "raw": {
+            "baseline": [
+              271.3126110000003,
+              252.15606200000002,
+              302.0267309999999,
+              250.3874339999993,
+              307.8677740000003,
+              255.04640800000016,
+              305.8948040000005,
+              246.2501630000006,
+              270.70574399999987
+            ],
+            "prototype": [
+              13.5032369999999,
+              17.222850000000108,
+              12.836741000000075,
+              15.769379999999728,
+              13.12353499999972,
+              17.53641400000015,
+              27.083559000000605,
+              10.946383999999853,
+              12.673109000000295
+            ]
+          }
+        }
+      ]
+    },
+    "renderer-bounds": {
+      "timings": {
+        "atoms": 1000000,
+        "baselineBoundsMedianMs": 25.551648999999998,
+        "productionBoundsMedianMs": 3.6754969999999503,
+        "productionCachedMedianMs": 0.0024240000000190776,
+        "baselineRadiiMedianMs": 11.894295000000056,
+        "productionRadiiMedianMs": 3.8698650000000043
+      },
+      "reads": {
+        "atoms": 2,
+        "baseline": 24,
+        "production": 6,
+        "cached": 0
+      },
+      "parity": true
+    },
+    "surface-caps": {
+      "id": "B8",
+      "status": "completed",
+      "files": [
+        "src/render/surface-mesh-geometry.js",
+        "tests/surface-mesh-geometry.test.js"
+      ],
+      "mechanisms": [
+        "Separate touching display surface sheets by local triangle fans, joining only source edges with exactly two incident triangles.",
+        "Use lazy limiting-cut coordinates for topology when cuts lie exactly on atomic vertices, retaining exact physical output coordinates.",
+        "Refine collapsed collinear display triangles by placing their midpoint in an unambiguous adjacent nonzero-area triangle. Preserve source/cap group boundaries and cap normals."
+      ],
+      "source_scientific_arrays_changed": false,
+      "worker_warmup_or_resource_lifecycle_changed": false,
+      "verification": {
+        "surface_related_tests": 27,
+        "surface_related_pass": 27,
+        "shared_edge_point_skew_left_hand_cases": 243,
+        "real_fcc_void_origins": 36,
+        "native_and_stl_open_edges": 0,
+        "baseline_comparisons": 150,
+        "baseline_bit_exact": 139,
+        "baseline_collapsed_cap_refinements": 11,
+        "baseline_geometric_invariance": true,
+        "diff_check_pass": true,
+        "pixel_screenshot": false
+      },
+      "numerical_examples": {
+        "shared_edge_boxes_volume_old_shifted": 72.975,
+        "shared_edge_boxes_volume_corrected": 72,
+        "fcc_7_void_aligned_cut_old_display_volume": 13856,
+        "fcc_7_void_aligned_cut_corrected_display_volume": 20874.666666666668,
+        "fcc_7_void_native_volume": 20874.666666861747
+      },
+      "performance_node_container_median_30_runs_ms": [
+        {
+          "vertices": 32,
+          "faces": 60,
+          "before": 0.127,
+          "after": 0.456
+        },
+        {
+          "vertices": 144,
+          "faces": 284,
+          "before": 0.296,
+          "after": 0.861
+        },
+        {
+          "vertices": 408,
+          "faces": 812,
+          "before": 0.555,
+          "after": 2.632
+        }
+      ],
+      "memory_cost": "Linear fan scratch: 4N + 8C bytes (C=source triangle corner count), plus small per-vertex maps. Limiting topology coordinates are allocated only for aligned cuts; degenerate-triangle lookup/refinement runs only if needed beyond the initial flatness scan.",
+      "remaining_limits": [
+        "No new pixel screenshot was produced.",
+        "Ambiguous coincident edge owners are deliberately left unpaired; malformed crossing or open source meshes are not repaired into an invented closed scientific surface.",
+        "Array bit identity is preserved for ordinary nondegenerate cuts; existing collapsed cap cases require a triangulation change for closed STL output."
+      ]
+    }
+  }
+}

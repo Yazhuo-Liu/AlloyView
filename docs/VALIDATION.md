@@ -2,6 +2,195 @@
 
 Latest validation: 2026-10-11 (UTC). Earlier entries retain their own dates.
 
+## Audit fixes B31, B8/B9/B14/B17/B18/B20 and CPU/render work (2026-10-11)
+
+Baseline: `3fafad10210d6814fb13565707be51f5026daba5`. Fetch and a fast-forward
+merge confirmed that this was the remote's latest main commit. The requested
+defects were addressed before performance changes. Setup used Node 24.19.0 and
+the bundled Wasm modules; browser checks use Chromium with SwiftShader.
+
+### Work process and decisions
+
+1. **B31, dump input.** Extend both text and byte headers for optional UNITS
+   and TIME blocks, preserve their metadata, and assign Type 1 only when type
+   and element are both absent. Element-only files keep actual element labels.
+   Validate the declared atom-row count instead of ignoring extra rows. Test
+   Unicode/BOM/CRLF input and single-byte incremental chunks, including a
+   metadata prefix on the next frame, without replacing the numeric byte fast
+   path with whole-file decoding.
+2. **B8, periodic surface display.** Reproduce missing caps on a native FCC
+   void and on two sheets that touch at a point or edge. Separate triangle
+   fans, use a limiting topological cut while keeping physical output vertices,
+   and carry collapsed cap subdivision points into adjacent facets. Checking
+   binary STL exposed a second crack that the raw indexed mesh alone did not
+   reveal: zero-area triangles are deliberately omitted by STL. Both forms
+   are now checked. Native analysis arrays and volume/area statistics are
+   unchanged; display topology changes are intentional.
+3. **B9/B14, surface lifecycle.** Give DXA and Surface independent cancellation
+   ownership within the same native client. Wait only for classification and
+   numeric producers used by Visible-atoms filters. Clear an old surface and
+   its export state while those results are pending. Resolve dependencies from
+   parsed expression references without allocating per-atom expression scope
+   arrays. Independent review found that an imported or old column with the
+   producer's output name could otherwise bypass waiting; visibility waits for
+   that producer and its transitive dependencies even when the column exists.
+   Ordinary filter edits retain the 600 ms debounce; producer completion wakes
+   a waiting surface immediately.
+4. **B17, terminal dependencies.** Missing Binning inputs with no running
+   producer become Unavailable; producer failure and cancellation wake the
+   consumer. `wait-analyses` reports the dependency reason and line instead of
+   hanging. Existing imported columns remain directly usable. Complete the
+   failure path for bond statistics as well: invalid automatic parameter edits
+   remove obsolete scientific results before notifying Binning. Use controlled
+   completion gates in the browser, then release real CPU/Wasm calculations;
+   verify that unrelated local shear runs while Surface awaits CNA.
+5. **B18, graphics loss.** Stop drawing and GL uploads, show a notice and
+   refuse image capture while the context is lost. Retain current CPU input
+   descriptors, selections, camera and completed analyses; rebuild every layer
+   on restoration. Abort AO fences/readbacks while preserving a completed
+   compatible result. Native `WEBGL_lose_context` tests include two loss cycles
+   and a new frame/style/mask entered while drawing is paused. This does not
+   reset the separate analysis Worker or WebGPU backend.
+6. **B20, failed replacement source.** Keep the old source until a candidate's
+   first frame and cache plan have passed validation. Candidate parsing uses
+   the same CPU permit budget. Commit adopts the candidate Worker and request
+   ownership; failure or cancellation retires only the candidate. Test an old
+   uncached frame after failure, source-index replies, pending requests,
+   cancellation and a lattice estimator still running on the old source.
+   The transaction covers parsing and source preflight; an unexpected renderer
+   exception after commit is not claimed to roll back all application state.
+7. **C4/C5/C9, CPU hot paths.** Preserve comparator ties, image shifts and
+   arithmetic order while replacing neighbor objects and temporary vectors
+   with typed scratch and scalar loops. Share normalized current reference
+   coordinates and inverse IDs on isolated hosts; count private copies and
+   opaque scratch. An independent memory review found the new reference
+   snapshot counted in both fixed and retained memory. Exclude only the
+   snapshots already charged by this job, keep private Worker contexts charged
+   and pin its active reference during idle trimming. Use range-only input and
+   bounded larger chunks for the cheap local-shear finalization pass; keep the
+   earlier neighbor-pass reduction partitions and heavy-kernel chunk limits.
+   Final public-input review reproduced a Float32 shared-input regression:
+   the prepared kernel expects normalized Float64 coordinates. Promote those
+   inputs once, without changing their source values, and charge the actual
+   Float64 normalization size in both memory modes; real Worker tests compare
+   all 19 fields with the direct kernel.
+   Preserve original nearest-search radii: learned radii could change thin-cell
+   acceptance. Remaining light-table transport and neighbor consumers stay in
+   TODO rather than being marked complete.
+8. **R1/R3/R8, display cost.** Draw indexed capped primitives with the same
+   triangle order, cap normals and hard seams. Keep caps because hidden
+   endpoints, small spheres and slices can expose them. Make primitive atom
+   textures lazy and move signed visibility into a one-byte texture, preserving
+   ordinary hiding versus selection hiding. Use one xyz bounds pass, indexed
+   radius loops and cached source extrema for internal style updates. Explicit
+   coordinate/vector setters remain responsible for invalidating same-array
+   edits. Arrow fields cache six geometric extrema per coordinate/scale/anchor
+   and selection revision; replica offsets and width padding merge separately.
+   Selection hiding now refreshes arrow bounds immediately, correcting an old
+   omitted display update without changing scientific data.
+   Pixel comparisons also require actual primitive pixels in each
+   exercised scene, avoiding a vacuous blank-image equality check.
+9. **S1/T3, startup and archives.** Compress existing logo artwork without
+   redrawing it, load only the selected wordmark and request the small BCC
+   fallback only when WebGL needs it. Reject an aggregate logo directory over
+   200 KiB before touching build output. Build immutable ZIP records and an
+   indexed CRC per PNG rather than checksumming the whole movie at completion;
+   preserve the ZIP bytes, offsets, CRC and frame/byte caps and discard partial
+   records on cancellation.
+
+### Numerical, geometric and browser evidence
+
+- C4: 31 fixtures and 37 ranges, **34,428 values** equal by `Object.is` across
+  the 19 reference fields. Different-size references, private/shared inputs,
+  Float32 sources, reordered/absent mappings and concurrent cancellation use
+  real Workers.
+- C5: **234,338 values** match the captured old kernel, including triclinic,
+  rotated orthogonal and mixed-PBC displacement, half-box ties, NaNs, signed
+  zeros, rounded Float32 vectors with Float64 magnitudes, six real PTM templates
+  and modified/invalid fits.
+- C9: CNA **14,360 labels** and Bonds/BondStats **869,572 values** match the
+  old kernels, including integer histograms, moments, primitive self images,
+  skew cells, large type IDs and caller ranges. Welford order is unchanged.
+- B8: **243 synthetic** touching-sheet cases and **36 native FCC cuts** have
+  closed display and STL meshes with conserved physical geometry. The failed
+  FCC display volume was 13,856 versus a native solid volume of
+  20,874.666666666668; the corrected closed display has the native volume.
+  Of 150 ordinary old/new cuts, 139 have identical arrays and 11 formerly
+  collapsed caps are intentionally retriangulated with the same area/volume.
+  Display preparation adds about 0.3–2.1 ms in the measured 32–408-vertex
+  meshes; this is correctness work, not a claimed speedup.
+- R1/R8: **11 WebGL scenes** match an expanded-triangle oracle exactly,
+  exercising small-radius exposed caps, multiple 3D/flat fields, periodic
+  replicas, hiding, slices, scalar preview, crystal drag and lazy re-enabling.
+  Ten-sided cylinders use **120 → 46** vertex rows; cones **60 → 33**. Mask-only
+  updates upload one byte per padded atom texel; inactive primitives upload no
+  dirty atom textures. No physical-GPU timing was measured.
+- R3: source bounds, RGBA and AO factors match the original bounds oracle
+  in **five real WebGL scenarios**, including negative cell vectors and
+  replicas, unwrapped/origin coordinates, slices, selections and multiple
+  vector fields. B18 loss/recovery restores all seven layer kinds with exact
+  RGBA, and makes no GL upload while lost.
+- B20 and dependencies: real page tests cover ordinary and isolated source
+  switching, old uncached frame reads, retained GPU/CPU/Wasm resources, actual
+  producer success/failure, correct Visible Surface masks and invalid bond bins.
+- S1/T3: aggregate logo assets **13,257,824 → 174,958 bytes**. Browser request
+  checks verify selected-theme loading and lazy fallback. Real frame archives
+  contain intact PNG dimensions and CRC, restore the starting frame and never
+  finalize a cancelled export; a fixed archive matches the old ZIP SHA-256.
+
+Kernel-only interleaved timing samples and their numerical scope are retained
+in [the benchmark record](benchmarks/audit-cpu-render-2026-10-11.json), with
+selected medians in [Performance](features/performance.md). These shared-cloud
+CPU timings are separate from the original audit's GTX 1080 Ti measurements.
+
+### Repeatable checks
+
+The integrated Node suite passes **1,895/1,895 tests**, with zero failures,
+skips or cancellations, and the static build passes.
+Production-page source loading (both isolation modes), dependency success and
+failure, archive/logo loading, core-scaled prewarming, topology, Surface,
+movies, Binning and shared trajectory reads pass their browser suites. Surface
+and Binning also cover both isolation modes. Prewarming verifies 6/14 permits
+on reported 8/16-core machines, starts growth before physical replication is
+rendered, preserves Worker/Wasm resources on reload and runs no scientific
+analysis merely to prepare the ordinary pool. Native graphics recovery,
+independent atom/vector bounds and primitive pixel suites pass on final source.
+The first production dependency-script run imported the unversioned mirror
+instead of the page's content-hashed module; its instrumentation missed the
+renderer. Resolve test imports from the actual page entry and rerun the
+production scenarios successfully; no application fix was needed for that
+test-harness failure.
+Browser pixel suites are correctness checks on SwiftShader, not hardware speed
+benchmarks. `renderer-context`, `renderer-bounds` and `atom-primitives` inspect
+source modules directly; application dependency, source and archive suites use
+the production build by default.
+
+```sh
+npm test
+npm run build
+npm run test:browser:source-loading
+npm run test:browser:source-loading -- --isolated
+npm run test:browser:analysis-dependencies
+npm run test:browser:archive-logo
+npm run test:browser:renderer-context
+npm run test:browser:renderer-bounds
+npm run test:browser:atom-primitives
+npm run test:browser:cpu-warmup
+npm run test:browser:topology-tools
+npm run test:browser:surface-mesh
+npm run test:browser:movies
+npm run test:browser:binning
+npm run test:browser:trajectory-workers
+```
+
+Remaining requested subparts: safe cap removal (R1), compact displacement and
+cached-PTM transport (C5), and remaining neighbor consumers (C9). Follow-up
+priorities are progressive indexing/prefetch and time-series ranges (B13/T1),
+coordination work bounds and unsafe image coefficients (B16/B37), automation
+dialog/restore ownership (B15/B19/B26), and kernel-specific GPU warmup/recovery
+(B28/B29). These are still open; the new dependency hooks provide a basis for
+the radical Voronoi radius dependency fix B24.
+
 ## Audit fixes B7, B11, B12/T5, C1–C3 and S2/S3 (2026-10-11)
 
 Baseline: `d934309`, after fetching the remote and confirming there was no

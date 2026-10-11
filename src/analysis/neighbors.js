@@ -4,6 +4,37 @@ import { cellFaceHeights, determinant3 } from '../data/model.js';
  * A local environment must retain distinct images in small simulation cells.
  * Queries inspect a complete sphere before keeping the nearest neighbors.
  */
+const NEIGHBOR_FIELDS = ['atoms', 'xs', 'ys', 'zs', 'distanceSquared', 'imageA', 'imageB', 'imageC'];
+export class NeighborBuffer {
+  constructor(capacity = 0) { this.length = 0; this.capacity = 0; if (capacity) this.reserve(capacity); }
+  reserve(needed) {
+    if (this.capacity >= needed) return;
+    const capacity = Math.max(32, 2 ** Math.ceil(Math.log2(needed)));
+    for (const name of NEIGHBOR_FIELDS) {
+      const Type = name === 'atoms' ? Uint32Array : Float64Array;
+      const next = new Type(capacity);
+      if (this[name]) next.set(this[name].subarray(0, this.length));
+      this[name] = next;
+    }
+    this.capacity = capacity;
+  }
+  copy(source, at, to) {
+    this.atoms[to] = source.atoms[at]; this.xs[to] = source.xs[at]; this.ys[to] = source.ys[at]; this.zs[to] = source.zs[at];
+    this.distanceSquared[to] = source.distanceSquared[at];
+    this.imageA[to] = source.imageA[at]; this.imageB[to] = source.imageB[at]; this.imageC[to] = source.imageC[at];
+  }
+}
+function compareRows(first, a, second, b) {
+  return first.distanceSquared[a] - second.distanceSquared[b] || first.atoms[a] - second.atoms[b]
+    || first.xs[a] - second.xs[b] || first.ys[a] - second.ys[b] || first.zs[a] - second.zs[b];
+}
+function neighborObjects(buffer) {
+  const result = new Array(buffer.length);
+  for (let i = 0; i < buffer.length; i++) result[i] = { atom: buffer.atoms[i], x: buffer.xs[i], y: buffer.ys[i], z: buffer.zs[i],
+    distanceSquared: buffer.distanceSquared[i], imageA: buffer.imageA[i], imageB: buffer.imageB[i], imageC: buffer.imageC[i] };
+  return result;
+}
+
 export class NeighborSearch {
   constructor({ fractional, cell }, { sharedMemory = false, reuseCoordinates = false } = {}) {
     this.count = fractional.length / 3;
@@ -112,16 +143,46 @@ export class NeighborSearch {
   }
 
   nearest(atom, count) {
+    return neighborObjects(this.nearestInto(atom, count, this.nearestOutput ??= new NeighborBuffer()));
+  }
+
+  nearestInto(atom, count, output = new NeighborBuffer()) {
     if (!Number.isInteger(count) || count < 1) throw new Error('Invalid nearest-neighbor count.');
     const needed = this.cell.pbc.some(Boolean) ? count : Math.min(count, this.count - 1);
-    if (needed === 0) return [];
+    output.length = 0;
+    if (needed === 0) return output;
+    const candidates = this.nearestCandidates ??= new NeighborBuffer();
+    if (output === candidates) throw new Error('Nearest output must not alias the candidate scratch.');
     let radius = this.nearestRadius(needed);
     for (let attempt = 0; attempt < 24; attempt += 1) {
-      const neighbors = this.within(atom, radius);
-      if (neighbors.length >= needed) {
-        neighbors.sort((a, b) => a.distanceSquared - b.distanceSquared || a.atom - b.atom
-          || a.x - b.x || a.y - b.y || a.z - b.z);
-        return neighbors.slice(0, needed);
+      this.collect(atom, radius, candidates);
+      if (candidates.length >= needed) {
+        output.reserve(needed);
+        if (needed > 64) {
+          let all = this.nearestSortIndices;
+          if (!all || all.length < candidates.length) all = this.nearestSortIndices = new Uint32Array(candidates.capacity);
+          const rows = all.subarray(0, candidates.length);
+          for (let i = 0; i < rows.length; i++) rows[i] = i;
+          rows.sort((a, b) => compareRows(candidates, a, candidates, b));
+          output.length = needed;
+          for (let i = 0; i < needed; i++) output.copy(candidates, rows[i], i);
+          return output;
+        }
+        let selected = this.nearestIndices;
+        if (!selected || selected.length < needed) selected = this.nearestIndices = new Uint32Array(needed);
+        let kept = 0;
+        for (let i = 0; i < candidates.length; i++) {
+          let insert = Math.min(kept, needed);
+          while (insert > 0 && compareRows(candidates, i, candidates, selected[insert - 1]) < 0) insert--;
+          if (insert >= needed) continue;
+          const end = Math.min(kept, needed - 1);
+          for (let j = end; j > insert; j--) selected[j] = selected[j - 1];
+          selected[insert] = i;
+          if (kept < needed) kept++;
+        }
+        output.length = kept;
+        for (let i = 0; i < kept; i++) output.copy(candidates, selected[i], i);
+        return output;
       }
       radius *= 1.6;
     }
@@ -146,6 +207,12 @@ export class NeighborSearch {
    * every atom in most analyses, so the inner loops keep values in scalars
    * rather than allocating per candidate; the arithmetic is unchanged. */
   within(atom, radius, limit = Infinity) {
+    return this.collect(atom, radius, null, limit);
+  }
+
+  // A caller-owned buffer retains its values while another independent query
+  // runs. No callback executes while this synchronous traversal fills it.
+  collect(atom, radius, output, limit = Infinity) {
     if (!Number.isFinite(radius) || radius <= 0) throw new Error('The neighbor radius must be positive and finite.');
     const coordinates = this.coordinates, h = this.cell.vectors, pbc = this.cell.pbc;
     const b0 = radius / this.heights[0] + 1e-12, b1 = radius / this.heights[1] + 1e-12, b2 = radius / this.heights[2] + 1e-12;
@@ -158,7 +225,8 @@ export class NeighborSearch {
     if (this.imageBudget(radius) > 100_000) throw new Error('The cell is too thin for this neighbor search; use a less skewed cell.');
     const p0 = pbc[0], p1 = pbc[1], p2 = pbc[2];
     const h0 = h[0], h1 = h[1], h2 = h[2], h3 = h[3], h4 = h[4], h5 = h[5], h6 = h[6], h7 = h[7], h8 = h[8];
-    const neighbors = [];
+    const typed = output !== null;
+    if (typed) output.length = 0; else output = [];
     const radiusSquared = radius * radius;
     for (let ix = x0; ix <= x1; ix++) for (let iy = y0; iy <= y1; iy++) for (let iz = z0; iz <= z1; iz++) {
       const bx = xWrap ? (ix % dx + dx) % dx : ix, by = yWrap ? (iy % dy + dy) % dy : iy, bz = zWrap ? (iz % dz + dz) % dz : iz;
@@ -177,15 +245,25 @@ export class NeighborSearch {
               const z = da * h2 + db * h5 + dc * h8;
               const distanceSquared = x * x + y * y + z * z;
               if (distanceSquared <= radiusSquared) {
-                neighbors.push({ atom: other, x, y, z, distanceSquared, imageA: a, imageB: b, imageC: c });
-                if (neighbors.length >= limit) return neighbors;
+                if (!typed) {
+                  output.push({ atom: other, x, y, z, distanceSquared, imageA: a, imageB: b, imageC: c });
+                  if (output.length >= limit) return output;
+                  continue;
+                }
+                const i = output.length;
+                output.reserve(i + 1);
+                output.atoms[i] = other; output.xs[i] = x; output.ys[i] = y; output.zs[i] = z;
+                output.distanceSquared[i] = distanceSquared;
+                output.imageA[i] = a; output.imageB[i] = b; output.imageC[i] = c;
+                output.length++;
+                if (output.length >= limit) return output;
               }
             }
           }
         }
       }
     }
-    return neighbors;
+    return output;
   }
 }
 

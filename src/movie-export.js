@@ -2,7 +2,7 @@
  * export, encode it with WebCodecs and write an MP4 or WebM file, or collect
  * PNG frames in a ZIP archive. The application is reached through a host
  * object, so the pipeline also runs with test doubles. */
-import { createImageArchive } from './export-archive.js';
+import { ImageArchiveBuilder } from './export-archive.js';
 import { planMovie } from './camera-path.js';
 import { DEFAULT_MOVIE_OUTPUT, MOVIE_LIMITS, PNG_SEQUENCE_FORMAT } from './movie-settings.js';
 import { Mp4Muxer } from './video/mp4-muxer.js';
@@ -48,7 +48,7 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
   if (archive && frameTotal > limits.maxArchiveFrames) throw new Error(`A ZIP of frames holds at most ${limits.maxArchiveFrames} images; this movie has ${frameTotal.toLocaleString('en-US')}.`);
   if (!archive && (typeof VideoEncoderClass !== 'function' || typeof VideoFrameClass !== 'function')) throw new Error('This browser has no WebCodecs video encoder.');
   let failure = null, encoder = null, muxer = null, archiveBytes = 0;
-  const entries = [];
+  const imageArchive = archive ? new ImageArchiveBuilder() : null;
   const digits = Math.max(4, String(frameTotal).length);
   if (!archive) {
     const Muxer = format.container === 'mp4' ? Mp4Muxer : WebmMuxer;
@@ -87,7 +87,7 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
           const bytes = await host.encodeImage(canvas);
           archiveBytes += bytes.length;
           if (archiveBytes > 256 * 1024 ** 2) throw new Error('The frame archive exceeds 256 MiB. Choose a smaller image size or fewer frames.');
-          entries.push({ name: `${fileStem}-${String(index + 1).padStart(digits, '0')}.png`, bytes });
+          imageArchive.add({ name: `${fileStem}-${String(index + 1).padStart(digits, '0')}.png`, bytes }, { signal });
         } else {
           if (canvas.width !== config.width || canvas.height !== config.height) {
             throw new Error('The image size changed during the export. Keep the window size, or choose a fixed image resolution.');
@@ -104,8 +104,8 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
     }
     throwIfAborted(signal);
     if (archive) {
-      const blob = createImageArchive(entries);
-      return { parts: [blob], size: blob.size, mimeType: format.mimeType, frames: entries.length, durationSeconds: entries.length / fps, elapsedMs: now() - started };
+      const blob = imageArchive.finish({ signal });
+      return { parts: [blob], size: blob.size, mimeType: format.mimeType, frames: imageArchive.count, durationSeconds: imageArchive.count / fps, elapsedMs: now() - started };
     }
     await encoder.flush();
     if (failure) throw failure;
@@ -113,6 +113,7 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
     const file = muxer.finalize();
     return { ...file, elapsedMs: now() - started };
   } finally {
+    imageArchive?.clear();
     if (encoder && encoder.state !== 'closed') { try { encoder.close(); } catch { /* already closed by an encoder error */ } }
   }
 }

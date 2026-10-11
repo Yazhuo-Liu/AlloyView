@@ -159,6 +159,16 @@ the new origin after the release.
 `intensity` (0–1), `directions` (16, 40, 100 or 200) and `resolution` (256,
 512, 1024 or 2048). Older recipes without this entry restore the feature off.
 
+## Graphics context recovery
+
+If the browser loses the WebGL context, the view shows a notice and pauses
+drawing. Image exports report the loss instead of downloading a blank image.
+When the browser restores the context, the renderer rebuilds its programs and
+all attached layers from retained data, keeping the camera, selections and
+completed analyses. Changes made while drawing is paused are used on recovery.
+Ambient occlusion retains a completed result only while its inputs still match.
+CPU Workers, Wasm heaps and the separate WebGPU compute backend are retained.
+
 ## Floating second view
 
 **Show a second view** opens a movable, resizable window looking at the same data. It starts on the left on desktop and on the right on phones, keeping the Details button accessible. Drag the window header to move it, or its resize corner to change its size. Focus either handle and use arrow keys for keyboard adjustment; Shift makes a larger step. Home restores the default layout, and Escape cancels an active drag or resize. Position and size remain bounded by the viewport.

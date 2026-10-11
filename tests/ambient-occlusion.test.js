@@ -177,6 +177,10 @@ class FakePass {
 
 function controllerFixture(options = {}) {
   const renderer = fakeRenderer(3, options), log = [], statuses = [], timers = [];
+  const contextListeners = new Set();
+  renderer.addContextListener = listener => { contextListeners.add(listener); return () => contextListeners.delete(listener); };
+  renderer.graphicsUnavailable = () => Boolean(renderer.contextLost);
+  renderer.assertGraphicsAvailable = () => { if (renderer.contextLost) throw new Error('Graphics context unavailable'); };
   let clock = 0, changes = 0;
   const pass = new FakePass(log);
   const controller = new AmbientOcclusionController(renderer, {
@@ -187,8 +191,45 @@ function controllerFixture(options = {}) {
   // Each rendered direction advances the fake clock by 4 ms.
   const render = pass.render.bind(pass); pass.render = (...args) => { clock += 4; return render(...args); };
   const runTimers = () => { while (timers.length) { const timer = timers.shift(); if (!timer.cancelled) timer.callback(); } };
-  return { renderer, controller, pass, log, statuses, timers, runTimers, changes: () => changes, elapse: milliseconds => { clock += milliseconds; } };
+  const context = state => {
+    renderer.contextLost = state !== 'restored';
+    for (const listener of contextListeners) listener({ state, message: 'Graphics context unavailable' });
+  };
+  return { renderer, controller, pass, log, statuses, timers, runTimers, context, contextListeners,
+    changes: () => changes, elapse: milliseconds => { clock += milliseconds; } };
 }
+
+test('context loss keeps completed CPU factors and reuses them after restore without stale GL passes', () => {
+  const { renderer, controller, pass, log, timers, runTimers, context, contextListeners } = controllerFixture();
+  controller.setSettings({ enabled: true, directions: 16, resolution: 256 }); runTimers();
+  const result = controller.result, factors = renderer.ambientOcclusionFactors;
+  context('lost');
+  assert.equal(controller.pass, null); assert.equal(controller.result, result);
+  assert.equal(renderer.ambientOcclusionFactors, factors); assert.equal(controller.status.state, 'error');
+  controller.update(); assert.equal(timers.length, 0);
+  assert.throws(() => controller.ensureCurrent(), /Graphics context unavailable/);
+  context('restored');
+  assert.equal(controller.status.state, 'ready'); assert.equal(controller.result, result);
+  assert.equal(log.length, 16, 'unchanged factors need neither a pass nor another calculation');
+  assert.equal(controller.pass, null); assert.equal(pass.disposed, undefined);
+  controller.dispose(); assert.equal(contextListeners.size, 0);
+});
+
+test('context loss cancels unfinished directions and changed inputs restart with a new pass after restore', () => {
+  const { renderer, controller, pass, log, timers, runTimers, context } = controllerFixture();
+  controller.setSettings({ enabled: true, directions: 16, resolution: 256 });
+  timers.shift().callback(); assert.ok(controller.job);
+  context('lost');
+  assert.equal(controller.job, null); assert.equal(controller.pending, null); assert.equal(controller.pass, null);
+  assert.ok(timers.every(timer => timer.cancelled));
+  renderer.visibility[0] = 0;
+  const replacement = new FakePass(log); controller.createPass = () => replacement;
+  context('restored'); runTimers();
+  assert.equal(controller.pass, replacement); assert.notEqual(controller.pass, pass);
+  assert.equal(controller.status.state, 'ready'); assert.equal(controller.result.inputs.visibility[0], 0);
+  assert.equal(controller.result.directions, 16);
+  controller.dispose();
+});
 
 test('the controller computes in budgeted slices, applies the result and reuses it until inputs change', () => {
   const { renderer, controller, log, statuses, timers, runTimers, changes } = controllerFixture();
@@ -358,7 +399,7 @@ test('the renderer uploads factors into a per-instance attribute and ignores mis
   const calls = [];
   const renderer = Object.create(WebGLRenderer.prototype);
   Object.assign(renderer, { frame: {}, atomCount: 2, replicas: [{}, {}], sphereVao: 'vao', requestRender() { calls.push('render'); } });
-  renderer.gl = new Proxy({ ARRAY_BUFFER: 'ARRAY_BUFFER', STATIC_DRAW: 'STATIC', FLOAT: 'FLOAT' }, {
+  renderer.gl = new Proxy({ ARRAY_BUFFER: 'ARRAY_BUFFER', STATIC_DRAW: 'STATIC', FLOAT: 'FLOAT', isContextLost: () => false }, {
     get(target, name) { return name in target ? target[name] : (...args) => { calls.push([name, ...args]); return name === 'createBuffer' ? 'buffer' : undefined; }; },
   });
   const factors = new Float32Array([1, 0.5, 0.25, 0]);

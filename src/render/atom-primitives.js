@@ -16,6 +16,7 @@ layout(location=4) in vec3 aShift;
 uniform sampler2D uPositions;
 uniform sampler2D uColors;
 uniform sampler2D uFractional;
+uniform highp isampler2D uVisibility;
 uniform sampler2D uScalarValues;
 ${SCALAR_COLOR_GLSL}
 ${CRYSTAL_DRAG_GLSL}
@@ -121,8 +122,9 @@ void main() {
   bool endpointInDisplay = uVectorMode || (all(greaterThanEqual(secondReplica, vec3(0.0))) && all(lessThan(secondReplica, uRepetitions)));
   // Ordinary atom/category filters leave the independent arrow layer visible.
   // Selection hiding uses a negative flag to hide the atom's attached arrows.
-  bool shown = (uVectorMode ? (startData.w >= 0.0 && endData.w >= 0.0)
-      : (startData.w > 0.5 && endData.w > 0.5))
+  int firstVisible = texelFetch(uVisibility, first, 0).r, secondVisible = texelFetch(uVisibility, second, 0).r;
+  bool shown = (uVectorMode ? (firstVisible >= 0 && secondVisible >= 0)
+      : (firstVisible > 0 && secondVisible > 0))
     && vectorLength > 1e-12 && segmentLength > 1e-12 && endpointInDisplay;
   shown = shown && sliceVisible(start, firstFractional + firstStep, uReplicaIndex);
   if (!uVectorMode) shown = shown && scalarShown(firstScalar) && scalarShown(secondScalar);
@@ -184,6 +186,26 @@ export function createPrimitiveMesh(cone = false, sides = 10) {
     vertex(0, 0, 0, 0, 0, -1); vertex(nextX, nextY, 0, 0, 0, -1); vertex(x, y, 0, 0, 0, -1);
   }
   return new Float32Array(vertices);
+}
+
+/** Share only identical position/normal rows. Caps keep their hard normals and
+ * the cone keeps each tip normal; the original triangles and seam bits remain
+ * unchanged, including when small atoms expose a bond's end caps. */
+export function createIndexedPrimitiveMesh(cone = false, sides = 10) {
+  const raw = createPrimitiveMesh(cone, sides), words = new Uint32Array(raw.buffer, raw.byteOffset, raw.length);
+  const unique = new Map(), vertices = [], indices = [];
+  for (let offset = 0; offset < raw.length; offset += 6) {
+    const key = Array.from(words.subarray(offset, offset + 6)).join(',');
+    let index = unique.get(key);
+    if (index === undefined) {
+      index = vertices.length / 6;
+      unique.set(key, index);
+      vertices.push(...raw.subarray(offset, offset + 6));
+    }
+    indices.push(index);
+  }
+  const IndexType = vertices.length / 6 <= 65536 ? Uint16Array : Uint32Array;
+  return { vertices: Float32Array.from(vertices), indices: IndexType.from(indices) };
 }
 
 /** Flat rectangle/triangle meshes use the same across/up/along coordinates as
@@ -279,13 +301,13 @@ export class AtomPrimitiveLayer {
   constructor(gl) {
     this.gl = gl;
     this.program = program(gl, VERTEX, FRAGMENT);
-    this.uniforms = Object.fromEntries(['uPositions', 'uColors', 'uFractional', 'uTextureWidth', 'uView', 'uProjection',
+    this.uniforms = Object.fromEntries(['uPositions', 'uColors', 'uFractional', 'uVisibility', 'uTextureWidth', 'uView', 'uProjection',
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions', 'uSliceAxis', 'uSliceMaximum', 'uSliceMode', 'uSliceCount',
       'uSlicePlanes[0]', 'uVectorMode', 'uVectorColor', 'uScale', 'uRadius', 'uExtent',
       'uAnchor', 'uHeadLength', 'uArrowHead', 'uFlatMode', 'uFixedUp', 'uArrowUp', 'uScalarValues',
       'uAmbientOcclusion', 'uOcclusionIntensity', 'uOcclusion', 'uOcclusionWidth', 'uAtomCount', 'uReplicaCount',
       ...SCALAR_COLOR_UNIFORMS, ...CRYSTAL_DRAG_UNIFORMS].map(name => [name, gl.getUniformLocation(this.program, name)]));
-    this.textures = Array.from({ length: 3 }, () => {
+    this.textures = Array.from({ length: 4 }, () => {
       const texture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -294,7 +316,7 @@ export class AtomPrimitiveLayer {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       return texture;
     });
-    this.textureSizes = [null, null, null];
+    this.textureSizes = [null, null, null, null];
     this.cylinder = this.mesh(false);
     this.cone = this.mesh(true);
     this.flatShaft = this.mesh(false, true);
@@ -308,10 +330,23 @@ export class AtomPrimitiveLayer {
   }
 
   mesh(cone, flat = false) {
-    const gl = this.gl, values = flat ? createFlatArrowMesh(cone) : createPrimitiveMesh(cone), buffer = gl.createBuffer();
+    const gl = this.gl, data = flat ? { vertices: createFlatArrowMesh(cone) } : createIndexedPrimitiveMesh(cone);
+    const buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, values, gl.STATIC_DRAW);
-    return { buffer, count: values.length / 6 };
+    gl.bufferData(gl.ARRAY_BUFFER, data.vertices, gl.STATIC_DRAW);
+    let indexBuffer;
+    if (data.indices) {
+      // Element bindings belong to a VAO. Mesh creation must not overwrite
+      // whichever atom or attached-geometry VAO the renderer last used.
+      const vao = gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+      gl.bindVertexArray(null);
+      indexBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data.indices, gl.STATIC_DRAW);
+      gl.bindVertexArray(vao);
+    }
+    return { buffer, count: data.indices?.length ?? data.vertices.length / 6, vertexCount: data.vertices.length / 6,
+      indexBuffer, indexType: data.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT };
   }
 
   instances() {
@@ -320,71 +355,121 @@ export class AtomPrimitiveLayer {
   }
 
   setFrame(renderer, colors) {
-    this.scalarColorInput = null;
-    const gl = this.gl, maximum = gl.getParameter(gl.MAX_TEXTURE_SIZE), count = renderer.atomCount;
+    const maximum = this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE), count = renderer.atomCount;
+    const width = Math.min(maximum, Math.max(1, Math.ceil(Math.sqrt(count)))), height = Math.max(1, Math.ceil(count / width));
+    if (height > maximum) throw new Error('The structure exceeds this GPU’s atom texture capacity.');
     this.clearInstances();
-    this.width = Math.min(maximum, Math.max(1, Math.ceil(Math.sqrt(count))));
-    this.height = Math.max(1, Math.ceil(count / this.width));
-    if (this.height > maximum) throw new Error('The structure exceeds this GPU’s atom texture capacity.');
-    this.positionValues = new Float32Array(this.width * this.height * 4);
-    this.colorValues = new Uint8Array(this.width * this.height * 4);
-    this.fractionalValues = new Float32Array(this.width * this.height * 4);
-    this.updatePositions(renderer);
-    this.updateColors(colors);
+    this.width = width; this.height = height;
+    // Most frames never draw bonds or arrows. Retain the canonical descriptors
+    // and allocate/upload their texture mirrors only when that layer draws.
+    this.sourceRenderer = renderer; this.colorSource = colors;
+    this.scalarColorInput = null;
+    this.textureDirty = { position: true, fractional: true, visibility: true, color: true };
+    this.shiftsDirty = false;
   }
 
-  uploadTexture(index, values, internalFormat, type) {
+  uploadTexture(index, values, internalFormat, type, format = this.gl.RGBA) {
     const gl = this.gl;
-    gl.activeTexture(gl.TEXTURE0 + index);
-    gl.bindTexture(gl.TEXTURE_2D, this.textures[index]);
-    const size = this.textureSizes[index];
-    if (size?.[0] === this.width && size?.[1] === this.height) {
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.width, this.height, gl.RGBA, type, values);
-    } else {
-      gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, this.width, this.height, 0, gl.RGBA, type, values);
-      this.textureSizes[index] = [this.width, this.height];
+    // One-byte rows need no padding, including odd texture widths. Restore the
+    // shared GL state for both initial allocation and same-size updates.
+    const alignment = format === gl.RED_INTEGER ? gl.getParameter(gl.UNPACK_ALIGNMENT) : null;
+    if (alignment !== null) gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    try {
+      gl.activeTexture(gl.TEXTURE0 + index);
+      gl.bindTexture(gl.TEXTURE_2D, this.textures[index]);
+      const size = this.textureSizes[index];
+      if (size?.[0] === this.width && size?.[1] === this.height) {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.width, this.height, format, type, values);
+      } else {
+        gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, this.width, this.height, 0, format, type, values);
+        this.textureSizes[index] = [this.width, this.height];
+      }
+    } finally {
+      if (alignment !== null) gl.pixelStorei(gl.UNPACK_ALIGNMENT, alignment);
+      gl.activeTexture(gl.TEXTURE0);
     }
-    gl.activeTexture(gl.TEXTURE0);
   }
 
   updatePositions(renderer, regenerateShifts = true) {
-    const fractional = renderer.displayFractional ?? renderer.frame.fractional;
-    for (let atom = 0; atom < renderer.atomCount; atom += 1) {
-      const index = atom * 3, target = atom * 4;
-      this.positionValues[target] = renderer.displayPositions[index];
-      this.positionValues[target + 1] = renderer.displayPositions[index + 1];
-      this.positionValues[target + 2] = renderer.displayPositions[index + 2];
-      this.positionValues[target + 3] = renderer.selectionVisibility?.[atom] === 0
-        ? -1 : renderer.visibility?.[atom] === 0 ? 0 : 1;
-      if (this.fractionalValues) {
-        this.fractionalValues[target] = fractional[index];
-        this.fractionalValues[target + 1] = fractional[index + 1];
-        this.fractionalValues[target + 2] = fractional[index + 2];
-      }
+    this.sourceRenderer = renderer; this.textureDirty ??= {};
+    this.textureDirty.position = true; this.textureDirty.visibility = true;
+    if (regenerateShifts) {
+      this.textureDirty.fractional = true;
+      this.shiftsDirty = true;
     }
-    this.uploadTexture(0, this.positionValues, this.gl.RGBA32F, this.gl.FLOAT);
-    if (this.fractionalValues && regenerateShifts) this.uploadTexture(2, this.fractionalValues, this.gl.RGBA32F, this.gl.FLOAT);
-    if (this.bonds && regenerateShifts) this.uploadShifts(this.bondBuffers, bondDisplayShifts(this.bonds, renderer.frame, renderer.displayPositions));
+  }
+
+  updateVisibility(renderer) {
+    this.sourceRenderer = renderer; this.textureDirty ??= {};
+    this.textureDirty.visibility = true;
+    // Explicit uploads may follow in-place edits of the same selection mask.
+    // Its revision matters only when selection hiding restricts arrow anchors.
+    this.boundsSelectionRevision = (this.boundsSelectionRevision ?? 0) + 1;
   }
 
   updateColors(colors) {
-    this.scalarColorInput = null;
-    for (let atom = 0; atom < colors.length / 3; atom += 1) {
-      this.colorValues[atom * 4] = colors[atom * 3];
-      this.colorValues[atom * 4 + 1] = colors[atom * 3 + 1];
-      this.colorValues[atom * 4 + 2] = colors[atom * 3 + 2];
-      this.colorValues[atom * 4 + 3] = 255;
-    }
-    this.uploadTexture(1, this.colorValues, this.gl.RGBA8, this.gl.UNSIGNED_BYTE);
+    this.colorSource = colors; this.scalarColorInput = null;
+    this.textureDirty ??= {};
+    this.textureDirty.color = true; this.textureDirty.preview = false;
   }
 
   updateScalarColorPreview(input) {
     if (this.scalarColorInput === input) return;
-    this.scalarColorInput = input;
-    const gl = this.gl;
-    for (let atom = 0; atom < input.values.length; atom++) this.colorValues[atom * 4 + 3] = input.colorOverrides[atom];
-    this.uploadTexture(1, this.colorValues, gl.RGBA8, gl.UNSIGNED_BYTE);
-    gl.activeTexture(gl.TEXTURE0);
+    this.scalarColorInput = input; this.textureDirty ??= {};
+    this.textureDirty.preview = true;
+  }
+
+  flushTextures(renderer = this.sourceRenderer) {
+    const dirty = this.textureDirty ?? {};
+    if (!renderer) return;
+    const gl = this.gl, pixels = this.width * this.height, count = renderer.atomCount;
+    const storage = (name, Type, length) => {
+      if (this[name]?.length !== length) this[name] = new Type(length);
+      return this[name];
+    };
+    if (dirty.position) {
+      const values = storage('positionValues', Float32Array, pixels * 4), positions = renderer.displayPositions;
+      for (let atom = 0; atom < count; atom++) {
+        const index = atom * 3, target = atom * 4;
+        values[target] = positions[index]; values[target + 1] = positions[index + 1]; values[target + 2] = positions[index + 2];
+      }
+      this.uploadTexture(0, values, gl.RGBA32F, gl.FLOAT);
+    }
+    if (dirty.fractional) {
+      const values = storage('fractionalValues', Float32Array, pixels * 4), positions = renderer.displayFractional ?? renderer.frame.fractional;
+      for (let atom = 0; atom < count; atom++) {
+        const index = atom * 3, target = atom * 4;
+        values[target] = positions[index]; values[target + 1] = positions[index + 1]; values[target + 2] = positions[index + 2];
+      }
+      this.uploadTexture(2, values, gl.RGBA32F, gl.FLOAT);
+    }
+    if (dirty.visibility) {
+      const values = storage('visibilityValues', Int8Array, pixels);
+      // Keep arrows independent of ordinary atom/category hiding; selection
+      // hiding suppresses every attached primitive with a distinct signed flag.
+      for (let atom = 0; atom < count; atom++) {
+        values[atom] = renderer.selectionVisibility?.[atom] === 0 ? -1 : renderer.visibility?.[atom] === 0 ? 0 : 1;
+      }
+      this.uploadTexture(3, values, gl.R8I, gl.BYTE, gl.RED_INTEGER);
+    }
+    if (dirty.color || dirty.preview) {
+      const values = storage('colorValues', Uint8Array, pixels * 4);
+      if (dirty.color) {
+        const colors = this.colorSource;
+        for (let atom = 0; atom < count; atom++) {
+          const index = atom * 3, target = atom * 4;
+          values[target] = colors[index]; values[target + 1] = colors[index + 1]; values[target + 2] = colors[index + 2];
+          values[target + 3] = 255;
+        }
+      }
+      if (this.scalarColorInput) {
+        for (let atom = 0; atom < count; atom++) values[atom * 4 + 3] = this.scalarColorInput.colorOverrides[atom];
+      }
+      this.uploadTexture(1, values, gl.RGBA8, gl.UNSIGNED_BYTE);
+    }
+    if (this.shiftsDirty && this.bonds) this.uploadShifts(this.bondBuffers, bondDisplayShifts(this.bonds, renderer.frame, renderer.displayPositions));
+    this.shiftsDirty = false;
+    this.textureDirty = {};
   }
 
   uploadInstances(buffers, indices, vectors) {
@@ -433,6 +518,10 @@ export class AtomPrimitiveLayer {
       if (!(field.vectors instanceof Float32Array) || field.vectors.length !== renderer.atomCount * 3) throw new Error('The vector array does not match the current frame.');
       return { id: field.id, vectors: field.vectors, options: normalizeVectorOptions(field.options, previous.get(field.id)?.options) };
     });
+    // Explicit vector setters remain data boundaries even for reused arrays.
+    // A caller can edit values in place before setting that same array again.
+    this.vectorBoundsCache?.clear();
+    this.vectorBoundsSource = this.vectorBoundsSelections = this.vectorBoundsFrame = null;
     let indices;
     for (const field of next) {
       const old = previous.get(field.id);
@@ -508,11 +597,14 @@ export class AtomPrimitiveLayer {
       this.gl.activeTexture(this.gl.TEXTURE0);
       this.occlusionSource = null; this.occlusionWidth = 1;
     }
-    this.positionValues = this.colorValues = this.fractionalValues = null;
+    this.positionValues = this.colorValues = this.fractionalValues = this.visibilityValues = null;
+    this.sourceRenderer = this.colorSource = null;
+    this.textureDirty = {}; this.shiftsDirty = false;
     this.width = this.height = 1;
     this.uploadTexture(0, new Float32Array(4), this.gl.RGBA32F, this.gl.FLOAT);
     this.uploadTexture(1, new Uint8Array(4), this.gl.RGBA8, this.gl.UNSIGNED_BYTE);
     this.uploadTexture(2, new Float32Array(4), this.gl.RGBA32F, this.gl.FLOAT);
+    this.uploadTexture(3, new Int8Array(1), this.gl.R8I, this.gl.BYTE, this.gl.RED_INTEGER);
   }
 
   drawMesh(buffers, mesh, radius, scale, extent, vectorMode, arrowHead = false) {
@@ -548,7 +640,11 @@ export class AtomPrimitiveLayer {
     gl.uniform1f(u.uRadius, radius);
     gl.uniform1f(u.uScale, scale);
     gl.uniform2f(u.uExtent, ...extent);
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, mesh.count, buffers.count);
+    if (mesh.indexBuffer) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
+      gl.drawElementsInstanced(gl.TRIANGLES, mesh.count, mesh.indexType, 0, buffers.count);
+    }
+    else gl.drawArraysInstanced(gl.TRIANGLES, 0, mesh.count, buffers.count);
   }
 
   render(renderer) {
@@ -557,6 +653,10 @@ export class AtomPrimitiveLayer {
     const gl = this.gl, u = this.uniforms;
     gl.useProgram(this.program);
     if (renderer.scalarColorPreview) this.updateScalarColorPreview(renderer.scalarColorPreview.input);
+    this.flushTextures(renderer);
+    gl.activeTexture(gl.TEXTURE0 + 5);
+    gl.bindTexture(gl.TEXTURE_2D, this.textures[3]);
+    gl.uniform1i(u.uVisibility, 5);
     for (let index = 0; index < (renderer.scalarColorPreview ? 4 : 3); index += 1) {
       gl.activeTexture(gl.TEXTURE0 + index);
       gl.bindTexture(gl.TEXTURE_2D, index === 3 ? renderer.scalarColorTexture : this.textures[index]);
@@ -607,22 +707,64 @@ export class AtomPrimitiveLayer {
 
   extendBounds(renderer, minimum, maximum) {
     const fields = this.vectorFields ?? (this.vectors ? [{ vectors: this.vectors, options: this.vectorOptions }] : []);
-    for (const { vectors, options } of fields) {
+    if (!fields.length) {
+      this.vectorBoundsCache?.clear();
+      this.vectorBoundsSource = this.vectorBoundsSelections = this.vectorBoundsFrame = null;
+      return;
+    }
+    // Public bounds/coordinate updates refresh this token even for in-place
+    // position edits. Standalone callers without one keep uncached semantics.
+    const source = renderer.sourceBoundsCache;
+    const cacheable = Boolean(source && source.positions === renderer.displayPositions);
+    const selections = renderer.selectionVisibility ?? null;
+    const selectionRevision = selections ? this.boundsSelectionRevision ?? 0 : 0;
+    this.vectorBoundsCache ??= new Map();
+    if (!cacheable || this.vectorBoundsSource !== source || this.vectorBoundsSelections !== selections
+      || this.vectorBoundsFrame !== renderer.frame || this.vectorBoundsSelectionRevision !== selectionRevision) this.vectorBoundsCache.clear();
+    // Hidden fields must not keep an obsolete full-frame coordinate array or
+    // selection mask alive after a source change.
+    this.vectorBoundsSource = cacheable ? source : null;
+    this.vectorBoundsSelections = cacheable ? selections : null;
+    this.vectorBoundsFrame = cacheable ? renderer.frame : null;
+    this.vectorBoundsSelectionRevision = selectionRevision;
+    for (const { id, vectors, options } of fields) {
       if (!options.visible) continue;
       const { scale, radius, headRadius = DEFAULT_VECTOR_OPTIONS.headRadius, anchor = 'tail' } = options;
       const shift = { tail: 0, head: -1, center: -0.5 }[anchor], padding = Math.max(radius, headRadius);
-      for (let offset = 0; offset < vectors.length; offset += 3) {
-        if (renderer.selectionVisibility?.[offset / 3] === 0) continue;
-        if (!Number.isFinite(vectors[offset]) || !Number.isFinite(vectors[offset + 1]) || !Number.isFinite(vectors[offset + 2])) continue;
-        for (let axis = 0; axis < 3; axis += 1) {
-          const delta = vectors[offset + axis] * scale;
-          const tail = renderer.displayPositions[offset + axis] + delta * shift, tip = tail + delta;
-          minimum[axis] = Math.min(minimum[axis], Math.min(tail, tip) + (renderer.minimumOffset?.[axis] ?? 0) - padding);
-          maximum[axis] = Math.max(maximum[axis], Math.max(tail, tip) + (renderer.maximumOffset?.[axis] ?? 0) + padding);
-        }
+      const key = id ?? vectors;
+      let bounds = this.vectorBoundsCache.get(key);
+      if (!cacheable || !bounds || bounds.source !== source || bounds.vectors !== vectors || bounds.frame !== renderer.frame
+        || !Object.is(bounds.scale, scale) || bounds.anchor !== anchor || bounds.selections !== selections || bounds.selectionRevision !== selectionRevision) {
+        bounds = { ...vectorGeometryBounds(vectors, renderer.displayPositions, selections, scale, shift),
+          source, vectors, frame: renderer.frame, scale, anchor, selections, selectionRevision };
+        if (cacheable) this.vectorBoundsCache.set(key, bounds);
+      }
+      if (!bounds.count) continue;
+      // Keep the original addition/subtraction order. Replica offsets and
+      // uniform padding need only six operations after the geometric extrema.
+      for (let axis = 0; axis < 3; axis++) {
+        minimum[axis] = Math.min(minimum[axis], bounds.minimum[axis] + (renderer.minimumOffset?.[axis] ?? 0) - padding);
+        maximum[axis] = Math.max(maximum[axis], bounds.maximum[axis] + (renderer.maximumOffset?.[axis] ?? 0) + padding);
       }
     }
   }
+}
+
+function vectorGeometryBounds(vectors, positions, selections, scale, shift) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity, count = 0;
+  for (let offset = 0; offset < vectors.length; offset += 3) {
+    if (selections?.[offset / 3] === 0) continue;
+    const x = vectors[offset], y = vectors[offset + 1], z = vectors[offset + 2];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    count++;
+    const dx = x * scale, dy = y * scale, dz = z * scale;
+    const tx = positions[offset] + dx * shift, ty = positions[offset + 1] + dy * shift, tz = positions[offset + 2] + dz * shift;
+    minX = Math.min(minX, Math.min(tx, tx + dx)); maxX = Math.max(maxX, Math.max(tx, tx + dx));
+    minY = Math.min(minY, Math.min(ty, ty + dy)); maxY = Math.max(maxY, Math.max(ty, ty + dy));
+    minZ = Math.min(minZ, Math.min(tz, tz + dz)); maxZ = Math.max(maxZ, Math.max(tz, tz + dz));
+  }
+  return { count, minimum: [minX, minY, minZ], maximum: [maxX, maxY, maxZ] };
 }
 
 function program(gl, vertex, fragment) {

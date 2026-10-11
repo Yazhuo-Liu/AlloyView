@@ -75,8 +75,12 @@ changing IDs, and missing IDs are rejected explicitly.
 Supported:
 
 - `ITEM: TIMESTEP`, `NUMBER OF ATOMS`, `BOX BOUNDS`, and named `ATOMS` blocks;
-- positive safe-integer numeric `type`, unique integer `id`, optional consistent
-  `element`;
+- optional `ITEM: UNITS` and `ITEM: TIME`, before the timestep or between
+  header blocks; stored as `metadata.lammpsUnits` and
+  `metadata.simulationTime`, without converting coordinates or properties;
+- unique integer `id`, optional positive safe-integer numeric `type` and
+  consistent `element`; without either type or element every atom is **Type 1**;
+  element-only rows retain their explicit labels and distinct type identities;
 - one complete coordinate set: `x/y/z`, `xs/ys/zs`, `xu/yu/zu`, or
   `xsu/ysu/zsu`;
 - optional complete `ix/iy/iz` image flags;
@@ -90,7 +94,7 @@ Rejected explicitly:
 
 - general triclinic `abc origin` output;
 - missing/partial coordinate groups, partial `ix/iy/iz` image flags, missing
-  ID/type, duplicate IDs/columns;
+  IDs, duplicate IDs/columns and fewer or more atom rows than `NUMBER OF ATOMS`;
 - string custom columns other than `element`;
 - binary or non-`ITEM:` formats ([gzip-compressed](#gzip-compressed-files)
   text dumps are accepted). A LAMMPS data file named `.lmp`

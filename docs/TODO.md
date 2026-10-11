@@ -68,14 +68,14 @@ The items with the best return, drawn from all parts below:
 
 | Order | Item | What it gives | Effort |
 | --- | --- | --- | --- |
-| 1 | R1 | Frames with bonds 2.4–2.7× faster, pixels unchanged | S |
-| 2 | C4, C5 | Less per-neighbor allocation and duplicate work in frame strain and displacement | S |
+| 1 | R1 | Remaining guarded cap removal; indexed geometry is complete | S–M |
+| 2 | C5 | Remaining compact transport for light kernels; scalar kernels are complete | M |
 | 3 | T1 | Prefetch fills the cache and overlaps playback preparation | S |
-| 4 | C9 | PTM, CNA, CSP and bonds about 2× faster on BCC, 1.1–1.4× on FCC | M |
-| 5 | S1, S4 | Cold start transfers 0.9 MB instead of 11.5 MB; revisits skip 200 conditional requests | S |
-| 6 | R2, R3, R4 | Orientation colors 9× faster; frame commit and picking 3–5× faster at 1M atoms | S |
+| 4 | C9 | Migrate remaining object-returning neighbor consumers | M |
+| 5 | S4, S5 | Cache immutable assets and bundle Worker entries while keeping prewarm | S–M |
+| 6 | R2, R4 | Remaining orientation-color and picking loops; bounds/radius work is complete | S |
 
-C1–C3, S2/S3 and T5 have moved to the feature documentation and the dated
+C1–C4, R3/R8, S1–S3 and T3/T5 have moved to the feature documentation and the dated
 [validation record](VALIDATION.md). Remaining timing estimates above retain
 the original audit's scope; they are not measurements of these completed fixes.
 
@@ -84,42 +84,8 @@ the original audit's scope; they are not measurements of these completed fixes.
 Fix these before performance work. B1–B6 and B10, and G1, were completed
 on 2026-10-10. B7, B11 and B12/T5, and C1–C3 and S2/S3, were completed
 on 2026-10-11; B2 rollback was also rechecked. See the process and validation
-record in [VALIDATION.md](VALIDATION.md). Completed labels are not reused.
-
-### B8. Surface mesh caps are open or wrong when atoms lie exactly on a cell face
-
-**Severity:** medium-high (wrong picture; exported STL is not closed).
-**Effort:** M.
-
-- **Where:** `src/render/surface-mesh-geometry.js` `buildSurfaceDisplayMesh`.
-- **Evidence [M]:** `bugs/B-mesh-grains/k7-ideal-lattice-caps.mjs 0 40 1`: 11
-  of 40 ideal FCC structures with voids have open edges or a wrong enclosed
-  volume at display origin 0. In the app
-  (`b13-ideal-lattice-caps-app.mjs`): 8 open edges and volume 11,861 against a
-  solid volume of 17,834; at origin (0.013, 0.017, 0.019) the mesh is closed.
-  Jittered atoms never fail. `k10-shared-edge-minimal.mjs`: two boxes sharing
-  one edge, cut through that edge, give volume 57 instead of 72.
-- **Cause:** vertices exactly on the cut plane are classified inconsistently,
-  and edges shared by two sheets are paired wrongly when cap loops are built.
-- **Fix:** classify on-plane vertices to one fixed side for every face (or
-  choose a cut offset that avoids all vertex coordinates), and split
-  non-manifold edge vertices per sheet before cutting.
-- **Test:** k7, k4 and k10 as randomized unit tests: no open edge, and volume
-  equal to the kernel's solid volume at origin 0 and at random origins.
-
-### B9. Cancelling DXA kills a surface job, and its status stays "Calculating…"
-
-**Severity:** medium-high. **Effort:** S–M.
-
-- **Where:** `src/analysis/dxa-client.js` terminates the shared Worker and
-  aborts every task; `src/surface-tools.js` returns on `AbortError` without
-  updating its state.
-- **Evidence [M]:** `bugs/B-mesh-grains/b1-dxa-cancel-kills-surface.mjs`: start
-  Surface and DXA, cancel DXA. Surface still shows "Calculating… preparing"
-  20 s later and `wait-analyses` never ends.
-- **Fix:** when the Worker is terminated for one task, redispatch the other
-  queued tasks on a new Worker; in the surface tool, tell a foreign abort from
-  its own and requeue or reset.
+record in [VALIDATION.md](VALIDATION.md). B31, B8, B9, B14, B17, B18 and B20
+were completed in the next 2026-10-11 batch. Completed labels are not reused.
 
 ### B13. Time series keep a stale last frame and lose settings in configurations
 
@@ -136,19 +102,6 @@ record in [VALIDATION.md](VALIDATION.md). Completed labels are not reused.
   list differs from the default.
 - **Fix:** refresh the time series when the frame count grows; read the range
   after indexing; compare the whole serialized state with the defaults.
-
-### B14. The surface of "Visible atoms" is stale after a frame change
-
-**Severity:** medium (frame series, scripts and movies can export it).
-**Effort:** M.
-
-- **Evidence [M]:** `bugs/B-mesh-grains/b2-visible-atoms-stale.mjs`: with a
-  CNA legend filter hiding "Other", each new frame's surface is first computed
-  from every atom, shows "Calculated", and is recomputed 0.6–1.8 s later from
-  the filtered set. An export in between uses the wrong surface.
-- **Fix:** when the restriction is "Visible atoms" and visibility depends on an
-  analysis that has not finished for the frame, hold the surface in a waiting
-  state.
 
 ### B15. Escape closes the movie progress window while the export continues
 
@@ -174,29 +127,6 @@ record in [VALIDATION.md](VALIDATION.md). Completed labels are not reused.
 - **Fix:** bound the loop to the images that can be closest, or reject like the
   other analyses.
 
-### B17. A binning profile in "Waiting" blocks scripts and movie export forever
-
-**Severity:** medium. **Effort:** S.
-
-- **Evidence [M]:** `bugs/A-movies/b7-waiting-hang.mjs`: binning waits for a
-  quantity no enabled analysis will produce; `wait-analyses` and movie
-  preparation count it as pending.
-- **Fix:** use a distinct non-pending state when nothing will produce the
-  quantity; name what is awaited and time out.
-
-### B18. WebGL context loss is not handled in the main view
-
-**Severity:** medium. **Effort:** M.
-
-- **Evidence [M]:** `bugs/C-labels-ao-export/t6-context-loss.mjs`
-  (`WEBGL_lose_context`): no notice is shown; the event is not
-  default-prevented, so the context cannot be restored; a PNG at the current
-  size downloads as a fully transparent image with no error; later frame
-  changes fail with shader errors.
-- **Fix:** prevent the default on loss, show a banner, stop rendering and
-  refuse exports with one message; on restore, rebuild programs and buffers
-  from the retained frame.
-
 ### B19. A second configuration import during a restore can leave it unfinished
 
 **Severity:** medium, intermittent (5 of 8 runs). **Effort:** S–M.
@@ -206,19 +136,6 @@ record in [VALIDATION.md](VALIDATION.md). Completed labels are not reused.
   analysis is calculated, and Color by ends as "type". The root cause was not
   isolated.
 - **Fix:** serialize restores, and always write a final status in `finally`.
-
-### B20. A file that fails to open leaves the previous trajectory displayed but dead
-
-**Severity:** medium. **Effort:** S (minimal) or M.
-
-- **Where:** `src/app.js` `loadFiles`: the old structure Worker is reset and
-  the file name changed before the new file is known to parse.
-- **Evidence [M]:** `bugs/X-cross/repro-bad-second-file.mjs` and
-  `shell/bugs2.mjs`: the header shows the broken file's name over the old
-  atoms, and frame navigation fails with "Open a structure or trajectory file
-  first."
-- **Fix:** load the new source in a second Worker and swap on the first frame
-  (this also gives S6); minimal: close the source cleanly on failure.
 
 ### B21. Export JSON fails after opening a shorter trajectory
 
@@ -261,12 +178,12 @@ record in [VALIDATION.md](VALIDATION.md). Completed labels are not reused.
 | B28 | With the Voronoi WebGPU kernel turned on, a failed GPU Voronoi preparation cancels all other GPU prewarming, and the status wrongly says "unavailable" (the default CPU routing no longer reaches this) | `gpu/prefetch-memory.mjs --scenario=slab`: 4 of 24 pipelines [M] | Catch the Voronoi-specific failure, continue the general warm-up, report status per kernel | S |
 | B29 | Device loss or any uncaptured GPU error disables WebGPU for the session | `src/analysis/gpu/runtime.js` [C] | Re-create the Worker once on the next request; treat validation errors as failed tasks | S–M |
 | B30 | Every refresh rebuilds the legend and drops keyboard focus; the legend cannot be edited during playback | `shell/bugs2.mjs` [M] | Update the legend in place when its kind, property and items are unchanged | M |
-| B31 | LAMMPS dumps with `ITEM: UNITS`/`ITEM: TIME`, or without a `type` column, are rejected; rows beyond NUMBER OF ATOMS are dropped silently | `io/bench-smooth-robust.mjs` [M] | Accept the optional blocks; default the type; raise an error on extra rows | S |
 | B32 | Small touch targets on phones (text buttons 28×11 px, help links 19×19) | `shell/mobile.mjs` [M] | 32–44 px hit areas under the mobile media query | S |
 | B33 | The Movie panel's image-size mirror keeps its old value after an import | `bugs/X-cross/roundtrip.mjs` [M] | Refresh it with the export-resolution control | S |
 | B34 | GPU results that depend on neighbor order are not reproducible between runs: frame strain on 6,912 and 60,229 atoms differs in 7–11 of 1,144,351 values (at most 1.5×10⁻⁸), HEA bonds and Q4/Q6 differ between two pools, and GPU Voronoi digests differ between page loads | Found while fixing B1 and B5; the GPU neighbor grid is filled with `atomicExchange`, so the order of each cell's list varies [M] | Sort each cell's list, or accumulate in an order-independent way; decide first whether run-to-run identity is required on the GPU | M |
 | B36 | `npm run test:gpu:voronoi` on the software adapter takes 285–320 s on the reference machine against a 360 s evaluate timeout, so a loaded machine can fail it without a defect | Measured on 2026-10-10 [M] | Split the page evaluation into two calls, or raise the timeout for this suite | S |
 | B35 | Trajectory lines for a selection group of physical copies find no atoms ("IDs not found (@AlloyView:copy…)"); lines work for source IDs | Seen while fixing B1 [M] | Map copy IDs to their source atom and add the copy's cell offset, or state the restriction in the panel | S–M |
+| B37 | Extremely large finite skew-cell displacement image bounds can exceed safe integers; an image loop then cannot advance | CPU C5 boundary probe: `[3e38,3e38,3e38]`, basis `[10,0,0,9,1,0,.7,-.8,10]`, periodic axes; isolated probe Worker does not return [M] | Reject unsafe image-coefficient bounds before enumeration; preserve finite large open/orthogonal displacement support | S |
 
 Suspected but not reproduced: the movie frame range persists across files
 beyond the new frame count. The expression variable `ID` is NaN for physical
@@ -274,36 +191,23 @@ copies (may be by design; B35 is its visible consequence).
 
 ## Part 2: performance, phase 1 (small changes)
 
-### C4. Reference-frame strain: remove per-neighbor allocation
+### C5. Remaining transport for light CPU kernels
 
-**Effort:** S. **Deployments:** hosts without WebGPU and CPU fallback.
+**Effort:** M. **Deployments:** private-memory CPU paths.
 
-- **Where:** `src/analysis/reference-strain.js` `minimumImageChange` and the
-  loops around it.
-- **Evidence [M]:** `minimumImageChange` is 62% of self time; the kernel costs
-  60.7 µs per atom against 5.4 µs for local-shear metrics on the same
-  neighbors.
-- **Change (verified):** the same arithmetic in scalars, in the same order.
-- **Gain:** kernel 60.7 → 7.2 µs per atom; pool 120k 607 → 158 ms and 1M
-  4,743 → 848 ms; all 19 output fields hash-identical.
-- **Also:** each Worker keeps a private wrapped copy of the current
-  coordinates that the memory budget does not count (about 720 MB across 30
-  Workers at 1M); share it when isolated.
+Displacement and cached ideal-strain scalar kernels are complete, as is
+range-only metric transport and bounded chunking for local-shear finalization.
+See [performance](features/performance.md) and the 2026-10-11
+[validation](VALIDATION.md).
 
-### C5. Light kernels: scalar loops and cheaper transport
-
-**Effort:** S (kernels), M (transport). **Deployments:** all CPU paths.
-
-- **Displacement [M]:** per-atom `map`, `subarray`, `every` and spread
-  `Math.hypot`. Verified prototype: 1.74 → 0.17 µs per atom; pool 120k
-  169 → 62 ms, 1M 443 → 184 ms.
-- **Ideal-strain tensor from a stored PTM fit [M]:** 5.3 µs per atom for a 3×3
-  product (`atomic-strain.js`); not prototyped, at least 10× expected [E].
-- **Local-shear finalize [M]:** a third pool pass takes 142 ms at 1M for 70 ms
-  of single-thread arithmetic; nonisolated Workers each receive the whole
-  metrics array.
-- **Change:** scalar kernels. For kernels under about 0.3 µs per atom, use one
-  chunk per Worker and fewer Workers, and send only the chunk's rows.
+- **Remaining:** displacement and cached ideal-strain still retain full input
+  tables per Worker. Evaluate compact row transport with explicit source-range
+  offsets and smaller degrees now that their kernels are much cheaper.
+- **Constraints:** preserve unmatched NaNs, reference mapping, PTM matrix
+  strides, retained contexts and cancellation; measure whole-pool time in both
+  isolation modes before choosing thresholds. Do not enlarge heavy PTM chunks.
+- The old audit's kernel and pool timing estimates are superseded by the new
+  kernel measurements; they are not a measurement of this remaining transport.
 
 ### C6. Coordination kernel and Worker target
 
@@ -383,8 +287,8 @@ GPU kernels).
   and go straight to the CPU until they change. Pin the backend within one
   batch or time series, because backends agree only within documented
   tolerances.
-- **Note:** these are pre-fix audit CPU timings. C3 is complete, and C4–C6
-  and C9 remain; re-measure before fixing thresholds.
+- **Note:** these are pre-fix audit CPU timings. C3/C4 and the C5 scalar kernels are complete; C5 transport, C6 and
+  remaining C9 consumers need whole-pool measurements before fixing thresholds.
 
 ### T1. Restart frame prefetch when indexing completes
 
@@ -414,16 +318,6 @@ GPU kernels).
   IDs; evict by distance from the current window. A sliding sum was rejected
   because it changes the summation order.
 
-### T3. Frame-ZIP: faster CRC
-
-**Effort:** S. **Deployments:** all.
-
-- **Evidence [M]:** `crc32` in `src/export-archive.js` iterates a `Uint8Array`
-  with `for…of`: 97.4 ms per 4 MiB against 11.7 ms with an indexed loop and
-  the same result. It runs in one synchronous block at the end: 445 ms for 24
-  frames, about 6 s at the 256 MiB cap.
-- **Change:** indexed loop, computed per frame. See T9 for PNG encoding.
-
 ### T4. Dump parser: fused tail pass and coordinate-only reads
 
 **Effort:** S. **Deployments:** all.
@@ -439,26 +333,21 @@ GPU kernels).
   lines. Add a same-order fast path to `unwrapSequenceFrame`, which builds a
   130k-entry `Map` per CFG frame.
 
-### R1. Bonds: indexed geometry without hidden caps
+### R1. Remaining capless-bond guard
 
-**Effort:** S. **Deployments:** every GPU.
+**Effort:** S–M. **Deployments:** WebGL.
 
-- **Where:** `src/render/atom-primitives.js` `createPrimitiveMesh` and
-  `drawMesh`.
-- **Evidence [M]:** a bond is a 10-sided cylinder stored as 120 non-indexed
-  vertices with two caps, and every vertex repeats 6–10 texel fetches. 60,229
-  atoms with 421,315 bonds issue 50.8 million vertex invocations per frame:
-  11.4–19.8 ms against 1.0 ms without bonds. 481,832 atoms with 3.37 million
-  bond instances take 131–135 ms per frame (about 7.5 FPS on a GTX 1080 Ti).
-- **Change (verified, no differing pixel in 4 scenes):** indexed cylinder and
-  cone drawn with `drawElementsInstanced`, and a capless cylinder whenever the
-  smallest drawn atom radius is at least the bond radius (the caps then sit
-  inside the atom spheres). Track the minimum radius next to
-  `maximumAtomRadius` for that guard.
-- **Gain:** 60k atoms with bonds 19.7 → 14.0 (indexed) → 8.3 ms (no caps);
-  482k atoms with bonds 135 → 95 → 50 ms. Vertices per bond 120 → 46 → 22.
-- **Verify:** `render/m2.mjs`, `render/m7.mjs`; the bonds row of
-  `scripts/browser-crystal-drag.mjs --performance`.
+Indexed capped cylinders and cones are complete (120 → 46 and 60 → 33 vertex
+rows), with exact pixels in the new browser suite. See
+[performance](features/performance.md).
+
+- **Remaining:** select a capless cylinder only when both endpoints' actual
+  drawn spheres cover every cap. Atom hiding, per-atom radii, selections and
+  slices can expose an endpoint; a minimum-radius check alone is insufficient.
+- **Verify:** small-radius, partially hidden, skew-periodic and sliced scenes
+  must remain pixel-identical, including exported images. Keep the capped mesh
+  as the fallback. The old audit's 2.4–2.7× combined gain includes cap removal
+  and is not a timing claim for the indexed-only implementation.
 
 ### R2. Orientation colors: scalar per-atom loop
 
@@ -475,27 +364,6 @@ GPU kernels).
   the exported helpers as the reference for a byte-comparison test.
 - **Gain (verified for IPF):** 2,206 → 236 ms with no differing byte;
   Rodrigues 5–10× expected [E].
-
-### R3. Scene bounds and radius loops at frame commit
-
-**Effort:** S. **Deployments:** all.
-
-- **Where:** `src/render/webgl-renderer.js` `updateSceneBounds`, called by
-  `setFrame`, `setDisplayPositions` and nine other setters (always by
-  `setSurfaceMesh` and `setTrajectoryLines`, even with nothing to show);
-  `atomRadii.reduce` and the `setAtomRadii` validation.
-- **Evidence [M]:** at 963,664 atoms `updateSceneBounds` takes 60–87 ms, the
-  radius maximum 19.6 ms and the radius validation 21 of `setAtomRadii`'s
-  24 ms. The uploads are cheap: 29 MB in about 10 ms. `setFrame` costs
-  113–133 ms of JavaScript in total. With the second view open, every sync
-  triggers one more full bounds scan.
-- **Change:** compute atom bounds in one indexed pass, cached by the display
-  position array and invalidated when display coordinates change; combine it
-  with the cell, replica offsets and layer extensions; cache arrow bounds per
-  field; indexed loops for the radius maximum and validation; skip the bounds
-  update when nothing changed.
-- **Gain:** the scan drops from 60.1 to 12.9 ms with identical bounds
-  (prototype) and to about zero when cached; `setFrame` about 35–45 ms [E].
 
 ### R4. Picking: tighten the per-atom loop
 
@@ -534,23 +402,6 @@ GPU kernels).
   caps; let the second renderer adopt the main renderer's processed display
   arrays, atom bounds and bond shifts (treated as immutable).
 
-### S1. Shrink the logo assets
-
-**Effort:** S. **Deployments:** all; phones most.
-
-- **Where:** `src/asserts/logo/`, `index.html`, `src/theme.js`.
-- **Evidence [M]:** `AlloyView_logo_only.png` is 2400×2400 and 4.4 MB; it is
-  the favicon and the empty-state fallback image, fetched even when hidden.
-  Each wordmark SVG is 4.4 MB and embeds the same 2048×2048 PNG twice for a
-  190 px mark; light-theme users download both. A cold start transfers
-  11.46 MB, of which code, CSS and HTML are 0.86 MB. The main thread spends
-  127 ms parsing the SVG and 113 ms decoding images.
-- **Change:** a 32–180 px favicon; a ≤264 px fallback inserted only when WebGL
-  fails; one small SVG whose lettering follows the theme; a build check that
-  rejects assets over 200 KB.
-- **Gain (prototype):** transfer 11,460 → 901 KB; about 40 MB less decoded
-  bitmap memory [E].
-
 ### S4. Cache content-hashed assets as immutable
 
 **Effort:** S (deployment configuration). **Deployments:** production.
@@ -565,36 +416,25 @@ GPU kernels).
 
 ## Part 2: performance, phase 2 (medium changes)
 
-### C9. Neighbor queries without per-neighbor allocation
+### C9. Remaining neighbor-buffer consumers
 
-**Effort:** M. **Deployments:** all CPU paths, CPU fallback and exact
-corrections. **The largest CPU gain.**
+**Effort:** M. **Deployments:** CPU and exact GPU corrections.
 
-- **Where:** `src/analysis/neighbors.js` (`within`, `nearest`) and every
-  caller: CNA, CSP, PTM preparation, bonds, bond statistics, local shear, RDF,
-  clusters.
-- **Evidence [M]:** `within()` allocates an object with four boxed doubles per
-  neighbor. For k = 18 the first search radius is 1.408 a, just inside the BCC
-  third shell at 1.414 a, so BCC needs 1.9–2.0 passes and 113–126 candidates
-  per atom against 18–23 in FCC. PTM on BCC spends about 59% of its CPU in
-  JavaScript neighbor preparation. CNA spends 33% in `classify`, in a string
-  `Map` and a new array per atom. A slab with two-thirds vacuum doubles the
-  candidate count.
-- **Change (verified, `cpu/proto-changed/`):** `collect()` fills typed scratch
-  arrays in the same order; `nearestInto()` keeps the k best by bounded
-  insertion with the existing comparator; the start radius is learned from
-  the last k-th neighbor distance with the original ladder as fallback; CNA
-  uses integer counters; pair keys are numeric.
-- **Exactness:** 159,696 queries over 17 frames and 845 kernel checks match
-  with `Object.is`; pool hashes are identical for 13 analyses at 120k in both
-  deployments and 10 at 1M.
-- **Gain, single thread on the Fe loop:** PTM 82.7 → 39.6 µs per atom, CNA
-  adaptive 12.9 → 5.8, CSP auto 14.0 → 6.7, bonds 5.4 → 2.3; FCC gains are
-  1.1–1.4× except bonds (2.4×). Pool with 30 Workers: 120k CNA 117 → 59 ms and
-  PTM 496 → 251 ms; 1M CNA 761 → 313 ms and PTM 4,737 → 2,936 ms.
-- **Risks:** scratch arrays are reused, so nested queries must copy first; the
-  numeric pair key needs type IDs below 2²⁶; in thin cells the smaller sphere
-  may succeed where the current code reports "cell is too thin".
+Reusable typed candidate buffers and stable nearest selection, integer CNA
+signatures, Bonds and trusted bond-statistics numeric pair lookup are complete.
+Public object-returning queries and the string-key GPU oracle remain supported.
+See [performance](features/performance.md) and [validation](VALIDATION.md).
+
+- **Remaining:** move RDF, local shear, clusters and the final object-returning
+  PTM/CSP consumers onto owned typed rows. Nested queries must not overwrite an
+  outer row; preserve neighbor order, image shifts, self images and reductions.
+- **Decision:** retain the original radius ladder. Learning the previous
+  k-th-neighbor radius can turn an existing thin-cell rejection into success;
+  it needs a separate equivalence proof or an explicit numerical-behavior
+  decision. It was not silently included in this optimization.
+- Compare against the current production buffers, not the original audit's
+  combined prototype. Recent CNA/Bonds kernel gains are about 1.4–1.5× in the
+  measured samples; they exclude Worker preparation and rendering.
 
 ### C10. CPU Voronoi: JavaScript overhead and index labels
 
@@ -687,7 +527,7 @@ its WebGPU kernel is turned on.
   summary; copy coordinates once per frame for nonisolated Workers. Recompute
   after smoothing and replication.
 - **Gain [E]:** 150–250 ms per frame at 1M in the original audit. Re-measure
-  after the completed S2/S3 batching and combine with remaining R3 work.
+  after the completed S2/S3 batching and R3 bounds/radius work.
 
 ### S5. Bundle the page and each Worker entry
 
@@ -728,7 +568,9 @@ its WebGPU kernel is turned on.
   the first open, and its parser pool is closed on each load; a 60k file has
   about 80–120 ms of unexplained overhead per open.
 - **Change:** let the Worker's own load handler replace the source, or keep
-  one standby Worker with a prewarmed parser and swap it in. Combine with B20.
+  one standby Worker with a prewarmed parser and swap it in. B20 now uses
+  candidate-source commit to preserve the old source on failure; keep that
+  transaction and shared CPU admission when reusing a standby parser.
 
 ### G3. Keep thin cells and slabs on the GPU
 
@@ -777,23 +619,6 @@ GPUs; none where `EXT_conservative_depth` is missing.
   replicas take zoom 10× from 10.0 to 6.1 ms.
 - **Risk:** a fragment depth below the rasterized depth is undefined; recheck
   pixel identity on other GPU vendors.
-
-### R8. Bond and arrow layer: update lazily, and store visibility separately
-
-**Effort:** S–M. **Deployments:** all.
-
-- **Where:** `src/render/atom-primitives.js` mirrors every position, color and
-  visibility update into textures, and packs visibility into the 16-byte
-  position texel. The layer is created on the first bonds or arrows and never
-  destroyed.
-- **Evidence [M]:** with the layer present at 963,664 atoms, `setVisibility`
-  goes from 0.3 to 28.6 ms and from 0.9 to 15.6 MB uploaded; `setFrame` from
-  113 to 236 ms and from 29.4 to 62.5 MB. This is paid even when no bond or
-  arrow is drawn. The audit's repeated-refresh cost is reduced by completed
-  S2 batching, but the per-upload texture cost remains.
-- **Change:** setters only mark data dirty; the layer flushes when it is about
-  to draw visible bonds or arrows; allocate CPU mirrors lazily; move
-  visibility into its own one-byte texture.
 
 ### R9. Ambient occlusion: count on the GPU
 
@@ -844,7 +669,7 @@ stays as the fallback where float blending is missing.
   surface analysis is the Delaunay tessellation, and a surface job and a DXA
   run execute one after the other in the shared Worker.
 - **Change:** build the display mesh in the Worker that already holds the
-  surface. Fix B8 first.
+  surface. B8 is complete; preserve its sheet ownership and closed STL caps.
 
 ### K3. Local shear: one neighbor pass
 

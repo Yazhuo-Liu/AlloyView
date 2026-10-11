@@ -1,4 +1,4 @@
-import { NeighborSearch, atomRange } from './neighbors.js';
+import { NeighborSearch, NeighborBuffer, atomRange } from './neighbors.js';
 
 export const MAX_BONDS = 1_000_000;
 export const MAX_NEIGHBORS_PER_ATOM = 100_000;
@@ -35,15 +35,17 @@ export function calculateBonds(frame, { cutoff, pairCutoffs = [], maxBonds = MAX
   const coordination = new Uint32Array(endAtom - startAtom);
   let capacity = Math.min(256, maxBonds), length = 0;
   let indices = new Uint32Array(capacity * 2), vectors = new Float32Array(capacity * 3), shifts = new Int32Array(capacity * 3);
+  const scratch = new NeighborBuffer();
   for (let atom = startAtom; atom < endAtom; atom += 1) {
-    const neighbors = search.within(atom, maximumCutoff, MAX_NEIGHBORS_PER_ATOM + 1);
+    const neighbors = search.collect(atom, maximumCutoff, scratch, MAX_NEIGHBORS_PER_ATOM + 1);
     if (neighbors.length > MAX_NEIGHBORS_PER_ATOM) throw new Error('Too many bond neighbors; reduce the cutoff.');
-    for (const neighbor of neighbors) {
-      const pairCutoff = overrides.get(pairKey(frame.types[atom], frame.types[neighbor.atom])) ?? cutoff;
-      if (!pairCutoff || neighbor.distanceSquared > pairCutoff ** 2 || neighbor.distanceSquared <= 1e-24) continue;
+    for (let i = 0; i < neighbors.length; i++) {
+      const other = neighbors.atoms[i];
+      const pairCutoff = overrides.size ? overrides.get(pairKey(frame.types[atom], frame.types[other])) ?? cutoff : cutoff;
+      if (!pairCutoff || neighbors.distanceSquared[i] > pairCutoff ** 2 || neighbors.distanceSquared[i] <= 1e-24) continue;
       coordination[atom - startAtom] += 1;
-      if (neighbor.atom < atom) continue;
-      if (neighbor.atom === atom && !positiveShift(neighbor.imageA, neighbor.imageB, neighbor.imageC)) continue;
+      if (other < atom) continue;
+      if (other === atom && !positiveShift(neighbors.imageA[i], neighbors.imageB[i], neighbors.imageC[i])) continue;
       if (length === maxBonds) throw new Error(`Bond output exceeds ${maxBonds.toLocaleString('en-US')} edges; reduce the cutoff.`);
       if (length === capacity) {
         capacity = Math.min(maxBonds, capacity * 2);
@@ -51,9 +53,9 @@ export function calculateBonds(frame, { cutoff, pairCutoffs = [], maxBonds = MAX
         nextIndices.set(indices); nextVectors.set(vectors); nextShifts.set(shifts);
         indices = nextIndices; vectors = nextVectors; shifts = nextShifts;
       }
-      indices.set([atom, neighbor.atom], length * 2);
-      vectors.set([neighbor.x, neighbor.y, neighbor.z], length * 3);
-      shifts.set([neighbor.imageA, neighbor.imageB, neighbor.imageC], length * 3);
+      indices[length * 2] = atom; indices[length * 2 + 1] = other;
+      vectors[length * 3] = neighbors.xs[i]; vectors[length * 3 + 1] = neighbors.ys[i]; vectors[length * 3 + 2] = neighbors.zs[i];
+      shifts[length * 3] = neighbors.imageA[i]; shifts[length * 3 + 1] = neighbors.imageB[i]; shifts[length * 3 + 2] = neighbors.imageC[i];
       length += 1;
     }
     if ((atom - startAtom + 1) % 256 === 0) onAtoms(atom - startAtom + 1, endAtom - startAtom);
@@ -63,5 +65,10 @@ export function calculateBonds(frame, { cutoff, pairCutoffs = [], maxBonds = MAX
     shifts: shifts.slice(0, length * 3), count: length, coordination, elapsedMs: performance.now() - startedAt, warning: null };
 }
 
-function pairKey(first, second) { return first <= second ? `${first}:${second}` : `${second}:${first}`; }
+function pairKey(first, second) {
+  if (Number.isInteger(first) && Number.isInteger(second) && first >= 0 && second >= 0 && first < 2 ** 26 && second < 2 ** 26) {
+    return first <= second ? first * 2 ** 26 + second : second * 2 ** 26 + first;
+  }
+  return first <= second ? `${first}:${second}` : `${second}:${first}`;
+}
 function positiveShift(a, b, c) { return a ? a > 0 : b ? b > 0 : c > 0; }

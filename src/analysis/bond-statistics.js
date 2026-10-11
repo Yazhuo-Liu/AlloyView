@@ -1,4 +1,4 @@
-import { NeighborSearch, atomRange } from './neighbors.js';
+import { NeighborSearch, NeighborBuffer, atomRange } from './neighbors.js';
 import { MAX_NEIGHBORS_PER_ATOM } from './bonds.js';
 
 // Angle enumeration is quadratic in local coordination. Refuse oversized
@@ -6,6 +6,18 @@ import { MAX_NEIGHBORS_PER_ATOM } from './bonds.js';
 export const MAX_BOND_STATISTICS_NEIGHBORS = 1024;
 export const MAX_BOND_STATISTICS_BINS = 4096;
 const preparedContexts = new WeakMap();
+
+/** Numeric diagnostic only: opaque scratch is private to its immutable input
+ * context and cannot be reached by a generic resident-buffer walk. */
+export function bondStatisticsScratchBytes(context) {
+  const scratch = preparedContexts.get(context)?.scratch;
+  if (!scratch) return 0;
+  let bytes = scratch.selected.byteLength + scratch.inverseLengths.byteLength;
+  for (const name of ['atoms', 'xs', 'ys', 'zs', 'distanceSquared', 'imageA', 'imageB', 'imageC']) {
+    bytes += scratch.candidates[name]?.byteLength ?? 0;
+  }
+  return bytes;
+}
 
 /** Common CPU/GPU contract for a cutoff-defined, periodic bond environment. */
 export function validateBondStatisticsParameters(frame, {
@@ -132,7 +144,11 @@ export function calculateBondStatistics(frame, { onPhase = () => {}, onAtoms = (
  * opaque so ordinary calculation options cannot bypass scientific checks. */
 export function prepareBondStatisticsContext(frame, parameters = {}) {
   const context = Object.freeze({});
-  preparedContexts.set(context, { frame, prepared: validateBondStatisticsParameters(frame, parameters) });
+  const prepared = validateBondStatisticsParameters(frame, parameters);
+  const encodedOverrides = new Map();
+  for (const entry of parameters.pairCutoffs ?? []) encodedOverrides.set(encodedPairKey(entry.first, entry.second), entry.cutoff);
+  preparedContexts.set(context, { frame, prepared, encodedOverrides, scratch: { candidates: new NeighborBuffer(),
+    selected: new Uint32Array(MAX_BOND_STATISTICS_NEIGHBORS), inverseLengths: new Float64Array(MAX_BOND_STATISTICS_NEIGHBORS) } });
   return context;
 }
 
@@ -151,7 +167,8 @@ export function calculatePreparedBondStatistics(context, { onPhase = () => {}, o
   const q4 = new Float32Array(endAtom - startAtom), q6 = new Float32Array(endAtom - startAtom);
   onPhase('analyzing');
   for (let atom = startAtom; atom < endAtom; atom += 1) {
-    const local = calculateBondStatisticsAtom(search, atom, prepared, output);
+    const local = search.collect ? calculateTypedAtom(search, atom, prepared, output, retained)
+      : calculateBondStatisticsAtom(search, atom, prepared, output);
     coordination[atom - startAtom] = local.coordination;
     q4[atom - startAtom] = local.q4;
     q6[atom - startAtom] = local.q6;
@@ -220,3 +237,59 @@ export function mergeBondStatisticsMoment(target, source) {
 
 function pairKey(first, second) { return first <= second ? `${first}:${second}` : `${second}:${first}`; }
 function positiveShift(a, b, c) { return a ? a > 0 : b ? b > 0 : c > 0; }
+
+// Encoding is exact only below 2^26; retain the original string identity for
+// larger integer types. This private map belongs to the validated context.
+const TYPE_KEY_BASE = 2 ** 26;
+function encodedPairKey(first, second) {
+  if (first < TYPE_KEY_BASE && second < TYPE_KEY_BASE) {
+    return first <= second ? first * TYPE_KEY_BASE + second : second * TYPE_KEY_BASE + first;
+  }
+  return pairKey(first, second);
+}
+function calculateTypedAtom(search, atom, prepared, output, retained) {
+  const { cutoff, maximumCutoff, types, lengthBins, angleBins } = prepared;
+  const { encodedOverrides, scratch } = retained;
+  const candidates = search.collect(atom, maximumCutoff, scratch.candidates, MAX_NEIGHBORS_PER_ATOM + 1);
+  if (candidates.length > MAX_NEIGHBORS_PER_ATOM) throw new Error('Too many bond neighbors; reduce the cutoff.');
+  const { selected, inverseLengths } = scratch;
+  const ownType = types[atom];
+  let coordination = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    const other = candidates.atoms[i];
+    const pairCutoff = encodedOverrides.size ? encodedOverrides.get(encodedPairKey(ownType, types[other])) ?? cutoff : cutoff;
+    const distanceSquared = candidates.distanceSquared[i];
+    if (!pairCutoff || distanceSquared > pairCutoff ** 2 || distanceSquared <= 1e-24) continue;
+    if (coordination === MAX_BOND_STATISTICS_NEIGHBORS) {
+      throw new Error(`Bond statistics support at most ${MAX_BOND_STATISTICS_NEIGHBORS} neighbors per atom; reduce the cutoff.`);
+    }
+    const length = Math.sqrt(distanceSquared);
+    selected[coordination] = i;
+    inverseLengths[coordination] = 1 / length;
+    coordination++;
+    if (other > atom || (other === atom && positiveShift(candidates.imageA[i], candidates.imageB[i], candidates.imageC[i]))) {
+      output.lengthCounts[bondStatisticsHistogramBin(length, maximumCutoff, lengthBins)] += 1;
+      addBondStatisticsSample(output.moments.length, length);
+    }
+  }
+  let legendre4 = coordination, legendre6 = coordination;
+  for (let first = 0; first < coordination; first++) {
+    const a = selected[first];
+    for (let second = first + 1; second < coordination; second++) {
+      const b = selected[second];
+      const cosine = Math.max(-1, Math.min(1, (candidates.xs[a] * candidates.xs[b] + candidates.ys[a] * candidates.ys[b]
+        + candidates.zs[a] * candidates.zs[b]) * (inverseLengths[first] * inverseLengths[second])));
+      const angle = Math.acos(cosine) * 180 / Math.PI;
+      output.angleCounts[bondStatisticsHistogramBin(angle, 180, angleBins)] += 1;
+      addBondStatisticsSample(output.moments.angle, angle);
+      const squared = cosine * cosine, fourth = squared * squared;
+      legendre4 += (35 * fourth - 30 * squared + 3) / 4;
+      legendre6 += (231 * fourth * squared - 315 * fourth + 105 * squared - 5) / 8;
+    }
+  }
+  const q4 = coordination ? Math.sqrt(Math.max(0, legendre4 / coordination ** 2)) : NaN;
+  const q6 = coordination ? Math.sqrt(Math.max(0, legendre6 / coordination ** 2)) : NaN;
+  addBondStatisticsSample(output.moments.q4, q4);
+  addBondStatisticsSample(output.moments.q6, q6);
+  return { coordination, q4, q6 };
+}

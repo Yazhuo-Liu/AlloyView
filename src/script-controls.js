@@ -23,11 +23,15 @@ const pauseFor = (milliseconds, signal) => new Promise((resolve, reject) => {
 });
 
 /** Resolve once `settled()` holds on two checks in a row, so that an analysis
- * which starts another one when it finishes is covered as well. */
+ * which starts another one when it finishes is covered as well. A dependency
+ * which cannot finish returns { settled: false, error } instead of leaving an
+ * automation task waiting indefinitely for data with no active producer. */
 export async function waitUntilSettled(settled, { signal = null, sleep = pauseFor, interval = 60 } = {}) {
   for (let quiet = 0; quiet < 2;) {
     if (signal?.aborted) throw new DOMException('Stopped.', 'AbortError');
-    quiet = settled() ? quiet + 1 : 0;
+    const status = settled();
+    if (status?.error) throw status.error instanceof Error ? status.error : new Error(String(status.error));
+    quiet = (typeof status === 'object' && status !== null ? status.settled : status) ? quiet + 1 : 0;
     if (quiet < 2) await sleep(interval, signal);
   }
 }

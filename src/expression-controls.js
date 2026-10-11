@@ -39,6 +39,7 @@ export function initializeExpressionControls({
   let renderedList = '', renderedVariables = null, selectionMessage = '', propertyMessage = '';
   let lastField = controls.text;
   const cache = new WeakMap();
+  const referenceSnapshots = new WeakMap();
   const snapshot = () => ({ properties: definitions.map(({ name, unit, expression }) => ({ name, unit, expression })) });
   const groups = () => getSelectionGroups()?.groups ?? [];
   const busy = () => expansion !== null;
@@ -373,6 +374,20 @@ export function initializeExpressionControls({
     /** Saved properties without values in this frame, for Color by placeholders. */
     pendingColorProperties: () => definitions.filter(definition => statuses.get(definition.name)?.state !== 'ready')
       .map(definition => ({ name: definition.name, label: `${definition.name}${definition.unit ? ` [${definition.unit}]` : ''}` })),
+    /** Read-only dependency metadata from the already parsed definitions.
+     * Inspecting a dependency never evaluates an expression or copies values. */
+    getPropertyStatus(name) {
+      const definition = definitions.find(item => item.name.toLowerCase() === String(name).toLowerCase());
+      if (!definition) return null;
+      return Object.freeze({ ...(statuses.get(definition.name) ?? { name: definition.name, state: 'waiting', message: 'Not evaluated for this frame yet.' }) });
+    },
+    getPropertyReferences(name) {
+      const definition = definitions.find(item => item.name.toLowerCase() === String(name).toLowerCase());
+      if (!definition) return null;
+      if (!referenceSnapshots.has(definition)) referenceSnapshots.set(definition,
+        Object.freeze(definition.parsed.references.map(reference => Object.freeze({ ...reference }))));
+      return referenceSnapshots.get(definition);
+    },
     getState: snapshot,
     setState(value) {
       definitions = compileComputedProperties(value ?? {});

@@ -28,7 +28,7 @@ const VORONOI_ANALYSIS_KINDS = ['voronoi', 'voronoiGeometry', 'voronoiGeometryBa
 // kernel on current adapters, so automatic selection keeps Voronoi on the CPU.
 export const VORONOI_CPU_ROUTE_REASON = 'Voronoi runs on CPU Workers, the faster backend for it. Its WebGPU kernel is used only when it is turned on.';
 const CPU_CACHED_INPUT_FIELDS = [...['structureInput', 'types', 'referenceFractional', 'referenceMapping', 'metricInput',
-  'currentPositions', 'referencePositions'], 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex', 'clusterSelection', 'rdfNormalization'];
+  'currentPositions', 'referencePositions', 'referenceCurrentFractional', 'referenceInverseMapping'], 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex', 'clusterSelection', 'rdfNormalization'];
 const CPU_MODULES = ['voronoi', 'ptm', 'dxa'];
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
@@ -218,7 +218,9 @@ export class AnalysisPool {
 
   /** Existing Wasm heaps never shrink when a frame is released. Count every
    * retained heap once, then budget only missing module capacity per slot. */
-  cpuRetainedInputBytes(frameKey) {
+  cpuRetainedInputBytes(frameKey, fixedSnapshotKeys = []) {
+    const coveredFrames = new Set([frameKey, ...fixedSnapshotKeys]);
+    const coveredGroups = new Set([...coveredFrames].map(key => `frame:${key}`));
     const groups = new Map(), buffers = new Set();
     const visit = (value, seen = new Set()) => {
       if (!value || typeof value !== 'object' || seen.has(value)) return;
@@ -230,10 +232,10 @@ export class AnalysisPool {
     let privateBytes = 0;
     for (const slot of this.slots) {
       privateBytes += Math.max(0, (slot.residentInputBytes ?? 0) - (slot.residentSharedInputBytes ?? 0));
-      for (const [key, bytes] of slot.residentSharedGroups ?? []) if (key !== `frame:${frameKey}`) groups.set(key, Math.max(groups.get(key) ?? 0, bytes));
+      for (const [key, bytes] of slot.residentSharedGroups ?? []) if (!coveredGroups.has(key)) groups.set(key, Math.max(groups.get(key) ?? 0, bytes));
     }
     for (const snapshot of new Set([...this.cpuSnapshots, this.voronoiSnapshot?.cpuSnapshot].filter(Boolean))) {
-      if (snapshot.key === frameKey) continue;
+      if (coveredFrames.has(snapshot.key)) continue;
       if (snapshot.sharedMemory) {
         const before = new Set(buffers); visit([snapshot.coordinates, snapshot.types, snapshot.neighborIndex, snapshot.coordinationIndices]);
         const shared = [...buffers].filter(buffer => !(buffer instanceof ArrayBuffer) && !before.has(buffer));
@@ -247,7 +249,7 @@ export class AnalysisPool {
   }
 
   trimIdleCpuInputs(frameKey) {
-    const pinned = new Set([...this.controllers].map(controller => controller.cpuFrameKey).filter(key => key !== undefined));
+    const pinned = new Set([...this.controllers].flatMap(controller => controller.cpuFrameKeys ?? [controller.cpuFrameKey]).filter(key => key !== undefined));
     pinned.add(frameKey);
     // Retire expendable data before lowering parallelism. Native modules and
     // Worker objects survive; in-use frames are never evicted here.
@@ -259,13 +261,13 @@ export class AnalysisPool {
   }
 
   cpuMemoryWorkerCount(atomCount, perWorkerBytes, sharedBytes, targetAtoms, modules = [],
-    { frameKey, reusableFrameBytes = 0, nativeCapacityBytes = {}, includeRetainedInputs = true, moduleWarmup = false } = {}) {
+    { frameKey, fixedSnapshotKeys = [], reusableFrameBytes = 0, nativeCapacityBytes = {}, includeRetainedInputs = true, moduleWarmup = false } = {}) {
     const initial = { ptm: PTM_INITIAL_HEAP_BYTES, voronoi: VORONOI_INITIAL_HEAP_BYTES, dxa: 32 * 1024 ** 2 };
     const slots = [...this.slots];
     const heapBytes = (slot, module) => slot.moduleHeapBytes?.[module]
       ?? (module === 'dxa' ? slot.dxaHeapBytes : undefined) ?? (slot[`${module}Warmed`] ? initial[module] : 0);
     const retainedHeapBytes = slots.reduce((total, slot) => total + CPU_MODULES.reduce((sum, module) => sum + heapBytes(slot, module), 0), 0);
-    const retainedInputBytes = includeRetainedInputs ? this.cpuRetainedInputBytes(frameKey) : 0;
+    const retainedInputBytes = includeRetainedInputs ? this.cpuRetainedInputBytes(frameKey, fixedSnapshotKeys) : 0;
     const retainedBytes = retainedHeapBytes + retainedInputBytes;
     const required = module => initial[module] + (nativeCapacityBytes[module] ?? 0);
     let workerCount = Math.min(this.limit, Math.max(1, Math.ceil(atomCount / targetAtoms)));
@@ -289,11 +291,12 @@ export class AnalysisPool {
   }
 
   cpuResidentWorkerPolicy(atomCount, frameBytes, analysisBytes, fixedBytes, targetAtoms, modules, sharedMemory, options = {}) {
-    if (sharedMemory) return { ...this.cpuMemoryWorkerCount(atomCount, 0, fixedBytes, targetAtoms, modules, options), residentFrameLimit: 2 };
-    const single = this.cpuMemoryWorkerCount(atomCount, frameBytes + analysisBytes, fixedBytes, targetAtoms, modules,
+    const privateContextBytes = options.privateContextBytes ?? 0;
+    if (sharedMemory) return { ...this.cpuMemoryWorkerCount(atomCount, privateContextBytes, fixedBytes, targetAtoms, modules, options), residentFrameLimit: 2 };
+    const single = this.cpuMemoryWorkerCount(atomCount, frameBytes + analysisBytes + privateContextBytes, fixedBytes, targetAtoms, modules,
       { ...options, reusableFrameBytes: frameBytes });
     let double;
-    try { double = this.cpuMemoryWorkerCount(atomCount, 2 * (frameBytes + analysisBytes), fixedBytes, targetAtoms, modules,
+    try { double = this.cpuMemoryWorkerCount(atomCount, 2 * (frameBytes + analysisBytes + privateContextBytes), fixedBytes, targetAtoms, modules,
       { ...options, reusableFrameBytes: frameBytes }); }
     catch { return { ...single, residentFrameLimit: 1 }; }
     return double.workerCount < single.workerCount ? { ...single, residentFrameLimit: 1 }
@@ -655,6 +658,7 @@ export class AnalysisPool {
     // Prepared contexts and population snapshots are Worker/pool-owned, not
     // public options allowing callers to suppress validation.
     delete inputs.preparedContext; delete inputs.rdfNormalization;
+    delete inputs.referenceCurrentFractional; delete inputs.referenceInverseMapping; delete inputs.metricStartAtom;
     // GPU residency metadata is not scientific input. Sending a complete
     // reference frame to every CPU worker would duplicate its cached arrays.
     delete inputs.referenceFrame;
@@ -710,23 +714,36 @@ export class AnalysisPool {
           : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] });
     const outputBytesPerAtom = Object.values(outputFields).reduce((sum, [Type, stride]) => sum + Type.BYTES_PER_ELEMENT * stride, 0);
     const typeBytes = frame.types?.byteLength ?? 0, frameBytes = frame.fractional.byteLength + typeBytes;
+    const compactMetrics = parameters.kind === 'localShearFinalize';
+    const referenceStrain = parameters.kind === 'referenceStrain';
+    const referenceCount = referenceStrain ? inputs.referenceFractional?.length / 3 : 0;
+    if (referenceStrain && (!Number.isInteger(referenceCount) || referenceCount < 1 || inputs.referenceMapping?.length !== atomCount)) {
+      throw new Error('Reference-strain coordinates or atom mapping are incomplete.');
+    }
+    const normalizedCurrentBytes = referenceStrain ? atomCount * 3 * Float64Array.BYTES_PER_ELEMENT : 0;
+    const normalizedReferenceBytes = referenceStrain ? referenceCount * 3 * Float64Array.BYTES_PER_ELEMENT : 0;
     const analysisBytes = Math.max(0, extraBytes - (inputs.types?.byteLength ?? 0));
+    // Finalization transfers disjoint metric rows, whose aggregate copy is
+    // already charged below. It does not duplicate the whole table per slot.
+    const residentAnalysisBytes = analysisBytes - (compactMetrics ? inputs.metricInput.byteLength : 0);
     const noIndex = inputs.preparedNeighbors || (parameters.kind === 'strain' && inputs.ptmInput)
       || ['displacement', 'localShearFinalize', 'wignerSeitzAssign'].includes(parameters.kind);
-    const privateIndexBytes = noIndex ? 0 : atomCount * 20;
+    const privateIndexBytes = noIndex ? 0 : (referenceStrain ? referenceCount : atomCount) * 20;
     // Source plus immutable pool snapshot and disjoint/merged outputs are
     // fixed. Sliced private neighbor rows occupy one aggregate table; only
     // multishell tables grow with the number of Workers.
     const fixedBytes = 2 * frameBytes + 2 * atomCount * outputBytesPerAtom + 2 * analysisBytes
-      + (sharedMemory && !noIndex ? frame.fractional.byteLength + privateIndexBytes : 0)
+      + (sharedMemory && !noIndex ? (referenceStrain ? normalizedReferenceBytes : frame.fractional.byteLength) + privateIndexBytes : 0)
+      + (sharedMemory && referenceStrain ? normalizedCurrentBytes + referenceCount * 4 : 0)
       + (!sharedMemory && sharedNeighborTable && !fullNeighborTable ? neighborBytes : 0);
     const modules = parameters.kind === 'ptm' || (parameters.kind === 'strain' && !parameters.ptmInput) ? ['ptm'] : [];
     // The fitter uploads a native u32 type table beside its initial heap.
     const nativeCapacityBytes = modules.length && typeBytes ? { ptm: atomCount * 4 } : {};
-    const targetAtoms = ['coordination', 'displacement'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000
+    const targetAtoms = ['coordination', 'displacement', 'localShearFinalize'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000
       : parameters.kind === 'wignerSeitzAssign' ? 16_384 : 4_096;
     const preflight = this.cpuResidentWorkerPolicy(atomCount, frameBytes + privateIndexBytes,
-      analysisBytes, fixedBytes, targetAtoms, modules, sharedMemory, { includeRetainedInputs: false, nativeCapacityBytes });
+      residentAnalysisBytes, fixedBytes, targetAtoms, modules, sharedMemory, { includeRetainedInputs: false, nativeCapacityBytes,
+        privateContextBytes: !sharedMemory && referenceStrain ? normalizedCurrentBytes + normalizedReferenceBytes + referenceCount * 4 : 0 });
     const controller = new AbortController();
     this.controllers.add(controller);
     const releaseBackground = this.cpuBudget.deferBackground?.({ signal: controller.signal }) ?? (() => {});
@@ -738,9 +755,20 @@ export class AnalysisPool {
         prepared: 0, initialized: 0, completedAtoms: 0, totalAtoms: atomCount, completedChunks: 0, totalChunks: 0 });
       const snapshot = await this.prepareCpuSnapshot(frame, sharedMemory, controller.signal);
       controller.cpuFrameKey = snapshot.key;
-      const wrappingBytes = !sharedMemory && !noIndex && snapshot.requiresWrappedCopy ? frame.fractional.byteLength : 0;
+      controller.cpuFrameKeys = [snapshot.key];
+      const referenceSnapshot = referenceStrain ? await this.prepareCpuSnapshot({ fractional: parameters.referenceFractional,
+        cell: parameters.referenceCell }, sharedMemory, controller.signal) : null;
+      if (referenceSnapshot) {
+        inputs.referenceFractional = referenceSnapshot.coordinates; inputs.referenceCell = referenceSnapshot.cell;
+        controller.cpuFrameKeys.push(referenceSnapshot.key);
+      }
+      const wrappingBytes = !sharedMemory && !noIndex && !referenceStrain && snapshot.requiresWrappedCopy ? frame.fractional.byteLength : 0;
+      const privateContextBytes = !sharedMemory && referenceStrain ? referenceCount * 4
+        + (snapshot.requiresWrappedCopy || !(snapshot.coordinates instanceof Float64Array) ? normalizedCurrentBytes : 0)
+        + (referenceSnapshot.requiresWrappedCopy || !(referenceSnapshot.coordinates instanceof Float64Array) ? normalizedReferenceBytes : 0) : 0;
       const selectMemory = () => this.cpuResidentWorkerPolicy(atomCount, frameBytes + privateIndexBytes + wrappingBytes,
-        analysisBytes, fixedBytes, targetAtoms, modules, sharedMemory, { frameKey: snapshot.key, nativeCapacityBytes });
+        residentAnalysisBytes, fixedBytes, targetAtoms, modules, sharedMemory, { frameKey: snapshot.key,
+          fixedSnapshotKeys: controller.cpuFrameKeys, nativeCapacityBytes, privateContextBytes });
       let memoryPolicy;
       try { memoryPolicy = selectMemory(); }
       catch { this.trimIdleCpuInputs(snapshot.key); memoryPolicy = selectMemory(); }
@@ -752,7 +780,8 @@ export class AnalysisPool {
       const orderedReduction = ['bondStatistics', 'localShearMetrics'].includes(parameters.kind);
       const maxChunk = ['coordination', 'displacement', 'localShearFinalize', 'wignerSeitzAssign'].includes(parameters.kind) ? 8192
         : parameters.kind === 'ptm' || parameters.kind === 'strain' ? 4096 : 2048;
-      const chunkSize = Math.max(128, Math.min(maxChunk, Math.ceil(atomCount / (workerCount * (['ptm', 'strain'].includes(parameters.kind) ? 4 : 8)))));
+      const chunkSize = compactMetrics ? Math.min(65_536, Math.ceil(atomCount / workerCount))
+        : Math.max(128, Math.min(maxChunk, Math.ceil(atomCount / (workerCount * (['ptm', 'strain'].includes(parameters.kind) ? 4 : 8)))));
       const chunks = [];
       for (let partition = 0; partition < workerCount; partition++) {
         const first = Math.floor(atomCount * partition / workerCount), last = Math.floor(atomCount * (partition + 1) / workerCount);
@@ -795,14 +824,15 @@ export class AnalysisPool {
           controller.signal, signal, phase => report(null, phase)));
       }
       if (sharedMemory) {
-        for (const name of INPUT_ARRAY_FIELDS) if (inputs[name] && name !== 'types') inputs[name] = await copyCoordinates(inputs[name], controller.signal, true);
+        for (const name of INPUT_ARRAY_FIELDS) if (inputs[name] && name !== 'types' && !(referenceStrain && name === 'referenceFractional')) inputs[name] = await copyCoordinates(inputs[name], controller.signal, true);
         if (inputs.ptmInput) inputs.ptmInput = await copyFields(inputs.ptmInput, controller.signal, true);
         if (inputs.preparedNeighbors) inputs.preparedNeighbors = await copyPtmNeighbors(inputs.preparedNeighbors, controller.signal, true);
-        if (parameters.kind === 'referenceStrain') {
-          const reference = await this.prepareCpuSnapshot({ fractional: parameters.referenceFractional, cell: parameters.referenceCell }, sharedMemory, controller.signal);
-          sharedIndexBuilds += Number(await this.prepareCpuIndex(reference, undefined, controller.signal, signal, phase => report(null, phase)));
-          inputs.referenceFractional = reference.coordinates; inputs.referenceCell = reference.cell;
-          inputs.referenceNeighborIndex = reference.neighborIndex;
+        if (referenceStrain) {
+          sharedIndexBuilds += Number(await this.prepareCpuIndex(referenceSnapshot, undefined, controller.signal, signal, phase => report(null, phase)));
+          inputs.referenceNeighborIndex = referenceSnapshot.neighborIndex;
+          inputs.referenceCurrentFractional = snapshot.requiresWrappedCopy || !(snapshot.coordinates instanceof Float64Array)
+            ? await copyWrappedCoordinates(snapshot.coordinates, snapshot.cell, controller.signal) : snapshot.coordinates;
+          inputs.referenceInverseMapping = await invertReferenceMapping(inputs.referenceMapping, referenceCount, controller.signal);
         }
       }
       const cpuCoordinationIndex = snapshot.coordinationIndices.get(parameters.cutoff);
@@ -815,7 +845,9 @@ export class AnalysisPool {
           const chunk = chunks[chunkIndex]; chunk.claimed = true; atomProgress[index] = 0;
           const { startAtom, endAtom, partition } = chunk;
           const partial = await this.runTask({ fractional: snapshot.coordinates, cell: snapshot.cell, ...inputs,
-            types: snapshot.types ?? inputs.types, cpuFrameKey: snapshot.key, cpuAnalysisKey, cpuResidentFrameLimit: residentFrameLimit,
+            types: snapshot.types ?? inputs.types, cpuFrameKey: snapshot.key,
+            cpuAnalysisKey: compactMetrics && !sharedMemory ? `${cpuAnalysisKey}:${startAtom}` : cpuAnalysisKey,
+            cpuResidentFrameLimit: residentFrameLimit,
             cpuNeighborIndex: snapshot.neighborIndex, cpuCoordinationIndex,
             startAtom, endAtom, ...(parameters.kind === 'coordination' ? { compactOutput: true } : {}),
             ...(parameters.kind === 'bondStatistics' && reductions[partition] ? { momentInput: reductions[partition].moments } : {}),
@@ -1277,7 +1309,8 @@ export class AnalysisPool {
       const meanMetric = metrics.metricSum.map((value) => value / atomCount / normalization);
       const result = await this.analyzeCPU(frame, { ...parameters, kind: 'localShearFinalize', metricInput: metrics.metrics,
         normalization, meanMetric }, { signal: controller.signal, onProgress: progress(2) });
-      return { ...result, elapsedMs: performance.now() - startedAt, coordination: coordination.coordination,
+      return { ...result, workerCount: Math.max(coordination.workerCount, metrics.workerCount, result.workerCount),
+        finalizeWorkerCount: result.workerCount, elapsedMs: performance.now() - startedAt, coordination: coordination.coordination,
         coordinationMode, normalization, meanMetric, averageCoordination: coordination.coordinationSum / atomCount,
         averageShear: shearInvariant(meanMetric), warning: null };
     } finally {
@@ -1522,7 +1555,10 @@ export class AnalysisPool {
         if (analysisReused) { for (const name of CPU_CACHED_INPUT_FIELDS) if (name !== 'types') delete payload[name]; }
         else if (!task.sharedMemory) {
           for (const name of INPUT_ARRAY_FIELDS) if (name !== 'types' && payload[name]) {
-            payload[name] = await copyCoordinates(payload[name], task.signal); transferables.push(payload[name].buffer);
+            const source = name === 'metricInput' && payload.kind === 'localShearFinalize'
+              ? payload[name].subarray(payload.startAtom * 6, payload.endAtom * 6) : payload[name];
+            if (name === 'metricInput' && payload.kind === 'localShearFinalize') payload.metricStartAtom = payload.startAtom;
+            payload[name] = await copyCoordinates(source, task.signal); transferables.push(payload[name].buffer);
           }
           if (payload.ptmInput) { payload.ptmInput = await copyFields(payload.ptmInput, task.signal); transferables.push(...Object.values(payload.ptmInput).map(values => values.buffer)); }
           if (payload.preparedNeighbors && !chunkNeighbors) {
@@ -1660,6 +1696,33 @@ async function copyCoordinates(source, signal, sharedMemory = false) {
     if (offset + chunkLength < source.length) await yieldToMain();
   }
   return copy;
+}
+
+async function copyWrappedCoordinates(source, cell, signal) {
+  const wrapped = new Float64Array(new SharedArrayBuffer(source.length * 8));
+  for (let index = 0; index < source.length; index++) {
+    const value = source[index];
+    if (!Number.isFinite(value)) throw new Error('Reference-frame strain requires finite current coordinates.');
+    wrapped[index] = cell.pbc[index % 3] ? value - Math.floor(value) : value;
+    if ((index + 1) % 524_288 === 0) { await yieldToMain(); if (signal.aborted) throw abortError(); }
+  }
+  if (signal.aborted) throw abortError();
+  return wrapped;
+}
+
+async function invertReferenceMapping(mapping, referenceCount, signal) {
+  const inverse = new Int32Array(new SharedArrayBuffer(referenceCount * 4)).fill(-1);
+  for (let atom = 0; atom < mapping.length; atom++) {
+    const reference = mapping[atom];
+    if (!Number.isInteger(reference) || reference < -1 || reference >= referenceCount
+      || (reference >= 0 && inverse[reference] >= 0)) {
+      throw new Error('Reference-strain atom mapping must be one-to-one and within the reference frame.');
+    }
+    if (reference >= 0) inverse[reference] = atom;
+    if ((atom + 1) % 65_536 === 0) { await yieldToMain(); if (signal.aborted) throw abortError(); }
+  }
+  if (signal.aborted) throw abortError();
+  return inverse;
 }
 
 async function copyPtmNeighbors(table, signal, sharedMemory, range = {}) {

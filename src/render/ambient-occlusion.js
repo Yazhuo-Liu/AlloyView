@@ -526,6 +526,15 @@ export class AmbientOcclusionController {
     this.settings = { ...DEFAULT_AMBIENT_OCCLUSION };
     this.result = this.job = this.pending = this.cancelledInputs = this.pass = null;
     this.status = { state: 'off' };
+    this.unsubscribeContext = renderer.addContextListener?.(({ state, message }) => {
+      if (state === 'restored') { this.update(); return; }
+      // The browser has already invalidated these GL objects. Do not free or
+      // wait on old fences. Completed CPU factors remain usable after restore.
+      this.pending?.cancel?.(); this.pending = null;
+      this.job?.cancel?.(); this.job = null;
+      this.pass = null; this.cancelledInputs = null;
+      if (this.settings.enabled) this.report({ state: 'error', message });
+    });
   }
 
   setSettings(patch) {
@@ -556,6 +565,7 @@ export class AmbientOcclusionController {
   update({ immediate = false } = {}) {
     const renderer = this.renderer;
     if (!this.settings.enabled) return;
+    if (renderer.graphicsUnavailable?.()) return;
     if (!renderer.frame) {
       this.stop(); this.result = null;
       if (renderer.ambientOcclusionFactors) renderer.setAmbientOcclusion(null);
@@ -673,6 +683,7 @@ export class AmbientOcclusionController {
    * every image, including each frame of a ZIP, uses a current result. */
   ensureCurrent() {
     const renderer = this.renderer;
+    renderer.assertGraphicsAvailable?.();
     if (!this.settings.enabled || !renderer.frame) return false;
     if (this.result && this.matches(this.result.inputs)) {
       if (renderer.ambientOcclusionFactors !== this.result.factors) this.apply(this.result.factors);
@@ -737,7 +748,7 @@ export class AmbientOcclusionController {
     this.status = status; this.onStatus(status);
   }
 
-  dispose() { this.stop(); this.pass?.dispose(); this.pass = null; this.pixels = null; }
+  dispose() { this.unsubscribeContext?.(); this.stop(); this.pass?.dispose(); this.pass = null; this.pixels = null; }
 }
 
 function createProgram(gl, vertexSource, fragmentSource) {

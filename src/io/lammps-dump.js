@@ -14,11 +14,14 @@ import {
   asBytes,
   decodeText,
   isByteInput,
-  lineStartAfter,
+  isAsciiBlank,
   parseBytesWithFallback,
 } from './ascii-rows.js';
 
 const TIMESTEP_MARKER = new TextEncoder().encode('ITEM: TIMESTEP');
+const ATOMS_MARKER = new TextEncoder().encode('ITEM: ATOMS');
+const FRAME_MARKERS = ['ITEM: TIMESTEP', 'ITEM: UNITS', 'ITEM: TIME', 'ITEM: ATOMS']
+  .map((name) => ({ name, bytes: new TextEncoder().encode(name) }));
 const WRAPPED_COORDINATE_SETS = [
   { names: ['x', 'y', 'z'], scaled: false },
   { names: ['xs', 'ys', 'zs'], scaled: true },
@@ -41,33 +44,52 @@ export async function indexLammpsDump(blob, onProgress = () => {}, { onFrame = (
   const offsets = [];
   const seen = new Set();
   let tail = new Uint8Array(0);
+  let prefixStart = null;
+  let inAtoms = false;
+  let leadingBom = false;
+  const firstBytes = new Uint8Array(3);
 
   for (let offset = 0; offset < blob.size; offset += chunkSize) {
     if (signal?.aborted) throw new DOMException('Trajectory indexing cancelled.', 'AbortError');
     const end = Math.min(blob.size, offset + chunkSize);
     const chunk = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
+    if (offset < 3) {
+      firstBytes.set(chunk.subarray(0, Math.min(3 - offset, chunk.length)), offset);
+      leadingBom = firstBytes[0] === 0xef && firstBytes[1] === 0xbb && firstBytes[2] === 0xbf;
+    }
     const combined = new Uint8Array(tail.length + chunk.length);
     combined.set(tail);
     combined.set(chunk, tail.length);
     const baseOffset = offset - tail.length;
 
-    const last = combined.length - TIMESTEP_MARKER.length;
-    for (let index = combined.indexOf(TIMESTEP_MARKER[0]); index >= 0 && index <= last; index = combined.indexOf(TIMESTEP_MARKER[0], index + 1)) {
-      if (index > 0 && combined[index - 1] !== 10) continue;
-      let matches = true;
-      for (let markerIndex = 1; markerIndex < TIMESTEP_MARKER.length; markerIndex += 1) {
-        if (combined[index + markerIndex] !== TIMESTEP_MARKER[markerIndex]) {
-          matches = false;
-          break;
+    for (let index = combined.indexOf(73); index >= 0; index = combined.indexOf(73, index + 1)) {
+      const absolute = baseOffset + index;
+      if (index > 0 && combined[index - 1] !== 10 && !(leadingBom && absolute === 3)) continue;
+      for (const marker of FRAME_MARKERS) {
+        if (index + marker.bytes.length >= combined.length && end < blob.size) continue;
+        let matches = true;
+        for (let markerIndex = 0; markerIndex < marker.bytes.length; markerIndex += 1) {
+          if (combined[index + markerIndex] !== marker.bytes[markerIndex]) { matches = false; break; }
         }
-      }
-      if (matches) {
-        const absolute = baseOffset + index;
-        if (absolute >= 0 && !seen.has(absolute)) {
-          seen.add(absolute);
-          if (offsets.length) onFrame({ start: offsets[offsets.length - 1], end: absolute, index: offsets.length - 1 });
-          offsets.push(absolute);
+        const after = combined[index + marker.bytes.length];
+        if (!matches || (after !== undefined && after !== 10 && after !== 13 && after !== 32 && after !== 9)) continue;
+        if (absolute < 0 || seen.has(absolute)) break;
+        seen.add(absolute);
+        if (marker.name === 'ITEM: TIMESTEP') {
+          const start = prefixStart ?? (leadingBom && absolute === 3 ? 0 : absolute);
+          if (!offsets.length && start !== 0) throw dumpError('The file does not begin with a dump frame header.');
+          if (offsets.length) onFrame({ start: offsets[offsets.length - 1], end: start, index: offsets.length - 1 });
+          offsets.push(start);
+          prefixStart = null;
+          inAtoms = false;
+        } else if (marker.name === 'ITEM: ATOMS') {
+          inAtoms = offsets.length > 0;
+        } else if (!offsets.length || inAtoms) {
+          // UNITS/TIME before TIMESTEP belong to the next frame. Optional
+          // blocks after its TIMESTEP belong to its current header.
+          prefixStart ??= leadingBom && absolute === 3 ? 0 : absolute;
         }
+        break;
       }
     }
 
@@ -77,7 +99,7 @@ export async function indexLammpsDump(blob, onProgress = () => {}, { onFrame = (
 
   offsets.sort((left, right) => left - right);
   if (offsets.length === 0 || offsets[0] !== 0) {
-    throw dumpError('The file does not begin with “ITEM: TIMESTEP”.');
+    throw dumpError('The file does not begin with a dump frame header.');
   }
   onFrame({ start: offsets[offsets.length - 1], end: blob.size, index: offsets.length - 1 });
   return { offsets, indexMs: performance.now() - startedAt };
@@ -116,31 +138,66 @@ function parseLammpsText(text, sourceName, startedAt) {
   return finishDumpFrame(header, atoms, sourceName, startedAt);
 }
 
-// The header occupies the first nine lines. Decoding only those bytes yields
-// the same lines as decoding the frame: a UTF-8 sequence never spans a line
-// feed, and the leading BOM is removed in both cases.
-const HEADER_LINES = 9;
-
 function parseLammpsBytes(bytes, sourceName, startedAt) {
-  const atomStart = lineStartAfter(bytes, HEADER_LINES);
+  const atomStart = dumpAtomRowsStart(bytes);
   if (atomStart < 0) return null;
   const lines = decodeText(bytes.subarray(0, atomStart)).replace(/^\uFEFF/, '').split(/\r?\n/);
   const header = readDumpHeader(lines);
-  if (header.cursor !== HEADER_LINES) return null;
   const atoms = createDumpAtoms(header);
   readDumpRowsBytes(bytes, atomStart, header, atoms);
   return finishDumpFrame(header, atoms, sourceName, startedAt);
 }
 
+// The two optional metadata blocks make a valid header at most 13 lines.
+// Decode only that prefix; keep the direct byte atom-row path for large files.
+function dumpAtomRowsStart(bytes) {
+  let start = 0;
+  for (let line = 0; line < 13; line += 1) {
+    const end = bytes.indexOf(10, start);
+    if (end < 0) return -1;
+    let first = start;
+    while (bytes[first] === 32 || bytes[first] === 9 || bytes[first] === 13) first += 1;
+    let matches = true;
+    for (let index = 0; index < ATOMS_MARKER.length; index += 1) {
+      if (bytes[first + index] !== ATOMS_MARKER[index]) { matches = false; break; }
+    }
+    if (matches && bytes[first + ATOMS_MARKER.length] === 32) return end + 1;
+    start = end + 1;
+  }
+  return -1;
+}
+
 function readDumpHeader(lines) {
   let cursor = 0;
+  let units = null;
+  let time = null;
+  function optionalBlocks() {
+    for (;;) {
+      const marker = lines[cursor]?.trim();
+      if (marker !== 'ITEM: UNITS' && marker !== 'ITEM: TIME') return;
+      cursor += 1;
+      const value = lines[cursor]?.trim() ?? '';
+      if (!value || value.startsWith('ITEM:')) throw dumpError('Line ' + (cursor + 1) + ': ' + marker + ' requires a value.');
+      if (marker === 'ITEM: UNITS') {
+        if (units !== null) throw dumpError('ITEM: UNITS is repeated in one frame.');
+        units = value;
+      } else {
+        if (time !== null) throw dumpError('ITEM: TIME is repeated in one frame.');
+        time = finiteValue(value, cursor, 'simulation time');
+      }
+      cursor += 1;
+    }
+  }
 
+  optionalBlocks();
   expectHeader(lines, cursor, 'ITEM: TIMESTEP');
   cursor += 1;
   const timestep = integerValue(lines[cursor], cursor, 'timestep', { allowNegative: true });
   cursor += 1;
+  optionalBlocks();
   expectHeader(lines, cursor, 'ITEM: NUMBER OF ATOMS');
   cursor += 1;
+  optionalBlocks();
   const count = integerValue(lines[cursor], cursor, 'atom count');
   if (count <= 0) throw dumpError(`Line ${cursor + 1}: the atom count must be greater than zero.`);
   cursor += 1;
@@ -173,6 +230,7 @@ function readDumpHeader(lines) {
   }
   const cell = createDumpCell(bounds, boundaryFlags, triclinic);
 
+  optionalBlocks();
   const atomHeader = lines[cursor]?.trim() ?? '';
   if (!atomHeader.startsWith('ITEM: ATOMS ')) {
     throw dumpError(`Line ${cursor + 1}: expected “ITEM: ATOMS …” followed by column names.`);
@@ -181,7 +239,6 @@ function readDumpHeader(lines) {
   if (new Set(columns).size !== columns.length) throw dumpError('ITEM: ATOMS contains duplicate column names.');
   const columnIndex = new Map(columns.map((name, index) => [name, index]));
   if (!columnIndex.has('id')) throw dumpError('ITEM: ATOMS is missing the required id column.');
-  if (!columnIndex.has('type')) throw dumpError('ITEM: ATOMS is missing the required numeric type column.');
   assertCompleteCoordinateSets(columnIndex);
   const wrappedCoordinateSet = WRAPPED_COORDINATE_SETS.find((set) => set.names.every((name) => columnIndex.has(name)));
   const unwrappedCoordinateSet = UNWRAPPED_COORDINATE_SETS.find((set) => set.names.every((name) => columnIndex.has(name)));
@@ -196,7 +253,7 @@ function readDumpHeader(lines) {
   cursor += 1;
 
   return {
-    cursor, timestep, count, cell, columns, columnIndex,
+    cursor, timestep, count, cell, columns, columnIndex, units, time,
     wrappedCoordinateSet, unwrappedCoordinateSet, hasImageFlags,
   };
 }
@@ -241,7 +298,7 @@ function readDumpRowsText(lines, { cursor: firstLine, count, columns, columnInde
     if (idSet.has(id)) throw dumpError(`Line ${cursor + 1}: atom ID ${id} is duplicated.`);
     idSet.add(id);
     ids[atom] = id;
-    const rawType = integerValue(tokens[typeColumn], cursor, 'type');
+    const rawType = typeColumn === undefined ? 1 : integerValue(tokens[typeColumn], cursor, 'type');
     if (rawType <= 0) throw dumpError(`Line ${cursor + 1}: type must be a positive integer.`);
     rawTypes[atom] = rawType;
     if (elements) elements[atom] = tokens[elementColumn];
@@ -264,6 +321,9 @@ function readDumpRowsText(lines, { cursor: firstLine, count, columns, columnInde
       properties[property].data[atom] = finiteValue(tokens[propertyColumns[property]], cursor, propertyNames[property]);
     }
   }
+  for (let cursor = firstLine + count; cursor < lines.length; cursor += 1) {
+    if (lines[cursor].trim()) throw dumpError('Line ' + (cursor + 1) + ': unexpected data after the declared ' + count + ' atom rows.');
+  }
 }
 
 // Fills the same arrays as readDumpRowsText. Wherever that loop would throw,
@@ -276,7 +336,7 @@ function readDumpRowsBytes(bytes, start, { count, columns, columnIndex }, atoms)
   const kinds = new Uint8Array(columnCount).fill(SKIP);
   const idColumn = columnIndex.get('id'), typeColumn = columnIndex.get('type'), elementColumn = columnIndex.get('element');
   kinds[idColumn] = NUMBER;
-  kinds[typeColumn] = NUMBER;
+  if (typeColumn !== undefined) kinds[typeColumn] = NUMBER;
   if (elements) kinds[elementColumn] = TEXT;
   // Finite real columns: [column, stride, offset] with their target arrays.
   const realColumns = [];
@@ -318,7 +378,7 @@ function readDumpRowsBytes(bytes, start, { count, columns, columnIndex }, atoms)
       largeIds.add(id);
     }
     ids[atom] = id;
-    const type = values[typeColumn];
+    const type = typeColumn === undefined ? 1 : values[typeColumn];
     if (!Number.isSafeInteger(type) || type <= 0) throw FALLBACK;
     rawTypes[atom] = type;
     if (elements) elements[atom] = texts[elementColumn];
@@ -335,11 +395,19 @@ function readDumpRowsBytes(bytes, start, { count, columns, columnIndex }, atoms)
       }
     }
   }
+  if (!isAsciiBlank(bytes, reader.position)) throw FALLBACK;
 }
 
 function finishDumpFrame(header, atoms, sourceName, startedAt) {
   const { count, cell, timestep, wrappedCoordinateSet, unwrappedCoordinateSet } = header;
   const { ids, rawTypes, types, wrappedValues, unwrappedValues, imageFlags, properties, elements } = atoms;
+  if (!header.columnIndex.has('type') && elements) {
+    const elementTypes = new Map();
+    for (let atom = 0; atom < count; atom += 1) {
+      if (!elementTypes.has(elements[atom])) elementTypes.set(elements[atom], elementTypes.size + 1);
+      rawTypes[atom] = elementTypes.get(elements[atom]);
+    }
+  }
   const rawTypeLabels = [...new Set(rawTypes)].sort((left, right) => left - right);
   if (rawTypeLabels.length > 65_535) throw dumpError('The file contains more than 65,535 atom types, which the current data layout cannot represent.');
   const typeMap = new Map(rawTypeLabels.map((value, index) => [value, index]));
@@ -391,6 +459,8 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
     cell,
     properties,
     timestep,
+    ...(header.units === null ? {} : { lammpsUnits: header.units }),
+    ...(header.time === null ? {} : { simulationTime: header.time }),
     title: `${sourceName} · ${timestep}`,
     sourceFormat: 'lammps-dump',
     coordinateColumns: {

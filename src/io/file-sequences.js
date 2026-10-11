@@ -34,7 +34,7 @@ export function detectStructureFormatHeader(text) {
   const lines = String(text).replace(/^\uFEFF/, '').split(/\r?\n/);
   const firstDataLine = lines.find((line) => line.trim() && !line.trim().startsWith('#'))?.trim() ?? '';
   if (/^Number\s+of\s+particles\s*=\s*\d+/i.test(firstDataLine)) return 'cfg';
-  if (/^ITEM:\s+TIMESTEP\b/i.test(firstDataLine)) return 'lammps-dump';
+  if (/^ITEM:\s+(?:TIMESTEP|UNITS|TIME)\b/i.test(firstDataLine)) return 'lammps-dump';
   // A data file's free-text title can be anything, so check its header first.
   if (looksLikeLammpsData(text)) return 'lammps-data';
   if (/^\d+$/.test(firstDataLine) && Number(firstDataLine) > 0) return 'xyz';

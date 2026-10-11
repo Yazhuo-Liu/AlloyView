@@ -29,9 +29,18 @@ slabs and nanoparticles, internal voids, pores and crack faces.
 The analysis repeats for every displayed frame while the tool is enabled, and
 after a change of the radius, smoothing or atom restriction. With **Visible
 atoms** it also repeats 0.6 s after the display filters last changed.
+If a filter needs a classification or numeric result still being calculated
+for this frame, Surface clears the old mesh and waits for that producer before
+reading the mask. Completion wakes it immediately; a failed or unavailable
+dependency reports its reason. Only analyses used by the active filters are
+dependencies, so unrelated work can continue in parallel.
 **Cancel** stops it and clears the mesh and its statistics while keeping the
 settings. Results are cached per frame, so returning to a frame redraws its
 surface without a new calculation.
+
+Surface and DXA cancel their own requests in the shared native queue. Cancelling
+one tool leaves the other's queued or running request intact; an externally
+aborted surface request leaves a terminal **Cancelled** state.
 
 ## Method
 
@@ -129,11 +138,14 @@ the solid.
 - Atoms on the surface are mesh vertices and appear half embedded in it; hide
   atoms or lower the radius scale to see the mesh alone.
 
-An atomic plane that lies exactly on a periodic cell face, as in ideal
-lattices that start at the cell origin, is cut consistently: reduced
-coordinates within 10⁻⁹ of a face are placed on it, a surface that lies in a
-face is shown on the side of its solid, and other atoms on a face belong to
-the lower side.
+An atomic plane that lies exactly on a periodic cell face, as in ideal lattices
+that start at the cell origin, is cut consistently. Independent triangle fans
+at a shared edge or point are separated before cutting. A limiting inward
+topological coordinate resolves which side owns a boundary vertex; output
+vertices keep their physical coordinates. Collapsed cap triangles contribute
+their subdivision points to adjacent triangles so omitting zero-area facets
+from STL does not leave a crack. This display construction changes neither
+the scientific source mesh nor its volume and area statistics.
 
 ## Mesh export
 

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell } from '../src/data/model.js';
 import { MESH_EXPORT_FORMATS, createMeshExport, exportTriangles, meshToObj, meshToPly, meshToStl } from '../src/io/mesh-export.js';
+import { calculateSurfaceMesh } from '../src/analysis/surface-mesh.js';
+import { fccBlock, periodicDistance, subsetFrame } from './helpers/surfaces.js';
 import {
   buildSurfaceDisplayMesh, displayMeshArea, displayMeshOpenEdges, displayMeshVolume, surfaceMeshArea, triangulateLoops,
 } from '../src/render/surface-mesh-geometry.js';
@@ -19,6 +21,29 @@ function boxMesh(low, high) {
   const quads = [[0, 4, 6, 2], [1, 3, 7, 5], [0, 1, 5, 4], [2, 6, 7, 3], [0, 2, 3, 1], [4, 5, 7, 6]];
   const triangles = quads.flatMap(([a, b, c, d]) => [a, b, c, a, c, d]);
   return { vertices: Float64Array.from(vertices), triangles: Uint32Array.from(triangles) };
+}
+
+function touchingBoxes(boxes) {
+  const vertices = [], triangles = [], ids = new Map();
+  for (const [low, high] of boxes) {
+    const mesh = boxMesh(low, high), remap = [];
+    for (let vertex = 0; vertex < 8; vertex++) {
+      const point = Array.from(mesh.vertices.subarray(vertex * 3, vertex * 3 + 3)), key = point.join(',');
+      let id = ids.get(key);
+      if (id === undefined) { id = vertices.length / 3; vertices.push(...point); ids.set(key, id); }
+      remap.push(id);
+    }
+    triangles.push(...Array.from(mesh.triangles, vertex => remap[vertex]));
+  }
+  return { vertices: Float64Array.from(vertices), triangles: Uint32Array.from(triangles) };
+}
+
+function readStl(buffer) {
+  const view = new DataView(buffer), count = view.getUint32(80, true), positions = new Float64Array(count * 9);
+  for (let triangle = 0; triangle < count; triangle++) {
+    for (let component = 0; component < 9; component++) positions[triangle * 9 + component] = view.getFloat32(84 + triangle * 50 + 12 + component * 4, true);
+  }
+  return { positions, indices: Uint32Array.from({ length: count * 3 }, (_, index) => index), vertexCount: count * 3, surfaceIndexCount: count * 3 };
 }
 
 function polygonArea(pu, pv, triangles) {
@@ -113,6 +138,70 @@ test('a box across an edge and a corner of the cell is closed by caps on every c
   near(displayMeshVolume(corner), 4 * 2 * 5);
   assert.equal(displayMeshOpenEdges(corner), 0);
   near(displayMeshArea(corner, corner.surfaceIndexCount, corner.capIndexCount), 2 * (2 * 5 + 4 * 5 + 4 * 2));
+});
+
+test('touching sheets keep independent caps and in-face vertex sides across origins, axes and cell bases', () => {
+  let seed = 0x8c11a;
+  const random = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 0x100000000);
+  const bases = [[10,0,0, 0,10,0, 0,0,10], [10,0,0, 3,9,0, 1,2,8], [10,0,0, 3,9,0, -1,-2,-8]];
+  for (const vectors of bases) for (let axis = 0; axis < 3; axis++) {
+    const cell = createCell({ vectors, origin: [5,-3,2], triclinic: true });
+    const determinant = vectors[0] * (vectors[4] * vectors[8] - vectors[5] * vectors[7])
+      - vectors[1] * (vectors[3] * vectors[8] - vectors[5] * vectors[6]) + vectors[2] * (vectors[3] * vectors[7] - vectors[4] * vectors[6]);
+    // Two closed boxes share an edge, not a face. The first variant crosses
+    // a periodic face; the second puts opposite-facing sheets exactly in it;
+    // the third touches at just one vertex, with no non-manifold edge.
+    for (const boxes of [
+      [[[.8,.2,.2],[1.2,.5,.5]], [[.8,.5,.5],[1.2,.8,.8]]],
+      [[[0,.2,.2],[.4,.5,.5]], [[-.4,.5,.2],[0,.8,.5]]],
+      [[[0,.2,.2],[.4,.5,.5]], [[-.4,.5,.5],[0,.8,.8]]],
+    ]) {
+      const mesh = touchingBoxes(boxes);
+      for (let vertex = 0; vertex < mesh.vertices.length / 3; vertex++) {
+        const f = [0,1,2].map(component => mesh.vertices[vertex * 3 + (component + axis) % 3]);
+        for (let component = 0; component < 3; component++) mesh.vertices[vertex * 3 + component]
+          = cell.origin[component] + f[0] * vectors[component] + f[1] * vectors[3 + component] + f[2] * vectors[6 + component];
+      }
+      if (determinant < 0) for (let triangle = 0; triangle < mesh.triangles.length; triangle += 3) {
+        [mesh.triangles[triangle + 1], mesh.triangles[triangle + 2]] = [mesh.triangles[triangle + 2], mesh.triangles[triangle + 1]];
+      }
+      const sourceVertices = mesh.vertices.slice(), sourceTriangles = mesh.triangles.slice(), area = surfaceMeshArea(mesh, cell);
+      const origins = [[0,0,0], [.013,.017,.019], [.5,.5,.5], [.8,.5,.5],
+        ...Array.from({ length: 5 }, () => [random(),random(),random()])];
+      for (const origin of origins) {
+        const display = buildSurfaceDisplayMesh(mesh, cell, { origin });
+        assert.equal(displayMeshOpenEdges(display), 0, `touching sheets are closed: axis ${axis}, origin ${origin}`);
+        near(displayMeshVolume(display), .4 * .3 * .3 * 2 * Math.abs(determinant), 1e-9, 'independent sheet volume');
+        near(displayMeshArea(display, 0, display.surfaceIndexCount), area, 1e-10, 'source faces are preserved');
+      }
+      assert.deepEqual(mesh.vertices, sourceVertices, 'display splitting never changes scientific vertices');
+      assert.deepEqual(mesh.triangles, sourceTriangles, 'display splitting never changes scientific topology');
+    }
+  }
+});
+
+test('ideal FCC void caps conserve the native solid across lattice-aligned and shifted cuts', async () => {
+  // These exact atomic planes and touching voids exercise the native alpha
+  // shape across several crystal sizes, rather than only hand-built boxes.
+  for (const repeat of [6,7,8]) {
+    const block = fccBlock(repeat, 4), length = repeat * 4;
+    for (const centers of [[[0,0,0]], [[0,length / 2,0]], [[0,0,0],[6,4,0]]]) {
+      const frame = subsetFrame(block, point => centers.every(center => periodicDistance(point, center, length) > 6));
+      const result = await calculateSurfaceMesh(frame, { radius: 3.5, smoothingLevel: 0 });
+      const sourceVertices = result.vertices.slice(), sourceTriangles = result.triangles.slice();
+      for (const origin of [[0,0,0], [.013,.017,.019], [.5,0,.5], [1 / repeat, 2 / repeat, 0]]) {
+        const display = buildSurfaceDisplayMesh(result, frame.cell, { origin });
+        assert.equal(displayMeshOpenEdges(display), 0, `FCC ${repeat}: closed at ${origin}`);
+        near(displayMeshVolume(display), result.filledVolume, 1e-8, `FCC ${repeat}: native solid volume`);
+        near(displayMeshArea(display, 0, display.surfaceIndexCount), result.surfaceArea, 1e-10, 'native surface area');
+        const exported = readStl(meshToStl(exportTriangles(display)));
+        assert.equal(displayMeshOpenEdges(exported), 0, `FCC ${repeat}: exported STL is closed at ${origin}`);
+        near(displayMeshVolume(exported), result.filledVolume, 1e-6, 'STL float32 coordinates retain the solid volume');
+      }
+      assert.deepEqual(result.vertices, sourceVertices);
+      assert.deepEqual(result.triangles, sourceTriangles);
+    }
+  }
 });
 
 test('a reversed mesh is the solid outside the box: caps fill the cell faces around it', () => {

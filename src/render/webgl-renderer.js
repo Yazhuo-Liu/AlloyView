@@ -4,7 +4,7 @@ import { installCameraInteractions } from './camera-interactions.js';
 import { selectAtomsInRectangle } from './box-selection.js';
 import { VIEW_PRESETS } from './camera-presets.js';
 import { drawIpfKey } from './orientation-colors.js';
-import { AtomPrimitiveLayer } from './atom-primitives.js';
+import { AtomPrimitiveLayer, normalizeVectorOptions, validateBonds } from './atom-primitives.js';
 import { ExportLineLayer } from './export-line-layer.js';
 import { captureOffscreen } from './offscreen-export.js';
 import { normalizeExportResolution, resolveExportSize, tileProjection } from './export-resolution.js';
@@ -15,7 +15,7 @@ import { DislocationLayer, normalizeDislocationOptions } from './dislocation-lay
 import { TrajectoryLineLayer, normalizeTrajectoryLineOptions } from './trajectory-line-layer.js';
 import { VoronoiCellLayer, VoronoiAllCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
 import { SiteMarkerLayer, normalizeSiteMarkerOptions } from './site-marker-layer.js';
-import { SurfaceMeshLayer } from './surface-mesh-layer.js';
+import { SurfaceMeshLayer, normalizeSurfaceMeshOptions, SURFACE_MESH_DEFAULTS } from './surface-mesh-layer.js';
 import { drawTextLabelsOverlay } from './text-label-overlay.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON, pointVisible, sliceHalfSpaces, sliceOutlineSegments, validateSlices } from './slicing.js';
 import {
@@ -289,6 +289,7 @@ export class WebGLRenderer {
     this.orthographicScale = 5;
     this.modelRadius = 5;
     this.sceneBounds = null;
+    this.sourceBoundsCache = null;
     this.maximumAtomRadius = 0.7;
     this.viewMatrix = new Float32Array(16);
     this.projectionMatrix = new Float32Array(16);
@@ -296,7 +297,10 @@ export class WebGLRenderer {
     this.frameTimes = [];
     this.lastStatsAt = 0;
     this.renderRequested = false;
+    this.contextLost = false;
+    this.contextListeners = new Set();
     this.initializeGl();
+    this.installContextEvents();
     this.installInteractions();
     this.resizeObserver = new ResizeObserver(() => this.requestRender());
     this.resizeObserver.observe(canvas);
@@ -380,12 +384,122 @@ export class WebGLRenderer {
     gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
   }
 
+  graphicsUnavailable() { return Boolean(this.contextLost || this.gl?.isContextLost?.()); }
+
+  assertGraphicsAvailable() {
+    if (this.graphicsUnavailable()) throw new Error('The graphics context is unavailable. Image export will resume after the view is restored.');
+  }
+
+  /** Render-only resources belong to the canvas. Analysis Workers and their
+   * CPU/GPU inputs have their own lifetime and are never reset here. */
+  addContextListener(listener) {
+    this.contextListeners ??= new Set();
+    this.contextListeners.add(listener);
+    return () => this.contextListeners.delete(listener);
+  }
+
+  reportContextState(state, message = '') {
+    if (this.canvas.parentElement && this.canvas.ownerDocument?.createElement) {
+      if (!this.contextNotice) {
+        const notice = this.canvas.ownerDocument.createElement('div');
+        notice.className = 'graphics-context-notice'; notice.setAttribute('role', 'alert');
+        notice.style.cssText = 'position:absolute;inset:12px 12px auto;z-index:20;padding:12px;border-radius:8px;background:var(--panel,#fff);color:var(--text,#182d3c);border:1px solid var(--line-strong,#879eac);pointer-events:none';
+        this.canvas.parentElement.append(notice); this.contextNotice = notice;
+      }
+      this.contextNotice.hidden = state === 'restored';
+      this.contextNotice.textContent = message;
+    }
+    for (const listener of this.contextListeners ?? []) listener({ state, message });
+  }
+
+  installContextEvents() {
+    this.canvas.addEventListener('webglcontextlost', event => this.handleContextLost(event));
+    this.canvas.addEventListener('webglcontextrestored', () => this.handleContextRestored());
+  }
+
+  handleContextLost(event) {
+    // Preventing the default opts in to the browser's restoration mechanism.
+    event?.preventDefault();
+    if (this.contextLost) return;
+    this.retainedSurfaceMeshes = new Map([...(this.surfaceMeshLayer?.entries.values() ?? [])].filter(entry => entry.mesh).map(entry => [entry.id,
+      { id: entry.id, mesh: entry.mesh, options: { ...entry.options } }]));
+    this.contextLost = true;
+    if (this.renderHandle !== undefined) cancelAnimationFrame(this.renderHandle);
+    this.renderHandle = undefined; this.renderRequested = false;
+    this.cancelSelectionGesture(); this.interactions?.reset();
+    // Lost GL objects cannot be reused on restore. Retain only descriptors and
+    // typed arrays; the setters below keep these current while drawing is paused.
+    for (const name of ['primitiveLayer', 'dislocationLayer', 'siteMarkerLayer', 'surfaceMeshLayer',
+      'trajectoryLineLayer', 'voronoiCellLayer', 'voronoiAllCellLayer', 'exportLineLayer']) this[name] = null;
+    this.scalarColorTexture = this.ambientOcclusionBuffer = null;
+    this.reportContextState('lost', 'Graphics context lost. Drawing and image export are paused while the view recovers. Atom data and calculations are retained.');
+  }
+
+  handleContextRestored() {
+    if (!this.contextLost || this.gl.isContextLost?.()) return;
+    try {
+      this.initializeGl();
+      this.contextLost = false;
+      this.restoreFrameResources();
+      this.frameTimes = []; this.lastStatsAt = 0;
+      this.reportContextState('restored');
+      this.requestRender();
+    } catch (error) {
+      this.contextLost = true;
+      this.reportContextState('error', `The graphics view could not be restored: ${error.message || String(error)}. Reload the page to retry.`);
+    }
+  }
+
+  restoreFrameResources() {
+    const surfaces = [...(this.retainedSurfaceMeshes?.values() ?? [])];
+    const preview = this.scalarColorPreview;
+    this.scalarColorInput = null; this.scalarColorPreview = null;
+    this.scalarColorTexture = this.ambientOcclusionBuffer = null;
+    if (!this.frame) return;
+    // Upload directly, without setFrame: it clears attached analyses, picks and
+    // visibility. Camera, display coordinates and every CPU result stay intact.
+    this.uploadFrameBuffers();
+    if (this.atomBonds) this.setBonds(this.atomBonds, this.bondOptions);
+    if (this.atomVectorFields?.length) this.setVectorFields(this.atomVectorFields);
+    if (this.dislocationNetwork) this.setDislocationNetwork(this.dislocationNetwork, this.dislocationOptions);
+    if (this.siteMarkers) this.setSiteMarkers(this.siteMarkers, this.siteMarkerOptions);
+    for (const entry of surfaces) this.setSurfaceMesh(entry.id, entry.mesh, entry.options);
+    if (this.trajectoryLines) this.setTrajectoryLines(this.trajectoryLines, this.trajectoryLineOptions);
+    if (this.voronoiCellGeometry) this.setVoronoiCellGeometry(this.voronoiCellGeometry, this.voronoiCellOptions);
+    if (this.voronoiAllCellGeometry) this.setVoronoiAllCellGeometry(this.voronoiAllCellGeometry, this.voronoiCellOptions);
+    if (this.ambientOcclusionFactors) {
+      const factors = this.ambientOcclusionFactors;
+      this.ambientOcclusionFactors = null;
+      this.setAmbientOcclusion(factors, { intensity: this.ambientOcclusionIntensity });
+    }
+    if (preview) this.setScalarColorPreview(preview.input.data, { ...preview, input: preview.input });
+    this.sliceOutlineGeometry = null;
+    this.updateSceneBounds();
+    this.retainedSurfaceMeshes = null;
+  }
+
+  uploadFrameBuffers() {
+    const gl = this.gl;
+    const upload = (buffer, values, usage) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer); gl.bufferData(gl.ARRAY_BUFFER, values, usage);
+    };
+    // Convert each coordinate array immediately before its upload, rather than
+    // retaining both full-frame Float32 copies at the same time.
+    upload(this.positionBuffer, floatDisplayCoordinates(this.displayPositions), gl.STATIC_DRAW);
+    upload(this.fractionalBuffer, floatDisplayCoordinates(this.displayFractional), gl.STATIC_DRAW);
+    upload(this.colorBuffer, this.atomColors, gl.DYNAMIC_DRAW);
+    upload(this.visibilityBuffer, this.visibility, gl.DYNAMIC_DRAW);
+    upload(this.radiusBuffer, this.atomRadii, gl.STATIC_DRAW);
+    upload(this.cellBuffer, buildCellLines(this.displayCell), gl.STATIC_DRAW);
+  }
+
   setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions, { coordinateMode } = {}) {
+    // A frame can arrive between driver loss and its queued DOM event.
+    if (!this.contextLost && this.graphicsUnavailable()) this.handleContextLost();
     this.clearScalarColorPreview();
     this.scalarColorInput = null;
     this.cancelSelectionGesture();
     const startedAt = performance.now();
-    const gl = this.gl;
     this.frame = frame;
     this.processDisplayCoordinates(displayPositions, coordinateMode);
     this.atomCount = frame.ids.length;
@@ -406,22 +520,16 @@ export class WebGLRenderer {
     this.atomRadii = atomRadii ?? new Float32Array(this.atomCount).fill(0.7);
     this.radiusRevision = (this.radiusRevision ?? 0) + 1;
     if (this.atomRadii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
-    this.maximumAtomRadius = this.atomRadii.reduce((maximum, radius) => Math.max(maximum, radius), 0);
+    let maximumRadius = 0;
+    for (let atom = 0; atom < this.atomRadii.length; atom++) maximumRadius = Math.max(maximumRadius, this.atomRadii[atom]);
+    this.maximumAtomRadius = maximumRadius;
     this.visibility = new Uint8Array(this.atomCount).fill(255);
     this.selectionVisibility = null;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, floatDisplayCoordinates(this.displayPositions), gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.fractionalBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, floatDisplayCoordinates(this.displayFractional), gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, this.visibility, gl.DYNAMIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.radiusBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, this.atomRadii, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.cellBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, buildCellLines(this.displayCell), gl.STATIC_DRAW);
-    this.primitiveLayer?.setFrame(this, colors);
+    if (!this.graphicsUnavailable()) {
+      this.uploadFrameBuffers();
+      this.primitiveLayer?.setFrame(this, colors);
+    }
+    this.retainedSurfaceMeshes?.clear();
     this.voronoiCellGeometry = null;
     this.voronoiCellLayer?.clear();
     this.voronoiAllCellGeometry = null;
@@ -434,10 +542,12 @@ export class WebGLRenderer {
   }
 
   clearFrame() {
+    if (!this.contextLost && this.graphicsUnavailable()) this.handleContextLost();
     this.clearScalarColorPreview();
     this.scalarColorInput = null;
     this.cancelSelectionGesture();
     this.selectionSourceBounds = null;
+    this.sourceBoundsCache = null;
     this.frame = this.displayPositions = this.visibility = this.selectionVisibility = this.atomRadii = null;
     this.rawDisplayPositions = this.displayFractional = null;
     this.periodicOrigin = [0, 0, 0];
@@ -486,6 +596,8 @@ export class WebGLRenderer {
     this.frameTimes = [];
     this.projectionMode = 'perspective';
     this.onProjectionChange(this.projectionMode);
+    this.retainedSurfaceMeshes?.clear();
+    if (this.graphicsUnavailable()) { this.requestRender(); return; }
     const gl = this.gl;
     for (const buffer of [this.positionBuffer, this.colorBuffer, this.fractionalBuffer,
       this.visibilityBuffer, this.radiusBuffer, this.cellBuffer, this.scalarColorBuffer, this.colorOverrideBuffer]) {
@@ -506,6 +618,7 @@ export class WebGLRenderer {
     if (this.frame && colors.length !== this.atomCount * 3) throw new Error('The color array does not match the current frame.');
     this.atomColors = colors;
     this.colorRevision = (this.colorRevision ?? 0) + 1;
+    if (this.graphicsUnavailable()) { this.requestRender(); return; }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
@@ -521,6 +634,10 @@ export class WebGLRenderer {
       ? this.scalarColorInput : prepareScalarColorData(data, options));
     const preview = scalarColorSettings(input, options);
     if (!preview.safe) { this.clearScalarColorPreview(); return null; }
+    if (this.graphicsUnavailable()) {
+      this.scalarColorInput = input; this.scalarColorPreview = preview;
+      this.cancelSelectionGesture(); return preview;
+    }
     if (input !== this.scalarColorInput) {
       this.scalarColorInput = input;
       const gl = this.gl;
@@ -562,7 +679,7 @@ export class WebGLRenderer {
 
   clearScalarColorPreview() {
     this.scalarColorPreview = null;
-    if (!this.sphereVao) return;
+    if (!this.sphereVao || this.graphicsUnavailable()) return;
     const gl = this.gl;
     gl.bindVertexArray(this.sphereVao);
     gl.disableVertexAttribArray(6); gl.disableVertexAttribArray(7);
@@ -585,13 +702,18 @@ export class WebGLRenderer {
       throw new Error('The selection visibility mask does not match the current frame.');
     }
     this.cancelSelectionGesture();
+    const selectionBoundsChanged = Boolean(this.selectionVisibility || selectionVisibility);
     this.visibility = values;
     this.voronoiDisplayRevision++;
     this.selectionVisibility = selectionVisibility;
+    if (this.graphicsUnavailable()) { this.requestRender(); return; }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, values, gl.DYNAMIC_DRAW);
-    this.primitiveLayer?.updatePositions(this, false);
+    this.primitiveLayer?.updateVisibility(this);
+    // Selection hiding also hides its arrows; refresh their scene extents when
+    // this changes without a vector/style setter. Scientific arrays stay intact.
+    if (selectionBoundsChanged && this.atomVectorFields?.length) this.updateSceneBounds({ reuseSourceBounds: true });
     this.requestRender();
   }
 
@@ -630,6 +752,7 @@ export class WebGLRenderer {
     this.cancelSelectionGesture();
     const startedAt = performance.now();
     this.processDisplayCoordinates(positions, coordinateMode);
+    if (this.graphicsUnavailable()) { this.updateSceneBounds(); return performance.now() - startedAt; }
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, floatDisplayCoordinates(this.displayPositions), this.gl.STATIC_DRAW);
     if (this.displayFractional && this.fractionalBuffer) {
@@ -660,7 +783,8 @@ export class WebGLRenderer {
     this.cancelSelectionGesture();
     Object.assign(this, replication);
     this.displayAtomCount = this.atomCount * this.replicas.length;
-    this.updateSceneBounds();
+    this.updateSceneBounds({ reuseSourceBounds: true });
+    if (this.graphicsUnavailable()) { this.requestRender(); return; }
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.cellBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, buildCellLines(this.displayCell), this.gl.STATIC_DRAW);
     this.requestRender();
@@ -674,13 +798,15 @@ export class WebGLRenderer {
   setAtomRadii(radii) {
     if (!this.frame || !(radii instanceof Float32Array) || radii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
     let maximum = 0;
-    for (const radius of radii) {
+    for (let atom = 0; atom < radii.length; atom++) {
+      const radius = radii[atom];
       if (!Number.isFinite(radius) || radius <= 0) throw new Error('Atom radii must be finite and greater than zero.');
       maximum = Math.max(maximum, radius);
     }
     this.atomRadii = radii;
     this.radiusRevision = (this.radiusRevision ?? 0) + 1;
     this.maximumAtomRadius = maximum;
+    if (this.graphicsUnavailable()) { this.requestRender(); return; }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.radiusBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, radii, gl.DYNAMIC_DRAW);
@@ -695,6 +821,7 @@ export class WebGLRenderer {
     if (typeof intensity !== 'number' || !(intensity >= 0 && intensity <= 1)) throw new Error('Ambient occlusion intensity must be between 0 and 1.');
     this.ambientOcclusionIntensity = intensity;
     if (factors !== (this.ambientOcclusionFactors ?? null)) {
+      if (this.graphicsUnavailable()) { this.ambientOcclusionFactors = factors; return; }
       // render() enables the attribute only while the size matches the view.
       const gl = this.gl;
       this.ambientOcclusionBuffer ??= gl.createBuffer();
@@ -720,6 +847,13 @@ export class WebGLRenderer {
   }
 
   setBonds(result, options = {}) {
+    if (this.graphicsUnavailable()) {
+      if (result && !this.frame) throw new Error('Load a structure before displaying atom geometry.');
+      const bonds = validateBonds(result, this.atomCount), radius = options.radius ?? this.bondOptions.radius;
+      if (!Number.isFinite(radius) || radius <= 0) throw new Error('Bond radius must be greater than zero.');
+      this.atomBonds = bonds; this.bondOptions = { visible: options.visible ?? this.bondOptions.visible, radius };
+      return;
+    }
     if (!result && (!this.frame || !this.primitiveLayer)) { this.atomBonds = null; return; }
     const layer = this.ensurePrimitiveLayer();
     layer.setBonds(this, result, options);
@@ -729,28 +863,55 @@ export class WebGLRenderer {
   }
 
   setVectors(vectors, options = {}) {
+    if (this.graphicsUnavailable()) {
+      const settings = normalizeVectorOptions(options, this.vectorOptions);
+      this.setVectorFields(vectors ? [{ id: 'legacy', vectors, options: settings }] : []);
+      this.vectorOptions = settings;
+      return;
+    }
     if (!vectors && (!this.frame || !this.primitiveLayer)) { this.atomVectors = null; this.atomVectorFields = []; return; }
     const layer = this.ensurePrimitiveLayer();
     layer.setVectors(this, vectors, options);
     this.atomVectors = layer.vectors;
     this.atomVectorFields = layer.vectorFields.map(({ id, vectors: values, options: settings }) => ({ id, vectors: values, options: { ...settings } }));
     this.vectorOptions = { ...layer.vectorOptions };
-    this.updateSceneBounds();
+    this.updateSceneBounds({ reuseSourceBounds: true });
     this.requestRender();
   }
 
   setVectorFields(fields = []) {
+    if (this.graphicsUnavailable()) {
+      if (!Array.isArray(fields)) throw new Error('Vector fields must be an array.');
+      if (fields.length && !this.frame) throw new Error('Load a structure before displaying atom geometry.');
+      const previous = new Map((this.atomVectorFields ?? []).map(field => [field.id, field]));
+      const ids = new Set();
+      const next = fields.map(field => {
+        if (!field || typeof field.id !== 'string' || !field.id || ids.has(field.id)) throw new Error('Vector fields require unique nonempty IDs.');
+        ids.add(field.id);
+        if (!(field.vectors instanceof Float32Array) || field.vectors.length !== this.atomCount * 3) throw new Error('The vector array does not match the current frame.');
+        return { id: field.id, vectors: field.vectors, options: normalizeVectorOptions(field.options, previous.get(field.id)?.options) };
+      });
+      this.atomVectorFields = next; this.atomVectors = next[0]?.vectors ?? null;
+      if (next[0]) this.vectorOptions = { ...next[0].options };
+      return;
+    }
     if (!fields.length && (!this.frame || !this.primitiveLayer)) { this.atomVectors = null; this.atomVectorFields = []; return; }
     const layer = this.ensurePrimitiveLayer();
     layer.setVectorFields(this, fields);
     this.atomVectorFields = layer.vectorFields.map(({ id, vectors, options }) => ({ id, vectors, options: { ...options } }));
     this.atomVectors = layer.vectors;
     this.vectorOptions = { ...layer.vectorOptions };
-    this.updateSceneBounds();
+    this.updateSceneBounds({ reuseSourceBounds: true });
     this.requestRender();
   }
 
   setDislocationNetwork(network, options = {}) {
+    if (this.graphicsUnavailable()) {
+      if (network && !this.frame) throw new Error('Load a structure before displaying a dislocation network.');
+      this.dislocationOptions = normalizeDislocationOptions(options, this.dislocationOptions);
+      this.dislocationNetwork = network;
+      return;
+    }
     if (!network && !this.dislocationLayer) {
       this.dislocationNetwork = null;
       this.dislocationOptions = normalizeDislocationOptions(options, this.dislocationOptions);
@@ -762,7 +923,7 @@ export class WebGLRenderer {
     this.dislocationLayer.setNetwork(this, network, options);
     this.dislocationNetwork = network;
     this.dislocationOptions = { ...this.dislocationLayer.options };
-    if (this.frame) this.updateSceneBounds();
+    if (this.frame) this.updateSceneBounds({ reuseSourceBounds: true });
     this.requestRender();
   }
 
@@ -771,6 +932,12 @@ export class WebGLRenderer {
   /** Point markers without atoms, e.g. vacant Wigner–Seitz sites: Cartesian
    * `positions` and byte RGB `colors`, wrapped into the displayed cell. */
   setSiteMarkers(markers, options = {}) {
+    if (this.graphicsUnavailable()) {
+      if (markers && !this.frame) throw new Error('Load a structure before displaying site markers.');
+      this.siteMarkerOptions = normalizeSiteMarkerOptions(options, this.siteMarkerOptions);
+      this.siteMarkers = markers;
+      return;
+    }
     if (!markers && !this.siteMarkerLayer) {
       this.siteMarkers = null;
       this.siteMarkerOptions = normalizeSiteMarkerOptions(options, this.siteMarkerOptions);
@@ -785,7 +952,7 @@ export class WebGLRenderer {
       && this.siteMarkerLayer.options.radius === previous.radius;
     this.siteMarkers = markers ?? null;
     this.siteMarkerOptions = { ...this.siteMarkerLayer.options };
-    if (this.frame && !unchanged) this.updateSceneBounds();
+    if (this.frame && !unchanged) this.updateSceneBounds({ reuseSourceBounds: true });
     this.requestRender();
   }
 
@@ -794,17 +961,26 @@ export class WebGLRenderer {
    * and optionally `reverse` and `spaceFilling`; null removes it. Options:
    * visible, color, interiorColor, capColor, opacity and caps. */
   setSurfaceMesh(id, mesh, options = {}) {
+    if (this.graphicsUnavailable()) {
+      if (mesh && !this.frame) throw new Error('Load a structure before displaying a surface mesh.');
+      this.retainedSurfaceMeshes ??= new Map();
+      const previous = this.retainedSurfaceMeshes.get(id);
+      const settings = normalizeSurfaceMeshOptions(options, previous?.options ?? SURFACE_MESH_DEFAULTS[id] ?? SURFACE_MESH_DEFAULTS.surface);
+      const entry = { id, mesh: mesh ?? null, options: settings, display: null, error: null };
+      if (mesh) this.retainedSurfaceMeshes.set(id, entry); else this.retainedSurfaceMeshes.delete(id);
+      return entry;
+    }
     if (!mesh && !this.surfaceMeshLayer) return null;
     if (mesh && !this.frame) throw new Error('Load a structure before displaying a surface mesh.');
     this.surfaceMeshLayer ??= new SurfaceMeshLayer(this.gl);
     const entry = this.surfaceMeshLayer.setMesh(this, id, mesh ?? null, options);
-    if (this.frame) this.updateSceneBounds();
+    if (this.frame) this.updateSceneBounds({ reuseSourceBounds: true });
     this.requestRender();
     return entry;
   }
 
   /** The displayed meshes as { id, mesh, options, display, error }. */
-  surfaceMeshes() { return [...(this.surfaceMeshLayer?.entries.values() ?? [])].filter(entry => entry.mesh); }
+  surfaceMeshes() { return [...(this.graphicsUnavailable() ? this.retainedSurfaceMeshes?.values() ?? [] : this.surfaceMeshLayer?.entries.values() ?? [])].filter(entry => entry.mesh); }
 
   /** Show the same meshes and styles as another renderer (the second view). */
   copySurfaceMeshes(source) {
@@ -818,28 +994,31 @@ export class WebGLRenderer {
   /** Atom paths persist across frame changes; closing the source clears them. */
   setTrajectoryLines(lines, options = {}) {
     this.trajectoryLineOptions = normalizeTrajectoryLineOptions(options, this.trajectoryLineOptions);
+    if (this.graphicsUnavailable()) { this.trajectoryLines = lines ?? null; return; }
     if (lines && !this.trajectoryLineLayer) this.trajectoryLineLayer = new TrajectoryLineLayer(this.gl);
     this.trajectoryLineLayer?.setLines(lines, this.trajectoryLineOptions);
     this.trajectoryLines = lines ?? null;
-    if (this.frame) this.updateSceneBounds();
+    if (this.frame) this.updateSceneBounds({ reuseSourceBounds: true });
     this.requestRender();
   }
 
   setVoronoiCellGeometry(geometry, options = {}) {
     if (geometry && (!this.frame || geometry.atomIndex >= this.atomCount)) throw new Error('The inspected Voronoi cell is outside this frame.');
     const settings = normalizeVoronoiCellOptions(options, this.voronoiCellOptions);
+    if (this.graphicsUnavailable()) { this.voronoiCellGeometry = geometry; this.voronoiCellOptions = settings; return; }
     const boundsChanged = geometry !== this.voronoiCellGeometry || settings.enabled !== this.voronoiCellOptions.enabled;
     if (geometry && !this.voronoiCellLayer) this.voronoiCellLayer = new VoronoiCellLayer(this.gl);
     this.voronoiCellLayer?.setGeometry(geometry, settings);
     this.voronoiCellGeometry = geometry;
     this.voronoiCellOptions = settings;
-    if (boundsChanged && this.frame) this.updateSceneBounds();
+    if (boundsChanged && this.frame) this.updateSceneBounds({ reuseSourceBounds: true });
     this.requestRender();
   }
 
   setVoronoiAllCellGeometry(geometry, options = {}) {
     if (geometry && !this.frame) throw new Error('Load a structure before displaying Voronoi cells.');
     const settings = normalizeVoronoiCellOptions(options, this.voronoiCellOptions);
+    if (this.graphicsUnavailable()) { this.voronoiAllCellGeometry = geometry; this.voronoiCellOptions = settings; return; }
     const oldChunks = this.voronoiAllCellLayer?.chunks.length ?? 0;
     const replaceBounds = geometry !== this.voronoiAllCellGeometry
       || settings.allEnabled !== (this.voronoiAllCellLayer?.options.allEnabled ?? false);
@@ -848,7 +1027,7 @@ export class WebGLRenderer {
     this.voronoiAllCellGeometry = geometry;
     this.voronoiCellOptions = settings;
     if (this.frame) {
-      if (replaceBounds || !this.sceneBounds) this.updateSceneBounds();
+      if (replaceBounds || !this.sceneBounds) this.updateSceneBounds({ reuseSourceBounds: true });
       else this.voronoiAllCellLayer?.extendBounds(this, this.sceneBounds.minimum, this.sceneBounds.maximum, oldChunks);
     }
     this.requestRender();
@@ -1063,25 +1242,19 @@ export class WebGLRenderer {
     this.requestRender();
   }
 
-  updateSceneBounds() {
-    const vertices = cellVertices(this.displayCell ?? this.frame.cell);
-    const minimum = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
-    const maximum = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
-    const sourceMinimum = [...minimum], sourceMaximum = [...maximum];
-    for (const array of [vertices, this.displayPositions]) {
-      for (let index = 0; index < array.length; index += 3) {
-        for (let component = 0; component < 3; component += 1) {
-          const isAtoms = array === this.displayPositions;
-          if (isAtoms) {
-            sourceMinimum[component] = Math.min(sourceMinimum[component], array[index + component]);
-            sourceMaximum[component] = Math.max(sourceMaximum[component], array[index + component]);
-          }
-          minimum[component] = Math.min(minimum[component], array[index + component]
-            + (isAtoms ? this.minimumOffset?.[component] ?? 0 : 0));
-          maximum[component] = Math.max(maximum[component], array[index + component]
-            + (isAtoms ? this.maximumOffset?.[component] ?? 0 : 0));
-        }
-      }
+  updateSceneBounds({ reuseSourceBounds = false } = {}) {
+    // Coordinate setters and public calls refresh even for the same array:
+    // callers may have edited its values in place. Pure layer/style changes
+    // reuse only these six numbers; cell, replicas and every layer still merge.
+    let source = this.sourceBoundsCache;
+    if (!reuseSourceBounds || source?.positions !== this.displayPositions || source.length !== this.displayPositions.length) {
+      source = this.sourceBoundsCache = { positions: this.displayPositions, length: this.displayPositions.length,
+        ...coordinateBounds(this.displayPositions) };
+    }
+    const { minimum, maximum } = coordinateBounds(cellVertices(this.displayCell ?? this.frame.cell));
+    for (let component = 0; component < 3; component++) {
+      minimum[component] = Math.min(minimum[component], source.minimum[component] + (this.minimumOffset?.[component] ?? 0));
+      maximum[component] = Math.max(maximum[component], source.maximum[component] + (this.maximumOffset?.[component] ?? 0));
     }
     this.primitiveLayer?.extendBounds(this, minimum, maximum);
     this.dislocationLayer?.extendBounds(this, minimum, maximum);
@@ -1091,7 +1264,7 @@ export class WebGLRenderer {
     this.voronoiCellLayer?.extendBounds(this, minimum, maximum);
     this.voronoiAllCellLayer?.extendBounds(this, minimum, maximum);
     this.sceneBounds = { minimum, maximum };
-    this.selectionSourceBounds = { minimum: sourceMinimum, maximum: sourceMaximum };
+    this.selectionSourceBounds = { minimum: [...source.minimum], maximum: [...source.maximum] };
     return this.sceneBounds;
   }
 
@@ -1138,15 +1311,17 @@ export class WebGLRenderer {
   }
 
   requestRender() {
-    if (this.renderRequested) return;
+    if (this.renderRequested || this.graphicsUnavailable()) return;
     this.renderRequested = true;
-    requestAnimationFrame((timestamp) => {
+    this.renderHandle = requestAnimationFrame((timestamp) => {
+      this.renderHandle = undefined;
       this.renderRequested = false;
       this.render(timestamp);
     });
   }
 
   render(timestamp = performance.now(), { transparentBackground = false, trackStats = true, sliceOutlines = true } = {}) {
+    if (this.graphicsUnavailable()) return;
     const gl = this.gl;
     if (!this.renderViewport) this.resize();
     this.updateMatrices();
@@ -1305,6 +1480,7 @@ export class WebGLRenderer {
   }
 
   resize() {
+    if (this.graphicsUnavailable()) return;
     const ratio = Math.min(2, window.devicePixelRatio || 1);
     const width = Math.max(1, Math.round(this.canvas.clientWidth * ratio));
     const height = Math.max(1, Math.round(this.canvas.clientHeight * ratio));
@@ -1403,7 +1579,7 @@ export class WebGLRenderer {
    * tests in scalars; the arithmetic matches transformPoint/pointVisible. */
   pick(clientX, clientY) {
     this.lastPick = null;
-    if (!this.frame) return -1;
+    if (!this.frame || this.graphicsUnavailable()) return -1;
     this.updateMatrices();
     const rectangle = this.canvas.getBoundingClientRect();
     const x = clientX - rectangle.left;
@@ -1461,8 +1637,10 @@ export class WebGLRenderer {
   }
 
   captureImage({ includeBackground = true, legend = null, includeAxes = false, includeSliceOutlines = true, resolution = null, tileSize = null, textLabels = null } = {}) {
+    this.assertGraphicsAvailable();
     // PNG/JPG and contact sheets always use the exact byte-rounded CPU palette.
     this.onBeforeCapture?.();
+    this.assertGraphicsAvailable();
     this.finishScalarColorPreview();
     const exportResolution = normalizeExportResolution(resolution ?? {});
     if (exportResolution.mode !== 'current' || tileSize !== null) {
@@ -1508,6 +1686,7 @@ export class WebGLRenderer {
   }
 
   captureOffscreenImage({ includeBackground, legend, includeAxes, includeSliceOutlines, resolution, tileSize, textLabels = null }) {
+    this.assertGraphicsAvailable();
     this.resize();
     const { width, height } = resolveExportSize(resolution, this.canvas.width, this.canvas.height);
     const exportCanvas = document.createElement('canvas'); exportCanvas.width = width; exportCanvas.height = height;
@@ -1815,6 +1994,18 @@ function createShader(gl, type, source) {
 
 function uniforms(gl, program, names) {
   return Object.fromEntries(names.map((name) => [name, gl.getUniformLocation(program, name)]));
+}
+
+function coordinateBounds(positions) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let index = 0; index < positions.length; index += 3) {
+    const x = positions[index], y = positions[index + 1], z = positions[index + 2];
+    // Math.min/max retain the previous NaN and signed-zero semantics.
+    minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
+  }
+  return { minimum: [minX, minY, minZ], maximum: [maxX, maxY, maxZ] };
 }
 
 // Analysis coordinates may be Float64 (e.g. divided supercell fractions).

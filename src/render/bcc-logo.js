@@ -140,6 +140,11 @@ export function initializeBccLogo(emptyState) {
   const container = emptyState.querySelector('.empty-logo');
   const canvas = container.querySelector('canvas');
   const fallback = container.querySelector('img');
+  function showFallback() {
+    if (!fallback.getAttribute('src')) fallback.src = fallback.dataset.src;
+    canvas.hidden = true;
+    fallback.hidden = false;
+  }
   let gl, program, vertexBuffer, indexBuffer, vertexArray;
   const release = () => {
     if (!gl) return;
@@ -151,7 +156,7 @@ export function initializeBccLogo(emptyState) {
   let indexCount;
   try {
     gl = canvas.getContext('webgl2', { alpha: true, antialias: true, depth: true, powerPreference: 'low-power' });
-    if (!gl) return { dispose() {} };
+    if (!gl) { showFallback(); return { dispose() {} }; }
     program = createProgram(gl);
     const geometry = createGeometry(createBccLogoModel());
     indexCount = geometry.indices.length;
@@ -171,6 +176,7 @@ export function initializeBccLogo(emptyState) {
     gl.clearColor(0, 0, 0, 0);
   } catch {
     release();
+    showFallback();
     return { dispose() {} }; // Preserve the original mark on unsupported GPUs.
   }
 
@@ -246,8 +252,7 @@ export function initializeBccLogo(emptyState) {
   const onContextLost = () => {
     lost = true;
     stop();
-    canvas.hidden = true;
-    fallback.hidden = false;
+    showFallback();
   };
   canvas.addEventListener('webglcontextlost', onContextLost);
   schedule();

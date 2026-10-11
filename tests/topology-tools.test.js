@@ -275,6 +275,24 @@ test('invalid input keeps valid saved parameters and failures cannot publish mal
   assert.equal(h.fields['run-bond-statistics'].disabled, false);
 });
 
+test('invalid bond-statistics reruns clear stale scientific results and notify after terminal state', async t => {
+  const h = harness(t), f = h.getFrame(), graph = { name: 'bondCoordination', analysisKind: 'bonds', data: new Uint32Array(3).fill(2) };
+  f.properties.push(graph);
+  const completed = h.tools.run('bondStatistics'); h.pending[0].resolve(bondResult()); await completed;
+  assert.ok(f.atomeyeResults.bondStatistics);
+  const changes = h.changes.length;
+  h.fields['bond-statistics-length-bins'].value = '0';
+  assert.equal(await h.tools.run('bondStatistics', { automatic: true }), false);
+  assert.equal(h.fields['bond-statistics-state'].textContent, 'Failed');
+  assert.equal(h.tools.getResult('bondStatistics'), null);
+  assert.equal(f.atomeyeResults.bondStatistics, undefined);
+  assert.deepEqual(f.properties, [graph]);
+  assert.deepEqual(h.tools.pendingKinds(), []);
+  assert.equal(h.changes.length, changes + 1, 'automatic validation failures also notify consumers without a toast');
+  assert.deepEqual(h.changes.at(-1), { kind: 'bondStatistics', frame: f, clearSettings: false });
+  assert.equal(h.notifications.length, 0);
+});
+
 test('progress follows the current job and aborting suppresses stale updates', async t => {
   const h = harness(t), task = h.tools.run('bondStatistics');
   h.pending[0].options.onProgress({ backend: 'cpu', phase: 'analyzing', completedAtoms: 1, totalAtoms: 3, workerCount: 2 });

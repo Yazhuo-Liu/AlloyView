@@ -154,6 +154,14 @@ running. Then, for each video frame, AlloyView:
 
 Movies have no transparency, so the background is always drawn, as for JPG.
 
+For **PNG frames · ZIP**, each completed PNG receives its CRC and immutable
+ZIP record before the next frame is captured. Finishing the archive writes
+the directory without rereading all images in one synchronous checksum pass.
+The frame and byte limits are checked before adding a record, and cancellation
+releases partial records. **Frame images** uses the same archive builder.
+Missing analysis dependencies stop preparation with their reason instead of
+waiting indefinitely.
+
 The renderer waits whenever more than two frames are queued in the encoder, so
 images are not produced faster than they are encoded. Encoded data is collected
 in blocks of 8 MiB that the browser can keep outside the page's memory; a few

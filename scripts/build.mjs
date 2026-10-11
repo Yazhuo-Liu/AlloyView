@@ -1,13 +1,37 @@
 import { createHash } from 'node:crypto';
-import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDocumentation } from './build-docs.mjs';
 import { createExampleCatalog, serializeExampleCatalog } from './example-catalog.mjs';
 
 const projectRoot = resolve(import.meta.dirname, '..');
+export const LOGO_ASSET_BUDGET = 200 * 1024;
+
+/** Check before touching the output tree. Logo assets are small runtime images;
+ * accidentally restoring multi-megabyte originals must fail deployment. Small
+ * build fixtures can omit this optional asset directory entirely. */
+export async function checkLogoAssetBudget(root = projectRoot) {
+  const directory = resolve(root, 'src/asserts/logo');
+  const entries = await readdir(directory, { withFileTypes: true }).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!entries) return 0;
+  async function totalBytes(path, children) {
+    const sizes = await Promise.all(children.map(async child => {
+      const file = resolve(path, child.name), info = await stat(file);
+      return info.isDirectory() ? totalBytes(file, await readdir(file, { withFileTypes: true })) : info.size;
+    }));
+    return sizes.reduce((sum, size) => sum + size, 0);
+  }
+  const bytes = await totalBytes(directory, entries);
+  if (bytes > LOGO_ASSET_BUDGET) throw new Error(`Logo assets total ${bytes.toLocaleString('en-US')} bytes; reduce src/asserts/logo to at most 200 KiB before building.`);
+  return bytes;
+}
 
 export async function buildSite(root = projectRoot, out = resolve(root, 'dist')) {
+  await checkLogoAssetBudget(root);
   const entries = ['src', 'styles.css', 'licenses'];
   let headers = null;
   try {

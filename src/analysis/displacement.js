@@ -160,8 +160,9 @@ export function calculatePreparedDisplacements(frame, parameters, { signal, onPr
     const index = atom - startAtom;
     if (calculateDisplacementAtom(context, atom, vectors, index * 3)) {
       matched += 1;
-      const components = vectors.subarray(index * 3, index * 3 + 3);
-      magnitudes[index] = components.every(Number.isFinite) ? Math.hypot(...components) : NaN;
+      const offset = index * 3;
+      const x = vectors[offset], y = vectors[offset + 1], z = vectors[offset + 2];
+      magnitudes[index] = Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? Math.hypot(x, y, z) : NaN;
     }
     if ((index + 1) % 2048 === 0) onProgress({ phase: 'displacement', completed: index + 1, total: endAtom - startAtom });
   }
@@ -180,7 +181,7 @@ function calculateDisplacementAtom(context, atom, vectors, offset) {
     if (!Number.isFinite(change[axis])) throw new Error('Displacement requires finite atom coordinates.');
   }
   if (minimumImage) resolveMinimumImage(change, imageCell, inverse, heights, orthogonal);
-  vectors.set(change, offset);
+  vectors[offset] = change[0]; vectors[offset + 1] = change[1]; vectors[offset + 2] = change[2];
   return true;
 }
 
@@ -233,40 +234,52 @@ function orthogonalBasis(h) {
 }
 
 function resolveMinimumImage(change, cell, inverse, heights, orthogonal) {
-  if (!cell.pbc.some(Boolean)) return;
-  const fractional = [0, 1, 2].map(axis => change[0] * inverse[axis]
-    + change[1] * inverse[3 + axis] + change[2] * inverse[6 + axis]);
+  const pbc = cell.pbc;
+  if (!pbc[0] && !pbc[1] && !pbc[2]) return;
+  let f0 = change[0] * inverse[0] + change[1] * inverse[3] + change[2] * inverse[6];
+  let f1 = change[0] * inverse[1] + change[1] * inverse[4] + change[2] * inverse[7];
+  let f2 = change[0] * inverse[2] + change[1] * inverse[5] + change[2] * inverse[8];
   const h = cell.vectors;
-  // In an orthogonal metric each periodic component minimizes independently.
-  // This common case avoids a candidate lattice-image search for every atom.
+  // Orthogonal periodic components minimize independently. Keep Math.round
+  // at half-cell ties and reconstruct from the same f64 fractional values.
   if (orthogonal) {
-    for (let axis = 0; axis < 3; axis += 1) if (cell.pbc[axis]) fractional[axis] -= Math.round(fractional[axis]);
-    for (let axis = 0; axis < 3; axis += 1) change[axis] = fractional[0] * h[axis]
-      + fractional[1] * h[3 + axis] + fractional[2] * h[6 + axis];
+    if (pbc[0]) f0 -= Math.round(f0);
+    if (pbc[1]) f1 -= Math.round(f1);
+    if (pbc[2]) f2 -= Math.round(f2);
+    change[0] = f0 * h[0] + f1 * h[3] + f2 * h[6];
+    change[1] = f0 * h[1] + f1 * h[4] + f2 * h[7];
+    change[2] = f0 * h[2] + f1 * h[5] + f2 * h[8];
     return;
   }
-  const shifts = fractional.map((value, axis) => cell.pbc[axis] ? -Math.round(value) : 0);
-  const squaredLength = (a, b, c) => (a * h[0] + b * h[3] + c * h[6]) ** 2
-    + (a * h[1] + b * h[4] + c * h[7]) ** 2 + (a * h[2] + b * h[5] + c * h[8]) ** 2;
-  let best = squaredLength(...fractional.map((value, axis) => value + shifts[axis]));
+  let s0 = pbc[0] ? -Math.round(f0) : 0;
+  let s1 = pbc[1] ? -Math.round(f1) : 0;
+  let s2 = pbc[2] ? -Math.round(f2) : 0;
+  let best = squaredImageLength(f0 + s0, f1 + s1, f2 + s2, h);
   const radius = Math.sqrt(best);
-  // A vector's fractional component cannot exceed its length divided by that
-  // cell's face height. This bounds all images that could beat the initial one.
-  const bounds = fractional.map((value, axis) => cell.pbc[axis]
-    ? [Math.ceil(-radius / heights[axis] - value - 1e-12), Math.floor(radius / heights[axis] - value + 1e-12)] : [0, 0]);
-  if (bounds.reduce((budget, [lo, hi]) => budget * (hi - lo + 1), 1) > MAX_IMAGE_CANDIDATES) {
+  // Face heights bound every candidate that can improve the initial image.
+  // Retain a/b/c traversal and strict improvement so equal-distance ties do
+  // not change when these temporary arrays become scalar locals.
+  const lo0 = pbc[0] ? Math.ceil(-radius / heights[0] - f0 - 1e-12) : 0;
+  const hi0 = pbc[0] ? Math.floor(radius / heights[0] - f0 + 1e-12) : 0;
+  const lo1 = pbc[1] ? Math.ceil(-radius / heights[1] - f1 - 1e-12) : 0;
+  const hi1 = pbc[1] ? Math.floor(radius / heights[1] - f1 + 1e-12) : 0;
+  const lo2 = pbc[2] ? Math.ceil(-radius / heights[2] - f2 - 1e-12) : 0;
+  const hi2 = pbc[2] ? Math.floor(radius / heights[2] - f2 + 1e-12) : 0;
+  if ((hi0 - lo0 + 1) * (hi1 - lo1 + 1) * (hi2 - lo2 + 1) > MAX_IMAGE_CANDIDATES) {
     throw new Error('The cell is too thin to resolve displacement periodic images.');
   }
-  for (let a = bounds[0][0]; a <= bounds[0][1]; a += 1) {
-    for (let b = bounds[1][0]; b <= bounds[1][1]; b += 1) {
-      for (let c = bounds[2][0]; c <= bounds[2][1]; c += 1) {
-        const distance = squaredLength(fractional[0] + a, fractional[1] + b, fractional[2] + c);
-        if (distance < best) { best = distance; shifts[0] = a; shifts[1] = b; shifts[2] = c; }
-      }
-    }
+  for (let a = lo0; a <= hi0; a += 1) for (let b = lo1; b <= hi1; b += 1) for (let c = lo2; c <= hi2; c += 1) {
+    const distance = squaredImageLength(f0 + a, f1 + b, f2 + c, h);
+    if (distance < best) { best = distance; s0 = a; s1 = b; s2 = c; }
   }
-  for (let axis = 0; axis < 3; axis += 1) change[axis] = (fractional[0] + shifts[0]) * h[axis]
-    + (fractional[1] + shifts[1]) * h[3 + axis] + (fractional[2] + shifts[2]) * h[6 + axis];
+  change[0] = (f0 + s0) * h[0] + (f1 + s1) * h[3] + (f2 + s2) * h[6];
+  change[1] = (f0 + s0) * h[1] + (f1 + s1) * h[4] + (f2 + s2) * h[7];
+  change[2] = (f0 + s0) * h[2] + (f1 + s1) * h[5] + (f2 + s2) * h[8];
+}
+
+function squaredImageLength(a, b, c, h) {
+  return (a * h[0] + b * h[3] + c * h[6]) ** 2
+    + (a * h[1] + b * h[4] + c * h[7]) ** 2 + (a * h[2] + b * h[5] + c * h[8]) ** 2;
 }
 
 function throwIfAborted(signal) {

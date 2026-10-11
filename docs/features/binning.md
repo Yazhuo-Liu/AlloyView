@@ -34,9 +34,13 @@ the panel and a CSV table; atom colors and properties do not change.
 Binning uses the complete analyzed frame, including hidden and sliced-out
 atoms. Once calculated, the tool is enabled: changing a setting recalculates,
 and every new frame is binned again with the same settings. When the chosen
-property is not available in a frame yet, for example while an analysis is
-still running, the panel shows **Waiting** and bins the frame as soon as the
-property appears. **Cancel** clears the result and stops recalculation.
+property is missing and an enabled producer is running, the panel shows
+**Waiting**, names the dependency and bins the frame when it appears. If the
+producer is disabled, fails or is cancelled, or an expression has an unavailable
+input, the panel shows **Unavailable** with the reason. This state is not a
+pending calculation: scripts and movie preparation report the missing input
+instead of waiting forever. Existing imported columns remain usable without
+running an analysis. **Cancel** clears the result and stops recalculation.
 
 ## Bins in reduced coordinates
 

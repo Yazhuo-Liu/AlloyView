@@ -33,6 +33,12 @@ prefetching and analyses, releases the source and its cached/GPU data, and
 resumes the rotating BCC model. You can immediately open the same or another
 file.
 
+A replacement file is parsed and its first frame validated before the previous
+source is released. If opening fails, the previous trajectory remains usable,
+including frames not yet cached, completed analyses and prepared backends.
+Candidate parsing shares the existing CPU budget; analysis Workers and Wasm
+heaps survive the source switch.
+
 For multi-frame dump, XYZ and PDB files, the first complete frame can appear
 while the rest of the file is indexed. A `+` after the frame count indicates
 that more frames may still be found. A reserved foreground parser handles
@@ -792,6 +798,12 @@ the second view and exported images, and can be saved with **Mesh STL**,
 available to labels and time series as `Surface.*` attributes. The analysis
 repeats for every displayed frame. See [Surface mesh](features/surface-mesh.md).
 
+With **Visible atoms**, Surface waits for the classification or scalar analyses
+used by the active filters before constructing the new frame's surface. The
+old mesh is cleared while waiting. Cancelling DXA leaves Surface work intact,
+and cancelling Surface leaves DXA work intact. Periodic cuts through atoms,
+shared edges or corners retain closed caps, including binary STL export.
+
 ## Dislocation analysis (DXA)
 
 Open **DXA**, choose a reference crystal and click **Extract dislocations**.
@@ -978,7 +990,10 @@ bar; hover, tap, the **Inspect** sliders or the arrow keys report a bin's
 range in Å along the vector, its value and atom count. **Profile CSV** /
 **Map CSV** exports every bin with its bounds in reduced coordinates and Å.
 Once calculated, binning repeats on every displayed frame with the same
-settings. For trajectories, **Average over all trajectory frames** reads each
+settings. A missing quantity shows **Waiting** only while its producer is
+running; otherwise it shows **Unavailable** with the reason. Scripts and movie
+preparation report that reason instead of waiting indefinitely.
+For trajectories, **Average over all trajectory frames** reads each
 frame in order and averages counts and densities per frame while pooling the
 samples of means and other statistics; it supports counts, density, positions,
 speed and file columns. See [Spatial binning](features/binning.md).
@@ -1249,6 +1264,12 @@ the current inputs. With the switch off, images are identical to those without
 the feature. Settings are saved in configuration JSON. See
 [Display](features/display.md#ambient-occlusion) for the method and limits.
 
+If the browser loses the graphics context, the renderer shows a notice and
+pauses image export. On recovery it restores the latest view and overlays while
+retaining the camera, selections, completed analyses and compute backends.
+PNG frame archives calculate each image's checksum as it arrives, keeping the
+final ZIP assembly short; cancellation releases the partial archive.
+
 ## Command scripts and movies
 
 **Visualization tools → Scripts** runs a list of commands, one per line:
@@ -1339,6 +1360,13 @@ result's display refresh has completed.
 npm test
 npm run benchmark
 # With Node.js 24 and Chrome/Chromium, after npm run build:
+# Failed replacement files, real dependency completion, graphics restoration and frame ZIPs:
+npm run test:browser:source-loading
+npm run test:browser:analysis-dependencies
+npm run test:browser:renderer-context
+npm run test:browser:renderer-bounds
+npm run test:browser:atom-primitives
+npm run test:browser:archive-logo
 npm run test:browser
 # Real keys, gearbox, rebinding, frame and slice actions:
 npm run test:browser:keyboard
@@ -1406,10 +1434,12 @@ for adapter options and timing interpretation.
   minimum-image displacement. A non-identity `Transform`
   combined with non-zero `eta` is rejected because upstream AtomEye gives those
   fields ambiguous precedence.
-- LAMMPS text dump: `id`, numeric `type`, common scalar columns, `x/y/z`,
+- LAMMPS text dump: `id`, optional numeric `type` and `element`, common scalar columns, `x/y/z`,
   `xu/yu/zu`, `xs/ys/zs`, or `xsu/ysu/zsu`; orthogonal and restricted triclinic
   `xy/xz/yz` boxes; per-axis boundary flags; and optional `ix/iy/iz` image flags
-  for unwrapped display. General triclinic `abc origin`, binary dumps,
+  for unwrapped display. Optional `ITEM: UNITS` and `ITEM: TIME` are retained
+  as metadata; absent type/element defaults to Type 1. Extra atom rows are
+  rejected. General triclinic `abc origin`, binary dumps,
   partial image flags, and non-numeric custom columns (except `element`) are
   rejected explicitly. Format recognition is content-based; conventional
   `.dump`, `.lmp`, `.lammpstrj`, and `.lammpstraj` names are shown as candidates.

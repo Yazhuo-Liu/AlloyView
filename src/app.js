@@ -82,6 +82,8 @@ import { initializeCrystalDragControls } from './crystal-drag-controls.js';
 import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './configuration.js';
 import { initializeAtomEyeTools } from './atomeye-tools.js';
 import { createDisplayRefresh } from './display-refresh.js';
+import { createAnalysisDependencies } from './analysis-dependencies.js';
+import { REFERENCE_STRAIN_FIELDS } from './analysis/reference-strain.js';
 import { initializeDxaTools, DXA_STRUCTURE_PROPERTY } from './dxa-tools.js';
 import { initializeFeatureHelp } from './feature-help.js';
 import { normalizeSelectionGroups, selectionGroupVisibility } from './selection-groups.js';
@@ -244,11 +246,67 @@ let replicationController = null;
 let replicationRequest = 0;
 const analysisFrameSources = new WeakMap();
 const displayRefresh = createDisplayRefresh({ apply: flushDisplayRefresh });
+const analysisDependencies = createAnalysisDependencies({
+  getFrame: () => state.frame,
+  getProducer: propertyProducer,
+  getExpressionStatus: name => expressionTools?.getPropertyStatus(name),
+  getExpressionReferences: name => expressionTools?.getPropertyReferences(name),
+  getFilters: () => ({ crystalSource: crystalVisibility?.serialize().source, quantity: state.colorMode,
+    hiddenCategories: name => hiddenCategories.get(name), scalarRange: name => scalarColorRanges.get(name),
+    hideOutside: name => scalarHideOutside.get(name) !== false }),
+});
 let framePaletteSeed = null;
 function requestDisplayRefresh(flags) { displayRefresh.request(flags); }
+function notifyAnalysisDependencies() {
+  if (!state.frame) return;
+  expressionTools?.sync(state.frame);
+  // The consumers are notified by applyColorsNow only after their current
+  // visibility masks and expression values have reached the renderer.
+  requestDisplayRefresh({ options: true, colors: true, vectors: true });
+}
+function propertyProducer(name, frame) {
+  if (frame !== state.frame) return null;
+  const lower = name.toLowerCase(), matches = names => names.some(field => field.toLowerCase() === lower);
+  const status = (prefix, label) => {
+    const text = document.getElementById(`${prefix}-state`)?.textContent.trim() ?? '';
+    return /…$|^Queued$|^Waiting$/.test(text) ? { name: label, state: 'pending' }
+      : { name: label, state: 'unavailable', message: `${name} is unavailable: ${label} ${text === 'Failed' ? 'failed' : 'is not calculating for this frame'}.` };
+  };
+  for (const [kind, analysis] of Object.entries(state.analysis)) {
+    if (!analysis.enabled) continue;
+    const outputs = kind === 'coordination' ? ['coordination']
+      : kind === 'strain' ? [...STRAIN_FIELDS, 'idealStrainStructureType']
+        : kind === 'ptm' ? [ANALYSES.ptm.name, ...PTM_EXTRA_OUTPUTS.map(([field]) => field)]
+          : kind === 'centrosymmetry' && analysis.parameters?.mode === 'auto'
+            ? [ANALYSES[kind].name, 'centralSymmetryStructureType', 'centralSymmetryNeighbors']
+            : [ANALYSES[kind].name];
+    if (matches(outputs)) {
+      // Frame replay chains ideal strain behind its enabled PTM fit. This is
+      // an actual producer dependency even before the strain controller starts.
+      if (kind === 'strain' && state.analysis.ptm.enabled && analysisTasks.get('ptm')?.frame === frame
+          && !['Failed', 'Calculated'].includes(elements['ptm-state'].textContent)) return { name: ANALYSES.strain.label, state: 'pending' };
+      return status(kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix,
+        kind === 'coordination' ? 'Coordination' : ANALYSES[kind].label);
+    }
+  }
+  for (const tool of [topologyTools, clusterTools, grainTools, wignerSeitzTools]) {
+    const field = tool?.pendingColorProperties().find(item => item.name.toLowerCase() === lower);
+    const kind = field && tool.getPropertyKind(field.name);
+    if (kind && tool.pendingKinds().includes(kind)) return { name: field.label, state: 'pending' };
+  }
+  if (dxaTools?.pendingColorProperties().some(field => field.name.toLowerCase() === lower)) return status('dxa', 'DXA');
+  const field = atomEyeTools?.pendingColorProperties().find(item => item.name.toLowerCase() === lower);
+  if (field) {
+    const prefix = field.name === 'bondCoordination' ? 'bonds' : field.name === 'localShear' ? 'local-shear'
+      : REFERENCE_STRAIN_FIELDS.includes(field.name) ? 'reference-strain' : 'displacement';
+    return status(prefix, field.label);
+  }
+  return null;
+}
 function afterDisplayRefresh(callback) {
   displayRefresh.afterFlush(() => {
     callback();
+    notifyAnalysisDependencies();
     // Vector-source waiting labels follow the completed analysis pills.
     requestDisplayRefresh({ vectors: true });
   });
@@ -570,7 +628,8 @@ atomEyeTools = initializeAtomEyeTools({
   prepareExport: options => { displayRefresh.flush(); return textLabelControls?.prepareExport(options); },
   showFrame, stopPlayback: stopFramePlayback,
   getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
-  notify: showToast, onEdit: () => interruptConfigurationRestore('a settings edit'), onMemoryChange: reassessFrameCache,
+  notify: message => { showToast(message); notifyAnalysisDependencies(); },
+  onEdit: () => interruptConfigurationRestore('a settings edit'), onMemoryChange: reassessFrameCache,
   onBondParametersChange: () => { void clusterTools?.refreshBondParameters(); return topologyTools?.refreshBondParameters(); },
   onBondStateChange: () => topologyTools?.syncBondEnabled(),
   getBondStatisticsEnabled: () => (topologyTools?.isEnabled('bondStatistics') ?? false) || (clusterTools?.usesBondCutoffs() ?? false),
@@ -742,6 +801,7 @@ surfaceTools = initializeSurfaceTools({
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
   getFrameIndex: () => state.frameIndex,
   getSelectionGroups: () => state.selectionGroups.groups,
+  getVisibilityDependencies: frame => analysisDependencies.getVisibilityDependencies(frame),
   getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
   onResultsChange: () => {
     if (!state.frame) return;
@@ -764,6 +824,7 @@ binningTools = initializeBinningTools({
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
   getFrameIndex: () => state.frameIndex,
   getSelectionGroups: () => state.selectionGroups.groups,
+  getPropertyDependency: (key, frame) => analysisDependencies.getPropertyDependency(key, frame),
   onResultsChange: () => statisticsExports?.refresh(),
   onEdit: () => interruptConfigurationRestore('a spatial binning edit'),
   notify: showToast,
@@ -1053,6 +1114,8 @@ const automationLock = createAutomationLock();
 // Every analysis panel reports its work in a state pill; a frame being read shows the loading overlay.
 const analysesSettled = () => {
   displayRefresh.flush();
+  const error = binningTools?.getAutomationError();
+  if (error) return { settled: false, error };
   return elements.loading.hidden && ![...document.querySelectorAll('.analysis-section .state-pill')]
     .some(pill => /…$|^Queued$|^Waiting$/.test(pill.textContent.trim()));
 };
@@ -1134,11 +1197,15 @@ window.addEventListener('beforeunload', () => {
 });
 
 function beginSourceOpen() {
-  cancelLatticeEstimation();
+  worker.cancelSourceLoad();
   replicationController?.abort();
   replicationRequest++;
   cpuPrefetch.cancel();
   gpuPrefetch.pause();
+  cancelFramePrefetch();
+  frameNavigationController?.abort();
+  frameNavigationController = null;
+  state.frameRequest++;
   interruptConfigurationRestore('a new source selection');
   sourceFetchController?.abort();
   sourceFetchController = null;
@@ -1155,8 +1222,10 @@ function finishSourceOpen(request) {
   sourceLoadingOwner = null;
   setControlsEnabled(Boolean(state.frame));
   syncSliceGizmo();
+  if (worker.sourceInfo) updateSourceIndex(worker.sourceInfo);
   if (state.frame) void cpuPrefetch.setFrame({ sourceKey: state.sourceVersion, frame: state.frame });
   scheduleGpuFramePrefetch();
+  if (state.frame) scheduleFramePrefetch(state.frameIndex);
 }
 
 function closeSource() {
@@ -1531,42 +1600,44 @@ async function loadCatalogExample(entry) {
 
 async function loadFiles(inputFiles, sourceDescriptor = null) {
   const selectionRequest = beginSourceOpen();
-  clearTimeout(cutoffTimer);
-  abortAnalysisJobs();
-  analysisPool.clearVoronoiFrames();
-  void gpuPrefetch.clearSource();
   stopFramePlayback();
   const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
   const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
-  const sourceVersion = state.sourceVersion + 1;
-  state.sourceVersion = sourceVersion;
-  // Module initialization overlaps file indexing. The parsed atom count grows
-  // these same pools before the user starts an analysis.
-  void cpuPrefetch.warmModules({ sourceKey: sourceVersion });
-  state.prefetchToken += 1;
-  cancelFramePrefetch();
-  frameNavigationController?.abort();
-  frameNavigationController = null;
-  state.pendingFrames.clear();
+  const previousSourceVersion = state.sourceVersion;
+  const sourceVersion = previousSourceVersion + 1;
+  // Warm retained modules while a private candidate is indexed. The old source
+  // key, analyses, native heaps and GPU inputs survive a rejected selection.
+  void cpuPrefetch.warmModules({ sourceKey: previousSourceVersion });
   const request = state.frameRequest + 1;
   state.frameRequest = request;
-  worker.reset();
-  elements['file-name'].textContent = sourceDescriptor?.label ?? (files.length > 1
-    ? `${files[0].name} … ${files.at(-1).name}` : files[0].name);
   setLoading(true, files.length > 1 ? `Reading ${files.length} local CFG files…` : 'Reading local file…');
+  let preparedSource;
   try {
-    const result = await worker.load(files);
-    if (selectionRequest !== sourceOpenRequest || request !== state.frameRequest || sourceVersion !== state.sourceVersion) return;
-    cache.clear();
-    state.cachePlan = chooseFrameCachePolicy(result.frame, result.frameCount, {
+    preparedSource = await worker.prepareSource(files);
+    const result = preparedSource.result;
+    if (selectionRequest !== sourceOpenRequest || request !== state.frameRequest || previousSourceVersion !== state.sourceVersion) return;
+    const cachePlan = chooseFrameCachePolicy(result.frame, result.frameCount, {
       heapLimit: performance.memory?.jsHeapSizeLimit,
       heapUsed: performance.memory?.usedJSHeapSize,
       deviceMemoryGiB: navigator.deviceMemory,
     });
+    // Commit only after a valid first frame exists. Candidate failure never
+    // invalidates old uncached-frame reads or removes its completed analyses.
+    clearTimeout(cutoffTimer);
+    abortAnalysisJobs();
+    state.sourceVersion = sourceVersion;
+    state.pendingFrames.clear();
+    analysisPool.clearVoronoiFrames();
+    void gpuPrefetch.clearSource();
+    preparedSource.commit();
+    cache.clear();
+    state.cachePlan = cachePlan;
     cache.setLimit(state.cachePlan.limit);
     cache.set(0, result.frame);
     state.file = files[0];
     state.files = files;
+    elements['file-name'].textContent = sourceDescriptor?.label ?? (files.length > 1
+      ? `${files[0].name} … ${files.at(-1).name}` : files[0].name);
     state.format = result.format;
     const initialIndex = worker.sourceInfo ?? result;
     state.frameCount = Math.max(result.frameCount, initialIndex.frameCount);
@@ -1638,7 +1709,6 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     setLoading(false);
     updateSourceIndex(worker.sourceInfo ?? result);
     showInteractionHint();
-    scheduleFramePrefetch(0);
     if (state.indexError) showToast(`Trajectory indexing stopped: ${state.indexError}`);
     else showToast(
       files.length > 1
@@ -1665,6 +1735,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
       showToast(error.message);
     }
   } finally {
+    preparedSource?.cancel();
     finishSourceOpen(selectionRequest);
   }
 }
@@ -2997,6 +3068,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
         if (!estimated) {
           elements['strain-state'].textContent = 'Not calculated';
           elements['run-strain'].disabled = false;
+          notifyAnalysisDependencies();
           return;
         }
       }
@@ -3019,6 +3091,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     elements[`run-${prefix}`].disabled = false;
     syncCancelButton(kind);
     showToast(error.message);
+    notifyAnalysisDependencies();
     return;
   }
   analysis.enabled = true;
@@ -3151,8 +3224,8 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     afterDisplayRefresh(() => { if (isCurrent()) ready(properties[0]); });
     if (result.warning) showToast(result.warning);
   } catch (error) {
-    if (!isCurrent() || error.name === 'AbortError') return;
-    elements[`${prefix}-state`].textContent = 'Failed';
+    if (!isCurrent()) return;
+    elements[`${prefix}-state`].textContent = error.name === 'AbortError' ? 'Cancelled' : 'Failed';
     elements[`${prefix}-status`].textContent = error.message;
     if (kind === 'centrosymmetry') updateCspMethodUi();
     reassessFrameCache(frame); updateMemoryMetric();
@@ -3161,6 +3234,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     if (isCurrent()) elements[`run-${prefix}`].disabled = false;
     if (analysisControllers.get(kind) === controller) analysisControllers.delete(kind);
     if (analysisTasks.get(kind)?.request === request) analysisTasks.delete(kind);
+    if (isCurrent()) notifyAnalysisDependencies();
   }
 }
 
@@ -3262,9 +3336,9 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     updateMemoryMetric();
     if (result.warning) showToast(result.warning);
   } catch (error) {
-    if (isCurrent() && error.name !== 'AbortError') {
-      elements['analysis-state'].textContent = 'Failed';
-      showToast(error.message);
+    if (isCurrent()) {
+      elements['analysis-state'].textContent = error.name === 'AbortError' ? 'Cancelled' : 'Failed';
+      if (error.name !== 'AbortError') showToast(error.message);
     }
   } finally {
     if (isCurrent()) {
@@ -3272,6 +3346,7 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
       if (loadingOwner === 'coordination') setLoading(false);
     }
     if (analysisControllers.get('coordination') === controller) analysisControllers.delete('coordination');
+    if (isCurrent()) notifyAnalysisDependencies();
   }
 }
 

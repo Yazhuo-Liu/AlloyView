@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell } from '../src/data/model.js';
-import { AtomPrimitiveLayer, bondDisplayShifts, createFlatArrowMesh, createPrimitiveMesh, normalizeVectorOptions,
+import { AtomPrimitiveLayer, bondDisplayShifts, createFlatArrowMesh, createIndexedPrimitiveMesh, createPrimitiveMesh, normalizeVectorOptions,
   parsePrimitiveColor, validateBonds, vectorArrowEndpoints } from '../src/render/atom-primitives.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 
@@ -46,6 +46,38 @@ test('cylinders and arrow cones have actual outward-facing, capped triangle geom
   }
 });
 
+test('indexed cylinders and cones preserve every triangle and Float32 attribute bit, including capped hard edges', () => {
+  for (const sides of [3, 8, 10, 32]) for (const cone of [false, true]) {
+    const raw = createPrimitiveMesh(cone, sides), { vertices, indices } = createIndexedPrimitiveMesh(cone, sides);
+    const expanded = new Float32Array(raw.length);
+    for (let index = 0; index < indices.length; index++) {
+      expanded.set(vertices.subarray(indices[index] * 6, indices[index] * 6 + 6), index * 6);
+    }
+    assert.deepEqual(new Uint32Array(expanded.buffer), new Uint32Array(raw.buffer));
+    assert.ok(indices instanceof Uint16Array);
+    assert.ok(vertices.length < raw.length);
+  }
+  assert.equal(createIndexedPrimitiveMesh(false).vertices.length / 6, 46);
+  assert.equal(createIndexedPrimitiveMesh(true).vertices.length / 6, 33);
+});
+
+test('indexed mesh uploads preserve the active VAO element binding', () => {
+  const layer = Object.create(AtomPrimitiveLayer.prototype), originalVao = {}, bindings = new Map([[originalVao, {}]]), uploads = [];
+  let vao = originalVao, buffer;
+  const initialElement = bindings.get(originalVao);
+  layer.gl = { ARRAY_BUFFER: 1, ELEMENT_ARRAY_BUFFER: 2, STATIC_DRAW: 3, VERTEX_ARRAY_BINDING: 4, UNSIGNED_SHORT: 5,
+    createBuffer: () => ({}), getParameter: () => vao,
+    bindVertexArray(value) { vao = value; },
+    bindBuffer(target, value) { buffer = value; if (target === this.ELEMENT_ARRAY_BUFFER) bindings.set(vao, value); },
+    bufferData(target, values) { uploads.push({ target, buffer, values }); } };
+  const mesh = layer.mesh(false);
+  assert.equal(vao, originalVao);
+  assert.equal(bindings.get(originalVao), initialElement);
+  assert.equal(uploads[1].buffer, mesh.indexBuffer);
+  assert.equal(mesh.count, 120); assert.equal(mesh.vertexCount, 46);
+  assert.equal(mesh.indexType, layer.gl.UNSIGNED_SHORT);
+});
+
 test('vector colors accept hex and normalized RGB without silently changing invalid input', () => {
   assert.deepEqual(parsePrimitiveColor('#ff8000'), [1, 128 / 255, 0]);
   assert.deepEqual(parsePrimitiveColor(new Float32Array([0, 0.5, 1])), [0, 0.5, 1]);
@@ -70,13 +102,15 @@ test('clearing attached geometry releases its prepared scalar source and shrinks
   const layer = Object.create(AtomPrimitiveLayer.prototype), uploads = [];
   Object.assign(layer, { scalarColorInput: { data: new Float64Array(100), values: new Float32Array(100) },
     positionValues: new Float32Array(400), fractionalValues: new Float32Array(400), colorValues: new Uint8Array(400), width: 10, height: 10,
-    gl: { RGBA32F: 1, RGBA8: 2, FLOAT: 3, UNSIGNED_BYTE: 4 }, clearInstances() {},
+    visibilityValues: new Int8Array(100), sourceRenderer: {}, colorSource: new Uint8Array(300), textureDirty: { visibility: true },
+    gl: { RGBA32F: 1, RGBA8: 2, FLOAT: 3, UNSIGNED_BYTE: 4, R8I: 5, BYTE: 6, RED_INTEGER: 7 }, clearInstances() {},
     uploadTexture(index, values) { uploads.push([index, values.byteLength]); } });
   layer.clear();
   assert.equal(layer.scalarColorInput, null);
   assert.equal(layer.positionValues, null); assert.equal(layer.fractionalValues, null); assert.equal(layer.colorValues, null);
+  assert.equal(layer.visibilityValues, null); assert.equal(layer.sourceRenderer, null); assert.equal(layer.colorSource, null);
   assert.equal(layer.width, 1); assert.equal(layer.height, 1);
-  assert.deepEqual(uploads, [[0, 16], [1, 4], [2, 16]], 'source-sized texture storage is replaced by single pixels');
+  assert.deepEqual(uploads, [[0, 16], [1, 4], [2, 16], [3, 1]], 'source-sized texture storage is replaced by single pixels');
 });
 
 test('bond display options reuse analysis arrays and instance uploads', () => {
@@ -97,25 +131,75 @@ test('bond display options reuse analysis arrays and instance uploads', () => {
   assert.ok(uploads.slice(3).every(upload => upload.values === 0), 'cancel releases GPU bond data');
 });
 
-test('position texture keeps selection hiding distinct from ordinary atom hiding without copying source positions', () => {
+test('visibility edits upload one signed byte per padded atom and preserve coordinate/color mirrors and source arrays', () => {
   const { layer } = layerFixture(), textures = [];
+  layer.width = 3; layer.height = 1;
   layer.positionValues = new Float32Array(12);
   layer.fractionalValues = new Float32Array(12);
-  layer.uploadTexture = (index, values) => textures.push({ index, values: [...values] });
-  layer.gl.RGBA32F = 3; layer.gl.FLOAT = 4;
+  layer.colorValues = new Uint8Array(12);
+  layer.uploadTexture = (index, values) => textures.push({ index, values: [...values], bytes: values.byteLength });
+  Object.assign(layer.gl, { R8I: 3, BYTE: 4, RED_INTEGER: 5 });
   const positions = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   const fractional = new Float32Array([.1, .2, .3, .4, .5, .6, .7, .8, .9]);
   const renderer = { atomCount: 3, displayPositions: positions, frame: { fractional },
     visibility: new Uint8Array([255, 0, 0]), selectionVisibility: new Uint8Array([255, 255, 0]) };
-  layer.updatePositions(renderer, false);
-  assert.equal(textures.length, 1, 'filter edits update only the existing position texture');
-  assert.deepEqual(textures[0], { index: 0, values: [1, 2, 3, 1, 4, 5, 6, 0, 7, 8, 9, -1] });
+  layer.updateVisibility(renderer);
+  assert.equal(textures.length, 0, 'filter edits defer uploads until an attached layer draws');
+  layer.flushTextures();
+  assert.deepEqual(textures, [{ index: 3, values: [1, 0, -1], bytes: 3 }]);
   assert.deepEqual([...positions], [1, 2, 3, 4, 5, 6, 7, 8, 9]);
-  const storage = layer.positionValues;
+  const storage = [layer.positionValues, layer.fractionalValues, layer.colorValues, layer.visibilityValues];
   renderer.selectionVisibility = null;
-  layer.updatePositions(renderer, false);
-  assert.equal(layer.positionValues, storage, 'unhiding reuses the resident texture staging array');
-  assert.deepEqual(textures[1].values, [1, 2, 3, 1, 4, 5, 6, 0, 7, 8, 9, 0]);
+  layer.updateVisibility(renderer); layer.flushTextures();
+  [layer.positionValues, layer.fractionalValues, layer.colorValues, layer.visibilityValues].forEach((values, index) => assert.equal(values, storage[index]));
+  assert.deepEqual(textures[1], { index: 3, values: [1, 0, 0], bytes: 3 });
+  layer.flushTextures(); assert.equal(textures.length, 2, 'unchanged warm textures need no upload');
+});
+
+test('inactive attached layers defer mirror allocation and combine frame, color, preview and coordinate changes on first draw', () => {
+  const { layer } = layerFixture(), textures = [];
+  Object.assign(layer.gl, { MAX_TEXTURE_SIZE: 10, getParameter: () => 4096, RGBA32F: 3, FLOAT: 4, RGBA8: 5, UNSIGNED_BYTE: 6 });
+  layer.uploadTexture = (index, values) => textures.push({ index, values: [...values] });
+  const positions = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const renderer = { atomCount: 3, displayPositions: positions, frame: { fractional: positions }, visibility: new Uint8Array([255, 0, 255]) };
+  const colors = new Uint8Array(9).fill(80), editedColors = new Uint8Array(9).fill(120);
+  layer.setFrame(renderer, colors);
+  layer.updateColors(editedColors);
+  layer.updateScalarColorPreview({ values: new Float32Array(3), colorOverrides: new Uint8Array([0, 255, 0]) });
+  renderer.displayPositions = new Float32Array([10, 20, 30, 40, 50, 60, 70, 80, 90]);
+  layer.updatePositions(renderer);
+  layer.render(renderer);
+  assert.equal(textures.length, 0); assert.equal(layer.positionValues, undefined);
+  layer.flushTextures();
+  assert.deepEqual([...layer.positionValues].slice(0, 12), [10, 20, 30, 0, 40, 50, 60, 0, 70, 80, 90, 0]);
+  assert.deepEqual([...layer.colorValues].slice(0, 12), [120, 120, 120, 0, 120, 120, 120, 255, 120, 120, 120, 0]);
+  const mirrors = [layer.positionValues, layer.fractionalValues, layer.colorValues, layer.visibilityValues];
+  const bounds = [[Infinity, Infinity, Infinity], [-Infinity, -Infinity, -Infinity]];
+  layer.vectorFields = [{ vectors: new Float32Array([1, 0, 0, 0, 0, 0, 0, 0, 1]), options: normalizeVectorOptions() }];
+  layer.extendBounds(renderer, ...bounds);
+  assert.ok(bounds.flat().every(Number.isFinite), 'bounds use canonical coordinates independently of lazy texture state');
+  layer.vectorFields = [];
+  layer.setFrame(renderer, editedColors); layer.flushTextures();
+  [layer.positionValues, layer.fractionalValues, layer.colorValues, layer.visibilityValues].forEach((values, index) => {
+    assert.equal(values, mirrors[index], 'same-sized frames retain warm staging');
+  });
+  assert.deepEqual([layer.colorValues[3], layer.colorValues[7], layer.colorValues[11]], [255, 255, 255], 'a new frame clears old preview overrides');
+});
+
+test('single-byte visibility textures restore unpack alignment after allocation, subimage update and failure', () => {
+  const layer = Object.create(AtomPrimitiveLayer.prototype), uploads = [], gl = { RGBA: 1, RED_INTEGER: 2, UNPACK_ALIGNMENT: 3,
+    TEXTURE0: 10, TEXTURE_2D: 11, getParameter: () => 8,
+    pixelStorei(parameter, value) { uploads.push(['alignment', value]); }, activeTexture() {}, bindTexture() {},
+    texImage2D(...args) { uploads.push(['image', args[3], args[4], args[6], args[8].byteLength]); },
+    texSubImage2D(...args) { uploads.push(['subimage', args[4], args[5], args[6], args[8].byteLength]); } };
+  Object.assign(layer, { gl, width: 3, height: 2, textures: [null, null, null, {}], textureSizes: [null, null, null, null] });
+  layer.uploadTexture(3, new Int8Array(6), 12, 13, gl.RED_INTEGER);
+  layer.uploadTexture(3, new Int8Array(6), 12, 13, gl.RED_INTEGER);
+  assert.deepEqual(uploads, [['alignment', 1], ['image', 3, 2, 2, 6], ['alignment', 8],
+    ['alignment', 1], ['subimage', 3, 2, 2, 6], ['alignment', 8]]);
+  gl.texSubImage2D = () => { throw new Error('upload failed'); };
+  assert.throws(() => layer.uploadTexture(3, new Int8Array(6), 12, 13, gl.RED_INTEGER), /upload failed/);
+  assert.deepEqual(uploads.at(-1), ['alignment', 8]);
 });
 
 test('vector display retains source data and reuses instances when scaling', () => {

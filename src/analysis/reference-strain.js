@@ -1,5 +1,5 @@
 import { cellFaceHeights, determinant3, imageLatticeCell, invert3 } from '../data/model.js';
-import { atomRange, NeighborSearch } from './neighbors.js';
+import { atomRange, NeighborSearch, NeighborBuffer } from './neighbors.js';
 import { yieldToMain } from '../task-yield.js';
 
 export const REFERENCE_STRAIN_FIELDS = Object.freeze([
@@ -148,7 +148,7 @@ export function calculateReferenceStrain(frame, {
   const result = Object.fromEntries(REFERENCE_STRAIN_FIELDS.map(name => [name, new Float32Array(length).fill(NaN)]));
   const covariance = new Float64Array(9), crossCovariance = new Float64Array(9);
   const inverse = new Float64Array(9), F = new Float64Array(9), E = new Float64Array(9);
-  const currentVector = new Float64Array(3), change = new Float64Array(3);
+  const currentVector = new Float64Array(3), change = new Float64Array(3), contextScratch = new NeighborBuffer();
   let incomplete = 0;
   let lastProgressAt = performance.now();
   onPhase('analyzing');
@@ -163,25 +163,26 @@ export function calculateReferenceStrain(frame, {
     covariance.fill(0);
     crossCovariance.fill(0);
     let neighbors = 0, squaredLengths = 0;
-    const referenceNeighbors = search.within(referenceAtom, cutoff, MAX_REFERENCE_NEIGHBORS + 1);
+    const referenceNeighbors = search.collect(referenceAtom, cutoff, contextScratch, MAX_REFERENCE_NEIGHBORS + 1);
     if (referenceNeighbors.length > MAX_REFERENCE_NEIGHBORS) {
       throw new Error('Too many reference-strain neighbors; reduce the cutoff.');
     }
-    for (const neighbor of referenceNeighbors) {
-      const other = inverseMapping[neighbor.atom];
+    for (let neighborIndex = 0; neighborIndex < referenceNeighbors.length; neighborIndex++) {
+      const neighborAtom = referenceNeighbors.atoms[neighborIndex];
+      const other = inverseMapping[neighborAtom];
       if (other < 0) continue;
-      const r = [neighbor.x, neighbor.y, neighbor.z];
+      const r0 = referenceNeighbors.xs[neighborIndex], r1 = referenceNeighbors.ys[neighborIndex], r2 = referenceNeighbors.zs[neighborIndex];
       for (let axis = 0; axis < 3; axis += 1) {
         const currentDifference = currentFractional[other * 3 + axis] - currentFractional[atom * 3 + axis];
-        const referenceDifference = search.coordinates[neighbor.atom * 3 + axis] - search.coordinates[referenceAtom * 3 + axis];
+        const referenceDifference = search.coordinates[neighborAtom * 3 + axis] - search.coordinates[referenceAtom * 3 + axis];
         change[axis] = currentDifference - referenceDifference;
       }
       minimumImageChange(change, imageCell, imageHeights, imageScale);
       // Recover the reference image from its full vector instead of discarding
       // image information with a second minimum-image operation on the bond.
       for (let axis = 0; axis < 3; axis += 1) {
-        currentVector[axis] = change[axis] + r[0] * referenceInverse[axis]
-          + r[1] * referenceInverse[3 + axis] + r[2] * referenceInverse[6 + axis];
+        currentVector[axis] = change[axis] + r0 * referenceInverse[axis]
+          + r1 * referenceInverse[3 + axis] + r2 * referenceInverse[6 + axis];
       }
       const [a, b, c] = currentVector;
       const h = frame.cell.vectors;
@@ -189,10 +190,15 @@ export function calculateReferenceStrain(frame, {
       currentVector[1] = a * h[1] + b * h[4] + c * h[7];
       currentVector[2] = a * h[2] + b * h[5] + c * h[8];
       squaredLengths += currentVector[0] * currentVector[0] + currentVector[1] * currentVector[1] + currentVector[2] * currentVector[2];
-      for (let row = 0; row < 3; row += 1) for (let column = 0; column < 3; column += 1) {
-        covariance[row * 3 + column] += r[row] * r[column];
-        crossCovariance[row * 3 + column] += currentVector[row] * r[column];
-      }
+      covariance[0] += r0 * r0; crossCovariance[0] += currentVector[0] * r0;
+      covariance[1] += r0 * r1; crossCovariance[1] += currentVector[0] * r1;
+      covariance[2] += r0 * r2; crossCovariance[2] += currentVector[0] * r2;
+      covariance[3] += r1 * r0; crossCovariance[3] += currentVector[1] * r0;
+      covariance[4] += r1 * r1; crossCovariance[4] += currentVector[1] * r1;
+      covariance[5] += r1 * r2; crossCovariance[5] += currentVector[1] * r2;
+      covariance[6] += r2 * r0; crossCovariance[6] += currentVector[2] * r0;
+      covariance[7] += r2 * r1; crossCovariance[7] += currentVector[2] * r1;
+      covariance[8] += r2 * r2; crossCovariance[8] += currentVector[2] * r2;
       neighbors += 1;
     }
     if (neighbors < 3 || !invertCovariance(covariance, inverse)) { incomplete += 1; continue; }
@@ -223,9 +229,10 @@ export function calculateReferenceStrain(frame, {
 }
 
 /** Reuse the double-precision index and correspondence for sparse GPU
- * corrections, instead of rebuilding the complete frame for each atom. */
+ * corrections. Inputs belong to one immutable snapshot; shared normalized
+ * coordinates and inverse mappings remain read-only and are checked exactly. */
 export function prepareReferenceStrainContext(frame, { referenceFractional, referenceCell, referenceMapping, referenceSearch,
-  sourceRepetitions = null }) {
+  sourceRepetitions = null, normalizedCurrentFractional = null, inverseMappingInput = null }) {
   const count = frame.fractional.length / 3;
   const referenceCount = referenceFractional?.length / 3;
   if (!Number.isInteger(referenceCount) || referenceCount < 1 || referenceMapping?.length !== count) {
@@ -234,14 +241,25 @@ export function prepareReferenceStrainContext(frame, { referenceFractional, refe
   if (!referenceCell?.pbc || referenceCell.pbc.some((periodic, axis) => periodic !== frame.cell.pbc[axis])) {
     throw new Error('Reference and current frames must use the same periodic boundary axes.');
   }
-  const inverseMapping = new Int32Array(referenceCount).fill(-1);
+  if (inverseMappingInput !== null && (!(inverseMappingInput instanceof Int32Array)
+      || inverseMappingInput.length !== referenceCount)) {
+    throw new Error('Reference-strain inverse mapping is incomplete.');
+  }
+  const inverseMapping = inverseMappingInput ?? new Int32Array(referenceCount).fill(-1);
+  if (inverseMappingInput !== null) for (let reference = 0; reference < referenceCount; reference += 1) {
+    const atom = inverseMapping[reference];
+    if (atom < -1 || atom >= count || (atom >= 0 && referenceMapping[atom] !== reference)) {
+      throw new Error('Reference-strain inverse mapping must match the atom mapping.');
+    }
+  }
   for (let atom = 0; atom < count; atom += 1) {
     const reference = referenceMapping[atom];
     if (!Number.isInteger(reference) || reference < -1 || reference >= referenceCount
-        || (reference >= 0 && inverseMapping[reference] >= 0)) {
+        || (reference >= 0 && (inverseMappingInput !== null
+          ? inverseMapping[reference] !== atom : inverseMapping[reference] >= 0))) {
       throw new Error('Reference-strain atom mapping must be one-to-one and within the reference frame.');
     }
-    if (reference >= 0) inverseMapping[reference] = atom;
+    if (reference >= 0 && inverseMappingInput === null) inverseMapping[reference] = atom;
   }
 
   const search = referenceSearch ?? new NeighborSearch({ fractional: referenceFractional, cell: referenceCell });
@@ -249,10 +267,22 @@ export function prepareReferenceStrainContext(frame, { referenceFractional, refe
   const imageCell = imageLatticeCell(frame.cell, sourceRepetitions);
   const imageHeights = cellFaceHeights(imageCell);
   const imageScale = sourceRepetitions ? Float64Array.from(sourceRepetitions) : null;
-  const currentFractional = Float64Array.from(frame.fractional, (value, k) => {
+  if (normalizedCurrentFractional !== null && (!(normalizedCurrentFractional instanceof Float64Array)
+      || normalizedCurrentFractional.length !== frame.fractional.length)) {
+    throw new Error('Reference-strain normalized current coordinates are incomplete.');
+  }
+  let alreadyNormalized = frame.fractional instanceof Float64Array;
+  for (let k = 0; k < frame.fractional.length; k += 1) {
+    const value = frame.fractional[k];
     if (!Number.isFinite(value)) throw new Error('Reference-frame strain requires finite current coordinates.');
-    return frame.cell.pbc[k % 3] ? value - Math.floor(value) : value;
-  });
+    const normalized = frame.cell.pbc[k % 3] ? value - Math.floor(value) : value;
+    if (normalizedCurrentFractional !== null && !Object.is(normalizedCurrentFractional[k], normalized)) {
+      throw new Error('Reference-strain normalized current coordinates must match the frame exactly.');
+    }
+    if (!Object.is(value, normalized)) alreadyNormalized = false;
+  }
+  const currentFractional = normalizedCurrentFractional ?? (alreadyNormalized ? frame.fractional
+    : Float64Array.from(frame.fractional, (value, k) => frame.cell.pbc[k % 3] ? value - Math.floor(value) : value));
   return { frame, referenceFractional, referenceCell, referenceMapping, inverseMapping, search,
     referenceInverse, imageCell, imageHeights, imageScale, currentFractional };
 }
@@ -276,27 +306,33 @@ function invertCovariance(matrix, output) {
 function minimumImageChange(change, cell, heights, scale) {
   if (scale) for (let axis = 0; axis < 3; axis += 1) change[axis] *= scale[axis];
   const h = cell.vectors;
-  const shifts = Array.from(change, (value, axis) => cell.pbc[axis] ? -Math.round(value) : 0);
-  const squaredLength = (a, b, c) => (a * h[0] + b * h[3] + c * h[6]) ** 2
-    + (a * h[1] + b * h[4] + c * h[7]) ** 2 + (a * h[2] + b * h[5] + c * h[8]) ** 2;
-  let best = squaredLength(...change.map((value, axis) => value + shifts[axis]));
-  // Face heights bound every candidate no longer than the initial valid image.
-  // Fractional rounding alone is insufficient in a highly skewed cell.
+  const d0 = change[0], d1 = change[1], d2 = change[2];
+  let s0 = cell.pbc[0] ? -Math.round(d0) : 0;
+  let s1 = cell.pbc[1] ? -Math.round(d1) : 0;
+  let s2 = cell.pbc[2] ? -Math.round(d2) : 0;
+  const a0 = d0 + s0, b0 = d1 + s1, c0 = d2 + s2;
+  let best = (a0 * h[0] + b0 * h[3] + c0 * h[6]) ** 2
+    + (a0 * h[1] + b0 * h[4] + c0 * h[7]) ** 2 + (a0 * h[2] + b0 * h[5] + c0 * h[8]) ** 2;
   const radius = Math.sqrt(best);
-  const bounds = Array.from(change, (value, axis) => cell.pbc[axis]
-    ? [Math.ceil(-radius / heights[axis] - value - 1e-12), Math.floor(radius / heights[axis] - value + 1e-12)]
-    : [0, 0]);
-  if (bounds.reduce((budget, [lo, hi]) => budget * (hi - lo + 1), 1) > 100_000) {
+  const lo0 = cell.pbc[0] ? Math.ceil(-radius / heights[0] - d0 - 1e-12) : 0;
+  const hi0 = cell.pbc[0] ? Math.floor(radius / heights[0] - d0 + 1e-12) : 0;
+  const lo1 = cell.pbc[1] ? Math.ceil(-radius / heights[1] - d1 - 1e-12) : 0;
+  const hi1 = cell.pbc[1] ? Math.floor(radius / heights[1] - d1 + 1e-12) : 0;
+  const lo2 = cell.pbc[2] ? Math.ceil(-radius / heights[2] - d2 - 1e-12) : 0;
+  const hi2 = cell.pbc[2] ? Math.floor(radius / heights[2] - d2 + 1e-12) : 0;
+  if (1 * (hi0 - lo0 + 1) * (hi1 - lo1 + 1) * (hi2 - lo2 + 1) > 100_000) {
     throw new Error('The cell is too thin to resolve reference-strain periodic images.');
   }
-  for (let a = bounds[0][0]; a <= bounds[0][1]; a += 1) {
-    for (let b = bounds[1][0]; b <= bounds[1][1]; b += 1) {
-      for (let c = bounds[2][0]; c <= bounds[2][1]; c += 1) {
-        const distance = squaredLength(change[0] + a, change[1] + b, change[2] + c);
-        if (distance < best) { best = distance; shifts[0] = a; shifts[1] = b; shifts[2] = c; }
+  for (let a = lo0; a <= hi0; a += 1) {
+    for (let b = lo1; b <= hi1; b += 1) {
+      for (let c = lo2; c <= hi2; c += 1) {
+        const da = d0 + a, db = d1 + b, dc = d2 + c;
+        const distance = (da * h[0] + db * h[3] + dc * h[6]) ** 2
+          + (da * h[1] + db * h[4] + dc * h[7]) ** 2 + (da * h[2] + db * h[5] + dc * h[8]) ** 2;
+        if (distance < best) { best = distance; s0 = a; s1 = b; s2 = c; }
       }
     }
   }
-  for (let axis = 0; axis < 3; axis += 1) change[axis] += shifts[axis];
+  change[0] += s0; change[1] += s1; change[2] += s2;
   if (scale) for (let axis = 0; axis < 3; axis += 1) change[axis] /= scale[axis];
 }

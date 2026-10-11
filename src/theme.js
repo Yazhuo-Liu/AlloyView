@@ -19,6 +19,8 @@ export function initializeTheme(onChange = () => {}) {
   function apply(theme) {
     document.documentElement.dataset.theme = theme;
     const logo = document.getElementById('brand-logo');
+    // HTML leaves the URL unset until the saved/system theme is known, so the
+    // browser does not request a wordmark for the opposite theme first.
     logo.src = LOGOS[theme];
     for (const value of ['light', 'dark']) {
       document.getElementById(`theme-${value}`).setAttribute('aria-pressed', String(theme === value));

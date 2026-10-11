@@ -46,6 +46,7 @@ export function surfaceSummaryRows(result) {
  * settings and atom restriction; display choices never recalculate. */
 export function initializeSurfaceTools({ renderer, tools, client = new DxaClient(), getFrame, getFrames = () => [getFrame()],
   getSourceVersion = () => 0, getSelectionGroups = () => [], getVisibility = () => renderer?.visibility ?? null,
+  getVisibilityDependencies = () => [],
   getFileStem = () => 'structure', getFrameIndex = () => 0, onResultsChange = () => {}, onDisplayChange = () => {},
   onEdit = () => {}, notify = () => {}, onDownload = downloadBlob,
   setTimer = (callback, delay) => setTimeout(callback, delay), clearTimer = id => clearTimeout(id) }) {
@@ -54,6 +55,36 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
     settings: { ...SURFACE_MESH_TOOL_DEFAULTS } };
   const memberSerials = new WeakMap();
   let controlsEnabled = false, generation = 0, nextMemberSerial = 1, visibilityTimer = null, radiusEdited = false;
+  let visibilityKey = null;
+  const visibilityWaiters = new Set();
+
+  function visibilityDependencies(frame) {
+    return (getVisibilityDependencies(frame) ?? []).filter(dependency => dependency?.state === 'pending' || dependency?.state === 'unavailable');
+  }
+
+  /** Only display quantities that actually filter atoms are dependencies.
+   * refreshVisibility notifies these subscribers after the display mask has
+   * been applied; cancellation removes the subscriber without polling. */
+  async function waitForVisibility(frame, signal, current) {
+    for (;;) {
+      if (!current()) return false;
+      const dependencies = visibilityDependencies(frame);
+      const unavailable = dependencies.find(dependency => dependency.state === 'unavailable');
+      if (unavailable) throw new Error(unavailable.message ?? `Visible atoms require ${unavailable.name}. Calculate it or change the display filter.`);
+      if (!dependencies.length) return true;
+      state('Waiting', `Waiting for the visible-atom filters: ${dependencies.map(dependency => dependency.name).join(', ')}.`);
+      await new Promise(resolve => {
+        const wake = () => {
+          signal.removeEventListener('abort', wake);
+          visibilityWaiters.delete(wake);
+          resolve();
+        };
+        visibilityWaiters.add(wake);
+        signal.addEventListener('abort', wake, { once: true });
+        if (signal.aborted) wake();
+      });
+    }
+  }
 
   function updateControls() {
     const available = controlsEnabled && Boolean(getFrame());
@@ -273,10 +304,18 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
     const current = () => request === job.serial && token === generation && source === getSourceVersion()
       && frame === getFrame() && job.enabled && !controller.signal.aborted && isCurrent();
     const { settings, group } = prepared;
-    const mask = atomMask(frame, settings, group);
-    const key = JSON.stringify({ radius: settings.radius, smoothingLevel: settings.smoothingLevel, atoms: mask ? settings.atoms : 'all',
-      selection: settings.atoms === 'group' ? [group.id, memberSerial(group.atomIds)] : mask ? maskDigest(mask) : null, sourceVersion: source });
     try {
+      if (settings.atoms === 'visible' && visibilityDependencies(frame).length) {
+        if (frame.atomeyeResults) delete frame.atomeyeResults.surfaceMesh;
+        clearView(); job.frame = frame;
+        onResultsChange({ frame, clearSettings: false });
+        if (!await waitForVisibility(frame, controller.signal, current)) return false;
+      }
+      if (!current()) return false;
+      const mask = atomMask(frame, settings, group);
+      visibilityKey = settings.atoms === 'visible' ? mask ? maskDigest(mask) : 'all' : null;
+      const key = JSON.stringify({ radius: settings.radius, smoothingLevel: settings.smoothingLevel, atoms: mask ? settings.atoms : 'all',
+        selection: settings.atoms === 'group' ? [group.id, memberSerial(group.atomIds)] : mask ? maskDigest(mask) : null, sourceVersion: source });
       let cached = frame.atomeyeResults?.surfaceMesh;
       if (cached?.key !== key) {
         if (frame.atomeyeResults) delete frame.atomeyeResults.surfaceMesh;
@@ -303,7 +342,15 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
       showResult(cached, frame);
       return true;
     } catch (error) {
-      if (!current() || error.name === 'AbortError') return false;
+      if (!current()) return false;
+      if (error.name === 'AbortError') {
+        // A backend cancellation can arrive without this panel being closed.
+        // Its promise has ended, so it must not retain an active state pill.
+        job.controller = null; job.failed = true;
+        clearView(); state('Cancelled', 'Surface calculation was interrupted. Calculate it again to retry.');
+        onResultsChange({ frame, clearSettings: false });
+        return false;
+      }
       job.controller = null; job.failed = true;
       if (frame.atomeyeResults) delete frame.atomeyeResults.surfaceMesh;
       clearView(); state('Failed', error.message);
@@ -396,6 +443,21 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
    * the filters have settled, so dragging a legend limit starts one job. */
   function refreshVisibility() {
     if (!job.enabled || job.settings.atoms !== 'visible' || job.failed) return false;
+    if (visibilityWaiters.size) {
+      for (const wake of [...visibilityWaiters]) wake();
+      return true;
+    }
+    const frame = getFrame();
+    if (frame) {
+      const mask = atomMask(frame, job.settings, null);
+      const nextKey = mask ? maskDigest(mask) : 'all';
+      if (!job.queued && (visibilityDependencies(frame).length || nextKey !== visibilityKey)) {
+        if (frame.atomeyeResults) delete frame.atomeyeResults.surfaceMesh;
+        abort(); clearView(); job.queued = true;
+        state('Queued', 'The visible atoms changed; preparing an updated surface…');
+        onResultsChange({ frame, clearSettings: false });
+      }
+    }
     if (visibilityTimer !== null) clearTimer(visibilityTimer);
     visibilityTimer = setTimer(() => { visibilityTimer = null; if (job.enabled && job.settings.atoms === 'visible') void run({ automatic: true }); }, VISIBILITY_DELAY_MS);
     return true;

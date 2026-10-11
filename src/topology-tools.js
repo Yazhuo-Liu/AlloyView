@@ -360,8 +360,11 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     try { settings = parameters(kind); call = analysisRequest(kind, settings, frame); }
     catch (error) {
       abort(kind); job.failed = true;
-      if (kind === 'voronoi') { clearFrames(kind); clearView(kind); onResultsChange({ kind, clearSettings: false }); }
+      // A failed rerun owns no completed scientific result. Notify consumers
+      // even without a new property so dependent profiles can stop waiting.
+      clearFrames(kind); clearView(kind);
       state(kind, 'Failed', error.message);
+      onResultsChange({ kind, frame, clearSettings: false });
       if (!automatic) notify(error.message);
       return false;
     }

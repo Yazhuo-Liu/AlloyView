@@ -197,8 +197,8 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
 
   function cancel({ clearSettings = true } = {}) {
     abortJobs(); enabled = false; failure = false;
-    // Stop the job and clear its display while retaining reusable backend memory.
-    void client.release?.();
+    // The controller owns this DXA request. The coordinator also serves
+    // surfaces and warm-up work, so releasing it would cancel their requests.
     cachedResult = null;
     colorDefaultPending = true;
     tools.setToolEnabled('dxa', false);

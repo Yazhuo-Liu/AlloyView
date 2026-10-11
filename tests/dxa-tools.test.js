@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { initializeDxaTools, DXA_STRUCTURE_PROPERTY, DXA_STRUCTURE_TYPES } from '../src/dxa-tools.js';
 import { createConfiguration, parseConfiguration } from '../src/configuration.js';
 import { colorsByCategory, combineVisibilityMasks, visibilityByCategory, visibilityByType } from '../src/render/palette.js';
+import { DxaClient } from '../src/analysis/dxa-client.js';
+import { createCell } from '../src/data/model.js';
 
 class Element {
   constructor(tagName = 'div') {
@@ -22,7 +24,7 @@ class Element {
   dispatch(name) { this.listeners.get(name)?.({ target: this }); }
 }
 
-function harness(t, { gpuPreference } = {}) {
+function harness(t, { gpuPreference, client: providedClient, initialFrame } = {}) {
   const previousDocument = globalThis.document;
   const ids = ['dxa-lattice', 'dxa-trial-length', 'dxa-stretchability', 'dxa-smoothing',
     'dxa-point-interval', 'dxa-perfect-only', 'dxa-line-radius', 'run-dxa', 'cancel-dxa',
@@ -30,10 +32,10 @@ function harness(t, { gpuPreference } = {}) {
   const fields = Object.fromEntries(ids.map(id => [id, new Element()]));
   globalThis.document = { getElementById: id => fields[id], createElement: tag => new Element(tag) };
   t.after(() => { globalThis.document = previousDocument; });
-  let frame = { ids: new Uint32Array([1, 2, 3, 4]), properties: [{ name: 'coordination', data: new Uint8Array([12, 12, 12, 12]) }] };
+  let frame = initialFrame ?? { ids: new Uint32Array([1, 2, 3, 4]), properties: [{ name: 'coordination', data: new Uint8Array([12, 12, 12, 12]) }] };
   let version = 'source:0', colorMode = 'type', colorChoiceVersion = 0;
   const pending = [], enabledTools = new Set(), draws = [], notifications = [], resultChanges = [];
-  const client = {
+  const client = providedClient ?? {
     releases: 0,
     analyze(inputFrame, parameters, options) {
       return new Promise((resolve, reject) => pending.push({ inputFrame, parameters, options, resolve, reject }));
@@ -71,6 +73,53 @@ function network(length = 4) {
 
 function structureNetwork(values = [0, 1, 2, 3], segments = []) {
   return { ...network(), atomStructureTypes: new Uint8Array(values), segments };
+}
+
+for (const order of ['surface-first', 'dxa-first']) {
+  test(`DXA tool Cancel leaves the shared coordinator's independent surface intact (${order})`, async t => {
+    class Worker {
+      constructor() { this.listeners = new Map(); this.messages = []; this.terminated = false; }
+      addEventListener(type, listener) { this.listeners.set(type, listener); }
+      postMessage(message, transfer = []) { this.messages.push(structuredClone(message, { transfer })); }
+      terminate() { this.terminated = true; }
+      emit(data) { this.listeners.get('message')({ data }); }
+    }
+    const workers = [];
+    const client = new DxaClient({
+      environment: { navigator: { hardwareConcurrency: 8 }, crossOriginIsolated: true, SharedArrayBuffer },
+      workerFactory: () => { const worker = new Worker(); workers.push(worker); return worker; }, yieldToMain: async () => {},
+    });
+    t.after(() => client.close());
+    const frame = { ids: new Uint32Array([1, 2, 3, 4]), properties: [],
+      fractional: new Float64Array([0, 0, 0, .5, .5, 0, .5, 0, .5, 0, .5, .5]),
+      cell: createCell({ vectors: [4, 0, 0, 0, 4, 0, 0, 0, 4] }) };
+    const h = harness(t, { client, initialFrame: frame });
+    const startSurface = () => client.surface(frame, { radius: 2, smoothingLevel: 0 });
+    let surface, dxa;
+    if (order === 'surface-first') { surface = startSurface(); dxa = h.tools.run(); }
+    else { dxa = h.tools.run(); surface = startSurface(); }
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+    await flush();
+    const worker = workers[0], first = worker.messages[0];
+    const control = { cancelBuffer: new SharedArrayBuffer(64), cancelPointer: 0 };
+    worker.emit({ id: first.id, control });
+    h.tools.cancel();
+    assert.equal(await dxa, false);
+    assert.equal(worker.terminated, false, 'a tool cancellation preserves the shared Worker and Wasm heap');
+    if (order === 'dxa-first') {
+      assert.equal(Atomics.load(new Int32Array(control.cancelBuffer), 0), 1);
+      assert.equal(worker.messages.filter(message => message.type === 'surface').length, 0, 'queued surface waits for native cancellation ACK');
+      worker.emit({ id: first.id, ok: false, name: 'AbortError', error: 'Cancelled' });
+      await flush();
+      assert.equal(Atomics.load(new Int32Array(control.cancelBuffer), 0), 0);
+    } else assert.equal(Atomics.load(new Int32Array(control.cancelBuffer), 0), 0, 'cancelling queued DXA never signals the active surface');
+    const request = worker.messages.find(message => message.type === 'surface');
+    assert.ok(request);
+    worker.emit({ id: request.id, ok: true, result: { surfaceArea: 12 } });
+    assert.equal((await surface).surfaceArea, 12);
+    assert.equal(workers.length, 1);
+    assert.equal(client.cpuBudget.active, 0);
+  });
 }
 
 test('DXA exposes native crystal classes without copying atom structures or requiring dislocation lines', async t => {
@@ -154,7 +203,7 @@ test('DXA cancellation restores an imported property with the same output name',
   assert.equal(frame.properties.find(item => item.name === DXA_STRUCTURE_PROPERTY), imported);
 });
 
-test('DXA Cancel aborts and releases work, rejects late networks, and preserves atom analyses', async t => {
+test('DXA Cancel aborts only its own work, rejects late networks, and preserves atom analyses', async t => {
   const h = harness(t), originalProperties = h.getFrame().properties, atomColors = h.renderer.atomColors;
   const task = h.tools.run();
   assert.equal(h.enabledTools.has('dxa'), true);
@@ -162,7 +211,7 @@ test('DXA Cancel aborts and releases work, rejects late networks, and preserves 
   const releases = h.client.releases;
   h.tools.cancel();
   assert.equal(h.pending[0].options.signal.aborted, true);
-  assert.equal(h.client.releases, releases + 1);
+  assert.equal(h.client.releases, releases, 'the shared coordinator keeps unrelated surface and warm-up requests');
   assert.equal(h.enabledTools.has('dxa'), false);
   assert.equal(h.renderer.network, null);
   assert.equal(h.fields['dxa-results'].hidden, true);

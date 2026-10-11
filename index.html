@@ -9,7 +9,7 @@
       content="Browser-only atomistic visualization, crystal structure and defect analysis"
     >
     <title>AlloyView · Atomistic Structure Viewer</title>
-    <link rel="icon" type="image/png" href="./src/asserts/logo/AlloyView_logo_only.png">
+    <link rel="icon" type="image/png" sizes="64x64" href="./src/asserts/logo/AlloyView_favicon.png">
     <script>
       try {
         const saved = localStorage.getItem('alloyview-theme');
@@ -25,7 +25,7 @@
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="./" aria-label="AlloyView home">
-          <img id="brand-logo" class="brand-logo" src="./src/asserts/logo/AlloyView_logo_light.svg" alt="AlloyView" width="1700" height="500">
+          <img id="brand-logo" class="brand-logo" alt="AlloyView" width="1700" height="500">
         </a>
 
         <div class="file-actions">
@@ -72,7 +72,7 @@
           <div id="empty-state" class="empty-state">
             <div class="empty-logo" role="img" aria-label="BCC ball-and-stick crystal model">
               <canvas id="bcc-logo" width="264" height="264" aria-hidden="true" hidden></canvas>
-              <img class="empty-logo-fallback" src="./src/asserts/logo/AlloyView_logo_only.png" alt="" width="2400" height="2400">
+              <img class="empty-logo-fallback" data-src="./src/asserts/logo/AlloyView_logo_only.png" alt="" width="264" height="264" hidden>
             </div>
             <p class="eyebrow">BROWSER-NATIVE MATERIALS VIEWER</p>
             <h1>See materials<br>atom by atom</h1>

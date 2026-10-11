@@ -41,10 +41,13 @@ try {
       const heldFrame = new Promise(resolve => { releaseFrame = resolve; });
       let held = true;
       checks.releaseFrame = () => { held = false; releaseFrame(); };
-      const load = StructureWorkerClient.prototype.load;
-      StructureWorkerClient.prototype.load = function(...args) {
+      const prepareSource = StructureWorkerClient.prototype.prepareSource;
+      StructureWorkerClient.prototype.prepareSource = function(...args) {
         checks.client = this;
-        return load.apply(this, args).then(result => { checks.loads.push({ frames: result.frameCount, complete: result.indexComplete }); return result; });
+        return prepareSource.apply(this, args).then(prepared => {
+          checks.loads.push({ frames: prepared.result.frameCount, complete: prepared.result.indexComplete });
+          return prepared;
+        });
       };
       const frame = StructureWorkerClient.prototype.frame;
       StructureWorkerClient.prototype.frame = function(index, options) {

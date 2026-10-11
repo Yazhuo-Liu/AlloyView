@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateReferenceStrain, createReferenceMapping, createReferenceMappingAsync, REFERENCE_STRAIN_FIELDS } from '../src/analysis/reference-strain.js';
+import { calculateReferenceStrain, createReferenceMapping, createReferenceMappingAsync, prepareReferenceStrainContext, REFERENCE_STRAIN_FIELDS } from '../src/analysis/reference-strain.js';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 import { crystalFrame } from './helpers/crystals.js';
 
@@ -243,4 +243,55 @@ test('phase and atom progress callbacks report index construction and completed 
     onAtoms: (...values) => progress.push(values) });
   assert.deepEqual(phases, ['indexing', 'analyzing']);
   assert.deepEqual(progress.at(-1), [19, 19]);
+});
+
+test('reference contexts validate and reuse shared normalized coordinates and inverse mappings exactly', () => {
+  const reference = crystalFrame('fcc', 2), current = { ...reference, fractional: reference.fractional.slice(), ids: reference.ids.slice() };
+  current.fractional[0] = -0; current.fractional[4] += 2; current.fractional[8] -= 1;
+  const referenceMapping = createReferenceMapping(current, reference);
+  const normalized = new Float64Array(new SharedArrayBuffer(current.fractional.byteLength));
+  const inverse = new Int32Array(new SharedArrayBuffer(reference.ids.length * 4)).fill(-1);
+  for (let k = 0; k < normalized.length; k += 1) normalized[k] = current.fractional[k] - Math.floor(current.fractional[k]);
+  for (let atom = 0; atom < referenceMapping.length; atom += 1) if (referenceMapping[atom] >= 0) inverse[referenceMapping[atom]] = atom;
+  const parameters = { referenceFractional: reference.fractional, referenceCell: reference.cell, referenceMapping, cutoff: 3.3 };
+  const original = current.fractional.slice();
+  const context = prepareReferenceStrainContext(current, { ...parameters, normalizedCurrentFractional: normalized, inverseMappingInput: inverse });
+  assert.equal(context.currentFractional, normalized); assert.equal(context.inverseMapping, inverse);
+  const direct = calculateReferenceStrain(current, parameters);
+  for (const startAtom of [0, 7, 19]) {
+    const endAtom = Math.min(reference.ids.length, startAtom + 11);
+    const result = calculateReferenceStrain(current, { ...parameters, preparedContext: context, startAtom, endAtom });
+    for (const field of REFERENCE_STRAIN_FIELDS) assert.deepEqual(result[field], direct[field].slice(startAtom, endAtom));
+  }
+  assert.deepEqual(current.fractional, original);
+  const invalid = normalized.slice(); invalid[0] = -0;
+  assert.throws(() => prepareReferenceStrainContext(current, { ...parameters, normalizedCurrentFractional: invalid }), /match the frame exactly/);
+  invalid[0] = 0; invalid[1] += 1e-15;
+  assert.throws(() => prepareReferenceStrainContext(current, { ...parameters, normalizedCurrentFractional: invalid }), /match the frame exactly/);
+  assert.throws(() => prepareReferenceStrainContext(current, { ...parameters, normalizedCurrentFractional: new Float32Array(normalized) }), /incomplete/);
+  assert.throws(() => prepareReferenceStrainContext(current, { ...parameters, inverseMappingInput: new Uint32Array(inverse) }), /incomplete/);
+  const malformed = inverse.slice(); malformed[0] = -1;
+  assert.throws(() => prepareReferenceStrainContext(current, { ...parameters, inverseMappingInput: malformed }), /one-to-one/);
+  malformed[0] = 1;
+  assert.throws(() => prepareReferenceStrainContext(current, { ...parameters, inverseMappingInput: malformed }), /match the atom mapping/);
+  const missing = referenceMapping.slice(); missing[2] = -1;
+  assert.throws(() => prepareReferenceStrainContext(current, { ...parameters, referenceMapping: missing, inverseMappingInput: inverse }), /match the atom mapping/);
+  const clean = prepareReferenceStrainContext(reference, { ...parameters, referenceMapping });
+  assert.equal(clean.currentFractional, reference.fractional, 'an immutable normalized Float64 snapshot needs no copy');
+  const copied = prepareReferenceStrainContext(current, parameters);
+  assert.notEqual(copied.currentFractional, current.fractional, 'image-bearing coordinates remain authoritative and unchanged');
+  assert.ok(Object.is(copied.currentFractional[0], 0));
+});
+
+test('shared normalized reference inputs preserve signed zero on open axes and reject duplicate mappings', () => {
+  const frame = crystalFrame('fcc', 2);
+  frame.cell = createCell({ vectors: frame.cell.vectors, pbc: [true, false, true] }); frame.fractional[1] = -0;
+  const mapping = createReferenceMapping(frame, frame), inverse = Int32Array.from(mapping);
+  const parameters = { referenceFractional: frame.fractional, referenceCell: frame.cell, referenceMapping: mapping };
+  const context = prepareReferenceStrainContext(frame, { ...parameters, normalizedCurrentFractional: frame.fractional, inverseMappingInput: inverse });
+  assert.ok(Object.is(context.currentFractional[1], -0));
+  const bad = frame.fractional.slice(); bad[1] = 0;
+  assert.throws(() => prepareReferenceStrainContext(frame, { ...parameters, normalizedCurrentFractional: bad }), /match the frame exactly/);
+  mapping[2] = mapping[1];
+  assert.throws(() => prepareReferenceStrainContext(frame, { ...parameters, inverseMappingInput: inverse }), /match the atom mapping|one-to-one/);
 });

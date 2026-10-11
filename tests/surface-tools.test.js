@@ -39,14 +39,14 @@ function harness(t) {
     createElement() { const element = new Element(); element.ownerDocument = this; return element; } };
   for (const element of Object.values(fields)) element.ownerDocument = globalThis.document;
   t.after(() => { globalThis.document = previousDocument; });
-  let index = 0, version = 'a', groups = [], visibility = null;
+  let index = 0, version = 'a', groups = [], visibility = null, dependencies = [];
   const pending = [], meshCalls = [], toolFlags = new Map(), notifications = [], changes = [], downloads = [], timers = [];
   const renderer = { frame: frames[0], periodicOrigin: [0, 0, 0], coordinateMode: 'wrapped', visibility: null,
     setSurfaceMesh(id, mesh, options) { meshCalls.push({ id, mesh, options: { ...options } }); return { id, mesh, options, error: null }; } };
   const client = { surface(frame, parameters, options) { return new Promise((resolve, reject) => pending.push({ frame, parameters, options, resolve, reject })); } };
   const tools = initializeSurfaceTools({ renderer, client, tools: { setToolEnabled: (name, enabled) => toolFlags.set(name, enabled) },
     getFrame: () => frames[index], getFrames: () => new Set(frames), getSourceVersion: () => version, getSelectionGroups: () => groups,
-    getVisibility: () => visibility, getFileStem: () => 'sample', getFrameIndex: () => index,
+    getVisibility: () => visibility, getVisibilityDependencies: () => dependencies, getFileStem: () => 'sample', getFrameIndex: () => index,
     onResultsChange: change => changes.push(change), notify: message => notifications.push(message),
     onDownload: (blob, filename) => downloads.push({ blob, filename }),
     setTimer: callback => { timers.push(callback); return timers.length; }, clearTimer: id => { timers[id - 1] = null; } });
@@ -59,7 +59,7 @@ function harness(t) {
   };
   return { tools, fields, pending, meshCalls, toolFlags, notifications, changes, downloads, timers, renderer, settle,
     setIndex(next) { index = next; renderer.frame = frames[next]; }, setVersion(next) { version = next; },
-    setGroups(next) { groups = next; }, setVisibility(next) { visibility = next; } };
+    setGroups(next) { groups = next; }, setVisibility(next) { visibility = next; }, setDependencies(next) { dependencies = next; } };
 }
 
 test('the Surface panel suggests a radius, constructs the mesh and shows its measurements', async t => {
@@ -370,4 +370,82 @@ test('surface measurements become global attributes and summary CSV rows', async
   // Without a result there are no surface attributes or rows.
   tools.cancel();
   assert.equal(createAttributeRegistry({ frame, frameIndex: 0 }).has('Surface.surface_area'), false);
+});
+
+test('Visible atoms waits only for its filter dependencies and exports no interim all-atom result', async t => {
+  const h = harness(t), frame = frames[0];
+  await h.tools.onFrame();
+  h.fields['surface-mesh-radius'].value = '3.5';
+  h.fields['surface-mesh-selection'].value = 'visible';
+  h.setDependencies([{ name: 'CNA', state: 'pending' }]);
+  const running = h.tools.run();
+  assert.equal(h.fields['surface-mesh-state'].textContent, 'Waiting');
+  assert.match(h.fields['surface-mesh-status'].textContent, /CNA/);
+  assert.equal(h.pending.length, 0, 'waiting does not use the shared native coordinator');
+  assert.equal(h.tools.getResult(), null);
+  assert.equal(h.tools.exportMesh('stl'), null);
+  assert.deepEqual(h.tools.pendingKinds(), ['surfaceMesh']);
+  const visibility = Uint8Array.from(frame.ids, (_, atom) => frame.positions[atom * 3] < 12 ? 255 : 0);
+  h.setVisibility(visibility); h.setDependencies([]);
+  h.tools.refreshVisibility();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.pending.length, 1, 'classification completion starts the surface without a debounce timer');
+  assert.deepEqual(h.pending[0].options.mask, Uint8Array.from(visibility, value => value ? 1 : 0));
+  await h.settle();
+  assert.equal(await running, true);
+  assert.equal(h.tools.getResult().inputCount, visibility.filter(Boolean).length);
+  assert.equal(h.fields['surface-mesh-state'].textContent, 'Calculated');
+  // An edit invalidates geometry and scientific exports immediately, before the debounce.
+  h.setVisibility(Uint8Array.from(visibility, (value, atom) => atom % 2 ? value : 0));
+  h.tools.refreshVisibility();
+  assert.equal(h.tools.getResult(), null);
+  assert.equal(frame.atomeyeResults.surfaceMesh, undefined);
+  assert.equal(h.fields['export-surface-mesh-stl'].disabled, true);
+  assert.equal(h.fields['surface-mesh-state'].textContent, 'Queued');
+  const changes = h.changes.length;
+  h.tools.refreshVisibility();
+  assert.equal(h.changes.length, changes, 'the display refresh of an already queued invalidation does not recursively publish another result change');
+  assert.equal(h.timers.filter(Boolean).length, 1, 'ordinary filter edits share one debounce timer');
+  h.tools.cancel();
+});
+
+test('cancel/source changes remove visible-filter subscribers and unavailable producers fail explicitly', async t => {
+  const h = harness(t);
+  await h.tools.onFrame();
+  h.fields['surface-mesh-selection'].value = 'visible';
+  h.setDependencies([{ name: 'DXA', state: 'pending' }]);
+  const old = h.tools.run();
+  h.tools.cancel();
+  assert.equal(await old, false);
+  h.setDependencies([]); h.tools.refreshVisibility();
+  assert.equal(h.pending.length, 0, 'a cancelled waiter cannot revive a surface');
+  h.setDependencies([{ name: 'CNA', state: 'pending' }]);
+  const firstFrame = h.tools.run();
+  h.setIndex(1); h.setDependencies([]);
+  const secondFrame = h.tools.onFrame();
+  assert.equal(await firstFrame, false);
+  assert.equal(h.pending.length, 1);
+  assert.equal(h.pending[0].frame, frames[1]);
+  await h.settle(); await secondFrame;
+  h.setDependencies([{ name: 'CNA', state: 'unavailable', message: 'CNA failed; calculate it again.' }]);
+  assert.equal(await h.tools.run(), false);
+  assert.equal(h.pending.length, 1);
+  assert.equal(h.fields['surface-mesh-state'].textContent, 'Failed');
+  assert.match(h.fields['surface-mesh-status'].textContent, /CNA failed/);
+  assert.deepEqual(h.tools.pendingKinds(), []);
+});
+
+test('a foreign backend AbortError clears an active surface state and leaves a retry available', async t => {
+  const h = harness(t);
+  await h.tools.onFrame();
+  const running = h.tools.run();
+  assert.equal(h.pending[0].options.signal.aborted, false);
+  h.pending[0].reject(new DOMException('Coordinator was replaced.', 'AbortError'));
+  assert.equal(await running, false);
+  assert.equal(h.fields['surface-mesh-state'].textContent, 'Cancelled');
+  assert.deepEqual(h.tools.pendingKinds(), []);
+  assert.equal(h.fields['run-surface-mesh'].disabled, false);
+  const retry = h.tools.run();
+  await h.settle();
+  assert.equal(await retry, true);
 });

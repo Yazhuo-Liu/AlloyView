@@ -134,6 +134,68 @@ with other jobs; multithreaded timings vary by about 10%.
 
 ## Workers and memory
 
+### CPU loops and display transfers (2026-10-11)
+
+Neighbor queries collect candidates in reusable typed buffers and select the
+nearest entries with the original comparator and stable tie order. CNA uses
+integer signature counters; Bonds and the trusted bond-statistics context use
+numeric pair keys where the type IDs can be encoded exactly, with a string
+fallback for large IDs. Public object-returning queries remain supported.
+The original search-radius ladder is retained, including thin-cell failure
+boundaries; learning a radius was not adopted without a stronger equivalence
+proof. RDF, local shear, clusters and some object-returning callers still have
+allocation work left.
+
+Reference-frame strain removes per-neighbor temporary vectors and shares
+normalized current coordinates and inverse IDs on isolated hosts. Private
+contexts, wrapping buffers and retained scratch count toward admission. The
+normalization budget uses the actual Float64 table size even for Float32 input.
+Current and reference snapshots are charged once, and active references stay
+pinned during idle trimming. Displacement and cached ideal-strain tensors use
+scalar loops and task-local scratch without changing arithmetic order.
+Local-shear finalization receives disjoint metric rows in private-memory mode
+and uses bounded 65,536-atom chunks, with a 50,000-atom Worker target. The two
+neighbor passes keep their earlier logical reduction partitions; no global
+increase in PTM/CNA chunk size or cancellation latency was introduced.
+
+Atom bounds use one indexed xyz pass; coordinate setters invalidate the cache,
+including an explicit setter with the same modified array. Internal layer or
+style updates reuse source extrema and still merge the cell, replicas and
+overlay extents. Radius validation and maximum calculation use indexed loops.
+Each arrow field caches six geometry extrema for a given coordinate revision,
+scale, anchor and selection mask; padding and replica offsets merge without
+scanning atoms again. Explicit vector setters invalidate the cache, including
+same-array edits. Selection hiding refreshes arrow bounds; ordinary element
+hiding keeps the existing independent-arrow behavior.
+Bonds and arrow heads use indexed geometry with caps and separate normals:
+the ten-sided cylinder has 46 vertex rows instead of 120 and its cone 33
+instead of 60. Caps remain necessary with small radii, hidden atoms or slices.
+The primitive layer allocates atom mirrors only when needed and uploads dirty
+textures just before visible drawing. Visibility occupies one byte per padded
+atom texel, rather than updating the sixteen-byte position texel. Hiding every
+primitive leaves dirty textures unuploaded until it is shown again.
+
+Measured Node 24 container medians below exclude parsing, context preparation,
+Worker transport and rendering unless explicitly named. They compare old and
+new kernels in interleaved runs and are not end-to-end or hardware-GPU speed
+guarantees. The [validation record](../VALIDATION.md) links raw measurements.
+
+| Work | Sample | Old → new median |
+| --- | --- | --- |
+| Reference strain | FCC 2,048 atoms, prepared context | 42.46 → 9.99 ms |
+| Displacement | 120,000 atoms, orthogonal periodic cell | 44.34 → 9.32 ms |
+| Cached ideal-strain tensors | 120,000 synthetic fits | 270.71 → 13.50 ms |
+| Adaptive CNA | 512 centers in the Fe loop | 2.76 → 2.02 ms |
+| Atom bounds | 1,000,000 atom centers, no overlays | 25.55 → 3.68 ms |
+| Radius validation/maximum | 1,000,000 radii | 11.89 → 3.87 ms |
+
+The header loads only the selected theme's compressed wordmark. A separate
+small favicon and an on-demand BCC fallback reduce aggregate logo assets from
+13,257,824 to 174,958 bytes. The build caps that directory at 200 KiB.
+Frame ZIPs compute an indexed CRC as each PNG arrives and retain immutable
+records; completion writes the directory without rescanning the whole archive.
+
+
 The structure Worker coordinates indexing and a reusable parser pool. A
 foreground parser is reserved for the requested frame; a bounded background
 pool parses nearby frames in parallel. Complete frames become available while

@@ -6,6 +6,8 @@ import { buildStatisticsTable, serializeCsv } from '../src/statistics-export.js'
 import { createConfiguration, parseConfiguration } from '../src/configuration.js';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 import { describeBin, niceRange, binningMapColors } from '../src/render/binning-chart.js';
+import { compileScript, runScript } from '../src/command-script.js';
+import { createScriptHost, waitUntilSettled } from '../src/script-controls.js';
 
 class Element {
   constructor(value = '') {
@@ -50,11 +52,13 @@ function harness(t, { frames = [layeredFrame()], groups = [] } = {}) {
   for (const element of Object.values(fields)) element.ownerDocument = globalThis.document;
   t.after(() => { globalThis.document = previousDocument; });
   let index = 0, version = 'a';
+  let dependency = null;
   const charts = [], notifications = [], toolFlags = new Map(), loaded = [];
   const tools = initializeBinningTools({ tools: { setToolEnabled: (name, enabled) => toolFlags.set(name, enabled) },
     getFrame: () => frames[index], getFrameAt: async frameIndex => { loaded.push(frameIndex); return frames[frameIndex]; },
     getFrameCount: () => frames.length, getSourceVersion: () => version, getFrameIndex: () => index,
     getSelectionGroups: () => groups, notify: message => notifications.push(message),
+    getPropertyDependency: () => dependency,
     renderChart: (container, result, options) => charts.push({ container, result, options }) });
   tools.setEnabled(true);
   const change = (id, value) => {
@@ -62,7 +66,8 @@ function harness(t, { frames = [layeredFrame()], groups = [] } = {}) {
     fields[id].dispatch('change');
   };
   return { tools, fields, charts, notifications, toolFlags, loaded, change, frames,
-    setFrame(next) { index = next; }, setVersion(next) { version = next; }, setGroups(next) { groups = next; } };
+    setFrame(next) { index = next; }, setVersion(next) { version = next; }, setGroups(next) { groups = next; },
+    setDependency(next) { dependency = next; } };
 }
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -152,9 +157,12 @@ test('maps, reductions and selections; a missing property waits and recalculates
   h.change('binning-mode', '1d');
   h.change('binning-selection', '');
   h.fields['binning-reduction'].value = 'stddev';
+  h.setDependency({ name: 'Central symmetry', state: 'pending' });
   h.change('binning-quantity', 'property:csp');
   await settle();
   assert.equal(h.fields['binning-state'].textContent, 'Waiting');
+  assert.deepEqual(h.tools.pendingKinds(), ['binning']);
+  assert.equal(h.tools.getAutomationError(), null);
   assert.equal(h.tools.getResult(), null);
   // Refreshing without new data does not recalculate.
   const before = h.charts.length;
@@ -165,6 +173,7 @@ test('maps, reductions and selections; a missing property waits and recalculates
   frame.properties.push({ name: 'csp', unit: '', data: Float64Array.from({ length: 16 }, (_, atom) => atom % 2 ? 3 : 1) });
   await h.tools.refresh();
   assert.equal(h.fields['binning-state'].textContent, 'Calculated');
+  assert.deepEqual(h.tools.pendingKinds(), []);
   assert.deepEqual([...h.tools.getResult().values], Array(8).fill(1));
   assert.equal(h.tools.getResult().valueLabel, 'Standard deviation csp');
   await h.tools.refresh();
@@ -285,4 +294,55 @@ test('chart helpers format bins, nice limits and palette colors', () => {
   assert.deepEqual([...colors], [32, 35, 38, 244, 244, 240, 130, 130, 130]);
   assert.equal(legend.minimum, 0);
   assert.equal(binningMapColors(Float64Array.from([NaN])).legend, null);
+});
+
+test('missing quantities without a producer become terminal and fail automation with a useful reason', async t => {
+  const h = harness(t);
+  await h.tools.restore({ ...BINNING_DEFAULTS, enabled: true, quantity: 'property', property: 'property:does_not_exist' });
+  assert.equal(h.fields['binning-state'].textContent, 'Unavailable');
+  assert.match(h.fields['binning-status'].textContent, /does_not_exist.*No active calculation will produce it/);
+  assert.deepEqual(h.tools.pendingKinds(), []);
+  assert.deepEqual(h.tools.failed(), ['binning']);
+  assert.equal(h.tools.getResult(), null);
+  assert.deepEqual(h.tools.exportResults(), {});
+  assert.equal(h.fields['run-binning'].disabled, false, 'the missing input can be retried');
+  let polls = 0, slept = 0;
+  const analysesSettled = () => { polls++; return { settled: true, error: h.tools.getAutomationError() }; };
+  await assert.rejects(waitUntilSettled(analysesSettled, { sleep: async () => { slept++; } }), /Binning: does_not_exist.*No active calculation/);
+  assert.equal(polls, 1); assert.equal(slept, 0, 'an impossible dependency never starts an indefinite wait');
+  const host = createScriptHost({ analysesSettled, sleep: async () => { slept++; } });
+  const { program, problems } = compileScript('wait 0\nwait-analyses\nexport png');
+  assert.deepEqual(problems, []);
+  await assert.rejects(runScript(program, host, { sleep: async () => {} }), { name: 'ScriptError', line: 2, message: /Binning: does_not_exist/ });
+  h.tools.cancel();
+  assert.equal(h.tools.getAutomationError(), null);
+  await waitUntilSettled(analysesSettled, { sleep: async () => {} });
+});
+
+test('producer cancellation wakes missing-quantity status, and later properties or frames retry without polling', async t => {
+  const h = harness(t, { frames: [layeredFrame(), layeredFrame({ frameIndex: 1 })] });
+  h.setDependency({ state: 'pending', name: 'Central symmetry' });
+  await h.tools.restore({ ...BINNING_DEFAULTS, enabled: true, quantity: 'property', property: 'property:csp' });
+  assert.equal(h.fields['binning-state'].textContent, 'Waiting');
+  assert.deepEqual(h.tools.pendingKinds(), ['binning']);
+  assert.equal(h.tools.getAutomationError(), null);
+  h.setDependency({ state: 'unavailable', name: 'Central symmetry', message: 'Central symmetry was cancelled.' });
+  await h.tools.refresh();
+  assert.equal(h.fields['binning-state'].textContent, 'Unavailable');
+  assert.deepEqual(h.tools.pendingKinds(), []);
+  assert.match(h.tools.getAutomationError(), /Central symmetry was cancelled/);
+  h.frames[0].properties.push({ name: 'csp', data: new Float64Array(16).fill(7) });
+  await h.tools.refresh();
+  assert.equal(h.fields['binning-state'].textContent, 'Calculated');
+  assert.equal(h.tools.getAutomationError(), null);
+  assert.ok([...h.tools.getResult().values].filter(Number.isFinite).every(value => value === 7));
+  assert.equal(h.tools.getResult().totals.binned, 16);
+  h.setFrame(1); h.setDependency(null);
+  await h.tools.onFrame();
+  assert.equal(h.fields['binning-state'].textContent, 'Unavailable');
+  assert.equal(h.tools.getResult(), null, 'a result from the old frame cannot satisfy a missing input');
+  h.tools.cancel();
+  h.setDependency({ state: 'pending', name: 'Central symmetry' });
+  await h.tools.refresh();
+  assert.equal(h.fields['binning-state'].textContent, 'Not calculated', 'dependency notifications cannot revive a cancelled binning tool');
 });

@@ -30,4 +30,13 @@ GPU acceleration is on by default. Switching the preference keeps completed resu
 
 ## Implementation
 
+The CPU kernel uses reusable typed neighbor buffers and scalar closest-image
+arithmetic in the original summation order. On isolated hosts, normalized
+current fractional coordinates and the inverse ID mapping are prepared once
+and shared across range Workers. Float32 sources are promoted once to Float64
+normalization tables without modifying their source arrays. Private-memory
+hosts reuse each Worker's prepared context. Admission counts private wrapping and mapping buffers and
+retained scratch; current and reference source snapshots are charged once.
+Active reference indices stay pinned while idle input data is trimmed.
+
 [ID mapping, covariance fit and image handling](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/reference-strain.js), [GPU reference-frame strain](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/gpu/reference-strain.js), [reference-strain compute shaders](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/gpu/reference-strain-shaders.js).

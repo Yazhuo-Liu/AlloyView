@@ -18,22 +18,26 @@ export class StructureWorkerClient {
     this.replicationControllers = new Set();
     this.replicationPreparations = new Map();
     this.frameRequests = new SharedFrameRequests();
+    this.stagedSource = null;
+    this.forwardTo = null;
     this.createWorker();
   }
 
   attachWorker(worker) {
     worker.addEventListener('message', (event) => {
-      if (worker === this.worker || worker === this.replicationWorker) this.handleMessage(event.data, worker);
+      const owner = this.forwardTo ?? this;
+      if (worker === owner.worker || worker === owner.replicationWorker) owner.handleMessage(event.data, worker);
     });
     worker.addEventListener('error', (event) => {
-      if (worker !== this.worker && worker !== this.replicationWorker) return;
-      for (const [id, pending] of this.pending) {
+      const owner = this.forwardTo ?? this;
+      if (worker !== owner.worker && worker !== owner.replicationWorker) return;
+      for (const [id, pending] of owner.pending) {
         if (pending.worker !== worker) continue;
-        this.pending.delete(id);
-        this.cleanup(pending);
+        owner.pending.delete(id);
+        owner.cleanup(pending);
         pending.reject(new Error(event.message || 'The Worker failed.'));
       }
-      if (worker === this.worker) this.clearCpuLeases();
+      if (worker === owner.worker) owner.clearCpuLeases();
     });
   }
 
@@ -79,6 +83,64 @@ export class StructureWorkerClient {
       incremental: true, cpuBudget: Boolean(this.cpuBudget),
       parserConcurrency: Math.max(1, Math.min(4, (this.cpuBudget?.limit ?? cpuWorkerLimit()) - 1)) });
   }
+
+  /** Parse a candidate beside the current source. The stable client object is
+   * retained by trajectory tools; only a confirmed source's backend is swapped.
+   * Candidate parser jobs use the same CPU budget, never a second thread quota.
+   * Index notifications are private until commit, so a failed selection leaves
+   * the old source, outstanding readers and its cached input arrays untouched.
+   */
+  async prepareSource(input, { signal } = {}) {
+    if (signal?.aborted) throw cancelled();
+    const files = normalizeLocalFiles(input);
+    this.cancelSourceLoad();
+    const staged = { signal, committed: false };
+    const candidate = new StructureWorkerClient(progress => {
+      if (this.stagedSource === staged && !signal?.aborted) this.onProgress(progress);
+    }, { cpuBudget: this.cpuBudget });
+    staged.candidate = candidate;
+    staged.cancel = () => {
+      signal?.removeEventListener?.('abort', staged.cancel);
+      if (this.stagedSource === staged) this.stagedSource = null;
+      if (!staged.committed) candidate.close();
+    };
+    this.stagedSource = staged;
+    signal?.addEventListener?.('abort', staged.cancel, { once: true });
+    try {
+      const result = await candidate.load(files);
+      if (this.stagedSource !== staged || signal?.aborted) throw cancelled();
+      return {
+        result,
+        get sourceInfo() { return candidate.forwardTo ? candidate.forwardTo.sourceInfo : candidate.sourceInfo; },
+        cancel: staged.cancel,
+        commit: () => {
+          if (this.stagedSource !== staged || signal?.aborted) throw cancelled();
+          // Detach first: resetting the previous backend must not cancel its
+          // already-confirmed replacement. It releases only the old leases.
+          this.stagedSource = null;
+          signal?.removeEventListener?.('abort', staged.cancel);
+          this.reset();
+          staged.committed = true;
+          this.worker = candidate.worker;
+          this.pending = candidate.pending;
+          this.cpuLeases = candidate.cpuLeases;
+          this.nextId = Math.max(this.nextId, candidate.nextId);
+          this.loadId = candidate.loadId;
+          this.sourceInfo = candidate.sourceInfo;
+          candidate.forwardTo = this;
+          candidate.worker = null;
+          candidate.pending = new Map();
+          candidate.cpuLeases = new Map();
+          return result;
+        },
+      };
+    } catch (error) {
+      staged.cancel();
+      throw error;
+    }
+  }
+
+  cancelSourceLoad() { this.stagedSource?.cancel(); }
 
   frame(index, { reportProgress = true, background = !reportProgress, speculative = false, signal, trajectory = null } = {}) {
     // Normalize field order so equivalent trajectory processing options share
@@ -177,10 +239,11 @@ export class StructureWorkerClient {
     this.cpuLeases.set(message.leaseId, request);
     try {
       request.lease = await this.cpuBudget.acquire(1, { signal: controller.signal, priority: message.priority ?? (message.background ? -20 : 20) });
-      if (worker !== this.worker || controller.signal.aborted) { request.lease.release(); return; }
+      const owner = this.forwardTo ?? this;
+      if (worker !== owner.worker || controller.signal.aborted) { request.lease.release(); return; }
       worker.postMessage({ type: 'cpu-granted', payload: { leaseId: message.leaseId } });
     } catch (error) {
-      if (worker === this.worker) worker.postMessage({ type: 'cpu-denied', payload: { leaseId: message.leaseId, error: error.message, name: error.name } });
+      if (worker === (this.forwardTo ?? this).worker) worker.postMessage({ type: 'cpu-denied', payload: { leaseId: message.leaseId, error: error.message, name: error.name } });
     }
   }
 
@@ -226,6 +289,7 @@ export class StructureWorkerClient {
   }
 
   reset() {
+    this.cancelSourceLoad();
     this.sourceGeneration++;
     this.frameRequests.clear();
     for (const controller of this.replicationControllers) controller.abort();

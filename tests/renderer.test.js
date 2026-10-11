@@ -130,8 +130,8 @@ test('selection visibility reaches attached primitives while malformed masks lea
   const frame = { properties: { energy: new Float64Array([1, 2, 100]) } };
   Object.assign(renderer, { frame, atomCount: 3, visibilityBuffer: {}, requestRender() {},
     gl: { ARRAY_BUFFER: 1, DYNAMIC_DRAW: 2, bindBuffer() {}, bufferData(target, data) { uploads.push(data); } },
-    primitiveLayer: { updatePositions(owner, regenerateShifts) {
-      primitiveMasks.push([owner.visibility, owner.selectionVisibility, regenerateShifts]);
+    primitiveLayer: { updateVisibility(owner) {
+      primitiveMasks.push([owner.visibility, owner.selectionVisibility]);
     } },
   });
   const mask = new Uint8Array([255, 0, 0]), selections = new Uint8Array([255, 255, 0]);
@@ -139,7 +139,7 @@ test('selection visibility reaches attached primitives while malformed masks lea
   assert.equal(renderer.frame, frame);
   assert.deepEqual([...frame.properties.energy], [1, 2, 100]);
   assert.equal(renderer.selectionVisibility, selections);
-  assert.deepEqual(primitiveMasks, [[mask, selections, false]]);
+  assert.deepEqual(primitiveMasks, [[mask, selections]]);
   assert.deepEqual(uploads, [mask]);
   assert.throws(() => renderer.setVisibility(null, { selectionVisibility: new Uint8Array(2) }), /selection visibility mask/);
   assert.equal(renderer.visibility, mask);
@@ -147,7 +147,7 @@ test('selection visibility reaches attached primitives while malformed masks lea
   assert.equal(uploads.length, 1, 'invalid masks do not change GPU buffers');
   renderer.setVisibility(mask);
   assert.equal(renderer.selectionVisibility, null, 'a regular visibility update clears selection-specific hiding');
-  assert.deepEqual(primitiveMasks[1], [mask, null, false]);
+  assert.deepEqual(primitiveMasks[1], [mask, null]);
 });
 
 test('transparent PNG export uses a transparent render and restores the viewport', () => {
