@@ -2,6 +2,7 @@ import { cellFaceHeights } from '../../data/model.js';
 import { calculatePreparedDisplacements, prepareDisplacementCalculation } from '../displacement.js';
 import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
 import { DISPLACEMENT_SHADER } from './displacement-shaders.js';
+import { validateAnalysisInput } from '../errors.js';
 
 export const MAX_GPU_DISPLACEMENT_CORRECTION_ATOMS = 16_384;
 const BATCH_ATOMS = 16_384;
@@ -14,7 +15,7 @@ const BATCH_ATOMS = 16_384;
  */
 export async function analyzeGpuDisplacement(runtime, frame, parameters = {}, { signal, onProgress = () => {} } = {}) {
   checkSignal(signal);
-  const prepared = prepareGpuDisplacementParameters(frame, parameters);
+  const prepared = validateAnalysisInput(() => prepareGpuDisplacementParameters(frame, parameters));
   const { referenceFrame, startAtom, endAtom, settings, context } = prepared;
   const count = endAtom - startAtom;
   const report = (phase, completedAtoms = 0) => onProgress({ phase, backend: 'gpu', workerCount: 1,

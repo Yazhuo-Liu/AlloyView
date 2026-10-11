@@ -4,6 +4,7 @@ import { yieldToMain } from '../task-yield.js';
 
 const MAX_IMAGE_CANDIDATES = 100_000;
 const derivedCartesianPositions = new WeakMap();
+const preparedContexts = new WeakSet();
 
 /** Cartesian current − reference displacement, matched by explicit atom IDs.
  * When both frames have generated row IDs, equal atom counts permit a row-order
@@ -130,16 +131,22 @@ export function prepareDisplacementCalculation(frame, parameters) {
   const inverse = minimumImage ? invert3(imageCell.vectors) : null;
   const orthogonal = minimumImage && orthogonalBasis(imageCell.vectors);
   const heights = minimumImage && !orthogonal ? cellFaceHeights(imageCell) : null;
-  return { frame, referenceMapping, currentPositions, referencePositions, minimumImage, mappingMode,
-    imageCell, inverse, orthogonal, heights, change: new Float64Array(3) };
+  const context = Object.freeze({ frame, referenceMapping, currentPositions, referencePositions, minimumImage, mappingMode,
+    sourceRepetitions: sourceRepetitions ? Object.freeze(Array.from(sourceRepetitions)) : null,
+    imageCell, inverse, orthogonal, heights, change: new Float64Array(3) });
+  preparedContexts.add(context);
+  return context;
 }
 
 /** Synchronous atom ranges run inside CPU workers without repeating ID maps. */
 export function calculatePreparedDisplacements(frame, parameters, { signal, onProgress = () => {} } = {}) {
   const context = parameters.preparedContext ?? prepareDisplacementCalculation(frame, parameters);
-  if (context.frame !== frame || context.referenceMapping !== parameters.referenceMapping
+  if (!preparedContexts.has(context) || context.frame !== frame || context.referenceMapping !== parameters.referenceMapping
     || context.currentPositions !== parameters.currentPositions || context.referencePositions !== parameters.referencePositions
-    || context.minimumImage !== (parameters.minimumImage ?? true)) throw new Error('The prepared displacement context does not match these inputs.');
+    || context.minimumImage !== (parameters.minimumImage ?? true) || context.mappingMode !== (parameters.mappingMode ?? 'id')
+    || JSON.stringify(context.sourceRepetitions) !== JSON.stringify(parameters.sourceRepetitions ?? null)) {
+    throw new Error('The prepared displacement context does not match these inputs.');
+  }
   const count = context.referenceMapping.length;
   const startAtom = parameters.startAtom ?? 0, endAtom = parameters.endAtom ?? count;
   if (!Number.isInteger(startAtom) || !Number.isInteger(endAtom) || startAtom < 0 || endAtom > count || endAtom < startAtom) {

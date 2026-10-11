@@ -52,6 +52,31 @@ test('shared CPU inputs produce the same q/histograms without modifying element 
   } finally { pool.close(); }
 });
 
+test('changed Worker degree keeps atom fields and histograms exact with bounded Float64 moment rounding', async () => {
+  const frame = crystalFrame('fcc', 13);
+  for (let index = 0; index < frame.fractional.length; index++) frame.fractional[index] += Math.sin(index * .123) * .0003;
+  const pools = [3, 8].map(cores => new AnalysisPool({ environment: { navigator: { hardwareConcurrency: cores } },
+    workerFactory: nodeFactory({ created: 0 }) }));
+  try {
+    const parameters = { kind: 'bondStatistics', cutoff: 3, lengthBins: 32, angleBins: 32 };
+    const one = await pools[0].analyze(frame, parameters), many = await pools[1].analyze(frame, parameters);
+    assert.equal(one.workerCount, 1); assert.equal(many.workerCount, 3);
+    for (const name of ['coordination', 'q4', 'q6', 'lengthCounts', 'angleCounts']) assert.deepEqual(many[name], one[name], name);
+    for (const name of ['length', 'angle', 'q4', 'q6']) {
+      assert.equal(many.moments[name].count, one.moments[name].count);
+      for (const field of ['mean', 'm2']) {
+        const first = one.moments[name][field], second = many.moments[name][field];
+        assert.ok(Math.abs(first - second) <= 1e-12 * Math.max(Math.abs(first), Math.abs(second)), `${name}.${field}`);
+      }
+    }
+    const small = await pools[0].analyze(frame, { kind: 'localShear', cutoff: 3 });
+    const large = await pools[1].analyze(frame, { kind: 'localShear', cutoff: 3 });
+    assert.deepEqual(large.localShear, small.localShear);
+    assert.deepEqual(large.coordination, small.coordination);
+    assert.ok(Math.abs(small.normalization - large.normalization) <= 1e-12 * Math.abs(small.normalization));
+  } finally { for (const pool of pools) pool.close(); }
+});
+
 test('GPU unavailability keeps bond statistics functional in pure CPU mode', async () => {
   const frame = crystalFrame('sc', 2);
   const pool = new AnalysisPool({ workerFactory: nodeFactory({ created: 0 }), gpuBackend: {

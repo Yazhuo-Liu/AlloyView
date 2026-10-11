@@ -3,6 +3,7 @@ import { validateReferences } from '../lattice.js';
 import { atomRange } from '../neighbors.js';
 import { GpuUnavailableError, checkSignal, readGpuBuffers, yieldWorker } from './runtime.js';
 import { ATOMIC_STRAIN_SHADER } from './atomic-strain-shaders.js';
+import { validateAnalysisInput } from '../errors.js';
 
 export const PTM_SCALE_INVALID = 1;
 export const PTM_DEFORMATION_INVALID = 2;
@@ -20,7 +21,7 @@ export async function analyzeGpuAtomicStrain(runtime, frame, parameters = {}, { 
   const { startAtom, endAtom } = atomRange(atomCount, parameters);
   const count = endAtom - startAtom;
   checkSignal(signal);
-  validateGpuPtmInput(frame, parameters);
+  validateAnalysisInput(() => validateGpuPtmInput(frame, parameters));
   onProgress({ backend: 'gpu', stage: 'strain-reference', phase: 'preparing', completedAtoms: 0, totalAtoms: count });
   const referenceTable = prepareGpuReferenceTable(frame, parameters.references);
   await runtime.initialize(signal);

@@ -1,10 +1,12 @@
+const atomNumberFormat = new Intl.NumberFormat('en-US');
+
 /** Describe the backend actually executing a job, including automatic fallback. */
 export function analysisProgressText(progress, { frameIndex = 0, kind = '' } = {}) {
   const { backend, phase, completed = 0, total = 1, workerCount = total,
     prepared = 0, initialized = 0, completedAtoms, totalAtoms } = progress;
   const frame = `frame ${frameIndex + 1}`;
   const atoms = Number.isFinite(completedAtoms) && totalAtoms > 0
-    ? ` ${completedAtoms.toLocaleString('en-US')} / ${totalAtoms.toLocaleString('en-US')} atoms` : '';
+    ? ` ${atomNumberFormat.format(completedAtoms)} / ${atomNumberFormat.format(totalAtoms)} atoms` : '';
   if (backend === 'gpu') {
     if (phase === 'queued') return `Waiting for the GPU for ${frame}…`;
     if (phase === 'initializing') return 'Initializing WebGPU…';

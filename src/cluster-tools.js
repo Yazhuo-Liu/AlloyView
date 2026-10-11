@@ -47,7 +47,7 @@ const integer = value => Number(value).toLocaleString('en-US');
 export function initializeClusterTools({ pool, tools, getFrame, getFrames = () => [getFrame()],
   getSourceVersion = () => 0, getFrameIndex = () => 0, getBondParameters = () => null, getSelectionGroups = () => [],
   getColorChoiceVersion = () => 0, chooseProperty = () => {}, onResultsChange = () => {}, notify = () => {},
-  onEdit = () => {}, onBeforeClear = () => {} }) {
+  onEdit = () => {}, onBeforeClear = () => {}, afterDisplayRefresh = callback => callback() }) {
   const $ = id => globalThis.document?.getElementById(id) ?? null;
   const job = { enabled: false, failed: false, queued: false, controller: null, serial: 0, result: null, frame: null,
     settings: { ...DEFAULTS } };
@@ -203,7 +203,7 @@ export function initializeClusterTools({ pool, tools, getFrame, getFrames = () =
     }
   }
 
-  function showResult(result, frame, key, cutoff) {
+  function showResult(result, frame, key, cutoff, current) {
     job.result = result; job.frame = frame; job.failed = false;
     // No GPU kernel exists, so the GPU preference is not recorded as a request.
     const metadata = { analysisKind: 'clusters', analysisKey: key, analysisMs: result.elapsedMs, analysisEngine: result.engine,
@@ -225,8 +225,13 @@ export function initializeClusterTools({ pool, tools, getFrame, getFrames = () =
     if ($('clusters-backend')) $('clusters-backend').textContent = backend;
     if ($('clusters-status')) $('clusters-status').title = analysisBackendDetails(result);
     if ($('clusters-progress')) { $('clusters-progress').hidden = true; $('clusters-progress').value = 1; }
-    state('Calculated', `${backend} · ${format((result.elapsedMs ?? 0) / 1000)} s${result.warning ? ` · ${result.warning}` : ''}`);
+    state('Updating display…');
     onResultsChange({ frame, clearSettings: false });
+    afterDisplayRefresh(() => {
+      if (current() && job.result === result && job.frame === frame) {
+        state('Calculated', `${backend} · ${format((result.elapsedMs ?? 0) / 1000)} s${result.warning ? ` · ${result.warning}` : ''}`);
+      }
+    });
   }
 
   async function run({ automatic = false, isCurrent = () => true } = {}) {
@@ -289,7 +294,7 @@ export function initializeClusterTools({ pool, tools, getFrame, getFrames = () =
       } else tableRows = Math.max(TABLE_ROWS, tableRows);
       if (!current()) return false;
       job.controller = null;
-      showResult(cached.result, frame, key, cached.cutoff);
+      showResult(cached.result, frame, key, cached.cutoff, current);
       if (!automatic && colorChoice === getColorChoiceVersion()) chooseProperty('clusterId');
       return true;
     } catch (error) {

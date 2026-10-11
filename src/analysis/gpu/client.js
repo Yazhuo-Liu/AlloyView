@@ -1,3 +1,5 @@
+import { analysisValidationError } from '../errors.js';
+
 const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'bondStatistics', 'voronoi', 'strain', 'cna', 'referenceStrain', 'centrosymmetry', 'displacement', 'ptmNeighbors']);
 const REFERENCE_KINDS = new Set(['referenceStrain', 'displacement']);
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
@@ -52,7 +54,7 @@ export class GpuAnalysisClient {
     preparedVoronoiFrameIndexes: [...(this._cacheStatus.preparedVoronoiFrameIndexes ?? [])] }; }
 
   associateFrame(frame, frameIndex) {
-    if (!Number.isInteger(frameIndex) || frameIndex < 0) throw new Error('The GPU frame index must be a nonnegative integer.');
+    if (!Number.isInteger(frameIndex) || frameIndex < 0) throw validationError('The GPU frame index must be a nonnegative integer.');
     const frameId = this.indexFrameIds.get(frameIndex) ?? this.frameIds.get(frame) ?? this.nextFrameId++;
     this.indexFrameIds.set(frameIndex, frameId);
     this.frameIds.set(frame, frameId);
@@ -150,8 +152,20 @@ export class GpuAnalysisClient {
     });
   }
 
-  cancel(task) {
-    this.settle(task, abortError());
+  cancel(task, error = abortError()) {
+    this.settle(task, error);
+    // A cancelled upload cannot acknowledge its provisional source identity.
+    // Preserve earlier acknowledged fits; a later task's replacement is
+    // removed only when it still owns the current descriptor.
+    const fit = task.ptmSource;
+    if (fit && this.ptmSources.get(fit.frameId) === fit.source && this.cachedPtmFits.get(fit.frameId) !== fit.source.id) {
+      this.ptmSources.delete(fit.frameId);
+    }
+    for (const { id, variant, source, uploaded } of task.positionSources ?? []) {
+      const variants = this.positionSources.get(id);
+      if (uploaded && variants?.get(variant) === source) variants.delete(variant);
+      if (variants && !variants.size) this.positionSources.delete(id);
+    }
     if (this.active.includes(task)) {
       if (task.dispatched) this.worker?.postMessage({ type: 'cancel', id: task.id });
     } else {
@@ -167,13 +181,41 @@ export class GpuAnalysisClient {
       if (this.worker !== worker) return;
       const task = this.pending.get(data.id) ?? this.active.find(active => active.id === data.id) ?? null;
       if (!task) return;
-      if (data.progress) { if (!task.settled) task.onProgress({ ...data.progress, backend: 'gpu', workerCount: 1 }); return; }
+      if (data.progress) {
+        if (!task.settled) {
+          try { task.onProgress({ ...data.progress, backend: 'gpu', workerCount: 1 }); }
+          catch (error) { this.cancel(task, error); }
+        }
+        return;
+      }
+      // Sparse CPU corrections also retain Wasm inside this Worker. A native
+      // trap cannot leave that module cached for another GPU calculation.
+      if (data.fatal === true) { fail({ message: data.error || 'The GPU analysis Worker failed.' }); return; }
       if (task.generation === this.generation) {
         this.cachedFrameIds = new Set(data.cachedFrameIds ?? data.cacheStatus?.cachedFrameIds ?? []);
         this.cachedCartesianFrames = new Map((data.cachedCartesianFrames ?? []).map(({ frameId, variants }) => [frameId, new Set(variants)]));
         this.cachedPtmFits = new Map((data.cachedPtmFits ?? []).map(({ frameId, fitId }) => [frameId, fitId]));
-        for (const frameId of this.positionSources.keys()) if (!this.cachedFrameIds.has(frameId)) this.positionSources.delete(frameId);
-        for (const [frameId, fit] of this.ptmSources) if (!this.cachedFrameIds.has(frameId) || this.cachedPtmFits.get(frameId) !== fit.id) this.ptmSources.delete(frameId);
+        // Replies describe the worker state before later posted tasks run.
+        // Keep their provisional source identities until their own ACK: an
+        // earlier cancelled warmup must not discard a raw fit already sent
+        // by the foreground analysis behind it. Residency still requires an
+        // actual ACK before any future task may omit its input payload.
+        const awaiting = this.active.filter(active => active !== task && active.dispatched
+          && !active.settled && active.generation === this.generation);
+        for (const [frameId, variants] of this.positionSources) {
+          for (const [variant, source] of variants) {
+            const acknowledged = this.cachedFrameIds.has(frameId) && this.cachedCartesianFrames.get(frameId)?.has(variant);
+            const posted = awaiting.some(active => active.positionSources?.some(pending =>
+              pending.id === frameId && pending.variant === variant && pending.source === source));
+            if (!acknowledged && !posted) variants.delete(variant);
+          }
+          if (!variants.size) this.positionSources.delete(frameId);
+        }
+        for (const [frameId, fit] of this.ptmSources) {
+          const acknowledged = this.cachedFrameIds.has(frameId) && this.cachedPtmFits.get(frameId) === fit.id;
+          const posted = awaiting.some(active => active.ptmSource?.frameId === frameId && active.ptmSource.source === fit);
+          if (!acknowledged && !posted) this.ptmSources.delete(frameId);
+        }
         if (data.cacheStatus) this._cacheStatus = { ...data.cacheStatus };
         if (data.ok && task.type === 'warmup') {
           this.deviceWarmed = true;
@@ -182,7 +224,8 @@ export class GpuAnalysisClient {
         }
       }
       if (data.ok) this.settle(task, null, task.type === 'analyze' ? data.result : this.cacheStatus);
-      else { const error = new Error(data.error || 'GPU analysis failed.'); error.name = data.name || 'Error'; this.settle(task, error); }
+      else { const error = new Error(data.error || 'GPU analysis failed.'); error.name = data.name || 'Error';
+        error.analysisErrorKind = data.errorKind; this.settle(task, error); }
       this.finishDispatch(task);
     });
     const fail = (event) => {
@@ -239,15 +282,15 @@ export class GpuAnalysisClient {
       if (task.type === 'analyze' && REFERENCE_KINDS.has(parameters?.kind)) {
         referenceSource = this.referenceFrame(parameters);
         const mapping = parameters.referenceMapping;
-        if (!ArrayBuffer.isView(mapping) || mapping instanceof DataView) throw new Error('GPU reference strain requires a typed referenceMapping array.');
+        if (!ArrayBuffer.isView(mapping) || mapping instanceof DataView) throw validationError('GPU reference strain requires a typed referenceMapping array.');
         const currentIndex = this.frameIndexes.get(task.frame);
         const requestedIndex = parameters.referenceFrameIndex ?? this.frameIndexes.get(referenceSource);
         if (referenceSource === task.frame && requestedIndex !== undefined && currentIndex !== undefined && requestedIndex !== currentIndex) {
-          throw new Error('The same GPU frame cannot have different current and reference indexes.');
+          throw validationError('The same GPU frame cannot have different current and reference indexes.');
         }
         if (requestedIndex !== undefined && currentIndex === requestedIndex
             && (referenceSource.fractional !== task.frame.fractional || referenceSource.cell !== task.frame.cell)) {
-          throw new Error('GPU current and reference frames with the same index must identify the same coordinates and cell.');
+          throw validationError('GPU current and reference frames with the same index must identify the same coordinates and cell.');
         }
         if (parameters.referenceFrameIndex !== undefined) this.associateFrame(referenceSource, parameters.referenceFrameIndex);
       }
@@ -276,7 +319,7 @@ export class GpuAnalysisClient {
         const reference = await prepareFramePayload(referenceSource);
         referenceFrameId = reference.id; referenceFrameIndex = reference.index; referenceFrame = reference.payload;
         if (frameId === referenceFrameId && frameIndex !== undefined && referenceFrameIndex !== frameIndex) {
-          throw new Error('The same GPU frame cannot have different current and reference indexes.');
+          throw validationError('The same GPU frame cannot have different current and reference indexes.');
         }
         const mapping = parameters.referenceMapping;
         const referenceMapping = await copyArray(mapping, task);
@@ -296,17 +339,21 @@ export class GpuAnalysisClient {
         const prepared = new Map();
         for (const [name, id] of [['currentPositions', frameId], ['referencePositions', referenceFrameId]]) {
           const source = parameters[name];
-          if (!ArrayBuffer.isView(source) || source instanceof DataView) throw new Error(`GPU displacement requires typed ${name} coordinates.`);
+          if (!ArrayBuffer.isView(source) || source instanceof DataView) throw validationError(`GPU displacement requires typed ${name} coordinates.`);
           const prior = prepared.get(id);
           if (prior) {
-            if (prior.source !== source) throw new Error('The same GPU frame requires the same current and reference displacement coordinates.');
+            if (prior.source !== source) throw validationError('The same GPU frame requires the same current and reference displacement coordinates.');
             positions[name] = prior.payload; continue;
           }
-          const reused = this.cachedCartesianFrames.get(id)?.has(variant) && this.positionSources.get(id)?.get(variant) === source;
+          const unacknowledged = this.active.some(active => active !== task && active.dispatched
+            && active.generation === this.generation && active.positionSources?.some(pending =>
+              pending.uploaded && pending.id === id && pending.variant === variant && pending.source === source));
+          const reused = !unacknowledged && this.cachedCartesianFrames.get(id)?.has(variant)
+            && this.positionSources.get(id)?.get(variant) === source;
           if (!reused) {
             positions[name] = await copyArray(source, task); transfer.push(positions[name].buffer);
-            positionSources.push({ id, variant, source });
           } else positions[name] = undefined;
+          positionSources.push({ id, variant, source, uploaded: !reused });
           prepared.set(id, { source, payload: positions[name] });
         }
         parameters = { ...parameters, ...positions };
@@ -314,7 +361,7 @@ export class GpuAnalysisClient {
       if (task.type === 'analyze' && parameters?.kind === 'centrosymmetry' && parameters.structureInput !== undefined) {
         if (parameters.mode !== 'auto' || !(parameters.structureInput instanceof Uint8Array)
             || parameters.structureInput.length !== task.frame.fractional.length / 3 || parameters.structureInput.some(type => type > 4)) {
-          throw new Error('GPU Auto central symmetry requires complete typed adaptive CNA structure IDs.');
+          throw validationError('GPU Auto central symmetry requires complete typed adaptive CNA structure IDs.');
         }
         const structureInput = await copyArray(parameters.structureInput, task); transfer.push(structureInput.buffer);
         parameters = { ...parameters, structureInput };
@@ -329,12 +376,12 @@ export class GpuAnalysisClient {
         const ptmInput = reused ? undefined : {};
         for (const name of ['structures', 'scales', 'deformation']) {
           const array = source[name];
-          if (!ArrayBuffer.isView(array) || array instanceof DataView) throw new Error(`GPU strain requires a typed PTM ${name} array.`);
+          if (!ArrayBuffer.isView(array) || array instanceof DataView) throw validationError(`GPU strain requires a typed PTM ${name} array.`);
           if (!reused) { ptmInput[name] = await copyArray(array, task); transfer.push(ptmInput[name].buffer); }
         }
         let ptmTypes;
         if (!reused) {
-          if (!ArrayBuffer.isView(task.frame.types) || task.frame.types instanceof DataView) throw new Error('GPU strain requires typed element IDs.');
+          if (!ArrayBuffer.isView(task.frame.types) || task.frame.types instanceof DataView) throw validationError('GPU strain requires typed element IDs.');
           ptmTypes = await copyArray(task.frame.types, task); transfer.push(ptmTypes.buffer);
         }
         ptmSource = { id, structures: source.structures, scales: source.scales, deformation: source.deformation,
@@ -346,7 +393,11 @@ export class GpuAnalysisClient {
       task.dispatched = true;
       worker.postMessage({ type: task.type, id: task.id, frameId, frameIndex, frame,
         referenceFrameId, referenceFrameIndex, referenceFrame, parameters, options: task.options }, transfer);
-      if (ptmSource) this.ptmSources.set(frameId, ptmSource);
+      if (ptmSource) {
+        task.ptmSource = { frameId, source: ptmSource };
+        this.ptmSources.set(frameId, ptmSource);
+      }
+      task.positionSources = positionSources;
       for (const { id, variant, source } of positionSources) {
         let variants = this.positionSources.get(id);
         if (!variants) { variants = new Map(); this.positionSources.set(id, variants); }
@@ -367,15 +418,15 @@ export class GpuAnalysisClient {
     // privately, but must not claim a trajectory index whose real frame can
     // later be used for element-filtered RDF or bonds.
     if (parameters.referenceFrameIndex !== undefined && parameters.referenceFrame === undefined) {
-      throw new Error('GPU reference frame indexes require an actual referenceFrame.');
+      throw validationError('GPU reference frame indexes require an actual referenceFrame.');
     }
     const fractional = parameters.referenceFractional;
-    if (!ArrayBuffer.isView(fractional) || fractional instanceof DataView) throw new Error('GPU reference strain requires typed referenceFractional coordinates.');
+    if (!ArrayBuffer.isView(fractional) || fractional instanceof DataView) throw validationError('GPU reference strain requires typed referenceFractional coordinates.');
     const cell = parameters.referenceCell;
-    if (!cell || typeof cell !== 'object') throw new Error('GPU reference strain requires a reference cell.');
+    if (!cell || typeof cell !== 'object') throw validationError('GPU reference strain requires a reference cell.');
     if (parameters.referenceFrame !== undefined) {
       const frame = parameters.referenceFrame;
-      if (frame?.fractional !== fractional || frame.cell !== cell) throw new Error('GPU reference frame metadata must identify the supplied reference coordinates and cell.');
+      if (frame?.fractional !== fractional || frame.cell !== cell) throw validationError('GPU reference frame metadata must identify the supplied reference coordinates and cell.');
       return frame;
     }
     let cells = this.referenceFrames.get(fractional);
@@ -426,3 +477,5 @@ function abortError() { return new DOMException('Analysis cancelled.', 'AbortErr
 import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult, compactVoronoiRadii } from '../voronoi-selection.js';
 import { gpuPreparationKinds } from './preparation.js';
 import { yieldToMain } from '../../task-yield.js';
+
+const validationError = message => analysisValidationError(new Error(message));

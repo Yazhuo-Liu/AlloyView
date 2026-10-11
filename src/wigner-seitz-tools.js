@@ -65,7 +65,7 @@ export function wignerSeitzMarkers(result, frame, reference, mode, { affineMappi
 export function initializeWignerSeitzTools({ renderer, pool, tools, getFrame, getFrameAt = async () => null,
   getFrames = () => [getFrame()], getFrameCount = () => 1, getFrameIndex = () => 0, getSourceVersion = () => 0,
   getColorChoiceVersion = () => 0, chooseProperty = () => {}, onResultsChange = () => {}, onDisplayChange = () => {},
-  notify = () => {}, onEdit = () => {}, onBeforeClear = () => {} }) {
+  notify = () => {}, onEdit = () => {}, onBeforeClear = () => {}, afterDisplayRefresh = callback => callback() }) {
   const $ = id => globalThis.document?.getElementById(id) ?? null;
   const job = { enabled: false, failed: false, queued: false, controller: null, serial: 0, cached: null, frame: null,
     settings: { ...WIGNER_SEITZ_DEFAULTS } };
@@ -196,7 +196,7 @@ export function initializeWignerSeitzTools({ renderer, pool, tools, getFrame, ge
     onDisplayChange();
   }
 
-  function showResult(cached, frame) {
+  function showResult(cached, frame, current) {
     const { result } = cached;
     job.cached = cached; job.frame = frame; job.failed = false;
     const metadata = { analysisKind: 'wignerSeitz', analysisKey: cached.key, analysisMs: result.elapsedMs, analysisEngine: result.engine };
@@ -222,9 +222,14 @@ export function initializeWignerSeitzTools({ renderer, pool, tools, getFrame, ge
     if ($('wigner-seitz-backend')) $('wigner-seitz-backend').textContent = backend;
     if ($('wigner-seitz-status')) $('wigner-seitz-status').title = analysisBackendDetails(result);
     if ($('wigner-seitz-progress')) { $('wigner-seitz-progress').hidden = true; $('wigner-seitz-progress').value = 1; }
-    state('Calculated', `${backend} · ${((result.elapsedMs ?? 0) / 1000).toLocaleString('en-US', { maximumSignificantDigits: 3 })} s`);
+    state('Updating display…');
     updateMarkers();
     onResultsChange({ frame, clearSettings: false });
+    afterDisplayRefresh(() => {
+      if (current() && job.cached === cached && job.frame === frame) {
+        state('Calculated', `${backend} · ${((result.elapsedMs ?? 0) / 1000).toLocaleString('en-US', { maximumSignificantDigits: 3 })} s`);
+      }
+    });
   }
 
   async function run({ automatic = false, isCurrent = () => true } = {}) {
@@ -288,7 +293,7 @@ export function initializeWignerSeitzTools({ renderer, pool, tools, getFrame, ge
       }
       if (!current()) return false;
       job.controller = null;
-      showResult(cached, frame);
+      showResult(cached, frame, current);
       if (!automatic && colorChoice === getColorChoiceVersion()) chooseProperty('wsDefectClass');
       return true;
     } catch (error) {

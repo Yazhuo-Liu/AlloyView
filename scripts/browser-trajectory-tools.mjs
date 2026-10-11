@@ -234,8 +234,10 @@ async function exercise({ isolated }) {
     await change('displacement-reference-frame', '3');
     await evaluate('document.getElementById("run-displacement").click()');
     await delay(200);
-    assert.equal(await evaluate(`trajectoryChecks.requests.some(request => request.index === 2 && request.foreground && request.trajectory?.smoothing === 3)`), true,
-      'the reference frame must be read in the foreground with smoothing');
+    assert.equal(await evaluate(`trajectoryChecks.requests.some(request => request.index === 2 && request.trajectory?.smoothing === 3)`), true,
+      'the reference frame must share a read using the active smoothing settings');
+    assert.equal(await evaluate(`document.getElementById('displacement-state').textContent`), 'Calculating…',
+      'the reference consumer stays active while the shared read is held');
     await evaluate('trajectoryChecks.release()');
     await waitFor(`document.getElementById('displacement-state').textContent === 'Calculated'`, 'Displacement from a smoothed reference');
     assert.equal((await loading()).hidden, true, 'a reference frame read must not leave the loading indicator on');
@@ -270,7 +272,8 @@ async function exercise({ isolated }) {
     // Closing the tool removes the lines.
     await evaluate('document.getElementById("close-tool").click()');
     await waitFor('!trajectoryChecks.renderer.trajectoryLines', 'Closing the trajectory tool');
-    return { adapter, isolated, trackedAtom: tracked + 1, crossingAtoms: crossing.length, unwrappedChecks, cna: { raw, smoothed },
+    const requests = await evaluate('({ total: trajectoryChecks.requests.length, promoted: trajectoryChecks.promotions.length })');
+    return { adapter, isolated, trackedAtom: tracked + 1, crossingAtoms: crossing.length, unwrappedChecks, cna: { raw, smoothed }, requests,
       lines: { maximumStep: lines.maximumStep, maximumX: lines.trackedMaximumX }, exported, screenshot };
   }, { software: useSoftwareAdapter(true), isolated, requireGpu: false });
 }
@@ -279,7 +282,7 @@ async function initializeChecks() {
   const app = document.querySelector('script[type=module][src]').src;
   const [{ WebGLRenderer }, { StructureWorkerClient }] = await Promise.all([
     import(new URL('./render/webgl-renderer.js', app)), import(new URL('./worker-client.js', app))]);
-  const checks = window.trajectoryChecks = { requests: [] };
+  const checks = window.trajectoryChecks = { requests: [], promotions: [] };
   const setFrame = WebGLRenderer.prototype.setFrame;
   WebGLRenderer.prototype.setFrame = function(...args) {
     if (this.canvas.id === 'viewport') checks.renderer = this; else checks.comparison = this;
@@ -288,11 +291,28 @@ async function initializeChecks() {
   const frame = StructureWorkerClient.prototype.frame;
   // hold(index) keeps every read of one frame waiting until release().
   let held = null, gate = null, open = null;
+  const heldReads = new Set();
   checks.hold = index => { held = index; gate = new Promise(resolve => { open = resolve; }); };
   checks.release = () => { held = null; open?.(); };
   StructureWorkerClient.prototype.frame = function(index, options = {}) {
-    checks.requests.push({ index, trajectory: options.trajectory ?? null, foreground: options.reportProgress !== false && !options.background });
-    return index === held ? gate.then(() => frame.call(this, index, options)) : frame.call(this, index, options);
+    const row = { index, trajectory: options.trajectory ?? null, foreground: options.reportProgress !== false && !options.background };
+    checks.requests.push(row);
+    if (index !== held) return frame.call(this, index, options);
+    const read = { row, options: { ...options } };
+    heldReads.add(read);
+    return gate.then(() => frame.call(this, index, read.options)).finally(() => heldReads.delete(read));
+  };
+  const promoteFrame = StructureWorkerClient.prototype.promoteFrame;
+  StructureWorkerClient.prototype.promoteFrame = function(index, trajectory = null) {
+    // The gate delays client dispatch, whereas a real parse is already known
+    // to the client. Record a foreground join without demanding a duplicate
+    // frame() call, and carry its priority across the artificial gate.
+    checks.promotions.push({ index, trajectory });
+    for (const read of heldReads) if (read.row.index === index && JSON.stringify(read.row.trajectory) === JSON.stringify(trajectory)) {
+      read.options.background = false; read.options.reportProgress = true;
+      read.row.foreground = true; read.row.promoted = true;
+    }
+    return promoteFrame.call(this, index, trajectory);
   };
   checks.change = (id, value, checkbox = false) => {
     const input = document.getElementById(id);

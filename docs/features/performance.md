@@ -21,7 +21,7 @@ results. The table lists the mechanisms; the sections below describe them.
 | Mechanism | Where it is used |
 | --- | --- |
 | Parallel | Frame parsing in one foreground and up to four background parser Workers; physical replication in its own Worker; CPU analyses as atom chunks in the shared Worker pool; DXA with pthreads on isolated hosts or private stage Workers elsewhere; WebGPU kernels |
-| Resident and cached | Parsed frames and results in the adaptive frame cache; coordinate snapshots and linked-cell indices of up to two frames in the CPU Workers; coordinates, neighbor indices and PTM fit uploads on the GPU; Wasm modules, heaps and thread pools between calculations |
+| Resident and cached | Parsed frames and results in the adaptive frame cache; shared in-flight reads; coordinate snapshots and linked-cell indices of one or two frames in the CPU Workers; coordinates, neighbor indices and PTM fit uploads on the GPU; Wasm modules, heaps and thread pools between calculations |
 | Pipelined | Up to three queued WebGPU dispatches; one GPU task posted behind the running one; readback and CPU correction of one range while the next runs; the next playback frame parsed while the current one is shown |
 | Prewarmed | Workers, the Voro++, PTM and DXA modules, DXA's compiled code, the current frame's CPU snapshot and index, and the GPU device, pipelines, uploads and neighbor index |
 | Shader uniforms only | Dragging a legend range, dragging the crystal through periodic boundaries and sweeping a slice upload no per-atom data while the pointer moves |
@@ -38,10 +38,13 @@ each has a counterpart without isolation.
   exactly the `Number()` value of every token. A row it cannot prove equal is
   parsed again by the line-based parser, which also produces every error
   message. See [trajectory memory behavior](../FORMATS.md#trajectory-memory-behavior).
-- **CPU analyses.** Chunks are claimed dynamically, but every reduction keeps
-  its logical partition and atom order, so arrays and statistics are identical
-  for any Worker count, with shared or copied memory, and on a repeated call
-  that reuses a resident frame.
+- **CPU analyses.** Chunks are claimed dynamically, while reductions retain
+  their logical partition and atom order for the chosen Worker count. Reusing
+  a resident input or its validated context does not change the formulas.
+  Per-atom arrays and integer histograms remain exact in the tested shared
+  and private paths. A different Worker count changes the grouping of
+  Float64 bond-statistics moments and local-shear normalization, so their
+  last bits can differ; see the [audit validation](../VALIDATION.md).
 - **WebGPU analyses.** Range sizes and the queue depth do not change
   deterministic outputs, and ambiguous cutoff, ordering and image decisions
   receive exact CPU corrections. Outputs that already depended on the GPU's
@@ -103,8 +106,9 @@ with other jobs; multithreaded timings vary by about 10%.
   unchanged with copies (about 190 ms) and varied between 171 and 262 ms with
   shared memory. PTM with private copies became slower in environments that
   do not report `performance.memory` (1,239 to 1,809 ms), because the memory
-  estimate now counts two resident frames per Worker and selects 6 Workers
-  instead of 9.
+  estimate then counted two resident frames per Worker and selected 6 Workers
+  instead of 9. These measurements precede the adaptive admission and
+  one-frame private residency described below.
 - **WebGPU analyses.** See the table under
   [Dispatch batching and readback](#dispatch-batching-and-readback).
 - **DXA.** See [DXA](dislocations.md) and the
@@ -115,9 +119,6 @@ with other jobs; multithreaded timings vary by about 10%.
 
 - Caching each property's data limits between legend edits saves under 10%
   and would rely on property arrays never changing in place.
-- A frame commit still uploads atom radii twice. Avoiding it needs a
-  comparison of every radius or a reordered commit, and the upload is 4 bytes
-  per atom.
 - A hand-written tokenizer that matches the regular-expression whitespace
   class exactly was 20% slower than the native `split` on two dumps, so the
   line-based parsers keep `split`; the byte-level reader replaces it for
@@ -170,21 +171,78 @@ inputs; closing the source releases them while preserving initialized modules.
 Both paths calculate on this device. PTM and Voro++
 Workers retain their own reusable WebAssembly kernel and memory.
 
+### Memory admission and reusable inputs
+
+The CPU analysis budget uses the largest of 256 MiB, 64 MiB per reported
+logical processor, 15% of a reported JavaScript heap limit, and 12.5% of
+reported device RAM, with a 2 GiB ceiling. A known small heap or device caps
+that estimate at half the heap limit or a quarter of device RAM. These are
+admission estimates; browsers do not report free RAM, and an allocation can
+still fail. Fixed source, snapshot and output allocations are deducted once.
+Private inputs/indices, bounded partial buffers and missing native module
+capacity grow with the Worker count; acknowledged grown Wasm heaps remain
+charged while retained.
+Module-only warmup also reserves 1 MiB per cold module for startup pages.
+
+If two private resident frames would reduce the useful Worker count, a Worker
+keeps one instead. Otherwise both frames remain available for reuse. Native
+modules, their heaps and the thread pool survive frame eviction. An analysis
+that cannot fit even one Worker is rejected before merged-output allocation
+or Worker dispatch, instead of silently selecting one Worker with the same
+excessive fixed cost. The estimate covers the current task and confirmed
+retained resources; it is not a global reservation for concurrent tasks'
+future outputs or unknown native heap growth.
+
+Bond-statistics type validation, Auto CSP label validation and displacement
+mapping preparation happen once per resident input set, rather than once per
+atom chunk. RDF populations and normalization are prepared once from the
+pool's immutable frame snapshot. A frame, data or parameter change invalidates
+these preparations. Direct kernel calls still validate their inputs; a caller
+cannot bypass validation by supplying a `validated` flag.
+
+### Progress, errors and frame readers
+
+Progress retains the newest atom count and updates browser controls at most
+once per animation frame within a phase. Phase/backend changes, the first
+positive atom update and terminal progress callbacks remain immediate.
+The **Calculated** status follows the display flush. A bounded timer keeps
+updates and callback-driven cancellation working in a background tab. The
+Worker's 80 ms atom-progress clock spans chunks of the same analysis, and
+number formatting reuses one `Intl.NumberFormat`. Work scheduling and result
+publication do not wait for these display updates.
+
+Invalid parameters and controlled scientific errors reject the analysis while
+retaining acknowledged Worker modules, heaps and resident-input ownership.
+Broken Worker transport and fatal native traps retire the damaged Worker.
+Cheap preconditions run before dispatch; a GPU input-validation failure is
+reported once, while device, memory and supported-precision failures still
+permit CPU fallback. Errors from a caller's progress callback reject its
+task; they are not GPU device failures and do not start CPU fallback.
+
+Frame readers join an in-flight operation with the same source, frame index
+and processing settings. Each reader owns its cancellation independently.
+Navigation promotes a joined background parse to foreground priority and
+cancels only speculative readers outside its new prefetch window. Time-series
+reads, trajectory averages and reference-frame reads continue while still
+needed. Source, smoothing and physical-replication changes invalidate the old
+request identity. Useful look-ahead starts during navigation rather than
+waiting for an idle interval.
+
 A Worker's share of the atoms is divided into about eight chunks (four for PTM
 and fresh strain). A chunk holds at least 128 atoms and at most 2,048 for CNA,
 central symmetry, bonds and most other analyses, 4,096 for PTM and strain, and
 8,192 for coordination, displacement and Wigner–Seitz assignment, so idle Workers can
 take over the slow regions of an inhomogeneous structure. The memory estimate
 that limits the Worker count charges shared coordinates, the shared index and
-the merged output once; without isolation it charges every Worker two resident
-frames, because a Worker may retain two. The merge does not yield to the page
+the merged output once; without isolation it charges the selected one- or
+two-frame residency and bounded partial outputs. The merge does not yield to the page
 thread after every chunk; the bond merge yields once per 262,144 copied bonds.
 Where `scheduler.yield` is unavailable, a yield is a clamped timer of about
 4 ms, which added about 0.45 s over 112 chunks. PTM keeps a resident
 frame's element types in its native heap for chemical ordering. Cancelling an
 analysis rejects it at once. Atom chunks already posted finish in their
-Worker, which stays in the pool with its module, snapshot and index; a failed
-Worker is terminated and replaced.
+Worker, which stays in the pool with its module, snapshot and index; a fatally
+failed Worker is terminated and replaced.
 
 An adaptive memory budget limits cached trajectory frames and results. Cancellation and source/frame/parameter ownership checks prevent late Worker messages from applying obsolete results. Closing the source stops playback and analysis, releases cached structure data, and restores the homepage. While GPU acceleration stays enabled, its device and compiled pipelines can be reused for the next source.
 

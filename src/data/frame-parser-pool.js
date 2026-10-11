@@ -8,16 +8,18 @@ const aborted = () => new DOMException('Frame parsing cancelled.', 'AbortError')
  * rejects its caller immediately; the slot and CPU permit stay occupied until
  * the Worker acknowledges completion, then its result is discarded. */
 export class FrameParserPool {
-  constructor({ environment = globalThis, backgroundCount, acquire, workerFactory } = {}) {
+  constructor({ environment = globalThis, backgroundCount, acquire, promote, workerFactory } = {}) {
     this.backgroundCount = backgroundCount ?? Math.max(1, Math.min(4, cpuWorkerLimit(environment) - 1));
     this.maximumBackgroundCount = this.backgroundCount;
     this.acquire = acquire;
+    this.promoteAcquire = promote;
     this.workerFactory = workerFactory ?? (typeof environment.Worker === 'function'
       ? () => new environment.Worker(new URL('../workers/frame-parser-worker.js', import.meta.url), { type: 'module' }) : null);
     this.slots = [];
     this.queue = [];
     this.nextId = 1;
     this.closed = false;
+    this.promotedSignals = new WeakMap();
   }
 
   setAtomCount(count) {
@@ -29,6 +31,10 @@ export class FrameParserPool {
 
   parse(descriptor, { background = false, signal, priority = background ? -20 : 20 } = {}) {
     if (this.closed || signal?.aborted) return Promise.reject(aborted());
+    // Smoothing/unwrapping can enqueue more reads after a foreground join.
+    // Keep their parallel background lanes but retain the promoted admission
+    // priority throughout that request's lifetime.
+    if (signal && this.promotedSignals.has(signal)) priority = Math.max(priority, this.promotedSignals.get(signal));
     return new Promise((resolve, reject) => {
       const task = { id: this.nextId++, descriptor, background, signal, priority, resolve, reject, controller: new AbortController() };
       task.abort = () => this.cancel(task);
@@ -36,6 +42,24 @@ export class FrameParserPool {
       this.queue.push(task);
       this.pump();
     });
+  }
+
+  /** A displayed-frame consumer joined an existing speculative parse. Move
+   * queued work into the foreground lane, or promote its pending CPU permit;
+   * never restart a parser which is already processing the frame. */
+  promote(signal, priority = 20) {
+    if (signal) this.promotedSignals.set(signal, Math.max(this.promotedSignals.get(signal) ?? -Infinity, priority));
+    for (const task of this.queue) if (task.signal === signal) {
+      task.background = false; task.priority = Math.max(task.priority, priority);
+    }
+    for (const slot of this.slots) {
+      const task = slot.task;
+      if (task?.signal !== signal) continue;
+      task.background = false; task.priority = Math.max(task.priority, priority);
+      if (!task.started) this.promoteAcquire?.({ signal: task.controller.signal, priority: task.priority });
+    }
+    this.queue.sort((first, second) => second.priority - first.priority);
+    this.pump();
   }
 
   pump() {

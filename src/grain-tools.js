@@ -70,7 +70,7 @@ const integer = value => Number(value).toLocaleString('en-US');
 export function initializeGrainTools({ client, tools, getFrame, getFrames = () => [getFrame()],
   getSourceVersion = () => 0, getFrameIndex = () => 0, getPtmParameters = () => ({ flags: 31, rmsdCutoff: .1 }),
   ensurePtm, releasePtm = () => {}, getColorChoiceVersion = () => 0, chooseProperty = () => {}, chooseColorMode = () => {},
-  onResultsChange = () => {}, notify = () => {}, onEdit = () => {} }) {
+  onResultsChange = () => {}, notify = () => {}, onEdit = () => {}, afterDisplayRefresh = callback => callback() }) {
   const $ = id => globalThis.document?.getElementById(id) ?? null;
   const job = { enabled: false, failed: false, queued: false, controller: null, serial: 0, result: null, frame: null,
     settings: { ...DEFAULTS } };
@@ -230,7 +230,7 @@ export function initializeGrainTools({ client, tools, getFrame, getFrames = () =
     }
   }
 
-  function showResult(cached, frame, key) {
+  function showResult(cached, frame, key, current) {
     const { result } = cached;
     job.result = result; job.frame = frame; job.failed = false;
     const metadata = { analysisKind: 'grains', analysisKey: key, analysisMs: result.totalMs, analysisEngine: result.engine };
@@ -250,9 +250,14 @@ export function initializeGrainTools({ client, tools, getFrame, getFrames = () =
     renderChart(result); renderTable(result);
     if ($('grains-backend')) $('grains-backend').textContent = result.engine;
     if ($('grains-progress')) { $('grains-progress').hidden = true; $('grains-progress').value = 1; }
-    state('Calculated', `${result.engine} · ${format((result.totalMs ?? 0) / 1000, 3)} s`
-      + (result.ptmReused ? ' · reused the PTM fit' : '') + (result.modelReused ? ' · reused the merge sequence' : ''));
+    state('Updating display…');
     onResultsChange({ frame, clearSettings: false });
+    afterDisplayRefresh(() => {
+      if (current() && job.result === result && job.frame === frame) {
+        state('Calculated', `${result.engine} · ${format((result.totalMs ?? 0) / 1000, 3)} s`
+          + (result.ptmReused ? ' · reused the PTM fit' : '') + (result.modelReused ? ' · reused the merge sequence' : ''));
+      }
+    });
   }
 
   async function run({ automatic = false, isCurrent = () => true } = {}) {
@@ -319,7 +324,7 @@ export function initializeGrainTools({ client, tools, getFrame, getFrames = () =
       } else tableRows = Math.max(TABLE_ROWS, tableRows);
       if (!current()) return false;
       job.controller = null;
-      showResult(cached, frame, key);
+      showResult(cached, frame, key, current);
       if (!automatic && colorChoice === getColorChoiceVersion()) chooseProperty('grainId');
       return true;
     } catch (error) {

@@ -119,20 +119,23 @@ test('reset rejects pending loads/frames, ignores old Workers and allows a fresh
   } finally { globalThis.Worker = originalWorker; }
 });
 
-test('cancelling prefetch rejects background requests while preserving foreground requests', async () => {
+test('cancelling prefetch rejects only speculative requests while preserving analysis and foreground consumers', async () => {
   const originalWorker = globalThis.Worker;
   globalThis.Worker = FakeWorker;
   try {
     const client = new StructureWorkerClient();
-    const background = client.frame(5, { background: true, reportProgress: false });
+    const background = client.frame(5, { background: true, reportProgress: false, speculative: true });
     const foreground = client.frame(90);
+    const analysis = client.frame(12, { background: true, reportProgress: false });
     const cancelled = assert.rejects(background, { name: 'AbortError' });
     client.cancelPrefetch();
     await cancelled;
-    assert.equal(client.pending.size, 1);
+    assert.equal(client.pending.size, 2);
     assert.ok(client.worker.messages.some(message => message.type === 'cancel-frame' && message.payload.id === 1));
     client.handleMessage({ id: 2, ok: true, result: { index: 90 } });
     assert.deepEqual(await foreground, { index: 90 });
+    client.handleMessage({ id: 3, ok: true, result: { index: 12 } });
+    assert.deepEqual(await analysis, { index: 12 });
     client.close();
   } finally { globalThis.Worker = originalWorker; }
 });
@@ -247,6 +250,100 @@ test('cancelling an index-completion wait detaches the subscriber while source i
     const next = client.frame(0);
     client.handleMessage({ id: 2, ok: true, result: { index: 0 } });
     assert.deepEqual(await next, { index: 0 });
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
+});
+
+test('same-frame consumers promote one Worker request and cancel independently without cancelling a time series', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const progress = [], client = new StructureWorkerClient(message => progress.push(message));
+    const prefetchController = new AbortController(), navigationController = new AbortController();
+    const prefetch = client.frame(7, { reportProgress: false, speculative: true, signal: prefetchController.signal });
+    const series = client.frame(7, { reportProgress: false });
+    const navigation = client.frame(7, { signal: navigationController.signal });
+    assert.equal(client.worker.messages.filter(message => message.type === 'frame').length, 1);
+    assert.deepEqual(client.worker.messages.at(-1), { type: 'promote-frame', payload: { id: 1 } });
+    const cancelled = Promise.all([assert.rejects(prefetch, { name: 'AbortError' }), assert.rejects(navigation, { name: 'AbortError' })]);
+    client.cancelPrefetch(); navigationController.abort();
+    await cancelled;
+    assert.equal(client.worker.messages.filter(message => message.type === 'cancel-frame').length, 0);
+    assert.equal(client.pending.size, 1);
+    client.handleMessage({ id: 1, event: 'progress', stage: 'sequence-unwrap', loaded: 1, total: 2 });
+    assert.equal(progress.length, 1);
+    const result = { frame: { positions: new Float64Array([1, 2, 3]) }, index: 7 };
+    client.handleMessage({ id: 1, ok: true, result });
+    assert.equal(await series, result);
+    assert.equal(client.frameRequests.entries.size, 0);
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
+});
+
+test('frame identities include source and processing settings while equivalent option order shares a parse', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const client = new StructureWorkerClient();
+    const first = client.frame(2, { trajectory: { smoothing: 3, inferredUnwrap: true } });
+    const same = client.frame(2, { trajectory: { inferredUnwrap: true, smoothing: 3 } });
+    const different = client.frame(2, { trajectory: { smoothing: 5, inferredUnwrap: true } });
+    assert.equal(client.worker.messages.filter(message => message.type === 'frame').length, 2);
+    const rejected = Promise.all([assert.rejects(first, { name: 'AbortError' }), assert.rejects(same, { name: 'AbortError' }), assert.rejects(different, { name: 'AbortError' })]);
+    const loaded = client.load(new File(['xyz'], 'new.xyz'));
+    await rejected;
+    const fresh = client.frame(2, { trajectory: { smoothing: 3, inferredUnwrap: true } });
+    const id = client.worker.messages.at(-1).id;
+    client.handleMessage({ id: 1, ok: true, result: { source: 'stale' } });
+    assert.equal(client.frameRequests.entries.size, 1);
+    client.handleMessage({ id, ok: true, result: { source: 'fresh' } });
+    assert.deepEqual(await fresh, { source: 'fresh' });
+    client.handleMessage({ id: client.loadId, ok: true, result: {} }); await loaded;
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
+});
+
+test('the last cancelling frame consumer sends exactly one parser cancel and late replies stay obsolete', async () => {
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const client = new StructureWorkerClient(), one = new AbortController(), two = new AbortController();
+    const first = client.frame(2, { signal: one.signal });
+    const second = client.frame(2, { signal: two.signal });
+    const rejected = Promise.all([assert.rejects(first, { name: 'AbortError' }), assert.rejects(second, { name: 'AbortError' })]);
+    one.abort(); assert.equal(client.pending.size, 1);
+    two.abort(); await rejected;
+    assert.equal(client.worker.messages.filter(message => message.type === 'cancel-frame').length, 1);
+    const retry = client.frame(2);
+    client.handleMessage({ id: 1, ok: true, result: { old: true } });
+    assert.equal(client.pending.size, 1);
+    client.handleMessage({ id: 2, ok: true, result: { new: true } });
+    assert.deepEqual(await retry, { new: true });
+    client.close();
+  } finally { globalThis.Worker = originalWorker; }
+});
+
+test('a foreground join promotes an already queued physical-replication dependency without restarting it', async () => {
+  const { CpuBudget } = await import('../src/analysis/cpu-budget.js');
+  const originalWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    const budget = new CpuBudget({ environment: { navigator: { hardwareConcurrency: 3 } } });
+    const occupied = await budget.acquire(1), unrelated = budget.acquire(1, { priority: -10 });
+    const client = new StructureWorkerClient(() => {}, { cpuBudget: budget });
+    const owner = new AbortController();
+    const replication = client.replicate({}, [2, 1, 1], { background: true, signal: owner.signal });
+    assert.equal(budget.queue[0].priority, -10);
+    client.promoteReplication(owner.signal);
+    assert.equal(budget.queue[0].priority, 20);
+    occupied.release(); await new Promise(resolve => setImmediate(resolve));
+    const worker = client.replicationWorker;
+    assert.equal(worker.messages.filter(message => message.type === 'replicate').length, 1);
+    client.handleMessage({ id: worker.messages[0].id, ok: true, result: { frame: { atoms: 2 } } }, worker);
+    assert.deepEqual(await replication, { atoms: 2 });
+    assert.equal(client.replicationPreparations.size, 0);
+    (await unrelated).release();
+    assert.equal(budget.active, 0);
     client.close();
   } finally { globalThis.Worker = originalWorker; }
 });

@@ -139,3 +139,57 @@ test('closing while a foreground parser awaits CPU capacity cancels cleanly with
   occupied.release();
   assert.equal(budget.active, 0);
 });
+
+test('a queued background frame promoted for display uses the foreground lane without duplicate parsing', async () => {
+  const { pool, workers } = fixture({ backgroundCount: 1 });
+  const first = pool.parse({ index: 1 }, { background: true });
+  const controller = new AbortController();
+  const needed = pool.parse({ index: 2 }, { background: true, signal: controller.signal });
+  await tick(); assert.equal(workers.length, 1);
+  pool.promote(controller.signal); await tick();
+  assert.equal(workers.length, 2);
+  assert.equal(workers[1].messages[0].descriptor.index, 2);
+  workers[1].complete({ selected: 2 });
+  assert.deepEqual(await needed, { selected: 2 });
+  workers[0].complete(); await first;
+  assert.equal(workers.reduce((count, worker) => count + worker.messages.filter(message => message.descriptor?.index === 2).length, 0), 1);
+  pool.close();
+});
+
+test('promotion elevates a pending parser CPU lease ahead of unrelated prewarming and keeps its Worker reusable', async () => {
+  const budget = new CpuBudget({ environment: { navigator: { hardwareConcurrency: 3 } } });
+  const occupied = await budget.acquire(1);
+  const { pool, workers } = fixture({ backgroundCount: 1,
+    acquire: ({ signal, priority }) => budget.acquire(1, { signal, priority }),
+    promote: ({ signal, priority }) => budget.promote(signal, priority) });
+  const unrelated = budget.acquire(1, { priority: -10 });
+  const controller = new AbortController();
+  const needed = pool.parse({ index: 9 }, { background: true, signal: controller.signal });
+  await tick(); assert.equal(budget.queue[0].priority, -10);
+  pool.promote(controller.signal);
+  assert.equal(budget.queue[0].priority, 20);
+  occupied.release(); await tick();
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].messages[0].descriptor.index, 9);
+  workers[0].complete({ selected: 9 });
+  assert.deepEqual(await needed, { selected: 9 });
+  (await unrelated).release();
+  assert.equal(budget.active, 0);
+  pool.close();
+});
+
+test('smoothing reads created after promotion keep foreground CPU priority in parallel background lanes', async () => {
+  const admissions = [];
+  const { pool, workers } = fixture({ acquire: options => { admissions.push(options); return { release() {} }; } });
+  const owner = new AbortController();
+  pool.promote(owner.signal);
+  const first = pool.parse({ index: 3 }, { background: true, signal: owner.signal, priority: -20 });
+  const second = pool.parse({ index: 4 }, { background: true, signal: owner.signal, priority: -20 });
+  await tick();
+  assert.equal(workers.length, 2, 'read-ahead retains parallel parser lanes');
+  assert.deepEqual(admissions.map(({ background, priority }) => ({ background, priority })), [
+    { background: true, priority: 20 }, { background: true, priority: 20 },
+  ]);
+  workers[0].complete(); workers[1].complete();
+  await Promise.all([first, second]); pool.close();
+});

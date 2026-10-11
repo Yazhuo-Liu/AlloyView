@@ -29,19 +29,44 @@ function forEachAtom(map, key, visit) {
   else if (found) for (const index of found) visit(index);
 }
 
+/** Resolve the independently versioned radius layer without building colors or
+ * visibility. The caller owns the defaults and keeps the returned array until
+ * a frame/type/ID/radius style changes. */
+export function resolveAppearanceRadii(frame, appearance = {}, baseRadii = radiiByType(frame)) {
+  const elements = new Map((appearance.elements ?? []).filter(entry => entry.radius != null).map(entry => [entry.label, entry.radius]));
+  const atoms = (appearance.atoms ?? []).filter(entry => entry.radius != null);
+  if (!elements.size && !atoms.length) return baseRadii;
+  const radii = baseRadii.slice(), byType = frame.typeLabels.map(label => elements.get(label));
+  if (byType.some(radius => radius != null)) for (let index = 0; index < frame.types.length; index++) {
+    const radius = byType[frame.types[index]];
+    if (radius != null) radii[index] = radius;
+  }
+  if (atoms.length) {
+    const byId = indicesById(frame.ids);
+    for (const { id, radius } of atoms) forEachAtom(byId, String(id), index => { radii[index] = radius; });
+  }
+  return radii;
+}
+
 /** Display overrides are keyed by stable labels/IDs, independent of atom order.
  * Precedence is atom > selection group > element for color, atom > element
  * for radius, and any of them can hide an atom. Element styles are resolved
  * per type; atom and group overrides touch only the atoms they name, so the
  * common case without overrides never converts every atom ID to a string. */
-export function applyAppearance(frame, colors, visibility, appearance = {}, { elementColors = true, selectionGroups = [], trackColorOverrides = false } = {}) {
+export function applyAppearance(frame, colors, visibility, appearance = {}, { elementColors = true, selectionGroups = [], trackColorOverrides = false, baseRadii = null, identity = false, resolveRadii = true } = {}) {
   const elements = new Map((appearance.elements ?? []).map(entry => [entry.label, entry]));
   const atoms = new Map((appearance.atoms ?? []).map(entry => [String(entry.id), entry]));
   const groups = selectionGroupStyles(selectionGroups);
+  // The display controller owns immutable defaults. With no styles there is
+  // nothing to resolve: retain its palette/mask/radius references verbatim.
+  if (identity && !elements.size && !atoms.size && !groups.size) {
+    return { colors, visibility, radii: baseRadii ?? radiiByType(frame), ...(trackColorOverrides ? { colorOverrides: null } : {}) };
+  }
   const outputColors = colors.slice();
   const colorOverrides = trackColorOverrides ? new Uint8Array(frame.ids.length) : null;
   const outputVisibility = visibility?.slice() ?? new Uint8Array(frame.ids.length).fill(255);
-  const radii = radiiByType(frame);
+  const hasRadiusOverrides = resolveRadii && [...elements.values(), ...atoms.values()].some(style => style.radius != null);
+  const radii = baseRadii ? (hasRadiusOverrides ? baseRadii.slice() : baseRadii) : radiiByType(frame);
   const typeStyles = frame.typeLabels.map(label => elements.get(label));
   const typeColors = typeStyles.map(style => elementColors && style?.color ? hexColor(style.color) : null);
   if (typeStyles.some((style, type) => typeColors[type] || style?.radius != null || style?.visible === false)) {
@@ -50,7 +75,7 @@ export function applyAppearance(frame, colors, visibility, appearance = {}, { el
       if (!style) continue;
       const rgb = typeColors[type];
       if (rgb) { outputColors[index * 3] = rgb[0]; outputColors[index * 3 + 1] = rgb[1]; outputColors[index * 3 + 2] = rgb[2]; if (colorOverrides) colorOverrides[index] = 255; }
-      if (style.radius != null) radii[index] = style.radius;
+      if (resolveRadii && style.radius != null) radii[index] = style.radius;
       if (style.visible === false) outputVisibility[index] = 0;
     }
   }
@@ -65,7 +90,7 @@ export function applyAppearance(frame, colors, visibility, appearance = {}, { el
       const rgb = atom.color ? hexColor(atom.color) : null;
       forEachAtom(byId, key, index => {
         if (rgb) { outputColors[index * 3] = rgb[0]; outputColors[index * 3 + 1] = rgb[1]; outputColors[index * 3 + 2] = rgb[2]; if (colorOverrides) colorOverrides[index] = 255; }
-        if (atom.radius != null) radii[index] = atom.radius;
+        if (resolveRadii && atom.radius != null) radii[index] = atom.radius;
         if (atom.visible === false) outputVisibility[index] = 0;
       });
     }

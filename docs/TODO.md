@@ -1,6 +1,6 @@
 # Improvement backlog
 
-Last updated: 2026-10-10. Audited commit: `dbe6055`.
+Last updated: 2026-10-11 (UTC). Audited commit: `dbe6055`.
 
 The feature plan is complete, so this backlog now tracks defects and
 performance work only. Earlier backlog items (P1–P18, O1–O16, A1–A9,
@@ -68,35 +68,23 @@ The items with the best return, drawn from all parts below:
 
 | Order | Item | What it gives | Effort |
 | --- | --- | --- | --- |
-| 1 | C1 | Fast CPU analyses run 2–3× faster in the application; fewer layouts during every analysis | S |
-| 2 | S2, S3 | Frame-change long task −50–60% (857 → 418 ms at 1M atoms) | S–M |
-| 3 | C2 | Large structures keep their Workers (1M-atom PTM: about 5 s instead of about 80 s on Firefox/Safari) | S |
-| 4 | R1 | Frames with bonds 2.4–2.7× faster, pixels unchanged | S |
-| 5 | C3, C4, C5 | Bond statistics, CSP, RDF, frame strain and displacement 2–6× faster at 1M atoms | S |
-| 6 | T1, T5 | Prefetch fills the cache; stepping 1.66× faster at 1M atoms; fixes B12 | S + M |
-| 7 | C9 | PTM, CNA, CSP and bonds about 2× faster on BCC, 1.1–1.4× on FCC | M |
-| 8 | S1, S4 | Cold start transfers 0.9 MB instead of 11.5 MB; revisits skip 200 conditional requests | S |
-| 9 | R2, R3, R4 | Orientation colors 9× faster; frame commit and picking 3–5× faster at 1M atoms | S |
+| 1 | R1 | Frames with bonds 2.4–2.7× faster, pixels unchanged | S |
+| 2 | C4, C5 | Less per-neighbor allocation and duplicate work in frame strain and displacement | S |
+| 3 | T1 | Prefetch fills the cache and overlaps playback preparation | S |
+| 4 | C9 | PTM, CNA, CSP and bonds about 2× faster on BCC, 1.1–1.4× on FCC | M |
+| 5 | S1, S4 | Cold start transfers 0.9 MB instead of 11.5 MB; revisits skip 200 conditional requests | S |
+| 6 | R2, R3, R4 | Orientation colors 9× faster; frame commit and picking 3–5× faster at 1M atoms | S |
+
+C1–C3, S2/S3 and T5 have moved to the feature documentation and the dated
+[validation record](VALIDATION.md). Remaining timing estimates above retain
+the original audit's scope; they are not measurements of these completed fixes.
 
 ## Part 1: defects
 
-Fix these before performance work. B1–B6 and B10 were fixed on 2026-10-10,
-and G1 was done with them
-(see `docs/VALIDATION.md`); their numbers are not reused.
-
-### B7. Time series mix values computed with different analysis settings
-
-**Severity:** medium-high (inconsistent CSV with no marker). **Effort:** S.
-
-- **Where:** `src/global-attributes.js` builds a property's signature from
-  `analysisKind` and `analysisKey`; coordination, bonds, frame strain, local
-  shear and displacement properties carry no `analysisKey`.
-- **Evidence [M]:** `bugs/C-labels-ao-export/t14-series-settings-change.mjs`:
-  with cutoff 3 Å, `Mean.coordination` is 12 on frames 1–3; after changing the
-  cutoff to 4.2 Å on frame 3 the CSV reads 12, 12, 18. The CNA column in the
-  same run correctly drops its old points.
-- **Fix:** set `analysisKey` (the parameter key already used for caching) on
-  every analysis property, and refuse an empty key for analysis kinds.
+Fix these before performance work. B1–B6 and B10, and G1, were completed
+on 2026-10-10. B7, B11 and B12/T5, and C1–C3 and S2/S3, were completed
+on 2026-10-11; B2 rollback was also rechecked. See the process and validation
+record in [VALIDATION.md](VALIDATION.md). Completed labels are not reused.
 
 ### B8. Surface mesh caps are open or wrong when atoms lie exactly on a cell face
 
@@ -132,35 +120,6 @@ and G1 was done with them
 - **Fix:** when the Worker is terminated for one task, redispatch the other
   queued tasks on a new Worker; in the surface tool, tell a foreign abort from
   its own and requeue or reset.
-
-### B11. A validation error from one analysis terminates the warm Worker pool
-
-**Severity:** medium (results stay correct; prewarming is undone).
-**Effort:** S.
-
-- **Where:** `src/analysis/analysis-pool.js` `finish()`: any error, including a
-  controlled `{ ok: false }` reply, terminates the Worker.
-- **Evidence [M]:** `cpu/error-kills-pool.mjs`: PTM on the HEA example, then
-  RDF (which fails with "Normalized RDF requires periodic boundaries…"). The
-  pool goes from 8 Workers to 0, and the next PTM needs 8 kernel
-  initializations: 521 ms instead of 312 ms. Every Worker-side validation
-  message does this. With WebGPU on, a GPU validation error becomes a CPU
-  fallback that then fails in every Worker.
-- **Fix:** terminate only on `error`/`messageerror` events, on close, or when
-  the Worker flags a fatal failure. Run cheap preconditions once on the main
-  thread, and do not fall back to the CPU for validation errors.
-
-### B12. Navigation aborts unrelated background frame reads
-
-**Severity:** medium. **Effort:** fixed by T5.
-
-- **Evidence [M]:** `io/b-series.mjs data/fe120k_30.dump --nogpu --interrupt`:
-  one "next frame" click during Time series **Read file values** ends the
-  collection silently ("Partial … 18 missing"), with no error and no retry.
-  Binning trajectory averages, the strain reference and GPU prefetch use the
-  same background path.
-- **Cause:** one shared controller and a blanket "abort every background
-  request" on each frame change. See T5 for the fix.
 
 ### B13. Time series keep a stale last frame and lose settings in configurations
 
@@ -315,73 +274,6 @@ copies (may be by design; B35 is its visible consequence).
 
 ## Part 2: performance, phase 1 (small changes)
 
-### C1. Coalesce analysis progress updates
-
-**Effort:** S. **Deployments:** all CPU paths.
-
-- **Where:** `src/analysis/status.js` (`toLocaleString('en-US')` twice per
-  event), every progress caller in `src/app.js` and the tool modules, the
-  event sources in `analysis-pool.js` and `workers/analysis-worker.js`.
-- **Evidence [M]:** `toLocaleString` costs 29.7 µs per call against 0.92 µs for
-  a cached `Intl.NumberFormat` with identical text. A chunk produces about 7
-  events: 1,681 for CSP at 120k atoms, up to 8,800 at 1M. Because chunks are
-  dispatched from the main thread, Workers wait while it formats stale text.
-  `cpu/progress-ab.mjs`, 120k, 30 Workers: CSP 68 ms with a no-op handler,
-  191 ms with text per event, 73 ms throttled to 20 Hz; local shear
-  170 / 525 / 174 ms. In the browser each event also costs a layout: PTM at
-  120k spends 84–162 ms formatting and 209–227 ms in 48–52 layouts.
-- **Change:** one module-level number formatter; keep only the latest progress
-  and write it at most once per animation frame, always passing phase changes
-  and the final event; make the Worker's 80 ms throttle span chunks.
-- **Gain:** fast analyses at 120k become 2–3× faster in the application.
-- **Verify:** `progress-ab.mjs`; old and new text equal for a list of values.
-
-### C2. Worker-count policy collapses to one Worker
-
-**Effort:** S (cliff and budget), M (nonisolated residency).
-**Deployments:** all; worst on Firefox/Safari and nonisolated hosts.
-
-- **Where:** `src/analysis/analysis-pool.js` `chooseWorkerCount` and its
-  callers.
-- **Evidence [M]:** `cpu/worker-counts.mjs`, limit 30. PTM gets 30 Workers at
-  120k atoms and 20 at 1M in isolated Chrome, but 1 Worker at 2M. Without
-  `performance.memory` (Firefox, Safari) isolated PTM gets 13 at 120k and 1 at
-  1M. Nonisolated CNA gets 30 → 4 → 2 → 1 from 120k to 4M. One Worker at 1M
-  PTM means about 80 s instead of about 5 s.
-- **Cause:** the count-independent `sharedBytes` sits inside the loop
-  condition, so once it alone exceeds the budget the count falls to 1 although
-  fewer Workers save nothing. The budget is a fixed 256 MiB without
-  `performance.memory`. PTM charges a 16 MiB initial heap per Worker, and
-  nonisolated Workers are charged two resident frames plus a second wrapped
-  coordinate copy.
-- **Change:** `count = min(limit, ceil(N / target), floor(budget / perWorker))`,
-  with shared bytes deciding only whether to warn or refuse. Derive the budget
-  from the larger of 256 MiB, 15% of the heap limit, a share of
-  `navigator.deviceMemory` and a per-core amount (constants are the owner's
-  call). Nonisolated: keep one resident frame when two would reduce the count,
-  and wrap the private copy in place.
-- **Gain [E]:** isolated Firefox/Safari PTM at 1M goes from 1 to 15–30
-  Workers; nonisolated Chrome CNA at 1M from 4 to about 14.
-- **Verify:** `worker-counts.mjs` as a unit-test table; peak memory at 1M and
-  4M in Chrome and Firefox.
-
-### C3. Validate inputs once per frame, not once per chunk
-
-**Effort:** S. **Deployments:** all CPU paths.
-
-- **Where:** `bond-statistics.js` (`types.some`), `centrosymmetry.js`
-  (`structureInput.some`), `rdf.js` (`rdfNormalization`), `displacement.js`
-  (mapping scan).
-- **Evidence [M]:** `cpu/hoist-ab.mjs`, 1M atoms, 471 chunks: bond statistics
-  spends 14.0 ms per chunk in validation, 6.6 s of Worker CPU against a 6.4 s
-  kernel; CSP auto with CNA input 12.6 ms per chunk; RDF 3.2 ms. The cost grows
-  as N² because chunk count and scan length both grow with N.
-- **Change:** validate once per resident frame and input set (the Worker
-  already caches inputs per analysis); compute the RDF normalization once on
-  the main thread.
-- **Gain (verified, pool, 1M, with C9):** bond statistics 800 → 277 ms, CSP
-  auto with input 798 → 328 ms, RDF 1,052 → 630 ms.
-
 ### C4. Reference-frame strain: remove per-neighbor allocation
 
 **Effort:** S. **Deployments:** hosts without WebGPU and CPU fallback.
@@ -425,7 +317,7 @@ every cutoff edit.
 - **Change (kernel verified):** scan for duplicate bins only when a periodic
   axis has fewer than 3 bins, rebuild the bin list only when the atom's bin
   changes, inline the minimum-image test; lower the target to 8,192–16,384
-  atoms per Worker after C2.
+  atoms per Worker using the completed C2 memory admission.
 - **Gain:** kernel 3.91 → 2.26 µs per atom; pool 120k 180 → 112 ms, about
   40–50 ms with 12 or more Workers [E].
 
@@ -491,8 +383,8 @@ GPU kernels).
   and go straight to the CPU until they change. Pin the backend within one
   batch or time series, because backends agree only within documented
   tolerances.
-- **Note:** the CPU columns will move after C3–C6 and C9; re-measure before
-  fixing thresholds.
+- **Note:** these are pre-fix audit CPU timings. C3 is complete, and C4–C6
+  and C9 remain; re-measure before fixing thresholds.
 
 ### T1. Restart frame prefetch when indexing completes
 
@@ -659,43 +551,6 @@ GPU kernels).
 - **Gain (prototype):** transfer 11,460 → 901 KB; about 40 MB less decoded
   bitmap memory [E].
 
-### S2. Coalesce the color, legend and radius refresh on a frame change
-
-**Effort:** S–M. **Deployments:** all.
-
-- **Where:** `src/app.js` `displayFrame`, the cached-result paths of
-  `runStructureAnalysis` and `runCoordination`, every tool's
-  `onResultsChange`; `src/dxa-tools.js` `clearNetwork` (it triggers a refresh
-  even when DXA is off, so a frame change with no analyses recolors twice).
-- **Evidence [M]:** a frame change with four cached analyses calls
-  `applyColors` 5 times, builds the palette and legend 6 times, runs
-  `refreshColorOptions` and `updateVectors` 9 times and uploads radii 6 times:
-  a 230–277 ms long task at 120k atoms and 847–900 ms at 1M (74 MB of GL
-  uploads).
-- **Change:** `requestDisplayRefresh` with dirty flags. `displayFrame` opens a
-  batch and flushes once; asynchronous completions flush once per animation
-  frame; exports and `analysesSettled` force a flush. Then attach cached
-  results before the first palette so `setFrame` uploads final colors.
-- **Gain (prototype, final state identical in 6 of 6 runs):** long task
-  217 → 84 ms at 120k and 857 → 418 ms at 1M.
-- **Verify:** hashes of the color, visibility and radius buffers and the
-  legend markup against the current build; `test:browser`,
-  `test:browser:initial-colors`, `test:browser:legend-preview`.
-
-### S3. One appearance pass per refresh, and skip unchanged radius uploads
-
-**Effort:** S. **Deployments:** all.
-
-- **Evidence [M]:** `applyAppearance` (`src/appearance.js`) always copies
-  colors, allocates a visibility mask and rebuilds radii, and is called three
-  times per `applyColors`: 28–36 ms at 1M with no overrides, including a
-  3.85 MB radius upload. `updateVectors` rebuilds three selects and
-  regex-normalizes every property name on each refresh (22–29 ms per frame
-  change).
-- **Change:** resolve once per refresh, with an identity fast path when there
-  are no element, atom or group styles; a radius revision so unchanged radii
-  are not uploaded; memoize normalized property names.
-
 ### S4. Cache content-hashed assets as immutable
 
 **Effort:** S (deployment configuration). **Deployments:** production.
@@ -756,28 +611,6 @@ its WebGPU kernel is turned on.
   write faces into growable typed buffers; return index IDs plus a table of
   unique labels and expand lazily.
 - **Gain [E]:** 30–35% of kernel CPU and 0.2–0.4 s of main-thread time at 1M.
-
-### T5. Shared in-flight frame requests
-
-**Effort:** M. **Deployments:** all. Fixes B12.
-
-- **Where:** `src/app.js` (`cancelFramePrefetch`, pending-request reuse,
-  idle-callback restart), `src/worker-client.js`,
-  `src/workers/structure-worker.js`, `src/data/frame-parser-pool.js`.
-- **Evidence [M]:** `io/b-eager.mjs`. Stepping a 1M-atom trajectory every
-  0.7 s makes 17 frame requests for 8 frames; 8 are aborted and 3.1 s of
-  in-flight parsing is discarded. With back-to-back steps (frame ZIP, movie,
-  Visit frames) every request is a serial foreground parse while four
-  background parsers idle. A 24-frame ZIP at 60k makes 93 requests, 53
-  aborted. Playback itself is a fixed 1 s timer started after each display.
-- **Change (prototype, `io/patched-app.js`):** one shared request per frame
-  index that consumers join; a foreground join promotes it; a frame change
-  aborts only prefetch-owned requests outside the new window; sequential steps
-  start the lanes at once.
-- **Gain (prototype, includes T1):** 1M, 8 back-to-back steps 6,551 → 3,941 ms;
-  60k, 24 steps 2,178 → 1,321 ms; the ZIP makes no extra request.
-- **Risks:** up to about 8 requests briefly in flight; stale-source handling
-  must stay on the source version and processing revision.
 
 ### T6. Header-only frame reads for time series
 
@@ -853,7 +686,8 @@ its WebGPU kernel is turned on.
   loop and ship them with the frame; bounds, legend and type controls read the
   summary; copy coordinates once per frame for nonisolated Workers. Recompute
   after smoothing and replication.
-- **Gain [E]:** 150–250 ms per frame at 1M. Combine with S2, S3 and R3.
+- **Gain [E]:** 150–250 ms per frame at 1M in the original audit. Re-measure
+  after the completed S2/S3 batching and combine with remaining R3 work.
 
 ### S5. Bundle the page and each Worker entry
 
@@ -955,7 +789,8 @@ GPUs; none where `EXT_conservative_depth` is missing.
 - **Evidence [M]:** with the layer present at 963,664 atoms, `setVisibility`
   goes from 0.3 to 28.6 ms and from 0.9 to 15.6 MB uploaded; `setFrame` from
   113 to 236 ms and from 29.4 to 62.5 MB. This is paid even when no bond or
-  arrow is drawn, and it multiplies with the repeated refreshes of S2.
+  arrow is drawn. The audit's repeated-refresh cost is reduced by completed
+  S2 batching, but the per-upload texture cost remains.
 - **Change:** setters only mark data dirty; the layer flushes when it is about
   to draw visible bonds or arrows; allocate CPU mirrors lazily; move
   visibility into its own one-byte texture.

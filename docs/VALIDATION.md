@@ -1,6 +1,215 @@
 # Validation record
 
-Latest validation: 2026-10-10 (America/New_York, EDT). Earlier entries retain their own dates.
+Latest validation: 2026-10-11 (UTC). Earlier entries retain their own dates.
+
+## Audit fixes B7, B11, B12/T5, C1–C3 and S2/S3 (2026-10-11)
+
+Baseline: `d934309`, after fetching the remote and confirming there was no
+newer commit. The requested “B2/T5” was treated as B12/T5, which is the shared
+frame-reader defect linked to T5; the already completed B2 configuration
+rollback fix was also checked. This work changes scheduling, input ownership
+and display refreshes, and retains background preparation, Worker pools,
+Wasm heaps and GPU fallback policy.
+
+### Work process and decisions
+
+1. Read the audit and inspect each current publication, cancellation and
+   memory-admission path. Split independent changes into parameter identity,
+   Worker error handling, frame readers, memory admission, input preparation
+   and display batching; review their shared call sites together.
+2. Reproduce the inconsistent series with a real tool controller: at a 3 Å
+   bond cutoff the first points have coordination 12, while a later 4.2 Å
+   cutoff produces 18. Attach the cache's parameter key to every affected
+   property, rather than a frame-specific key. Verify that the new setting
+   removes the old points, and the same setting on another frame retains
+   them. Extend this identity through computed-property dependencies and
+   imported columns; flatten and deduplicate recipe dependencies to avoid
+   exponentially growing keys.
+3. Separate a controlled negative Worker reply from a damaged Worker. Add
+   cheap public preconditions, preserve input-validation classification
+   through the GPU Worker/client, and acknowledge the actual resident cache
+   and native heap after a scientific error. Real two-Worker tests then fail
+   a Voronoi calculation and retry PTM with zero kernel initializations.
+   Fatal replies and transport failures still replace the affected Worker.
+4. Introduce independently owned subscribers for raw parsing and processed
+   frame requests. Key sharing by source and processing revision, including
+   trajectory settings and physical replication. Promote foreground joins,
+   keep useful speculative reads in the next window, and stop the underlying
+   operation only when its last reader leaves. Check the real parser CPU
+   priority and permit release, not only a mocked Promise.
+5. Split fixed and per-Worker memory estimates, use browser/core memory hints
+   and charge retained native heaps. Select one private resident frame when
+   a second would reduce parallelism. During independent review, an attempted
+   in-place periodic wrap was found to change a later Wigner–Seitz result:
+   unwrapped input must remain authoritative. Restrict coordinate reuse to
+   already normalized inputs and add a CNA → Wigner–Seitz regression with
+   changed current/reference cells.
+6. Move full-array validation into prepared resident contexts. Keep public
+   direct calls fully validated and reject forged contexts; source mutations
+   and parameter changes prepare again. Prepare RDF normalization from the
+   immutable pool snapshot once, not from an array that can change while a
+   Worker is running.
+7. Coalesce progress before text formatting, while keeping phase changes,
+   cancellation and completion live. Batch frame appearance/legend/vector
+   work, attach cached results before the initial upload, and force the queue
+   to flush before explicit captures and automation completion checks.
+   Compare appearance against the existing per-atom precedence rules and
+   exercise actual WebGL uploads.
+8. Run the complete tests and independent integration review. The first
+   complete run exposed a warmup subscriber that could remain pending when
+   its final memory-quota calculation threw. Ensure this error settles the
+   subscriber, account for already warmed slots and leave startup headroom
+   for native modules. Plan a coalesced warmup before changing its shared
+   session, so a new request that cannot fit leaves an earlier valid request
+   intact. A separate review reproduced cancellation from a
+   final deferred GPU progress callback after the result had arrived; check
+   cancellation again after flushing that callback. Add regressions for
+   both abort and pool close, and propagate progress-callback errors without
+   treating them as GPU device failures. The advanced-tools browser check also exposed
+   an imported-property rename whose new data preceded its selector update;
+   publish the displayed quantity and its renamed selection together before
+   awaiting attachment to other cached frames.
+9. Exercise real WebGPU application routing. Its first CSP result exposed
+   a status that said **Calculated** while the color legend was still queued.
+   Publish completion after the same display batch, with freshness guards,
+   instead of forcing a separate palette upload for every analysis result.
+   Also flush the restored display before publishing **Configuration restored**;
+   pending external quantities retain their saved selection, and completion
+   callbacks finish while the restoration still owns its freshness guard.
+   Extend the same completion boundary to bond statistics, Voronoi, clusters,
+   grain segmentation, Wigner–Seitz and DXA. Fresh and cached publications
+   wait for the display, and serial/source/frame/restore guards prevent a
+   cancelled or obsolete callback from marking a newer job complete.
+10. Continue the GPU application test through lattice-reference edits. The
+    scientific fit was reused correctly, but an older background warmup reply
+    removed the source descriptor of a posted PTM upload before that upload's
+    acknowledgement. Protect provisional descriptors held by a posted task;
+    only the owning acknowledgement establishes whether they are resident.
+    Keep failed/cancelled/source-invalidated uploads ineligible for reuse and
+    test the reply ordering without changing shader arithmetic. Also catch
+    progress-callback failures at the GPU message boundary: reject with the
+    original callback error, cancel the posted calculation and retain its
+    active slot until the Worker acknowledges cleanup. A queued independent
+    calculation then continues on the same Worker, without CPU fallback.
+
+### Durable behavior
+
+- **B7:** coordination, bonds, frame strain, local shear, displacement and
+  color tiles publish nonempty parameter identities. A missing identity
+  keeps ordinary coloring available but prevents global-attribute collection
+  and shows a recalculation/waiting reason. Expression identities include
+  upstream settings without including frame-specific array references.
+- **B11:** controlled scientific failures retain reusable CPU resources;
+  broken transport and fatal native/internal failures retire them. GPU input
+  validation is not retried on CPU. Device, allocation and supported-precision
+  failures retain the existing fallback behavior. A fatal Wasm error inside
+  GPU sparse CPU correction also replaces the GPU Worker and invalidates its
+  uploaded-input acknowledgements.
+  Older acknowledgements cannot discard provisional PTM/Cartesian descriptors
+  owned by a later posted task; an actual owning acknowledgement is still
+  required before any future upload may be omitted.
+- **B12/T5:** navigation cancels speculative ownership, rather than every
+  background reader. Foreground joins reuse in-flight work; time-series,
+  reference and trajectory-average readers keep their own cancellation.
+  Source and processing changes remain invalidation barriers. B2 rollback
+  continues to align the saved smoothing setting with the displayed frame.
+- **C1:** one cached number formatter, one newest browser progress update per
+  animation frame within a phase, an 80 ms background-tab fallback, and an
+  atom-progress clock spanning Worker chunks. Terminal progress callbacks
+  remain immediate; **Calculated** follows the display flush. Callback
+  failures still reject the analysis; close/abort removes pending updates.
+- **C2:** adaptive memory admission separates fixed allocations, retained
+  inputs/heaps and additional Worker costs. One- or two-frame private
+  residency is selected without discarding initialized native modules.
+  Module warmup reserves 1 MiB per cold module beyond its initial heap;
+  observed initialized heaps and already ready slots determine later quotas.
+- **C3:** bond-statistics types, Auto CSP labels and displacement mapping are
+  validated/prepared once per resident input set. RDF populations and
+  normalization are prepared once in the pool. `inputPreparations` provides
+  diagnostic evidence of reuse; private and shared paths agree with direct
+  kernels.
+- **S2/S3:** scientific properties publish synchronously while display flags
+  batch palette/legend/options/radii/vectors/statistics work. No-override
+  appearance returns the caller-owned arrays; unchanged radius styles skip
+  uploads; vector names and component descriptors are memoized with mutation
+  checks. Completion status follows its display batch. Captures and
+  `analysesSettled` flush pending display work.
+
+The durable descriptions are in [Performance](features/performance.md),
+[Time series](features/time-series.md), [Display](features/display.md) and the
+[user guide](USER_GUIDE.md). Audit prototype timing gains have not been
+substituted for measurements of this implementation.
+
+### Numerical and display checks
+
+With a fixed Worker count, prepared-input tests compare complete typed result
+arrays and statistics with the direct kernels in private and shared memory.
+Changing CPU admission can intentionally change the existing logical
+partition count for Float64 reductions. On a reproducible perturbed FCC
+fixture of 8,788 atoms, one versus three Workers gives element-wise identical
+Q4, Q6, coordination, bond-length/angle histograms and local-shear arrays.
+Bond-moment means differ by at most 1.43 × 10⁻¹³; moment `m2` relative
+differences are at most 6.13 × 10⁻¹³. Local-shear normalization differs by
+1.16 × 10⁻¹⁴. The regression allows 10⁻¹² relative error for those reductions
+on this fixture. This records existing floating-point grouping behavior; it
+does not implement Worker-count-independent moments (remaining item C11).
+
+Actual WebGL instrumentation in the initial-color suite verifies one
+`setFrame`, with no additional color or radius upload on first display.
+Changing coloring, legend ranges, revisiting frames and replaying a
+configuration do not upload unchanged radius data. The 20,000-atom legend
+suite verifies no per-atom upload during range dragging; committed atom and
+Voronoi pixels match exact rendering byte-for-byte. The existing scalar
+preview differs by at most one byte before the exact commit.
+
+The memory budget tests exercise missing heap/device hints and known small
+devices. They verify admission estimates and counts without allocating
+million-atom fixtures. They do not measure free RAM or claim a Firefox/Safari
+peak-memory result. `memoryEstimateBytes` covers the current task's fixed
+outputs, confirmed retained inputs/native heaps and estimated PTM capacity;
+concurrent tasks' future outputs have no global reservation, and further
+native heap growth is only confirmed after acknowledgement. No new hardware
+GPU speedup or million-atom wall-time improvement is claimed by this work.
+
+### Verification completed
+
+Node.js 24.19.0, headless Chromium and its SwiftShader fallback adapter were
+used in this environment. The final application checks ran the original
+scripts, including the previously failing completion and cache-reuse
+assertions. No GPU assertion was skipped to obtain a pass.
+
+| Command | Result |
+| --- | --- |
+| `npm test` | 1,819 passed; zero failures, cancellations or skipped tests |
+| `npm run build` | Static viewer and standalone documentation built successfully |
+| `node scripts/browser-gpu.mjs --application-only` | All 19 application scenarios passed on actual WebGPU with SwiftShader |
+| `npm run test:browser:advanced-tools` | Passed; restored external quantity selection, rename, replica attributes, camera controls and wrapped-copy analyses |
+| `npm run test:browser:initial-colors` | Passed; initial upload, cached radius data, coordinate/velocity coloring and configuration replay |
+| `npm run test:browser:legend-preview` | Passed; exact committed atom/Voronoi pixels, main/second-view synchronization and zero WebGL errors |
+| `npm run test:browser:trajectory-workers` | Passed; one shared parse, independent readers survive navigation and all 12 time-series points remain |
+| `npm run test:browser:trajectory-tools` | Passed in isolated and nonisolated modes; B2 rollback and foreground promotion |
+| `npm run test:browser:cpu-warmup` | Passed; retained pools grow from one ordinary Worker to 6/14 on 8/16 reported cores after replication |
+| `npm run test:browser:topology-tools` | Passed; bond statistics/Voronoi results, legend, cancellation, CSV and recipe replay |
+| `npm run test:browser:clusters` | Passed in isolated and nonisolated modes; per-atom arrays equal the direct kernel, including the 60,229-atom Fe loop and warm reruns |
+| `npm run test:browser:grains` | Passed in isolated and nonisolated modes; direct/PTM fixture parity, CSV/replay/coloring and a 259,808-atom physically replicated NiGB calculation with cancellation/retry |
+| `npm run test:browser:wigner-seitz` | Passed in isolated and nonisolated modes; 120,458-atom parallel result equals the CPU oracle, markers/CSV/replay remain correct |
+| `npm run test:browser:dxa` | Passed; native extraction, crystal legend, cancellation, configuration replay and automatic analysis after frame/replication changes |
+| Browser smoke, spatial-binning and expressions suites | Passed for the affected renderer and Worker paths |
+
+The GPU application check confirms that editing lattice references preserves
+both CPU fits (`freshFit=false`) and acknowledged GPU raw fits
+(`ptmInputReused=true`, `gpuPtmInputReused=true`), with zero error for this ideal
+strain fixture. Its CPU/GPU reference-strain difference is at most
+5.33 × 10⁻¹⁵ and displacement difference at most 3.61 × 10⁻¹⁶; arrows remain
+Float32 and magnitudes Float64. Cancellation, configuration replay, six-frame
+residency, physical replication from 32 to 64 and back to 32 atoms, source
+replacement and GPU teardown also pass. These are correctness/resource tests
+on a software adapter, not measurements of hardware GPU speed.
+
+The CPU warmup check retains the same modules and native heaps across source
+reloads and physical replication, and initializes no scientific results in
+the background. The changed source was frozen before the final build and
+browser runs; documentation-only edits were built and link-checked afterward.
 
 ## Defect fixes B1–B6 and B10, and Voronoi routing G1 (2026-10-10)
 

@@ -5,9 +5,22 @@ import { MAX_NEIGHBORS_PER_ATOM } from './bonds.js';
 // environments rather than silently sampling or truncating their statistics.
 export const MAX_BOND_STATISTICS_NEIGHBORS = 1024;
 export const MAX_BOND_STATISTICS_BINS = 4096;
+const preparedContexts = new WeakMap();
 
 /** Common CPU/GPU contract for a cutoff-defined, periodic bond environment. */
 export function validateBondStatisticsParameters(frame, {
+  cutoff, pairCutoffs = [], lengthBins = 100, angleBins = 180, ...range
+} = {}) {
+  const prepared = validateBondStatisticsSchema(frame, { cutoff, pairCutoffs, lengthBins, angleBins, ...range });
+  if (frame.types.some(type => !Number.isInteger(type) || type < 0)) {
+    throw new Error('Bond statistics require one nonnegative integer element type per atom.');
+  }
+  return prepared;
+}
+
+/** Constant-size transport/schema checks; element values are checked once
+ * when an immutable resident calculation context is prepared. */
+export function validateBondStatisticsSchema(frame, {
   cutoff, pairCutoffs = [], lengthBins = 100, angleBins = 180, ...range
 } = {}) {
   const atomCount = frame.fractional.length / 3;
@@ -16,8 +29,7 @@ export function validateBondStatisticsParameters(frame, {
   if (![lengthBins, angleBins].every(value => Number.isInteger(value) && value >= 1 && value <= MAX_BOND_STATISTICS_BINS)) {
     throw new Error(`Bond statistics require 1–${MAX_BOND_STATISTICS_BINS} bins per distribution.`);
   }
-  if (!ArrayBuffer.isView(frame.types) || frame.types.length !== atomCount
-      || frame.types.some(type => !Number.isInteger(type) || type < 0)) {
+  if (!ArrayBuffer.isView(frame.types) || frame.types instanceof DataView || frame.types.length !== atomCount) {
     throw new Error('Bond statistics require one nonnegative integer element type per atom.');
   }
   if (!Array.isArray(pairCutoffs)) throw new Error('Element-pair cutoffs must be an array.');
@@ -112,7 +124,24 @@ export function calculateBondStatisticsAtom(search, atom, prepared, output) {
  * remain authoritative; display replication and slices do not affect analysis. */
 export function calculateBondStatistics(frame, { onPhase = () => {}, onAtoms = () => {}, momentInput, ...parameters } = {}) {
   const startedAt = performance.now();
-  const prepared = validateBondStatisticsParameters(frame, parameters);
+  const result = calculatePreparedBondStatistics(prepareBondStatisticsContext(frame, parameters), { ...parameters, onPhase, onAtoms, momentInput });
+  return { ...result, elapsedMs: performance.now() - startedAt };
+}
+
+/** Contexts belong to one validated, immutable Worker input set. They are
+ * opaque so ordinary calculation options cannot bypass scientific checks. */
+export function prepareBondStatisticsContext(frame, parameters = {}) {
+  const context = Object.freeze({});
+  preparedContexts.set(context, { frame, prepared: validateBondStatisticsParameters(frame, parameters) });
+  return context;
+}
+
+export function calculatePreparedBondStatistics(context, { onPhase = () => {}, onAtoms = () => {}, momentInput, ...range } = {}) {
+  const startedAt = performance.now();
+  const retained = preparedContexts.get(context);
+  if (!retained) throw new Error('The prepared bond-statistics context is invalid.');
+  const { frame } = retained;
+  const prepared = { ...retained.prepared, ...atomRange(retained.prepared.atomCount, range) };
   const { startAtom, endAtom } = prepared;
   onPhase('indexing');
   const search = (frame.neighborSearch ?? new NeighborSearch(frame));

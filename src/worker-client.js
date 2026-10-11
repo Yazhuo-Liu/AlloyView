@@ -1,5 +1,6 @@
 import { normalizeLocalFiles } from './io/local-files.js';
 import { cpuWorkerLimit } from './analysis/cpu-budget.js';
+import { SharedFrameRequests } from './data/shared-frame-requests.js';
 
 const cancelled = () => new DOMException('Structure request cancelled.', 'AbortError');
 
@@ -15,6 +16,8 @@ export class StructureWorkerClient {
     this.loadId = null;
     this.sourceGeneration = 0;
     this.replicationControllers = new Set();
+    this.replicationPreparations = new Map();
+    this.frameRequests = new SharedFrameRequests();
     this.createWorker();
   }
 
@@ -39,7 +42,7 @@ export class StructureWorkerClient {
     this.attachWorker(this.worker);
   }
 
-  request(type, payload, { reportProgress = true, background = false, signal, worker, onProgress, lease } = {}) {
+  request(type, payload, { reportProgress = true, background = false, signal, worker, onProgress, lease, onDispatch } = {}) {
     if (signal?.aborted) { lease?.release(); return Promise.reject(cancelled()); }
     if (!worker && !this.worker) this.createWorker();
     const target = worker ?? this.worker;
@@ -60,13 +63,14 @@ export class StructureWorkerClient {
       };
       this.pending.set(id, pending);
       signal?.addEventListener?.('abort', pending.abort, { once: true });
-      try { target.postMessage({ id, type, payload }); }
+      try { onDispatch?.(id, pending); target.postMessage({ id, type, payload }); }
       catch (error) { this.pending.delete(id); this.cleanup(pending); reject(error); }
     });
   }
 
   load(input) {
     this.sourceGeneration++;
+    this.frameRequests.clear();
     for (const controller of this.replicationControllers) controller.abort();
     const files = normalizeLocalFiles(input);
     this.sourceInfo = null;
@@ -76,8 +80,29 @@ export class StructureWorkerClient {
       parserConcurrency: Math.max(1, Math.min(4, (this.cpuBudget?.limit ?? cpuWorkerLimit()) - 1)) });
   }
 
-  frame(index, { reportProgress = true, background = !reportProgress, signal, trajectory = null } = {}) {
-    return this.request('frame', { index, background, ...(trajectory ? { trajectory } : {}) }, { reportProgress, background, signal });
+  frame(index, { reportProgress = true, background = !reportProgress, speculative = false, signal, trajectory = null } = {}) {
+    // Normalize field order so equivalent trajectory processing options share
+    // a request even when they were constructed by different consumers.
+    const processing = trajectory ? Object.fromEntries(Object.entries(trajectory).sort(([first], [second]) => first.localeCompare(second))) : null;
+    const key = JSON.stringify([this.sourceGeneration, index, processing]);
+    return this.frameRequests.join(key, { signal, background, speculative }, entry => {
+      entry.index = index;
+      return this.request('frame', { index, background, ...(processing ? { trajectory: processing } : {}) }, {
+        reportProgress, background, signal: entry.controller.signal,
+        onDispatch: (id, pending) => {
+          entry.promote = () => {
+            pending.background = false; pending.reportProgress = true;
+            pending.worker.postMessage({ type: 'promote-frame', payload: { id } });
+          };
+        },
+      });
+    });
+  }
+
+  promoteFrame(index, trajectory = null) {
+    const processing = trajectory ? Object.fromEntries(Object.entries(trajectory).sort(([first], [second]) => first.localeCompare(second))) : null;
+    const entry = this.frameRequests.entries.get(JSON.stringify([this.sourceGeneration, index, processing]));
+    if (entry?.background) { entry.background = false; entry.promote?.(); }
   }
 
   /** Display-only unwrapped coordinates inferred for an already delivered frame. */
@@ -92,14 +117,16 @@ export class StructureWorkerClient {
   waitForIndex({ signal } = {}) { return this.request('index-complete', {}, { reportProgress: false, signal }); }
 
   cancelPrefetch() {
-    this.worker?.postMessage({ type: 'cancel-prefetch' });
-    for (const pending of [...this.pending.values()]) if (pending.background) pending.abort();
+    // Background analyses are consumers, not speculative prefetch. Their
+    // requests must survive navigation and another consumer's cancellation.
+    this.frameRequests.cancelSpeculative();
   }
 
   async replicate(frame, repetitions, { signal, onProgress, background = false } = {}) {
     const controller = new AbortController();
     const generation = this.sourceGeneration;
     this.replicationControllers.add(controller);
+    this.replicationPreparations.set(controller, signal);
     const abort = () => controller.abort();
     signal?.addEventListener?.('abort', abort, { once: true });
     if (signal?.aborted) controller.abort();
@@ -121,7 +148,17 @@ export class StructureWorkerClient {
     } finally {
       lease?.release();
       this.replicationControllers.delete(controller);
+      this.replicationPreparations.delete(controller);
       signal?.removeEventListener?.('abort', abort);
+    }
+  }
+
+  /** A foreground join may occur after parsing while physical copies are
+   * waiting for CPU capacity. Promote that same dependency, without making
+   * another expansion or replacing its retained replication Worker. */
+  promoteReplication(signal) {
+    for (const [controller, originalSignal] of this.replicationPreparations) {
+      if (originalSignal === signal) this.cpuBudget?.promote(controller.signal, 20);
     }
   }
 
@@ -153,6 +190,11 @@ export class StructureWorkerClient {
   }
 
   handleMessage(message, worker = this.worker) {
+    if (message.event === 'cpu-promote') {
+      const request = this.cpuLeases.get(message.leaseId);
+      if (request) this.cpuBudget?.promote(request.controller.signal, message.priority ?? 20);
+      return;
+    }
     if (message.event === 'cpu-acquire') {
       if (this.cpuBudget) void this.acquireCpu(message, worker);
       return;
@@ -185,8 +227,10 @@ export class StructureWorkerClient {
 
   reset() {
     this.sourceGeneration++;
+    this.frameRequests.clear();
     for (const controller of this.replicationControllers) controller.abort();
     this.replicationControllers.clear();
+    this.replicationPreparations.clear();
     this.worker?.terminate();
     this.replicationWorker?.terminate();
     this.worker = null;

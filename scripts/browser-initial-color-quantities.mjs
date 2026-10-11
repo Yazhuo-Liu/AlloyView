@@ -63,6 +63,8 @@ try {
     }
     await upload('#file-input', trajectory);
     await waitFor('initialColorChecks.renderer?.frame.ids.length===4 && document.getElementById("loading").hidden', 'Tilted trajectory load');
+    assert.deepEqual(await evaluate('initialColorChecks.uploads'), { frames: 1, colors: 0, radii: 0 },
+      'first palette/radii upload is final: no duplicate color or radius upload during frame setup');
     const options = await evaluate('initialColorChecks.options()');
     for (const axis of ['x', 'y', 'z']) {
       assert.ok(options.some(option => option.value === `builtin:position:${axis}`), `initial Position ${axis.toUpperCase()} choice`);
@@ -133,6 +135,7 @@ try {
     assert.deepEqual(await evaluate('initialColorChecks.lastCapture.data'), [Math.hypot(4, 4, 0), 2, 2, 3], 'PNG legend carries the selected physical speed');
     assert.equal(await evaluate('initialColorChecks.renderer.gl.getError()'), 0);
     assert.equal(await evaluate('initialColorChecks.renderer.frame.properties.some(property=>property.analysisKind==="vectors")'), false, 'coloring leaves imported properties untouched');
+    assert.equal(await evaluate('initialColorChecks.uploads.radii'), 0, 'color quantities, ranges and frame visits do not reupload unchanged radii');
 
     await upload('#file-input', plain);
     await waitFor('initialColorChecks.renderer.frame.ids.length===3 && document.getElementById("file-name").textContent==="positions-only.xyz" && document.getElementById("loading").hidden', 'Position-only XYZ load');
@@ -157,12 +160,19 @@ async function installChecks() {
   const [{ WebGLRenderer }, { colorsByProperty }] = await Promise.all([
     import(new URL('./render/webgl-renderer.js', app)), import(new URL('./render/palette.js', app)),
   ]);
-  const checks = window.initialColorChecks = {};
+  const checks = window.initialColorChecks = { uploads: { frames: 0, colors: 0, radii: 0 } };
   const setFrame = WebGLRenderer.prototype.setFrame, capture = WebGLRenderer.prototype.captureImage;
   WebGLRenderer.prototype.setFrame = function(...args) {
-    if (this.canvas.id === 'viewport') checks.renderer = this;
+    if (this.canvas.id === 'viewport') { checks.renderer = this; checks.uploads.frames++; }
     return setFrame.apply(this, args);
   };
+  for (const [method, counter] of [['setColors', 'colors'], ['setAtomRadii', 'radii']]) {
+    const original = WebGLRenderer.prototype[method];
+    WebGLRenderer.prototype[method] = function(...args) {
+      if (this.canvas.id === 'viewport') checks.uploads[counter]++;
+      return original.apply(this, args);
+    };
+  }
   WebGLRenderer.prototype.captureImage = function(options) {
     if (this.canvas.id === 'viewport') checks.lastCapture = { title: options?.legend?.title, data: Array.from(options?.legend?.property?.data ?? []) };
     return capture.call(this, options);

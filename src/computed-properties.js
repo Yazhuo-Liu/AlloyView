@@ -104,18 +104,21 @@ export function applyComputedProperties(frame, definitions, cache = new WeakMap(
       continue;
     }
     let bound;
-    try { bound = bindExpression(definition.parsed, createExpressionScope(frame, { properties: [...base, ...added] })); }
+    const sources = [...base, ...added];
+    try { bound = bindExpression(definition.parsed, createExpressionScope(frame, { properties: sources })); }
     catch (error) {
       if (!(error instanceof ExpressionError)) throw error;
       statuses.push({ name: definition.name, state: 'waiting', message: error.message });
       continue;
     }
+    const identity = computedAnalysisIdentity(definition, bound, [...sources, ...(frame.analysisOriginalProperties?.values() ?? [])]);
+    const { analysisKey } = identity;
     const previous = entries.get(definition.key);
-    let property = previous && previous.inputs.length === bound.inputs.length
+    let property = previous && previous.property.analysisKey === analysisKey && previous.inputs.length === bound.inputs.length
       && previous.inputs.every((input, index) => Object.is(input, bound.inputs[index])) ? previous.property : null;
     if (!property) {
       property = { name: definition.name, unit: definition.unit, data: evaluateExpression(bound),
-        analysisKind: COMPUTED_PROPERTY_KIND, expression: definition.expression };
+        analysisKind: COMPUTED_PROPERTY_KIND, ...identity, expression: definition.expression };
       entries.set(definition.key, { inputs: bound.inputs, property });
     }
     used.add(definition.key);
@@ -127,6 +130,28 @@ export function applyComputedProperties(frame, definitions, cache = new WeakMap(
   const changed = next.length !== frame.properties.length || next.some((property, index) => property !== frame.properties[index]);
   if (changed) frame.properties = next;
   return { changed, statuses };
+}
+
+/** Recipe and upstream settings identify an expression across frames. Array
+ * identities and frame-dependent scalar values deliberately do not enter the
+ * key: they refresh the value cache without discarding the trajectory. */
+function computedAnalysisIdentity(definition, bound, sources) {
+  const inputs = new Set(bound.inputs), dependencies = new Set();
+  for (const property of sources) {
+    if (!inputs.has(property.data)) continue;
+    if (property.externalImportId) dependencies.add(JSON.stringify([property.name, 'external', property.externalImportId]));
+    else if (property.analysisKind) {
+      if (typeof property.analysisKey !== 'string' || !property.analysisKey.trim()) return { analysisKey: null };
+      // Flatten upstream recipes instead of recursively embedding their keys:
+      // a chain that references several previous expressions remains bounded.
+      if (isComputedProperty(property) && property.analysisRecipeKey) {
+        dependencies.add(JSON.stringify([property.name, property.analysisKind, property.analysisRecipeKey]));
+        for (const dependency of property.analysisDependencies ?? []) dependencies.add(dependency);
+      } else dependencies.add(JSON.stringify([property.name, property.analysisKind, property.analysisKey]));
+    }
+  }
+  const analysisDependencies = [...dependencies].sort();
+  return { analysisKey: JSON.stringify([definition.key, analysisDependencies]), analysisRecipeKey: definition.key, analysisDependencies };
 }
 
 /** Remove computed columns, for example from cached frames after an edit. */

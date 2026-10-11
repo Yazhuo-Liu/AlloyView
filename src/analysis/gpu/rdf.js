@@ -3,6 +3,7 @@ import { MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { cellFaceHeights } from '../../data/model.js';
 import { makeNeighborShader } from './neighbors.js';
 import { GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
+import { validateAnalysisInput } from '../errors.js';
 
 const U32_MAX = 0xffff_ffff;
 const MAX_BATCH_ATOMS = 16_384;
@@ -62,8 +63,8 @@ struct RdfCorrections {
 
 export async function analyzeGpuRdf(runtime, frame, parameters, { signal, onProgress = () => {} } = {}) {
   const { cutoff: requestedCutoff, bins: requestedBins = 100, firstType: requestedFirst = null, secondType: requestedSecond = null } = parameters;
-  const normalization = rdfNormalization(frame, { cutoff: requestedCutoff, bins: requestedBins,
-    firstType: requestedFirst, secondType: requestedSecond });
+  const normalization = validateAnalysisInput(() => rdfNormalization(frame, { cutoff: requestedCutoff, bins: requestedBins,
+    firstType: requestedFirst, secondType: requestedSecond }));
   const count = frame.fractional.length / 3;
   const { cutoff, bins, firstType, secondType } = normalization;
   if ([firstType, secondType].some((type) => type !== null && type >= U32_MAX)

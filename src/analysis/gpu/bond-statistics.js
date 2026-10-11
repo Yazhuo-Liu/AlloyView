@@ -3,6 +3,7 @@ import { validateBondStatisticsParameters, createBondStatisticsAccumulators, cal
   addBondStatisticsSample, mergeBondStatisticsMoment, bondStatisticsHistogramBin, finalizeBondStatistics } from '../bond-statistics.js';
 import { prepareGpuBondParameters } from './bonds.js';
 import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
+import { validateAnalysisInput } from '../errors.js';
 import { BOND_STATISTICS_SHADER, BOND_STATISTICS_ATOM_WORDS, BOND_STATISTICS_CORRECTION_WORDS,
   BOND_STATISTICS_FLAG_PRECISION, BOND_STATISTICS_FLAG_NEIGHBORS, MAX_GPU_BOND_STATISTICS_NEIGHBORS } from './bond-statistics-shaders.js';
 
@@ -40,9 +41,9 @@ export function nextBondStatisticsBatch({ atoms, records, capacity, maximum, ove
  * pairs cross back; precision corrections never download a neighbor graph. */
 export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, { signal, onProgress = () => {} } = {}) {
   checkSignal(signal);
-  const prepared = validateBondStatisticsParameters(frame, parameters);
+  const prepared = validateAnalysisInput(() => validateBondStatisticsParameters(frame, parameters));
   // Reuse the Bonds numeric/type limits before sending settings to WGSL.
-  prepareGpuBondParameters(frame, parameters);
+  validateAnalysisInput(() => prepareGpuBondParameters(frame, parameters));
   const { startAtom, endAtom, cutoff, maximumCutoff, lengthBins, angleBins } = prepared;
   if (![cutoff, maximumCutoff].every(value => Number.isFinite(Math.fround(value)) && Math.fround(value) > 0)) {
     throw new GpuUnavailableError('The bond statistics cutoffs exceed GPU numeric precision.');

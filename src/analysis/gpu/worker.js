@@ -1,6 +1,8 @@
 import { GpuRuntime, checkSignal, GpuUnavailableError, EXACT_PAIR_ANALYSIS_KINDS } from './runtime.js';
 import { analyzeGpuCoordination } from './coordination.js';
 import { analyzeGpuRdf } from './rdf.js';
+import { validateAnalysisParameters } from '../analysis-validation.js';
+import { fatalAnalysisError } from '../errors.js';
 
 const runtime = new GpuRuntime();
 const controllers = new Map();
@@ -67,6 +69,10 @@ async function run(data, controller) {
       runtime.releaseVoronoi();
       self.postMessage({ id: data.id, ok: true, ...cacheState() });
       return;
+    }
+    if (data.type === 'analyze') {
+      const input = data.frame ?? frames.get(data.frameId);
+      if (input) validateAnalysisParameters(input, data.parameters);
     }
     progress({ phase: 'initializing', completedAtoms: 0, totalAtoms: data.frame?.fractional.length / 3 || 0 });
     if (data.type === 'warmup') {
@@ -214,6 +220,7 @@ async function run(data, controller) {
       if (activeFrame.ptmFit?.id === newPtmFitId) delete activeFrame.ptmFit;
     }
     if (['analyze','prepare-frame'].includes(data.type)) { releasePins?.(); releasePins = null; runtime.finishAnalysis(); }
-    self.postMessage({ id: data.id, ok: false, error: error.message || String(error), name: error.name, ...cacheState() });
+    self.postMessage({ id: data.id, ok: false, error: error.message || String(error), name: error.name,
+      errorKind: error.analysisErrorKind, fatal: fatalAnalysisError(error), ...cacheState() });
   } finally { releasePins?.(); controllers.delete(data.id); }
 }

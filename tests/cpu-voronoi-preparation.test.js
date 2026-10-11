@@ -47,7 +47,10 @@ for (const sharedMemory of [false, true]) test(`background Voronoi preparation r
     assert.equal(stats.created, 2); assert.equal(stats.messages.filter(kind => kind === 'voronoiPrepare').length, 2);
     assert.deepEqual(pool.cpuWarmupStatus.readyModules, { voronoi: 2, ptm: 0, dxa: 0 });
     assert.ok([...pool.slots].every(slot => slot.moduleHeapBytes.voronoi >= 16 * 1024 ** 2
-      && slot.residentInputBytes >= frame.fractional.byteLength * 2), 'heap and resident-index telemetry cover both native and retained JS memory');
+      && slot.residentInputBytes >= frame.fractional.byteLength + frame.types.byteLength + frame.ids.length * 4),
+    'heap and telemetry cover the unique native and resident JS allocations');
+    if (!sharedMemory) assert.ok([...pool.slots].every(slot => slot.residentInputBytes < frame.fractional.byteLength * 2
+      + frame.types.byteLength), 'normalized private coordinates are shared by both resident index owners');
     assert.equal(pool.cpuBudget.active, 0, 'prepared idle Workers retain memory without CPU permits');
     const warm = await pool.warmupCpu({ atomCount: 8192, modules: ['ptm', 'voronoi'] });
     assert.equal(warm.readyWorkers, 2); assert.deepEqual(warm.readyModules, { voronoi: 2, ptm: 2, dxa: 0 });
@@ -89,7 +92,7 @@ test('module-aware warmup allocates only requested kernels and rejects unknown m
   } finally { pool.close(); }
 });
 
-test('coalescing requested module sets recalculates the native heap memory quota', async () => {
+test('coalescing requested module sets recalculates the native heap memory quota', { timeout: 5000 }, async () => {
   const stats = { created: 0, terminated: 0, messages: [] };
   const env = { navigator: { hardwareConcurrency: 16 }, performance: { memory: { jsHeapSizeLimit: 256 * 1024 ** 2 } } };
   const pool = new AnalysisPool({ environment: env, workerFactory: realFactory(stats) });
@@ -98,9 +101,62 @@ test('coalescing requested module sets recalculates the native heap memory quota
       pool.warmupCpu({ atomCount: 100_000, modules: ['ptm'] }),
       pool.warmupCpu({ atomCount: 100_000, modules: ['voronoi'] }),
     ]);
-    assert.equal(ptm.targetWorkers, 1); assert.equal(voronoi.targetWorkers, 1);
-    assert.equal(stats.created, 1, 'the combined 16 MiB + 16 MiB heaps constrain growing shared warmup requests');
-    assert.deepEqual(pool.cpuWarmupStatus.readyModules, { voronoi: 1, ptm: 1, dxa: 0 });
+    assert.equal(ptm.targetWorkers, 3); assert.equal(voronoi.targetWorkers, 3);
+    assert.equal(stats.created, 3, 'the combined native heaps and bootstrap pages fit the 128 MiB budget');
+    assert.deepEqual(pool.cpuWarmupStatus.readyModules, { voronoi: 3, ptm: 3, dxa: 0 });
+    const retained = [...pool.slots].reduce((sum, slot) => sum + slot.moduleHeapBytes.ptm + slot.moduleHeapBytes.voronoi, 0);
+    assert.ok(retained <= 128 * 1024 ** 2);
+    const messageCount = stats.messages.length;
+    const reused = await pool.warmupCpu({ atomCount: 100_000, modules: ['ptm', 'voronoi'] });
+    assert.equal(reused.readyWorkers, 3); assert.equal(stats.messages.length, messageCount);
+  } finally { pool.close(); }
+});
+
+test('a grown native heap failing subscriber quota settles every joined warmup and preserves cancellation', { timeout: 2000 }, async () => {
+  const stats = { created: 0, terminated: 0, messages: [] };
+  const env = { navigator: { hardwareConcurrency: 4 }, performance: { memory: { jsHeapSizeLimit: 256 * 1024 ** 2 } } };
+  const pool = new AnalysisPool({ environment: env, workerFactory: manualFactory(stats) });
+  try {
+    const first = pool.warmupCpu({ atomCount: 1, modules: ['voronoi'] });
+    const joined = pool.warmupCpu({ atomCount: 1, modules: ['voronoi'] });
+    const finished = Promise.allSettled([first, joined]);
+    while (!stats.messages.length) await tick();
+    const { worker, data } = stats.messages[0];
+    worker.reply(data, { warmed: true, modules: ['voronoi'], nativeHeapBytes: { voronoi: 129 * 1024 ** 2 } });
+    const results = await finished;
+    assert.ok(results.every(result => result.status === 'rejected' && /memory budget/.test(result.reason.message)));
+    assert.equal(pool.cpuBudget.active, 0); assert.equal(pool.controllers.size, 0);
+    assert.equal(stats.terminated, 0, 'quota failure leaves the acknowledged native module reusable');
+    env.performance.memory.jsHeapSizeLimit = 1024 ** 3;
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(pool.warmupCpu({ atomCount: 1, modules: ['voronoi'], signal: controller.signal }), { name: 'AbortError' });
+    const ready = await pool.warmupCpu({ atomCount: 1, modules: ['voronoi'] });
+    assert.equal(ready.readyWorkers, 1); assert.equal(stats.messages.length, 1);
+  } finally { pool.close(); }
+});
+
+test('a rejected coalesced module request leaves the original warmup unchanged', { timeout: 2000 }, async () => {
+  const stats = { created: 0, terminated: 0, messages: [] };
+  const env = { navigator: { hardwareConcurrency: 4 }, performance: { memory: { jsHeapSizeLimit: 36 * 1024 ** 2 } } };
+  const pool = new AnalysisPool({ environment: env, workerFactory: manualFactory(stats) });
+  try {
+    const first = pool.warmupCpu({ atomCount: 1, modules: ['ptm'] });
+    first.catch(() => {});
+    const original = pool.cpuWarmup;
+    let joined;
+    assert.doesNotThrow(() => { joined = pool.warmupCpu({ atomCount: 100_000, modules: ['voronoi'] }); });
+    await assert.rejects(joined, /memory budget/);
+    assert.equal(pool.cpuWarmup, original); assert.deepEqual(original.modules, ['ptm']);
+    assert.equal(original.atomCount, 1); assert.equal(original.coordinateBytes, 24);
+    assert.equal(original.subscribers.size, 1); assert.equal(original.controller.signal.aborted, false);
+    while (!stats.messages.length) await tick();
+    assert.equal(stats.messages.length, 1); assert.deepEqual(stats.messages[0].data.modules, ['ptm']);
+    stats.messages[0].worker.reply(stats.messages[0].data,
+      { warmed: true, modules: ['ptm'], nativeHeapBytes: { ptm: 17 * 1024 ** 2 } });
+    const status = await first;
+    assert.equal(status.readyWorkers, 1); assert.equal(stats.created, 1); assert.equal(stats.terminated, 0);
+    assert.deepEqual(pool.cpuWarmupStatus.readyModules, { voronoi: 0, ptm: 1, dxa: 0 });
+    assert.equal(pool.cpuWarmup, null); assert.equal(pool.controllers.size, 0); assert.equal(pool.cpuBudget.active, 0);
   } finally { pool.close(); }
 });
 

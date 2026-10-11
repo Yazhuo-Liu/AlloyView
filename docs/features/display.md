@@ -216,6 +216,16 @@ The renderer draws instanced sphere impostors: each GPU instance is a camera-fac
 
 Wrapped/unwrapped display and clipping do not rewrite analysis coordinates. Analyses retain the original frame and its periodic cell.
 
+A frame transition batches color choices, appearance, legend, radius and
+vector updates. Cached analyses are attached before its first atom-buffer
+upload; asynchronous results share the next animation-frame refresh.
+The analysis shows **Calculated** after its display batch has applied, so the
+completed status and its color legend become visible together.
+Appearance is resolved once, and unchanged radius styles keep the existing
+radius buffer. Explicit edits and image captures flush pending display work,
+so exports include the latest completed results. These display batches do not
+delay publication of scientific properties or change their values.
+
 ## Image and trajectory exports
 
 Expand **Display → Export images and atom IDs → Image resolution** to choose

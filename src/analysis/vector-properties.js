@@ -23,13 +23,16 @@ export function vectorPropertyNames(mode) {
  * Modes retain their own fields; replacing one field never removes another.
  * Imported name collisions are saved by replaceAnalysisProperty for reset.
  */
-export function registerVectorProperties(frame, { mode, vectors, magnitudes, unit = '' }) {
+export function registerVectorProperties(frame, { mode, vectors, magnitudes, unit = '', analysisKey = null }) {
   const names = vectorPropertyNames(mode);
   const count = frame.ids?.length ?? vectors?.length / 3;
   if (!Number.isInteger(count) || count < 0 || vectors?.length !== count * 3) {
     throw new Error('Vector values must contain three components per atom.');
   }
   if (typeof unit !== 'string') throw new Error('Vector property units must be a string.');
+  if (analysisKey !== null && (typeof analysisKey !== 'string' || !analysisKey.trim())) {
+    throw new Error('Vector analysis settings must have a nonempty analysis key.');
+  }
   if (magnitudes !== undefined && magnitudes?.length !== count) {
     throw new Error('Vector magnitudes must contain one value per atom.');
   }
@@ -57,6 +60,7 @@ export function registerVectorProperties(frame, { mode, vectors, magnitudes, uni
     unit,
     data: values[component],
     analysisKind: mode === 'displacement' ? 'displacement' : 'vectors',
+    analysisKey,
     vectorMode: mode,
     vectorComponent: component,
   }));

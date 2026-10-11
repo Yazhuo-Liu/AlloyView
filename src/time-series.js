@@ -40,7 +40,15 @@ export class TimeSeriesStore {
       this.timesteps.set(frameIndex, Number(timestep)); changed = true;
     }
     for (const { name, value, unit = '', signature = '', kind = 'file' } of entries) {
-      if (typeof name !== 'string' || typeof value !== 'number') continue;
+      if (typeof name !== 'string') continue;
+      // A value without identified analysis settings cannot be combined with
+      // earlier frames, even when a caller bypasses the attribute registry.
+      if (kind === 'analysis' && (typeof signature !== 'string' || !signature.trim() || /^[^:]+:\s*$/.test(signature))) {
+        changed = this.series.delete(name) || changed;
+        this.unavailable.delete(name);
+        continue;
+      }
+      if (typeof value !== 'number') continue;
       let series = this.series.get(name);
       if (!series || series.signature !== signature) {
         series = { name, unit, kind, signature, points: new Map() };
@@ -107,6 +115,12 @@ export function recordRegistry(store, registry, frameIndex, names) {
   for (const name of names) {
     const entry = registry.get(name);
     if (entry && typeof entry.value === 'number') entries.push(entry);
+    else {
+      const descriptor = registry.describe(name);
+      // Explicitly unidentified results invalidate older points instead of
+      // presenting those points as belonging to the newly computed result.
+      if (descriptor?.unavailableReason) entries.push(descriptor);
+    }
   }
   return store.record(frameIndex, entries, { timestep: registry.frame?.timestep });
 }

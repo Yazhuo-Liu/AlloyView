@@ -7,6 +7,8 @@ import {
 import { createConfiguration, parseConfiguration } from '../src/configuration.js';
 import { replicateFrame } from '../src/data/replicate.js';
 import { clearAnalysisResults, replaceAnalysisProperty } from '../src/analysis/results.js';
+import { createAttributeRegistry } from '../src/global-attributes.js';
+import { TimeSeriesStore, recordRegistry } from '../src/time-series.js';
 
 function frame(step = 0, extra = []) {
   const ids = Float64Array.of(1, 2, 3);
@@ -97,6 +99,57 @@ test('velocity magnitude updates when only one external component is replaced', 
     assert.equal(target.properties.find(property => property.name === 'vx').data, x);
     assert.equal(applyComputedProperties(target, recipe, cache).changed, false, 'unchanged components still reuse computed values');
   }
+});
+
+test('computed series inherit upstream parameter and external import identities across frames', () => {
+  const recipe = definitions([{ name: 'twice', expression: 'coordination * 2' }, { name: 'scaled', expression: 'twice + Frame' }]);
+  const store = new TimeSeriesStore(), cache = new WeakMap(), keys = [];
+  const record = (index, analysisKey) => {
+    const target = frame(index, [{ name: 'coordination', analysisKind: 'coordination', analysisKey, data: new Float32Array(3).fill(12) }]);
+    applyComputedProperties(target, recipe, cache);
+    keys.push(target.properties.find(property => property.name === 'scaled').analysisKey);
+    recordRegistry(store, createAttributeRegistry({ frame: target }), index, ['Mean.twice', 'Mean.scaled']);
+    return target;
+  };
+  record(0, '{"cutoff":3}'); record(1, '{"cutoff":3}');
+  assert.equal(keys[0], keys[1], 'new arrays and changed Frame values refresh data without changing analysis identity');
+  assert.equal(store.describe('Mean.scaled').points.size, 2);
+  const target = record(2, '{"cutoff":4.2}');
+  assert.notEqual(keys[1], keys[2]);
+  for (const name of ['Mean.twice', 'Mean.scaled']) assert.equal(store.describe(name).points.size, 1, name);
+  const previous = target.properties.find(property => property.name === 'scaled');
+  target.properties.find(property => property.name === 'coordination').analysisKey = '{"cutoff":5}';
+  assert.equal(applyComputedProperties(target, recipe, cache).changed, true, 'metadata edits invalidate expression identity even if arrays are retained');
+  assert.notEqual(target.properties.find(property => property.name === 'scaled').analysisKey, previous.analysisKey);
+
+  const externalRecipe = definitions([{ name: 'pressure', expression: 'stress / volume' }]);
+  const imported = frame(); imported.properties[0].externalImportId = 'first-import';
+  applyComputedProperties(imported, externalRecipe, cache);
+  const first = imported.properties.find(property => property.name === 'pressure').analysisKey;
+  imported.properties[0].externalImportId = 'second-import';
+  applyComputedProperties(imported, externalRecipe, cache);
+  assert.notEqual(imported.properties.find(property => property.name === 'pressure').analysisKey, first);
+});
+
+test('expressions of unidentified analysis inputs keep their values but cannot mix trajectory points', () => {
+  const target = frame(0, [{ name: 'coordination', data: new Float32Array(3).fill(12), analysisKind: 'coordination' }]);
+  applyComputedProperties(target, definitions([{ name: 'twice', expression: 'coordination * 2' }, { name: 'scaled', expression: 'twice + 1' }]));
+  const registry = createAttributeRegistry({ frame: target });
+  for (const name of ['twice', 'scaled']) {
+    assert.ok(target.properties.find(property => property.name === name).data.every(Number.isFinite));
+    assert.equal(registry.get(`Mean.${name}`), null);
+    assert.match(registry.describe(`Mean.${name}`).unavailableReason, /settings are not identified/);
+  }
+});
+
+test('computed parameter identities do not grow exponentially through a branching recipe chain', () => {
+  const properties = [{ name: 'e0', expression: 'stress' }, { name: 'e1', expression: 'e0 + 1' }];
+  for (let index = 2; index < 40; index++) properties.push({ name: `e${index}`, expression: `e${index - 1} + e${index - 2}` });
+  const target = frame();
+  applyComputedProperties(target, definitions(properties));
+  const last = target.properties.find(property => property.name === 'e39');
+  assert.equal(last.analysisDependencies.length, 39);
+  assert.ok(last.analysisKey.length < 8_000, 'shared ancestors appear once in a flattened parameter identity');
 });
 
 test('a column with the same name reports a conflict instead of being replaced', () => {

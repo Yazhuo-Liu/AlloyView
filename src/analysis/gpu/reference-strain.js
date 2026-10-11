@@ -3,6 +3,7 @@ import { atomRange } from '../neighbors.js';
 import { REFERENCE_STRAIN_FIELDS, calculateReferenceStrain, prepareReferenceStrainContext } from '../reference-strain.js';
 import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
 import { REFERENCE_STRAIN_SHADER, REFERENCE_STRAIN_CLEAR_SHADER } from './reference-strain-shaders.js';
+import { validateAnalysisInput } from '../errors.js';
 
 export const MAX_GPU_REFERENCE_CORRECTION_ATOMS = 16_384;
 
@@ -12,7 +13,7 @@ export const MAX_GPU_REFERENCE_CORRECTION_ATOMS = 16_384;
  * wrapped frame (sourceRepetitions) resolves images in its source lattice.
  */
 export async function analyzeGpuReferenceStrain(runtime, frame, parameters = {}, { signal, onProgress = () => {} } = {}) {
-  const prepared = prepareGpuReferenceParameters(frame, parameters);
+  const prepared = validateAnalysisInput(() => prepareGpuReferenceParameters(frame, parameters));
   checkSignal(signal);
   const { referenceFrame, startAtom, endAtom, inverseMapping, settings } = prepared;
   const count = endAtom - startAtom;

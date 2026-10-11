@@ -1,5 +1,4 @@
 import { determinant3 } from './data/model.js';
-import { isComputedProperty } from './computed-properties.js';
 import { scalarStatistics } from './statistics-export.js';
 
 /** Per-frame scalar attributes for text labels and time series. Names are
@@ -60,8 +59,11 @@ function completed(frame, name) {
 
 function analysisKey(frame, kind) {
   const property = frame.properties?.find(item => item.analysisKind === kind);
-  return property ? `${kind}:${property.analysisKey ?? ''}` : null;
+  const key = property?.analysisKey ?? frame.atomeyeResults?.[kind]?.key;
+  return identifiedKey(key) ? `${kind}:${key}` : null;
 }
+
+function identifiedKey(key) { return typeof key === 'string' && key.trim().length > 0; }
 
 function propertyKind(property) {
   return !property.analysisKind || property.externalImportId ? 'file' : 'analysis';
@@ -71,7 +73,8 @@ function propertySignature(property) {
   // A new import of the same column name replaces the earlier values.
   if (property.externalImportId) return `external:${property.externalImportId}`;
   if (propertyKind(property) === 'file') return '';
-  return isComputedProperty(property) ? `expression:${property.expression ?? ''}` : `${property.analysisKind}:${property.analysisKey ?? ''}`;
+  if (identifiedKey(property.analysisKey)) return `${property.analysisKind}:${property.analysisKey}`;
+  return null;
 }
 
 function counts(values) {
@@ -90,7 +93,10 @@ export function createAttributeRegistry(context = {}) {
   const descriptors = new Map(), folded = new Map(), cache = new Map();
   const add = (name, { unit = '', description = '', kind = 'file', csv = null, signature = '', group = name.split('.')[0], compute }) => {
     if (descriptors.has(name) || name.length > MAX_ATTRIBUTE_NAME_LENGTH) return;
-    descriptors.set(name, Object.freeze({ name, unit, description, kind, csv: csv && Object.freeze(csv), signature, group, compute }));
+    const unavailableReason = kind === 'analysis' && !identifiedKey(signature)
+      ? 'Analysis settings are not identified; recalculate this analysis before collecting its values.' : null;
+    descriptors.set(name, Object.freeze({ name, unit, description, kind, csv: csv && Object.freeze(csv), signature, group,
+      ...(unavailableReason ? { unavailableReason } : {}), compute: unavailableReason ? () => undefined : compute }));
     const key = name.toLowerCase();
     folded.set(key, folded.has(key) ? null : name);
   };
@@ -168,7 +174,7 @@ function addFrameAttributes(frame, context, add) {
   addDxaAttributes(frame, context.dxaNetwork, add);
   const clusters = completed(frame, 'clusters');
   if (clusters) {
-    const signature = analysisKey(frame, 'clusters') ?? 'clusters';
+    const signature = analysisKey(frame, 'clusters');
     for (const [name, field, description] of [['cluster_count', 'clusterCount', 'Number of clusters'],
       ['largest_size', 'largestSize', 'Atoms in the largest cluster'], ['percolating_count', 'percolatingCount', 'Clusters connected to their own periodic images']]) {
       if (Number.isFinite(clusters[field])) add(`Clusters.${name}`, { kind: 'analysis', signature, description,
@@ -177,7 +183,7 @@ function addFrameAttributes(frame, context, add) {
   }
   const grains = completed(frame, 'grains');
   if (grains) {
-    const signature = analysisKey(frame, 'grains') ?? 'grains';
+    const signature = analysisKey(frame, 'grains');
     for (const [name, field, unit, description] of [['grain_count', 'grainCount', '', 'Number of grains'],
       ['mean_size', 'meanSize', 'atoms', 'Mean number of atoms per grain'], ['largest_size', 'largestSize', 'atoms', 'Atoms in the largest grain'],
       ['unassigned_atoms', 'unassignedAtoms', '', 'Atoms that belong to no grain'],
@@ -188,7 +194,7 @@ function addFrameAttributes(frame, context, add) {
   }
   const wignerSeitz = completed(frame, 'wignerSeitz');
   if (wignerSeitz) {
-    const signature = analysisKey(frame, 'wignerSeitz') ?? `wignerSeitz:${wignerSeitz.referenceFrame}:${wignerSeitz.affineMapping}`;
+    const signature = analysisKey(frame, 'wignerSeitz');
     for (const [name, field, description] of [['vacancy_count', 'vacancyCount', 'Empty reference sites'],
       ['interstitial_count', 'interstitialCount', 'Atoms beyond one per reference site'], ['antisite_count', 'antisiteCount', 'Sites occupied by one atom of another type'],
       ['site_count', 'siteCount', 'Reference sites']]) {
@@ -199,7 +205,7 @@ function addFrameAttributes(frame, context, add) {
   const surface = completed(frame, 'surfaceMesh');
   if (surface) {
     // Names follow OVITO's ConstructSurfaceMesh attributes.
-    const signature = `surfaceMesh:${frame.atomeyeResults?.surfaceMesh?.key ?? ''}`;
+    const signature = analysisKey(frame, 'surfaceMesh');
     for (const [name, field, unit, description] of SURFACE_ATTRIBUTES) {
       if (Number.isFinite(surface[field])) add(`Surface.${name}`, { kind: 'analysis', signature, unit, description,
         csv: ['surfaceMesh', name, ''], compute: () => surface[field] });
@@ -244,7 +250,7 @@ function addCategoryAttributes(frame, prefix, propertyName, values, categories, 
 function addDxaAttributes(frame, network, add) {
   const structure = frame.properties?.find(property => property.name === DXA_STRUCTURE && property.analysisKind === 'dxa');
   if (!network || !structure) return;
-  const signature = `dxa:${structure.analysisKey ?? ''}`, common = { kind: 'analysis', signature, group: 'DXA' };
+  const signature = analysisKey(frame, 'dxa'), common = { kind: 'analysis', signature, group: 'DXA' };
   add('DXA.total_length', { ...common, unit: 'Å', description: 'Total dislocation line length', csv: ['dxa', 'total_length', ''],
     compute: () => network.totalLength ?? 0 });
   add('DXA.line_density', { ...common, unit: 'Å⁻²', description: 'Dislocation line length per cell volume', csv: ['dxa', 'line_density', ''],

@@ -52,3 +52,15 @@ test('hidden selections combine with existing visibility filters and cannot reve
   assert.deepEqual([...result.visibility], [0, 0, 0, 255]);
   assert.deepEqual([...visibility], [255, 255, 0, 255]);
 });
+
+test('unstyled display retains palette, visibility and default radii identities while style resolution never mutates them', () => {
+  const frame = { ids: Uint32Array.of(1, 2), types: Uint32Array.of(0, 0), typeLabels: ['Fe'] };
+  const colors = Uint8Array.of(1, 2, 3, 4, 5, 6), visibility = Uint8Array.of(255, 0), radii = Float32Array.of(1.26, 1.26);
+  const fast = applyAppearance(frame, colors, visibility, {}, { identity: true, baseRadii: radii });
+  assert.equal(fast.colors, colors); assert.equal(fast.visibility, visibility); assert.equal(fast.radii, radii);
+  const styled = applyAppearance(frame, colors, visibility, { atoms: [{ id: 1, color: '#ff0000', radius: 2 }] }, { identity: true, baseRadii: radii });
+  assert.notEqual(styled.colors, colors); assert.notEqual(styled.radii, radii);
+  assert.deepEqual([...colors], [1, 2, 3, 4, 5, 6]);
+  assert.equal(radii[0], Math.fround(1.26));
+  assert.equal(styled.radii[0], 2);
+});

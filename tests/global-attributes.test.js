@@ -24,13 +24,15 @@ function analyzedFrame({ scale = 1 } = {}) {
         analysisKind: 'cna', analysisKey: '{"mode":"adaptive"}' },
       { name: 'ptmStructureType', unit: '', data: Uint8Array.from([7, 7, 7, 0, 0, 0, 0, 0, 0, 0]), categories: PTM_TYPES,
         analysisKind: 'ptm', analysisKey: '{"flags":31}' },
-      { name: 'vonMises', unit: 'GPa', data: Float64Array.from({ length: count }, (_, atom) => atom), analysisKind: 'expression', expression: 'id - 1' },
+      { name: 'vonMises', unit: 'GPa', data: Float64Array.from({ length: count }, (_, atom) => atom),
+        analysisKind: 'expression', analysisKey: '{"expression":"id - 1"}', expression: 'id - 1' },
       { name: 'dxaStructureType', unit: '', data: new Uint8Array(count).fill(1), categories: DXA_STRUCTURE_TYPES, analysisKind: 'dxa', analysisKey: '{"lattice":"fcc"}' },
       { name: 'clusterId', unit: '', data: Uint32Array.from([1, 1, 1, 1, 1, 2, 2, 2, 3, 3]), analysisKind: 'clusters', analysisKey: '{"cutoff":3}' },
     ],
     atomeyeResults: {
       clusters: { result: { clusterCount: 3, largestSize: 5, percolatingCount: 1, includedAtoms: 10 } },
-      wignerSeitz: { result: { vacancyCount: 2, interstitialCount: 1, antisiteCount: 4, siteCount: 11, referenceFrame: 0, affineMapping: false } },
+      wignerSeitz: { key: '{"referenceFrame":0,"affineMapping":false}',
+        result: { vacancyCount: 2, interstitialCount: 1, antisiteCount: 4, siteCount: 11, referenceFrame: 0, affineMapping: false } },
     },
   };
 }
@@ -84,7 +86,7 @@ test('frame, cell, strain, fractions and means use stable names and units', () =
   for (const name of ['Frame', 'Timestep', 'Cell.a', 'Strain.a', 'Mean.c_pe', 'Mean.charge', 'Type.Ni.count']) assert.equal(registry.get(name).kind, 'file', name);
   for (const name of ['CNA.FCC.fraction', 'Mean.vonMises', 'DXA.total_length', 'Clusters.cluster_count', 'WignerSeitz.vacancy_count']) assert.equal(registry.get(name).kind, 'analysis', name);
   assert.equal(registry.get('CNA.FCC.fraction').signature, 'cna:{"mode":"adaptive"}');
-  assert.equal(registry.get('Mean.vonMises').signature, 'expression:id - 1');
+  assert.equal(registry.get('Mean.vonMises').signature, 'expression:{"expression":"id - 1"}');
   assert.equal(registry.get('Strain.a').signature, 'reference:0');
   // Case-insensitive lookup; Map lookups never reach object members.
   assert.equal(value('cna.fcc.FRACTION'), 0.6);
@@ -128,6 +130,27 @@ test('background registries exclude analysis results and stale DXA networks', ()
   const plain = createAttributeRegistry({ frame: { ...frame, timestep: null } });
   assert.equal(plain.has('Timestep'), false); assert.equal(plain.has('Strain.a'), false); assert.equal(plain.has('FrameCount'), false);
   assert.equal(createAttributeRegistry({}).list().length, 0);
+});
+
+test('unidentified analysis settings stay unavailable without classifying them as file values', () => {
+  const frame = analyzedFrame();
+  for (const kind of ['coordination', 'bonds', 'referenceStrain', 'localShear', 'displacement', 'expression']) {
+    frame.properties.push({ name: kind, data: new Float32Array(10).fill(12), analysisKind: kind, analysisKey: '', expression: 'coordination * 2' });
+  }
+  delete frame.properties.find(property => property.analysisKind === 'cna').analysisKey;
+  delete frame.atomeyeResults.wignerSeitz.key;
+  frame.atomeyeResults.surfaceMesh = { result: { surfaceArea: 10 } };
+  const registry = createAttributeRegistry({ frame });
+  for (const name of ['CNA.FCC.fraction', 'WignerSeitz.vacancy_count', 'Surface.surface_area',
+    ...['coordination', 'bonds', 'referenceStrain', 'localShear', 'displacement', 'expression'].map(kind => `Mean.${kind}`)]) {
+    assert.equal(registry.get(name), null, name);
+    assert.equal(registry.describe(name).kind, 'analysis', name);
+    assert.match(registry.describe(name).unavailableReason, /recalculate/i, name);
+  }
+  const imported = frame.properties.find(property => property.name === 'charge');
+  imported.analysisKind = 'coordination'; imported.analysisKey = '';
+  assert.equal(createAttributeRegistry({ frame }).get('Mean.charge').signature, 'external:import-1');
+  assert.equal(createAttributeRegistry({ frame, fileOnly: true }).get('Mean.charge').kind, 'file');
 });
 
 test('attribute values are computed lazily and once per registry', () => {

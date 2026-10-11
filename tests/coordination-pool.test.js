@@ -15,5 +15,5 @@ test('coordination worker count respects coordinate-copy memory pressure', () =>
     navigator: { hardwareConcurrency: 16 },
     performance: { memory: { jsHeapSizeLimit: 128 * 1024 ** 2 } },
   };
-  assert.equal(chooseWorkerCount(1_000_000, 12_000_000, environment), 1);
+  assert.equal(chooseWorkerCount(1_000_000, 12_000_000, environment), 5);
 });

@@ -39,7 +39,8 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   onEdit = () => {}, onDisplayChange = () => {},
   getColorMode = () => 'type', getColorChoiceVersion = () => 0, onResultsChange = () => {},
   onMemoryChange = () => {}, notify = () => {}, client = new DxaClient(),
-  getFileStem = () => 'structure', getFrameIndex = () => 0, onDownload = downloadBlob }) {
+  getFileStem = () => 'structure', getFrameIndex = () => 0, onDownload = downloadBlob,
+  afterDisplayRefresh = callback => callback() }) {
   let enabled = false, controlsEnabled = false, controller = null, request = 0;
   let network = null, failure = false, radius = 0.25;
   let visibleFamilies = new Set(), familyColors = new Map(), cachedResult = null;
@@ -175,13 +176,14 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   }
 
   function clearNetwork({ clearSettings = false } = {}) {
+    const hadResult = Boolean(network || atomStructureFrame);
     network = null;
     if (atomStructureFrame) clearAnalysisResults(atomStructureFrame, 'dxa');
     atomStructureFrame = null;
     $('dxa-results').hidden = true;
     $('dxa-summary').textContent = '';
     $('dxa-status').title = '';
-    onResultsChange({ clearSettings });
+    if (hadResult || clearSettings) onResultsChange({ clearSettings });
     draw();
     onMemoryChange(getFrame());
   }
@@ -204,7 +206,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     $('dxa-status').textContent = 'Extract lines and Burgers vectors from the complete structure.';
   }
 
-  function showResult(result, frame, key, selectStructures = false) {
+  function showResult(result, frame, key, selectStructures, current) {
     network = result; failure = false;
     if (result.atomStructureTypes) {
       replaceAnalysisProperty(frame, { name: DXA_STRUCTURE_PROPERTY, displayName: DXA_STRUCTURE_LABEL,
@@ -215,7 +217,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
       colorDefaultPending = false;
     }
     $('dxa-results').hidden = false;
-    state('Calculated', true);
+    state('Updating display…');
     const count = result.segments?.length ?? 0;
     const length = Number(result.totalLength ?? 0), density = Number(result.density ?? 0);
     $('dxa-summary').textContent = `${integer(count)} segments · ${length.toPrecision(5)} Å total length · ${density.toExponential(3)} Å⁻² density`;
@@ -237,11 +239,12 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     ].filter(Boolean).join('\n');
     onResultsChange({ selectProperty: selectStructures && atomStructureFrame ? DXA_STRUCTURE_PROPERTY : null });
     renderFamilies(); draw(); onMemoryChange(frame);
+    afterDisplayRefresh(() => { if (current() && network === result) state('Calculated', true); });
   }
 
-  async function run({ automatic = false } = {}) {
+  async function run({ automatic = false, isCurrent = () => true } = {}) {
     const frame = getFrame();
-    if (!frame) return false;
+    if (!frame || !isCurrent()) return false;
     let settings;
     try { settings = parameters(); }
     catch (error) {
@@ -258,7 +261,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     tools.setToolEnabled('dxa', true);
     clearNetwork();
     const serial = request, sourceVersion = getSourceVersion();
-    const current = () => serial === request && frame === getFrame() && sourceVersion === getSourceVersion() && enabled;
+    const current = () => serial === request && frame === getFrame() && sourceVersion === getSourceVersion() && enabled && isCurrent();
     // The defect mesh is requested apart from the DXA parameters: lines and
     // structure labels are the same with and without it. A cached result is
     // reused unless a mesh is wanted that it does not contain.
@@ -266,7 +269,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     const key = JSON.stringify(settings), cached = cachedResult;
     if (cached?.frame === frame && cached.key === key
       && (!meshRequest || cached.result.defectMesh?.smoothingLevel === meshRequest.smoothingLevel)) {
-      showResult(cached.result, frame, key, shouldSelectStructures()); return true;
+      showResult(cached.result, frame, key, shouldSelectStructures(), current); return true;
     }
     // Global line graphs can be large. Keep only the latest frame/result,
     // rather than adding unaccounted graph arrays to the trajectory cache.
@@ -291,7 +294,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
       });
       if (!current() || job.signal.aborted) return false;
       cachedResult = { frame, key, result };
-      controller = null; showResult(result, frame, key, shouldSelectStructures()); return true;
+      controller = null; showResult(result, frame, key, shouldSelectStructures(), current); return true;
     } catch (error) {
       if (!current() || job.signal.aborted || error.name === 'AbortError') return false;
       controller = null; failure = true; clearNetwork(); state('Failed');
@@ -332,7 +335,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     visibleFamilies = new Set(saved.visibleFamilies);
     familyColors = new Map(saved.familyColors.map(({ family, color }) => [family, color]));
     renderFamilies();
-    if (saved.enabled && getFrame() && isCurrent()) await run({ automatic: true });
+    if (saved.enabled && getFrame() && isCurrent()) await run({ automatic: true, isCurrent });
   }
 
   function reset() {

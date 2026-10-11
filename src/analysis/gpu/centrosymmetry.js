@@ -3,6 +3,7 @@ import { atomRange } from '../neighbors.js';
 import { analyzeGpuCna, adaptiveCnaInitialRadius, MAX_GPU_CNA_RADIUS_ATTEMPTS } from './cna.js';
 import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
 import { CSP_SHADER, CSP_RESULT_WORDS } from './centrosymmetry-shaders.js';
+import { analysisValidationError } from '../errors.js';
 
 const TYPE_NAMES = ['other', 'fcc', 'hcp', 'bcc', 'ico'];
 
@@ -20,7 +21,7 @@ export async function analyzeGpuCentrosymmetry(runtime, frame, parameters = {}, 
   const { startAtom, endAtom } = atomRange(count, parameters);
   if (structureInput !== undefined && (!(structureInput instanceof Uint8Array)
       || structureInput.length !== count || structureInput.some(type => type > 4))) {
-    throw new Error('Auto central symmetry requires complete adaptive CNA structure IDs.');
+    throw analysisValidationError(new Error('Auto central symmetry requires complete adaptive CNA structure IDs.'));
   }
   checkSignal(signal);
   const progress = (phase, completedAtoms = 0) => onProgress({ phase, completedAtoms, totalAtoms: count, workerCount: 1 });

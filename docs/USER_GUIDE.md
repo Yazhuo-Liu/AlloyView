@@ -1018,6 +1018,13 @@ value and returns to the starting frame. Missing values are gaps in the chart
 and empty cells in **Series CSV**. Attributes with different units are drawn in
 separate panels with a shared crosshair. See [Time series](features/time-series.md).
 
+Changing an analysis cutoff, reference or other calculation setting clears
+older points for that attribute; computed expressions also track the settings
+of the analyses they use. Same settings across frames keep the collected
+points. Navigating while **Read file values** runs leaves its background
+collection active. Readers of the same frame share parsing and cancel
+independently.
+
 Open **Displacement** to enable calculation against a selected reference frame.
 It uses stable atom IDs; equal-size frames without explicit IDs use row order
 with a warning that atom ordering must stay unchanged. Mixed ID schemes and
@@ -1317,6 +1324,14 @@ calculation on later frames. Input settings remain available for restarting with
 **Calculate/Identify**. Other enabled analyses continue, including independent
 PTM/strain requests. Cancelling the selected coloring result returns the view
 to atom-type coloring; imported source properties are retained or restored.
+
+An invalid input or controlled calculation error keeps prewarmed Workers and
+Wasm memory available for a corrected retry. A failed Worker connection or
+fatal native error recreates the affected Worker. GPU validation errors are
+reported directly; GPU device or supported-precision failures can still fall
+back to CPU calculation. Progress controls coalesce rapid updates while phase
+changes and final progress remain immediate. **Calculated** appears after the
+result's display refresh has completed.
 
 ## Tests and benchmark
 

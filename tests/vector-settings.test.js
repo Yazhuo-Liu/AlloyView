@@ -14,6 +14,19 @@ test('presets select a complete numeric family without mixing vector sources', (
   assert.deepEqual(findVectorComponents([...derived, ...properties], 'force').map(property => property.name), ['Force_0', 'Force_1', 'Force_2']);
 });
 
+test('memoized vector names and component descriptors follow in-place property metadata edits', () => {
+  const properties = ['spinX', 'spinY', 'spinZ'].map(name => ({ name, data: Float32Array.of(1) }));
+  const frame = { ids: Uint32Array.of(1), properties };
+  assert.ok(availableVectorSources(frame).some(source => source.value === 'property:spin'));
+  properties.forEach((property, index) => { property.name = `moment${'XYZ'[index]}`; });
+  assert.ok(availableVectorSources(frame).some(source => source.value === 'property:moment'));
+  assert.equal(availableVectorSources(frame).some(source => source.value === 'property:spin'), false);
+  properties.forEach((property, index) => { property.name = `f${'xyz'[index]}`; });
+  assert.deepEqual(findVectorComponents(properties, 'force'), properties);
+  properties[1].name = 'unrelated';
+  assert.equal(findVectorComponents(properties, 'force'), null, 'renaming a cached alias cannot leave a stale complete family');
+});
+
 test('dimension links preserve an arbitrary manually chosen ratio from any edited dimension', () => {
   const previous = { radius: .1, headRadius: .4, headLength: .8 };
   assert.deepEqual(linkedArrowDimensions(previous, 'headLength', 2.4), { radius: .3, headRadius: 1.2, headLength: 2.4 });

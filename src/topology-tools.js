@@ -71,7 +71,8 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
   getSourceVersion = () => 0, getFrameIndex = () => 0, getBondParameters = () => ({ cutoff: 3, pairCutoffs: [] }),
   getBondEnabled = () => Boolean(getFrame()?.atomeyeResults?.bonds),
   getColorChoiceVersion = () => 0, chooseProperty = () => {}, onResultsChange = () => {},
-  notify = () => {}, onEdit = () => {}, onBeforeClear = () => {}, onGpuPreparationChange = () => {} }) {
+  notify = () => {}, onEdit = () => {}, onBeforeClear = () => {}, onGpuPreparationChange = () => {},
+  afterDisplayRefresh = callback => callback() }) {
   const $ = id => globalThis.document?.getElementById(id) ?? null;
   const voronoiView = initializeVoronoiResults({ getElement: $, chooseProperty });
   const jobs = Object.fromEntries(Object.keys(DEFINITIONS).map(kind => [kind,
@@ -305,7 +306,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     return true;
   }
 
-  function showResult(kind, result, frame, key) {
+  function showResult(kind, result, frame, key, current) {
     const job = jobs[kind], prefix = DEFINITIONS[kind].prefix;
     job.result = result; job.frame = frame; job.failed = false;
     for (const field of TOPOLOGY_PROPERTIES[kind]) {
@@ -343,8 +344,13 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     if ($(`${prefix}-status`)) $(`${prefix}-status`).title = `${analysisBackendDetails(backend)}${corrections}`;
     const progress = $(`${prefix}-progress`);
     if (progress) { progress.hidden = true; progress.value = 1; }
-    state(kind, 'Calculated', `${backendLabel} · ${format((result.elapsedMs ?? 0) / 1000)} s`);
+    state(kind, 'Updating display…');
     onResultsChange({ kind, frame, clearSettings: false });
+    afterDisplayRefresh(() => {
+      if (current() && job.result === result && job.frame === frame) {
+        state(kind, 'Calculated', `${backendLabel} · ${format((result.elapsedMs ?? 0) / 1000)} s`);
+      }
+    });
   }
 
   async function run(kind, { automatic = false, isCurrent = () => true } = {}) {
@@ -409,7 +415,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
       }
       if (!current()) return false;
       job.controller = null;
-      showResult(kind, cached.result, frame, key);
+      showResult(kind, cached.result, frame, key, current);
       if (!automatic && colorChoice === getColorChoiceVersion()) chooseProperty(DEFINITIONS[kind].property);
       return true;
     } catch (error) {

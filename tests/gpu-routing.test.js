@@ -26,10 +26,10 @@ test('GPU is opt-in; supported jobs route to GPU while unsupported jobs retain C
   const data = frame();
   try {
     assert.equal(pool.gpuEnabled, false);
-    const cpu = await pool.analyze(data, { kind: 'coordination' });
+    const cpu = await pool.analyze(data, { kind: 'coordination', cutoff: 3 });
     assert.equal(cpu.backend, 'cpu'); assert.equal(cpu.gpuRequested, false); assert.equal(calls.gpu, 0);
     pool.setGpuEnabled(true);
-    const gpu = await pool.analyze(data, { kind: 'coordination' });
+    const gpu = await pool.analyze(data, { kind: 'coordination', cutoff: 3 });
     assert.equal(gpu.backend, 'gpu'); assert.equal(gpu.gpuRequested, true); assert.equal(gpu.engine, 'webgpu');
     const progress = [];
     const unsupported = await pool.analyze(data, { kind: 'ptm' }, { onProgress: value => progress.push(value) });
@@ -44,7 +44,7 @@ test('device errors fall back to CPU and include the failed GPU attempt in wall 
   const { pool, calls } = routingPool(async () => { await new Promise(resolve => setTimeout(resolve, 20)); throw new Error('GPU device lost'); });
   pool.setGpuEnabled(true);
   try {
-    const result = await pool.analyze(frame(), { kind: 'coordination' });
+    const result = await pool.analyze(frame(), { kind: 'coordination', cutoff: 3 });
     assert.equal(result.backend, 'cpu'); assert.match(result.fallbackReason, /device lost/);
     assert.ok(result.elapsedMs >= 15); assert.equal(calls.cpu, 1);
     pool.releaseGpuResources(); assert.equal(calls.released, 1);
@@ -54,7 +54,7 @@ test('device errors fall back to CPU and include the failed GPU attempt in wall 
 test('GPU cancellation never retries an expensive job on CPU', async () => {
   const { pool, calls } = routingPool(async () => { throw abortError(); });
   pool.setGpuEnabled(true);
-  try { await assert.rejects(pool.analyze(frame(), { kind: 'coordination' }), { name: 'AbortError' }); assert.equal(calls.cpu, 0); }
+  try { await assert.rejects(pool.analyze(frame(), { kind: 'coordination', cutoff: 3 }), { name: 'AbortError' }); assert.equal(calls.cpu, 0); }
   finally { pool.close(); }
 });
 
@@ -72,7 +72,7 @@ test('CNA and complete reference tensors route through the GPU pool and retain s
     } };
   const pool = new AnalysisPool({ gpuBackend }), cpuInputs = [];
   pool.analyzeCPU = async (_frame, parameters) => { cpuInputs.push(parameters); return { ...tensors, engine: 'js-worker' }; };
-  const parameters = { kind: 'referenceStrain', referenceFrame: data, referenceFrameIndex: 0,
+  const parameters = { kind: 'referenceStrain', cutoff: 3, referenceFrame: data, referenceFrameIndex: 0,
     referenceFractional: data.fractional, referenceCell: data.cell, referenceMapping: mapping };
   pool.setGpuEnabled(true);
   try {
@@ -123,7 +123,7 @@ test('one GPU worker serializes jobs and reuses uploaded frame identities withou
   const { client, workers } = fakeClient(), data = frame();
   try {
     const original = data.fractional.slice();
-    const first = client.analyze(data, { kind: 'coordination' });
+    const first = client.analyze(data, { kind: 'coordination', cutoff: 3 });
     const second = client.analyze(data, { kind: 'rdf' });
     await until(() => workers[0]?.messages.length === 1);
     const message = workers[0].messages[0];
@@ -139,13 +139,13 @@ test('one GPU worker serializes jobs and reuses uploaded frame identities withou
 test('a resident analysis is posted behind running GPU work, at most one deep, and results settle in posting order', async () => {
   const { client, workers } = fakeClient(), data = frame();
   try {
-    const upload = client.analyze(data, { kind: 'coordination' });
+    const upload = client.analyze(data, { kind: 'coordination', cutoff: 3 });
     await until(() => workers[0]?.messages.length === 1);
     workers[0].answer(workers[0].messages[0]); await upload;
     const order = [];
     const second = client.analyze(data, { kind: 'rdf' }).then(value => { order.push('rdf'); return value; });
     const third = client.analyze(data, { kind: 'bonds', cutoff: 3 }).then(value => { order.push('bonds'); return value; });
-    const fourth = client.analyze(data, { kind: 'coordination' }).then(value => { order.push('coordination'); return value; });
+    const fourth = client.analyze(data, { kind: 'coordination', cutoff: 3 }).then(value => { order.push('coordination'); return value; });
     await until(() => workers[0].messages.length === 3);
     await new Promise(resolve => setTimeout(resolve, 10));
     const [, running, waiting] = workers[0].messages;
@@ -164,7 +164,7 @@ test('a resident analysis is posted behind running GPU work, at most one deep, a
 test('a posted queued analysis keeps cancellation semantics and a worker failure rejects every posted task', async () => {
   const { client, workers } = fakeClient(), data = frame(), controller = new AbortController();
   try {
-    const upload = client.analyze(data, { kind: 'coordination' });
+    const upload = client.analyze(data, { kind: 'coordination', cutoff: 3 });
     await until(() => workers[0]?.messages.length === 1);
     workers[0].answer(workers[0].messages[0]); await upload;
     const running = client.analyze(data, { kind: 'rdf' });
@@ -173,7 +173,7 @@ test('a posted queued analysis keeps cancellation semantics and a worker failure
     await until(() => workers[0].messages.length === 3);
     controller.abort(); await rejection;
     assert.deepEqual(workers[0].messages.at(-1), { type: 'cancel', id: workers[0].messages[2].id });
-    const later = client.analyze(data, { kind: 'coordination' });
+    const later = client.analyze(data, { kind: 'coordination', cutoff: 3 });
     await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(workers[0].messages.filter(message => message.type === 'analyze').length, 3,
       'the cancelled task occupies its slot until the worker acknowledges it');
@@ -192,9 +192,9 @@ test('a posted queued analysis keeps cancellation semantics and a worker failure
 test('GPU abort settles promptly and keeps following jobs serialized until worker acknowledgement', async () => {
   const { client, workers } = fakeClient(), controller = new AbortController();
   try {
-    const first = client.analyze(frame(), { kind: 'coordination' }, { signal: controller.signal });
+    const first = client.analyze(frame(), { kind: 'coordination', cutoff: 3 }, { signal: controller.signal });
     const outcome = assert.rejects(first, { name: 'AbortError' });
-    const next = client.analyze(frame(), { kind: 'coordination' });
+    const next = client.analyze(frame(), { kind: 'coordination', cutoff: 3 });
     await until(() => workers[0]?.messages.length === 1);
     const message = workers[0].messages[0];
     controller.abort(); await outcome;
@@ -209,11 +209,11 @@ test('GPU abort settles promptly and keeps following jobs serialized until worke
 test('release during preparation cannot clear a new task or dispatch a queued third task early', async () => {
   const { client, workers } = fakeClient();
   try {
-    const first = client.analyze(frame(), { kind: 'coordination' });
+    const first = client.analyze(frame(), { kind: 'coordination', cutoff: 3 });
     const cancelled = assert.rejects(first, { name: 'AbortError' });
     client.release();
-    const second = client.analyze(frame(), { kind: 'coordination' });
-    const third = client.analyze(frame(), { kind: 'coordination' });
+    const second = client.analyze(frame(), { kind: 'coordination', cutoff: 3 });
+    const third = client.analyze(frame(), { kind: 'coordination', cutoff: 3 });
     await cancelled;
     await until(() => workers[1]?.messages.length === 1);
     assert.equal(workers[0].messages.length, 0);
@@ -230,7 +230,7 @@ test('release during preparation cannot clear a new task or dispatch a queued th
 test('missing WebGPU is a recoverable backend failure and allocates no worker', async () => {
   let workers = 0;
   const client = new GpuAnalysisClient({ environment: {}, workerFactory: () => { workers++; return new FakeWorker(); } });
-  await assert.rejects(client.analyze(frame(), { kind: 'coordination' }), /WebGPU is unavailable/);
+  await assert.rejects(client.analyze(frame(), { kind: 'coordination', cutoff: 3 }), /WebGPU is unavailable/);
   assert.equal(workers, 0); client.close();
 });
 
@@ -265,7 +265,7 @@ test('pre-uploaded trajectory frames survive CPU eviction and omit subsequent an
     workers[0].answer(upload, { cacheStatus: { capacity: 12, cachedFrameIds: [upload.frameId], cachedFrameIndexes: [8] } });
     await prepared;
     const reparsed = frame(); client.associateFrame(reparsed, 8);
-    const analysis = client.analyze(reparsed, { kind: 'coordination' });
+    const analysis = client.analyze(reparsed, { kind: 'coordination', cutoff: 3 });
     await until(() => workers[0].messages.length === 2);
     const request = workers[0].messages[1];
     assert.equal(request.frameId, upload.frameId); assert.equal(request.frame, undefined);
@@ -285,7 +285,7 @@ test('foreground analysis preempts background uploads and runs ahead of queued p
     const queued = client.prepareFrame(queuedFrame, { frameIndex: 2 });
     await until(() => workers[0]?.messages.length === 1);
     const upload = workers[0].messages[0];
-    const foreground = client.analyze(frame(), { kind: 'coordination' });
+    const foreground = client.analyze(frame(), { kind: 'coordination', cutoff: 3 });
     await cancelled;
     assert.equal(workers[0].messages.at(-1).type, 'cancel');
     assert.equal(workers[0].messages.filter(message => message.frame).length, 1, 'queued prefetch has no copied payload');
@@ -323,7 +323,7 @@ test('source reset cancels old work promptly and ignores stale resident IDs befo
 test('disabling GPU releases background work while accepted calculations finish before device teardown', async () => {
   const { client, workers } = fakeClient();
   try {
-    const first = client.analyze(frame(), { kind: 'coordination' });
+    const first = client.analyze(frame(), { kind: 'coordination', cutoff: 3 });
     const second = client.analyze(frame(), { kind: 'rdf' });
     const preparation = client.prepareFrame(frame(), { frameIndex: 1 });
     const cancelledPreparation = assert.rejects(preparation, { name: 'AbortError' });
@@ -345,13 +345,13 @@ test('rapid reenable cancels deferred teardown and reuses the worker after the r
   const pool = new AnalysisPool({ gpuBackend: client });
   try {
     pool.setGpuEnabled(true);
-    const first = pool.analyze(frame(), { kind: 'coordination' });
+    const first = pool.analyze(frame(), { kind: 'coordination', cutoff: 3 });
     await until(() => workers[0]?.messages.length === 1);
     pool.setGpuEnabled(false); pool.releaseGpuResources({ whenIdle: true });
     pool.setGpuEnabled(true);
     workers[0].answer(workers[0].messages[0]); await first;
     assert.equal(workers[0].terminated, false);
-    const next = pool.analyze(frame(), { kind: 'coordination' });
+    const next = pool.analyze(frame(), { kind: 'coordination', cutoff: 3 });
     await until(() => workers[0].messages.length === 2);
     workers[0].answer(workers[0].messages[1]); await next;
     assert.equal(workers.length, 1); assert.equal(workers[0].terminated, false);

@@ -1,5 +1,15 @@
 import { normalizeVectorOptions } from './render/atom-primitives.js';
 
+const normalizedNames = new WeakMap();
+function normalizedPropertyName(property) {
+  const cached = normalizedNames.get(property);
+  if (cached?.name === property.name) return cached.normalized;
+  const normalized = property.name.toLowerCase().replace(/[._\[\]\s]/g, '');
+  normalizedNames.set(property, { name: property.name, normalized });
+  return normalized;
+}
+const componentDescriptors = new WeakMap();
+
 /** Match a complete imported vector family; never mix force and velocity axes. */
 export function findVectorComponents(properties, mode) {
   const families = mode === 'force' ? ['force', 'forces', 'f'] : mode === 'velocity' ? ['velocity', 'velocities', 'vel', 'v'] : [];
@@ -7,7 +17,7 @@ export function findVectorComponents(properties, mode) {
   for (const family of families) {
     for (const axes of [['x', 'y', 'z'], ['0', '1', '2'], ['1', '2', '3']]) {
       const matches = axes.map(axis => numeric.find(property => {
-        const normalized = property.name.toLowerCase().replace(/[._\[\]\s]/g, '');
+        const normalized = normalizedPropertyName(property);
         return normalized === family + axis;
       }));
       if (matches.every(Boolean)) return matches;
@@ -77,6 +87,15 @@ function numericProperty(property, atomCount) {
 }
 
 function vectorComponentDescriptor(property) {
+  const { name, displayName, component } = property, fieldName = property.field?.name, fieldWidth = property.field?.width;
+  const cached = componentDescriptors.get(property);
+  if (cached && cached.name === name && cached.displayName === displayName && cached.component === component
+    && cached.fieldName === fieldName && cached.fieldWidth === fieldWidth) return cached.result;
+  const result = calculateComponentDescriptor(property);
+  componentDescriptors.set(property, { name, displayName, component, fieldName, fieldWidth, result });
+  return result;
+}
+function calculateComponentDescriptor(property) {
   // Extended XYZ stores the original field name and a zero-based component.
   if (property.field?.width === 3 && typeof property.field.name === 'string' && Number.isInteger(property.component)
     && property.component >= 0 && property.component < 3) {

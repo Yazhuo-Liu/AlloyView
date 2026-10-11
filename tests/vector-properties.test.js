@@ -74,9 +74,21 @@ test('invalid vector shapes and unsupported modes fail before modifying frame pr
   assert.throws(() => vectorPropertyNames('constructor'), /Unknown vector source/);
   assert.throws(() => registerVectorProperties(frame, { mode: 'force', vectors: new Float32Array(6), unit: null }), /units must be a string/);
   assert.throws(() => registerVectorProperties(frame, { mode: 'displacement', vectors: new Float32Array(6), magnitudes: [0] }), /one value per atom/);
+  assert.throws(() => registerVectorProperties(frame, { mode: 'displacement', vectors: new Float32Array(6), analysisKey: '' }), /nonempty analysis key/);
   assert.deepEqual(frame.properties, []);
   assert.equal(frame.vectorPropertyResults, undefined);
   assert.deepEqual(vectorPropertyNames('generic'), { x: 'vectorX', y: 'vectorY', z: 'vectorZ', magnitude: 'vectorMagnitude' });
+});
+
+test('all displacement components retain one parameter identity and restore imported collisions', () => {
+  const frame = frameWithAtoms(2), imported = { name: 'displacementX', data: Float64Array.of(30, 40) };
+  frame.properties.push(imported);
+  const analysisKey = JSON.stringify({ referenceFrame: 0, minimumImage: true, gpuRequested: true });
+  registerVectorProperties(frame, { mode: 'displacement', vectors: [1, 2, 3, 4, 5, 6], analysisKey });
+  assert.equal(frame.properties.filter(property => property.analysisKind === 'displacement').length, 4);
+  for (const property of frame.properties) assert.equal(property.analysisKey, analysisKey);
+  clearAnalysisResults(frame, 'displacement');
+  assert.equal(frame.properties[0], imported);
 });
 
 test('precomputed GPU magnitudes retain large finite values and invalid vector masks', () => {

@@ -39,6 +39,11 @@ not change. Frames whose values are already known, including the displayed
 frame and frames seen earlier, are not read again. Progress is shown and the
 reading can be cancelled at any time.
 
+Stepping to another frame does not cancel this collection. Readers of the
+same frame share its in-flight parse, but each reader can cancel independently;
+only departure of the last reader cancels the underlying work. Changing the
+source or processing settings still invalidates incompatible reads.
+
 **Analysis attributes** (CNA, PTM and DXA structure fractions, DXA line
 length and density, cluster and Wigner–Seitz counts, means of analysis outputs
 and of computed expression properties) are recorded from the displayed frame
@@ -59,12 +64,19 @@ differ from what is shown. Recording finished results keeps the plot
 consistent with the viewer and costs nothing extra.
 
 Each value is stored with the settings that produced it: an analysis's
-parameter key, an expression's text, or the strain reference frame. When an
+parameter key, an expression's text and upstream input identities, or the strain reference frame. When an
 attribute arrives with different settings (for example after changing the CNA
 mode or the strain reference), its older points are discarded, so a curve
 never mixes settings; a new import of an external property counts as new
 settings. Opening another source, changing trajectory smoothing or switching
 **Replicate atoms** clears all values.
+
+This also applies to coordination cutoffs, bond cutoffs, local shear and
+displacement settings. Expressions depending on those outputs inherit their
+parameter identity. An analysis output without a nonempty parameter key is
+shown as waiting for recalculation in global attributes and cannot enter the
+series; it remains available for ordinary atom coloring. Same settings across
+frames retain their previously collected points.
 
 ## Chart and table
 

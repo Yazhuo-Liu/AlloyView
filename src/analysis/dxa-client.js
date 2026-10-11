@@ -1,6 +1,7 @@
 import { DXA_CODE_WARMUP_MIN_ATOMS, dxaWorkerCount, normalizeDefectMeshRequest, preflightDxaMemory, validateDxaFrame, validateDxaParameters } from './dxa.js';
 import { validateSurfaceMask, validateSurfaceMeshParameters } from './surface-mesh.js';
 import { CpuBudget } from './cpu-budget.js';
+import { createAnalysisProgressReporter } from './progress.js';
 
 const COPY_CHUNK_VALUES = 512 * 1024;
 // Automatic private-stage Workers on hosts without shared memory, one per
@@ -131,6 +132,8 @@ export class DxaClient {
 
   enqueue(values) {
     const task = { id: this.nextId++, ...values, controller: new AbortController(), settled: false, dispatched: false };
+    task.progressReporter = createAnalysisProgressReporter(values.onProgress ?? (() => {}), { environment: this.environment, signal: values.signal });
+    task.onProgress = task.progressReporter.report;
     task.promise = new Promise((resolve, reject) => { task.resolve = resolve; task.reject = reject; });
     task.abort = () => this.cancel(task);
     task.signal?.addEventListener('abort', task.abort, { once: true });
@@ -354,6 +357,12 @@ export class DxaClient {
 
   settle(task, error, result) {
     if (task.settled) return;
+    if (!error) {
+      try { task.progressReporter.flush(); } catch (progressError) { error = progressError; }
+      // The final progress callback can cancel this very task.
+      if (task.settled) return;
+    }
+    task.progressReporter.close();
     task.settled = true; task.signal?.removeEventListener('abort', task.abort); this.pending.delete(task.id);
     task.frame = task.mask = null;
     if (error) task.reject(error); else task.resolve(result);

@@ -77,8 +77,10 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
         const kind = documentRoot.createElement('span'), remove = documentRoot.createElement('button');
         key.className = `series-key series-${slotOf(name)}`; label.textContent = name; label.className = 'time-series-name';
         const descriptor = attributes.current()?.describe(name);
-        kind.className = 'time-series-kind'; kind.textContent = !descriptor && !store.describe(name) ? 'not in this frame' : kindOf(name) === 'analysis' ? 'analysis' : 'file';
-        kind.title = kindOf(name) === 'analysis' ? 'Recorded when its analysis finishes on the displayed frame.' : 'Read from frames in the background.';
+        kind.className = 'time-series-kind'; kind.textContent = descriptor?.unavailableReason ? 'waiting for analysis settings'
+          : !descriptor && !store.describe(name) ? 'not in this frame' : kindOf(name) === 'analysis' ? 'analysis' : 'file';
+        kind.title = descriptor?.unavailableReason ?? (kindOf(name) === 'analysis'
+          ? 'Recorded when its analysis finishes on the displayed frame.' : 'Read from frames in the background.');
         remove.type = 'button'; remove.className = 'text-button'; remove.textContent = 'Remove'; remove.disabled = !controlsEnabled;
         remove.setAttribute('aria-label', `Remove ${name} from the time series`);
         remove.addEventListener('click', () => { onEdit(); settings.attributes = settings.attributes.filter(item => item !== name); changed(); });
@@ -110,9 +112,11 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
       .filter(item => item.count);
     if (!missing.length) return `${integer(total)} frames · every value collected.`;
     const parts = missing.map(item => `${item.name} (${integer(item.count)} missing${kindOf(item.name) === 'analysis' ? ', analysis' : ''})`);
+    const unidentified = missing.filter(item => attributes.current()?.describe(item.name)?.unavailableReason);
     const advice = missing.some(item => kindOf(item.name) === 'analysis')
       ? ' Analysis values appear as frames are displayed with the analysis enabled; Visit frames fills the rest.' : ' Read file values to fill them.';
-    return `${integer(total)} frames · ${parts.join(', ')}.${advice}`;
+    return `${integer(total)} frames · ${parts.join(', ')}.${unidentified.length
+      ? ` Recalculate ${unidentified.map(item => item.name).join(', ')} to identify its analysis settings.` : advice}`;
   }
 
   function draw({ force = false } = {}) {

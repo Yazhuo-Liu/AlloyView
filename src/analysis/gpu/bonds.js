@@ -2,6 +2,7 @@ import { MAX_BONDS, MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { NeighborSearch, atomRange } from '../neighbors.js';
 import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
 import { BONDS_COUNT_SHADER, BONDS_WRITE_SHADER, BOND_ATOM_WORDS, BOND_RECORD_WORDS } from './bonds-shaders.js';
+import { validateAnalysisInput } from '../errors.js';
 
 export const MAX_GPU_BOND_PAIR_CUTOFFS = 256;
 export const MAX_GPU_BOND_CORRECTION_ATOMS = 16_384;
@@ -60,7 +61,7 @@ export function correctGpuBondAtom(frame, prepared, atom, search = new NeighborS
  * The small CPU prefix scan allocates exactly the accepted bounded edge count. */
 export async function analyzeGpuBonds(runtime, frame, parameters = {}, { signal, onProgress = () => {} } = {}) {
   checkSignal(signal);
-  const prepared = prepareGpuBondParameters(frame, parameters);
+  const prepared = validateAnalysisInput(() => prepareGpuBondParameters(frame, parameters));
   const { atomCount, startAtom, endAtom, maximumCutoff, maxBonds } = prepared;
   const context = await runtime.prepareNeighbors(frame, maximumCutoff, { signal });
   const buffers = [], create = bytes => { const buffer = runtime.createBuffer(bytes); buffers.push(buffer); return buffer; };

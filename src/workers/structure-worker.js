@@ -43,7 +43,10 @@ function acquireParserCpu({ background, signal, priority }) {
 }
 
 function getParserPool() {
-  if (!parserPool) parserPool = new FrameParserPool({ acquire: acquireParserCpu, backgroundCount: parserBackgroundCount });
+  if (!parserPool) parserPool = new FrameParserPool({ acquire: acquireParserCpu, backgroundCount: parserBackgroundCount,
+    promote: ({ signal, priority }) => {
+      for (const [leaseId, lease] of leases) if (lease.signal === signal) self.postMessage({ event: 'cpu-promote', leaseId, priority });
+    } });
   return parserPool;
 }
 
@@ -61,10 +64,20 @@ self.addEventListener('message', async (event) => {
     else pending.reject(Object.assign(new Error(payload.error), { name: payload.name ?? 'Error' }));
     return;
   }
-  if (type === 'cancel-prefetch' || type === 'cancel-frame') {
-    for (const [requestId, task] of frameRequests) {
-      if ((type === 'cancel-frame' && requestId === payload.id)
-        || (type === 'cancel-prefetch' && task.background)) task.controller.abort();
+  // Speculative ownership lives on the page, where all consumers are known.
+  // A legacy blanket notice cannot distinguish a time-series read from a
+  // prefetch which another consumer has joined; accept it without cancelling
+  // unrelated work. Current clients cancel the last owner's request by ID.
+  if (type === 'cancel-prefetch') return;
+  if (type === 'cancel-frame') {
+    frameRequests.get(payload.id)?.controller.abort();
+    return;
+  }
+  if (type === 'promote-frame') {
+    const task = frameRequests.get(payload.id);
+    if (task) {
+      task.background = false; task.priority = 20;
+      parserPool?.promote(task.controller.signal);
     }
     return;
   }
@@ -170,8 +183,8 @@ async function sourceFrameCount(current, { atLeast = 0, signal } = {}) {
 }
 
 async function readSourceFrame(current, index, requestId, task) {
-  const options = { background: task.background, signal: task.controller.signal,
-    ...(task.priority === undefined ? {} : { priority: task.priority }) };
+  const options = { get background() { return task.background; }, signal: task.controller.signal,
+    get priority() { return task.priority ?? (task.background ? -20 : 20); } };
   if (current.descriptors) {
     if (!current.descriptors[index] && !current.indexComplete) await current.indexPromise;
     const descriptor = current.descriptors[index];

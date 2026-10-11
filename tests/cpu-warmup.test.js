@@ -44,7 +44,7 @@ test('CPU count tracks logical cores minus two, atom count and copy memory witho
   assert.equal(chooseWorkerCount(100_000, 1, environment(2), 4_096), 1);
   const memoryLimited = { navigator: { hardwareConcurrency: 16 },
     performance: { memory: { jsHeapSizeLimit: 100 * 1024 ** 2 } } };
-  assert.equal(chooseWorkerCount(100_000, 8 * 1024 ** 2, memoryLimited, 4_096), 1);
+  assert.equal(chooseWorkerCount(100_000, 8 * 1024 ** 2, memoryLimited, 4_096), 6);
 });
 
 test('real prewarming initializes PTM once, coalesces growth and keeps kernels for new frames', async () => {

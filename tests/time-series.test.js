@@ -51,6 +51,48 @@ test('a new analysis signature discards points computed with other settings', ()
   assert.equal(store.describe('x'), null, 'only numbers are recorded');
 });
 
+test('parameter edits replace only their analysis series and identical settings survive frame changes', () => {
+  const store = new TimeSeriesStore(), kinds = ['coordination', 'bonds', 'referenceStrain', 'localShear', 'displacement'];
+  const names = kinds.map(kind => `Mean.${kind}`);
+  const record = (index, key, value) => {
+    const item = frame(index);
+    item.properties.push(...kinds.map(kind => ({ name: kind, analysisKind: kind, analysisKey: key, data: new Float32Array(4).fill(value) })));
+    recordRegistry(store, createAttributeRegistry({ frame: item }), index, [...names, 'Mean.q']);
+  };
+  record(0, '{"cutoff":3,"gpuRequested":false}', 12);
+  record(1, '{"cutoff":3,"gpuRequested":false}', 12);
+  for (const name of names) assert.equal(store.describe(name).points.size, 2, name);
+  record(2, '{"cutoff":4.2,"gpuRequested":false}', 18);
+  for (const name of names) {
+    assert.equal(store.has(name, 0), false, name); assert.equal(store.has(name, 1), false, name);
+    assert.equal(store.value(name, 2), 18, name);
+  }
+  assert.equal(store.describe('Mean.q').points.size, 3, 'unrelated file columns keep their points');
+  record(3, '{"cutoff":4.2,"gpuRequested":false}', 20);
+  for (const name of names) assert.equal(store.describe(name).points.size, 2, name);
+  record(4, '{"cutoff":4.2,"gpuRequested":true}', 20);
+  for (const name of names) assert.equal(store.describe(name).points.size, 1, 'a changed backend preference has its own measurement identity');
+  const table = timeSeriesTable(store, names, [0, 1, 2, 3, 4]);
+  assert.deepEqual(table.rows[0].slice(3), ['', '', '', '', '']);
+  assert.deepEqual(table.rows[4].slice(3), [20, 20, 20, 20, 20]);
+});
+
+test('unknown analysis identities clear previous points and are never collected as file data', () => {
+  const store = new TimeSeriesStore(), target = frame(0);
+  target.properties.push({ name: 'coordination', data: new Float32Array(4).fill(12), analysisKind: 'coordination', analysisKey: '{"cutoff":3}' });
+  recordRegistry(store, createAttributeRegistry({ frame: target }), 0, ['Mean.coordination', 'Mean.q']);
+  target.properties.at(-1).analysisKey = '';
+  const registry = createAttributeRegistry({ frame: target });
+  assert.equal(registry.describe('Mean.coordination').kind, 'analysis');
+  assert.equal(recordRegistry(store, registry, 1, ['Mean.coordination']), true);
+  assert.equal(store.describe('Mean.coordination'), null);
+  for (const signature of ['', null, 'coordination:', 'coordination:   ']) {
+    assert.equal(store.record(2, [{ name: 'Mean.coordination', value: 18, kind: 'analysis', signature }]), false);
+  }
+  assert.equal(store.value('Mean.q', 0), 0.5);
+  assert.equal(createAttributeRegistry({ frame: target, fileOnly: true }).describe('Mean.coordination'), null);
+});
+
 test('background collection reads only missing frames, records file values and can be cancelled', async () => {
   const frames = [0, 1, 2, 3, 4].map(index => frame(index));
   const store = new TimeSeriesStore(), reads = [];
@@ -83,7 +125,8 @@ test('background collection reads only missing frames, records file values and c
   await assert.rejects(collectFileSeries({ store: new TimeSeriesStore(), frames: [0], names: ['Cell.a'], readFrame: async () => null, attributesFor }), /Frame 1 could not be read/);
   // Analysis values never come from a background registry.
   const analyzed = frame(0);
-  analyzed.properties.push({ name: 'structureType', data: new Uint8Array(4).fill(1), categories: STRUCTURE_TYPES, analysisKind: 'cna' });
+  analyzed.properties.push({ name: 'structureType', data: new Uint8Array(4).fill(1), categories: STRUCTURE_TYPES,
+    analysisKind: 'cna', analysisKey: '{"mode":"adaptive"}' });
   const onlyFile = new TimeSeriesStore();
   await collectFileSeries({ store: onlyFile, frames: [0], names: ['CNA.FCC.fraction'], readFrame: async () => analyzed, attributesFor });
   assert.equal(onlyFile.has('CNA.FCC.fraction', 0), false);

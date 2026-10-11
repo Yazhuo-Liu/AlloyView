@@ -1,4 +1,5 @@
 import { FrameCache } from './data/frame-cache.js';
+import { SharedFrameRequests } from './data/shared-frame-requests.js';
 import { ColorQuantityResolver, colorPropertyKey, initialColorQuantities } from './render/color-quantities.js';
 import { colorsByDiscreteProperty, discreteValues } from './render/discrete-colors.js';
 import { DEFAULT_ORIENTATION_SETTINGS, OrientationColorResolver, drawIpfKey, normalizeOrientationSettings, ORIENTATION_COLOR_MODES } from './render/orientation-colors.js';
@@ -40,7 +41,7 @@ import {
   visibilityByType,
   combineVisibilityMasks,
 } from './render/palette.js';
-import { normalizeRadiusPercent, radiiByType } from './render/atomic-radii.js';
+import { normalizeRadiusPercent } from './render/atomic-radii.js';
 import { WebGLRenderer } from './render/webgl-renderer.js';
 import { initializeBccLogo } from './render/bcc-logo.js';
 import { StructureWorkerClient } from './worker-client.js';
@@ -80,6 +81,7 @@ import { initializeSliceGizmo } from './render/slice-gizmo.js';
 import { initializeCrystalDragControls } from './crystal-drag-controls.js';
 import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './configuration.js';
 import { initializeAtomEyeTools } from './atomeye-tools.js';
+import { createDisplayRefresh } from './display-refresh.js';
 import { initializeDxaTools, DXA_STRUCTURE_PROPERTY } from './dxa-tools.js';
 import { initializeFeatureHelp } from './feature-help.js';
 import { normalizeSelectionGroups, selectionGroupVisibility } from './selection-groups.js';
@@ -165,7 +167,7 @@ const state = {
   availableSources: [],
   availableEntries: [],
   sourceVersion: 0,
-  pendingFrames: new Map(),
+  pendingFrames: new SharedFrameRequests(),
   cachePlan: null,
   prefetchToken: 0,
   playing: false,
@@ -189,6 +191,7 @@ let frameTimer = null;
 let playbackTimer = null;
 let playbackBuffer = null;
 let framePrefetchController = null;
+const framePrefetchRequests = new Map();
 let frameNavigationController = null;
 let interactionHintTimer = null;
 let interactionHintFadeTimer = null;
@@ -240,6 +243,16 @@ let gpuPreparationStatus = null;
 let replicationController = null;
 let replicationRequest = 0;
 const analysisFrameSources = new WeakMap();
+const displayRefresh = createDisplayRefresh({ apply: flushDisplayRefresh });
+let framePaletteSeed = null;
+function requestDisplayRefresh(flags) { displayRefresh.request(flags); }
+function afterDisplayRefresh(callback) {
+  displayRefresh.afterFlush(() => {
+    callback();
+    // Vector-source waiting labels follow the completed analysis pills.
+    requestDisplayRefresh({ vectors: true });
+  });
+}
 const cpuPrefetch = new CpuPrefetchScheduler({ pool: analysisPool, dxaClient });
 const gpuPrefetch = new GpuPrefetchScheduler({
   pool: analysisPool,
@@ -358,7 +371,7 @@ try {
     onProjectionChange: syncProjectionControls,
     onRender: () => { sliceGizmo?.update(); ambientOcclusion?.update(); },
     // Exports wait for current ambient occlusion, after a legend edit commits.
-    onBeforeCapture: () => { commitScalarLegendEdit?.(); ambientOcclusion?.ensureCurrent(); },
+    onBeforeCapture: () => { commitScalarLegendEdit?.(); displayRefresh.flush(); ambientOcclusion?.ensureCurrent(); },
   });
 } catch (error) {
   showToast(error.message);
@@ -518,6 +531,7 @@ const worker = new StructureWorkerClient(({ loaded, total, stage }) => {
 
 atomEyeTools = initializeAtomEyeTools({
   renderer, pool: analysisPool, tools: toolPanels,
+  requestDisplayRefresh, afterDisplayRefresh,
   getFrame: () => state.frame, getFrameAt: getFrame,
   getFrameIndex: () => state.frameIndex, getFrameCount: () => state.frameCount,
   ensureIndexed: waitForSourceIndex,
@@ -552,11 +566,8 @@ atomEyeTools = initializeAtomEyeTools({
   },
   getColorMode: () => state.colorMode,
   getColorChoiceVersion: () => colorChoiceVersion,
-  getExportOptions: () => ({ includeBackground: elements['png-background'].checked,
-    includeAxes: elements['png-axes'].checked, legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
-    ...exportResolutionControls.getOptions(),
-    ...sliceOutlineExportOptions(), ...textLabelExportOptions() }),
-  prepareExport: options => textLabelControls?.prepareExport(options),
+  getExportOptions: imageExportOptions,
+  prepareExport: options => { displayRefresh.flush(); return textLabelControls?.prepareExport(options); },
   showFrame, stopPlayback: stopFramePlayback,
   getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
   notify: showToast, onEdit: () => interruptConfigurationRestore('a settings edit'), onMemoryChange: reassessFrameCache,
@@ -588,7 +599,7 @@ crystalVisibility = initializeCrystalVisibilityControls({
 });
 
 dxaTools = initializeDxaTools({
-  renderer, tools: toolPanels, client: dxaClient, getFrame: () => state.frame,
+  renderer, tools: toolPanels, client: dxaClient, getFrame: () => state.frame, afterDisplayRefresh,
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
   getColorMode: () => state.colorMode,
   getColorChoiceVersion: () => colorChoiceVersion,
@@ -616,7 +627,7 @@ dxaTools = initializeDxaTools({
 });
 
 topologyTools = initializeTopologyTools({
-  renderer, pool: analysisPool, tools: toolPanels,
+  renderer, pool: analysisPool, tools: toolPanels, afterDisplayRefresh,
   getFrame: () => state.frame,
   getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
@@ -645,7 +656,7 @@ topologyTools = initializeTopologyTools({
 });
 
 clusterTools = initializeClusterTools({
-  pool: analysisPool, tools: toolPanels,
+  pool: analysisPool, tools: toolPanels, afterDisplayRefresh,
   getFrame: () => state.frame,
   getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
@@ -670,7 +681,7 @@ clusterTools = initializeClusterTools({
 });
 
 grainTools = initializeGrainTools({
-  client: new GrainSegmentationClient({ cpuBudget }), tools: toolPanels,
+  client: new GrainSegmentationClient({ cpuBudget }), tools: toolPanels, afterDisplayRefresh,
   getFrame: () => state.frame,
   getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
@@ -700,7 +711,7 @@ grainTools = initializeGrainTools({
 });
 
 wignerSeitzTools = initializeWignerSeitzTools({
-  renderer, pool: analysisPool, tools: toolPanels,
+  renderer, pool: analysisPool, tools: toolPanels, afterDisplayRefresh,
   getFrame: () => state.frame, getFrameAt: getFrame,
   getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
   getFrameCount: () => state.frameCount,
@@ -978,6 +989,7 @@ for (const button of document.querySelectorAll('[data-view]')) {
 }
 elements['export-png'].addEventListener('click', () => {
   if (!state.frame) return;
+  displayRefresh.flush();
   const stem = (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, '');
   try {
     renderer.exportPng(`${stem}-frame-${state.frameIndex + 1}.png`, {
@@ -1011,6 +1023,18 @@ document.addEventListener('click', (event) => {
   }
 });
 
+// Finish explicit edits before the event returns. Analysis completions have no
+// DOM event and still merge into one animation-frame refresh.
+for (const eventName of ['input', 'change', 'click']) document.addEventListener(eventName, () => displayRefresh.flush());
+let displayEditFlushQueued = false;
+for (const eventName of ['input', 'change', 'click']) document.addEventListener(eventName, () => {
+  // Capture also sees non-bubbling edits from integrations. Its microtask runs
+  // after the target handler has published the new settings.
+  if (displayEditFlushQueued) return;
+  displayEditFlushQueued = true;
+  queueMicrotask(() => { displayEditFlushQueued = false; displayRefresh.flush(); });
+}, { capture: true });
+
 syncProjectionControls('perspective');
 updateCspMethodUi();
 setBackgroundColor(elements.background.value, { automatic: true });
@@ -1027,8 +1051,11 @@ const keyboardControls = initializeKeyboardControls({
 // frame's analyses have finished.
 const automationLock = createAutomationLock();
 // Every analysis panel reports its work in a state pill; a frame being read shows the loading overlay.
-const analysesSettled = () => elements.loading.hidden && ![...document.querySelectorAll('.analysis-section .state-pill')]
-  .some(pill => /…$|^Queued$|^Waiting$/.test(pill.textContent.trim()));
+const analysesSettled = () => {
+  displayRefresh.flush();
+  return elements.loading.hidden && ![...document.querySelectorAll('.analysis-section .state-pill')]
+    .some(pill => /…$|^Queued$|^Waiting$/.test(pill.textContent.trim()));
+};
 const showFrameForAutomation = (index) => {
   atomEyeTools.cancelBatch({ restore: false });
   interruptConfigurationRestore('a frame change');
@@ -1173,8 +1200,7 @@ function closeSource() {
   timeSeries?.reset();
   movieControls?.reset();
   globalAttributes?.reset();
-  framePrefetchController?.abort();
-  framePrefetchController = null;
+  cancelFramePrefetch();
   frameNavigationController?.abort();
   frameNavigationController = null;
   worker.reset();
@@ -1518,8 +1544,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
   // these same pools before the user starts an analysis.
   void cpuPrefetch.warmModules({ sourceKey: sourceVersion });
   state.prefetchToken += 1;
-  framePrefetchController?.abort();
-  framePrefetchController = null;
+  cancelFramePrefetch();
   frameNavigationController?.abort();
   frameNavigationController = null;
   state.pendingFrames.clear();
@@ -1743,7 +1768,8 @@ function sourceFormatLabel(format) {
 async function showFrame(index) {
   if (sourceLoadingOwner !== null) return false;
   if (!Number.isInteger(index) || index < 0 || index >= state.frameCount) return false;
-  const navigation = beginFrameNavigation();
+  const interruptedNavigation = frameNavigationController;
+  const navigation = beginFrameNavigation({ deferAbort: true });
   if (index !== state.frameIndex) cancelLatticeEstimation();
   const interruptedReplication = Boolean(replicationController);
   if (interruptedReplication) {
@@ -1756,6 +1782,7 @@ async function showFrame(index) {
   // The displayed frame is kept unless a smoothing change has not reached it,
   // for example when this request interrupts the one that applies the change.
   if (index === state.frameIndex && displayedSmoothingWindow() === trajectoryTools.smoothingWindow()) {
+    interruptedNavigation?.abort();
     elements['frame-slider'].value = String(index);
     elements['frame-label'].textContent = `${index + 1} / ${state.frameCount}`;
     setRangeProgress(elements['frame-slider']);
@@ -1766,11 +1793,18 @@ async function showFrame(index) {
     return true;
   }
   gpuPrefetch.cancel();
-  cancelFramePrefetch();
+  cancelFramePrefetch(prefetchWindow(index));
   const requiresLoad = !cache.has(index);
   if (requiresLoad) setLoading(true, `Preparing frame ${index + 1}…`, navigation, true);
   try {
-    const frame = await getFrame(index, { signal: navigation.signal });
+    const requestedFrame = getFrame(index, { signal: navigation.signal });
+    // A repeated request for the same index joins before the old navigation
+    // consumer departs, so it cannot cancel and restart the shared parse.
+    interruptedNavigation?.abort();
+    // Join/promote the displayed frame before launching background lanes, and
+    // start useful look-ahead even when sequential navigation never goes idle.
+    scheduleFramePrefetch(index);
+    const frame = await requestedFrame;
     if (request !== state.frameRequest) return false;
     if (!frame) return false;
     if (state.coordinateMode === 'unwrapped' && trajectoryTools.needsInferredUnwrap(frame)) {
@@ -1800,6 +1834,9 @@ async function showFrame(index) {
 }
 
 async function displayFrame(frame, { resetCamera = false } = {}) {
+  const pending = [];
+  displayRefresh.begin();
+  try {
   abortAnalysisJobs();
   state.frame = frame;
   // Prepare modules, snapshots and neighbour indices alongside the first
@@ -1819,9 +1856,12 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   renderLatticeReferences(frame);
   syncAxisVisibility();
   configureCoordinateMode(frame);
+  atomEyeTools.prepareFrame(frame);
   refreshColorOptions();
   const palette = atomEyeTools.customizePalette(paletteForCurrentMode());
-  const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), radiiByType(frame), displayRepetitions(),
+  framePaletteSeed = { frame, mode: state.colorMode, palette, properties: frame.properties.map(property =>
+    [property.name, property.data, property.categories, property.displayName, property.unit]), groups: state.selectionGroups.groups };
+  const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), atomEyeTools.getRadii(), displayRepetitions(),
     { coordinateMode: displayCoordinateMode(frame) });
   trajectoryTools?.onFrame();
   if (state.coordinateMode === 'unwrapped' && trajectoryTools?.needsInferredUnwrap(frame)) {
@@ -1833,10 +1873,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   configurePeriodicOriginUi();
   sliceControls.refreshPickedAtoms();
   configureReplicationUi();
-  applyScalarVisibility(palette.legend);
-  renderLegend(palette.legend);
-  statisticsExports?.refresh();
-  globalAttributes?.refresh();
+  applyColors();
   if (resetCamera) renderer.resetCamera();
   updateSlices();
   restoreSelection();
@@ -1865,7 +1902,6 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   setRangeProgress(elements['frame-slider']);
   updateCnaMethodUi();
   updateCspMethodUi();
-  const pending = [];
   const strainRequest = state.analysis.strain.request;
   for (const kind of Object.keys(ANALYSES)) {
     const prefix = ANALYSES[kind].prefix;
@@ -1891,65 +1927,74 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   pending.push(surfaceTools.onFrame());
   pending.push(binningTools.onFrame());
   syncCancelButton('coordination');
+  } finally {
+    try { displayRefresh.end(); } finally { framePaletteSeed = null; }
+  }
   await Promise.all(pending);
+  displayRefresh.flush();
 }
 
-async function getFrame(index, { background = false, cacheFrame = true, signal, sourceKey } = {}) {
+async function getFrame(index, { background = false, speculative = false, cacheFrame = true, signal, sourceKey } = {}) {
   if (signal?.aborted || (sourceKey && sourceKey !== processingSourceKey())) return null;
   const cached = cacheFrame ? cache.get(index) : cache.frames.get(index);
   if (cached) {
     analysisPool.associateGpuFrame(cached, index);
     return cached;
   }
-  const existing = state.pendingFrames.get(index);
-  if (existing && !existing.signal?.aborted && (background || !existing.background)) {
-    if (cacheFrame) existing.cacheFrame = true;
-    return existing.promise;
-  }
   const sourceVersion = state.sourceVersion;
   const processingRevision = state.processingRevision;
   const physical = state.replicateAtoms, repetitions = [...state.repetitions];
-  const pending = { cacheFrame, promise: null, background, signal };
+  const identity = processingSourceKey();
   // Smoothing and inferred unwrapping run in the structure Worker. Without
   // them the request is unchanged; smoothing edits bump processingRevision.
   const trajectory = trajectoryTools?.frameRequestOptions() ?? null;
-  pending.promise = worker.frame(index, { reportProgress: !background, background, signal, trajectory })
+  const key = JSON.stringify([identity, index, physical, repetitions, trajectory]);
+  return state.pendingFrames.join(key, { signal, background, speculative, cacheFrame }, pending => {
+    pending.index = index;
+    pending.promote = () => worker.promoteFrame(index, trajectory);
+    return worker.frame(index, { reportProgress: !background, background, signal: pending.controller.signal, trajectory })
     .then(async (result) => {
-      const preparationSignal = framePreparationSignal(signal, () =>
+      const preparationSignal = framePreparationSignal(pending.controller.signal, () =>
         sourceVersion === state.sourceVersion && processingRevision === state.processingRevision
-          && (!sourceKey || sourceKey === processingSourceKey()));
+          && identity === processingSourceKey());
       if (preparationSignal.aborted) return null;
       result.frame.frameIndex = index;
+      pending.promote = () => worker.promoteReplication(preparationSignal);
       await externalProperties.applyToFrame(result.frame);
       if (preparationSignal.aborted) return null;
-      const frame = physical ? await prepareAnalysisFrame(result.frame, repetitions, true, { signal: preparationSignal, background }) : result.frame;
+      const frame = physical ? await prepareAnalysisFrame(result.frame, repetitions, true, { signal: preparationSignal, background: pending.background }) : result.frame;
       if (preparationSignal.aborted) return null;
       analysisPool.associateGpuFrame(frame, index);
       // GPU residency can extend beyond the CPU window without evicting the
       // displayed frame or retaining the whole sequence twice in host memory.
-      if (pending.cacheFrame && state.pendingFrames.get(index) === pending) {
-        if (background && cache.has(state.frameIndex)) cache.get(state.frameIndex);
+      if (pending.cacheFrame && state.pendingFrames.entries.get(key) === pending) {
+        if (pending.background && cache.has(state.frameIndex)) cache.get(state.frameIndex);
         cache.set(index, frame);
         updateCacheLabel();
       }
       return frame;
-    })
-    .finally(() => {
-      if (state.pendingFrames.get(index) === pending) state.pendingFrames.delete(index);
     });
-  state.pendingFrames.set(index, pending);
-  return pending.promise;
+  });
 }
 
-function cancelFramePrefetch() {
+function cancelFramePrefetch(retainIndices = []) {
   state.prefetchToken++;
   framePrefetchController?.abort();
   framePrefetchController = null;
-  worker.cancelPrefetch();
+  const retained = new Set(retainIndices);
+  for (const [index, request] of framePrefetchRequests) if (!retained.has(index)) {
+    request.controller.abort();
+    framePrefetchRequests.delete(index);
+  }
+}
+
+function prefetchWindow(centerIndex) {
+  return [centerIndex, ...(!state.cachePlan ? [] : prefetchOrder(centerIndex, state.frameCount,
+    state.cachePlan.limit, state.cachePlan.fullTrajectory))];
 }
 
 function scheduleFramePrefetch(centerIndex) {
-  cancelFramePrefetch();
+  cancelFramePrefetch(prefetchWindow(centerIndex));
   if (state.frameCount <= 1 || !state.cachePlan) return;
   const controller = new AbortController();
   framePrefetchController = controller;
@@ -1962,19 +2007,26 @@ function scheduleFramePrefetch(centerIndex) {
     while (cursor < indices.length && token === state.prefetchToken && !controller.signal.aborted) {
       const index = indices[cursor++];
       if (cache.has(index)) continue;
+      let request = framePrefetchRequests.get(index);
       try {
-        await getFrame(index, { background: true, signal: controller.signal });
-        if (cache.has(centerIndex)) cache.get(centerIndex);
+        if (!request) {
+          const owner = new AbortController();
+          request = { controller: owner, promise: getFrame(index, { background: true, speculative: true, signal: owner.signal }) };
+          framePrefetchRequests.set(index, request);
+        }
+        await request.promise;
+        if (token === state.prefetchToken && cache.has(centerIndex)) cache.get(centerIndex);
       } catch (error) {
         if (error.name === 'AbortError' || controller.signal.aborted) return;
         // A malformed speculative frame must not stop the other available
         // frames; requesting it explicitly will display the parser's error.
+      } finally {
+        if (framePrefetchRequests.get(index) === request) framePrefetchRequests.delete(index);
       }
     }
   };
   const run = () => { if (!controller.signal.aborted) void Promise.all(Array.from({ length: concurrency }, lane)); };
-  if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 800 });
-  else setTimeout(run, 40);
+  queueMicrotask(run);
 }
 
 function prefetchOrder(center, count, limit, fullTrajectory) {
@@ -2258,10 +2310,6 @@ async function refreshExternalProperties({ restoring = false, reason, oldName, n
   const version = state.sourceVersion;
   const frames = new Set([state.frame, ...cache.frames.values()]);
   for (const frame of [...frames]) frames.add(sourceFrame(frame));
-  for (const frame of frames) {
-    await externalProperties.applyToFrame(frame, { sourceFrame: sourceFrame(frame) });
-    if (version !== state.sourceVersion) return;
-  }
   if (reason === 'rename') {
     if (state.colorMode === `property:${oldName}`) state.colorMode = `property:${name}`;
     for (const preferences of [scalarColorRanges, scalarColorSchemes, scalarHideOutside, scalarColorModes, hiddenCategories]) {
@@ -2270,8 +2318,20 @@ async function refreshExternalProperties({ restoring = false, reason, oldName, n
       preferences.set(key, preferences.get(oldKey));
       preferences.delete(oldKey);
     }
-    atomEyeTools?.renameProperty(oldName, name);
   }
+  let renamedDisplay = false;
+  for (const frame of frames) {
+    await externalProperties.applyToFrame(frame, { sourceFrame: sourceFrame(frame) });
+    if (version !== state.sourceVersion) return;
+    if (reason === 'rename' && frame === state.frame) {
+      // The displayed field and its selected quantity become observable
+      // together, before awaiting attachment to other cached frames.
+      atomEyeTools?.renameProperty(oldName, name);
+      refreshColorOptions(); applyColors(); displayRefresh.flush();
+      renamedDisplay = true;
+    }
+  }
+  if (reason === 'rename' && !renamedDisplay) atomEyeTools?.renameProperty(oldName, name);
   externalProperties.refresh();
   toolPanels.setToolEnabled('externalProperties', externalProperties.getState().files.length > 0);
   refreshColorOptions();
@@ -2280,6 +2340,7 @@ async function refreshExternalProperties({ restoring = false, reason, oldName, n
   atomEyeTools?.refreshProperties();
   reassessFrameCache(state.frame);
   updateMemoryMetric();
+  displayRefresh.flush();
   if (externalProperties.getPendingFiles().length) elements['configuration-status'].textContent =
     `Reselect external property files in Modification → External properties: ${externalProperties.getPendingFiles().map(file => file.name).join(', ')}. Their values have not been restored.`;
   else if (!restoring && /external property files/i.test(elements['configuration-status'].textContent)) {
@@ -2347,6 +2408,7 @@ function applyCoordinateMode({ resetCamera = true } = {}) {
   atomEyeTools.updateMeasurements();
   atomEyeTools.syncComparison();
   sliceControls.refreshPickedAtoms();
+  displayRefresh.flush();
 }
 
 function selectColorMode(value) {
@@ -2358,11 +2420,17 @@ function selectColorMode(value) {
   if (isCrystalStructureProperty(value.slice(9))) crystalVisibility.restore({ source: value.slice(9) });
   elements['color-mode'].value = value;
   applyColors();
+  displayRefresh.flush();
 }
 
 function refreshColorOptions() {
-  const previous = state.colorMode;
+  // Recipes can publish dependent properties immediately; only DOM work waits.
   expressionTools?.sync(state.frame);
+  requestDisplayRefresh({ options: true, vectors: true });
+}
+
+function refreshColorOptionsNow() {
+  const previous = state.colorMode;
   elements['color-mode'].replaceChildren(option('type', 'Atom type'));
   const propertyNames = new Set();
   initialColorQuantities(state.frame).forEach(({ value, label }) => {
@@ -2437,18 +2505,34 @@ function refreshColorOptions() {
   const available = [...elements['color-mode'].options].some((item) => item.value === previous);
   state.colorMode = available ? previous : 'type';
   elements['color-mode'].value = state.colorMode;
-  atomEyeTools?.updateVectors();
 }
 
 function applyColors() {
+  requestDisplayRefresh({ colors: true, statistics: true, comparison: true });
+}
+
+function flushDisplayRefresh(flags) {
+  if (flags.options) refreshColorOptionsNow();
+  if (flags.colors || flags.appearance) applyColorsNow();
+  else if (flags.statistics) atomEyeTools?.flushDisplayRefresh({ statistics: true });
+  if (flags.vectors) atomEyeTools?.flushDisplayRefresh({ vectors: true });
+  if (flags.comparison) atomEyeTools?.flushDisplayRefresh({ comparison: true });
+}
+
+function applyColorsNow() {
   if (!state.frame) return;
   try {
-    const palette = atomEyeTools.customizePalette(paletteForCurrentMode());
-    renderer.setColors(palette.colors);
+    const seed = framePaletteSeed;
+    const reuse = seed?.frame === state.frame && renderer.atomColors === seed.palette.colors && seed.mode === state.colorMode && seed.groups === state.selectionGroups.groups
+      && seed.properties.length === state.frame.properties.length && seed.properties.every(([name, data, categories, displayName, unit], index) => {
+        const property = state.frame.properties[index];
+        return property.name === name && property.data === data && property.categories === categories && property.displayName === displayName && property.unit === unit;
+      });
+    const palette = reuse ? seed.palette : atomEyeTools.customizePalette(paletteForCurrentMode());
+    if (!reuse) renderer.setColors(palette.colors);
     applyScalarVisibility(palette.legend);
     renderLegend(palette.legend);
-    atomEyeTools.applyRadii();
-    atomEyeTools.updateStatistics();
+    atomEyeTools.flushDisplayRefresh({ radii: true, statistics: true });
     statisticsExports?.refresh();
     globalAttributes?.refresh();
     void binningTools?.refresh();
@@ -2978,7 +3062,8 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
   const cached = frame.properties.find(property => property.name === name && property.analysisKey === key
     && (!['strain', 'cna', 'centrosymmetry', 'ptm'].includes(kind) || Boolean(property.analysisGpuRequested) === gpuRequested));
   if (cached) {
-    ready(cached); refreshColorOptions(); applyColors();
+    refreshColorOptions(); applyColors();
+    afterDisplayRefresh(() => { if (isCurrent()) ready(cached); });
     analysisControllers.delete(kind);
     return;
   }
@@ -3061,8 +3146,9 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     }
     for (const property of properties) replaceAnalysisProperty(frame, property);
     if (kind === 'centrosymmetry' && !result.cspStructureTypes) crystalVisibility.forgetSource('centralSymmetryStructureType');
-    reassessFrameCache(frame); ready(properties[0]);
+    reassessFrameCache(frame);
     refreshColorOptions(); applyColors(); restoreSelection(); updateMemoryMetric();
+    afterDisplayRefresh(() => { if (isCurrent()) ready(properties[0]); });
     if (result.warning) showToast(result.warning);
   } catch (error) {
     if (!isCurrent() || error.name === 'AbortError') return;
@@ -3117,13 +3203,16 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     if (frame === state.frame) {
       refreshColorOptions();
       applyColors();
-      elements['analysis-state'].textContent = 'Calculated';
-      elements['analysis-state'].classList.add('ready');
-      const backend = { engine: existing.analysisEngine, fallbackReason: existing.analysisFallbackReason };
-      elements['metric-analysis'].textContent = `${formatDuration(existing.analysisMs)} · ${analysisBackendLabel(backend)}`;
-      elements['metric-analysis'].title = analysisBackendDetails(backend);
-      elements['run-analysis'].disabled = false;
-      if (loadingOwner === 'coordination') setLoading(false);
+      afterDisplayRefresh(() => {
+        if (!isCurrent()) return;
+        elements['analysis-state'].textContent = 'Calculated';
+        elements['analysis-state'].classList.add('ready');
+        const backend = { engine: existing.analysisEngine, fallbackReason: existing.analysisFallbackReason };
+        elements['metric-analysis'].textContent = `${formatDuration(existing.analysisMs)} · ${analysisBackendLabel(backend)}`;
+        elements['metric-analysis'].title = analysisBackendDetails(backend);
+        elements['run-analysis'].disabled = false;
+        if (loadingOwner === 'coordination') setLoading(false);
+      });
     }
     analysisControllers.delete('coordination');
     return;
@@ -3153,6 +3242,7 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
     const property = { name: 'coordination', unit: '', data: result.coordination, analysisCutoff: cutoff,
       histogram: result.histogram, meanCoordination: result.meanCoordination,
       analysisKind: 'coordination', analysisMs: result.elapsedMs, analysisEngine: result.engine,
+      analysisKey: JSON.stringify({ cutoff, gpuRequested: result.gpuRequested ?? analysisPool.gpuEnabled }),
       analysisFallbackReason: result.fallbackReason,
       analysisGpuRequested: result.gpuRequested ?? analysisPool.gpuEnabled };
     replaceAnalysisProperty(frame, property);
@@ -3161,10 +3251,13 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
         || !state.analysis.coordination.enabled || state.analysis.coordination.cutoff !== cutoff) return;
     refreshColorOptions();
     applyColors();
-    elements['analysis-state'].textContent = 'Calculated';
-    elements['analysis-state'].classList.add('ready');
-    elements['metric-analysis'].textContent = `${formatDuration(result.elapsedMs)} · ${analysisBackendLabel(result)}`;
-    elements['metric-analysis'].title = analysisBackendDetails(result);
+    afterDisplayRefresh(() => {
+      if (!isCurrent()) return;
+      elements['analysis-state'].textContent = 'Calculated';
+      elements['analysis-state'].classList.add('ready');
+      elements['metric-analysis'].textContent = `${formatDuration(result.elapsedMs)} · ${analysisBackendLabel(result)}`;
+      elements['metric-analysis'].title = analysisBackendDetails(result);
+    });
     updateSelectionPanel();
     updateMemoryMetric();
     if (result.warning) showToast(result.warning);
@@ -3321,6 +3414,7 @@ function updateSelectionPanel(index = null) {
 }
 
 function renderLegend(legend) {
+  const legendFrame = state.frame;
   commitScalarLegendEdit = null;
   currentColorLegend = legend;
   crystalVisibility?.refresh();
@@ -3514,7 +3608,7 @@ function renderLegend(legend) {
     let previewActive = false;
     const finishSliderPreview = (limits = pendingSliderRange ?? scalarColorRanges.get(legend.property.name)) => {
       pendingSliderRange = null;
-      if (!rangeSlider.element.isConnected || !limits) return;
+      if (state.frame !== legendFrame || !rangeSlider.element.isConnected || !limits) return;
       previewActive = false;
       commitScalarLegendEdit = null;
       applyRange(limits);
@@ -3554,6 +3648,7 @@ function renderLegend(legend) {
       return limits;
     };
     const applyRange = (limits) => {
+      if (state.frame !== legendFrame) return;
       pendingSliderRange = null;
       previewActive = false;
       commitScalarLegendEdit = null;
@@ -3571,8 +3666,10 @@ function renderLegend(legend) {
       minimum.textContent = formatValue(limits.minimum);
       maximum.textContent = formatValue(limits.maximum);
       syncAutomatic();
+      displayRefresh.flush();
     };
     const previewRange = (limits) => {
+      if (state.frame !== legendFrame) return;
       const previewLegend = { ...legend, ...limits, customRange: true };
       if (!previewActive || !renderer.scalarColorPreview) {
         const overrides = atomEyeTools.customizePalette({ colors: renderer.atomColors, legend }, { trackColorOverrides: true }).colorOverrides;
@@ -3928,6 +4025,7 @@ function textLabelExportOptions() {
 
 // The PNG button's options, for script and movie images.
 function imageExportOptions() {
+  displayRefresh.flush();
   return { includeBackground: elements['png-background'].checked, includeAxes: elements['png-axes'].checked,
     legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
     ...exportResolutionControls.getOptions(), ...sliceOutlineExportOptions(), ...textLabelExportOptions() };
@@ -4265,6 +4363,9 @@ async function restoreConfiguration(config) {
       state.colorMode = saved.display.colorMode;
       refreshColorOptions(); applyColors(); restoreSelection();
     }
+    // "Restored" includes the saved quantity selector, even when its external
+    // file is pending, and completion pills queued behind the display work.
+    displayRefresh.flush();
     const failed = [...Object.keys(state.analysis).filter(kind => {
       const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
       return state.analysis[kind].enabled && elements[`${prefix}-state`].textContent === 'Failed';
@@ -4560,9 +4661,9 @@ function reportReadProgress(text) {
 
 /** Abort the frame request in flight, hide the indicator it showed, and
  * return the controller that owns the next request. */
-function beginFrameNavigation() {
+function beginFrameNavigation({ deferAbort = false } = {}) {
   const interrupted = frameNavigationController;
-  interrupted?.abort();
+  if (!deferAbort) interrupted?.abort();
   if (interrupted && loadingOwner === interrupted) setLoading(false);
   return frameNavigationController = new AbortController();
 }

@@ -35,6 +35,12 @@ try {
       const { StructureWorkerClient } = await import(new URL('./worker-client.js', app));
       const { WebGLRenderer } = await import(new URL('./render/webgl-renderer.js', app));
       const checks = window.trajectoryChecks = { loads: [], frameRequests: [], replicas: [], displays: [] };
+      // Keep one processed-frame read in flight long enough for a file-value
+      // collection and navigation to share the app's processing operation.
+      let releaseFrame;
+      const heldFrame = new Promise(resolve => { releaseFrame = resolve; });
+      let held = true;
+      checks.releaseFrame = () => { held = false; releaseFrame(); };
       const load = StructureWorkerClient.prototype.load;
       StructureWorkerClient.prototype.load = function(...args) {
         checks.client = this;
@@ -43,7 +49,12 @@ try {
       const frame = StructureWorkerClient.prototype.frame;
       StructureWorkerClient.prototype.frame = function(index, options) {
         checks.frameRequests.push({ index, background: Boolean(options?.background), time: performance.now() });
-        return frame.call(this, index, options);
+        const result = frame.call(this, index, options);
+        return index === 1 && held ? result.then(async value => {
+          await heldFrame;
+          if (options?.signal?.aborted) throw new DOMException('Frame request cancelled.', 'AbortError');
+          return value;
+        }) : result;
       };
       const replicate = StructureWorkerClient.prototype.replicate;
       StructureWorkerClient.prototype.replicate = function(...args) {
@@ -64,8 +75,20 @@ try {
     await call('DOM.setFileInputFiles', { nodeId, files: [file] });
     await evaluate('document.getElementById("file-input").dispatchEvent(new Event("change",{bubbles:true}))');
     await waitFor('trajectoryChecks.renderer?.frame.ids.length === 2 && document.getElementById("frame-count").textContent === "12"', 'Indexed trajectory import');
+    await waitFor('trajectoryChecks.frameRequests.some(request => request.index === 1)', 'In-flight speculative frame');
+    await evaluate(`document.querySelector('[data-tool-button="timeSeries"]').click();
+      document.getElementById('time-series-last').value = '12';
+      document.getElementById('time-series-last').dispatchEvent(new Event('change', {bubbles:true}));
+      document.getElementById('collect-time-series').click();`);
+    await waitFor('document.getElementById("collect-time-series").disabled && !document.getElementById("cancel-time-series").disabled', 'File-value collection joined to prefetch');
     await evaluate('document.getElementById("frame-last").click()');
     await waitFor('trajectoryChecks.renderer.frame.frameIndex === 11', 'Foreground seek to last frame');
+    assert.equal(await evaluate('document.getElementById("collect-time-series").disabled'), true, 'navigation must preserve the active collection');
+    assert.equal(await evaluate('trajectoryChecks.frameRequests.filter(request => request.index === 1).length'), 1, 'the collection shares the prefetch processing request');
+    await evaluate('trajectoryChecks.releaseFrame()');
+    await waitFor(`document.getElementById('time-series-state').textContent === 'Complete'
+      && document.querySelector('#time-series-chart path[data-series="Cell.volume"]')?.dataset.pointCount === '12'`, 'Complete file-value collection after navigation');
+    assert.equal(await evaluate('trajectoryChecks.renderer.frame.frameIndex'), 11, 'background collection keeps the navigated view');
     const identities = await evaluate('Array.from(trajectoryChecks.renderer.frame.ids)');
     assert.deepEqual(identities, [7, 12]);
     await evaluate('document.getElementById("frame-first").click()');
@@ -117,15 +140,38 @@ try {
       controller.abort();
       const abortObserved = await cancelled;
       const foreground = await client.frame(4);
+      // Hold CPU admission so promotion is observable through the real
+      // structure Worker -> parser pool -> page-thread budget protocol.
+      const occupied = await budget.acquire(budget.limit);
+      const messages = [];
+      const post = client.worker.postMessage.bind(client.worker);
+      client.worker.postMessage = message => { messages.push(message); return post(message); };
+      const navigation = new AbortController();
+      const prefetched = client.frame(5, { background:true, reportProgress:false, speculative:true })
+        .then(() => false, error => error.name === 'AbortError');
+      const series = client.frame(5, { background:true, reportProgress:false });
+      const selectedFrame = client.frame(5, { signal:navigation.signal })
+        .then(() => false, error => error.name === 'AbortError');
+      const deadline = performance.now() + 10000;
+      while (!budget.queue.some(request => request.priority === 20) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+      const promoted = budget.queue.some(request => request.priority === 20);
+      client.cancelPrefetch(); navigation.abort();
+      const independentCancellation = await prefetched && await selectedFrame;
+      const sharedParses = messages.filter(message => message.type === 'frame' && message.payload.index === 5).length;
+      const prematureCancels = messages.filter(message => message.type === 'cancel-frame').length;
+      occupied.release();
+      const collected = await series;
       client.close();
       return { maximumActive, limit:budget.limit, indices:results.map(result=>result.index),
-        atoms:foreground.frame.ids.length, abortObserved, activeAfterClose:budget.active };
+        atoms:foreground.frame.ids.length, abortObserved, activeAfterClose:budget.active,
+        shared:{promoted,independentCancellation,sharedParses,prematureCancels,collected:collected.index} };
     })()`);
     assert.ok(direct.maximumActive >= 2 && direct.maximumActive <= direct.limit, JSON.stringify(direct));
     assert.deepEqual(direct.indices, [2, 3, 7]);
     assert.equal(direct.atoms, 10000);
     assert.equal(direct.abortObserved, true);
     assert.equal(direct.activeAfterClose, 0);
+    assert.deepEqual(direct.shared, { promoted:true, independentCancellation:true, sharedParses:1, prematureCancels:0, collected:5 });
     const beforeClose = await evaluate('({loads:trajectoryChecks.loads, requests:trajectoryChecks.frameRequests.length, replicas:trajectoryChecks.replicas.length})');
     await evaluate('document.getElementById("close-file").click()');
     await waitFor('!trajectoryChecks.client.worker && !trajectoryChecks.client.replicationWorker', 'Closing the source releases parser/replication Workers');

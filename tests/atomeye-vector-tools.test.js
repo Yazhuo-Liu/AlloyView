@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { initializeAtomEyeTools } from '../src/atomeye-tools.js';
 
-function withVectorControls(run) {
+function withVectorControls(run, { requestDisplayRefresh = null } = {}) {
   const oldDocument = globalThis.document, elements = new Map(), draws = [];
   const makeElement = () => ({
     value: '1', checked: false, hidden: false, children: [], listeners: {},
@@ -28,7 +28,8 @@ function withVectorControls(run) {
   try {
     const controls = initializeAtomEyeTools({ renderer, pool: {}, tools: { setToolEnabled() {}, isToolEnabled: () => false },
       getFrame: () => frame, getFrames: () => frame ? [frame] : [], getFrameIndex: () => 0, getFrameCount: () => 1,
-      getSelectedIndex: () => -1, getSourceVersion: () => 1, refresh() {}, chooseProperty() {}, onEdit() {},
+      getSelectedIndex: () => -1, getSourceVersion: () => 1, getColorMode: () => 'type', refresh() {}, chooseProperty() {}, onEdit() {},
+      requestDisplayRefresh,
     });
     const change = (id, value) => {
       const element = elements.get(id);
@@ -56,6 +57,48 @@ test('vectors wait for a changed atom count to finish uploading and clear safely
     controls.updateVectors();
     assert.deepEqual(renderer.atomVectorFields, []);
   });
+});
+
+test('repeated display refreshes retain radii and vector selector nodes; changed columns refresh selectors', () => {
+  withVectorControls(({ controls, renderer, elements, getFrame }) => {
+    const frame = getFrame();
+    frame.types = Uint32Array.of(0, 0); frame.typeLabels = ['Fe'];
+    renderer.atomColors = new Uint8Array(6); renderer.atomRadii = controls.getRadii();
+    let uploads = 0;
+    renderer.setAtomRadii = radii => { uploads++; renderer.atomRadii = radii; };
+    const firstPalette = controls.customizePalette({ colors: renderer.atomColors, legend: { items: [] } });
+    assert.equal(firstPalette.colors, renderer.atomColors);
+    controls.applyRadii(); controls.applyRadii();
+    assert.equal(uploads, 0, 'color-only refreshes cannot upload unchanged radii');
+    controls.updateVectors();
+    const options = elements.get('vector-x').children;
+    controls.updateVectors();
+    assert.equal(elements.get('vector-x').children, options, 'unchanged component lists retain their DOM nodes');
+    frame.properties[0] = { ...frame.properties[0], name: 'renamedForceX' };
+    controls.updateVectors();
+    assert.notEqual(elements.get('vector-x').children, options);
+    frame.typeLabels = ['Ni'];
+    controls.customizePalette({ colors: renderer.atomColors, legend: { items: [] } });
+    controls.applyRadii();
+    assert.equal(uploads, 1, 'changed element radii upload once');
+    assert.equal(renderer.atomRadii[0], Math.fround(1.24));
+  });
+});
+
+test('deferred vector drawing preserves editor state before adding another field', () => {
+  const requests = [];
+  withVectorControls(({ controls, elements, renderer, draws, change }) => {
+    change('vector-mode', 'force'); change('show-vectors', true); change('vector-scale', 3);
+    elements.get('add-vector-field').listeners.click();
+    assert.equal(draws.length, 0, 'buffer uploads wait for the merged display flush');
+    const fields = controls.serialize().vectors.fields;
+    assert.equal(fields[0].mode, 'force'); assert.equal(fields[0].enabled, true); assert.equal(fields[0].scale, 3);
+    assert.equal(fields[1].enabled, false);
+    controls.flushDisplayRefresh({ vectors: true });
+    assert.equal(renderer.atomVectorFields.length, 1);
+    assert.equal(renderer.atomVectorFields[0].options.scale, 3);
+    assert.ok(requests.some(flags => flags.vectors));
+  }, { requestDisplayRefresh: flags => requests.push(flags) });
 });
 
 test('renaming a preset component updates the field editor and preserves the rendered vectors and style', () => {

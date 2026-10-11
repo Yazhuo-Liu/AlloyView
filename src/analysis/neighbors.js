@@ -5,7 +5,7 @@ import { cellFaceHeights, determinant3 } from '../data/model.js';
  * Queries inspect a complete sphere before keeping the nearest neighbors.
  */
 export class NeighborSearch {
-  constructor({ fractional, cell }, { sharedMemory = false } = {}) {
+  constructor({ fractional, cell }, { sharedMemory = false, reuseCoordinates = false } = {}) {
     this.count = fractional.length / 3;
     if (!Number.isInteger(this.count) || this.count < 1) throw new Error('Analysis requires at least one atom.');
     this.cell = cell;
@@ -14,7 +14,17 @@ export class NeighborSearch {
       throw new Error('Neighbor search requires a finite, non-singular cell.');
     }
     const allocate = (Type, length) => sharedMemory ? new Type(new SharedArrayBuffer(length * Type.BYTES_PER_ELEMENT)) : new Type(length);
-    this.coordinates = allocate(Float64Array, fractional.length);
+    // Only a transferred, Worker-owned Float64 snapshot may share storage.
+    // Public callers and shared source arrays keep separate immutable inputs.
+    if (reuseCoordinates && (!(fractional instanceof Float64Array) || !(fractional.buffer instanceof ArrayBuffer) || sharedMemory)) {
+      throw new Error('In-place neighbor wrapping requires private Float64 coordinates.');
+    }
+    // Keep image-bearing coordinates authoritative for later analyses (e.g.
+    // non-affine Wigner-Seitz mapping between different cells). Reuse only
+    // coordinates whose periodic components are already normalized.
+    const normalized = reuseCoordinates && !fractional.some((value, index) => cell.pbc[index % 3]
+      && (value < 0 || value >= 1 || Object.is(value, -0)));
+    this.coordinates = normalized ? fractional : allocate(Float64Array, fractional.length);
     this.minimum = [0, 0, 0];
     this.span = [1, 1, 1];
     for (let axis = 0; axis < 3; axis += 1) {
@@ -23,7 +33,7 @@ export class NeighborSearch {
       for (let atom = 0; atom < this.count; atom += 1) {
         const value = fractional[atom * 3 + axis];
         if (!Number.isFinite(value)) throw new Error(`Atom ${atom + 1} has a non-finite coordinate.`);
-        this.coordinates[atom * 3 + axis] = cell.pbc[axis] ? value - Math.floor(value) : value;
+        if (!normalized) this.coordinates[atom * 3 + axis] = cell.pbc[axis] ? value - Math.floor(value) : value;
         minimum = Math.min(minimum, value);
         maximum = Math.max(maximum, value);
       }
