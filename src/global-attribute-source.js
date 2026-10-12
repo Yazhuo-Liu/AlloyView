@@ -111,10 +111,14 @@ export function createGlobalAttributeSource({ getFrame, getFrameIndex = () => 0,
       strainReferenceFrame = index; refresh();
       return true;
     },
-    serialize: () => ({ strainReferenceFrame }),
+    serialize: ({ frameCount } = {}) => ({ strainReferenceFrame: Number.isSafeInteger(frameCount) && frameCount > 0
+      ? Math.min(strainReferenceFrame, frameCount - 1) : strainReferenceFrame }),
     restore(saved) { strainReferenceFrame = normalizeGlobalAttributeState(saved ?? {}).strainReferenceFrame; refresh({ force: true }); },
     /** Forget the reference cell, for example when the source closes. */
-    reset() { reference = null; referenceRequest = null; registry = null; signature = []; refresh({ force: true }); },
+    reset({ resetReference = false } = {}) {
+      if (resetReference) strainReferenceFrame = 0;
+      reference = null; referenceRequest = null; registry = null; signature = []; refresh({ force: true });
+    },
   });
 }
 

@@ -421,6 +421,12 @@ definitions.
 
 ## Save and restore a configuration
 
+Configuration restores run one at a time. Importing another configuration
+while one is being restored cancels the older request and applies the latest
+choice after its work settles. Wait for a running script, movie export or
+preview to finish before importing. Starting a new structure resets trajectory
+reference frames and keeps collection limits within the new source.
+
 Use **Export JSON** directly below **Structure** to save the current source file names,
 sizes, available relative paths and saved trajectory frame, together with the
 processing and view settings. The configuration includes enabled coordination,
@@ -1320,8 +1326,9 @@ frame's finished analyses, at the Display image resolution, and encodes it in
 the browser with WebCodecs. **Format** lists what the browser can encode at
 that size: MP4 with H.264 (the most compatible), WebM with VP9 or VP8, and
 AV1 where available; **Quality** sets the bitrate. Video sizes are made even.
-A progress window shows the frame, size and time left, and **Cancel** stops
-the export; the frame and camera are restored afterwards. Without a video
+A progress window shows the frame, size and time left; **Cancel** or **Escape**
+stops the export. The window stays visible while the frame and camera are
+restored, and other page controls become available afterwards. Without a video
 encoder (an old browser or a page that is not served over HTTPS), the panel
 offers **PNG frames · ZIP** with the same frames, up to 500. See
 [Camera path and movie](features/movies.md).

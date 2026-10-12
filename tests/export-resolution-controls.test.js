@@ -6,21 +6,22 @@ function fixture() {
   const nodes = Object.fromEntries(['export-resolution', 'export-width', 'export-height', 'export-aspect-lock',
     'export-custom-size', 'export-size-status'].map(id => [id, {
     value: id === 'export-resolution' ? 'current' : id === 'export-width' ? '1920' : '1080', checked: true,
-    classList: { add() {}, remove() {} }, listeners: new Map(),
+    classList: { add() {}, remove() {} }, listeners: new Map(), events: [],
     get valueAsNumber() { return this.value === '' ? NaN : Number(this.value); },
     addEventListener(name, callback) { this.listeners.set(name, callback); }, removeEventListener() {},
+    dispatchEvent(event) { this.events.push(event.type); },
   }]));
   const oldDocument = globalThis.document;
   globalThis.document = { getElementById: id => nodes[id] };
-  const renderer = { canvas: { width: 800, height: 600 } }, notifications = [];
-  const controls = initializeExportResolutionControls({ renderer, notify: message => notifications.push(message) });
+  const renderer = { canvas: { width: 800, height: 600 } }, notifications = [], edits = [];
+  const controls = initializeExportResolutionControls({ renderer, notify: message => notifications.push(message), onEdit: () => edits.push('edit') });
   controls.setEnabled(true);
   const change = (id, value) => {
     const node = nodes[id]; if (typeof value === 'boolean') node.checked = value; else node.value = String(value);
     node.listeners.get('change')({ target: node });
   };
   const restore = () => { controls.dispose(); if (oldDocument === undefined) delete globalThis.document; else globalThis.document = oldDocument; };
-  return { nodes, renderer, notifications, controls, change, restore };
+  return { nodes, renderer, notifications, edits, controls, change, restore };
 }
 
 test('custom aspect lock follows the current view, including after preset selection and screen resize', () => {
@@ -56,6 +57,8 @@ test('restoring a recipe preserves its exact custom dimensions until a manual ed
   try {
     const state = { mode: 'custom', width: 1234, height: 700, lockAspect: true };
     f.controls.restore(state); assert.deepEqual(f.controls.getState(), state);
+    assert.deepEqual(f.nodes['export-resolution'].events, ['export-resolution-restored'], 'recipe restoration notifies mirrored settings');
+    assert.deepEqual(f.edits, [], 'the mirror update cannot interrupt the configuration restore as a user edit');
     f.change('export-width', '800'); assert.equal(f.controls.getState().height, 600);
     f.controls.setEnabled(false);
     assert.equal(f.nodes['export-width'].disabled, true); assert.equal(f.nodes['export-resolution'].disabled, true);

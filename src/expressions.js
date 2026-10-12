@@ -323,19 +323,36 @@ export function createExpressionScope(frame, { properties = frame?.properties ??
         const types = frame.types;
         return atom(entry.name, [types, typeLabels.length, ...typeLabels], () => {
           const numbers = expressionTypeNumbers(typeLabels);
-          const data = derived(types, `type:${JSON.stringify(numbers)}`, () => Float64Array.from(types, type => numbers[type] ?? NaN));
+          const data = derived(types, `type:${JSON.stringify(numbers)}`, () => {
+            const values = new Float64Array(types.length);
+            for (let index = 0; index < types.length; index++) values[index] = numbers[types[index]] ?? NaN;
+            return values;
+          });
           return { data, stride: 1, offset: 0 };
         }, { types, typeLabels });
       }
       case 'id': {
         const ids = frame.ids;
-        return atom(entry.name, [ids], () => ({ data: derived(ids, 'id', () => Float64Array.from(ids, id => {
-          const value = typeof id === 'bigint' ? Number(id) : canonicalAtomNumber(id);
-          return value === undefined ? NaN : value;
-        })), stride: 1, offset: 0 }));
+        return atom(entry.name, [ids], () => ({ data: derived(ids, 'id', () => {
+          // Numeric typed IDs already carry the canonical values. A native
+          // typed copy preserves NaN, infinities and -0 without one callback
+          // (or string conversion) per atom. Keep a private cached snapshot.
+          if (ArrayBuffer.isView(ids) && !(ids instanceof DataView)
+              && !(ids instanceof BigInt64Array) && !(ids instanceof BigUint64Array)) return new Float64Array(ids);
+          const values = new Float64Array(ids.length);
+          for (let index = 0; index < ids.length; index++) {
+            const id = ids[index], value = typeof id === 'bigint' ? Number(id) : canonicalAtomNumber(id);
+            values[index] = value === undefined ? NaN : value;
+          }
+          return values;
+        }), stride: 1, offset: 0 }));
       }
       case 'index':
-        return atom(entry.name, [count], () => ({ data: derived(frame.ids, `index:${count}`, () => Float64Array.from({ length: count }, (_, index) => index)), stride: 1, offset: 0 }));
+        return atom(entry.name, [count], () => ({ data: derived(frame.ids, `index:${count}`, () => {
+          const values = new Float64Array(count);
+          for (let index = 0; index < count; index++) values[index] = index;
+          return values;
+        }), stride: 1, offset: 0 }));
       case 'velocity': {
         const data = velocity[entry.axis].data;
         return atom(entry.name, [data], () => ({ data, stride: 1, offset: 0 }));

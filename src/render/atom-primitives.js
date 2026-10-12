@@ -302,8 +302,9 @@ export function bondDisplayShifts(result, frame, positions = frame.positions) {
 export class AtomPrimitiveLayer {
   constructor(gl) {
     this.gl = gl;
-    // Multisampling can expose a nominally occluded, edge-on cap in a covered
-    // sample even when its pixel-center geometry is behind the sphere impostor.
+    // Real MSAA draws differ after deleting analytically covered caps, even
+    // at a pixel well inside a sphere's opaque disc. The sample/depth mechanism
+    // is unproven, so a larger silhouette margin does not establish coverage.
     // Retain the original caps for those contexts and all offscreen exports.
     this.singleSampleDefault = gl.getParameter(gl.FRAMEBUFFER_BINDING) === null && gl.getParameter(gl.SAMPLES) === 0
       && gl.getParameter(gl.DEPTH_BITS) >= 16;

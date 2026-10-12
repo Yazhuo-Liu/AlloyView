@@ -134,6 +134,40 @@ with other jobs; multithreaded timings vary by about 10%.
 
 ## Workers and memory
 
+### Numeric correspondence and result preparation
+
+Displacement and reference-frame strain share one atom-ID correspondence
+preparation path before either CPU or GPU computation. Numeric typed IDs use
+a bounded Int32 lookup when the range is dense, and a numeric Map otherwise;
+other IDs keep their text identity. Reference lookups are reused only after
+checking every original ID against their immutable snapshot, so in-place
+reordering or replacement cannot reuse an obsolete mapping. Time-based yields
+keep preparation cancellable.
+
+The weakly keyed lookup cache is capped at 64 MiB and at one eighth of the
+CPU memory budget. Its retained bytes are included in both frame-cache sizing
+and CPU admission; it contains no published property or portable recipe data.
+In one Chromium run with one million dense IDs, the original mapping took
+487.5 ms, a cold lookup 88.1 ms and a reused lookup 45.0 ms. Longest measured
+continuous slices fell from 48.7 to 5.8/4.0 ms. Sparse IDs have a smaller gain,
+and allocation or garbage collection can exceed the loop's yield target.
+
+Expression Type and Index binding uses direct loops, and typed numeric ID
+binding uses an owned Float64 copy. Coordination statistics use a bounded
+Float64 count table, retaining the original fallback and arithmetic for unusual
+values. Wigner–Seitz's complete occupancy/defect summary runs in one existing
+pool Worker without uploading positions or rebuilding its neighbor index.
+Posted cancellation retains that Worker's CPU lease, native heap and temporary
+memory charge until acknowledgment. These changes preserve the prewarmed pool.
+Moving the summary improves page responsiveness rather than guaranteeing a
+shorter first-result time; the [validation record](../VALIDATION.md) includes
+the measured totals and exact-result comparisons.
+
+Bond ranges accumulate their completed edge counts before claiming more work.
+Exceeding the complete graph's output limit cancels the unfinished CPU ranges
+at once, retaining warm Workers and allowing independent analyses to continue.
+The GPU path keeps its existing count/prefix check before edge allocation.
+
 ### CPU loops and display transfers (2026-10-11)
 
 Neighbor queries collect candidates in reusable typed buffers and select the

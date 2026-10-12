@@ -182,6 +182,11 @@ The default cell color is blue (`#3b82f6`), with opacity 0.5. Outline color
 follows the viewport background: dark edges on light backgrounds and pale
 edges with a dark rim on dark backgrounds.
 
+On antialiased canvases, cell faces and outlines apply opacity through blending
+once. Their drawing temporarily disables alpha-to-coverage and restores its
+previous state, so the opacity setting is not applied twice. Cell and slice
+outlines use the same rule in the viewport and exported images.
+
 **All-cell view** chooses how the complete tessellation is drawn.
 **See-through** (the default) draws every cell translucently and fades deeper
 faces and edges, so the nearest cells remain legible. **Nearest surface** first

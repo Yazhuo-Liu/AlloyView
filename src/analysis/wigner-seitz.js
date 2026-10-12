@@ -1,5 +1,6 @@
 import { cellFaceHeights, determinant3, invert3 } from '../data/model.js';
 import { atomRange } from './neighbors.js';
+import { yieldToEventLoop } from '../task-yield.js';
 
 /** Per-atom classes, by the reference site an atom is assigned to. Atoms that
  * share a site are all interstitial, as in OVITO's atom output mode where
@@ -331,7 +332,7 @@ export function assignWignerSeitzSites(frame, { referenceFractional, referenceCe
  * - interstitials: Σ (occupancy − 1) over sites with occupancy ≥ 2 (excess atoms).
  * - antisite: a site with occupancy 1 whose atom's type differs from the site type.
  * The atom count minus the site count equals interstitials minus vacancies. */
-export function summarizeWignerSeitz({ siteIndex, siteCount, currentTypes, currentTypeLabels, referenceTypes, referenceTypeLabels }) {
+function* wignerSeitzSummarySteps({ siteIndex, siteCount, currentTypes, currentTypeLabels, referenceTypes, referenceTypeLabels }) {
   const atomCount = siteIndex?.length;
   if (!Number.isInteger(atomCount) || atomCount < 1 || !Number.isInteger(siteCount) || siteCount < 1) {
     throw new Error('Wigner–Seitz assignments are incomplete.');
@@ -352,12 +353,19 @@ export function summarizeWignerSeitz({ siteIndex, siteCount, currentTypes, curre
     const site = siteIndex[atom];
     if (!(site >= 0 && site < siteCount)) throw new Error('A Wigner–Seitz assignment is outside the reference sites.');
     siteOccupancy[site] += 1;
+    if ((atom + 1) % 65_536 === 0) yield;
   }
   // Atoms grouped by site in ascending atom order (a stable counting sort).
   const siteAtomOffsets = new Uint32Array(siteCount + 1);
-  for (let site = 0; site < siteCount; site += 1) siteAtomOffsets[site + 1] = siteAtomOffsets[site] + siteOccupancy[site];
+  for (let site = 0; site < siteCount; site += 1) {
+    siteAtomOffsets[site + 1] = siteAtomOffsets[site] + siteOccupancy[site];
+    if ((site + 1) % 65_536 === 0) yield;
+  }
   const siteAtoms = new Uint32Array(atomCount), cursor = siteAtomOffsets.slice(0, siteCount);
-  for (let atom = 0; atom < atomCount; atom += 1) siteAtoms[cursor[siteIndex[atom]]++] = atom;
+  for (let atom = 0; atom < atomCount; atom += 1) {
+    siteAtoms[cursor[siteIndex[atom]]++] = atom;
+    if ((atom + 1) % 65_536 === 0) yield;
+  }
 
   const rows = labels.map(label => ({ label, sites: 0, atoms: 0, vacancies: 0, antisites: 0, antisiteAtoms: 0, sharedSiteAtoms: 0 }));
   const siteTypeCounts = new Float64Array(referenceTypeLabels.length), atomTypeCounts = new Float64Array(currentTypeLabels.length);
@@ -365,17 +373,20 @@ export function summarizeWignerSeitz({ siteIndex, siteCount, currentTypes, curre
     const type = referenceTypes[site];
     if (!(type >= 0 && type < siteTypeCounts.length)) throw new Error('A reference site has an unknown type.');
     siteTypeCounts[type] += 1;
+    if ((site + 1) % 65_536 === 0) yield;
   }
   for (let atom = 0; atom < atomCount; atom += 1) {
     const type = currentTypes[atom];
     if (!(type >= 0 && type < atomTypeCounts.length)) throw new Error('A current atom has an unknown type.');
     atomTypeCounts[type] += 1;
+    if ((atom + 1) % 65_536 === 0) yield;
   }
   siteTypeCounts.forEach((count, type) => { rows[rowOfReference[type]].sites += count; });
   atomTypeCounts.forEach((count, type) => { rows[rowOfCurrent[type]].atoms += count; });
   const siteClass = new Uint8Array(siteCount);
   let vacancyCount = 0, interstitialCount = 0, antisiteCount = 0, multiplyOccupiedSites = 0, sharedSiteAtoms = 0, defectSiteCount = 0;
   for (let site = 0; site < siteCount; site += 1) {
+    if ((site + 1) % 65_536 === 0) yield;
     const occupancy = siteOccupancy[site], type = referenceTypes[site];
     if (occupancy === 0) {
       siteClass[site] = SITE_VACANCY; vacancyCount += 1; rows[rowOfReference[type]].vacancies += 1;
@@ -387,23 +398,55 @@ export function summarizeWignerSeitz({ siteIndex, siteCount, currentTypes, curre
     } else {
       siteClass[site] = SITE_INTERSTITIAL; multiplyOccupiedSites += 1;
       interstitialCount += occupancy - 1; sharedSiteAtoms += occupancy;
-      for (let slot = siteAtomOffsets[site]; slot < siteAtomOffsets[site + 1]; slot += 1) rows[rowOfCurrent[currentTypes[siteAtoms[slot]]]].sharedSiteAtoms += 1;
+      for (let slot = siteAtomOffsets[site]; slot < siteAtomOffsets[site + 1]; slot += 1) {
+        rows[rowOfCurrent[currentTypes[siteAtoms[slot]]]].sharedSiteAtoms += 1;
+        if ((slot + 1) % 65_536 === 0) yield;
+      }
     }
     defectSiteCount += 1;
   }
   const defectSites = new Uint32Array(defectSiteCount);
-  for (let site = 0, cursorIndex = 0; site < siteCount; site += 1) if (siteClass[site] !== SITE_REGULAR) defectSites[cursorIndex++] = site;
+  for (let site = 0, cursorIndex = 0; site < siteCount; site += 1) {
+    if (siteClass[site] !== SITE_REGULAR) defectSites[cursorIndex++] = site;
+    if ((site + 1) % 65_536 === 0) yield;
+  }
   const atomOccupancy = new Uint32Array(atomCount), atomClass = new Uint8Array(atomCount), atomSiteType = new Uint32Array(atomCount);
   for (let atom = 0; atom < atomCount; atom += 1) {
     const site = siteIndex[atom];
     atomOccupancy[atom] = siteOccupancy[site];
     atomClass[atom] = ATOM_CLASS_OF_SITE[siteClass[site]];
     atomSiteType[atom] = referenceTypes[site];
+    if ((atom + 1) % 65_536 === 0) yield;
   }
   return { atomCount, siteCount, siteOccupancy, siteClass, siteAtomOffsets, siteAtoms, defectSites,
     atomOccupancy, atomClass, atomSiteType, vacancyCount, interstitialCount, antisiteCount, multiplyOccupiedSites,
     sharedSiteAtoms, regularSiteCount: siteCount - defectSiteCount, typeLabels: labels, typeSummary: rows,
     referenceTypeLabels: referenceTypeLabels.map(String), currentTypeLabels: currentTypeLabels.map(String) };
+}
+
+/** Direct callers retain the synchronous API and the exact counting order. */
+export function summarizeWignerSeitz(parameters) {
+  const steps = wignerSeitzSummarySteps(parameters);
+  let next;
+  do { next = steps.next(); } while (!next.done);
+  return next.value;
+}
+
+/** Worker finalization yields between bounded passes, including a site with
+ * many assigned atoms, so cancellation can be acknowledged without retiring
+ * its warm modules. The counting code is also the synchronous CPU oracle. */
+export async function summarizeWignerSeitzAsync(parameters, { signal, onYield } = {}) {
+  if (signal?.aborted) throw new DOMException('Analysis cancelled.', 'AbortError');
+  const steps = wignerSeitzSummarySteps(parameters);
+  try {
+    for (;;) {
+      const next = steps.next();
+      if (next.done) return next.value;
+      onYield?.();
+      await yieldToEventLoop();
+      if (signal?.aborted) throw new DOMException('Analysis cancelled.', 'AbortError');
+    }
+  } finally { steps.return(); }
 }
 
 /** Assignments plus summary, shared by the direct and Worker pool paths. */

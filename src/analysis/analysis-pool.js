@@ -7,7 +7,7 @@ import { prepareVoronoiSelection, expandVoronoiResult, mapVoronoiGeometry,
 import { validateVoronoiRadii } from './voronoi-radii.js';
 import { finalizeRdf, rdfNormalization } from './rdf.js';
 import { modalCoordination, shearInvariant } from './local-shear.js';
-import { REFERENCE_STRAIN_FIELDS } from './reference-strain.js';
+import { REFERENCE_STRAIN_FIELDS, referenceMappingCacheBytes } from './reference-strain.js';
 import { GpuAnalysisClient } from './gpu/client.js';
 import { validateReferences } from './lattice.js';
 import { validatePtmParameters, validatePreparedPtmNeighbors, PTM_NEIGHBOR_LIST_FIELDS } from './ptm.js';
@@ -15,7 +15,7 @@ import { CpuBudget } from './cpu-budget.js';
 import { cpuMemoryBudget, chooseMemoryWorkerCount } from './cpu-memory.js';
 import { yieldToMain } from '../task-yield.js';
 import { analyzeDxaStagePool, DXA_STAGE_KINDS } from './dxa-cpu-pool.js';
-import { finishWignerSeitz } from './wigner-seitz.js';
+import { coordinationStatistics } from './coordination-statistics.js';
 import { createAnalysisProgressReporter, isAnalysisProgressError } from './progress.js';
 import { analysisReplyError, isAnalysisValidationError } from './errors.js';
 import { validateAnalysisParameters } from './analysis-validation.js';
@@ -244,7 +244,11 @@ export class AnalysisPool {
         visit([snapshot.source, snapshot.sourceTypes]);
       } else visit([snapshot.source, snapshot.sourceTypes, snapshot.coordinates, snapshot.types]);
     }
-    return privateBytes + [...buffers].reduce((sum, buffer) => sum + buffer.byteLength, 0)
+    // Async summaries own transient tables while yielding. A caller may have
+    // cancelled already, but a posted task retains these bytes until its ACK.
+    const summaryBytes = [...new Set([...this.active, ...this.queue])].reduce((sum, task) => sum
+      + (task.done ? 0 : task.payload.kind === 'wignerSeitzFinalize' ? task.payload.summaryRetainedBytes ?? 0 : 0), 0);
+    return referenceMappingCacheBytes() + summaryBytes + privateBytes + [...buffers].reduce((sum, buffer) => sum + buffer.byteLength, 0)
       + [...groups.values()].reduce((sum, bytes) => sum + bytes, 0);
   }
 
@@ -830,7 +834,7 @@ export class AnalysisPool {
       if (parameters.kind === 'cna') merged.structures = merged.values;
       else if (parameters.kind === 'centrosymmetry' && !autoCentrosymmetry) merged.centrosymmetry = merged.values;
       const reductions = new Array(workerCount), reducedPartials = new Array(workerCount);
-      let completedAtoms = 0, completedChunks = 0, completed = 0, lastCompletedAtoms = 0, inputPreparations = 0;
+      let completedAtoms = 0, completedChunks = 0, completed = 0, lastCompletedAtoms = 0, inputPreparations = 0, completedBondCount = 0;
       const report = (index, phase, progress) => {
         if (controller.signal.aborted) return;
         if (index !== null) phases[index] = phase;
@@ -893,6 +897,15 @@ export class AnalysisPool {
             ...(parameters.kind === 'localShearMetrics' && reductions[partition] ? { reductionInput: reductions[partition] } : {}) },
           controller.signal, signal, (phase, progress) => report(index, phase, progress), sharedMemory);
           if (controller.signal.aborted) throw abortError();
+          if (parameters.kind === 'bonds') {
+            // Each range obeys the same local cap, but the complete graph
+            // can exceed it long before the remaining ranges finish. Abort
+            // this calculation immediately; independent queued jobs and the
+            // retained Worker/index are released by the usual ACK path.
+            completedBondCount += partial.count;
+            const maxBonds = parameters.maxBonds ?? MAX_BONDS;
+            if (completedBondCount > maxBonds) throw new Error(`Bond output exceeds ${maxBonds.toLocaleString('en-US')} edges; reduce the cutoff.`);
+          }
           inputPreparations += partial.inputPreparations ?? 0;
           for (const [name, [, stride]] of Object.entries(outputFields)) {
             const field = name === 'values' ? parameters.kind === 'cna' ? 'structures' : 'centrosymmetry' : name;
@@ -1315,18 +1328,48 @@ export class AnalysisPool {
     const siteCount = referenceFractional?.length / 3;
     if (!ArrayBuffer.isView(referenceFractional) || !Number.isInteger(siteCount) || siteCount < 1) throw new Error('Wigner–Seitz analysis requires reference site coordinates.');
     if (!ArrayBuffer.isView(referenceTypes) || referenceTypes.length !== siteCount) throw new Error('Wigner–Seitz analysis requires one type per reference site.');
+    if (!ArrayBuffer.isView(frame.types) || frame.types.length !== atomCount) throw new Error('Wigner–Seitz analysis requires one type per current atom.');
+    if (!Array.isArray(frame.typeLabels) || !Array.isArray(referenceTypeLabels)) throw new Error('Wigner–Seitz analysis requires element labels.');
     if (typeof affineMapping !== 'boolean') throw new Error('The Wigner–Seitz affine mapping option must be a boolean.');
     if (!referenceCell?.pbc || [0, 1, 2].some(axis => Boolean(referenceCell.pbc[axis]) !== Boolean(frame.cell.pbc[axis]))) {
       throw new Error('Reference and current frames must use the same periodic boundary axes.');
     }
-    const assigned = await this.analyzeCPU(frame, { kind: 'wignerSeitzAssign', referenceFractional, referenceCell, affineMapping },
-      { signal, onProgress });
-    if (signal?.aborted || this.closed) throw abortError();
-    const result = finishWignerSeitz(frame, { siteIndex: assigned.siteIndex, siteDistance: assigned.siteDistance, siteCount },
-      { referenceTypes, referenceTypeLabels, affineMapping });
-    return { ...result, workerCount: assigned.workerCount, sharedMemory: assigned.sharedMemory, chunkSize: assigned.chunkSize,
-      chunkCount: assigned.chunkCount, scheduling: 'dynamic', engine: assigned.engine, assignElapsedMs: assigned.elapsedMs,
-      elapsedMs: performance.now() - startedAt, warning: null };
+    const controller = new AbortController(), abort = () => controller.abort();
+    this.controllers.add(controller);
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      const assigned = await this.analyzeCPU(frame, { kind: 'wignerSeitzAssign', referenceFractional, referenceCell, affineMapping },
+        { signal: controller.signal, onProgress });
+      if (controller.signal.aborted || this.closed) throw abortError();
+      // One reusable slot counts all sites in stable atom order. No positions,
+      // reference coordinates or neighbor index are uploaded again. Charge the
+      // summary arrays and private type copies alongside retained native heaps.
+      const typeBytes = frame.types?.byteLength ?? 0;
+      const summaryBytes = atomCount * 13 + siteCount * 17 + 4 + 8 * (frame.typeLabels.length + referenceTypeLabels.length);
+      const memory = this.cpuMemoryWorkerCount(1, typeBytes + referenceTypes.byteLength,
+        assigned.siteIndex.byteLength + assigned.siteDistance.byteLength + summaryBytes + referenceTypes.byteLength, 1);
+      const summaryRetainedBytes = typeBytes + 2 * referenceTypes.byteLength
+        + assigned.siteIndex.byteLength + assigned.siteDistance.byteLength + summaryBytes;
+      const report = phase => onProgress({ phase, stage: 'wigner-seitz-summary', completed: assigned.workerCount,
+        total: assigned.workerCount, workerCount: assigned.workerCount, completedAtoms: atomCount, totalAtoms: atomCount,
+        completedChunks: assigned.chunkCount, totalChunks: assigned.chunkCount });
+      report('finalizing');
+      const summarized = await this.runTask({ kind: 'wignerSeitzFinalize', siteIndex: assigned.siteIndex,
+        siteDistance: assigned.siteDistance, siteCount, types: frame.types, currentTypeLabels: frame.typeLabels,
+        referenceTypes, referenceTypeLabels, affineMapping, summaryRetainedBytes }, controller.signal, signal, () => report('finalizing'), assigned.sharedMemory);
+      if (controller.signal.aborted || this.closed) throw abortError();
+      // Worker resource diagnostics belong to its retained slot, rather than
+      // becoming part of the scientific summary or its portable cache.
+      const { nativeHeapBytes: _heaps, residentInputBytes: _resident, residentSharedInputBytes: _shared,
+        cpuFramePrivateBytes: _frames, residentSharedGroups: _groups, cpuResidentInputBytes: _cpu,
+        cpuResidentSharedInputBytes: _cpuShared, otherResidentInputBytes: _other, otherResidentSharedInputBytes: _otherShared,
+        cpuResidentSharedGroups: _cpuGroups, otherResidentSharedGroups: _otherGroups, elapsedMs: summaryElapsedMs, ...result } = summarized;
+      return { ...result, workerCount: assigned.workerCount, sharedMemory: assigned.sharedMemory, chunkSize: assigned.chunkSize,
+        chunkCount: assigned.chunkCount, scheduling: 'dynamic', engine: assigned.engine, assignElapsedMs: assigned.elapsedMs,
+        summaryElapsedMs, summaryWorkerCount: 1, summaryMemoryEstimateBytes: memory.memoryEstimateBytes,
+        elapsedMs: performance.now() - startedAt, warning: null };
+    } catch (error) { controller.abort(); throw error; }
+    finally { signal?.removeEventListener('abort', abort); this.controllers.delete(controller); }
   }
 
   async analyzeLocalShear(frame, parameters, { onProgress, signal }) {
@@ -1363,7 +1406,8 @@ export class AnalysisPool {
       const task = { id: this.nextId++, payload, signal, sourceSignal, resolve, reject, onPhase,
         sharedMemory, worker: null, slot: null, done: false, lease: null, posted: false };
       task.abort = () => {
-        if ((task.payload.kind === 'voronoiPrepare' || task.payload.cpuFrameKey !== undefined || task.payload.cpuOwnedRange) && !task.posted && task.slot && !this.closed) {
+        if ((task.payload.kind === 'voronoiPrepare' || task.payload.kind === 'wignerSeitzFinalize'
+            || task.payload.cpuFrameKey !== undefined || task.payload.cpuOwnedRange) && !task.posted && task.slot && !this.closed) {
           // Coordinate copying/yielding is main-thread work. Cancelling it
           // leaves the idle Worker's previously warmed modules untouched.
           task.cancelledVoronoi = true; task.reject(abortError());
@@ -1376,11 +1420,15 @@ export class AnalysisPool {
           if (!task.cancelledWarmup) { task.cancelledWarmup = true; task.reject(abortError()); }
           return;
         }
-        if ((task.payload.cpuFrameKey !== undefined || task.payload.cpuOwnedRange || task.payload.kind.startsWith('voronoi')) && task.posted && !this.closed) {
+        if ((task.payload.cpuFrameKey !== undefined || task.payload.cpuOwnedRange || task.payload.kind.startsWith('voronoi')
+            || task.payload.kind === 'wignerSeitzFinalize') && task.posted && !this.closed) {
           // Bounded chunks finish cooperatively. Reject the caller immediately
           // but retain the busy slot/lease until its ACK, preserving the native
           // module, coordinate snapshot, and index for the next calculation.
-          if (!task.cancelledVoronoi) { task.cancelledVoronoi = true; task.reject(abortError()); }
+          if (!task.cancelledVoronoi) {
+            task.cancelledVoronoi = true; task.reject(abortError());
+            if (task.payload.kind === 'wignerSeitzFinalize') task.worker.postMessage({ kind: 'wignerSeitzCancel', id: task.id });
+          }
           return;
         }
         this.finish(task, abortError());
@@ -1569,6 +1617,16 @@ export class AnalysisPool {
           payload.dxaStageInput = prepared.input;
           transferables.push(...prepared.transfer);
         }
+      } else if (payload.kind === 'wignerSeitzFinalize') {
+        payload = { ...payload };
+        for (const name of ['types', 'referenceTypes']) {
+          if (!(payload[name].buffer instanceof ArrayBuffer)) continue;
+          payload[name] = await copyCoordinates(payload[name], task.signal, task.sharedMemory);
+          if (payload[name].buffer instanceof ArrayBuffer) transferables.push(payload[name].buffer);
+        }
+        // These merged assignment arrays belong exclusively to this result.
+        // They return with the summary; canonical frame data stays attached.
+        for (const name of ['siteIndex', 'siteDistance']) if (payload[name].buffer instanceof ArrayBuffer) transferables.push(payload[name].buffer);
       } else if (payload.kind === 'voronoiFinalize') {
         for (const partial of payload.partials) for (const value of Object.values(partial)) {
           if (ArrayBuffer.isView(value) && value.buffer instanceof ArrayBuffer) transferables.push(value.buffer);
@@ -1824,15 +1882,4 @@ function waitForCpuResources() {
 
 function abortError() {
   return new DOMException('Analysis cancelled.', 'AbortError');
-}
-
-async function coordinationStatistics(values, signal) {
-  const counts = new Map();
-  let sum = 0;
-  for (let atom = 0; atom < values.length; atom += 1) {
-    const value = values[atom]; counts.set(value, (counts.get(value) ?? 0) + 1); sum += value;
-    if (atom && atom % 65_536 === 0) { await yieldToMain(); if (signal.aborted) throw abortError(); }
-  }
-  return { histogram: [...counts].sort((a, b) => a[0] - b[0]).map(([coordination, count]) => ({ coordination, count })),
-    meanCoordination: sum / values.length };
 }

@@ -1,6 +1,129 @@
 # Validation record
 
-Latest validation: 2026-10-11 (UTC). Earlier entries retain their own dates.
+Latest validation: 2026-10-11 (America/New_York). Earlier entries retain their own dates.
+
+## Remaining restore/export defects and page preparation (2026-10-11, America/New_York)
+
+Baseline: `da97066`. Fetch confirmed the remote's main branch still pointed
+to that commit, and the working tree was clean. Node 24.19.0, Chromium and
+SwiftShader were used in the same four-CPU-quota cloud environment as the
+preceding batch. No native kernel or WebGPU numerical algorithm was replaced.
+
+### Work process and decisions
+
+1. **B15/B33.** Put codec support probing inside the Movie export's complete
+   cancellable lifecycle. Show progress before probing; Escape, Cancel and an
+   unexpected dialog close abort the operation. Preserve the dialog and
+   application lock/inert state through cleanup and frame/camera restoration.
+   Ignore late codec/capture replies and release the encoder even if configure
+   fails. A saved image-resolution change sends a separate synchronization
+   event to the Movie mirror, without simulating a user edit. WebCodecs support
+   queries cannot themselves be aborted; cancellation stops waiting for them.
+2. **B19/B26.** Serialize configuration state transactions, skip superseded
+   queued recipes, and abort obsolete preparation/analyses when a newer recipe
+   arrives. Keep analyses within one restore parallel and join all tool
+   promises before releasing its transaction. CPU/GPU leases retain their
+   existing acknowledgment protection. Only the current owner writes terminal
+   status or colors. The original app, with its first CNA gated, started a
+   second restore before the first settled; the revised app did not. The
+   audit's intermittent residual “Restoring…” state was not independently
+   reproduced, so the confirmed claim is overlapping state mutation and its
+   prevention. Scripts, previews and exports share the restoration lock.
+3. **B21.** Reset trajectory references and collection bounds on a replacement
+   or closed source, and clamp them again for export. Preserve chart attributes
+   and style. A real eight-frame to three-frame replacement now exports valid
+   JSON. A newer recipe can cancel waiting for frame thirty while progressive
+   indexing remains at seven frames; background indexing continues to thirty.
+4. **B22.** Pause alpha-to-coverage once around each Voronoi layer and each
+   existing annotation batch, restoring the original GL state in `finally`.
+   Blending applies the requested opacity once for faces, highlights, edges,
+   cell lines and slice lines, including current-size and tiled exports.
+   The intended visual change is corrected MSAA opacity, not scientific data.
+   An independent blending-only oracle matches sixty screen cases and twenty-
+   four exports byte for byte; the old MSAA state differs in 3,468 bytes for
+   each tested intermediate opacity, while its single-sample control matches.
+5. **B27.** Accumulate completed CPU bond-range counts and reject as soon as
+   their combined graph exceeds the existing cap. Unneeded ranges are not
+   posted; already posted chunks retain their Worker and lease until ACK.
+   Shared/private real-Worker tests stop before half of a 15,625-atom frame is
+   dispatched, keep every individual partial below the cap, complete an
+   independent CNA and reuse the same Workers for a correct following graph.
+   The GPU count/prefix rejection before edge allocation remains unchanged.
+6. **C7.** Replace expression Type/Index callback conversion with direct loops
+   and typed numeric-ID conversion with an owned Float64 copy. Preserve BigInt,
+   signed zero and text behavior. Use a bounded Float64 coordination count
+   table, retaining the original fallback, sort and sum for unusual values.
+   Move complete Wigner–Seitz occupancy/defect summarization into one existing
+   pool Worker without reuploading positions or rebuilding an index. Queued
+   and posted temporary allocations are charged to CPU admission; cancellation
+   retains that reservation and the native heap until ACK. The original and
+   new summary match with `Object.is` on 500 fixtures and 5,850,531 fields.
+7. **C8.** Use a bounded Int32 lookup for dense typed numeric IDs and a numeric
+   Map otherwise, retaining text identity and error messages. Cache reference
+   tables by weak ID-array ownership with a precise immutable snapshot: every
+   cache hit verifies mutations, reordering and duplicates. Bound the cache
+   by 64 MiB and one eighth of the memory budget; count retained bytes in both
+   frame caching and CPU admission. Both CPU and GPU analyses use the same
+   time-sliced preparation. Shared/private CPU Workers and actual versioned
+   GPU Workers preserve reference-strain fields and displacement with exact
+   mappings; original arrays remain attached.
+8. **S4, repository portion.** Generate immutable rules for the actual build
+   hash in `_headers`, preserving isolation and subpath support. The preview
+   server validates the generated manifest before assigning a year-long
+   immutable policy; source/compatibility paths, HTML and 404s are not given
+   that policy. Eleven focused tests include real HTTP requests. Real Chromium
+   revisits reuse JS, Worker, Wasm and CSS with zero network transfer, and a
+   rebuilt hash obtains new content. Cloudflare rules are documented but have
+   not been deployed by this change; the proxy blocked production HTTP checks.
+9. **R1 review.** Keep caps on MSAA canvases. Isolating the forced capless
+   negative control places its three differing RGB bytes at pixel (345,188),
+   belonging to bond 36 between atoms 3 and 16 with no image shift. Capped
+   RGBA is `[152,77,185,255]`, versus `[162,83,197,255]` for both capless and
+   sphere-only. This lies within the sphere's opaque projected disc, with
+   normalized radius squared 0.000505, so merely increasing an edge margin
+   does not justify removal. The driver/sample-depth mechanism is unproven.
+   Runtime guards stay unchanged; the tracked browser probe now supports the
+   production build and reports the counterexample's first differing pixel.
+
+### Measured effects and limits
+
+One million atoms, seven interleaved Node runs, medians:
+
+| Preparation | Original | Revised |
+| --- | ---: | ---: |
+| Expression Type binding | 69.25 ms | 2.53 ms |
+| Expression ID binding | 76.86 ms | 0.47 ms |
+| Expression Index binding | 33.43 ms | 1.94 ms |
+| Coordination summary, including fifteen yields | 30.20 ms | 20.48 ms |
+
+The original synchronous Wigner–Seitz summary blocked for 43.88 ms. Its revised
+shared generator took 54.08 ms synchronously; moving it to a warmed Worker took
+61.52 ms wall time, with page heartbeat maximum gaps of 1.61–2.80 ms. Checkpoint
+branches add overhead. This is a responsiveness and resource-reuse improvement,
+not a claim that its arithmetic or first-result total became faster.
+
+One Chromium dense-ID mapping observation at one million IDs was 487.5 ms for
+the original text path, 88.1 ms cold and 45.0 ms cached. Longest measured slices
+were 48.7, 5.8 and 4.0 ms, respectively; the cache retained 12 MB. A later
+production-build observation was 716.1/69.3/44.1 ms. Sparse numeric Maps show
+less benefit (one Node observation 1,164/887/789 ms with a 56 MB conservative
+cache estimate). These are cloud measurements, not host-independent guarantees;
+an 8 ms loop yield target does not bound allocation or garbage-collection time.
+
+### Integrated validation
+
+- `npm test`: **2,008 passed, zero failures**; `npm run build`: passed.
+- Production browser suites passed: Movie, configuration restoration,
+  Wigner–Seitz, expressions, numeric reference mapping, blended annotations and
+  atom primitives. Real versioned facades and GPU Worker URLs were checked.
+  Movie validation includes six video formats, independent parsers, ffprobe,
+  browser decoding, PNG fallback, phone layout and cleanup-time interactions.
+- The complete production `test:browser` smoke suite passed, including
+  configuration replay, reference-strain/displacement, concurrent analyses,
+  cancelled jobs, reused Workers, both views, phone controls and image exports.
+- Documentation, runtime-bundle and deployment/cache fixture checks:
+  **eight passed**. `git diff --check`: clean.
+
 
 ## Index/GPU recovery and remaining transport, startup and surface work (2026-10-11)
 

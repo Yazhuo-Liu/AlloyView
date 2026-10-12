@@ -2,3 +2,20 @@
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
   Cross-Origin-Resource-Policy: same-origin
+
+# The build replaces this token with the exact content hash. Ordinary source
+# files and the unversioned compatibility tree must never inherit this TTL.
+/assets/__ALLOYVIEW_BUILD_ID__/*
+  Cache-Control: public, max-age=31536000, immutable
+/:site/assets/__ALLOYVIEW_BUILD_ID__/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Revalidate viewer entrypoints so a deployment selects the new asset tree.
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/:site/
+  Cache-Control: no-cache
+/:site/index.html
+  Cache-Control: no-cache

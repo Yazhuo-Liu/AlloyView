@@ -1,6 +1,6 @@
 # Improvement backlog
 
-Last updated: 2026-10-11 (UTC). Audited commit: `dbe6055`.
+Last updated: 2026-10-11 (America/New_York). Audited commit: `dbe6055`.
 
 The feature plan is complete, so this backlog now tracks defects and
 performance work only. Earlier backlog items (P1–P18, O1–O16, A1–A9,
@@ -68,13 +68,13 @@ The items with the best return, drawn from all parts below:
 
 | Order | Item | What it gives | Effort |
 | --- | --- | --- | --- |
-| 1 | B15, B19 | Keep movie cancellation reachable and serialize configuration restores | S |
+| 1 | B23, B24, B30 | Preview restoration, radical-radius dependencies and stable legend focus | S–M |
 | 2 | R1 | MSAA cap removal still needs a coverage proof; single-sample guard is complete | M |
-| 3 | C7, C8 | Main-thread post-processing and typed numeric-ID matching | S–M |
-| 4 | S4 | Cache immutable assets while keeping background prewarm | S |
+| 3 | T2, T4 | Bound smoothing buffers and fuse dump coordinate/type passes | S–M |
+| 4 | S4 | Enable the prepared immutable-asset rules on the production CDN | S |
 | 5 | R2, R4 | Remaining orientation-color and picking loops | S |
 
-C1–C6/C9, R3/R8, S1–S3/S5, T1/T3/T5 and K2 have moved to the feature
+C1–C9, R3/R8, S1–S3/S5, T1/T3/T5 and K2 have moved to the feature
 documentation and dated [validation record](VALIDATION.md). R1 retains its MSAA
 restriction below; measurements are scoped to the tested deployment and hardware.
 
@@ -87,56 +87,9 @@ record in [VALIDATION.md](VALIDATION.md). B31, B8, B9, B14, B17, B18 and B20
 were completed in the next 2026-10-11 batch. B13/T1, B16/B37 and B28/B29
 were completed in the following batch, along with C5/C6/C9, S5 and K2.
 R1 gained a single-sample capless guard; MSAA remains capped. Completed labels
-are not reused.
-
-### B15. Escape closes the movie progress window while the export continues
-
-**Severity:** medium. **Effort:** S.
-
-- **Evidence [M]:** `bugs/A-movies/b6-movie-cancel-escape.mjs`: after Escape
-  the dialog is closed, the export keeps running, Cancel is unreachable, and
-  the theme and frame can be changed mid-export.
-- **Fix:** reopen the dialog or treat its `close` as Cancel; add
-  `closedby="none"`; make the application root `inert` during an export.
-
-### B19. A second configuration import during a restore can leave it unfinished
-
-**Severity:** medium, intermittent (5 of 8 runs). **Effort:** S–M.
-
-- **Evidence [M]:** `bugs/X-cross/import-concurrency.mjs double <gapMs>` on a
-  cold page: the status stays "Restoring configuration…" although every
-  analysis is calculated, and Color by ends as "type". The root cause was not
-  isolated.
-- **Fix:** serialize restores, and always write a final status in `finally`.
-
-### B21. Export JSON fails after opening a shorter trajectory
-
-**Severity:** medium. **Effort:** S.
-
-- **Evidence [M]:** `bugs/X-cross/repro-export-after-shorter-file.mjs`: a
-  strain reference frame or time-series first frame of 5, then a 3-frame file;
-  **Export JSON** fails validation and nothing downloads.
-- **Fix:** reset or clamp both in `loadFiles` and `closeSource`, and clamp
-  again in `captureConfiguration`.
-
-### B22. Voronoi cell opacity is applied twice on multisampled canvases
-
-**Severity:** medium (wrong opacity; images depend on the device).
-**Effort:** S.
-
-- **Where:** `src/render/voronoi-cell-layer.js` enables blending for faces and
-  outlines while `SAMPLE_ALPHA_TO_COVERAGE` is enabled globally in
-  `src/render/webgl-renderer.js`. The surface mesh layer already disables it.
-- **Evidence [M]:** `render/m4.mjs --only=a2c`: one white cell on black. With
-  4× multisampling the center pixels read 21, 75 and 150 at opacity 0.25, 0.5
-  and 0.75; with coverage disabled, or without multisampling, they read 83,
-  150 and 200. The ratio is exactly the opacity.
-- **Fix:** disable alpha-to-coverage around the Voronoi face and outline
-  passes and restore it afterwards; check the cell and slice-outline lines
-  (alpha 0.92 with blending) the same way.
-- **Intended visual change:** on multisampled canvases Voronoi faces and
-  outlines become as opaque as the slider says and lose the dither pattern.
-  Exports follow the screen.
+are not reused. The following batch completed B15/B19/B21/B22/B26/B27/B33
+and C7/C8. S4's build/preview policy is complete; enabling the external CDN
+rules remains below.
 
 ### Lower-severity defects
 
@@ -145,11 +98,8 @@ are not reused.
 | B23 | Camera-path preview does not return to its starting frame when frames load slowly | `bugs/A-movies/b8-preview-restore.mjs`, 4 of 4 [M] | On stop, show the starting frame whenever a load is pending | S |
 | B24 | Radical Voronoi with radii from an expression of an analysis output fails on every frame change | `bugs/D-kernels-inputs/b09-radical-radius-expression-frame-change.mjs` [M] | Wait while the radius property has a pending dependency; rerun when computed properties refresh | S–M |
 | B25 | Transparent PNG at "Current viewport" has edge fringes (1,927 of 290,700 pixels, up to 53 levels) | `bugs/C-labels-ao-export/t5-transparent-matte.mjs` [M] | Use the offscreen black/white matte for this path too; this changes that export's pixels | S |
-| B26 | Importing a configuration while a script runs is cut short by the script's next command | `bugs/A-movies/b4-import-during-script.mjs` [M] | Refuse the import while the automation lock is held | S |
-| B27 | Bonds on a large frame run to the end and then fail at the 1,000,000-edge cap | 964k atoms [M] | Sum counts as chunks finish and stop early | S |
 | B30 | Every refresh rebuilds the legend and drops keyboard focus; the legend cannot be edited during playback | `shell/bugs2.mjs` [M] | Update the legend in place when its kind, property and items are unchanged | M |
 | B32 | Small touch targets on phones (text buttons 28×11 px, help links 19×19) | `shell/mobile.mjs` [M] | 32–44 px hit areas under the mobile media query | S |
-| B33 | The Movie panel's image-size mirror keeps its old value after an import | `bugs/X-cross/roundtrip.mjs` [M] | Refresh it with the export-resolution control | S |
 | B34 | GPU results that depend on neighbor order are not reproducible between runs: frame strain on 6,912 and 60,229 atoms differs in 7–11 of 1,144,351 values (at most 1.5×10⁻⁸), HEA bonds and Q4/Q6 differ between two pools, and GPU Voronoi digests differ between page loads | Found while fixing B1 and B5; the GPU neighbor grid is filled with `atomicExchange`, so the order of each cell's list varies [M] | Sort each cell's list, or accumulate in an order-independent way; decide first whether run-to-run identity is required on the GPU | M |
 | B36 | `npm run test:gpu:voronoi` on the software adapter takes 285–320 s on the reference machine against a 360 s evaluate timeout, so a loaded machine can fail it without a defect | Measured on 2026-10-10 [M] | Split the page evaluation into two calls, or raise the timeout for this suite | S |
 | B35 | Trajectory lines for a selection group of physical copies find no atoms ("IDs not found (@AlloyView:copy…)"); lines work for source IDs | Seen while fixing B1 [M] | Map copy IDs to their source atom and add the copy's cell offset, or state the restriction in the panel | S–M |
@@ -159,36 +109,6 @@ beyond the new frame count. The expression variable `ID` is NaN for physical
 copies (may be by design; B35 is its visible consequence).
 
 ## Part 2: performance, phase 1 (small changes)
-
-### C7. Main-thread post-processing
-
-**Effort:** S. **Deployments:** all.
-
-- **Expressions [M]:** `Float64Array.from(types, callback)` takes 149 ms
-  against 7 ms for a loop at 1M; the first use of `ID` costs 294 ms. This is
-  most of the "0.5 s at 1M" noted in the expressions page.
-- **Statistics [M]:** `coordinationStatistics` uses a `Map` keyed by number
-  (35 ms against 8 ms for a count table, plus 15 yields).
-- **Wigner–Seitz summary [M]:** 64 ms synchronous at 1M; move it into the
-  Worker as cluster labeling already is.
-
-### C8. Match atom IDs with typed tables, off the string path
-
-**Effort:** S–M. **Deployments:** all, including WebGPU (matching precedes the
-GPU kernels).
-
-- **Where:** `reference-strain.js` `createReferenceMappingAsync`, used by
-  displacement and frame strain.
-- **Evidence [M]:** `cpu/main-thread.mjs`, 1M numeric IDs: 1,578 ms in 31 slices
-  of about 51 ms, longer than the displacement analysis itself (443 ms). A
-  dense table takes 55 ms and returns the same mapping. The reference-side map
-  is rebuilt for every current frame.
-- **Change:** for numeric typed IDs, a dense `Int32Array` table when the ID
-  range is at most 4N + 1024, otherwise a numeric `Map`; keep the string path
-  for other IDs; cache the reference-side table per reference ID array; slice
-  by time or move the match to the structure Worker.
-- **Verify:** equality with the current mapping on shuffled, missing,
-  duplicate and string IDs, including the same error messages.
 
 ### G2. A routing table, and a memory of fallbacks
 
@@ -267,6 +187,9 @@ moves use a constant-size projection/depth check, without scanning every bond.
   bytes, maximum difference 12) even when analytic geometry put the cap behind
   an endpoint sphere. This is an observed difference, not a demonstrated
   driver mechanism. Default antialiasing therefore retains capped geometry.
+  Further isolation places the differing pixel inside the sphere's opaque
+  projected disc (normalized radius squared 0.000505); widening only the
+  edge margin does not explain or eliminate this counterexample.
 - **Verify:** strict pixel equality for current and exported views, periodic
   shifts, per-atom radii, hiding, slices and context restoration. Avoid an
   O(bond-count) coverage scan on every camera move without measuring its cost.
@@ -325,7 +248,7 @@ moves use a constant-size projection/depth check, without scanning every bond.
   caps; let the second renderer adopt the main renderer's processed display
   arrays, atom bounds and bond shifts (treated as immutable).
 
-### S4. Cache content-hashed assets as immutable
+### S4. Enable production CDN rules for content-hashed assets
 
 **Effort:** S (deployment configuration). **Deployments:** production.
 
@@ -333,9 +256,17 @@ moves use a constant-size projection/depth check, without scanning every bond.
   `max-age=14400` and HTML and Wasm with `max-age=600`; Wasm is not cached at
   the edge. After expiry a revisit sends 204–206 conditional requests through
   the same waterfall: ready in 570 ms against 302 ms.
-- **Change:** for `/AlloyView/assets/*`, a Cloudflare cache rule and
-  `Cache-Control: public, max-age=31536000, immutable`; the same line in
-  `_headers`; keep `index.html` short-lived; document it in DEPLOYMENT.md.
+- **Completed:** the build generates exact-hash immutable rules in `_headers`;
+  the preview server verifies the build manifest before caching hashed
+  assets. Real Chromium revisits reuse JS, Worker, Wasm and CSS without
+  network transfer, while new build hashes retrieve new bytes. HTML and
+  compatibility/source paths keep their update policy.
+- **Remaining:** enable the documented Cloudflare cache and response-header
+  rules on production if that host does not apply `_headers`. Cache only
+  successful exact-hash assets; never long-cache a missing version's 404.
+  Production HTTP inspection was blocked by the execution proxy, so this
+  batch does not claim that the external rules are active. See
+  [Deployment](DEPLOYMENT.md#cache-content-addressed-assets).
 
 ## Part 2: performance, phase 2 (medium changes)
 

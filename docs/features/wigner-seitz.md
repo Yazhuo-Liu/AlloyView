@@ -123,8 +123,13 @@ includes the counts. Markers are part of PNG exports and the second view.
 ## Performance and determinism
 
 Assignment runs in the shared CPU Worker pool. Each Worker builds the site
-index once per calculation and assigns ranges of current atoms; occupancies,
-classes and counts are then accumulated in atom order on the main thread.
+index once per calculation and assigns ranges of current atoms. One slot in
+the same pool then accumulates occupancies, classes and counts in atom order.
+It receives the owned assignments and bounded copies of the type arrays,
+without uploading positions or rebuilding a neighbor index. Its tables are
+included in memory admission while active, including after cancellation until
+the Worker acknowledges it. The slot, site indices and native kernels remain
+available for later work.
 Assignments do not depend on the partition, so every array is identical to a
 single-threaded calculation for any Worker count, with and without shared
 memory. The calculation has no GPU kernel; the GPU preference does not affect
@@ -140,6 +145,14 @@ and builds its site index; repeated calculations (for example while stepping
 through frames) take 0.07–0.19 s. The results were identical to the
 single-threaded calculation with and without shared memory.
 
+The subsequent million-atom summary check on the cloud Node 24 environment
+measured a 61.5 ms median wall time for a warmed Worker across seven trials.
+The page-style 1 ms heartbeat continued with a maximum observed gap of
+1.6–2.8 ms, compared with the previous synchronous summary's 43.9 ms median
+blocking the calling thread. The cooperative counting code adds checkpoints;
+this change improves responsiveness rather than claiming faster arithmetic.
+The synchronous API remains available and uses the same counting order.
+
 ## Limitations
 
 - The reference must be a frame of the loaded source; a separate reference
@@ -152,8 +165,8 @@ single-threaded calculation with and without shared memory.
 - Site markers are drawn wrapped into the displayed cell, also in the
   unwrapped coordinate view. They cannot be picked: identify sites through
   **WS site index**, atom details and the defect-site CSV.
-- Occupancies and classes are summarized on the main thread after the
-  Workers finish (about 0.01 s per 100,000 atoms).
+- Summary tables are finalized by one Worker; this global counting step is
+  serial and yields for cancellation between bounded chunks.
 - Every Worker builds its own index of the reference sites for each
   calculation; the index is not shared between Workers, also with shared
   memory.

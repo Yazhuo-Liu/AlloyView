@@ -12,7 +12,7 @@ import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLo
 import { calculateReferenceStrain, prepareReferenceStrainContext } from '../analysis/reference-strain.js';
 import { calculatePreparedDisplacements, prepareDisplacementCalculation } from '../analysis/displacement.js';
 import { calculateClusterEdges, finalizeClusters } from '../analysis/clusters.js';
-import { assignWignerSeitzSites, prepareWignerSeitzContext } from '../analysis/wigner-seitz.js';
+import { assignWignerSeitzSites, prepareWignerSeitzContext, summarizeWignerSeitzAsync } from '../analysis/wigner-seitz.js';
 import { calculateDxaLocalRange, calculateDxaTetrahedraRange, releaseDxaCpuStageData, warmupDxaCpuStages, dxaCpuKernelMemoryBytes } from '../analysis/dxa-cpu-stages.js';
 
 import { NeighborSearch } from '../analysis/neighbors.js';
@@ -26,6 +26,7 @@ const CPU_INPUT_FIELDS = ['structureInput', 'referenceFractional', 'referenceMap
   'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex', 'clusterSelection', 'rdfNormalization'];
 let cpuResident, cpuAnalysis;
 const cpuResidents = new Map(), cpuAnalyses = new Map();
+const wignerSeitzSummaries = new Map();
 
 // One immutable source snapshot and linked-cell index per resident Worker.
 // Chunk messages reuse these arrays; results never transfer source buffers.
@@ -70,6 +71,7 @@ function residentInputMemory() {
 }
 
 self.addEventListener('message', async ({ data }) => {
+  if (data.kind === 'wignerSeitzCancel') { wignerSeitzSummaries.get(data.id)?.abort(); return; }
   if (data.kind === 'cpuRelease') { for (const retained of cpuResidents.values()) releasePtmFrame(retained.frame); cpuResident = null; cpuAnalysis = null; cpuResidents.clear(); cpuAnalyses.clear(); return; }
   if (data.kind === 'voronoiRelease') { voronoiResident = null; voronoiRadii = null; return; }
   if (data.kind === 'dxaRelease') { await releaseDxaCpuStageData(data.dxaResidentKey); return; }
@@ -262,6 +264,16 @@ self.addEventListener('message', async ({ data }) => {
     } else if (kind === 'wignerSeitzAssign') {
       onPhase('analyzing');
       result = assignWignerSeitzSites(frame, { ...parameters, onAtoms });
+    } else if (kind === 'wignerSeitzFinalize') {
+      onPhase('finalizing');
+      const startedAt = performance.now();
+      const controller = new AbortController();
+      wignerSeitzSummaries.set(id, controller);
+      try {
+        result = { siteIndex: parameters.siteIndex, siteDistance: parameters.siteDistance, affineMapping: parameters.affineMapping,
+          ...await summarizeWignerSeitzAsync({ ...parameters, currentTypes: types }, { signal: controller.signal }) };
+        result.elapsedMs = performance.now() - startedAt;
+      } finally { wignerSeitzSummaries.delete(id); }
     } else if (kind === 'localShearCoordination') {
       result = calculateLocalShearCoordination(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'localShearMetrics') {

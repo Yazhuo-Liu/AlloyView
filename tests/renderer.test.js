@@ -398,3 +398,24 @@ test('PNG arrows follow camera rotation, draw XYZ labels and leave the backgroun
   assert.ok(labels[1][1] < 575, 'rotated Y points left');
   assert.ok(lines.length >= 4);
 });
+
+
+test('cell and slice annotation alpha is blended once, with coverage restored for native and export lines', () => {
+  for (const coverage of [false, true]) for (const exportLines of [false, true]) {
+    let enabled = coverage, draws = 0;
+    const renderer = Object.create(WebGLRenderer.prototype);
+    const gl = { SAMPLE_ALPHA_TO_COVERAGE: 1, LINES: 2,
+      isEnabled(capability) { assert.equal(capability, 1); return enabled; },
+      enable(capability) { assert.equal(capability, 1); enabled = true; },
+      disable(capability) { assert.equal(capability, 1); enabled = false; },
+      uniform3f() {}, drawArrays() { assert.equal(enabled, false); draws++; } };
+    Object.assign(renderer, {gl,lineUniforms:{uColor:1},renderViewport:exportLines ? {lineScale:2} : null,
+      exportLineLayer:{ draw() { assert.equal(enabled, false); draws++; } } });
+    renderer.drawAnnotationLines({},0,2,[1,1,1]);
+    assert.equal(draws,1);assert.equal(enabled,coverage);
+    if (exportLines) renderer.exportLineLayer.draw = () => { throw new Error('draw failed'); };
+    else gl.drawArrays = () => { throw new Error('draw failed'); };
+    assert.throws(() => renderer.drawAnnotationLines({},0,2,[1,1,1]), /draw failed/);
+    assert.equal(enabled,coverage,'failures restore the incoming coverage state');
+  }
+});

@@ -1,26 +1,46 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { withWebGpuBrowser } from './webgpu-browser.mjs';
 
 // Draw the original expanded triangles as an independent geometry oracle.
-const production = await readFile(new URL('../src/render/atom-primitives.js', import.meta.url), 'utf8');
-const start = production.indexOf('export function createIndexedPrimitiveMesh(');
-const end = production.indexOf('/** Flat rectangle/triangle meshes', start);
+const productionSource = await readFile(new URL('../src/render/atom-primitives.js', import.meta.url), 'utf8');
+const start = productionSource.indexOf('export function createIndexedPrimitiveMesh(');
+const end = productionSource.indexOf('/** Flat rectangle/triangle meshes', start);
 assert.ok(start >= 0 && end > start);
-const source = production.slice(0, start)
+const source = productionSource.slice(0, start)
   + 'export function createIndexedPrimitiveMesh(cone = false, sides = 10) { return { vertices: createPrimitiveMesh(cone, sides) }; }\n\n'
-  + production.slice(end);
-const report = await withWebGpuBrowser(async ({evaluate}) => evaluate(`(async()=>({singleSample:await (${run.toString()})(${JSON.stringify(source)},false), multisample:await (${run.toString()})(${JSON.stringify(source)},true)}))()`), {requireGpu:false});
+  + productionSource.slice(end);
+const production = process.argv.includes('--production');
+const report = await withWebGpuBrowser(async ({evaluate,call}) => {
+  if (production) {
+    const origin = await evaluate('location.origin');
+    await call('Page.navigate', {url:`${origin}/AlloyView/dist/index.html`});
+    const deadline = Date.now() + 30_000;
+    while (!(await evaluate('document.readyState === "complete" && document.querySelector("[data-tool-button=coordination]")'))) {
+      if (Date.now() > deadline) throw new Error('Production page startup timed out.');
+      await delay(25);
+    }
+  }
+  return evaluate(`(async()=>({production:${production},entry:${production} ? document.querySelector('script[type=module][src]').src : null,
+    singleSample:await (${run.toString()})(${JSON.stringify(source)},false,${production}),
+    multisample:await (${run.toString()})(${JSON.stringify(source)},true,${production})}))()`);
+}, {requireGpu:false});
 console.log(JSON.stringify(report,null,2));
 assert.ok([report.singleSample,report.multisample].every(result=>result.exportDifferences===0&&result.rows.every(row => row.differingBytes === 0 && row.errorA === 0 && row.errorB === 0)));
 
 
-async function run(source, antialias) {
-  const baseUrl = new URL('./src/render/atom-primitives.js',location.href);
+async function run(source, antialias, production) {
+  // Production resolves the candidate and dependencies from the built page's
+  // real content-versioned facade; the oracle still expands independent caps.
+  const baseUrl = production
+    ? new URL('./render/atom-primitives.js',document.querySelector('script[type=module][src]').src)
+    : new URL('./src/render/atom-primitives.js',location.href);
   source = source.replace(/from '([^']+)'/g,(_,name)=>`from '${new URL(name,baseUrl).href}'`);
   const url=URL.createObjectURL(new Blob([source],{type:'text/javascript'}));
   const [{AtomPrimitiveLayer:Baseline},{AtomPrimitiveLayer:Candidate},{WebGLRenderer},{crystalFrame},{calculateBonds},{createCell,fractionalToCartesian}] = await Promise.all([
-    import(url),import('./src/render/atom-primitives.js'),import('./src/render/webgl-renderer.js'),import('./tests/helpers/crystals.js'),import('./src/analysis/bonds.js'),import('./src/data/model.js')]);
+    import(url),import(baseUrl),import(new URL('./webgl-renderer.js',baseUrl)),import('/AlloyView/tests/helpers/crystals.js'),
+    import(new URL('../analysis/bonds.js',baseUrl)),import(new URL('../data/model.js',baseUrl))]);
   URL.revokeObjectURL(url);
   const frame=crystalFrame('fcc',2,3.52);
   frame.cell=createCell({vectors:[7.04,0,0,1.2,7.04,0,-.8,.7,7.04]}); frame.positions=fractionalToCartesian(frame.fractional,frame.cell);
@@ -56,9 +76,32 @@ async function run(source, antialias) {
   if(!candidate.singleSampleDefault&&renderers[1].gl.getParameter(renderers[1].gl.SAMPLES)>0){
     const r=renderers[1],gl=r.gl,read=()=>{const bytes=new Uint8Array(r.canvas.width*r.canvas.height*4);gl.readPixels(0,0,r.canvas.width,r.canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,bytes);return bytes;};
     const capped=read();candidate.singleSampleDefault=true;candidate.bondBuffers.displayShifts=bonds.shifts;
-    try{r.render(performance.now(),{trackStats:false});const capless=read();let differingBytes=0,maximumDifference=0;
-      for(let i=0;i<capped.length;i++){const difference=Math.abs(capped[i]-capless[i]);if(difference)differingBytes++;maximumDifference=Math.max(maximumDifference,difference);}
-      unsafeMultisampleControl={caplessExercised:candidate.coveredBondMesh(r)===candidate.caplessCylinder,differingBytes,maximumDifference};
+    try{r.render(performance.now(),{trackStats:false});const capless=read();let differingBytes=0,maximumDifference=0,firstDifference=-1;
+      for(let i=0;i<capped.length;i++){const difference=Math.abs(capped[i]-capless[i]);if(difference){differingBytes++;if(firstDifference<0)firstDifference=i;}maximumDifference=Math.max(maximumDifference,difference);}
+      let firstPixel=null;
+      if(firstDifference>=0){
+        const offset=firstDifference-firstDifference%4,x=(offset/4)%r.canvas.width,y=Math.floor(offset/4/r.canvas.width);
+        firstPixel={x,y,capped:Array.from(capped.subarray(offset,offset+4)),capless:Array.from(capless.subarray(offset,offset+4))};
+        // Record whether the observation is even near a sphere's fading edge.
+        // This is diagnostic evidence, not an added production coverage rule.
+        let nearest=null;
+        for(let atom=0;atom<r.atomCount;atom++){
+          const position=r.displayPositions.subarray(atom*3,atom*3+3),view=r.viewMatrix,projection=r.projectionMatrix;
+          const center=[0,1,2].map(row=>view[row]*position[0]+view[4+row]*position[1]+view[8+row]*position[2]+view[12+row]);
+          if(center[2]>=0)continue;
+          const projected=[(projection[0]*center[0]/-center[2]+1)*r.canvas.width/2,(projection[5]*center[1]/-center[2]+1)*r.canvas.height/2];
+          const radius=r.atomRadii[atom]*r.radiusScale;
+          const corner=[(x+.5-projected[0])/(projection[0]*radius/-center[2]*r.canvas.width/2),
+            (y+.5-projected[1])/(projection[5]*radius/-center[2]*r.canvas.height/2)];
+          const normalizedRadiusSquared=corner[0]**2+corner[1]**2;
+          if(!nearest||normalizedRadiusSquared<nearest.normalizedRadiusSquared)nearest={atom,projectedCenter:projected,normalizedRadiusSquared};
+        }
+        firstPixel.nearestSphere=nearest;
+        const savedLayer=r.primitiveLayer;r.primitiveLayer=null;
+        try{r.render(performance.now(),{trackStats:false});firstPixel.spheresOnly=Array.from(read().subarray(offset,offset+4));}
+        finally{r.primitiveLayer=savedLayer;}
+      }
+      unsafeMultisampleControl={caplessExercised:candidate.coveredBondMesh(r)===candidate.caplessCylinder,differingBytes,maximumDifference,firstPixel};
     }finally{candidate.singleSampleDefault=false;candidate.bondBuffers.displayShifts=null;candidate.bondCapCoverage=null;}
   }
   both(r=>r.setProjection('orthographic'));compare('orthographic cap coverage');

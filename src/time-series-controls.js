@@ -334,12 +334,21 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
     refresh: () => { renderAttributeList(); writeRange(); updateControls(); draw({ force: true }); },
     setEnabled(value) { controlsEnabled = Boolean(value); syncSource(); writeRange(); renderAttributeList(); updateControls(); draw({ force: true }); },
     /** Drop collected values and stop work, keeping the settings. */
-    reset() { if (job) { job.controller.abort(); finishJob(job); } store.clear(); collected = false; tools?.setToolEnabled('timeSeries', false); draw({ force: true }); },
+    reset({ resetRange = false } = {}) {
+      if (job) { job.controller.abort(); finishJob(job); }
+      if (resetRange) { settings.firstFrame = 0; settings.lastFrame = null; writeRange(); }
+      store.clear(); collected = false; tools?.setToolEnabled('timeSeries', false); draw({ force: true });
+    },
     isRunning: () => Boolean(job),
     hasSeries: () => settings.attributes.length > 0 && collected,
     getData: chartData,
     store,
-    serialize: () => ({ ...settings, attributes: [...settings.attributes], autoCollect: collected }),
+    serialize: ({ frameCount } = {}) => {
+      const maximum = Number.isSafeInteger(frameCount) && frameCount > 0 ? frameCount - 1 : null;
+      return { ...settings, attributes: [...settings.attributes], autoCollect: collected,
+        firstFrame: maximum === null ? settings.firstFrame : Math.min(settings.firstFrame, maximum),
+        lastFrame: settings.lastFrame === null || maximum === null ? settings.lastFrame : Math.min(settings.lastFrame, maximum) };
+    },
     async restore(saved, { isCurrent = () => true } = {}) {
       if (job) { job.controller.abort(); finishJob(job); }
       settings = normalizeTimeSeriesState(saved ?? { attributes: [...TIME_SERIES_DEFAULTS.attributes] });

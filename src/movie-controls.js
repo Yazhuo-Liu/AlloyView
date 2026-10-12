@@ -8,6 +8,19 @@ import { createAutomationLock, waitUntilSettled } from './script-controls.js';
 
 const canvasBlob = canvas => new Promise((resolve, reject) => canvas.toBlob(
   blob => blob ? resolve(blob) : reject(new Error('Could not encode the image.')), 'image/png'));
+const cancelled = () => new DOMException('The movie export was cancelled.', 'AbortError');
+// WebCodecs has no signal for its support query. Stop waiting immediately,
+// while consuming the eventual answer without publishing a stale probe.
+function waitForProbe(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(cancelled());
+  return new Promise((resolve, reject) => {
+    const stop = () => { signal.removeEventListener('abort', stop); reject(cancelled()); };
+    signal.addEventListener('abort', stop, { once: true });
+    Promise.resolve(promise).then(value => { signal.removeEventListener('abort', stop); resolve(value); },
+      error => { signal.removeEventListener('abort', stop); reject(error); });
+  });
+}
 
 export function formatBytes(bytes) {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
@@ -42,6 +55,7 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
   const dialog = documentRoot ? node('dialog') : null;
   if (dialog) {
     dialog.id = 'movie-export-dialog'; dialog.className = 'movie-export-dialog'; dialog.setAttribute('aria-labelledby', 'movie-export-title');
+    dialog.setAttribute('closedby', 'none');
     const title = node('h2', 'Exporting movie'); title.id = 'movie-export-title';
     const progress = node('progress'); progress.id = 'movie-progress'; progress.className = 'analysis-progress'; progress.max = 1; progress.value = 0;
     progress.setAttribute('aria-label', 'Movie export progress');
@@ -49,16 +63,15 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
     const cancel = node('button', 'Cancel', 'button button-secondary'); cancel.id = 'cancel-movie'; cancel.type = 'button';
     dialog.append(title, progress, text, node('p', 'The view and frame return to where they were when the export ends.', 'help'), cancel);
     documentRoot.body?.append(dialog);
-    // A long render is not thrown away by Escape; Cancel is explicit.
-    dialog.addEventListener('cancel', event => event.preventDefault());
   }
   let path = createCameraPath(), output = { ...DEFAULT_MOVIE_OUTPUT }, enabled = false, message = '';
-  let formats = [], probeRequest = 0, probeTimer = null, probeStale = true, exporting = null, preview = null, renderedKeyframes = '', toolMarked = false;
+  let formats = [], probeRequest = 0, probeTimer = null, probeStale = true, exporting = null, preview = null, renderedKeyframes = '', toolMarked = false, disposed = false;
   // Encoders are asked only while the panel is open or an export starts, so
   // a session that never makes a movie never touches the video encoder.
   const panel = controls.exportButton?.closest?.('[data-tool-panel]') ?? null;
   const panelOpen = () => !panel || !panel.hidden;
   const busy = () => exporting !== null || preview !== null;
+  const lockMessage = () => lock.owner() === 'configuration' ? 'Wait for the configuration restore to finish first.' : 'Stop the running script first.';
   const frameCount = () => Math.max(1, getFrameCount());
   // The image size is the Display panel's export setting; the menu here edits the same control.
   const resolutionSource = $('export-resolution');
@@ -125,7 +138,14 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
   }
 
   /** Ask the encoder which formats work at the current size, rate and quality. */
-  async function probe() {
+  async function probe({ signal = null } = {}) {
+    if (disposed || signal?.aborted) throw cancelled();
+    const probeEncoder = signal && typeof VideoEncoderClass === 'function' ? class {
+      static isConfigSupported(config) {
+        if (signal.aborted) throw cancelled();
+        return VideoEncoderClass.isConfigSupported(config);
+      }
+    } : VideoEncoderClass;
     const request = ++probeRequest;
     probeStale = false;
     const candidates = [];
@@ -137,8 +157,9 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
     }
     const results = [];
     for (const { format, size, bitrate } of candidates) {
-      const [entry] = await probeMovieFormats({ width: size.width, height: size.height, fps: output.fps, bitrate, formats: [format], VideoEncoderClass });
-      if (request !== probeRequest) return;
+      const [entry] = await waitForProbe(probeMovieFormats({ width: size.width, height: size.height, fps: output.fps, bitrate, formats: [format], VideoEncoderClass: probeEncoder }), signal);
+      if (signal?.aborted) throw cancelled();
+      if (disposed || request !== probeRequest) return;
       if (entry.supported && typeof VideoFrameClass === 'function') results.push(entry);
     }
     formats = [...results, { format: PNG_SEQUENCE_FORMAT, supported: true, config: null, reason: '' }];
@@ -148,6 +169,7 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
 
   function scheduleProbe() {
     clearTimeout(probeTimer);
+    if (disposed) return;
     if (controls.format) controls.format.dataset.pending = 'true';
     if (!panelOpen()) { probeStale = true; return; }
     probeTimer = setTimeout(() => { void probe(); }, 120);
@@ -289,7 +311,7 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
     let plan;
     try { plan = planMovie(path, { fps: 30, frameCount: frameCount() }); } catch (error) { notify(error.message); return; }
     const release = lock.acquire('movie');
-    if (!release) { notify('Stop the running script first.'); return; }
+    if (!release) { notify(lockMessage()); return; }
     stopPlayback();
     const stopHere = () => stopPreview({ restore: false });
     const task = { release, source: getSourceVersion(), camera: captureCamera(renderer), frame: getFrameIndex(), started: null, loading: false,
@@ -317,29 +339,56 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
   }
 
   async function runExport() {
-    if (busy() || !enabled) return;
+    if (disposed || busy() || !enabled) return;
     const release = lock.acquire('movie');
-    if (!release) { notify('Stop the running script first.'); return; }
+    if (!release) { notify(lockMessage()); return; }
     const controller = new AbortController();
-    exporting = { controller };
-    // Ask the encoder again, so its configuration matches the settings and viewport of this moment.
-    clearTimeout(probeTimer);
-    await probe();
-    const description = describePlan();
-    if (description.error || controller.signal.aborted) { exporting = null; release(); render(); if (description.error) notify(description.error); return; }
-    const { entry, size } = description;
-    const snapshot = normalizeCameraPathState(JSON.parse(JSON.stringify(path))), settings = { ...output }, stem = getFileStem();
+    const task = exporting = { controller };
     const progressBar = $('movie-progress'), progressText = $('movie-progress-text'), cancel = $('cancel-movie');
     const onCancel = () => { controller.abort(); if (progressText) progressText.textContent = 'Cancelling…'; };
+    const application = documentRoot?.querySelector?.('.app-shell') ?? controls.exportButton?.closest?.('.app-shell');
+    const wasInert = application?.inert, previousFocus = documentRoot?.activeElement;
+    // The dialog is a sibling of the app shell: the cancellation button stays
+    // interactive, including while restoring the original frame after abort.
+    if (application) application.inert = true;
+    const showProgress = () => {
+      if (!dialog || dialog.open) return;
+      try { dialog.showModal(); }
+      catch { dialog.show(); } // Explicit inert also protects the nonmodal fallback.
+    };
+    const onDialogCancel = event => { event.preventDefault(); onCancel(); };
+    const onEscape = event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault(); event.stopPropagation(); onCancel();
+    };
+    const onDialogClose = () => {
+      // A close event from our finished task may be queued until another
+      // export starts. Only an actually closed active dialog cancels work.
+      if (exporting !== task || dialog.open || disposed) return;
+      onCancel();
+      try { showProgress(); } catch { /* abort still restores and releases the lock */ }
+    };
     message = ''; setState('Exporting…');
     if (progressBar) progressBar.value = 0;
     if (progressText) progressText.textContent = 'Preparing…';
     cancel?.addEventListener('click', onCancel);
+    dialog?.addEventListener('cancel', onDialogCancel);
+    dialog?.addEventListener('close', onDialogClose);
+    documentRoot?.addEventListener?.('keydown', onEscape, true);
     render();
-    // A modal dialog keeps stray clicks and shortcuts from changing the scene mid-export.
-    try { dialog?.showModal(); } catch { /* an open dialog elsewhere: continue without the modal */ }
     let lastText = 0;
     try {
+      showProgress();
+      cancel?.focus?.();
+      // Codec preparation belongs to the same cancellable lifecycle as the
+      // render; even a stalled support query cannot strand the automation lock.
+      clearTimeout(probeTimer);
+      await probe({ signal: controller.signal });
+      if (controller.signal.aborted) throw cancelled();
+      const description = describePlan();
+      if (description.error) throw new Error(description.error);
+      const { entry, size } = description;
+      const snapshot = normalizeCameraPathState(JSON.parse(JSON.stringify(path))), settings = { ...output }, stem = getFileStem();
       const result = await exportMovie({ path: snapshot, output: settings, format: entry.format, config: entry.config, fileStem: stem, signal: controller.signal,
         VideoEncoderClass, VideoFrameClass,
         host: {
@@ -360,6 +409,7 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
             progressText.textContent = `Frame ${frame.toLocaleString('en-US')} of ${frameTotal.toLocaleString('en-US')} · ${formatBytes(bytes)} · ${formatSeconds(elapsedMs / 1000)} elapsed${frame < frameTotal ? ` · about ${formatSeconds(etaMs / 1000)} left` : ''}`;
           }
         } });
+      if (controller.signal.aborted) throw cancelled();
       const name = `${stem}${entry.format.id === PNG_SEQUENCE_FORMAT.id ? '-movie-frames' : '-movie'}.${entry.format.extension}`;
       downloadBlob(new Blob(result.parts, { type: result.mimeType }), name);
       message = `Saved ${name}: ${result.frames.toLocaleString('en-US')} frames, ${Number(result.durationSeconds.toFixed(2))} s, ${formatBytes(result.size)}, rendered in ${formatSeconds(result.elapsedMs / 1000)}.`;
@@ -369,9 +419,18 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
       else { message = `Movie export failed: ${error?.message ?? error}`; setState('Failed'); notify(message); }
     } finally {
       cancel?.removeEventListener('click', onCancel);
-      if (dialog?.open) dialog.close();
-      exporting = null; release();
-      render(); scheduleProbe();
+      dialog?.removeEventListener('cancel', onDialogCancel);
+      dialog?.removeEventListener('close', onDialogClose);
+      documentRoot?.removeEventListener?.('keydown', onEscape, true);
+      if (controller.signal.aborted) probeRequest++;
+      exporting = null;
+      try { if (dialog?.open) dialog.close(); }
+      finally {
+        if (application) application.inert = wasInert;
+        release();
+        if (!wasInert && previousFocus?.isConnected) previousFocus.focus?.();
+        if (!disposed) { render(); scheduleProbe(); }
+      }
     }
   }
 
@@ -399,6 +458,7 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
   });
   const onResolution = () => { render(); scheduleProbe(); };
   for (const id of ['export-resolution', 'export-width', 'export-height', 'export-aspect-lock']) $(id)?.addEventListener('change', onResolution);
+  resolutionSource?.addEventListener('export-resolution-restored', onResolution);
   const observer = typeof view.ResizeObserver === 'function' && renderer?.canvas ? new view.ResizeObserver(() => { if (!busy()) onResolution(); }) : null;
   observer?.observe(renderer.canvas);
   const panelObserver = panel && typeof view.MutationObserver === 'function' ? new view.MutationObserver(() => { if (panelOpen() && probeStale) scheduleProbe(); }) : null;
@@ -437,6 +497,12 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
       path = state.path; output = state.output; message = ''; renderedKeyframes = '';
       setState('Idle'); render(); scheduleProbe();
     },
-    dispose() { stopPreview({ restore: false }); exporting?.controller.abort(); observer?.disconnect(); panelObserver?.disconnect(); clearTimeout(probeTimer); dialog?.remove(); },
+    dispose() {
+      disposed = true; probeRequest++;
+      stopPreview({ restore: false }); exporting?.controller.abort(); observer?.disconnect(); panelObserver?.disconnect(); clearTimeout(probeTimer);
+      resolutionSource?.removeEventListener('export-resolution-restored', onResolution);
+      for (const id of ['export-resolution', 'export-width', 'export-height', 'export-aspect-lock']) $(id)?.removeEventListener('change', onResolution);
+      dialog?.remove();
+    },
   });
 }

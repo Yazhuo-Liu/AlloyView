@@ -382,7 +382,7 @@ test('renderer slabs clip atoms and picks, and cut outlines draw only when shown
   Object.assign(r.gl, Object.fromEntries(['clearColor', 'clear', 'colorMask', 'disable', 'enable', 'useProgram',
     'bindVertexArray', 'uniformMatrix4fv', 'uniform1f', 'uniform1i', 'uniform4fv', 'uniform1iv', 'blendFuncSeparate',
     'drawArraysInstanced', 'bindBuffer', 'bufferData', 'drawArrays', 'uniform3f'].map(name => [name, record(name)])),
-  { LINES: 'LINES', DEPTH_TEST: 'DEPTH_TEST', BLEND: 'BLEND', ARRAY_BUFFER: 'ARRAY_BUFFER', DYNAMIC_DRAW: 'DYNAMIC_DRAW' });
+  { LINES: 'LINES', DEPTH_TEST: 'DEPTH_TEST', BLEND: 'BLEND', ARRAY_BUFFER: 'ARRAY_BUFFER', DYNAMIC_DRAW: 'DYNAMIC_DRAW', isEnabled() { return false; } });
   const lines = () => calls.filter(([name, mode]) => name === 'drawArrays' && mode === 'LINES');
   const uploads = () => calls.filter(([name, target, data]) => name === 'bufferData' && data instanceof Float32Array);
   r.render(0, { trackStats: false });

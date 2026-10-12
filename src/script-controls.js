@@ -303,7 +303,11 @@ export function initializeScriptControls({ host, registry, tools = null, lock = 
     if (!result) return;
     if (result.problems.length) { message = `Fix ${result.problems.length === 1 ? 'the problem' : `${result.problems.length} problems`} shown above before running.`; render(); return; }
     const release = lock.acquire('script');
-    if (!release) { notify(lock.owner() === 'movie' ? 'Wait for the movie export or preview to finish first.' : 'Another script is running.'); return; }
+    if (!release) {
+      notify(lock.owner() === 'configuration' ? 'Wait for the configuration restore to finish first.'
+        : lock.owner() === 'movie' ? 'Wait for the movie export or preview to finish first.' : 'Another script is running.');
+      return;
+    }
     const controller = new AbortController(), task = { controller, line: 0 };
     running = task;
     tools?.setToolEnabled('scripts', true);

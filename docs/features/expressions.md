@@ -102,7 +102,20 @@ Write a column whose name is not a plain identifier between backquotes. Names su
 
 Errors name the problem and its column (and line, for multi-line text), and the panel highlights the offending text: unknown variables and functions list close matches, wrong argument counts state the expected number, and a missing velocity or analysis output says what to calculate. Expressions are limited to 4,096 characters, 64 nested levels of parentheses, function calls, unary operators, conditionals and powers, and 256 operations in any chain. Names never reach JavaScript objects, so `constructor` or `__proto__` are ordinary unknown names.
 
-Expressions are evaluated synchronously on the page thread: computing a property or applying a condition takes about 0.5 s for 1,000,000 atoms, during which the page does not respond. A selection condition is evaluated once, on the frame displayed when the button is pressed; it is not applied again on later frames. Expansion builds its own neighbor index in the selection Worker and does not reuse the index that the analysis Workers keep for the same frame.
+Expressions are evaluated synchronously on the page thread; time depends on
+the expression and atom count, and long evaluations still block interaction.
+Numeric typed IDs now use a native Float64 copy, while Type and Index use
+direct loops instead of per-element callbacks. In a cloud Node 24 check with
+one million atoms and seven interleaved trials, first binding fell from
+69.3 to 2.5 ms for Type, 76.9 to 0.5 ms for ID, and 33.4 to 1.9 ms for Index.
+These are input preparation timings rather than whole-expression timings;
+the derived arrays remain private and are reused on subsequent bindings.
+Text and BigInt identifiers keep the documented conversion rules.
+
+A selection condition is evaluated once, on the frame displayed when the
+button is pressed; it is not applied again on later frames. Expansion builds
+its own neighbor index in the selection Worker and does not reuse the index
+that the analysis Workers keep for the same frame.
 
 ## Configuration files
 

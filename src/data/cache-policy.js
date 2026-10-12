@@ -1,9 +1,14 @@
+import { referenceMappingCacheBytes } from '../analysis/reference-strain.js';
+
 const MEBIBYTE = 1024 ** 2;
 const GIBIBYTE = 1024 ** 3;
 
 export function estimateFrameBytes(frame) {
   const buffers = new Set(), visited = new Set(), pending = [frame];
-  let bytes = 0;
+  // Numeric correspondence lookups are weakly keyed by the reference IDs.
+  // Their private snapshot/table remains live beside an otherwise unchanged
+  // frame, so include it without exposing it as a scientific property.
+  let bytes = frame?.ids ? referenceMappingCacheBytes(frame.ids) : 0;
   // Physical replication retains the parsed source for switching back, and
   // uses stable compound IDs stored as strings rather than a typed ID buffer.
   bytes += Math.max(0, Number(frame?.processingSourceBytes) || 0);

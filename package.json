@@ -46,7 +46,7 @@
     "test:browser:source-loading": "node scripts/browser-source-loading.mjs",
     "test:browser:renderer-context": "node scripts/browser-renderer-context.mjs",
     "test:browser:renderer-bounds": "node scripts/browser-renderer-bounds.mjs",
-    "test:browser:atom-primitives": "node scripts/browser-atom-primitives.mjs",
+    "test:browser:atom-primitives": "node scripts/browser-atom-primitives.mjs --production",
     "test:browser:analysis-dependencies": "node scripts/browser-analysis-dependencies.mjs",
     "test:browser:archive-logo": "node scripts/browser-archive-logo.mjs",
     "test:browser:trajectory-tools": "node scripts/browser-trajectory-tools.mjs",
@@ -66,7 +66,11 @@
     "build:dxa:threaded": "bash wasm/build-dxa-threaded.sh",
     "test:browser:progressive-series": "node scripts/browser-progressive-series.mjs",
     "test:browser:bundled-runtime": "node scripts/browser-bundled-runtime.mjs",
-    "test:browser:gpu-recovery": "node scripts/browser-gpu-recovery.mjs"
+    "test:browser:gpu-recovery": "node scripts/browser-gpu-recovery.mjs",
+    "test:browser:configuration-restore": "node scripts/browser-configuration-restore.mjs",
+    "test:browser:blended-annotations": "node scripts/browser-blended-annotations.mjs --production",
+    "test:browser:reference-mapping": "node scripts/browser-reference-mapping.mjs --production",
+    "benchmark:reference-mapping": "node scripts/benchmark-reference-mapping.mjs"
   },
   "engines": {
     "node": ">=20"

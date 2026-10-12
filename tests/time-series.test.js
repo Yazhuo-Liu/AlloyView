@@ -344,3 +344,23 @@ test('cancelling a time-series collection keeps the values read so far', async t
   assert.equal(await series.collect(), true);
   assert.equal(series.getData().series.find(item => item.name === 'Mean.q').values.filter(Number.isFinite).length, 6);
 });
+
+test('opening a new source resets timeline bounds while retaining plotted attributes and style', async t => {
+  const { series, fields, view } = harness(t, { frameCount: 8 });
+  await series.restore({ attributes: ['Cell.volume'], firstFrame: 4, lastFrame: 7, stride: 2,
+    xAxis: 'timestep', separatePanels: true, autoCollect: false });
+  view.count = 3;
+  const bounded = series.serialize({ frameCount: view.count });
+  assert.equal(bounded.firstFrame, 2);
+  assert.equal(bounded.lastFrame, 2);
+  assert.equal(series.serialize().firstFrame, 4, 'capture validation does not silently modify live settings');
+  series.reset({ resetRange: true });
+  series.refresh();
+  assert.deepEqual(series.serialize(), { attributes: ['Cell.volume'], firstFrame: 0, lastFrame: null, stride: 2,
+    xAxis: 'timestep', separatePanels: true, autoCollect: false });
+  assert.equal(fields['time-series-first'].value, '1');
+  assert.equal(fields['time-series-last'].value, '3');
+  const config = createConfiguration({ source: { kind: 'file', label: 'short.xyz', format: 'xyz', frameIndex: 0,
+    frameCount: 3, files: [{ name: 'short.xyz', size: 100 }] }, settings: { extensions: { timeSeries: series.serialize() } } });
+  assert.equal(parseConfiguration(JSON.stringify(config)).source.frameCount, 3);
+});

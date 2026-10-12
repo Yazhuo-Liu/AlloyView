@@ -603,6 +603,15 @@ export class VoronoiCellLayer {
     const atom = this.geometry?.atomIndex;
     if (!this.options.enabled || !this.indexCount || !renderer.frame || atom >= renderer.atomCount || !renderer.visibility?.[atom]
       || !scalarPreviewAtomVisible(renderer.scalarColorPreview, atom)) return;
+    const gl = this.gl, coverage = gl.isEnabled(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    // Opacity and ribbon antialiasing are already applied by alpha blending.
+    // Applying them again as a multisample mask makes cells too transparent.
+    if (coverage) gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    try { this.renderCells(renderer, atom); }
+    finally { if (coverage) gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE); }
+  }
+
+  renderCells(renderer, atom) {
     const gl = this.gl, u = this.uniforms, planes = dislocationSlicePlanes(renderer);
     gl.useProgram(this.program); gl.bindVertexArray(this.vao);
     gl.uniform1i(u.uBatched, 0);
@@ -830,6 +839,13 @@ export class VoronoiAllCellLayer {
     this.highlightedCellCount = this.renderedHighlightReplicaCount = 0;
     if (!this.options.allEnabled || !this.cellCount || !renderer.frame) return;
     this.updatePositions(renderer);
+    const gl = this.gl, coverage = gl.isEnabled(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    if (coverage) gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    try { this.renderCells(renderer); }
+    finally { if (coverage) gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE); }
+  }
+
+  renderCells(renderer) {
     const gl = this.gl, u = this.uniforms, planes = dislocationSlicePlanes(renderer);
     const { opacity, scale } = this.options, surface = this.options.style === 'surface';
     gl.useProgram(this.program); gl.uniform1i(u.uBatched, 1); gl.uniform1i(u.uAtoms, 5);

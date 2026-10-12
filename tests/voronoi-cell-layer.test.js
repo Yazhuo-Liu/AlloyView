@@ -28,7 +28,7 @@ function mockGl() {
   for (const name of ['VERTEX_SHADER', 'FRAGMENT_SHADER', 'COMPILE_STATUS', 'LINK_STATUS', 'ARRAY_BUFFER',
     'ELEMENT_ARRAY_BUFFER', 'FLOAT', 'STATIC_DRAW', 'UNSIGNED_INT', 'TEXTURE0', 'TEXTURE_2D', 'RGBA32F', 'RGBA',
     'TEXTURE_MIN_FILTER', 'TEXTURE_MAG_FILTER', 'NEAREST', 'TEXTURE_WRAP_S', 'TEXTURE_WRAP_T', 'CLAMP_TO_EDGE',
-    'MAX_TEXTURE_SIZE', 'BLEND', 'SRC_ALPHA', 'ONE_MINUS_SRC_ALPHA', 'ONE', 'CULL_FACE', 'DEPTH_TEST', 'POLYGON_OFFSET_FILL',
+    'MAX_TEXTURE_SIZE', 'SAMPLE_ALPHA_TO_COVERAGE', 'BLEND', 'SRC_ALPHA', 'ONE_MINUS_SRC_ALPHA', 'ONE', 'CULL_FACE', 'DEPTH_TEST', 'POLYGON_OFFSET_FILL',
     'FRONT', 'BACK', 'TRIANGLES', 'LINES', 'ZERO', 'LEQUAL', 'GREATER']) gl[name] = name === 'TEXTURE0' ? 33984 : name;
   for (const name of ['createProgram', 'createShader', 'createVertexArray', 'createBuffer', 'createTexture']) gl[name] = () => ({});
   gl.getUniformLocation = (_program, name) => name;
@@ -41,6 +41,12 @@ function mockGl() {
     'vertexAttribDivisor', 'vertexAttribI4ui', 'blendFuncSeparate', 'depthMask', 'depthFunc', 'polygonOffset', 'cullFace', 'drawElements', 'drawElementsInstanced', 'drawArrays', 'drawArraysInstanced']) {
     gl[name] = (...arguments_) => calls.push({ name, arguments: arguments_ });
   }
+  const enabled = new Set();
+  gl.isEnabled = capability => enabled.has(capability);
+  for (const [name, value] of [['enable', true], ['disable', false]]) gl[name] = capability => {
+    if (value) enabled.add(capability); else enabled.delete(capability);
+    calls.push({ name, arguments: [capability] });
+  };
   return { gl, calls };
 }
 
@@ -274,4 +280,35 @@ test('default see-through mode keeps two-sided translucent faces and fades deepe
   assert.equal(calls.filter(call => call.name === 'uniform1f' && call.arguments[0] === 'uScale').every(call => call.arguments[1] === .8), true);
   assert.ok(calls.some(call => call.name === 'uniform3f' && call.arguments[0] === 'uEdgeColor'
     && call.arguments.slice(1).every(channel => channel >= 0.75)), 'dark backgrounds use pale outlines');
+});
+
+
+test('Voronoi face, depth, ghost and ribbon passes blend alpha once and restore the incoming coverage state', async () => {
+  const geometry = await cube(0), renderer = { frame: {}, atomCount: 1, selected: 0,
+    displayPositions: new Float64Array(3), visibility: Uint8Array.of(255), voronoiDisplayRevision: 1,
+    replicas: [{offset:[0,0,0]}], viewMatrix: new Float32Array(16), projectionMatrix: new Float32Array(16),
+    sliceMode: 'planes', sliceCount: 0, background: [0,0,0], canvas: {width:400,height:300,clientWidth:400} };
+  for (const allEnabled of [false, true]) for (const style of ['xray', 'surface']) {
+    const { gl, calls } = mockGl(), layer = allEnabled ? new VoronoiAllCellLayer(gl) : new VoronoiCellLayer(gl);
+    layer.setGeometry(allEnabled ? {chunks:[createVoronoiCellBatch([geometry])],cellCount:1} : geometry,
+      {enabled:!allEnabled,allEnabled,style,opacity:.25});
+    for (const coverage of [false, true]) {
+      if (coverage) gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE); else gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+      let draws = 0;
+      for (const name of ['drawElements','drawElementsInstanced','drawArrays','drawArraysInstanced']) gl[name] = () => {
+        assert.equal(gl.isEnabled(gl.SAMPLE_ALPHA_TO_COVERAGE), false, `${allEnabled}/${style}/${name} uses blending only`);
+        draws++;
+      };
+      const begin = calls.length;
+      layer.render(renderer);
+      assert.ok(draws > 2, 'exercises faces and outlines, including the all-cell depth/highlight passes');
+      assert.equal(gl.isEnabled(gl.SAMPLE_ALPHA_TO_COVERAGE), coverage);
+      assert.equal(calls.slice(begin).filter(call => ['enable','disable'].includes(call.name)
+        && call.arguments[0] === gl.SAMPLE_ALPHA_TO_COVERAGE).length, coverage ? 2 : 0,
+        'one coverage transition per complete layer, never per cell or ribbon');
+      gl.drawElements = gl.drawElementsInstanced = () => { throw new Error('draw failed'); };
+      assert.throws(() => layer.render(renderer), /draw failed/);
+      assert.equal(gl.isEnabled(gl.SAMPLE_ALPHA_TO_COVERAGE), coverage, 'failed draws retain the incoming state');
+    }
+  }
 });

@@ -109,7 +109,12 @@ export async function buildSite(root = projectRoot, out = resolve(root, 'dist'))
     await writeFile(resolve(runtimeRoot, path), contents);
   }
   await cp(resolve(root, 'LICENSE'), resolve(out, 'LICENSE'));
-  if (headers !== null) await writeFile(resolve(out, '_headers'), headers);
+  if (headers !== null) {
+    // Cache only this build's content-addressed paths. A literal asset wildcard
+    // would also grant a year-long TTL to future unversioned compatibility files.
+    await writeFile(resolve(out, '_headers'), headers.toString('utf8')
+      .replaceAll('__ALLOYVIEW_BUILD_ID__', buildId));
+  }
   const html = await readFile(resolve(root, 'index.html'), 'utf8');
   await writeFile(resolve(out, 'index.html'), html
     .replaceAll('./src/', `${assetPrefix}src/`)

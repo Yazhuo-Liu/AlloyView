@@ -205,6 +205,7 @@ try {
     const beforeRestore = await camera();
     const tampered = structuredClone(saved);
     tampered.settings.camera = null; tampered.source.frameIndex = 0;
+    tampered.settings.display.png.resolution = { mode: '1080p', width: 1234, height: 700, lockAspect: false };
     tampered.settings.extensions.scripts = { scripts: [{ id: 'evil', name: 'Auto', text: 'camera view top\nexport png stolen' }], selectedId: 'evil' };
     await evaluate('movieChecks.beginDownload()');
     await evaluate(`movieChecks.importRecipe(${JSON.stringify(JSON.stringify(tampered))})`);
@@ -217,6 +218,8 @@ try {
       ['Auto', 'camera view top\nexport png stolen', 'Idle']);
     assert.match(await text('script-status'), /Scripts restored\. Review the commands, then select Run\./);
     assert.deepEqual((await evaluate('movieChecks.keyframes()')).map(keyframe => keyframe.time), [0, 2], 'the camera path is restored');
+    assert.deepEqual(await evaluate('[document.getElementById("export-resolution").value, document.getElementById("movie-resolution").value]'),
+      ['1080p', '1080p'], 'configuration import synchronizes the Movie image-size mirror without a manual change');
     for (const [label, mutate, pattern] of [
       ['unknown script key', value => { value.settings.extensions.scripts.scripts[0].autorun = true; }, /scripts\[0\]\.autorun is not a supported setting/],
       ['oversized script', value => { value.settings.extensions.scripts.scripts[0].text = 'x'.repeat(20001); }, /scripts\[0\]\.text must be text of at most 20000/],
@@ -336,6 +339,7 @@ try {
     const midway = await evaluate('({ camera: movieChecks.camera(), text: document.getElementById("movie-progress-text").textContent, modal: document.getElementById("movie-export-dialog").matches(":modal") })');
     assert.match(midway.text, /^Frame \d+ of 121 · [\d.]+ (kB|MB) · \d+ s elapsed · about \d+ s left$/);
     assert.equal(midway.modal, true, 'the progress dialog blocks other input');
+    assert.equal(await evaluate('document.querySelector(".app-shell").inert'), true, 'the scene remains explicitly inert throughout the export');
     assert.notDeepEqual(midway.camera, start.camera, 'the camera is animated during the export');
     await click('cancel-movie');
     await waitFor('document.getElementById("movie-state").textContent === "Cancelled" && !document.getElementById("movie-export-dialog").open', 'Export cancelled');
@@ -344,6 +348,43 @@ try {
     assert.deepEqual({ camera: await camera(), frame: await frameIndex() }, start, 'cancel: state restored');
     assert.match(await text('movie-status'), /Movie export cancelled\. The view and frame were restored\./);
     assert.equal(await evaluate('document.getElementById("export-movie").disabled'), false, 'another export can start');
+    assert.equal(await evaluate('document.querySelector(".app-shell").inert'), false, 'Cancel releases the scene interaction lock');
+
+    // The image may already be preparing in a reusable Worker when Cancel is
+    // pressed. Keep its ownership until that capture and restoration settle.
+    for (const action of ['escape', 'close', 'native-cancel']) {
+      await evaluate('movieChecks.beginDownload(); movieChecks.holdCapture()');
+      await click('export-movie');
+      await waitFor('movieChecks.capturePending', `${action}: capture preparation started`);
+      if (action === 'escape') {
+        await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+        await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      } else if (action === 'close') await evaluate('document.getElementById("movie-export-dialog").close()');
+      else await evaluate('document.getElementById("movie-export-dialog").dispatchEvent(new Event("cancel", { cancelable: true }))');
+      await waitFor('document.getElementById("movie-export-dialog").open && document.getElementById("movie-progress-text").textContent === "Cancelling…"', `${action}: cancellation stays reachable`);
+      assert.equal(await evaluate('document.querySelector(".app-shell").inert && !document.getElementById("cancel-movie").disabled'), true,
+        `${action}: Cancel is outside the inert scene`);
+      const blocked = await evaluate('(() => { const theme = document.documentElement.dataset.theme, target = document.getElementById(theme === "dark" ? "theme-light" : "theme-dark"), box = target.getBoundingClientRect(); return { theme, frame: movieChecks.renderer.frame.frameIndex, x: box.x + box.width / 2, y: box.y + box.height / 2 }; })()');
+      await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: blocked.x, y: blocked.y, button: 'left', clickCount: 1 });
+      await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: blocked.x, y: blocked.y, button: 'left', clickCount: 1 });
+      await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
+      await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
+      assert.deepEqual(await evaluate('({ theme: document.documentElement.dataset.theme, frame: movieChecks.renderer.frame.frameIndex })'),
+        { theme: blocked.theme, frame: blocked.frame }, `${action}: real clicks and frame shortcuts cannot change a restoring scene`);
+      await evaluate('movieChecks.releaseCapture()');
+      await waitFor('document.getElementById("movie-state").textContent === "Cancelled" && !document.getElementById("movie-export-dialog").open', `${action}: cleanup finished`);
+      assert.equal(await evaluate('movieChecks.download'), null, `${action}: cancelled work saves nothing`);
+      assert.deepEqual({ camera: await camera(), frame: await frameIndex() }, start, `${action}: the original scene is restored`);
+      assert.equal(await evaluate('document.querySelector(".app-shell").inert'), false, `${action}: interaction returns after cleanup`);
+      await evaluate('movieChecks.restoreDownload()');
+    }
+    await evaluate('movieChecks.beginDownload(); movieChecks.holdCodecProbe()');
+    await click('export-movie');
+    await waitFor('movieChecks.probePending && document.getElementById("movie-export-dialog").open', 'stalled codec probe has a reachable Cancel');
+    await click('cancel-movie');
+    await waitFor('document.getElementById("movie-state").textContent === "Cancelled" && !document.getElementById("movie-export-dialog").open', 'stalled codec probe cancels before an answer', 2_000);
+    assert.equal(await evaluate('document.querySelector(".app-shell").inert'), false);
+    await evaluate('movieChecks.releaseCodecProbe(); movieChecks.restoreDownload()');
 
     // ── Keyframe editing and the viewport preview ─────────────────────────
     await change('movie-fps', 10);
@@ -524,6 +565,24 @@ async function installChecks(parserUrl) {
   const [{ WebGLRenderer }, { probeMovieFormats, MOVIE_FORMATS, parseAv1SequenceHeader }, { movieBitrate, movieRenderSize, DEFAULT_MOVIE_OUTPUT }, containers] = await Promise.all([
     import(new URL('./render/webgl-renderer.js', app)), import(new URL('./video/codecs.js', app)), import(new URL('./movie-export.js', app)), import(parserUrl)]);
   const checks = window.movieChecks = { download: null, recordText: null };
+  checks.holdCapture = () => {
+    const capture = checks.renderer.captureImage;
+    checks.capturePending = false;
+    checks.renderer.captureImage = async (...args) => {
+      checks.capturePending = true;
+      await new Promise(resolve => { checks.releaseCapture = () => { checks.renderer.captureImage = capture; resolve(); }; });
+      return capture.apply(checks.renderer, args);
+    };
+  };
+  checks.holdCodecProbe = () => {
+    const probe = VideoEncoder.isConfigSupported, waiting = [];
+    checks.probePending = false;
+    VideoEncoder.isConfigSupported = config => {
+      checks.probePending = true;
+      return new Promise(resolve => waiting.push(() => resolve(probe.call(VideoEncoder, config))));
+    };
+    checks.releaseCodecProbe = () => { VideoEncoder.isConfigSupported = probe; for (const finish of waiting) finish(); };
+  };
   const fillText = CanvasRenderingContext2D.prototype.fillText;
   CanvasRenderingContext2D.prototype.fillText = function(value, ...rest) { checks.recordText?.push(String(value)); return fillText.call(this, value, ...rest); };
   checks.takeLabels = () => { const labels = (checks.recordText ?? []).filter(value => value.startsWith('FCC')); checks.recordText = null; return labels; };

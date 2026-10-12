@@ -1,6 +1,6 @@
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, resolve, sep } from 'node:path';
+import { extname, relative as relativePath, resolve, sep } from 'node:path';
 import { createDocumentationPages } from './build-docs.mjs';
 import { createExampleCatalog, serializeExampleCatalog } from './example-catalog.mjs';
 
@@ -19,7 +19,25 @@ const mime = {
   '.wasm': 'application/wasm',
 };
 
+function cacheControl(target) {
+  // Preview can serve dist directly or through an arbitrary repository subpath.
+  // A hash-shaped development directory alone is not proof of built assets:
+  // check the site's generated entrypoint and runtime manifest as well.
+  const relative = relativePath(root, target).split(sep).join('/');
+  const match = relative.match(/^(.*\/)?assets\/([a-f0-9]{16})\/.+$/);
+  if (!match) return 'no-store';
+  const siteRoot = resolve(root, match[1] ?? '.');
+  const manifest = resolve(siteRoot, 'assets', match[2], 'runtime-manifest.json');
+  if (!existsSync(manifest) || !statSync(manifest).isFile()) return 'no-store';
+  try {
+    const html = readFileSync(resolve(siteRoot, 'index.html'), 'utf8');
+    if (!html.includes(`<meta name="alloyview-build" content="${match[2]}">`)) return 'no-store';
+  } catch { return 'no-store'; }
+  return 'public, max-age=31536000, immutable';
+}
+
 const server = createServer(async (request, response) => {
+  response.setHeader('Cache-Control', 'no-store');
   let pathname;
   try { pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname); }
   catch {
@@ -87,8 +105,9 @@ const server = createServer(async (request, response) => {
 
   response.writeHead(200, {
     'Content-Type': mime[extname(target).toLowerCase()] ?? 'application/octet-stream',
-    'Cache-Control': 'no-store',
+    'Cache-Control': cacheControl(target),
   });
+  if (request.method === 'HEAD') { response.end(); return; }
   createReadStream(target).pipe(response);
 });
 server.listen(port, '127.0.0.1', () => {

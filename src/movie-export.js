@@ -42,6 +42,7 @@ function encoderProgress(encoder) {
 export async function renderMovie({ plan, format, config = null, keyframeSeconds = DEFAULT_MOVIE_OUTPUT.keyframeSeconds, host,
   signal = null, onProgress = () => {}, limits = MOVIE_LIMITS, fileStem = 'alloyview', now = () => performance.now(),
   VideoEncoderClass = globalThis.VideoEncoder, VideoFrameClass = globalThis.VideoFrame } = {}) {
+  throwIfAborted(signal);
   const { frameTotal, fps } = plan, started = now();
   if (frameTotal > limits.maxFrames) throw new Error(`A movie has at most ${limits.maxFrames.toLocaleString('en-US')} frames.`);
   const archive = format.id === PNG_SEQUENCE_FORMAT.id;
@@ -65,11 +66,13 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
       },
       error: error => { failure ??= new Error(`The video encoder failed: ${error?.message ?? error}`); },
     });
-    encoder.configure(config);
   }
+  const stopEncoding = () => { if (encoder && encoder.state !== 'closed') { try { encoder.close(); } catch { /* already closed */ } } };
+  signal?.addEventListener('abort', stopEncoding, { once: true });
   const keyInterval = Math.max(1, Math.round(keyframeSeconds * fps));
   const frameDuration = Math.round(1e6 / fps);
   try {
+    encoder?.configure(config);
     for (let index = 0; index < frameTotal; index++) {
       throwIfAborted(signal);
       if (failure) throw failure;
@@ -83,8 +86,10 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
       if (camera) host.setCamera(camera);
       const canvas = await host.capture();
       try {
+        throwIfAborted(signal);
         if (archive) {
           const bytes = await host.encodeImage(canvas);
+          throwIfAborted(signal);
           archiveBytes += bytes.length;
           if (archiveBytes > 256 * 1024 ** 2) throw new Error('The frame archive exceeds 256 MiB. Choose a smaller image size or fewer frames.');
           imageArchive.add({ name: `${fileStem}-${String(index + 1).padStart(digits, '0')}.png`, bytes }, { signal });
@@ -112,9 +117,13 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
     throwIfAborted(signal);
     const file = muxer.finalize();
     return { ...file, elapsedMs: now() - started };
+  } catch (error) {
+    throwIfAborted(signal);
+    throw error;
   } finally {
+    signal?.removeEventListener('abort', stopEncoding);
     imageArchive?.clear();
-    if (encoder && encoder.state !== 'closed') { try { encoder.close(); } catch { /* already closed by an encoder error */ } }
+    stopEncoding();
   }
 }
 

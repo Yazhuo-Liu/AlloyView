@@ -87,9 +87,13 @@ be exported yet.
 **Export movie** opens a progress window with the frame count, the encoded
 size, the elapsed time and an estimate of the time left. Other controls are
 blocked until the export ends, so that a stray click cannot change the scene
-half-way. **Cancel** stops the export and saves nothing. When the export ends,
-is cancelled or fails, the displayed frame and the camera return to where they
-were. The file is named `<structure>-movie.mp4` or `.webm`.
+half-way. **Cancel** or **Escape** stops the export and saves nothing. The
+progress window stays available while the original frame and camera are
+restored; other controls become available after that cleanup finishes. If the
+window is closed unexpectedly, the export cancels and the window reopens to
+show cleanup progress. When the export ends, is cancelled or fails, the
+displayed frame and camera return to where they were. The file is named
+`<structure>-movie.mp4` or `.webm`.
 
 ## How the camera moves
 

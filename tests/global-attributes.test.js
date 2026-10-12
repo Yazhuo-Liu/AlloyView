@@ -197,3 +197,17 @@ test('the attribute source reads the strain reference in the background and noti
     assert.throws(() => normalizeGlobalAttributeState(value), /globalAttributes/);
   }
 });
+
+test('a new source clears its old strain reference, and a portable snapshot bounds stale indices', () => {
+  let count = 8;
+  const frame = analyzedFrame(), scheduled = [];
+  const source = createGlobalAttributeSource({ getFrame: () => frame, getFrameCount: () => count,
+    schedule: callback => scheduled.push(callback) });
+  source.setStrainReferenceFrame(4);
+  count = 3;
+  assert.deepEqual(source.serialize({ frameCount: count }), { strainReferenceFrame: 2 });
+  assert.equal(source.getStrainReferenceFrame(), 4, 'bounded capture does not change the displayed reference');
+  source.reset({ resetReference: true });
+  assert.deepEqual(source.serialize(), { strainReferenceFrame: 0 });
+  assert.equal(source.current().get('Strain.a').value, 0);
+});

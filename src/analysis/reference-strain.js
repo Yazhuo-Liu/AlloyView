@@ -1,6 +1,8 @@
 import { cellFaceHeights, determinant3, imageLatticeCell, invert3 } from '../data/model.js';
 import { atomRange, NeighborSearch, NeighborBuffer } from './neighbors.js';
 import { yieldToMain } from '../task-yield.js';
+import { canonicalAtomNumber } from '../data/atom-ids.js';
+import { cpuMemoryBudget } from './cpu-memory.js';
 
 export const REFERENCE_STRAIN_FIELDS = Object.freeze([
   'referenceShearStrain', 'referenceHydrostaticStrain', 'referenceVolumeChange',
@@ -41,41 +43,169 @@ export function createReferenceMapping(currentFrame, referenceFrame) {
   return Int32Array.from(currentIds, id => byId.get(String(id)) ?? -1);
 }
 
-/** The same preparation with periodic browser yields, so matching large ID
- * arrays does not block the Cancel button before analysis Workers are started.
+// Weak keys do not retain evicted reference frames. A retained lookup owns its
+// snapshot: neither callers nor Workers can mutate the table behind another job.
+const referenceIdLookups = new WeakMap();
+const MAX_DENSE_ID_ENTRIES = 8 * 1024 * 1024;
+const MAX_CACHED_ID_BYTES = 64 * 1024 * 1024;
+const referenceIdRecency = new Map();
+let cachedReferenceIdBytes = 0;
+const ID_SLICE_ROWS = 65_536, ID_CLOCK_ROWS = 2048, ID_SLICE_MS = 8;
+
+/** Match IDs before either CPU or GPU dispatch. Numeric typed IDs avoid text
+ * conversion, using a bounded dense table when possible and a numeric Map for
+ * sparse/large IDs. A cached reference lookup is checked against every source
+ * ID on each visit; mutable typed arrays therefore cannot produce stale rows.
+ * Main-thread slices allow Cancel and rendering to run during preparation.
  */
 export async function createReferenceMappingAsync(currentFrame, referenceFrame, {
-  signal, onProgress = () => {},
+  signal, onProgress = () => {}, environment = globalThis,
 } = {}) {
   throwIfAborted(signal);
+  const cacheLimit = Math.min(MAX_CACHED_ID_BYTES, Math.floor(cpuMemoryBudget(environment) / 8));
+  trimReferenceLookups(cacheLimit);
   assertStableCorrespondence(currentFrame, referenceFrame);
   const currentIds = idArray(currentFrame), referenceIds = idArray(referenceFrame);
-  const byId = new Map(), seen = new Set(), mapping = new Int32Array(currentIds.length);
   const total = currentIds.length + referenceIds.length;
-  const checkpoint = async (completed) => {
-    onProgress({ completed, total });
+  let sliceStarted = performance.now(), sliceRows = 0, completedRows = 0;
+  const needsYield = () => {
+    sliceRows += 1;
+    return sliceRows >= ID_SLICE_ROWS || (sliceRows % ID_CLOCK_ROWS === 0 && performance.now() - sliceStarted >= ID_SLICE_MS);
+  };
+  const checkpoint = async completed => {
+    completedRows = Math.max(completedRows, completed);
+    onProgress({ completed: completedRows, total });
     await yieldToMain();
     throwIfAborted(signal);
+    sliceRows = 0; sliceStarted = performance.now();
   };
-  for (let atom = 0; atom < referenceIds.length; atom += 1) {
-    const id = referenceIds[atom];
-    const key = String(id);
-    assertUniqueId(id, byId.has(key));
-    byId.set(key, atom);
-    if ((atom + 1) % 65_536 === 0) await checkpoint(atom + 1);
+  let lookup;
+  if (numericTypedIds(referenceIds)) {
+    lookup = referenceIdLookups.get(referenceIds);
+    if (lookup) {
+      let unchanged = lookup.snapshot.length === referenceIds.length;
+      for (let atom = 0; unchanged && atom < referenceIds.length; atom += 1) {
+        unchanged = lookup.snapshot[atom] === referenceIds[atom];
+        if (needsYield()) await checkpoint(atom + 1);
+      }
+      if (!unchanged) { forgetReferenceLookup(referenceIds, lookup); lookup = null; }
+      else touchReferenceLookup(lookup);
+    }
+    if (!lookup) {
+      const snapshot = new Float64Array(referenceIds.length);
+      let minimum = Infinity, maximum = -Infinity;
+      for (let atom = 0; atom < referenceIds.length; atom += 1) {
+        const id = referenceIds[atom];
+        assertUniqueId(id, false);
+        snapshot[atom] = id;
+        if (id < minimum) minimum = id;
+        if (id > maximum) maximum = id;
+        if (needsYield()) await checkpoint(Math.floor((atom + 1) / 2));
+      }
+      const length = maximum - minimum + 1;
+      const dense = Number.isSafeInteger(length) && length <= MAX_DENSE_ID_ENTRIES && length <= referenceIds.length * 4 + 1024;
+      // Index + 1 leaves zero as the missing-ID sentinel without filling the
+      // whole table. Subtracting a large, safe integer minimum is exact here.
+      lookup = dense ? { snapshot, minimum, table: new Int32Array(length) }
+        : { snapshot, byId: new Map() };
+      for (let atom = 0; atom < snapshot.length; atom += 1) {
+        const id = snapshot[atom];
+        if (lookup.table) {
+          const slot = id - minimum;
+          assertUniqueId(id, lookup.table[slot] !== 0);
+          lookup.table[slot] = atom + 1;
+        } else {
+          assertUniqueId(id, lookup.byId.has(id));
+          lookup.byId.set(id, atom);
+        }
+        if (needsYield()) await checkpoint(Math.floor((snapshot.length + atom + 1) / 2));
+      }
+      const retainedBytes = snapshot.byteLength + (lookup.table?.byteLength ?? snapshot.length * 48);
+      cacheReferenceLookup(referenceIds, lookup, retainedBytes, cacheLimit);
+    }
+  } else {
+    // Keep the original text path for compound/string IDs. Only looking up
+    // text against a numeric reference requires canonical numeric conversion.
+    const byId = new Map();
+    for (let atom = 0; atom < referenceIds.length; atom += 1) {
+      const id = referenceIds[atom], key = String(id);
+      assertUniqueId(id, byId.has(key));
+      byId.set(key, atom);
+      if (needsYield()) await checkpoint(atom + 1);
+    }
+    lookup = { byId, textual: true };
   }
-  if (referenceIds.length % 65_536 !== 0) await checkpoint(referenceIds.length);
+  await checkpoint(referenceIds.length);
+  const mapping = new Int32Array(currentIds.length), seen = new Set();
+  const numeric = numericTypedIds(currentIds);
+  const seenDense = numeric && lookup.table ? new Uint8Array(lookup.table.length) : null;
   for (let atom = 0; atom < currentIds.length; atom += 1) {
-    const id = currentIds[atom];
-    const key = String(id);
-    assertUniqueId(id, seen.has(key));
-    seen.add(key);
-    mapping[atom] = byId.get(key) ?? -1;
-    if ((atom + 1) % 65_536 === 0) await checkpoint(referenceIds.length + atom + 1);
+    const id = currentIds[atom], key = lookup.textual ? String(id) : numeric ? id : referenceIdKey(id);
+    const slot = typeof key === 'number' && lookup.table ? key - lookup.minimum : -1;
+    const inTable = Number.isInteger(slot) && slot >= 0 && slot < (lookup.table?.length ?? 0);
+    const repeated = seenDense && inTable ? seenDense[slot] !== 0 : seen.has(key);
+    assertUniqueId(id, repeated);
+    if (seenDense && inTable) seenDense[slot] = 1; else seen.add(key);
+    mapping[atom] = lookup.table ? (inTable ? lookup.table[slot] - 1 : -1) : (lookup.byId.get(key) ?? -1);
+    if (needsYield()) await checkpoint(referenceIds.length + atom + 1);
   }
   throwIfAborted(signal);
   onProgress({ completed: total, total });
   return mapping;
+}
+
+// The weak LRU bounds all retained tables together, including dead references
+// awaiting collection. It stores no source array or frame strongly. Engines
+// without WeakRef simply rebuild instead of retaining an unbounded cache.
+function cacheReferenceLookup(ids, lookup, bytes, limit) {
+  if (typeof WeakRef !== 'function' || bytes > limit) return;
+  const previous = referenceIdLookups.get(ids);
+  if (previous) forgetReferenceLookup(ids, previous);
+  while (cachedReferenceIdBytes + bytes > limit && referenceIdRecency.size > 0) {
+    const oldest = referenceIdRecency.keys().next().value;
+    forgetReferenceLookup(referenceIdRecency.get(oldest).ids.deref(), oldest);
+  }
+  referenceIdLookups.set(ids, lookup);
+  referenceIdRecency.set(lookup, { ids: new WeakRef(ids), bytes });
+  cachedReferenceIdBytes += bytes;
+}
+
+function trimReferenceLookups(limit) {
+  for (const [entry, record] of referenceIdRecency) if (!record.ids.deref()) forgetReferenceLookup(null, entry);
+  while (cachedReferenceIdBytes > limit && referenceIdRecency.size > 0) {
+    const oldest = referenceIdRecency.keys().next().value;
+    forgetReferenceLookup(referenceIdRecency.get(oldest).ids.deref(), oldest);
+  }
+}
+
+/** Retained lookup bytes for frame/cache admission. Typed buffers are exact;
+ * sparse Map entries use the same conservative 48-byte estimate as retention.
+ * No frame properties, Worker payloads or calculated outputs are modified.
+ */
+export function referenceMappingCacheBytes(ids) {
+  if (ids !== undefined) return referenceIdRecency.get(referenceIdLookups.get(ids))?.bytes ?? 0;
+  trimReferenceLookups(MAX_CACHED_ID_BYTES);
+  return cachedReferenceIdBytes;
+}
+
+function touchReferenceLookup(lookup) {
+  const record = referenceIdRecency.get(lookup);
+  if (record) { referenceIdRecency.delete(lookup); referenceIdRecency.set(lookup, record); }
+}
+
+function forgetReferenceLookup(ids, lookup) {
+  const record = referenceIdRecency.get(lookup);
+  if (record) { cachedReferenceIdBytes -= record.bytes; referenceIdRecency.delete(lookup); }
+  if (ids && referenceIdLookups.get(ids) === lookup) referenceIdLookups.delete(ids);
+}
+
+function numericTypedIds(ids) {
+  return ArrayBuffer.isView(ids) && typeof ids[0] === 'number';
+}
+
+function referenceIdKey(id) {
+  const value = canonicalAtomNumber(id);
+  return value === undefined ? String(id) : value;
 }
 
 function assertStableCorrespondence(currentFrame, referenceFrame) {

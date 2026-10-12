@@ -101,6 +101,81 @@ threaded DXA loader. The versioned `runtime-manifest.json` records entry sizes.
 The content hash includes generated bundle bytes. Development and the
 unversioned compatibility tree retain the original source modules.
 
+## Cache content-addressed assets
+
+Every file under `assets/<16-character-content-hash>/` is part of one immutable
+build, including bundles, module Workers, native Wasm, examples and styles.
+These files can use `Cache-Control: public, max-age=31536000, immutable`.
+Viewer HTML must revalidate so it can select a new build. Source-tree files,
+unversioned compatibility JavaScript/Wasm and generated documentation outside
+the asset tree must keep a short lifetime. Background CPU/GPU preparation still
+runs on each page load and reuses resources within that page; HTTP caching
+avoids downloading unchanged code again, rather than retaining a GPU device.
+
+The checked-in `_headers` is a build template: `npm run build` replaces
+`__ALLOYVIEW_BUILD_ID__` with its exact hash. The generated `dist/_headers`
+sets the one-year TTL only for that hash, both at `/assets/<hash>/` and at a
+one-level project subpath such as `/AlloyView/assets/<hash>/`. Its viewer
+entrypoint rules use `no-cache`. The isolation headers apply globally and are
+unchanged. To serve under a deeper prefix, prepend that prefix to the generated
+cache routes in the hosting configuration; preserve the global isolation rule.
+The local preview server recognizes the generated manifest and HTML build
+marker under any prefix. It serves only the matching hashed assets as immutable;
+all development, unversioned, HTML and error responses retain `no-store`.
+
+GitHub Pages ignores `_headers`. For the production custom domain, Cloudflare
+needs separate external rules; committing this template does **not** deploy
+those rules. In **Rules → Cache Rules**, create an asset rule that marks the
+matching responses eligible for caching. Set **Edge TTL** to one year for
+successful `200` responses only, and disable caching for `404` responses so a
+removed version cannot acquire a long-lived cached error. Set **Browser TTL**
+to one year. Keep HTML and unversioned paths outside this rule.
+
+Use the following custom filter on a plan that supports regex matching:
+
+```text
+(http.host eq "yazhuoliu.com"
+ and http.request.uri.path matches "^/AlloyView/assets/[0-9a-f]{16}/")
+```
+
+On plans without the `matches` operator, match the exact current hash instead;
+replace `BUILD_HASH` with the value from `dist/index.html` and update this rule
+after each deployment. If retaining earlier builds, add their exact prefixes
+with `or` rather than widening it to unversioned paths:
+
+```text
+(http.host eq "yazhuoliu.com"
+ and starts_with(http.request.uri.path, "/AlloyView/assets/BUILD_HASH/"))
+```
+
+Create a **Response Header Transform Rule** with the same host/path condition
+and `http.response.code eq 200`, and a **Set static** operation for
+`Cache-Control` with value `public, max-age=31536000, immutable`. The response
+status condition prevents the browser from caching a missing hashed URL for a
+year; the request-phase Cache Rule uses its status-code TTL settings instead.
+Keep the existing COOP/COEP/CORP rule.
+Response header transformations alone do not change Cloudflare's edge cache
+decision, which is why both rules are needed. For viewer HTML (`/AlloyView/`
+and `/AlloyView/index.html`), use a separate **Bypass cache** rule and a response
+header rule setting `Cache-Control: no-cache`; avoid an overlapping catch-all
+one-year rule. See Cloudflare's
+[Cache Rules settings](https://developers.cloudflare.com/cache/how-to/cache-rules/settings/)
+and [response header transformations](https://developers.cloudflare.com/rules/transform/response-header-modification/).
+
+After deploying the hosting rules, check the actual responses. The HTML should
+revalidate; the bundle, Worker and Wasm URLs copied from the current
+`assets/<hash>/` tree should all carry the one-year `immutable` value and the
+three isolation headers. Repeat an asset request to check its `CF-Cache-Status`
+and `Age`, and verify that an unversioned `/AlloyView/src/analysis/*.wasm` URL
+does not inherit the one-year policy. A local preview check validates the
+artifact policy but cannot establish that Cloudflare account rules are active.
+
+The build currently publishes only the newest hashed tree. A tab left open
+across a deployment can still request an old Worker or Wasm that it has not
+downloaded before; retain previous hashed trees at the host if that uninterrupted
+upgrade behavior is required. Browser caching cannot supply an asset that was
+never fetched.
+
 ## WebGPU on GitHub Pages
 
 The Pages build contains the GPU Worker and the same GPU preparation and cache

@@ -75,6 +75,28 @@ test('movie frames await asynchronous Surface capture before encoding or advanci
   assert.equal(log.filter(entry => entry[0] === 'capture').length, 4); assert.equal(pending, 0);
 });
 
+test('cancelling an asynchronous capture releases its canvas without encoding or publishing progress', async () => {
+  const codec = fakeCodec(), { host, app } = fakeHost(), controller = new AbortController();
+  let finishCapture;
+  const canvas = { width: 320, height: 240 }, progress = [];
+  host.capture = () => new Promise(resolve => { finishCapture = resolve; });
+  const pending = renderMovie({ plan: planMovie(cameraPath(), { fps: 3 }), format: h264, config, host,
+    signal: controller.signal, onProgress: value => progress.push(value), ...codec });
+  controller.abort(); finishCapture(canvas);
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.equal(app.released, 1); assert.equal(codec.state.encoders[0].state, 'closed');
+  assert.deepEqual(codec.state.encoders[0].encoded, []); assert.deepEqual(progress, []);
+  assert.equal(codec.state.openFrames, 0);
+});
+
+test('encoder configuration failure closes its resources before another movie can run', async () => {
+  const codec = fakeCodec(), { host } = fakeHost();
+  class InvalidEncoder extends codec.VideoEncoderClass { configure() { throw new Error('Invalid encoder configuration'); } }
+  await assert.rejects(renderMovie({ plan: planMovie(cameraPath(), { fps: 3 }), format: h264, config, host,
+    ...codec, VideoEncoderClass: InvalidEncoder }), /Invalid encoder configuration/);
+  assert.equal(codec.state.encoders[0].state, 'closed');
+});
+
 test('a camera path renders every frame in order into a playable MP4 with forced keyframes', async () => {
   const codec = fakeCodec(), { host, log, app } = fakeHost(), progress = [];
   const plan = planMovie(cameraPath(), { fps: 10, frameCount: 10 });

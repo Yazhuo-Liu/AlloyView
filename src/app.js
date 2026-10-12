@@ -80,6 +80,7 @@ import { initializeSliceControls } from './slice-controls.js';
 import { initializeSliceGizmo } from './render/slice-gizmo.js';
 import { initializeCrystalDragControls } from './crystal-drag-controls.js';
 import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './configuration.js';
+import { createConfigurationRestoreQueue, settleConfigurationAnalyses } from './configuration-restore.js';
 import { initializeAtomEyeTools } from './atomeye-tools.js';
 import { createDisplayRefresh } from './display-refresh.js';
 import { createAnalysisDependencies } from './analysis-dependencies.js';
@@ -241,6 +242,8 @@ let pendingConfiguration = null;
 let configurationRequest = 0;
 let configurationReadRequest = 0;
 let restorationOwner = null;
+let restorationController = null;
+const configurationRestores = createConfigurationRestoreQueue();
 let gpuPreparationStatus = null;
 let replicationController = null;
 let replicationRequest = 0;
@@ -992,7 +995,9 @@ elements['apply-replicate'].addEventListener('click', applyReplication);
 elements['reset-replicate'].addEventListener('click', resetReplication);
 elements['replicate-atoms'].addEventListener('change', applyReplication);
 elements['export-configuration'].addEventListener('click', exportConfiguration);
-elements['import-configuration'].addEventListener('click', () => elements['configuration-file'].click());
+elements['import-configuration'].addEventListener('click', () => {
+  if (configurationAutomationAvailable()) elements['configuration-file'].click();
+});
 elements['configuration-file'].addEventListener('change', importConfiguration);
 elements['slice-axis'].addEventListener('change', updateSlice);
 elements['slice-position'].addEventListener('input', updateSlice);
@@ -1249,6 +1254,7 @@ function closeSource() {
   replicationController?.abort();
   replicationRequest++;
   configurationRequest++;
+  restorationController?.abort();
   restorationOwner = null;
   commitScalarLegendEdit = null;
   colorQuantityResolver.clear();
@@ -1279,9 +1285,9 @@ function closeSource() {
   binningTools?.reset();
   trajectoryTools?.reset();
   voronoiCells?.reset();
-  timeSeries?.reset();
+  timeSeries?.reset({ resetRange: true });
   movieControls?.reset();
-  globalAttributes?.reset();
+  globalAttributes?.reset({ resetReference: true });
   cancelFramePrefetch();
   frameNavigationController?.abort();
   frameNavigationController = null;
@@ -1692,9 +1698,9 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     binningTools?.reset();
     trajectoryTools?.reset();
     voronoiCells?.reset();
-    timeSeries?.reset();
+    timeSeries?.reset({ resetRange: true });
     movieControls?.reset();
-    globalAttributes?.reset();
+    globalAttributes?.reset({ resetReference: true });
     for (const kind of Object.keys(state.analysis)) toolPanels.setToolEnabled(kind, false);
     toolPanels.setToolEnabled('replicate', false);
     state.references = result.frame.typeLabels.map(referenceForElement);
@@ -4147,6 +4153,7 @@ function syncSliceGizmo() {
 function interruptConfigurationRestore(reason) {
   if (restorationOwner === null) return;
   configurationRequest++;
+  restorationController?.abort();
   restorationOwner = null;
   elements['configuration-status'].textContent = `Configuration restore interrupted by ${reason}.`;
 }
@@ -4221,15 +4228,23 @@ function captureConfiguration() {
 // Labels, time series and the strain reference are saved only when used, so
 // recipes that do not use them are unchanged.
 function attributeExtensions() {
-  const extensions = {}, labels = textLabelControls.serialize(), series = timeSeries.serialize();
+  const extensions = {}, labels = textLabelControls.serialize(), series = timeSeries.serialize({ frameCount: state.frame ? state.frameCount : undefined });
   if (labels) extensions.textLabels = labels;
   if (JSON.stringify(series) !== JSON.stringify({ ...TIME_SERIES_DEFAULTS, autoCollect: false })) extensions.timeSeries = series;
-  if (globalAttributes.getStrainReferenceFrame() !== 0) extensions.globalAttributes = globalAttributes.serialize();
+  const attributes = globalAttributes.serialize({ frameCount: state.frame ? state.frameCount : undefined });
+  if (attributes.strainReferenceFrame !== 0) extensions.globalAttributes = attributes;
   // Scripts and the camera path are saved as text and numbers; importing never runs a script.
   const scripts = scriptControls?.serialize(), movie = movieControls?.serialize();
   if (scripts) extensions.scripts = scripts;
   if (movie) extensions.movie = movie;
   return extensions;
+}
+
+function configurationAutomationAvailable() {
+  const owner = automationLock.owner();
+  if (owner === null || owner === 'configuration') return true;
+  showToast(`Wait for the ${owner === 'script' ? 'running script' : 'movie export or preview'} to finish before importing a configuration.`);
+  return false;
 }
 
 function exportConfiguration() {
@@ -4245,16 +4260,22 @@ function exportConfiguration() {
 async function importConfiguration() {
   const [file] = elements['configuration-file'].files;
   elements['configuration-file'].value = '';
-  if (!file) return;
+  if (!file || !configurationAutomationAvailable()) return;
   const readRequest = ++configurationReadRequest;
   let acceptedRequest = null;
   try {
     if (file.size > 8 * 1024 * 1024) throw new Error('Configuration files must be no larger than 8 MiB.');
     const config = parseConfiguration(await file.text());
-    if (readRequest !== configurationReadRequest) return;
+    if (readRequest !== configurationReadRequest || !configurationAutomationAvailable()) return;
     configurationRequest++;
     acceptedRequest = configurationRequest;
-    restorationOwner = null;
+    restorationController?.abort();
+    if (restorationOwner !== null) {
+      // Superseding a recipe cancels obsolete work but retains pools, Wasm
+      // memory and prepared inputs. The queue joins tool promises; backend
+      // leases remain protected until their posted work acknowledges cleanup.
+      abortAnalysisJobs(); timeSeries?.cancel(); trajectoryTools?.cancelLines();
+    }
     pendingConfiguration = null;
     if (sourceLoadingOwner === null && (!config.source || matchesSource(config, state.files, state.format))) await restoreConfiguration(config);
     else {
@@ -4268,20 +4289,29 @@ async function importConfiguration() {
   }
 }
 
-async function restoreConfiguration(config) {
-  cancelLatticeEstimation();
-  replicationController?.abort();
-  replicationRequest++;
+function restoreConfiguration(config) {
   const request = configurationRequest, sourceVersion = state.sourceVersion, sourceRequest = sourceOpenRequest;
   const current = () => request === configurationRequest && sourceVersion === state.sourceVersion && sourceRequest === sourceOpenRequest;
+  return configurationRestores.run(() => restoreConfigurationNow(config, { request, sourceVersion, sourceRequest, current }), { isCurrent: current });
+}
+
+async function restoreConfigurationNow(config, { request, sourceVersion, sourceRequest, current }) {
+  if (!configurationAutomationAvailable()) throw new Error('Configuration import requires the script or movie to finish first.');
+  const releaseAutomation = automationLock.acquire('configuration');
+  if (!releaseAutomation) throw new Error('Another configuration is still being restored.');
   const saved = config.settings;
   const targetIndex = config.source?.frameIndex ?? state.frameIndex;
   const previousSmoothing = trajectoryTools.getSmoothing();
-  let displayed = false, smoothingRequest = null;
+  let displayed = false, smoothingRequest = null, completed = false, failure = null;
+  const controller = new AbortController();
+  restorationController = controller;
   restorationOwner = request;
   try {
+    cancelLatticeEstimation();
+    replicationController?.abort();
+    replicationRequest++;
     clearTimeout(frameTimer);
-    if (config.source && targetIndex >= state.frameCount && !state.indexComplete) await waitForSourceIndex();
+    if (config.source && targetIndex >= state.frameCount && !state.indexComplete) await waitForSourceIndex({ signal: controller.signal });
     if (!current()) return;
     if (config.source && targetIndex >= state.frameCount) throw new Error('The saved frame is not available in the loaded source.');
     // Smoothing defines the analyzed coordinates, so it applies before the
@@ -4296,11 +4326,11 @@ async function restoreConfiguration(config) {
       const preparation = {};
       if (!cache.has(targetIndex)) setLoading(true, `Preparing frame ${targetIndex + 1}…`, preparation, true);
       try {
-        existingTarget = await getFrame(targetIndex);
+        existingTarget = await getFrame(targetIndex, { signal: controller.signal });
         if (existingTarget) {
           repetitions = normalizeRepetitions(saved.replicate, sourceFrame(existingTarget).cell.pbc);
           targetFrame = await prepareAnalysisFrame(existingTarget, repetitions, saved.replicateAtoms,
-            { signal: { get aborted() { return !current(); } } });
+            { signal: controller.signal });
         }
       } finally {
         if (loadingOwner === preparation) setLoading(false);
@@ -4452,7 +4482,7 @@ async function restoreConfiguration(config) {
     const grainRestore = grainTools.restore(saved.extensions.grains, { isCurrent: current });
     const tasks = Object.keys(state.analysis).filter(kind => state.analysis[kind].enabled).map(kind => kind === 'coordination'
       ? runCoordination({ automatic: true }) : runStructureAnalysis(kind, { automatic: true }));
-    await Promise.all([...tasks, grainRestore, atomEyeTools.restore(saved.extensions, { isCurrent: current }),
+    await settleConfigurationAnalyses([...tasks, grainRestore, atomEyeTools.restore(saved.extensions, { isCurrent: current }),
       dxaTools.restore(saved.extensions.dxa, { isCurrent: current }),
       topologyTools.restore(saved.extensions, { isCurrent: current }),
       clusterTools.restore(saved.extensions.clusters, { isCurrent: current }),
@@ -4480,13 +4510,23 @@ async function restoreConfiguration(config) {
       : externalProperties.getPendingFiles().length
         ? 'Configuration restored. Select the external property files in Modification → External properties to restore their data.'
         : 'Configuration restored. Enabled analyses and saved display settings are ready.';
+    completed = true;
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
+    releaseAutomation();
+    if (current() && !completed) {
+      elements['configuration-status'].textContent = failure
+        ? `Could not restore configuration: ${failure.message}` : 'Configuration restore stopped.';
+    }
     if (restorationOwner === request) restorationOwner = null;
+    if (restorationController === controller) restorationController = null;
     // A recipe that was rejected or interrupted before its frame was shown
     // has already applied its smoothing setting. Unless a newer restoration,
     // source or frame request takes over, the setting returns to the one of
     // the frame still on screen.
-    if (!displayed && smoothingRequest === state.frameRequest && restorationOwner === null
+    if (request === configurationRequest && !displayed && smoothingRequest === state.frameRequest && restorationOwner === null
       && sourceVersion === state.sourceVersion && sourceRequest === sourceOpenRequest) {
       matchSmoothingToDisplayedFrame(previousSmoothing.window);
     }

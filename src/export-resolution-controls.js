@@ -66,6 +66,9 @@ export function initializeExportResolutionControls({ renderer, onEdit = () => {}
       const saved = normalizeExportResolution(value);
       mode.value = saved.mode; width.value = String(saved.width); height.value = String(saved.height); lock.checked = saved.lockAspect;
       previousMode = saved.mode; ratio = saved.width / saved.height; lastSize = { width: saved.width, height: saved.height }; refresh();
+      // Mirrored controls synchronize saved state without replaying a user
+      // edit, which would interrupt the configuration restore in progress.
+      mode.dispatchEvent?.(new (mode.ownerDocument?.defaultView?.Event ?? globalThis.Event)('export-resolution-restored'));
     },
     dispose() { observer?.disconnect(); for (const element of [mode, width, height, lock]) element.removeEventListener('change', changed); },
   };

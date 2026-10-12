@@ -1421,13 +1421,19 @@ export class WebGLRenderer {
 
   drawAnnotationLines(buffer, first, count, color) {
     const gl = this.gl;
-    if (this.renderViewport?.lineScale > 1) {
-      this.exportLineLayer ??= new ExportLineLayer(gl);
-      this.exportLineLayer.draw(this, buffer, first, count, color);
-    } else {
-      gl.uniform3f(this.lineUniforms.uColor, ...color);
-      gl.drawArrays(gl.LINES, first, count);
-    }
+    // Lines blend their own opacity (and export ribbons their own coverage).
+    // Preserve atom alpha-to-coverage without applying annotation alpha twice.
+    const coverage = gl.isEnabled(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    if (coverage) gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    try {
+      if (this.renderViewport?.lineScale > 1) {
+        this.exportLineLayer ??= new ExportLineLayer(gl);
+        this.exportLineLayer.draw(this, buffer, first, count, color);
+      } else {
+        gl.uniform3f(this.lineUniforms.uColor, ...color);
+        gl.drawArrays(gl.LINES, first, count);
+      }
+    } finally { if (coverage) gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE); }
   }
 
   // Outlines are annotations: like the slice editing overlay, they stay on top

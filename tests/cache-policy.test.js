@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { chooseFrameCachePolicy, estimateFrameBytes } from '../src/data/cache-policy.js';
+import { createReferenceMappingAsync, referenceMappingCacheBytes } from '../src/analysis/reference-strain.js';
+import { AnalysisPool } from '../src/analysis/analysis-pool.js';
 
 test('small trajectories are eligible for lazy all-frame caching', () => {
   const frame = sampleFrame(100);
@@ -80,6 +82,24 @@ test('large string-ID expansions cannot use the tiny typed-buffer-only cache est
   const after = chooseFrameCachePolicy(frame, 3000, environment);
   assert.ok(after.limit < before.limit);
   assert.ok(after.estimatedFrameBytes > before.estimatedFrameBytes);
+});
+
+test('retained numeric-reference lookup is charged to frame caching and CPU admission', async () => {
+  const frame = sampleFrame(1000);
+  frame.idSource = 'native';
+  for (let atom = 0; atom < frame.ids.length; atom++) frame.ids[atom] = 100 + atom;
+  const initial = estimateFrameBytes(frame), pool = new AnalysisPool({ environment: { navigator: { hardwareConcurrency: 4 } } });
+  try {
+    const retained = pool.cpuRetainedInputBytes();
+    const mapping = await createReferenceMappingAsync(frame, frame);
+    const lookupBytes = referenceMappingCacheBytes(frame.ids);
+    assert.ok(lookupBytes >= frame.ids.byteLength + frame.ids.length * Int32Array.BYTES_PER_ELEMENT);
+    assert.equal(estimateFrameBytes(frame), initial + lookupBytes);
+    assert.equal(pool.cpuRetainedInputBytes(), retained + lookupBytes);
+    assert.equal(estimateFrameBytes({}), 0, 'unrelated frames without IDs do not own the global lookup cache');
+    assert.ok(mapping.every((value, atom) => value === atom));
+    assert.deepEqual(frame.properties, [], 'lookup cache is not a published atom property');
+  } finally { pool.close(); }
 });
 
 function sampleFrame(atomCount) {
