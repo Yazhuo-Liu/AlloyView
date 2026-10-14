@@ -71,8 +71,17 @@ async function exercise({ isolated }) {
       const wanted = ['1', '2', '4'].includes(input.dataset.ptmTemplate);
       if (input.checked !== wanted) { input.checked = wanted; input.dispatchEvent(new Event('change', { bubbles: true })); } }`);
     assert.equal(await evaluate('document.getElementById("grains-threshold").disabled'), true, 'the automatic threshold is an output');
+    // A standalone fit completed before Grains is enabled must already carry
+    // its bounded neighbor lists, rather than triggering another template fit.
+    await evaluate('grainChecks.showTool("ptm"); document.getElementById("run-ptm").click()');
+    await waitFor('document.getElementById("ptm-state").textContent === "Calculated"', 'standalone PTM before Grains');
+    const standaloneRuns = await evaluate('grainChecks.ptmRuns');
+    await evaluate('grainChecks.selectColor("type")');
+    await evaluate('grainChecks.showTool("grains")');
     await evaluate('document.getElementById("run-grains").click()');
     const first = await calculated('Four-grain frame', { frameIndex: 0 });
+    assert.equal(await evaluate('grainChecks.ptmRuns'), standaloneRuns, 'enabling Grains reuses the preceding standalone fit');
+    await evaluate('document.getElementById("cancel-ptm").click()');
     assert.equal(first.grainCount, 4);
     assert.equal(first.atoms, four.ids.length);
     assert.equal(first.unassigned, 0, 'orphan adoption assigns every atom');

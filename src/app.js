@@ -19,7 +19,7 @@ import { CpuBudget } from './analysis/cpu-budget.js';
 import { DxaClient } from './analysis/dxa-client.js';
 import { analysisProgressText as formatAnalysisProgress, analysisBackendLabel, analysisBackendDetails } from './analysis/status.js';
 import { STRUCTURE_TYPES } from './analysis/cna.js';
-import { PTM_ORDERING_TYPES, PTM_TYPES } from './analysis/ptm.js';
+import { PTM_ORDERING_TYPES, PTM_TYPES, retainPtmNeighborLists } from './analysis/ptm.js';
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
 import { ELEMENT_LATTICES, STRAIN_STRUCTURES, referenceForElement, validateReferences } from './analysis/lattice.js';
 import { estimateLatticeReferences } from './analysis/lattice-estimate.js';
@@ -2950,7 +2950,8 @@ async function estimateMissingReferences({ frame = state.frame, forStrain = fals
   try {
     if (!compatiblePtm(frame, parameters.flags, parameters.rmsdCutoff)) {
       progressText('Identifying reference crystals and fitting their lattice geometry…');
-      const result = await analysisPool.analyze(frame, { kind: 'ptm', ...parameters }, {
+      const result = await analysisPool.analyze(frame, { kind: 'ptm', ...parameters,
+        neighborLists: retainPtmNeighborLists(frame) }, {
         frameIndex: state.frameIndex, signal: controller.signal,
         onProgress: progress => progressText(analysisProgressText(progress, 'ptm')),
       });
@@ -3245,7 +3246,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
         && property.analysisKey === JSON.stringify({ mode: 'adaptive' })) : null;
     const inputs = { kind, ...parameters,
       // Grain segmentation reuses this fit when it also returns neighbor lists.
-      ...(['ptm', 'strain'].includes(kind) && grainTools?.isEnabled() ? { neighborLists: true } : {}),
+      ...(['ptm', 'strain'].includes(kind) && (grainTools?.isEnabled() || retainPtmNeighborLists(frame)) ? { neighborLists: true } : {}),
       ...(adaptiveCna ? { structureInput: adaptiveCna.data } : {}),
       ...(kind === 'strain' && frame.ptm?.key === ptmKey ? { ptmInput: frame.ptm } : {}) };
     const task = analysisPool.analyze(frame, inputs, {

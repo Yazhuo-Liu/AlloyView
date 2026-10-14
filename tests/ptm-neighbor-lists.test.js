@@ -5,7 +5,8 @@ import { AnalysisPool } from '../src/analysis/analysis-pool.js';
 import { calculateAtomicStrain } from '../src/analysis/atomic-strain.js';
 import { GRAIN_DISORDERED_NEIGHBORS, GRAIN_NEIGHBOR_SLOTS } from '../src/analysis/grains.js';
 import { NeighborSearch } from '../src/analysis/neighbors.js';
-import { calculatePtm, PTM_FIELDS, PTM_NEIGHBOR_LIST_FIELDS, PTM_TEMPLATE_NEIGHBORS, PTM_UNMATCHED_NEIGHBORS } from '../src/analysis/ptm.js';
+import { calculatePtm, PTM_FIELDS, PTM_NEIGHBOR_LIST_FIELDS, PTM_TEMPLATE_NEIGHBORS, PTM_UNMATCHED_NEIGHBORS,
+  retainPtmNeighborLists, PTM_RETAINED_NEIGHBOR_BUDGET_BYTES } from '../src/analysis/ptm.js';
 import { createCell } from '../src/data/model.js';
 import { crystalFrame } from './helpers/crystals.js';
 import { axisAngleQuaternion, mulberry32, polycrystalFrame } from './helpers/polycrystal.js';
@@ -17,6 +18,17 @@ function assertIdentical(actual, expected, label) {
   }
 }
 const list = (ptm, atom) => Array.from(ptm.neighborIndices.subarray(atom * 16, atom * 16 + ptm.neighborCounts[atom]));
+
+test('optional retained PTM lists obey their allocation budget without reading atom IDs', () => {
+  const maximum = Math.floor((PTM_RETAINED_NEIGHBOR_BUDGET_BYTES - 24) / 65);
+  const frame = count => ({ ids: new Proxy({ length: count }, { get(target, key) {
+    assert.equal(key, 'length', 'retention policy must not traverse atom IDs'); return target.length;
+  } }) });
+  assert.equal(retainPtmNeighborLists(frame(maximum)), true);
+  assert.equal(retainPtmNeighborLists(frame(maximum + 1)), false);
+  assert.equal(retainPtmNeighborLists(frame(1_000_000)), false);
+  assert.equal(retainPtmNeighborLists(frame(0)), false);
+});
 function noisy(frame, amplitude, seed) {
   const random = mulberry32(seed);
   return { ...frame, fractional: Float64Array.from(frame.fractional, value => value + (random() - .5) * amplitude) };

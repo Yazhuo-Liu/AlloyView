@@ -266,8 +266,15 @@ node scripts/research/ovito-grains-compare.mjs compare /tmp/grains/structures/fc
 PTM runs in the shared CPU Worker pool, with WebGPU neighbor preparation when
 GPU acceleration is on. A PTM fit of the frame with the same templates and
 RMSD threshold is reused when it carries neighbor lists. Fits made by the PTM
-or Strain tools while Grains is on carry them, so one fit serves all three; a
-fit made before Grains was turned on is repeated once.
+or Strain tools retain them even before Grains is enabled when their additional
+65 bytes per atom plus the span fit within a 32 MiB per-frame allowance.
+Enabling Grains then reuses that fit without another template calculation.
+Above that allowance, lists are obtained on demand; fits started with Grains
+enabled always carry them. The existing frame cache counts these arrays and
+can reduce its retained frame count. The optional allowance does not reserve
+32 MiB upfront or change Worker admission and prewarming.
+Collecting lists adds bookkeeping and transport to the initial fit; its benefit
+is avoiding a second fit when Grains is enabled later.
 
 The clustering runs in one dedicated Worker, started when the panel opens. It
 keeps the merge sequence of the last structure, so a new threshold, minimum

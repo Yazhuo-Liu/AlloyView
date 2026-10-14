@@ -374,6 +374,12 @@ stays as the fallback where float blending is missing.
 - **Change:** request neighbor lists whenever memory allows (65 B per atom);
   profile the clustering before choosing between typed-array tuning and a Wasm
   port.
+- **Completed (2026-10-14):** ordinary PTM and fresh ideal-strain fits retain
+  template neighbor lists within a 32 MiB per-frame allowance, so enabling
+  Grains later reuses a compatible fit. Larger frames obtain lists on demand;
+  already-enabled Grains still requests them regardless of this optional cap.
+  Existing cache accounting and Worker admission apply. The clustering work
+  and hardware profiling remain open.
 
 ### K3. Local shear: one neighbor pass
 

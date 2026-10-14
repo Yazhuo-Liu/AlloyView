@@ -37,6 +37,16 @@ export const PTM_TEMPLATE_NEIGHBORS = 16;
 export const PTM_UNMATCHED_NEIGHBORS = 8;
 export const PTM_NEIGHBOR_LIST_FIELDS = Object.freeze({ neighborCounts: [Uint8Array, 1],
   neighborIndices: [Uint32Array, PTM_TEMPLATE_NEIGHBORS] });
+
+// Retain bounded template lists with ordinary fits so a later grain analysis
+// can reuse them. Large frames request lists only when Grains actually needs
+// them; this policy allocates nothing and leaves Worker admission unchanged.
+export const PTM_RETAINED_NEIGHBOR_BUDGET_BYTES = 32 * 1024 ** 2;
+export function retainPtmNeighborLists(frame) {
+  const count = frame?.ids?.length;
+  return Number.isSafeInteger(count) && count > 0
+    && count * (1 + 4 * PTM_TEMPLATE_NEIGHBORS) + 24 <= PTM_RETAINED_NEIGHBOR_BUDGET_BYTES;
+}
 // One packed kernel record: see alloy_ptm_atom in wasm/ptm.cpp.
 const PTM_RECORD_DOUBLES = 18;
 const PTM_NEIGHBOR_COLUMNS = ['atoms', 'xs', 'ys', 'zs', 'distanceSquared', 'imageA', 'imageB', 'imageC'];

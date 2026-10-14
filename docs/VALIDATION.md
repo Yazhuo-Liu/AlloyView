@@ -2,6 +2,36 @@
 
 Latest validation: 2026-10-14 (America/New_York). Earlier entries retain their own dates.
 
+## Bounded PTM neighbor retention for Grains (2026-10-14)
+
+Baseline: `0e7278f`, confirmed equal to remote main. K1's repeated-fitting
+finding still applied: a standalone PTM result lacked neighbor lists unless
+Grains was already enabled. Ordinary PTM, fresh ideal strain and lattice
+reference-estimation fits now retain their lists when 65 bytes per atom plus
+the 24-byte span fit within a 32 MiB per-frame allowance. The decision reads
+only atom count and allocates nothing. Larger frames keep demand-driven lists;
+an enabled Grains analysis always requests the full required lists.
+
+Settings keys, template fits, scientific outputs, cancellation, shared/private
+Worker scheduling and warm resources remain unchanged. Existing frame cache
+accounting includes the retained arrays. The actual browser regression now
+computes standalone PTM before enabling Grains and asserts no additional PTM
+job, alongside its original direct-kernel parity and trajectory/cancellation
+checks in isolated and ordinary deployments. The native neighbor-list suite
+checks exact fit parity and parallel Worker merges; a budget-boundary test
+verifies that retention never scans IDs or opts a million-atom frame into the
+optional allocation. Clustering parallelism remains a separate K1 task; no
+hardware speedup or new G2 routing threshold is claimed.
+
+Reproduce with `node --test tests/ptm-neighbor-lists.test.js`, `npm test`,
+`npm run build` and `npm run test:browser:grains`.
+The neighbor-list suite passes 9 tests and the complete suite passes 2,143,
+with no failures or skips. Production Grains passes in both hosting modes;
+the full browser smoke and real WebGPU application checks also pass. These
+software-adapter checks establish numerical and lifecycle behavior, not
+physical-GPU throughput. Optional retention adds first-fit work and transport
+in exchange for avoiding the later template fit.
+
 ## Resident GPU revisions and shared second-view preparation (2026-10-14)
 
 Baseline: `12ec706`, synchronized from remote main before this continuation.
