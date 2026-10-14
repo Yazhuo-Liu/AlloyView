@@ -85,3 +85,32 @@ test('range edits commit their latest limits on release, cancellation, lost capt
     assert.deepEqual(commits, [{ minimum: 3, maximum: 10 }], `${event} commits once`);
   }
 });
+
+
+test('frame updates preserve a dirty native slider track and commit its original gesture against the new data domain', () => {
+  const commits = [];
+  const slider = createLegendRangeSlider(root, { minimum: 0, maximum: 10, dataMinimum: 0, dataMaximum: 10, step: 1,
+    onCommit: limits => commits.push(limits) });
+  const minimumNode = slider.inputs.minimum, maximumNode = slider.inputs.maximum;
+  minimumNode.dispatch('pointerdown'); minimumNode.value = '3'; minimumNode.dispatch('input');
+  slider.update({ minimum: 3, maximum: 10, dataMinimum: 100, dataMaximum: 110, step: .5 });
+  assert.equal(slider.editing, true); assert.equal(maximumNode.max, '10'); assert.equal(minimumNode.value, '3');
+  minimumNode.value = '4'; minimumNode.dispatch('input'); minimumNode.dispatch('pointerup');
+  assert.deepEqual(commits, [{ minimum: 4, maximum: 10 }]); assert.equal(slider.editing, false);
+  assert.equal(slider.inputs.minimum, minimumNode); assert.equal(slider.inputs.maximum, maximumNode);
+  assert.equal(maximumNode.max, '212'); assert.equal(minimumNode.value, '0');
+  minimumNode.dispatch('change'); assert.equal(commits.length, 1, 'native change does not repeat the commit');
+});
+
+test('a captured slider with no input adopts the latest automatic range only after release', () => {
+  const commits = [];
+  const slider = createLegendRangeSlider(root, { minimum: 0, maximum: 10, dataMinimum: 0, dataMaximum: 10, step: 1,
+    onCommit: limits => commits.push(limits) });
+  slider.inputs.maximum.dispatch('pointerdown');
+  slider.update({ minimum: 20, maximum: 30, dataMinimum: 20, dataMaximum: 30, step: 1 });
+  slider.update({ minimum: 100, maximum: 200, dataMinimum: 100, dataMaximum: 200, step: 1 });
+  assert.equal(slider.inputs.maximum.max, '10');
+  slider.inputs.maximum.dispatch('pointercancel');
+  assert.equal(slider.inputs.maximum.max, '100'); assert.equal(slider.inputs.maximum.value, '100');
+  assert.deepEqual(commits, [], 'merely touching the thumb does not freeze Auto or create a manual edit');
+});

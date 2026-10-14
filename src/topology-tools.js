@@ -70,6 +70,7 @@ const format = value => value !== null && value !== undefined && Number.isFinite
 export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () => [getFrame()],
   getSourceVersion = () => 0, getFrameIndex = () => 0, getBondParameters = () => ({ cutoff: 3, pairCutoffs: [] }),
   getBondEnabled = () => Boolean(getFrame()?.atomeyeResults?.bonds),
+  getPropertyDependency = () => null,
   getColorChoiceVersion = () => 0, chooseProperty = () => {}, onResultsChange = () => {},
   notify = () => {}, onEdit = () => {}, onBeforeClear = () => {}, onGpuPreparationChange = () => {},
   afterDisplayRefresh = callback => callback() }) {
@@ -77,6 +78,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
   const voronoiView = initializeVoronoiResults({ getElement: $, chooseProperty });
   const jobs = Object.fromEntries(Object.keys(DEFINITIONS).map(kind => [kind,
     { enabled: false, failed: false, queued: false, controller: null, serial: 0, result: null, frame: null,
+      radiusSignature: null, dependencyWake: null, publishing: false, dispatched: false, radiusCache: null,
       settings: { ...DEFINITIONS[kind].defaults } }]));
   let controlsEnabled = false;
   let generation = 0;
@@ -144,18 +146,25 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
       input.disabled = !available || !settings.radical || !typeSource;
     }
     const properties = voronoiRadiusProperties(frame), select = $('voronoi-radius-property');
-    if (select && radiusPropertyNames !== properties.map(property => property.name).join('\n')) {
-      radiusPropertyNames = properties.map(property => property.name).join('\n');
+    const entries = properties.map(property => [property.name,
+      property.unit ? `${property.displayName ?? property.name} (${property.unit})` : property.displayName ?? property.name]);
+    if (settings.radiusProperty && !properties.some(property => property.name === settings.radiusProperty)) {
+      const dependency = radiusDependency(frame, settings);
+      entries.push([settings.radiusProperty, `${settings.radiusProperty} (${dependency?.state === 'pending' ? 'waiting for data…' : 'unavailable'})`]);
+    }
+    const propertyNames = JSON.stringify(entries);
+    if (select && radiusPropertyNames !== propertyNames) {
+      radiusPropertyNames = propertyNames;
       const root = select.ownerDocument;
-      select.replaceChildren(...properties.map(property => {
-        const option = root.createElement('option'); option.value = property.name;
-        option.textContent = property.unit ? `${property.displayName ?? property.name} (${property.unit})` : property.displayName ?? property.name;
+      select.replaceChildren(...entries.map(([name, label]) => {
+        const option = root.createElement('option'); option.value = name;
+        option.textContent = label;
         return option;
       }));
     }
     if (select) {
       select.value = settings.radiusProperty ?? '';
-      select.disabled = !available || !settings.radical || typeSource || !properties.length;
+      select.disabled = !available || !settings.radical || typeSource || !entries.length;
     }
     if ($('voronoi-radical')) { $('voronoi-radical').checked = settings.radical; $('voronoi-radical').disabled = !available; }
     if ($('voronoi-radius-source')) { $('voronoi-radius-source').value = typeSource ? 'types' : 'property'; $('voronoi-radius-source').disabled = !available || !settings.radical; }
@@ -262,12 +271,83 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     return { analysis: { ...analysis, radii }, identity: { ...analysis, radical: voronoiRadiiFingerprint(radii) }, radii };
   }
 
+  function radiusDependency(frame, settings) {
+    if (!settings.radical || settings.radiusSource !== 'property' || !settings.radiusProperty) return null;
+    return getPropertyDependency(settings.radiusProperty, frame);
+  }
+
+  function radiusSignature(frame, settings) {
+    if (!settings.radical || settings.radiusSource !== 'property') return null;
+    const property = voronoiRadiusProperties(frame).find(entry => entry.name === settings.radiusProperty);
+    const dependency = radiusDependency(frame, settings);
+    return [frame, String(getSourceVersion()), settings.radiusProperty, property?.data ?? null, dependency?.state ?? null,
+      dependency?.message ?? null, JSON.stringify(dependency?.producers ?? [])];
+  }
+
+  /** Analysis results and expression edits wake only this request's radius
+   * dependency. No timers, CPU permits or GPU tasks are held while waiting. */
+  async function waitForRadius(frame, settings, controller, current) {
+    const job = jobs.voronoi;
+    let cleared = false;
+    for (;;) {
+      if (!current()) return false;
+      const dependency = radiusDependency(frame, settings);
+      job.radiusSignature = radiusSignature(frame, settings);
+      if (dependency?.state === 'unavailable') throw new Error(dependency.message ?? `Radius property ${settings.radiusProperty} is unavailable in this frame.`);
+      if (dependency?.state !== 'pending') return true;
+      if (!cleared) {
+        clearAnalysisResults(frame, 'voronoi');
+        if (frame.atomeyeResults) delete frame.atomeyeResults.voronoi;
+        clearView('voronoi'); job.frame = frame; cleared = true;
+      }
+      state('voronoi', 'Waiting', `Waiting for ${dependency.producers?.join(', ') || dependency.name || settings.radiusProperty} to provide radius property ${settings.radiusProperty} in this frame.`);
+      const waiting = new Promise(resolve => {
+        const wake = () => {
+          controller.signal.removeEventListener('abort', wake);
+          if (job.dependencyWake === wake) job.dependencyWake = null;
+          resolve();
+        };
+        job.dependencyWake = wake;
+        controller.signal.addEventListener('abort', wake, { once: true });
+        if (controller.signal.aborted) wake();
+      });
+      if (cleared === true) {
+        // Notify after subscribing: a synchronous display refresh can already
+        // make the selected expression ready or expose a terminal input error.
+        cleared = 'notified';
+        onResultsChange({ kind: 'voronoi', frame, clearSettings: false });
+      }
+      await waiting;
+    }
+  }
+
+  function refreshProperties() {
+    updateRadicalControls();
+    const job = jobs.voronoi;
+    if (!job.enabled || job.queued || job.publishing || !job.settings.radical || job.settings.radiusSource !== 'property') return Promise.resolve(false);
+    const next = radiusSignature(getFrame(), job.settings), previous = job.radiusSignature;
+    const changed = !previous || !next || next.some((value, index) => value !== previous[index]);
+    if (!changed) return Promise.resolve(false);
+    job.radiusSignature = next;
+    if (job.controller && !job.dispatched) { job.dependencyWake?.(); return Promise.resolve(false); }
+    return run('voronoi', { automatic: true });
+  }
+
+  function releaseRadiusCache(job, entry = job.radiusCache) {
+    if (!entry) return;
+    if (entry.frame.voronoiInputCache === entry.retained) delete entry.frame.voronoiInputCache;
+    if (job.radiusCache === entry) job.radiusCache = null;
+  }
+
   function abort(kind) {
     const job = jobs[kind];
     job.serial++;
     job.controller?.abort();
+    job.dependencyWake?.();
+    releaseRadiusCache(job);
     job.controller = null;
     job.queued = false;
+    job.dispatched = false;
     const progress = $(`${DEFINITIONS[kind].prefix}-progress`);
     if (progress) progress.hidden = true;
     updateControls(kind);
@@ -300,6 +380,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     onBeforeClear(kind, { clearSettings });
     abort(kind);
     jobs[kind].enabled = false; jobs[kind].failed = false;
+    jobs[kind].radiusSignature = null;
     clearFrames(kind); clearView(kind); syncTool(kind);
     state(kind, 'Not calculated', DEFINITIONS[kind].help);
     if (!silent) onResultsChange({ kind, clearSettings });
@@ -345,7 +426,15 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     const progress = $(`${prefix}-progress`);
     if (progress) { progress.hidden = true; progress.value = 1; }
     state(kind, 'Updating display…');
-    onResultsChange({ kind, frame, clearSettings: false });
+    job.publishing = true;
+    try { onResultsChange({ kind, frame, clearSettings: false }); }
+    finally {
+      // Publishing this tessellation can shadow an imported column and update
+      // expressions that refer to it. Those are display consequences of this
+      // result, not new radius inputs to recursively analyze again.
+      if (kind === 'voronoi') job.radiusSignature = job.enabled && frame === getFrame() ? radiusSignature(frame, job.settings) : null;
+      job.publishing = false;
+    }
     afterDisplayRefresh(() => {
       if (current() && job.result === result && job.frame === frame) {
         state(kind, 'Calculated', `${backendLabel} · ${format((result.elapsedMs ?? 0) / 1000)} s`);
@@ -357,7 +446,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     const job = jobs[kind], frame = getFrame();
     if (!job || !frame || !isCurrent()) return false;
     let settings, call;
-    try { settings = parameters(kind); call = analysisRequest(kind, settings, frame); }
+    try { settings = parameters(kind); }
     catch (error) {
       abort(kind); job.failed = true;
       // A failed rerun owns no completed scientific result. Notify consumers
@@ -376,18 +465,41 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     const controller = new AbortController(); job.controller = controller; job.queued = false;
     const current = () => request === job.serial && token === generation && source === getSourceVersion()
       && frame === getFrame() && job.enabled && !controller.signal.aborted && isCurrent();
-    // Standard requests keep their previous keys; a requested GPU kernel adds its own.
-    const gpuKernel = kind === 'voronoi' && settings.gpuKernel && Boolean(pool.gpuEnabled);
-    const key = JSON.stringify({ ...call.identity, sourceVersion: source, gpuRequested: Boolean(pool.gpuEnabled), ...(gpuKernel ? { gpuKernel } : {}) });
     const prefix = DEFINITIONS[kind].prefix;
+    // Keep a completed result private while its input is pending. If the
+    // finished radii have the same fingerprint, republish it without another
+    // tessellation. Internal frame metadata keeps every retained buffer visible
+    // to estimateFrameBytes while properties/public results remain unavailable.
+    const previousCached = kind === 'voronoi' ? frame.atomeyeResults?.[kind] : null;
+    const radiusCache = previousCached ? { frame, retained: { cached: previousCached } } : null;
+    if (radiusCache) { frame.voronoiInputCache = radiusCache.retained; job.radiusCache = radiusCache; }
     try {
-      let cached = frame.atomeyeResults?.[kind];
+      if (kind === 'voronoi' && settings.radical && settings.radiusSource === 'property') {
+        // Previous outputs cannot feed their own next tessellation. Restore
+        // imports first and refresh expressions against those source values;
+        // keep the result cache for the validated radius-fingerprint check.
+        if (frame.properties.some(property => property.analysisKind === kind)) {
+          clearAnalysisResults(frame, kind);
+          onResultsChange({ kind, frame, clearSettings: false });
+        }
+        const dependency = radiusDependency(frame, settings);
+        if (dependency?.state === 'unavailable') throw new Error(dependency.message ?? `Radius property ${settings.radiusProperty} is unavailable in this frame.`);
+        if (dependency?.state === 'pending' && !await waitForRadius(frame, settings, controller, current)) return false;
+      }
+      if (!current()) return false;
+      call = analysisRequest(kind, settings, frame);
+      if (kind === 'voronoi') job.radiusSignature = radiusSignature(frame, settings);
+      // Standard requests keep their previous keys; a requested GPU kernel adds its own.
+      const gpuKernel = kind === 'voronoi' && settings.gpuKernel && Boolean(pool.gpuEnabled);
+      const key = JSON.stringify({ ...call.identity, sourceVersion: source, gpuRequested: Boolean(pool.gpuEnabled), ...(gpuKernel ? { gpuKernel } : {}) });
+      let cached = frame.atomeyeResults?.[kind] ?? previousCached;
       if (cached?.key !== key) {
         clearAnalysisResults(frame, kind);
         if (frame.atomeyeResults) delete frame.atomeyeResults[kind];
         clearView(kind); job.frame = frame;
         state(kind, 'Calculating…', 'Waiting for available analysis Workers…');
         onResultsChange({ kind, frame, clearSettings: false });
+        job.dispatched = true;
         const result = await pool.analyze(frame, { kind, ...call.analysis }, {
           signal: controller.signal, frameIndex: getFrameIndex(),
           onProgress: progress => {
@@ -417,20 +529,30 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
         frame.atomeyeResults ??= {}; frame.atomeyeResults[kind] = cached;
       }
       if (!current()) return false;
+      frame.atomeyeResults ??= {}; frame.atomeyeResults[kind] = cached;
+      releaseRadiusCache(job, radiusCache);
       job.controller = null;
       showResult(kind, cached.result, frame, key, current);
       if (!automatic && colorChoice === getColorChoiceVersion()) chooseProperty(DEFINITIONS[kind].property);
       return true;
     } catch (error) {
       if (!current() || error.name === 'AbortError') return false;
+      job.dependencyWake?.();
+      releaseRadiusCache(job, radiusCache);
       job.controller = null; job.failed = true;
       clearAnalysisResults(frame, kind);
       if (frame.atomeyeResults) delete frame.atomeyeResults[kind];
       clearView(kind); state(kind, 'Failed', error.message);
-      onResultsChange({ kind, frame, clearSettings: false });
+      job.publishing = true;
+      try { onResultsChange({ kind, frame, clearSettings: false }); }
+      finally {
+        if (kind === 'voronoi') job.radiusSignature = job.enabled && frame === getFrame() ? radiusSignature(frame, job.settings) : null;
+        job.publishing = false;
+      }
       if (!automatic) notify(error.message);
       return false;
     } finally {
+      releaseRadiusCache(job, radiusCache);
       if (job.controller === controller) job.controller = null;
       updateControls(kind);
     }
@@ -557,7 +679,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     state(kind, 'Not calculated', definition.help);
   }
 
-  return Object.freeze({ run, onFrame, reset, abortJobs, cancel, serialize, restore, refreshBondParameters,
+  return Object.freeze({ run, onFrame, reset, abortJobs, cancel, serialize, restore, refreshBondParameters, refreshProperties,
     syncBondEnabled: () => syncTool('bondStatistics'),
     isEnabled: kind => Boolean(jobs[kind]?.enabled),
     setEnabled(value) { controlsEnabled = Boolean(value); for (const kind of Object.keys(jobs)) updateControls(kind); },

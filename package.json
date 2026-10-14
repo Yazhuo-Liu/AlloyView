@@ -70,7 +70,13 @@
     "test:browser:configuration-restore": "node scripts/browser-configuration-restore.mjs",
     "test:browser:blended-annotations": "node scripts/browser-blended-annotations.mjs --production",
     "test:browser:reference-mapping": "node scripts/browser-reference-mapping.mjs --production",
-    "benchmark:reference-mapping": "node scripts/benchmark-reference-mapping.mjs"
+    "benchmark:reference-mapping": "node scripts/benchmark-reference-mapping.mjs",
+    "test:browser:legend-retention": "node scripts/browser-legend-retention.mjs --production",
+    "test:browser:radical-dependencies": "node scripts/browser-radical-dependencies.mjs",
+    "test:browser:render-hot-loops": "node scripts/browser-render-hot-loops.mjs --production",
+    "test:browser:transparent-current": "node scripts/browser-transparent-current.mjs",
+    "benchmark:matte": "node scripts/benchmark-matte.mjs",
+    "benchmark:parser-tail": "node scripts/benchmark-parser-tail.mjs"
   },
   "engines": {
     "node": ">=20"

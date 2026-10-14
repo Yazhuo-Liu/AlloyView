@@ -1,9 +1,7 @@
 import {
-  cartesianToFractional,
   createCell,
-  fractionalToCartesian,
+  invert3,
   validateFrame,
-  wrapFractional,
 } from '../data/model.js';
 import {
   AsciiRowReader,
@@ -32,6 +30,10 @@ const UNWRAPPED_COORDINATE_SETS = [
 ];
 const COORDINATE_SETS = [...WRAPPED_COORDINATE_SETS, ...UNWRAPPED_COORDINATE_SETS];
 const IMAGE_COLUMNS = ['ix', 'iy', 'iz'];
+// Small numeric type identifiers are usual in dumps. Bound the lookup by
+// source size and 65,536 entries; a sparse or very large safe-integer type
+// never causes an allocation proportional to its numeric value.
+const MAX_DENSE_TYPE_ENTRIES = 65_536;
 const RESERVED_COLUMNS = new Set([
   'id', 'type', 'element',
   ...COORDINATE_SETS.flatMap((set) => set.names),
@@ -408,42 +410,95 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
       rawTypes[atom] = elementTypes.get(elements[atom]);
     }
   }
-  const rawTypeLabels = [...new Set(rawTypes)].sort((left, right) => left - right);
-  if (rawTypeLabels.length > 65_535) throw dumpError('The file contains more than 65,535 atom types, which the current data layout cannot represent.');
-  const typeMap = new Map(rawTypeLabels.map((value, index) => [value, index]));
-  const typeLabels = rawTypeLabels.map((value) => `Type ${value}`);
-  const elementByType = new Map();
+  const denseTypeLimit = Math.min(count * 4 + 64, MAX_DENSE_TYPE_ENTRIES);
+  const seenTypes = new Uint8Array(denseTypeLimit);
+  const sparseTypes = new Set();
+  const rawTypeLabels = [];
+  let largestDenseType = 0;
   for (let atom = 0; atom < count; atom += 1) {
-    const typeIndex = typeMap.get(rawTypes[atom]);
-    types[atom] = typeIndex;
-    if (elements) {
-      const previous = elementByType.get(rawTypes[atom]);
-      if (previous && previous !== elements[atom]) {
-        throw dumpError(`Type ${rawTypes[atom]} maps to both element “${previous}” and “${elements[atom]}”.`);
+    const value = rawTypes[atom];
+    if (value < denseTypeLimit) {
+      if (!seenTypes[value]) {
+        seenTypes[value] = 1;
+        rawTypeLabels.push(value);
+        largestDenseType = Math.max(largestDenseType, value);
       }
-      elementByType.set(rawTypes[atom], elements[atom]);
+    } else if (!sparseTypes.has(value)) {
+      sparseTypes.add(value);
+      rawTypeLabels.push(value);
+    }
+  }
+  rawTypeLabels.sort((left, right) => left - right);
+  if (rawTypeLabels.length > 65_535) throw dumpError('The file contains more than 65,535 atom types, which the current data layout cannot represent.');
+  const denseTypeMap = new Uint16Array(largestDenseType + 1);
+  const sparseTypeMap = new Map();
+  for (let index = 0; index < rawTypeLabels.length; index += 1) {
+    const value = rawTypeLabels[index];
+    if (value < denseTypeLimit) denseTypeMap[value] = index;
+    else sparseTypeMap.set(value, index);
+  }
+  const typeLabels = rawTypeLabels.map((value) => `Type ${value}`);
+  // Preserve the original error order: type capacity and conflicting element
+  // labels are checked before any coordinate conversion can fail.
+  if (elements) {
+    const elementByType = new Array(rawTypeLabels.length);
+    for (let atom = 0; atom < count; atom += 1) {
+      const value = rawTypes[atom];
+      const typeIndex = value < denseTypeLimit ? denseTypeMap[value] : sparseTypeMap.get(value);
+      const previous = elementByType[typeIndex];
+      if (previous && previous !== elements[atom]) {
+        throw dumpError(`Type ${value} maps to both element “${previous}” and “${elements[atom]}”.`);
+      }
+      elementByType[typeIndex] = elements[atom];
       typeLabels[typeIndex] = elements[atom];
     }
   }
 
   const sourceCoordinateSet = wrappedCoordinateSet ?? unwrappedCoordinateSet;
   const sourceValues = wrappedValues ?? unwrappedValues;
-  const sourceFractional = coordinateSetToFractional(sourceCoordinateSet, sourceValues, cell);
-  const fractional = wrapFractional(sourceFractional, cell.pbc);
-  const positions = fractionalToCartesian(fractional, cell);
-
-  let unwrappedPositions = null;
-  let unwrapSource = null;
-  if (unwrappedCoordinateSet) {
-    const unwrappedFractional = coordinateSetToFractional(unwrappedCoordinateSet, unwrappedValues, cell);
-    unwrappedPositions = unwrappedCoordinateSet.scaled
-      ? fractionalToCartesian(unwrappedFractional, cell)
-      : unwrappedValues;
-    unwrapSource = unwrappedCoordinateSet.names.join('/');
-  } else if (imageFlags && wrappedCoordinateSet) {
-    const unwrappedFractional = addImageFlags(sourceFractional, imageFlags);
-    unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
-    unwrapSource = 'ix/iy/iz';
+  const sourceScaled = sourceCoordinateSet.scaled;
+  const unwrappedScaled = Boolean(unwrappedCoordinateSet?.scaled);
+  // Cartesian→fractional, wrapping, image addition and final Cartesian
+  // storage each rounded to Float32 in the original separate passes. Keep
+  // every rounding point and the exact sum order when fusing those passes.
+  // An explicit xu/yu/zu array remains authoritative, even with image flags.
+  const inverse = !sourceScaled || (unwrappedCoordinateSet && !unwrappedScaled)
+    ? invert3(cell.vectors) : null;
+  const fractional = new Float32Array(count * 3);
+  const positions = new Float32Array(count * 3);
+  const unwrapImages = Boolean(!unwrappedCoordinateSet && imageFlags && wrappedCoordinateSet);
+  const unwrappedPositions = unwrappedCoordinateSet && !unwrappedScaled ? unwrappedValues
+    : unwrappedCoordinateSet || unwrapImages ? new Float32Array(count * 3) : null;
+  const unwrapSource = unwrappedCoordinateSet ? unwrappedCoordinateSet.names.join('/') : unwrapImages ? 'ix/iy/iz' : null;
+  const { origin, vectors, pbc } = cell;
+  for (let atom = 0; atom < count; atom += 1) {
+    const rawType = rawTypes[atom];
+    types[atom] = rawType < denseTypeLimit ? denseTypeMap[rawType] : sparseTypeMap.get(rawType);
+    const offset = atom * 3;
+    let a = sourceValues[offset], b = sourceValues[offset + 1], c = sourceValues[offset + 2];
+    if (!sourceScaled) {
+      const x = a - origin[0], y = b - origin[1], z = c - origin[2];
+      a = Math.fround(x * inverse[0] + y * inverse[3] + z * inverse[6]);
+      b = Math.fround(x * inverse[1] + y * inverse[4] + z * inverse[7]);
+      c = Math.fround(x * inverse[2] + y * inverse[5] + z * inverse[8]);
+    }
+    const wrappedA = Math.fround(pbc[0] ? a - Math.floor(a) : a);
+    const wrappedB = Math.fround(pbc[1] ? b - Math.floor(b) : b);
+    const wrappedC = Math.fround(pbc[2] ? c - Math.floor(c) : c);
+    fractional[offset] = wrappedA;
+    fractional[offset + 1] = wrappedB;
+    fractional[offset + 2] = wrappedC;
+    positions[offset] = origin[0] + wrappedA * vectors[0] + wrappedB * vectors[3] + wrappedC * vectors[6];
+    positions[offset + 1] = origin[1] + wrappedA * vectors[1] + wrappedB * vectors[4] + wrappedC * vectors[7];
+    positions[offset + 2] = origin[2] + wrappedA * vectors[2] + wrappedB * vectors[5] + wrappedC * vectors[8];
+    if (unwrapImages || unwrappedScaled) {
+      const unwrappedA = unwrapImages ? Math.fround(a + imageFlags[offset]) : unwrappedValues[offset];
+      const unwrappedB = unwrapImages ? Math.fround(b + imageFlags[offset + 1]) : unwrappedValues[offset + 1];
+      const unwrappedC = unwrapImages ? Math.fround(c + imageFlags[offset + 2]) : unwrappedValues[offset + 2];
+      unwrappedPositions[offset] = origin[0] + unwrappedA * vectors[0] + unwrappedB * vectors[3] + unwrappedC * vectors[6];
+      unwrappedPositions[offset + 1] = origin[1] + unwrappedA * vectors[1] + unwrappedB * vectors[4] + unwrappedC * vectors[7];
+      unwrappedPositions[offset + 2] = origin[2] + unwrappedA * vectors[2] + unwrappedB * vectors[5] + unwrappedC * vectors[8];
+    }
   }
 
   return validateFrame({
@@ -480,16 +535,6 @@ function assertCompleteCoordinateSets(columnIndex) {
       throw dumpError(`Coordinate set ${set.names.join('/')} is incomplete; missing ${missing.join(', ')}.`);
     }
   }
-}
-
-function coordinateSetToFractional(coordinateSet, values, cell) {
-  return coordinateSet.scaled ? values : cartesianToFractional(values, cell);
-}
-
-function addImageFlags(fractional, imageFlags) {
-  const unwrapped = new Float32Array(fractional.length);
-  for (let index = 0; index < fractional.length; index += 1) unwrapped[index] = fractional[index] + imageFlags[index];
-  return unwrapped;
 }
 
 function createDumpCell(bounds, boundaryFlags, triclinic) {

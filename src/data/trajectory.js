@@ -21,14 +21,24 @@ export function unwrapSequenceFrame(frame, previousState, index) {
   // Explicit image flags or out-of-cell CFG coordinates are authoritative.
   if (frame.unwrappedPositions) return continuityState(frame, index);
 
-  const previousById = new Map();
-  for (let atom = 0; atom < previousState.ids.length; atom += 1) {
-    previousById.set(previousState.ids[atom], atom);
+  // Most CFG writers retain row order. Check the complete ID sequence before
+  // using that order; a later mismatch must still use stable-ID matching for
+  // every atom, including the rows preceding the mismatch.
+  let sameOrder = true;
+  for (let atom = 0; atom < frame.ids.length; atom += 1) {
+    if (frame.ids[atom] !== previousState.ids[atom]) { sameOrder = false; break; }
+  }
+  let previousById = null;
+  if (!sameOrder) {
+    previousById = new Map();
+    for (let atom = 0; atom < previousState.ids.length; atom += 1) {
+      previousById.set(previousState.ids[atom], atom);
+    }
   }
   const unwrappedFractional = new Float64Array(frame.fractional.length);
   const imageFlags = new Int32Array(frame.fractional.length);
   for (let atom = 0; atom < frame.ids.length; atom += 1) {
-    const previousAtom = previousById.get(frame.ids[atom]);
+    const previousAtom = sameOrder ? atom : previousById.get(frame.ids[atom]);
     if (previousAtom === undefined) {
       throw new Error(`CFG sequence frame ${index + 1} contains atom ID ${frame.ids[atom]}, which is absent from the preceding image.`);
     }

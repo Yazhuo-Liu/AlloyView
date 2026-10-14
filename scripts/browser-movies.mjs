@@ -18,10 +18,13 @@ import { useSoftwareAdapter, withWebGpuBrowser } from './webgpu-browser.mjs';
 //   --keep <directory>   also write the exported movies there
 //   --timing             add a 1920 × 1080, 120-frame export of examples/fixed_end_climb
 //   --hardware           use the real GPU for WebGL instead of SwiftShader
+//   --source             use source modules before the unified production build
+//   --preview-only       run the slow-frame preview races without encoding movies
 const root = resolve(import.meta.dirname, '..');
 assert.ok(existsSync(resolve(root, 'dist/index.html')), 'Run npm run build first.');
 const keepIndex = process.argv.indexOf('--keep'), keep = keepIndex >= 0 ? resolve(process.argv[keepIndex + 1]) : null;
 const timing = process.argv.includes('--timing');
+const source = process.argv.includes('--source'), previewOnly = process.argv.includes('--preview-only');
 const temporary = await mkdtemp(resolve(tmpdir(), 'alloyview-movies-'));
 const fixture = 'movie-fixture.dump', fixturePath = resolve(temporary, fixture);
 const FRAMES = 6, LATTICE = 3.52, CELLS = 3, LENGTH = LATTICE * CELLS;
@@ -67,7 +70,7 @@ try {
         movie: document.getElementById('movie-status')?.textContent, summary: document.getElementById('movie-summary')?.textContent,
         progress: document.getElementById('movie-progress-text')?.textContent, recipe: document.getElementById('configuration-status')?.textContent })`)}`);
     }
-    async function open(path = 'dist/index.html') {
+    async function open(path = source ? 'index.html' : 'dist/index.html') {
       await call('Page.navigate', { url: `${origin}/AlloyView/${path}` });
       await waitFor('document.readyState === "complete" && document.getElementById("export-movie") && document.getElementById("run-script")', 'Application startup');
       await evaluate(`(${installChecks.toString()})(${JSON.stringify(`${origin}/AlloyView/tests/helpers/video-containers.js`)})`);
@@ -102,8 +105,59 @@ try {
       await waitFor(`document.getElementById('script-state').textContent === ${JSON.stringify(expectedState)}`, `Script ${expectedState}`);
     }
 
+    async function slowPreviewChecks() {
+      await showTool('movie'); await change('movie-frame-mode', 'fit');
+      await change('movie-frame-first', 1); await change('movie-frame-last', FRAMES);
+      const start = { camera: await camera(), frame: await frameIndex() };
+      assert.notEqual(start.frame, 0, 'the first preview frame differs from its starting frame');
+      const results = [];
+      for (const action of ['stop', 'finish', 'gesture', 'restart']) {
+        await evaluate('movieChecks.holdPreviewFrame(0)');
+        try {
+          await click('preview-movie');
+          await waitFor('movieChecks.heldPreview.ready', `${action}: a real parsed frame is held before delivery`);
+          assert.equal(await frameIndex(), start.frame, `${action}: the starting frame remains displayed during its slow load`);
+          if (action === 'gesture') {
+            const bounds = await evaluate('(() => { const b = movieChecks.renderer.canvas.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()');
+            await call('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', buttons: 1, clickCount: 1, ...bounds });
+            await call('Input.dispatchMouseEvent', { type: 'mouseMoved', button: 'left', buttons: 1, x: bounds.x + 35, y: bounds.y + 20 });
+            await call('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', buttons: 0, clickCount: 1, x: bounds.x + 35, y: bounds.y + 20 });
+          } else if (action !== 'finish') await click('preview-movie');
+          await waitFor('document.getElementById("preview-movie").textContent === "Preview" && document.getElementById("movie-state").textContent === "Idle"', `${action}: preview restoration completes`, 15_000);
+          assert.equal(await evaluate('movieChecks.heldPreview.aborted'), true, `${action}: stopping aborts the obsolete frame navigation`);
+          const stoppedCamera = await camera();
+          if (action !== 'gesture') assert.deepEqual(stoppedCamera, start.camera, `${action}: restore the starting camera`);
+          else assert.notDeepEqual(stoppedCamera, start.camera, 'a real pointer drag keeps the user camera');
+          if (action === 'restart') {
+            await click('preview-movie');
+            await waitFor('document.getElementById("preview-movie").textContent === "Stop preview"', 'a new preview starts before the old held response arrives');
+          }
+          await evaluate('movieChecks.releasePreviewFrame()');
+          await waitFor('movieChecks.heldPreview.delivered', `${action}: deliver the late real Worker response`);
+          await delay(100);
+          if (action === 'restart') {
+            assert.equal(await text('movie-state'), 'Preview', 'the late old response cannot clear the new preview');
+            await click('preview-movie');
+            await waitFor('document.getElementById("preview-movie").textContent === "Preview"', 'stop the restarted preview');
+          }
+          assert.equal(await frameIndex(), start.frame, `${action}: the abandoned frame cannot replace the starting frame`);
+          assert.deepEqual(await camera(), stoppedCamera, `${action}: no late camera restoration overrides the settled pose`);
+          results.push(action);
+          if (action === 'gesture') {
+            // Put the next scenario back at the same physical starting pose.
+            await evaluate(`Object.assign(movieChecks.renderer, ${JSON.stringify(start.camera)}); movieChecks.renderer.requestRender()`);
+          }
+        } finally { await evaluate('movieChecks.releasePreviewFrame()'); }
+      }
+      return results;
+    }
+
     await open();
     await loadFixture();
+    if (previewOnly) {
+      await runScript('camera view front\nframe 2\nkeyframe 0\ncamera orbit 90 0\nkeyframe 1\ncamera view front');
+      return { source, preview: await slowPreviewChecks() };
+    }
 
     // ── Scripts: errors are located and nothing runs ──────────────────────
     await showTool('scripts');
@@ -415,6 +469,7 @@ try {
     await click('preview-movie');
     await waitFor('document.getElementById("preview-movie").textContent === "Preview"', 'Preview stopped');
     assert.deepEqual(await camera(), previewStart.camera, 'Stop preview returns to the starting view');
+    const slowPreviews = await slowPreviewChecks();
     // A script cannot start while a preview owns the viewport, and the reverse.
     await click('preview-movie');
     await waitFor('document.getElementById("preview-movie").textContent === "Stop preview"', 'Preview for the lock check');
@@ -555,16 +610,44 @@ try {
     assert.deepEqual([fallback.type, fallback.images.length], ['application/zip', 5]);
 
     return { adapter: 'WebGL ' + (await evaluate('movieChecks.renderer.gl.getParameter(movieChecks.renderer.gl.VERSION)')), formats: expected, movies,
-      archive: archive.images.length, phone, ffprobe, timed };
+      archive: archive.images.length, phone, ffprobe, timed, slowPreviews };
   }, { software: useSoftwareAdapter(true), requireGpu: false });
   console.log(JSON.stringify(report, null, 2));
 } finally { await rm(temporary, { recursive: true, force: true }); }
 
 async function installChecks(parserUrl) {
   const app = document.querySelector('script[type="module"][src]').src;
-  const [{ WebGLRenderer }, { probeMovieFormats, MOVIE_FORMATS, parseAv1SequenceHeader }, { movieBitrate, movieRenderSize, DEFAULT_MOVIE_OUTPUT }, containers] = await Promise.all([
-    import(new URL('./render/webgl-renderer.js', app)), import(new URL('./video/codecs.js', app)), import(new URL('./movie-export.js', app)), import(parserUrl)]);
+  const [{ WebGLRenderer }, { probeMovieFormats, MOVIE_FORMATS, parseAv1SequenceHeader }, { movieBitrate, movieRenderSize, DEFAULT_MOVIE_OUTPUT }, containers,
+    { StructureWorkerClient }, { FrameCache }] = await Promise.all([
+    import(new URL('./render/webgl-renderer.js', app)), import(new URL('./video/codecs.js', app)), import(new URL('./movie-export.js', app)), import(parserUrl),
+    import(new URL('./worker-client.js', app)), import(new URL('./data/frame-cache.js', app))]);
   const checks = window.movieChecks = { download: null, recordText: null };
+  // Keep the real parsed Worker result, source identity and navigation signal;
+  // only delay delivery. Force that one cached index through the real loader.
+  checks.holdPreviewFrame = index => {
+    const get = FrameCache.prototype.get, has = FrameCache.prototype.has, frame = StructureWorkerClient.prototype.frame;
+    const held = checks.heldPreview = { ready: false, delivered: false, aborted: false };
+    let release; const gate = new Promise(resolve => { release = resolve; });
+    FrameCache.prototype.get = function(value) { return value === index ? undefined : get.call(this, value); };
+    FrameCache.prototype.has = function(value) { return value === index ? false : has.call(this, value); };
+    StructureWorkerClient.prototype.frame = async function(value, options = {}) {
+      const pending = frame.call(this, value, options);
+      if (value !== index || options.background) return pending;
+      const result = await pending;
+      held.ready = true;
+      const abort = () => { held.aborted = true; };
+      if (options.signal?.aborted) abort(); else options.signal?.addEventListener('abort', abort, { once: true });
+      await gate;
+      options.signal?.removeEventListener('abort', abort);
+      held.delivered = true;
+      return result;
+    };
+    checks.releasePreviewFrame = () => {
+      FrameCache.prototype.get = get; FrameCache.prototype.has = has; StructureWorkerClient.prototype.frame = frame;
+      release();
+    };
+  };
+  checks.releasePreviewFrame = () => {};
   checks.holdCapture = () => {
     const capture = checks.renderer.captureImage;
     checks.capturePending = false;

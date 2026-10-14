@@ -82,6 +82,18 @@ test('smoothing edits validate the window and apply through the page', async t =
   assert.equal(tools.frameRequestOptions(), null);
 });
 
+test('limited smoothing caches explain possible rereads without changing saved settings', t => {
+  const { tools, fields, frame } = harness(t);
+  frame.smoothing = { window: 5, firstFrame: 0, lastFrame: 8, frameCount: 9,
+    cacheLimited: { budgetBytes: 768 * 1024 ** 2, requestedBytes: 900 * 1024 ** 2 } };
+  tools.setSmoothing({ enabled: true, window: 5 });
+  assert.match(fields['trajectory-smooth-status'].textContent, /limited to 768 MiB.*may reread frames/);
+  assert.deepEqual(tools.serialize().smoothing, { enabled: true, window: 5 });
+  delete frame.smoothing.cacheLimited;
+  tools.onFrame();
+  assert.doesNotMatch(fields['trajectory-smooth-status'].textContent, /reread|limited/);
+});
+
 test('lines read IDs or groups, enforce the point limit before reading, and round-trip settings', async t => {
   const groups = [{ id: 'g', name: 'Solutes', atomIds: [4, 9] }, { id: 'big', name: 'All', atomIds: Array.from({ length: 200_000 }, (_, index) => index + 1) }];
   const { tools, fields, calls, change } = harness(t, { groups });

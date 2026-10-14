@@ -84,9 +84,19 @@ neighbors in the background as usual; cached raw and smoothed results never mix.
 Reference frames for displacement and frame strain are smoothed too. Atom
 types and other per-atom columns are those of frame *k*.
 
-Parsed coordinates of recently used frames are kept in the Worker (up to
-192 MiB) so stepping to the next frame reads only one new frame. Progress is
-shown while averaging; changing the frame cancels the work.
+Parsed coordinates of recently used frames are kept in the existing structure
+Worker. The cache targets a 192 MiB baseline and grows with the actual coordinate
+snapshot sizes to cover the smoothing window, one next frame and parser
+read-ahead. The hard limit reserves half the existing CPU memory budget for
+other source and native resources, and is always at most 768 MiB. Small device
+or heap hints can lower it below the baseline. Matching, equally ordered atom IDs
+share one private array; retained typed-array backing buffers count once.
+Frames farthest from the current windows are evicted first. When a window
+needs more than the limit, the status explains that frames may be reread;
+the averaging order and numerical results are unchanged. This cache budget
+excludes active parsers and averaging output buffers. Progress is shown while
+averaging; changing the frame cancels the work. Warm parser Workers and the
+shared CPU admission budget are reused.
 
 ## Trajectory lines
 

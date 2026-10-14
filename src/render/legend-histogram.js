@@ -3,6 +3,7 @@ export const LEGEND_HISTOGRAM_BINS = 48;
 // Legends re-render on every color edit and playback frame; the histogram
 // depends only on the data array and the displayed range.
 const cache = new WeakMap();
+const scaleUpdates = new WeakMap();
 
 // Integer properties with at most this many values in range get one band per
 // integer, so the probe never reports the empty gaps between integers.
@@ -39,28 +40,9 @@ export function scalarLegendHistogram(data, minimum, maximum, bins = LEGEND_HIST
 export function createLegendScale(root, legend, { format = String, histogram: showHistogram = true } = {}) {
   const scale = root.createElement('div');
   scale.className = 'legend-scale';
-  const { minimum, maximum } = legend, span = maximum - minimum;
+  let minimum, maximum, span, histogram, unit, decimals, svg = null, bars = null;
+  let probeClientX = null;
   const position = value => span > 0 ? (value - minimum) / span : 0.5;
-  const histogram = showHistogram && legend.property?.data ? scalarLegendHistogram(legend.property.data, minimum, maximum) : null;
-  if (histogram?.peak) {
-    const svg = root.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('class', 'legend-histogram'); svg.setAttribute('aria-hidden', 'true');
-    svg.setAttribute('viewBox', '0 0 1000 1'); svg.setAttribute('preserveAspectRatio', 'none');
-    // Integer bands are narrow bars centered on their values.
-    const integerWidth = Math.max(6, Math.min(40, 600 / Math.max(1, span)));
-    let path = '';
-    histogram.counts.forEach((count, index) => {
-      if (!count) return;
-      // End bars stay within the gradient instead of straddling its edges.
-      const from = histogram.integer ? Math.max(0, Math.min(1000 - integerWidth, position(histogram.first + index) * 1000 - integerWidth / 2))
-        : index * 1000 / histogram.counts.length;
-      const width = histogram.integer ? integerWidth : 1000 / histogram.counts.length;
-      // Square-root heights keep sparse bands visible next to a dominant peak.
-      path += `M${from.toFixed(2)},1V${(1 - Math.sqrt(count / histogram.peak)).toFixed(4)}h${width.toFixed(2)}V1z`;
-    });
-    const bars = root.createElementNS(SVG_NS, 'path'); bars.setAttribute('d', path);
-    svg.append(bars); scale.append(svg);
-  }
   const gradient = root.createElement('div');
   gradient.className = 'legend-gradient';
   gradient.style.background = legend.gradient;
@@ -69,11 +51,8 @@ export function createLegendScale(root, legend, { format = String, histogram: sh
   marker.hidden = label.hidden = true;
   label.setAttribute('role', 'status');
   scale.append(gradient, marker, label);
-  const unit = legend.unit ? ` ${legend.unit}` : '';
   const atoms = count => `${count.toLocaleString('en-US')} atom${count === 1 ? '' : 's'}`;
   // Digits finer than a band (or a pixel-scale step) are noise in the probe.
-  const resolution = span / (histogram && !histogram.integer ? histogram.counts.length : 100);
-  const decimals = resolution > 0 ? Math.max(0, Math.min(20, 1 - Math.floor(Math.log10(resolution)))) : null;
   const rounded = value => format(decimals === null ? value : Number(value.toFixed(decimals)));
   function describe(fraction) {
     const value = minimum + fraction * span;
@@ -90,6 +69,7 @@ export function createLegendScale(root, legend, { format = String, histogram: sh
     return { fraction, text: `${rounded(value)}${unit}\n${atoms(histogram.counts[index])} between ${rounded(lower)} and ${rounded(upper)}` };
   }
   function probe(event) {
+    probeClientX = event.clientX;
     const rectangle = scale.getBoundingClientRect?.();
     if (!rectangle?.width || !Number.isFinite(event.clientX)) return;
     const { fraction, text } = describe(Math.max(0, Math.min(1, (event.clientX - rectangle.left) / rectangle.width)));
@@ -102,15 +82,57 @@ export function createLegendScale(root, legend, { format = String, histogram: sh
       ? `${width >= rectangle.width ? rectangle.width / 2 : Math.max(width / 2, Math.min(rectangle.width - width / 2, fraction * rectangle.width))}px`
       : `${Math.max(14, Math.min(86, fraction * 100))}%`;
   }
-  function hide() { marker.hidden = label.hidden = true; }
+  function hide() { probeClientX = null; marker.hidden = label.hidden = true; }
   scale.addEventListener('pointermove', probe);
   scale.addEventListener('pointerdown', probe);
   scale.addEventListener('pointerleave', hide);
-  if (histogram) {
-    const outside = histogram.below + histogram.above;
-    scale.title = `${histogram.integer ? 'Bars count atoms at each integer value'
-      : `Bars count atoms in ${histogram.counts.length} equal value bands`} of the color range.`
-      + (outside ? ` ${outside.toLocaleString('en-US')} finite value${outside === 1 ? ' lies' : 's lie'} outside it.` : '');
-  } else scale.title = '';
+  function update(nextLegend, { histogram: nextHistogram = true } = {}) {
+    ({ minimum, maximum } = nextLegend);
+    span = maximum - minimum;
+    unit = nextLegend.unit ? ` ${nextLegend.unit}` : '';
+    histogram = nextHistogram && nextLegend.property?.data
+      ? scalarLegendHistogram(nextLegend.property.data, minimum, maximum) : null;
+    const resolution = span / (histogram && !histogram.integer ? histogram.counts.length : 100);
+    decimals = resolution > 0 ? Math.max(0, Math.min(20, 1 - Math.floor(Math.log10(resolution)))) : null;
+    gradient.style.background = nextLegend.gradient;
+    if (histogram?.peak) {
+      if (!svg) {
+        svg = root.createElementNS(SVG_NS, 'svg');
+        svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('viewBox', '0 0 1000 1');
+        svg.setAttribute('preserveAspectRatio', 'none');
+        bars = root.createElementNS(SVG_NS, 'path'); svg.append(bars); scale.insertBefore(svg, gradient);
+      }
+      svg.setAttribute('class', 'legend-histogram'); svg.style.display = '';
+      const integerWidth = Math.max(6, Math.min(40, 600 / Math.max(1, span)));
+      let path = '';
+      histogram.counts.forEach((count, index) => {
+        if (!count) return;
+        const from = histogram.integer ? Math.max(0, Math.min(1000 - integerWidth, position(histogram.first + index) * 1000 - integerWidth / 2))
+          : index * 1000 / histogram.counts.length;
+        const width = histogram.integer ? integerWidth : 1000 / histogram.counts.length;
+        path += `M${from.toFixed(2)},1V${(1 - Math.sqrt(count / histogram.peak)).toFixed(4)}h${width.toFixed(2)}V1z`;
+      });
+      bars.setAttribute('d', path);
+    } else if (svg) {
+      svg.setAttribute('class', 'legend-histogram-inactive'); svg.style.display = 'none';
+    }
+    if (histogram) {
+      const outside = histogram.below + histogram.above;
+      scale.title = `${histogram.integer ? 'Bars count atoms at each integer value'
+        : `Bars count atoms in ${histogram.counts.length} equal value bands`} of the color range.`
+        + (outside ? ` ${outside.toLocaleString('en-US')} finite value${outside === 1 ? ' lies' : 's lie'} outside it.` : '');
+    } else scale.title = '';
+    if (probeClientX !== null) probe({ clientX: probeClientX });
+  }
+  update(legend, { histogram: showHistogram });
+  scaleUpdates.set(scale, update);
+  return scale;
+}
+
+/** Refresh the existing gradient, bars and active probe without replacing its DOM. */
+export function updateLegendScale(scale, legend, options) {
+  const update = scaleUpdates.get(scale);
+  if (!update) throw new Error('Unknown legend scale.');
+  update(legend, options);
   return scale;
 }

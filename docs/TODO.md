@@ -1,6 +1,6 @@
 # Improvement backlog
 
-Last updated: 2026-10-11 (America/New_York). Audited commit: `dbe6055`.
+Last updated: 2026-10-14 (America/New_York). Audited commit: `dbe6055`.
 
 The feature plan is complete, so this backlog now tracks defects and
 performance work only. Earlier backlog items (P1–P18, O1–O16, A1–A9,
@@ -68,13 +68,13 @@ The items with the best return, drawn from all parts below:
 
 | Order | Item | What it gives | Effort |
 | --- | --- | --- | --- |
-| 1 | B23, B24, B30 | Preview restoration, radical-radius dependencies and stable legend focus | S–M |
-| 2 | R1 | MSAA cap removal still needs a coverage proof; single-sample guard is complete | M |
-| 3 | T2, T4 | Bound smoothing buffers and fuse dump coordinate/type passes | S–M |
+| 1 | B35, B32 | Physical-copy trajectory lines and mobile touch targets | S–M |
+| 2 | T4, T6 | Coordinate-only and header-only reads for trajectory consumers | M |
+| 3 | G2 | Re-measure routing and avoid repeating unsupported GPU attempts | M |
 | 4 | S4 | Enable the prepared immutable-asset rules on the production CDN | S |
-| 5 | R2, R4 | Remaining orientation-color and picking loops | S |
+| 5 | R6, R7 | Shared display preparation and early atom-depth rejection | S–M |
 
-C1–C9, R3/R8, S1–S3/S5, T1/T3/T5 and K2 have moved to the feature
+C1–C9, R2–R5/R8, S1–S3/S5, T1–T3/T5 and K2 have moved to the feature
 documentation and dated [validation record](VALIDATION.md). R1 retains its MSAA
 restriction below; measurements are scoped to the tested deployment and hardware.
 
@@ -89,16 +89,14 @@ were completed in the following batch, along with C5/C6/C9, S5 and K2.
 R1 gained a single-sample capless guard; MSAA remains capped. Completed labels
 are not reused. The following batch completed B15/B19/B21/B22/B26/B27/B33
 and C7/C8. S4's build/preview policy is complete; enabling the external CDN
-rules remains below.
+rules remains below. The approved 2026-10-14 batch completed B23/B24/B25/B30,
+T2, R2/R4/R5 and the fused-tail/same-order part of T4; coordinate-only
+reads remain a separate task.
 
 ### Lower-severity defects
 
 | ID | Problem | Evidence | Fix | Effort |
 | --- | --- | --- | --- | --- |
-| B23 | Camera-path preview does not return to its starting frame when frames load slowly | `bugs/A-movies/b8-preview-restore.mjs`, 4 of 4 [M] | On stop, show the starting frame whenever a load is pending | S |
-| B24 | Radical Voronoi with radii from an expression of an analysis output fails on every frame change | `bugs/D-kernels-inputs/b09-radical-radius-expression-frame-change.mjs` [M] | Wait while the radius property has a pending dependency; rerun when computed properties refresh | S–M |
-| B25 | Transparent PNG at "Current viewport" has edge fringes (1,927 of 290,700 pixels, up to 53 levels) | `bugs/C-labels-ao-export/t5-transparent-matte.mjs` [M] | Use the offscreen black/white matte for this path too; this changes that export's pixels | S |
-| B30 | Every refresh rebuilds the legend and drops keyboard focus; the legend cannot be edited during playback | `shell/bugs2.mjs` [M] | Update the legend in place when its kind, property and items are unchanged | M |
 | B32 | Small touch targets on phones (text buttons 28×11 px, help links 19×19) | `shell/mobile.mjs` [M] | 32–44 px hit areas under the mobile media query | S |
 | B34 | GPU results that depend on neighbor order are not reproducible between runs: frame strain on 6,912 and 60,229 atoms differs in 7–11 of 1,144,351 values (at most 1.5×10⁻⁸), HEA bonds and Q4/Q6 differ between two pools, and GPU Voronoi digests differ between page loads | Found while fixing B1 and B5; the GPU neighbor grid is filled with `atomicExchange`, so the order of each cell's list varies [M] | Sort each cell's list, or accumulate in an order-independent way; decide first whether run-to-run identity is required on the GPU | M |
 | B36 | `npm run test:gpu:voronoi` on the software adapter takes 285–320 s on the reference machine against a 360 s evaluate timeout, so a loaded machine can fail it without a defect | Measured on 2026-10-10 [M] | Split the page evaluation into two calls, or raise the timeout for this suite | S |
@@ -145,33 +143,23 @@ copies (may be by design; B35 is its visible consequence).
 - **Note:** these are pre-fix audit CPU timings. C3/C4 and the C5 scalar kernels are complete; the following C5/C6/C9 completion batch measured whole-pool effects separately.
   See VALIDATION.md for its CPU-quota and cold-start limitations.
 
-### T2. Smoothing: size the coordinate store to the window
+### T4. Coordinate-only reads for internal trajectory consumers
 
-**Effort:** S. **Deployments:** all.
+**Effort:** M. **Deployments:** all.
 
-- **Where:** `src/workers/trajectory-processor.js` (192 MiB LRU store).
-- **Evidence [M]:** at 1M atoms the store holds 10.4 snapshots, so each
-  consecutive smoothed frame re-reads 1 frame at w = 3, 4 at w = 5 and the
-  whole window of 20 at w = 10; one read is a 390 ms parse.
-- **Change:** budget = max(192 MiB, (2w + 2 + read-ahead) snapshots) with a
-  hard cap and a status note; share one ID array between snapshots with equal
-  IDs; evict by distance from the current window. A sliding sum was rejected
-  because it changes the summation order.
+The bounded type table, fused dump tail and CFG same-order ID fast path are
+complete and exact against the preceding build. See [Formats](FORMATS.md)
+and the dated [validation record](VALIDATION.md).
 
-### T4. Dump parser: fused tail pass and coordinate-only reads
-
-**Effort:** S. **Deployments:** all.
-
-- **Evidence [M]:** `finishDumpFrame` spends 59 ms in a `Set` and per-atom
-  `Map.get` for types and 42 ms in three coordinate passes, of about 395 ms
-  for a 1M frame.
-- **Change (verified, `io/proto/lammps-dump-opt.js`):** a dense type table and
-  one fused pass with the same rounding points; identical arrays on 8 files.
-  Parse 387 → 323 ms at 1M and 22.5 → 17.5 ms at 60k. A coordinate-only
-  projection (IDs and wrapped coordinates) is 1.39–1.6× faster than a full
-  parse; use it for unwrap integration, smoothing neighbors and trajectory
-  lines. Add a same-order fast path to `unwrapSequenceFrame`, which builds a
-  130k-entry `Map` per CFG frame.
+- **Remaining:** introduce a coordinate projection containing IDs, cell,
+  fractional coordinates and authoritative unwrapped/image data. Smoothing
+  neighbors, unwrap integration and trajectory lines can avoid allocating
+  unrelated properties; full displayed frames still use complete parsing.
+- **Verify:** preserve ID/type/coordinate/row-count and property validation,
+  cancellation, progressive/gzip descriptors, strict CFG continuity and
+  existing parser-pool admission. Do not accept malformed input merely because
+  a consumer did not request its property arrays.
+- Header-only time-series reads are tracked separately under T6.
 
 ### R1. MSAA capless-bond coverage
 
@@ -194,48 +182,6 @@ moves use a constant-size projection/depth check, without scanning every bond.
   shifts, per-atom radii, hiding, slices and context restoration. Avoid an
   O(bond-count) coverage scan on every camera move without measuring its cost.
 - See [performance](features/performance.md) and [validation](VALIDATION.md).
-
-### R2. Orientation colors: scalar per-atom loop
-
-**Effort:** S. **Deployments:** all.
-
-- **Where:** `src/render/orientation-colors.js`, the resolver loop and its
-  helpers.
-- **Evidence [M]:** at 963,664 atoms the inverse-pole-figure colors take
-  2,206 ms on the main thread and Rodrigues colors 3,107 ms: about ten
-  short-lived arrays per atom, plus 24 symmetry candidates in Rodrigues mode.
-- **Change:** normalize in locals, sort three values with compare-swaps and
-  write bytes straight into the color array; flatten the symmetry table.
-  Keep `Math.hypot` and the operation order so bytes stay identical, and keep
-  the exported helpers as the reference for a byte-comparison test.
-- **Gain (verified for IPF):** 2,206 → 236 ms with no differing byte;
-  Rodrigues 5–10× expected [E].
-
-### R4. Picking: tighten the per-atom loop
-
-**Effort:** S. **Deployments:** all.
-
-- **Evidence [M]:** a click costs 62.9–77.5 ms at 963,664 atoms and 89 ms with
-  a plane slice (`pick()` in `src/render/webgl-renderer.js`): every atom gets
-  the full projection, the edge projection and the radius arithmetic.
-- **Change:** hoist state into locals, skip atoms not nearer than the current
-  hit, reject by a screen-distance bound before the exact radius, and run the
-  slice test only on survivors. Acceptance rules stay as they are.
-- **Gain (prototype):** 62.9 → 11.5 ms, same atom at 12 of 12 probe points.
-  Add a randomized comparison with the current function as a unit test.
-
-### R5. Transparent export: shortcut empty and opaque pixels in the matte
-
-**Effort:** S. **Deployments:** all.
-
-- **Evidence [M]:** a transparent 4K export of 963,664 atoms takes 396 ms
-  against 159 ms opaque; `solveMatte` in `src/render/offscreen-export.js`
-  takes 182 ms for 8.09 million pixels although 78% are empty and 21.5%
-  opaque.
-- **Change:** compare 32-bit views. Equal color on black and white is opaque;
-  black 0 with white 0xFFFFFF is empty; otherwise use the existing formula.
-  Both shortcuts equal the formula exactly.
-- **Gain (verified, no differing byte):** 182 → 63 ms.
 
 ### R6. Second view: reuse processed arrays and display meshes
 

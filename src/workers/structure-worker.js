@@ -165,6 +165,7 @@ function trajectoryProcessor() {
     trajectory = new TrajectoryProcessor({
       readFrame: (index, { signal, background, priority }) => readSourceFrame(current, index, null,
         { background, priority, controller: { signal } }),
+      promoteRead: ({ signal, priority }) => getParserPool().promote(signal, priority),
       getFrameCount: options => sourceFrameCount(current, options),
     });
   }

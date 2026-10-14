@@ -64,6 +64,7 @@ export function createLegendRangeSlider(root, { minimum, maximum, dataMinimum, d
     input.dataset.limit = name;
     input.setAttribute('aria-label', `${text} color limit`);
     input.addEventListener('input', () => move(name));
+    input.addEventListener('pointerdown', event => { pointerActive = true; pointerId = event.pointerId; });
     // Native change covers mouse, touch and keyboard range editing. Capture
     // release/cancellation too: a lost pointer or focus must never leave the
     // temporary shader palette active. Commit is idempotent between inputs.
@@ -74,7 +75,7 @@ export function createLegendRangeSlider(root, { minimum, maximum, dataMinimum, d
   }
   element.append(track, inputs.minimum, inputs.maximum);
   let domain = null;
-  let dirty = false, currentLimits = { minimum, maximum };
+  let dirty = false, pointerActive = false, pointerId = null, pendingUpdate = null, currentLimits = { minimum, maximum };
 
   function show(lowerPosition, upperPosition, limits) {
     inputs.minimum.value = String(lowerPosition);
@@ -91,6 +92,7 @@ export function createLegendRangeSlider(root, { minimum, maximum, dataMinimum, d
   }
 
   function set(limits) {
+    currentLimits = { ...limits };
     domain = legendSliderDomain([dataMinimum, dataMaximum, limits.minimum, limits.maximum], step);
     element.hidden = !domain;
     if (!domain) return;
@@ -110,12 +112,29 @@ export function createLegendRangeSlider(root, { minimum, maximum, dataMinimum, d
     onInput?.(limits, changed);
   }
 
+  function editing() {
+    return dirty || pointerActive || Object.values(inputs).some(input => pointerId !== null && input.hasPointerCapture?.(pointerId));
+  }
+
+  function update(values) {
+    // A new frame can arrive while a native range input owns pointer capture.
+    // Its existing track must stay under the pointer until this gesture ends.
+    if (editing()) { pendingUpdate = values; return; }
+    ({ dataMinimum, dataMaximum, step } = values);
+    set({ minimum: values.minimum, maximum: values.maximum });
+  }
+
   function commit(changed) {
-    if (!dirty) return;
+    pointerActive = false;
+    const edited = dirty;
     dirty = false;
-    onCommit?.(currentLimits, changed);
+    if (edited) onCommit?.(currentLimits, changed);
+    if (pendingUpdate) {
+      const values = pendingUpdate; pendingUpdate = null;
+      update(edited ? { ...values, ...currentLimits } : values);
+    }
   }
 
   set({ minimum, maximum });
-  return { element, inputs, set };
+  return { element, inputs, set, update, get editing() { return editing(); } };
 }

@@ -65,12 +65,12 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
     documentRoot.body?.append(dialog);
   }
   let path = createCameraPath(), output = { ...DEFAULT_MOVIE_OUTPUT }, enabled = false, message = '';
-  let formats = [], probeRequest = 0, probeTimer = null, probeStale = true, exporting = null, preview = null, renderedKeyframes = '', toolMarked = false, disposed = false;
+  let formats = [], probeRequest = 0, probeTimer = null, probeStale = true, exporting = null, preview = null, previewRestoring = null, renderedKeyframes = '', toolMarked = false, disposed = false;
   // Encoders are asked only while the panel is open or an export starts, so
   // a session that never makes a movie never touches the video encoder.
   const panel = controls.exportButton?.closest?.('[data-tool-panel]') ?? null;
   const panelOpen = () => !panel || !panel.hidden;
-  const busy = () => exporting !== null || preview !== null;
+  const busy = () => exporting !== null || preview !== null || previewRestoring !== null;
   const lockMessage = () => lock.owner() === 'configuration' ? 'Wait for the configuration restore to finish first.' : 'Stop the running script first.';
   const frameCount = () => Math.max(1, getFrameCount());
   // The image size is the Display panel's export setting; the menu here edits the same control.
@@ -119,7 +119,7 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
       controls.exportButton.disabled = !enabled || busy() || Boolean(description.error);
       controls.exportButton.textContent = description.archive ? 'Export frames (ZIP)' : 'Export movie';
     }
-    if (controls.preview) controls.preview.disabled = !enabled || exporting !== null || (preview === null && Boolean(previewError()));
+    if (controls.preview) controls.preview.disabled = !enabled || exporting !== null || previewRestoring !== null || (preview === null && Boolean(previewError()));
   }
 
   function previewError() {
@@ -236,7 +236,7 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
     setNumber(controls.fps, output.fps); setNumber(controls.bitrate, output.bitrateMbps); setNumber(controls.keyframeSeconds, output.keyframeSeconds);
     if (controls.quality) controls.quality.value = output.quality;
     if (controls.bitrateField) controls.bitrateField.hidden = output.quality !== 'custom';
-    if (controls.preview) controls.preview.textContent = preview ? 'Stop preview' : 'Preview';
+    if (controls.preview) controls.preview.textContent = preview ? 'Stop preview' : previewRestoring ? 'Restoring…' : 'Preview';
     renderFormats(); renderSummary();
     if (controls.status) controls.status.textContent = message || (!enabled ? 'Open a structure to record a movie.'
       : path.keyframes.length ? `${path.keyframes.length} keyframe${path.keyframes.length === 1 ? '' : 's'} over ${Number(cameraPathDuration(path).toFixed(3))} s. Preview plays the path in the viewport.`
@@ -293,21 +293,39 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
 
   function stopPreview({ restore = true } = {}) {
     const task = preview;
-    if (!task) return;
+    if (!task) return previewRestoring?.settled;
     preview = null;
     view.cancelAnimationFrame?.(task.request);
-    task.release();
     for (const [name, listener] of task.listeners) renderer.canvas.removeEventListener(name, listener);
-    if (restore && getSourceVersion() === task.source) {
-      applyCamera(renderer, task.camera);
-      if (getFrameIndex() !== task.frame) void showFrame(task.frame);
+    const sameSource = getSourceVersion() === task.source;
+    const frame = restore ? task.frame : getFrameIndex();
+    if (restore && sameSource) applyCamera(renderer, task.camera);
+    message = restore ? '' : 'Preview stopped at this pose.';
+    // A slow request may still target another frame even though the starting
+    // frame is currently displayed. A new same-frame navigation cancels that
+    // request too. On a viewport gesture, keep both the displayed frame and
+    // the user's camera instead of allowing an abandoned load to appear later.
+    if (sameSource && (task.loading || (restore && getFrameIndex() !== frame))) {
+      previewRestoring = task;
+      setState('Restoring'); render();
+      let restoring;
+      try { restoring = showFrame(frame); } catch (error) { restoring = Promise.reject(error); }
+      task.settled = Promise.resolve(restoring).catch(error => {
+        if (!disposed && previewRestoring === task && getSourceVersion() === task.source && error?.name !== 'AbortError') notify(error.message);
+      }).finally(() => {
+        task.release();
+        if (previewRestoring !== task) return;
+        previewRestoring = null;
+        if (!disposed) { setState('Idle'); render(); }
+      });
+      return task.settled;
     }
-    message = restore ? '' : 'Preview stopped at this pose.'; setState('Idle'); render();
+    task.release(); setState('Idle'); render();
   }
 
   /** Play the path in real time in the viewport. Frames appear as they load. */
   function startPreview() {
-    if (busy() || !enabled) return;
+    if (disposed || busy() || !enabled) return;
     let plan;
     try { plan = planMovie(path, { fps: 30, frameCount: frameCount() }); } catch (error) { notify(error.message); return; }
     const release = lock.acquire('movie');

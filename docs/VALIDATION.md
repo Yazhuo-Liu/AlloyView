@@ -1,6 +1,182 @@
 # Validation record
 
-Latest validation: 2026-10-11 (America/New_York). Earlier entries retain their own dates.
+Latest validation: 2026-10-14 (America/New_York). Earlier entries retain their own dates.
+
+## Approved preview, legend, dependency and hot-loop batch (2026-10-14, America/New_York)
+
+Baseline: `38aaabe`. Fetch confirmed that remote main still pointed to this
+commit before implementation. The approved scope was B23/B24/B25/B30,
+T2, R2/R4/R5 and only the fused dump-tail and same-order CFG portion of T4.
+Coordinate-only parsing, the R1 MSAA cap restriction and external S4 CDN
+deployment remain separate tasks. Node 24.19.0 and Chromium/SwiftShader ran
+in a cloud container with four CPUs of scheduling quota. These measurements
+do not establish a speedup on a physical GPU.
+
+### Work process and decisions
+
+1. **B23, preview restoration.** Stop and natural completion restore the
+   starting frame even while the next frame is still loading and the start
+   is still displayed. Navigation invalidation prevents the late next-frame
+   reply from replacing the restored frame. The automation lock remains held
+   until restoration settles. A user camera gesture cancels pending navigation
+   but retains that gesture's camera and the currently displayed frame.
+   Restart, disposal and source replacement cannot be overwritten by an old
+   completion callback. Existing parser Workers and native modules survive.
+2. **B24, radical dependencies.** Trace actual transitive radius-expression
+   dependencies and wait for their enabled producers through property-ready
+   notifications. Waiting neither polls nor leases a computation Worker.
+   Producer-start notifications prevent stale same-frame analysis values from
+   being consumed after a failed recomputation. Unknown inputs, dependency
+   cycles, failed producers and negative/non-finite radii report explicit
+   errors; restored imported properties with the same name remain valid.
+   CPU and GPU consume the same validated radii. Cancellation and frame/source
+   replacement clear obsolete waits. Compatible radii reuse a same-frame
+   Voronoi result; private retained inputs are counted in frame memory and
+   removed by their current owner on cancellation or failure.
+3. **B30, legend retention.** Update unchanged legend schemas in place.
+   Frame/result refreshes retain numeric drafts, native bad-input state,
+   selection, keyboard focus and slider pointer capture. Event handlers read
+   the latest frame and legend; detached controls cannot edit a newer one.
+   A drag freezes its track domain and applies a deferred new-frame domain
+   after release. Its exact palette commits to the current frame. Histogram,
+   gradient and probe layers retain their order. Changing the schema still
+   rebuilds the necessary controls, while the common Color by selector survives.
+4. **B25, current-size transparent PNG.** Render black and white into the
+   original native viewport and recover straight RGBA with the existing matte
+   formula. Preserve native dimensions/MSAA, flip readback rows and add the
+   existing canvas annotations. This avoids imposing chosen-resolution pixel
+   limits or allocating an offscreen framebuffer for Current viewport.
+   Opaque capture keeps its original readback path. Both transparent export
+   paths now retain the actual background's Voronoi edge style during the
+   black/white passes; changing that style between passes invalidated the
+   matte model. Background and temporary appearance state restore in `finally`,
+   including readback failure, and pending Surface geometry still blocks capture.
+5. **R5, matte processing.** Read aligned byte buffers as native-endian packed
+   pixels to skip completely empty and opaque pixels. Ignore input alpha,
+   as the original formula does. A fixed bounded sample chooses the general
+   loop for mostly translucent images, avoiding the measured branch overhead
+   of unconditional shortcuts. Unaligned, aliased, unusual array-like and
+   fractional-count inputs retain the original behavior. Output values do not
+   depend on the sampling decision.
+6. **T2, smoothing coordinate cache.** Size a bounded nearby-coordinate cache
+   for the actual window and device memory, with a 192 MiB baseline and a
+   device/heap-dependent ceiling no greater than 768 MiB or half the CPU
+   memory budget. Account for actual backing buffers and shared ID arrays once.
+   Oversized snapshots are returned but not retained outside the budget;
+   the panel explains when limited retention may cause rereads. Stable private
+   ID arrays are interned with bounded recent candidates. Sorted frame keys
+   and a moving front offset avoid rescanning a whole long trajectory for
+   eviction. A foreground consumer promotes an existing background read
+   rather than reparsing it; independent cancellation and acknowledgment keep
+   Worker/CPU-budget ownership intact.
+7. **T4, approved first part.** Fuse dump type assignment and coordinate-tail
+   preparation using a bounded dense-type lookup with a sparse fallback for
+   large safe-integer type IDs. Preserve every original Float32 rounding
+   point, mixed-PBC wrap, authoritative unwrapped coordinate and error.
+   Eliminate two temporary three-component Float32 buffers. CFG continuity
+   uses a direct same-ID-order path only after validating the complete order;
+   reordered IDs retain the original mapping. Full property parsing remains.
+8. **R2/R4, display CPU loops.** Normalize and transform orientations in scalar
+   locals, use a flat Rodrigues symmetry table and write RGB directly with the
+   original operator/tie order. Retain the public helpers as independent
+   references. Picking rejects noncompetitive center depths and conservative
+   screen bounds before exact radius/slice tests. Preserve equal-depth ties,
+   three-CSS-pixel minimum radius, replicas, masks and last-pick coordinates.
+   Independent review found an extreme finite-input overflow where the old
+   oracle accepted `Infinity <= Infinity`; the bound now requires finite
+   original projection intermediates and otherwise uses the original path.
+
+### Exactness and intended visual change
+
+The complete suite passed **2,057/2,057** tests. Independent dump/CFG comparison
+against `38aaabe` covered 3,406 inputs and 5,584,327 `Object.is`-identical
+fields, plus 1,000 identical error messages. Orientation colors match the
+public-helper oracle byte for byte. Picking matches a frozen preceding-build
+oracle, including 50,000 independent logarithmic-scale extreme cases and
+1,651 real-browser picks before/after graphics-context restoration. Four
+matte tests include 65,536 pixel combinations, arbitrary input alpha, shared
+and unaligned views, aliasing and original count behavior.
+
+B25 intentionally changes the formerly incorrect transparent current-size
+RGBA. Across 48 browser scenes (two themes, main/second-view aspects, single
+sample/four-sample MSAA, atoms, bonds/arrows/dislocations, selected/all-cell
+Voronoi and slices), opaque native bytes remain identical. New transparent
+pixels equal an independent original matte calculation from actual black/white
+readbacks after the same Canvas conversion. Black/white re-composition differs
+by at most 1/2 channel levels; theme re-composition differs by at most 3 only
+in three layered all-cell x-ray cases. Those are fixture-specific RGBA8 blend
+and Canvas quantization observations, not a universal error bound. A negative
+control changing Voronoi style between passes differed by up to 202 levels.
+Native dimensions, samples, viewport, camera, background and appearance state
+are restored, including an injected second-read failure. Scientific arrays
+and analysis formulas are unchanged by this batch.
+
+### Measured effects and limits
+
+| Operation | Baseline | Revised | Scope |
+| --- | ---: | ---: | --- |
+| IPF colors, one million atoms | 1,072.4 ms | 201.7 ms | Chromium main-thread CPU, three interleaved samples |
+| Rodrigues colors, one million atoms | 1,645.4 ms | 213.7 ms | Same; excludes cache hits and GL uploads |
+| Slice-filtered pick, one million atoms | 49.3 ms | 23.4 ms | Chromium CPU, five interleaved samples |
+| 4K matte, mostly empty/opaque | 73.09 ms | 40.90 ms | Node CPU, seven interleaved samples |
+| 4K matte, all translucent | 333.85 ms | 322.36 ms | Same; small gain is not guaranteed |
+| Dump full parse, one million atoms | 496.87 ms | 470.45 ms | Node, twelve warmups/seven interleaved samples |
+| Dump tail only, one million atoms | 52.41 ms | 23.16 ms | Same, excludes row parsing |
+| Fe dump full parse, 60,229 atoms | 23.32 ms | 21.25 ms | Same |
+| CFG same-order continuity, 129,904 atoms | 17.54 ms | 3.79 ms | Node, excludes file parsing |
+| CFG same-order continuity, one million atoms | 268.24 ms | 34.67 ms | Same |
+| 1,000 unchanged-schema legend refreshes | 197.0 ms | 185.1 ms | Browser, 20,000-atom frame, nine interleaved samples |
+
+The legend refresh created 6,000 controls previously and zero now; this does
+not measure full render FPS. The scalar-preview browser regression retains
+80,002 scalar reads and unchanged full-array uploads throughout a 20,000-atom
+drag, then commits exact colors in both views and Voronoi.
+
+For six adjacent centers of a synthetic one-million-atom trajectory, smoothing
+neighbor reads remain 11 with a three-frame window, fall from 30 to 15 with a
+five-frame window, and from 120 to 25 with a ten-frame window. After its first
+center, the ten-frame case rereads one neighbor rather than twenty per step.
+Its 25 coordinate snapshots retain 308,008,800 bytes (about 294 MiB) within the
+fixture's 512 MiB device ceiling, with one shared ID array rather than ten.
+These are controlled cache/read-count results, not real-file parsing timings.
+Small parser timings varied with JIT/GC and concurrent cloud load; the full
+parser improvement is much smaller than the isolated tail/continuity gain.
+
+### Reproducible checks
+
+Run `npm run build` before production browser checks. This batch passed:
+
+- `npm test` and `npm run build`.
+- `npm run test:browser:movies -- --production`, including four pending-frame
+  preview races and real MP4/WebM decoding with ffprobe.
+- `npm run test:browser:radical-dependencies` and
+  `node scripts/browser-voronoi-radical.mjs --production`; actual CPU/GPU
+  radical radii, failed/replaced dependencies and cancellation were exercised.
+- `npm run test:browser:legend-retention`,
+  `node scripts/browser-scalar-legend-preview.mjs --production` and
+  `node scripts/browser-orientation-discrete.mjs --production`.
+- `node scripts/browser-trajectory-tools.mjs --production` and
+  `node scripts/browser-trajectory-workers.mjs --production`, including
+  nonisolated/shared paths, foreground promotion, source cancellation and
+  parser reuse. The latter stayed within its three-permit budget and returned
+  to zero active permits on close.
+- `npm run test:browser:render-hot-loops`,
+  `npm run test:browser:transparent-current` and
+  `node scripts/browser-export-resolution.mjs --production`; the resolution
+  regression includes a 6,000 × 4,000 image tiled across twelve targets.
+- `npm run test:browser` for the complete integration smoke, and
+  `npm run test:browser:blended-annotations` for the preceding B22 opacity
+  behavior in current/tiled opaque and transparent captures.
+- Eight bundle, deployment/cache and documentation tests, including actual
+  HTTP asset policies and generated documentation links.
+- `npm run test:browser:bundled-runtime` against the final documented build;
+  the actual versioned page and Worker entries load at the project subpath.
+
+Use `node scripts/browser-render-hot-loops.mjs --production --benchmark`,
+`npm run benchmark:matte` and
+`npm run benchmark:parser-tail -- --rounds=7` to repeat the measured CPU loops.
+The benchmark scripts assert output agreement before reporting timing.
+
 
 ## Remaining restore/export defects and page preparation (2026-10-11, America/New_York)
 

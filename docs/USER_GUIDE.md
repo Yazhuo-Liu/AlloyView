@@ -114,7 +114,9 @@ results; it does not start another calculation. The selector is also available
 for crystal classifications and fields containing only NaN values. On phones,
 expand **Legend / atoms** to access it.
 Enabled analysis quantities remain selected while their results update for a
-different frame.
+different frame. Refreshes for the same quantity keep unfinished limit inputs,
+keyboard focus and an active slider drag, so a frame change does not interrupt
+your edit.
 
 Every categorical legend, including **Atom type**, has a visibility checkbox
 and count for each class. Element choices follow element labels across frames
@@ -321,7 +323,10 @@ unchanged.
   coordinates, which suppresses thermal noise at high temperature. Changing
   the setting discards cached frames and results; stepping through frames stays
   responsive because averaging runs in the Worker and neighbours are
-  prefetched.
+  prefetched. Nearby coordinates and atom IDs are reused within a memory limit
+  suited to your device. A large averaging window may require rereading some
+  frames; **Coordinate cache is limited…** in the status explains when this
+  happens.
 - **Trajectory lines.** Draw continuous paths of a selection group or listed
   atom IDs over a frame range, sampling every *N* frames: for example, solute
   or vacancy-neighbour paths. Lines are unwrapped across boundaries, can be
@@ -900,7 +905,11 @@ to neighbor coordination or the index. Under **Cell weighting**, **Radical
 radii and editable) or from a numeric per-atom property. Each face moves away
 from the larger atom of its pair; equal radii reproduce the standard cells. A
 small atom crowded by much larger neighbors can have an empty radical cell,
-reported with zero volume, no faces and an **Empty radical cells** count. See
+reported with zero volume, no faces and an **Empty radical cells** count.
+Computed properties can supply radii too. If their expression needs an analysis
+that is still running, Voronoi waits and continues when that result is ready.
+Missing inputs, failed dependencies and invalid radius values report an error.
+See
 [radical cells](features/voronoi.md#radical-radius-weighted-cells).
 
 The cells are calculated by CPU Workers, and the **Backend** line says so.
@@ -1238,6 +1247,9 @@ overlays. PNG retains the independent
 background/legend/XYZ-arrow controls described above. **Visible atom IDs**
 saves a list of source IDs that pass the current display filters, without
 duplicating IDs for display replicas.
+With the PNG background off, layered polyhedra and lines retain their colors
+and appearance. **Current view** keeps the viewport's pixel size and
+antialiasing; an opaque export retains the on-screen appearance.
 
 **Frame images** traverses the requested first/last frame and step, completes
 the enabled processing for each frame, and packages the PNG images in a ZIP.
@@ -1313,7 +1325,11 @@ JSON as text and never start on import. See
 
 **Visualization tools → Movie** animates the camera. Set a view and select
 **Add keyframe**; repeat for each pose; edit the times in the list.
-**Preview** plays the path in the viewport. Between two upright keyframes the
+**Preview** plays the path in the viewport. Stopping it or reaching the end
+returns to the starting frame and view, even if another frame is still loading.
+The button briefly shows **Restoring…** until that finishes. Dragging or
+scrolling to interrupt the preview keeps your view and the currently displayed
+frame instead. Between two upright keyframes the
 camera stays upright and turns the shorter way; rolled views are joined by
 quaternion slerp; the center and zoom follow a smooth spline that never
 overshoots a keyframe. **Trajectory frames during the movie** keeps the

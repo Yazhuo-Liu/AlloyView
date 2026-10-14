@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { initializeTopologyTools } from '../src/topology-tools.js';
 import { distributionRows } from '../src/render/distribution-chart.js';
+import { createAnalysisDependencies } from '../src/analysis-dependencies.js';
+import { initializeExpressionControls } from '../src/expression-controls.js';
+import { estimateFrameBytes } from '../src/data/cache-policy.js';
+import { clearAnalysisResults, replaceAnalysisProperty } from '../src/analysis/results.js';
 
 class Element {
   constructor(value = '') {
@@ -38,7 +42,7 @@ function voronoiResult(count = 3) {
     engine: '3 CPU Workers / Voro++ Wasm', fallbackReason: 'GPU Voronoi is unavailable.', elapsedMs: 100 };
 }
 
-function harness(t) {
+function harness(t, { getPropertyDependency = () => null, onPropertiesChange = () => {} } = {}) {
   const previousDocument = globalThis.document;
   const fields = {};
   for (const prefix of ['bond-statistics', 'voronoi']) {
@@ -69,9 +73,11 @@ function harness(t) {
     tools: { setToolEnabled: (name, enabled) => toolFlags.set(name, enabled) },
     getFrame: () => currentFrame, getFrames: () => frames, getSourceVersion: () => version,
     getFrameIndex: () => frameIndex, getBondParameters: () => ({ cutoff: bondCutoff, pairCutoffs: [] }),
+    getPropertyDependency,
     getBondEnabled: () => graphEnabled, getColorChoiceVersion: () => colorVersion,
     chooseProperty: name => selected.push(name), onResultsChange: change => {
       changes.push(change); pendingSnapshots.push([...tools.pendingKinds()]);
+      onPropertiesChange(change);
     },
     onBeforeClear: (kind, options) => beforeClear.push({ kind, options,
       enabled: tools.isEnabled(kind),
@@ -89,6 +95,254 @@ function harness(t) {
     changeColor() { colorVersion++; },
   };
 }
+
+function radicalDependencyHarness(t) {
+  let dependencies, expressions, h;
+  const producers = new Map();
+  h = harness(t, {
+    getPropertyDependency: (name, current) => dependencies?.getPropertyDependency(name, current,
+      { waitForProducers: true, consumerKind: 'voronoi' }),
+    onPropertiesChange: () => {
+      expressions?.sync(h.getFrame());
+      if (h) void h.tools.refreshProperties();
+    },
+  });
+  expressions = initializeExpressionControls({ getFrame: h.getFrame, documentRoot: null });
+  dependencies = createAnalysisDependencies({ getFrame: h.getFrame,
+    getExpressionStatus: name => expressions.getPropertyStatus(name),
+    getExpressionReferences: name => expressions.getPropertyReferences(name),
+    getProducer: name => {
+      if (h.tools.pendingKinds().includes('voronoi') && ['atomicVolume', 'voronoiCoordination', 'voronoiSurfaceArea'].includes(name)) {
+        return { name: 'Voronoi', kind: 'voronoi', state: 'pending' };
+      }
+      return producers.get(name);
+    },
+  });
+  const nextFrame = (properties = []) => ({ ...frame(), properties,
+    types: Uint8Array.of(0, 0, 0), typeLabels: ['Ni'], positions: new Float64Array(9),
+    fractional: new Float64Array(9), cell: { vectors: Float64Array.of(3, 0, 0, 0, 3, 0, 0, 0, 3) } });
+  const refresh = () => { expressions.sync(h.getFrame()); return h.tools.refreshProperties(); };
+  const configure = (name = 'radii', extras = {}) => h.tools.restore({ voronoi:
+    { enabled: true, radical: true, radiusSource: 'property', radiusProperty: name, ...extras } });
+  return { ...h, expressions, producers, nextFrame, refresh, configure };
+}
+
+test('radical radii wait only for transitive current-frame inputs, keep the selected option, then route complete radii to CPU or GPU', async t => {
+  for (const gpu of [false, true]) await t.test(gpu ? 'GPU' : 'CPU', async t => {
+    const h = radicalDependencyHarness(t);
+    h.pool.gpuEnabled = gpu;
+    h.setFrame(h.nextFrame());
+    h.expressions.setState({ properties: [
+      { name: 'base', unit: '', expression: 'CSP + 1' },
+      { name: 'radii', unit: 'Å', expression: 'base / 2' },
+    ] });
+    h.producers.set('centralSymmetry', { name: 'Central symmetry', state: 'pending' });
+    h.producers.set('ptmStructureType', { name: 'PTM', state: 'pending' });
+    h.expressions.sync(h.getFrame());
+    const request = h.configure('radii', { gpuKernel: gpu });
+    assert.equal(h.pending.length, 0, 'no CPU/GPU job is allocated before the radius inputs exist');
+    assert.equal(h.fields['voronoi-state'].textContent, 'Waiting');
+    assert.match(h.fields['voronoi-status'].textContent, /Waiting for Central symmetry/);
+    assert.doesNotMatch(h.fields['voronoi-status'].textContent, /PTM/);
+    assert.deepEqual(h.tools.failed(), []);
+    assert.deepEqual(h.tools.pendingKinds(), ['voronoi']);
+    assert.equal(h.fields['voronoi-radius-property'].value, 'radii');
+    assert.match(h.fields['voronoi-radius-property'].children.at(-1).textContent, /radii \(waiting for data/);
+    assert.equal(h.fields['voronoi-radius-property'].disabled, false);
+    const independent = h.tools.run('bondStatistics');
+    assert.equal(h.pending[0].settings.kind, 'bondStatistics', 'an unrelated calculation can run while Voronoi is waiting');
+    h.pending[0].resolve(bondResult()); await independent;
+    assert.equal(h.pending.length, 1, 'unrelated completion does not dispatch the dependent request');
+    h.producers.delete('centralSymmetry');
+    h.getFrame().properties.push({ name: 'centralSymmetry', data: Float64Array.of(1, 2, 3), analysisKind: 'centrosymmetry', analysisKey: 'CSP' });
+    await h.refresh(); await Promise.resolve();
+    assert.equal(h.pending.length, 2);
+    assert.deepEqual(h.pending[1].settings.radii, Float64Array.of(1, 1.5, 2));
+    assert.equal('radiusProperty' in h.pending[1].settings, false);
+    assert.equal('gpuKernel' in h.pending[1].settings, false);
+    const result = { ...voronoiResult(), ...(gpu ? { backend: 'gpu', engine: 'webgpu-voronoi' } : {}) };
+    h.pending[1].resolve(result); await request;
+    assert.equal(h.tools.getResult('voronoi').radicalRadii, h.pending[1].settings.radii);
+    assert.equal(h.fields['voronoi-state'].textContent, 'Calculated');
+    assert.deepEqual(h.tools.failed(), []);
+    assert.deepEqual(h.notifications, []);
+
+    // Changing frames repeats the dependency gate even if the old frame had a
+    // valid radius column, rather than reporting it as an invalid property.
+    h.setFrame(h.nextFrame());
+    h.producers.set('centralSymmetry', { name: 'Central symmetry', state: 'pending' });
+    h.expressions.sync(h.getFrame());
+    const navigation = h.tools.onFrame();
+    assert.equal(h.pending.length, 3, 'enabled independent bonds run; Voronoi keeps waiting');
+    assert.equal(h.pending[2].settings.kind, 'bondStatistics');
+    h.pending[2].resolve(bondResult());
+    assert.equal(h.fields['voronoi-state'].textContent, 'Waiting');
+    h.changeColor();
+    h.getFrame().properties.push({ name: 'centralSymmetry', data: Float64Array.of(3, 5, 7), analysisKind: 'centrosymmetry', analysisKey: 'CSP' });
+    h.producers.delete('centralSymmetry'); await h.refresh(); await Promise.resolve();
+    assert.deepEqual(h.pending[3].settings.radii, Float64Array.of(2, 3, 4));
+    h.pending[3].resolve(voronoiResult()); await navigation;
+    assert.equal(h.fields['voronoi-state'].textContent, 'Calculated');
+    assert.deepEqual(h.selected, ['bondQ6'], 'automatic dependency replay does not change the chosen color');
+  });
+});
+
+test('waiting radical radius requests cancel, change frames, reset sources and reject stale results without polling', async t => {
+  const h = radicalDependencyHarness(t);
+  h.setFrame(h.nextFrame());
+  h.expressions.setState({ properties: [{ name: 'radii', expression: 'CSP + 1', unit: 'Å' }] });
+  h.producers.set('centralSymmetry', { name: 'Central symmetry', state: 'pending' });
+  h.expressions.sync(h.getFrame());
+  const canceled = h.configure(); h.tools.cancel('voronoi');
+  await canceled;
+  assert.equal(h.pending.length, 0); assert.deepEqual(h.tools.pendingKinds(), []);
+  h.getFrame().properties.push({ name: 'centralSymmetry', data: Float64Array.of(0, 1, 2) });
+  h.producers.clear(); await h.refresh();
+  assert.equal(h.pending.length, 0, 'late inputs cannot reenable canceled Voronoi');
+
+  h.setFrame(h.nextFrame()); h.producers.set('centralSymmetry', { name: 'Central symmetry', state: 'pending' });
+  h.expressions.sync(h.getFrame());
+  const previous = h.configure();
+  h.setFrame(h.nextFrame([{ name: 'centralSymmetry', data: Float64Array.of(2, 4, 6) }]));
+  h.producers.clear(); h.expressions.sync(h.getFrame());
+  const next = h.tools.onFrame(); await previous;
+  assert.equal(h.pending.length, 1); assert.equal(h.pending[0].frame, h.getFrame());
+  h.pending[0].resolve(voronoiResult()); await next;
+  h.setFrame(h.nextFrame()); h.producers.set('centralSymmetry', { name: 'Central symmetry', state: 'pending' });
+  h.expressions.sync(h.getFrame());
+  const source = h.tools.onFrame(); h.setSourceVersion('source-b'); h.tools.reset(); await source;
+  assert.equal(h.pending.length, 1); assert.equal(h.tools.isEnabled('voronoi'), false);
+  assert.equal(h.tools.getResult('voronoi'), null);
+});
+
+test('failed and unknown radius dependencies are terminal, while later valid values retry an enabled analysis', async t => {
+  const h = radicalDependencyHarness(t);
+  h.setFrame(h.nextFrame());
+  h.expressions.setState({ properties: [{ name: 'radii', expression: 'CSP + 1', unit: 'Å' }] });
+  h.producers.set('centralSymmetry', { name: 'Central symmetry', state: 'pending' });
+  h.expressions.sync(h.getFrame());
+  const waiting = h.configure();
+  h.producers.set('centralSymmetry', { state: 'unavailable', message: 'The central symmetry calculation failed.' });
+  await h.refresh(); await waiting;
+  assert.equal(h.fields['voronoi-state'].textContent, 'Failed');
+  assert.match(h.fields['voronoi-status'].textContent, /central symmetry calculation failed/);
+  assert.equal(h.pending.length, 0); assert.deepEqual(h.tools.pendingKinds(), []);
+  assert.deepEqual(h.tools.failed(), ['voronoi']);
+  h.producers.clear();
+  h.getFrame().properties.push({ name: 'centralSymmetry', data: Float64Array.of(0, 0, 0) });
+  const retry = h.refresh(); assert.equal(h.pending.length, 1);
+  h.pending[0].resolve(voronoiResult()); await retry;
+  assert.deepEqual(h.tools.failed(), []);
+  h.expressions.setState({ properties: [{ name: 'radii', expression: 'missingRadiusInput + 1', unit: 'Å' }] });
+  await h.refresh();
+  assert.match(h.fields['voronoi-status'].textContent, /missingRadiusInput/);
+  assert.equal(h.fields['voronoi-state'].textContent, 'Failed');
+  assert.equal(h.pending.length, 1);
+  for (const value of ['-1', '0/0', '1/0']) {
+    h.expressions.setState({ properties: [{ name: 'radii', expression: String(value), unit: 'Å' }] });
+    await h.refresh();
+    assert.match(h.fields['voronoi-status'].textContent, /atom 1 must be finite and at least 0/);
+    assert.equal(h.pending.length, 1);
+  }
+});
+
+test('editing radii during an active analysis cancels its request and caches the updated expression values', async t => {
+  const h = radicalDependencyHarness(t);
+  h.setFrame(h.nextFrame());
+  h.expressions.setState({ properties: [{ name: 'radii', expression: '1', unit: 'Å' }] });
+  h.expressions.sync(h.getFrame());
+  const first = h.configure();
+  assert.deepEqual(h.pending[0].settings.radii, Float64Array.of(1, 1, 1));
+  h.expressions.setState({ properties: [{ name: 'radii', expression: '2', unit: 'Å' }] });
+  const edited = h.refresh();
+  assert.equal(h.pending[0].options.signal.aborted, true);
+  assert.deepEqual(h.pending[1].settings.radii, Float64Array.of(2, 2, 2));
+  h.pending[1].resolve(voronoiResult()); await edited;
+  h.pending[0].resolve(voronoiResult()); await first;
+  assert.deepEqual(h.tools.getResult('voronoi').radicalRadii, Float64Array.of(2, 2, 2));
+  assert.equal(await h.refresh(), false); assert.equal(h.pending.length, 2, 'unchanged display refreshes do not recalculate');
+});
+
+test('an existing radical result stays private during a radius dependency wait and is reused for identical completed radii', async t => {
+  const h = radicalDependencyHarness(t);
+  h.setFrame(h.nextFrame([{ name: 'centralSymmetry', data: Float64Array.of(0, 0, 0) }]));
+  h.expressions.setState({ properties: [{ name: 'radii', expression: '1 + CSP', unit: 'Å' }] });
+  h.expressions.sync(h.getFrame());
+  const initial = h.configure(); const result = { ...voronoiResult(), faces: new Float64Array(10_000) };
+  h.pending[0].resolve(result); await initial;
+  h.producers.set('centralSymmetry', { name: 'Central symmetry', state: 'pending' });
+  const rerun = h.refresh();
+  assert.equal(h.fields['voronoi-state'].textContent, 'Waiting');
+  assert.equal(h.tools.getResult('voronoi'), null);
+  assert.equal(h.getFrame().atomeyeResults.voronoi, undefined);
+  const frame = h.getFrame(), retained = frame.voronoiInputCache;
+  assert.equal(retained.cached.result, result);
+  const accounted = estimateFrameBytes(frame);
+  delete frame.voronoiInputCache;
+  assert.ok(accounted - estimateFrameBytes(frame) >= result.faces.byteLength, 'every private retained face buffer remains counted in the frame budget');
+  frame.voronoiInputCache = retained;
+  assert.equal(h.pending.length, 1);
+  h.producers.clear();
+  h.getFrame().properties.find(property => property.name === 'centralSymmetry').data = Float64Array.of(0, 0, 0);
+  await h.refresh(); await rerun;
+  assert.equal(h.pending.length, 1, 'completed identical radii reuse the cached scientific tessellation');
+  assert.equal(h.tools.getResult('voronoi'), result);
+  assert.equal(h.getFrame().atomeyeResults.voronoi.result, result);
+  assert.equal(frame.voronoiInputCache, undefined);
+  assert.equal(h.fields['voronoi-state'].textContent, 'Calculated');
+  h.producers.set('centralSymmetry', { name: 'Central symmetry', state: 'pending' });
+  const canceled = h.refresh(); assert.ok(frame.voronoiInputCache);
+  h.tools.cancel('voronoi'); await canceled;
+  assert.equal(frame.voronoiInputCache, undefined, 'cancel releases the private cache before publishing cleared state');
+});
+
+test('failed same-frame radius producers cannot supply stale owned arrays, but cleared imports under the same name stay usable', async t => {
+  const h = radicalDependencyHarness(t), imported = { name: 'centralSymmetry', data: Float64Array.of(1, 2, 3) };
+  h.setFrame(h.nextFrame([imported]));
+  replaceAnalysisProperty(h.getFrame(), { name: 'centralSymmetry', data: Float64Array.of(0, 0, 0), analysisKind: 'centrosymmetry' });
+  h.expressions.setState({ properties: [{ name: 'radii', expression: '1 + CSP', unit: 'Å' }] });
+  h.expressions.sync(h.getFrame());
+  const initial = h.configure(); h.pending[0].resolve(voronoiResult()); await initial;
+  h.producers.set('centralSymmetry', { name: 'Central symmetry', state: 'pending' });
+  const waiting = h.refresh();
+  assert.equal(h.fields['voronoi-state'].textContent, 'Waiting');
+  assert.ok(h.getFrame().voronoiInputCache);
+  h.producers.set('centralSymmetry', { state: 'unavailable', failed: true, message: 'The central symmetry calculation failed.' });
+  await h.refresh(); await waiting;
+  assert.match(h.fields['voronoi-status'].textContent, /calculation failed/);
+  assert.equal(h.fields['voronoi-state'].textContent, 'Failed');
+  assert.equal(h.getFrame().voronoiInputCache, undefined, 'failure frees retained output buffers');
+  assert.equal(h.pending.length, 1, 'stale owned values cannot restart Voronoi');
+  clearAnalysisResults(h.getFrame(), 'centrosymmetry');
+  assert.equal(h.getFrame().properties.find(property => property.name === 'centralSymmetry'), imported);
+  const restored = h.refresh();
+  assert.deepEqual(h.pending[1].settings.radii, Float64Array.of(2, 3, 4), 'the restored source column remains a valid input despite the failed producer');
+  h.pending[1].resolve(voronoiResult()); await restored;
+  assert.equal(h.fields['voronoi-state'].textContent, 'Calculated');
+});
+
+test('radical radius expressions cannot wait for their own Voronoi output, and restored imported columns remain valid', async t => {
+  const h = radicalDependencyHarness(t);
+  h.setFrame(h.nextFrame());
+  h.expressions.setState({ properties: [{ name: 'radii', expression: 'atomicVolume / 10', unit: 'Å' }] });
+  h.expressions.sync(h.getFrame());
+  await h.configure();
+  assert.equal(h.pending.length, 0);
+  assert.match(h.fields['voronoi-status'].textContent, /cyclic dependency.*voronoi/);
+  assert.deepEqual(h.tools.pendingKinds(), []);
+  const imported = { name: 'atomicVolume', data: Float64Array.of(10, 12, 14) };
+  h.getFrame().properties.push(imported); h.expressions.sync(h.getFrame());
+  const standard = h.tools.restore({ voronoi: { enabled: true } });
+  h.pending[0].resolve(voronoiResult()); await standard;
+  assert.equal(h.getFrame().analysisOriginalProperties.get('atomicVolume'), imported);
+  const radical = h.configure();
+  assert.deepEqual(h.pending[1].settings.radii, Float64Array.of(1, 1.2, 1.4));
+  h.pending[1].resolve(voronoiResult()); await radical;
+  assert.equal(h.pending.length, 2, 'publishing a result does not recursively consume its own new output');
+  assert.equal(await h.refresh(), false);
+  assert.equal(await h.tools.run('voronoi'), true, 'a repeat restores imported input then reuses matching radii');
+  assert.equal(h.pending.length, 2);
+});
 
 test('bond metrics own separate properties, cache and cancellation while graph results remain enabled', async t => {
   const h = harness(t), f = h.getFrame();

@@ -38,13 +38,60 @@ function allocateTarget(gl, width, height, samples) {
  * texture, or multisample framebuffer is retained alongside that image. The
  * caller supplies the scene drawing and owns the interactive camera state. */
 const MATTE_BLACK = Object.freeze([0, 0, 0]), MATTE_WHITE = Object.freeze([1, 1, 1]);
+const MATTE_ALPHA_MASK = new Uint32Array(Uint8Array.of(0, 0, 0, 255).buffer)[0];
+const MATTE_RGB_MASK = ~MATTE_ALPHA_MASK;
+
+function matteWords(bytes, count) {
+  if (!(bytes instanceof Uint8Array || bytes instanceof Uint8ClampedArray)
+      || !Number.isSafeInteger(count) || count < 1 || count > bytes.length / 4 || bytes.byteOffset % 4) return null;
+  return new Uint32Array(bytes.buffer, bytes.byteOffset, count);
+}
+
+function matteHasShortcuts(black, white, count) {
+  const samples = Math.min(128, count);
+  let shortcuts = 0;
+  for (let index = 0; index < samples; index++) {
+    // Spread probes across the image rather than sampling only an empty
+    // border or a periodic stripe. This choice affects speed, never values.
+    const pixel = Math.floor(((Math.imul(index, 0x9e3779b1) >>> 0) / 0x1_0000_0000) * count);
+    const dark = black[pixel] & MATTE_RGB_MASK, light = white[pixel] & MATTE_RGB_MASK;
+    if (dark === light || dark === 0 && light === MATTE_RGB_MASK) shortcuts++;
+  }
+  return shortcuts * 4 >= samples;
+}
+
+function solveMatteGeneral(black, white, output, count) {
+  for (let pixel = 0; pixel < count * 4; pixel += 4) {
+    const transmission = (white[pixel] - black[pixel] + white[pixel + 1] - black[pixel + 1] + white[pixel + 2] - black[pixel + 2]) / 765;
+    const alpha = Math.round(255 * Math.min(1, Math.max(0, 1 - transmission)));
+    for (let channel = 0; channel < 3; channel++) output[pixel + channel] = alpha ? Math.min(255, Math.round(black[pixel + channel] * 255 / alpha)) : 0;
+    output[pixel + 3] = alpha;
+  }
+  return output;
+}
 
 /** Recover straight color and alpha from the same view rendered on black (k)
  * and white (w) backgrounds: the view equals k + (1 − α)·B for any background
  * B, so α = 1 − mean(w − k) and color = k / α. The transparent image then
  * composites over any background exactly like the view rendered on it. */
 export function solveMatte(black, white, output, count) {
-  for (let pixel = 0; pixel < count * 4; pixel += 4) {
+  const blackWords = matteWords(black, count), whiteWords = matteWords(white, count), outputWords = matteWords(output, count);
+  const packed = blackWords && whiteWords && outputWords;
+  // Fully translucent foreground has little to skip. Avoid adding word
+  // loads/branches to its original loop; inspect only a fixed small sample.
+  if (!packed || !matteHasShortcuts(blackWords, whiteWords, count)) return solveMatteGeneral(black, white, output, count);
+  for (let pixel = 0, word = 0; pixel < count * 4; pixel += 4, word++) {
+    const dark = blackWords[word], light = whiteWords[word], darkRgb = dark & MATTE_RGB_MASK, lightRgb = light & MATTE_RGB_MASK;
+    if (darkRgb === lightRgb) {
+      // The original formula gives alpha=255 and the exact black RGB.
+      // Input alpha is deliberately ignored, as in the general formula.
+      outputWords[word] = dark | MATTE_ALPHA_MASK;
+      continue;
+    }
+    if (darkRgb === 0 && lightRgb === MATTE_RGB_MASK) {
+      outputWords[word] = 0;
+      continue;
+    }
     const transmission = (white[pixel] - black[pixel] + white[pixel + 1] - black[pixel + 1] + white[pixel + 2] - black[pixel + 2]) / 765;
     const alpha = Math.round(255 * Math.min(1, Math.max(0, 1 - transmission)));
     for (let channel = 0; channel < 3; channel++) {

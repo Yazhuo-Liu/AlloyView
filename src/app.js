@@ -90,7 +90,7 @@ import { initializeFeatureHelp } from './feature-help.js';
 import { normalizeSelectionGroups, selectionGroupVisibility } from './selection-groups.js';
 import { initializeSelectionGroupControls } from './selection-group-controls.js';
 import { initializeCrystalVisibilityControls, isCrystalStructureProperty } from './crystal-visibility-controls.js';
-import { createLegendScale } from './render/legend-histogram.js';
+import { createLegendScale, updateLegendScale } from './render/legend-histogram.js';
 import { createLegendRangeSlider } from './render/legend-range-slider.js';
 
 const elements = Object.fromEntries([
@@ -273,7 +273,7 @@ function propertyProducer(name, frame) {
   const status = (prefix, label) => {
     const text = document.getElementById(`${prefix}-state`)?.textContent.trim() ?? '';
     return /…$|^Queued$|^Waiting$/.test(text) ? { name: label, state: 'pending' }
-      : { name: label, state: 'unavailable', message: `${name} is unavailable: ${label} ${text === 'Failed' ? 'failed' : 'is not calculating for this frame'}.` };
+      : { name: label, state: 'unavailable', failed: text === 'Failed', message: `${name} is unavailable: ${label} ${text === 'Failed' ? 'failed' : 'is not calculating for this frame'}.` };
   };
   for (const [kind, analysis] of Object.entries(state.analysis)) {
     if (!analysis.enabled) continue;
@@ -295,7 +295,7 @@ function propertyProducer(name, frame) {
   for (const tool of [topologyTools, clusterTools, grainTools, wignerSeitzTools]) {
     const field = tool?.pendingColorProperties().find(item => item.name.toLowerCase() === lower);
     const kind = field && tool.getPropertyKind(field.name);
-    if (kind && tool.pendingKinds().includes(kind)) return { name: field.label, state: 'pending' };
+    if (kind && tool.pendingKinds().includes(kind)) return { name: field.label, state: 'pending', kind };
   }
   if (dxaTools?.pendingColorProperties().some(field => field.name.toLowerCase() === lower)) return status('dxa', 'DXA');
   const field = atomEyeTools?.pendingColorProperties().find(item => item.name.toLowerCase() === lower);
@@ -707,6 +707,8 @@ topologyTools = initializeTopologyTools({
   getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
   getFrameIndex: () => state.frameIndex,
+  getPropertyDependency: (name, frame) => analysisDependencies.getPropertyDependency(name, frame,
+    { waitForProducers: true, consumerKind: 'voronoi' }),
   getBondParameters: () => atomEyeTools.getBondParameters(),
   getBondEnabled: () => atomEyeTools.isEnabled('bonds'),
   getColorChoiceVersion: () => colorChoiceVersion,
@@ -1343,6 +1345,7 @@ function closeSource() {
   elements['selection-data'].replaceChildren();
   updateSelectionPanel();
   elements.legend.hidden = true;
+  legendView = null;
   elements['color-legend'].replaceChildren();
   elements['slice-position'].value = '100';
   sliceControls.reset();
@@ -2643,6 +2646,7 @@ function applyColorsNow() {
     statisticsExports?.refresh();
     globalAttributes?.refresh();
     void binningTools?.refresh();
+    void topologyTools?.refreshProperties();
   } catch (error) {
     showToast(error.message);
   }
@@ -3180,6 +3184,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
   elements[`${prefix}-state`].textContent = 'Calculating…';
   elements[`${prefix}-state`].classList.remove('ready');
   if (kind === 'centrosymmetry') updateCspMethodUi({ calculating: true });
+  notifyAnalysisDependencies();
   try {
     const ptmKey = JSON.stringify({ flags: parameters.flags, rmsdCutoff: parameters.rmsdCutoff });
     if (kind === 'strain') {
@@ -3330,6 +3335,7 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
   elements['run-analysis'].disabled = true;
   elements['analysis-state'].textContent = 'Calculating…';
   elements['analysis-state'].classList.remove('ready');
+  notifyAnalysisDependencies();
   setLoading(true, `Calculating coordination for frame ${frameIndex + 1}…`, 'coordination');
   try {
     // Keep one analysis active. Rapid edits replace queued requests with the
@@ -3524,51 +3530,82 @@ function updateSelectionPanel(index = null) {
   elements['clear-selection'].hidden = false;
 }
 
+let legendView = null;
 function renderLegend(legend) {
-  const legendFrame = state.frame;
-  commitScalarLegendEdit = null;
   currentColorLegend = legend;
   crystalVisibility?.refresh();
-  elements['color-legend'].replaceChildren();
-  const propertyControl = document.createElement('label');
-  propertyControl.className = 'legend-property';
-  const propertyLabel = document.createElement('span');
-  propertyLabel.textContent = 'Color by';
-  const propertySelect = document.createElement('select');
-  propertySelect.id = 'legend-color-mode';
-  for (const sourceOption of elements['color-mode'].options) {
-    const item = option(sourceOption.value, sourceOption.textContent);
-    item.disabled = sourceOption.disabled;
-    propertySelect.append(item);
+  const eligible = legend.property && (!legend.property.categories || legend.discrete)
+    ? discreteValues(legend.discrete ? { ...legend.property, categories: undefined } : legend.property) : null;
+  const scaleModeVisible = Boolean(eligible || legend.property && scalarColorModes.get(legend.property.name) === 'discrete');
+  const schema = JSON.stringify([state.colorMode, legend.kind, legend.property?.name, Boolean(legend.atomTypes), Boolean(legend.discrete),
+    Boolean(legend.emptyRange), Boolean(legend.unit), scaleModeVisible,
+    legend.items?.map(item => [item.id, item.label]), legend.mode, legend.source,
+    legend.kind === 'orientation' && orientationSettings.direction === 'custom', legend.keys?.map(key => [key.title, key.labels])]);
+  if (legendView?.schema === schema && legendView.root === elements['color-legend']) {
+    legendView.refresh(legend, eligible);
+    elements.legend.hidden = false;
+    return;
   }
-  propertySelect.value = state.colorMode;
-  propertySelect.title = propertySelect.selectedOptions[0]?.textContent ?? 'Choose the coloring quantity';
-  propertySelect.addEventListener('change', () => {
-    const focused = document.activeElement === propertySelect;
-    selectColorMode(propertySelect.value);
-    if (focused) document.getElementById('legend-color-mode')?.focus({ preventScroll: true });
-  });
-  propertyControl.append(propertyLabel, propertySelect);
-  elements['color-legend'].append(propertyControl);
+  commitScalarLegendEdit = null;
+  // Color by is shared across schemas, so choosing a different quantity does
+  // not detach its own focused select or interrupt keyboard navigation.
+  const retainedPropertyControl = legendView?.propertyControl?.isConnected ? legendView.propertyControl : null;
+  const view = legendView = { schema, root: elements['color-legend'], frame: state.frame };
+  const refreshers = [];
+  view.refresh = (next, nextEligible = eligible) => {
+    legend = next; view.frame = state.frame;
+    for (const refresh of refreshers) refresh(nextEligible);
+  };
+  const isCurrent = () => legendView === view && state.frame === view.frame && Boolean(state.frame);
+  for (const child of [...elements['color-legend'].childNodes]) if (child !== retainedPropertyControl) child.remove();
+  const propertyControl = view.propertyControl = retainedPropertyControl ?? document.createElement('label');
+  propertyControl.className = 'legend-property';
+  const propertyLabel = retainedPropertyControl?.querySelector('span') ?? document.createElement('span');
+  propertyLabel.textContent = 'Color by';
+  const propertySelect = retainedPropertyControl?.querySelector('select') ?? document.createElement('select');
+  propertySelect.id = 'legend-color-mode';
+  const refreshPropertyOptions = () => {
+    const existing = new Map([...propertySelect.options].map(item => [item.value, item]));
+    for (let index = 0; index < elements['color-mode'].options.length; index++) {
+      const sourceOption = elements['color-mode'].options[index];
+      const item = existing.get(sourceOption.value) ?? option(sourceOption.value, sourceOption.textContent);
+      existing.delete(sourceOption.value);
+      if (item.textContent !== sourceOption.textContent) item.textContent = sourceOption.textContent;
+      item.disabled = sourceOption.disabled;
+      if (propertySelect.options[index] !== item) propertySelect.insertBefore(item, propertySelect.options[index] ?? null);
+    }
+    for (const item of existing.values()) item.remove();
+    propertySelect.value = state.colorMode;
+    propertySelect.title = propertySelect.selectedOptions[0]?.textContent ?? 'Choose the coloring quantity';
+  };
+  refreshers.push(refreshPropertyOptions); refreshPropertyOptions();
+  if (!retainedPropertyControl) {
+    propertySelect.addEventListener('change', () => {
+      if (propertySelect.isConnected && state.frame) selectColorMode(propertySelect.value);
+    });
+    propertyControl.append(propertyLabel, propertySelect);
+    elements['color-legend'].append(propertyControl);
+  }
   const title = document.createElement('div');
   title.className = 'legend-title';
   const label = document.createElement('strong');
   label.textContent = legend.title;
   title.append(label);
+  refreshers.push(() => { label.textContent = legend.title; });
   if ((legend.kind === 'scalar' || legend.discrete) && legend.unit) {
     const unit = document.createElement('span');
     unit.textContent = legend.unit;
     title.append(unit);
+    refreshers.push(() => { unit.textContent = legend.unit; });
   }
   elements['color-legend'].append(title);
   if (legend.kind === 'orientation') {
-    renderOrientationLegend(legend);
+    refreshers.push(renderOrientationLegend(() => legend, isCurrent));
     elements.legend.hidden = false;
     return;
   }
   if ((legend.property && !legend.property.categories) || legend.discrete) {
-    const eligible = discreteValues(legend.discrete ? { ...legend.property, categories: undefined } : legend.property);
-    if (eligible || scalarColorModes.get(legend.property.name) === 'discrete') {
+    if (scaleModeVisible) {
       const control = document.createElement('label');
       control.className = 'legend-property';
       const caption = document.createElement('span'); caption.textContent = 'Color scale';
@@ -3577,7 +3614,13 @@ function renderLegend(legend) {
       select.value = legend.discrete ? 'discrete' : 'continuous';
       select.options[1].disabled = !eligible;
       if (!eligible) select.title = 'This frame needs 1–32 distinct safe integer values for discrete colors.';
+      refreshers.push(nextEligible => {
+        select.value = legend.discrete ? 'discrete' : 'continuous';
+        select.options[1].disabled = !nextEligible;
+        select.title = nextEligible ? '' : 'This frame needs 1–32 distinct safe integer values for discrete colors.';
+      });
       select.addEventListener('change', () => {
+        if (!isCurrent()) return;
         interruptConfigurationRestore('a color scale change');
         scalarColorModes.set(legend.property.name, select.value);
         applyColors(); updateSelectionPanel();
@@ -3625,6 +3668,7 @@ function renderLegend(legend) {
       row.title = item.description ?? `Show or hide ${item.label} atoms`;
       row.classList.toggle('is-hidden', !item.visible);
       checkbox.addEventListener('change', () => {
+        if (!isCurrent()) return;
         interruptConfigurationRestore('a category visibility change');
         const key = legend.atomTypes ? item.label : item.id;
         if (checkbox.checked) hidden.delete(key);
@@ -3641,7 +3685,7 @@ function renderLegend(legend) {
       count.textContent = `${formatInteger(item.count)} · ${(legend.atomCount ? 100 * item.count / legend.atomCount : 0).toFixed(1)}%`;
       row.append(count);
       items.append(row);
-      controls.push({ checkbox, row, key: legend.atomTypes ? item.label : item.id });
+      controls.push({ checkbox, row, swatch, count, key: legend.atomTypes ? item.label : item.id });
     }
     const actions = document.createElement('div');
     actions.className = 'legend-category-actions';
@@ -3652,6 +3696,7 @@ function renderLegend(legend) {
       button.textContent = text;
       button.setAttribute('aria-label', `${checked ? 'Show' : 'Hide'} every ${legend.title} category`);
       button.addEventListener('click', () => {
+        if (!isCurrent()) return;
         interruptConfigurationRestore('a category visibility change');
         for (const { checkbox, row, key } of controls) {
           if (checked) hidden.delete(key);
@@ -3665,9 +3710,21 @@ function renderLegend(legend) {
       });
       actions.append(button);
     }
+    refreshers.push(() => {
+      controls.forEach(({ checkbox, row, swatch, count }, index) => {
+        const item = legend.items[index];
+        checkbox.checked = item.visible;
+        row.classList.toggle('is-hidden', !item.visible);
+        row.title = item.description ?? `Show or hide ${item.label} atoms`;
+        swatch.style.background = `rgb(${item.color.join(' ')})`;
+        count.textContent = `${formatInteger(item.count)} · ${(legend.atomCount ? 100 * item.count / legend.atomCount : 0).toFixed(1)}%`;
+      });
+      for (const button of actions.children) button.setAttribute('aria-label',
+        `${button.dataset.legendAction === 'select-all' ? 'Show' : 'Hide'} every ${legend.title} category`);
+    });
     elements['color-legend'].append(actions, items);
   } else {
-    let scale = createLegendScale(document, legend, { format: formatValue });
+    const scale = createLegendScale(document, legend, { format: formatValue });
     const range = document.createElement('div');
     range.className = 'legend-range';
     const minimum = document.createElement('span');
@@ -3687,7 +3744,7 @@ function renderLegend(legend) {
     }
     schemeSelect.value = legend.scheme;
     schemeControl.append(schemeLabel, schemeSelect);
-    const step = scalarLegendStep(legend);
+    let step = scalarLegendStep(legend);
     const minimumControl = legendNumberControl('Min', legend.minimum, step);
     const editableMaximum = legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step;
     const maximumControl = legendNumberControl('Max', editableMaximum, step);
@@ -3719,7 +3776,7 @@ function renderLegend(legend) {
     let previewActive = false;
     const finishSliderPreview = (limits = pendingSliderRange ?? scalarColorRanges.get(legend.property.name)) => {
       pendingSliderRange = null;
-      if (state.frame !== legendFrame || !rangeSlider.element.isConnected || !limits) return;
+      if (!isCurrent() || !rangeSlider.element.isConnected || !limits) return;
       previewActive = false;
       commitScalarLegendEdit = null;
       applyRange(limits);
@@ -3728,6 +3785,7 @@ function renderLegend(legend) {
       minimum: legend.minimum, maximum: editableMaximum, dataMinimum: legend.dataMinimum, dataMaximum: legend.dataMaximum,
       step, format: formatValue,
       onInput: (requested, changed) => {
+        if (!isCurrent()) return;
         interruptConfigurationRestore('a color range edit');
         const limits = coupleScalarRange(requested.minimum, requested.maximum, changed, step);
         if (!limits) return;
@@ -3744,7 +3802,7 @@ function renderLegend(legend) {
             const pending = pendingSliderRange;
             pendingSliderRange = null;
             // A frame change may have replaced this legend and its property.
-            if (pending && rangeSlider.element.isConnected) previewRange(pending);
+            if (pending && isCurrent() && rangeSlider.element.isConnected) previewRange(pending);
           });
         }
         pendingSliderRange = limits;
@@ -3754,12 +3812,12 @@ function renderLegend(legend) {
     controls.append(schemeControl, rangeSlider.element, minimumControl.label, maximumControl.label, visibility, actions);
     const freezeCurrentRange = () => {
       const limits = scalarColorRanges.get(legend.property.name)
-        ?? { minimum: legend.minimum, maximum: editableMaximum };
+        ?? { minimum: legend.minimum, maximum: legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step };
       scalarColorRanges.set(legend.property.name, limits);
       return limits;
     };
     const applyRange = (limits) => {
-      if (state.frame !== legendFrame) return;
+      if (!isCurrent()) return;
       pendingSliderRange = null;
       previewActive = false;
       commitScalarLegendEdit = null;
@@ -3771,16 +3829,15 @@ function renderLegend(legend) {
       applyScalarVisibility(palette.legend);
       atomEyeTools.syncComparison();
       // The histogram and hover probe describe the displayed range.
-      const nextScale = createLegendScale(document, palette.legend, { format: formatValue });
-      scale.replaceWith(nextScale);
-      scale = nextScale;
+      legend = palette.legend;
+      updateLegendScale(scale, legend, { histogram: true });
       minimum.textContent = formatValue(limits.minimum);
       maximum.textContent = formatValue(limits.maximum);
       syncAutomatic();
       displayRefresh.flush();
     };
     const previewRange = (limits) => {
-      if (state.frame !== legendFrame) return;
+      if (!isCurrent()) return;
       const previewLegend = { ...legend, ...limits, customRange: true };
       if (!previewActive || !renderer.scalarColorPreview) {
         const overrides = atomEyeTools.customizePalette({ colors: renderer.atomColors, legend }, { trackColorOverrides: true }).colorOverrides;
@@ -3801,12 +3858,12 @@ function renderLegend(legend) {
       currentColorLegend = previewLegend;
       // Rebuilding histogram counts would scan all atoms per tick. Keep the
       // gradient/value probe responsive and restore exact counts on release.
-      const nextScale = createLegendScale(document, previewLegend, { format: formatValue, histogram: false });
-      scale.replaceWith(nextScale); scale = nextScale;
+      updateLegendScale(scale, previewLegend, { histogram: false });
       minimum.textContent = formatValue(limits.minimum);
       maximum.textContent = formatValue(limits.maximum);
     };
     const applyLiveRange = (changed) => {
+      if (!isCurrent()) return;
       interruptConfigurationRestore('a color range edit');
       // Even an incomplete edit turns Auto off. Preserve the last valid range
       // until both numbers are valid, without replacing the active input.
@@ -3838,35 +3895,62 @@ function renderLegend(legend) {
     minimumControl.input.addEventListener('change', () => applyLiveRange('minimum'));
     maximumControl.input.addEventListener('change', () => applyLiveRange('maximum'));
     schemeSelect.addEventListener('change', () => {
+      if (!isCurrent()) return;
       interruptConfigurationRestore('a color map change');
       scalarColorSchemes.set(legend.property.name, schemeSelect.value);
       applyColors();
     });
     visibilityCheckbox.addEventListener('change', () => {
+      if (!isCurrent()) return;
       interruptConfigurationRestore('a color visibility change');
       scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
       applyScalarVisibility(currentColorLegend ?? paletteForCurrentMode().legend);
       atomEyeTools.syncComparison();
     });
     automatic.addEventListener('click', () => {
+      if (!isCurrent()) return;
       interruptConfigurationRestore('a color range change');
       if (scalarColorRanges.has(legend.property.name)) scalarColorRanges.delete(legend.property.name);
       else freezeCurrentRange();
       applyColors();
+    });
+    refreshers.push(() => {
+      step = scalarLegendStep(legend);
+      const upper = legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step;
+      minimumControl.input.step = maximumControl.input.step = String(step);
+      // Preserve a focused field's browser editing buffer, including incomplete
+      // number syntax. Its opposite bound and the displayed range still update.
+      if (document.activeElement !== minimumControl.input) minimumControl.input.value = formatEditableNumber(legend.minimum);
+      if (document.activeElement !== maximumControl.input) maximumControl.input.value = formatEditableNumber(upper);
+      rangeSlider.update({ minimum: legend.minimum, maximum: upper, dataMinimum: legend.dataMinimum, dataMaximum: legend.dataMaximum, step });
+      minimum.textContent = formatValue(legend.minimum); maximum.textContent = formatValue(legend.maximum);
+      schemeSelect.value = legend.scheme;
+      visibilityCheckbox.checked = scalarHideOutside.get(legend.property.name) !== false;
+      previewActive = Boolean(renderer.scalarColorPreview);
+      updateLegendScale(scale, legend, { histogram: !previewActive });
+      syncAutomatic();
+    });
+    for (const input of [minimumControl.input, maximumControl.input]) input.addEventListener('blur', () => {
+      if (isCurrent()) input.value = formatEditableNumber(input === minimumControl.input ? legend.minimum
+        : legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step);
     });
     elements['color-legend'].append(scale, range, controls);
   }
   elements.legend.hidden = false;
 }
 
-function renderOrientationLegend(legend) {
+function renderOrientationLegend(getLegend, isCurrent) {
+  let legend = getLegend();
+  const refreshers = [];
   if (legend.mode === 'ipf') {
     const control = document.createElement('label'); control.className = 'legend-property';
     const caption = document.createElement('span'); caption.textContent = 'Sample direction';
     const select = document.createElement('select'); select.id = 'legend-ipf-direction';
     for (const value of ['x', 'y', 'z', 'custom']) select.append(option(value, value === 'custom' ? 'Custom vector' : value.toUpperCase()));
     select.value = orientationSettings.direction;
+    refreshers.push(() => { select.value = orientationSettings.direction; });
     select.addEventListener('change', () => {
+      if (!isCurrent()) return;
       interruptConfigurationRestore('an orientation color change');
       orientationSettings = normalizeOrientationSettings({ ...orientationSettings, direction: select.value }); applyColors();
     });
@@ -3880,12 +3964,16 @@ function renderOrientationLegend(legend) {
         label.append(input); row.append(label); return input;
       });
       for (const input of inputs) input.addEventListener('change', () => {
+        if (!isCurrent()) return;
         try {
           const custom = inputs.map(input => input.value.trim() === '' ? NaN : Number(input.value));
           const settings = normalizeOrientationSettings({ direction: 'custom', custom });
           interruptConfigurationRestore('an orientation color change'); orientationSettings = settings; applyColors();
         } catch (error) { showToast(error.message); }
       });
+      refreshers.push(() => inputs.forEach((input, index) => {
+        if (document.activeElement !== input) input.value = String(orientationSettings.custom[index]);
+      }));
       elements['color-legend'].append(row);
     }
     for (const key of legend.keys) {
@@ -3893,8 +3981,14 @@ function renderOrientationLegend(legend) {
       const canvas = document.createElement('canvas'); canvas.className = 'legend-ipf-key';
       canvas.width = 240; canvas.height = 126; canvas.setAttribute('role', 'img');
       canvas.setAttribute('aria-label', `${key.title} inverse pole figure key: ${key.labels.join(', ')}`);
-      const color = getComputedStyle(elements['color-legend']).getPropertyValue('--text-soft').trim() || '#355563';
-      drawIpfKey(canvas.getContext('2d'), key, 0, 0, canvas.width, canvas.height, { color, fontSize: 11 });
+      let previousColor = null;
+      const refreshKey = () => {
+        const color = getComputedStyle(elements['color-legend']).getPropertyValue('--text-soft').trim() || '#355563';
+        if (color === previousColor) return;
+        previousColor = color;
+        drawIpfKey(canvas.getContext('2d'), key, 0, 0, canvas.width, canvas.height, { color, fontSize: 11 });
+      };
+      refreshers.push(refreshKey); refreshKey();
       elements['color-legend'].append(title, canvas);
     }
   }
@@ -3908,11 +4002,14 @@ function renderOrientationLegend(legend) {
     grains.textContent = 'Every atom has the color of its grain\'s mean orientation. Atoms in no grain are gray.';
     elements['color-legend'].append(grains);
   }
-  if (legend.undefinedCount) {
-    const count = document.createElement('p'); count.className = 'help';
-    count.textContent = `Undefined: ${formatInteger(legend.undefinedCount)} · ${(100 * legend.undefinedCount / legend.atomCount).toFixed(1)}%`;
-    elements['color-legend'].append(count);
-  }
+  const count = document.createElement('p'); count.className = 'help';
+  const refreshCount = () => {
+    count.hidden = !legend.undefinedCount;
+    count.textContent = `Undefined: ${formatInteger(legend.undefinedCount)} · ${(legend.atomCount ? 100 * legend.undefinedCount / legend.atomCount : 0).toFixed(1)}%`;
+  };
+  refreshers.push(refreshCount); refreshCount();
+  elements['color-legend'].append(count);
+  return () => { legend = getLegend(); for (const refresh of refreshers) refresh(); };
 }
 
 function legendNumberControl(name, value, step) {

@@ -6,7 +6,7 @@ import { VIEW_PRESETS } from './camera-presets.js';
 import { drawIpfKey } from './orientation-colors.js';
 import { AtomPrimitiveLayer, normalizeVectorOptions, validateBonds } from './atom-primitives.js';
 import { ExportLineLayer } from './export-line-layer.js';
-import { captureOffscreen } from './offscreen-export.js';
+import { captureOffscreen, solveMatte } from './offscreen-export.js';
 import { normalizeExportResolution, resolveExportSize, tileProjection } from './export-resolution.js';
 import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms, prepareScalarColorData, scalarColorSettings, scalarPreviewAtomVisible } from './scalar-colormap.js';
 import { effectivePeriodicOrigin, normalizePeriodicOrigin, periodicDisplayCoordinates } from './periodic-origin.js';
@@ -1599,9 +1599,10 @@ export class WebGLRenderer {
     return (this.replicas ?? [{ indices: SOURCE_REPLICA }]).some(replica => this.isAtomVisible(atom, replica.indices));
   }
 
-  /** Nearest visible atom under the pointer, in front of the camera. This
-   * visits every displayed atom, so the loop keeps the projection and slice
-   * tests in scalars; the arithmetic matches transformPoint/pointVisible. */
+  /** Nearest visible atom under the pointer, in front of the camera. Reject
+   * farther centers and conservative screen bounds before projecting the
+   * exact radius or testing slices. The final acceptance arithmetic remains
+   * the same, including first-hit depth ties and the 3 CSS-pixel minimum. */
   pick(clientX, clientY) {
     this.lastPick = null;
     if (!this.frame || this.graphicsUnavailable()) return -1;
@@ -1617,41 +1618,66 @@ export class WebGLRenderer {
     const slices = planes ? this.slices.filter(slice => slice.enabled) : [];
     const fractional = this.displayFractional ?? this.frame.fractional, axis = this.sliceAxis;
     const repetition = this.repetitions?.[axis] ?? 1;
+    const radiusScale = this.radiusScale, sliceMaximum = this.sliceMaximum;
+    // Built-in perspective/parallel projections have a constant homogeneous
+    // W along the radius edge. Arbitrary projections retain the exact path.
+    const screenBound = p[3] === 0 && p[7] === 0 && p[4] === 0 && p[8] === 0 && width >= 0;
+    const radiusFactor = Math.abs(p[0]) * width * .5, roundoff = 64 * Number.EPSILON;
     for (const replica of this.replicas ?? [{ indices: [0, 0, 0], offset: [0, 0, 0] }]) {
       const [ia, ib, ic] = replica.indices, [ox, oy, oz] = replica.offset;
       for (let atom = 0; atom < this.atomCount; atom += 1) {
         if (visibility?.[atom] === 0) continue;
         if (!scalarPreviewAtomVisible(this.scalarColorPreview, atom)) continue;
         const index = atom * 3;
-        if (planes) {
-          const px = positions[index] + ia * vectors[0] + ib * vectors[3] + ic * vectors[6];
-          const py = positions[index + 1] + ia * vectors[1] + ib * vectors[4] + ic * vectors[7];
-          const pz = positions[index + 2] + ia * vectors[2] + ib * vectors[5] + ic * vectors[8];
-          let shown = true;
-          for (const slice of slices) {
-            const distance = slice.normal[0] * px + slice.normal[1] * py + slice.normal[2] * pz - slice.position;
-            if (slice.slab ? Math.abs(distance) > slice.thickness / 2 + SLICE_EPSILON
-              : slice.side === 'positive' ? distance < -SLICE_EPSILON : distance > SLICE_EPSILON) { shown = false; break; }
-          }
-          if (!shown) continue;
-        } else if (!((fractional[index + axis] + replica.indices[axis]) / repetition <= this.sliceMaximum)) continue;
         const wx = positions[index] + ox, wy = positions[index + 1] + oy, wz = positions[index + 2] + oz;
+        const viewZ = v[2] * wx + v[6] * wy + v[10] * wz + v[14];
+        if (viewZ >= 0 || viewZ <= closestDepth) continue;
         const viewX = v[0] * wx + v[4] * wy + v[8] * wz + v[12];
         const viewY = v[1] * wx + v[5] * wy + v[9] * wz + v[13];
-        const viewZ = v[2] * wx + v[6] * wy + v[10] * wz + v[14];
-        if (viewZ >= 0) continue;
         const clipX = p[0] * viewX + p[4] * viewY + p[8] * viewZ + p[12];
-        const clipY = p[1] * viewX + p[5] * viewY + p[9] * viewZ + p[13];
         const clipW = p[3] * viewX + p[7] * viewY + p[11] * viewZ + p[15];
         if (clipW <= 0) continue;
         const screenX = (clipX / clipW * 0.5 + 0.5) * width;
+        const radius = (radii?.[atom] ?? 0.7) * radiusScale, dx = x - screenX;
+        let bound = Infinity;
+        if (screenBound) {
+          // Preserve even the old overflow behavior: the edge multiplies
+          // before dividing, and Infinity <= Infinity can be a radius hit.
+          // Prove its intermediate products and coordinate subtraction safe
+          // before using a differently ordered conservative bound.
+          const projectedMagnitude = (Math.abs(p[0]) * (Math.abs(viewX) + Math.abs(radius)) + Math.abs(p[12])) / clipW;
+          if (Number.isFinite(projectedMagnitude) && projectedMagnitude <= Number.MAX_VALUE / 2) {
+            const projectedRadius = Math.abs(radius / clipW) * radiusFactor;
+            // Pad for cancellation, viewX + radius and off-center offsets.
+            bound = Math.max(3, projectedRadius) + roundoff * (Math.abs(screenX)
+              + (Math.abs(p[0] * viewX / clipW) + Math.abs(p[12] / clipW)) * width + projectedRadius + width);
+            // A coarse abs-distance comparison is not equivalent to the
+            // original squared-distance comparison if either square overflows.
+            if (!Number.isFinite(bound ** 2)) bound = Infinity;
+            if (Number.isFinite(bound) && Math.abs(dx) > bound) continue;
+          }
+        }
+        const clipY = p[1] * viewX + p[5] * viewY + p[9] * viewZ + p[13];
         const screenY = (0.5 - clipY / clipW * 0.5) * height;
-        const edgeX = viewX + (radii?.[atom] ?? 0.7) * this.radiusScale;
+        const distanceSquared = dx ** 2 + (y - screenY) ** 2;
+        if (Number.isFinite(bound) && distanceSquared > bound ** 2) continue;
+        const edgeX = viewX + radius;
         const edgeClipX = p[0] * edgeX + p[4] * viewY + p[8] * viewZ + p[12];
         const edgeClipW = p[3] * edgeX + p[7] * viewY + p[11] * viewZ + p[15];
         const radiusPixels = Math.max(3, Math.abs(edgeClipX / edgeClipW - clipX / clipW) * width * 0.5);
-        const distanceSquared = (x - screenX) ** 2 + (y - screenY) ** 2;
         if (distanceSquared <= radiusPixels ** 2 && viewZ > closestDepth) {
+          if (planes) {
+            const px = positions[index] + ia * vectors[0] + ib * vectors[3] + ic * vectors[6];
+            const py = positions[index + 1] + ia * vectors[1] + ib * vectors[4] + ic * vectors[7];
+            const pz = positions[index + 2] + ia * vectors[2] + ib * vectors[5] + ic * vectors[8];
+            let shown = true;
+            for (const slice of slices) {
+              const distance = slice.normal[0] * px + slice.normal[1] * py + slice.normal[2] * pz - slice.position;
+              if (slice.slab ? Math.abs(distance) > slice.thickness / 2 + SLICE_EPSILON
+                : slice.side === 'positive' ? distance < -SLICE_EPSILON : distance > SLICE_EPSILON) { shown = false; break; }
+            }
+            if (!shown) continue;
+          } else if (!((fractional[index + axis] + replica.indices[axis]) / repetition <= sliceMaximum)) continue;
           closest = atom;
           closestDepth = viewZ;
           this.lastPick = { index: atom, replica: Array.from(replica.indices), position: [wx, wy, wz] };
@@ -1688,9 +1714,18 @@ export class WebGLRenderer {
     let width;
     let height;
     let pixels;
+    const background = this.background;
+    const appearanceBackground = this.exportAppearanceBackground;
     try {
+      // Keep the viewport's own sample locations and native size. Its RGB
+      // contains the clear color at partially covered pixels; the shared
+      // black/white matte recovers straight color rather than copying fringes.
+      if (!includeBackground) {
+        this.exportAppearanceBackground = appearanceBackground ?? background;
+        this.background = [0, 0, 0];
+      }
       this.render(performance.now(), {
-        transparentBackground: !includeBackground,
+        transparentBackground: false,
         trackStats: false,
         ...(includeSliceOutlines ? {} : { sliceOutlines: false }),
       });
@@ -1698,8 +1733,19 @@ export class WebGLRenderer {
       height = this.canvas.height;
       pixels = new Uint8Array(width * height * 4);
       gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      if (!includeBackground) {
+        const black = pixels;
+        pixels = new Uint8Array(black.length);
+        this.background = [1, 1, 1];
+        this.render(performance.now(), { trackStats: false, ...(includeSliceOutlines ? {} : { sliceOutlines: false }) });
+        gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        this.assertGraphicsAvailable();
+        solveMatte(black, pixels, pixels, width * height);
+      }
     } finally {
       // Keep the interactive viewport opaque even after a transparent export.
+      this.background = background;
+      this.exportAppearanceBackground = appearanceBackground;
       this.render(performance.now(), { trackStats: false });
     }
     const exportCanvas = document.createElement('canvas');
@@ -1731,6 +1777,7 @@ export class WebGLRenderer {
     const context = exportCanvas.getContext('2d');
     if (!context) throw new Error('This browser could not allocate the image canvas. Choose a smaller size.');
     const oldViewport = this.renderViewport;
+    const appearanceBackground = this.exportAppearanceBackground;
     const cssWidth = Number(this.canvas.clientWidth) || this.canvas.width;
     const annotationScale = Math.max(1, Math.min(3, this.canvas.width / cssWidth)) * height / this.canvas.height;
     const lineScale = height / this.canvas.height;
@@ -1739,6 +1786,7 @@ export class WebGLRenderer {
       // view's own pipeline; only the clear color changes, not cell or outline
       // colors chosen for the real background.
       const background = this.background;
+      if (!includeBackground) this.exportAppearanceBackground = appearanceBackground ?? background;
       this.lastExportStats = { width, height, ...captureOffscreen(this.gl, context, width, height, (tile, matteBackground) => {
         this.renderViewport = { width, height, tile, annotationScale, lineScale };
         this.background = matteBackground ?? background;
@@ -1747,6 +1795,7 @@ export class WebGLRenderer {
       }, { tileSize, matte: !includeBackground }) };
     } finally {
       this.renderViewport = oldViewport;
+      this.exportAppearanceBackground = appearanceBackground;
       this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
       // Restore both the visible image and matrices used by picking/gizmos.
       this.render(performance.now(), { trackStats: false });

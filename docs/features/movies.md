@@ -49,7 +49,12 @@ video settings stay.
 it started from; select it again to stop early. Dragging or scrolling in the
 viewport stops the preview at the current pose. With trajectory frames linked,
 the preview shows frames as fast as they can be loaded and analyzed, so it may
-skip frames that the exported movie contains.
+skip frames that the exported movie contains. Stopping or reaching the end
+cancels any frame still loading before returning to the starting frame. The
+Preview button briefly shows **Restoring…** until that navigation finishes;
+another preview, script or export waits for it. Dragging or scrolling instead
+keeps the displayed frame and your new camera pose, discarding an unfinished
+preview load.
 
 ### Trajectory frames
 

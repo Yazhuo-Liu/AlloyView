@@ -74,9 +74,15 @@ as well.
 Results and caches are keyed on the radii themselves, so radical and standard
 results, or results for different radii, never replace each other. Editing a
 radius, changing the source or switching the option recalculates an enabled
-analysis. A later change to the values of the chosen per-atom property, such
-as an edited computed property or a newly imported external attribute, does
-not recalculate by itself; calculate again to use the new radii. Radical cells
+analysis. An enabled analysis follows changes to the chosen per-atom property,
+including edited computed properties and newly imported external attributes.
+When a computed radius needs an enabled analysis on a new frame, Voronoi waits
+for only those inputs and resumes after they finish. The selected radius
+property remains visible in the list while waiting. Other analyses can run
+independently; this wait does not allocate a calculation Worker. A missing or
+failed producer, a cyclic dependency on Voronoi's own output, or a negative or
+non-finite radius reports an error. Canceling Voronoi stops the waiting request.
+CPU and WebGPU use the same completed radius values. Radical cells
 change volumes, neighbors and indices by design; use
 the standard tessellation for comparisons with tools that report unweighted
 Voronoi cells.

@@ -118,7 +118,9 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     if (!smoothing.enabled) text('trajectory-smooth-status', 'Off. Displayed and analyzed coordinates are the file coordinates.');
     else if (frame?.smoothing) {
       const { firstFrame, lastFrame, frameCount } = frame.smoothing;
-      text('trajectory-smooth-status', `Frame ${getFrameIndex() + 1} is the average of ${plural(frameCount, 'frame')} (${firstFrame + 1}–${lastFrame + 1}). Every analysis uses these coordinates.`);
+      const limit = frame.smoothing.cacheLimited;
+      const cacheNote = limit ? ` Coordinate cache is limited to ${(limit.budgetBytes / 1024 ** 2).toFixed(0)} MiB; this window may reread frames.` : '';
+      text('trajectory-smooth-status', `Frame ${getFrameIndex() + 1} is the average of ${plural(frameCount, 'frame')} (${firstFrame + 1}–${lastFrame + 1}). Every analysis uses these coordinates.${cacheNote}`);
     } else text('trajectory-smooth-status', `Averaging ±${smoothing.window} frames…`);
   }
 

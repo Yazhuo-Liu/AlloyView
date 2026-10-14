@@ -52,6 +52,72 @@ export function fundamentalZoneQuaternion(quaternion, family) {
 // bounded by tan(π/8) for cubic axes, and by tan(π/12) along c and tan(π/4)
 // in the basal plane for hexagonal crystals.
 const RODRIGUES_LIMITS = Object.freeze({ cubic: Array(3).fill(Math.SQRT2 - 1), hexagonal: [1, 1, 2 - Math.sqrt(3)] });
+const FLAT_SYMMETRY = Object.freeze({ cubic: Float64Array.from(SYMMETRY.cubic.flat()), hexagonal: Float64Array.from(SYMMETRY.hexagonal.flat()) });
+
+// Rendering visits every atom on the main thread. Keep the public array-based
+// helpers below as the readable reference, but give the hot loop scalar locals
+// and a direct byte destination. Math.hypot, product order, symmetry ordering
+// and the 1e-12 tie rule deliberately match those helpers.
+function writeOrientationColor(colors, offset, family, ipf, sampleX, sampleY, sampleZ, qw, qx, qy, qz) {
+  const length = Math.hypot(qw, qx, qy, qz);
+  if (!family || !Number.isFinite(length) || length < 1e-12) {
+    colors[offset] = 130; colors[offset + 1] = 130; colors[offset + 2] = 130;
+    return false;
+  }
+  const w = qw / length, x = qx / length, y = qy / length, z = qz / length;
+  let red, green, blue;
+  if (ipf) {
+    const dx = (1 - 2 * (y * y + z * z)) * sampleX + 2 * (x * y + w * z) * sampleY + 2 * (x * z - w * y) * sampleZ;
+    const dy = 2 * (x * y - w * z) * sampleX + (1 - 2 * (x * x + z * z)) * sampleY + 2 * (y * z + w * x) * sampleZ;
+    const dz = 2 * (x * z + w * y) * sampleX + 2 * (y * z - w * x) * sampleY + (1 - 2 * (x * x + y * y)) * sampleZ;
+    const norm = Math.hypot(dx, dy, dz);
+    if (family === 'cubic') {
+      let low = Math.abs(dx) / norm, middle = Math.abs(dy) / norm, high = Math.abs(dz) / norm;
+      if (low > middle) { const swap = low; low = middle; middle = swap; }
+      if (middle > high) { const swap = middle; middle = high; high = swap; }
+      if (low > middle) { const swap = low; low = middle; middle = swap; }
+      red = Math.max(0, high - middle); green = Math.max(0, Math.SQRT2 * (middle - low)); blue = Math.sqrt(3) * low;
+    } else {
+      const period = Math.PI / 3, angle = ((Math.atan2(dy, dx) % period) + period) % period;
+      const basal = Math.min(angle, period - angle) / (Math.PI / 6), rho = Math.hypot(dx, dy) / norm;
+      red = Math.abs(dz) / norm; green = rho * basal; blue = rho * (1 - basal);
+    }
+    const maximum = Math.max(red, green, blue);
+    if (!(maximum > 0)) {
+      colors[offset] = 130; colors[offset + 1] = 130; colors[offset + 2] = 130;
+      return false;
+    }
+    colors[offset] = Math.round(255 * Math.sqrt(Math.max(0, red) / maximum));
+    colors[offset + 1] = Math.round(255 * Math.sqrt(Math.max(0, green) / maximum));
+    colors[offset + 2] = Math.round(255 * Math.sqrt(Math.max(0, blue) / maximum));
+  } else {
+    const operators = FLAT_SYMMETRY[family];
+    let largest = -1, rw = 0, rx = 0, ry = 0, rz = 0;
+    for (let operator = 0; operator < operators.length; operator += 4) {
+      const gw = operators[operator], gx = operators[operator + 1], gy = operators[operator + 2], gz = operators[operator + 3];
+      const candidate = w * gw - x * gx - y * gy - z * gz;
+      if (Math.abs(candidate) > largest + 1e-12) {
+        largest = Math.abs(candidate); rw = candidate;
+        rx = w * gx + x * gw + y * gz - z * gy;
+        ry = w * gy - x * gz + y * gw + z * gx;
+        rz = w * gz + x * gy - y * gx + z * gw;
+      }
+    }
+    if (rw < 0) { rw = -rw; rx = -rx; ry = -ry; rz = -rz; }
+    if (!(rw > 0)) {
+      colors[offset] = 130; colors[offset + 1] = 130; colors[offset + 2] = 130;
+      return false;
+    }
+    red = Math.abs(rx / rw) < 1e-9 ? 0 : rx / rw;
+    green = Math.abs(ry / rw) < 1e-9 ? 0 : ry / rw;
+    blue = Math.abs(rz / rw) < 1e-9 ? 0 : rz / rw;
+    const limits = RODRIGUES_LIMITS[family];
+    colors[offset] = Math.round(255 * Math.max(0, Math.min(1, .5 + .5 * red / limits[0])));
+    colors[offset + 1] = Math.round(255 * Math.max(0, Math.min(1, .5 + .5 * green / limits[1])));
+    colors[offset + 2] = Math.round(255 * Math.max(0, Math.min(1, .5 + .5 * blue / limits[2])));
+  }
+  return true;
+}
 
 /** RGB from the fundamental-zone Rodrigues vector, each component scaled by
  * its zone half-width: equivalent orientations always get the same color. */
@@ -178,19 +244,14 @@ export function orientationColorSource(frame, mode) {
 function resolveGrainOrientations(frame, source, ipf, sample, normalized) {
   const table = new Uint8Array((source.grainCount + 1) * 3);
   table.set(UNDEFINED_ORIENTATION_COLOR, 0);
-  const defined = new Uint8Array(source.grainCount + 1), quaternion = [0, 0, 0, 0];
+  const defined = new Uint8Array(source.grainCount + 1), orientations = source.orientations;
+  const [sampleX, sampleY, sampleZ] = sample;
   let cubic = 0, hexagonal = 0;
   for (let grain = 0; grain < source.grainCount; grain++) {
-    for (let axis = 0; axis < 4; axis++) quaternion[axis] = source.orientations[grain * 4 + axis];
     const structure = source.structures[grain], family = orientationFamily(structure);
-    let rgb = null;
-    if (family && !ipf) rgb = rodriguesRgb(quaternion, family);
-    else if (family) {
-      const weights = ipfWeights(sampleToCrystalDirection(quaternion, sample), structure);
-      if (weights && Math.max(...weights) > 0) rgb = ipfColorFromWeights(weights);
-    }
-    table.set(rgb ?? UNDEFINED_ORIENTATION_COLOR, (grain + 1) * 3);
-    defined[grain + 1] = rgb ? 1 : 0;
+    const q = grain * 4;
+    defined[grain + 1] = writeOrientationColor(table, (grain + 1) * 3, family, ipf, sampleX, sampleY, sampleZ,
+      orientations[q], orientations[q + 1], orientations[q + 2], orientations[q + 3]) ? 1 : 0;
     if (family === 'cubic') cubic++;
     if (family === 'hexagonal') hexagonal++;
   }
@@ -232,19 +293,15 @@ export class OrientationColorResolver {
     const key = mode === ORIENTATION_COLOR_MODES[0] ? `${normalized.direction}:${sample.join(',')}` : mode;
     const sources = [source.structures, source.orientations ?? null, ...(source.components ?? [])];
     if (this.current?.frame === frame && this.current.key === key && sources.every((value, index) => value === this.current.sources[index])) return this.current.palette;
-    const colors = new Uint8Array(frame.ids.length * 3), quaternion = [0, 0, 0, 0];
+    const colors = new Uint8Array(frame.ids.length * 3), orientations = source.orientations;
+    const components = source.components, structures = source.structures, ipf = mode === ORIENTATION_COLOR_MODES[0];
+    const [sampleX, sampleY, sampleZ] = sample;
     let undefinedCount = 0, cubic = 0, hexagonal = 0;
     for (let atom = 0; atom < frame.ids.length; atom++) {
-      for (let axis = 0; axis < 4; axis++) quaternion[axis] = source.orientations?.[atom * 4 + axis] ?? source.components?.[axis][atom];
-      const structure = source.structures[atom], family = orientationFamily(structure);
-      let rgb = null;
-      if (family && mode === ORIENTATION_COLOR_MODES[1]) rgb = rodriguesRgb(quaternion, family);
-      else if (family) {
-        const weights = ipfWeights(sampleToCrystalDirection(quaternion, sample), structure);
-        if (weights && Math.max(...weights) > 0) rgb = ipfColorFromWeights(weights);
-      }
-      if (!rgb) { rgb = UNDEFINED_ORIENTATION_COLOR; undefinedCount++; }
-      colors.set(rgb, atom * 3);
+      const family = orientationFamily(structures[atom]), q = atom * 4;
+      if (!writeOrientationColor(colors, atom * 3, family, ipf, sampleX, sampleY, sampleZ,
+        orientations?.[q] ?? components?.[0][atom], orientations?.[q + 1] ?? components?.[1][atom],
+        orientations?.[q + 2] ?? components?.[2][atom], orientations?.[q + 3] ?? components?.[3][atom])) undefinedCount++;
       if (family === 'cubic') cubic++;
       if (family === 'hexagonal') hexagonal++;
     }

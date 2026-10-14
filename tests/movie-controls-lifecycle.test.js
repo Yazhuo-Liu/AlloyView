@@ -31,12 +31,15 @@ class Element extends EventTarget {
 }
 
 function fixture(t, { prepareExport = async () => {}, showFrame = null, captureImage = null, VideoEncoderClass = null, inert = false } = {}) {
-  const root = new EventTarget(); root.nodes = new Map(); root.defaultView = { Event }; root.activeElement = null;
+  const root = new EventTarget(); root.nodes = new Map(); root.activeElement = null;
+  const animations = new Map(); let nextAnimation = 0;
+  root.defaultView = { Event, requestAnimationFrame: callback => { const id = ++nextAnimation; animations.set(id, callback); return id; },
+    cancelAnimationFrame: id => animations.delete(id) };
   root.createElement = tag => new Element(tag, root);
   root.getElementById = id => root.nodes.get(id) ?? null;
   root.head = root.createElement('head'); root.body = root.createElement('body'); root.application = root.createElement('div');
   root.application.inert = inert; root.querySelector = selector => selector === '.app-shell' ? root.application : null;
-  for (const id of ['movie-state', 'movie-status', 'movie-summary', 'movie-format', 'export-movie', 'movie-resolution', 'export-resolution']) {
+  for (const id of ['movie-state', 'movie-status', 'movie-summary', 'movie-format', 'export-movie', 'preview-movie', 'movie-resolution', 'export-resolution']) {
     const node = root.createElement(id.includes('resolution') || id === 'movie-format' ? 'select' : 'button'); node.id = id;
   }
   root.nodes.get('export-resolution').value = 'current';
@@ -54,7 +57,25 @@ function fixture(t, { prepareExport = async () => {}, showFrame = null, captureI
     frames: { mode: 'fit', first: 0, last: 4, step: 1, rate: 10 } }, output: { format: 'png-zip', fps: 2 } });
   t.after(() => controls.dispose());
   const fields = Object.fromEntries(root.nodes);
-  return { controls, root, fields, renderer, state, lock };
+  return { controls, root, fields, renderer, state, lock, animations, tick(now) {
+    const [id, callback] = animations.entries().next().value ?? [];
+    assert.equal(typeof callback, 'function', 'a preview animation is pending');
+    animations.delete(id); callback(now);
+  } };
+}
+
+// The real app's navigation supersedes a previous request immediately, while
+// parser responses may arrive later. Keep those separate in the race fixtures.
+function delayedNavigation(getFixture) {
+  const requests = []; let generation = 0;
+  return { requests, showFrame(index) {
+    const f = getFixture(), source = f.state.source, request = ++generation, gate = deferred();
+    requests.push({ index, ...gate }); f.state.shown.push(index);
+    return gate.promise.then(() => {
+      if (request !== generation || source !== f.state.source) return false;
+      f.state.frame = index; return true;
+    });
+  } };
 }
 
 async function waitFor(check) {
@@ -175,4 +196,114 @@ test('configuration restoration owns the automation lock and is named when movie
   await f.controls.exportMovie();
   assert.equal(f.fields['movie-state'].textContent, 'Failed', 'releasing the configuration lock admits the next movie');
   assert.equal(f.lock.owner(), null);
+});
+
+test('stopping a slow preview cancels its pending navigation even while its starting frame is displayed', async t => {
+  let f; const navigation = delayedNavigation(() => f);
+  f = fixture(t, { showFrame: navigation.showFrame });
+  const original = camera();
+  f.controls.startPreview(); f.tick(0); f.tick(200);
+  assert.equal(f.state.frame, 3); assert.deepEqual(f.state.shown, [0]);
+  assert.notEqual(f.renderer.yaw, original.yaw);
+  const stopped = f.controls.stopPreview();
+  assert.deepEqual(f.state.shown, [0, 3], 'the unchanged displayed frame still supersedes the pending load');
+  assert.equal(f.fields['movie-state'].textContent, 'Restoring'); assert.equal(f.controls.isBusy(), true);
+  assert.equal(f.lock.owner(), 'movie'); assert.equal(f.fields['preview-movie'].disabled, true);
+  assert.deepEqual(Object.fromEntries(Object.keys(original).map(key => [key, f.renderer[key]])), original);
+  navigation.requests[0].resolve(); await delay(0);
+  assert.equal(f.state.frame, 3, 'the late parser response cannot display its abandoned frame');
+  assert.equal(f.lock.owner(), 'movie', 'restoration retains ownership until its navigation settles');
+  navigation.requests[1].resolve(); await stopped;
+  assert.equal(f.controls.isBusy(), false); assert.equal(f.lock.owner(), null);
+  assert.equal(f.fields['movie-state'].textContent, 'Idle'); assert.equal(f.fields['preview-movie'].textContent, 'Preview');
+});
+
+test('natural preview completion restores a slow pending frame and a quick restart cannot overlap its cleanup', async t => {
+  let f; const navigation = delayedNavigation(() => f);
+  f = fixture(t, { showFrame: navigation.showFrame });
+  f.controls.startPreview(); f.tick(0); f.tick(1000);
+  assert.deepEqual(f.state.shown, [0, 3]); assert.equal(f.animations.size, 0);
+  f.controls.startPreview(); assert.equal(f.animations.size, 0, 'restart waits for the owned restoration');
+  const stopping = f.controls.stopPreview();
+  navigation.requests[1].resolve(); await stopping;
+  f.controls.startPreview(); f.tick(2000);
+  assert.deepEqual(f.state.shown, [0, 3, 0]); assert.equal(f.lock.owner(), 'movie');
+  navigation.requests[0].resolve(); await delay(0);
+  assert.equal(f.controls.isBusy(), true); assert.equal(f.lock.owner(), 'movie', 'old cleanup cannot release a new preview');
+  navigation.requests[2].resolve(); await delay(0);
+  assert.equal(f.state.frame, 0);
+  const finalStop = f.controls.stopPreview(); navigation.requests[3].resolve(); await finalStop;
+  assert.equal(f.state.frame, 3); assert.equal(f.lock.owner(), null);
+});
+
+test('a viewport gesture stops at the user camera and cancels an unshown preview frame', async t => {
+  let f; const navigation = delayedNavigation(() => f);
+  f = fixture(t, { showFrame: navigation.showFrame });
+  f.controls.startPreview(); f.tick(0); f.tick(300);
+  f.renderer.yaw = 2; f.renderer.pan = [4, 5, 6];
+  f.renderer.canvas.dispatchEvent(new Event('pointerdown'));
+  assert.deepEqual(f.state.shown, [0, 3]);
+  assert.equal(f.renderer.yaw, 2); assert.deepEqual(f.renderer.pan, [4, 5, 6]);
+  navigation.requests[1].resolve(); await f.controls.stopPreview();
+  navigation.requests[0].resolve(); await delay(0);
+  assert.equal(f.state.frame, 3); assert.equal(f.renderer.yaw, 2);
+  assert.match(f.fields['movie-status'].textContent, /Preview stopped at this pose/);
+  assert.equal(f.lock.owner(), null);
+});
+
+test('a source change discards a pending preview without restoring old frames or camera', async t => {
+  let f; const navigation = delayedNavigation(() => f);
+  f = fixture(t, { showFrame: navigation.showFrame });
+  f.controls.startPreview(); f.tick(0);
+  f.state.source = 'b'; f.state.frame = 1; f.renderer.yaw = 5;
+  f.controls.reset();
+  assert.deepEqual(f.state.shown, [0]); assert.equal(f.lock.owner(), null);
+  navigation.requests[0].resolve(); await delay(0);
+  assert.equal(f.state.frame, 1); assert.equal(f.renderer.yaw, 5);
+  assert.equal(f.controls.hasKeyframes(), false);
+});
+
+test('a source replacement during preview restoration keeps its new frame, pose and settings', async t => {
+  let f; const navigation = delayedNavigation(() => f);
+  f = fixture(t, { showFrame: navigation.showFrame });
+  f.controls.startPreview(); f.tick(0);
+  const stopping = f.controls.stopPreview();
+  f.state.source = 'b'; f.state.frame = 1; f.renderer.yaw = 5;
+  f.controls.reset();
+  const fresh = { path: { keyframes: [{ time: 0, camera: { ...camera(), yaw: 5 }, frame: null },
+    { time: 2, camera: { ...camera(), yaw: 6 }, frame: null }], frames: { mode: 'current' } } };
+  f.controls.restore(fresh);
+  navigation.requests[1].reject(new Error('Obsolete restore failed')); await stopping;
+  navigation.requests[0].resolve(); await delay(0);
+  assert.equal(f.state.frame, 1); assert.equal(f.renderer.yaw, 5); assert.deepEqual(f.state.notices, []);
+  assert.deepEqual(f.controls.getState().path.keyframes.map(row => [row.time, row.camera.yaw]), [[0, 5], [2, 6]]);
+  assert.equal(f.lock.owner(), null); assert.equal(f.controls.isBusy(), false);
+});
+
+test('restoration failures and disposal settle preview ownership without publishing stale callbacks', async t => {
+  for (const action of ['reject', 'dispose']) {
+    let f; const navigation = delayedNavigation(() => f);
+    f = fixture(t, { showFrame: navigation.showFrame });
+    f.controls.startPreview(); f.tick(0);
+    const stopping = f.controls.stopPreview();
+    if (action === 'dispose') {
+      f.controls.dispose(); f.controls.startPreview(); assert.equal(f.animations.size, 0);
+      f.fields['movie-state'].textContent = 'Disposed';
+    }
+    navigation.requests[1].reject(new Error('Restore read failed')); await stopping;
+    navigation.requests[0].resolve(); await delay(0);
+    assert.equal(f.lock.owner(), null); assert.equal(f.controls.isBusy(), false); assert.equal(f.state.frame, 3);
+    assert.deepEqual(f.state.notices, action === 'reject' ? ['Restore read failed'] : []);
+    assert.equal(f.fields['movie-state'].textContent, action === 'reject' ? 'Idle' : 'Disposed');
+  }
+});
+
+test('a camera-only preview restores immediately without dispatching any frame navigation', async t => {
+  const f = fixture(t), saved = f.controls.getState();
+  saved.path.frames.mode = 'current'; f.controls.restore(saved);
+  f.controls.startPreview(); f.tick(0); f.tick(300);
+  assert.notEqual(f.renderer.yaw, camera().yaw);
+  f.controls.stopPreview();
+  assert.equal(f.renderer.yaw, camera().yaw); assert.deepEqual(f.state.shown, []);
+  assert.equal(f.controls.isBusy(), false); assert.equal(f.lock.owner(), null);
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLegendScale, scalarLegendHistogram } from '../src/render/legend-histogram.js';
+import { createLegendScale, updateLegendScale, scalarLegendHistogram } from '../src/render/legend-histogram.js';
 
 class Element {
   constructor(root, tag) {
@@ -8,6 +8,7 @@ class Element {
     this.listeners = new Map(); this.textContent = ''; this.style = {}; this.hidden = false;
   }
   append(...children) { this.children.push(...children); }
+  insertBefore(child, before) { this.children.splice(this.children.indexOf(before), 0, child); }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   addEventListener(name, callback) { this.listeners.set(name, callback); }
   dispatch(name, event = {}) { this.listeners.get(name)?.({ target: this, ...event }); }
@@ -86,4 +87,23 @@ test('integer legends snap the probe to the nearest integer and report its popul
   scale.dispatch('pointermove', { clientX: 100 });
   assert.equal(label.textContent, '10\n0 atoms with this value');
   assert.equal(scale.title, 'Bars count atoms at each integer value of the color range.');
+});
+
+
+test('an existing scale updates its gradient, histogram and active probe from the latest frame without replacing nodes', () => {
+  const first = { minimum: 0, maximum: 2, unit: 'eV', gradient: 'red', property: { data: Uint8Array.of(0, 1, 2) } };
+  const scale = createLegendScale(root, first);
+  const gradient = scale.find('legend-gradient')[0], marker = scale.find('legend-probe')[0], label = scale.find('legend-probe-label')[0];
+  const histogram = scale.all('svg')[0], bars = scale.all('path')[0];
+  scale.dispatch('pointermove', { clientX: 200 });
+  const next = { minimum: 10, maximum: 12, unit: 'Å', gradient: 'blue', property: { data: Uint8Array.of(10, 11, 11, 11, 12) } };
+  assert.equal(updateLegendScale(scale, next), scale);
+  assert.equal(scale.find('legend-gradient')[0], gradient); assert.equal(scale.find('legend-probe')[0], marker);
+  assert.equal(scale.find('legend-probe-label')[0], label); assert.equal(scale.all('svg')[0], histogram); assert.equal(scale.all('path')[0], bars);
+  assert.equal(gradient.style.background, 'blue'); assert.equal(label.textContent, '11 Å\n3 atoms with this value');
+  updateLegendScale(scale, { ...next, minimum: 0, maximum: 20 }, { histogram: false });
+  assert.equal(histogram.style.display, 'none'); assert.equal(label.textContent, '10 Å');
+  updateLegendScale(scale, next);
+  assert.equal(histogram.style.display, ''); assert.equal(scale.all('svg').length, 1);
+  assert.equal(label.textContent, '11 Å\n3 atoms with this value');
 });

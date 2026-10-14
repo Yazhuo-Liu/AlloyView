@@ -14,6 +14,15 @@ PNG legend, and their settings are saved in configuration JSON.
 
 Choose wrapped coordinates to place periodic atoms inside the simulation cell, or unwrapped coordinates to show the available trajectory positions. Without image flags or unwrapped columns in the file, a trajectory's unwrapped positions are inferred from consecutive frames (see [Trajectory tools](trajectory-tools.md)). **Color by** selects atom types, imported scalar properties, or completed analysis fields. Scalar palettes, fixed ranges, automatic ranges and visibility filters also appear in the viewport legend. Set the range by typing **Min** and **Max** or by dragging the two-thumb slider above them. The slider spans the data range, widened to include any typed limit outside it; its ends give the exact data minimum and maximum. As with the number fields, moving one limit past the other pushes the other one along. A faint histogram behind a scalar gradient divides the displayed range into 48 equal value bands (one band per value for small integer ranges) and shows how many finite values fall in each; square-root heights keep sparse bands visible. Hover or tap the gradient to read the value at that position and how many atoms lie between the limits of its band, for example *6 atoms between 9.92 and 10.26*. The gradient's tooltip explains the bands and counts values outside the range.
 
+During playback, a legend with the same quantity and category layout updates
+its existing controls in place. The focused field keeps an incomplete number
+draft, selects and visibility checkboxes retain keyboard focus, and a captured
+range thumb keeps its track until release. A range edit still turns **Auto**
+off immediately; its exact limits apply to the current frame and image exports.
+The bars and hover probe update with the latest values. Switching to a different
+legend layout (for example an entirely undefined field) replaces only the
+quantity-specific controls; **Color by** itself stays in place.
+
 Every categorical legend has a visibility checkbox for each class, including each element in **Atom type**. Element choices are stored by label and continue to apply after switching color quantities or trajectory frames. Other categorical filters belong to their own property, so hiding a CNA class does not hide a PTM class with the same numeric ID. These display filters intersect with appearance and scalar-range filters, synchronize to the second view, and are saved in configuration JSON.
 
 For a numeric property containing at most **32 distinct safe integer values**,
@@ -271,13 +280,18 @@ failures retry with smaller tiles; a lost graphics context or an unavailable
 image canvas reports an export error and releases temporary targets.
 
 Chosen-size images use the view's own rendering pipeline, so atom edges, lines
-and colors look as on screen. An export at the canvas size reproduces the
-Current viewport image exactly. Without a background, each tile is rendered
-twice, on black (k) and on white (w), and solved for straight color and alpha:
-α = 1 − mean(w − k) and color = k / α. The transparent PNG therefore
-composites over any background exactly like the view rendered on that
-background, with no dark fringes or see-through atom edges. The second render
-roughly doubles the export time.
+and colors look as on screen. Opaque capture at the native canvas size keeps
+the original Current viewport readback. Without a background, Current viewport
+renders black and white in that original viewport, retaining its native size
+and antialiasing. Chosen-size exports perform the same two passes per tile.
+The matte recovers straight color and alpha with
+α = 1 − mean(w − k) and color = k / α. This removes dark fringes and incorrect
+alpha on atom edges and translucent layers. Voronoi edge styling keeps the
+actual light/dark background's appearance through both passes. Eight-bit
+blending and Canvas conversion can introduce small re-composition differences;
+see the measured cases in [validation](../VALIDATION.md). The second render
+roughly doubles the rendering work. Native viewport capture adds no offscreen
+size limit; the dimension/pixel limits above apply to chosen resolutions.
 
 PNG preserves alpha when **Include background in PNG** is unchecked. Legend and XYZ annotations are composited independently, so enabling a legend does not restore a solid canvas background. With a background, the legend panel uses the colors of the on-screen legend in the current light or dark theme. A scalar legend shows the quantity, color bar and limits; the color map's name is not written into the image. JPG uses an opaque background because the format has no alpha channel.
 

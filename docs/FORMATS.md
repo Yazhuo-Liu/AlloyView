@@ -342,6 +342,15 @@ the line-based parser, so results and error messages do not depend on the
 input path. PDB, LAMMPS data and POSCAR files are always parsed from decoded
 text.
 
+Dump finalization uses a bounded lookup for common numeric type IDs and a
+sparse lookup for larger IDs, including safe integers above the 32-bit range.
+Type labels retain their numeric order. Type assignment, wrapping and
+Cartesian output share one atom loop; Cartesian-to-fractional conversion,
+wrapping, image addition and final coordinate storage retain their existing
+Float32 rounding points. Explicit unwrapped coordinate columns remain
+authoritative over image flags. Finalization still runs in the parser Worker,
+and the complete property arrays remain available to every consumer.
+
 In Chrome on a 32-thread workstation, reading and parsing one frame in a
 parser Worker takes 21 ms for the 28,800-atom HEA dump, 74 ms for the
 60,229-atom Fe loop dump and 106 ms for the 129,904-atom Ni grain-boundary
@@ -364,6 +373,10 @@ parsed in parallel. ID-based unwrapping retains ordered continuity states
 (IDs plus wrapped/unwrapped fractional coordinates), so completion order does
 not change the inferred images. Backward access resumes from bounded retained
 checkpoints or replays from the first image when necessary.
+When the complete current and previous ID sequences agree, continuity uses
+their existing row order without allocating a per-frame ID map. A mismatch
+anywhere in that sequence retains the stable-ID lookup for the entire frame;
+missing IDs and image-flag overflow keep the same errors.
 
 After the first visible frame, the main thread estimates parsed bytes per frame
 and selects a cache limit from the browser heap limit/device-memory hints when

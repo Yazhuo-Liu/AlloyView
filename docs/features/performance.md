@@ -63,6 +63,15 @@ each has a counterpart without isolation.
   legend drag preview uses normalized 32-bit scalars, and the exact CPU
   palette returns when the edit ends or an image is exported. A crystal drag
   commits through the same path as a typed origin.
+  PTM and grain orientation colors normalize quaternions in scalar locals,
+  sort cubic directions without temporary arrays, and write RGB bytes directly.
+  Rodrigues coloring uses a flat symmetry table and the same first-operator
+  tie rule. The public IPF and Rodrigues helpers remain the reference; the
+  optimized path produces identical bytes for packed and component inputs.
+  Picking rejects farther centers and a conservative screen bound before the
+  exact radius and slice tests. Standard projections use that bound; arbitrary
+  projections keep the exact path. Center-depth ordering, equal-depth ties,
+  the minimum three CSS-pixel radius, replicas and visibility are unchanged.
 
 ### Measured effects
 
@@ -683,6 +692,58 @@ return when editing ends or an image is exported. This temporary rendering
 preview does not alter scientific values or analysis backends.
 
 Browsers provide no portable way to use a WebGPU `GPUBuffer` directly as a WebGL buffer. A future WebGPU renderer could draw from retained analysis buffers on the same `GPUDevice`, avoiding the full array round trip for supported displays. It would need to keep those buffers alive, map colors on GPU and write any CPU precision corrections back before drawing. The present analysis Worker owns its device and releases temporary output buffers after returning results, so this would require a change to device ownership and rendering. Legends, atom inspection and data export would still need summary statistics or selected values on the CPU.
+
+## Coordinate and display preparation
+
+Smoothing retains a bounded nearby window of private coordinate snapshots.
+The budget follows the requested window and available device/heap memory;
+actual backing buffers and interned stable ID arrays are counted once.
+Snapshots beyond the ceiling are usable for the current operation but are
+not retained. The panel reports limited retention when rereads may be needed.
+A foreground request joining a background read promotes the existing parser
+job and CPU reservation. Cancellation still waits for posted work to acknowledge
+before releasing its resources. Workers and native modules remain reusable.
+
+Dump parsing combines type assignment and coordinate-tail preparation without
+altering its original Float32 rounding points or authoritative unwrapped
+coordinates. Two intermediate three-component buffers are removed. CFG
+continuity takes a direct row path after checking that every ID is in the
+same order, and maps reordered rows by stable IDs. These optimizations still
+parse full frames and validate all properties; coordinate-only reads remain
+in the [backlog](../TODO.md).
+
+Orientation coloring computes quaternion transforms in scalar locals and
+writes final RGB bytes directly. Picking checks noncompetitive center depths
+and a conservative screen bound before exact radius and slice calculations;
+unusual projections or overflowing intermediate arithmetic use the original
+path. Both loops preserve their preceding output and tie rules. They execute
+on the browser CPU and do not change the parallel analysis kernels.
+
+Unchanged legend schemas reuse their controls and event listeners, while
+updating their current frame, histogram and probe. This preserves editing
+without allocating six new controls on every refresh. Range dragging retains
+the existing shader-uniform preview and performs its exact commit on release.
+
+Transparent image matte processing skips empty and opaque packed pixels.
+A fixed small sample chooses the original general loop for mostly translucent
+images; that choice only affects speed. Native byte order, unaligned inputs,
+input alpha and aliasing retain the original formula's behavior. Both native
+and chosen-resolution captures use the same matte helper.
+
+The [2026-10-14 validation record](../VALIDATION.md) contains independent
+oracles, read counts and interleaved measurements. To reproduce the CPU loops:
+
+```bash
+npm run build
+node scripts/browser-render-hot-loops.mjs --production --benchmark
+npm run benchmark:matte
+npm run benchmark:parser-tail -- --rounds=7
+```
+
+These benchmarks check outputs before reporting elapsed time. They exclude
+cached color hits, GPU computation and WebGL uploads; parser-tail timings
+exclude parsing atom rows. Software-adapter rendering verifies correctness
+and cannot predict hardware GPU speed.
 
 ## Startup, failure recovery and background geometry
 

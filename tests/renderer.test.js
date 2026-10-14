@@ -150,9 +150,10 @@ test('selection visibility reaches attached primitives while malformed masks lea
   assert.deepEqual(primitiveMasks[1], [mask, null]);
 });
 
-test('transparent PNG export uses a transparent render and restores the viewport', () => {
+test('transparent current PNG recovers straight alpha with the native viewport and restores its background', () => {
   const originalDocument = globalThis.document;
   const renderOptions = [];
+  const appearances = [];
   let exportedImage;
   let exportedType;
 
@@ -182,25 +183,34 @@ test('transparent PNG export uses a transparent render and restores the viewport
   try {
     const renderer = Object.create(WebGLRenderer.prototype);
     renderer.canvas = { width: 1, height: 2 };
+    const background = renderer.background = [0.2, 0.3, 0.4];
+    let reads = 0;
     renderer.gl = {
       RGBA: 0x1908,
       UNSIGNED_BYTE: 0x1401,
       readPixels(x, y, width, height, format, type, pixels) {
         assert.deepEqual([x, y, width, height, format, type], [0, 0, 1, 2, 0x1908, 0x1401]);
-        // WebGL returns bottom-to-top; the exported 2D image must be top-to-bottom.
-        pixels.set([10, 20, 30, 40, 50, 60, 70, 80]);
+        // Black/white RGB is composited with opaque framebuffer alpha.
+        // The original direct readback would retain that background in RGB.
+        pixels.set(reads++ ? [148, 158, 168, 255, 255, 255, 255, 255] : [20, 30, 40, 255, 0, 0, 0, 255]);
       },
     };
-    renderer.render = (timestamp, options) => { renderOptions.push(options); };
+    renderer.render = (timestamp, options) => {
+      renderOptions.push({ options, background: renderer.background });
+      appearances.push(renderer.exportAppearanceBackground);
+    };
 
     renderer.exportPng('transparent.png', { includeBackground: false });
 
     assert.deepEqual(renderOptions, [
-      { transparentBackground: true, trackStats: false },
-      { trackStats: false },
+      { options: { transparentBackground: false, trackStats: false }, background: [0, 0, 0] },
+      { options: { trackStats: false }, background: [1, 1, 1] },
+      { options: { trackStats: false }, background },
     ]);
+    assert.equal(renderer.background, background);
+    assert.deepEqual(appearances, [background, background, undefined], 'only the clear background changes during matte');
     assert.equal(exportedType, 'image/png');
-    assert.deepEqual([...exportedImage.data], [50, 60, 70, 80, 10, 20, 30, 40]);
+    assert.deepEqual([...exportedImage.data], [0, 0, 0, 0, 40, 60, 80, 127]);
   } finally {
     if (originalDocument === undefined) delete globalThis.document;
     else globalThis.document = originalDocument;

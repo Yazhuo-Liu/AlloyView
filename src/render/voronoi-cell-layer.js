@@ -646,7 +646,7 @@ export class VoronoiCellLayer {
     // Draw light outlines after every replica's translucent faces. A later
     // face pass can otherwise blend over and erase an earlier replica's edges.
     this.outline.begin(renderer, planes, { scale: this.options.scale });
-    const edges = selected ? SELECTED_EDGE_STYLE : voronoiEdgeStyle(baseColor, renderer.background);
+    const edges = selected ? SELECTED_EDGE_STYLE : voronoiEdgeStyle(baseColor, renderer.exportAppearanceBackground ?? renderer.background);
     for (const replica of renderer.replicas) {
       this.outline.draw(this, this.vertexCount, this.edgeCount,
         replica.offset.map((value, axis) => value + renderer.displayPositions[atom * 3 + axis]), edges);
@@ -939,7 +939,7 @@ export class VoronoiAllCellLayer {
     // the resolved cell depth also removes every hidden outline.
     this.outline.begin(renderer, planes, { batched: true, textureWidth: this.textureWidth, scale,
       depthFade: surface ? 0 : XRAY_EDGE_FADE });
-    const edges = voronoiEdgeStyle(color, renderer.background, ALL_CELL_EDGE_WIDTH, ALL_CELL_SHORT_EDGE);
+    const edges = voronoiEdgeStyle(color, renderer.exportAppearanceBackground ?? renderer.background, ALL_CELL_EDGE_WIDTH, ALL_CELL_SHORT_EDGE);
     for (const replica of renderer.replicas) {
       this.outline.setAnchor(trueSize ? 0 : -1);
       for (const chunk of this.chunks) {

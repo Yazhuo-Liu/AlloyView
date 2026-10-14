@@ -2,12 +2,20 @@ import {
   INFERRED_UNWRAP_SOURCE, MAX_TRAJECTORY_LINE_VERTICES, SmoothingAccumulator, TrajectoryLineBuilder, TrajectoryUnwrapper,
   inferredUnwrappedPositions, smoothingWindow, trajectoryLineFrames,
 } from '../data/trajectory-tools.js';
+import { cpuMemoryBudget } from '../analysis/cpu-memory.js';
 
 /** Raw coordinates kept for reuse by neighbouring smoothing windows, the
  * unwrapping frontier and line sampling. It is a cache: any frame can be read
  * again, so eviction changes only speed, never results. */
 export const TRAJECTORY_COORDINATE_BYTES = 192 * 1024 ** 2;
+export const MAX_TRAJECTORY_COORDINATE_BYTES = 768 * 1024 ** 2;
 const READ_AHEAD = 3;
+
+/** Hints describe capacity, not free RAM. Use at most half the existing CPU
+ * budget so source frames, parser outputs and native analyses retain room. */
+export function trajectoryCoordinateBudgetLimit(environment = globalThis) {
+  return Math.max(1, Math.min(MAX_TRAJECTORY_COORDINATE_BYTES, Math.floor(cpuMemoryBudget(environment) / 2)));
+}
 
 const cancelled = () => new DOMException('Trajectory processing cancelled.', 'AbortError');
 const checkSignal = signal => { if (signal?.aborted) throw cancelled(); };
@@ -19,11 +27,11 @@ function cloneCell(cell) {
 
 /** Only what other frames' calculations read. A frame that will be
  * transferred to the page is copied; a frame read here is retained as is. */
-function coordinateSnapshot(frame, index, copy) {
+function coordinateSnapshot(frame, index, copy, ids) {
   const own = value => value && (copy ? value.slice() : value);
   return {
     frameIndex: index,
-    ids: copy ? (ArrayBuffer.isView(frame.ids) ? frame.ids.slice() : Array.from(frame.ids)) : frame.ids,
+    ids,
     idSource: frame.idSource,
     fractional: own(frame.fractional),
     cell: copy ? cloneCell(frame.cell) : frame.cell,
@@ -32,13 +40,48 @@ function coordinateSnapshot(frame, index, copy) {
   };
 }
 
-function snapshotBytes(snapshot) {
-  let bytes = 256;
-  for (const value of [snapshot.ids, snapshot.fractional, snapshot.unwrappedPositions]) {
-    if (ArrayBuffer.isView(value)) bytes += value.byteLength;
-    else if (Array.isArray(value)) bytes += value.length * 16;
-  }
+function arrayBytes(value) {
+  if (ArrayBuffer.isView(value)) return value.buffer.byteLength;
+  if (!Array.isArray(value)) return 0;
+  let bytes = value.length * 8;
+  for (const item of value) bytes += typeof item === 'string' ? 16 + item.length * 2 : 8;
   return bytes;
+}
+
+function snapshotReferences(snapshot) {
+  const references = new Map();
+  for (const value of [snapshot.ids, snapshot.fractional, snapshot.unwrappedPositions, snapshot.cell.origin, snapshot.cell.vectors]) {
+    if (!value) continue;
+    const identity = ArrayBuffer.isView(value) ? value.buffer : value;
+    references.set(identity, arrayBytes(value));
+  }
+  return references;
+}
+
+function equalIds(first, second) {
+  if (first === second) return true;
+  if (first.constructor !== second.constructor || first.length !== second.length) return false;
+  for (let index = 0; index < first.length; index += 1) if (!Object.is(first[index], second[index])) return false;
+  return true;
+}
+
+function lowerBound(indices, value, start) {
+  let first = start, last = indices.length;
+  while (first < last) {
+    const middle = first + Math.floor((last - first) / 2);
+    if (indices[middle] < value) first = middle + 1; else last = middle;
+  }
+  return first;
+}
+
+function waitForRead(promise, signal) {
+  if (!signal) return promise;
+  checkSignal(signal);
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(cancelled());
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
 }
 
 /**
@@ -47,16 +90,36 @@ function snapshotBytes(snapshot) {
  * results never depend on which frames were requested or prefetched first.
  */
 export class TrajectoryProcessor {
-  constructor({ readFrame, getFrameCount, coordinateBudgetBytes = TRAJECTORY_COORDINATE_BYTES, eventBudgetBytes,
-    readAhead = READ_AHEAD } = {}) {
+  constructor({ readFrame, getFrameCount, promoteRead, environment = globalThis, coordinateBudgetBytes = TRAJECTORY_COORDINATE_BYTES, eventBudgetBytes,
+    coordinateBudgetLimitBytes = trajectoryCoordinateBudgetLimit(environment), readAhead = READ_AHEAD } = {}) {
     if (typeof readFrame !== 'function' || typeof getFrameCount !== 'function') throw new TypeError('A trajectory processor requires frame access.');
+    if (!Number.isSafeInteger(coordinateBudgetBytes) || coordinateBudgetBytes < 1 ||
+      !Number.isSafeInteger(coordinateBudgetLimitBytes) || coordinateBudgetLimitBytes < 1) {
+      throw new RangeError('Trajectory coordinate cache budgets must be positive safe integers.');
+    }
+    if (!Number.isSafeInteger(readAhead) || readAhead < 0) throw new RangeError('Trajectory read-ahead must be a nonnegative safe integer.');
     this.readFrame = readFrame;
+    this.promoteRead = promoteRead;
     this.getFrameCount = getFrameCount;
-    this.coordinateBudgetBytes = coordinateBudgetBytes;
+    this.coordinateBudgetLimitBytes = Math.min(MAX_TRAJECTORY_COORDINATE_BYTES, coordinateBudgetLimitBytes);
+    this.baseCoordinateBudgetBytes = Math.min(coordinateBudgetBytes, this.coordinateBudgetLimitBytes);
+    this.coordinateBudgetBytes = this.baseCoordinateBudgetBytes;
     this.readAhead = readAhead;
     this.unwrapper = new TrajectoryUnwrapper(eventBudgetBytes === undefined ? {} : { eventBudgetBytes });
     this.store = new Map();
     this.storeBytes = 0;
+    this.references = new Map();
+    this.idArrays = new Map();
+    this.idCandidates = [];
+    this.windows = new Set();
+    this.cacheWindows = [];
+    this.sortedIndices = [];
+    this.indexStart = 0;
+    this.lastWindow = null;
+    this.lastCoordinateIndex = 0;
+    this.coordinateSnapshotBytes = 0;
+    this.idSnapshotBytes = 0;
+    this.requestedCoordinateBytes = this.coordinateBudgetBytes;
     this.reading = new Map();
     this.lockTail = Promise.resolve();
     this.closed = false;
@@ -66,24 +129,168 @@ export class TrajectoryProcessor {
     this.closed = true;
     this.store.clear();
     this.reading.clear();
+    this.references.clear();
+    this.idArrays.clear();
+    this.idCandidates = [];
+    this.windows.clear();
+    this.cacheWindows = [];
+    this.sortedIndices = [];
+    this.indexStart = 0;
+    this.lastWindow = null;
     this.storeBytes = 0;
   }
 
+  /** Intern only privately retained ID arrays; outgoing frames keep their
+   * own IDs, so transfer to the page cannot detach any cached snapshot. */
+  snapshotIds(ids, copy) {
+    // Stable trajectories need one comparison, without per-atom keys or a
+    // hash table. Bound the search when atom order changes between frames.
+    for (let index = this.idCandidates.length - 1; index >= 0; index--) {
+      const candidate = this.idCandidates[index];
+      if (equalIds(candidate, ids)) return candidate;
+    }
+    return copy ? (ArrayBuffer.isView(ids) ? ids.slice() : Array.from(ids)) : ids;
+  }
+
+  beginWindow(index, window, frameCount, background) {
+    const { first, last } = smoothingWindow(index, window, frameCount);
+    const scope = { first, last: Math.min(frameCount - 1, last + 1 + this.readAhead) };
+    this.windows.add(scope);
+    if (!background || !this.lastWindow) this.lastWindow = scope;
+    this.resizeCache();
+    return scope;
+  }
+
+  resizeCache() {
+    const windows = [...this.windows];
+    if (this.lastWindow && !this.windows.has(this.lastWindow)) windows.push(this.lastWindow);
+    const ordered = windows.sort((first, second) => first.first - second.first);
+    const ranges = [];
+    let frames = 0, last = -1;
+    for (const window of ordered) {
+      frames += Math.max(0, window.last - Math.max(window.first, last + 1) + 1);
+      last = Math.max(last, window.last);
+      const preceding = ranges.at(-1);
+      if (preceding && window.first <= preceding.last + 1) preceding.last = Math.max(preceding.last, window.last);
+      else ranges.push({ first: window.first, last: window.last });
+    }
+    this.cacheWindows = ranges;
+    // The scope includes one extra frame and read-ahead beyond the window.
+    // IDs count once for stable ordering; observed alternate orders count
+    // separately rather than treating shared IDs as free memory.
+    const desiredFrames = frames;
+    let coordinateBytes = this.cacheDistance(this.lastCoordinateIndex) === 0 ? this.coordinateSnapshotBytes : 0;
+    let idBytes = coordinateBytes ? this.idSnapshotBytes : 0;
+    const idArrays = new Set();
+    // Each smoothing interval is at most 2w + 2 + read-ahead frames. Never
+    // scan all cached tiny frames to size a bounded averaging window.
+    for (const range of ranges) for (let index = range.first; index <= range.last; index++) {
+      const entry = this.store.get(index);
+      if (entry) {
+        coordinateBytes = Math.max(coordinateBytes, entry.coordinateBytes);
+        idBytes = Math.max(idBytes, entry.idBytes);
+        idArrays.add(entry.snapshot.ids);
+      }
+    }
+    this.requestedCoordinateBytes = Math.max(this.baseCoordinateBudgetBytes,
+      desiredFrames * coordinateBytes + Math.min(desiredFrames, Math.max(1, idArrays.size)) * idBytes);
+    this.coordinateBudgetBytes = Math.min(this.coordinateBudgetLimitBytes, this.requestedCoordinateBytes);
+    this.trimCache();
+  }
+
+  cacheDistance(index) {
+    const windows = this.cacheWindows;
+    if (!windows.length) return Math.abs(index - this.lastCoordinateIndex);
+    let distance = Infinity;
+    for (const { first, last } of windows) distance = Math.min(distance, index < first ? first - index : Math.max(0, index - last));
+    return distance;
+  }
+
+  removeSnapshot(index, entry) {
+    this.store.delete(index);
+    const position = lowerBound(this.sortedIndices, index, this.indexStart);
+    if (position === this.indexStart) {
+      this.indexStart++;
+      if (this.indexStart > 1024 && this.indexStart * 2 > this.sortedIndices.length) {
+        this.sortedIndices = this.sortedIndices.slice(this.indexStart); this.indexStart = 0;
+      }
+    } else if (position === this.sortedIndices.length - 1) this.sortedIndices.pop();
+    else this.sortedIndices.splice(position, 1);
+    this.storeBytes -= 256;
+    for (const [identity] of entry.references) {
+      const retained = this.references.get(identity);
+      if (--retained.count === 0) { this.storeBytes -= retained.bytes; this.references.delete(identity); }
+    }
+    const idCount = this.idArrays.get(entry.snapshot.ids) - 1;
+    if (idCount) this.idArrays.set(entry.snapshot.ids, idCount);
+    else {
+      this.idArrays.delete(entry.snapshot.ids);
+      const candidate = this.idCandidates.indexOf(entry.snapshot.ids);
+      if (candidate >= 0) this.idCandidates.splice(candidate, 1);
+    }
+  }
+
+  trimCache() {
+    while (this.storeBytes > this.coordinateBudgetBytes && this.store.size) {
+      let victim, greatestDistance = -1;
+      const consider = index => {
+        if (index === undefined) return;
+        const distance = this.cacheDistance(index);
+        if (distance > greatestDistance) { greatestDistance = distance; victim = index; }
+      };
+      consider(this.sortedIndices[this.indexStart]);
+      consider(this.sortedIndices.at(-1));
+      // Distance peaks at either outer endpoint or the midpoint of a gap
+      // between preferred windows. Query only the two nearest stored keys.
+      for (let index = 1; index < this.cacheWindows.length; index++) {
+        const midpoint = this.cacheWindows[index - 1].last + (this.cacheWindows[index].first - this.cacheWindows[index - 1].last) / 2;
+        const position = lowerBound(this.sortedIndices, midpoint, this.indexStart);
+        consider(this.sortedIndices[position]);
+        if (position > this.indexStart) consider(this.sortedIndices[position - 1]);
+      }
+      if (greatestDistance === 0) victim = this.store.keys().next().value;
+      this.removeSnapshot(victim, this.store.get(victim));
+    }
+  }
+
+  cacheLimit() {
+    return this.requestedCoordinateBytes > this.coordinateBudgetLimitBytes
+      ? { budgetBytes: this.coordinateBudgetBytes, requestedBytes: this.requestedCoordinateBytes, retainedBytes: this.storeBytes, retainedFrames: this.store.size }
+      : null;
+  }
+
   remember(index, frame, { copy = false } = {}) {
+    this.lastCoordinateIndex = index;
     const existing = this.store.get(index);
     if (existing) {
       this.store.delete(index); this.store.set(index, existing);
       return existing.snapshot;
     }
-    const snapshot = coordinateSnapshot(frame, index, copy), bytes = snapshotBytes(snapshot);
-    this.store.set(index, { snapshot, bytes });
-    this.storeBytes += bytes;
-    // Keep the newest entry even when it alone exceeds the budget.
-    while (this.storeBytes > this.coordinateBudgetBytes && this.store.size > 1) {
-      const [oldest, entry] = this.store.entries().next().value;
-      this.store.delete(oldest);
-      this.storeBytes -= entry.bytes;
+    const snapshot = coordinateSnapshot(frame, index, copy, this.snapshotIds(frame.ids, copy));
+    const references = snapshotReferences(snapshot);
+    const entry = { snapshot, references, coordinateBytes: 0, idBytes: arrayBytes(snapshot.ids) };
+    this.store.set(index, entry);
+    if (this.indexStart === this.sortedIndices.length) { this.sortedIndices = [index]; this.indexStart = 0; }
+    else if (index > this.sortedIndices.at(-1)) this.sortedIndices.push(index);
+    else if (index < this.sortedIndices[this.indexStart] && this.indexStart) this.sortedIndices[--this.indexStart] = index;
+    else this.sortedIndices.splice(lowerBound(this.sortedIndices, index, this.indexStart), 0, index);
+    this.storeBytes += 256;
+    let bytes = 256;
+    const idIdentity = ArrayBuffer.isView(snapshot.ids) ? snapshot.ids.buffer : snapshot.ids;
+    for (const [identity, referenceBytes] of references) {
+      if (identity !== idIdentity) bytes += referenceBytes;
+      const retained = this.references.get(identity);
+      if (retained) retained.count++;
+      else { this.references.set(identity, { count: 1, bytes: referenceBytes }); this.storeBytes += referenceBytes; }
     }
+    this.idArrays.set(snapshot.ids, (this.idArrays.get(snapshot.ids) ?? 0) + 1);
+    const candidate = this.idCandidates.indexOf(snapshot.ids);
+    if (candidate >= 0) this.idCandidates.splice(candidate, 1);
+    this.idCandidates.push(snapshot.ids);
+    if (this.idCandidates.length > 4) this.idCandidates.shift();
+    entry.coordinateBytes = this.coordinateSnapshotBytes = bytes;
+    this.idSnapshotBytes = entry.idBytes;
+    this.resizeCache();
     return snapshot;
   }
 
@@ -100,9 +307,16 @@ export class TrajectoryProcessor {
           if (this.closed) throw cancelled();
           return this.remember(index, frame);
         }).finally(() => { if (this.reading.get(index) === pending) this.reading.delete(index); });
+        pending.signal = signal;
+        pending.priority = priority ?? (background ? -20 : 20);
         this.reading.set(index, pending);
       }
-      try { return await pending; }
+      const requestedPriority = priority ?? (background ? -20 : 20);
+      if (pending.signal && requestedPriority > pending.priority) {
+        this.promoteRead?.({ signal: pending.signal, priority: requestedPriority });
+        pending.priority = requestedPriority;
+      }
+      try { const result = await waitForRead(pending, signal); checkSignal(signal); return result; }
       catch (error) {
         // A shared read may belong to a request that was cancelled meanwhile.
         if (error.name !== 'AbortError' || signal?.aborted || this.closed) throw error;
@@ -168,45 +382,52 @@ export class TrajectoryProcessor {
     const options = { signal, background: true, priority: background ? -20 : 20 };
     const frameCount = await this.getFrameCount({ atLeast: index + window + 1, signal });
     checkSignal(signal);
-    this.remember(index, frame, { copy: true });
-    let inferred = null;
-    if (needsUnwrap && frameCount > 1) {
-      const imageFlags = await this.imageFlagsAt(index, frame.ids, options,
-        progress => onProgress({ ...progress, stage: 'trajectory-unwrap' }));
-      inferred = { imageFlags, unwrappedPositions: inferredUnwrappedPositions(frame.fractional, imageFlags, frame.cell) };
-    }
-    if (window > 0) {
-      const { first, last } = smoothingWindow(index, window, frameCount);
-      if (last > first) {
-        const center = { frameIndex: index, ids: frame.ids, idSource: frame.idSource, fractional: frame.fractional,
-          positions: frame.positions, cell: frame.cell };
-        const accumulator = new SmoothingAccumulator(center);
-        for (let current = first; current <= last; current += 1) {
-          checkSignal(signal);
-          if (current === index) { accumulator.add(center, { center: true }); continue; }
-          this.readAheadFrom(Array.from({ length: Math.min(last, current + this.readAhead) - current }, (_, offset) => current + offset + 1)
-            .filter(value => value !== index), options);
-          accumulator.add(await this.coordinates(current, options));
-          onProgress({ loaded: current - first + 1, total: last - first + 1, stage: 'trajectory-smooth' });
-        }
-        checkSignal(signal);
-        const fileImages = frame.unwrappedPositions ? frame.imageFlags ?? null : null;
-        const result = accumulator.finish({
-          imageFlags: fileImages ?? inferred?.imageFlags ?? null,
-          unwrappedPositions: fileImages ? null : frame.unwrappedPositions ?? null,
-        });
-        frame.fractional = result.fractional;
-        frame.positions = result.positions;
-        frame.cell = result.cell;
-        if (frame.unwrappedPositions) {
-          frame.unwrappedPositions = result.unwrappedPositions;
-          if (frame.imageFlags) frame.imageFlags = result.imageFlags;
-        } else if (inferred) inferred = { imageFlags: result.imageFlags, unwrappedPositions: result.unwrappedPositions };
+    const scope = window > 0 ? this.beginWindow(index, window, frameCount, background) : null;
+    try {
+      this.remember(index, frame, { copy: true });
+      let inferred = null;
+      if (needsUnwrap && frameCount > 1) {
+        const imageFlags = await this.imageFlagsAt(index, frame.ids, options,
+          progress => onProgress({ ...progress, stage: 'trajectory-unwrap' }));
+        inferred = { imageFlags, unwrappedPositions: inferredUnwrappedPositions(frame.fractional, imageFlags, frame.cell) };
       }
-      frame.smoothing = { window, firstFrame: first, lastFrame: last, frameCount: last - first + 1 };
+      if (window > 0) {
+        const { first, last } = smoothingWindow(index, window, frameCount);
+        if (last > first) {
+          const center = { frameIndex: index, ids: frame.ids, idSource: frame.idSource, fractional: frame.fractional,
+            positions: frame.positions, cell: frame.cell };
+          const accumulator = new SmoothingAccumulator(center);
+          for (let current = first; current <= last; current += 1) {
+            checkSignal(signal);
+            if (current === index) { accumulator.add(center, { center: true }); continue; }
+            this.readAheadFrom(Array.from({ length: Math.min(last, current + this.readAhead) - current }, (_, offset) => current + offset + 1)
+              .filter(value => value !== index), options);
+            accumulator.add(await this.coordinates(current, options));
+            onProgress({ loaded: current - first + 1, total: last - first + 1, stage: 'trajectory-smooth' });
+          }
+          checkSignal(signal);
+          const fileImages = frame.unwrappedPositions ? frame.imageFlags ?? null : null;
+          const result = accumulator.finish({
+            imageFlags: fileImages ?? inferred?.imageFlags ?? null,
+            unwrappedPositions: fileImages ? null : frame.unwrappedPositions ?? null,
+          });
+          frame.fractional = result.fractional;
+          frame.positions = result.positions;
+          frame.cell = result.cell;
+          if (frame.unwrappedPositions) {
+            frame.unwrappedPositions = result.unwrappedPositions;
+            if (frame.imageFlags) frame.imageFlags = result.imageFlags;
+          } else if (inferred) inferred = { imageFlags: result.imageFlags, unwrappedPositions: result.unwrappedPositions };
+        }
+        frame.smoothing = { window, firstFrame: first, lastFrame: last, frameCount: last - first + 1 };
+        const limit = this.cacheLimit();
+        if (limit) frame.smoothing.cacheLimited = limit;
+      }
+      if (inferred) frame.inferredUnwrap = { ...inferred, source: INFERRED_UNWRAP_SOURCE };
+      return frame;
+    } finally {
+      if (scope) { this.windows.delete(scope); this.resizeCache(); }
     }
-    if (inferred) frame.inferredUnwrap = { ...inferred, source: INFERRED_UNWRAP_SOURCE };
-    return frame;
   }
 
   /** Inferred display coordinates for an already delivered frame. The same
