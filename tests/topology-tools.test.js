@@ -427,6 +427,25 @@ test('compatible frame caches are reused and changed cutoffs or GPU preference r
   assert.equal(h.fields['bond-statistics-backend'].textContent, 'WebGPU');
 });
 
+test('a pinned bond-statistics backend invalidates only incompatible cached results and retains normal cache reuse', async t => {
+  const h = harness(t); h.pool.gpuEnabled = true;
+  let pinned = null; const inspected = [];
+  h.pool.canReuseRoutingResult = (frame, input, result) => {
+    inspected.push({ frame, input, result });
+    return !pinned || result?.backend === pinned || Boolean(result?.fallbackReason);
+  };
+  const gpu = h.tools.run('bondStatistics');
+  h.pending[0].resolve({ ...bondResult(), backend: 'gpu', gpuRequested: true }); await gpu;
+  assert.equal(await h.tools.run('bondStatistics'), true); assert.equal(h.pending.length, 1);
+  pinned = 'cpu'; const cpu = h.tools.run('bondStatistics', { automatic: true });
+  assert.equal(h.pending.length, 2, 'the prior GPU result cannot bypass the CPU batch route');
+  assert.equal(inspected.at(-1).input.kind, 'bondStatistics'); assert.equal(inspected.at(-1).input.cutoff, 3);
+  h.pending[1].resolve({ ...bondResult(), gpuRequested: true }); await cpu;
+  assert.equal(await h.tools.run('bondStatistics', { automatic: true }), true);
+  assert.equal(h.pending.length, 2, 'the matching CPU result is retained');
+  pinned = null; assert.equal(await h.tools.run('bondStatistics'), true); assert.equal(h.pending.length, 2);
+});
+
 test('concurrent analyses cancel independently and protect a user color change', async t => {
   const h = harness(t), bondTask = h.tools.run('bondStatistics'), voronoiTask = h.tools.run('voronoi');
   assert.equal(h.tools.getPropertyKind('atomicVolume'), 'voronoi');

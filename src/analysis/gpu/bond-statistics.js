@@ -2,7 +2,7 @@ import { NeighborSearch } from '../neighbors.js';
 import { validateBondStatisticsParameters, createBondStatisticsAccumulators, calculateBondStatisticsAtom,
   addBondStatisticsSample, mergeBondStatisticsMoment, bondStatisticsHistogramBin, finalizeBondStatistics } from '../bond-statistics.js';
 import { prepareGpuBondParameters } from './bonds.js';
-import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, gpuInputUnsupported, readGpuBuffers, yieldWorker } from './runtime.js';
 import { validateAnalysisInput } from '../errors.js';
 import { BOND_STATISTICS_SHADER, BOND_STATISTICS_ATOM_WORDS, BOND_STATISTICS_CORRECTION_WORDS,
   BOND_STATISTICS_FLAG_PRECISION, BOND_STATISTICS_FLAG_NEIGHBORS, MAX_GPU_BOND_STATISTICS_NEIGHBORS } from './bond-statistics-shaders.js';
@@ -130,11 +130,11 @@ export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, 
         const base = (atom - begin) * BOND_STATISTICS_ATOM_WORDS, row = atom - startAtom;
         const flags = atomWords[base + 3];
         if (flags & BOND_STATISTICS_FLAG_NEIGHBORS) {
-          throw new GpuUnavailableError(`Bond statistics environments above ${MAX_GPU_BOND_STATISTICS_NEIGHBORS} neighbors use CPU workers.`);
+          throw gpuInputUnsupported(`Bond statistics environments above ${MAX_GPU_BOND_STATISTICS_NEIGHBORS} neighbors use CPU workers.`, 'bond-neighbor-budget');
         }
         if (flags & BOND_STATISTICS_FLAG_PRECISION) {
           if (++correctionAtoms > MAX_GPU_BOND_STATISTICS_CORRECTIONS) {
-            throw new GpuUnavailableError('Too many bond environments are on GPU cutoff boundaries; using CPU workers.');
+            throw gpuInputUnsupported('Too many bond environments are on GPU cutoff boundaries; using CPU workers.', 'bond-correction-budget');
           }
           search ??= new NeighborSearch(frame);
           const local = calculateBondStatisticsAtom(search, atom, prepared, output);

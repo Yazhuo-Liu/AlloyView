@@ -85,7 +85,10 @@
     "test:browser:gpu-frame-revisions": "node scripts/browser-gpu-frame-revisions.mjs --production",
     "test:browser:comparison-preparation": "node scripts/browser-comparison-preparation.mjs --production",
     "benchmark:display-preparation": "node scripts/benchmark-display-preparation.mjs",
-    "benchmark:primitive-preparation": "node --expose-gc scripts/benchmark-primitive-preparation.mjs"
+    "benchmark:primitive-preparation": "node --expose-gc scripts/benchmark-primitive-preparation.mjs",
+    "test:browser:measured-gpu-routing": "node scripts/browser-measured-gpu-routing.mjs --production",
+    "test:browser:conservative-depth": "node scripts/browser-conservative-depth.mjs --production",
+    "benchmark:grains": "node scripts/benchmark-grain-pipeline.mjs"
   },
   "engines": {
     "node": ">=20"

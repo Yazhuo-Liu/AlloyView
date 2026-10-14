@@ -36,7 +36,7 @@ export function formatSeconds(seconds) {
 /** The Movie panel: camera keyframes, a viewport preview and video export. */
 export function initializeMovieControls({ renderer, tools = null, lock = createAutomationLock(), getFrameIndex = () => 0, getFrameCount = () => 1,
   getSourceVersion = () => '', ensureIndexed = async () => {}, showFrame = async () => true, stopPlayback = () => {}, getExportOptions = () => ({}),
-  getResolution = () => ({ mode: 'current' }), analysesSettled = () => true,
+  beginRoutingBatch = () => () => {}, getResolution = () => ({ mode: 'current' }), analysesSettled = () => true,
   prepareExport = async () => {}, getFileStem = () => 'alloyview', onEdit = () => {}, notify = () => {}, documentRoot = globalThis.document,
   VideoEncoderClass = globalThis.VideoEncoder, VideoFrameClass = globalThis.VideoFrame } = {}) {
   const $ = id => documentRoot?.getElementById(id) ?? null;
@@ -360,6 +360,7 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
     if (disposed || busy() || !enabled) return;
     const release = lock.acquire('movie');
     if (!release) { notify(lockMessage()); return; }
+    let releaseRouting = () => {};
     const controller = new AbortController();
     const task = exporting = { controller };
     const progressBar = $('movie-progress'), progressText = $('movie-progress-text'), cancel = $('cancel-movie');
@@ -396,6 +397,7 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
     render();
     let lastText = 0;
     try {
+      releaseRouting = beginRoutingBatch();
       showProgress();
       cancel?.focus?.();
       // Codec preparation belongs to the same cancellable lifecycle as the
@@ -445,7 +447,8 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
       try { if (dialog?.open) dialog.close(); }
       finally {
         if (application) application.inert = wasInert;
-        release();
+        try { releaseRouting(); }
+        finally { release(); }
         if (!wasInert && previousFocus?.isConnected) previousFocus.focus?.();
         if (!disposed) { render(); scheduleProbe(); }
       }

@@ -493,7 +493,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
       const gpuKernel = kind === 'voronoi' && settings.gpuKernel && Boolean(pool.gpuEnabled);
       const key = JSON.stringify({ ...call.identity, sourceVersion: source, gpuRequested: Boolean(pool.gpuEnabled), ...(gpuKernel ? { gpuKernel } : {}) });
       let cached = frame.atomeyeResults?.[kind] ?? previousCached;
-      if (cached?.key !== key) {
+      if (cached?.key !== key || pool.canReuseRoutingResult?.(frame, { kind, ...call.analysis }, cached?.result) === false) {
         clearAnalysisResults(frame, kind);
         if (frame.atomeyeResults) delete frame.atomeyeResults[kind];
         clearView(kind); job.frame = frame;

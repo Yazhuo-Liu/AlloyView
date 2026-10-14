@@ -697,6 +697,18 @@ enabling GPU acceleration does not guarantee a speedup. See
 [Performance](features/performance.md) for algorithm choices and the backend
 layout in `src/analysis/gpu/`.
 
+For larger central-symmetry, bond, bond-statistics and RDF jobs, routing can
+learn from completed calculations on your device. It uses a few GPU and CPU
+observations, then prefers a backend with a clear measured advantage. Each
+request runs one calculation; calibration does not calculate the same result
+twice. Concurrent work, failed attempts and cancellation do not train the
+model. Movie exports, frame-image exports and time-series visits retain one
+backend choice per analysis throughout their batch; an unsupported GPU request
+can still fall back to CPU. A tooltip explains a measured CPU choice separately
+from a GPU failure. Explicit content-dependent GPU limits are also remembered
+for the current input revision, so unchanged data need not repeat a failed
+attempt.
+
 Bond statistics and Voronoi have both CPU Worker and WebGPU paths. CPU Voronoi
 distributes bounded atom batches dynamically and reuses its Voro++ Wasm memory,
 coordinate snapshots and neighborhood indices. It is the backend Voronoi uses
@@ -1002,6 +1014,13 @@ time series. A cell thinner than two neighbor distances along a periodic
 vector must first be replicated with **Replicate atoms for analysis**; the
 nickel example needs 1 × 1 × 2. Results follow OVITO 3.9.4. See
 [Grain segmentation](features/grains.md).
+
+Large grain calculations prepare neighbor bonds and disorientations in reusable
+parallel Workers, sharing the application's CPU budget. Ordered graph merging
+then uses one Worker so grain IDs, orientations and merge plots retain their
+original numerical order. Small or memory-limited jobs keep the single-Worker
+path. Threshold and minimum-size edits reuse the retained merge model instead
+of repeating PTM or parallel preparation.
 
 **Binning**, in Visualization tools, divides the cell into equal slabs along
 one cell vector (**Profile (1D)**) or columns along two (**Map (2D)**) and

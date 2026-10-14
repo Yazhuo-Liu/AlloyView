@@ -255,6 +255,22 @@ Drag the direction globe, use its arrow keys, or adjust the azimuth, elevation a
 
 The renderer draws instanced sphere impostors: each GPU instance is a camera-facing quad whose fragment shader reconstructs a sphere surface and depth. Source atom buffers are reused for periodic copies. The camera's near/far range derives from complete scene bounds, including depth, instead of a fixed distance; this prevents large structures from being cut by the near plane when zooming or using Ortho.
 
+Sphere, site-marker and ambient-occlusion ID shaders probe conservative-depth
+support once per WebGL context. If the driver accepts the qualifier, a guarded
+nearest-surface billboard depth permits earlier depth rejection while keeping
+the reconstructed sphere depth. Original center-plane clipping and screen
+coordinates remain unchanged. A rejected probe uses the original shader;
+context restoration probes the new context. This extension is unavailable in
+the tested Chromium/SwiftShader environment, so no early-depth gain is claimed
+for it.
+
+Opaque atom replicas can be drawn nearest first when conservative depth bounds
+prove their entire intervals are disjoint, including Float32 transform error
+and depth-buffer quantization. Overlapping copies, depth ties and crystal drag
+keep original order. Per-copy ambient-occlusion factors stay attached to their
+original copy. The bounded ordering cache avoids new sort buffers on every
+unchanged draw; translucent layers keep their original ordering.
+
 Wrapped/unwrapped display and clipping do not rewrite analysis coordinates. Analyses retain the original frame and its periodic cell.
 
 A frame transition batches color choices, appearance, legend, radius and

@@ -198,12 +198,13 @@ function thinCellError(axis) {
 
 /** One bond per atom pair (a < b) for every neighbor b in the PTM list of a,
  * as OVITO builds them: the relation is the list of the lower-indexed atom. */
-function createNeighborBonds({ atomCount, structures, neighborCounts, neighborIndices, neighborSpan, fractional, cell }) {
+export function createNeighborBonds({ atomCount, structures, neighborCounts, neighborIndices, neighborSpan, fractional, cell }, first = 0, end = atomCount) {
   for (let axis = 0; axis < 3; axis += 1) {
     if (cell.pbc[axis] && neighborSpan && neighborSpan[axis] >= .5 + SPAN_EPSILON) throw thinCellError(axis);
   }
+  if (!Number.isInteger(first) || !Number.isInteger(end) || first < 0 || end < first || end > atomCount) throw new Error('Invalid grain atom range.');
   let count = 0;
-  for (let atom = 0; atom < atomCount; atom += 1) {
+  for (let atom = first; atom < end; atom += 1) {
     const row = atom * GRAIN_NEIGHBOR_SLOTS;
     const length = structures[atom] === OTHER ? Math.min(neighborCounts[atom], GRAIN_DISORDERED_NEIGHBORS) : neighborCounts[atom];
     if (length > GRAIN_NEIGHBOR_SLOTS) throw new Error('Grain segmentation found an invalid PTM neighbor list.');
@@ -216,7 +217,7 @@ function createNeighborBonds({ atomCount, structures, neighborCounts, neighborIn
   const a = new Uint32Array(count), b = new Uint32Array(count), lengths = new Float64Array(count);
   const inverse = invert3(cell.vectors), h = cell.vectors, pbc = cell.pbc;
   let bond = 0;
-  for (let atom = 0; atom < atomCount; atom += 1) {
+  for (let atom = first; atom < end; atom += 1) {
     const row = atom * GRAIN_NEIGHBOR_SLOTS;
     const length = structures[atom] === OTHER ? Math.min(neighborCounts[atom], GRAIN_DISORDERED_NEIGHBORS) : neighborCounts[atom];
     for (let slot = 0; slot < length; slot += 1) {
@@ -583,30 +584,55 @@ function validateInput(input) {
  *   neighborIndices, neighborSpan, fractional, cell } from calculatePtm with
  *   neighborLists: true.
  */
-export function buildGrainDendrogram(input, { algorithm = GRAIN_DEFAULTS.algorithm,
-  handleCoherentInterfaces = GRAIN_DEFAULTS.handleCoherentInterfaces, includeRegression = false, onProgress = () => {} } = {}) {
-  ({ algorithm, handleCoherentInterfaces } = validateGrainParameters({ algorithm, handleCoherentInterfaces }));
-  const atomCount = validateInput(input), structures = input.structures;
-  onProgress('bonds', 0);
-  const bonds = createNeighborBonds({ ...input, atomCount });
+const preparedGrains = Symbol('prepared grain geometry');
 
-  // OVITO stores the PTM orientation in single precision before the grain
-  // modifier reads it; unmatched atoms carry a null quaternion.
+export function prepareGrainGeometry(input, { handleCoherentInterfaces = true, bonds = null, onProgress = () => {} } = {}) {
+  const atomCount = validateInput(input), structures = input.structures;
+  bonds ??= createNeighborBonds({ ...input, atomCount });
+  onProgress('interfaces', 0);
   const sourceOrientations = new Float32Array(atomCount * 4);
-  for (let atom = 0; atom < atomCount; atom += 1) {
+  for (let atom = 0; atom < atomCount; atom++) {
     if (structures[atom] === OTHER) continue;
-    for (let k = 0; k < 4; k += 1) sourceOrientations[atom * 4 + k] = input.orientations[atom * 4 + k];
+    for (let k = 0; k < 4; k++) sourceOrientations[atom * 4 + k] = input.orientations[atom * 4 + k];
   }
   const types = Uint8Array.from(structures), orientations = Float64Array.from(sourceOrientations);
-  onProgress('interfaces', 0);
   const convertedAtoms = handleCoherentInterfaces ? rotateInterfaceAtoms(input, bonds, types, orientations) : 0;
+  return { atomCount, structures, bonds, sourceOrientations, types, orientations, convertedAtoms };
+}
 
-  onProgress('disorientation', 0);
-  bonds.disorientation = new Float64Array(bonds.count);
-  for (let bond = 0; bond < bonds.count; bond += 1) {
-    const a = bonds.a[bond], b = bonds.b[bond];
-    bonds.disorientation[bond] = latticeDisorientation(types[a], types[b], orientations, a * 4, orientations, b * 4);
-    if ((bond & 262143) === 0) onProgress('disorientation', bond / bonds.count);
+export function grainDisorientationRange({ a, b, types, orientations }, first = 0, end = a.length, onProgress = () => {}) {
+  if (!Number.isInteger(first) || !Number.isInteger(end) || first < 0 || end < first || end > a.length || b.length !== a.length) throw new Error('Invalid grain bond range.');
+  const values = new Float64Array(end - first);
+  for (let bond = first; bond < end; bond++) {
+    values[bond - first] = latticeDisorientation(types[a[bond]], types[b[bond]], orientations, a[bond] * 4, orientations, b[bond] * 4);
+    if ((bond & 262143) === 0) onProgress('disorientation', bond / Math.max(1, a.length));
+  }
+  return values;
+}
+
+export async function buildGrainDendrogramParallel(input, options, stage, resume) {
+  options ??= {};
+  const checked = validateGrainParameters(options), atomCount = validateInput(input);
+  options.onProgress?.('bonds', 0);
+  const bonds = await stage('bonds', { ...input, atomCount }, atomCount);
+  const prepared = prepareGrainGeometry(input, { ...checked, bonds, onProgress: options.onProgress });
+  options.onProgress?.('disorientation', 0);
+  const data = await stage('disorientation', { a: bonds.a, b: bonds.b, types: prepared.types, orientations: prepared.orientations }, bonds.count);
+  prepared.types = data.types; prepared.orientations = data.orientations;
+  bonds.a = data.a; bonds.b = data.b; bonds.disorientation = data.values;
+  await resume();
+  return buildGrainDendrogram(input, { ...options, [preparedGrains]: prepared });
+}
+
+export function buildGrainDendrogram(input, { algorithm = GRAIN_DEFAULTS.algorithm,
+  handleCoherentInterfaces = GRAIN_DEFAULTS.handleCoherentInterfaces, includeRegression = false, onProgress = () => {}, [preparedGrains]: prepared = null } = {}) {
+  ({ algorithm, handleCoherentInterfaces } = validateGrainParameters({ algorithm, handleCoherentInterfaces }));
+  if (!prepared) onProgress('bonds', 0);
+  const { atomCount, structures, bonds, sourceOrientations, types, orientations, convertedAtoms } = prepared
+    ?? prepareGrainGeometry(input, { handleCoherentInterfaces, onProgress });
+  if (!bonds.disorientation) {
+    onProgress('disorientation', 0);
+    bonds.disorientation = grainDisorientationRange({ a: bonds.a, b: bonds.b, types, orientations }, 0, bonds.count, onProgress);
   }
   // Ascending disorientation, ties in bond order (upstream sort is unstable).
   const order = stableAscendingOrder(bonds.disorientation, bonds.count);

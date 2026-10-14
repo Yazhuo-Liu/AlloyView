@@ -1,7 +1,7 @@
 import { classify, classifyAdaptiveEnvironment } from '../cna.js';
 import { NeighborSearch, atomRange } from '../neighbors.js';
 import { determinant3 } from '../../data/model.js';
-import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, gpuInputUnsupported, yieldWorker } from './runtime.js';
 import { CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, CNA_RESULT_WORDS, CNA_FLAG_PRECISION, CNA_FLAG_BUDGET,
   CNA_FLAG_CP_GRAPH, CNA_FLAG_BCC_GRAPH, CNA_FLAG_SHELL12, CNA_FLAG_SHELL14 } from './cna-shaders.js';
 
@@ -43,7 +43,7 @@ export async function analyzeGpuCna(runtime, frame, parameters = {}, { signal, o
       unresolved = 0;
       for (let atom = startAtom; atom < endAtom; atom++) {
         const offset = atom * CNA_RESULT_WORDS;
-        if (data[offset + 1] & CNA_FLAG_BUDGET) throw new GpuUnavailableError('The CNA candidate search exceeds the GPU per-atom budget.');
+        if (data[offset + 1] & CNA_FLAG_BUDGET) throw gpuInputUnsupported('The CNA candidate search exceeds the GPU per-atom budget.', 'cna-candidate-budget');
         if (!data[offset + 2]) unresolved++;
       }
       if (!unresolved) { radiusAttempts++; break; }
@@ -52,7 +52,7 @@ export async function analyzeGpuCna(runtime, frame, parameters = {}, { signal, o
       await yieldWorker();
     }
     if (unresolved) {
-      throw new GpuUnavailableError('The adaptive CNA GPU search could not resolve this cell geometry.');
+      throw gpuInputUnsupported('The adaptive CNA GPU search could not resolve this cell geometry.', 'cna-search-budget');
     }
     const structures = new Uint8Array(endAtom - startAtom), correctionAtoms = [];
     const gpuCorrectionReasons = { closePackedGraph: 0, bccGraph: 0, shell12: 0, shell14: 0 };
@@ -67,7 +67,7 @@ export async function analyzeGpuCna(runtime, frame, parameters = {}, { signal, o
       if (atom && atom % 65_536 === 0) { await yieldWorker(); checkSignal(signal); }
     }
     if (correctionAtoms.length > MAX_GPU_CNA_CORRECTIONS) {
-      throw new GpuUnavailableError(`More than ${MAX_GPU_CNA_CORRECTIONS} CNA environments are near a GPU precision boundary; using CPU workers.`);
+      throw gpuInputUnsupported(`More than ${MAX_GPU_CNA_CORRECTIONS} CNA environments are near a GPU precision boundary; using CPU workers.`, 'cna-correction-budget');
     }
     if (correctionAtoms.length) {
       const search = new NeighborSearch(frame);

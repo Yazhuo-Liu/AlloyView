@@ -1,3 +1,4 @@
+import { MeasuredGpuRouting } from './gpu-routing.js';
 import { CSP_SUMMARY_FIELDS } from './centrosymmetry.js';
 import { MAX_BONDS } from './bonds.js';
 import { mergeBondStatisticsPartials } from './bond-statistics.js';
@@ -32,6 +33,7 @@ const CPU_CACHED_INPUT_FIELDS = [...['structureInput', 'types', 'referenceFracti
   'currentPositions', 'referencePositions', 'referenceCurrentFractional', 'referenceInverseMapping'], 'ptmInput', 'preparedNeighbors', 'referenceCell', 'referenceNeighborIndex', 'clusterSelection', 'rdfNormalization'];
 const CPU_MODULES = ['voronoi', 'ptm', 'dxa'];
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
+const ROUTING_OWNER = Symbol('routing timing owner');
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
   deformation: [Float64Array, 9], distances: [Float32Array, 1] };
 // Standalone PTM also returns orientations and chemical ordering; strain
@@ -104,15 +106,50 @@ export class AnalysisPool {
     this.cpuSnapshots = []; this.cpuSnapshotPending = null; this.nextCpuFrameKey = 1; this.nextCpuAnalysisKey = 1;
     this.cpuSnapshotGeneration = 0;
     this.closed = false;
-    this.gpuEnabled = false;
+    this.gpuEnabled = false; this.gpuRouting = new MeasuredGpuRouting();
+    this.routingAnalysisRevision = 0; this.routingObservations = new Set();
     this.gpuVoronoi = false;
     this.gpuBackend = gpuBackend ?? new GpuAnalysisClient({ environment });
     this.gpuFallbacks = new GpuFallbackCache({ inputRevisionFor: frame => this.gpuBackend.frameRevision?.(frame) });
   }
 
+  canReuseRoutingResult(frame, parameters, result) {
+    if (!this.gpuEnabled) return true;
+    const key = this.gpuRouting.key(frame, parameters, this.limit, this.gpuBackend.fallbackGeneration ?? 0);
+    return this.gpuRouting.canReuse(parameters.kind, result?.backend, key, result?.fallbackReason, { allowProbe: this.routingIdle() });
+  }
+  beginRoutingBatch() { return this.gpuRouting.beginBatch(); }
+  get gpuRoutingStatus() { return this.gpuRouting.status(); }
+
+  routingIdle() {
+    return !this.routingObservations.size && !this.cpuBudget.active && !this.cpuBudget.queue?.length
+      && !(this.gpuBackend.active?.length || this.gpuBackend.active?.size || this.gpuBackend.queue?.length || this.gpuBackend.pending?.size);
+  }
+
+  beginRoutingObservation(key, backend, state, startedAt) {
+    if (!key || !state) return;
+    const profile = this.gpuRouting.profiles.get(key), revision = this.routingAnalysisRevision;
+    const generation = this.gpuBackend.fallbackGeneration ?? 0, gpuAdmission = this.gpuBackend.nextId;
+    const idle = this.routingIdle();
+    const owner = {}, admissions = this.cpuBudget.observeAdmissions?.(owner);
+    state.owner = owner; this.routingObservations.add(state);
+    state.close = () => { admissions?.release(); this.routingObservations.delete(state); };
+    state.finish = result => {
+      // Publish only after final progress delivery: it can cancel the request.
+      // Profile identity prevents a late result from re-populating a cleared
+      // source/device profile; admissions exclude work overlapping any phase.
+      if (!idle || !admissions?.uncontended || revision !== this.routingAnalysisRevision
+          || profile !== this.gpuRouting.profiles.get(key) || !this.gpuEnabled
+          || generation !== (this.gpuBackend.fallbackGeneration ?? 0)
+          || result.backend !== backend || result.fallbackReason
+          || Number.isInteger(gpuAdmission) && this.gpuBackend.nextId !== gpuAdmission + Number(backend === 'gpu')) return;
+      this.gpuRouting.observe(key, backend, performance.now() - startedAt);
+    };
+  }
+
   setGpuEnabled(enabled) {
     enabled = Boolean(enabled);
-    if (enabled !== this.gpuEnabled) this.gpuFallbacks.clear();
+    if (enabled !== this.gpuEnabled) { this.gpuFallbacks.clear(); this.gpuRouting.clear(); }
     this.gpuEnabled = enabled; if (this.gpuEnabled) this.gpuBackend.resume?.();
   }
   /** Explicit request for the GPU Voronoi kernel. It takes effect only while
@@ -134,7 +171,7 @@ export class AnalysisPool {
     this.gpuFallbacks.invalidateFrame(frame);
     return this.gpuBackend.invalidateFrame?.(frame, options) ?? Promise.resolve(this.gpuCacheStatus);
   }
-  clearGpuFrames() { this.gpuFallbacks.clear(); return this.gpuBackend.clearFrames?.() ?? Promise.resolve(this.gpuCacheStatus); }
+  clearGpuFrames() { this.gpuRouting.clear(); this.gpuFallbacks.clear(); return this.gpuBackend.clearFrames?.() ?? Promise.resolve(this.gpuCacheStatus); }
   clearVoronoiFrames() {
     this.clearCpuFrames();
     this.cpuFramePreparation?.controller.abort();
@@ -497,19 +534,22 @@ export class AnalysisPool {
 
   async analyze(frame, parameters, { onProgress = () => {}, signal, frameIndex } = {}) {
     const progress = createAnalysisProgressReporter(onProgress, { environment: this.environment, signal });
+    const routingObservation = {};
     try {
-      const result = await this.analyzeWithProgress(frame, parameters, { onProgress: progress.report, signal, frameIndex });
+      const result = await this.analyzeWithProgress(frame, parameters, { onProgress: progress.report, signal, frameIndex, routingObservation });
       progress.flush();
       // The final deferred callback can itself cancel or close the pool.
       if (signal?.aborted || this.closed) throw abortError();
+      routingObservation.finish?.(result);
       return result;
-    } finally { progress.close(); }
+    } finally { routingObservation.close?.(); progress.close(); }
   }
 
-  async analyzeWithProgress(frame, parameters, { onProgress = () => {}, signal, frameIndex } = {}) {
+  async analyzeWithProgress(frame, parameters, { onProgress = () => {}, signal, frameIndex, routingObservation } = {}) {
     if (this.closed) throw new Error('The analysis pool is closed.');
     if (signal?.aborted) throw abortError();
     validateAnalysisParameters(frame, parameters);
+    this.routingAnalysisRevision++;
     const analysisStartedAt = performance.now();
     const gpuRequested = this.gpuEnabled;
     // Connectivity has no GPU kernel; it is not a fallback from one.
@@ -530,6 +570,14 @@ export class AnalysisPool {
     }
     if (gpuRequested && parameters.kind === 'strain' && this.gpuBackend.supports('strain')) {
       return this.analyzeStrainWithGpu(frame, parameters, { onProgress, signal, frameIndex });
+    }
+    const routeKey = gpuRequested ? this.gpuRouting.key(frame, parameters, this.limit, this.gpuBackend.fallbackGeneration ?? 0) : null;
+    const route = this.gpuRouting.choose(routeKey, parameters.kind, { allowProbe: this.routingIdle() });
+    if (gpuRequested && this.gpuBackend.supports(parameters.kind)) this.beginRoutingObservation(routeKey, route.backend, routingObservation, analysisStartedAt);
+    if (gpuRequested && this.gpuBackend.supports(parameters.kind) && route.backend === 'cpu') {
+      const result = await this.analyzeCPU(frame, parameters, { signal, routingOwner: routingObservation?.owner,
+        onProgress: update => onProgress({ ...update, backend: 'cpu' }) });
+      return { ...result, backend: 'cpu', gpuRequested, routeReason: route.reason, elapsedMs: performance.now() - analysisStartedAt };
     }
     let fallbackReason, fallbackCode, fallbackCached;
     if (gpuRequested) {
@@ -664,7 +712,7 @@ export class AnalysisPool {
       warning: null, ...(fallbacks.length ? { fallbackReason: fallbacks.join('; ') } : {}) };
   }
 
-  async analyzeCPU(frame, parameters, { onProgress = () => {}, signal, onGeometryChunk, retainCells = true } = {}) {
+  async analyzeCPU(frame, parameters, { onProgress = () => {}, signal, onGeometryChunk, retainCells = true, routingOwner } = {}) {
     if (this.closed) throw new Error('The analysis pool is closed.');
     if (signal?.aborted) throw abortError();
     validateAnalysisParameters(frame, parameters);
@@ -785,6 +833,7 @@ export class AnalysisPool {
       residentAnalysisBytes, fixedBytes, targetAtoms, modules, sharedMemory, { includeRetainedInputs: false, nativeCapacityBytes,
         privateContextBytes: !sharedMemory && referenceStrain ? normalizedCurrentBytes + normalizedReferenceBytes + referenceCount * 4 : 0 });
     const controller = new AbortController();
+    if (routingOwner) controller.signal[ROUTING_OWNER] = routingOwner;
     this.controllers.add(controller);
     const releaseBackground = this.cpuBudget.deferBackground?.({ signal: controller.signal }) ?? (() => {});
     const abort = () => controller.abort();
@@ -1484,7 +1533,7 @@ export class AnalysisPool {
         // slot before entering the global budget, so a blocked admission never
         // prevents that slot's current owner from obtaining its own permit.
         if (!this.hasWorkerSlot(task)) await this.waitForWorkerSlot(task);
-        const lease = await this.cpuBudget.acquire(1, { signal: task.signal,
+        const lease = await this.cpuBudget.acquire(1, { signal: task.signal, owner: task.signal[ROUTING_OWNER],
           priority: task.payload.cpuPriority ?? (task.payload.kind === 'warmup' ? -1 : ['voronoiPrepare', 'cpuPrepare'].includes(task.payload.kind) ? -0.5 : 0) });
         if (task.done || task.signal.aborted || task.sourceSignal?.aborted || this.closed) {
           lease.release(); this.finish(task, abortError()); return;

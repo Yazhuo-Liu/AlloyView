@@ -1,7 +1,7 @@
 import { CSP_SUMMARY_FIELDS } from '../centrosymmetry.js';
 import { atomRange } from '../neighbors.js';
 import { analyzeGpuCna, adaptiveCnaInitialRadius, MAX_GPU_CNA_RADIUS_ATTEMPTS } from './cna.js';
-import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, gpuInputUnsupported, yieldWorker } from './runtime.js';
 import { CSP_SHADER, CSP_RESULT_WORDS } from './centrosymmetry-shaders.js';
 import { analysisValidationError } from '../errors.js';
 
@@ -61,14 +61,14 @@ export async function analyzeGpuCentrosymmetry(runtime, frame, parameters = {}, 
       unresolved = 0;
       for (let atom = startAtom; atom < endAtom; atom++) {
         const base = atom * CSP_RESULT_WORDS;
-        if (data[base + 1]) throw new GpuUnavailableError(data[base + 1] === 1
-          ? 'The central-symmetry candidate search exceeds the GPU budget.' : 'The central-symmetry GPU arithmetic could not resolve this environment.');
+        if (data[base + 1]) throw gpuInputUnsupported(data[base + 1] === 1
+          ? 'The central-symmetry candidate search exceeds the GPU budget.' : 'The central-symmetry GPU arithmetic could not resolve this environment.', 'csp-environment-budget');
         if (!data[base + 2]) unresolved++;
       }
       if (!unresolved) { radiusAttempts++; break; }
       radius *= 1.6; await yieldWorker();
     }
-    if (unresolved) throw new GpuUnavailableError('The central-symmetry GPU search could not resolve this cell geometry.');
+    if (unresolved) throw gpuInputUnsupported('The central-symmetry GPU search could not resolve this cell geometry.', 'csp-search-budget');
     const values = new Float32Array(data.buffer), centrosymmetry = new Float32Array(endAtom - startAtom);
     const auto = mode === 'auto', cspStructureTypes = auto ? new Uint8Array(endAtom - startAtom) : null;
     const cspNeighborCounts = auto ? new Uint8Array(endAtom - startAtom) : null;

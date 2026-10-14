@@ -1,0 +1,50 @@
+# Original G2 audit evidence
+
+These are historical pre-fix measurements from the 2026-10-10 audit, copied
+with the backlog's status notes at baseline `55cf7fb`.
+They are not timings of the current measured-routing implementation and do not
+set its device-independent routing thresholds. See [validation](../VALIDATION.md)
+for current reproduction and software-adapter limitations.
+
+### G2. Measured routing and content-dependent fallback policy
+
+**Effort:** S (static table), M (measured model). **Deployments:** WebGPU on.
+
+- **Evidence [M]:** warm medians in ms, GPU / CPU 6w / CPU 14w:
+
+| Kernel | 28.8k | 60k | 130k | 1M | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Coordination | 11 / 142 / 206 | 11 / 203 / 242 | 11–15 / 181 / 286 | 52 / 911 / 481 | GPU |
+| CNA fixed | 11 / 36 / 35 | 16 / 93 / 51 | 25–30 / 115 / 81 | 178 / 1482 / 639 | GPU |
+| CNA adaptive | 39 / 60 / 60 | 30 / 134 / 78 | 128–136 / 203 / 120 | 347 / 2153 / 851 | GPU; tie with 14w at 130k |
+| Central symmetry, 12 | 58 / 39 / 41 | 57 / 72 / 41 | 134–146 / 150 / 93 | 714–1594 / 1276 / 472 | CPU with 14w |
+| Central symmetry, Auto | 78 / 57 / 84 | 82 / 109 / 61 | 166 / 227 / 139 | 811–1659 / 1889 / 848 | Tie |
+| Bonds | 50 / 48 / 48 | 83 / 109 / 80 | 127–149 / 170 / 117 | not run | Tie |
+| Bond distributions | 67 / 71 / 84 | 124 / 190 / 132 | 442–499 / 280 / 183 | 1531 / 3588 / 1828 | CPU at 130k |
+| RDF | not periodic | 25 / 182 / 106 | 86 / 58 / 57 | 842 / 3854 / 1629 | GPU unless it falls back |
+| Local shear | 11 / 62 / 67 | 15 / 131 / 106 | 49–52 / 151 / 138 | 380 / 1962 / 981 | GPU |
+| Displacement | 8 / 33 / 37 | 13 / 64 / 62 | 22–24 / 57 / 70 | 109 / 653 / 372 | GPU |
+| Reference strain | 21 / 245 / 192 | 47 / 568 / 335 | 229 / 1000 / 741 | 1650 / 9874 / 4670 | GPU |
+| Ideal strain tensor | 17 / 119 / 106 | 15 / 179 / 198 | 25–30 / 315 / 356 | 245 / 2518 / 2176 | GPU |
+| Voronoi | 2560–4700 / 230–350 / 240–260 | 5700–8900 / 500–660 / 480–600 | 25,600 / 11,000 / – | not run | CPU (done: Voronoi runs on the CPU unless its WebGPU kernel is turned on) |
+
+- **Original audit [M]:** every call retried a GPU path that failed before. RDF on NiGB
+  costs 86 ms instead of 57; on NiGB 2×2×2 adaptive CNA costs 3.6 s instead of
+  2.5 s.
+- **Completed:** bounded weak-reference memory for explicit coordinate-independent
+  cell/cutoff and periodic-image capability refusals. Source/device changes and
+  parameter edits permit retry; transient allocation/device failures and
+  cancellation are not recorded. See [performance](../features/performance.md#remembering-unsupported-cell-geometry)
+  and [validation](../VALIDATION.md). No new routing threshold was inferred from
+  software-adapter measurements.
+- **Remaining:** re-measure before adopting a static table (bond distributions to
+  CPU from 100k atoms with 6 or more Workers; central symmetry to CPU with 12
+  or more Workers), then a per-kernel cost model corrected by measured times.
+  A broader content-dependent refusal cache needs a reliable input revision
+  or immutable snapshot, rather than frame identity alone. GPU input revisions
+  now scope the refusal cache, but unmarked array edits still require the
+  documented invalidation contract. Pin the
+  backend within one batch or time series, because backends agree only within
+  documented tolerances.
+- **Note:** these are pre-fix audit CPU timings. C3/C4 and the C5 scalar kernels are complete; the following C5/C6/C9 completion batch measured whole-pool effects separately.
+  See VALIDATION.md for its CPU-quota and cold-start limitations.

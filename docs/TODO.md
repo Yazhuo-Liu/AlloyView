@@ -68,9 +68,9 @@ The items with the best return, drawn from all parts below:
 
 | Order | Item | What it gives | Effort |
 | --- | --- | --- | --- |
-| 1 | G2 | Re-measure routing and evaluate remaining content-dependent fallbacks | M |
-| 2 | R7 | Early atom-depth rejection | S–M |
-| 3 | C10, K1 | Voronoi transport and reused grain-template fitting | M |
+| 1 | C10 | Voronoi transport | M |
+| 2 | R7 | Validate conservative-depth acceleration on a supporting physical GPU | S–M |
+| 3 | K1 | Further optimize the ordered grain merge | M |
 | 4 | S4 | Enable the prepared immutable-asset rules on the production CDN | S |
 
 C1–C9, R2–R6/R8, S1–S3/S5, T1–T6 and K2 have moved to the feature
@@ -91,10 +91,13 @@ and C7/C8. S4's build/preview policy is complete; enabling the external CDN
 rules remains below. The approved 2026-10-14 batch completed B23/B24/B25/B30,
 T2, R2/R4/R5 and the fused-tail/same-order part of T4; coordinate-only
 reads were completed in the following continuation, along with B32/B35/B36
-and T6. G2 now remembers explicit cell/cutoff capability refusals; its routing
-model and content-dependent fallback policy remain below. The next continuation
+and T6. G2 first gained cell/cutoff refusal memory. The next continuation
 completed B38's explicit GPU revision/invalidation contract and R6's shared
 second-view preparation, and corrected Surface cache accounting and revisions.
+The current continuation adds G2 local measured routing, revision-scoped
+content refusals and per-analysis batch choices, parallel Grains preparation,
+and R7 guarded shader/safe replica ordering. R7 hardware verification and K1's
+further ordered-merge work remain below.
 Their contracts and validation are recorded in [VALIDATION.md](VALIDATION.md).
 
 ### Lower-severity defects
@@ -109,49 +112,6 @@ numeric expression variable `ID`; B35 trajectory paths now resolve their
 encoded source ID and offset directly.
 
 ## Part 2: performance, phase 1 (small changes)
-
-### G2. Measured routing and content-dependent fallback policy
-
-**Effort:** S (static table), M (measured model). **Deployments:** WebGPU on.
-
-- **Evidence [M]:** warm medians in ms, GPU / CPU 6w / CPU 14w:
-
-| Kernel | 28.8k | 60k | 130k | 1M | Verdict |
-| --- | --- | --- | --- | --- | --- |
-| Coordination | 11 / 142 / 206 | 11 / 203 / 242 | 11–15 / 181 / 286 | 52 / 911 / 481 | GPU |
-| CNA fixed | 11 / 36 / 35 | 16 / 93 / 51 | 25–30 / 115 / 81 | 178 / 1482 / 639 | GPU |
-| CNA adaptive | 39 / 60 / 60 | 30 / 134 / 78 | 128–136 / 203 / 120 | 347 / 2153 / 851 | GPU; tie with 14w at 130k |
-| Central symmetry, 12 | 58 / 39 / 41 | 57 / 72 / 41 | 134–146 / 150 / 93 | 714–1594 / 1276 / 472 | CPU with 14w |
-| Central symmetry, Auto | 78 / 57 / 84 | 82 / 109 / 61 | 166 / 227 / 139 | 811–1659 / 1889 / 848 | Tie |
-| Bonds | 50 / 48 / 48 | 83 / 109 / 80 | 127–149 / 170 / 117 | not run | Tie |
-| Bond distributions | 67 / 71 / 84 | 124 / 190 / 132 | 442–499 / 280 / 183 | 1531 / 3588 / 1828 | CPU at 130k |
-| RDF | not periodic | 25 / 182 / 106 | 86 / 58 / 57 | 842 / 3854 / 1629 | GPU unless it falls back |
-| Local shear | 11 / 62 / 67 | 15 / 131 / 106 | 49–52 / 151 / 138 | 380 / 1962 / 981 | GPU |
-| Displacement | 8 / 33 / 37 | 13 / 64 / 62 | 22–24 / 57 / 70 | 109 / 653 / 372 | GPU |
-| Reference strain | 21 / 245 / 192 | 47 / 568 / 335 | 229 / 1000 / 741 | 1650 / 9874 / 4670 | GPU |
-| Ideal strain tensor | 17 / 119 / 106 | 15 / 179 / 198 | 25–30 / 315 / 356 | 245 / 2518 / 2176 | GPU |
-| Voronoi | 2560–4700 / 230–350 / 240–260 | 5700–8900 / 500–660 / 480–600 | 25,600 / 11,000 / – | not run | CPU (done: Voronoi runs on the CPU unless its WebGPU kernel is turned on) |
-
-- **Original audit [M]:** every call retried a GPU path that failed before. RDF on NiGB
-  costs 86 ms instead of 57; on NiGB 2×2×2 adaptive CNA costs 3.6 s instead of
-  2.5 s.
-- **Completed:** bounded weak-reference memory for explicit coordinate-independent
-  cell/cutoff and periodic-image capability refusals. Source/device changes and
-  parameter edits permit retry; transient allocation/device failures and
-  cancellation are not recorded. See [performance](features/performance.md#remembering-unsupported-cell-geometry)
-  and [validation](VALIDATION.md). No new routing threshold was inferred from
-  software-adapter measurements.
-- **Remaining:** re-measure before adopting a static table (bond distributions to
-  CPU from 100k atoms with 6 or more Workers; central symmetry to CPU with 12
-  or more Workers), then a per-kernel cost model corrected by measured times.
-  A broader content-dependent refusal cache needs a reliable input revision
-  or immutable snapshot, rather than frame identity alone. GPU input revisions
-  now scope the refusal cache, but unmarked array edits still require the
-  documented invalidation contract. Pin the
-  backend within one batch or time series, because backends agree only within
-  documented tolerances.
-- **Note:** these are pre-fix audit CPU timings. C3/C4 and the C5 scalar kernels are complete; the following C5/C6/C9 completion batch measured whole-pool effects separately.
-  See VALIDATION.md for its CPU-quota and cold-start limitations.
 
 ### R1. MSAA capless-bond coverage
 
@@ -312,28 +272,22 @@ its WebGPU kernel is turned on.
   the adapter limits and `navigator.deviceMemory`; drop the Worker's CPU copy
   for frames that are not current or pinned.
 
-### R7. Early depth rejection for atom impostors
+### R7. Supporting-GPU depth validation
 
-**Effort:** S–M. **Deployments:** largest on HiDPI, integrated and mobile
-GPUs; none where `EXT_conservative_depth` is missing.
+**Effort:** S–M. **Deployments:** browsers/drivers accepting the conservative-depth qualifier.
 
-- **Where:** the sphere shaders in `src/render/webgl-renderer.js` write
-  `gl_FragDepth`, which disables early depth testing; the same pattern is in
-  `site-marker-layer.js` and the ambient-occlusion ID pass.
-- **Evidence [M]:** at 963,664 atoms a frame takes 4.4 ms at the default zoom
-  (vertex-bound), 11–13 ms zoomed in, and 37–50 ms at device pixel ratio 2. A
-  flat-color fragment shader changes nothing; removing the depth write halves
-  the time; turning multisampling off saves at most 30%.
-- **Change:** with the extension, declare
-  `layout(depth_greater) out highp float gl_FragDepth` and rasterize the
-  billboard at the depth of the sphere's nearest point (with a 0.1% margin,
-  only when the center is inside the clip range). Keep the current shader as
-  the fallback. Draw display replicas nearest-first.
-- **Gain (interleaved A/B, no differing pixel in 7 scenes):** zoom 3× at 1M
-  atoms 11.1 → 5.9 ms, and 37.1 → 15.4 ms at pixel ratio 2; nearest-first
-  replicas take zoom 10× from 10.0 to 6.1 ms.
-- **Risk:** a fragment depth below the rasterized depth is undefined; recheck
-  pixel identity on other GPU vendors.
+- **Completed:** compile/link capability probe per context, nearest-sphere raster
+  depth with geometric and arithmetic guards, matching site-marker/AO paths,
+  original-shader fallback and cached safe nearest-first opaque replicas.
+  Float32 transform/depth-quantization ties preserve original copy order.
+- **Current evidence:** the actual Chromium/SwiftShader driver rejects the
+  extension. Pixel/PNG comparisons therefore validate fallback plus independently
+  compiled guarded geometry; they do not demonstrate early-depth acceleration.
+- **Remaining:** test a physical GPU whose WebGL compiler accepts the qualifier,
+  verify exact images and early-depth timing gains across vendors. The original
+  audit reported 11.1 → 5.9 ms (zoom 3×, 1M atoms) and 37.1 → 15.4 ms at DPR 2;
+  these historical figures are not reproduced performance claims for this code.
+- See [display](features/display.md) and [validation](VALIDATION.md).
 
 ### R9. Ambient occlusion: count on the GPU
 
@@ -364,22 +318,20 @@ stays as the fallback where float blending is missing.
   few large ones in chunk order (faces are translucent, so triangle order must
   be preserved) and draw three times per replica.
 
-### K1. Grain segmentation: reuse the PTM fit and speed up clustering
+### K1. Grain segmentation: further ordered-merge optimization
 
-**Effort:** S (reuse), M (clustering). **Deployments:** all.
+**Effort:** M. **Deployments:** all.
 
-- **Evidence:** when PTM ran before Grains was enabled, the whole PTM fit is
-  repeated to get neighbor lists [C]. Clustering is single-threaded
-  JavaScript: 1.0–1.1 s for 105,520 atoms and 2.2–2.8 s for 259,808 [M].
-- **Change:** request neighbor lists whenever memory allows (65 B per atom);
-  profile the clustering before choosing between typed-array tuning and a Wasm
-  port.
-- **Completed (2026-10-14):** ordinary PTM and fresh ideal-strain fits retain
-  template neighbor lists within a 32 MiB per-frame allowance, so enabling
-  Grains later reuses a compatible fit. Larger frames obtain lists on demand;
-  already-enabled Grains still requests them regardless of this optional cap.
-  Existing cache accounting and Worker admission apply. The clustering work
-  and hardware profiling remain open.
+- **Completed:** bounded PTM neighbor retention avoids repeated fits. Large
+  grain preparation splits neighbor-bond construction and disorientations over
+  persistent Workers, with shared/private snapshots, memory admission and the
+  shared CPU budget. Merges and coherent-interface decisions retain original
+  order; threshold/size edits reuse the retained merge model.
+- **Remaining:** profile and optimize the dependency-ordered graph/MST merge
+  without changing orientation accumulation, stable tie order, thresholds or
+  grain IDs. This serial stage releases the parallel CPU permits before it runs.
+- See [grains](features/grains.md) and [validation](VALIDATION.md) for actual
+  interleaved timings and exact-output comparisons.
 
 ### K3. Local shear: one neighbor pass
 

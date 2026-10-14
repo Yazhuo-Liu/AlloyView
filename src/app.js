@@ -906,6 +906,7 @@ textLabelControls = initializeTextLabels({
 });
 
 timeSeries = initializeTimeSeries({
+  beginRoutingBatch: () => analysisPool.beginRoutingBatch(),
   tools: toolPanels, attributes: globalAttributes,
   getFrame: () => state.frame,
   getFrameAt: (index, { signal } = {}) => getFrame(index, { background: true, cacheFrame: false, signal }),
@@ -1150,6 +1151,7 @@ const showFrameForAutomation = (index) => {
   return showFrame(index);
 };
 movieControls = initializeMovieControls({
+  beginRoutingBatch: () => analysisPool.beginRoutingBatch(),
   renderer, tools: toolPanels, lock: automationLock,
   getFrameIndex: () => state.frameIndex, getFrameCount: () => state.frameCount,
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
@@ -3198,13 +3200,15 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
           ? 'Local structure recognition selects 12 neighbors for FCC/HCP and 8 for BCC. Unresolved environments are gray.'
         : `Calculated with ${parameters.neighbors} neighbors.${property.incomplete ? ` ${property.incomplete} undefined environments are gray.` : ''}`;
     if (kind === 'centrosymmetry') updateCspMethodUi({ property });
-    const backend = { engine: property.analysisEngine, fallbackReason: property.analysisFallbackReason };
+    const backend = { engine: property.analysisEngine, fallbackReason: property.analysisFallbackReason, routeReason: property.analysisRouteReason };
     elements[`metric-${prefix}`].textContent = `${formatDuration(property.analysisMs)} · ${analysisBackendLabel(backend)}`;
     elements[`metric-${prefix}`].title = analysisBackendDetails(backend);
     elements[`run-${prefix}`].disabled = false;
   };
   const cached = frame.properties.find(property => property.name === name && property.analysisKey === key
-    && (!['strain', 'cna', 'centrosymmetry', 'ptm'].includes(kind) || Boolean(property.analysisGpuRequested) === gpuRequested));
+    && (!['strain', 'cna', 'centrosymmetry', 'ptm'].includes(kind) || Boolean(property.analysisGpuRequested) === gpuRequested)
+    && analysisPool.canReuseRoutingResult(frame, { kind, ...parameters }, { backend: property.analysisBackend,
+      fallbackReason: property.analysisFallbackReason }));
   if (cached) {
     refreshColorOptions(); applyColors();
     afterDisplayRefresh(() => { if (isCurrent()) ready(cached); });
@@ -3261,6 +3265,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     if (!isCurrent()) return;
     const metadata = { unit: '', analysisKind: kind, analysisKey: key, analysisMs: result.elapsedMs,
       analysisGpuRequested: result.gpuRequested ?? gpuRequested,
+      analysisBackend: result.backend, analysisRouteReason: result.routeReason,
       analysisEngine: result.engine, analysisFallbackReason: result.fallbackReason, incomplete: result.incomplete ?? 0 };
     let properties;
     if (kind === 'ptm') {

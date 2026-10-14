@@ -2,7 +2,7 @@ import { rdfNormalization, finalizeRdf } from '../rdf.js';
 import { MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { cellFaceHeights } from '../../data/model.js';
 import { makeNeighborShader } from './neighbors.js';
-import { GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
+import { GpuUnavailableError, gpuInputUnsupported, readGpuBuffers, yieldWorker } from './runtime.js';
 import { validateAnalysisInput } from '../errors.js';
 
 const U32_MAX = 0xffff_ffff;
@@ -117,8 +117,8 @@ export async function analyzeGpuRdf(runtime, frame, parameters, { signal, onProg
     for (let index = 1; pending; index++) {
       const following = pending.endAtom < count ? await launch(pending.endAtom, slots[index % slots.length]) : null;
       const [batchCounts, diagnostics] = await pending.readback;
-      if (diagnostics[1]) throw new GpuUnavailableError('Too many RDF pairs lie on floating-point shell boundaries.');
-      if (diagnostics[2]) throw new GpuUnavailableError('The RDF neighborhood exceeds the GPU safety limit.');
+      if (diagnostics[1]) throw gpuInputUnsupported('Too many RDF pairs lie on floating-point shell boundaries.', 'rdf-correction-budget');
+      if (diagnostics[2]) throw gpuInputUnsupported('The RDF neighborhood exceeds the GPU safety limit.', 'rdf-neighbor-budget');
       for (let bin = 0; bin < bins; bin += 1) counts[bin] += batchCounts[bin];
       if (diagnostics[0]) {
         const records = await runtime.read(pending.slot.corrections, Uint32Array, diagnostics[0] * 2, { signal, offset: 16 });

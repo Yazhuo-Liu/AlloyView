@@ -30,7 +30,8 @@ class Element extends EventTarget {
   remove() { this.isConnected = false; this.open = false; }
 }
 
-function fixture(t, { prepareExport = async () => {}, showFrame = null, captureImage = null, VideoEncoderClass = null, inert = false } = {}) {
+function fixture(t, { prepareExport = async () => {}, showFrame = null, captureImage = null, VideoEncoderClass = null, inert = false,
+  beginRoutingBatch = null } = {}) {
   const root = new EventTarget(); root.nodes = new Map(); root.activeElement = null;
   const animations = new Map(); let nextAnimation = 0;
   root.defaultView = { Event, requestAnimationFrame: callback => { const id = ++nextAnimation; animations.set(id, callback); return id; },
@@ -46,11 +47,16 @@ function fixture(t, { prepareExport = async () => {}, showFrame = null, captureI
   const canvas = root.createElement('canvas'); canvas.width = 320; canvas.height = 240;
   const renderer = { ...camera(), frame: {}, canvas, setProjection(value) { this.projectionMode = value; }, requestRender() {},
     captureImage: captureImage ?? (() => { throw new Error('Test capture failed'); }) };
-  const state = { frame: 3, source: 'a', shown: [], notices: [], releases: 0 };
+  const state = { frame: 3, source: 'a', shown: [], notices: [], releases: 0, batches: 0, routing: 0 };
   const lock = createAutomationLock();
   const controls = initializeMovieControls({ renderer, lock, documentRoot: root, getFrameIndex: () => state.frame,
     getFrameCount: () => 5, getSourceVersion: () => state.source,
-    prepareExport, showFrame: showFrame ?? (async index => { state.shown.push(index); state.frame = index; return true; }),
+    prepareExport, beginRoutingBatch: beginRoutingBatch ?? (() => {
+      state.batches++; state.routing++;
+      let released = false;
+      return () => { assert.equal(released, false, 'each movie releases its routing batch exactly once'); released = true; state.routing--; state.releases++; };
+    }),
+    showFrame: showFrame ?? (async index => { state.shown.push(index); state.frame = index; return true; }),
     notify: message => state.notices.push(message), VideoEncoderClass, VideoFrameClass: null });
   controls.setEnabled(true);
   controls.restore({ path: { keyframes: [{ time: 0, camera: camera(), frame: null }, { time: 1, camera: { ...camera(), yaw: 1 }, frame: null }],
@@ -96,10 +102,12 @@ test('Escape cancels before preparation finishes and preserves the dialog and in
   assert.equal(escape.defaultPrevented, true); assert.equal(signal.aborted, true);
   assert.equal(f.fields['movie-export-dialog'].open, true);
   assert.equal(f.lock.owner(), 'movie'); assert.equal(f.root.application.inert, true);
+  assert.equal(f.state.routing, 1, 'cancellation retains the selected analysis backend until owned work finishes');
   preparing.resolve(); await pending;
   assert.equal(f.lock.owner(), null); assert.equal(f.root.application.inert, false);
   assert.equal(f.fields['movie-export-dialog'].open, false); assert.equal(f.fields['movie-state'].textContent, 'Cancelled');
   assert.deepEqual(f.state.shown, []);
+  assert.equal(f.state.routing, 0); assert.equal(f.state.releases, 1);
 });
 
 test('a dialog close aborts, reopens reachable progress and keeps the application blocked through frame restoration', async t => {
@@ -119,10 +127,30 @@ test('a dialog close aborts, reopens reachable progress and keeps the applicatio
   capturing.resolve(canvas);
   await waitFor(() => f.state.shown.length === 2);
   assert.equal(f.fields['movie-export-dialog'].open, true); assert.equal(f.root.application.inert, true);
+  assert.equal(f.state.routing, 1, 'restoration still belongs to the pinned batch');
   assert.deepEqual([canvas.width, canvas.height], [1, 1], 'an asynchronously captured cancelled image is released');
   restoring.resolve(); await pending;
   assert.deepEqual(f.state.shown, [0, 3]); assert.equal(f.state.frame, 3);
   assert.equal(f.fields['movie-state'].textContent, 'Cancelled'); assert.equal(f.lock.owner(), null); assert.equal(f.root.application.inert, false);
+  assert.equal(f.state.routing, 0); assert.equal(f.state.releases, 1);
+});
+
+test('movie routing setup or original-frame restoration failures cannot retain automation ownership', async t => {
+  const f = fixture(t, { beginRoutingBatch: () => { throw new Error('Routing unavailable'); } });
+  await f.controls.exportMovie();
+  assert.equal(f.lock.owner(), null); assert.equal(f.controls.isBusy(), false);
+  assert.equal(f.root.application.inert, false); assert.equal(f.fields['movie-state'].textContent, 'Failed');
+  assert.match(f.state.notices[0], /Routing unavailable/);
+  const other = fixture(t, { showFrame: async index => {
+    other.state.shown.push(index);
+    assert.equal(other.state.routing, 1);
+    if (index === 3) throw new Error('Original frame unavailable');
+    other.state.frame = index; return true;
+  } });
+  await other.controls.exportMovie();
+  assert.deepEqual(other.state.shown, [0, 3]);
+  assert.equal(other.state.routing, 0); assert.equal(other.state.releases, 1);
+  assert.equal(other.lock.owner(), null); assert.equal(other.controls.isBusy(), false);
 });
 
 test('native dialog cancellation and button cancellation share one abort lifecycle', async t => {

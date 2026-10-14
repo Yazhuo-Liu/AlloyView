@@ -455,20 +455,22 @@ origin, PBC and available revision fields. Changing those values, replacing
 coordinate/type arrays, clearing the source, replacing a lost GPU device, or
 turning GPU acceleration off and back on permits a fresh attempt. Pair-cutoff
 overrides and RDF's padded search radius remain specific to their own request.
-The capability cache checks supplied revision fields; it does not change the
-existing resident-GPU frame protocol. Public callers that mutate a resident
-frame's geometry in place must still clear its GPU source with
-`clearGpuFrames()` or supply a fresh frame identity before asking the GPU to
-calculate it. Application source/processing changes already use that lifecycle.
+The capability cache checks the resident GPU input token and supplied revision
+fields. Public callers that mutate a resident frame's arrays in place must
+increment `geometryRevision` or call `invalidateGpuFrame(frame)` before its
+next calculation. Application source/processing changes already use that
+lifecycle.
 
-The memory is deliberately narrower than all GPU fallbacks. Adaptive search,
-coordinate-dependent precision correction, type encoding, Voronoi degeneracy,
-allocation/OOM, validation errors and device failures are retried normally.
-Public typed arrays can change in place without a revision, so they cannot
-safely key a general fallback cache without reading every atom. For the cached
-cell/cutoff limits, an in-place coordinate/type edit cannot remove the already
-proved geometric limitation: the CPU calculation still validates and computes
-the current input. No old classification or neighbor result is retained.
+Explicit CNA candidate/search/correction budgets, CSP environment/search
+budgets, Bonds correction budgets, bond-statistics neighbor/correction budgets
+and RDF neighbor/correction budgets
+also qualify for refusal memory. These content-dependent entries require the
+exact resident input token, rather than frame identity alone. Revisions,
+array replacements, parameter changes and device generations invalidate them;
+an unversioned caller cannot opt into content refusal memory. Unmarked in-place
+edits are outside the documented resident-input contract. Type encoding,
+Voronoi degeneracy, allocation/OOM, validation errors and device failures are
+retried normally. No old classification or neighbor result is retained.
 
 At most 128 refusals store small scalar metadata and weak references, without
 owning atom buffers. Source clearing and pool disposal release the entries.
@@ -480,6 +482,42 @@ performance routing threshold is inferred from software-adapter timings.
 node --test tests/gpu-fallback-cache.test.js
 node scripts/browser-gpu-fallback-cache.mjs --production
 ```
+
+### Routing from local measurements
+
+Central symmetry, bonds, bond statistics and RDF can use local timing profiles
+for requests of at least 16,384 atoms. A bounded profile groups atom-count and
+density bands, CPU capacity, PBC, cell shape, type count and small calculation
+parameters. It stores timings, never coordinates or scientific results. Raw
+mapping/classification arrays cannot become profile keys. Other supported
+analyses keep their GPU preference; Voronoi retains its explicit kernel switch.
+
+Each profile first observes three GPU results and then three CPU results. Every
+request produces one result; the scheduler never duplicates a calculation to
+compare backends. Seven-sample rolling medians and a 20% advantage threshold
+avoid switching on one cold run or small timing differences. After calibration,
+occasional alternative-backend observations can recover from a changed workload.
+Calibration and alternative-backend probes wait for idle local admission;
+known CPU/GPU contention retains the learned preference and existing batch pins.
+Cancelled, failed, queued or overlapping work does not train a profile. Shared
+CPU admission ownership distinguishes a request's own Worker ranges from
+unrelated parsing, preheat, DXA and analyses. Late completions after a profile
+or device reset cannot contaminate the new profile.
+
+Movie exports, frame-image ZIP exports and time-series visits hold a per-analysis
+backend choice across frame sizes and parameter profiles, including nested
+batches. A cached result from another backend is recalculated when needed for
+that batch. Proven GPU limitations can still fall back to CPU. The choice
+unlocks on completion, cancellation or restoration failure. Source/device
+changes clear measured profiles while retaining existing batch choices until
+their owners release them. CPU routing exposes `routeReason`; a failed GPU
+attempt exposes `fallbackReason`.
+
+`npm run test:browser:measured-gpu-routing` exercises real RDF GPU/CPU
+calibration, exact histograms, nested batch locking and a real CNA precision
+budget refusal that retries after input invalidation. SwiftShader measurements
+verify this policy on a software adapter; they do not establish a physical-GPU
+cutoff or reproduce the audit machine's throughput.
 
 ## How the GPU backend works
 
@@ -500,8 +538,8 @@ See [Voronoi](voronoi.md) for numerical recovery and boundary conventions.
 
 ### Voronoi backend choice
 
-With GPU acceleration on, the analysis pool tries the GPU kernel of every
-supported analysis except Voronoi. Voronoi goes to the CPU Worker pool unless
+With GPU acceleration on, supported analyses start with a GPU preference and
+the contested kernels can learn a CPU route as described above. Voronoi goes to the CPU Worker pool unless
 **Use the WebGPU kernel** is checked in the Voronoi panel (saved as
 `settings.extensions.voronoi.gpuKernel`). The reason is measured speed: the
 kernel clips about 2.5 times as many planes per cell as Voro++, and its

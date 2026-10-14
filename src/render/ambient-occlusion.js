@@ -1,3 +1,4 @@
+import { createConservativeDepthProgram } from './conservative-depth.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON } from './slicing.js';
 import { lookAt, orthographic } from './math.js';
 
@@ -342,7 +343,8 @@ const ID_UNIFORMS = ['uView', 'uProjection', 'uRadiusScale', 'uSliceAxis', 'uSli
 export class AmbientOcclusionPass {
   constructor(gl) {
     this.gl = gl;
-    this.program = createProgram(gl, ID_VERTEX, ID_FRAGMENT);
+    const depth = createConservativeDepthProgram(gl, ID_VERTEX, ID_FRAGMENT, createProgram);
+    this.program = depth.program; this.conservativeDepth = depth;
     this.uniforms = Object.fromEntries(ID_UNIFORMS.map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.vao = null; this.vaoBuffers = null; this.quad = null;
     this.framebuffer = this.color = this.depth = null; this.resolution = 0;

@@ -175,8 +175,19 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       stateFor(kind, 'Calculating…', 'Waiting for available analysis Workers…');
       try {
         let cached = frame.atomeyeResults?.[kind];
-        if (cached?.key !== key) {
-          const input = { ...parameters, kind };
+        const input = { ...parameters, kind };
+        if (kind === 'rdf') {
+          for (const name of ['firstType', 'secondType']) {
+            if (input[name] !== null) {
+              const type = frame.typeLabels.indexOf(input[name]);
+              if (type < 0) throw new Error(`Element ${input[name]} is absent from this frame.`);
+              input[name] = type;
+            }
+          }
+        }
+        // Use the same normalized element indices for routing cached RDF
+        // results and fresh dispatches, so both address one timing profile.
+        if (cached?.key !== key || pool.canReuseRoutingResult?.(frame, input, cached?.result) === false) {
           if (kind === 'referenceStrain') {
             const reference = parameters.frameIndex === getFrameIndex() ? frame
               : await getFrameAt(parameters.frameIndex, { background: true, signal: controller.signal });
@@ -191,15 +202,6 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
               onProgress: ({ completed, total }) => { if (current()) $('reference-strain-status').textContent = `Matching atom IDs… ${completed} / ${total}`; } });
             if (!current()) return;
             delete input.frameIndex;
-          }
-          if (kind === 'rdf') {
-            for (const name of ['firstType', 'secondType']) {
-              if (input[name] !== null) {
-                const type = frame.typeLabels.indexOf(input[name]);
-                if (type < 0) throw new Error(`Element ${input[name]} is absent from this frame.`);
-                input[name] = type;
-              }
-            }
           }
           const result = await pool.analyze(frame, input, { signal: controller.signal, frameIndex: getFrameIndex(), onProgress: progress => {
             if (!current()) return;
@@ -967,11 +969,13 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     // completed index produces an await boundary before the first image.
     const task = { cancelled: false, restore: true, source: getSourceVersion(), controller: new AbortController() };
     batch = task;
+    let releaseRouting = () => {};
     const original = getFrameIndex(), camera = cameraSnapshot(renderer), archive = new ImageArchiveBuilder(); let total = 0;
     let completed = false, failure = null;
     stopPlayback(); $('cancel-frame-series').disabled = false; $('export-frame-series').disabled = true;
     $('export-series-status').textContent = 'Preparing trajectory index…';
     try {
+      releaseRouting = pool.beginRoutingBatch?.() ?? (() => {});
       await ensureIndexed({ signal: task.controller.signal });
       await prepareExport({ signal: task.controller.signal });
       if (task.cancelled || task.source !== getSourceVersion() || !getFrame()) return;
@@ -995,11 +999,23 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       failure = error;
       if (!task.cancelled) throw error;
     } finally {
-      if (task.restore && task.source === getSourceVersion()) { await showFrame(original); restoreCamera(renderer, camera); }
-      $('export-series-status').textContent = completed ? `Exported ${archive.count} frames in one ZIP archive.` : failure && !task.cancelled ? `Export failed: ${failure.message}` : 'Export cancelled.';
-      archive.clear();
-      if (batch === task) batch = null;
-      $('cancel-frame-series').disabled = true; $('export-frame-series').disabled = !getFrame();
+      try {
+        if (task.restore && task.source === getSourceVersion()) {
+          try { await showFrame(original); }
+          finally { restoreCamera(renderer, camera); }
+        }
+      } catch (error) {
+        failure = error; completed = false;
+        throw error;
+      } finally {
+        try { releaseRouting(); }
+        finally {
+          $('export-series-status').textContent = completed ? `Exported ${archive.count} frames in one ZIP archive.` : failure && !task.cancelled ? `Export failed: ${failure.message}` : 'Export cancelled.';
+          archive.clear();
+          if (batch === task) batch = null;
+          $('cancel-frame-series').disabled = true; $('export-frame-series').disabled = !getFrame();
+        }
+      }
     }
   }
   async function exportViews() {

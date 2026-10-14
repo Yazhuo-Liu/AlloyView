@@ -302,7 +302,7 @@ export function initializeGrainTools({ client, tools, getFrame, getFrames = () =
         if (!current()) return false;
         const ptmMs = performance.now() - startedAt;
         if ($('grains-status')) $('grains-status').textContent = STAGES.bonds;
-        const segmented = await client.segment({ ptm: fitted.ptm, fractional: frame.fractional, cell: frame.cell }, prepared.request, {
+        const segmented = await client.segment({ ptm: fitted.ptm, fractional: frame.fractional, cell: frame.cell, geometryRevision: frame.geometryRevision ?? 0 }, prepared.request, {
           signal: controller.signal,
           onProgress: (stage, fraction) => {
             if (!current()) return;
@@ -316,7 +316,7 @@ export function initializeGrainTools({ client, tools, getFrame, getFrames = () =
           throw new Error('The grain output does not match the current atom population.');
         }
         const result = { ...segmented, ptmMs, ptmReused: Boolean(fitted.reused), ptmKey: fitted.ptm.key, totalMs: performance.now() - startedAt,
-          engine: `${fitted.reused ? 'PTM (reused)' : fitted.engine ?? 'PTM'} + ${segmented.worker ? 'CPU · 1 Worker' : 'CPU · main thread'}` };
+          engine: `${fitted.reused ? 'PTM (reused)' : fitted.engine ?? 'PTM'} + ${segmented.worker ? `CPU · ${segmented.workerCount ?? 1} Worker${(segmented.workerCount ?? 1) === 1 ? '' : 's'}` : 'CPU · main thread'}` };
         const estimate = grainVolumes(frame, result);
         if (estimate) { result.volumes = estimate.volumes; result.volumeSource = estimate.source; }
         cached = { key, result };
@@ -432,7 +432,7 @@ export function initializeGrainTools({ client, tools, getFrame, getFrames = () =
 
   return Object.freeze({ run, onFrame, reset, cancel, serialize, restore, refreshPtmParameters,
     abortJobs: abort,
-    warm: () => client.warm?.(),
+    warm: () => client.warm?.(getFrame()?.ids?.length ?? 0),
     dispose() { abort(); client.dispose?.(); },
     isEnabled: () => job.enabled,
     setEnabled(value) { controlsEnabled = Boolean(value); updateControls(); },

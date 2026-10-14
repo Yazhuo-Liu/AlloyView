@@ -1,3 +1,4 @@
+import { createConservativeDepthProgram, resetConservativeDepth, orderedOpaqueReplicas } from './conservative-depth.js';
 import { cartesianToFractional, cellVertices } from '../data/model.js';
 import { createReplication } from './replication.js';
 import { installCameraInteractions } from './camera-interactions.js';
@@ -321,7 +322,9 @@ export class WebGLRenderer {
 
   initializeGl() {
     const gl = this.gl;
-    this.sphereProgram = createProgram(gl, SPHERE_VERTEX, SPHERE_FRAGMENT);
+    resetConservativeDepth(gl);
+    const sphere = createConservativeDepthProgram(gl, SPHERE_VERTEX, SPHERE_FRAGMENT, createProgram);
+    this.sphereProgram = sphere.program; this.conservativeDepth = sphere;
     this.lineProgram = createProgram(gl, LINE_VERTEX, LINE_FRAGMENT);
     this.sphereVao = gl.createVertexArray();
     this.positionBuffer = gl.createBuffer();
@@ -1500,7 +1503,7 @@ export class WebGLRenderer {
     } else if (this.ambientOcclusionBuffer) gl.disableVertexAttribArray(8);
     // Reuse the same atom buffers for every image. Analysis, color updates and
     // visibility masks still have exactly one entry per original atom.
-    for (const [ordinal, replica] of this.replicas.entries()) {
+    for (const { ordinal, replica } of orderedOpaqueReplicas(this)) {
       // Each displayed copy reads its own occlusion values.
       if (occlusion) gl.vertexAttribPointer(8, 1, gl.FLOAT, false, 0, ordinal * this.atomCount * 4);
       gl.uniform3f(this.sphereUniforms.uReplicaOffset, ...replica.offset);

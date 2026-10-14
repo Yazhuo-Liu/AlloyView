@@ -177,7 +177,7 @@ class Element {
   dispatch(name) { return this.listeners.get(name)?.({ target: this }); }
 }
 
-function harness(t, { frameCount = 5, initialFrameCount = frameCount, ensureIndexed = async () => {} } = {}) {
+function harness(t, { frameCount = 5, initialFrameCount = frameCount, ensureIndexed = async () => {}, showFrame = null } = {}) {
   const ids = ['time-series-state', 'time-series-status', 'time-series-attribute', 'add-time-series-attribute', 'time-series-attribute-list',
     'time-series-attribute-options', 'time-series-first', 'time-series-last', 'time-series-stride', 'time-series-x-axis', 'time-series-separate',
     'time-series-strain-reference', 'collect-time-series', 'visit-time-series', 'cancel-time-series', 'export-time-series', 'clear-time-series',
@@ -195,7 +195,7 @@ function harness(t, { frameCount = 5, initialFrameCount = frameCount, ensureInde
       item.properties.push({ name: 'structureType', data: Uint8Array.from([1, 1, 1, item.frameIndex % 2]), categories: STRUCTURE_TYPES, analysisKind: 'cna', analysisKey: 'k' });
     }
   };
-  const view = { index: 0, count: initialFrameCount, displayed: [], reads: [] };
+  const view = { index: 0, count: initialFrameCount, displayed: [], reads: [], routing: 0, batches: 0, releases: 0 };
   analyze(frames[0]);
   const scheduled = [];
   const attributes = createGlobalAttributeSource({ getFrame: () => frames[view.index], getFrameIndex: () => view.index, getFrameCount: () => view.count,
@@ -203,13 +203,21 @@ function harness(t, { frameCount = 5, initialFrameCount = frameCount, ensureInde
   const downloads = [], notices = [];
   const series = initializeTimeSeries({ attributes, documentRoot, getFrame: () => frames[view.index], getFrameIndex: () => view.index,
     getFrameCount: () => view.count, ensureIndexed: options => ensureIndexed({ ...options, view, fields, documentRoot, getSeries: () => series }),
+    beginRoutingBatch: () => {
+      view.routing++; view.batches++; let released = false;
+      return () => { assert.equal(released, false); released = true; view.routing--; view.releases++; };
+    },
     getFrameAt: async (index, { signal } = {}) => {
       view.reads.push(index);
       await Promise.resolve();
       if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
       return frames[index];
     },
-    showFrame: async index => { view.index = index; view.displayed.push(index); analyze(frames[index]); attributes.refresh(); flush(); return true; },
+    showFrame: async index => {
+      view.displayed.push(index);
+      if (showFrame && await showFrame(index, { view, fields, series }) === false) return false;
+      view.index = index; analyze(frames[index]); attributes.refresh(); flush(); return true;
+    },
     getFileName: () => 'run.dump', notify: message => notices.push(message), onDownload: (blob, filename) => downloads.push({ blob, filename }) });
   function flush() { while (scheduled.length) scheduled.shift()(); }
   series.setEnabled(true);
@@ -230,6 +238,7 @@ test('collection waits for the full index before interpreting an open-ended part
   assert.equal(fields['time-series-last'].max, '5');
   assert.equal(series.serialize().lastFrame, null);
   assert.equal(fields['time-series-state'].textContent, 'Complete');
+  assert.equal(view.batches, 0, 'file-only reads do not pin an analysis backend');
   assert.deepEqual(view.displayed, [], 'indexing and file-value collection do not change the view');
 });
 
@@ -275,8 +284,46 @@ test('visiting an explicit range uses the completed index and preserves every un
   assert.deepEqual(series.getData().frames, [1]);
   assert.equal(fields['time-series-last'].max, '6');
   assert.equal(fields['time-series-last'].value, '3');
+  assert.equal(view.routing, 0); assert.equal(view.batches, 1); assert.equal(view.releases, 1);
   await series.restore(uncollected);
   assert.deepEqual(series.serialize(), uncollected);
+});
+
+test('time-series cancellation retains visit ownership and its backend until asynchronous restoration settles', async t => {
+  let releaseNavigation, restoreEntered;
+  const navigating = new Promise(resolve => { releaseNavigation = resolve; });
+  const restoring = new Promise(resolve => { restoreEntered = resolve; });
+  const h = harness(t, { showFrame: async (index, { view }) => {
+    assert.equal(view.routing, 1);
+    if (index === 1) await navigating;
+    if (index === 0) restoreEntered();
+  } });
+  h.add('CNA.FCC.fraction');
+  const visit = h.series.visit();
+  while (!h.view.displayed.length) await new Promise(resolve => setImmediate(resolve));
+  h.series.cancel();
+  assert.equal(h.series.isRunning(), true);
+  assert.equal(await h.series.visit(), false, 'a second visit cannot replace pending cleanup');
+  assert.equal(h.view.batches, 1); assert.equal(h.view.routing, 1);
+  releaseNavigation(); await restoring; assert.equal(await visit, false);
+  assert.equal(h.view.index, 0); assert.equal(h.series.isRunning(), false);
+  assert.equal(h.view.routing, 0); assert.equal(h.view.releases, 1);
+  assert.equal(h.fields['time-series-state'].textContent, 'Cancelled');
+});
+
+test('time-series restoration failures release routing and re-enable a later visit', async t => {
+  let failRestore = true;
+  const h = harness(t, { showFrame: async (index, { view }) => {
+    assert.equal(view.routing, 1);
+    if (index === 0 && failRestore) { failRestore = false; throw new Error('Original frame unavailable'); }
+  } });
+  h.add('CNA.FCC.fraction');
+  assert.equal(await h.series.visit(), false);
+  assert.equal(h.view.routing, 0); assert.equal(h.view.releases, 1);
+  assert.equal(h.series.isRunning(), false); assert.deepEqual(h.notices, ['Original frame unavailable']);
+  assert.equal(h.fields['time-series-state'].textContent, 'Failed');
+  assert.equal(await h.series.visit(), true);
+  assert.equal(h.view.routing, 0); assert.equal(h.view.batches, 2); assert.equal(h.view.releases, 2);
 });
 
 test('cancelling an index wait preserves the reusable controller and later collection sees the completed tail', async t => {

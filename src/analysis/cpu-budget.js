@@ -19,6 +19,17 @@ export class CpuBudget {
     this.active = 0;
     this.queue = [];
     this.backgroundDeferrals = new Set();
+    this.admissionRevision = 0;
+    this.admissionObservers = new Set();
+  }
+
+  /** Timing calibration distinguishes a job's own bounded range admissions
+   * from unrelated parser, DXA, preheat or analysis work sharing this budget. */
+  observeAdmissions(owner) {
+    const observation = { owner, uncontended: !this.active && !this.queue.length };
+    this.admissionObservers.add(observation);
+    return { get uncontended() { return observation.uncontended; },
+      release: () => this.admissionObservers.delete(observation) };
   }
 
   /** Foreground input preparation must enter admission before its asynchronous
@@ -46,13 +57,13 @@ export class CpuBudget {
     this.pump();
   }
 
-  acquire(count = 1, { signal, priority = 0 } = {}) {
+  acquire(count = 1, { signal, priority = 0, owner } = {}) {
     if (!Number.isInteger(count) || count < 1 || count > this.limit) {
       return Promise.reject(new Error(`CPU work must request between 1 and ${this.limit} computation threads.`));
     }
     if (signal?.aborted) return Promise.reject(abortError());
     return new Promise((resolve, reject) => {
-      const request = { count, signal, priority, resolve, reject };
+      const request = { count, signal, priority, owner, resolve, reject };
       request.abort = () => {
         const index = this.queue.indexOf(request);
         if (index < 0) return;
@@ -77,6 +88,8 @@ export class CpuBudget {
       this.queue.shift();
       request.signal?.removeEventListener('abort', request.abort);
       this.active += request.count;
+      this.admissionRevision++;
+      for (const observer of this.admissionObservers) if (request.owner !== observer.owner) observer.uncontended = false;
       let released = false;
       request.resolve({ count: request.count, release: () => {
         if (released) return;

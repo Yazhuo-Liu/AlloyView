@@ -1,0 +1,108 @@
+{
+  "fixture": "Ideal FCC geometry with four synthetic 15-degree orientation slabs; real PTM neighbor graph",
+  "atoms": 108000,
+  "samples": 5,
+  "cpuWorkerLimit": 3,
+  "hostAvailableParallelism": 4,
+  "grains": 4,
+  "excludes": [
+    "PTM fitting",
+    "first Worker/module startup",
+    "rendering",
+    "GPU"
+  ],
+  "includes": [
+    "private/shared stage snapshot preparation",
+    "Worker communication",
+    "stable graph merge and regression",
+    "orphan adoption and final readback"
+  ],
+  "timings": {
+    "serial": [
+      {
+        "wallMs": 439.82836899999984,
+        "modelMs": 416.45585500000016,
+        "workerCount": 1
+      },
+      {
+        "wallMs": 412.71379499999966,
+        "modelMs": 378.0350319999998,
+        "workerCount": 1
+      },
+      {
+        "wallMs": 398.0343500000008,
+        "modelMs": 371.77052300000014,
+        "workerCount": 1
+      },
+      {
+        "wallMs": 367.165027,
+        "modelMs": 343.65503199999966,
+        "workerCount": 1
+      },
+      {
+        "wallMs": 349.3636319999996,
+        "modelMs": 323.83390600000075,
+        "workerCount": 1
+      }
+    ],
+    "parallel-private": [
+      {
+        "wallMs": 398.6258770000004,
+        "modelMs": 374.95265900000004,
+        "workerCount": 3
+      },
+      {
+        "wallMs": 401.26994600000035,
+        "modelMs": 367.5888070000001,
+        "workerCount": 3
+      },
+      {
+        "wallMs": 364.71984800000064,
+        "modelMs": 340.8110370000004,
+        "workerCount": 3
+      },
+      {
+        "wallMs": 350.41811399999915,
+        "modelMs": 330.94330100000025,
+        "workerCount": 3
+      },
+      {
+        "wallMs": 354.4008450000001,
+        "modelMs": 327.7552199999991,
+        "workerCount": 3
+      }
+    ],
+    "parallel-shared": [
+      {
+        "wallMs": 350.40378899999996,
+        "modelMs": 330.3553349999993,
+        "workerCount": 3
+      },
+      {
+        "wallMs": 340.9574190000003,
+        "modelMs": 312.5933810000006,
+        "workerCount": 3
+      },
+      {
+        "wallMs": 342.63724,
+        "modelMs": 324.660492,
+        "workerCount": 3
+      },
+      {
+        "wallMs": 325.0581969999994,
+        "modelMs": 293.0637480000005,
+        "workerCount": 3
+      },
+      {
+        "wallMs": 312.41428199999973,
+        "modelMs": 278.5676569999996,
+        "workerCount": 3
+      }
+    ]
+  },
+  "medianWallMs": {
+    "serial": 398.0343500000008,
+    "parallel-private": 364.71984800000064,
+    "parallel-shared": 340.9574190000003
+  }
+}

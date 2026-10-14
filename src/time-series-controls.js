@@ -21,7 +21,7 @@ const CONTROL_IDS = ['time-series-attribute', 'add-time-series-attribute', 'time
 export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt = async () => null, getFrameIndex = () => 0,
   getFrameHeaderAt = null, getFrameHeaderConcurrency = () => 3,
   getFrameCount = () => 1, ensureIndexed = async () => {}, getSourceVersion = () => 0, getFileName = () => 'structure',
-  showFrame = async () => false, stopPlayback = () => {}, onEdit = () => {}, notify = () => {}, onDownload = downloadBlob,
+  beginRoutingBatch = () => () => {}, showFrame = async () => false, stopPlayback = () => {}, onEdit = () => {}, notify = () => {}, onDownload = downloadBlob,
   documentRoot = globalThis.document, now = () => performance.now() } = {}) {
   const $ = id => documentRoot?.getElementById(id) ?? null;
   const store = new TimeSeriesStore();
@@ -247,9 +247,11 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
     onEdit(); stopPlayback();
     collected = true; tools?.setToolEnabled('timeSeries', settings.attributes.length > 0);
     const task = startJob('visit'), original = getFrameIndex();
+    let releaseRouting = () => {};
     const current = () => job === task && !task.controller.signal.aborted && task.source === String(getSourceVersion());
     let interrupted = false, visited = 0;
     try {
+      releaseRouting = beginRoutingBatch();
       await ensureIndexed({ signal: task.controller.signal });
       if (!current()) return false;
       readRange(); writeRange();
@@ -272,16 +274,34 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
       return false;
     } finally {
       const restore = task.source === String(getSourceVersion()) && !interrupted;
-      finishJob(task);
-      if (restore && getFrameIndex() !== original) await showFrame(original);
-      if ($('time-series-status')) $('time-series-status').textContent = interrupted ? `Stopped after ${integer(visited)} frames: the displayed frame changed. ${summary()}`
+      let ownsCompletion = false, restoreFailure = null;
+      try { if (restore && getFrameIndex() !== original) await showFrame(original); }
+      catch (error) {
+        restoreFailure = error;
+        if (job === task && error.name !== 'AbortError') notify(error.message);
+        return false;
+      } finally {
+        try { releaseRouting(); }
+        finally {
+          ownsCompletion = job === task;
+          finishJob(task);
+          if (ownsCompletion) {
+            if (restoreFailure && restoreFailure.name !== 'AbortError') state('Failed', restoreFailure.message);
+            else if (task.controller.signal.aborted) state('Cancelled', `Stopped. ${summary()}`);
+          }
+        }
+      }
+      if (ownsCompletion && !task.controller.signal.aborted && $('time-series-status')) $('time-series-status').textContent = interrupted ? `Stopped after ${integer(visited)} frames: the displayed frame changed. ${summary()}`
         : `${summary()} Visited ${integer(visited)} frames.`;
     }
   }
 
   function cancel() {
     if (!job) return false;
-    job.controller.abort(); const task = job; finishJob(task);
+    job.controller.abort(); const task = job;
+    // A visit still owns its navigation while returning to the original
+    // frame. Do not let another visit overlap that asynchronous cleanup.
+    if (task.kind !== 'visit') finishJob(task);
     state('Cancelled', `Stopped. ${summary()}`);
     return true;
   }

@@ -1,3 +1,4 @@
+import { createConservativeDepthProgram } from './conservative-depth.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON } from './slicing.js';
 import { periodicDisplayCoordinates } from './periodic-origin.js';
 import { CRYSTAL_DRAG_GLSL, CRYSTAL_DRAG_UNIFORMS, applyCrystalDragUniforms } from './crystal-drag.js';
@@ -86,7 +87,8 @@ export function siteMarkerDisplayCoordinates(positions, cell, periodicOrigin = [
 export class SiteMarkerLayer {
   constructor(gl) {
     this.gl = gl;
-    this.program = createProgram(gl);
+    const depth = createConservativeDepthProgram(gl, VERTEX, FRAGMENT, createProgram, 'uRadius');
+    this.program = depth.program; this.conservativeDepth = depth;
     this.uniforms = Object.fromEntries(['uView', 'uProjection', 'uRadius', 'uSliceAxis', 'uSliceMaximum', 'uSliceMode',
       'uSliceCount', 'uSlicePlanes[0]', 'uReplicaOffset', 'uReplicaIndex', 'uRepetitions', ...CRYSTAL_DRAG_UNIFORMS].map(name => [name, gl.getUniformLocation(this.program, name)]));
     this.vao = gl.createVertexArray();
@@ -208,9 +210,9 @@ export class SiteMarkerLayer {
   }
 }
 
-function createProgram(gl) {
+function createProgram(gl, vertex = VERTEX, fragment = FRAGMENT) {
   const program = gl.createProgram();
-  for (const [kind, source] of [[gl.VERTEX_SHADER, VERTEX], [gl.FRAGMENT_SHADER, FRAGMENT]]) {
+  for (const [kind, source] of [[gl.VERTEX_SHADER, vertex], [gl.FRAGMENT_SHADER, fragment]]) {
     const shader = gl.createShader(kind);
     gl.shaderSource(shader, source);
     gl.compileShader(shader);

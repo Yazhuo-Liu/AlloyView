@@ -1,6 +1,6 @@
 import { MAX_BONDS, MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { NeighborSearch, atomRange } from '../neighbors.js';
-import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, gpuInputUnsupported, readGpuBuffers, yieldWorker } from './runtime.js';
 import { BONDS_COUNT_SHADER, BONDS_WRITE_SHADER, BOND_ATOM_WORDS, BOND_RECORD_WORDS } from './bonds-shaders.js';
 import { validateAnalysisInput } from '../errors.js';
 
@@ -79,7 +79,7 @@ export async function analyzeGpuBonds(runtime, frame, parameters = {}, { signal,
     for (let atom = startAtom; atom < endAtom; atom++) {
       const base = atom * BOND_ATOM_WORDS;
       if (atomData[base + 2]) {
-        if (corrections.size >= MAX_GPU_BOND_CORRECTION_ATOMS) throw new GpuUnavailableError('Too many bond environments are near cutoff boundaries for GPU precision correction.');
+        if (corrections.size >= MAX_GPU_BOND_CORRECTION_ATOMS) throw gpuInputUnsupported('Too many bond environments are near cutoff boundaries for GPU precision correction.', 'bonds-correction-budget');
         search ??= new NeighborSearch(frame);
         const corrected = correctGpuBondAtom(frame, prepared, atom, search);
         corrections.set(atom, corrected.edges);

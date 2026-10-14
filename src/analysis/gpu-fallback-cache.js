@@ -1,12 +1,16 @@
-// Cache only explicit, coordinate-independent neighbor-index refusals. A
-// public frame can mutate typed arrays in place, so input identity is not a
-// license to retain content-dependent precision or classification failures.
+// Cell refusals are coordinate-independent. Content refusals require an
+// explicit GPU input revision; unmarked public array edits are outside the
+// resident-input contract, and unversioned callers never cache them.
 const FIXED_RADIUS_KINDS = new Set(['coordination', 'rdf', 'bonds', 'bondStatistics', 'localShear', 'cna']);
 export const GPU_CELL_CUTOFF_FAILURE_CODES = new Set([
   'cell-neighbor-geometry', 'periodic-image-budget', 'periodic-image-precision',
   'cell-cutoff-numeric-range', 'padded-radius-numeric-range',
   'padded-periodic-image-budget', 'padded-periodic-image-precision',
 ]);
+export const GPU_INPUT_FAILURE_CODES = new Set(['cna-candidate-budget', 'cna-search-budget', 'cna-correction-budget',
+  'bond-neighbor-budget', 'bond-correction-budget', 'bonds-correction-budget', 'rdf-neighbor-budget', 'rdf-correction-budget',
+  'csp-environment-budget', 'csp-search-budget']);
+const INPUT_KINDS = new Set(['cna', 'centrosymmetry', 'bonds', 'bondStatistics', 'rdf']);
 const MAX_ENTRIES = 128, MAX_KEY_CHARS = 4096;
 
 /** Bounded scalar metadata; it never owns source coordinate/type buffers. */
@@ -23,22 +27,25 @@ export class GpuFallbackCache {
   }
 
   request(frame, parameters, backendGeneration = 0) {
-    if (typeof WeakRef !== 'function' || !frame || !FIXED_RADIUS_KINDS.has(parameters?.kind)
-      || (parameters.kind === 'cna' && parameters.mode !== 'fixed')
-      || !Number.isFinite(parameters.cutoff) || parameters.cutoff <= 0) return null;
+    if (!frame || typeof frame !== 'object') return null;
+    const inputRevision = this.inputRevisionFor(frame);
+    const contentEligible = INPUT_KINDS.has(parameters?.kind) && Number.isSafeInteger(inputRevision);
+    const cellEligible = FIXED_RADIUS_KINDS.has(parameters?.kind) && (parameters.kind !== 'cna' || parameters.mode === 'fixed')
+      && Number.isFinite(parameters.cutoff) && parameters.cutoff > 0;
+    if (typeof WeakRef !== 'function' || !frame || (!contentEligible && !cellEligible)) return null;
     // Origin/PBC, revisions and small parameter values are compared exactly.
     // A coordinate edit that preserves the cell cannot remove these limits;
     // actual current coordinates are still checked by the CPU calculation.
     const cell = frame.cell;
     if (cell?.vectors?.length !== 9 || cell.origin?.length !== 3 || cell.pbc?.length !== 3) return null;
-    const key = smallKey({ parameters, inputRevision: this.inputRevisionFor(frame),
+    const key = smallKey({ parameters, inputRevision,
       vectors: Array.from(cell.vectors), origin: Array.from(cell.origin),
       pbc: Array.from(cell.pbc), triclinic: cell.triclinic,
       revisions: [frame.revision, frame.analysisRevision, frame.geometryRevision],
       coordinateLength: frame.fractional?.length, typeLength: frame.types?.length });
     if (key === null || !frame.fractional || typeof frame.fractional !== 'object') return null;
     return { frame, parameters, key, backendGeneration, generation: this.generation,
-      coordinates: frame.fractional, types: frame.types };
+      coordinates: frame.fractional, types: frame.types, contentEligible, cellEligible };
   }
 
   lookup(request) {
@@ -52,8 +59,9 @@ export class GpuFallbackCache {
 
   remember(request, error, backendGeneration = request?.backendGeneration) {
     if (!request || request.generation !== this.generation || request.backendGeneration !== backendGeneration
-      || error?.name !== 'GpuUnavailableError' || error.gpuUnsupportedScope !== 'cell-cutoff'
-      || !GPU_CELL_CUTOFF_FAILURE_CODES.has(error.gpuUnsupportedCode)
+      || error?.name !== 'GpuUnavailableError'
+      || !(request.cellEligible && error.gpuUnsupportedScope === 'cell-cutoff' && GPU_CELL_CUTOFF_FAILURE_CODES.has(error.gpuUnsupportedCode)
+        || request.contentEligible && error.gpuUnsupportedScope === 'input-revision' && GPU_INPUT_FAILURE_CODES.has(error.gpuUnsupportedCode))
       || error.gpuOutOfMemory || error.gpuDeviceLost || error.gpuDeviceUnavailable) return false;
     const current = this.request(request.frame, request.parameters, backendGeneration);
     // Detect in-flight changes of all inputs this refusal actually depends on.

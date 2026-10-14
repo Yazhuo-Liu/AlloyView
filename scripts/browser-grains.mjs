@@ -238,6 +238,8 @@ async function exercise({ isolated }) {
     const nickel = await calculated('Replicated nickel bicrystal', { parity: false });
     assert.equal(nickel.grainCount, 2); assert.equal(nickel.atoms, 259808); assert.equal(nickel.unassigned, 0);
     assert.deepEqual(nickel.sizes, [130560, 129248]);
+    const workerCount = await evaluate('grainChecks.renderer.frame.atomeyeResults.grains.result.workerCount');
+    if (await evaluate('navigator.hardwareConcurrency >= 5')) assert.ok(workerCount > 1, 'large grain preparation uses parallel Workers when memory permits');
     const cold = await evaluate('grainChecks.timing()');
     // Cancelling a running job stops it and leaves a warm Worker behind.
     await change('grains-interfaces', false, true);
@@ -251,7 +253,7 @@ async function exercise({ isolated }) {
     const warm = await evaluate('grainChecks.timing()');
     return { adapter, isolated, first: { grainCount: first.grainCount, sizes: first.sizes, threshold: first.threshold, purity: truth.purity },
       second: { grainCount: second.grainCount, sizes: second.sizes }, csvRows: rows.length - 1, mergeRows: mergeRows.length - 1,
-      nickel: { atoms: nickel.atoms, sizes: nickel.sizes, threshold: nickel.threshold, cold, warm }, mobile, screenshots: [desktopScreenshot, screenshot] };
+      nickel: { atoms: nickel.atoms, sizes: nickel.sizes, threshold: nickel.threshold, workerCount, cold, warm }, mobile, screenshots: [desktopScreenshot, screenshot] };
   }, { software: useSoftwareAdapter(true), isolated, requireGpu: false });
 }
 

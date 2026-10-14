@@ -276,14 +276,50 @@ can reduce its retained frame count. The optional allowance does not reserve
 Collecting lists adds bookkeeping and transport to the initial fit; its benefit
 is avoiding a second fit when Grains is enabled later.
 
-The clustering runs in one dedicated Worker, started when the panel opens. It
-keeps the merge sequence of the last structure, so a new threshold, minimum
+Clustering uses a persistent coordinator Worker, started when the panel opens.
+At 65,536 atoms or more, with at least three CPU permits and sufficient memory,
+it also uses persistent range Workers for neighbor-bond construction and
+lattice disorientation. The coordinator and helpers share the application's
+logical-core-minus-two budget; helper modules warm in the background with no
+idle reservation. Before ordered graph merging, the weighted reservation is
+replaced with one CPU permit so other analyses can proceed. Coherent-interface
+conversion, stable merge ordering, threshold regression and orphan adoption
+retain their serial order for identical numerical results.
+
+It keeps the merge sequence of the last structure, so a new threshold, minimum
 grain size or orphan setting repeats only steps 5–8. The automatic and manual
 algorithms share one merge sequence; the minimum spanning tree and each
 coherent-interface setting have their own. Cancelling terminates the Worker
-and starts a new one in the background. The Worker receives copies of the PTM
-arrays and coordinates; it needs neither shared memory nor cross-origin
-isolation, and results are identical with and without them.
+and starts a new coordinator in the background; helper Workers stay warm and
+acknowledge cancellation before releasing their CPU permits. Requests are
+serialized to prevent two whole-frame reservations from blocking each other's
+stage transition. The analysis needs neither shared memory nor cross-origin
+isolation, and results are identical with and without them. In isolated
+pages, helpers read one shared immutable stage snapshot. Other pages use
+bounded private copies; admission counts the snapshot and worst-case complete
+range/merged outputs against a 256 MiB temporary allowance. Large frames that
+cannot afford at least two helpers keep the serial path. This allowance is
+additional preparation memory, not the whole grain model's memory or an
+allocation made up front.
+
+Array replacement, cell-vector/PBC changes and explicit geometry revisions
+invalidate the retained model without scanning atom arrays on each request.
+For in-place coordinate edits increment the input `geometryRevision`; for
+in-place PTM-array edits increment `ptm.geometryRevision`. Revisions must be
+nonnegative safe integers. Small frames and repeated model segmentation use
+one Worker.
+
+An interleaved Node benchmark of 108,000 FCC atoms with four synthetic
+orientation slabs and a real PTM neighbor graph took median 398.03 ms on the
+serial route, 364.72 ms with private helpers and 340.96 ms with shared helpers
+(five samples, explicit three-permit budget on a four-processor execution
+environment). Timing includes snapshot preparation, messaging, graph merging,
+regression, adoption and result readback; PTM and first module startup are
+excluded. At 19,652 atoms, forced parallel preparation was slower, so the
+default keeps small frames serial. These are measurements of this fixture and
+host, not a general speedup claim. Reproduce the large comparison with
+`node scripts/benchmark-grain-pipeline.mjs 30 5 3`; use
+`17 5 3 --force-small` to examine small-frame messaging overhead.
 
 In headless Chrome on the reference workstation (40 logical processors):
 
@@ -305,9 +341,9 @@ keeps about a third of that.
 
 ## Limitations
 
-- Building the merge sequence runs on one thread in the grain Worker, while
-  OVITO's engine is multithreaded. Only the preceding PTM fit uses the Worker
-  pool.
+- The ordered graph merge, coherent-interface conversion and regression still
+  run on one thread. The independent bond/disorientation passes and preceding
+  PTM fit use Workers, preserving the same stable grain model and numbering.
 - The browser tests run grain segmentation with GPU acceleration off. Grains
   from a PTM fit whose neighbors were prepared with WebGPU are not yet covered
   by a browser test.

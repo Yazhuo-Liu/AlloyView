@@ -157,6 +157,15 @@ async function runJobs({text,isolated,entries}) {
     const grains=new GrainSegmentationClient({cpuBudget:budget}), clustered=await grains.segment({ptm,fractional:frame.fractional,cell:frame.cell},
       {algorithm:'mst',mergeThreshold:1,minGrainSize:1,adoptOrphans:true});
     result.grains=clustered.grainCount; grains.dispose(); result.executedEntries.push('src/workers/grains-worker.js');
+    const grainStage=new Worker(new URL('./workers/grains-stage-worker.js',appUrl),{type:'module'});
+    try {
+      await new Promise((resolve,reject)=>{
+        grainStage.addEventListener('error',event=>reject(new Error(event.message)),{once:true});
+        grainStage.addEventListener('message',({data})=>data.id===1&&data.ok?resolve():reject(new Error(data.error??'Invalid grain warmup ACK')),{once:true});
+        grainStage.postMessage({id:1,warm:true});
+      });
+    } finally { grainStage.terminate(); }
+    result.executedEntries.push('src/workers/grains-stage-worker.js');
     const mesh={vertices:Float64Array.from([8,3,4,2,3,4,8,7,4,2,7,4,8,3,6,2,3,6,8,7,6,2,7,6]),
       triangles:Uint32Array.from([[0,4,6,2],[1,3,7,5],[0,1,5,4],[2,6,7,3],[0,2,3,1],[4,5,7,6]].flatMap(([a,b,c,d])=>[a,b,c,a,c,d]))};
     const geometry=new SurfaceGeometryClient({cpuBudget:budget}), prepared=await geometry.prepare(mesh,frame.cell);

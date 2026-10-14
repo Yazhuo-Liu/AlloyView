@@ -2,6 +2,146 @@
 
 Latest validation: 2026-10-14 (America/New_York). Earlier entries retain their own dates.
 
+## Parallel Grains, measured G2 routing and guarded R7 depth (2026-10-14)
+
+Baseline: `55cf7fb`, confirmed equal to remote main before this work and again
+before committing. The review checked the remaining K1/G2/R7 findings against
+current code, implemented the bounded parallel and routing paths, then ran
+independent scientific, lifecycle and renderer reviews before the final build.
+The existing PTM/Wasm pools, load-time preparation and foreground CPU budget
+remain in use.
+
+### Grain preparation and admission
+
+Neighbor bonds are constructed by deterministic central-atom ranges;
+disorientations are calculated by independent edge ranges. Persistent helper
+Workers return complete typed arrays in original range order. Coherent-interface
+conversion and graph/MST merging preserve their dependency order, orientation
+accumulation and stable ties. Before the ordered merge, the coordinator returns
+its extra CPU permits and acquires one permit. Threshold, size and orphan-setting
+edits reuse the retained merge model. Model keys observe array replacements,
+small cell descriptors and explicit geometry/PTM revisions without scanning all
+atom data at every request.
+
+Shared mode uses one immutable stage snapshot; private mode uses bounded copies.
+Admission includes snapshot and worst-case complete partial/merged arrays in a
+256 MiB temporary budget. Smaller than 65,536 atoms, fewer than three available
+CPU permits or insufficient memory retains the original single-Worker route.
+Helper modules prewarm in the background and survive source changes and aborted
+stages. Cancellation and failed replies wait for posted range acknowledgements
+before returning the CPU lease. Independent review corrected optimistic copy
+accounting, unnecessary bond-stage orientation uploads, clamped copy-yield
+costs, coordinator reply/message errors, dispose/queued-job races and late errors
+from replaced helpers.
+
+The large interleaved benchmark uses 108,000 ideal FCC positions with four
+**synthetic** 15-degree orientation slabs and a real PTM neighbor graph. Five
+samples give median end-to-end clustering times of 398.03 ms serial, 364.72 ms
+private parallel and 340.96 ms shared parallel. The explicit three-permit
+configuration ran on a four-processor execution environment. Timing includes
+snapshots, transport, ordered merge, regression, adoption and readback; PTM,
+first Worker/module startup, rendering and GPU work are excluded. At 19,652
+atoms forced parallel preparation was slower (67.91 / 94.94 / 100.51 ms), which
+motivated the small-frame serial route. These gains apply to this fixture and
+host; six private permits were slower in an earlier oversubscribed observation.
+
+Reproduce with `npm run benchmark:grains -- 30 5 3` and the small diagnostic
+`npm run benchmark:grains -- 17 5 3 --force-small`. Full samples and conditions:
+[108k](benchmarks/grain-pipeline-108k-2026-10-14.json),
+[19k](benchmarks/grain-pipeline-19k-2026-10-14.json).
+Production Grains passes in isolated and nonisolated hosts, including PTM reuse,
+exact direct-kernel comparisons, CSV/replay/coloring and the real 259,808-atom
+physically replicated NiGB frame. Both runs use three preparation Workers and
+retain exactly two grains of 130,560 and 129,248 atoms after cancellation/retry.
+
+### G2 route measurements and batch lifetimes
+
+Central symmetry, Bonds, bond statistics and RDF use bounded local profiles
+from 16,384 atoms. Calibration observes three successful GPU and three CPU
+requests, with one computation per request, seven-sample medians, a 20% switching
+margin and sparse rechecks. Other supported kernels retain their GPU preference;
+Voronoi retains its explicit switch. CPU admission ownership distinguishes a
+calibration job's own ranges from other analysis, parser, DXA and preheat work.
+Calibration/recheck probes defer during known contention, so a persistently
+busy workload retains its learned preference instead of repeating CPU probes
+that cannot produce a valid sample; cache-to-batch pinning uses the same gate.
+Overlapping jobs, device/profile/source resets, failures and cancellation do not
+train a profile; recording occurs after final progress has completed safely.
+No audit-machine core threshold or software-adapter speed threshold is imposed.
+
+Explicit content budget refusals in CNA, CSP, Bonds, bond statistics and RDF
+are remembered only against an exact GPU input revision and complete small
+parameters. Input replacement/revision, source/device changes and preference
+changes allow retry; OOM, validation/device failures and cancellation do not
+become permanent refusals. Review fixed a missing RDF diagnostic import,
+correction-overflow tags, canonical parameter keys and nested batch inheritance.
+
+Movie, frame-image ZIP and time-series visits pin each analysis's backend
+preference through frame/parameter changes and nested batches; unsupported GPU
+work may still fall back. Cached results respect that choice. Original-frame
+restoration, cancellation and setup failures release ownership and backend locks,
+including restoration exceptions. The review also fixed frame-ZIP retained
+archives/busy state and a time-series race that allowed a second visit while the
+first was restoring; RDF cache checks use the same numeric type indices as fresh
+requests.
+
+The real production WebGPU probe runs RDF on 19,652 FCC atoms through three GPU
+and three CPU observations, learns a CPU choice on SwiftShader and preserves
+exact histograms/normalized values. Nested batch choices and mismatched cached
+backends are checked. Fixed CNA at the exact first-shell boundary triggers the
+real `cna-correction-budget` refusal: two unchanged requests attempt GPU once;
+`invalidateGpuFrame` permits a second attempt while preserving the GPU Worker
+and canonical arrays. CPU permits return to zero. The historical pre-fix audit
+is retained separately in [original G2 evidence](benchmarks/g2-original-audit.txt).
+
+### R7 depth correctness and browser limitation
+
+A per-context compile/link and fragment-highp probe enables guarded nearest-sphere
+raster depth plus `depth_greater` only when accepted. Sphere, site-marker and AO
+ID shaders share that path, retain original XY/W and center-plane clipping, and
+use the original shader on refusal. Context restoration re-probes. Independent
+review found an actual Float32 counterexample where raster-depth division rounded
+above fragment depth; a 32-epsilon NDC arithmetic guard and regression prevent
+that violation. Geometric radius padding and near-plane clamping remain in place.
+
+Opaque replica ordering uses cached, bounded rows and original copy ordinals.
+It sorts only provably disjoint depth intervals, including Float32 transform
+error and at least 16-bit depth quantization. Overlap, quantized ties, large-offset
+ambiguity and crystal drag retain original order. Translucent layers do not move;
+per-copy AO factors keep their original identity.
+
+Chromium/SwiftShader **rejects `GL_EXT_conservative_depth`**, so this run uses the
+original shader and does not establish early-depth acceleration. The regression
+also compiles the guarded geometry with only the unsupported qualifier stripped,
+checking geometry correctness independently of extension support. Sixteen real
+pixel/PNG comparisons at DPR 2 cover perspective/orthographic views, skew replicas,
+selection, periodic origin, enlarged radii, site markers, near-camera AO and an
+actual nearest-first `[2,1,0]` draw with distinct per-copy AO. Every comparison is
+exact, AO ID factors match and GL errors are zero. Physical GPUs accepting the
+qualifier still require vendor-specific equality and timing validation. Prior
+R7 audit gains are historical evidence, not reproduced gains for this build.
+
+### Final verification
+
+- `npm test`: **2,179 passed**, no failures, cancellations or skips.
+- `npm run build`: passed; the new helper Worker is in the versioned runtime.
+- Production browser checks passed: `test:browser:grains`,
+  `test:browser:measured-gpu-routing`, `test:browser:conservative-depth`,
+  `test:browser:bundled-runtime`, `test:browser:trajectory-tools`,
+  `test:browser:movies`, `test:browser:time-series-headers` and
+  `node scripts/browser-gpu.mjs --application-only`.
+- Independent focused regressions cover scientific parity, weighted-budget
+  transitions, private/shared Workers, cancellation/ACKs, routing contention,
+  late resets, nested batch cleanup and depth arithmetic/precision failure.
+
+Browser correctness/lifecycle evidence is archived in
+[routing/depth](benchmarks/routing-depth-browser-2026-10-14.json).
+These software-adapter browser checks ran concurrently, so their elapsed times
+are not hardware performance comparisons. The grain benchmark above ran
+separately and interleaved its alternatives. G2 implementation is complete;
+R7's supporting-physical-GPU verification and further dependency-ordered grain
+merge optimization remain explicitly listed in TODO.
+
 ## Bounded PTM neighbor retention for Grains (2026-10-14)
 
 Baseline: `0e7278f`, confirmed equal to remote main. K1's repeated-fitting

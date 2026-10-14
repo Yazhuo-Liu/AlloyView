@@ -1,0 +1,217 @@
+{
+  "routing": {
+    "adapter": {
+      "available": true,
+      "vendor": "google",
+      "architecture": "swiftshader",
+      "device": "",
+      "description": "",
+      "isFallbackAdapter": true,
+      "limits": {
+        "maxStorageBufferBindingSize": 1073741824,
+        "maxComputeWorkgroupsPerDimension": 65535
+      }
+    },
+    "production": true,
+    "atoms": 19652,
+    "cpuLimit": 6,
+    "calibration": [
+      {
+        "backend": "gpu",
+        "elapsedMs": 703.6999999955297,
+        "routeReason": null,
+        "fallbackReason": null
+      },
+      {
+        "backend": "gpu",
+        "elapsedMs": 145.60000000149012,
+        "routeReason": null,
+        "fallbackReason": null
+      },
+      {
+        "backend": "gpu",
+        "elapsedMs": 144.70000000298023,
+        "routeReason": null,
+        "fallbackReason": null
+      },
+      {
+        "backend": "cpu",
+        "elapsedMs": 154.60000000149012,
+        "routeReason": "CPU selected for bounded local backend calibration.",
+        "fallbackReason": null
+      },
+      {
+        "backend": "cpu",
+        "elapsedMs": 42.5,
+        "routeReason": "CPU selected for bounded local backend calibration.",
+        "fallbackReason": null
+      },
+      {
+        "backend": "cpu",
+        "elapsedMs": 16.5,
+        "routeReason": "CPU selected for bounded local backend calibration.",
+        "fallbackReason": null
+      },
+      {
+        "backend": "cpu",
+        "elapsedMs": 16.700000002980232,
+        "routeReason": "CPU selected by measured local backend timings.",
+        "fallbackReason": null
+      }
+    ],
+    "profiles": [
+      {
+        "backend": "cpu",
+        "gpuSamples": 3,
+        "cpuSamples": 5,
+        "gpuMedianMs": 145.60000000149012,
+        "cpuMedianMs": 16.700000002980232
+      },
+      {
+        "backend": "gpu",
+        "gpuSamples": 0,
+        "cpuSamples": 1,
+        "gpuMedianMs": null,
+        "cpuMedianMs": 17.899999998509884
+      },
+      {
+        "backend": "gpu",
+        "gpuSamples": 0,
+        "cpuSamples": 1,
+        "gpuMedianMs": null,
+        "cpuMedianMs": 17
+      },
+      {
+        "backend": "gpu",
+        "gpuSamples": 0,
+        "cpuSamples": 0,
+        "gpuMedianMs": null,
+        "cpuMedianMs": null
+      }
+    ],
+    "exactHistograms": true,
+    "batchPinned": true,
+    "cachedBackendRejected": true,
+    "firstRefusalAttempts": 1,
+    "repeatRefusalAttempts": 1,
+    "revisionRetryAttempts": 2,
+    "refusalCode": "cna-correction-budget",
+    "retainedGpuWorker": true,
+    "sourceArraysRetained": true,
+    "releasedCpuPermits": 0
+  },
+  "depth": {
+    "production": true,
+    "dpr": 2,
+    "aoIdDifferences": 0,
+    "sortedOrdinals": [
+      2,
+      1,
+      0
+    ],
+    "capability": {
+      "supported": false,
+      "reason": "ERROR: 0:2: 'GL_EXT_conservative_depth' : extension is not supported\nERROR: 0:12: 'gl_FragDepth' : reserved built-in name\n\u0000"
+    },
+    "geometryVariant": "Actual nearest-z shader, qualifier stripped only for geometry correctness on unsupported adapters",
+    "scenes": [
+      {
+        "name": "perspective / geometry",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "perspective / actual",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "orthographic top / geometry",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "orthographic top / actual",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "skew replicas and selected atoms / geometry",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "skew replicas and selected atoms / actual",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "shifted origin and large radii / geometry",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "shifted origin and large radii / actual",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "vacancy sphere markers / geometry",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "vacancy sphere markers / actual",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "near sphere camera and AO colors / geometry",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "near sphere camera and AO colors / actual",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "computed ambient occlusion ID passes / geometry",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "computed ambient occlusion ID passes / actual",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "separated replicas nearest-first with distinct per-copy AO / geometry",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      },
+      {
+        "name": "separated replicas nearest-first with distinct per-copy AO / actual",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "glError": 0
+      }
+    ]
+  },
+  "scope": "Production correctness and lifecycle checks on Chromium SwiftShader; browser checks ran concurrently, so timings are not physical-GPU performance claims."
+}

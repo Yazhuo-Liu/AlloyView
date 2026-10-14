@@ -37,6 +37,12 @@ const INDEX_NEIGHBORS_SHADER = `${NEIGHBOR_BINDINGS_WGSL.replace('@group(0) @bin
   if (atomicAdd(&occupancy[bin + 1u], 1u) >= config.padding.x) { atomicStore(&occupancy[0], 1u); }
 }`;
 
+export function gpuInputUnsupported(message, code) {
+  const error = new GpuUnavailableError(message);
+  error.gpuUnsupportedScope = 'input-revision'; error.gpuUnsupportedCode = code;
+  return error;
+}
+
 export class GpuUnavailableError extends Error {
   constructor(message, unsupportedCode) {
     super(message); this.name = 'GpuUnavailableError';
