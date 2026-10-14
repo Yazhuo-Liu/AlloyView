@@ -33,6 +33,7 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
 
   const options = () => ({ visible: lines.settings.visible, color: lines.settings.color, width: lines.settings.width,
     colorByTime: lines.settings.colorByTime, colorScheme: lines.settings.colorScheme });
+  const replicationKey = () => JSON.stringify(getFrame()?.physicalReplication?.repetitions ?? null);
 
   function text(id, value) { if ($(id)) $(id).textContent = value; }
 
@@ -222,7 +223,12 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     if (settings.firstFrame >= frameCount || last >= frameCount) throw new Error(`Choose frames from 1 to ${frameCount}.`);
     const frames = trajectoryLineFrames(settings.firstFrame, last, settings.stride);
     trajectoryLineVertexCount(ids.length, frames.length, MAX_TRAJECTORY_LINE_VERTICES);
-    return { settings, request: { ids: Array.from(ids), first: settings.firstFrame, last, stride: settings.stride } };
+    const request = { ids: Array.from(ids), first: settings.firstFrame, last, stride: settings.stride };
+    const physical = getFrame()?.physicalReplication;
+    // The structure Worker reads each original frame once. Only selected IDs
+    // and this small copy context cross the boundary, never an expanded frame.
+    if (physical) request.physicalReplication = { repetitions: Array.from(physical.repetitions) };
+    return { settings, request, replicationKey: replicationKey() };
   }
 
   /** Settings from the inputs, validated; shared IDs stay in their groups. */
@@ -257,10 +263,13 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
 
   async function generateLines({ isCurrent = () => true } = {}) {
     let prepared;
+    const waitingSerial = lines.serial, waitingSource = getSourceVersion(), waitingReplication = replicationKey();
     try {
       await ensureIndexed();
+      if (waitingSerial !== lines.serial || waitingSource !== getSourceVersion() || waitingReplication !== replicationKey() || !isCurrent()) return false;
       prepared = readLineRequest();
     } catch (error) {
+      if (waitingSerial !== lines.serial || waitingSource !== getSourceVersion() || waitingReplication !== replicationKey() || !isCurrent()) return false;
       text('trajectory-lines-status', error.message);
       notify(error.message);
       return false;
@@ -269,7 +278,9 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     const controller = new AbortController(), serial = ++lines.serial, source = getSourceVersion();
     lines.controller = controller;
     lines.settings = prepared.settings;
-    const current = () => serial === lines.serial && source === getSourceVersion() && !controller.signal.aborted && isCurrent();
+    lines.replicationKey = prepared.replicationKey;
+    const current = () => serial === lines.serial && source === getSourceVersion() && prepared.replicationKey === replicationKey()
+      && !controller.signal.aborted && isCurrent();
     text('trajectory-lines-status', 'Reading frames…');
     updateControls();
     try {
@@ -360,7 +371,14 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     },
     setEnabled(enabled) { controlsEnabled = Boolean(enabled); writeControls(); },
     refresh: writeControls,
-    onFrame() { updateControls(); },
+    onFrame() {
+      // Frame navigation leaves paths intact, but a different physical-copy
+      // layout changes their meaning. Abort old work before it can publish.
+      if ((lines.result || lines.controller) && lines.replicationKey !== replicationKey()) {
+        clearLines({ status: 'Physical replication changed. Generate lines for the current atoms.' });
+      }
+      updateControls();
+    },
     reset() {
       cancelUnwrap();
       lines.serial++;

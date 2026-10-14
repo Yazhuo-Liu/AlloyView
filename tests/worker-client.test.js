@@ -347,3 +347,27 @@ test('a foreground join promotes an already queued physical-replication dependen
     client.close();
   } finally { globalThis.Worker = originalWorker; }
 });
+
+test('header consumers share metadata independently from atom reads, promote existing work and survive speculative cancellation', async () => {
+  const originalWorker=globalThis.Worker;globalThis.Worker=FakeWorker;
+  try {
+    const client=new StructureWorkerClient(),controller=new AbortController();
+    const reference=client.frameHeader(7,{signal:controller.signal});
+    const series=client.frameHeader(7);
+    const foreground=client.frameHeader(7,{background:false});
+    const atoms=client.frame(7,{reportProgress:false});
+    assert.equal(client.worker.messages.filter(message=>message.type==='frame-header').length,1);
+    assert.equal(client.worker.messages.filter(message=>message.type==='frame').length,1);
+    assert.deepEqual(client.worker.messages.find(message=>message.type==='promote-frame'),{type:'promote-frame',payload:{id:1}});
+    const cancelled=assert.rejects(reference,{name:'AbortError'});controller.abort();client.cancelPrefetch();await cancelled;
+    assert.equal(client.worker.messages.filter(message=>message.type==='cancel-frame').length,0);
+    const metadata={header:{atomCount:1000},index:7};client.handleMessage({id:1,ok:true,result:metadata});
+    assert.equal(await series,metadata);assert.equal(await foreground,metadata);
+    client.handleMessage({id:2,ok:true,result:{frame:{ids:[1]},index:7}});await atoms;
+    const old=client.frameHeader(7);const rejected=assert.rejects(old,{name:'AbortError'});
+    client.reset();await rejected;
+    const fresh=client.frameHeader(7);client.handleMessage({id:3,ok:true,result:{header:{old:true}}});
+    assert.equal(client.pending.size,1);client.handleMessage({id:4,ok:true,result:metadata});assert.equal(await fresh,metadata);
+    client.close();
+  } finally {globalThis.Worker=originalWorker;}
+});

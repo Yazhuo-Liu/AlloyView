@@ -60,27 +60,29 @@ export async function readXyzFrame(blob, offsets, index, sourceName = 'trajector
  * bytes are read directly when possible (see ascii-rows.js). Otherwise, and
  * for every malformed frame, the bytes are decoded and parsed as text, so the
  * result and any error message do not depend on the input type.
+ * Internal coordinate-only reads validate every column but omit unrelated
+ * scalar buffers; IDs and image-flag auxiliaries keep their full semantics.
  */
-export function parseXyzFrame(input, sourceName = 'structure.xyz') {
+export function parseXyzFrame(input, sourceName = 'structure.xyz', { projection = 'full' } = {}) {
   const startedAt = performance.now();
-  if (!isByteInput(input)) return parseXyzText(String(input), sourceName, startedAt);
+  if (!isByteInput(input)) return parseXyzText(String(input), sourceName, startedAt, projection);
   return parseBytesWithFallback(
     asBytes(input),
-    (bytes) => parseXyzBytes(bytes, sourceName, startedAt),
-    (text) => parseXyzText(text, sourceName, startedAt),
+    (bytes) => parseXyzBytes(bytes, sourceName, startedAt, projection),
+    (text) => parseXyzText(text, sourceName, startedAt, projection),
   );
 }
 
-function parseXyzText(text, sourceName, startedAt) {
+function parseXyzText(text, sourceName, startedAt, projection) {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
-  const header = readXyzHeader(lines);
+  const header = readXyzHeader(lines, lines.length, projection);
   const atoms = createXyzAtoms(header);
   readXyzRowsText(lines, header, atoms);
   return finishXyzFrame(header, atoms, sourceName, startedAt);
 }
 
-function parseXyzBytes(bytes, sourceName, startedAt) {
-  const header = readHeaderLines(bytes, readXyzHeader);
+function parseXyzBytes(bytes, sourceName, startedAt, projection) {
+  const header = readHeaderLines(bytes, (lines, usableLines) => readXyzHeader(lines, usableLines, projection));
   if (!header) return null;
   const start = lineStartAfter(bytes, header.cursor);
   // A quoted token may contain blanks (see tokenizeRow); leave quotes to the
@@ -95,7 +97,7 @@ function parseXyzBytes(bytes, sourceName, startedAt) {
 // Reads the count and comment lines. Only the first `usableLines` lines are
 // known when the caller decoded just the start of the data; if the header
 // continues beyond them, this returns null and the caller decodes more.
-function readXyzHeader(lines, usableLines = lines.length) {
+export function readXyzHeader(lines, usableLines = lines.length, projection = 'full') {
   let cursor = 0;
   while (!lines[cursor]?.trim() && cursor < lines.length) cursor += 1;
   if (cursor + 1 >= usableLines && usableLines < lines.length) return null;
@@ -115,7 +117,7 @@ function readXyzHeader(lines, usableLines = lines.length) {
   const propertyFields = fields.filter((field) => ![speciesField, positionField, idField].includes(field) && field.type !== 'S');
   const properties = propertyFields.flatMap((field) => Array.from({ length: field.width }, (_, component) => ({
     name: field.width === 1 ? field.name : `${field.name}_${component}`,
-    unit: '', data: new Float32Array(count), field, component,
+    unit: '', data: projection === 'coordinates' ? null : new Float32Array(count), field, component,
   })));
   if (new Set(properties.map((property) => property.name)).size !== properties.length) throw xyzError('Flattened numeric property names are duplicated.');
   return { cursor, count, comment, metadata, fields, speciesField, positionField, idField, properties };
@@ -155,7 +157,7 @@ function readXyzRowsText(lines, { cursor: firstLine, count, speciesField, positi
       const token = tokens[property.field.offset + property.component];
       const value = property.field.type === 'L' ? booleanValue(token) : numeric(token, property.name, { allowNaN: true });
       if (property.field.type === 'I' && !Number.isSafeInteger(value)) throw xyzError(`Property ${property.name} requires safe integers.`);
-      property.data[atom] = value;
+      if (property.data) property.data[atom] = value;
     }
   }
   if (lines.slice(cursor).some((line) => line.trim())) throw xyzError('Unexpected data after the declared atom rows.');
@@ -246,7 +248,7 @@ function readXyzRowsBytes(bytes, start, { count, speciesField, positionField, id
         if (!Number.isFinite(value) && !/^nan$/i.test(texts[column])) throw FALLBACK;
         if (propertyTypes[property] === 1 && !Number.isSafeInteger(value)) throw FALLBACK;
       }
-      propertyData[property][atom] = value;
+      if (propertyData[property]) propertyData[property][atom] = value;
     }
   }
   return reader.position;
@@ -260,12 +262,16 @@ function finishXyzFrame(header, atoms, sourceName, startedAt) {
   return validateFrame({
     ids, idSource: idField ? 'explicit' : 'row-order', types, typeLabels,
     ...coordinates, cell,
-    properties: properties.map(({ field, component, ...property }) => property),
-    timestep: metadata.Step !== undefined ? numeric(metadata.Step, 'Step') : null,
+    properties: properties.filter(property => property.data).map(({ field, component, ...property }) => property),
+    timestep: parseXyzTimestep(metadata),
     title: sourceName, sourceFormat: 'xyz', comment,
     ignoredStringProperties: fields.filter((field) => field.type === 'S' && field !== speciesField).map((field) => field.name),
     parseMs: performance.now() - startedAt,
   });
+}
+
+export function parseXyzTimestep(metadata) {
+  return metadata.Step !== undefined ? numeric(metadata.Step, 'Step') : null;
 }
 
 export function coordinatesForCell(rawPositions, cell, format) {
@@ -297,7 +303,7 @@ export function inferNonperiodicCell(positions) {
     vectors: [lengths[0], 0, 0, 0, lengths[1], 0, 0, 0, lengths[2]], pbc: [false, false, false] });
 }
 
-function cellFromMetadata(metadata, positions) {
+export function cellFromMetadata(metadata, positions) {
   const pbcTokens = metadata.pbc?.trim().split(/\s+/);
   if (pbcTokens && pbcTokens.length !== 3) throw xyzError('pbc requires three boolean flags.');
   if (metadata.Lattice === undefined) {

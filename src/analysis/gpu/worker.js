@@ -226,6 +226,8 @@ async function run(data, controller) {
     if (['analyze','prepare-frame'].includes(data.type)) { releasePins?.(); releasePins = null; runtime.finishAnalysis(); }
     self.postMessage({ id: data.id, ok: false, error: error.message || String(error), name: error.name,
       errorKind: error.analysisErrorKind, fatal: fatalAnalysisError(error), gpuDeviceLost: Boolean(error.gpuDeviceLost),
-      gpuDeviceUnavailable: Boolean(error.gpuDeviceUnavailable), gpuAnalysisKind: error.gpuAnalysisKind, ...cacheState() });
+      gpuDeviceUnavailable: Boolean(error.gpuDeviceUnavailable), gpuAnalysisKind: error.gpuAnalysisKind,
+      gpuUnsupportedScope: error.gpuUnsupportedScope, gpuUnsupportedCode: error.gpuUnsupportedCode,
+      gpuOutOfMemory: Boolean(error.gpuOutOfMemory), ...cacheState() });
   } finally { releasePins?.(); controllers.delete(data.id); }
 }

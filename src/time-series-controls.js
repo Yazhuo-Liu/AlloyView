@@ -19,6 +19,7 @@ const CONTROL_IDS = ['time-series-attribute', 'add-time-series-attribute', 'time
  * finished analysis). Visit frames steps the main view through the frames
  * still missing such values and returns to the original frame. */
 export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt = async () => null, getFrameIndex = () => 0,
+  getFrameHeaderAt = null, getFrameHeaderConcurrency = () => 3,
   getFrameCount = () => 1, ensureIndexed = async () => {}, getSourceVersion = () => 0, getFileName = () => 'structure',
   showFrame = async () => false, stopPlayback = () => {}, onEdit = () => {}, notify = () => {}, onDownload = downloadBlob,
   documentRoot = globalThis.document, now = () => performance.now() } = {}) {
@@ -217,6 +218,8 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
       if (!current()) return false;
       const result = await collectFileSeries({ store, frames: frames(), names, signal: task.controller.signal,
         readFrame: (index, options) => getFrameAt(index, options),
+        readHeader: getFrameHeaderAt,
+        headerConcurrency: getFrameHeaderConcurrency(),
         attributesFor: (frame, index) => attributes.forFrame(frame, index),
         onProgress: ({ done, total }) => {
           if (!current()) return;

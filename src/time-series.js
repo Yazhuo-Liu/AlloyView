@@ -10,6 +10,13 @@ export const MAX_TIME_SERIES = 8;
 export const MAX_TIME_SERIES_FRAMES = 100_000;
 export const TIME_SERIES_DEFAULTS = Object.freeze({ attributes: Object.freeze(['Cell.volume']), firstFrame: 0, lastFrame: null, stride: 1,
   xAxis: 'frame', separatePanels: false });
+const HEADER_ATTRIBUTES = new Set(['Frame', 'FrameCount', 'Timestep', 'AtomCount', 'NumberDensity', 'Cell.volume',
+  'Cell.a', 'Cell.b', 'Cell.c', 'Cell.alpha', 'Cell.beta', 'Cell.gamma',
+  'Strain.reference', 'Strain.a', 'Strain.b', 'Strain.c', 'Strain.volumetric']);
+
+/** Only these quantities are determined without visiting atom columns. A
+ * mixed request (for example Cell.volume + Mean.energy) uses one full read. */
+export function isHeaderSeries(names) { return names.length > 0 && names.every(name => HEADER_ATTRIBUTES.has(name)); }
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 export class TimeSeriesStore {
@@ -82,30 +89,64 @@ export function seriesFrames({ firstFrame = 0, lastFrame = null, stride = 1 } = 
  * attributesFor(frame, index) returns its registry. Only frames that lack a
  * requested value are read. Cancellation throws an AbortError.
  */
-export async function collectFileSeries({ store, frames, names, readFrame, attributesFor, signal, onProgress = () => {},
-  yieldEvery = () => Promise.resolve() } = {}) {
+export async function collectFileSeries({ store, frames, names, readFrame, readHeader = null, attributesFor, signal, onProgress = () => {},
+  headerConcurrency = 3, yieldEvery = () => Promise.resolve() } = {}) {
   const pending = frames.filter(index => names.some(name => !store.settled(name, index)));
+  const headerOnly = typeof readHeader === 'function' && isHeaderSeries(names);
+  const concurrency = headerOnly ? Math.max(1, Math.min(4, Math.floor(headerConcurrency) || 1)) : 1;
+  const controller = headerOnly ? new AbortController() : null;
+  const abort = () => controller?.abort();
+  signal?.addEventListener?.('abort', abort, { once: true });
+  if (signal?.aborted) abort();
+  const readSignal = controller?.signal ?? signal;
   let read = 0, recorded = 0;
-  onProgress({ done: 0, total: pending.length });
-  for (const index of pending) {
-    if (signal?.aborted) throw abortError();
-    const frame = await readFrame(index, { signal });
-    if (signal?.aborted) throw abortError();
+  async function readInput(index) {
+    if (readSignal?.aborted) throw abortError();
+    let frame = headerOnly ? await readHeader(index, { signal: readSignal }) : null;
+    if (readSignal?.aborted) throw abortError();
+    if (!headerOnly || frame?.headerUnavailable) frame = await readFrame(index, { signal: readSignal });
+    if (readSignal?.aborted) throw abortError();
     if (!frame) throw new Error(`Frame ${index + 1} could not be read.`);
-    const registry = attributesFor(frame, index);
-    const entries = [], missing = [];
-    for (const name of names) {
-      const entry = registry.get(name);
-      if (entry?.kind === 'file' && typeof entry.value === 'number') entries.push(entry);
-      else missing.push(name);
-    }
-    recorded += entries.length;
-    store.record(index, entries, { timestep: frame.timestep });
-    for (const name of missing) store.markUnavailable(name, index);
-    onProgress({ done: ++read, total: pending.length, frameIndex: index });
-    await yieldEvery();
+    return frame;
   }
-  return { read, recorded };
+  // A bounded rolling window uses the retained parser lanes; never launch a
+  // request for every trajectory frame. Resolve failures into queue values so
+  // an out-of-order error cannot become an unhandled promise rejection.
+  const queue = [];
+  let requested = 0;
+  const fill = () => {
+    while (queue.length < concurrency && requested < pending.length) {
+      const index = pending[requested++];
+      queue.push(readInput(index).then(frame => ({ frame }), error => ({ error })));
+    }
+  };
+  try {
+    onProgress({ done: 0, total: pending.length });
+    fill();
+    for (const index of pending) {
+      if (signal?.aborted) throw abortError();
+      const { frame, error } = await queue.shift();
+      if (error) throw error;
+      if (signal?.aborted) throw abortError();
+      const registry = attributesFor(frame, index);
+      const entries = [], missing = [];
+      for (const name of names) {
+        const entry = registry.get(name);
+        if (entry?.kind === 'file' && typeof entry.value === 'number') entries.push(entry);
+        else missing.push(name);
+      }
+      recorded += entries.length;
+      store.record(index, entries, { timestep: frame.timestep });
+      for (const name of missing) store.markUnavailable(name, index);
+      onProgress({ done: ++read, total: pending.length, frameIndex: index });
+      await yieldEvery();
+      fill();
+    }
+    return { read, recorded };
+  } finally {
+    signal?.removeEventListener?.('abort', abort);
+    controller?.abort();
+  }
 }
 
 /** Record available values of the displayed frame's registry. */

@@ -88,7 +88,7 @@ export class FrameParserPool {
       task.lease = await this.acquire?.({ background: task.background, signal: task.controller.signal, priority: task.priority });
       if (task.controller.signal.aborted || slot.task !== task) { task.lease?.release(); return; }
       if (!this.workerFactory) {
-        const frame = await parseFrameDescriptor(task.descriptor);
+        const frame = await parseFrameDescriptor(task.descriptor, { signal: task.controller.signal });
         this.finish(slot, task, null, frame);
         return;
       }

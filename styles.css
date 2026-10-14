@@ -985,3 +985,33 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .time-series-attribute-list li { min-height: 36px; }
   .text-label-picker .button, .time-series-add .button { min-height: 42px; }
 }
+
+/* Phone targets occupy real layout space: adjacent actions cannot steal an
+   enlarged invisible hit box, and desktop controls retain their compact size. */
+@media (max-width: 920px) {
+  button { min-width: 32px; min-height: 36px; touch-action: manipulation; }
+  .theme-switch button, .gpu-switch, .comparison-actions button, .comparison-toolbar button { min-height: 36px; }
+  :root .keyboard-shortcuts button { min-width: 32px; min-height: 36px; }
+  .background-swatches button { min-width: 32px; }
+  .comparison-resize { min-width: 32px; min-height: 36px; }
+  .text-button { min-width: 36px; min-height: 36px; padding: 4px 6px; }
+  .feature-help .feature-help-link { width: 32px; height: 32px; }
+  .tool-details > summary, .performance-section > summary { min-height: 36px; padding-block: 8px; }
+  label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) { min-height: 36px; }
+  .legend-controls .legend-visibility, .crystal-items .legend-item, .crystal-visibility-item { min-height: 40px; }
+  .legend-actions button, .legend-category-actions button, .mobile-overlay-toggle { min-height: 40px; }
+  .tool-selector button[data-tool-button], .tool-category-tabs button, .tool-run-button { min-height: 44px; }
+  .legend-controls input:not([type="range"]):not([type="checkbox"]), .legend-scheme select, .legend-property select { height: 36px; }
+  .legend-controls .legend-slider { height: 36px; }
+  .legend-slider-track { left: 16px; right: 16px; }
+  .legend-slider input::-webkit-slider-thumb { width: 32px; height: 32px; }
+  .legend-slider input::-moz-range-thumb { width: 32px; height: 32px; }
+  .element-style-row { grid-template-columns: minmax(30px, 1fr) 36px minmax(52px, 1fr) 32px auto; }
+  /* This checkbox has no wrapping label, so the input itself is the target. */
+  .element-style-row input[type="checkbox"] { width: 32px; height: 32px; }
+  .trajectory-controls { grid-template-columns: repeat(3, 32px) minmax(36px, 1fr) repeat(2, 32px); gap: 3px; }
+  .trajectory-controls > button, .trajectory-controls > .frame-play { width: 32px; height: 36px; }
+  .view-toolbar:has(#show-keyboard-shortcuts) { gap: 0; }
+  .view-toolbar:has(#show-keyboard-shortcuts) > button { width: 32px; }
+  .atom-details-toggle { margin-left: 142px; }
+}

@@ -74,6 +74,8 @@ current tool again or **Close / cancel** to cancel that analysis and clear its
 results. **Cancel** clears the result while leaving the settings open to retry.
 
 On phones, the viewport stays above an independently scrolling tools panel.
+Buttons and help links have larger touch areas; tap a checkbox's label to
+change its setting as well as tapping the box itself.
 **View**, **Legend / atoms** and **Details** start collapsed; tap to open
 camera controls, the legend's atom filters or the inspection window.
 **Details** sits in the top row beside the view tools, and an open panel stays
@@ -332,7 +334,14 @@ unchanged.
   or vacancy-neighbour paths. Lines are unwrapped across boundaries, can be
   colored by time, are clipped by slices, appear in the second view and image
   exports (their width scales with the export size) and are limited to two
-  million points.
+  million points. Physical copies retain their selected atom IDs and follow
+  each frame's cell translation, including tilted or changing cells. Changing
+  or resetting physical replication clears the old paths; generate them again
+  for the current atoms.
+
+Background reads of neighbouring frames load only the geometry these tools
+need. Displayed frames retain all imported properties for coloring, vectors
+and atom details.
 
 See [Trajectory tools](features/trajectory-tools.md) for the algorithms,
 precedence rules, caches and limits.
@@ -669,7 +678,11 @@ shared CPU Wasm Worker pool. Strain can reuse a compatible fit and its GPU uploa
 editing lattice parameters updates the element-reference table without
 repeating the geometric fit.
 Other analyses keep their existing CPU implementation, and unavailable or
-unsupported GPU execution falls back to CPU. A GPU that fails the start-up
+unsupported GPU execution falls back to CPU. When a cell/cutoff exceeds the
+GPU's numeric or periodic-image limits, repeating that fixed-cutoff analysis
+goes directly to the reusable CPU Workers. Changing the parameters or source,
+or switching GPU acceleration
+off and back on, allows another GPU attempt. A GPU that fails the start-up
 check of exact double-float arithmetic runs displacement, both strain analyses
 and a requested WebGPU Voronoi kernel on CPU Workers; the switch's tooltip
 then says so. The switch
@@ -1048,6 +1061,12 @@ exporting frame images; **Visit frames** displays the frames still missing a
 value and returns to the starting frame. Missing values are gaps in the chart
 and empty cells in **Series CSV**. Attributes with different units are drawn in
 separate panels with a shared crosshair. See [Time series](features/time-series.md).
+
+If all selected quantities come from frame headers, such as the timestep or
+cell dimensions, **Read file values** can skip loading the atom data. Selecting
+type fractions or column means, or enabling smoothing, uses complete frames.
+Plain XYZ and PDB frames without an explicit cell also use complete frames to
+derive their cell dimensions.
 
 Changing an analysis cutoff, reference or other calculation setting clears
 older points for that attribute; computed expressions also track the settings

@@ -4,6 +4,7 @@ import { ColorQuantityResolver, colorPropertyKey, initialColorQuantities } from 
 import { colorsByDiscreteProperty, discreteValues } from './render/discrete-colors.js';
 import { DEFAULT_ORIENTATION_SETTINGS, OrientationColorResolver, drawIpfKey, normalizeOrientationSettings, ORIENTATION_COLOR_MODES } from './render/orientation-colors.js';
 import { framePreparationSignal } from './data/frame-preparation.js';
+import { processedFrameHeader } from './data/processed-frame-header.js';
 import { findAtomIndex } from './appearance.js';
 import { chooseFrameCachePolicy, estimateFrameBytes } from './data/cache-policy.js';
 import { normalizeRepetitions } from './render/replication.js';
@@ -892,6 +893,7 @@ globalAttributes = createGlobalAttributeSource({
   getFrameIndex: () => state.frameIndex,
   getFrameCount: () => state.frameCount,
   getFrameAt: (index, { signal } = {}) => getFrame(index, { background: true, cacheFrame: false, signal }),
+  getFrameHeaderAt: getFrameHeader,
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
   getDxaNetwork: () => renderer.dislocationNetwork,
 });
@@ -907,6 +909,8 @@ timeSeries = initializeTimeSeries({
   tools: toolPanels, attributes: globalAttributes,
   getFrame: () => state.frame,
   getFrameAt: (index, { signal } = {}) => getFrame(index, { background: true, cacheFrame: false, signal }),
+  getFrameHeaderAt: getFrameHeader,
+  getFrameHeaderConcurrency: () => trajectoryTools?.smoothingWindow() ? 1 : Math.max(1, Math.min(3, cpuBudget.limit - 1)),
   getFrameIndex: () => state.frameIndex,
   getFrameCount: () => state.frameCount,
   ensureIndexed: waitForSourceIndex,
@@ -2033,6 +2037,32 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   }
   await Promise.all(pending);
   displayRefresh.flush();
+}
+
+/** Header-derived series avoid atom parsing. An inferred cell or smoothing
+ * uses the ordinary frame path; it owns the cell that the analyses use. */
+async function getFrameHeader(index, { signal } = {}) {
+  const identity = processingSourceKey();
+  const physical = state.replicateAtoms, repetitions = [...state.repetitions];
+  const current = () => !signal?.aborted && identity === processingSourceKey();
+  const check = () => { if (!current()) throw new DOMException('Frame header request cancelled.', 'AbortError'); };
+  const fromFrame = frame => frame ? { headerOnly: true, atomCount: frame.ids.length,
+    cell: frame.cell, timestep: frame.timestep, frameIndex: index, sourceFormat: frame.sourceFormat } : null;
+  check();
+  const cached = cache.frames.get(index);
+  if (cached) return fromFrame(cached);
+  // The averaged cell cannot be reconstructed from a single source header.
+  if (trajectoryTools?.smoothingWindow()) {
+    const frame = await getFrame(index, { background: true, cacheFrame: false, signal });
+    check(); return fromFrame(frame);
+  }
+  const result = await worker.frameHeader(index, { background: true, signal });
+  check();
+  if (result.header?.headerUnavailable) {
+    const frame = await getFrame(index, { background: true, cacheFrame: false, signal });
+    check(); return fromFrame(frame);
+  }
+  return processedFrameHeader(result.header, { physical, repetitions });
 }
 
 async function getFrame(index, { background = false, speculative = false, cacheFrame = true, signal, sourceKey } = {}) {

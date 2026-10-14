@@ -1,20 +1,54 @@
 import assert from 'node:assert/strict';
 import { useSoftwareAdapter, withWebGpuBrowser } from './webgpu-browser.mjs';
 
+// Keep the page, Workers, device and resident inputs alive across bounded CDP
+// calls. A slow software adapter no longer has to finish every scientific case
+// within one evaluate deadline, and a failed stage names the work that stalled.
+const stepTimeoutMs = 180_000;
 const report = await withWebGpuBrowser(async ({ evaluate, adapter }) => {
-  const checks = await evaluate(`(${runVoronoiChecks.toString()})()`, { timeoutMs: 360_000 });
-  return { adapter, softwareValidation: useSoftwareAdapter(true), ...checks };
+  await evaluate(`globalThis.voronoiCheckSteps = (${runVoronoiChecks.toString()})(); undefined`);
+  const stages = [];
+  let label = 'automatic routing and initial GPU compilation';
+  let failure;
+  try {
+    for (let step = 0; step < 80; step++) {
+      const started = Date.now();
+      let result;
+      try { result = await evaluate('globalThis.voronoiCheckSteps.next()', { timeoutMs: stepTimeoutMs }); }
+      catch (error) { throw new Error(`Voronoi stage ${step + 1} after ${label}: ${error.message}`, { cause: error }); }
+      const elapsedMs = Date.now() - started;
+      if (result.done) return { adapter, softwareValidation: useSoftwareAdapter(true), ...result.value,
+        stages, stepTimeoutMs };
+      label = result.value;
+      stages.push({ label, elapsedMs });
+      console.error(`Voronoi: ${label} (${elapsedMs} ms)`);
+    }
+    throw new Error('Voronoi validation exceeded its bounded stage count.');
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    // On success the generator's own finally already closed both pools. On a
+    // timeout this also stops active work; closing the browser is the final
+    // owner of a driver call that cannot acknowledge cancellation.
+    try { await evaluate('globalThis.closeVoronoiChecks?.(); undefined', { timeoutMs: 10_000 }); }
+    catch (error) {
+      if (failure) throw new AggregateError([failure, error], `${failure.message}; cleanup also failed: ${error.message}`);
+      throw error;
+    }
+  }
 }, { software: useSoftwareAdapter(true) });
 console.log(JSON.stringify(report, null, 2));
 assert.ok(!report.error, report.error);
 
-async function runVoronoiChecks() {
+async function* runVoronoiChecks() {
   const [{ AnalysisPool }, { crystalFrame }, { createCell }, { calculateVoronoi }] = await Promise.all([
     import('./src/analysis/analysis-pool.js'), import('./tests/helpers/crystals.js'), import('./src/data/model.js'), import('./src/analysis/voronoi.js'),
   ]);
   const cpu = new AnalysisPool(), gpu = new AnalysisPool(); cpu.setGpuEnabled(false); gpu.setGpuEnabled(true);
   // Automatic selection keeps Voronoi on CPU Workers; this suite asks for the WebGPU kernel.
   gpu.setGpuVoronoi(true);
+  globalThis.closeVoronoiChecks = () => { cpu.close(); gpu.close(); };
   const rows = [], preparations = [], check = (condition, message) => { if (!condition) throw new Error(message); };
   const compare = (actual, expected, tolerance, label) => {
     check(actual.length === expected.length, label + ' array length'); let error = 0;
@@ -107,7 +141,9 @@ async function runVoronoiChecks() {
         'Device preparation must compile and allocate nothing for Voronoi: ' + JSON.stringify({ pipelines: device.pipelineCount, atoms: device.voronoiWorkspaceAtoms }));
       rows.push({ label: 'Automatic selection routes Voronoi to CPU Workers without touching the GPU', backend: 'cpu', devicePipelines: device.pipelineCount });
     } finally { automatic.close(); }
+    yield 'automatic CPU routing and empty device preparation';
     await run('SC self-image cube', crystalFrame('sc', 1, 2));
+    yield 'SC periodic self images';
     // Included types are the tessellation's sites, not a mask applied after a
     // full-source calculation. Checkerboard SC splits into two FCC lattices.
     const binary = crystalFrame('sc', 2, 2); binary.typeLabels = ['Ni', 'Cu'];
@@ -122,6 +158,7 @@ async function runVoronoiChecks() {
     check(nickel.faceNeighbors.some(atom => atom > 3) && nickel.faceNeighbors.every(atom => atom < 0 || binary.types[atom] === 0),
       'GPU compact neighbor IDs must map back to original selected source atoms');
     const binaryAll = await run('Switch subset to all restores SC sites', binary);
+    yield 'binary element subset and all-site topology';
     check(binaryAll.voronoiCoordination.every(value => value === 6) && binaryAll.atomicVolume.every(value => Math.abs(value - 8) < 5e-5),
       'All-site SC analytic volume/CN');
     const nickelReused = await run('Switch all back to unchanged subset reuses compact GPU input', binary, { selectedTypes: ['Ni'] });
@@ -136,6 +173,7 @@ async function runVoronoiChecks() {
     const exactSubset = await run('Subset exact-threshold recovery retains source scattering', binary,
       { selectedTypes: ['Ni'], faceAreaThreshold: 2 * Math.SQRT2 });
     check(exactSubset.gpuCorrectionAtoms > 0, 'Selected exact face threshold must use exact recovery when ambiguous');
+    yield 'subset cache reuse, source scattering and threshold recovery';
     const unknownLabels = { ...binary, typeLabels: ['Type 1', 'Type 2'] };
     await run('Numeric source type labels select GPU sites without inferred elements', unknownLabels, { selectedTypes: ['Type 2'] });
     const fcc = crystalFrame('fcc', 2, 3.52);
@@ -161,10 +199,12 @@ async function runVoronoiChecks() {
       voronoiKernelWarmupCount:prepared.voronoiKernelWarmupCount,workspaceAtoms:prepared.voronoiWorkspaceAtoms,
       inputReused:afterPreparation.inputReused,gpuInputReused:afterPreparation.gpuInputReused});
     const reused = await run('FCC device/frame/workspace reused', fcc, { bins: 37 });
+    yield 'load preparation and warmed FCC parity';
     check(reused.kernelReused && reused.inputReused && reused.gpuInputReused, 'GPU resident inputs and convex-cell workspace must be reused');
     await run('Central-atom range retains original face neighbors', fcc, { startAtom: 5, endAtom: 17 });
     await run('Periodic BCC', crystalFrame('bcc', 2, 2.86));
     await run('Triclinic HCP', crystalFrame('hcp', 2, 2.5));
+    yield 'FCC ranges, BCC and triclinic HCP';
     const distorted = crystalFrame('fcc', 2, 3.52);
     distorted.cell = createCell({ vectors: [7.04, .17, -.09, .4, 7.12, .15, -.11, .04, 6.96], triclinic: true });
     for (let i = 0; i < distorted.fractional.length; i++) distorted.fractional[i] += .013 * Math.sin(i * 1.791);
@@ -175,12 +215,14 @@ async function runVoronoiChecks() {
     const open = { fractional: Float64Array.from([.15, .27, .31, .61, .32, .53, .36, .74, .83, .84, .86, .12]),
       types: new Uint16Array(4), cell: createCell({ vectors: [3, .2, 0, .4, 2.7, .1, .2, .3, 3.1], pbc: [false, false, false] }) };
     await run('Finite skew nonperiodic domain', open);
+    yield 'distorted, mixed and open domains';
     await run('Neighbor face threshold', fcc, { faceAreaThreshold: .3, relativeFaceAreaThreshold: .01 });
     await run('Absolute face threshold exact boundary', crystalFrame('sc', 1, 2), { faceAreaThreshold: 4 });
     await run('Relative face threshold exact boundary', crystalFrame('sc', 1, 2), { relativeFaceAreaThreshold: 1 / 6 });
     const thin = { fractional: Float64Array.from([.3, .4, .5]), types: new Uint16Array(1),
       cell: createCell({ vectors: [6, 0, 0, 0, .08, 0, 0, 0, .05] }) };
     await run('Extreme thin orthogonal single-site exact GPU seed', thin);
+    yield 'face threshold boundaries and thin exact seed';
     const cornerFixture = epsilon => {
       const points = [[5, 5, 5], [7, 5, 5], [3, 5, 5], [5, 7, 5], [5, 3, 5], [5, 5, 7], [5, 5, 3], [7 - epsilon, 7 - epsilon, 7 - epsilon]];
       return { fractional: Float64Array.from(points.flat(), value => value / 10), types: new Uint16Array(8),
@@ -193,11 +235,13 @@ async function runVoronoiChecks() {
     const barelySkew = { fractional: Float64Array.from([.2, .4, .8]), types: new Uint16Array(1),
       cell: createCell({ vectors: [1, 0, 0, .000001, 1, 0, 0, 0, 1] }) };
     await run('Near-orthogonal tiny faces use exact cell recovery', barelySkew);
+    yield 'tangent planes, tiny faces and sparse exact recovery';
     const polygon = [[.5, .5, .5], [.5, .5, .7], [.5, .5, .3]];
     for (let point = 0; point < 50; point++) polygon.push([.5 + .2 * Math.cos(point * 2 * Math.PI / 50), .5 + .2 * Math.sin(point * 2 * Math.PI / 50), .5]);
     const highOrder = { fractional: Float64Array.from(polygon.flat()), types: new Uint16Array(polygon.length),
       cell: createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10], pbc: [false, false, false] }) };
     await run('Polygon capacity preserves complete topology through CPU fallback', highOrder, {}, { requireGpu: false });
+    yield 'polygon capacity fallback';
     // Radical (radius-weighted) cells use the same tolerances and topology checks.
     const { voronoiRadiiForTypes } = await import('./src/analysis/voronoi-radii.js');
     const cscl = crystalFrame('bcc', 2, 4); cscl.typeLabels = ['Cs', 'Cl'];
@@ -208,6 +252,7 @@ async function runVoronoiChecks() {
     for (let atom = 0; atom < rock.types.length; atom++) rock.types[atom] = Math.round(2 * (rock.fractional[atom * 3] + rock.fractional[atom * 3 + 1] + rock.fractional[atom * 3 + 2])) % 2;
     await run('Radical rock salt', rock, { radii: voronoiRadiiForTypes(rock, [{ label: 'Na', radius: 1.02 }, { label: 'Cl', radius: 1.81 }]) });
     await run('Radical equal radii', crystalFrame('fcc', 2, 3.52), { radii: new Float64Array(32).fill(1.24) });
+    yield 'analytic radical salts and equal radii';
     await run('Radical skew distorted random radii', distorted, { radii: Float64Array.from({ length: 32 }, (_, atom) => 1.1 + .3 * Math.abs(Math.sin(atom * 2.3))) });
     await run('Radical mixed PBC random radii', mixed, { radii: Float64Array.from({ length: 32 }, (_, atom) => 1.1 + .3 * Math.abs(Math.sin(atom * 1.3))) });
     await run('Radical binary subset compacts radii', binary, { selectedTypes: ['Cu'], radii: Float64Array.from(binary.types, (type, atom) => type ? 1 + atom / 20 : NaN) });
@@ -217,15 +262,18 @@ async function runVoronoiChecks() {
     const spread = await run('Radical radius spread beyond the GPU bound', crystalFrame('fcc', 2, 3.52),
       { radii: Float64Array.from({ length: 32 }, (_, atom) => atom ? 0 : 11) }, { requireGpu: false });
     check(/radius spread/.test(spread.fallbackReason), 'Radius spread fallback reason');
+    yield 'radical skew/subset/empty-cell and radius-spread fallback';
     // Real source structures remain complete; only central output ranges are sampled.
     const [{ parseCfg }, { parseLammpsFrame }] = await Promise.all([import('./src/io/cfg.js'), import('./src/io/lammps-dump.js')]);
     const fe = parseLammpsFrame(await (await fetch('./examples/Fe_disloc_loop.dump')).text(), 'Fe_disloc_loop.dump');
     await run('Real Fe dislocation-loop full-source BCC sample', fe, { startAtom: 0, endAtom: 256 });
     await run('Real Fe dislocation-loop defect-core full-source sample', fe, { startAtom: 53344, endAtom: 53408 });
+    yield 'real Fe full-source and defect-core samples';
     await run('Radical real Fe loop per-atom radii', fe, { startAtom: 53344, endAtom: 53408,
       radii: Float64Array.from({ length: fe.ids.length }, (_, atom) => 1.26 * (1 + .04 * Math.sin(1.7 * atom))) });
     const hea = parseLammpsFrame(await (await fetch('./examples/hea-fcc-screw.dump')).text(), 'hea-fcc-screw.dump');
     await run('Radical real HEA element radii', hea, { startAtom: 14000, endAtom: 14064, radii: voronoiRadiiForTypes(hea, []) });
+    yield 'real Fe and HEA radical cells';
     const ni = parseCfg(await (await fetch('./examples/NiGB_minimized.cfg')).text(), 'NiGB_minimized.cfg');
     const exteriorFailure = await gpu.gpuBackend.analyze(ni, { kind: 'voronoi', startAtom: 0, endAtom: 128 })
       .then(() => null, error => error);
@@ -233,13 +281,18 @@ async function runVoronoiChecks() {
       'Extreme Ni vacuum-boundary coverage must request exact CPU fallback');
     rows.push({ label: 'Real Ni thin vacuum-boundary sample requests exact CPU fallback', atoms: ni.ids.length,
       backend: 'explicit CPU fallback', fallbackReason: exteriorFailure.message });
+    yield 'real Ni exterior exact fallback';
     const samples = [Math.floor(ni.ids.length / 3), Math.floor(ni.ids.length * 2 / 3)];
-    for (const first of samples) await run('Real Ni grain/interior full-source sample ' + first, ni,
-      { startAtom: first, endAtom: first + 64 }, { allowPrecisionFallback: true });
+    for (const first of samples) {
+      await run('Real Ni grain/interior full-source sample ' + first, ni,
+        { startAtom: first, endAtom: first + 64 }, { allowPrecisionFallback: true });
+      yield 'real Ni grain/interior sample ' + first;
+    }
     await run('Real Ni interior full-source eight-cell precision sample', ni,
       { startAtom: samples[0], endAtom: samples[0] + 8 });
     await run('Radical real Ni interior per-atom radii', ni, { startAtom: samples[0], endAtom: samples[0] + 16,
       radii: Float64Array.from({ length: ni.ids.length }, (_, atom) => 1.24 * (1 + .03 * Math.cos(2.1 * atom))) }, { allowPrecisionFallback: true });
+    yield 'real Ni interior precision and radical samples';
     // Cancellation must leave the resident worker usable for other analyses.
     const controller = new AbortController(); controller.abort();
     const cancelled = await gpu.analyze(fcc, { kind: 'voronoi' }, { signal: controller.signal }).then(() => false, error => error.name === 'AbortError');
@@ -264,6 +317,7 @@ async function runVoronoiChecks() {
     }
     check(interrupted && partialProgress, 'Abort must interrupt a started multi-batch GPU analysis');
     compare(longFrame.fractional, beforeCancellation, 0, 'cancelled source coordinates');
+    yield 'active multi-batch GPU cancellation';
     const resumed = await gpu.analyze(longFrame, { kind: 'voronoi' });
     check(resumed.backend === 'gpu' && resumed.kernelReused && resumed.gpuInputReused, 'Cancelled GPU job must retain device, frame buffer and cell workspace: ' + JSON.stringify({backend:resumed.backend,kernelReused:resumed.kernelReused,gpuInputReused:resumed.gpuInputReused,fallbackReason:resumed.fallbackReason}));
     check(resumed.voronoiCoordination.every(value => value === 12) && resumed.voronoiIndices.every(value => value === '<0,12,0,0>'),
@@ -272,11 +326,12 @@ async function runVoronoiChecks() {
     rows.push({ label: 'Cancel an active multi-batch GPU job and reuse its inputs/workspace', backend: resumed.backend,
       atoms: longFrame.types.length, gpuMs: resumed.elapsedMs, gpuDispatches: resumed.gpuDispatches });
     await gpu.analyze(fcc, { kind: 'voronoi' });
+    yield 'resumed FCC complete topology and retained GPU resources';
     const queued = await Promise.all([gpu.analyze(fcc, { kind: 'voronoi' }), gpu.analyze(fcc, { kind: 'cna' })]);
     check(queued.every(result => result.backend === 'gpu' && result.inputReused && result.gpuInputReused), 'Voronoi and CNA share resident worker/device/frame');
     check(queued[1].structures.every(type => type === 1), 'Queued CNA still recognizes FCC');
     rows.push({ label: 'Cancellation and queued CNA reuse GPU worker', backend: 'gpu' });
     return { rows, preparations };
   } catch (error) { return { rows, preparations, error: error.stack || String(error) }; }
-  finally { cpu.close(); gpu.close(); }
+  finally { globalThis.closeVoronoiChecks(); delete globalThis.closeVoronoiChecks; }
 }

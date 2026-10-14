@@ -1,5 +1,6 @@
 import { canonicalAtomNumber } from './atom-ids.js';
 import { cartesianToFractional, createCell, fractionalToCartesian, invert3 } from './model.js';
+import { normalizeRepetitions } from '../render/replication.js';
 
 /** Label shown beside display coordinates inferred by `TrajectoryUnwrapper`. */
 export const INFERRED_UNWRAP_SOURCE = 'inferred from adjacent frames';
@@ -386,6 +387,35 @@ export function trajectoryLineVertexCount(atomCount, sampleCount, maxVertices = 
   return vertices;
 }
 
+const REPLICATED_ID_PREFIX = '@AlloyView:';
+
+/** Resolve IDs produced by replicateFrame, only when the caller describes a
+ * physically replicated selection. Ordinary source IDs may themselves look
+ * like copy IDs; they must remain literal without that context. Reserved source
+ * IDs are escaped in the base copy, so decoding once preserves that distinction.
+ * Invalid/obsolete copy IDs are missing selections rather than phantom atoms.
+ */
+function trajectoryLineSource(id, repetitions) {
+  const zero = [0, 0, 0];
+  if (!repetitions || typeof id !== 'string' || !id.startsWith(REPLICATED_ID_PREFIX)) return { id, offset: zero };
+  let encoded, offset;
+  if (id.startsWith(`${REPLICATED_ID_PREFIX}base:`)) {
+    encoded = id.slice(`${REPLICATED_ID_PREFIX}base:`.length);
+    offset = zero;
+  } else {
+    const match = /^@AlloyView:copy:(0|[1-9]\d*):(0|[1-9]\d*):(0|[1-9]\d*):(.+)$/.exec(id);
+    if (!match) return null;
+    offset = match.slice(1, 4).map(Number);
+    if (!offset.some(Boolean) || offset.some((value, axis) => !Number.isSafeInteger(value) || value >= repetitions[axis])) return null;
+    encoded = match[4];
+  }
+  let source;
+  try { source = decodeURIComponent(encoded); } catch { return null; }
+  if (!source || /[\x00-\x1f\x7f]/.test(source) || encodeURIComponent(source) !== encoded
+      || offset === zero && !source.startsWith(REPLICATED_ID_PREFIX)) return null;
+  return { id: source, offset };
+}
+
 /**
  * Continuous paths of selected atoms over sampled frames. A frame's own
  * unwrapped coordinates (image flags or unwrapped columns) are used where
@@ -393,17 +423,30 @@ export function trajectoryLineVertexCount(atomCount, sampleCount, maxVertices = 
  * since the previous sample of that atom. Samples must be added in order.
  */
 export class TrajectoryLineBuilder {
-  constructor(atomIds, frames, { maxVertices = MAX_TRAJECTORY_LINE_VERTICES } = {}) {
+  constructor(atomIds, frames, { maxVertices = MAX_TRAJECTORY_LINE_VERTICES, physicalReplication = null } = {}) {
     const ids = Array.from(atomIds ?? []);
     if (!ids.length) throw new Error('Choose at least one atom for trajectory lines.');
     if (!Array.isArray(frames) || !frames.length) throw new Error('Trajectory lines require at least one sampled frame.');
     trajectoryLineVertexCount(ids.length, frames.length, maxVertices);
     this.atomIds = ids;
     this.frames = frames;
+    const repetitions = physicalReplication === null ? null
+      : normalizeRepetitions(physicalReplication?.repetitions ?? [], [true, true, true]);
     this.lookup = new IdIndex();
-    for (const id of ids) {
-      if (this.lookup.get(id) !== undefined) throw new Error(`Atom ID ${String(id)} is listed twice.`);
-      this.lookup.add(id);
+    const selected = repetitions ? new IdIndex() : null;
+    this.sourceIndices = new Int32Array(ids.length).fill(-1);
+    this.copyOffsets = new Uint16Array(ids.length * 3);
+    for (let atom = 0; atom < ids.length; atom += 1) {
+      const id = ids[atom];
+      if (selected?.get(id) !== undefined) throw new Error(`Atom ID ${String(id)} is listed twice.`);
+      selected?.add(id);
+      const source = trajectoryLineSource(id, repetitions);
+      if (!source) continue;
+      let index = this.lookup.get(source.id);
+      if (!selected && index !== undefined) throw new Error(`Atom ID ${String(id)} is listed twice.`);
+      if (index === undefined) { index = this.lookup.size; this.lookup.add(source.id); }
+      this.sourceIndices[atom] = index;
+      this.copyOffsets.set(source.offset, atom * 3);
     }
     const atoms = ids.length, samples = frames.length;
     this.points = new Float64Array(atoms * samples * 3);
@@ -417,7 +460,7 @@ export class TrajectoryLineBuilder {
 
   rowsFor(ids) {
     if (this.previous && sameIds(this.previous.ids, ids)) return this.previous.rows;
-    const rows = new Int32Array(this.atomIds.length).fill(-1);
+    const rows = new Int32Array(this.lookup.size).fill(-1);
     for (let row = 0; row < ids.length; row += 1) {
       const atom = this.lookup.get(ids[row]);
       if (atom === undefined) continue;
@@ -436,8 +479,9 @@ export class TrajectoryLineBuilder {
     const unwrapped = frame.unwrappedPositions?.length === frame.fractional.length ? frame.unwrappedPositions : null;
     const inverse = unwrapped ? invert3(h) : null;
     const u = [0, 0, 0];
-    for (let atom = 0; atom < rows.length; atom += 1) {
-      const row = rows[atom];
+    for (let atom = 0; atom < this.atomIds.length; atom += 1) {
+      const source = this.sourceIndices[atom];
+      const row = source < 0 ? -1 : rows[source];
       if (row < 0) continue;
       const base = atom * 3;
       for (let axis = 0; axis < 3; axis += 1) {
@@ -459,6 +503,10 @@ export class TrajectoryLineBuilder {
       for (let axis = 0; axis < 3; axis += 1) {
         this.points[point + axis] = unwrapped ? unwrapped[row * 3 + axis]
           : origin[axis] + u[0] * h[axis] + u[1] * h[3 + axis] + u[2] * h[6 + axis];
+        if (this.copyOffsets[base] || this.copyOffsets[base + 1] || this.copyOffsets[base + 2]) {
+          this.points[point + axis] += this.copyOffsets[base] * h[axis]
+            + this.copyOffsets[base + 1] * h[3 + axis] + this.copyOffsets[base + 2] * h[6 + axis];
+        }
       }
       this.present[atom * samples + sample] = 1;
     }

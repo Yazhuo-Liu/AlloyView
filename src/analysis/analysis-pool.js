@@ -19,6 +19,7 @@ import { coordinationStatistics } from './coordination-statistics.js';
 import { createAnalysisProgressReporter, isAnalysisProgressError } from './progress.js';
 import { analysisReplyError, isAnalysisValidationError } from './errors.js';
 import { validateAnalysisParameters } from './analysis-validation.js';
+import { GpuFallbackCache } from './gpu-fallback-cache.js';
 
 const PTM_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
 const VORONOI_INITIAL_HEAP_BYTES = 16 * 1024 ** 2;
@@ -106,9 +107,14 @@ export class AnalysisPool {
     this.gpuEnabled = false;
     this.gpuVoronoi = false;
     this.gpuBackend = gpuBackend ?? new GpuAnalysisClient({ environment });
+    this.gpuFallbacks = new GpuFallbackCache();
   }
 
-  setGpuEnabled(enabled) { this.gpuEnabled = Boolean(enabled); if (this.gpuEnabled) this.gpuBackend.resume?.(); }
+  setGpuEnabled(enabled) {
+    enabled = Boolean(enabled);
+    if (enabled !== this.gpuEnabled) this.gpuFallbacks.clear();
+    this.gpuEnabled = enabled; if (this.gpuEnabled) this.gpuBackend.resume?.();
+  }
   /** Explicit request for the GPU Voronoi kernel. It takes effect only while
    * GPU acceleration is on; otherwise Voronoi runs on the CPU pool. */
   setGpuVoronoi(enabled) {
@@ -117,12 +123,12 @@ export class AnalysisPool {
     // A withdrawn request returns the kernel's GPU workspace.
     if (released) this.gpuBackend.releaseVoronoi?.()?.catch(() => {});
   }
-  releaseGpuResources(options) { return this.gpuBackend.release?.(options); }
+  releaseGpuResources(options) { this.gpuFallbacks.clear(); return this.gpuBackend.release?.(options); }
   warmupGpu(options) { return this.gpuBackend.warmup?.(options) ?? Promise.resolve(this.gpuCacheStatus); }
   configureGpuCache(options) { return this.gpuBackend.configureCache?.(options) ?? Promise.resolve(this.gpuCacheStatus); }
   prepareGpuFrame(frame, options) { return this.gpuBackend.prepareFrame?.(frame, options) ?? Promise.resolve(this.gpuCacheStatus); }
   associateGpuFrame(frame, frameIndex) { return this.gpuBackend.associateFrame?.(frame, frameIndex); }
-  clearGpuFrames() { return this.gpuBackend.clearFrames?.() ?? Promise.resolve(this.gpuCacheStatus); }
+  clearGpuFrames() { this.gpuFallbacks.clear(); return this.gpuBackend.clearFrames?.() ?? Promise.resolve(this.gpuCacheStatus); }
   clearVoronoiFrames() {
     this.clearCpuFrames();
     this.cpuFramePreparation?.controller.abort();
@@ -136,6 +142,7 @@ export class AnalysisPool {
   }
 
   clearCpuFrames() {
+    this.gpuFallbacks.clear();
     this.cpuSnapshots = []; this.cpuSnapshotGeneration++;
     for (const slot of this.slots) {
       if (slot.task) slot.cpuReleasePending = true;
@@ -518,11 +525,14 @@ export class AnalysisPool {
     if (gpuRequested && parameters.kind === 'strain' && this.gpuBackend.supports('strain')) {
       return this.analyzeStrainWithGpu(frame, parameters, { onProgress, signal, frameIndex });
     }
-    let fallbackReason;
+    let fallbackReason, fallbackCode, fallbackCached;
     if (gpuRequested) {
       if (!this.gpuBackend.supports(parameters.kind)) fallbackReason = `The ${parameters.kind} analysis uses CPU workers; no GPU kernel is available.`;
       else {
-        try {
+        const refusal = this.gpuFallbacks.request(frame, parameters, this.gpuBackend.fallbackGeneration ?? 0);
+        const cached = this.gpuFallbacks.lookup(refusal);
+        if (cached) ({ fallbackReason, fallbackCode, fallbackCached } = cached);
+        else try {
           const result = await this.gpuBackend.analyze(frame, parameters, { onProgress, signal, frameIndex });
           if (signal?.aborted || this.closed) throw abortError();
           return { ...result, backend: 'gpu', gpuRequested: true, elapsedMs: performance.now() - analysisStartedAt };
@@ -530,13 +540,15 @@ export class AnalysisPool {
           if (error.name === 'AbortError' || signal?.aborted || this.closed) throw abortError();
           if (isAnalysisValidationError(error) || isAnalysisProgressError(error)) throw error;
           fallbackReason = error.message || 'The GPU calculation failed; using CPU workers.';
+          if (this.gpuFallbacks.remember(refusal, error, this.gpuBackend.fallbackGeneration ?? 0)) fallbackCode = error.gpuUnsupportedCode;
         }
       }
     }
     const result = await this.analyzeCPU(frame, parameters, { signal,
-      onProgress: (update) => onProgress({ ...update, backend: 'cpu', ...(fallbackReason ? { fallbackReason } : {}) }) });
+      onProgress: (update) => onProgress({ ...update, backend: 'cpu', ...(fallbackReason ? { fallbackReason } : {}),
+        ...(fallbackCode ? { fallbackCode } : {}), ...(fallbackCached ? { fallbackCached } : {}) }) });
     return { ...result, backend: 'cpu', gpuRequested, elapsedMs: performance.now() - analysisStartedAt,
-      ...(fallbackReason ? { fallbackReason } : {}) };
+      ...(fallbackReason ? { fallbackReason } : {}), ...(fallbackCode ? { fallbackCode } : {}), ...(fallbackCached ? { fallbackCached } : {}) };
   }
 
   /** GPU prepares geometry; the resident CPU pool remains the PTM fitter. */
@@ -1803,6 +1815,7 @@ export class AnalysisPool {
 
   close() {
     this.closed = true;
+    this.gpuFallbacks.clear();
     this.voronoiSnapshot = null;
     this.voronoiSnapshotGeneration++;
     this.cpuSnapshots = []; this.cpuSnapshotGeneration++;

@@ -76,7 +76,12 @@
     "test:browser:render-hot-loops": "node scripts/browser-render-hot-loops.mjs --production",
     "test:browser:transparent-current": "node scripts/browser-transparent-current.mjs",
     "benchmark:matte": "node scripts/benchmark-matte.mjs",
-    "benchmark:parser-tail": "node scripts/benchmark-parser-tail.mjs"
+    "benchmark:parser-tail": "node scripts/benchmark-parser-tail.mjs",
+    "test:browser:copy-trajectories": "node scripts/browser-copy-trajectories.mjs",
+    "test:browser:mobile-targets": "node scripts/browser-mobile-targets.mjs --production",
+    "test:browser:time-series-headers": "node scripts/browser-time-series-headers.mjs",
+    "test:browser:gpu-fallback-cache": "node scripts/browser-gpu-fallback-cache.mjs --production",
+    "benchmark:coordinate-projection": "node scripts/benchmark-coordinate-projection.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -68,13 +68,13 @@ The items with the best return, drawn from all parts below:
 
 | Order | Item | What it gives | Effort |
 | --- | --- | --- | --- |
-| 1 | B35, B32 | Physical-copy trajectory lines and mobile touch targets | S–M |
-| 2 | T4, T6 | Coordinate-only and header-only reads for trajectory consumers | M |
-| 3 | G2 | Re-measure routing and avoid repeating unsupported GPU attempts | M |
-| 4 | S4 | Enable the prepared immutable-asset rules on the production CDN | S |
-| 5 | R6, R7 | Shared display preparation and early atom-depth rejection | S–M |
+| 1 | B38 | Define explicit invalidation for public mutable resident GPU inputs | M |
+| 2 | G2 | Re-measure routing and evaluate remaining content-dependent fallbacks | M |
+| 3 | R6, R7 | Shared display preparation and early atom-depth rejection | S–M |
+| 4 | C10, K1 | Voronoi transport and reused grain-template fitting | M |
+| 5 | S4 | Enable the prepared immutable-asset rules on the production CDN | S |
 
-C1–C9, R2–R5/R8, S1–S3/S5, T1–T3/T5 and K2 have moved to the feature
+C1–C9, R2–R5/R8, S1–S3/S5, T1–T6 and K2 have moved to the feature
 documentation and dated [validation record](VALIDATION.md). R1 retains its MSAA
 restriction below; measurements are scoped to the tested deployment and hardware.
 
@@ -91,24 +91,26 @@ are not reused. The following batch completed B15/B19/B21/B22/B26/B27/B33
 and C7/C8. S4's build/preview policy is complete; enabling the external CDN
 rules remains below. The approved 2026-10-14 batch completed B23/B24/B25/B30,
 T2, R2/R4/R5 and the fused-tail/same-order part of T4; coordinate-only
-reads remain a separate task.
+reads were completed in the following continuation, along with B32/B35/B36
+and T6. G2 now remembers explicit cell/cutoff capability refusals; its routing
+model and content-dependent fallback policy remain below. B38 records a newly
+reproduced public API limitation, without claiming an application-path failure.
 
 ### Lower-severity defects
 
 | ID | Problem | Evidence | Fix | Effort |
 | --- | --- | --- | --- | --- |
-| B32 | Small touch targets on phones (text buttons 28×11 px, help links 19×19) | `shell/mobile.mjs` [M] | 32–44 px hit areas under the mobile media query | S |
 | B34 | GPU results that depend on neighbor order are not reproducible between runs: frame strain on 6,912 and 60,229 atoms differs in 7–11 of 1,144,351 values (at most 1.5×10⁻⁸), HEA bonds and Q4/Q6 differ between two pools, and GPU Voronoi digests differ between page loads | Found while fixing B1 and B5; the GPU neighbor grid is filled with `atomicExchange`, so the order of each cell's list varies [M] | Sort each cell's list, or accumulate in an order-independent way; decide first whether run-to-run identity is required on the GPU | M |
-| B36 | `npm run test:gpu:voronoi` on the software adapter takes 285–320 s on the reference machine against a 360 s evaluate timeout, so a loaded machine can fail it without a defect | Measured on 2026-10-10 [M] | Split the page evaluation into two calls, or raise the timeout for this suite | S |
-| B35 | Trajectory lines for a selection group of physical copies find no atoms ("IDs not found (@AlloyView:copy…)"); lines work for source IDs | Seen while fixing B1 [M] | Map copy IDs to their source atom and add the copy's cell offset, or state the restriction in the panel | S–M |
+| B38 | Reusing a public resident GPU frame after changing its coordinates or cell in place returns old values; a new frame identity or `clearGpuFrames()` restores correct results. Existing application source, smoothing and replication paths clear their GPU source. | Actual SwiftShader Coordination: `[2,1,1]` stays unchanged after an edit whose CPU/new-frame GPU result is `[2,2,2]`; G2 has zero cache entries [M] | Add an explicit geometry revision/invalidation contract, or measure a content check before enabling it. Preserve resident-input reuse for immutable application frames. | M |
 
 Suspected but not reproduced: the movie frame range persists across files
-beyond the new frame count. The expression variable `ID` is NaN for physical
-copies (may be by design; B35 is its visible consequence).
+beyond the new frame count. Compound physical-copy IDs still give NaN in the
+numeric expression variable `ID`; B35 trajectory paths now resolve their
+encoded source ID and offset directly.
 
 ## Part 2: performance, phase 1 (small changes)
 
-### G2. A routing table, and a memory of fallbacks
+### G2. Measured routing and content-dependent fallback policy
 
 **Effort:** S (static table), M (measured model). **Deployments:** WebGPU on.
 
@@ -130,36 +132,24 @@ copies (may be by design; B35 is its visible consequence).
 | Ideal strain tensor | 17 / 119 / 106 | 15 / 179 / 198 | 25–30 / 315 / 356 | 245 / 2518 / 2176 | GPU |
 | Voronoi | 2560–4700 / 230–350 / 240–260 | 5700–8900 / 500–660 / 480–600 | 25,600 / 11,000 / – | not run | CPU (done: Voronoi runs on the CPU unless its WebGPU kernel is turned on) |
 
-- **Also [M]:** every call retries a GPU path that failed before. RDF on NiGB
+- **Original audit [M]:** every call retried a GPU path that failed before. RDF on NiGB
   costs 86 ms instead of 57; on NiGB 2×2×2 adaptive CNA costs 3.6 s instead of
   2.5 s.
-- **Change:** start with a static table (bond distributions to
+- **Completed:** bounded weak-reference memory for explicit coordinate-independent
+  cell/cutoff and periodic-image capability refusals. Source/device changes and
+  parameter edits permit retry; transient allocation/device failures and
+  cancellation are not recorded. See [performance](features/performance.md#remembering-unsupported-cell-geometry)
+  and [validation](VALIDATION.md). No new routing threshold was inferred from
+  software-adapter measurements.
+- **Remaining:** re-measure before adopting a static table (bond distributions to
   CPU from 100k atoms with 6 or more Workers; central symmetry to CPU with 12
   or more Workers), then a per-kernel cost model corrected by measured times.
-  Remember a `GpuUnavailableError` per source revision, kernel and parameters
-  and go straight to the CPU until they change. Pin the backend within one
-  batch or time series, because backends agree only within documented
-  tolerances.
+  A broader content-dependent refusal cache needs a reliable input revision
+  or immutable snapshot, rather than frame identity alone; see B38. Pin the
+  backend within one batch or time series, because backends agree only within
+  documented tolerances.
 - **Note:** these are pre-fix audit CPU timings. C3/C4 and the C5 scalar kernels are complete; the following C5/C6/C9 completion batch measured whole-pool effects separately.
   See VALIDATION.md for its CPU-quota and cold-start limitations.
-
-### T4. Coordinate-only reads for internal trajectory consumers
-
-**Effort:** M. **Deployments:** all.
-
-The bounded type table, fused dump tail and CFG same-order ID fast path are
-complete and exact against the preceding build. See [Formats](FORMATS.md)
-and the dated [validation record](VALIDATION.md).
-
-- **Remaining:** introduce a coordinate projection containing IDs, cell,
-  fractional coordinates and authoritative unwrapped/image data. Smoothing
-  neighbors, unwrap integration and trajectory lines can avoid allocating
-  unrelated properties; full displayed frames still use complete parsing.
-- **Verify:** preserve ID/type/coordinate/row-count and property validation,
-  cancellation, progressive/gzip descriptors, strict CFG continuity and
-  existing parser-pool admission. Do not accept malformed input merely because
-  a consumer did not request its property arrays.
-- Header-only time-series reads are tracked separately under T6.
 
 ### R1. MSAA capless-bond coverage
 
@@ -231,21 +221,6 @@ its WebGPU kernel is turned on.
   write faces into growable typed buffers; return index IDs plus a table of
   unique labels and expand lazily.
 - **Gain [E]:** 30–35% of kernel CPU and 0.2–0.4 s of main-thread time at 1M.
-
-### T6. Header-only frame reads for time series
-
-**Effort:** M. **Deployments:** all.
-
-- **Evidence [M]:** the default attribute `Cell.volume` costs a full parse per
-  frame, serially: 23 parses in 1.70 s at 120k and about 0.5 s per frame at 1M.
-  A header parse from a 2 KB slice takes 0.35–0.52 ms at any size and returns
-  the same timestep, atom count and cell.
-- **Change:** a structure-Worker request `frame-header(index)` for dump, XYZ,
-  PDB and CFG. Use it when every requested attribute is header-derived (Frame,
-  Timestep, AtomCount, `Cell.*`, NumberDensity, `Strain.*`); otherwise use the
-  coordinate projection of T4 on idle lanes. Smoothing forces the full path
-  because it averages the cell.
-- **Gain:** 50–800×; a 10,000-frame trajectory takes about 5 s [E].
 
 ### T7. Replicated frames: reuse the ID array
 

@@ -1,0 +1,635 @@
+{
+  "baseline": "71ab20f",
+  "date": "2026-10-14",
+  "environment": "Node 24.19.0 / Chromium SwiftShader, four-CPU cloud quota; no physical-GPU timing",
+  "coordinate_projection": {
+    "node": "v24.19.0",
+    "atoms": 100000,
+    "columns": 24,
+    "samples": 7,
+    "warmups": 8,
+    "scope": "Synchronous complete row validation and source geometry parsing; excludes file I/O, Worker transport, smoothing and rendering. Retained bytes count actual distinct typed-array buffers, not process RSS.",
+    "results": [
+      {
+        "name": "synthetic dump 100000 atoms/24 properties",
+        "inputBytes": 13689121,
+        "fullProperties": 24,
+        "fullMs": 44.415295000000015,
+        "coordinatesMs": 39.935438000000204,
+        "fullRetainedBytes": 13000096,
+        "coordinatesRetainedBytes": 3400096,
+        "omittedPropertyBytes": 9600000,
+        "samples": [
+          [
+            43.89098899999999,
+            44.872562000000016,
+            44.415295000000015,
+            45.94139199999995,
+            50.521357999999964,
+            43.661189999999806,
+            43.86303699999985
+          ],
+          [
+            40.04409899999996,
+            44.370678999999996,
+            39.935438000000204,
+            40.591437999999926,
+            39.74085000000014,
+            39.34530500000005,
+            38.92623400000002
+          ]
+        ]
+      },
+      {
+        "name": "synthetic CFG 100000 atoms/24 properties",
+        "inputBytes": 12900664,
+        "fullProperties": 25,
+        "fullMs": 45.97654499999999,
+        "coordinatesMs": 42.81820300000027,
+        "fullRetainedBytes": 13400096,
+        "coordinatesRetainedBytes": 3400096,
+        "omittedPropertyBytes": 10000000,
+        "samples": [
+          [
+            45.60087900000008,
+            46.14882899999975,
+            52.11577699999998,
+            45.680976999999984,
+            53.71535300000005,
+            45.97654499999999,
+            45.68548400000009
+          ],
+          [
+            42.7737259999999,
+            42.81820300000027,
+            43.28623500000003,
+            42.20613600000024,
+            45.87814900000012,
+            42.1343109999998,
+            46.69829200000004
+          ]
+        ]
+      },
+      {
+        "name": "synthetic XYZ 100000 atoms/24 properties",
+        "inputBytes": 12900275,
+        "fullProperties": 24,
+        "fullMs": 64.74091399999998,
+        "coordinatesMs": 57.68337200000042,
+        "fullRetainedBytes": 13000096,
+        "coordinatesRetainedBytes": 3400096,
+        "omittedPropertyBytes": 9600000,
+        "samples": [
+          [
+            65.33362000000034,
+            65.0615870000006,
+            61.80115399999977,
+            65.78877300000022,
+            64.74091399999998,
+            61.56371399999989,
+            61.217531000000236
+          ],
+          [
+            57.15438099999983,
+            57.68911200000002,
+            57.68337200000042,
+            57.30633499999931,
+            61.98542700000053,
+            61.042271999999684,
+            57.50724199999968
+          ]
+        ]
+      },
+      {
+        "name": "Fe_disloc_loop.dump",
+        "inputBytes": 7668915,
+        "fullProperties": 14,
+        "fullMs": 25.028414999999768,
+        "coordinatesMs": 22.972945000000436,
+        "fullRetainedBytes": 6866202,
+        "coordinatesRetainedBytes": 3493378,
+        "omittedPropertyBytes": 3372824,
+        "samples": [
+          [
+            25.028414999999768,
+            24.26067999999941,
+            24.368027999999867,
+            26.75604100000055,
+            29.17014300000028,
+            24.674761999999646,
+            25.07688699999926
+          ],
+          [
+            22.943410999999287,
+            23.30076999999983,
+            22.972945000000436,
+            22.886357000000316,
+            22.910291999999572,
+            23.057910000000447,
+            27.590995999999905
+          ]
+        ]
+      },
+      {
+        "name": "hea-fcc-screw.dump",
+        "inputBytes": 2293003,
+        "fullProperties": 2,
+        "fullMs": 6.714783000000352,
+        "coordinatesMs": 6.393718000000263,
+        "fullRetainedBytes": 1209696,
+        "coordinatesRetainedBytes": 979296,
+        "omittedPropertyBytes": 230400,
+        "samples": [
+          [
+            5.893278000000464,
+            6.650628000000324,
+            6.424903999999515,
+            8.019983999999567,
+            6.714783000000352,
+            6.950522999999521,
+            7.013694999999643
+          ],
+          [
+            6.393718000000263,
+            6.1751750000003085,
+            6.164958999999726,
+            6.217086999999992,
+            7.020636000000195,
+            6.898704999999609,
+            7.015367999999398
+          ]
+        ]
+      },
+      {
+        "name": "NiGB_minimized.cfg",
+        "inputBytes": 7035524,
+        "fullProperties": 1,
+        "fullMs": 37.119292000000314,
+        "coordinatesMs": 40.996006999999736,
+        "fullRetainedBytes": 8054144,
+        "coordinatesRetainedBytes": 7534528,
+        "omittedPropertyBytes": 519616,
+        "samples": [
+          [
+            37.119292000000314,
+            38.3780940000006,
+            41.8162199999997,
+            35.532054000000244,
+            35.1910399999997,
+            36.76848299999983,
+            44.006609999999455
+          ],
+          [
+            37.734150999999656,
+            39.15937899999972,
+            40.996006999999736,
+            41.55930999999964,
+            41.29371700000047,
+            39.095054999999775,
+            41.46958699999959
+          ]
+        ]
+      }
+    ]
+  },
+  "gpu_capability_fallback": {
+    "adapter": {
+      "available": true,
+      "vendor": "google",
+      "architecture": "swiftshader",
+      "device": "",
+      "description": "",
+      "isFallbackAdapter": true,
+      "limits": {
+        "maxStorageBufferBindingSize": 1073741824,
+        "maxComputeWorkgroupsPerDimension": 65535
+      }
+    },
+    "production": false,
+    "firstGpuAttempts": 1,
+    "repeatGpuAttempts": 1,
+    "attempts": 4,
+    "reusedCpuWorker": true,
+    "retainedGpuWorker": true,
+    "mutableCpuMatchesOracle": true,
+    "toggleRetried": true,
+    "deviceReplacementRetried": true,
+    "newSourceUsesGpu": true,
+    "closedEntries": 0,
+    "results": [
+      {
+        "backend": "cpu",
+        "fallbackCode": "periodic-image-budget",
+        "fallbackCached": false,
+        "coordination": [
+          2,
+          1,
+          1
+        ]
+      },
+      {
+        "backend": "cpu",
+        "fallbackCode": "periodic-image-budget",
+        "fallbackCached": true,
+        "coordination": [
+          2,
+          1,
+          1
+        ]
+      },
+      {
+        "backend": "cpu",
+        "fallbackCode": "periodic-image-budget",
+        "fallbackCached": true,
+        "coordination": [
+          2,
+          2,
+          2
+        ]
+      },
+      {
+        "backend": "cpu",
+        "fallbackCode": "periodic-image-budget",
+        "fallbackCached": false,
+        "coordination": [
+          2,
+          2,
+          2
+        ]
+      },
+      {
+        "backend": "cpu",
+        "fallbackCode": "periodic-image-budget",
+        "fallbackCached": false,
+        "coordination": [
+          2,
+          2,
+          2
+        ]
+      },
+      {
+        "backend": "gpu",
+        "fallbackCached": false,
+        "coordination": [
+          2,
+          2,
+          2
+        ]
+      }
+    ]
+  },
+  "resident_gpu_api_negative_control": {
+    "adapter": {
+      "available": true,
+      "vendor": "google",
+      "architecture": "swiftshader",
+      "device": "",
+      "description": "",
+      "isFallbackAdapter": true,
+      "limits": {
+        "maxStorageBufferBindingSize": 1073741824,
+        "maxComputeWorkgroupsPerDimension": 65535
+      }
+    },
+    "reports": [
+      {
+        "mode": "coordinates",
+        "settings": {
+          "kind": "coordination",
+          "cutoff": 1.1
+        },
+        "steps": [
+          {
+            "name": "baseline",
+            "fractional": [
+              0.1,
+              0.1,
+              0.5,
+              0.6,
+              0.1,
+              0.5,
+              0.1,
+              0.6,
+              0.5
+            ],
+            "vectors": [
+              2,
+              0,
+              0,
+              0,
+              2,
+              0,
+              0,
+              0,
+              2
+            ],
+            "cpu": [
+              2,
+              1,
+              1
+            ],
+            "gpu": [
+              2,
+              1,
+              1
+            ],
+            "backend": "gpu",
+            "inputReused": false,
+            "gpuInputReused": false,
+            "uploadCount": 1,
+            "cacheEntries": 0
+          },
+          {
+            "name": "in-place public mutation",
+            "fractional": [
+              0.1,
+              0.1,
+              0.5,
+              0.12,
+              0.11,
+              0.5,
+              0.1,
+              0.6,
+              0.5
+            ],
+            "vectors": [
+              2,
+              0,
+              0,
+              0,
+              2,
+              0,
+              0,
+              0,
+              2
+            ],
+            "cpu": [
+              2,
+              2,
+              2
+            ],
+            "gpu": [
+              2,
+              1,
+              1
+            ],
+            "backend": "gpu",
+            "inputReused": true,
+            "gpuInputReused": true,
+            "uploadCount": 1,
+            "cacheEntries": 0
+          },
+          {
+            "name": "fresh frame identity, same arrays",
+            "fractional": [
+              0.1,
+              0.1,
+              0.5,
+              0.12,
+              0.11,
+              0.5,
+              0.1,
+              0.6,
+              0.5
+            ],
+            "vectors": [
+              2,
+              0,
+              0,
+              0,
+              2,
+              0,
+              0,
+              0,
+              2
+            ],
+            "cpu": [
+              2,
+              2,
+              2
+            ],
+            "gpu": [
+              2,
+              2,
+              2
+            ],
+            "backend": "gpu",
+            "inputReused": false,
+            "gpuInputReused": false,
+            "uploadCount": 2,
+            "cacheEntries": 0
+          },
+          {
+            "name": "source barrier, original frame identity",
+            "fractional": [
+              0.1,
+              0.1,
+              0.5,
+              0.12,
+              0.11,
+              0.5,
+              0.1,
+              0.6,
+              0.5
+            ],
+            "vectors": [
+              2,
+              0,
+              0,
+              0,
+              2,
+              0,
+              0,
+              0,
+              2
+            ],
+            "cpu": [
+              2,
+              2,
+              2
+            ],
+            "gpu": [
+              2,
+              2,
+              2
+            ],
+            "backend": "gpu",
+            "inputReused": false,
+            "gpuInputReused": false,
+            "uploadCount": 3,
+            "cacheEntries": 0
+          }
+        ]
+      },
+      {
+        "mode": "cell",
+        "settings": {
+          "kind": "coordination",
+          "cutoff": 1.1
+        },
+        "steps": [
+          {
+            "name": "baseline",
+            "fractional": [
+              0.1,
+              0.1,
+              0.5,
+              0.6,
+              0.1,
+              0.5,
+              0.1,
+              0.6,
+              0.5
+            ],
+            "vectors": [
+              2,
+              0,
+              0,
+              0,
+              2,
+              0,
+              0,
+              0,
+              2
+            ],
+            "cpu": [
+              2,
+              1,
+              1
+            ],
+            "gpu": [
+              2,
+              1,
+              1
+            ],
+            "backend": "gpu",
+            "inputReused": false,
+            "gpuInputReused": false,
+            "uploadCount": 4,
+            "cacheEntries": 0
+          },
+          {
+            "name": "in-place public mutation",
+            "fractional": [
+              0.1,
+              0.1,
+              0.5,
+              0.6,
+              0.1,
+              0.5,
+              0.1,
+              0.6,
+              0.5
+            ],
+            "vectors": [
+              0.8,
+              0,
+              0,
+              0,
+              2,
+              0,
+              0,
+              0,
+              2
+            ],
+            "cpu": [
+              2,
+              2,
+              2
+            ],
+            "gpu": [
+              2,
+              1,
+              1
+            ],
+            "backend": "gpu",
+            "inputReused": true,
+            "gpuInputReused": true,
+            "uploadCount": 4,
+            "cacheEntries": 0
+          },
+          {
+            "name": "fresh frame identity, same arrays",
+            "fractional": [
+              0.1,
+              0.1,
+              0.5,
+              0.6,
+              0.1,
+              0.5,
+              0.1,
+              0.6,
+              0.5
+            ],
+            "vectors": [
+              0.8,
+              0,
+              0,
+              0,
+              2,
+              0,
+              0,
+              0,
+              2
+            ],
+            "cpu": [
+              2,
+              2,
+              2
+            ],
+            "gpu": [
+              2,
+              2,
+              2
+            ],
+            "backend": "gpu",
+            "inputReused": false,
+            "gpuInputReused": false,
+            "uploadCount": 5,
+            "cacheEntries": 0
+          },
+          {
+            "name": "source barrier, original frame identity",
+            "fractional": [
+              0.1,
+              0.1,
+              0.5,
+              0.6,
+              0.1,
+              0.5,
+              0.1,
+              0.6,
+              0.5
+            ],
+            "vectors": [
+              0.8,
+              0,
+              0,
+              0,
+              2,
+              0,
+              0,
+              0,
+              2
+            ],
+            "cpu": [
+              2,
+              2,
+              2
+            ],
+            "gpu": [
+              2,
+              2,
+              2
+            ],
+            "backend": "gpu",
+            "inputReused": false,
+            "gpuInputReused": false,
+            "uploadCount": 6,
+            "cacheEntries": 0
+          }
+        ]
+      }
+    ]
+  }
+}

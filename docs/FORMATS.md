@@ -415,6 +415,30 @@ structures are selectable, clicking any numbered structure-sequence member opens
 its entire sequence, and unrecognized files such as LAMMPS `log.neb.*` remain
 visible but disabled. Selected files are not uploaded.
 
+Internal trajectory operations request a **coordinate projection** for neighboring
+frames. CFG, LAMMPS dump, XYZ and PDB readers retain stable IDs, atom types, the
+cell, wrapped/reduced coordinates, authoritative unwrapped coordinates and image
+flags, while avoiding unrelated scalar-property buffers. They still validate
+all the scalar columns, logical/integer XYZ values, CFG semantic auxiliaries and
+row shapes, with the same parsing errors as a complete frame. The displayed
+frame is always parsed completely and keeps its imported properties. Gzip CFG
+sequences and decompressed indexed trajectory byte ranges use the same modes.
+LAMMPS data and POSCAR, which open as single frames, retain an explicit complete
+parser fallback for coordinate requests; no reduced-allocation speedup is
+claimed for those formats. Coordinate projection reduces source allocations and
+Worker transport, but still reads and validates every atom row, so files with
+few scalar columns may see little timing improvement. A reproducible parser-only
+comparison is available through `node scripts/benchmark-coordinate-projection.mjs`.
+
+File-derived time series can also request a **header projection** in the same
+reusable parser pool. It reads a bounded prefix for declared counts, cells and
+steps; indexed PDB models use the primary-conformer counts and ordered cell
+metadata already collected by the byte indexer. Plain XYZ and PDB without a
+cell, unsupported single-frame formats and oversized headers request a complete
+frame fallback because their cell or metadata cannot be established from the
+header. Header reads do not certify atom rows; opening or displaying a frame
+still performs complete row validation.
+
 A single parsed frame still has transient copies during Worker-to-main transfer
 and GPU upload. A frame with explicit/reconstructable unwrapped coordinates
 retains one additional three-component `Float32Array`. Coordination uses shared

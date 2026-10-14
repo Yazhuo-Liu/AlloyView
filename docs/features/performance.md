@@ -402,6 +402,47 @@ Algorithms without a GPU version continue to use their CPU implementation. Voron
 
 Ideal lattice strain reports GPU neighbor preparation, CPU PTM fitting and GPU reference/tensor evaluation as separate stages. If the GPU reference/tensor stage fails, CPU fallback reuses the completed fit instead of repeating PTM. GPU reference evaluation selects each atom's element and phase, applies the editable lattice parameters, restores absolute deformation and computes strain invariants. Only raw fit arrays and a small per-element reference table are prepared on CPU. [PTM](ptm.md), [CNA](cna.md), [central symmetry](centrosymmetry.md), [displacement](displacement.md), [reference-frame strain](reference-strain.md), [bonds](bonds.md) and [ideal lattice strain](ideal-strain.md) document their cutoff, precision and reference conventions.
 
+### Remembering unsupported cell geometry
+
+After a GPU neighbor index explicitly rejects a cell/cutoff combination for
+periodic-image or numeric-range limits, repeating the same fixed-radius request
+uses the warm CPU Workers directly. The result and progress retain the original
+fallback reason and code; `fallbackCached: true` identifies a skipped attempt.
+This covers Coordination, fixed-cutoff CNA, Bonds, bond distributions, RDF and
+local geometric shear when their parameters fit the bounded small route key.
+
+The refusal uses explicit error metadata, rather than matching an error's text.
+It is scoped to the frame, complete small parameter values, cell vectors,
+origin, PBC and available revision fields. Changing those values, replacing
+coordinate/type arrays, clearing the source, replacing a lost GPU device, or
+turning GPU acceleration off and back on permits a fresh attempt. Pair-cutoff
+overrides and RDF's padded search radius remain specific to their own request.
+The capability cache checks supplied revision fields; it does not change the
+existing resident-GPU frame protocol. Public callers that mutate a resident
+frame's geometry in place must still clear its GPU source with
+`clearGpuFrames()` or supply a fresh frame identity before asking the GPU to
+calculate it. Application source/processing changes already use that lifecycle.
+
+The memory is deliberately narrower than all GPU fallbacks. Adaptive search,
+coordinate-dependent precision correction, type encoding, Voronoi degeneracy,
+allocation/OOM, validation errors and device failures are retried normally.
+Public typed arrays can change in place without a revision, so they cannot
+safely key a general fallback cache without reading every atom. For the cached
+cell/cutoff limits, an in-place coordinate/type edit cannot remove the already
+proved geometric limitation: the CPU calculation still validates and computes
+the current input. No old classification or neighbor result is retained.
+
+At most 128 refusals store small scalar metadata and weak references, without
+owning atom buffers. Source clearing and pool disposal release the entries.
+Cancelling still aborts the calculation, with no CPU retry. GPU device/pipeline
+and CPU Worker/Wasm reuse and queue admission remain unchanged. No new
+performance routing threshold is inferred from software-adapter timings.
+
+```bash
+node --test tests/gpu-fallback-cache.test.js
+node scripts/browser-gpu-fallback-cache.mjs --production
+```
+
 ## How the GPU backend works
 
 GPU code lives in **`src/analysis/gpu/`**, separate from the CPU kernels. Both backends return the same analysis quantities to the scheduler, color legend and frame cache. Linked-cell search limits neighbor candidates; the implementation does not compare every atom with every other atom. This matters for large inputs such as the bundled 129,904-atom **Ni grain boundary** example, `examples/NiGB_minimized.cfg`.

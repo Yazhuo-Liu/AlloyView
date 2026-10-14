@@ -442,9 +442,9 @@ export class TrajectoryProcessor {
   }
 
   /** Polylines of the listed atoms over sampled frames. */
-  async lines({ ids, first, last, stride, maxVertices = MAX_TRAJECTORY_LINE_VERTICES }, { signal, onProgress = () => {} } = {}) {
+  async lines({ ids, first, last, stride, physicalReplication, maxVertices = MAX_TRAJECTORY_LINE_VERTICES }, { signal, onProgress = () => {} } = {}) {
     const frames = trajectoryLineFrames(first, last, stride);
-    const builder = new TrajectoryLineBuilder(ids, frames, { maxVertices });
+    const builder = new TrajectoryLineBuilder(ids, frames, { maxVertices, physicalReplication });
     const frameCount = await this.getFrameCount({ atLeast: last + 1, signal });
     if (last >= frameCount) throw new Error(`Frame ${last + 1} is outside this ${frameCount}-frame trajectory.`);
     const options = { signal, background: true, priority: 10 };

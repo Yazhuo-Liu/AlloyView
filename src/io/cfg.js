@@ -29,41 +29,43 @@ const CFG_BOUNDARY_TOLERANCE = 1e-5;
  * bytes are read directly when possible (see ascii-rows.js). Otherwise, and
  * for every malformed file, the bytes are decoded and parsed as text, so the
  * result and any error message do not depend on the input type.
+ * Internal coordinate-only reads validate every column but omit unrelated
+ * scalar buffers; IDs and image-flag auxiliaries keep their full semantics.
  */
-export function parseCfg(input, sourceName = 'structure.cfg') {
+export function parseCfg(input, sourceName = 'structure.cfg', { projection = 'full' } = {}) {
   const startedAt = performance.now();
-  if (!isByteInput(input)) return parseCfgText(input, sourceName, startedAt);
+  if (!isByteInput(input)) return parseCfgText(input, sourceName, startedAt, projection);
   return parseBytesWithFallback(
     asBytes(input),
-    (bytes) => parseCfgBytes(bytes, sourceName, startedAt),
-    (text) => parseCfgText(text, sourceName, startedAt),
+    (bytes) => parseCfgBytes(bytes, sourceName, startedAt, projection),
+    (text) => parseCfgText(text, sourceName, startedAt, projection),
   );
 }
 
-function parseCfgText(text, sourceName, startedAt) {
+function parseCfgText(text, sourceName, startedAt, projection) {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
   const header = readCfgHeader(lines);
   const parsed = header.entryCount === null
-    ? parseBasicAtoms(lines, header.dataIndex, header.count)
-    : parseExtendedAtoms(lines, header.dataIndex, header.count, extendedLayout(header));
+    ? parseBasicAtoms(lines, header.dataIndex, header.count, projection)
+    : parseExtendedAtoms(lines, header.dataIndex, header.count, extendedLayout(header, projection));
   return finishCfgFrame(header, parsed, sourceName, startedAt);
 }
 
-function parseCfgBytes(bytes, sourceName, startedAt) {
+function parseCfgBytes(bytes, sourceName, startedAt, projection) {
   const header = readHeaderLines(bytes, readCfgHeader);
   if (!header) return null;
   const start = lineStartAfter(bytes, header.dataIndex);
   if (start < 0) return null;
   const parsed = header.entryCount === null
-    ? readBasicAtomBytes(bytes, start, header.count)
-    : readExtendedAtomBytes(bytes, start, header.count, extendedLayout(header));
+    ? readBasicAtomBytes(bytes, start, header.count, projection)
+    : readExtendedAtomBytes(bytes, start, header.count, extendedLayout(header, projection));
   return finishCfgFrame(header, parsed, sourceName, startedAt);
 }
 
 // Reads the header from `lines`. Only the first `usableLines` lines are known
 // when the caller decoded just the start of a file; if the header continues
 // beyond them, this returns null and the caller decodes more.
-function readCfgHeader(lines, usableLines = lines.length) {
+export function readCfgHeader(lines, usableLines = lines.length) {
   const firstIndex = lines.findIndex((line) => line.trim() && !line.trim().startsWith('#'));
   if (firstIndex < 0 && usableLines < lines.length) return null;
   if (firstIndex < 0) throw cfgError('The file is empty.');
@@ -212,7 +214,7 @@ function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt) {
     unwrapSource,
     fractional,
     cell,
-    properties: semantics.properties,
+    properties: semantics.properties.filter(property => property.data),
     timestep: null,
     title: sourceName,
     sourceFormat: 'cfg',
@@ -256,11 +258,11 @@ function inferCfgImageFlags(rawFractional, pbc) {
   return hasMeaningfulImage ? flags : undefined;
 }
 
-function parseBasicAtoms(lines, start, count) {
+function parseBasicAtoms(lines, start, count, projection) {
   const fractional = new Float64Array(count * 3);
   const types = new Uint16Array(count);
-  const masses = new Float32Array(count);
-  const velocity = [new Float32Array(count), new Float32Array(count), new Float32Array(count)];
+  const masses = projection === 'coordinates' ? null : new Float32Array(count);
+  const velocity = projection === 'coordinates' ? [] : [new Float32Array(count), new Float32Array(count), new Float32Array(count)];
   const typeMap = new Map();
   let hasVelocity = null;
   let atom = 0;
@@ -277,13 +279,17 @@ function parseBasicAtoms(lines, start, count) {
       throw cfgError(`Line ${index + 1}: atom rows with and without velocities cannot be mixed in one data block.`);
     }
     hasVelocity = rowHasVelocity;
-    masses[atom] = finiteNumber(tokens[0], `mass on line ${index + 1}`);
+    const mass = finiteNumber(tokens[0], `mass on line ${index + 1}`);
+    if (masses) masses[atom] = mass;
     const symbol = validateSymbol(tokens[1], index);
     if (!typeMap.has(symbol)) typeMap.set(symbol, typeMap.size);
     types[atom] = typeMap.get(symbol);
     for (let component = 0; component < 3; component += 1) {
       fractional[atom * 3 + component] = finiteNumber(tokens[2 + component], `fractional coordinate on line ${index + 1}`);
-      if (rowHasVelocity) velocity[component][atom] = finiteNumber(tokens[5 + component], `velocity on line ${index + 1}`);
+      if (rowHasVelocity) {
+        const speed = finiteNumber(tokens[5 + component], `velocity on line ${index + 1}`);
+        if (velocity[component]) velocity[component][atom] = speed;
+      }
     }
     atom += 1;
   }
@@ -293,8 +299,8 @@ function parseBasicAtoms(lines, start, count) {
 }
 
 function basicAtomResult(fractional, types, typeMap, masses, hasVelocity, velocity) {
-  const properties = [{ name: 'mass', unit: 'amu', data: masses }];
-  if (hasVelocity) {
+  const properties = masses ? [{ name: 'mass', unit: 'amu', data: masses }] : [];
+  if (hasVelocity && velocity.length) {
     for (let component = 0; component < 3; component += 1) {
       properties.push({ name: `velocity_${'xyz'[component]}`, unit: '', data: velocity[component] });
     }
@@ -304,11 +310,11 @@ function basicAtomResult(fractional, types, typeMap, masses, hasVelocity, veloci
 
 // Byte-level counterpart of parseBasicAtoms: the same arrays, and FALLBACK
 // wherever parseBasicAtoms would throw (see ascii-rows.js).
-function readBasicAtomBytes(bytes, start, count) {
+function readBasicAtomBytes(bytes, start, count, projection) {
   const fractional = new Float64Array(count * 3);
   const types = new Uint16Array(count);
-  const masses = new Float32Array(count);
-  const velocity = [new Float32Array(count), new Float32Array(count), new Float32Array(count)];
+  const masses = projection === 'coordinates' ? null : new Float32Array(count);
+  const velocity = projection === 'coordinates' ? [] : [new Float32Array(count), new Float32Array(count), new Float32Array(count)];
   const typeMap = new Map();
   const kinds = Uint8Array.of(NUMBER, TEXT, NUMBER, NUMBER, NUMBER, NUMBER, NUMBER, NUMBER);
   const values = new Float64Array(kinds.length);
@@ -327,7 +333,7 @@ function readBasicAtomBytes(bytes, start, count) {
     if (hasVelocity !== null && hasVelocity !== rowHasVelocity) throw FALLBACK;
     hasVelocity = rowHasVelocity;
     if (!Number.isFinite(values[0])) throw FALLBACK;
-    masses[atom] = values[0];
+    if (masses) masses[atom] = values[0];
     types[atom] = symbols.typeIndex(texts[1], typeMap);
     for (let component = 0; component < 3; component += 1) {
       const coordinate = values[2 + component];
@@ -336,7 +342,7 @@ function readBasicAtomBytes(bytes, start, count) {
       if (rowHasVelocity) {
         const speed = values[5 + component];
         if (!Number.isFinite(speed)) throw FALLBACK;
-        velocity[component][atom] = speed;
+        if (velocity[component]) velocity[component][atom] = speed;
       }
     }
     atom += 1;
@@ -347,7 +353,7 @@ function readBasicAtomBytes(bytes, start, count) {
 }
 
 // Validation and storage shared by the text and byte readers of extended rows.
-function extendedLayout({ count, entryCount, noVelocity, auxiliary }) {
+function extendedLayout({ count, entryCount, noVelocity, auxiliary }, projection) {
   const baseColumns = noVelocity ? 3 : 6;
   const auxiliaryCount = entryCount - baseColumns;
   if (entryCount < baseColumns || auxiliaryCount < 0) {
@@ -367,13 +373,13 @@ function extendedLayout({ count, entryCount, noVelocity, auxiliary }) {
   const propertyData = propertyDefinitions.map((definition) => (
     ['id', 'ix', 'iy', 'iz'].includes(definition.name.toLowerCase())
       ? new Float64Array(count)
-      : new Float32Array(count)
+      : projection === 'coordinates' ? null : new Float32Array(count)
   ));
   return {
     entryCount,
     propertyDefinitions,
     propertyData,
-    masses: new Float32Array(count),
+    masses: projection === 'coordinates' ? null : new Float32Array(count),
     fractional: new Float64Array(count * 3),
     types: new Uint16Array(count),
     typeMap: new Map(),
@@ -386,7 +392,7 @@ function extendedAtomResult({ fractional, types, typeMap, masses, propertyDefini
     types,
     typeLabels: [...typeMap.keys()],
     properties: [
-      { name: 'mass', unit: 'amu', data: masses },
+      ...(masses ? [{ name: 'mass', unit: 'amu', data: masses }] : []),
       ...propertyDefinitions.map((definition, index) => ({ ...definition, data: propertyData[index] })),
     ],
   };
@@ -429,10 +435,11 @@ function parseExtendedAtoms(lines, start, count, layout) {
     // Columns are validated in order; a failure discards the partial row.
     const x = finiteAtomValue(tokens[first], index), y = finiteAtomValue(tokens[first + 1], index), z = finiteAtomValue(tokens[first + 2], index);
     for (let property = 0; property < propertyData.length; property += 1) {
-      propertyData[property][atom] = finiteAtomValue(tokens[first + 3 + property], index);
+      const value = finiteAtomValue(tokens[first + 3 + property], index);
+      if (propertyData[property]) propertyData[property][atom] = value;
     }
     fractional[atom * 3] = x; fractional[atom * 3 + 1] = y; fractional[atom * 3 + 2] = z;
-    masses[atom] = rowMass;
+    if (masses) masses[atom] = rowMass;
     if (!typeMap.has(rowSymbol)) typeMap.set(rowSymbol, typeMap.size);
     types[atom] = typeMap.get(rowSymbol);
     atom += 1;
@@ -486,10 +493,10 @@ function readExtendedAtomBytes(bytes, start, count, layout) {
     for (let property = 0; property < propertyCount; property += 1) {
       const value = values[first + 3 + property];
       if (!Number.isFinite(value)) throw FALLBACK;
-      propertyData[property][atom] = value;
+      if (propertyData[property]) propertyData[property][atom] = value;
     }
     fractional[atom * 3] = x; fractional[atom * 3 + 1] = y; fractional[atom * 3 + 2] = z;
-    masses[atom] = rowMass;
+    if (masses) masses[atom] = rowMass;
     types[atom] = symbols.typeIndex(rowSymbol, typeMap);
     atom += 1;
   }

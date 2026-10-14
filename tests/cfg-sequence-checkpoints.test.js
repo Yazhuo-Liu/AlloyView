@@ -47,3 +47,24 @@ test('CFG sequence frames resume from saved continuity and match a strict forwar
   }
   assert.deepEqual(parsedFiles, [7, 1, 1, 4, 0, 1, 1, 1, 1, 1]);
 });
+
+test('CFG header requests do not advance continuity or discard complete target properties', async () => {
+  const files = await sequence(8);
+  await request('load', { files });
+  const full = (await request('frame', { index: 7 })).frame;
+  const expected = signature(full);
+  assert.ok(full.properties.length > 0, 'the displayed target remains a full frame');
+  replies.length = 0;
+  const { header } = await request('frame-header', { index: 3 });
+  assert.equal(header.atomCount, full.ids.length);
+  assert.deepEqual(header.cell, full.cell);
+  assert.equal(header.frameIndex, 3);
+  assert.equal(header.ids, undefined);
+  assert.equal(replies.filter(message => message.stage === 'sequence-unwrap').length, 0);
+  replies.length = 0;
+  const again = (await request('frame', { index: 7 })).frame;
+  assert.equal(signature(again), expected);
+  assert.deepEqual(again.properties, full.properties);
+  assert.equal(replies.filter(message => message.stage === 'sequence-unwrap').length, 1,
+    'a header read leaves the existing near-target checkpoint intact');
+});

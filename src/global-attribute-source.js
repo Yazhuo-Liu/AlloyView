@@ -22,6 +22,7 @@ function fail(path, message) { throw new Error(`Invalid AlloyView configuration:
  * once a label or time series asks for Strain.* (requestReference). */
 export function createGlobalAttributeSource({ getFrame, getFrameIndex = () => 0, getFrameCount = () => 1,
   getFrameAt = async () => null, getSourceVersion = () => 0, getDxaNetwork = () => null,
+  getFrameHeaderAt = null,
   schedule = callback => setTimeout(callback, 0) } = {}) {
   let strainReferenceFrame = 0, reference = null, referenceRequest = null, registry = null, signature = [];
   let scheduled = false, notified = null;
@@ -53,7 +54,11 @@ export function createGlobalAttributeSource({ getFrame, getFrameIndex = () => 0,
     if (strainReferenceFrame >= getFrameCount()) return null;
     if (referenceRequest?.key !== key) {
       const index = strainReferenceFrame;
-      const promise = Promise.resolve(getFrameAt(index, { signal })).then(frame => {
+      const promise = Promise.resolve().then(async () => {
+        const header = typeof getFrameHeaderAt === 'function' ? await getFrameHeaderAt(index, { signal }) : null;
+        if (signal?.aborted) throw new DOMException('Reference cell request cancelled.', 'AbortError');
+        return header && !header.headerUnavailable ? header : getFrameAt(index, { signal });
+      }).then(frame => {
         if (referenceKey(index) !== key || !frame?.cell) return null;
         reference = { key, cell: copyCell(frame.cell) };
         refresh();

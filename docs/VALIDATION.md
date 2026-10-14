@@ -2,6 +2,179 @@
 
 Latest validation: 2026-10-14 (America/New_York). Earlier entries retain their own dates.
 
+## Continued trajectory reads, copy paths and GPU refusal handling (2026-10-14, America/New_York)
+
+Baseline: `71ab20f`. Fetch confirmed remote main still pointed to this commit
+and the working tree was clean. This continuation covers B32/B35/B36, the
+remaining coordinate projection of T4, T6, and only the coordinate-independent
+capability-memory portion of G2. Node 24.19.0 and Chromium/SwiftShader used the
+same four-CPU-quota environment. Existing Worker/Wasm pools, background
+preparation, GPU pipelines and parser/analysis CPU admission remain in place.
+
+### Work process and decisions
+
+1. **B35.** Reproduced a physical copy ID producing no trajectory. Resolve
+   canonical escaped base/copy IDs only with an explicit physical-replication
+   context. Track the source atom's continuous path in its own lattice, then
+   add each sample's copy offset using its current cell vectors. Retain the
+   selected compound ID in the result/configuration. Read each source sample
+   once for any number of selected copies. Ordinary source IDs remain literal;
+   malformed, obsolete or missing copies do not create phantom lines. Cancel
+   pending work and remove old lines when the physical layout changes, including
+   changes during an index-completion wait. No expanded frame is constructed
+   solely to draw these paths.
+2. **B32.** Enlarge phone button/help/checkbox-label hit areas to 32–44 CSS
+   pixels, with low-priority defaults that preserve already larger controls.
+   Desktop styles remain outside these mobile overrides. The browser probe
+   measures actual visible targets, narrow layouts, overlays, range gestures
+   and real touch activation rather than relying on stylesheet text.
+3. **T4.** Introduce full/coordinates/header projections in the existing
+   parser pool. CFG, dump, XYZ and PDB coordinate readers avoid unrelated
+   scalar buffers while validating every original property, row, ID, type and
+   image field in the original order. Keep authoritative unwrapped coordinates
+   and every Float32 rounding point. Displayed frames still retain imported
+   properties; smoothing neighbors, integration and line sampling use the
+   coordinate projection. CFG checkpoint intermediates use coordinates while
+   their requested display target stays complete. Single-frame data/POSCAR
+   explicitly fall back to complete parsing. Scientific error handling is
+   preserved rather than accepting malformed omitted columns.
+4. **T6.** Read declared counts/cells/steps from bounded 4 KiB prefix chunks,
+   with a 1 MiB limit and full fallback. Share original format header rules,
+   including XYZ/PDB timestep validation. PDB indexing records primary
+   conformer counts and model-local CRYST1 lines while sharing existing global
+   context. Gzip CFG prefixes stream without fully decompressing atom data.
+   Header-derived series and their strain reference use a bounded rolling
+   request window, shared parser permits and ordered result commits. Cancel
+   only owned subscriptions and retain posted permits until ACK. Mixed
+   property collections, inferred cells, unsupported/long headers and smoothing
+   use complete frames. Physical count/cell transforms equal materialized
+   replication without allocating copied atoms. Review replaced per-line
+   repeated header scanning with checks per byte chunk; an 80,000-comment
+   fixture and cancellation regression exercise that path.
+5. **G2, conservative portion.** Propagate explicit cell/cutoff capability
+   error codes through the actual GPU Worker/client. Remember at most 128
+   coordinate-independent refusals with bounded keys and weak references;
+   inspect only small cell/parameter metadata rather than all atoms. Fixed
+   Coordination/CNA/Bonds/bond distributions/RDF/local shear can then use
+   warm CPU Workers directly. Source/device generations, GPU toggles, cell,
+   parameters, revisions and array replacement permit retry. Current CPU
+   inputs are validated again. Cancellation, OOM/device failures, arbitrary
+   error text and content-dependent precision/degeneracy are not cached.
+   Independent review checked each cached code's dependence and eviction.
+   No audit-era performance threshold was adopted without new hardware data.
+6. **B36.** Split the Voronoi GPU browser suite into bounded evaluations of
+   one async generator, retaining the same pools/device/inputs. Each stage
+   has a 180-second deadline and reports its label; scientific assertions,
+   cancellation and resource-reuse checks remain. A stalled stage fails and
+   closes its resources, rather than extending one whole-suite deadline or
+   dropping checks.
+
+### Verification and observed effects
+
+The complete Node suite passed **2,101/2,101** tests. Independent comparison
+against frozen `71ab20f` covered 3,500 parsing cases: 1,862 successful inputs
+with 223,022 `Object.is`-identical fields and 1,638 identical parsing errors.
+Additional real persistent-parser tests mix full/coordinates/header jobs,
+cancel header reads, recover after errors and close at zero CPU permits.
+CFG header reads leave continuity checkpoints and complete target properties
+unchanged. Header physical attributes equal actual `replicateFrame` results
+for changing/skew cells and mixed PBC.
+
+B35 production browser checks pass in isolated/nonisolated modes: three
+physical paths, eighteen vertices, changing cells/origins, periodic crossings,
+second-view geometry, PNG, reset and exact configuration replay. Its request
+is 139 bytes of small metadata; the largest Cartesian difference from the
+analytic source/copy oracle is 1.19 × 10⁻⁶ Å, at final Float32 rendering
+precision. Changing the layout/source while waiting for indexing cannot post
+obsolete IDs or republish old lines.
+
+Actual source-app T6 checks in both isolation modes collect twenty uncached
+frames plus a distant reference with **zero full-frame requests** during the
+header phase. Returned metadata contains no IDs, positions, types, fractional
+or property arrays. Adding `Mean.energy` uses complete parsing; physical
+replication gives exact counts/volumes/densities, and smoothing makes twenty-one
+complete reads and zero header requests. Maximum CPU leases remain three under
+the fixture's three-permit budget, and source close returns to zero. Progressive
+indexing still supports cancellation, completion-only prefetch and saved-series
+replay. Header reads validate metadata only: atom rows and unread gzip payloads
+are validated on the complete/coordinate paths, not certified by a header read.
+
+The complete staged Voronoi suite passes **46 original cases in 20 stages** on
+SwiftShader, including every face/topology oracle, precision fallback, real
+Fe/HEA/Ni samples and multi-batch cancellation/recovery. Summed stage time is
+196.9 seconds; the longest stage is the resumed 2,048-atom FCC calculation at
+79.0 seconds, below its 180-second deadline. This validates the software
+adapter and execution lifecycle, not physical GPU throughput.
+
+An actual thin-PBC G2 probe attempts GPU once, then skips that same proven
+unsupported geometry. In-place coordinate changes still produce new CPU
+coordination `[2,2,2]`, replacing `[2,1,1]` and matching the CPU oracle. It
+reuses its CPU and GPU Workers, retries after off/on and controlled device
+replacement, and succeeds on GPU for a new supported source.
+
+B32 source and production checks pass at 320/375/430 CSS-pixel widths and
+844 × 390 landscape: 133 target measurements across thirteen contexts per
+screen, each at least 32 pixels in both directions. Real touch activates
+tool Close, checkboxes and Auto, and drags the enlarged native slider hit area.
+Toolbar, details and camera panels do not overlap; page/sidebar have no
+horizontal overflow, and eight desktop controls return to their original sizes.
+
+Seven interleaved parser-only samples, after eight warmups:
+
+| Input | Complete | Coordinates | Omitted typed-buffer bytes |
+| --- | ---: | ---: | ---: |
+| 100k dump, 24 scalar columns | 44.42 ms | 39.94 ms | 9,600,000 |
+| 100k CFG, 24 scalar columns plus mass | 45.98 ms | 42.82 ms | 10,000,000 |
+| 100k XYZ, 24 scalar columns | 64.74 ms | 57.68 ms | 9,600,000 |
+| Fe loop, 60,229 atoms | 25.03 ms | 22.97 ms | 3,372,824 |
+| HEA, 28,800 atoms | 6.71 ms | 6.39 ms | 230,400 |
+| NiGB, 129,904 atoms, mass only | 37.12 ms | 41.00 ms | 519,616 |
+
+The coordinate projection still reads and validates all rows. Reduced
+allocation/transfer does not promise universal elapsed-time gains, particularly
+for NiGB's one scalar column. These times exclude file I/O, Worker transport,
+smoothing and rendering; buffer counts are retained backing bytes, not process
+RSS. The benchmark now asserts all retained geometry/metadata outside timing.
+The [archived measurements](benchmarks/trajectory-input-audit-2026-10-14.json)
+retain the environment, individual samples and GPU probes.
+
+### Newly recorded API limitation
+
+B38 is separate from G2: the existing public resident-GPU protocol treats a
+frame as immutable until source clearing or replacement. Actual supported GPU
+Coordination with cutoff 1.1, periodic `diag(2,2,2)`, and fractional coordinates
+`[.1,.1,.5, .6,.1,.5, .1,.6,.5]` initially gives `[2,1,1]` on CPU/GPU. Mutating
+the second atom to `[.12,.11,.5]`, or separately changing cell vector entry 0
+to `.8`, gives CPU `[2,2,2]` but old-frame GPU `[2,1,1]` with reused input.
+Both new-frame identity and `clearGpuFrames()` recover GPU `[2,2,2]`.
+G2 records zero cache entries in these probes. Existing application loading,
+processed-frame invalidation and physical replication clear their GPU source;
+no failing application user path was established. An explicit revision or
+invalidation API, and any content-check cost, remain in TODO. Broader
+content-dependent G2 fallback memory and measured routing also remain open.
+
+### Reproducible checks
+
+This continuation passed `npm test`, `npm run build` and the complete
+`npm run test:browser` integration smoke. Its focused production checks are:
+
+```bash
+npm run test:browser:copy-trajectories
+npm run test:browser:time-series-headers
+node scripts/browser-progressive-series.mjs
+npm run test:browser:mobile-targets
+npm run test:browser:gpu-fallback-cache
+```
+
+`npm run test:gpu:voronoi` passes the complete staged software-GPU suite.
+The final header/PDB/structure/XYZ/gzip Node checks pass 43 tests, and eight
+bundle, deployment/cache and documentation checks pass. Parser-only timing
+and retained-buffer counts can be repeated with
+`npm run benchmark:coordinate-projection`; the independent exact-field
+comparison runs outside its timed loops. Graphical checks on SwiftShader
+remain correctness checks rather than hardware-GPU benchmarks.
+
+
 ## Approved preview, legend, dependency and hot-loop batch (2026-10-14, America/New_York)
 
 Baseline: `38aaabe`. Fetch confirmed that remote main still pointed to this

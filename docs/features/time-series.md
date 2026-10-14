@@ -33,11 +33,32 @@ attribute that has missing frames and how many.
 angles and strain, atom-type fractions, and means of columns read from the
 file or imported as [external properties](external-properties.md)) depend
 only on the frame as read. **Read file values** requests the frames through
-the structure Worker in the background, in order, without caching them and
+the structure Worker in the background, without caching them and
 without displaying them: the viewport, its analyses and the selected frame do
 not change. Frames whose values are already known, including the displayed
 frame and frames seen earlier, are not read again. Progress is shown and the
 reading can be cancelled at any time.
+
+When every requested file quantity comes from the header (`Frame`,
+`FrameCount`, `Timestep`, `AtomCount`, `NumberDensity`, `Cell.*` and `Strain.*`),
+uncached frames use a bounded header reader. It reuses the existing parser
+Workers and their shared CPU budget, with at most three reads in flight;
+values still enter the plot in frame order. The strain reference uses this
+same metadata path. Dump, Extended XYZ with a `Lattice`, CFG (including gzip
+sequences) and indexed PDB with `CRYST1` provide these values without building
+atom arrays. PDB uses the primary conformer count retained during indexing,
+and each model keeps its own cell metadata, including cell changes inside
+the model. Physical replication enlarges the header cell and atom count just
+as it enlarges analysis inputs.
+
+Plain XYZ and PDB cells inferred from coordinates, unsupported formats,
+headers exceeding 1 MiB and trajectory smoothing use the ordinary frame
+reader. Smoothing needs the averaged cell from its neighboring frames. Adding
+a column mean or an atom-type population also keeps the ordinary path for the
+whole request. A header read validates its metadata, but does not validate
+atom coordinates, IDs or property rows: normal frame display and analyses
+perform that validation. Gzip header reads stream only the required prefix;
+they do not verify the unread compressed atom payload.
 
 When a large trajectory initially opens before indexing finishes, frame
 limits refresh as the index grows. **Read file values** waits for the completed

@@ -109,6 +109,16 @@ the minimum-image displacement since the atom's previous sample. Choose a step
 small enough that atoms move less than half a cell between samples. Atoms found
 in fewer than two sampled frames produce no line; missing IDs are listed.
 
+Atoms created with **Replicate atoms for analysis** can also be traced, from
+either an explicit ID list or a selection group. Each selected copy follows
+its original atom's continuous path plus its copy offset along that sample's
+cell vectors. Changing cell size, tilt and origin are therefore included.
+The Worker reads each original sampled frame once, regardless of how many
+copies are selected. Copy IDs are preserved in the paths and configuration.
+Changing or resetting physical replication removes the old paths and cancels
+pending generation; generate them again for the current atoms. Display-only
+replication continues to repeat the existing lines without recalculating them.
+
 Lines follow the file coordinates, not smoothed ones, and do not change when
 the displayed frame changes. They are drawn as screen-space ribbons with the
 chosen width in pixels, either in one color or colored by time along each path

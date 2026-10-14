@@ -38,7 +38,10 @@ const INDEX_NEIGHBORS_SHADER = `${NEIGHBOR_BINDINGS_WGSL.replace('@group(0) @bin
 }`;
 
 export class GpuUnavailableError extends Error {
-  constructor(message) { super(message); this.name = 'GpuUnavailableError'; }
+  constructor(message, unsupportedCode) {
+    super(message); this.name = 'GpuUnavailableError';
+    if (unsupportedCode) { this.gpuUnsupportedCode = unsupportedCode; this.gpuUnsupportedScope = 'cell-cutoff'; }
+  }
 }
 
 export class GpuDeviceLostError extends GpuUnavailableError {
@@ -723,21 +726,21 @@ export class GpuRuntime {
     const heights = Array.from(cellFaceHeights(frame.cell));
     const vectors = Array.from(frame.cell.vectors);
     if (vectors.some((value) => !Number.isFinite(value)) || heights.some((value) => !Number.isFinite(value) || value <= 0)) {
-      throw new GpuUnavailableError('This cell geometry is unsuitable for GPU neighbor analysis.');
+      throw new GpuUnavailableError('This cell geometry is unsuitable for GPU neighbor analysis.', 'cell-neighbor-geometry');
     }
     let imageBudget = heights.reduce((product, height, axis) => product * (frame.cell.pbc[axis] ? 2 * Math.ceil(cutoff / height) + 3 : 1), 1);
-    if (imageBudget > 4096) throw new GpuUnavailableError('The periodic image search exceeds the GPU budget.');
+    if (imageBudget > 4096) throw new GpuUnavailableError('The periodic image search exceeds the GPU budget.', 'periodic-image-budget');
     // Extremely long image translations amplify the shared f32 cell-matrix
     // error beyond its distance tolerance. Open axes enumerate no images.
     if (heights.some((height, axis) => frame.cell.pbc[axis] && cutoff / height > MAX_GPU_PERIODIC_RADIUS_FACES)) {
-      throw new GpuUnavailableError('The periodic image geometry exceeds the GPU distance precision budget.');
+      throw new GpuUnavailableError('The periodic image geometry exceeds the GPU distance precision budget.', 'periodic-image-precision');
     }
     const cellScale = Math.max(...[0, 3, 6].map((offset) => Math.hypot(...vectors.slice(offset, offset + 3))));
     if (cellScale / cutoff > 1e6 || atomCount > 4_000_000) throw new GpuUnavailableError('This frame exceeds the GPU precision or memory budget.');
     if (!Number.isFinite(Math.fround(cutoff * cutoff)) || Math.fround(cutoff * cutoff) <= 0
         || [...vectors, ...heights].some((value) => !Number.isFinite(Math.fround(value)))
         || heights.some((value) => Math.fround(value) <= 0)) {
-      throw new GpuUnavailableError('The cell or cutoff exceeds the GPU numeric range.');
+      throw new GpuUnavailableError('The cell or cutoff exceeds the GPU numeric range.', 'cell-cutoff-numeric-range');
     }
     const coefficientSum = heights.reduce((sum, height, axis) => sum + (frame.cell.pbc[axis] ? Math.ceil(cutoff / height) + 1 : 1), 0);
     const imagePrecisionFactor = Math.max(1, coefficientSum / 4);
@@ -745,13 +748,13 @@ export class GpuRuntime {
     const paddedSquared = Math.fround(Math.fround(cutoff * cutoff) + Math.fround(distanceTolerance));
     if (!Number.isFinite(Math.fround(distanceTolerance)) || Math.fround(distanceTolerance) <= 0
         || !Number.isFinite(paddedSquared) || paddedSquared <= 0) {
-      throw new GpuUnavailableError('The padded GPU neighbor radius exceeds the GPU numeric range.');
+      throw new GpuUnavailableError('The padded GPU neighbor radius exceeds the GPU numeric range.', 'padded-radius-numeric-range');
     }
     const queryRadius = Math.sqrt(paddedSquared);
     imageBudget = heights.reduce((product, height, axis) => product * (frame.cell.pbc[axis] ? 2 * Math.ceil(queryRadius / height) + 3 : 1), 1);
-    if (imageBudget > 4096) throw new GpuUnavailableError('The padded periodic image search exceeds the GPU budget.');
+    if (imageBudget > 4096) throw new GpuUnavailableError('The padded periodic image search exceeds the GPU budget.', 'padded-periodic-image-budget');
     if (heights.some((height, axis) => frame.cell.pbc[axis] && queryRadius / height > MAX_GPU_PERIODIC_RADIUS_FACES)) {
-      throw new GpuUnavailableError('The padded periodic image geometry exceeds the GPU distance precision budget.');
+      throw new GpuUnavailableError('The padded periodic image geometry exceeds the GPU distance precision budget.', 'padded-periodic-image-precision');
     }
     const dimensions = heights.map((height) => Math.max(1, Math.min(256, Math.floor(height / queryRadius))));
     const maximumBins = Math.min(2_000_000, atomCount * 4);

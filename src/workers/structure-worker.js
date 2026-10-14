@@ -117,6 +117,17 @@ self.addEventListener('message', async (event) => {
       self.postMessage({ id, ok: true, result: { frame, index: payload.index } }, trajectoryTransferables(frame));
       return;
     }
+    if (type === 'frame-header') {
+      assertSource();
+      task = { controller: new AbortController(), background: Boolean(payload.background), projection: 'header' };
+      frameRequests.set(id, task);
+      const header = await readSourceFrame(source, payload.index, id, task);
+      if (task.controller.signal.aborted) throw new DOMException('Frame parsing cancelled.', 'AbortError');
+      // Metadata has no atom buffers to transfer, and uses the same parser
+      // lanes, promotion and acknowledgment-owned CPU permits as full frames.
+      self.postMessage({ id, ok: true, result: { header, index: payload.index } });
+      return;
+    }
     if (type === 'trajectory-unwrap' || type === 'trajectory-lines') {
       assertSource();
       task = { controller: new AbortController(), background: Boolean(payload.background) };
@@ -164,7 +175,7 @@ function trajectoryProcessor() {
     const current = source;
     trajectory = new TrajectoryProcessor({
       readFrame: (index, { signal, background, priority }) => readSourceFrame(current, index, null,
-        { background, priority, controller: { signal } }),
+        { background, priority, projection: 'coordinates', controller: { signal } }),
       promoteRead: ({ signal, priority }) => getParserPool().promote(signal, priority),
       getFrameCount: options => sourceFrameCount(current, options),
     });
@@ -184,18 +195,25 @@ async function sourceFrameCount(current, { atLeast = 0, signal } = {}) {
 }
 
 async function readSourceFrame(current, index, requestId, task) {
+  const projection = task.projection ?? 'full';
   const options = { get background() { return task.background; }, signal: task.controller.signal,
-    get priority() { return task.priority ?? (task.background ? -20 : 20); } };
+    projection, get priority() { return task.priority ?? (task.background ? -20 : 20); } };
   if (current.descriptors) {
     if (!current.descriptors[index] && !current.indexComplete) await current.indexPromise;
     const descriptor = current.descriptors[index];
     if (!Number.isInteger(index) || !descriptor) throw new Error(`Trajectory frame ${index} is outside the available range.`);
-    return getParserPool().parse(descriptor, options);
+    return getParserPool().parse({ ...descriptor, projection }, options);
   }
-  if (current.format === 'cfg-sequence') return readCfgSequenceFrame(current, index, requestId, options);
+  if (current.format === 'cfg-sequence') {
+    if (projection === 'header') {
+      if (!Number.isInteger(index) || index < 0 || index >= current.files.length) throw new Error(`CFG sequence frame ${index} is outside the available range.`);
+      return getParserPool().parse({ format: 'cfg', file: current.files[index], index, projection }, options);
+    }
+    return readCfgSequenceFrame(current, index, requestId, options);
+  }
   if (current.format === 'cfg' || SINGLE_FRAME_PARSERS[current.format]) {
     if (index !== 0) throw new Error('A single structure contains only one frame.');
-    return getParserPool().parse({ format: current.format, file: current.file, index }, options);
+    return getParserPool().parse({ format: current.format, file: current.file, index, projection }, options);
   }
   let chunk = current;
   let localIndex = index;
@@ -209,7 +227,7 @@ async function readSourceFrame(current, index, requestId, task) {
   const count = current.frameCount ?? current.offsets?.length;
   if (!Number.isInteger(index) || index < 0 || index >= count) throw new Error(`Trajectory frame ${index} is outside the available range.`);
   const descriptor = descriptors?.[localIndex] ?? { start: offsets[localIndex], end: offsets[localIndex + 1] ?? chunk.file.size };
-  return getParserPool().parse({ ...descriptor, format, file: chunk.file, index,
+  return getParserPool().parse({ ...descriptor, format, file: chunk.file, index, projection,
     header: descriptor.header ?? chunk.indexed?.header }, options);
 }
 
@@ -388,7 +406,8 @@ async function readCfgSequenceFrame(sequenceSource, index, requestId, options = 
   let start = continuity ? continuity.index + 1 : 1;
   let frame = null;
   if (!continuity) {
-    frame = await getParserPool().parse({ format: 'cfg', file: sequenceSource.files[0], index: 0 }, options);
+    frame = await getParserPool().parse({ format: 'cfg', file: sequenceSource.files[0], index: 0,
+      projection: index === 0 ? options.projection : 'coordinates' }, options);
     continuity = prepareSequenceBaseline(frame);
     rememberContinuity(sequenceSource, continuity);
     if (index === 0) {
@@ -402,7 +421,8 @@ async function readCfgSequenceFrame(sequenceSource, index, requestId, options = 
   const ahead = Math.max(1, getParserPool().backgroundCount + 1);
   const parsed = new Map();
   const enqueue = current => {
-    const promise = getParserPool().parse({ format: 'cfg', file: sequenceSource.files[current], index: current },
+    const promise = getParserPool().parse({ format: 'cfg', file: sequenceSource.files[current], index: current,
+      projection: current === index ? options.projection : 'coordinates' },
       { ...options, background: options.background || current !== start, priority: options.background ? -20 : 20 });
     promise.catch(() => {});
     parsed.set(current, promise);

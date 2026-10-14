@@ -426,6 +426,15 @@ Its cases include CsCl and rock-salt crystals, triclinic and mixed-boundary
 cells with random radii, type subsets, empty cells, the radius-spread fallback,
 and samples of the Fe loop, HEA and Ni grain-boundary examples.
 
+`npm run test:gpu:voronoi` keeps the same page, CPU/GPU Workers, device and
+resident inputs throughout these checks, but advances through bounded browser
+evaluation stages. Each stage has a 180-second deadline and reports its label
+and elapsed time; the entire suite no longer shares one 360-second deadline.
+The active multi-batch cancellation and subsequent recovery run in separate
+stages, retaining the same resource-reuse assertions. A timed-out stage fails
+the suite and closes its pools/browser. Software-adapter timings validate the
+algorithm and lifecycle, rather than physical GPU performance.
+
 The Auto color range treats volume and surface-area variations at GPU rounding
 precision as uniform, so tiny numerical differences in an ideal crystal do not
 become apparent defects. The actual range extrema, scientific arrays, CSV

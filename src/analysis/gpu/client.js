@@ -38,6 +38,8 @@ export class GpuAnalysisClient {
     this.nextPtmFitId = 1;
     this._cacheStatus = { ...EMPTY_CACHE };
     this.generation = 0;
+    // Routing refusals cannot outlive a source barrier or a replaced device.
+    this.fallbackGeneration = 0;
     this.warmedUp = false;
     this.deviceWarmed = false;
     this.warmedAnalysisKinds = new Set();
@@ -126,6 +128,7 @@ export class GpuAnalysisClient {
   /** A source barrier: invalidate old uploads before accepting the new source. */
   clearFrames() {
     this.generation++;
+    this.fallbackGeneration++;
     for (const task of this.pending.values()) this.cancel(task);
     this.queue.length = 0;
     this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexFrameIds.clear();
@@ -234,11 +237,15 @@ export class GpuAnalysisClient {
         error.analysisErrorKind = data.errorKind;
         error.gpuDeviceUnavailable = Boolean(data.gpuDeviceUnavailable);
         error.gpuAnalysisKind = data.gpuAnalysisKind;
+        error.gpuUnsupportedScope = data.gpuUnsupportedScope;
+        error.gpuUnsupportedCode = data.gpuUnsupportedCode;
+        error.gpuOutOfMemory = Boolean(data.gpuOutOfMemory);
         this.settle(task, error); }
       this.finishDispatch(task);
     });
     const fail = (event) => {
       if (this.worker !== worker) return;
+      this.fallbackGeneration++;
       const error = new Error(event.message || 'The GPU analysis worker failed.');
       if (event.name) error.name = event.name;
       if (event.gpuDeviceLost) error.gpuDeviceLost = true;
@@ -466,6 +473,7 @@ export class GpuAnalysisClient {
     }
     this.releaseWhenIdle = false;
     this.generation++;
+    this.fallbackGeneration++;
     for (const task of this.pending.values()) this.settle(task, abortError());
     this.queue.length = 0; this.worker?.terminate(); this.worker = null; this.active = [];
     this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();

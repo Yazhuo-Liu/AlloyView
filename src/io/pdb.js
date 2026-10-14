@@ -9,6 +9,7 @@ export async function indexPdb(blob, onProgress = () => {}, options = {}) {
   let currentHeader = '';
   let active = null;
   let implicitAtoms = 0;
+  let implicitPrimaryAtoms = 0;
   let modelAtoms = 0;
   let explicitModels = false;
   await scanLineBytes(blob, (bytes, from, to, start, end) => {
@@ -17,7 +18,10 @@ export async function indexPdb(blob, onProgress = () => {}, options = {}) {
       if (active) throw pdbError('MODEL records must be separated by ENDMDL.');
       if (implicitAtoms) throw pdbError('Atom records before the first MODEL cannot be combined with a model trajectory.');
       explicitModels = true;
-      active = { start, end: null, header: currentHeader };
+      active = { start, end: null, header: currentHeader, atomCount: 0,
+        // Reuse the existing immutable global header string; metadata stores
+        // only this model's own records rather than retaining another copy.
+        metadataHeader: lineText(bytes.subarray(from, to)) };
       modelAtoms = 0;
     } else if (record === 'ENDMDL') {
       if (!active) throw pdbError('ENDMDL has no preceding MODEL.');
@@ -30,6 +34,26 @@ export async function indexPdb(blob, onProgress = () => {}, options = {}) {
       if (explicitModels && !active) throw pdbError('Atom records must occur inside MODEL/ENDMDL blocks.');
       if (active) modelAtoms += 1;
       else implicitAtoms += 1;
+      // PDB's full parser includes only blank/A alternate conformers. The
+      // byte index already visits these rows; retain this exact population
+      // for header-only consumers without parsing coordinates or properties.
+      let alternate = to - from > 16 ? bytes[from + 16] : 32;
+      // Fixed-width fields refer to decoded characters. Unusual Unicode
+      // prefixes must follow that rule rather than shifting the altLoc byte.
+      for (let offset = from; offset < Math.min(to, from + 17); offset++) {
+        if (bytes[offset] >= 0x80) {
+          alternate = (lineText(bytes.subarray(from, to))[16] ?? ' ').charCodeAt(0);
+          break;
+        }
+      }
+      if (alternate === 32 || alternate === 65) {
+        if (active) active.atomCount++;
+        else implicitPrimaryAtoms++;
+      }
+    } else if (active && record === 'CRYST1') {
+      // A CRYST1 inside a MODEL, even after atom rows, overrides its header.
+      // Keep all lines so a malformed earlier cell still reports an error.
+      active.metadataHeader += `\n${lineText(bytes.subarray(from, to))}`;
     } else if (!active && (record === 'CRYST1' || record === 'TITLE')) {
       header.push(lineText(bytes.subarray(from, to)));
       currentHeader = header.join('\n');
@@ -37,8 +61,9 @@ export async function indexPdb(blob, onProgress = () => {}, options = {}) {
   }, onProgress, options);
   if (active) throw pdbError('The last MODEL is missing ENDMDL.');
   if (!explicitModels && implicitAtoms) {
-    frames.push({ start: 0, end: blob.size });
-    options.onFrame?.({ start: 0, end: blob.size, index: 0 });
+    const descriptor = { start: 0, end: blob.size, atomCount: implicitPrimaryAtoms, metadataHeader: currentHeader };
+    frames.push(descriptor);
+    options.onFrame?.({ ...descriptor, index: 0 });
   }
   if (!frames.length) throw pdbError('The file contains no ATOM or HETATM records.');
   return { frames, header: explicitModels ? header.join('\n') : '', indexMs: performance.now() - startedAt };
@@ -78,7 +103,7 @@ export async function readPdbFrame(blob, indexed, index, sourceName = 'trajector
   return frame;
 }
 
-export function parsePdbFrame(text, sourceName = 'structure.pdb') {
+export function parsePdbFrame(text, sourceName = 'structure.pdb', { projection = 'full' } = {}) {
   const startedAt = performance.now();
   const lines = String(text).replace(/^\uFEFF/, '').split(/\r?\n/);
   const atoms = [];
@@ -93,8 +118,7 @@ export function parsePdbFrame(text, sourceName = 'structure.pdb') {
     else if (record === 'MODEL') {
       models += 1;
       if (models > 1) throw pdbError('Use the indexed trajectory reader for files containing multiple MODEL records.');
-      const value = line.slice(10, 14).trim();
-      if (value) timestep = integer(value, 'MODEL number');
+      timestep = readPdbModelTimestep(line);
     } else if (record === 'ATOM' || record === 'HETATM') {
       // PDB alternate conformations overlap. Display the primary (blank/A)
       // conformer; its serial number remains the stable atom identity.
@@ -104,10 +128,12 @@ export function parsePdbFrame(text, sourceName = 'structure.pdb') {
       if (id <= 0) throw pdbError('Atom serial numbers must be positive.');
       const position = [30, 38, 46].map((offset) => finite(line.slice(offset, offset + 8).trim(), 'atom coordinate'));
       const species = elementLabel(line);
-      atoms.push({ id, position, species,
-        occupancy: optionalNumber(line.slice(54, 60)),
-        bfactor: optionalNumber(line.slice(60, 66)),
-      });
+      // Even coordinate-only reads validate both discarded scalar columns.
+      const occupancy = optionalNumber(line.slice(54, 60));
+      const bfactor = optionalNumber(line.slice(60, 66));
+      const atom = { id, position, species };
+      if (projection !== 'coordinates') { atom.occupancy = occupancy; atom.bfactor = bfactor; }
+      atoms.push(atom);
     }
   }
   if (!atoms.length) throw pdbError('The structure contains no primary ATOM or HETATM records.');
@@ -118,7 +144,7 @@ export function parsePdbFrame(text, sourceName = 'structure.pdb') {
   const typeLabels = [];
   const typeMap = new Map();
   const seenIds = new Set();
-  const properties = ['occupancy', 'bfactor'].map((name) => ({ name, unit: name === 'bfactor' ? 'Å²' : '', data: new Float32Array(count) }));
+  const properties = projection === 'coordinates' ? [] : ['occupancy', 'bfactor'].map((name) => ({ name, unit: name === 'bfactor' ? 'Å²' : '', data: new Float32Array(count) }));
   for (let atom = 0; atom < count; atom += 1) {
     const value = atoms[atom];
     if (seenIds.has(value.id)) throw pdbError(`Atom serial ${value.id} occurs more than once in the primary conformer.`);
@@ -130,8 +156,10 @@ export function parsePdbFrame(text, sourceName = 'structure.pdb') {
     }
     types[atom] = typeMap.get(value.species);
     rawPositions.set(value.position, atom * 3);
-    properties[0].data[atom] = value.occupancy;
-    properties[1].data[atom] = value.bfactor;
+    if (properties.length) {
+      properties[0].data[atom] = value.occupancy;
+      properties[1].data[atom] = value.bfactor;
+    }
   }
   cell ??= inferNonperiodicCell(rawPositions);
   const coordinates = coordinatesForCell(rawPositions, cell, 'PDB');
@@ -140,7 +168,7 @@ export function parsePdbFrame(text, sourceName = 'structure.pdb') {
     pdbTitle: titles.join(' '), sourceFormat: 'pdb', parseMs: performance.now() - startedAt });
 }
 
-function parseCrystalCell(line) {
+export function parseCrystalCell(line) {
   const [a, b, c] = [6, 15, 24].map((offset) => finite(line.slice(offset, offset + 9).trim(), 'CRYST1 length'));
   const [alpha, beta, gamma] = [33, 40, 47].map((offset) => finite(line.slice(offset, offset + 7).trim(), 'CRYST1 angle'));
   if ([a, b, c].some((value) => value <= 0) || [alpha, beta, gamma].some((value) => value <= 0 || value >= 180)) {
@@ -157,6 +185,11 @@ function parseCrystalCell(line) {
   if (!(czSquared > 0)) throw pdbError('CRYST1 angles do not define a nonzero-volume cell.');
   return createCell({ vectors: [a, 0, 0, b * cosGamma, b * sinGamma, 0, cx, cy, Math.sqrt(czSquared)],
     pbc: [true, true, true], triclinic: [alpha, beta, gamma].some((angle) => Math.abs(angle - 90) > 1e-10) });
+}
+
+export function readPdbModelTimestep(line) {
+  const value = line.slice(10, 14).trim();
+  return value ? integer(value, 'MODEL number') : null;
 }
 
 function elementLabel(line) {

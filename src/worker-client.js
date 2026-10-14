@@ -167,6 +167,25 @@ export class StructureWorkerClient {
     if (entry?.background) { entry.background = false; entry.promote?.(); }
   }
 
+  /** Read indexed metadata in the same parser lanes and CPU budget, without
+   * populating the atom-frame cache. Header and full-frame readers never
+   * coalesce with one another; equivalent metadata readers still share work. */
+  frameHeader(index, { background = true, signal } = {}) {
+    const key = JSON.stringify([this.sourceGeneration, index, 'header']);
+    return this.frameRequests.join(key, { signal, background, speculative: false }, entry => {
+      entry.index = index;
+      return this.request('frame-header', { index, background }, {
+        reportProgress: false, background, signal: entry.controller.signal,
+        onDispatch: (id, pending) => {
+          entry.promote = () => {
+            pending.background = false;
+            pending.worker.postMessage({ type: 'promote-frame', payload: { id } });
+          };
+        },
+      });
+    });
+  }
+
   /** Display-only unwrapped coordinates inferred for an already delivered frame. */
   trajectoryUnwrap(index, { smoothing = 0, background = false, signal, onProgress } = {}) {
     return this.request('trajectory-unwrap', { index, smoothing, background }, { reportProgress: false, background, signal, onProgress });

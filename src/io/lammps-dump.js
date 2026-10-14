@@ -121,31 +121,33 @@ export async function readLammpsFrame(blob, offsets, frameIndex, sourceName = 't
  * of bytes are read directly when possible (see ascii-rows.js). Otherwise, and
  * for every malformed frame, the bytes are decoded and parsed as text, so the
  * result and any error message do not depend on the input type.
+ * Internal coordinate-only reads validate every column but omit unrelated
+ * scalar buffers; IDs and image-flag auxiliaries keep their full semantics.
  */
-export function parseLammpsFrame(input, sourceName = 'trajectory.dump') {
+export function parseLammpsFrame(input, sourceName = 'trajectory.dump', { projection = 'full' } = {}) {
   const startedAt = performance.now();
-  if (!isByteInput(input)) return parseLammpsText(input, sourceName, startedAt);
+  if (!isByteInput(input)) return parseLammpsText(input, sourceName, startedAt, projection);
   return parseBytesWithFallback(
     asBytes(input),
-    (bytes) => parseLammpsBytes(bytes, sourceName, startedAt),
-    (text) => parseLammpsText(text, sourceName, startedAt),
+    (bytes) => parseLammpsBytes(bytes, sourceName, startedAt, projection),
+    (text) => parseLammpsText(text, sourceName, startedAt, projection),
   );
 }
 
-function parseLammpsText(text, sourceName, startedAt) {
+function parseLammpsText(text, sourceName, startedAt, projection) {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
   const header = readDumpHeader(lines);
-  const atoms = createDumpAtoms(header);
+  const atoms = createDumpAtoms(header, projection);
   readDumpRowsText(lines, header, atoms);
   return finishDumpFrame(header, atoms, sourceName, startedAt);
 }
 
-function parseLammpsBytes(bytes, sourceName, startedAt) {
+function parseLammpsBytes(bytes, sourceName, startedAt, projection) {
   const atomStart = dumpAtomRowsStart(bytes);
   if (atomStart < 0) return null;
   const lines = decodeText(bytes.subarray(0, atomStart)).replace(/^\uFEFF/, '').split(/\r?\n/);
   const header = readDumpHeader(lines);
-  const atoms = createDumpAtoms(header);
+  const atoms = createDumpAtoms(header, projection);
   readDumpRowsBytes(bytes, atomStart, header, atoms);
   return finishDumpFrame(header, atoms, sourceName, startedAt);
 }
@@ -169,7 +171,7 @@ function dumpAtomRowsStart(bytes) {
   return -1;
 }
 
-function readDumpHeader(lines) {
+export function readDumpHeader(lines) {
   let cursor = 0;
   let units = null;
   let time = null;
@@ -260,7 +262,7 @@ function readDumpHeader(lines) {
   };
 }
 
-function createDumpAtoms({ count, columns, columnIndex, wrappedCoordinateSet, unwrappedCoordinateSet, hasImageFlags }) {
+function createDumpAtoms({ count, columns, columnIndex, wrappedCoordinateSet, unwrappedCoordinateSet, hasImageFlags }, projection) {
   const propertyNames = columns.filter((name) => !RESERVED_COLUMNS.has(name));
   const wrappedValues = wrappedCoordinateSet ? new Float32Array(count * 3) : null;
   const unwrappedValues = unwrappedCoordinateSet ? new Float32Array(count * 3) : null;
@@ -272,7 +274,7 @@ function createDumpAtoms({ count, columns, columnIndex, wrappedCoordinateSet, un
     wrappedValues,
     unwrappedValues,
     imageFlags: hasImageFlags ? new Int32Array(count * 3) : null,
-    properties: propertyNames.map((name) => ({ name, unit: '', data: new Float32Array(count) })),
+    properties: propertyNames.map((name) => ({ name, unit: '', data: projection === 'coordinates' ? null : new Float32Array(count) })),
     elements: columnIndex.has('element') ? new Array(count) : null,
     // Column positions are fixed for the frame; resolve them once rather
     // than per atom.
@@ -320,7 +322,8 @@ function readDumpRowsText(lines, { cursor: firstLine, count, columns, columnInde
       }
     }
     for (let property = 0; property < properties.length; property += 1) {
-      properties[property].data[atom] = finiteValue(tokens[propertyColumns[property]], cursor, propertyNames[property]);
+      const value = finiteValue(tokens[propertyColumns[property]], cursor, propertyNames[property]);
+      if (properties[property].data) properties[property].data[atom] = value;
     }
   }
   for (let cursor = firstLine + count; cursor < lines.length; cursor += 1) {
@@ -387,7 +390,8 @@ function readDumpRowsBytes(bytes, start, { count, columns, columnIndex }, atoms)
     for (let index = 0; index < realCount; index += 1) {
       const value = values[real[index * 3]];
       if (!Number.isFinite(value)) throw FALLBACK;
-      realTargets[index][atom * real[index * 3 + 1] + real[index * 3 + 2]] = value;
+      const target = realTargets[index];
+      if (target) target[atom * real[index * 3 + 1] + real[index * 3 + 2]] = value;
     }
     if (imageFlags) {
       for (let component = 0; component < 3; component += 1) {
@@ -512,7 +516,7 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
     unwrappedPositions,
     imageFlags,
     cell,
-    properties,
+    properties: properties.filter(property => property.data),
     timestep,
     ...(header.units === null ? {} : { lammpsUnits: header.units }),
     ...(header.time === null ? {} : { simulationTime: header.time }),
