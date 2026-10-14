@@ -49,6 +49,20 @@ the Worker. It shares the application's CPU budget and warms in the background
 after structure loading. Mesh and image exports wait for the current geometry,
 and STL, PLY and OBJ formatting also runs in that Worker.
 
+The same scientific mesh, cell, periodic origin and cap settings share one
+in-flight preparation and one immutable CPU display result, including the
+interleaved position/normal upload array. Opening the second view and restoring
+its graphics context reuse that result; each WebGL context keeps its own device
+buffers. Cancelling one view's subscription leaves work needed by the other
+view intact. The geometry client retains at most two recipes per source and
+two recent unowned sources within a 128 MiB retained-buffer budget. Its budget
+includes Worker copies, complete backing allocations behind sliced arrays,
+analysis metadata kept alive by a source mesh, and cached display arrays;
+shared page allocations count once. Displayed sources and unfinished requests
+remain protected from eviction. Retained-buffer accounting is refreshed when a
+source or cached recipe changes; drawing and appearance edits do not scan mesh
+arrays or traverse their metadata.
+
 ## Method
 
 The construction follows the alpha-shape method of OVITO 3.9.4's *Construct
@@ -196,7 +210,7 @@ About three quarters of the time is the Delaunay tessellation. The surface
 analysis and the DXA defect mesh add 53 KB to the DXA kernel for static hosts
 (614 → 668 KB) and 57 KB to the threaded one (663 → 720 KB). Wrapping,
 cutting and capping the HEA surface (4,384 triangles) for display takes
-8–26 ms on the main thread; a porous test structure of 221,176 atoms with
+8–26 ms in the geometry preparation; a porous test structure of 221,176 atoms with
 124,352 surface triangles and caps on all six faces takes 0.12–0.19 s in
 Node.js. The Fe loop is solid everywhere and has no surface.
 
@@ -215,8 +229,9 @@ Node.js. The Fe loop is solid everywhere and has no surface.
 - Caps close periodic cell faces only. Atoms outside an open boundary of a
   partly periodic cell can leave a cap incomplete, and a slice leaves the
   solid open.
-- Wrapping, cutting and capping run on the main thread when a result arrives
-  and when the periodic origin is committed.
+- Wrapping, cutting, capping and export formatting run in the retained geometry
+  Worker. Environments without Worker support use the synchronous display
+  fallback.
 - Memory follows DXA's estimate of 32 MiB plus 3 KiB per atom against a
   1.5 GiB budget; the display mesh needs about 60 bytes per triangle.
 
@@ -233,10 +248,21 @@ recalculated after import.
 
 ## Implementation
 
+Analysis meshes are immutable display inputs. Public renderer callers that edit
+vertices or triangles in place must increase the mesh's nonnegative integer
+`geometryRevision` and call `setSurfaceMesh()` again. Replacing either array or
+editing the small cell descriptor also invalidates preparation. An obsolete
+posted revision cannot publish or populate the cache; its CPU permit remains
+held until the Worker acknowledges completion. This avoids scanning every
+vertex on ordinary display synchronization. Revision numbers should increase
+for each edit and should not be reused.
+
 [Surface kernel](https://github.com/Yazhuo-Liu/AlloyView/blob/main/wasm/surface.cpp),
 [kernel host and result checks](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/surface-mesh.js),
 [Worker client](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/dxa-client.js),
 [wrapping, cutting and caps](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/surface-mesh-geometry.js),
+[shared geometry client](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/surface-geometry-client.js),
+[geometry Worker](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/surface-geometry-worker.js),
 [mesh layer](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/surface-mesh-layer.js),
 [panel](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/surface-tools.js),
 [mesh files](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/io/mesh-export.js).

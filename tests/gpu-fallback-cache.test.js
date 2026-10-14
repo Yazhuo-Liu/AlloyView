@@ -38,6 +38,35 @@ test('explicit geometry refusals skip the next GPU attempt while keeping CPU pro
   } finally { pool.close(); }
 });
 
+test('single-frame invalidation retries that input without forgetting another frame refusal', async () => {
+  const { pool, backend, calls } = poolFor(), first = crystalFrame('bcc', 2), second = crystalFrame('fcc', 2);
+  const ids = new WeakMap(); let next = 0, invalidations = 0;
+  backend.frameRevision = frame => { if (!ids.has(frame)) ids.set(frame, ++next); return ids.get(frame); };
+  backend.invalidateFrame = async frame => { invalidations++; ids.set(frame, ++next); };
+  try {
+    await pool.analyze(first, parameters()); await pool.analyze(second, parameters());
+    assert.equal(pool.gpuFallbacks.size, 2);
+    await pool.invalidateGpuFrame(first);
+    assert.equal(invalidations, 1); assert.equal(pool.gpuFallbacks.size, 1);
+    assert.equal((await pool.analyze(second, parameters())).fallbackCached, true);
+    assert.equal((await pool.analyze(first, parameters())).fallbackCached, undefined);
+    assert.equal(calls.gpu, 3); assert.equal((await pool.analyze(first, parameters())).fallbackCached, true);
+  } finally { pool.close(); }
+});
+
+test('a GPU input token changed during a failed attempt cannot memorize its obsolete refusal', async () => {
+  let reject, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const { pool, backend } = poolFor(async () => { started(); return new Promise((_resolve, fail) => { reject = fail; }); });
+  const frame = crystalFrame('bcc', 2); let revision = 1;
+  backend.frameRevision = () => revision;
+  try {
+    const pending = pool.analyze(frame, parameters()); await ready;
+    revision++; reject(unsupported()); await pending;
+    assert.equal(pool.gpuFallbacks.size, 0);
+  } finally { pool.close(); }
+});
+
 test('source, device recovery, explicit GPU toggles, frame revisions and bounded cell mutations permit retry', async () => {
   const { pool, backend, calls } = poolFor(), frame = crystalFrame('bcc', 2);
   const mutations = [

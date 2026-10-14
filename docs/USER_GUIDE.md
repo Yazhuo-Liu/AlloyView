@@ -1258,7 +1258,10 @@ own camera with the shared background, legend and XYZ-arrow export options,
 excluding window controls, toolbars and Details. Its position and size
 are stored as viewport-relative fractions in
 `settings.extensions.comparison.layout` and adapt to another screen on import.
-Camera movement does not launch another analysis. **Six-view PNG** exports
+The views also share prepared coordinates, atom bounds, bond shifts and mesh
+data. Each canvas retains its own graphics buffers and camera. Closing the
+second view releases its frame buffers and shared packing caches; reopening
+restores its camera. Camera movement does not launch another analysis. **Six-view PNG** exports
 a contact sheet of the six standard directions.
 
 **Export JPG** produces an opaque image with the selected legend and XYZ-arrow

@@ -1,11 +1,26 @@
 import assert from 'node:assert/strict';
+import { setTimeout as delay } from 'node:timers/promises';
 import { withWebGpuBrowser } from './webgpu-browser.mjs';
 
-// Source modules keep this recovery check independent of build artifacts.
-const report = await withWebGpuBrowser(async ({ evaluate }) => evaluate(`(async () => {
-  const { WebGLRenderer } = await import('/AlloyView/src/render/webgl-renderer.js');
-  const { createCell, fractionalToCartesian } = await import('/AlloyView/src/data/model.js');
-  const { createVoronoiCellBatch } = await import('/AlloyView/src/render/voronoi-cell-layer.js');
+// Default source mode remains independent of build artifacts; --production
+// imports the actual content-versioned facades from the built application.
+const production = process.argv.includes('--production');
+const report = await withWebGpuBrowser(async ({ evaluate, call }) => {
+  if (production) {
+    const origin = await evaluate('location.origin');
+    await call('Page.navigate', { url: `${origin}/AlloyView/dist/index.html` });
+    const deadline = Date.now() + 30_000;
+    while (!(await evaluate('document.readyState === "complete" && document.querySelector("[data-tool-button=coordination]")'))) {
+      if (Date.now() > deadline) throw new Error('Production page startup timed out.');
+      await delay(25);
+    }
+  }
+  return evaluate(`(async () => {
+  const production = ${production}, app = production ? document.querySelector('script[type=module][src]').src : null;
+  const moduleUrl = path => production ? new URL(path, app).href : '/AlloyView/src/' + path;
+  const { WebGLRenderer } = await import(moduleUrl('./render/webgl-renderer.js'));
+  const { createCell, fractionalToCartesian } = await import(moduleUrl('./data/model.js'));
+  const { createVoronoiCellBatch } = await import(moduleUrl('./render/voronoi-cell-layer.js'));
   const wait = async predicate => { const deadline=performance.now()+10000; while(!predicate()){if(performance.now()>deadline)throw Error('Context event timed out');await new Promise(resolve=>setTimeout(resolve,10));} };
   const canvas=document.createElement('canvas');canvas.style.cssText='width:480px;height:320px';document.body.append(canvas);
   const r=new WebGLRenderer(canvas), gl=r.gl, extension=gl.getExtension('WEBGL_lose_context');
@@ -61,8 +76,9 @@ const report = await withWebGpuBrowser(async ({ evaluate }) => evaluate(`(async 
   const second={uploadsWhileLost,latestFrame:r.frame===next,latestProperties:r.frame.properties[0].data[0]===3,latestColors:r.atomColors===nextColors,latestMask:r.visibility[1]===0,
     latestBondRadius:r.bondOptions.radius,latestVectorScale:r.atomVectorFields[0].options.scale,latestPick:r.selected,
     obsoleteSurfaceRemoved:r.surfaceMeshes().length===0,glError:gl.getError()};
-  r.clearFrame();return{first,second,dimensions:[canvas.width,canvas.height]};
-})()`), { requireGpu: false });
+  r.clearFrame();return{production,entry:app,first,second,dimensions:[canvas.width,canvas.height]};
+})()`);
+}, { requireGpu: false });
 assert.equal(report.first.prevented, true);
 assert.ok(report.first.denied.every(Boolean));
 for (const key of ['frameRetained','pixelBytesEqual','cameraEqual','scientificArraysRetained','newProgram','newPositionBuffer','allLayersRebuilt',

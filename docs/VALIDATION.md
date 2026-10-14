@@ -2,6 +2,121 @@
 
 Latest validation: 2026-10-14 (America/New_York). Earlier entries retain their own dates.
 
+## Resident GPU revisions and shared second-view preparation (2026-10-14)
+
+Baseline: `12ec706`, synchronized from remote main before this continuation.
+This batch completes B38 and R6. The review first reproduced stale supported
+GPU input, then checked the actual Surface display path: S5 had already moved
+mesh preparation to a shared Worker, so that part of the R6 audit was stale.
+Changes extend that existing reuse and correct its resource boundaries.
+
+### Input and cancellation contracts
+
+`AnalysisPool.invalidateGpuFrame(frame, { frameIndex })` advances the writable
+`geometryRevision` marker, cancels old jobs using the frame as current or
+reference input, and releases only that frame after Worker acknowledgement.
+The caller may instead increment the optional nonnegative safe-integer marker
+before its next request. Replacing arrays or editing the small cell descriptor
+also refreshes the GPU input through constant-size checks. Unmarked edits
+inside coordinate, type or label arrays are deliberately outside this contract;
+there is no full atom scan on each warm calculation.
+
+Reparsed immutable indexed frames still reuse acknowledged GPU inputs. An old
+indexed alias cannot borrow an edited input, retire a newer canonical frame,
+or publish a stale acknowledgement. Compact Voronoi site sets expire with their
+source. G2 refusal entries now follow the GPU input token, and an explicit
+invalidation removes only the corresponding frame's entries. Frozen frames or
+revision overflow reject invalidation before GPU tasks or index mappings change.
+
+The supported three-atom Coordination probe matches CPU results through
+`[2,1,1] → [2,2,2] → [2,1,1]`: one explicit invalidation and one revision edit
+add exactly two uploads. Another resident frame and an unchanged indexed
+reparse need no upload. The device, Worker and compiled pipelines stay reusable.
+A changed reference rejects its in-flight strain job with `AbortError`; old
+posted slots remain occupied until acknowledgement and never retry on CPU.
+
+### Display sharing and resource lifetimes
+
+Main and second views share validated processed coordinates, fractional
+coordinates, source atom bounds, maximum atom radius, lazy Float32 upload
+mirrors, primitive texture rows and bond shifts. Each view retains separate GL
+uploads, styling, camera state and attached-layer bounds. Explicit coordinate
+and radius setters refresh the preparation even when callers edit the same
+array. Tokens are revoked on source changes and checked without atom scans.
+
+Single-view primitive draws keep their original reusable private scratch.
+Closing the second view clears its frame and GL payload, releases shared CPU
+packing/mirrors, and retains its camera/layout for reopening. Source clearing
+and context recovery preserve these lifetimes. Eight real-browser scenes
+compare against independently recomputed coordinates and renderers: Float64
+inputs, wrapped/unwrapped origins, skew/negative replication, slices, bonds,
+hidden selections, arrows and same-array edits. Pixel comparisons, transparent
+exports and 800 pick probes agree exactly; closing/reopening checks shared
+cache byte counts and actual two-context row adoption.
+
+The existing floating-Voronoi regression also caught a hidden-canvas edge:
+after a closed-window recipe was restored, the camera position and distance
+were correct but the reported parallel field width used the preceding 1×1
+canvas aspect. The second renderer now synchronizes its size immediately after
+showing it and applying restored layout/camera state, without atom reuploads.
+The original saved-camera assertions remain intact.
+
+Surface and DXA defect meshes already share in-flight preparation, display mesh
+and packed arrays across views, with independent GL buffers. Real Worker tests
+verify one source transfer/preparation per recipe and no additional Worker
+messages on context recovery. Accounting now counts complete backing buffers,
+metadata and Worker cell buffers, deduplicates shared buffers, and refreshes
+only when source/cache data changes. Two-recipe/128 MiB idle eviction is retained.
+Public in-place mesh edits increment `mesh.geometryRevision`; obsolete replies
+cannot publish, and the CPU lease is held until acknowledgement.
+
+### Reproduction and measurement scope
+
+Final Node validation passes **2,142 tests**, with no failures, skips or
+cancellations. The complete integration smoke and production module/Worker
+manifest checks pass. Focused real-browser checks cover GPU revisions and
+refusal caching, ideal strain, comparison views, floating Voronoi, crystal drag,
+Surface in isolated and ordinary deployments, context recovery and 42 candidate
+primitive scenes across single-sample and MSAA rendering. Documentation,
+bundling and deployment checks also pass. Context recovery produces identical
+pixels and no uploads while lost; each primitive candidate matches the existing
+render/export path. The deliberate unsafe-capless control still differs as
+intended, showing that the test detects omitted caps.
+
+```bash
+npm test
+npm run build
+npm run test:browser
+npm run test:browser:gpu-frame-revisions
+npm run test:browser:comparison-preparation
+npm run test:browser:surface-mesh -- --production
+npm run test:browser:renderer-context -- --production
+node scripts/browser-gpu.mjs --built-only
+npm run benchmark:display-preparation
+npm run benchmark:primitive-preparation -- 1000000 9
+```
+
+The [archived measurements](benchmarks/resident-display-audit-2026-10-14.json)
+retain individual CPU samples and browser results. The million-atom display
+benchmark times only the second renderer's CPU preparation, excluding main
+preparation, GL upload and GPU drawing. The primitive benchmark times CPU
+coordinate texture packing for two views; shared mirrors use 32,000,000 bytes
+instead of 64,000,000 bytes. These isolated gains are not whole-frame FPS or
+physical-GPU throughput measurements. SwiftShader validates real WGSL execution
+and graphics correctness; no hardware-GPU speedup is claimed.
+
+| CPU preparation scope, one million atoms | Independent preparation | Shared preparation | Samples |
+| --- | ---: | ---: | ---: |
+| Second-view coordinates, bounds and radius preparation | 47.63 ms | 0.167 ms | 7, interleaved |
+| Two-view primitive coordinate texture packing | 29.12 ms | 9.02 ms | 9, interleaved |
+
+The two benchmark processes ran concurrently; times are environment-local
+medians rather than target-device performance estimates. The production GPU
+strain script now navigates to the complete built application before importing
+its module facades, fixing its obsolete minimal-DOM harness. It verifies fresh
+CPU/GPU tensor parity, exact zero strain in an ideal FCC cell, resident PTM reuse
+on reference edits and versioned Worker paths.
+
 ## Continued trajectory reads, copy paths and GPU refusal handling (2026-10-14, America/New_York)
 
 Baseline: `71ab20f`. Fetch confirmed remote main still pointed to this commit
@@ -150,7 +265,8 @@ Both new-frame identity and `clearGpuFrames()` recover GPU `[2,2,2]`.
 G2 records zero cache entries in these probes. Existing application loading,
 processed-frame invalidation and physical replication clear their GPU source;
 no failing application user path was established. An explicit revision or
-invalidation API, and any content-check cost, remain in TODO. Broader
+invalidation API was completed in the subsequent B38 entry above, using
+constant-size revision checks rather than a full content scan. Broader
 content-dependent G2 fallback memory and measured routing also remain open.
 
 ### Reproducible checks

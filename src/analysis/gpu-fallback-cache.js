@@ -11,9 +11,16 @@ const MAX_ENTRIES = 128, MAX_KEY_CHARS = 4096;
 
 /** Bounded scalar metadata; it never owns source coordinate/type buffers. */
 export class GpuFallbackCache {
-  constructor() { this.clear(); }
+  constructor({ inputRevisionFor = () => undefined } = {}) { this.inputRevisionFor = inputRevisionFor; this.clear(); }
   clear() { this.frames = new WeakMap(); this.entries = new Map(); this.generation = (this.generation ?? 0) + 1; }
   get size() { return this.entries.size; }
+
+  invalidateFrame(frame) {
+    const entries = this.frames.get(frame);
+    if (!entries) return;
+    for (const entry of entries.values()) this.entries.delete(entry);
+    this.frames.delete(frame);
+  }
 
   request(frame, parameters, backendGeneration = 0) {
     if (typeof WeakRef !== 'function' || !frame || !FIXED_RADIUS_KINDS.has(parameters?.kind)
@@ -24,7 +31,8 @@ export class GpuFallbackCache {
     // actual current coordinates are still checked by the CPU calculation.
     const cell = frame.cell;
     if (cell?.vectors?.length !== 9 || cell.origin?.length !== 3 || cell.pbc?.length !== 3) return null;
-    const key = smallKey({ parameters, vectors: Array.from(cell.vectors), origin: Array.from(cell.origin),
+    const key = smallKey({ parameters, inputRevision: this.inputRevisionFor(frame),
+      vectors: Array.from(cell.vectors), origin: Array.from(cell.origin),
       pbc: Array.from(cell.pbc), triclinic: cell.triclinic,
       revisions: [frame.revision, frame.analysisRevision, frame.geometryRevision],
       coordinateLength: frame.fractional?.length, typeLength: frame.types?.length });

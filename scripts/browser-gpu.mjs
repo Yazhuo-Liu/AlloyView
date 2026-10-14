@@ -3,7 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { useSoftwareAdapter, withWebGpuBrowser } from './webgpu-browser.mjs';
 
 const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
-  if (process.argv.includes('--built-only')) return { adapter, scope: 'Versioned production ideal strain workers', builtIdeal: await runBuiltIdealChecks({ evaluate }) };
+  if (process.argv.includes('--built-only')) return { adapter, scope: 'Versioned production ideal strain workers', builtIdeal: await runBuiltIdealChecks({ evaluate, call }) };
   if (process.argv.includes('--application-only')) return { adapter, scope: 'Application integration checks',
     application: await runApplicationSmoke({ evaluate, call }) };
   await evaluate(`(async () => {
@@ -1023,16 +1023,23 @@ async function runPhysicalReplicationGpuChecks({ evaluate, waitFor }) {
   } finally { await evaluate('window.restorePhysicalGpuHooks()'); }
 }
 
-async function runBuiltIdealChecks({ evaluate }) {
+async function runBuiltIdealChecks({ evaluate, call }) {
+  // Production facades export the bundled app's modules. Load its complete DOM
+  // before importing them, rather than initializing it on the minimal harness.
+  const origin = await evaluate('location.origin');
+  await call('Page.navigate', { url: `${origin}/AlloyView/dist/index.html` });
+  const deadline = Date.now() + 30_000;
+  while (!await evaluate('document.readyState === "complete" && document.querySelector("[data-tool-button=coordination]")')) {
+    if (Date.now() > deadline) throw new Error('Production GPU page startup timed out.');
+    await delay(25);
+  }
+  await evaluate(`if (document.getElementById('enable-gpu-computing').getAttribute('aria-pressed') === 'true') document.getElementById('enable-gpu-computing').click()`);
   return evaluate(`(async () => {
-    const html = await (await fetch('./dist/index.html')).text();
-    const entry = html.match(/src="(\\.\\/assets\\/[^" ]+\\/src\\/app\\.js)"/);
-    if (!entry) throw new Error('Run npm run build before the --built-only production check.');
-    const base = new URL(entry[1].replace(/app\\.js$/, ''), new URL('./dist/index.html', location.href));
+    const base = new URL('./', document.querySelector('script[type=module][src]').src);
     const { AnalysisPool } = await import(new URL('analysis/analysis-pool.js', base).href);
-    const { crystalFrame } = await import('./tests/helpers/crystals.js');
+    const { crystalFrame } = await import('/AlloyView/tests/helpers/crystals.js');
     const { STRAIN_FIELDS } = await import(new URL('analysis/atomic-strain.js', base).href);
-    const { compareGpuFields, compareGpuPtm } = await import('./scripts/gpu-comparison.js');
+    const { compareGpuFields, compareGpuPtm } = await import('/AlloyView/scripts/gpu-comparison.js');
     const NativeWorker = window.Worker, workerUrls = [];
     window.Worker = class extends NativeWorker { constructor(url, options) { workerUrls.push(String(url)); super(url, options); } };
     const cpu = new AnalysisPool(), gpu = new AnalysisPool({ ptmNeighborBackend: 'gpu' }); cpu.setGpuEnabled(false); gpu.setGpuEnabled(true);

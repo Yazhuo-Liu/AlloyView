@@ -1000,6 +1000,14 @@ export class GpuRuntime {
     return keys;
   }
 
+  /** Called by the serial Worker only after all old-frame jobs released pins. */
+  releaseFrame(frameKey) {
+    if (this.analysisFramePins.has(frameKey)) throw new Error('Cannot release an active GPU frame.');
+    if (this.protectedFrameKey === frameKey) this.protectedFrameKey = null;
+    this.evictFrame(frameKey);
+    return this.cacheStatus();
+  }
+
   evictFrame(frameKey) {
     this.voronoiPreparations.delete(frameKey);
     if (this.voronoiCpuContext?.frameKey === frameKey) this.voronoiCpuContext = null;

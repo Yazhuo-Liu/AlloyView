@@ -47,6 +47,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   let generation = 0, measurements = [], appearance = { elements: [], atoms: [] };
   let pairCutoffs = [], currentFrame = null, comparison = null, comparisonContainer = null;
   let comparisonWindow = null;
+  let parkedComparisonCamera = null;
   const comparisonRestore = createPendingComparisonRestore();
   let colors = null, batch = null;
   const displacement = { enabled: false, parameters: null, controller: null, request: 0 };
@@ -701,7 +702,15 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   }
   function syncComparisonNow() {
     const frame = getFrame();
-    if (!frame || !$('compare-view').checked) { if (comparisonContainer) comparisonContainer.hidden = true; tools.setToolEnabled('display', false); return; }
+    if (!frame || !$('compare-view').checked) {
+      renderer.setDisplayPreparationSharing?.(false);
+      if (comparisonContainer) comparisonContainer.hidden = true;
+      if (comparison?.frame) {
+        parkedComparisonCamera = frame ? cameraSnapshot(comparison) : null;
+        comparison.clearFrame();
+      }
+      tools.setToolEnabled('display', false); return;
+    }
     if (!comparison) {
       comparisonContainer = document.createElement('section'); comparisonContainer.className = 'comparison-view';
       comparisonContainer.id = 'comparison-view'; comparisonContainer.setAttribute('aria-label', 'Second view');
@@ -749,23 +758,32 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       comparisonWindow = initializeFloatingWindow({ element: comparisonContainer, dragHandle: header, resizeHandle,
         onEdit: changed, onChange: () => comparison.requestRender() });
     }
+    const wasHidden = comparisonContainer.hidden;
     comparisonContainer.hidden = false;
+    // A hidden cleared canvas can render at 1×1. Publish its live dimensions
+    // before synchronous camera reads, fitting, or recipe restoration.
+    if (wasHidden || comparison.frame !== frame) comparison.resize();
     const positions = renderer.rawDisplayPositions ?? renderer.displayPositions;
     const coordinateMode = renderer.coordinateMode ?? 'wrapped';
+    const preparedDisplay = renderer.exportDisplaySnapshot();
     if (comparison.frame !== frame) {
-      const camera = comparison.frame ? cameraSnapshot(comparison) : null;
-      comparison.setFrame(frame, renderer.atomColors, positions, renderer.atomRadii, renderer.repetitions, { coordinateMode });
+      const camera = comparison.frame ? cameraSnapshot(comparison) : parkedComparisonCamera;
+      comparison.setFrame(frame, renderer.atomColors, positions, renderer.atomRadii, renderer.repetitions, { coordinateMode, preparedDisplay });
+      parkedComparisonCamera = null;
       if (camera) restoreCamera(comparison, camera);
       else { comparison.resetCamera(); if ($('compare-preset').value !== 'custom') comparison.setView($('compare-preset').value); }
     } else {
       if (comparison.atomColors !== renderer.atomColors || comparison.sourceColorRevision !== renderer.colorRevision) comparison.setColors(renderer.atomColors);
-      if (comparison.atomRadii !== renderer.atomRadii || comparison.sourceRadiusRevision !== renderer.radiusRevision) comparison.setAtomRadii(renderer.atomRadii);
-      if (comparison.rawDisplayPositions !== positions || comparison.coordinateMode !== coordinateMode) comparison.setDisplayPositions(positions, { coordinateMode });
+      if (comparison.rawDisplayPositions !== positions || comparison.coordinateMode !== coordinateMode
+          || comparison.sourceDisplayRevision !== renderer.displayRevision
+          || comparison.sourceBoundsRevision !== renderer.sourceBoundsRevision) {
+        comparison.setDisplayPositions(positions, { coordinateMode, preparedDisplay });
+      }
+      if (comparison.atomRadii !== renderer.atomRadii || comparison.sourceRadiusRevision !== renderer.radiusRevision) comparison.setAtomRadii(renderer.atomRadii, { preparedDisplay });
       if (comparison.repetitions.some((value, axis) => value !== renderer.repetitions[axis])) comparison.setReplications(renderer.repetitions);
     }
-    const origin = renderer.periodicOrigin ?? [0, 0, 0];
-    if (origin.some((value, axis) => value !== (comparison.periodicOrigin?.[axis] ?? 0))) comparison.setPeriodicOrigin(origin, { coordinateMode });
     comparison.sourceColorRevision = renderer.colorRevision; comparison.sourceRadiusRevision = renderer.radiusRevision;
+    comparison.sourceDisplayRevision = renderer.displayRevision; comparison.sourceBoundsRevision = renderer.sourceBoundsRevision;
     if (comparison.visibility !== renderer.visibility || comparison.selectionVisibility !== renderer.selectionVisibility) {
       comparison.setVisibility(renderer.visibility, { selectionVisibility: renderer.selectionVisibility });
     }
@@ -781,7 +799,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     // Occlusion is view-independent: the second view reuses the main result.
     comparison.setAmbientOcclusion(renderer.ambientOcclusionFactors ?? null, { intensity: renderer.ambientOcclusionIntensity ?? 1 });
     comparison.setBonds(renderer.atomBonds ?? null,
-      { visible: $('show-bonds').checked, radius: number('bonds-radius') });
+      { visible: $('show-bonds').checked, radius: number('bonds-radius'), preparedBonds: renderer.preparedBondSnapshot });
     comparison.setVectorFields(renderer.atomVectorFields ?? []);
     comparison.setDislocationNetwork(renderer.dislocationNetwork, renderer.dislocationOptions);
     comparison.setSiteMarkers(renderer.siteMarkers, renderer.siteMarkerOptions);
@@ -845,6 +863,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     $('export-series-first').value = '1'; $('export-series-last').value = String(getFrameCount() || 1);
     renderer.setBonds(null); renderer.setVectorFields([]); renderer.setSelectedAtoms([]);
     comparison?.clearFrame(); if (comparisonContainer) comparisonContainer.hidden = true;
+    renderer.setDisplayPreparationSharing?.(false);
+    parkedComparisonCamera = null;
     comparisonWindow?.reset();
     comparisonRestore.reset();
     updateMeasurements(); syncVectorSourceUi();
@@ -865,7 +885,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       measurements: { enabled: $('measure-mode').checked, minimumImage: $('measure-pbc').checked, atomIds: [...measurements] },
       appearance: { elements: appearance.elements.map(entry => ({ ...entry })), atoms: appearance.atoms.map(entry => ({ ...entry })) },
       comparison: comparisonRestore.snapshot({ enabled: $('compare-view').checked && Boolean(frame), preset: $('compare-view').checked && frame && comparison?.frame === frame ? cameraViewPreset(comparison) : $('compare-preset').value,
-        projectionMode: comparison?.projectionMode ?? 'orthographic', camera: frame && comparison?.frame === frame ? cameraSnapshot(comparison) : null,
+        projectionMode: parkedComparisonCamera?.projectionMode ?? comparison?.projectionMode ?? 'orthographic',
+        camera: frame ? (comparison?.frame === frame ? cameraSnapshot(comparison) : parkedComparisonCamera) : null,
         ...(comparisonWindow ? { layout: comparisonWindow.serialize() } : {}) }),
     };
   }
@@ -1154,6 +1175,9 @@ export function createPendingComparisonRestore() {
       if (!saved) return;
       if (layoutPending && window) { window.restore(saved.layout); layoutPending = false; }
       if (cameraPending && renderer?.frame) {
+        // Restoring a floating layout can precede the next animation frame.
+        // Resize now so numeric field width uses the restored viewport aspect.
+        renderer.resize?.();
         if (saved.camera) restoreCamera(renderer, saved.camera);
         renderer.setProjection(saved.projectionMode); cameraPending = false;
       }

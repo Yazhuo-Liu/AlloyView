@@ -186,6 +186,28 @@ Its own toolbar provides Top, Bottom, Front, Back, Left, Right, Perspective and 
 
 Rotate, pan and zoom inside either viewport independently. The second view inherits the main view's atom-radius scale, element and per-atom radius/color overrides, scalar palettes and visibility filters immediately. Both also share coordinates, slices, replication, cell/background settings, bonds, vectors, trajectory lines and Voronoi cells. Display edits and trajectory-frame changes preserve the second camera's orientation.
 
+The views reuse the same prepared display coordinates, atom bounds and maximum
+radius. A new frame, periodic origin or explicit coordinate/radius update
+publishes a new preparation, including edits to the same source array. The
+second view still owns its camera, WebGL buffers and bounds for attached layers.
+Float64 vertex coordinates are converted once per shared update; the additional
+Float32 upload mirrors are retained only while display preparation is shared.
+Bond/arrow coordinate texture rows and bond image shifts are also reused across
+the two views, while their visibility, colors and graphics resources stay
+independent. Context recovery uploads these retained inputs into new buffers.
+The shared upload descriptor reports its retained Float32 mirror bytes through
+`uploadByteLength`; coordinate-row and bond-shift preparations report
+`byteLength`. Float64 XYZ and fractional mirrors together need at most 24 bytes
+per source atom, and the primitive texture row pair needs 32 bytes per padded
+atom slot. These caches contain only the current preparation/layout and are
+released when the second view closes; the main view then resumes its reusable
+private texture scratch. Each context still performs its own GL upload.
+
+Closing the floating view releases its frame arrays, prepared inputs and GL
+payload, and parks its camera and layout for reopening. Closing the structure
+also discards the parked view state. It does not close the CPU Workers, Wasm
+heaps or GPU analysis resources used by other tools.
+
 The second view's PNG button exports that camera independently. It uses the shared PNG background, legend and XYZ-arrow settings. Window controls, toolbars and Details stay out of the image. Saving the second view does not replace the main camera.
 
 Configuration JSON saves the second camera and its viewport-relative layout in `settings.extensions.comparison.layout`, with `left`, `top`, `width` and `height` fractions. Restoring the recipe on a different screen adapts the window to the current viewport.

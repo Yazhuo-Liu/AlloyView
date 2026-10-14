@@ -1,4 +1,5 @@
 import { analysisValidationError } from '../errors.js';
+import { gpuFrameSnapshot, sameGpuFrameMetadata, sameGpuFrameArrays } from './frame-revision.js';
 
 const SUPPORTED_KINDS = new Set(['coordination', 'rdf', 'localShear', 'bonds', 'bondStatistics', 'voronoi', 'strain', 'cna', 'referenceStrain', 'centrosymmetry', 'displacement', 'ptmNeighbors']);
 const REFERENCE_KINDS = new Set(['referenceStrain', 'displacement']);
@@ -27,9 +28,14 @@ export class GpuAnalysisClient {
     this.nextId = 1;
     this.frameIds = new WeakMap();
     this.frameIndexes = new WeakMap();
+    this.indexedFrames = new WeakSet();
     this.referenceFrames = new WeakMap();
     this.indexFrameIds = new Map();
     this.nextFrameId = 1;
+    this.frameSnapshots = new WeakMap();
+    this.frameMetadata = new Map();
+    this.invalidatedFrameIds = new Set();
+    this.derivedFrameIds = new Map();
     this.cachedFrameIds = new Set();
     this.cachedCartesianFrames = new Map();
     this.positionSources = new Map();
@@ -50,25 +56,105 @@ export class GpuAnalysisClient {
   supports(kind) { return SUPPORTED_KINDS.has(kind); }
   /** The oldest task that was taken from the queue and has not finished. */
   get current() { return this.active[0] ?? null; }
-  get cacheStatus() { return { ...this._cacheStatus, cachedFrameIds: [...this.cachedFrameIds],
-    cachedPtmFits: [...this.cachedPtmFits].map(([frameId, fitId]) => ({ frameId, fitId })),
-    cachedFrameIndexes: [...(this._cacheStatus.cachedFrameIndexes ?? [])],
-    preparedVoronoiFrameIds: [...(this._cacheStatus.preparedVoronoiFrameIds ?? [])],
-    preparedVoronoiFrameIndexes: [...(this._cacheStatus.preparedVoronoiFrameIndexes ?? [])],
-    kernelFailures: (this._cacheStatus.kernelFailures ?? []).map(failure => ({ ...failure })) }; }
+  get cacheStatus() {
+    const frameIndexes = ids => [...new Set([...ids].map(id => {
+      const index = this.frameMetadata.get(id)?.frameIndex;
+      return this.indexFrameIds.get(index) === id ? index : undefined;
+    }).filter(Number.isInteger))].sort((a, b) => a - b);
+    const cachedFrameIndexes = frameIndexes(this.cachedFrameIds);
+    const preparedVoronoiFrameIds = (this._cacheStatus.preparedVoronoiFrameIds ?? []).filter(id => this.frameMetadata.has(id) && !this.invalidatedFrameIds.has(id));
+    return { ...this._cacheStatus, cachedFrameIds: [...this.cachedFrameIds], cachedFrameIndexes,
+      fullyCached: this._cacheStatus.frameCount > 0 && cachedFrameIndexes.length === this._cacheStatus.frameCount
+        && cachedFrameIndexes[0] === 0 && cachedFrameIndexes.at(-1) === this._cacheStatus.frameCount - 1,
+      cachedPtmFits: [...this.cachedPtmFits].map(([frameId, fitId]) => ({ frameId, fitId })),
+      preparedVoronoiFrameIds, preparedVoronoiFrameIndexes: frameIndexes(preparedVoronoiFrameIds),
+      kernelFailures: (this._cacheStatus.kernelFailures ?? []).map(failure => ({ ...failure })) };
+  }
 
-  associateFrame(frame, frameIndex) {
-    if (!Number.isInteger(frameIndex) || frameIndex < 0) throw validationError('The GPU frame index must be a nonnegative integer.');
-    const frameId = this.indexFrameIds.get(frameIndex) ?? this.frameIds.get(frame) ?? this.nextFrameId++;
-    this.indexFrameIds.set(frameIndex, frameId);
-    this.frameIds.set(frame, frameId);
-    this.frameIndexes.set(frame, frameIndex);
-    return frameId;
+
+  associateFrame(frame, frameIndex) { return this.frameRevision(frame, { frameIndex }); }
+
+  /** A cheap GPU-input revision token, also suitable for scoped routing caches. */
+  frameRevision(frame, { frameIndex } = {}) {
+    const snapshot = gpuFrameSnapshot(frame);
+    if (frameIndex !== undefined) {
+      if (!Number.isInteger(frameIndex) || frameIndex < 0) throw validationError('The GPU frame index must be a nonnegative integer.');
+      this.frameIndexes.set(frame, frameIndex);
+      this.indexedFrames.add(frame);
+    }
+    const index = this.frameIndexes.get(frame);
+    const ownId = this.frameIds.get(frame), indexedId = index === undefined || !this.indexedFrames.has(frame) ? undefined : this.indexFrameIds.get(index);
+    const previous = this.frameSnapshots.get(frame);
+    // An already-seen object from a preceding revision is not a new immutable
+    // parser result. Keep it private so it cannot borrow another alias's edited
+    // coordinates or replace the current canonical trajectory input.
+    if (indexedId !== undefined && (previous && previous.id !== indexedId
+        || snapshot.values[0] < (this.frameMetadata.get(indexedId)?.values[0] ?? 0))) this.indexedFrames.delete(frame);
+    let id = this.indexedFrames.has(frame) ? indexedId ?? ownId : ownId;
+    const metadata = this.frameMetadata.get(id);
+    if (metadata && (!sameGpuFrameMetadata(metadata, snapshot)
+        || (previous?.id === id && !sameGpuFrameArrays(previous.snapshot, snapshot)))) {
+      this.retireFrame(id);
+      id = undefined;
+    }
+    if (!this.frameMetadata.has(id)) id = this.nextFrameId++;
+    this.frameIds.set(frame, id);
+    if (index !== undefined && this.indexedFrames.has(frame)) this.indexFrameIds.set(index, id);
+    this.frameSnapshots.set(frame, { id, snapshot });
+    // Store scalar metadata only: no strong references to source arrays or cell.
+    this.frameMetadata.set(id, { values: snapshot.values, frameIndex: index });
+    return id;
+  }
+
+  /** Mark an in-place geometry/type edit. The old input stays leased until its
+   * cancelled jobs acknowledge; its buffers are then freed without replacing
+   * the Worker, device, pipelines, or unrelated resident frames. */
+  invalidateFrame(frame, { frameIndex } = {}) {
+    if (frameIndex !== undefined && (!Number.isInteger(frameIndex) || frameIndex < 0)) throw validationError('The GPU frame index must be a nonnegative integer.');
+    const snapshot = gpuFrameSnapshot(frame), index = frameIndex ?? this.frameIndexes.get(frame);
+    const ownId = this.frameIds.get(frame), canonicalId = index === undefined ? undefined : this.indexFrameIds.get(index);
+    const canonicalMetadata = this.frameMetadata.get(canonicalId);
+    // A known older/private alias marks its own input only. An unseen immutable
+    // alias may identify the canonical input by matching its scalar revision.
+    const id = ownId ?? (canonicalMetadata && sameGpuFrameMetadata(canonicalMetadata, snapshot) ? canonicalId : undefined);
+    const revision = Math.max(snapshot.values[0], canonicalMetadata?.values[0] ?? 0);
+    if (revision === Number.MAX_SAFE_INTEGER) throw validationError('GPU geometryRevision cannot be incremented beyond a safe integer.');
+    try { frame.geometryRevision = revision + 1; }
+    catch { throw validationError('GPU frame invalidation requires a writable geometryRevision marker; use a new frame identity for frozen frames.'); }
+    if (frame.geometryRevision !== revision + 1) throw validationError('GPU frame invalidation requires a writable geometryRevision marker; use a new frame identity for frozen frames.');
+    if (index !== undefined) this.frameIndexes.set(frame, index);
+    if (canonicalId === undefined || canonicalId === id) this.indexedFrames.add(frame);
+    else this.indexedFrames.delete(frame);
+    const barrier = id === undefined ? Promise.resolve(this.cacheStatus) : this.retireFrame(id);
+    this.frameIds.delete(frame);
+    if (index !== undefined && this.indexFrameIds.get(index) === id) this.indexFrameIds.delete(index);
+    this.frameSnapshots.delete(frame);
+    this.frameRevision(frame);
+    return barrier;
+  }
+
+  retireFrame(id) {
+    if (this.invalidatedFrameIds.has(id)) return Promise.resolve(this.cacheStatus);
+    this.invalidatedFrameIds.add(id);
+    this.frameMetadata.delete(id);
+    for (const derivedId of this.derivedFrameIds.get(id) ?? []) this.retireFrame(derivedId);
+    this.derivedFrameIds.delete(id);
+    this.cachedFrameIds.delete(id); this.cachedCartesianFrames.delete(id);
+    this.positionSources.delete(id); this.ptmSources.delete(id); this.cachedPtmFits.delete(id);
+    for (const task of [...this.pending.values()]) {
+      if (task.frameDependencies?.includes(id)) this.cancel(task);
+    }
+    if (!this.worker || this.closed) { this.invalidatedFrameIds.delete(id); return Promise.resolve(this.cacheStatus); }
+    const barrier = this.enqueue('release-frame', { releasedFrameId: id }, 0, { resume: false });
+    // Automatic metadata changes have no caller awaiting this housekeeping.
+    // Cancellation/source barriers may reject it; no unhandled rejection.
+    barrier.catch(() => {});
+    return barrier;
   }
 
   analyze(frame, parameters, { signal, onProgress = () => {}, frameIndex } = {}) {
     if (!this.supports(parameters.kind)) return Promise.reject(new Error(`The ${parameters.kind} analysis uses CPU workers.`));
-    if (frameIndex !== undefined) this.associateFrame(frame, frameIndex);
+    try { if (frameIndex !== undefined) this.associateFrame(frame, frameIndex); } catch (error) { return Promise.reject(error); }
     // A user calculation takes the next slot, even when prefetch is uploading.
     this.preemptPreparation();
     if (parameters.kind === 'voronoi' && parameters.selectedTypes != null) {
@@ -79,7 +165,7 @@ export class GpuAnalysisClient {
         // input ID; sharing the trajectory's source ID would reuse wrong sites.
         if (index !== undefined) this.frameIndexes.set(compactFrame, index);
         const radii = compactVoronoiRadii(parameters.radii, selection);
-        return this.enqueue('analyze', { frame: compactFrame,
+        return this.enqueue('analyze', { frame: compactFrame, sourceFrame: frame,
           parameters: { ...parameters, ...range, selectedTypes: null, ...(radii ? { radii } : {}) }, signal, onProgress }, 1)
           .then(result => expandVoronoiResult(result, selection));
       } catch (error) { return Promise.reject(error); }
@@ -100,15 +186,16 @@ export class GpuAnalysisClient {
   }
 
   prepareFrame(frame, { frameIndex, signal, analysisKinds, selectedTypes = null, onProgress = () => {} } = {}) {
-    if (frameIndex !== undefined) this.associateFrame(frame, frameIndex);
     try {
+      if (frameIndex !== undefined) this.associateFrame(frame, frameIndex);
       const kinds = gpuPreparationKinds(analysisKinds);
+      const sourceFrame = frame;
       if (kinds?.includes('voronoi') && selectedTypes != null) {
         const selection = prepareVoronoiSelection(frame, selectedTypes), index = this.frameIndexes.get(frame);
         if (index !== undefined) this.frameIndexes.set(selection.frame,index);
         frame = selection.frame;
       }
-      return this.enqueue('prepare-frame', { frame, signal, onProgress, options:{analysisKinds:kinds} }, 2);
+      return this.enqueue('prepare-frame', { frame, sourceFrame, signal, onProgress, options:{analysisKinds:kinds} }, 2);
     } catch (error) { return Promise.reject(error); }
   }
 
@@ -131,7 +218,8 @@ export class GpuAnalysisClient {
     this.fallbackGeneration++;
     for (const task of this.pending.values()) this.cancel(task);
     this.queue.length = 0;
-    this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexFrameIds.clear();
+    this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexedFrames = new WeakSet(); this.indexFrameIds.clear();
+    this.frameSnapshots = new WeakMap(); this.frameMetadata.clear(); this.invalidatedFrameIds.clear(); this.derivedFrameIds.clear();
     this.referenceFrames = new WeakMap();
     this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear(); this._cacheStatus = { ...EMPTY_CACHE };
     this.ptmSources.clear(); this.cachedPtmFits.clear();
@@ -144,10 +232,34 @@ export class GpuAnalysisClient {
   enqueue(type, details, priority, { resume = true } = {}) {
     if (details.signal?.aborted || this.closed) return Promise.reject(abortError());
     if (!this.environment.navigator?.gpu) return Promise.reject(new Error('WebGPU is unavailable in this browser or context.'));
+    let frameDependencies, frameSources;
+    try {
+      frameSources = details.frame ? [details.frame] : [];
+      const sourceId = details.sourceFrame && details.sourceFrame !== details.frame ? this.frameRevision(details.sourceFrame) : undefined;
+      frameDependencies = details.frame ? [this.frameRevision(details.frame)] : [];
+      if (type === 'analyze' && REFERENCE_KINDS.has(details.parameters?.kind)) {
+        const reference = this.referenceFrame(details.parameters);
+        this.validateReference(details.frame, details.parameters, reference);
+        frameSources.push(reference);
+        frameDependencies.push(this.frameRevision(reference, { frameIndex: details.parameters.referenceFrameIndex }));
+      }
+      if (details.sourceFrame && details.sourceFrame !== details.frame) {
+        frameSources.push(details.sourceFrame);
+        frameDependencies.push(sourceId);
+        let derived = this.derivedFrameIds.get(sourceId);
+        if (!derived) { derived = new Set(); this.derivedFrameIds.set(sourceId, derived); }
+        derived.add(frameDependencies[0]);
+      }
+      // Associating a newer reference revision can retire an earlier current
+      // alias before this task is registered. Capture their final identities,
+      // so invalidating either actual posted input cancels this task.
+      frameDependencies = [...new Set(frameSources.map(source => this.frameRevision(source)))];
+      if (sourceId !== undefined) this.derivedFrameIds.get(sourceId)?.add(frameDependencies[0]);
+    } catch (error) { return Promise.reject(error); }
     if (resume) this.resume();
     return new Promise((resolve, reject) => {
       const task = { id: this.nextId++, type, priority, generation: this.generation, onProgress: () => {},
-        ...details, resolve, reject, settled: false, dispatched: false };
+        ...details, frameDependencies, frameSources, resolve, reject, settled: false, dispatched: false };
       task.abort = () => this.cancel(task);
       task.signal?.addEventListener('abort', task.abort, { once: true });
       this.pending.set(task.id, task);
@@ -197,13 +309,19 @@ export class GpuAnalysisClient {
         }
         return;
       }
+      // A caller may mark geometry while a dispatch is in flight without
+      // immediately starting another analysis. Do not publish that old result.
+      if (!task.settled) {
+        try { for (const source of task.frameSources ?? []) this.frameRevision(source); }
+        catch (error) { this.cancel(task, error); }
+      }
       // Sparse CPU corrections also retain Wasm inside this Worker. A native
       // trap cannot leave that module cached for another GPU calculation.
       if (data.fatal === true) { fail({ message: data.error || 'The GPU analysis Worker failed.' }); return; }
       if (task.generation === this.generation) {
-        this.cachedFrameIds = new Set(data.cachedFrameIds ?? data.cacheStatus?.cachedFrameIds ?? []);
-        this.cachedCartesianFrames = new Map((data.cachedCartesianFrames ?? []).map(({ frameId, variants }) => [frameId, new Set(variants)]));
-        this.cachedPtmFits = new Map((data.cachedPtmFits ?? []).map(({ frameId, fitId }) => [frameId, fitId]));
+        this.cachedFrameIds = new Set((data.cachedFrameIds ?? data.cacheStatus?.cachedFrameIds ?? []).filter(id => !this.invalidatedFrameIds.has(id)));
+        this.cachedCartesianFrames = new Map((data.cachedCartesianFrames ?? []).filter(({ frameId }) => !this.invalidatedFrameIds.has(frameId)).map(({ frameId, variants }) => [frameId, new Set(variants)]));
+        this.cachedPtmFits = new Map((data.cachedPtmFits ?? []).filter(({ frameId }) => !this.invalidatedFrameIds.has(frameId)).map(({ frameId, fitId }) => [frameId, fitId]));
         // Replies describe the worker state before later posted tasks run.
         // Keep their provisional source identities until their own ACK: an
         // earlier cancelled warmup must not discard a raw fit already sent
@@ -225,7 +343,9 @@ export class GpuAnalysisClient {
           const posted = awaiting.some(active => active.ptmSource?.frameId === frameId && active.ptmSource.source === fit);
           if (!acknowledged && !posted) this.ptmSources.delete(frameId);
         }
-        if (data.cacheStatus) this._cacheStatus = { ...data.cacheStatus };
+        if (data.cacheStatus) this._cacheStatus = { ...data.cacheStatus,
+          preparedVoronoiFrameIds: (data.cacheStatus.preparedVoronoiFrameIds ?? []).filter(id => !this.invalidatedFrameIds.has(id)) };
+        if (task.type === 'release-frame') this.invalidatedFrameIds.delete(task.releasedFrameId);
         if (data.ok && task.type === 'warmup') {
           this.deviceWarmed = true;
           if (task.options?.analysisKinds) for (const kind of task.options.analysisKinds) this.warmedAnalysisKinds.add(kind);
@@ -280,7 +400,7 @@ export class GpuAnalysisClient {
    * the worker still receives and runs tasks in queue order. */
   canPipeline(task) {
     if (this.active.length >= MAX_TASKS_IN_FLIGHT || task.type !== 'analyze' || task.generation !== this.generation) return false;
-    if (this.active.some(active => !active.dispatched || active.type === 'clear-frames')) return false;
+    if (this.active.some(active => !active.dispatched || ['clear-frames', 'release-frame'].includes(active.type))) return false;
     const resident = frame => { const id = this.frameIds.get(frame); return id !== undefined && this.cachedFrameIds.has(id); };
     if (!task.frame || !resident(task.frame)) return false;
     if (REFERENCE_KINDS.has(task.parameters?.kind)) {
@@ -302,24 +422,13 @@ export class GpuAnalysisClient {
       let referenceSource;
       if (task.type === 'analyze' && REFERENCE_KINDS.has(parameters?.kind)) {
         referenceSource = this.referenceFrame(parameters);
-        const mapping = parameters.referenceMapping;
-        if (!ArrayBuffer.isView(mapping) || mapping instanceof DataView) throw validationError('GPU reference strain requires a typed referenceMapping array.');
-        const currentIndex = this.frameIndexes.get(task.frame);
-        const requestedIndex = parameters.referenceFrameIndex ?? this.frameIndexes.get(referenceSource);
-        if (referenceSource === task.frame && requestedIndex !== undefined && currentIndex !== undefined && requestedIndex !== currentIndex) {
-          throw validationError('The same GPU frame cannot have different current and reference indexes.');
-        }
-        if (requestedIndex !== undefined && currentIndex === requestedIndex
-            && (referenceSource.fractional !== task.frame.fractional || referenceSource.cell !== task.frame.cell)) {
-          throw validationError('GPU current and reference frames with the same index must identify the same coordinates and cell.');
-        }
+        this.validateReference(task.frame, parameters, referenceSource);
         if (parameters.referenceFrameIndex !== undefined) this.associateFrame(referenceSource, parameters.referenceFrameIndex);
       }
       const transfer = [];
       const preparedIds = new Set();
       const prepareFramePayload = async (source) => {
-        let id = this.frameIds.get(source);
-        if (!id) { id = this.nextFrameId++; this.frameIds.set(source, id); }
+        const id = this.frameRevision(source);
         const index = this.frameIndexes.get(source);
         let payload;
         if (!this.cachedFrameIds.has(id) && !preparedIds.has(id)) {
@@ -409,11 +518,12 @@ export class GpuAnalysisClient {
           types: task.frame.types, revision: source.revision };
         parameters = { ...parameters, ptmInput, ptmTypes, ptmFitId: id, ptmRevision: source.revision };
       }
+      for (const source of [task.frame, referenceSource, task.sourceFrame]) if (source) this.frameRevision(source);
       if (task.settled) { this.finishDispatch(task); return; }
       if (this.worker !== worker) throw abortError();
       task.dispatched = true;
       worker.postMessage({ type: task.type, id: task.id, frameId, frameIndex, frame,
-        referenceFrameId, referenceFrameIndex, referenceFrame, parameters, options: task.options }, transfer);
+        referenceFrameId, referenceFrameIndex, referenceFrame, parameters, options: task.options, releasedFrameId: task.releasedFrameId }, transfer);
       if (ptmSource) {
         task.ptmSource = { frameId, source: ptmSource };
         this.ptmSources.set(frameId, ptmSource);
@@ -432,6 +542,20 @@ export class GpuAnalysisClient {
   finishDispatch(task) {
     const index = this.active.indexOf(task);
     if (index >= 0) { this.active.splice(index, 1); this.pump(); }
+  }
+
+  validateReference(frame, parameters, reference) {
+    const mapping = parameters.referenceMapping;
+    if (!ArrayBuffer.isView(mapping) || mapping instanceof DataView) throw validationError('GPU reference strain requires a typed referenceMapping array.');
+    const currentIndex = this.frameIndexes.get(frame);
+    const requestedIndex = parameters.referenceFrameIndex ?? this.frameIndexes.get(reference);
+    if (reference === frame && requestedIndex !== undefined && currentIndex !== undefined && requestedIndex !== currentIndex) {
+      throw validationError('The same GPU frame cannot have different current and reference indexes.');
+    }
+    if (requestedIndex !== undefined && currentIndex === requestedIndex
+        && (reference.fractional !== frame.fractional || reference.cell !== frame.cell)) {
+      throw validationError('GPU current and reference frames with the same index must identify the same coordinates and cell.');
+    }
   }
 
   referenceFrame(parameters) {
@@ -479,7 +603,8 @@ export class GpuAnalysisClient {
     this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
     this.ptmSources.clear(); this.cachedPtmFits.clear();
     this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = this.deviceWarmed = false; this.warmedAnalysisKinds.clear();
-    this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexFrameIds.clear();
+    this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexedFrames = new WeakSet(); this.indexFrameIds.clear();
+    this.frameSnapshots = new WeakMap(); this.frameMetadata.clear(); this.invalidatedFrameIds.clear(); this.derivedFrameIds.clear();
     this.referenceFrames = new WeakMap();
   }
 

@@ -402,6 +402,44 @@ Algorithms without a GPU version continue to use their CPU implementation. Voron
 
 Ideal lattice strain reports GPU neighbor preparation, CPU PTM fitting and GPU reference/tensor evaluation as separate stages. If the GPU reference/tensor stage fails, CPU fallback reuses the completed fit instead of repeating PTM. GPU reference evaluation selects each atom's element and phase, applies the editable lattice parameters, restores absolute deformation and computes strain invariants. Only raw fit arrays and a small per-element reference table are prepared on CPU. [PTM](ptm.md), [CNA](cna.md), [central symmetry](centrosymmetry.md), [displacement](displacement.md), [reference-frame strain](reference-strain.md), [bonds](bonds.md) and [ideal lattice strain](ideal-strain.md) document their cutoff, precision and reference conventions.
 
+### Editing resident GPU inputs
+
+GPU inputs have a per-frame revision. `AnalysisPool.invalidateGpuFrame(frame)`
+(or the GPU client's method) advances the writable
+`frame.geometryRevision` marker and returns a promise that settles after old
+tasks release that frame. Alternatively, increment the
+frame's optional nonnegative integer `geometryRevision` before requesting the
+next analysis or preparation. A revision change detected while an older task
+is running also prevents publishing its result.
+
+The check examines the revision, atom count, array identities on the same
+frame object, and the fixed-size cell vectors, origin and PBC flags. It does
+not scan atom coordinates or types on every calculation: in-place changes to
+those arrays, Cartesian displacement inputs or their labels must be marked
+explicitly. Indexed trajectory frames remain immutable within a revision;
+reparsing the same index after CPU eviction therefore reuses its acknowledged
+GPU input even though its new CPU arrays have different identities. A reloaded edited frame
+must carry its changed revision; rereading the original unedited source uses
+its original revision and cannot borrow the edited input. Previously seen
+aliases or freshly reloaded source frames from an older revision keep private inputs, so they cannot replace or
+silently borrow the current indexed geometry.
+
+Invalidation cancels queued, preparing and posted tasks that use the frame,
+including as a reference. Posted tasks retain their slots until the Worker
+acknowledges cancellation; cancelled results do not retry on CPU. Only that
+frame's coordinates, neighbor indices, Cartesian variants, raw PTM uploads,
+adaptive CNA labels and derived type-subset inputs are released. Other resident
+frames, warmed pipelines, the GPU device, Worker and reusable Voronoi workspace
+remain available. A late old acknowledgement cannot revive an invalidated
+input or its preparation state.
+
+The real WebGPU regression changes a three-atom coordination result from
+`[2, 1, 1]` to `[2, 2, 2]` after an in-place edit and explicit invalidation,
+then returns to `[2, 1, 1]` through `geometryRevision`. Both edits match the CPU
+oracle and add exactly two input uploads; an unrelated frame and a reparsed
+unchanged frame need no new upload. The Chromium SwiftShader run verifies
+correctness and resource reuse, not physical-GPU performance.
+
 ### Remembering unsupported cell geometry
 
 After a GPU neighbor index explicitly rejects a cell/cutoff combination for

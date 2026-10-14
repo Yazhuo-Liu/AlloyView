@@ -146,3 +146,31 @@ test('a closed-window recipe retains layout and camera before creation, export a
     {enabled:false,layout,camera:null},'restored settings are consumed once; later live edits are authoritative');
   h.controls.dispose();
 });
+
+test('pending camera restoration synchronizes a formerly hidden canvas before numeric field-width reads', async () => {
+  const { createPendingComparisonRestore } = await import('../src/atomeye-tools.js');
+  const source = camera(400, 300), destination = camera(1, 1);
+  const savedCamera = Object.fromEntries(['yaw', 'pitch', 'roll', 'fov', 'constrainUp', 'distance', 'orthographicScale', 'projectionMode', 'target', 'pan']
+    .map(key => [key, structuredClone(source[key])]));
+  const wanted = source.getCameraState().fieldWidth;
+  let resizeCalls = 0;
+  destination.frame = null;
+  destination.canvas.clientWidth = destination.canvas.clientHeight = 0;
+  destination.resize = () => {
+    resizeCalls++;
+    destination.canvas.width = destination.canvas.clientWidth;
+    destination.canvas.height = destination.canvas.clientHeight;
+  };
+  const pending = createPendingComparisonRestore();
+  pending.restore({ camera: savedCamera, projectionMode: 'orthographic', layout: { width: .4, height: .3 } }, null);
+  const window = { restore() { destination.canvas.clientWidth = 400; destination.canvas.clientHeight = 300; } };
+  pending.apply(destination, window);
+  assert.equal(resizeCalls, 0, 'hidden layouts can restore without starting GL work');
+  destination.frame = {};
+  pending.apply(destination, window);
+  assert.equal(resizeCalls, 1);
+  near(destination.getCameraState().fieldWidth, wanted);
+  assert.deepEqual([destination.canvas.width, destination.canvas.height], [400, 300]);
+  pending.apply(destination, window);
+  assert.equal(resizeCalls, 1, 'later display refreshes do not repeat the consumed restoration');
+});

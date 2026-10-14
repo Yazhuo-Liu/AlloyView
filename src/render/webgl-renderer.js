@@ -10,6 +10,10 @@ import { captureOffscreen, solveMatte } from './offscreen-export.js';
 import { normalizeExportResolution, resolveExportSize, tileProjection } from './export-resolution.js';
 import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms, prepareScalarColorData, scalarColorSettings, scalarPreviewAtomVisible } from './scalar-colormap.js';
 import { effectivePeriodicOrigin, normalizePeriodicOrigin, periodicDisplayCoordinates } from './periodic-origin.js';
+import { createPreparedDisplay, createPreparedDisplayUploads, revokePreparedDisplay, validatePreparedDisplay } from './prepared-display.js';
+import { createPrimitivePreparation, revokePrimitivePreparation, createPrimitiveBondPreparation,
+  validatePrimitiveBondPreparation, revokePrimitiveBondPreparation, releasePrimitivePreparationRows,
+  releasePrimitiveBondPreparationShifts } from './prepared-primitive-inputs.js';
 import { CRYSTAL_DRAG_GLSL, CRYSTAL_DRAG_UNIFORMS, applyCrystalDragUniforms, createCrystalDragState } from './crystal-drag.js';
 import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
 import { TrajectoryLineLayer, normalizeTrajectoryLineOptions } from './trajectory-line-layer.js';
@@ -294,6 +298,10 @@ export class WebGLRenderer {
     this.modelRadius = 5;
     this.sceneBounds = null;
     this.sourceBoundsCache = null;
+    this.displayRevision = 0;
+    this.sourceBoundsRevision = 0;
+    this.preparedDisplaySnapshot = null;
+    this.ownPreparedDisplaySnapshot = null;
     this.maximumAtomRadius = 0.7;
     this.viewMatrix = new Float32Array(16);
     this.projectionMatrix = new Float32Array(16);
@@ -464,7 +472,7 @@ export class WebGLRenderer {
     // Upload directly, without setFrame: it clears attached analyses, picks and
     // visibility. Camera, display coordinates and every CPU result stay intact.
     this.uploadFrameBuffers();
-    if (this.atomBonds) this.setBonds(this.atomBonds, this.bondOptions);
+    if (this.atomBonds) this.setBonds(this.atomBonds, { ...this.bondOptions, preparedBonds: this.preparedBondSnapshot });
     if (this.atomVectorFields?.length) this.setVectorFields(this.atomVectorFields);
     if (this.dislocationNetwork) this.setDislocationNetwork(this.dislocationNetwork, this.dislocationOptions);
     if (this.siteMarkers) this.setSiteMarkers(this.siteMarkers, this.siteMarkerOptions);
@@ -479,7 +487,7 @@ export class WebGLRenderer {
     }
     if (preview) this.setScalarColorPreview(preview.input.data, { ...preview, input: preview.input });
     this.sliceOutlineGeometry = null;
-    this.updateSceneBounds();
+    this.updateSceneBounds({ reuseSourceBounds: true });
     this.retainedSurfaceMeshes = null;
   }
 
@@ -490,15 +498,17 @@ export class WebGLRenderer {
     };
     // Convert each coordinate array immediately before its upload, rather than
     // retaining both full-frame Float32 copies at the same time.
-    upload(this.positionBuffer, floatDisplayCoordinates(this.displayPositions), gl.STATIC_DRAW);
-    upload(this.fractionalBuffer, floatDisplayCoordinates(this.displayFractional), gl.STATIC_DRAW);
+    upload(this.positionBuffer, this.displayUploadCoordinates('positions'), gl.STATIC_DRAW);
+    upload(this.fractionalBuffer, this.displayUploadCoordinates('fractional'), gl.STATIC_DRAW);
     upload(this.colorBuffer, this.atomColors, gl.DYNAMIC_DRAW);
     upload(this.visibilityBuffer, this.visibility, gl.DYNAMIC_DRAW);
     upload(this.radiusBuffer, this.atomRadii, gl.STATIC_DRAW);
     upload(this.cellBuffer, buildCellLines(this.displayCell), gl.STATIC_DRAW);
   }
 
-  setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions, { coordinateMode } = {}) {
+  setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions, { coordinateMode, preparedDisplay } = {}) {
+    if (preparedDisplay) validatePreparedDisplay(preparedDisplay, frame, displayPositions,
+      coordinateMode ?? (displayPositions === frame.positions ? 'wrapped' : 'unwrapped'), { radii: atomRadii });
     // A frame can arrive between driver loss and its queued DOM event.
     if (!this.contextLost && this.graphicsUnavailable()) this.handleContextLost();
     this.clearScalarColorPreview();
@@ -506,11 +516,13 @@ export class WebGLRenderer {
     this.cancelSelectionGesture();
     const startedAt = performance.now();
     this.frame = frame;
-    this.processDisplayCoordinates(displayPositions, coordinateMode);
+    this.processDisplayCoordinates(displayPositions, coordinateMode, preparedDisplay);
     this.atomCount = frame.ids.length;
     this.atomColors = colors;
     this.colorRevision = (this.colorRevision ?? 0) + 1;
     this.atomBonds = this.atomVectors = null;
+    revokePrimitiveBondPreparation(this.ownPreparedBondSnapshot);
+    this.ownPreparedBondSnapshot = this.preparedBondSnapshot = null;
     this.atomVectorFields = [];
     this.dislocationNetwork = null;
     this.dislocationLayer?.clear();
@@ -522,11 +534,11 @@ export class WebGLRenderer {
     this.sliceSelectedAtoms?.fill(-1);
     Object.assign(this, createReplication(frame.cell, repetitions));
     this.displayAtomCount = this.atomCount * this.replicas.length;
-    this.atomRadii = atomRadii ?? new Float32Array(this.atomCount).fill(0.7);
+    this.atomRadii = atomRadii ?? preparedDisplay?.atomRadii ?? new Float32Array(this.atomCount).fill(0.7);
     this.radiusRevision = (this.radiusRevision ?? 0) + 1;
     if (this.atomRadii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
-    let maximumRadius = 0;
-    for (let atom = 0; atom < this.atomRadii.length; atom++) maximumRadius = Math.max(maximumRadius, this.atomRadii[atom]);
+    let maximumRadius = preparedDisplay?.maximumAtomRadius ?? 0;
+    if (!preparedDisplay) for (let atom = 0; atom < this.atomRadii.length; atom++) maximumRadius = Math.max(maximumRadius, this.atomRadii[atom]);
     this.maximumAtomRadius = maximumRadius;
     this.visibility = new Uint8Array(this.atomCount).fill(255);
     this.selectionVisibility = null;
@@ -539,7 +551,7 @@ export class WebGLRenderer {
     this.voronoiCellLayer?.clear();
     this.voronoiAllCellGeometry = null;
     this.voronoiAllCellLayer?.clear();
-    this.updateSceneBounds();
+    this.updateSceneBounds({ reuseSourceBounds: Boolean(preparedDisplay) });
     // The returned time covers submitting the uploads. Waiting for the GPU
     // with gl.finish() here would stall every frame change just to time it.
     this.requestRender();
@@ -553,6 +565,11 @@ export class WebGLRenderer {
     this.cancelSelectionGesture();
     this.selectionSourceBounds = null;
     this.sourceBoundsCache = null;
+    this.invalidatePreparedDisplay();
+    revokePrimitivePreparation(this.ownPreparedPrimitivePreparation);
+    this.ownPreparedPrimitivePreparation = null;
+    this.preparedPrimitivePreparation = null;
+    this.preparedDisplayUploads = null;
     this.frame = this.displayPositions = this.visibility = this.selectionVisibility = this.atomRadii = null;
     this.rawDisplayPositions = this.displayFractional = null;
     this.periodicOrigin = [0, 0, 0];
@@ -561,6 +578,8 @@ export class WebGLRenderer {
     this.cellWireframeMode = 'mono';
     this.atomColors = null;
     this.atomBonds = this.atomVectors = null;
+    revokePrimitiveBondPreparation(this.ownPreparedBondSnapshot);
+    this.ownPreparedBondSnapshot = this.preparedBondSnapshot = null;
     this.atomVectorFields = [];
     this.primitiveLayer?.clear();
     if (this.ambientOcclusionFactors) this.setAmbientOcclusion(null);
@@ -722,11 +741,82 @@ export class WebGLRenderer {
     this.requestRender();
   }
 
-  processDisplayCoordinates(positions, coordinateMode = positions === this.frame.positions ? 'wrapped' : 'unwrapped') {
+  invalidatePreparedDisplay() {
+    revokePreparedDisplay(this.ownPreparedDisplaySnapshot);
+    this.ownPreparedDisplaySnapshot = this.preparedDisplaySnapshot = null;
+  }
+
+  setDisplayPreparationSharing(enabled) {
+    const previous = Boolean(this.shareDisplayPreparation);
+    this.shareDisplayPreparation = Boolean(enabled);
+    if (!enabled) {
+      this.invalidatePreparedDisplay();
+      this.preparedDisplayUploads = null;
+      releasePrimitivePreparationRows(this.ownPreparedPrimitivePreparation);
+      releasePrimitiveBondPreparationShifts(this.ownPreparedBondSnapshot);
+      this.primitiveLayer?.releaseSharedPreparation?.();
+    } else if (!previous) {
+      // First opening/reopening may follow a private or formerly shared draw.
+      // Both views adopt one current CPU row pair at their next visible draw.
+      this.primitiveLayer?.updatePositions?.(this);
+      this.requestRender();
+    }
+  }
+
+  displayUploadCoordinates(kind) {
+    if (this.preparedDisplayUploads) return this.preparedDisplayUploads[kind]();
+    return floatDisplayCoordinates(kind === 'positions' ? this.displayPositions : this.displayFractional);
+  }
+
+  /** Share camera-independent preparation only. Each GL context uploads its
+   * own attributes and merges its own attached-layer and camera bounds. */
+  exportDisplaySnapshot() {
+    if (!this.frame) return null;
+    this.setDisplayPreparationSharing(true);
+    if (this.preparedDisplaySnapshot) {
+      try {
+        return validatePreparedDisplay(this.preparedDisplaySnapshot, this.frame, this.rawDisplayPositions,
+          this.coordinateMode, { radii: this.atomRadii, periodicOrigin: this.periodicOrigin });
+      } catch { this.invalidatePreparedDisplay(); }
+    }
+    if (this.sourceBoundsCache?.positions !== this.displayPositions || this.sourceBoundsCache.length !== this.displayPositions.length) {
+      this.updateSceneBounds();
+    }
+    this.preparedDisplayUploads ??= createPreparedDisplayUploads(this.displayPositions, this.displayFractional);
+    const snapshot = createPreparedDisplay({ frame: this.frame, atomCount: this.atomCount,
+      rawDisplayPositions: this.rawDisplayPositions, displayPositions: this.displayPositions,
+      displayFractional: this.displayFractional, coordinateMode: this.coordinateMode, periodicOrigin: this.periodicOrigin,
+      displayRevision: this.displayRevision, sourceBoundsRevision: this.sourceBoundsRevision,
+      atomRadii: this.atomRadii, radiusRevision: this.radiusRevision, maximumAtomRadius: this.maximumAtomRadius,
+      sourceBounds: this.sourceBoundsCache, primitivePreparation: this.preparedPrimitivePreparation,
+      uploadCoordinates: this.preparedDisplayUploads });
+    this.ownPreparedDisplaySnapshot = this.preparedDisplaySnapshot = snapshot;
+    return snapshot;
+  }
+
+  processDisplayCoordinates(positions, coordinateMode = positions === this.frame.positions ? 'wrapped' : 'unwrapped', preparedDisplay = null) {
     this.voronoiDisplayRevision++;
     if (!['wrapped', 'unwrapped'].includes(coordinateMode)) throw new Error('Unknown display coordinate mode.');
+    if (preparedDisplay) validatePreparedDisplay(preparedDisplay, this.frame, positions, coordinateMode);
+    this.invalidatePreparedDisplay();
+    revokePrimitivePreparation(this.ownPreparedPrimitivePreparation);
+    this.ownPreparedPrimitivePreparation = null;
+    this.displayRevision = (this.displayRevision ?? 0) + 1;
     this.rawDisplayPositions = positions;
     this.coordinateMode = coordinateMode;
+    if (preparedDisplay) {
+      this.periodicOrigin = [...preparedDisplay.periodicOrigin];
+      this.displayPositions = preparedDisplay.displayPositions;
+      this.displayFractional = preparedDisplay.displayFractional;
+      this.sourceBoundsCache = { positions: this.displayPositions, length: this.displayPositions.length, ...preparedDisplay.sourceBounds };
+      this.sourceBoundsRevision = preparedDisplay.sourceBoundsRevision;
+      this.preparedPrimitivePreparation = preparedDisplay.primitivePreparation;
+      this.preparedDisplayUploads = preparedDisplay.uploadCoordinates;
+      this.preparedDisplaySnapshot = preparedDisplay;
+      return;
+    }
+    this.preparedPrimitivePreparation = null;
+    this.preparedDisplayUploads = null;
     const origin = effectivePeriodicOrigin(this.periodicOrigin, this.frame.cell);
     if (origin.every(value => value === 0)) {
       this.displayPositions = positions;
@@ -737,6 +827,12 @@ export class WebGLRenderer {
       this.displayPositions = display.positions;
       this.displayFractional = display.fractional;
     }
+    if (ArrayBuffer.isView(this.displayPositions) && ArrayBuffer.isView(this.displayFractional)) {
+      this.ownPreparedPrimitivePreparation = this.preparedPrimitivePreparation = createPrimitivePreparation({ frame: this.frame,
+        positions: this.displayPositions, fractional: this.displayFractional, periodicOrigin: this.periodicOrigin,
+        coordinateMode, displayRevision: this.displayRevision });
+    }
+    if (this.shareDisplayPreparation) this.preparedDisplayUploads = createPreparedDisplayUploads(this.displayPositions, this.displayFractional);
   }
 
   setPeriodicOrigin(origin, { coordinateMode } = {}) {
@@ -750,25 +846,25 @@ export class WebGLRenderer {
       { coordinateMode: coordinateMode ?? this.coordinateMode ?? 'wrapped' });
   }
 
-  setDisplayPositions(positions, { coordinateMode } = {}) {
+  setDisplayPositions(positions, { coordinateMode, preparedDisplay } = {}) {
     if (!this.frame || positions.length !== this.atomCount * 3) {
       throw new Error('The display coordinate array does not match the current frame.');
     }
     this.cancelSelectionGesture();
     const startedAt = performance.now();
-    this.processDisplayCoordinates(positions, coordinateMode);
-    if (this.graphicsUnavailable()) { this.updateSceneBounds(); return performance.now() - startedAt; }
+    this.processDisplayCoordinates(positions, coordinateMode, preparedDisplay);
+    if (this.graphicsUnavailable()) { this.updateSceneBounds({ reuseSourceBounds: Boolean(preparedDisplay) }); return performance.now() - startedAt; }
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-    this.gl.bufferData(this.gl.ARRAY_BUFFER, floatDisplayCoordinates(this.displayPositions), this.gl.STATIC_DRAW);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, this.displayUploadCoordinates('positions'), this.gl.STATIC_DRAW);
     if (this.displayFractional && this.fractionalBuffer) {
       this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.fractionalBuffer);
-      this.gl.bufferData(this.gl.ARRAY_BUFFER, floatDisplayCoordinates(this.displayFractional), this.gl.STATIC_DRAW);
+      this.gl.bufferData(this.gl.ARRAY_BUFFER, this.displayUploadCoordinates('fractional'), this.gl.STATIC_DRAW);
     }
     this.primitiveLayer?.updatePositions(this);
     if (this.dislocationNetwork) this.dislocationLayer?.setNetwork(this, this.dislocationNetwork, this.dislocationOptions);
     // Surface meshes are cut at the displayed cell; a new origin cuts them again.
     this.surfaceMeshLayer?.refresh(this);
-    this.updateSceneBounds();
+    this.updateSceneBounds({ reuseSourceBounds: Boolean(preparedDisplay) });
     this.requestRender();
     return performance.now() - startedAt;
   }
@@ -800,17 +896,21 @@ export class WebGLRenderer {
     this.radiusScale = scaleFactor;
     this.requestRender();
   }
-  setAtomRadii(radii) {
+  setAtomRadii(radii, { preparedDisplay } = {}) {
     if (!this.frame || !(radii instanceof Float32Array) || radii.length !== this.atomCount) throw new Error('The atom radius array does not match the current frame.');
-    let maximum = 0;
-    for (let atom = 0; atom < radii.length; atom++) {
+    if (preparedDisplay) validatePreparedDisplay(preparedDisplay, this.frame, this.rawDisplayPositions,
+      this.coordinateMode, { radii, periodicOrigin: this.periodicOrigin });
+    let maximum = preparedDisplay?.maximumAtomRadius ?? 0;
+    if (!preparedDisplay) for (let atom = 0; atom < radii.length; atom++) {
       const radius = radii[atom];
       if (!Number.isFinite(radius) || radius <= 0) throw new Error('Atom radii must be finite and greater than zero.');
       maximum = Math.max(maximum, radius);
     }
     this.atomRadii = radii;
+    this.invalidatePreparedDisplay();
     this.radiusRevision = (this.radiusRevision ?? 0) + 1;
     this.maximumAtomRadius = maximum;
+    if (preparedDisplay) this.preparedDisplaySnapshot = preparedDisplay;
     if (this.graphicsUnavailable()) { this.requestRender(); return; }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.radiusBuffer);
@@ -852,6 +952,24 @@ export class WebGLRenderer {
   }
 
   setBonds(result, options = {}) {
+    const previous = this.preparedBondSnapshot, previousOwn = this.ownPreparedBondSnapshot;
+    let preparation = null;
+    if (result) {
+      if (!this.frame) throw new Error('Load a structure before displaying atom geometry.');
+      const bonds = { ...result, count: result.count ?? result.indices?.length / 2 };
+      preparation = options.preparedBonds
+        ? validatePrimitiveBondPreparation(options.preparedBonds, this, bonds)
+        : createPrimitiveBondPreparation({ frame: this.frame, bonds, bondRevision: (this.bondRevision ?? 0) + 1 });
+    }
+    this.preparedBondSnapshot = preparation;
+    try { this.applyBonds(result, options); }
+    catch (error) { this.preparedBondSnapshot = previous; throw error; }
+    if (previousOwn !== preparation) revokePrimitiveBondPreparation(previousOwn);
+    this.ownPreparedBondSnapshot = !options.preparedBonds || preparation === previousOwn ? preparation : null;
+    this.bondRevision = (this.bondRevision ?? 0) + 1;
+  }
+
+  applyBonds(result, options = {}) {
     if (this.graphicsUnavailable()) {
       if (result && !this.frame) throw new Error('Load a structure before displaying atom geometry.');
       const bonds = validateBonds(result, this.atomCount), radius = options.radius ?? this.bondOptions.radius;
@@ -1267,6 +1385,8 @@ export class WebGLRenderer {
     // reuse only these six numbers; cell, replicas and every layer still merge.
     let source = this.sourceBoundsCache;
     if (!reuseSourceBounds || source?.positions !== this.displayPositions || source.length !== this.displayPositions.length) {
+      this.invalidatePreparedDisplay();
+      this.sourceBoundsRevision = (this.sourceBoundsRevision ?? 0) + 1;
       source = this.sourceBoundsCache = { positions: this.displayPositions, length: this.displayPositions.length,
         ...coordinateBounds(this.displayPositions) };
     }

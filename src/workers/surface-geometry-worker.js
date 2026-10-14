@@ -6,6 +6,7 @@ const cancelled = new Set();
 let completed = 0;
 self.postMessage({ type: 'ready' });
 const residentBytes = source => source ? source.mesh.vertices.byteLength + source.mesh.triangles.byteLength
+  + source.cell.origin.buffer.byteLength + source.cell.vectors.buffer.byteLength
   + (source.display?.positions.byteLength ?? 0) + (source.display?.normals.byteLength ?? 0)
   + (source.display?.indices.byteLength ?? 0) + (source.values?.byteLength ?? 0) : 0;
 

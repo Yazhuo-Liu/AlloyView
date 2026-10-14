@@ -6,6 +6,34 @@ const COPY_CHUNK = 65536;
 const defaults = new WeakMap();
 let defaultClient;
 
+/** Analysis meshes are immutable. Public callers editing their arrays in place
+ * increment geometryRevision before setting the mesh again; array replacement
+ * and cell edits are detected without scanning vertex/triangle values. */
+export function surfaceGeometrySourceKey(mesh, cell) {
+  const revision = mesh.geometryRevision ?? 0;
+  if (!Number.isSafeInteger(revision) || revision < 0) throw new Error('Surface geometryRevision must be a nonnegative safe integer.');
+  return JSON.stringify([revision, Array.from(cell.origin), Array.from(cell.vectors), Array.from(cell.pbc)]);
+}
+
+// Walk retained containers only when a source/cache changes. Typed views are
+// leaves: their full allocations count, without enumerating atom/mesh values.
+function retainedBuffers(roots) {
+  const buffers = new Set(), visited = new Set(), pending = [roots];
+  while (pending.length) {
+    const value = pending.pop();
+    if (!value || typeof value !== 'object' || visited.has(value)) continue;
+    visited.add(value);
+    if (ArrayBuffer.isView(value)) { buffers.add(value.buffer); continue; }
+    if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer === 'function' && value instanceof SharedArrayBuffer)) {
+      buffers.add(value); continue;
+    }
+    if (value instanceof Map) for (const [key, entry] of value) pending.push(key, entry);
+    else if (value instanceof Set || Array.isArray(value)) for (const entry of value) pending.push(entry);
+    else for (const entry of Object.values(value)) pending.push(entry);
+  }
+  return buffers;
+}
+
 /** Main and second views share source snapshots, prepared geometry and a single
  * retained Worker. A snapshot is a private copy: analysis arrays stay owned by
  * their original frame. No device or WebGPU backend is started here. */
@@ -25,6 +53,7 @@ export class SurfaceGeometryClient {
     this.worker = null; this.workerReady = null; this.warming = null;
     this.closed = false; this.warmController = null;
     this.sources = new Map(); this.identities = new WeakMap(); this.jobs = new Map();
+    this.bufferOwners = new Map(); this.pageBytes = 0;
     this.queue = []; this.running = null; this.sequence = 0; this.sourceSequence = 0; this.clock = 0;
   }
 
@@ -51,15 +80,23 @@ export class SurfaceGeometryClient {
   }
 
   source(mesh, cell) {
+    const sourceKey = surfaceGeometrySourceKey(mesh, cell);
     let cells = this.identities.get(mesh);
     if (!cells) { cells = new WeakMap(); this.identities.set(mesh, cells); }
     let source = cells.get(cell);
-    if (!source) {
-      source = { id: ++this.sourceSequence, mesh, cell, owners: 0, pending: 0, uploaded: false, cache: new Map() };
+    if (!source || source.sourceKey !== sourceKey || source.vertices !== mesh.vertices || source.triangles !== mesh.triangles) {
+      source = { id: ++this.sourceSequence, mesh, cell, sourceKey, vertices: mesh.vertices, triangles: mesh.triangles,
+        owners: 0, pending: 0, uploaded: false, cache: new Map() };
       cells.set(cell, source);
     }
-    source.used = ++this.clock; this.sources.set(source.id, source);
+    source.used = ++this.clock;
+    if (!this.sources.has(source.id)) { this.sources.set(source.id, source); this.refreshRetainedBuffers(source); }
     return source;
+  }
+
+  sourceCurrent(source) {
+    return source.sourceKey === surfaceGeometrySourceKey(source.mesh, source.cell)
+      && source.vertices === source.mesh.vertices && source.triangles === source.mesh.triangles;
   }
 
   retainSource(mesh, cell) {
@@ -72,22 +109,47 @@ export class SurfaceGeometryClient {
     // Keep two recent unowned sources for context restoration and a quick
     // frame revisit; current views and active requests are never evicted.
     const idle = [...this.sources.values()].filter(source => !source.owners && !source.pending).sort((a, b) => b.used - a.used);
-    let bytes = [...this.sources.values()].reduce((sum, source) => sum + this.sourceBytes(source), 0);
+    let bytes = this.retainedBytes();
     for (const source of idle.toReversed()) {
       if (idle.length <= 2 && bytes <= this.retainedByteBudget) break;
-      bytes -= this.sourceBytes(source); idle.splice(idle.indexOf(source), 1);
+      idle.splice(idle.indexOf(source), 1);
       this.sources.delete(source.id); source.cache.clear(); source.uploaded = false; source.workerBytes = 0;
+      this.refreshRetainedBuffers(source, false);
       this.worker?.postMessage({ type: 'drop', sourceId: source.id });
+      bytes = this.retainedBytes();
     }
   }
 
   sourceBytes(source) {
     // Source descriptors held by this client, actual Worker-side retained
     // buffers (including export-only preparation), and page-side recipe caches.
-    let bytes = source.mesh.vertices.byteLength + source.mesh.triangles.byteLength + (source.workerBytes ?? 0);
-    for (const result of source.cache.values()) bytes += result.display.positions.byteLength + result.display.normals.byteLength
-      + result.display.indices.byteLength + result.values.byteLength;
-    return bytes;
+    return (source.pageBytes ?? 0) + (source.workerBytes ?? 0);
+  }
+
+  retainedBytes() {
+    // Views and recipes can refer to the same mesh, cells or backing buffers.
+    // Count each page allocation once, including analysis metadata retained by
+    // the mesh object and the complete allocations behind sliced views. The
+    // Worker's private allocations are independent of those page buffers.
+    return this.pageBytes + [...this.sources.values()].reduce((sum, source) => sum + (source.workerBytes ?? 0), 0);
+  }
+
+  refreshRetainedBuffers(source, retained = true) {
+    const previous = source.buffers ?? new Set(), next = retained
+      ? retainedBuffers([source.mesh, source.cell, source.cache, source.vertices, source.triangles]) : new Set();
+    for (const buffer of previous) if (!next.has(buffer)) {
+      const record = this.bufferOwners.get(buffer);
+      if (--record.owners === 0) { this.bufferOwners.delete(buffer); this.pageBytes -= record.bytes; }
+    }
+    for (const buffer of next) if (!previous.has(buffer)) {
+      let record = this.bufferOwners.get(buffer);
+      if (!record) {
+        record = { owners: 0, bytes: buffer.byteLength }; this.bufferOwners.set(buffer, record); this.pageBytes += record.bytes;
+      }
+      record.owners++;
+    }
+    source.buffers = next;
+    source.pageBytes = [...next].reduce((sum, buffer) => sum + buffer.byteLength, 0);
   }
 
   prepare(mesh, cell, options = {}, { signal } = {}) {
@@ -183,8 +245,9 @@ export class SurfaceGeometryClient {
       job.lease = await this.cpuBudget.acquire(1, { signal: job.controller.signal });
       if (job.finished) { job.lease.release(); return; }
       const worker = this.ensureWorker(), source = job.source;
+      if (!this.sourceCurrent(source)) throw aborted();
       const mesh = source.uploaded ? null : await this.snapshot(source, job.controller.signal);
-      if (job.controller.signal.aborted) throw aborted();
+      if (job.controller.signal.aborted || !this.sourceCurrent(source)) throw aborted();
       // Shared cancellation is checked inside the synchronous topology loops.
       // Without isolation, abort still suppresses publication promptly; the
       // permit remains held until the Worker acknowledges its finished work.
@@ -207,11 +270,14 @@ export class SurfaceGeometryClient {
     if (!job || message.id !== job.id) return;
     if (message.sourceReady) job.source.uploaded = true;
     if (Number.isFinite(message.residentBytes)) job.source.workerBytes = message.residentBytes;
-    if (message.ok && !job.controller.signal.aborted && job.cacheKey) {
+    let stale = false;
+    try { stale = !this.sourceCurrent(job.source); } catch { stale = true; }
+    if (message.ok && !job.controller.signal.aborted && !stale && job.cacheKey) {
       job.source.cache.set(job.cacheKey, message.result);
       while (job.source.cache.size > 2) job.source.cache.delete(job.source.cache.keys().next().value);
+      this.refreshRetainedBuffers(job.source);
     }
-    this.finish(job, message.result, message.ok ? null : Object.assign(new Error(message.error?.message || 'Surface geometry preparation failed.'),
+    this.finish(job, message.result, stale ? aborted() : message.ok ? null : Object.assign(new Error(message.error?.message || 'Surface geometry preparation failed.'),
       { name: message.error?.name || 'Error' }));
   }
 
@@ -231,7 +297,9 @@ export class SurfaceGeometryClient {
   failWorker(error) {
     this.workerReady?.reject(error); this.workerReady = null;
     this.worker?.terminate(); this.worker = null;
-    for (const source of this.sources.values()) { source.uploaded = false; source.workerBytes = 0; source.cache.clear(); }
+    for (const source of this.sources.values()) {
+      source.uploaded = false; source.workerBytes = 0; source.cache.clear(); this.refreshRetainedBuffers(source);
+    }
     if (this.running) this.finish(this.running, null, error);
   }
 
@@ -246,7 +314,9 @@ export class SurfaceGeometryClient {
       job.listeners.clear(); job.lease?.release(); job.source.pending--;
     }
     this.running = null; this.queue = []; this.jobs.clear();
-    for (const source of this.sources.values()) { source.uploaded = false; source.workerBytes = 0; source.cache.clear(); }
+    for (const source of this.sources.values()) {
+      source.uploaded = false; source.workerBytes = 0; source.cache.clear(); this.refreshRetainedBuffers(source, false);
+    }
     this.sources.clear();
   }
 }

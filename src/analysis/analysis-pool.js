@@ -107,7 +107,7 @@ export class AnalysisPool {
     this.gpuEnabled = false;
     this.gpuVoronoi = false;
     this.gpuBackend = gpuBackend ?? new GpuAnalysisClient({ environment });
-    this.gpuFallbacks = new GpuFallbackCache();
+    this.gpuFallbacks = new GpuFallbackCache({ inputRevisionFor: frame => this.gpuBackend.frameRevision?.(frame) });
   }
 
   setGpuEnabled(enabled) {
@@ -128,6 +128,12 @@ export class AnalysisPool {
   configureGpuCache(options) { return this.gpuBackend.configureCache?.(options) ?? Promise.resolve(this.gpuCacheStatus); }
   prepareGpuFrame(frame, options) { return this.gpuBackend.prepareFrame?.(frame, options) ?? Promise.resolve(this.gpuCacheStatus); }
   associateGpuFrame(frame, frameIndex) { return this.gpuBackend.associateFrame?.(frame, frameIndex); }
+  /** An edited public frame can refresh one GPU input without discarding the
+   * other trajectory frames, warm device, pipelines or CPU Workers. */
+  invalidateGpuFrame(frame, options) {
+    this.gpuFallbacks.invalidateFrame(frame);
+    return this.gpuBackend.invalidateFrame?.(frame, options) ?? Promise.resolve(this.gpuCacheStatus);
+  }
   clearGpuFrames() { this.gpuFallbacks.clear(); return this.gpuBackend.clearFrames?.() ?? Promise.resolve(this.gpuCacheStatus); }
   clearVoronoiFrames() {
     this.clearCpuFrames();
@@ -529,6 +535,9 @@ export class AnalysisPool {
     if (gpuRequested) {
       if (!this.gpuBackend.supports(parameters.kind)) fallbackReason = `The ${parameters.kind} analysis uses CPU workers; no GPU kernel is available.`;
       else {
+        // Establish the indexed/revised identity before looking up a refusal.
+        // A changed geometry epoch must not reuse an old routing decision.
+        this.gpuBackend.frameRevision?.(frame, { frameIndex });
         const refusal = this.gpuFallbacks.request(frame, parameters, this.gpuBackend.fallbackGeneration ?? 0);
         const cached = this.gpuFallbacks.lookup(refusal);
         if (cached) ({ fallbackReason, fallbackCode, fallbackCached } = cached);

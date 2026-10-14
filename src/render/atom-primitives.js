@@ -2,6 +2,7 @@ import { invert3 } from '../data/model.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON } from './slicing.js';
 import { SCALAR_COLOR_GLSL, SCALAR_COLOR_UNIFORMS, applyScalarColorUniforms } from './scalar-colormap.js';
 import { CRYSTAL_DRAG_GLSL, CRYSTAL_DRAG_UNIFORMS, applyCrystalDragUniforms } from './crystal-drag.js';
+import { preparedPrimitiveRows, preparedPrimitiveBondShifts } from './prepared-primitive-inputs.js';
 
 // Atom textures and instance buffers have source-frame sizes. Repeating a skew
 // cell changes uniforms only; recoloring/filtering never walks every bond.
@@ -368,6 +369,11 @@ export class AtomPrimitiveLayer {
     const width = Math.min(maximum, Math.max(1, Math.ceil(Math.sqrt(count)))), height = Math.max(1, Math.ceil(count / width));
     if (height > maximum) throw new Error('The structure exceeds this GPU’s atom texture capacity.');
     this.clearInstances();
+    // Shared rows are immutable CPU preparation, not reusable local scratch.
+    // Drop the preceding source while a newly loaded frame awaits its draw.
+    if (this.sharedPositionValues) this.positionValues = null;
+    if (this.sharedFractionalValues) this.fractionalValues = null;
+    this.sharedPositionValues = this.sharedFractionalValues = null;
     this.width = width; this.height = height;
     // Most frames never draw bonds or arrows. Retain the canonical descriptors
     // and allocate/upload their texture mirrors only when that layer draws.
@@ -428,29 +434,52 @@ export class AtomPrimitiveLayer {
     this.textureDirty.preview = true;
   }
 
+  releaseSharedPreparation() {
+    // The GPU textures already contain these rows. Closing a comparison view
+    // can release CPU mirrors without disturbing its current image or marking
+    // a redundant upload; the next explicit coordinate update uses scratch.
+    if (this.positionValues === this.sharedPositionValues) this.positionValues = null;
+    if (this.fractionalValues === this.sharedFractionalValues) this.fractionalValues = null;
+    this.sharedPositionValues = this.sharedFractionalValues = null;
+  }
+
   flushTextures(renderer = this.sourceRenderer) {
     const dirty = this.textureDirty ?? {};
     if (!renderer) return;
     const gl = this.gl, pixels = this.width * this.height, count = renderer.atomCount;
     const storage = (name, Type, length) => {
-      if (this[name]?.length !== length) this[name] = new Type(length);
+      const sharedName = name === 'positionValues' ? 'sharedPositionValues' : name === 'fractionalValues' ? 'sharedFractionalValues' : null;
+      // A standalone or incompatible renderer must never overwrite rows
+      // already used by another context's current prepared display.
+      if (this[name]?.length !== length || sharedName && this[sharedName]) this[name] = new Type(length);
+      if (sharedName) this[sharedName] = null;
       return this[name];
     };
+    const sharing = Boolean(renderer.shareDisplayPreparation || renderer.preparedDisplaySnapshot);
+    const rows = sharing && (dirty.position || dirty.fractional) ? preparedPrimitiveRows(renderer, this.width, this.height) : null;
     if (dirty.position) {
       this.bondCapCoverage = null;
-      const values = storage('positionValues', Float32Array, pixels * 4), positions = renderer.displayPositions;
-      for (let atom = 0; atom < count; atom++) {
-        const index = atom * 3, target = atom * 4;
-        values[target] = positions[index]; values[target + 1] = positions[index + 1]; values[target + 2] = positions[index + 2];
+      const values = rows?.positionValues ?? storage('positionValues', Float32Array, pixels * 4);
+      if (rows) this.positionValues = this.sharedPositionValues = values;
+      else {
+        const positions = renderer.displayPositions;
+        for (let atom = 0; atom < count; atom++) {
+          const index = atom * 3, target = atom * 4;
+          values[target] = positions[index]; values[target + 1] = positions[index + 1]; values[target + 2] = positions[index + 2];
+        }
       }
       this.uploadTexture(0, values, gl.RGBA32F, gl.FLOAT);
     }
     if (dirty.fractional) {
       this.bondCapCoverage = null;
-      const values = storage('fractionalValues', Float32Array, pixels * 4), positions = renderer.displayFractional ?? renderer.frame.fractional;
-      for (let atom = 0; atom < count; atom++) {
-        const index = atom * 3, target = atom * 4;
-        values[target] = positions[index]; values[target + 1] = positions[index + 1]; values[target + 2] = positions[index + 2];
+      const values = rows?.fractionalValues ?? storage('fractionalValues', Float32Array, pixels * 4);
+      if (rows) this.fractionalValues = this.sharedFractionalValues = values;
+      else {
+        const positions = renderer.displayFractional ?? renderer.frame.fractional;
+        for (let atom = 0; atom < count; atom++) {
+          const index = atom * 3, target = atom * 4;
+          values[target] = positions[index]; values[target + 1] = positions[index + 1]; values[target + 2] = positions[index + 2];
+        }
       }
       this.uploadTexture(2, values, gl.RGBA32F, gl.FLOAT);
     }
@@ -484,7 +513,9 @@ export class AtomPrimitiveLayer {
       }
       this.uploadTexture(1, values, gl.RGBA8, gl.UNSIGNED_BYTE);
     }
-    if (this.shiftsDirty && this.bonds) this.uploadShifts(this.bondBuffers, bondDisplayShifts(this.bonds, renderer.frame, renderer.displayPositions));
+    if (this.shiftsDirty && this.bonds) this.uploadShifts(this.bondBuffers,
+      (sharing ? preparedPrimitiveBondShifts(renderer, this.bonds, bondDisplayShifts) : null)
+        ?? bondDisplayShifts(this.bonds, renderer.frame, renderer.displayPositions));
     this.shiftsDirty = false;
     this.textureDirty = {};
   }
@@ -519,7 +550,9 @@ export class AtomPrimitiveLayer {
     this.bondOptions = { visible: options.visible ?? this.bondOptions.visible, radius };
     if (bonds && !unchanged) {
       this.uploadInstances(this.bondBuffers, bonds.indices, bonds.vectors);
-      this.uploadShifts(this.bondBuffers, bondDisplayShifts(bonds, renderer.frame, renderer.displayPositions));
+      this.uploadShifts(this.bondBuffers,
+        (renderer.shareDisplayPreparation || renderer.preparedDisplaySnapshot ? preparedPrimitiveBondShifts(renderer, bonds, bondDisplayShifts) : null)
+        ?? bondDisplayShifts(bonds, renderer.frame, renderer.displayPositions));
     } else if (!bonds) this.releaseInstances(this.bondBuffers);
   }
 
@@ -623,6 +656,7 @@ export class AtomPrimitiveLayer {
       this.occlusionSource = null; this.occlusionWidth = 1;
     }
     this.positionValues = this.colorValues = this.fractionalValues = this.visibilityValues = null;
+    this.sharedPositionValues = this.sharedFractionalValues = null;
     this.sourceRenderer = this.colorSource = null;
     this.textureDirty = {}; this.shiftsDirty = false;
     this.width = this.height = 1;

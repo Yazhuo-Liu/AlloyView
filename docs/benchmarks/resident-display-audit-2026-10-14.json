@@ -1,0 +1,1960 @@
+{
+  "date": "2026-10-14",
+  "baseline": "12ec706",
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "Linux",
+    "graphics": "Chromium SwiftShader software adapter",
+    "timingNote": "CPU benchmarks ran in separate concurrent processes; isolated preparation scope, not total frame time or hardware GPU throughput."
+  },
+  "displayPreparation": {
+    "atomCount": 1000000,
+    "scope": "Second-view CPU display preparation; excludes GL uploads, GPU rendering and main preparation",
+    "samples": 7,
+    "previousMs": 47.628484999999955,
+    "sharedMs": 0.16688599999997678,
+    "previousTimesMs": [
+      47.628484999999955,
+      71.62032900000008,
+      46.603106000000025,
+      53.286120000000096,
+      35.39570400000002,
+      46.99017600000002,
+      49.022005000000036
+    ],
+    "sharedTimesMs": [
+      0.4701909999999998,
+      0.2463430000000244,
+      0.16688599999997678,
+      0.31144799999992756,
+      0.13110300000005282,
+      0.058024999999929605,
+      0.12694600000008904
+    ],
+    "avoidedPerRevision": {
+      "transformedCoordinates": 3000000,
+      "transformedFractional": 3000000,
+      "coordinateBounds": 3000000,
+      "radiusReads": 1000000
+    },
+    "exactCoordinatesAndBounds": true,
+    "processedBuffersShared": true
+  },
+  "primitivePreparation": {
+    "count": 1000000,
+    "iterations": 9,
+    "pixels": 1000000,
+    "previousMedianMs": 29.121262000000115,
+    "preparedMedianMs": 9.023157000000083,
+    "previousCoordinateMirrorBytes": 64000000,
+    "preparedCoordinateMirrorBytes": 32000000,
+    "checksum": 257532.5944340229,
+    "timings": {
+      "previous": [
+        37.33683199999996,
+        21.960445000000163,
+        29.826880000000074,
+        21.84971200000018,
+        32.897527999999966,
+        28.93208299999992,
+        32.88072299999999,
+        25.053916999999956,
+        29.121262000000115
+      ],
+      "prepared": [
+        8.615928999999937,
+        14.420008999999936,
+        7.888437999999951,
+        15.234067000000096,
+        8.02303599999982,
+        17.11602599999992,
+        9.498017000000118,
+        8.351688999999851,
+        9.023157000000083
+      ]
+    }
+  },
+  "sourceComparisonBrowser": {
+    "production": false,
+    "scenarios": [
+      {
+        "name": "Float64 / zero origin / negative skew replicas",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "wrapped periodic origin",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "unwrapped origin / independent fractional arrays",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "changed negative skew replicas",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "slices / bond image shifts",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "independent scene merge / selection-hidden arrows",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "same-array radii revision",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "same-array display revision",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      }
+    ],
+    "sharing": {
+      "samePositionRows": true,
+      "sameFractionRows": true,
+      "actualRowBytes": true,
+      "closedRowBytesZero": true,
+      "closedShiftBytesZero": true,
+      "closedLayerRowsReleased": true,
+      "closedUploadMirrorsReleased": true,
+      "reopenedRowsShared": true
+    },
+    "context": {
+      "pixelDifferences": 0,
+      "preparationRetained": true
+    },
+    "ui": {
+      "adopted": true,
+      "sameArrayCoordinatesFollow": true,
+      "sameArrayRadiusFollows": true,
+      "independentCamera": true,
+      "hiddenReleased": true,
+      "reopenRestoresCamera": true,
+      "sourceClosed": true
+    }
+  },
+  "contracts": {
+    "explicitGpuInvalidation": "invalidateGpuFrame advances geometryRevision; in-place array edits must be marked.",
+    "secondViewGpuUploads": "Each GL context retains separate uploads and graphics resources.",
+    "surfaceReuse": "One persistent Worker shares display geometry and packed arrays; per-context GL buffers."
+  },
+  "productionGpuInputRevisions": {
+    "adapter": {
+      "available": true,
+      "vendor": "google",
+      "architecture": "swiftshader",
+      "device": "",
+      "description": "",
+      "isFallbackAdapter": true,
+      "limits": {
+        "maxStorageBufferBindingSize": 1073741824,
+        "maxComputeWorkgroupsPerDimension": 65535
+      }
+    },
+    "production": true,
+    "initial": [
+      2,
+      1,
+      1
+    ],
+    "explicitInvalidation": [
+      2,
+      2,
+      2
+    ],
+    "revisionEdit": [
+      2,
+      1,
+      1
+    ],
+    "additionalInputUploads": 2,
+    "reparsedResidentInput": true,
+    "unrelatedFrameRetained": true,
+    "referenceCancelled": true,
+    "retainedWorkerAndPipelines": true,
+    "pendingAfterRecovery": 0,
+    "activeAfterRecovery": 0,
+    "uploadCount": 4,
+    "pipelineCount": 3
+  },
+  "productionGpuRefusalCache": {
+    "adapter": {
+      "available": true,
+      "vendor": "google",
+      "architecture": "swiftshader",
+      "device": "",
+      "description": "",
+      "isFallbackAdapter": true,
+      "limits": {
+        "maxStorageBufferBindingSize": 1073741824,
+        "maxComputeWorkgroupsPerDimension": 65535
+      }
+    },
+    "production": true,
+    "firstGpuAttempts": 1,
+    "repeatGpuAttempts": 1,
+    "attempts": 4,
+    "reusedCpuWorker": true,
+    "retainedGpuWorker": true,
+    "mutableCpuMatchesOracle": true,
+    "toggleRetried": true,
+    "deviceReplacementRetried": true,
+    "newSourceUsesGpu": true,
+    "closedEntries": 0,
+    "results": [
+      {
+        "backend": "cpu",
+        "fallbackCode": "periodic-image-budget",
+        "fallbackCached": false,
+        "coordination": [
+          2,
+          1,
+          1
+        ]
+      },
+      {
+        "backend": "cpu",
+        "fallbackCode": "periodic-image-budget",
+        "fallbackCached": true,
+        "coordination": [
+          2,
+          1,
+          1
+        ]
+      },
+      {
+        "backend": "cpu",
+        "fallbackCode": "periodic-image-budget",
+        "fallbackCached": true,
+        "coordination": [
+          2,
+          2,
+          2
+        ]
+      },
+      {
+        "backend": "cpu",
+        "fallbackCode": "periodic-image-budget",
+        "fallbackCached": false,
+        "coordination": [
+          2,
+          2,
+          2
+        ]
+      },
+      {
+        "backend": "cpu",
+        "fallbackCode": "periodic-image-budget",
+        "fallbackCached": false,
+        "coordination": [
+          2,
+          2,
+          2
+        ]
+      },
+      {
+        "backend": "gpu",
+        "fallbackCached": false,
+        "coordination": [
+          2,
+          2,
+          2
+        ]
+      }
+    ]
+  },
+  "productionIdealStrain": {
+    "adapter": {
+      "available": true,
+      "vendor": "google",
+      "architecture": "swiftshader",
+      "device": "",
+      "description": "",
+      "isFallbackAdapter": true,
+      "limits": {
+        "maxStorageBufferBindingSize": 1073741824,
+        "maxComputeWorkgroupsPerDimension": 65535
+      }
+    },
+    "scope": "Versioned production ideal strain workers",
+    "builtIdeal": {
+      "assetBase": "/AlloyView/dist/assets/2948449939427487/src/",
+      "atoms": 108,
+      "freshEngine": "webgpu-ptm-neighbors+ptm-wasm-worker+webgpu-strain-tensor",
+      "freshFields": {
+        "maxAbsoluteError": 0,
+        "fields": {
+          "atomicShearStrain": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "atomicHydrostaticStrain": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "atomicVolumeChange": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE11": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE22": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE33": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE12": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE13": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE23": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          }
+        }
+      },
+      "ptm": {
+        "maxAbsoluteError": 0,
+        "fields": {
+          "structures": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "rmsd": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "scales": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "deformation": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "distances": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          }
+        }
+      },
+      "editedFields": {
+        "maxAbsoluteError": 3.2050630875227215e-16,
+        "fields": {
+          "atomicShearStrain": {
+            "maxAbsoluteError": 3.2050630875227215e-16,
+            "nanAtoms": 0
+          },
+          "atomicHydrostaticStrain": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "atomicVolumeChange": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE11": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE22": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE33": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE12": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE13": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          },
+          "strainE23": {
+            "maxAbsoluteError": 0,
+            "nanAtoms": 0
+          }
+        }
+      },
+      "editedPtmInputReused": true,
+      "editedGpuPtmInputReused": true,
+      "uploadCountUnchanged": true,
+      "workerUrls": [
+        "http://127.0.0.1:36621/AlloyView/dist/assets/2948449939427487/src/analysis/gpu/worker.js",
+        "http://127.0.0.1:36621/AlloyView/dist/assets/2948449939427487/src/workers/analysis-worker.js",
+        "http://127.0.0.1:36621/AlloyView/dist/assets/2948449939427487/src/workers/analysis-worker.js"
+      ],
+      "exactZero": true
+    }
+  },
+  "productionComparisonBeforeCanvasFix": {
+    "production": true,
+    "scenarios": [
+      {
+        "name": "Float64 / zero origin / negative skew replicas",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "wrapped periodic origin",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "unwrapped origin / independent fractional arrays",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "changed negative skew replicas",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "slices / bond image shifts",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "independent scene merge / selection-hidden arrows",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "same-array radii revision",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      },
+      {
+        "name": "same-array display revision",
+        "pixelDifferences": 0,
+        "exportDifferences": 0,
+        "pickDifferences": 0,
+        "boundsEqual": true,
+        "coordinatesShared": true,
+        "uploadBytes": 576,
+        "glError": 0
+      }
+    ],
+    "sharing": {
+      "samePositionRows": true,
+      "sameFractionRows": true,
+      "actualRowBytes": true,
+      "closedRowBytesZero": true,
+      "closedShiftBytesZero": true,
+      "closedLayerRowsReleased": true,
+      "closedUploadMirrorsReleased": true,
+      "reopenedRowsShared": true
+    },
+    "context": {
+      "pixelDifferences": 0,
+      "preparationRetained": true
+    },
+    "ui": {
+      "adopted": true,
+      "sameArrayCoordinatesFollow": true,
+      "sameArrayRadiusFollows": true,
+      "independentCamera": true,
+      "hiddenReleased": true,
+      "reopenRestoresCamera": true,
+      "sourceClosed": true
+    }
+  },
+  "productionSurfaceMesh": [
+    {
+      "adapter": {
+        "required": false,
+        "available": false,
+        "reason": "WebGPU is not required for this CPU browser check."
+      },
+      "isolated": false,
+      "sharedMemory": false,
+      "fixture": {
+        "faces": 104,
+        "voidVolume": 1600.0001324419977,
+        "surfaceArea": 675.9019354947355,
+        "pixels": {
+          "capped": {
+            "red": 0,
+            "green": 39639,
+            "blue": 144728,
+            "other": 244,
+            "sample": [
+              34,
+              33,
+              231
+            ]
+          },
+          "cappedOblique": {
+            "red": 0,
+            "green": 32854,
+            "blue": 240745,
+            "other": 299
+          },
+          "uncapped": {
+            "red": 38504,
+            "green": 34246,
+            "blue": 0,
+            "other": 178
+          },
+          "sliced": {
+            "red": 0,
+            "green": 19876,
+            "blue": 72364,
+            "other": 122
+          },
+          "cut": [
+            {
+              "red": 0,
+              "green": 27034,
+              "blue": 159433,
+              "other": 259
+            },
+            {
+              "red": 99515,
+              "green": 5820,
+              "blue": 81316,
+              "other": 40
+            }
+          ],
+          "centered": {
+            "red": 0,
+            "green": 0,
+            "blue": 184896,
+            "other": 0
+          },
+          "dragging": {
+            "red": 39395,
+            "green": 109,
+            "blue": 0,
+            "other": 16
+          }
+        },
+        "geometry": {
+          "openEdges": 0,
+          "volume": 20351.99986720084,
+          "caps": 6,
+          "surfaceArea": 675.9019354947367,
+          "capArea": 3695.9999699592586,
+          "triangles": 524,
+          "capTriangles": 222,
+          "capTrianglesOffA": 154
+        },
+        "screenMatch": [
+          {
+            "width": 1050,
+            "height": 928,
+            "maxDifference": 0,
+            "changedFraction": 0,
+            "opacity": 1
+          },
+          {
+            "width": 1050,
+            "height": 928,
+            "maxDifference": 0,
+            "changedFraction": 0,
+            "opacity": 0.5
+          }
+        ]
+      },
+      "restored": {
+        "smoothingLevel": 6,
+        "surfaceArea": 651.9247487482178
+      },
+      "hea": {
+        "radius": "3.4",
+        "surface": {
+          "atoms": 28800,
+          "radius": 3.4,
+          "smoothingLevel": 8,
+          "firstMs": 754,
+          "runs": [
+            {
+              "totalMs": 735,
+              "kernelMs": 611,
+              "threads": 1
+            },
+            {
+              "totalMs": 462,
+              "kernelMs": 460,
+              "threads": 1
+            },
+            {
+              "totalMs": 494,
+              "kernelMs": 472,
+              "threads": 1
+            }
+          ],
+          "medianMs": 494,
+          "workerCount": 1,
+          "sharedMemory": false,
+          "directMainThreadMs": 512,
+          "faceCount": 4384,
+          "vertexCount": 2192,
+          "surfaceArea": 14378.41644264658,
+          "filledVolume": 322952.8564262015,
+          "emptyVolume": 12970.343615865257,
+          "cellVolume": 335923.20003400306,
+          "counts": [
+            1,
+            1,
+            0,
+            1
+          ],
+          "displayBuildMs": 40.2,
+          "displayTriangles": 5480,
+          "stages": [
+            [
+              "Periodic Delaunay tessellation",
+              370
+            ],
+            [
+              "Classify tetrahedra and build the surface",
+              48
+            ],
+            [
+              "Identify filled and empty regions",
+              49
+            ],
+            [
+              "Separate manifolds and smooth the surface",
+              3
+            ],
+            [
+              "Measure the surface",
+              0
+            ],
+            [
+              "Collect the surface mesh",
+              0
+            ]
+          ],
+          "direct": {
+            "faceCount": 4384,
+            "surfaceArea": 14378.41644264658,
+            "filledVolume": 322952.8564262015
+          }
+        },
+        "defectMesh": {
+          "vertexCount": 2192,
+          "triangleCount": 4384,
+          "surfaceArea": 14290.34030304304,
+          "smoothingLevel": 8,
+          "goodCellCount": 165873,
+          "defectCellCount": 6752
+        },
+        "defectPixels": {
+          "red": 107544,
+          "green": 448,
+          "blue": 0,
+          "other": 0
+        },
+        "dxa": {
+          "atoms": 28800,
+          "threads": 1,
+          "offMs": [
+            1054,
+            785,
+            853
+          ],
+          "onMs": [
+            781,
+            739,
+            602
+          ],
+          "medianOffMs": 853,
+          "medianOnMs": 739,
+          "meshStageMs": 3.6,
+          "triangles": 4384,
+          "vertices": 2192,
+          "surfaceArea": 14290.34030304304
+        }
+      },
+      "loop": {
+        "surface": {
+          "atoms": 60229,
+          "radius": 3.45,
+          "smoothingLevel": 8,
+          "firstMs": 1107,
+          "runs": [
+            {
+              "totalMs": 1146,
+              "kernelMs": 1143,
+              "threads": 1
+            },
+            {
+              "totalMs": 1036,
+              "kernelMs": 1034,
+              "threads": 1
+            },
+            {
+              "totalMs": 802,
+              "kernelMs": 799,
+              "threads": 1
+            }
+          ],
+          "medianMs": 1036,
+          "workerCount": 1,
+          "sharedMemory": false,
+          "directMainThreadMs": 837,
+          "faceCount": 0,
+          "vertexCount": 0,
+          "surfaceArea": 0,
+          "filledVolume": 686663.7424277451,
+          "emptyVolume": 0,
+          "cellVolume": 686663.7424277319,
+          "counts": [
+            1,
+            0,
+            0,
+            0
+          ],
+          "displayBuildMs": null,
+          "displayTriangles": 0,
+          "stages": [
+            [
+              "Periodic Delaunay tessellation",
+              666
+            ],
+            [
+              "Classify tetrahedra and build the surface",
+              53
+            ],
+            [
+              "Identify filled and empty regions",
+              77
+            ],
+            [
+              "Separate manifolds and smooth the surface",
+              0
+            ],
+            [
+              "Measure the surface",
+              0
+            ],
+            [
+              "Collect the surface mesh",
+              0
+            ]
+          ],
+          "direct": {
+            "faceCount": 0,
+            "surfaceArea": 0,
+            "filledVolume": 686663.7424277451
+          }
+        },
+        "dxa": {
+          "atoms": 60229,
+          "threads": 1,
+          "offMs": [
+            1562,
+            1376,
+            1396
+          ],
+          "onMs": [
+            1429,
+            1418,
+            1693
+          ],
+          "medianOffMs": 1396,
+          "medianOnMs": 1429,
+          "meshStageMs": 5.5,
+          "triangles": 0,
+          "vertices": 0,
+          "surfaceArea": 0
+        }
+      },
+      "mobile": [
+        {
+          "id": "surface-mesh-radius",
+          "width": 168.5,
+          "fits": true
+        },
+        {
+          "id": "surface-mesh-smoothing",
+          "width": 168.5,
+          "fits": true
+        },
+        {
+          "id": "surface-mesh-selection",
+          "width": 346,
+          "fits": true
+        },
+        {
+          "id": "run-surface-mesh",
+          "width": 346,
+          "fits": true
+        },
+        {
+          "id": "surface-mesh-color",
+          "width": 110,
+          "fits": true
+        },
+        {
+          "id": "surface-mesh-opacity",
+          "width": 342,
+          "fits": true
+        },
+        {
+          "id": "export-surface-mesh-stl",
+          "width": 168.5,
+          "fits": true
+        },
+        {
+          "id": "export-surface-mesh-obj",
+          "width": 168.5,
+          "fits": true
+        }
+      ],
+      "screenshots": [
+        "/tmp/alloyview-surface-mesh-desktop.png",
+        "/tmp/alloyview-surface-mesh-mobile.png",
+        "/tmp/alloyview-dxa-defect-mesh.png"
+      ]
+    },
+    {
+      "adapter": {
+        "required": false,
+        "available": false,
+        "reason": "WebGPU is not required for this CPU browser check."
+      },
+      "isolated": true,
+      "sharedMemory": true,
+      "fixture": {
+        "faces": 104,
+        "voidVolume": 1600.0001324419977,
+        "surfaceArea": 675.9019354947355,
+        "pixels": {
+          "capped": {
+            "red": 0,
+            "green": 39639,
+            "blue": 144728,
+            "other": 244,
+            "sample": [
+              34,
+              33,
+              231
+            ]
+          },
+          "cappedOblique": {
+            "red": 0,
+            "green": 32854,
+            "blue": 240745,
+            "other": 299
+          },
+          "uncapped": {
+            "red": 38504,
+            "green": 34246,
+            "blue": 0,
+            "other": 178
+          },
+          "sliced": {
+            "red": 0,
+            "green": 19876,
+            "blue": 72364,
+            "other": 122
+          },
+          "cut": [
+            {
+              "red": 0,
+              "green": 27034,
+              "blue": 159433,
+              "other": 259
+            },
+            {
+              "red": 99515,
+              "green": 5820,
+              "blue": 81316,
+              "other": 40
+            }
+          ],
+          "centered": {
+            "red": 0,
+            "green": 0,
+            "blue": 184896,
+            "other": 0
+          },
+          "dragging": {
+            "red": 39395,
+            "green": 109,
+            "blue": 0,
+            "other": 16
+          }
+        },
+        "geometry": {
+          "openEdges": 0,
+          "volume": 20351.99986720084,
+          "caps": 6,
+          "surfaceArea": 675.9019354947367,
+          "capArea": 3695.9999699592586,
+          "triangles": 524,
+          "capTriangles": 222,
+          "capTrianglesOffA": 154
+        },
+        "screenMatch": [
+          {
+            "width": 1050,
+            "height": 928,
+            "maxDifference": 0,
+            "changedFraction": 0,
+            "opacity": 1
+          },
+          {
+            "width": 1050,
+            "height": 928,
+            "maxDifference": 0,
+            "changedFraction": 0,
+            "opacity": 0.5
+          }
+        ]
+      },
+      "restored": {
+        "smoothingLevel": 6,
+        "surfaceArea": 651.9247487482178
+      },
+      "hea": {
+        "radius": "3.4",
+        "surface": {
+          "atoms": 28800,
+          "radius": 3.4,
+          "smoothingLevel": 8,
+          "firstMs": 303,
+          "runs": [
+            {
+              "totalMs": 277,
+              "kernelMs": 273,
+              "threads": 3
+            },
+            {
+              "totalMs": 278,
+              "kernelMs": 276,
+              "threads": 3
+            },
+            {
+              "totalMs": 281,
+              "kernelMs": 280,
+              "threads": 3
+            }
+          ],
+          "medianMs": 278,
+          "workerCount": 3,
+          "sharedMemory": true,
+          "directMainThreadMs": 375,
+          "faceCount": 4384,
+          "vertexCount": 2192,
+          "surfaceArea": 14378.416442646578,
+          "filledVolume": 322952.8564262006,
+          "emptyVolume": 12970.343615865222,
+          "cellVolume": 335923.20003400306,
+          "counts": [
+            1,
+            1,
+            0,
+            1
+          ],
+          "displayBuildMs": 34.1,
+          "displayTriangles": 5480,
+          "stages": [
+            [
+              "Periodic Delaunay tessellation",
+              214
+            ],
+            [
+              "Classify tetrahedra and build the surface",
+              19
+            ],
+            [
+              "Identify filled and empty regions",
+              40
+            ],
+            [
+              "Separate manifolds and smooth the surface",
+              5
+            ],
+            [
+              "Measure the surface",
+              0
+            ],
+            [
+              "Collect the surface mesh",
+              0
+            ]
+          ],
+          "direct": {
+            "faceCount": 4384,
+            "surfaceArea": 14378.41644264658,
+            "filledVolume": 322952.8564262015
+          }
+        },
+        "defectMesh": {
+          "vertexCount": 2192,
+          "triangleCount": 4384,
+          "surfaceArea": 14290.340303043055,
+          "smoothingLevel": 8,
+          "goodCellCount": 165873,
+          "defectCellCount": 6749
+        },
+        "defectPixels": {
+          "red": 107544,
+          "green": 448,
+          "blue": 0,
+          "other": 0
+        },
+        "dxa": {
+          "atoms": 28800,
+          "threads": 3,
+          "offMs": [
+            485,
+            417,
+            418
+          ],
+          "onMs": [
+            460,
+            428,
+            426
+          ],
+          "medianOffMs": 418,
+          "medianOnMs": 428,
+          "meshStageMs": 7.3,
+          "triangles": 4384,
+          "vertices": 2192,
+          "surfaceArea": 14290.340303043058
+        }
+      },
+      "loop": {
+        "surface": {
+          "atoms": 60229,
+          "radius": 3.45,
+          "smoothingLevel": 8,
+          "firstMs": 669,
+          "runs": [
+            {
+              "totalMs": 595,
+              "kernelMs": 592,
+              "threads": 3
+            },
+            {
+              "totalMs": 671,
+              "kernelMs": 668,
+              "threads": 3
+            },
+            {
+              "totalMs": 834,
+              "kernelMs": 827,
+              "threads": 3
+            }
+          ],
+          "medianMs": 671,
+          "workerCount": 3,
+          "sharedMemory": true,
+          "directMainThreadMs": 1045,
+          "faceCount": 0,
+          "vertexCount": 0,
+          "surfaceArea": 0,
+          "filledVolume": 686663.7424277383,
+          "emptyVolume": 0,
+          "cellVolume": 686663.7424277319,
+          "counts": [
+            1,
+            0,
+            0,
+            0
+          ],
+          "displayBuildMs": null,
+          "displayTriangles": 0,
+          "stages": [
+            [
+              "Periodic Delaunay tessellation",
+              690
+            ],
+            [
+              "Classify tetrahedra and build the surface",
+              41
+            ],
+            [
+              "Identify filled and empty regions",
+              93
+            ],
+            [
+              "Separate manifolds and smooth the surface",
+              0
+            ],
+            [
+              "Measure the surface",
+              0
+            ],
+            [
+              "Collect the surface mesh",
+              0
+            ]
+          ],
+          "direct": {
+            "faceCount": 0,
+            "surfaceArea": 0,
+            "filledVolume": 686663.7424277451
+          }
+        },
+        "dxa": {
+          "atoms": 60229,
+          "threads": 3,
+          "offMs": [
+            901,
+            895,
+            819
+          ],
+          "onMs": [
+            964,
+            868,
+            868
+          ],
+          "medianOffMs": 895,
+          "medianOnMs": 868,
+          "meshStageMs": 4.3,
+          "triangles": 0,
+          "vertices": 0,
+          "surfaceArea": 0
+        }
+      },
+      "mobile": [
+        {
+          "id": "surface-mesh-radius",
+          "width": 168.5,
+          "fits": true
+        },
+        {
+          "id": "surface-mesh-smoothing",
+          "width": 168.5,
+          "fits": true
+        },
+        {
+          "id": "surface-mesh-selection",
+          "width": 346,
+          "fits": true
+        },
+        {
+          "id": "run-surface-mesh",
+          "width": 346,
+          "fits": true
+        },
+        {
+          "id": "surface-mesh-color",
+          "width": 110,
+          "fits": true
+        },
+        {
+          "id": "surface-mesh-opacity",
+          "width": 342,
+          "fits": true
+        },
+        {
+          "id": "export-surface-mesh-stl",
+          "width": 168.5,
+          "fits": true
+        },
+        {
+          "id": "export-surface-mesh-obj",
+          "width": 168.5,
+          "fits": true
+        }
+      ],
+      "screenshots": [
+        "/tmp/alloyview-surface-mesh-desktop-isolated.png",
+        "/tmp/alloyview-surface-mesh-mobile-isolated.png",
+        "/tmp/alloyview-dxa-defect-mesh-isolated.png"
+      ]
+    }
+  ],
+  "productionContextRecovery": {
+    "production": true,
+    "entry": "http://127.0.0.1:45937/AlloyView/dist/assets/2948449939427487/src/app.js",
+    "first": {
+      "prevented": true,
+      "denied": [
+        true,
+        true,
+        true
+      ],
+      "notice": "Graphics context lost. Drawing and image export are paused while the view recovers. Atom data and calculations are retained.",
+      "frameRetained": true,
+      "pixelBytesEqual": true,
+      "differingBytes": 0,
+      "cameraEqual": true,
+      "scientificArraysRetained": true,
+      "newProgram": true,
+      "newPositionBuffer": true,
+      "allLayersRebuilt": true,
+      "sourceDescriptorsRetained": true,
+      "factorsRetained": true,
+      "previewRetained": true,
+      "noticeHidden": true,
+      "glError": 0
+    },
+    "second": {
+      "uploadsWhileLost": 0,
+      "latestFrame": true,
+      "latestProperties": true,
+      "latestColors": true,
+      "latestMask": true,
+      "latestBondRadius": 0.13,
+      "latestVectorScale": 2,
+      "latestPick": 0,
+      "obsoleteSurfaceRemoved": true,
+      "glError": 0
+    },
+    "dimensions": [
+      480,
+      320
+    ]
+  },
+  "productionPrimitiveScenes": {
+    "production": true,
+    "entry": "http://127.0.0.1:45939/AlloyView/dist/assets/2948449939427487/src/app.js",
+    "singleSample": {
+      "rows": [
+        {
+          "label": "guarded capless bonds / skew cell",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 31636,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "orthographic cap coverage",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 29335,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "one small per-atom radius retains every cap",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 33853,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "same-array radii restoration re-enables capless",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 31636,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "caps exposed by tiny spheres retained",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 69214,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "periodic replicas and bond image shifts",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 102536,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "full spheres over periodic bond images",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 19376,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "3d and flat multiple arrow fields",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 19838,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "ordinary hidden atoms preserve independent arrows",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 14302,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "selection hiding excludes attached bonds and arrows",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 8536,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "slice planes clip primitive endpoints and faces",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 5816,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "scalar preview and per-atom overrides",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 6086,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "crystal drag wraps bond anchors and replicas",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 6441,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "inactive layer leaves dirty textures unuploaded",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 0,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "reenabling flushes latest visibility on warm mirrors",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 12363,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "full spheres re-enable capless after hiding and drag",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 11542,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "legacy fractional slicing retains caps",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 8586,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "noncanonical small visibility bytes retain caps without sphere coverage",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 27257,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "committed periodic origin updates cap coverage and image shifts",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 9934,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "display coordinate edits retain mismatched endpoint caps",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 11057,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "periodic self bonds with both sphere images displayed",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 93,
+          "capless": true,
+          "errorA": 0,
+          "errorB": 0
+        }
+      ],
+      "bondCount": 192,
+      "exportDifferences": 0,
+      "exports": [
+        {
+          "offscreen": false,
+          "includeBackground": false,
+          "differingBytes": 0
+        },
+        {
+          "offscreen": false,
+          "includeBackground": true,
+          "differingBytes": 0
+        },
+        {
+          "offscreen": true,
+          "includeBackground": false,
+          "differingBytes": 0
+        },
+        {
+          "offscreen": true,
+          "includeBackground": true,
+          "differingBytes": 0
+        }
+      ],
+      "defaultSamples": 0,
+      "bondDrawIndices": [
+        120,
+        60
+      ],
+      "unsafeMultisampleControl": null,
+      "warmMirrorReused": true,
+      "contextRecovery": {
+        "differingBytes": 0,
+        "rebuiltCaplessMesh": true,
+        "sampleModeRetained": true,
+        "glError": 0
+      },
+      "note": "Real WebGL2 pixel parity on SwiftShader. No physical-GPU speed claim. Single-sample guarded capless/indexed primitives checked against expanded capped triangle oracle; MSAA and offscreen exports retain caps."
+    },
+    "multisample": {
+      "rows": [
+        {
+          "label": "guarded capless bonds / skew cell",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 33742,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "orthographic cap coverage",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 31662,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "one small per-atom radius retains every cap",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 36014,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "same-array radii restoration re-enables capless",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 33742,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "caps exposed by tiny spheres retained",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 71285,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "periodic replicas and bond image shifts",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 105295,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "full spheres over periodic bond images",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 23283,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "3d and flat multiple arrow fields",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 23978,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "ordinary hidden atoms preserve independent arrows",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 18453,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "selection hiding excludes attached bonds and arrows",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 11286,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "slice planes clip primitive endpoints and faces",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 7676,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "scalar preview and per-atom overrides",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 8383,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "crystal drag wraps bond anchors and replicas",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 8861,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "inactive layer leaves dirty textures unuploaded",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 0,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "reenabling flushes latest visibility on warm mirrors",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 15960,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "full spheres re-enable capless after hiding and drag",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 13251,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "legacy fractional slicing retains caps",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 9853,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "noncanonical small visibility bytes retain caps without sphere coverage",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 29479,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "committed periodic origin updates cap coverage and image shifts",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 11616,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "display coordinate edits retain mismatched endpoint caps",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 12661,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        },
+        {
+          "label": "periodic self bonds with both sphere images displayed",
+          "bytes": 614400,
+          "differingBytes": 0,
+          "maximumDifference": 0,
+          "primitivePixelBytes": 223,
+          "capless": false,
+          "errorA": 0,
+          "errorB": 0
+        }
+      ],
+      "bondCount": 192,
+      "exportDifferences": 0,
+      "exports": [
+        {
+          "offscreen": false,
+          "includeBackground": false,
+          "differingBytes": 0
+        },
+        {
+          "offscreen": false,
+          "includeBackground": true,
+          "differingBytes": 0
+        },
+        {
+          "offscreen": true,
+          "includeBackground": false,
+          "differingBytes": 0
+        },
+        {
+          "offscreen": true,
+          "includeBackground": true,
+          "differingBytes": 0
+        }
+      ],
+      "defaultSamples": 4,
+      "bondDrawIndices": [
+        120,
+        60
+      ],
+      "unsafeMultisampleControl": {
+        "caplessExercised": true,
+        "differingBytes": 3,
+        "maximumDifference": 12,
+        "firstPixel": {
+          "x": 345,
+          "y": 188,
+          "capped": [
+            152,
+            77,
+            185,
+            255
+          ],
+          "capless": [
+            162,
+            83,
+            197,
+            255
+          ],
+          "nearestSphere": {
+            "atom": 16,
+            "projectedCenter": [
+              345.83596044511586,
+              188.025729978242
+            ],
+            "normalizedRadiusSquared": 0.0005051302489645413
+          },
+          "spheresOnly": [
+            162,
+            83,
+            197,
+            255
+          ]
+        }
+      },
+      "warmMirrorReused": true,
+      "contextRecovery": {
+        "differingBytes": 0,
+        "rebuiltCaplessMesh": true,
+        "sampleModeRetained": true,
+        "glError": 0
+      },
+      "note": "Real WebGL2 pixel parity on SwiftShader. No physical-GPU speed claim. Single-sample guarded capless/indexed primitives checked against expanded capped triangle oracle; MSAA and offscreen exports retain caps."
+    }
+  },
+  "productionBundledRuntime": {
+    "result": "passed",
+    "entry": "./assets/2948449939427487/src/app.js",
+    "serial": {
+      "startupModules": 5,
+      "ordinaryStartupModules": 1,
+      "startupGlueModules": [
+        "voronoi-kernel.mjs",
+        "ptm-kernel.mjs",
+        "voronoi-kernel.mjs",
+        "ptm-kernel.mjs"
+      ],
+      "manifestEntries": 13,
+      "moduleFacades": 171,
+      "identities": true,
+      "coordination": 256,
+      "executedEntries": [
+        "src/app.js",
+        "src/workers/structure-worker.js",
+        "src/workers/frame-parser-worker.js",
+        "src/workers/analysis-worker.js",
+        "src/workers/dxa-worker.js",
+        "src/workers/replication-worker.js",
+        "src/workers/external-property-worker.js",
+        "src/workers/statistics-export-worker.js",
+        "src/workers/selection-worker.js",
+        "src/workers/binning-worker.js",
+        "src/workers/grains-worker.js",
+        "src/workers/surface-geometry-worker.js",
+        "src/analysis/gpu/worker.js"
+      ],
+      "dxa": {
+        "threads": 1,
+        "shared": false,
+        "poolSize": 0,
+        "labels": 256,
+        "engine": "Wasm CPU"
+      },
+      "replicated": 512,
+      "ptm": 256,
+      "voronoi": 256,
+      "externalProperties": 256,
+      "csvRows": 256,
+      "selected": 13,
+      "binned": 256,
+      "grains": 1,
+      "surfaceTriangles": 12,
+      "gpu": {
+        "backend": "gpu",
+        "coordination": 256
+      },
+      "buffersRetained": true,
+      "workerUrls": [
+        "src/workers/structure-worker.js",
+        "src/analysis/gpu/worker.js",
+        "src/workers/analysis-worker.js",
+        "src/workers/dxa-worker.js",
+        "src/workers/surface-geometry-worker.js",
+        "src/workers/replication-worker.js",
+        "src/workers/frame-parser-worker.js",
+        "src/workers/external-property-worker.js",
+        "src/workers/statistics-export-worker.js",
+        "src/workers/selection-worker.js",
+        "src/workers/binning-worker.js",
+        "src/workers/grains-worker.js"
+      ],
+      "notFound": [],
+      "errors": [],
+      "consoleErrors": [],
+      "cpuPermitsAfterClose": 0
+    },
+    "threaded": {
+      "startupModules": 5,
+      "ordinaryStartupModules": 1,
+      "startupGlueModules": [
+        "voronoi-kernel.mjs",
+        "ptm-kernel.mjs",
+        "voronoi-kernel.mjs",
+        "ptm-kernel.mjs"
+      ],
+      "manifestEntries": 13,
+      "moduleFacades": 171,
+      "identities": true,
+      "coordination": 2048,
+      "executedEntries": [
+        "src/app.js",
+        "src/workers/structure-worker.js",
+        "src/workers/frame-parser-worker.js",
+        "src/workers/analysis-worker.js",
+        "src/workers/dxa-worker.js"
+      ],
+      "dxa": {
+        "threads": 2,
+        "shared": true,
+        "poolSize": 1,
+        "labels": 2048,
+        "engine": "Wasm CPU \u00b7 2 threads"
+      },
+      "buffersRetained": true,
+      "workerUrls": [
+        "src/workers/structure-worker.js",
+        "src/analysis/gpu/worker.js",
+        "src/workers/analysis-worker.js",
+        "src/workers/dxa-worker.js",
+        "src/workers/surface-geometry-worker.js"
+      ],
+      "notFound": [],
+      "errors": [],
+      "consoleErrors": [],
+      "cpuPermitsAfterClose": 0
+    }
+  },
+  "verificationNote": "These production reports verify the initial bundle. The later hidden-canvas aspect fix is separately covered by the unchanged floating-Voronoi regression, and final checks are recorded in VALIDATION.md."
+}

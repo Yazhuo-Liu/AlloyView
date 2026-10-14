@@ -17,7 +17,7 @@ let queue = Promise.resolve();
 
 self.addEventListener('message', ({ data }) => {
   if (data.type === 'cancel') { controllers.get(data.id)?.abort(); return; }
-  if (!['analyze', 'warmup', 'configure-cache', 'prepare-frame', 'clear-frames', 'release-voronoi'].includes(data.type)) return;
+  if (!['analyze', 'warmup', 'configure-cache', 'prepare-frame', 'clear-frames', 'release-voronoi', 'release-frame'].includes(data.type)) return;
   const controller = new AbortController(); controllers.set(data.id, controller);
   const retained = [...new Set([data.frameId, data.referenceFrameId].filter(id => id !== undefined))];
   for (const id of retained) receivedFrameIds.set(id, (receivedFrameIds.get(id) ?? 0) + 1);
@@ -58,6 +58,11 @@ async function run(data, controller) {
     checkSignal(controller.signal);
     if (data.type === 'clear-frames') {
       runtime.clearFrames(); frames.clear();
+      self.postMessage({ id: data.id, ok: true, ...cacheState() });
+      return;
+    }
+    if (data.type === 'release-frame') {
+      runtime.releaseFrame(data.releasedFrameId); frames.delete(data.releasedFrameId);
       self.postMessage({ id: data.id, ok: true, ...cacheState() });
       return;
     }

@@ -5,7 +5,7 @@ import { dislocationSlicePlanes } from './dislocation-layer.js';
 import { effectivePeriodicOrigin } from './periodic-origin.js';
 import { MAX_SLICE_PLANES, SLICE_EPSILON } from './slicing.js';
 import { buildSurfaceDisplayMesh } from './surface-mesh-geometry.js';
-import { sharedSurfaceGeometryClient } from './surface-geometry-client.js';
+import { sharedSurfaceGeometryClient, surfaceGeometrySourceKey } from './surface-geometry-client.js';
 
 /** Closed triangle meshes: the alpha-shape surface and the DXA defect mesh.
  * Each mesh is wrapped into the displayed cell, cut at its periodic faces and
@@ -157,14 +157,18 @@ export class SurfaceMeshLayer {
     if (!mesh) { this.release(entry); return entry; }
     if (!renderer.frame) throw new Error('Load a structure before displaying a surface mesh.');
     const state = surfaceMeshDisplayState(renderer);
-    const displayKey = JSON.stringify([state.origin, entry.options.caps]);
-    if (entry.mesh !== mesh || entry.cell !== renderer.frame.cell || entry.displayKey !== displayKey) {
+    const sourceKey = surfaceGeometrySourceKey(mesh, renderer.frame.cell);
+    const displayKey = JSON.stringify([state.origin, entry.options.caps, Boolean(mesh.reverse), Boolean(mesh.spaceFilling)]);
+    const sourceChanged = entry.mesh !== mesh || entry.cell !== renderer.frame.cell || entry.sourceKey !== sourceKey
+      || entry.vertices !== mesh.vertices || entry.triangles !== mesh.triangles;
+    if (sourceChanged || entry.displayKey !== displayKey) {
       entry.controller?.abort(); entry.revision++;
-      if (entry.mesh !== mesh || entry.cell !== renderer.frame.cell) {
+      if (sourceChanged) {
         entry.releaseSource?.();
         entry.releaseSource = this.geometryClient.available ? this.geometryClient.retainSource(mesh, renderer.frame.cell) : null;
       }
       entry.mesh = mesh; entry.cell = renderer.frame.cell; entry.displayKey = displayKey;
+      entry.sourceKey = sourceKey; entry.vertices = mesh.vertices; entry.triangles = mesh.triangles;
       this.upload(entry, state, renderer);
     }
     entry.translation = state.translation;
@@ -227,6 +231,7 @@ export class SurfaceMeshLayer {
     entry.controller?.abort(); entry.revision++; entry.pending = false; entry.ready = null;
     entry.releaseSource?.(); entry.releaseSource = null;
     entry.mesh = entry.display = entry.cell = entry.displayKey = entry.error = null;
+    entry.sourceKey = entry.vertices = entry.triangles = null;
     const gl = this.gl;
     gl.bindVertexArray(entry.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, entry.buffer); gl.bufferData(gl.ARRAY_BUFFER, 0, gl.STATIC_DRAW);

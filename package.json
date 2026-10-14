@@ -81,7 +81,11 @@
     "test:browser:mobile-targets": "node scripts/browser-mobile-targets.mjs --production",
     "test:browser:time-series-headers": "node scripts/browser-time-series-headers.mjs",
     "test:browser:gpu-fallback-cache": "node scripts/browser-gpu-fallback-cache.mjs --production",
-    "benchmark:coordinate-projection": "node scripts/benchmark-coordinate-projection.mjs"
+    "benchmark:coordinate-projection": "node scripts/benchmark-coordinate-projection.mjs",
+    "test:browser:gpu-frame-revisions": "node scripts/browser-gpu-frame-revisions.mjs --production",
+    "test:browser:comparison-preparation": "node scripts/browser-comparison-preparation.mjs --production",
+    "benchmark:display-preparation": "node scripts/benchmark-display-preparation.mjs",
+    "benchmark:primitive-preparation": "node --expose-gc scripts/benchmark-primitive-preparation.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -68,13 +68,12 @@ The items with the best return, drawn from all parts below:
 
 | Order | Item | What it gives | Effort |
 | --- | --- | --- | --- |
-| 1 | B38 | Define explicit invalidation for public mutable resident GPU inputs | M |
-| 2 | G2 | Re-measure routing and evaluate remaining content-dependent fallbacks | M |
-| 3 | R6, R7 | Shared display preparation and early atom-depth rejection | S–M |
-| 4 | C10, K1 | Voronoi transport and reused grain-template fitting | M |
-| 5 | S4 | Enable the prepared immutable-asset rules on the production CDN | S |
+| 1 | G2 | Re-measure routing and evaluate remaining content-dependent fallbacks | M |
+| 2 | R7 | Early atom-depth rejection | S–M |
+| 3 | C10, K1 | Voronoi transport and reused grain-template fitting | M |
+| 4 | S4 | Enable the prepared immutable-asset rules on the production CDN | S |
 
-C1–C9, R2–R5/R8, S1–S3/S5, T1–T6 and K2 have moved to the feature
+C1–C9, R2–R6/R8, S1–S3/S5, T1–T6 and K2 have moved to the feature
 documentation and dated [validation record](VALIDATION.md). R1 retains its MSAA
 restriction below; measurements are scoped to the tested deployment and hardware.
 
@@ -93,15 +92,16 @@ rules remains below. The approved 2026-10-14 batch completed B23/B24/B25/B30,
 T2, R2/R4/R5 and the fused-tail/same-order part of T4; coordinate-only
 reads were completed in the following continuation, along with B32/B35/B36
 and T6. G2 now remembers explicit cell/cutoff capability refusals; its routing
-model and content-dependent fallback policy remain below. B38 records a newly
-reproduced public API limitation, without claiming an application-path failure.
+model and content-dependent fallback policy remain below. The next continuation
+completed B38's explicit GPU revision/invalidation contract and R6's shared
+second-view preparation, and corrected Surface cache accounting and revisions.
+Their contracts and validation are recorded in [VALIDATION.md](VALIDATION.md).
 
 ### Lower-severity defects
 
 | ID | Problem | Evidence | Fix | Effort |
 | --- | --- | --- | --- | --- |
 | B34 | GPU results that depend on neighbor order are not reproducible between runs: frame strain on 6,912 and 60,229 atoms differs in 7–11 of 1,144,351 values (at most 1.5×10⁻⁸), HEA bonds and Q4/Q6 differ between two pools, and GPU Voronoi digests differ between page loads | Found while fixing B1 and B5; the GPU neighbor grid is filled with `atomicExchange`, so the order of each cell's list varies [M] | Sort each cell's list, or accumulate in an order-independent way; decide first whether run-to-run identity is required on the GPU | M |
-| B38 | Reusing a public resident GPU frame after changing its coordinates or cell in place returns old values; a new frame identity or `clearGpuFrames()` restores correct results. Existing application source, smoothing and replication paths clear their GPU source. | Actual SwiftShader Coordination: `[2,1,1]` stays unchanged after an edit whose CPU/new-frame GPU result is `[2,2,2]`; G2 has zero cache entries [M] | Add an explicit geometry revision/invalidation contract, or measure a content check before enabling it. Preserve resident-input reuse for immutable application frames. | M |
 
 Suspected but not reproduced: the movie frame range persists across files
 beyond the new frame count. Compound physical-copy IDs still give NaN in the
@@ -145,7 +145,9 @@ encoded source ID and offset directly.
   CPU from 100k atoms with 6 or more Workers; central symmetry to CPU with 12
   or more Workers), then a per-kernel cost model corrected by measured times.
   A broader content-dependent refusal cache needs a reliable input revision
-  or immutable snapshot, rather than frame identity alone; see B38. Pin the
+  or immutable snapshot, rather than frame identity alone. GPU input revisions
+  now scope the refusal cache, but unmarked array edits still require the
+  documented invalidation contract. Pin the
   backend within one batch or time series, because backends agree only within
   documented tolerances.
 - **Note:** these are pre-fix audit CPU timings. C3/C4 and the C5 scalar kernels are complete; the following C5/C6/C9 completion batch measured whole-pool effects separately.
@@ -172,17 +174,6 @@ moves use a constant-size projection/depth check, without scanning every bond.
   shifts, per-atom radii, hiding, slices and context restoration. Avoid an
   O(bond-count) coverage scan on every camera move without measuring its cost.
 - See [performance](features/performance.md) and [validation](VALIDATION.md).
-
-### R6. Second view: reuse processed arrays and display meshes
-
-**Effort:** S. **Deployments:** all.
-
-- **Evidence:** enabling the second view at 60k atoms with bonds takes 173 ms
-  and uploads 16.8 MB [M]; each surface mesh is wrapped, cut and capped again
-  for it, and display coordinates and scene bounds are recomputed [C].
-- **Change:** cache the display mesh on the mesh object by cell, origin and
-  caps; let the second renderer adopt the main renderer's processed display
-  arrays, atom bounds and bond shifts (treated as immutable).
 
 ### S4. Enable production CDN rules for content-hashed assets
 
