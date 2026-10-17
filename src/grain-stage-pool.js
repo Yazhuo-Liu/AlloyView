@@ -13,11 +13,14 @@ const STAGE_FIELDS = {
 export class GrainStagePool {
   constructor({ createWorker = defaultFactory, environment = globalThis } = {}) {
     this.createWorker = createWorker; this.environment = environment; this.slots = []; this.sequence = 0; this.pending = new Set(); this.warming = null;
-    this.warmTarget = 0; this.disposed = false; this.running = false;
+    this.warmTarget = 0; this.deferredWarm = null; this.disposed = false; this.running = false;
   }
   prewarm(degree, budget) {
     if (this.disposed || !this.createWorker || degree < 3 || !budget) return;
     this.warmTarget = Math.max(this.warmTarget, degree - 1);
+    // Snapshot copying yields to the UI. Reopening the panel during that
+    // interval must not claim a slot that this stage is about to use.
+    if (this.running) { this.deferredWarm = budget; return; }
     if (this.warming) return;
     const controller = new AbortController(), job = { controller, promise: null }; this.warming = job;
     job.promise = (async () => {
@@ -63,6 +66,7 @@ export class GrainStagePool {
     worker.addEventListener('message', ({ data }) => {
       if (slot.job?.id !== data.id) return;
       const job = slot.job; slot.job = null;
+      if (data.ok) slot.warmed = true;
       data.ok ? job.resolve(data.result) : job.reject(new Error(data.error));
     });
     const failed = event => {
@@ -102,11 +106,19 @@ export class GrainStagePool {
   async runStage(stage, input, length, degree, signal) {
     if (this.disposed || signal?.aborted) throw abort();
     if (!STAGE_FIELDS[stage] || !Number.isSafeInteger(length) || length < 0 || !Number.isSafeInteger(degree) || degree < 3) throw new Error('Invalid parallel grain stage.');
-    await this.stopWarm();
     if (this.running) throw new Error('A parallel grain stage is already running.');
+    // Claim the stage before awaiting existing warmup, so another prewarm
+    // cannot start between that acknowledgement and the snapshot copy.
     this.running = true;
-    try { return await this.runRanges(stage, input, length, degree, signal); }
-    finally { this.running = false; }
+    try {
+      await this.stopWarm();
+      if (this.disposed || signal?.aborted) throw abort();
+      return await this.runRanges(stage, input, length, degree, signal);
+    } finally {
+      this.running = false;
+      const budget = this.deferredWarm; this.deferredWarm = null;
+      if (budget) this.prewarm(this.warmTarget + 1, budget);
+    }
   }
   async runRanges(stage, input, length, degree, signal) {
     const snapshot = await this.snapshot(Object.fromEntries(STAGE_FIELDS[stage].map(key => [key, input[key]])), signal), ranges = [], posted = [];
@@ -120,6 +132,7 @@ export class GrainStagePool {
     try { for (let index = 0; index < count; index++) {
       const first = Math.floor(length * index / count), end = Math.floor(length * (index + 1) / count);
       const slot = this.slot(index), id = ++this.sequence;
+      if (slot.job) throw new Error('A grain stage Worker is already running.');
       posted.push(slot);
       const promise = new Promise((resolve, reject) => {
         slot.job = { id, resolve, reject };
@@ -154,5 +167,5 @@ export class GrainStagePool {
     return result;
   }
   async drain() { await Promise.allSettled([...this.pending]); }
-  dispose() { this.disposed = true; this.warming?.controller.abort(); for (const slot of this.slots) { slot?.worker.terminate(); slot?.job?.reject(abort()); } this.slots = []; }
+  dispose() { this.disposed = true; this.deferredWarm = null; this.warming?.controller.abort(); for (const slot of this.slots) { slot?.worker.terminate(); slot?.job?.reject(abort()); } this.slots = []; }
 }

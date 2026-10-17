@@ -434,7 +434,10 @@ export class GpuAnalysisClient {
         if (!this.cachedFrameIds.has(id) && !preparedIds.has(id)) {
           const fractional = await copyArray(source.fractional, task);
           const types = source.types ? await copyArray(source.types, task) : undefined;
-          payload = { fractional, types, typeLabels: source.typeLabels, cell: source.cell, gpuFrameId: id };
+          payload = { fractional, types, typeLabels: source.typeLabels, cell: source.cell, gpuFrameId: id,
+            // Subsets retain their trajectory index for foreground routing,
+            // but only the complete current frame is permanently pinned.
+            gpuDerivedFrame: source === task.frame && Boolean(task.sourceFrame && task.sourceFrame !== source) };
           transfer.push(fractional.buffer);
           if (types) transfer.push(types.buffer);
           preparedIds.add(id);

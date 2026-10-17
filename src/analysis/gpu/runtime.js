@@ -379,7 +379,7 @@ export class GpuRuntime {
           checkSignal(signal);
           return { positionsBuffer, typesBuffer, frameIndex, bytes };
         });
-        this.frames.set(frameKey, { ...existing, ...buffers, typesSource: frame.types, frameIndex: frameIndex ?? existing?.frameIndex,
+        this.frames.set(frameKey, { ...existing, ...buffers, typesSource: frame.types, derived: Boolean(frame.gpuDerivedFrame), frameIndex: frameIndex ?? existing?.frameIndex,
           bytes: (existing?.bytes ?? 0) + bytes }); this.residentBytes += bytes; this.inputUploads++;
         return { frameKey, ...this.cacheStatus() };
       } catch (error) {
@@ -579,7 +579,7 @@ export class GpuRuntime {
   shrinkBudget(incomingBytes = 0) {
     const workspaceBytes = gpuWorkspaceBytes(this.frameBytes);
     const protectedKeys = this.protectedKeys();
-    const protectedBytes = [...this.frames].filter(([key, frame]) => protectedKeys.has(key) || frame.frameIndex === this.currentIndex)
+    const protectedBytes = [...this.frames].filter(([key, frame]) => protectedKeys.has(key) || !frame.derived && frame.frameIndex === this.currentIndex)
       .reduce((total, [, frame]) => total + frame.bytes, 0);
     const lowerBound = workspaceBytes + Math.max(this.frameBytes, protectedBytes + incomingBytes);
     this.budgetBytes = Math.min(this.budgetBytes, Math.max(lowerBound,

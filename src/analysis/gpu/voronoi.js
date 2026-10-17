@@ -122,7 +122,10 @@ function voronoiSettings(frame, { geometry, scale, exactSingleSite }) {
 export async function prepareGpuVoronoiFrame(runtime, source, parameters = {}, { signal, frameIndex, onProgress = () => {} } = {}) {
   checkSignal(signal);
   const selection = prepareVoronoiSelection(source, parameters.selectedTypes), frame = selection.frame;
-  if (!selection.isAll && frame.gpuFrameId === undefined) frame.gpuFrameId = -++GpuRuntime.frameSerial;
+  if (!selection.isAll) {
+    if (frame.gpuFrameId === undefined) frame.gpuFrameId = -++GpuRuntime.frameSerial;
+    frame.gpuDerivedFrame = true;
+  }
   const release = runtime.pinFrames?.([frame]);
   try {
     await runtime.warmup({ analysisKinds:['voronoi'], signal });
@@ -164,6 +167,7 @@ export async function analyzeGpuVoronoi(runtime, frame, parameters = {}, { signa
   // The normal client compacts before transferring input. Direct/runtime users
   // receive the same scientific behavior, with a separate resident cache key.
   if (selection.frame.gpuFrameId === undefined) selection.frame.gpuFrameId = -++GpuRuntime.frameSerial;
+  selection.frame.gpuDerivedFrame = true;
   const release = runtime.pinFrames?.([selection.frame]);
   try {
     const result = await analyzeGpuVoronoiCells(runtime, selection.frame,

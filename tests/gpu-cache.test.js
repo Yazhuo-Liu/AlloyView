@@ -165,6 +165,39 @@ test('compute allocation protects both the displayed frame and the frame bound t
   } finally { runtime.close(); }
 });
 
+test('idle subsets sharing the current index can evict while active subset/reference pins and warmed resources survive', async () => {
+  const { runtime } = fixture();
+  let active, referencePin;
+  try {
+    const current = input(0), subset = input(1), reference = input(2);
+    subset.gpuDerivedFrame = true;
+    const bytes = frameUploadBytes(current);
+    runtime.configureCache({ frameCount: 1, currentIndex: 0, budgetBytes: gpuWorkspaceBytes(bytes) + bytes * 3 });
+    await runtime.warmup({ analysisKinds: ['voronoi'] });
+    await runtime.uploadFrame(current, { frameIndex: 0 });
+    const currentBuffer = runtime.frames.get(current.gpuFrameId).positionsBuffer;
+    const device = runtime.device, pipelines = [...runtime.pipelines.values()];
+    active = runtime.pinFrames([subset, reference]);
+    referencePin = runtime.pinFrames([reference]);
+    await runtime.uploadFrame(subset, { frameIndex: 0 });
+    await runtime.uploadFrame(reference, { frameIndex: 2 });
+    const subsetBuffer = runtime.frames.get(subset.gpuFrameId).positionsBuffer;
+    const referenceBuffer = runtime.frames.get(reference.gpuFrameId).positionsBuffer;
+    runtime.finishAnalysis();
+    assert.equal(runtime.frames.size, 3, 'both analysis inputs stay pinned through readback despite capacity one');
+    assert.equal(subsetBuffer.destroyed, false);
+    active(); active = null;
+    runtime.finishAnalysis();
+    assert.equal(subsetBuffer.destroyed, true, 'sharing the current index does not permanently pin a completed subset');
+    assert.equal(referenceBuffer.destroyed, false, 'the independent nested reference lease is still active');
+    assert.equal(currentBuffer.destroyed, false, 'the complete displayed frame keeps its permanent pin');
+    referencePin(); referencePin = null; runtime.finishAnalysis();
+    assert.deepEqual(runtime.cacheStatus().cachedFrameIds, [current.gpuFrameId]);
+    assert.equal(referenceBuffer.destroyed, true);
+    assert.equal(runtime.device, device); assert.deepEqual([...runtime.pipelines.values()], pipelines);
+  } finally { active?.(); referencePin?.(); runtime.close(); }
+});
+
 test('a dual-frame reference job retains both inputs during compute OOM recovery without relabeling the displayed frame', async () => {
   const state = fixture(), { runtime } = state;
   let unpin;

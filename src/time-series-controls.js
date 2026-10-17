@@ -273,7 +273,10 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
       if (error.name !== 'AbortError' && job === task) notify(error.message);
       return false;
     } finally {
-      const restore = task.source === String(getSourceVersion()) && !interrupted;
+      // Explicit cancellation retains this job until its view is restored.
+      // A reset or configuration restore replaces it and owns navigation now,
+      // even when the source and processing revision have not changed.
+      const restore = job === task && task.source === String(getSourceVersion()) && !interrupted;
       let ownsCompletion = false, restoreFailure = null;
       try { if (restore && getFrameIndex() !== original) await showFrame(original); }
       catch (error) {

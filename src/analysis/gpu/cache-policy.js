@@ -29,12 +29,13 @@ export function trajectoryCapacity({ frameCount = 0, frameBytes = 0, budgetBytes
 }
 
 /** Furthest frame first; equal-distance eviction keeps the more recent frame.
- * Frames without trajectory indexes retain insertion-order eviction. */
+ * Derived inputs and frames without indexes retain insertion-order eviction.
+ * A subset shares its source's index but not its permanent current-frame pin. */
 export function frameEvictionOrder(frames, currentIndex, protectedKeys = new Set()) {
   return [...frames].map(([key, frame], order) => ({ key, frame, order }))
-    .filter(({ key, frame }) => !protectedKeys.has(key) && !(Number.isInteger(frame.frameIndex) && frame.frameIndex === currentIndex))
+    .filter(({ key, frame }) => !protectedKeys.has(key) && !(!frame.derived && Number.isInteger(frame.frameIndex) && frame.frameIndex === currentIndex))
     .sort((first, second) => {
-      const distance = frame => Number.isInteger(frame.frameIndex) ? Math.abs(frame.frameIndex - currentIndex) : Infinity;
+      const distance = frame => !frame.derived && Number.isInteger(frame.frameIndex) ? Math.abs(frame.frameIndex - currentIndex) : Infinity;
       return distance(second.frame) - distance(first.frame) || first.order - second.order;
     }).map(({ key }) => key);
 }

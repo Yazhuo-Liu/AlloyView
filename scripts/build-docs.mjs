@@ -11,6 +11,7 @@ export const DOC_GUIDES = Object.freeze([
   { source: 'ATOMEYE_REVIEW.md', page: 'atomeye-review.html', title: 'AtomEye implementation review' },
   { source: 'DXA_REVIEW.md', page: 'dxa-review.html', title: 'DXA implementation review' },
   { source: 'DXA_CPU_PROFILE.md', page: 'dxa-cpu-profile.html', title: 'DXA CPU profile' },
+  { source: 'REPOSITORY_REVIEW_2026-10-16.md', page: 'repository-review-2026-10-16.html', title: 'Repository review (2026-10-16)' },
   { source: 'TODO.md', page: 'todo.html', title: 'Improvement backlog' },
 ]);
 

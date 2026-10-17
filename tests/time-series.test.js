@@ -311,6 +311,61 @@ test('time-series cancellation retains visit ownership and its backend until asy
   assert.equal(h.fields['time-series-state'].textContent, 'Cancelled');
 });
 
+test('configuration restore supersedes a visit waiting for indexing without changing its target frame', async t => {
+  let waiting = false;
+  const h = harness(t, { ensureIndexed: ({ signal }) => new Promise((resolve, reject) => {
+    waiting = true;
+    signal.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), { once: true });
+  }) });
+  h.add('CNA.FCC.fraction');
+  const visit = h.series.visit();
+  assert.equal(waiting, true);
+  // The host commits the configuration's frame before restoring its panels.
+  // Neither the source nor its processing revision has changed.
+  h.view.index = 3;
+  await h.series.restore({ attributes: ['Cell.volume'], autoCollect: false });
+  const restoredStatus = h.fields['time-series-status'].textContent;
+  assert.equal(await visit, false);
+  assert.equal(h.view.index, 3);
+  assert.deepEqual(h.view.displayed, [], 'obsolete cleanup cannot start another navigation');
+  assert.equal(h.fields['time-series-status'].textContent, restoredStatus);
+  assert.equal(h.view.routing, 0); assert.equal(h.view.releases, 1);
+  assert.equal(h.series.isRunning(), false);
+});
+
+test('resetting a visit with pending navigation lets a replacement visit retain its frame and routing ownership', { timeout: 5000 }, async t => {
+  let releaseNavigation, releaseReplacement;
+  const navigating = new Promise(resolve => { releaseNavigation = resolve; });
+  const replacement = new Promise(resolve => { releaseReplacement = resolve; });
+  let firstNavigation = true;
+  const h = harness(t, { showFrame: async index => {
+    if (index === 1 && firstNavigation) {
+      firstNavigation = false;
+      await navigating;
+      return false; // The host's newer navigation superseded this request.
+    }
+    if (index === 2) await replacement;
+  } });
+  h.add('CNA.FCC.fraction');
+  const obsolete = h.series.visit();
+  while (!h.view.displayed.length) await new Promise(resolve => setImmediate(resolve));
+  h.series.reset(); h.view.index = 3;
+  const active = h.series.visit();
+  while (h.view.displayed.length < 4) await new Promise(resolve => setImmediate(resolve));
+  const activeFrame = h.view.index, activeStatus = h.fields['time-series-status'].textContent;
+  const displayed = [...h.view.displayed];
+  releaseNavigation(); await obsolete;
+  assert.equal(h.view.index, activeFrame);
+  assert.deepEqual(h.view.displayed, displayed);
+  assert.equal(h.fields['time-series-status'].textContent, activeStatus);
+  assert.equal(h.series.isRunning(), true);
+  assert.equal(h.view.routing, 1); assert.equal(h.view.releases, 1);
+  releaseReplacement(); assert.equal(await active, true);
+  assert.equal(h.view.index, 3);
+  assert.equal(h.series.isRunning(), false);
+  assert.equal(h.view.routing, 0); assert.equal(h.view.releases, 2);
+});
+
 test('time-series restoration failures release routing and re-enable a later visit', async t => {
   let failRestore = true;
   const h = harness(t, { showFrame: async (index, { view }) => {

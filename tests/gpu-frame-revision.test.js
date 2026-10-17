@@ -147,6 +147,9 @@ test('type-subset inputs never claim the source trajectory identity and release 
     const source = await run(client, worker, frame, undefined, { frameIndex: 0 });
     const subset = await run(client, worker, frame, { kind: 'voronoi', selectedTypes: ['A'] });
     assert.notEqual(subset.frameId, source.frameId); assert.equal(client.indexFrameIds.get(0), source.frameId);
+    assert.equal(source.frame.gpuDerivedFrame, false);
+    assert.equal(subset.frame.gpuDerivedFrame, true);
+    assert.equal(subset.frameIndex, 0, 'subset analysis still follows the source trajectory index');
     const before = worker.messages.length, barrier = client.invalidateFrame(frame);
     await until(() => worker.messages.length > before); const first = worker.messages.at(-1);
     assert.equal(first.type, 'release-frame'); assert.equal(first.releasedFrameId, subset.frameId); worker.answer(first);

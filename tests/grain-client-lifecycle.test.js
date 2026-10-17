@@ -149,3 +149,71 @@ test('dispose cancels a CPU admission waiter before it can construct a Worker', 
   held.release(); await nextTurn();
   assert.equal(cpuBudget.active, 0); assert.equal(workers.length, 0); assert.equal(client.requests.size, 0);
 });
+
+for (const outcome of ['complete', 'cancel', 'dispose']) test(`panel prewarming during a grain snapshot defers safely through ${outcome}`, { timeout: 2000 }, async t => {
+  const helpers = [], cpuBudget = new CpuBudget({ environment: { navigator: { hardwareConcurrency: 10 } } });
+  const source = input(70000), controller = new AbortController();
+  const client = new GrainSegmentationClient({ cpuBudget,
+    createStageWorker: () => {
+      const worker = new FakeWorker((self, message) => {
+        const result = message.warm ? { warmed: true }
+          : message.stage === 'bonds' ? emptyBonds() : new Float64Array(message.end - message.first);
+        queueMicrotask(() => self.emit('message', { id: message.id, ok: true, result }));
+      });
+      helpers.push(worker); return worker;
+    },
+    createWorker: () => {
+      let id;
+      return new FakeWorker((self, message) => {
+        if (message.type === 'grains') {
+          id = message.id;
+          queueMicrotask(() => self.emit('message', { id, stageRequest: { stage: 'bonds', length: 70000, requestId: 1 } }));
+        } else if (message.type === 'stage-result') {
+          assert.equal(message.error, undefined);
+          if (message.requestId === 1) queueMicrotask(() => self.emit('message', { id, stageRequest: {
+            stage: 'disorientation', input: { a: new Uint32Array(), b: new Uint32Array(), types: source.ptm.structures,
+              orientations: source.ptm.orientations }, length: 0, requestId: 2 } }));
+          else if (message.requestId === 2) queueMicrotask(() => self.emit('message', { id, stageRequest: { stage: 'serial', requestId: 3 } }));
+          else done(self, { id });
+        }
+      });
+    },
+  });
+  let releaseSnapshot, enteredSnapshot;
+  const copying = new Promise(resolve => { enteredSnapshot = resolve; });
+  const resume = new Promise(resolve => { releaseSnapshot = resolve; });
+  const snapshot = client.stages.snapshot.bind(client.stages);
+  let first = true;
+  client.stages.snapshot = async (...args) => {
+    const result = await snapshot(...args);
+    if (first) { first = false; enteredSnapshot(); await resume; }
+    return result;
+  };
+  t.after(() => { releaseSnapshot(); client.dispose(); });
+  const operation = client.segment(source, {}, { signal: controller.signal });
+  operation.catch(() => {});
+  const rejected = outcome === 'complete' ? null : assert.rejects(operation, { name: 'AbortError' });
+  await copying;
+  assert.equal(cpuBudget.active, 6, 'the foreground stage leaves room for a background permit');
+  client.warm(source.ptm.structures.length);
+  await nextTurn();
+  assert.equal(helpers.length, 0, 'opening the panel cannot claim a helper while its snapshot is being copied');
+  assert.equal(cpuBudget.active, 6, 'deferred warmup consumes no extra permit');
+  if (outcome === 'cancel') controller.abort();
+  else if (outcome === 'dispose') client.dispose();
+  releaseSnapshot();
+  if (rejected) await rejected;
+  else assert.equal((await operation).worker, true, 'the next disorientation stage also completes');
+  await client.stages.warming?.promise;
+  assert.equal(cpuBudget.active, 0); assert.equal(cpuBudget.queue.length, 0);
+  assert.equal(client.requests.size, 0); assert.equal(client.stages.pending.size, 0);
+  if (outcome === 'dispose') assert.equal(helpers.length, 0, 'disposal discards deferred warmup');
+  else {
+    assert.equal(helpers.length, 5);
+    assert.ok(client.stages.slots.every(slot => slot.warmed), 'all requested helpers stay ready for the next calculation');
+    assert.ok(helpers.every(worker => !worker.terminated));
+    const warmMessages = helpers.flatMap(worker => worker.messages.filter(message => message.warm));
+    assert.equal(warmMessages.length, outcome === 'cancel' ? 5 : 0,
+      'cancelled snapshot preparation still prewarms its helpers; completed ranges already loaded their modules');
+  }
+});
