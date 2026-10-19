@@ -1,4 +1,5 @@
-/** Frozen center-depth picking oracle from 38aaabe, before R4 shortcuts. */
+/** Unoptimized picking oracle: original traversal without R4 shortcuts,
+ * updated to rank hits by the rendered sphere's surface depth. */
 import { scalarPreviewAtomVisible } from '../../src/render/scalar-colormap.js';
 import { SLICE_EPSILON } from '../../src/render/slicing.js';
 
@@ -46,14 +47,19 @@ export function baselinePick(clientX, clientY) {
         if (clipW <= 0) continue;
         const screenX = (clipX / clipW * 0.5 + 0.5) * width;
         const screenY = (0.5 - clipY / clipW * 0.5) * height;
-        const edgeX = viewX + (radii?.[atom] ?? 0.7) * this.radiusScale;
+        const radius = (radii?.[atom] ?? 0.7) * this.radiusScale;
+        const edgeX = viewX + radius;
         const edgeClipX = p[0] * edgeX + p[4] * viewY + p[8] * viewZ + p[12];
         const edgeClipW = p[3] * edgeX + p[7] * viewY + p[11] * viewZ + p[15];
-        const radiusPixels = Math.max(3, Math.abs(edgeClipX / edgeClipW - clipX / clipW) * width * 0.5);
+        const projectedRadius = Math.abs(edgeClipX / edgeClipW - clipX / clipW) * width * 0.5;
+        const radiusPixels = Math.max(3, projectedRadius);
         const distanceSquared = (x - screenX) ** 2 + (y - screenY) ** 2;
-        if (distanceSquared <= radiusPixels ** 2 && viewZ > closestDepth) {
+        const discRadiusSquared = projectedRadius > 0 && Number.isFinite(projectedRadius)
+          ? ((x - screenX) / projectedRadius) ** 2 + ((y - screenY) / projectedRadius) ** 2 : 1;
+        const surfaceDepth = viewZ + (Number.isFinite(radius) ? radius : 0) * Math.sqrt(Math.max(0, 1 - discRadiusSquared));
+        if (distanceSquared <= radiusPixels ** 2 && surfaceDepth > closestDepth) {
           closest = atom;
-          closestDepth = viewZ;
+          closestDepth = surfaceDepth;
           this.lastPick = { index: atom, replica: Array.from(replica.indices), position: [wx, wy, wz] };
         }
       }

@@ -14,6 +14,14 @@ const ATOM_STYLES = Object.freeze({
   dipole: ['type', 'q', 'x', 'y', 'z', 'mux', 'muy', 'muz'],
 });
 const PROPERTY_COLUMNS = Object.freeze({ q: 'q', mol: 'mol', diameter: 'diameter', density: 'density', mux: 'mux', muy: 'muy', muz: 'muz' });
+const SECTION_NAMES = new Set([
+  'Atoms', 'Velocities', 'Ellipsoids', 'Lines', 'Triangles', 'Bodies',
+  'Bonds', 'Angles', 'Dihedrals', 'Impropers', 'Masses',
+  'Pair Coeffs', 'PairIJ Coeffs', 'Bond Coeffs', 'Angle Coeffs', 'Dihedral Coeffs', 'Improper Coeffs',
+  'BondBond Coeffs', 'BondAngle Coeffs', 'UreyBradley Coeffs', 'MiddleBondTorsion Coeffs',
+  'EndBondTorsion Coeffs', 'AngleTorsion Coeffs', 'AngleAngleTorsion Coeffs', 'BondBond13 Coeffs', 'AngleAngle Coeffs',
+  'Atom Type Labels', 'Bond Type Labels', 'Angle Type Labels', 'Dihedral Type Labels', 'Improper Type Labels',
+]);
 
 const dataError = (message) => new Error(`LAMMPS data: ${message}`);
 
@@ -148,23 +156,31 @@ function parseHeader(lines) {
   return header;
 }
 
-/** Sections start at a line beginning with a letter; their rows are the
- * following non-blank lines up to the next such line. */
+/** Section keywords delimit rows. A row may start with a type label, so its
+ * first letter cannot distinguish it from a section heading. */
 function splitSections(lines, start) {
   const sections = new Map();
+  const atomLabels = new Set();
   let current = null;
   for (let index = start; index < lines.length; index += 1) {
     const raw = lines[index], line = stripComment(raw).trim();
     if (!line) continue;
-    if (/^[A-Za-z]/.test(line)) {
-      const name = line.replace(/\s+/g, ' ');
+    const tokens = line.split(/\s+/);
+    const name = /^[A-Za-z]/.test(line) ? tokens.join(' ') : null;
+    // Fixes may add sections such as CMAP or a custom multi-word title.
+    // Numeric (including malformed numeric) values distinguish labeled rows
+    // from these headings; known mass labels also keep bad values visible.
+    const extensionHeading = name && !tokens.some(token => /^[+-]?(?:\d|\.\d|Infinity$|NaN$)/i.test(token))
+      && !(current?.name === 'Masses' && atomLabels.has(tokens[0]));
+    if (SECTION_NAMES.has(name) || extensionHeading) {
       if (sections.has(name)) throw dataError(`line ${index + 1}: the ${name} section appears twice.`);
       current = { name, hint: (/#\s*(\S+)/.exec(raw)?.[1] ?? '').toLowerCase(), line: index, rows: [] };
       sections.set(name, current);
       continue;
     }
     if (!current) throw dataError(`line ${index + 1}: data appears before any section keyword.`);
-    current.rows.push({ tokens: line.split(/\s+/), comment: commentOf(raw), line: index });
+    current.rows.push({ tokens, comment: commentOf(raw), line: index });
+    if (current.name === 'Atom Type Labels' && tokens.length === 2) atomLabels.add(tokens[1]);
   }
   return sections;
 }

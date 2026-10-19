@@ -222,7 +222,8 @@ export function trajectoryFrameAt(path, time, { frameCount, duration }) {
  * The timeline shared by the preview and the movie export. A camera path
  * with at least two keyframes animates the camera for its duration; frames
  * played at a rate extend the duration to cover their range. Video frame i
- * is sampled at i / fps, and an animated camera path includes its end pose.
+ * is sampled at i / fps; an animated camera path's final sample uses the
+ * exact end time even when that time falls between video frames.
  */
 export function planMovie(path, { fps, frameCount = 1, maxFrames = Infinity } = {}) {
   if (!Number.isFinite(fps) || fps <= 0) throw new Error('Choose a positive frame rate.');
@@ -244,7 +245,7 @@ export function planMovie(path, { fps, frameCount = 1, maxFrames = Infinity } = 
   const includeEnd = cameraAnimated && pathDuration >= framesDuration - 1e-9;
   const frameTotal = Math.max(1, Math.round(duration * fps)) + (includeEnd ? 1 : 0);
   if (frameTotal > maxFrames) throw new Error(`This movie has ${frameTotal.toLocaleString('en-US')} frames; the limit is ${maxFrames.toLocaleString('en-US')}. Lower the frame rate or shorten it.`);
-  const timeAt = index => Math.min(duration, index / fps);
+  const timeAt = index => includeEnd && index === frameTotal - 1 ? duration : Math.min(duration, index / fps);
   return { duration, frameTotal, fps, cameraAnimated, playsFrames, includeEnd, range, timeAt,
     cameraAt: index => keyframes.length ? sampleCameraPath(path, timeAt(index)) : null,
     frameAt: index => trajectoryFrameAt(path, timeAt(index), { frameCount, duration }),

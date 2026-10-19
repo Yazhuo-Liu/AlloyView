@@ -5,7 +5,7 @@ const poscarError = (message) => new Error(`POSCAR: ${message}`);
 const SYMBOL = /^[A-Z][a-z]?$/;
 
 /** True when text has the POSCAR layout: a scale line, three lattice rows,
- * then species names and/or atom counts. */
+ * then species names and/or atom counts followed by a coordinate mode. */
 export function looksLikePoscar(text) {
   const lines = String(text).replace(/^﻿/, '').split(/\r?\n/).slice(0, 9).map(line => line.trim().split(/\s+/));
   if (lines.length < 7) return false;
@@ -14,7 +14,16 @@ export function looksLikePoscar(text) {
   if (!numbers(scale) || ![1, 3].includes(scale.length)) return false;
   if (![2, 3, 4].every(index => lines[index].length >= 3 && numbers(lines[index].slice(0, 3)))) return false;
   const counts = tokens => tokens.length > 0 && tokens.every(token => /^\d+$/.test(token));
-  return counts(lines[5]) || (lines[5].every(token => /^[A-Z][a-z]?\S*$/.test(token)) && counts(lines[6]));
+  let cursor = 6;
+  if (!counts(lines[5])) {
+    if (!lines[5].every(token => /^[A-Z][a-z]?\S*$/.test(token)) || !counts(lines[6])) return false;
+    cursor += 1;
+  }
+  if (/^s/i.test(lines[cursor]?.[0] ?? '')) cursor += 1;
+  const mode = lines[cursor] ?? [];
+  // Numeric XYZ species can resemble lattice/count rows, but a coordinate
+  // mode must not itself be an XYZ species followed by three coordinates.
+  return /^[cdk]/i.test(mode[0] ?? '') && !(mode.length >= 4 && numbers(mode.slice(1, 4)));
 }
 
 /** Parse a VASP POSCAR or CONTCAR structure (one configuration). Atoms are

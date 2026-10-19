@@ -425,11 +425,16 @@ export function initializeBinningTools({ tools, getFrame, getFrameAt = async () 
   function refresh() {
     updateQuantityOptions(); updateSelectionOptions(); updateSchemeOptions();
     updateControls();
-    if (!job.enabled || !getFrame() || job.averaging) return Promise.resolve(false);
+    if (!job.enabled || !getFrame()) return Promise.resolve(false);
     let prepared;
-    try { prepared = prepare(); } catch { return Promise.resolve(false); }
+    // A removed group must cancel an in-flight average as well as clear a
+    // completed result. run() publishes the normal validation failure.
+    try { prepared = prepare(); } catch { return run({ automatic: true }); }
     if (prepared.settings.averageFrames && getFrameCount() > 1) {
-      return job.average?.key === JSON.stringify([prepared.key, String(getSourceVersion())]) ? Promise.resolve(false) : run({ automatic: true });
+      const key = JSON.stringify([prepared.key, String(getSourceVersion())]);
+      // Frame/color refreshes reuse matching work; changed group membership
+      // replaces the task before its old partials can be published.
+      return job.averaging?.key === key || job.average?.key === key ? Promise.resolve(false) : run({ automatic: true });
     }
     let property = null;
     try { property = resolveProperty(getFrame(), prepared.settings); } catch { return Promise.resolve(false); }

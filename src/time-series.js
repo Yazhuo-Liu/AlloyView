@@ -36,6 +36,17 @@ export class TimeSeriesStore {
     this.unavailable.get(name).add(frameIndex);
   }
 
+  /** Drop values and missing-frame observations when their source columns change. */
+  invalidate(names) {
+    let changed = false;
+    for (const name of names) {
+      changed = this.series.delete(name) || changed;
+      changed = this.unavailable.delete(name) || changed;
+    }
+    if (changed) this.revision++;
+    return changed;
+  }
+
   /** True when a background read of this frame needs nothing for this name. */
   settled(name, frameIndex) { return this.has(name, frameIndex) || (this.unavailable.get(name)?.has(frameIndex) ?? false); }
 
@@ -59,7 +70,9 @@ export class TimeSeriesStore {
       let series = this.series.get(name);
       if (!series || series.signature !== signature) {
         series = { name, unit, kind, signature, points: new Map() };
-        if (this.series.has(name)) this.unavailable.clear();
+        // A newly imported column can first appear after every background
+        // frame was marked missing. Its first value must reopen those reads.
+        this.unavailable.delete(name);
         this.series.set(name, series); changed = true;
       }
       series.unit = unit; series.kind = kind;
@@ -132,7 +145,7 @@ export async function collectFileSeries({ store, frames, names, readFrame, readH
       const entries = [], missing = [];
       for (const name of names) {
         const entry = registry.get(name);
-        if (entry?.kind === 'file' && typeof entry.value === 'number') entries.push(entry);
+        if (entry?.kind === 'file' && typeof entry.value === 'number') entries.push({ ...entry, name });
         else missing.push(name);
       }
       recorded += entries.length;
@@ -155,12 +168,12 @@ export function recordRegistry(store, registry, frameIndex, names) {
   const entries = [];
   for (const name of names) {
     const entry = registry.get(name);
-    if (entry && typeof entry.value === 'number') entries.push(entry);
+    if (entry && typeof entry.value === 'number') entries.push({ ...entry, name });
     else {
       const descriptor = registry.describe(name);
       // Explicitly unidentified results invalidate older points instead of
       // presenting those points as belonging to the newly computed result.
-      if (descriptor?.unavailableReason) entries.push(descriptor);
+      if (descriptor?.unavailableReason) entries.push({ ...descriptor, name });
     }
   }
   return store.record(frameIndex, entries, { timestep: registry.frame?.timestep });

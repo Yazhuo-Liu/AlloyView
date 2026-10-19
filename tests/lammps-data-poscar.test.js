@@ -96,6 +96,78 @@ Atoms # full
   assert.deepEqual([...labeled.properties.find(entry => entry.name === 'mol').data], [3, 3]);
 });
 
+const labeledMasses = `title
+2 atoms
+2 atom types
+1 bonds
+1 bond types
+0 4 xlo xhi
+0 4 ylo yhi
+0 4 zlo zhi
+
+Atom Type Labels
+
+1 Fe
+2 C
+
+Masses
+
+Fe 55.845
+2 12.011
+
+PairIJ Coeffs
+
+Fe Fe 0.1 2
+Fe C 0.2 3
+C C 0.3 4
+
+Atoms # molecular
+
+7 1 C 1 1 1
+9 1 Fe 2 2 2
+
+Bonds
+
+1 1 7 9
+
+Velocities
+
+9 0.2 0 0
+7 0.1 0 0
+`;
+
+test('LAMMPS data preserves labeled mass rows and skips coefficient and topology sections', () => {
+  const frame = parseLammpsData(labeledMasses);
+  assert.deepEqual(frame.typeLabels, ['Fe', 'C']);
+  assert.deepEqual([...frame.types], [1, 0]);
+  near(frame.properties.find(entry => entry.name === 'mass').data, [12.011, 55.845], 1e-4);
+  near(frame.properties.find(entry => entry.name === 'vx').data, [0.1, 0.2]);
+  const allLabels = parseLammpsData(labeledMasses.replace('2 12.011', 'C 12.011'));
+  near(allLabels.properties.find(entry => entry.name === 'mass').data, [12.011, 55.845], 1e-4);
+});
+
+test('LAMMPS data reports unknown mass labels instead of silently discarding their rows', () => {
+  assert.throws(() => parseLammpsData(labeledMasses.replace('Fe 55.845', 'Zn 55.845')), /unknown atom type label “Zn”/);
+  for (const mass of ['NaN', 'Infinity', '12bad', 'bad']) {
+    assert.throws(() => parseLammpsData(labeledMasses.replace('Fe 55.845', `Fe ${mass}`)), /mass is not a finite number/);
+  }
+  assert.throws(() => parseLammpsData(`${labeledMasses}\nMasses\n\n1 55.845\n`), /Masses section appears twice/);
+});
+
+test('LAMMPS data skips CMAP and custom fix sections without consuming atom or mass rows', () => {
+  const atoms = Array.from({ length: 5 }, (_, index) => `${index + 1} 1 ${index} 0 0`).join('\n');
+  const cmap = `title\n5 atoms\n1 atom types\n0 10 xlo xhi\n0 10 ylo yhi\n0 10 zlo zhi\n\nAtoms # atomic\n\n${atoms}\n\nCMAP\n\n1 1 1 2 3 4 5\n`;
+  assert.equal(parseLammpsData(cmap).ids.length, 5);
+  for (const nextSection of ['PairIJ Coeffs', 'Bonds', null]) {
+    const extension = '\nMy Custom Section\n\n1 2 3\n';
+    const text = nextSection ? labeledMasses.replace(`\n${nextSection}\n`, `${extension}\n${nextSection}\n`) : labeledMasses + extension;
+    const frame = parseLammpsData(text);
+    assert.deepEqual([...frame.ids], [7, 9]);
+    near(frame.properties.find(entry => entry.name === 'mass').data, [12.011, 55.845], 1e-4);
+    near(frame.properties.find(entry => entry.name === 'vx').data, [0.1, 0.2]);
+  }
+});
+
 test('LAMMPS data rejects ambiguous or inconsistent input with specific messages', () => {
   const header = 'title\n2 atoms\n1 atom types\n0 4 xlo xhi\n0 4 ylo yhi\n0 4 zlo zhi\n\nAtoms\n\n';
   assert.throws(() => parseLammpsData(`${header}1 1 0 1 1 1\n2 1 0 2 2 2\n`), /no style comment.*Atoms # charge/);
@@ -167,4 +239,17 @@ test('format detection recognizes data files and POSCAR without misreading other
   assert.equal(inferStructureFormatFromPath('cell.vasp'), 'poscar');
   assert.equal(inferStructureFormatFromPath('mydata.dump'), 'lammps-dump');
   assert.ok(isPotentialStructurePath('relax/POSCAR'));
+});
+
+test('numeric POSCAR titles retain VASP 4/5 and coordinate-mode detection', () => {
+  for (const title of ['123', '1']) {
+    for (const species of ['Au Cu_pv\n', '']) {
+      for (const mode of ['Direct', 'Cartesian', 'K', 'selective dynamics\ndirect', 'Selective dynamics\nK']) {
+        const text = cu3au.replace('Cu3Au L12', title).replace('Au Cu_pv\n', species).replace('Direct', mode);
+        const withFlags = /^selective/i.test(mode) ? text.replace(/^(0(?:\.5)?(?: 0(?:\.5)?){2})$/gm, '$1 T T T') : text;
+        assert.equal(detectStructureFormatHeader(withFlags), 'poscar', `${title}, ${species}, ${mode}`);
+        assert.equal(parsePoscar(withFlags, 'POSCAR').ids.length, 4);
+      }
+    }
+  }
 });

@@ -6,6 +6,7 @@ import { colorsByCategory, visibilityByCategory, UNLISTED_CATEGORY_ID } from '..
 import { buildStatisticsTable } from '../src/statistics-export.js';
 import { createConfiguration, parseConfiguration } from '../src/configuration.js';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
+import { initializeExternalPropertyControls } from '../src/external-property-controls.js';
 
 class Element {
   constructor(value = '') {
@@ -141,6 +142,118 @@ test('selection groups, bond cutoffs and masses become exact kernel inputs', asy
   assert.match(h.fields['clusters-status'].textContent, /no longer exists/);
   assert.deepEqual(h.tools.failed(), ['clusters']);
   assert.equal(h.fields['clusters-selection'].children.at(-1).textContent, 'Missing group (core)');
+});
+
+test('replacing mass values changes the cache key even without a refresh notification', async t => {
+  const h = harness(t, { frame: lineFrame({ mass: true }) }), frame = h.getFrame();
+  const first = h.tools.run(); h.settle(); await first;
+  const mass = frame.properties.find(property => property.name === 'mass');
+  mass.data = new Float64Array(10).fill(1); mass.data[0] = 100;
+  const replacement = h.tools.run();
+  assert.equal(h.pending.length, 2);
+  h.settle(); assert.equal(await replacement, true);
+  assert.equal(h.tools.getResult().centers[0], 120 / 105);
+  assert.ok(Math.abs(h.tools.getResult().radiiOfGyration[0] - 0.7095078297976829) < 1e-12);
+});
+
+test('mass refresh invalidates cached frames and cancels only obsolete in-flight work', async t => {
+  const firstFrame = lineFrame({ mass: true }), h = harness(t, { frame: firstFrame });
+  const first = h.tools.run(); h.settle(); await first;
+  const secondFrame = lineFrame({ mass: true }); h.setFrame(secondFrame);
+  const obsolete = h.tools.onFrame();
+  for (const frame of [firstFrame, secondFrame]) {
+    const mass = frame.properties.find(property => property.name === 'mass');
+    mass.data = new Float64Array(10).fill(1); mass.data[0] = 100;
+  }
+  const refreshed = h.tools.refreshProperties();
+  assert.equal(h.pending.length, 3);
+  assert.equal(h.pending[1].options.signal.aborted, true);
+  assert.equal(firstFrame.atomeyeResults.clusters, undefined);
+  assert.equal(firstFrame.properties.some(property => property.analysisKind === 'clusters'), false);
+  assert.equal(h.fields['clusters-results'].hidden, true);
+  assert.equal(await h.tools.refreshProperties(), false, 'the same change does not launch duplicate work');
+  h.settle(2); assert.equal(await refreshed, true);
+  const latest = h.tools.getResult();
+  h.settle(1); assert.equal(await obsolete, false);
+  assert.equal(h.tools.getResult(), latest, 'a late obsolete result cannot replace the new result');
+  assert.equal(latest.centers[0], 120 / 105);
+  h.setFrame(firstFrame);
+  const revisit = h.tools.onFrame();
+  assert.equal(h.pending.length, 4, 'the cached frame is recalculated when visited');
+  h.settle(); assert.equal(await revisit, true);
+  assert.equal(h.tools.getResult().centers[0], 120 / 105);
+});
+
+test('mass changes reject results that arrive before the property refresh callback', async t => {
+  const h = harness(t, { frame: lineFrame({ mass: true }) }), frame = h.getFrame();
+  const obsolete = h.tools.run();
+  frame.properties = frame.properties.filter(property => property.name !== 'mass');
+  h.settle();
+  assert.equal(await obsolete, false);
+  assert.equal(frame.atomeyeResults?.clusters, undefined);
+  assert.equal(h.tools.getResult(), null);
+  const refreshed = h.tools.refreshProperties();
+  assert.equal(h.pending.length, 2);
+  assert.equal(h.pending[1].settings.clusterMasses, null);
+  h.settle(); assert.equal(await refreshed, true);
+  assert.equal(h.tools.getResult().weighting, 'uniform');
+});
+
+test('external mass imports, replacement and removal refresh clusters without rerunning on unrelated edits', async t => {
+  const h = harness(t), frame = h.getFrame();
+  frame.idSource = 'explicit'; frame.frameIndex = 0;
+  const previousSelf = globalThis.self;
+  let listener, requestId = 0, refresh;
+  const replies = new Map();
+  globalThis.self = { addEventListener(type, callback) { assert.equal(type, 'message'); listener = callback; },
+    postMessage(message) { replies.set(message.id, message); } };
+  t.after(() => { if (previousSelf === undefined) delete globalThis.self; else globalThis.self = previousSelf; });
+  await import('../src/workers/external-property-worker.js');
+  const workerClient = { async request(type, payload) {
+    const id = ++requestId;
+    await listener({ data: { id, type, payload } });
+    const reply = replies.get(id); replies.delete(id);
+    if (!reply.ok) throw new Error(reply.error);
+    return reply.result;
+  }, reset() {} };
+  const refreshProperties = () => { refresh = h.tools.refreshProperties(); };
+  const controls = initializeExternalPropertyControls({ getFrame: h.getFrame, workerClient,
+    onImported: refreshProperties, onRemoved: refreshProperties });
+  const csv = (name, column, firstValue = 1) => new File([
+    `id,${column}\n${[...frame.ids].map((id, index) => `${id},${index ? 1 : firstValue}`).join('\n')}`,
+  ], name);
+  const initial = h.tools.run(); h.settle(); await initial;
+  const mass = await controls.importFile(csv('mass.csv', 'mass'));
+  const massRun = refresh;
+  assert.equal(h.pending.length, 2);
+  const unrelated = await controls.importFile(csv('energy.csv', 'energy'));
+  assert.equal(await refresh, false);
+  assert.equal(h.pending[1].options.signal.aborted, false, 'an unrelated edit does not interrupt mass analysis');
+  h.settle(); assert.equal(await massRun, true);
+  assert.equal(h.tools.getResult().weighting, 'mass');
+  const original = h.tools.getResult();
+  await controls.rename(unrelated.id, 'energy', 'energy_new'); assert.equal(await refresh, false);
+  await controls.remove(unrelated.id); assert.equal(await refresh, false);
+  assert.equal(await h.tools.run(), true, 'fresh transfers with unchanged values still reuse the cache');
+  assert.equal(h.pending.length, 2);
+  assert.equal(h.tools.getResult(), original);
+
+  await controls.remove(mass.id);
+  const removed = refresh;
+  assert.equal(h.pending[2].settings.clusterMasses, null);
+  const replacement = await controls.importFile(csv('mass-new.csv', 'mass', 100));
+  assert.equal(h.pending[2].options.signal.aborted, true);
+  assert.equal(h.pending.length, 4);
+  h.settle(2); assert.equal(await removed, false);
+  h.settle(3); assert.equal(await refresh, true);
+  assert.equal(h.tools.getResult().centers[0], 120 / 105);
+  assert.ok(Math.abs(h.tools.getResult().radiiOfGyration[0] - 0.7095078297976829) < 1e-12);
+
+  await controls.remove(replacement.id);
+  h.settle(); assert.equal(await refresh, true);
+  assert.equal(h.tools.getResult().weighting, 'uniform');
+  assert.equal(h.tools.getResult().centers[0], 3.5);
+  assert.match(h.fields['clusters-summary'].textContent, /equal atom weights/);
 });
 
 test('frame changes recalculate enabled clusters and restore replays saved settings', async t => {

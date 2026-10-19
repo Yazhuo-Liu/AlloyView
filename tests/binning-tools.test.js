@@ -38,7 +38,7 @@ function layeredFrame({ shift = 0, energy = layer => -layer, frameIndex = 0 } = 
     properties: [{ name: 'pe', unit: 'eV', data }, { name: 'structureType', data: new Uint8Array(count), categories: [{ id: 0, label: 'Other' }] }] };
 }
 
-function harness(t, { frames = [layeredFrame()], groups = [] } = {}) {
+function harness(t, { frames = [layeredFrame()], groups = [], readFrame = null } = {}) {
   const previousDocument = globalThis.document;
   const fields = {};
   for (const id of ['binning-state', 'binning-status', 'binning-backend', 'binning-progress', 'binning-results', 'binning-summary',
@@ -55,7 +55,9 @@ function harness(t, { frames = [layeredFrame()], groups = [] } = {}) {
   let dependency = null;
   const charts = [], notifications = [], toolFlags = new Map(), loaded = [];
   const tools = initializeBinningTools({ tools: { setToolEnabled: (name, enabled) => toolFlags.set(name, enabled) },
-    getFrame: () => frames[index], getFrameAt: async frameIndex => { loaded.push(frameIndex); return frames[frameIndex]; },
+    getFrame: () => frames[index], getFrameAt: async (frameIndex, options) => {
+      loaded.push(frameIndex); return readFrame ? readFrame(frameIndex, options) : frames[frameIndex];
+    },
     getFrameCount: () => frames.length, getSourceVersion: () => version, getFrameIndex: () => index,
     getSelectionGroups: () => groups, notify: message => notifications.push(message),
     getPropertyDependency: () => dependency,
@@ -230,6 +232,63 @@ test('a trajectory average reads every frame once and survives frame changes', a
   await settle(); await settle();
   assert.equal(h.fields['binning-state'].textContent, 'Failed');
   assert.match(h.fields['binning-status'].textContent, /not available in frame 1/);
+});
+
+test('editing group members replaces an in-flight average without publishing old partials', async t => {
+  const frames = [layeredFrame(), layeredFrame({ frameIndex: 1 })];
+  let release, firstSignal, reads = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  const h = harness(t, { frames, groups: [{ id: 'top', name: 'Top', atomIds: [101] }],
+    readFrame: async (index, { signal }) => {
+      if (reads++ === 0) { firstSignal = signal; await gate; }
+      return frames[index];
+    } });
+  h.change('binning-selection', 'top');
+  h.change('binning-quantity', 'count');
+  h.change('binning-average-frames', true);
+  const original = h.tools.run();
+  await settle();
+  assert.deepEqual(h.loaded, [0]);
+  await h.tools.refresh();
+  assert.equal(firstSignal.aborted, false, 'an unchanged refresh keeps the pending frame read');
+  assert.deepEqual(h.loaded, [0]);
+
+  h.setGroups([{ id: 'top', name: 'Top', atomIds: [113, 114, 115, 116] }]);
+  const replacement = h.tools.refresh();
+  assert.equal(firstSignal.aborted, true, 'membership changes cancel the old average');
+  assert.equal(await replacement, true);
+  const result = h.tools.getResult();
+  assert.equal(result.totals.binned, 8);
+  assert.deepEqual([...result.counts], [0, 0, 0, 0, 0, 0, 2, 2]);
+  assert.equal(h.tools.exportResults().binning.totals.binned, 8);
+  release();
+  assert.equal(await original, false, 'even a reader that ignores cancellation cannot publish old work');
+  assert.equal(h.tools.getResult(), result);
+  assert.equal(h.charts.length, 1);
+  assert.deepEqual(h.tools.pendingKinds(), []);
+});
+
+test('removing the selected group cancels averaging and clears exportable results', async t => {
+  const frames = [layeredFrame(), layeredFrame({ frameIndex: 1 })];
+  let release, firstSignal;
+  const gate = new Promise(resolve => { release = resolve; });
+  const h = harness(t, { frames, groups: [{ id: 'top', name: 'Top', atomIds: [101] }],
+    readFrame: async (index, { signal }) => { firstSignal = signal; await gate; return frames[index]; } });
+  h.change('binning-selection', 'top');
+  h.change('binning-average-frames', true);
+  const original = h.tools.run();
+  await settle();
+  h.setGroups([]);
+  assert.equal(await h.tools.refresh(), false);
+  assert.equal(firstSignal.aborted, true);
+  assert.equal(h.fields['binning-state'].textContent, 'Failed');
+  assert.match(h.fields['binning-status'].textContent, /group no longer exists/);
+  assert.equal(h.tools.getResult(), null);
+  assert.deepEqual(h.tools.exportResults(), {});
+  release();
+  assert.equal(await original, false);
+  assert.equal(h.charts.length, 0);
+  assert.deepEqual(h.tools.pendingKinds(), []);
 });
 
 test('settings serialize, validate and restore through configurations', async t => {

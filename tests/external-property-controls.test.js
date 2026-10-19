@@ -41,9 +41,11 @@ test('attribute controller uses the persistent Worker for import, replicas, rena
       manifest = await controls.importFile(csv);
       assert.equal(current.properties[1], analysis);
       assert.deepEqual([...current.properties.find(property => property.name === 'x').data], [8, 9]);
+      const version = current.properties.find(property => property.name === 'x').externalPropertyVersion;
       current = frame([22, 11], 3);
       await controls.applyToFrame(current);
       assert.deepEqual([...current.properties.find(property => property.name === 'x').data], [9, 8]);
+      assert.notEqual(current.properties.find(property => property.name === 'x').externalPropertyVersion, version);
       assert.equal(requests.filter(request => request.type === 'import').length, 1);
       assert.ok(Number.isNaN(current.properties.find(property => property.name === 'energy').data[0]));
     });
@@ -53,13 +55,30 @@ test('attribute controller uses the persistent Worker for import, replicas, rena
       await controls.applyToFrame(target, { sourceFrame: current });
       assert.deepEqual([...target.properties.find(property => property.name === 'x').data], [9, 8, 9, 8, 9, 8]);
       assert.equal(target.properties[1].analysisKind, 'coordination');
+      const version = target.properties.find(property => property.name === 'x').externalPropertyVersion;
+      const reorderedSource = frame([11, 22], 3);
+      await controls.applyToFrame(target, { sourceFrame: reorderedSource });
+      const reordered = target.properties.find(property => property.name === 'x');
+      assert.deepEqual([...reordered.data], [8, 9, 8, 9, 8, 9]);
+      assert.notEqual(reordered.externalPropertyVersion, version, 'the source atom mapping is part of the dependency');
+      target.ids = Float64Array.from([1, 2, 3, 4]);
+      await controls.applyToFrame(target, { sourceFrame: reorderedSource });
+      const resized = target.properties.find(property => property.name === 'x');
+      assert.deepEqual([...resized.data], [8, 9, 8, 9]);
+      assert.notEqual(resized.externalPropertyVersion, reordered.externalPropertyVersion, 'replication changes the dependency');
       await assert.rejects(controls.applyToFrame(frame([1, 2, 3, 4]), { sourceFrame: current }), /original source frame/);
     });
     await t.test('rename and remove leave a data-free reproducible recipe', async () => {
+      const original = current.properties.find(property => property.name === 'x');
       await controls.rename(manifest.id, 'x', 'imported_x');
+      const renamed = current.properties.find(property => property.name === 'imported_x');
+      assert.notEqual(renamed.data, original.data, 'the Worker transfers fresh arrays');
+      assert.equal(renamed.externalPropertyVersion, original.externalPropertyVersion, 'renaming preserves the values version');
       await controls.remove(manifest.id, 'energy');
       assert.ok(!current.properties.some(property => property.name === 'x' || property.name === 'energy'));
       assert.deepEqual([...current.properties.find(property => property.name === 'imported_x').data], [9, 8]);
+      assert.equal(current.properties.find(property => property.name === 'imported_x').externalPropertyVersion,
+        original.externalPropertyVersion, 'removing another column does not invalidate this one');
       const state = controls.getState();
       assert.equal(state.files[0].columns[1].enabled, false);
       assert.ok(!JSON.stringify(state).includes('data'));
@@ -67,6 +86,7 @@ test('attribute controller uses the persistent Worker for import, replicas, rena
       controls.setState(state); await controls.applyToFrame(current);
       assert.equal(controls.getPendingFiles().length, 0);
       assert.equal(requests.filter(request => request.type === 'import').length, count);
+      assert.equal(current.properties.find(property => property.name === 'imported_x').externalPropertyVersion, original.externalPropertyVersion);
       controls.reset(); controls.setState(state);
       assert.deepEqual(controls.getPendingFiles().map(file => file.name), ['attributes.csv']);
       await controls.applyToFrame(current);
@@ -74,6 +94,8 @@ test('attribute controller uses the persistent Worker for import, replicas, rena
       await controls.importFile(csv);
       assert.equal(controls.getPendingFiles().length, 0);
       assert.deepEqual(current.properties.map(property => property.name), ['mass', 'coordination', 'imported_x']);
+      assert.notEqual(current.properties.find(property => property.name === 'imported_x').externalPropertyVersion,
+        original.externalPropertyVersion, 'reimporting a saved manifest gets a fresh values version');
       assert.ok(imported.some(event => event.reason === 'restore'));
       assert.deepEqual(removed[0].removedNames, ['energy']);
     });
@@ -84,6 +106,19 @@ test('attribute controller uses the persistent Worker for import, replicas, rena
       controls.reset(); current = frame([22, 11], 3); controls.setState(saved);
       await controls.importFile(aux);
       assert.deepEqual([...current.properties.find(property => property.name === 'aux_1').data], [2, 1]);
+    });
+    await t.test('single-frame scope changes invalidate attachment and values versions', async () => {
+      controls.reset(); current = frame([11, 22], 0); current.idSource = 'row-order';
+      await controls.importFile(auxFile());
+      const version = current.properties.find(property => property.name === 'aux_1').externalPropertyVersion;
+      current.frameIndex = 1;
+      await controls.applyToFrame(current);
+      assert.equal(current.properties.some(property => property.externalImportId), false);
+      current.frameIndex = 0;
+      await controls.applyToFrame(current);
+      const restored = current.properties.find(property => property.name === 'aux_1');
+      assert.deepEqual([...restored.data], [1, 2]);
+      assert.notEqual(restored.externalPropertyVersion, version);
     });
     await t.test('failed mismatched ID mapping is transactional', async () => {
       const before = current.properties;

@@ -754,7 +754,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       resizeHandle.setAttribute('aria-label', 'Resize second view. Drag or use arrow keys.'); resizeHandle.title = 'Resize second view';
       resizeHandle.textContent = '◢';
       comparisonContainer.append(header, toolbar, surface, resizeHandle); renderer.canvas.parentElement.append(comparisonContainer);
-      comparison = new WebGLRenderer(canvas, { onPick: index => selectAtom(index), onProjectionChange: syncComparisonToolbar, onCameraChange: syncComparisonToolbar,
+      comparison = new WebGLRenderer(canvas, { onPick: (index, pick) => selectAtom(index, pick), onProjectionChange: syncComparisonToolbar, onCameraChange: syncComparisonToolbar,
         surfaceGeometryClient: renderer.surfaceGeometryClient,
         onBeforeCapture: () => renderer.onBeforeCapture?.() });
       comparisonWindow = initializeFloatingWindow({ element: comparisonContainer, dragHandle: header, resizeHandle,

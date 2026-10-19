@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { parseXyzFrame } from '../src/io/xyz.js';
 
 import {
   catalogLocalSources,
@@ -67,6 +68,14 @@ test('structure headers are identified without relying on filename extensions', 
   assert.equal(detectStructureFormatHeader('ordinary text'), null);
   assert.equal(detectStructureFormatHeader('2\ncomment\nFe 0 0 0\nC 1 1 1\n'), 'xyz');
   assert.equal(detectStructureFormatHeader('REMARK   generated\nATOM      1  C   MOL A   1       0.000   0.000   0.000\n'), 'pdb');
+});
+
+test('numeric XYZ comments and species do not turn atom rows into a POSCAR header', () => {
+  for (const lastSpecies of ['5', 'C', 'K', 'Sc']) {
+    const text = `5\n1\n1 0 0 0\n2 1 0 0\n3 0 1 0\n4 0 0 1\n${lastSpecies} 1 1 1\n`;
+    assert.equal(parseXyzFrame(text).ids.length, 5);
+    assert.equal(detectStructureFormatHeader(text), 'xyz', `last species ${lastSpecies}`);
+  }
 });
 
 test('CFG filename hints remain valid when a numeric suffix follows the extension', () => {

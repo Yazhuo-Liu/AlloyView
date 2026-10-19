@@ -37,8 +37,9 @@ export function detectStructureFormatHeader(text) {
   if (/^ITEM:\s+(?:TIMESTEP|UNITS|TIME)\b/i.test(firstDataLine)) return 'lammps-dump';
   // A data file's free-text title can be anything, so check its header first.
   if (looksLikeLammpsData(text)) return 'lammps-data';
-  if (/^\d+$/.test(firstDataLine) && Number(firstDataLine) > 0) return 'xyz';
+  // POSCAR also has a free-text title, which may be a positive integer.
   if (looksLikePoscar(text)) return 'poscar';
+  if (/^\d+$/.test(firstDataLine) && Number(firstDataLine) > 0) return 'xyz';
   if (lines.some((line) => /^(?:HEADER|TITLE|CRYST1|MODEL|ATOM|HETATM)(?:\s|$)/.test(line))) return 'pdb';
   return null;
 }

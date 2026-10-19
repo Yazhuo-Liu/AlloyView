@@ -230,6 +230,27 @@ test('movie plans cover the camera path including its end pose and report what c
   assert.throws(() => planMovie(path(keys), { fps: 0 }), /positive frame rate/);
 });
 
+test('movie end samples reach nonintegral keyframe times without adding trajectory-only frames', () => {
+  const start = camera(), end = camera({ yaw: 1, distance: 50, projectionMode: 'orthographic' });
+  for (const [duration, fps] of [[1.1, 24], [1.15, 24], [0.001, 1], [0.14, 100]]) {
+    const movie = path([[0, start, 0], [duration, end, 9]], { frames: { ...createCameraPath().frames, mode: 'keyframes' } });
+    const plan = planMovie(movie, { fps, frameCount: 10 });
+    const last = plan.frameTotal - 1;
+    assert.equal(plan.includeEnd, true);
+    assert.equal(plan.timeAt(0), 0);
+    assert.equal(plan.timeAt(last), duration);
+    assert.deepEqual(plan.cameraAt(last), end);
+    assert.equal(plan.frameAt(last), 9);
+    if (last > 1) assert.equal(plan.timeAt(last - 1), (last - 1) / fps);
+    assert.equal(planMovie(movie, { fps, frameCount: 10, maxFrames: plan.frameTotal }).frameTotal, plan.frameTotal);
+    assert.throws(() => planMovie(movie, { fps, frameCount: 10, maxFrames: plan.frameTotal - 1 }), /the limit is/);
+  }
+  const trajectory = planMovie(path([], { frames: { mode: 'rate', first: 0, last: 10, step: 1, rate: 10 } }), { fps: 24, frameCount: 11 });
+  assert.equal(trajectory.includeEnd, false);
+  assert.equal(trajectory.frameTotal, 26);
+  assert.equal(trajectory.timeAt(25), 25 / 24);
+});
+
 test('keyframes are added after the last one, replaced at equal times, retimed in order and swapped in place', () => {
   let keyframes = addKeyframe([], camera());
   keyframes = addKeyframe(keyframes, camera({ yaw: 1 }), { frame: 3 });

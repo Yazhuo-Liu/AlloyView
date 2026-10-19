@@ -309,6 +309,23 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
     return true;
   }
 
+  /** External columns may appear, be replaced or disappear without a source
+   * change. Stop old reads before forgetting their observations, including
+   * computed-property means whose inputs may depend on an edited column.
+   * Frame bounds, styles, cell attributes and timesteps remain intact. */
+  function invalidateProperties(names = null) {
+    const properties = names === null ? null : new Set(names.map(name => String(name).toLowerCase()));
+    const registry = attributes.current();
+    const affected = [...new Set([...settings.attributes, ...store.series.keys(), ...store.unavailable.keys()])]
+      .filter(name => name.toLowerCase().startsWith('mean.') && (!properties || properties.has(name.slice(5).toLowerCase())
+        || (store.describe(name)?.signature ?? registry?.describe(name)?.signature ?? '').startsWith('expression:')));
+    if (!affected.length) return false;
+    cancel();
+    const changed = store.invalidate(affected);
+    renderAttributeList(); updateControls(); draw({ force: true });
+    return changed;
+  }
+
   function addAttribute() {
     const input = $('time-series-attribute'), name = input?.value.trim() ?? '';
     if (!name) return;
@@ -356,7 +373,7 @@ export function initializeTimeSeries({ tools, attributes, getFrame, getFrameAt =
   }
 
   return Object.freeze({
-    collect, visit, cancel, exportCsv,
+    collect, visit, cancel, exportCsv, invalidateProperties,
     refresh: () => { renderAttributeList(); writeRange(); updateControls(); draw({ force: true }); },
     setEnabled(value) { controlsEnabled = Boolean(value); syncSource(); writeRange(); renderAttributeList(); updateControls(); draw({ force: true }); },
     /** Drop collected values and stop work, keeping the settings. */

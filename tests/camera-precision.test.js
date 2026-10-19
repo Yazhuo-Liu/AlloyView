@@ -71,6 +71,28 @@ test('releasing Z upright preserves top and bottom views; free orbit crosses a p
   }
 });
 
+test('constrained orbit leaves top and bottom along their displayed screen orientation', () => {
+  for (const pitch of [Math.PI / 2, -Math.PI / 2]) {
+    for (const yaw of [0, .73, Math.PI * 3, -Math.PI * 4]) {
+      for (const [horizontal, vertical] of [[.0001, 0], [0, .0001], [-.0001, -.0001], [.032, 0]]) {
+        const { renderer: r } = fixture(); r.pitch = pitch; r.yaw = yaw;
+        const before = r.cameraBasis(), direction = r.getCameraState().direction;
+        r.orbitCamera(0, 0);
+        assert.deepEqual(r.cameraBasis(), before, 'zero pointer movement preserves the exact preset');
+        assert.equal(r.pitch, pitch); assert.equal(r.yaw, yaw);
+        r.orbitCamera(horizontal, vertical);
+        const after = r.cameraBasis();
+        for (const axis of ['right', 'up']) {
+          assert.ok(before[axis].reduce((sum, value, i) => sum + value * after[axis][i], 0) > .999,
+            `screen ${axis} flipped at pitch ${pitch}, yaw ${yaw}`);
+        }
+        assert.ok(direction.reduce((sum, value, i) => sum + value * r.getCameraState().direction[i], 0) > .999);
+        assert.equal(r.constrainUp, true); assert.equal(r.roll, 0);
+      }
+    }
+  }
+});
+
 test('restoring Z upright after crossing a pole retains the viewing direction and clamps subsequent mouse orbit', () => {
   const { renderer: r } = fixture();
   r.setCameraState({ constrainUp: false, pitch: 2.5, roll: .8 });

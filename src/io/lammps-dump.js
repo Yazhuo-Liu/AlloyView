@@ -503,6 +503,25 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
       unwrappedPositions[offset + 1] = origin[1] + unwrappedA * vectors[1] + unwrappedB * vectors[4] + unwrappedC * vectors[7];
       unwrappedPositions[offset + 2] = origin[2] + unwrappedA * vectors[2] + unwrappedB * vectors[5] + unwrappedC * vectors[8];
     }
+    if (imageFlags) {
+      // LAMMPS only remaps atoms on neighbor-list rebuilds: even x/y/z may
+      // lie outside the box. Keep images relative to our canonical wrapped
+      // coordinates, so replication and smoothing reconstruct the same atom.
+      // Explicit unwrapped columns take precedence over the file's flags.
+      if (unwrappedCoordinateSet) {
+        if (unwrappedScaled) {
+          a = unwrappedValues[offset]; b = unwrappedValues[offset + 1]; c = unwrappedValues[offset + 2];
+        } else {
+          const x = unwrappedValues[offset] - origin[0], y = unwrappedValues[offset + 1] - origin[1], z = unwrappedValues[offset + 2] - origin[2];
+          a = x * inverse[0] + y * inverse[3] + z * inverse[6];
+          b = x * inverse[1] + y * inverse[4] + z * inverse[7];
+          c = x * inverse[2] + y * inverse[5] + z * inverse[8];
+        }
+      }
+      if (pbc[0]) imageFlags[offset] = normalizedImageFlag(unwrappedCoordinateSet ? Math.round(a - wrappedA) : imageFlags[offset] + Math.floor(a));
+      if (pbc[1]) imageFlags[offset + 1] = normalizedImageFlag(unwrappedCoordinateSet ? Math.round(b - wrappedB) : imageFlags[offset + 1] + Math.floor(b));
+      if (pbc[2]) imageFlags[offset + 2] = normalizedImageFlag(unwrappedCoordinateSet ? Math.round(c - wrappedC) : imageFlags[offset + 2] + Math.floor(c));
+    }
   }
 
   return validateFrame({
@@ -529,6 +548,13 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
     unwrapSource,
     parseMs: performance.now() - startedAt,
   });
+}
+
+function normalizedImageFlag(image) {
+  if (!Number.isSafeInteger(image) || image < -2_147_483_648 || image > 2_147_483_647) {
+    throw dumpError('Wrapping coordinates requires an image flag outside the supported 32-bit range.');
+  }
+  return image;
 }
 
 function assertCompleteCoordinateSets(columnIndex) {

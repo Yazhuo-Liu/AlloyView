@@ -195,6 +195,21 @@ test('a quick second tap or click on the same atom centers the camera on that re
   assert.equal(centered.length, 2, 'empty space does not move the camera');
 });
 
+test('click callbacks receive the originating renderer replica hit and clear misses', () => {
+  const { renderer: r, touch } = fixture();
+  const hit = { index: 7, replica: [1, 0, 0], position: [12, 3, 5] }, calls = [];
+  r.pick = function () { this.lastPick = hit; return 7; };
+  r.onPick = (index, picked) => calls.push({ index, picked });
+  touch('pointerdown', 1, 160, 220); touch('pointerup', 1, 160, 220);
+  assert.deepEqual(calls, [{ index: 7, picked: hit }]);
+  r.setSelectionInteraction({ mode: 'click', onPick: (index, picked) => calls.push({ index, picked }) });
+  touch('pointerdown', 1, 160, 220); touch('pointerup', 1, 160, 220);
+  assert.deepEqual(calls.at(-1), { index: 7, picked: hit });
+  r.pick = () => -1;
+  touch('pointerdown', 1, 160, 220); touch('pointerup', 1, 160, 220);
+  assert.deepEqual(calls.at(-1), { index: -1, picked: null }, 'a stale lastPick cannot leak into a miss');
+});
+
 test('click selection routes taps to a group handler while keeping orbit drags', () => {
   const { renderer: r, touch } = fixture();
   const group = [];

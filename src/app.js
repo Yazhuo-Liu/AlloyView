@@ -508,11 +508,13 @@ expressionTools = initializeExpressionControls({
   expansionClient: new SelectionExpansionClient({ cpuBudget }),
 });
 
-function handleAtomPick(index) {
+function handleAtomPick(index, picked = null) {
   if (sliceControls?.isPicking()) {
     if (state.frame && index >= 0 && index < state.frame.ids.length) {
       const id = state.frame.ids[index];
-      const pick = renderer.lastPick?.index === index ? renderer.lastPick : null;
+      // The second view has its own replicas and lastPick. Use the hit from
+      // the originating view; ID lookup falls back to the primary position.
+      const pick = picked?.index === index ? picked : null;
       sliceControls.addPickedAtom({ id, replicaIndices: pick?.replica ?? [0, 0, 0],
         position: pick?.position ?? Array.from(renderer.displayPositions.slice(index * 3, index * 3 + 3)) });
       selectAtom(index);
@@ -2446,9 +2448,15 @@ function centerPeriodicOriginOnSelected() {
   setPeriodicOrigin([0, 1, 2].map(axis => state.frame.cell.pbc[axis] ? state.frame.fractional[index * 3 + axis] - 0.5 : 0));
 }
 
-async function refreshExternalProperties({ restoring = false, reason, oldName, name } = {}) {
+async function refreshExternalProperties({ restoring = false, reason, oldName, name, importId, state: importState, removedNames } = {}) {
   if (!externalProperties || !state.frame) return;
   if (!restoring) interruptConfigurationRestore('an external attribute edit');
+  const changedNames = removedNames ?? (reason === 'rename' ? [oldName, name]
+    : importId ? (importState ?? externalProperties.getState()).files.find(entry => entry.id === importId)
+      ?.columns.filter(column => column.enabled).map(column => column.name) ?? null : null);
+  // Stop reads before cached frames are reattached so old points and missing
+  // markers cannot survive an import, rename or removal of their input column.
+  timeSeries?.invalidateProperties(changedNames);
   const version = state.sourceVersion;
   const frames = new Set([state.frame, ...cache.frames.values()]);
   for (const frame of [...frames]) frames.add(sourceFrame(frame));
@@ -2474,6 +2482,7 @@ async function refreshExternalProperties({ restoring = false, reason, oldName, n
     }
   }
   if (reason === 'rename' && !renamedDisplay) atomEyeTools?.renameProperty(oldName, name);
+  void clusterTools?.refreshProperties();
   externalProperties.refresh();
   toolPanels.setToolEnabled('externalProperties', externalProperties.getState().files.length > 0);
   refreshColorOptions();

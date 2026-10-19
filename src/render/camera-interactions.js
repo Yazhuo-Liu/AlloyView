@@ -196,9 +196,10 @@ export function installCameraInteractions(renderer) {
     } else if (select) {
       const atom = renderer.pick(event.clientX, event.clientY);
       // The picked replica's position, read before handlers can pick again.
-      const position = renderer.lastPick?.index === atom ? renderer.lastPick.position : null;
-      if (renderer.selectionInteraction?.mode === 'click' && renderer.selectionInteraction.onPick) renderer.selectionInteraction.onPick(atom);
-      else renderer.onPick(atom);
+      const pick = renderer.lastPick?.index === atom ? renderer.lastPick : null;
+      const position = pick?.position ?? null;
+      if (renderer.selectionInteraction?.mode === 'click' && renderer.selectionInteraction.onPick) renderer.selectionInteraction.onPick(atom, pick);
+      else renderer.onPick(atom, pick);
       const time = event.timeStamp ?? performance.now();
       // Picking modes (measurement, slice or group picking) own repeated clicks.
       if (position && (renderer.allowsDoubleTapAnchor?.() ?? true) && lastTap?.atom === atom && time - lastTap.time <= DOUBLE_TAP_MS

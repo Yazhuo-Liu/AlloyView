@@ -177,7 +177,7 @@ class Element {
   dispatch(name) { return this.listeners.get(name)?.({ target: this }); }
 }
 
-function harness(t, { frameCount = 5, initialFrameCount = frameCount, ensureIndexed = async () => {}, showFrame = null } = {}) {
+function harness(t, { frameCount = 5, initialFrameCount = frameCount, ensureIndexed = async () => {}, showFrame = null, readFrame = null } = {}) {
   const ids = ['time-series-state', 'time-series-status', 'time-series-attribute', 'add-time-series-attribute', 'time-series-attribute-list',
     'time-series-attribute-options', 'time-series-first', 'time-series-last', 'time-series-stride', 'time-series-x-axis', 'time-series-separate',
     'time-series-strain-reference', 'collect-time-series', 'visit-time-series', 'cancel-time-series', 'export-time-series', 'clear-time-series',
@@ -209,6 +209,7 @@ function harness(t, { frameCount = 5, initialFrameCount = frameCount, ensureInde
     },
     getFrameAt: async (index, { signal } = {}) => {
       view.reads.push(index);
+      if (readFrame) return readFrame(index, { signal, frames, view });
       await Promise.resolve();
       if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
       return frames[index];
@@ -226,6 +227,78 @@ function harness(t, { frameCount = 5, initialFrameCount = frameCount, ensureInde
   t.after(() => series.reset());
   return { fields, series, attributes, view, add, flush, downloads, notices, frames, documentRoot };
 }
+
+test('a previously unknown column reopens missing-frame reads when its first value appears', async t => {
+  const h = harness(t);
+  h.add('mean.energy');
+  await h.series.collect();
+  assert.equal(h.series.store.settled('mean.energy', 3), true);
+  for (const item of h.frames) item.properties.push({ name: 'energy', externalImportId: 'external-energy', data: new Float64Array(4).fill(10 + item.frameIndex) });
+  h.attributes.refresh(); h.flush();
+  assert.equal(h.series.store.settled('mean.energy', 3), false, 'the new series forgets earlier absence observations');
+  h.view.reads.length = 0;
+  await h.series.collect();
+  assert.deepEqual(h.view.reads, [1, 2, 3, 4]);
+  assert.deepEqual(h.series.getData().series.find(item => item.name === 'mean.energy').values, [10, 11, 12, 13, 14],
+    'the requested spelling stays usable when its later descriptor has canonical capitalization');
+});
+
+test('external property invalidation also drops expression means that may depend on removed inputs', async t => {
+  const h = harness(t);
+  for (const item of h.frames) item.properties.push({ name: 'doubleEnergy', analysisKind: 'expression', analysisKey: 'recipe:energy', data: new Float64Array(4).fill(20) });
+  h.add('Mean.doubleEnergy');
+  h.attributes.refresh(); h.flush();
+  await h.series.visit();
+  assert.equal(h.series.store.describe('Mean.doubleEnergy').points.size, 5);
+  h.series.invalidateProperties(['energy']);
+  for (const item of h.frames) item.properties = item.properties.filter(property => property.name !== 'doubleEnergy');
+  h.attributes.refresh(); h.flush();
+  assert.equal(h.series.store.describe('Mean.doubleEnergy'), null);
+});
+
+test('external property edits invalidate replaced and removed values while preserving range and unrelated series', async t => {
+  const h = harness(t);
+  const setEnergy = value => {
+    for (const item of h.frames) item.properties = [...item.properties.filter(property => property.name !== 'energy'),
+      ...(value === null ? [] : [{ name: 'energy', externalImportId: `external-${value}`, data: new Float64Array(4).fill(value + item.frameIndex) }])];
+  };
+  setEnergy(10);
+  await h.series.restore({ attributes: ['Cell.volume', 'Mean.energy', 'Mean.q'], firstFrame: 1, lastFrame: 3, stride: 2, xAxis: 'timestep', separatePanels: true });
+  await h.series.collect();
+  const settings = h.series.serialize(), cell = h.series.store.describe('Cell.volume'), q = h.series.store.describe('Mean.q');
+  setEnergy(20);
+  h.series.invalidateProperties(['energy']);
+  assert.equal(h.series.store.describe('Mean.energy'), null);
+  assert.equal(h.series.store.describe('Cell.volume'), cell);
+  assert.equal(h.series.store.describe('Mean.q'), q);
+  assert.deepEqual(h.series.serialize(), settings);
+  h.attributes.refresh(); h.flush();
+  h.view.reads.length = 0;
+  await h.series.collect();
+  assert.deepEqual(h.view.reads, [1, 3]);
+  assert.deepEqual(h.series.getData().series.find(item => item.name === 'Mean.energy').values, [21, 23]);
+  setEnergy(null);
+  h.series.invalidateProperties(['energy']);
+  h.attributes.refresh(); h.flush();
+  await h.series.collect();
+  assert.deepEqual(h.series.getData().series.find(item => item.name === 'Mean.energy').values, [undefined, undefined]);
+  assert.equal(h.series.store.describe('Mean.q'), q);
+});
+
+test('property invalidation cancels an in-flight old read before it can restore deleted values', async t => {
+  let resolveRead;
+  const h = harness(t, { readFrame: index => new Promise(resolve => { resolveRead = () => resolve(frame(index)); }) });
+  await h.series.restore({ attributes: ['Mean.q'] });
+  const reading = h.series.collect();
+  while (!resolveRead) await Promise.resolve();
+  h.series.invalidateProperties(['q']);
+  for (const item of h.frames) item.properties = item.properties.filter(property => property.name !== 'q');
+  h.attributes.refresh(); h.flush();
+  resolveRead();
+  assert.equal(await reading, false);
+  assert.equal(h.series.store.describe('Mean.q'), null);
+  assert.equal(h.series.isRunning(), false);
+});
 
 test('collection waits for the full index before interpreting an open-ended partial range', async t => {
   const { fields, series, view } = harness(t, { initialFrameCount: 2, frameCount: 5,

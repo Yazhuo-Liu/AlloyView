@@ -1334,7 +1334,16 @@ export class WebGLRenderer {
   }
 
   orbitCamera(horizontal, vertical) {
+    if (!horizontal && !vertical) return;
     if (this.constrainUp !== false) {
+      // At a pole the fixed screen-up hint, rather than yaw, defines the
+      // visible orientation. Leave it along that screen basis: in particular
+      // Bottom faces +Y up and therefore exits at yaw π, not yaw 0.
+      if (Math.abs(Math.cos(this.pitch)) < 1e-7) {
+        const { right } = this.cameraBasis();
+        const yaw = Math.atan2(right[1], right[0]);
+        this.yaw = yaw + Math.round((this.yaw - yaw) / (2 * Math.PI)) * 2 * Math.PI;
+      }
       this.yaw += horizontal;
       this.pitch = Math.max(-Math.PI / 2 + .008, Math.min(Math.PI / 2 - .008, this.pitch + vertical));
       return;
@@ -1722,10 +1731,9 @@ export class WebGLRenderer {
     return (this.replicas ?? [{ indices: SOURCE_REPLICA }]).some(replica => this.isAtomVisible(atom, replica.indices));
   }
 
-  /** Nearest visible atom under the pointer, in front of the camera. Reject
-   * farther centers and conservative screen bounds before projecting the
-   * exact radius or testing slices. The final acceptance arithmetic remains
-   * the same, including first-hit depth ties and the 3 CSS-pixel minimum. */
+  /** Nearest visible sphere surface under the pointer. Conservative front
+   * depths and screen bounds avoid projecting or slicing distant atoms.
+   * Retain first-hit depth ties and the 3 CSS-pixel picking tolerance. */
   pick(clientX, clientY) {
     this.lastPick = null;
     if (!this.frame || this.graphicsUnavailable()) return -1;
@@ -1754,14 +1762,16 @@ export class WebGLRenderer {
         const index = atom * 3;
         const wx = positions[index] + ox, wy = positions[index + 1] + oy, wz = positions[index + 2] + oz;
         const viewZ = v[2] * wx + v[6] * wy + v[10] * wz + v[14];
-        if (viewZ >= 0 || viewZ <= closestDepth) continue;
+        const radius = (radii?.[atom] ?? 0.7) * radiusScale;
+        const depthRadius = Number.isFinite(radius) ? radius : 0;
+        if (viewZ >= 0 || viewZ + Math.max(0, depthRadius) <= closestDepth) continue;
         const viewX = v[0] * wx + v[4] * wy + v[8] * wz + v[12];
         const viewY = v[1] * wx + v[5] * wy + v[9] * wz + v[13];
         const clipX = p[0] * viewX + p[4] * viewY + p[8] * viewZ + p[12];
         const clipW = p[3] * viewX + p[7] * viewY + p[11] * viewZ + p[15];
         if (clipW <= 0) continue;
         const screenX = (clipX / clipW * 0.5 + 0.5) * width;
-        const radius = (radii?.[atom] ?? 0.7) * radiusScale, dx = x - screenX;
+        const dx = x - screenX;
         let bound = Infinity;
         if (screenBound) {
           // Preserve even the old overflow behavior: the edge multiplies
@@ -1787,8 +1797,16 @@ export class WebGLRenderer {
         const edgeX = viewX + radius;
         const edgeClipX = p[0] * edgeX + p[4] * viewY + p[8] * viewZ + p[12];
         const edgeClipW = p[3] * edgeX + p[7] * viewY + p[11] * viewZ + p[15];
-        const radiusPixels = Math.max(3, Math.abs(edgeClipX / edgeClipW - clipX / clipW) * width * 0.5);
-        if (distanceSquared <= radiusPixels ** 2 && viewZ > closestDepth) {
+        const projectedRadius = Math.abs(edgeClipX / edgeClipW - clipX / clipW) * width * 0.5;
+        const radiusPixels = Math.max(3, projectedRadius);
+        if (distanceSquared <= radiusPixels ** 2) {
+          // Reconstruct the same hemisphere depth as SPHERE_FRAGMENT, using
+          // the rendered radius, not the enlarged hit target for tiny atoms.
+          // Outside the actual disc, the 3px tolerance uses its center plane.
+          const discRadiusSquared = projectedRadius > 0 && Number.isFinite(projectedRadius)
+            ? (dx / projectedRadius) ** 2 + ((y - screenY) / projectedRadius) ** 2 : 1;
+          const surfaceDepth = viewZ + depthRadius * Math.sqrt(Math.max(0, 1 - discRadiusSquared));
+          if (!(surfaceDepth > closestDepth)) continue;
           if (planes) {
             const px = positions[index] + ia * vectors[0] + ib * vectors[3] + ic * vectors[6];
             const py = positions[index + 1] + ia * vectors[1] + ib * vectors[4] + ic * vectors[7];
@@ -1802,7 +1820,7 @@ export class WebGLRenderer {
             if (!shown) continue;
           } else if (!((fractional[index + axis] + replica.indices[axis]) / repetition <= sliceMaximum)) continue;
           closest = atom;
-          closestDepth = viewZ;
+          closestDepth = surfaceDepth;
           this.lastPick = { index: atom, replica: Array.from(replica.indices), position: [wx, wy, wz] };
         }
       }

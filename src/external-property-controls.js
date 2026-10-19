@@ -1,6 +1,8 @@
 import { normalizeExternalPropertyState, validateExternalPropertyName } from './io/external-properties.js';
 import { ExternalPropertyWorkerClient } from './external-property-worker-client.js';
 
+let nextPropertyVersion = 1;
+
 /** Metadata stays in recipes; local attribute values stay in one Worker. */
 export function initializeExternalPropertyControls({
   getFrame = () => null, getSourceVersion = () => 0, getFrameAtIndex,
@@ -16,6 +18,7 @@ export function initializeExternalPropertyControls({
   let applied = new WeakMap();
   // Retain Files for this source. Moving among cached frames never reparses them.
   const localFiles = new Map();
+  const importRevisions = new Map();
   let statusMessage = '';
   const snapshot = () => normalizeExternalPropertyState(state);
   const pendingFiles = () => state.files.filter(file => !localFiles.has(file.id));
@@ -74,7 +77,11 @@ export function initializeExternalPropertyControls({
 
   async function applyToFrame(frame, { sourceFrame = frame } = {}) {
     if (!frame || !sourceFrame) return frame;
-    if (applied.get(frame)?.revision === revision && applied.get(frame)?.sourceFrame === sourceFrame) return frame;
+    const mapping = { sourceFrame, sourceIds: sourceFrame.ids, targetIds: frame.ids,
+      idSource: sourceFrame.idSource, frameIndex: sourceFrame.frameIndex ?? 0, targetCount: frame.ids.length };
+    const sameMapping = previous => previous && Object.keys(mapping).every(key => previous[key] === mapping[key]);
+    const previous = applied.get(frame);
+    if (previous?.revision === revision && sameMapping(previous)) return frame;
     const requestRevision = revision, sourceVersion = getSourceVersion();
     const manifests = state.files.filter(entry => localFiles.has(entry.id));
     let properties = [];
@@ -89,10 +96,21 @@ export function initializeExternalPropertyControls({
       if (requestRevision !== revision || sourceVersion !== getSourceVersion()) throw cancelled();
       properties = result.properties;
     }
+    // A fresh transfer does not mean the column's values changed. Preserve its
+    // dependency version across unrelated imports and renames, but invalidate
+    // it after reimporting values or changing the frame/replica atom mapping.
+    const versions = new Map();
+    for (const property of properties) {
+      const key = `${property.externalImportId}\0${property.externalPropertySource}`;
+      const importRevision = importRevisions.get(property.externalImportId);
+      const old = sameMapping(previous) ? previous.versions.get(key) : null;
+      property.externalPropertyVersion = old && old.importRevision === importRevision ? old.version : nextPropertyVersion++;
+      versions.set(key, { importRevision, version: property.externalPropertyVersion });
+    }
     // Commit atomically after all mappings succeed. Analyses and input fields
     // retain their original objects; only controller-owned fields are replaced.
     frame.properties = [...baseProperties(frame), ...properties];
-    applied.set(frame, { revision, sourceFrame });
+    applied.set(frame, { revision, ...mapping, versions });
     return frame;
   }
 
@@ -136,6 +154,7 @@ export function initializeExternalPropertyControls({
       }
       state = normalizeExternalPropertyState({ files: [...state.files.filter(entry => entry.id !== importId), result.manifest] });
       localFiles.set(importId, file); revision++;
+      importRevisions.set(importId, revision);
       await applyToFrame(getFrame());
       await onImported({ reason: restore ? 'restore' : 'import', importId, frame, state: snapshot(), file });
       statusMessage = `${restore ? 'Restored' : 'Imported'} ${result.manifest.columns.filter(column => column.enabled).length} properties from ${file.name}. ${result.manifest.scope === 'single-frame' ? `Values apply to frame ${result.manifest.frameIndex + 1} only because this structure has no stable atom IDs.` : 'Values follow stable atom IDs across frames.'}`;
@@ -164,14 +183,17 @@ export function initializeExternalPropertyControls({
     const removedNames = entry.columns.filter(column => column.enabled && (sourceName === undefined || column.sourceName === sourceName)).map(column => column.name);
     state = normalizeExternalPropertyState({ files: sourceName === undefined ? state.files.filter(file => file.id !== importId)
       : state.files.map(file => file.id === importId ? { ...file, columns: file.columns.map(column => column.sourceName === sourceName ? { ...column, enabled: false } : column) } : file) });
-    if (sourceName === undefined && localFiles.delete(importId)) await workerClient.request('remove', { importId });
+    if (sourceName === undefined && localFiles.delete(importId)) {
+      importRevisions.delete(importId);
+      await workerClient.request('remove', { importId });
+    }
     revision++; await applyToFrame(getFrame());
     await onRemoved({ importId, sourceName, removedNames, state: snapshot() });
     statusMessage = sourceName === undefined ? `Removed attributes from ${entry.file.name}.` : `Removed “${removedNames[0]}”.`; render(); return snapshot();
   }
 
   function reset() {
-    revision++; state = { files: [] }; localFiles.clear(); applied = new WeakMap();
+    revision++; state = { files: [] }; localFiles.clear(); importRevisions.clear(); applied = new WeakMap();
     workerClient.reset(); activeImport = null; busy = false; statusMessage = ''; render();
   }
 
@@ -193,7 +215,10 @@ export function initializeExternalPropertyControls({
           && old.mapping === entry.mapping && old.frameIndex === entry.frameIndex && old.scope === entry.scope
           && JSON.stringify(old.columns.map(column => column.sourceName)) === JSON.stringify(entry.columns.map(column => column.sourceName));
       }).map(entry => entry.id));
-      for (const id of localFiles.keys()) if (!keep.has(id)) { localFiles.delete(id); void workerClient.request('remove', { importId: id }).catch(() => {}); }
+      for (const id of localFiles.keys()) if (!keep.has(id)) {
+        localFiles.delete(id); importRevisions.delete(id);
+        void workerClient.request('remove', { importId: id }).catch(() => {});
+      }
       state = next; revision++; statusMessage = ''; render();
       if (!silent) notify(pendingFiles().length ? `Reselect external files: ${pendingFiles().map(entry => entry.file.name).join(', ')}.` : 'External attribute settings restored.');
       return snapshot();

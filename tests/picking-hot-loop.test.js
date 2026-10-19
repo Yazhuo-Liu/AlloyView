@@ -55,7 +55,7 @@ function pointerFor(renderer, atom, replica = renderer.replicas[0], radiusFracti
   return [rect.left + (cx / cw * .5 + .5) * rect.width + radius * radiusFraction, rect.top + (.5 - cy / cw * .5) * rect.height];
 }
 
-test('screen and depth shortcuts match the old pick and lastPick for random cameras, replicas, scalar limits and slices', () => {
+test('screen and depth shortcuts match the surface-depth reference for random cameras, replicas, scalar limits and slices', () => {
   const random = randomGenerator();
   for (let scenario = 0; scenario < 100; scenario++) {
     const renderer = fixture(random, scenario), rect = renderer.canvas.getBoundingClientRect();
@@ -67,7 +67,7 @@ test('screen and depth shortcuts match the old pick and lastPick for random came
   }
 });
 
-test('center depth ties, minimum pixel radius, exceptional radii and unavailable graphics retain the old rules', () => {
+test('surface depth ties, minimum pixel radius, exceptional radii and unavailable graphics retain their rules', () => {
   const renderer = fixture(randomGenerator(), 1, 5);
   Object.assign(renderer, { viewMatrix: Float64Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
     projectionMatrix: orthographic(-10, 10, -10, 10, .01, 20), displayPositions: Float64Array.from([0, 0, -5, 0, 0, -5, 0, 0, -6, 0, 0, 1, 0, 0, -4]),
@@ -115,7 +115,7 @@ test('edge-product and squared-distance overflow retain the original exact picki
   }
 });
 
-test('logarithmic finite projection and geometry scales match the original pick including overflow intermediates', () => {
+test('logarithmic finite projection and geometry scales match the reference including overflow intermediates', () => {
   const renderer = fixture(randomGenerator(), 0, 1), random = randomGenerator();
   Object.assign(renderer, { viewMatrix: Float64Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
     visibility: Uint8Array.of(255), radiusScale: 1, sliceMode: 'planes', slices: [], scalarColorPreview: null,

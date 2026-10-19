@@ -49,10 +49,11 @@ export function initializeClusterTools({ pool, tools, getFrame, getFrames = () =
   getColorChoiceVersion = () => 0, chooseProperty = () => {}, onResultsChange = () => {}, notify = () => {},
   onEdit = () => {}, onBeforeClear = () => {}, afterDisplayRefresh = callback => callback() }) {
   const $ = id => globalThis.document?.getElementById(id) ?? null;
-  const job = { enabled: false, failed: false, queued: false, controller: null, serial: 0, result: null, frame: null,
+  const job = { enabled: false, failed: false, queued: false, controller: null, serial: 0, result: null, frame: null, massKey: null,
     settings: { ...DEFAULTS } };
-  const memberSerials = new WeakMap();
+  const memberSerials = new WeakMap(), massSerials = new WeakMap();
   let controlsEnabled = false, generation = 0, tableRows = TABLE_ROWS, nextMemberSerial = 1;
+  let nextMassSerial = 1;
 
   function updateControls() {
     const available = controlsEnabled && Boolean(getFrame());
@@ -135,6 +136,17 @@ export function initializeClusterTools({ pool, tools, getFrame, getFrames = () =
       && ArrayBuffer.isView(property.data) && property.data.length === frame.ids.length) ?? null;
   }
 
+  function massDependency(property) {
+    if (!property) return null;
+    // External transfers get new arrays even when another column was edited.
+    // Their version already includes the imported values and atom mapping.
+    if (property.externalImportId && property.externalPropertyVersion !== undefined) {
+      return `external:${property.externalPropertyVersion}`;
+    }
+    if (!massSerials.has(property.data)) massSerials.set(property.data, nextMassSerial++);
+    return `data:${massSerials.get(property.data)}`;
+  }
+
   function abort() {
     job.serial++;
     job.controller?.abort();
@@ -161,7 +173,7 @@ export function initializeClusterTools({ pool, tools, getFrame, getFrames = () =
       clearAnalysisResults(frame, 'clusters');
       if (frame.atomeyeResults) delete frame.atomeyeResults.clusters;
     }
-    job.frame = null;
+    job.frame = null; job.massKey = null;
   }
 
   function cancel({ clearSettings = true, silent = false } = {}) {
@@ -252,12 +264,14 @@ export function initializeClusterTools({ pool, tools, getFrame, getFrames = () =
     syncTool({ reveal: !automatic });
     const request = job.serial, token = generation, source = getSourceVersion(), colorChoice = getColorChoiceVersion();
     const controller = new AbortController(); job.controller = controller; job.queued = false;
+    const mass = massProperty(frame), massKey = massDependency(mass);
+    job.massKey = massKey;
     const current = () => request === job.serial && token === generation && source === getSourceVersion()
-      && frame === getFrame() && job.enabled && !controller.signal.aborted && isCurrent();
-    const mass = massProperty(frame);
+      && frame === getFrame() && job.enabled && !controller.signal.aborted && isCurrent()
+      && massDependency(massProperty(frame)) === massKey;
     const { group, request: settings } = prepared;
     const key = JSON.stringify({ ...settings, selection: group ? [group.id, memberSerial(group.atomIds)] : null,
-      massWeighted: Boolean(mass), sourceVersion: source });
+      mass: massKey, sourceVersion: source });
     try {
       let cached = frame.atomeyeResults?.clusters;
       if (cached?.key !== key) {
@@ -289,7 +303,7 @@ export function initializeClusterTools({ pool, tools, getFrame, getFrames = () =
             || !ArrayBuffer.isView(result.clusterSize) || result.clusterSize.length !== frame.ids.length) {
           throw new Error('The cluster output does not match the current atom population.');
         }
-        cached = { key, result, cutoff: settings.cutoff };
+        cached = { key, result, cutoff: settings.cutoff, massKey };
         frame.atomeyeResults ??= {}; frame.atomeyeResults.clusters = cached;
       } else tableRows = Math.max(TABLE_ROWS, tableRows);
       if (!current()) return false;
@@ -370,6 +384,26 @@ export function initializeClusterTools({ pool, tools, getFrame, getFrames = () =
     return job.enabled && job.settings.selectionGroupId !== null ? run({ automatic: true }) : Promise.resolve(false);
   }
 
+  function refreshProperties() {
+    const currentFrame = getFrame();
+    let recalculate = false;
+    for (const frame of new Set([...(getFrames() ?? []), currentFrame, job.frame])) {
+      if (!frame) continue;
+      const massKey = massDependency(massProperty(frame)), cached = frame.atomeyeResults?.clusters;
+      if (cached && cached.massKey !== massKey) {
+        clearAnalysisResults(frame, 'clusters');
+        delete frame.atomeyeResults.clusters;
+        if (frame === currentFrame) recalculate = true;
+      }
+      if (frame === job.frame && job.massKey !== massKey) {
+        abort(); clearView();
+        job.massKey = massKey;
+        if (frame === currentFrame) recalculate = true;
+      }
+    }
+    return recalculate && job.enabled ? run({ automatic: true }) : Promise.resolve(false);
+  }
+
   $('run-clusters')?.addEventListener('click', () => { tableRows = TABLE_ROWS; void run(); });
   $('cancel-clusters')?.addEventListener('click', () => { onEdit(); cancel(); });
   for (const id of ['clusters-neighbor-mode', 'clusters-cutoff', 'clusters-selection', 'clusters-sort']) {
@@ -389,7 +423,7 @@ export function initializeClusterTools({ pool, tools, getFrame, getFrames = () =
   $('clusters-color-size')?.addEventListener('click', () => chooseProperty('clusterSize', { manual: true }));
   state('Not calculated', HELP);
 
-  return Object.freeze({ run, onFrame, reset, cancel, serialize, restore, refreshBondParameters, refreshSelectionGroups,
+  return Object.freeze({ run, onFrame, reset, cancel, serialize, restore, refreshBondParameters, refreshSelectionGroups, refreshProperties,
     abortJobs: abort,
     isEnabled: () => job.enabled,
     // Bonds keeps an edited cutoff across frames while clusters depend on it.

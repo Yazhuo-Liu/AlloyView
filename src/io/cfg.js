@@ -234,10 +234,14 @@ function wrapCfgFractional(fractional, pbc) {
   for (let index = 0; index < fractional.length; index += 1) {
     const value = fractional[index];
     if (!pbc[index % 3]) { stabilized[index] = value; continue; }
-    const nearestInteger = Math.round(value);
-    stabilized[index] = Math.abs(value - nearestInteger) <= CFG_BOUNDARY_TOLERANCE ? nearestInteger : value;
+    stabilized[index] = stabilizeCfgFractional(value);
   }
   return wrapFractional(stabilized, pbc);
+}
+
+function stabilizeCfgFractional(value) {
+  const nearestInteger = Math.round(value);
+  return Math.abs(value - nearestInteger) <= CFG_BOUNDARY_TOLERANCE ? nearestInteger : value;
 }
 
 function inferCfgImageFlags(rawFractional, pbc) {
@@ -247,7 +251,9 @@ function inferCfgImageFlags(rawFractional, pbc) {
     if (!pbc[index % 3]) continue;
     const value = rawFractional[index];
     if (value < -CFG_BOUNDARY_TOLERANCE || value > 1 + CFG_BOUNDARY_TOLERANCE) {
-      const image = Math.floor(value);
+      // Use the same boundary snapping as the wrapped coordinate; otherwise
+      // values just below an integer lose a whole cell from the unwrap.
+      const image = Math.floor(stabilizeCfgFractional(value));
       if (image < -2_147_483_648 || image > 2_147_483_647) {
         throw cfgError(`Fractional coordinate ${value} requires an unsupported image flag.`);
       }
