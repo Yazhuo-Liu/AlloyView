@@ -179,7 +179,7 @@ its WebGPU kernel is turned on.
 **Deployments:** all.
 
 - **Where:** `src/data/replicate.js`, `src/workers/replication-worker.js`,
-  `src/worker-client.js`, `src/data/cache-policy.js`.
+  `src/data/structure-worker-client.js`, `src/data/cache-policy.js`.
 - **Evidence [M]:** physical replication gives every copy a string ID. For
   120,458 × 2×2×2 atoms, 380 ms of the 723 ms replication is ID validation and
   string building, and posting the result takes 471 ms because 843,206 strings

@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addSelectionGroup, normalizeSelectionGroups, updateSelectionGroup, removeSelectionGroup,
   selectSelectionGroup, setSelectionGroupMembers, selectionGroupStyles, summarizeSelectionGroups,
-  selectionGroupVisibility, parseSelectionAtomIds, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from '../src/selection-groups.js';
-import { initializeSelectionGroupControls } from '../src/selection-group-controls.js';
+  selectionGroupVisibility, parseSelectionAtomIds, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from '../src/data/selection-groups.js';
+import { initializeSelectionGroupControls } from '../src/ui/selection/selection-group-controls.js';
 import { replicateFrame } from '../src/data/replicate.js';
 import { crystalFrame } from './helpers/crystals.js';
 

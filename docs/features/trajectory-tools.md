@@ -166,7 +166,7 @@ one.
 [Worker processing and caching](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/trajectory-processor.js),
 [structure Worker requests](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/structure-worker.js),
 [line rendering](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/trajectory-line-layer.js),
-[panel controls](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/trajectory-tool-controls.js).
+[panel controls](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/selection/trajectory-tool-controls.js).
 The behavior follows OVITO's Unwrap trajectories, Smooth trajectory and
 Generate trajectory lines modifiers; the code is an independent
 implementation.

@@ -11,7 +11,7 @@ import {
 import { periodicDisplayCoordinates } from '../src/render/periodic-origin.js';
 import { transformPoint } from '../src/render/math.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
-import { initializeCrystalDragControls } from '../src/crystal-drag-controls.js';
+import { initializeCrystalDragControls } from '../src/ui/view/crystal-drag-controls.js';
 
 const cubic = createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10] });
 const skew = createCell({ origin: [100, -10, 2], vectors: [10, 0, 0, 3, 8, 0, -2, 1, 7], pbc: [true, false, true], triclinic: true });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createReferenceMappingAsync, referenceMappingCacheBytes } from '../src/analysis/reference-strain.js';
-import { yieldToMain } from '../src/task-yield.js';
+import { yieldToMain } from '../src/shared/task-yield.js';
 
 // The pre-C8 asynchronous text path, kept here as a performance and identity
 // oracle. Scientific regression tests exercise invalid inputs independently.

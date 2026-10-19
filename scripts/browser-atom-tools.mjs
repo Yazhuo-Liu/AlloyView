@@ -461,7 +461,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await evaluate(`(async () => {
     const appUrl = document.querySelector('script[type="module"]').src;
     const { FrameCache } = await import(new URL('./data/frame-cache.js', appUrl));
-    const { StructureWorkerClient } = await import(new URL('./worker-client.js', appUrl));
+    const { StructureWorkerClient } = await import(new URL('./data/structure-worker-client.js', appUrl));
     const get = FrameCache.prototype.get, frame = StructureWorkerClient.prototype.frame;
     let miss = true, hold = true;
     window.displacementReferenceHeld = false;
@@ -964,7 +964,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await evaluate(`(async () => {
     const appUrl = document.querySelector('script[type="module"]').src;
     const { FrameCache } = await import(new URL('./data/frame-cache.js', appUrl));
-    const { StructureWorkerClient } = await import(new URL('./worker-client.js', appUrl));
+    const { StructureWorkerClient } = await import(new URL('./data/structure-worker-client.js', appUrl));
     const { AnalysisPool } = await import(new URL('./analysis/analysis-pool.js', appUrl));
     const get = FrameCache.prototype.get, frame = StructureWorkerClient.prototype.frame, analyze = AnalysisPool.prototype.analyze;
     let miss = true, hold = true, holdAnalysis = true;
@@ -1268,7 +1268,7 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   await evaluate(`(async () => {
     const appUrl = document.querySelector('script[type="module"]').src;
     const { FrameCache } = await import(new URL('./data/frame-cache.js', appUrl));
-    const { StructureWorkerClient } = await import(new URL('./worker-client.js', appUrl));
+    const { StructureWorkerClient } = await import(new URL('./data/structure-worker-client.js', appUrl));
     const get = FrameCache.prototype.get, frame = StructureWorkerClient.prototype.frame;
     let miss = true, hold = true;
     window.displacementSourceHeld = false;

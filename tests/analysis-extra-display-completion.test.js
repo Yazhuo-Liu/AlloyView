@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createDisplayRefresh } from '../src/display-refresh.js';
+import { createDisplayRefresh } from '../src/render/display-refresh.js';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
-import { initializeTopologyTools } from '../src/topology-tools.js';
-import { initializeClusterTools } from '../src/cluster-tools.js';
+import { initializeTopologyTools } from '../src/ui/analysis/topology-tools.js';
+import { initializeClusterTools } from '../src/ui/analysis/cluster-tools.js';
 import { calculateClusters } from '../src/analysis/clusters.js';
-import { initializeDxaTools, DXA_STRUCTURE_PROPERTY } from '../src/dxa-tools.js';
-import { initializeGrainTools } from '../src/grain-tools.js';
-import { initializeWignerSeitzTools } from '../src/wigner-seitz-tools.js';
+import { initializeDxaTools, DXA_STRUCTURE_PROPERTY } from '../src/ui/analysis/dxa-tools.js';
+import { initializeGrainTools } from '../src/ui/analysis/grain-tools.js';
+import { initializeWignerSeitzTools } from '../src/ui/analysis/wigner-seitz-tools.js';
 import { calculateWignerSeitz } from '../src/analysis/wigner-seitz.js';
 
 class Element {

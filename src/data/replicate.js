@@ -1,6 +1,6 @@
 import { createCell, invert3, validateFrame } from './model.js';
 import { normalizeRepetitions } from '../render/replication.js';
-import { yieldToMain } from '../task-yield.js';
+import { yieldToMain } from '../shared/task-yield.js';
 
 export const MAX_PHYSICAL_REPLICATION_ATOMS = 4_000_000;
 export const MAX_PHYSICAL_REPLICATION_BYTES = 512 * 1024 ** 2;

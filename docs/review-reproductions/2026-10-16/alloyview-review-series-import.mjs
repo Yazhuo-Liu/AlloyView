@@ -1,6 +1,6 @@
 // Archived review evidence for baseline 77b24ad; see docs/REPOSITORY_REVIEW_2026-10-16.md.
-import { initializeTimeSeries } from '../../../src/time-series-controls.js';
-import { createAttributeRegistry } from '../../../src/global-attributes.js';
+import { initializeTimeSeries } from '../../../src/ui/properties/time-series-controls.js';
+import { createAttributeRegistry } from '../../../src/properties/global-attributes.js';
 import { createCell } from '../../../src/data/model.js';
 const frames=[0,1,2].map(frameIndex=>({frameIndex,timestep:frameIndex,ids:Uint32Array.of(1),types:Uint8Array.of(0),typeLabels:['Fe'],cell:createCell({vectors:[1,0,0,0,1,0,0,0,1]}),properties:[]}));
 let listener; const reads=[];

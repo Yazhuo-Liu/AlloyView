@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initializeDxaTools, DXA_STRUCTURE_PROPERTY, DXA_STRUCTURE_TYPES } from '../src/dxa-tools.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+import { initializeDxaTools, DXA_STRUCTURE_PROPERTY, DXA_STRUCTURE_TYPES } from '../src/ui/analysis/dxa-tools.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 import { colorsByCategory, combineVisibilityMasks, visibilityByCategory, visibilityByType } from '../src/render/palette.js';
 import { DxaClient } from '../src/analysis/dxa-client.js';
 import { createCell } from '../src/data/model.js';

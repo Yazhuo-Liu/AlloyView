@@ -4,7 +4,7 @@ import { processedFrameHeader } from '../src/data/processed-frame-header.js';
 import { replicateFrame, MAX_PHYSICAL_REPLICATION_ATOMS } from '../src/data/replicate.js';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 import { crystalFrame } from './helpers/crystals.js';
-import { createAttributeRegistry } from '../src/global-attributes.js';
+import { createAttributeRegistry } from '../src/properties/global-attributes.js';
 
 test('header-derived physical attributes match materialized skew and mixed-PBC frames', async () => {
   for (const pbc of [[true, true, true], [true, false, true]]) {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAnalysisDependencies } from '../src/analysis-dependencies.js';
-import { initializeExpressionControls } from '../src/expression-controls.js';
+import { createAnalysisDependencies } from '../src/application/analysis-dependencies.js';
+import { initializeExpressionControls } from '../src/ui/properties/expression-controls.js';
 
 function harness() {
   const frame = { ids: Uint32Array.of(1, 2), types: Uint8Array.of(0, 0), typeLabels: ['Fe'],

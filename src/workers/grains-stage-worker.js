@@ -1,6 +1,6 @@
 import { createNeighborBonds, grainDisorientationRange } from '../analysis/grains.js';
 let current = null;
-import { yieldToEventLoop as pause } from '../task-yield.js';
+import { yieldToEventLoop as pause } from '../shared/task-yield.js';
 self.addEventListener('message', ({ data }) => {
   if (data.warm) { self.postMessage({ id: data.id, ok: true, result: { warmed: true } }); return; }
   if (data.cancel) { if (current?.id === data.id) current.cancelled = true; return; }

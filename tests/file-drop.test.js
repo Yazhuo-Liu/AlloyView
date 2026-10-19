@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeFileDrop } from '../src/file-drop.js';
+import { initializeFileDrop } from '../src/ui/shell/file-drop.js';
 
 function fixture() {
   const handlers = new Map(), overlay = { hidden: true }, drops = [];

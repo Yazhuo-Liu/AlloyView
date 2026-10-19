@@ -626,6 +626,6 @@ async function copyArray(source, task) {
 function abortError() { return new DOMException('Analysis cancelled.', 'AbortError'); }
 import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult, compactVoronoiRadii } from '../voronoi-selection.js';
 import { gpuPreparationKinds } from './preparation.js';
-import { yieldToMain } from '../../task-yield.js';
+import { yieldToMain } from '../../shared/task-yield.js';
 
 const validationError = message => analysisValidationError(new Error(message));

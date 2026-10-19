@@ -69,7 +69,7 @@ try {
     await evaluate(`(async () => {
       if (document.getElementById('enable-gpu-computing').getAttribute('aria-pressed') === 'true') document.getElementById('enable-gpu-computing').click();
       const app = document.querySelector('script[type=module][src]').src;
-      const { StructureWorkerClient } = await import(new URL('./worker-client.js', app));
+      const { StructureWorkerClient } = await import(new URL('./data/structure-worker-client.js', app));
       const { WebGLRenderer } = await import(new URL('./render/webgl-renderer.js', app));
       const checks = window.progressiveChecks = { notices:[], requests:[], downloads:[], gated:false, held:false, phase:'series', beforeComplete:true };
       const prepare = StructureWorkerClient.prototype.prepareSource;

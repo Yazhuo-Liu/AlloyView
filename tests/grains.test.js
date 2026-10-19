@@ -5,7 +5,7 @@ import { DisjointSet, GRAIN_DEFAULTS, GRAIN_MIN_PLOT_SIZE, buildGrainDendrogram,
   quaternionAxisAngle, quaternionBungeEuler, segmentGrains, stableAscendingOrder, suggestMergeThreshold, validateGrainParameters } from '../src/analysis/grains.js';
 import { latticeDisorientation } from '../src/analysis/disorientation.js';
 import { calculatePtm } from '../src/analysis/ptm.js';
-import { GrainSegmentationClient } from '../src/grains-client.js';
+import { GrainSegmentationClient } from '../src/analysis/grains-client.js';
 import { createCell } from '../src/data/model.js';
 import { crystalFrame } from './helpers/crystals.js';
 import { GRAIN_FIXTURES, loadGrainFixture, ovitoGrainInput } from './helpers/grain-fixtures.js';

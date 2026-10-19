@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { addKeyframe, anglesFromBasis, applyCamera, basisFromQuaternion, cameraBasis, cameraPathDuration, captureCamera, createCameraPath,
   DEFAULT_KEYFRAME_SPACING, MAX_CAMERA_KEYFRAMES, moveKeyframe, normalizeCameraPathState, planMovie, quaternionFromBasis, removeKeyframe,
-  retimeKeyframe, sampleCameraPath, slerpQuaternion, trajectoryFrameAt } from '../src/camera-path.js';
+  retimeKeyframe, sampleCameraPath, slerpQuaternion, trajectoryFrameAt } from '../src/render/camera-path.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 
 const DEGREE = Math.PI / 180;

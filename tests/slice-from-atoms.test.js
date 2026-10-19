@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sliceBetweenAtoms, sliceThroughAtoms, sliceThroughAtom } from '../src/slice-from-atoms.js';
+import { sliceBetweenAtoms, sliceThroughAtoms, sliceThroughAtom } from '../src/render/slice-from-atoms.js';
 import { pointVisible } from '../src/render/slicing.js';
 
 function close(actual, expected, epsilon = 1e-10) {

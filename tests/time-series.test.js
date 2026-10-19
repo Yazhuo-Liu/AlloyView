@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { collectFileSeries, MAX_TIME_SERIES, normalizeTimeSeriesState, recordRegistry, seriesAxis, seriesFrames, timeSeriesTable,
-  TimeSeriesStore } from '../src/time-series.js';
-import { initializeTimeSeries } from '../src/time-series-controls.js';
-import { createGlobalAttributeSource } from '../src/global-attribute-source.js';
-import { createAttributeRegistry } from '../src/global-attributes.js';
+  TimeSeriesStore } from '../src/data/time-series.js';
+import { initializeTimeSeries } from '../src/ui/properties/time-series-controls.js';
+import { createGlobalAttributeSource } from '../src/properties/global-attribute-source.js';
+import { createAttributeRegistry } from '../src/properties/global-attributes.js';
 import { timeSeriesPanels } from '../src/render/time-series-chart.js';
-import { serializeCsv } from '../src/statistics-export.js';
+import { serializeCsv } from '../src/io/statistics-export.js';
 import { createCell } from '../src/data/model.js';
 import { STRUCTURE_TYPES } from '../src/analysis/cna.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 
 /** Frame f: |a| = 10 (1 + 0.01 f), timestep 50 f, q = f + id mod 2. */
 function frame(index, { timestep = true } = {}) {

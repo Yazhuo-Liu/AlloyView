@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCameraPath } from '../src/camera-path.js';
+import { createCameraPath } from '../src/render/camera-path.js';
 import { DEFAULT_MOVIE_OUTPUT, estimateMovieBytes, exportMovie, movieBitrate, movieRenderSize, MOVIE_LIMITS, MOVIE_QUALITIES, normalizeMovieOutput,
-  normalizeMovieState, PNG_SEQUENCE_FORMAT, renderMovie } from '../src/movie-export.js';
+  normalizeMovieState, PNG_SEQUENCE_FORMAT, renderMovie } from '../src/video/movie-export.js';
 import { movieFormat } from '../src/video/codecs.js';
-import { formatBytes, formatSeconds } from '../src/movie-controls.js';
-import { planMovie } from '../src/camera-path.js';
+import { formatBytes, formatSeconds } from '../src/ui/export/movie-controls.js';
+import { planMovie } from '../src/render/camera-path.js';
 import { readMp4, readWebm } from './helpers/video-containers.js';
 
 const camera = (yaw = 0) => ({ yaw, pitch: 0.3, roll: 0, fov: 0.7, constrainUp: true, target: [0, 0, 0], pan: [0, 0, 0], distance: 20, orthographicScale: 8, projectionMode: 'perspective' });

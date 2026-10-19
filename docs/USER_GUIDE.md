@@ -578,7 +578,7 @@ kernel runs serially. See [deployment](DEPLOYMENT.md#cross-origin-isolation-for-
 
 ## Extend the modification tools
 
-[The tool registry](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/tool-registry.js)
+[The tool registry](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/shell/tool-registry.js)
 stores each tool's stable ID, label, category and analysis flag. Modification
 tools can also declare `changesStructure` or `changesProperties` metadata.
 Future editors for adding, deleting or moving atoms selected by clicking or

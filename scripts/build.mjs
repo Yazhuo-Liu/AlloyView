@@ -13,7 +13,7 @@ export const LOGO_ASSET_BUDGET = 200 * 1024;
  * accidentally restoring multi-megabyte originals must fail deployment. Small
  * build fixtures can omit this optional asset directory entirely. */
 export async function checkLogoAssetBudget(root = projectRoot) {
-  const directory = resolve(root, 'src/asserts/logo');
+  const directory = resolve(root, 'src/assets/logo');
   const entries = await readdir(directory, { withFileTypes: true }).catch(error => {
     if (error.code === 'ENOENT') return null;
     throw error;
@@ -27,7 +27,7 @@ export async function checkLogoAssetBudget(root = projectRoot) {
     return sizes.reduce((sum, size) => sum + size, 0);
   }
   const bytes = await totalBytes(directory, entries);
-  if (bytes > LOGO_ASSET_BUDGET) throw new Error(`Logo assets total ${bytes.toLocaleString('en-US')} bytes; reduce src/asserts/logo to at most 200 KiB before building.`);
+  if (bytes > LOGO_ASSET_BUDGET) throw new Error(`Logo assets total ${bytes.toLocaleString('en-US')} bytes; reduce src/assets/logo to at most 200 KiB before building.`);
   return bytes;
 }
 

@@ -14,7 +14,7 @@ import { validateReferences } from './lattice.js';
 import { validatePtmParameters, validatePreparedPtmNeighbors, PTM_NEIGHBOR_LIST_FIELDS } from './ptm.js';
 import { CpuBudget } from './cpu-budget.js';
 import { cpuMemoryBudget, chooseMemoryWorkerCount } from './cpu-memory.js';
-import { yieldToMain } from '../task-yield.js';
+import { yieldToMain } from '../shared/task-yield.js';
 import { analyzeDxaStagePool, DXA_STAGE_KINDS } from './dxa-cpu-pool.js';
 import { coordinationStatistics } from './coordination-statistics.js';
 import { createAnalysisProgressReporter, isAnalysisProgressError } from './progress.js';

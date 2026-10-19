@@ -366,8 +366,8 @@ extension leave the analysis off.
 [symmetry and disorientation](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/disorientation.js),
 [PTM neighbor lists](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/ptm.js),
 [Worker](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/grains-worker.js) and
-[its client](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/grains-client.js),
-[panel, colors and table](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/grain-tools.js),
+[its client](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/grains-client.js),
+[panel, colors and table](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/analysis/grain-tools.js),
 [merge plot](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/grain-merge-chart.js),
 [orientation colors](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/orientation-colors.js).
 The pinned OVITO sources the port was written from, with their license, are

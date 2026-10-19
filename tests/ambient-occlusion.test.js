@@ -5,8 +5,8 @@ import {
   accumulateVisiblePixels, ambientOcclusionBounds, ambientOcclusionBrightness, ambientOcclusionCamera, ambientOcclusionDirections,
   ambientOcclusionInputs, ambientOcclusionInputsMatch, normalizeAmbientOcclusion, normalizeAmbientOcclusionSettings,
 } from '../src/render/ambient-occlusion.js';
-import { ambientOcclusionStatusText, initializeAmbientOcclusionControls } from '../src/ambient-occlusion-controls.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+import { ambientOcclusionStatusText, initializeAmbientOcclusionControls } from '../src/ui/view/ambient-occlusion-controls.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 import { transformPoint } from '../src/render/math.js';
 

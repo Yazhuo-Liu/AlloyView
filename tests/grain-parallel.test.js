@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
-import { GrainSegmentationClient } from '../src/grains-client.js';
-import { GrainStagePool } from '../src/grain-stage-pool.js';
+import { GrainSegmentationClient } from '../src/analysis/grains-client.js';
+import { GrainStagePool } from '../src/analysis/grain-stage-pool.js';
 import { CpuBudget } from '../src/analysis/cpu-budget.js';
 import { calculatePtm } from '../src/analysis/ptm.js';
 import { buildGrainDendrogram, buildGrainDendrogramParallel, calculateGrains } from '../src/analysis/grains.js';

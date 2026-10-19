@@ -7,9 +7,9 @@ import { readFrameHeaderDescriptor, MAX_FRAME_HEADER_BYTES } from '../src/io/fra
 import { parseFrameDescriptor } from '../src/workers/frame-parser.js';
 import { indexPdb } from '../src/io/pdb.js';
 import { FrameParserPool } from '../src/data/frame-parser-pool.js';
-import { collectFileSeries, isHeaderSeries, TimeSeriesStore } from '../src/time-series.js';
-import { createAttributeRegistry } from '../src/global-attributes.js';
-import { createGlobalAttributeSource } from '../src/global-attribute-source.js';
+import { collectFileSeries, isHeaderSeries, TimeSeriesStore } from '../src/data/time-series.js';
+import { createAttributeRegistry } from '../src/properties/global-attributes.js';
+import { createGlobalAttributeSource } from '../src/properties/global-attribute-source.js';
 import { createCell } from '../src/data/model.js';
 
 const dump = (count = 2, step = -10) => `ITEM: TIMESTEP\n${step}\nITEM: UNITS\nmetal\nITEM: TIME\n1.5\nITEM: NUMBER OF ATOMS\n${count}\nITEM: BOX BOUNDS xy xz yz pp ff pp\n-1 12 2\n-2 11 1\n3 13 3\nITEM: ATOMS id type xs ys zs energy\n`;

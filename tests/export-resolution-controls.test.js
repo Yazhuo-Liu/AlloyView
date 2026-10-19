@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeExportResolutionControls } from '../src/export-resolution-controls.js';
+import { initializeExportResolutionControls } from '../src/ui/export/export-resolution-controls.js';
 
 function fixture() {
   const nodes = Object.fromEntries(['export-resolution', 'export-width', 'export-height', 'export-aspect-lock',

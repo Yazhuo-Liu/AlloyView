@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initializeClusterTools, clusterCategories, clusterColor, CLUSTER_COLORS, CLUSTER_LEGEND_LIMIT } from '../src/cluster-tools.js';
+import { initializeClusterTools, clusterCategories, clusterColor, CLUSTER_COLORS, CLUSTER_LEGEND_LIMIT } from '../src/ui/analysis/cluster-tools.js';
 import { calculateClusters } from '../src/analysis/clusters.js';
 import { colorsByCategory, visibilityByCategory, UNLISTED_CATEGORY_ID } from '../src/render/palette.js';
-import { buildStatisticsTable } from '../src/statistics-export.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+import { buildStatisticsTable } from '../src/io/statistics-export.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
-import { initializeExternalPropertyControls } from '../src/external-property-controls.js';
+import { initializeExternalPropertyControls } from '../src/ui/properties/external-property-controls.js';
 
 class Element {
   constructor(value = '') {

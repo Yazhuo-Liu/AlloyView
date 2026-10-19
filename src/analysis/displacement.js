@@ -1,6 +1,6 @@
 import { cellFaceHeights, fractionalToCartesian, imageLatticeCell, invert3, wrappedSourceRepetitions } from '../data/model.js';
 import { createReferenceMappingAsync } from './reference-strain.js';
-import { yieldToMain } from '../task-yield.js';
+import { yieldToMain } from '../shared/task-yield.js';
 
 const MAX_IMAGE_CANDIDATES = 100_000;
 const derivedCartesianPositions = new WeakMap();

@@ -33,7 +33,7 @@ try {
     await waitFor('document.readyState === "complete" && document.querySelector("[data-tool-button=replicate]")', 'Application startup');
     await evaluate(`(async () => {
       const app = document.querySelector('script[type=module][src]').src;
-      const { StructureWorkerClient } = await import(new URL('./worker-client.js', app));
+      const { StructureWorkerClient } = await import(new URL('./data/structure-worker-client.js', app));
       const { WebGLRenderer } = await import(new URL('./render/webgl-renderer.js', app));
       const checks = window.trajectoryChecks = { loads: [], frameRequests: [], replicas: [], displays: [] };
       // Keep one processed-frame read in flight long enough for a file-value
@@ -123,7 +123,7 @@ try {
     await waitFor('trajectoryChecks.renderer.frame.ids.length === 2', 'Source restoration');
     const direct = await evaluate(`(async () => {
       const app = document.querySelector('script[type=module][src]').src;
-      const { StructureWorkerClient } = await import(new URL('./worker-client.js', app));
+      const { StructureWorkerClient } = await import(new URL('./data/structure-worker-client.js', app));
       const { CpuBudget } = await import(new URL('./analysis/cpu-budget.js', app));
       const budget = new CpuBudget({ environment: { navigator: { hardwareConcurrency: 5 } } });
       const client = new StructureWorkerClient(() => {}, { cpuBudget: budget });

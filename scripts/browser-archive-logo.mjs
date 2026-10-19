@@ -31,7 +31,7 @@ try {
     const cold = await evaluate(`(() => {
       const logo=document.getElementById('brand-logo'), fallback=document.querySelector('.empty-logo-fallback');
       return {brand:logo.currentSrc, width:logo.naturalWidth, fallbackSource:fallback.getAttribute('src'), fallbackHidden:fallback.hidden,
-        resources:performance.getEntriesByType('resource').filter(entry=>entry.name.includes('/asserts/logo/')).map(entry=>({name:entry.name.split('/').at(-1),bytes:entry.decodedBodySize}))};
+        resources:performance.getEntriesByType('resource').filter(entry=>entry.name.includes('/assets/logo/')).map(entry=>({name:entry.name.split('/').at(-1),bytes:entry.decodedBodySize}))};
     })()`);
     assert.ok(cold.brand.endsWith('AlloyView_logo_dark.svg')); assert.equal(cold.width, 1700);
     assert.equal(cold.fallbackSource, null); assert.equal(cold.fallbackHidden, true);
@@ -41,7 +41,7 @@ try {
     await waitFor('document.getElementById("brand-logo").currentSrc.endsWith("AlloyView_logo_light.svg") && document.getElementById("brand-logo").naturalWidth>0', 'Dark wordmark');
     await evaluate(`(async () => {
       const app=document.querySelector('script[type=module][src]').src;
-      const [{WebGLRenderer},{ImageArchiveBuilder}]=await Promise.all([import(new URL('./render/webgl-renderer.js',app)),import(new URL('./export-archive.js',app))]);
+      const [{WebGLRenderer},{ImageArchiveBuilder}]=await Promise.all([import(new URL('./render/webgl-renderer.js',app)),import(new URL('./io/export-archive.js',app))]);
       const checks=window.archiveChecks={records:[],finishes:[],downloads:[],hold:false};
       const setFrame=WebGLRenderer.prototype.setFrame;
       WebGLRenderer.prototype.setFrame=function(...args){if(this.canvas.id==='viewport')checks.renderer=this;return setFrame.apply(this,args);};
@@ -69,7 +69,7 @@ try {
       document.getElementById('export-frame-series').click();`);
     await waitFor('archiveChecks.downloads.length===1 && document.getElementById("export-series-status").textContent.includes("Exported 2 frames")', 'Incremental archive');
     const archive = await evaluate(`(async () => {
-      const app=document.querySelector('script[type=module][src]').src,{crc32}=await import(new URL('./export-archive.js',app));
+      const app=document.querySelector('script[type=module][src]').src,{crc32}=await import(new URL('./io/export-archive.js',app));
       const blob=archiveChecks.downloads[0],bytes=new Uint8Array(await blob.arrayBuffer()), view=new DataView(bytes.buffer),images=[];
       let offset=0;
       while(view.getUint32(offset,true)===0x04034b50){const length=view.getUint32(offset+18,true),start=offset+30+view.getUint16(offset+26,true),data=bytes.slice(start,start+length);

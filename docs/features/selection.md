@@ -24,4 +24,4 @@ Zero-length or collinear geometry can leave angles undefined. Minimum-image meas
 
 ## Implementation
 
-[Periodic measurements](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/measurements.js), [appearance precedence](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/appearance.js), [picking and inspection](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/atomeye-tools.js).
+[Periodic measurements](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/measurements.js), [appearance precedence](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/appearance.js), [picking and inspection](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/view/atomeye-tools.js).

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 import { replicateFrame } from '../src/data/replicate.js';
 import { TrajectoryLineBuilder } from '../src/data/trajectory-tools.js';
-import { initializeTrajectoryToolControls } from '../src/trajectory-tool-controls.js';
+import { initializeTrajectoryToolControls } from '../src/ui/selection/trajectory-tool-controls.js';
 import { TrajectoryProcessor } from '../src/workers/trajectory-processor.js';
 
 const repetitions = [2, 3, 2];

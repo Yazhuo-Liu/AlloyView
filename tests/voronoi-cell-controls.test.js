@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initializeVoronoiCellControls } from '../src/voronoi-cell-controls.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+import { initializeVoronoiCellControls } from '../src/ui/view/voronoi-cell-controls.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 
 function harness() {
   const elements = Object.fromEntries(['show-voronoi-cell', 'show-all-voronoi-cells', 'voronoi-cell-color', 'voronoi-cell-opacity', 'voronoi-cell-style', 'voronoi-cell-scale', 'voronoi-cell-status', 'voronoi-all-cells-status']

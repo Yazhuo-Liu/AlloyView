@@ -3,7 +3,7 @@ import test from 'node:test';
 import { DEFAULT_EXPORT_RESOLUTION, EXPORT_TILE_BYTES, normalizeExportResolution, resolveExportSize,
   validateExportSize, planExportTiles, tileProjection, exportTileLimit } from '../src/render/export-resolution.js';
 import { orthographic, perspective, transformPoint } from '../src/render/math.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 import { captureOffscreen } from '../src/render/offscreen-export.js';
 
 test('export presets and scaled sizes resolve against the current view without changing it', () => {

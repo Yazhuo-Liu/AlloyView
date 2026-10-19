@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildStatisticsTable, csvCell, csvChunks, scalarStatistics, serializeCsv } from '../src/statistics-export.js';
+import { buildStatisticsTable, csvCell, csvChunks, scalarStatistics, serializeCsv } from '../src/io/statistics-export.js';
 import { createCell } from '../src/data/model.js';
 
 function snapshot() {

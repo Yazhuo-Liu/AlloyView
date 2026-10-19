@@ -1,6 +1,6 @@
 import { replicateFrame } from '../data/replicate.js';
 import { frameTransferables } from '../data/model.js';
-import { yieldToEventLoop } from '../task-yield.js';
+import { yieldToEventLoop } from '../shared/task-yield.js';
 
 const requests = new Map();
 self.addEventListener('message', async ({ data: { id, type, payload } }) => {

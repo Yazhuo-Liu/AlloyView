@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { compileScript, formatScriptProblem, MAX_SAVED_SCRIPTS, normalizeScriptState, runScript, scriptCommandReference,
-  ScriptError, SCRIPT_LIMITS } from '../src/command-script.js';
+  ScriptError, SCRIPT_LIMITS } from '../src/application/command-script.js';
 
 const REGISTRY = ['camera.yaw-left', 'camera.zoom-in', 'frames.next', 'image.png', 'interface.theme'];
 const TOOLS = ['display', 'slice', 'cna', 'textLabels'];
@@ -140,7 +140,7 @@ test('script text is data: property names and code are unknown commands or plain
   assert.equal(globalThis.__scriptProbe, 0);
   delete globalThis.__scriptProbe;
   // The module itself contains no dynamic code evaluation.
-  const source = await readFile(new URL('../src/command-script.js', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/application/command-script.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /\beval\s*\(|new\s+Function|\bFunction\s*\(|\bimport\s*\(|setTimeout\s*\(\s*['"`]/);
 });
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { measureAtoms, minimumImageVector } from '../src/measurements.js';
+import { measureAtoms, minimumImageVector } from '../src/analysis/measurements.js';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 
 const near = (actual, expected, tolerance = 1e-10) => assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} differs from ${expected}`);

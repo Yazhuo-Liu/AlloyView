@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDisplayRefresh } from '../src/display-refresh.js';
+import { createDisplayRefresh } from '../src/render/display-refresh.js';
 
 function harness(apply) {
   const scheduled = new Map(); let sequence = 0;

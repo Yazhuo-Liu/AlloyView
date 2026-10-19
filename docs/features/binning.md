@@ -177,9 +177,9 @@ no binning entry and leave the tool off.
 ## Implementation
 
 [Binning kernel](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/spatial-binning.js),
-[panel](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/binning-tools.js),
+[panel](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/analysis/binning-tools.js),
 [chart](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/binning-chart.js),
-[Worker client](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/binning-client.js),
-[CSV table](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/statistics-export.js).
+[Worker client](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/binning-client.js),
+[CSV table](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/io/statistics-export.js).
 OVITO's spatial binning modifier is part of OVITO Pro; this implementation is
 independent.

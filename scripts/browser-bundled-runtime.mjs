@@ -75,7 +75,7 @@ async function runJobs({text,isolated,entries}) {
   const trace = window.bundleTrace, appUrl = document.querySelector('script[type=module][src]').src;
   const assetRoot = new URL('../', appUrl);
   const namespace = await import(appUrl);
-  const modules = await Promise.all(['worker-client.js','analysis/analysis-pool.js','render/webgl-renderer.js','analysis/dxa-client.js']
+  const modules = await Promise.all(['data/structure-worker-client.js','analysis/analysis-pool.js','render/webgl-renderer.js','analysis/dxa-client.js']
     .map(path => import(new URL(path, appUrl))));
   const [{StructureWorkerClient},{AnalysisPool},{WebGLRenderer},{DxaClient}] = modules;
   const exported = Object.values(namespace);
@@ -137,8 +137,8 @@ async function runJobs({text,isolated,entries}) {
     check(ptm.structures.every(type=>type===1),'Bundled PTM Wasm fit'); result.ptm=ptm.structures.length;
     const voronoi=await trace.appPool.analyze(frame,{kind:'voronoi',bins:8});
     check(voronoi.atomicVolume.every(value=>Math.abs(value-4.05**3/4)<1e-6),'Bundled Voro++ Wasm volume '+JSON.stringify({first:voronoi.atomicVolume[0],min:Math.min(...voronoi.atomicVolume),max:Math.max(...voronoi.atomicVolume),expected:4.05**3/4,cell:Array.from(frame.cell.vectors),backend:voronoi.backend})); result.voronoi=voronoi.atomicVolume.length;
-    const extra=await Promise.all(['external-property-worker-client.js','statistics-export-client.js','selection-expansion-client.js',
-      'binning-client.js','grains-client.js','render/surface-geometry-client.js','analysis/gpu/client.js'].map(path=>import(new URL(path,appUrl))));
+    const extra=await Promise.all(['io/external-property-worker-client.js','io/statistics-export-client.js','analysis/selection-expansion-client.js',
+      'analysis/binning-client.js','analysis/grains-client.js','render/surface-geometry-client.js','analysis/gpu/client.js'].map(path=>import(new URL(path,appUrl))));
     const [{ExternalPropertyWorkerClient},{StatisticsExportClient},{SelectionExpansionClient},{SpatialBinningClient},
       {GrainSegmentationClient},{SurfaceGeometryClient},{GpuAnalysisClient}]=extra;
     const attrs=new ExternalPropertyWorkerClient();

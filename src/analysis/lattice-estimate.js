@@ -1,7 +1,7 @@
 import { referenceFactors } from './atomic-strain.js';
 import { STRAIN_STRUCTURES } from './lattice.js';
 import { determinant3 } from '../data/model.js';
-import { yieldToMain } from '../task-yield.js';
+import { yieldToMain } from '../shared/task-yield.js';
 
 const IDEAL_CA = Math.sqrt(8 / 3);
 const CHUNK_SIZE = 32768;

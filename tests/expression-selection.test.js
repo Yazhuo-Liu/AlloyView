@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { expandSelection, normalizeExpansionOptions } from '../src/analysis/expand-selection.js';
-import { initializeExpressionControls } from '../src/expression-controls.js';
-import { SelectionExpansionClient } from '../src/selection-expansion-client.js';
-import { addSelectionGroup, normalizeSelectionGroups, setSelectionGroupMembers } from '../src/selection-groups.js';
-import { isComputedProperty } from '../src/computed-properties.js';
+import { initializeExpressionControls } from '../src/ui/properties/expression-controls.js';
+import { SelectionExpansionClient } from '../src/analysis/selection-expansion-client.js';
+import { addSelectionGroup, normalizeSelectionGroups, setSelectionGroupMembers } from '../src/data/selection-groups.js';
+import { isComputedProperty } from '../src/properties/computed-properties.js';
 
 function random(seed) {
   return () => { seed = (seed + 0x6d2b79f5) | 0; let value = Math.imul(seed ^ (seed >>> 15), 1 | seed); value ^= value + Math.imul(value ^ (value >>> 7), 61 | value); return ((value ^ (value >>> 14)) >>> 0) / 4294967296; };

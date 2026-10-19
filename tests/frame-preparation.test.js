@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { framePreparationSignal } from '../src/data/frame-preparation.js';
 import { CpuBudget } from '../src/analysis/cpu-budget.js';
-import { StructureWorkerClient } from '../src/worker-client.js';
+import { StructureWorkerClient } from '../src/data/structure-worker-client.js';
 
 class FakeWorker {
   constructor() { this.messages = []; this.listeners = new Map(); }

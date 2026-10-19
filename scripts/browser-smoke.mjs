@@ -178,7 +178,7 @@ try {
     await evaluate(`(async () => {
       const appUrl = document.querySelector('script[type="module"]').src;
       const { FrameCache } = await import(new URL('./data/frame-cache.js', appUrl));
-      const { StructureWorkerClient } = await import(new URL('./worker-client.js', appUrl));
+      const { StructureWorkerClient } = await import(new URL('./data/structure-worker-client.js', appUrl));
       const get = FrameCache.prototype.get, frame = StructureWorkerClient.prototype.frame;
       let miss = true, hold = true;
       window.preflightResultHeld = false;
@@ -331,7 +331,7 @@ try {
   assert.equal(await evaluate('document.getElementById("close-file").hidden'), true);
   await evaluate(`(async () => {
     const appUrl = document.querySelector('script[type="module"]').src;
-    const { StructureWorkerClient } = await import(new URL('./worker-client.js', appUrl));
+    const { StructureWorkerClient } = await import(new URL('./data/structure-worker-client.js', appUrl));
     const load = StructureWorkerClient.prototype.load;
     StructureWorkerClient.prototype.load = function(...args) {
       window.closeTestClient = this;

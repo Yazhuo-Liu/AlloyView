@@ -52,4 +52,4 @@ Files are matched by filename and size. Row-order imports restore against their 
 
 Parsing, ID mapping and physical-copy attribute expansion run in a persistent Worker. Parsed columns are reused across frames. Attribute buffer allocations are checked before creation, with a 512 MiB limit per mapped attribute set.
 
-[Attribute parser and manifests](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/io/external-properties.js), [attribute controls](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/external-property-controls.js), [attribute Worker](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/external-property-worker.js).
+[Attribute parser and manifests](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/io/external-properties.js), [attribute controls](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/properties/external-property-controls.js), [attribute Worker](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/external-property-worker.js).

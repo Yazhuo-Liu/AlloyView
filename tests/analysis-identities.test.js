@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeAtomEyeTools } from '../src/atomeye-tools.js';
-import { attributeSegment, createAttributeRegistry } from '../src/global-attributes.js';
-import { TimeSeriesStore, recordRegistry } from '../src/time-series.js';
+import { initializeAtomEyeTools } from '../src/ui/view/atomeye-tools.js';
+import { attributeSegment, createAttributeRegistry } from '../src/properties/global-attributes.js';
+import { TimeSeriesStore, recordRegistry } from '../src/data/time-series.js';
 import { createCell } from '../src/data/model.js';
 
 async function withAnalysisControls(gpuRequested, run) {

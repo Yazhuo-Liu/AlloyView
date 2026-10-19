@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { constrainFloatingWindow, normalizeFloatingWindow, defaultFloatingWindow, initializeFloatingWindow } from '../src/floating-window.js';
-import { copyRendererCamera } from '../src/atomeye-tools.js';
+import { constrainFloatingWindow, normalizeFloatingWindow, defaultFloatingWindow, initializeFloatingWindow } from '../src/ui/shell/floating-window.js';
+import { copyRendererCamera } from '../src/ui/view/atomeye-tools.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 
 function bounded(rect, bounds) {
@@ -120,7 +120,7 @@ test('applying a second camera preserves full physical view, pan and field width
 });
 
 test('a closed-window recipe retains layout and camera before creation, export and later reopening', async () => {
-  const {createPendingComparisonRestore} = await import('../src/atomeye-tools.js');
+  const {createPendingComparisonRestore} = await import('../src/ui/view/atomeye-tools.js');
   const layout = {left:.25,top:.35,width:.4,height:.45}, source = camera(400,300);
   const savedCamera = Object.fromEntries(['yaw','pitch','roll','fov','constrainUp','distance','orthographicScale','projectionMode','target','pan']
     .map(key=>[key,structuredClone(source[key])]));
@@ -148,7 +148,7 @@ test('a closed-window recipe retains layout and camera before creation, export a
 });
 
 test('pending camera restoration synchronizes a formerly hidden canvas before numeric field-width reads', async () => {
-  const { createPendingComparisonRestore } = await import('../src/atomeye-tools.js');
+  const { createPendingComparisonRestore } = await import('../src/ui/view/atomeye-tools.js');
   const source = camera(400, 300), destination = camera(1, 1);
   const savedCamera = Object.fromEntries(['yaw', 'pitch', 'roll', 'fov', 'constrainUp', 'distance', 'orthographicScale', 'projectionMode', 'target', 'pan']
     .map(key => [key, structuredClone(source[key])]));

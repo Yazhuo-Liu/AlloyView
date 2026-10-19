@@ -1,0 +1,1045 @@
+// Portable processing recipes contain no coordinates or computed atom arrays.
+// Local files must be selected again; source metadata is only used to match them.
+import { SCALAR_COLOR_SCHEMES } from '../render/palette.js';
+import { DEFAULT_SLAB_THICKNESS, DEFAULT_SLICE_STEP, MAX_MILLER_INDEX, MAX_SLICE_LENGTH, MIN_SLICE_LENGTH } from '../render/slicing.js';
+import { BUILTIN_COLOR_MODES, BUILTIN_SCALAR_COLOR_MODES } from '../render/color-quantities.js';
+import { normalizeExportResolution } from '../render/export-resolution.js';
+import { normalizeOrientationSettings } from '../render/orientation-colors.js';
+import { AMBIENT_OCCLUSION_DIRECTIONS, AMBIENT_OCCLUSION_RESOLUTIONS, DEFAULT_AMBIENT_OCCLUSION } from '../render/ambient-occlusion.js';
+import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from '../data/selection-groups.js';
+import { DXA_DEFAULTS, DXA_FAMILIES } from '../analysis/dxa.js';
+import { CRYSTAL_VISIBILITY_SOURCE_NAMES } from '../ui/view/crystal-visibility-controls.js';
+import { COORDINATION_CUTOFF_PRESETS } from '../analysis/cutoff.js';
+import { normalizeExternalPropertyState } from '../io/external-properties.js';
+import { normalizeComputedPropertyState } from '../properties/computed-properties.js';
+import { BINNING_AXES, BINNING_QUANTITIES, BINNING_REDUCTIONS, MAX_BINS_PER_AXIS, MAX_TOTAL_BINS } from '../analysis/spatial-binning.js';
+import { GRAIN_ALGORITHMS, GRAIN_DEFAULTS, GRAIN_DEFAULT_MST_THRESHOLD, MAX_GRAIN_SIZE_LIMIT } from '../analysis/grains.js';
+import { MAX_SMOOTHING_WINDOW, MAX_TRAJECTORY_LINE_WIDTH, MIN_TRAJECTORY_LINE_WIDTH } from '../data/trajectory-tools.js';
+import { normalizeTextLabelState } from '../render/text-labels.js';
+import { normalizeTimeSeriesState } from '../data/time-series.js';
+import { normalizeGlobalAttributeState } from '../properties/global-attribute-source.js';
+import { normalizeScriptState } from './command-script.js';
+import { normalizeMovieState } from '../video/movie-settings.js';
+
+export const CONFIGURATION_VERSION = 1;
+export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
+export const MAX_CONFIGURATION_SLICES = 16;
+export const MAX_CONFIGURATION_PAIR_CUTOFFS = 1024;
+export const MAX_CONFIGURATION_ATOM_OVERRIDES = 100_000;
+export const MAX_CONFIGURATION_RDF_BINS = 4096;
+export const MAX_CONFIGURATION_SELECTION_GROUPS = MAX_SELECTION_GROUPS;
+export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
+export const MAX_CONFIGURATION_TRAJECTORY_LINE_IDS = 100_000;
+
+const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'lammps-data', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence', 'poscar']);
+const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'timeSeries', 'textLabels', 'scripts', 'movie', 'grains']);
+const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
+const COORDINATION_CUTOFF_CHOICES = new Set(['custom', ...COORDINATION_CUTOFF_PRESETS.map(preset => preset.symbol)]);
+const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
+const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+const MAX_FILES = 20_000;
+const MAX_PROPERTIES = 4096;
+const MAX_COORDINATE = 1e15;
+
+/** Build and validate a detached recipe from a UI snapshot. */
+export function createConfiguration(snapshot = {}) {
+  const input = record(snapshot, 'configuration', ['app', 'version', 'exportedAt', 'source', 'settings']);
+  if (input.app !== undefined && input.app !== 'AlloyView') fail('app', 'must be AlloyView');
+  if (input.version !== undefined && input.version !== CONFIGURATION_VERSION) fail('version', 'is unsupported');
+  const configuration = normalizeConfiguration({
+    app: 'AlloyView',
+    version: CONFIGURATION_VERSION,
+    exportedAt: input.exportedAt ?? new Date().toISOString(),
+    source: input.source ?? null,
+    settings: input.settings ?? {},
+  }, true);
+  enforceTextSize(JSON.stringify(configuration));
+  return configuration;
+}
+
+/** Validate the complete recipe before the caller changes any application state. */
+export function parseConfiguration(text) {
+  if (typeof text !== 'string') fail('file', 'must contain JSON text');
+  enforceTextSize(text);
+  let value;
+  try { value = JSON.parse(text); } catch { fail('file', 'contains invalid JSON'); }
+  return normalizeConfiguration(value, false);
+}
+
+/**
+ * Match an unordered selection of File objects or { file, relativePath } entries.
+ * Modification times are informational: a re-downloaded example can still match.
+ */
+export function matchesSource(configuration, files, format) {
+  const source = configuration?.source;
+  if (source === null) return true;
+  if (!source || !Array.isArray(source.files)) return false;
+  if (format !== undefined && format !== null && canonicalFormat(format) !== canonicalFormat(source.format)) return false;
+  const selected = Array.from(files ?? [], (entry) => {
+    const file = entry?.file ?? entry;
+    return {
+      name: file?.name,
+      size: file?.size,
+      relativePath: normalizePath(entry?.relativePath || file?.webkitRelativePath || file?.name || ''),
+    };
+  });
+  if (selected.length !== source.files.length) return false;
+  const groups = new Map();
+  for (const file of selected) {
+    if (typeof file.name !== 'string' || !Number.isSafeInteger(file.size) || file.size < 0) return false;
+    const key = fileKey(file);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(file);
+  }
+  // Match exact relative paths first so a basename-only selection cannot consume
+  // a directory-qualified entry needed by a second file with the same name.
+  const pending = [];
+  for (const file of source.files) {
+    const group = groups.get(fileKey(file));
+    if (!group?.length) return false;
+    const path = normalizePath(file.relativePath || file.name);
+    const index = group.findIndex(candidate => candidate.relativePath === path);
+    if (index >= 0) group.splice(index, 1);
+    else pending.push(file);
+  }
+  for (const file of pending) {
+    const group = groups.get(fileKey(file));
+    if (!group?.length) return false;
+    const path = normalizePath(file.relativePath || file.name);
+    const candidates = group.map((candidate, index) => ({ candidate, index }))
+      .filter(({ candidate }) => !hasDirectory(path) || !hasDirectory(candidate.relativePath));
+    // Identically named and sized files in different directories need their
+    // paths to disambiguate them rather than silently restoring the wrong data.
+    if (candidates.length !== 1) return false;
+    group.splice(candidates[0].index, 1);
+  }
+  return true;
+}
+
+export const matchConfigurationSource = matchesSource;
+
+/** Download only a validated JSON recipe; no source contents are embedded. */
+export function downloadConfiguration(configuration, filename = 'alloyview-configuration.json') {
+  const validated = normalizeConfiguration(configuration, false);
+  const text = `${JSON.stringify(validated, null, 2)}\n`;
+  enforceTextSize(text);
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = String(filename).replace(/[\\/\x00-\x1f]/g, '_') || 'alloyview-configuration.json';
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return validated;
+}
+
+function normalizeConfiguration(value, fromSnapshot) {
+  const input = record(value, 'configuration', ['app', 'version', 'exportedAt', 'source', 'settings']);
+  if (input.app !== 'AlloyView') fail('app', 'must be AlloyView');
+  if (input.version !== CONFIGURATION_VERSION) fail('version', 'is unsupported');
+  const exportedAt = string(input.exportedAt, 'exportedAt', 64);
+  if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(exportedAt)
+    || !Number.isFinite(Date.parse(exportedAt))) fail('exportedAt', 'must be an ISO timestamp');
+  if (!Object.hasOwn(input, 'source')) fail('source', 'is missing');
+  if (!Object.hasOwn(input, 'settings')) fail('settings', 'is missing');
+  const configuration = {
+    app: 'AlloyView',
+    version: CONFIGURATION_VERSION,
+    exportedAt,
+    source: normalizeSource(input.source),
+    settings: normalizeSettings(input.settings, fromSnapshot),
+  };
+  const reference = configuration.settings.extensions.referenceStrain;
+  if (reference.enabled && configuration.source?.frameCount !== undefined
+    && reference.frameIndex >= configuration.source.frameCount) {
+    fail('settings.extensions.referenceStrain.frameIndex', 'must be smaller than the source frame count');
+  }
+  const displacement = configuration.settings.extensions.displacement;
+  if (displacement.enabled && configuration.source?.frameCount !== undefined
+    && displacement.referenceFrame >= configuration.source.frameCount) {
+    fail('settings.extensions.displacement.referenceFrame', 'must be smaller than the source frame count');
+  }
+  const wignerSeitz = configuration.settings.extensions.wignerSeitz;
+  if (wignerSeitz?.enabled && configuration.source?.frameCount !== undefined
+    && wignerSeitz.referenceFrame >= configuration.source.frameCount) {
+    fail('settings.extensions.wignerSeitz.referenceFrame', 'must be smaller than the source frame count');
+  }
+  const surfaceMesh = configuration.settings.extensions.surfaceMesh;
+  if (surfaceMesh?.atoms === 'group' && !configuration.settings.selectionGroups.groups.some(group => group.id === surfaceMesh.selectionGroupId)) {
+    fail('settings.extensions.surfaceMesh.selectionGroupId', 'must identify a saved selection group');
+  }
+  const clusterGroup = configuration.settings.extensions.clusters?.selectionGroupId;
+  if (clusterGroup != null && !configuration.settings.selectionGroups.groups.some(group => group.id === clusterGroup)) {
+    fail('settings.extensions.clusters.selectionGroupId', 'must identify a saved selection group');
+  }
+  const binningGroup = configuration.settings.extensions.binning?.selectionGroupId;
+  if (binningGroup != null && !configuration.settings.selectionGroups.groups.some(group => group.id === binningGroup)) {
+    fail('settings.extensions.binning.selectionGroupId', 'must identify a saved selection group');
+  }
+  const trajectoryLines = configuration.settings.extensions.trajectory?.lines;
+  if (trajectoryLines?.source === 'group'
+    && !configuration.settings.selectionGroups.groups.some(group => group.id === trajectoryLines.selectionGroupId)) {
+    fail('settings.extensions.trajectory.lines.selectionGroupId', 'must identify a saved selection group');
+  }
+  if (trajectoryLines?.enabled && configuration.source?.frameCount !== undefined
+    && Math.max(trajectoryLines.firstFrame, trajectoryLines.lastFrame ?? 0) >= configuration.source.frameCount) {
+    fail('settings.extensions.trajectory.lines', 'must use frames smaller than the source frame count');
+  }
+  const timeSeries = configuration.settings.extensions.timeSeries;
+  if (timeSeries && configuration.source?.frameCount !== undefined
+    && Math.max(timeSeries.firstFrame, timeSeries.lastFrame ?? 0) >= configuration.source.frameCount) {
+    fail('settings.extensions.timeSeries', 'must use frames smaller than the source frame count');
+  }
+  const strainReference = configuration.settings.extensions.globalAttributes?.strainReferenceFrame;
+  if (strainReference !== undefined && configuration.source?.frameCount !== undefined && strainReference >= configuration.source.frameCount) {
+    fail('settings.extensions.globalAttributes.strainReferenceFrame', 'must be smaller than the source frame count');
+  }
+  for (const [index, file] of (configuration.settings.extensions.externalProperties?.files ?? []).entries()) {
+    if (configuration.source?.frameCount !== undefined && file.frameIndex >= configuration.source.frameCount) {
+      fail(`settings.extensions.externalProperties.files[${index}].frameIndex`, 'must be smaller than the source frame count');
+    }
+  }
+  return configuration;
+}
+
+function normalizeSource(value) {
+  if (value === null) return null;
+  const input = record(value, 'source', ['kind', 'label', 'format', 'files', 'frameIndex', 'frameCount']);
+  const files = list(input.files, 'source.files', MAX_FILES, 1).map((entry, index) => {
+    const path = `source.files[${index}]`;
+    const file = record(entry, path, ['name', 'relativePath', 'size', 'lastModified']);
+    const name = string(file.name, `${path}.name`, 1024);
+    if (/[\\/]/.test(name)) fail(`${path}.name`, 'must be a filename without directories');
+    const relativePath = normalizePath(string(file.relativePath ?? name, `${path}.relativePath`, 4096));
+    if (relativePath.startsWith('/') || /^[A-Za-z]:/.test(relativePath)
+      || relativePath.split('/').some(component => component === '..' || component === '.')) {
+      fail(`${path}.relativePath`, 'must be a relative file path');
+    }
+    if (relativePath.split('/').at(-1) !== name) fail(`${path}.relativePath`, 'must end with the filename');
+    const output = { name, relativePath, size: number(file.size, `${path}.size`, 0, Number.MAX_SAFE_INTEGER, true) };
+    if (file.lastModified !== undefined) output.lastModified = number(file.lastModified, `${path}.lastModified`, 0, Number.MAX_SAFE_INTEGER, true);
+    return output;
+  });
+  const kind = choice(input.kind ?? (files.length > 1 ? 'sequence' : 'file'), 'source.kind', new Set(['file', 'sequence']));
+  if (kind === 'file' && files.length !== 1) fail('source.kind', 'file sources must contain one file');
+  const frameIndex = number(input.frameIndex ?? 0, 'source.frameIndex', 0, Number.MAX_SAFE_INTEGER, true);
+  const output = { kind, format: choice(input.format, 'source.format', FORMATS), files, frameIndex };
+  if (input.label !== undefined) output.label = string(input.label, 'source.label', 2048);
+  if (input.frameCount !== undefined) {
+    output.frameCount = number(input.frameCount, 'source.frameCount', 1, Number.MAX_SAFE_INTEGER, true);
+    if (frameIndex >= output.frameCount) fail('source.frameIndex', 'must be smaller than the frame count');
+  }
+  const paths = files.map(file => file.relativePath);
+  if (new Set(paths).size !== paths.length) fail('source.files', 'contains duplicate relative paths');
+  return output;
+}
+
+function normalizeSettings(value, fromSnapshot) {
+  const input = record(value, 'settings', ['display', 'analyses', 'extensions', 'replicate', 'replicateAtoms', 'slices', 'colors', 'camera', 'activeTool', 'activeCategory', 'selectedAtomId', 'theme', 'compute', 'selectionGroups']);
+  const compute = record(input.compute ?? {}, 'settings.compute', ['gpuEnabled']);
+  const repetitions = vector(input.replicate ?? [1, 1, 1], 'settings.replicate', 1, 4096, true);
+  if (repetitions.reduce((product, count) => product * count, 1) > 4096) fail('settings.replicate', 'exceeds 4096 displayed cells');
+  return {
+    compute: { gpuEnabled: boolean(compute.gpuEnabled, 'settings.compute.gpuEnabled', true) },
+    display: normalizeDisplay(input.display ?? {}),
+    analyses: normalizeAnalyses(input.analyses ?? {}, fromSnapshot),
+    extensions: normalizeExtensions(input.extensions ?? {}, fromSnapshot),
+    replicate: repetitions,
+    replicateAtoms: boolean(input.replicateAtoms, 'settings.replicateAtoms', false),
+    slices: normalizeSlices(input.slices ?? {}),
+    selectionGroups: normalizeSelections(input.selectionGroups ?? {}),
+    colors: normalizeColors(input.colors ?? {}),
+    camera: normalizeCamera(input.camera ?? null),
+    activeTool: input.activeTool === 'configuration' ? null : nullableChoice(
+      input.activeTool === undefined || input.activeTool === 'selection' ? 'display' : input.activeTool, 'settings.activeTool', TOOLS),
+    activeCategory: choice(input.activeCategory ?? (['replicate', 'externalProperties', 'expressions', 'trajectory'].includes(input.activeTool) ? 'modification' : 'visualization'),
+      'settings.activeCategory', new Set(['visualization', 'modification'])),
+    selectedAtomId: identifier(input.selectedAtomId ?? null, 'settings.selectedAtomId', true),
+    theme: choice(input.theme ?? 'dark', 'settings.theme', new Set(['light', 'dark'])),
+  };
+}
+
+function normalizeSelections(value) {
+  try { return normalizeSelectionGroups(value, { path: 'settings.selectionGroups' }); }
+  catch (error) { throw new Error(error.message.replace(/^Invalid selection groups:/, 'Invalid AlloyView configuration:')); }
+}
+
+/** Optional version 1 additions keep older recipes disabled and data-free. */
+function normalizeExtensions(value, fromSnapshot) {
+  const path = 'settings.extensions';
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'textLabels', 'timeSeries', 'globalAttributes', 'scripts', 'movie', 'grains']);
+  const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
+  const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
+  const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage', 'tiles']);
+  const referenceStrain = record(input.referenceStrain ?? {}, `${path}.referenceStrain`, ['enabled', 'frameIndex', 'cutoff']);
+  const localShear = record(input.localShear ?? {}, `${path}.localShear`, ['enabled', 'cutoff', 'subtractMean']);
+  const rdf = record(input.rdf ?? {}, `${path}.rdf`, ['enabled', 'cutoff', 'bins', 'firstType', 'secondType']);
+  const bondStatistics = input.bondStatistics === undefined ? null
+    : record(input.bondStatistics, `${path}.bondStatistics`, ['enabled', 'lengthBins', 'angleBins']);
+  const voronoi = input.voronoi === undefined ? null
+    : record(input.voronoi, `${path}.voronoi`, ['enabled', 'faceAreaThreshold', 'relativeFaceAreaThreshold', 'bins', 'selectedTypes',
+      ...VORONOI_RADICAL_KEYS, 'gpuKernel']);
+  const voronoiDisplay = input.voronoiDisplay === undefined ? null
+    : record(input.voronoiDisplay, `${path}.voronoiDisplay`, ['enabled', 'allEnabled', 'color', 'opacity', 'style', 'scale']);
+  if (bondStatistics?.enabled === true && nullablePositive(bonds.cutoff, `${path}.bonds.cutoff`, fromSnapshot) === null) {
+    fail(`${path}.bonds.cutoff`, 'is required for enabled bond statistics');
+  }
+  const clusters = input.clusters === undefined ? null : normalizeClusters(input.clusters, `${path}.clusters`, fromSnapshot);
+  if (clusters?.enabled && clusters.neighborMode === 'bonds' && nullablePositive(bonds.cutoff, `${path}.bonds.cutoff`, fromSnapshot) === null) {
+    fail(`${path}.bonds.cutoff`, 'is required for enabled clusters that use bond cutoffs');
+  }
+  const measurements = record(input.measurements ?? {}, `${path}.measurements`, ['enabled', 'minimumImage', 'atomIds']);
+  const appearance = record(input.appearance ?? {}, `${path}.appearance`, ['elements', 'atoms']);
+  const comparison = record(input.comparison ?? {}, `${path}.comparison`, ['enabled', 'preset', 'projectionMode', 'camera', 'layout']);
+  const comparisonLayout = normalizeComparisonLayout(comparison.layout, `${path}.comparison.layout`);
+  const pairCutoffs = list(bonds.pairCutoffs ?? [], `${path}.bonds.pairCutoffs`, MAX_CONFIGURATION_PAIR_CUTOFFS).map((value, index) => {
+    const entryPath = `${path}.bonds.pairCutoffs[${index}]`;
+    const entry = record(value, entryPath, ['first', 'second', 'cutoff']);
+    return {
+      first: typeLabel(entry.first, `${entryPath}.first`),
+      second: typeLabel(entry.second, `${entryPath}.second`),
+      cutoff: number(entry.cutoff, `${entryPath}.cutoff`, 0, MAX_COORDINATE),
+    };
+  });
+  ensureUnique(pairCutoffs.map(({ first, second }) => JSON.stringify([first, second].sort())), `${path}.bonds.pairCutoffs`);
+  const components = list(vectors.components ?? [null, null, null], `${path}.vectors.components`, 3, 3).map((value, index) => {
+    if (value === null) return null;
+    const property = string(value, `${path}.vectors.components[${index}]`, 256);
+    if (FORBIDDEN_KEYS.has(property)) fail(`${path}.vectors.components[${index}]`, 'is reserved');
+    return property;
+  });
+  const vectorsEnabled = boolean(vectors.enabled, `${path}.vectors.enabled`, false);
+  const vectorMode = normalizeVectorMode(vectors.mode ?? 'generic', `${path}.vectors.mode`);
+  if (vectorsEnabled && vectorMode === 'generic' && components.includes(null)) fail(`${path}.vectors.components`, 'needs three properties for enabled vectors');
+  // Legacy vector controls also computed displacements when arrow display was
+  // disabled. Preserve that computation once, without coupling the new tools.
+  const legacyDisplacement = input.displacement === undefined && vectorMode === 'displacement';
+  const legacyReferenceFrame = number(vectors.referenceFrame ?? 0, `${path}.vectors.referenceFrame`, 0, Number.MAX_SAFE_INTEGER, true);
+  const legacyMinimumImage = boolean(vectors.minimumImage, `${path}.vectors.minimumImage`, true);
+  const atomIds = list(measurements.atomIds ?? [], `${path}.measurements.atomIds`, 4).map((value, index) => identifier(value, `${path}.measurements.atomIds[${index}]`));
+  ensureUnique(atomIds.map(String), `${path}.measurements.atomIds`);
+  const elements = list(appearance.elements ?? [], `${path}.appearance.elements`, MAX_PROPERTIES).map((value, index) => {
+    const entryPath = `${path}.appearance.elements[${index}]`;
+    const entry = record(value, entryPath, ['label', 'color', 'radius', 'visible']);
+    return { label: typeLabel(entry.label, `${entryPath}.label`), ...normalizeAppearance(entry, entryPath, fromSnapshot) };
+  });
+  ensureUnique(elements.map(({ label }) => label), `${path}.appearance.elements`);
+  const atoms = list(appearance.atoms ?? [], `${path}.appearance.atoms`, MAX_CONFIGURATION_ATOM_OVERRIDES).map((value, index) => {
+    const entryPath = `${path}.appearance.atoms[${index}]`;
+    const entry = record(value, entryPath, ['id', 'color', 'radius', 'visible']);
+    return { id: identifier(entry.id, `${entryPath}.id`), ...normalizeAppearance(entry, entryPath, fromSnapshot) };
+  });
+  ensureUnique(atoms.map(({ id }) => String(id)), `${path}.appearance.atoms`);
+  return {
+    // Keep older version 1 recipes unchanged. DXA contains parameters and
+    // display choices only; its network is recalculated after import.
+    ...(input.dxa === undefined ? {} : { dxa: normalizeDxa(input.dxa, `${path}.dxa`) }),
+    ...(input.externalProperties === undefined ? {} : { externalProperties: normalizeExternalPropertyState(input.externalProperties) }),
+    // Expression text is parsed again by the safe expression parser; values are never stored.
+    ...(input.expressions === undefined ? {} : { expressions: normalizeExpressions(input.expressions, `${path}.expressions`) }),
+    ...(bondStatistics === null ? {} : { bondStatistics: {
+      enabled: boolean(bondStatistics.enabled, `${path}.bondStatistics.enabled`, false),
+      lengthBins: number(bondStatistics.lengthBins ?? 100, `${path}.bondStatistics.lengthBins`, 1, 4096, true),
+      angleBins: number(bondStatistics.angleBins ?? 180, `${path}.bondStatistics.angleBins`, 1, 4096, true),
+    } }),
+    ...(voronoi === null ? {} : { voronoi: {
+      enabled: boolean(voronoi.enabled, `${path}.voronoi.enabled`, false),
+      faceAreaThreshold: number(voronoi.faceAreaThreshold ?? 0, `${path}.voronoi.faceAreaThreshold`, 0, MAX_COORDINATE),
+      relativeFaceAreaThreshold: number(voronoi.relativeFaceAreaThreshold ?? 0, `${path}.voronoi.relativeFaceAreaThreshold`, 0, 1),
+      bins: number(voronoi.bins ?? 50, `${path}.voronoi.bins`, 1, 4096, true),
+      selectedTypes: voronoi.selectedTypes == null ? null : [...new Set(list(voronoi.selectedTypes, `${path}.voronoi.selectedTypes`, 65535)
+        .map((label, index) => string(label, `${path}.voronoi.selectedTypes[${index}]`, 256)))].sort(),
+      ...normalizeVoronoiRadical(voronoi, `${path}.voronoi`),
+      // The WebGPU Voronoi kernel is an explicit request. Recipes without the
+      // key, including every older one, restore with CPU Workers.
+      ...(voronoi.gpuKernel === undefined ? {} : { gpuKernel: boolean(voronoi.gpuKernel, `${path}.voronoi.gpuKernel`, false) }),
+    } }),
+    ...(clusters === null ? {} : { clusters }),
+    ...(input.binning === undefined ? {} : { binning: normalizeBinning(input.binning, `${path}.binning`) }),
+    ...(input.wignerSeitz === undefined ? {} : { wignerSeitz: normalizeWignerSeitz(input.wignerSeitz, `${path}.wignerSeitz`) }),
+    ...(input.grains === undefined ? {} : { grains: normalizeGrains(input.grains, `${path}.grains`) }),
+    ...(input.surfaceMesh === undefined ? {} : { surfaceMesh: normalizeSurfaceMesh(input.surfaceMesh, `${path}.surfaceMesh`, fromSnapshot) }),
+    ...(input.trajectory === undefined ? {} : { trajectory: normalizeTrajectory(input.trajectory, `${path}.trajectory`) }),
+    // Label templates are stored as text and parsed again by the safe template parser; no values are stored.
+    ...(input.textLabels === undefined ? {} : { textLabels: normalizeTextLabelState(input.textLabels, { path: `${path}.textLabels` }) }),
+    ...(input.timeSeries === undefined ? {} : { timeSeries: normalizeTimeSeriesState(input.timeSeries, { path: `${path}.timeSeries` }) }),
+    ...(input.globalAttributes === undefined ? {} : { globalAttributes: normalizeGlobalAttributeState(input.globalAttributes, { path: `${path}.globalAttributes` }) }),
+    // Script text is stored verbatim, compiled only by the command parser and never run on import.
+    ...(input.scripts === undefined ? {} : { scripts: normalizeScriptState(input.scripts, { path: `${path}.scripts` }) }),
+    ...(input.movie === undefined ? {} : { movie: normalizeMovieState(input.movie, { path: `${path}.movie` }) }),
+    ...(voronoiDisplay === null ? {} : { voronoiDisplay: {
+      enabled: boolean(voronoiDisplay.enabled, `${path}.voronoiDisplay.enabled`, false),
+      allEnabled: boolean(voronoiDisplay.allEnabled, `${path}.voronoiDisplay.allEnabled`, false),
+      color: hexColor(voronoiDisplay.color ?? '#3b82f6', `${path}.voronoiDisplay.color`),
+      opacity: number(voronoiDisplay.opacity ?? 0.5, `${path}.voronoiDisplay.opacity`, 0, 1),
+      style: choice(voronoiDisplay.style ?? 'xray', `${path}.voronoiDisplay.style`, new Set(['xray', 'surface'])),
+      scale: number(voronoiDisplay.scale ?? 1, `${path}.voronoiDisplay.scale`, 0.4, 1),
+    } }),
+    bonds: {
+      ...normalizeCutoffAnalysis(bonds, `${path}.bonds`, fromSnapshot),
+      pairCutoffs,
+      radius: number(bonds.radius ?? 0.12, `${path}.bonds.radius`, 1e-12, MAX_COORDINATE),
+      visible: boolean(bonds.visible, `${path}.bonds.visible`, true),
+    },
+    vectors: {
+      enabled: vectorsEnabled,
+      components,
+      mode: vectorMode,
+      componentScales: vector(vectors.componentScales ?? [1, 1, 1], `${path}.vectors.componentScales`, -1e12, 1e12),
+      scale: number(vectors.scale ?? 1, `${path}.vectors.scale`, 1e-12, 1e12),
+      color: hexColor(vectors.color ?? '#f9ca57', `${path}.vectors.color`),
+      radius: number(vectors.radius ?? 0.06, `${path}.vectors.radius`, 1e-12, MAX_COORDINATE),
+      headRadius: number(vectors.headRadius ?? 0.15, `${path}.vectors.headRadius`, 1e-12, MAX_COORDINATE),
+      headLength: number(vectors.headLength ?? 0.3, `${path}.vectors.headLength`, 1e-12, MAX_COORDINATE),
+      linkDimensions: boolean(vectors.linkDimensions, `${path}.vectors.linkDimensions`, true),
+      anchor: choice(vectors.anchor ?? 'tail', `${path}.vectors.anchor`, new Set(['tail', 'head', 'center'])),
+      dimension: choice(vectors.dimension ?? '3d', `${path}.vectors.dimension`, new Set(['3d', '2d'])),
+      upMode: choice(vectors.upMode ?? 'camera', `${path}.vectors.upMode`, new Set(['camera', 'fixed'])),
+      up: normalizeVectorUp(vectors.up ?? [0, 1, 0], `${path}.vectors.up`),
+      ...(vectors.fields === undefined ? {} : normalizeVectorFields(vectors, `${path}.vectors`)),
+    },
+    displacement: {
+      enabled: boolean(displacement.enabled, `${path}.displacement.enabled`, legacyDisplacement),
+      referenceFrame: number(displacement.referenceFrame ?? (legacyDisplacement ? legacyReferenceFrame : 0), `${path}.displacement.referenceFrame`, 0, Number.MAX_SAFE_INTEGER, true),
+      minimumImage: boolean(displacement.minimumImage, `${path}.displacement.minimumImage`, legacyDisplacement ? legacyMinimumImage : true),
+      tiles: vector(displacement.tiles ?? [0, 0, 0], `${path}.displacement.tiles`, 0, 64, true),
+    },
+    referenceStrain: {
+      ...normalizeCutoffAnalysis(referenceStrain, `${path}.referenceStrain`, fromSnapshot),
+      frameIndex: number(referenceStrain.frameIndex ?? 0, `${path}.referenceStrain.frameIndex`, 0, Number.MAX_SAFE_INTEGER, true),
+    },
+    localShear: {
+      ...normalizeCutoffAnalysis(localShear, `${path}.localShear`, fromSnapshot),
+      subtractMean: boolean(localShear.subtractMean, `${path}.localShear.subtractMean`, false),
+    },
+    rdf: {
+      ...normalizeCutoffAnalysis(rdf, `${path}.rdf`, fromSnapshot),
+      bins: number(rdf.bins ?? 100, `${path}.rdf.bins`, 1, MAX_CONFIGURATION_RDF_BINS, true),
+      firstType: rdf.firstType === undefined || rdf.firstType === null ? null : typeLabel(rdf.firstType, `${path}.rdf.firstType`),
+      secondType: rdf.secondType === undefined || rdf.secondType === null ? null : typeLabel(rdf.secondType, `${path}.rdf.secondType`),
+    },
+    measurements: {
+      enabled: boolean(measurements.enabled, `${path}.measurements.enabled`, false),
+      minimumImage: boolean(measurements.minimumImage, `${path}.measurements.minimumImage`, true),
+      atomIds,
+    },
+    appearance: { elements, atoms },
+    comparison: {
+      enabled: boolean(comparison.enabled, `${path}.comparison.enabled`, false),
+      preset: choice(comparison.preset ?? 'top', `${path}.comparison.preset`, new Set(['front', 'back', 'left', 'right', 'top', 'bottom', 'custom'])),
+      projectionMode: choice(comparison.projectionMode ?? 'orthographic', `${path}.comparison.projectionMode`, new Set(['orthographic', 'perspective'])),
+      camera: normalizeCamera(comparison.camera ?? null),
+      ...(comparisonLayout ? { layout: comparisonLayout } : {}),
+    },
+  };
+}
+
+function normalizeExpressions(value, path) {
+  try { return normalizeComputedPropertyState(value); }
+  catch (error) { throw new Error(error.message.replace(/^Computed properties:/, `Invalid AlloyView configuration: ${path}:`)); }
+}
+
+/** Cluster settings name a selection group by ID; the group itself is saved
+ * in settings.selectionGroups and checked once both are normalized. */
+function normalizeClusters(value, path, fromSnapshot) {
+  const input = record(value, path, ['enabled', 'neighborMode', 'cutoff', 'selectionGroupId', 'sortBySize']);
+  const enabled = boolean(input.enabled, `${path}.enabled`, false);
+  const neighborMode = choice(input.neighborMode ?? 'cutoff', `${path}.neighborMode`, new Set(['cutoff', 'bonds']));
+  const cutoff = nullablePositive(input.cutoff, `${path}.cutoff`, fromSnapshot);
+  if (enabled && neighborMode === 'cutoff' && cutoff === null) fail(`${path}.cutoff`, 'is required for enabled clusters');
+  return { enabled, neighborMode, cutoff,
+    selectionGroupId: input.selectionGroupId === undefined || input.selectionGroupId === null ? null
+      : sliceIdentifier(input.selectionGroupId, `${path}.selectionGroupId`),
+    sortBySize: boolean(input.sortBySize, `${path}.sortBySize`, true) };
+}
+
+/** Grain segmentation settings only; PTM templates and its RMSD threshold
+ * are saved under analyses.ptm, and grains are recalculated after import.
+ * mergeThreshold is the manual log merge distance, mstThreshold the
+ * disorientation in degrees of the minimum spanning tree. */
+function normalizeGrains(value, path) {
+  const input = record(value, path, ['enabled', 'algorithm', 'mergeThreshold', 'mstThreshold', 'minGrainSize', 'adoptOrphans', 'handleCoherentInterfaces']);
+  return {
+    enabled: boolean(input.enabled, `${path}.enabled`, false),
+    algorithm: choice(input.algorithm ?? GRAIN_DEFAULTS.algorithm, `${path}.algorithm`, new Set(GRAIN_ALGORITHMS)),
+    mergeThreshold: number(input.mergeThreshold ?? GRAIN_DEFAULTS.mergeThreshold, `${path}.mergeThreshold`, -1e6, 1e6),
+    mstThreshold: number(input.mstThreshold ?? GRAIN_DEFAULT_MST_THRESHOLD, `${path}.mstThreshold`, 0, 1e6),
+    minGrainSize: number(input.minGrainSize ?? GRAIN_DEFAULTS.minGrainSize, `${path}.minGrainSize`, 1, MAX_GRAIN_SIZE_LIMIT, true),
+    adoptOrphans: boolean(input.adoptOrphans, `${path}.adoptOrphans`, GRAIN_DEFAULTS.adoptOrphans),
+    handleCoherentInterfaces: boolean(input.handleCoherentInterfaces, `${path}.handleCoherentInterfaces`, GRAIN_DEFAULTS.handleCoherentInterfaces),
+  };
+}
+
+/** Wigner–Seitz settings hold a zero-based reference frame and display
+ * choices only; assignments and occupancies are recalculated after import. */
+function normalizeWignerSeitz(value, path) {
+  const input = record(value, path, ['enabled', 'referenceFrame', 'affineMapping', 'markers', 'showMarkers', 'markerRadius']);
+  return {
+    enabled: boolean(input.enabled, `${path}.enabled`, false),
+    referenceFrame: number(input.referenceFrame ?? 0, `${path}.referenceFrame`, 0, Number.MAX_SAFE_INTEGER, true),
+    affineMapping: boolean(input.affineMapping, `${path}.affineMapping`, false),
+    markers: choice(input.markers ?? 'vacancies', `${path}.markers`, new Set(['vacancies', 'defects', 'all'])),
+    showMarkers: boolean(input.showMarkers, `${path}.showMarkers`, true),
+    markerRadius: number(input.markerRadius ?? 0.6, `${path}.markerRadius`, 0.01, 100),
+  };
+}
+
+/** Colors, opacity and cap choice of a displayed mesh, with its defaults. */
+function normalizeMeshStyle(input, path, defaults) {
+  return {
+    visible: boolean(input.visible, `${path}.visible`, true),
+    caps: boolean(input.caps, `${path}.caps`, true),
+    opacity: number(input.opacity ?? 1, `${path}.opacity`, 0, 1),
+    color: hexColor(input.color ?? defaults.color, `${path}.color`),
+    interiorColor: hexColor(input.interiorColor ?? defaults.interiorColor, `${path}.interiorColor`),
+    capColor: hexColor(input.capColor ?? defaults.capColor, `${path}.capColor`),
+  };
+}
+const MESH_STYLE_KEYS = ['visible', 'caps', 'opacity', 'color', 'interiorColor', 'capColor'];
+const SURFACE_MESH_STYLE = { color: '#c9d4e3', interiorColor: '#b5524a', capColor: '#8fa3bf' };
+const DEFECT_MESH_STYLE = { color: '#d9c06a', interiorColor: '#c7ae5c', capColor: '#b39b52' };
+
+/** Surface settings hold the probe radius, smoothing, atom restriction and
+ * display style; the mesh and its statistics are recalculated after import.
+ * A null radius follows the suggestion for the opened structure. */
+function normalizeSurfaceMesh(value, path, fromSnapshot) {
+  const input = record(value, path, ['enabled', 'radius', 'smoothingLevel', 'atoms', 'selectionGroupId', ...MESH_STYLE_KEYS]);
+  const enabled = boolean(input.enabled, `${path}.enabled`, false);
+  const radius = nullablePositive(input.radius, `${path}.radius`, fromSnapshot);
+  if (radius !== null && radius > 1e6) fail(`${path}.radius`, 'must not exceed 1000000');
+  if (enabled && radius === null) fail(`${path}.radius`, 'is required for an enabled surface mesh');
+  const atoms = choice(input.atoms ?? 'all', `${path}.atoms`, new Set(['all', 'visible', 'group']));
+  const selectionGroupId = input.selectionGroupId === undefined || input.selectionGroupId === null ? null
+    : sliceIdentifier(input.selectionGroupId, `${path}.selectionGroupId`);
+  if (atoms === 'group' && selectionGroupId === null) fail(`${path}.selectionGroupId`, 'is required for a selection group restriction');
+  return { enabled, radius, smoothingLevel: number(input.smoothingLevel ?? 8, `${path}.smoothingLevel`, 0, 100, true),
+    atoms, selectionGroupId: atoms === 'group' ? selectionGroupId : null, ...normalizeMeshStyle(input, path, SURFACE_MESH_STYLE) };
+}
+
+/** Binning settings name their quantity by its Color by key; the property
+ * itself is resolved again in each frame. Both axes and bin counts are kept
+ * so switching between a profile and a map restores the second vector. */
+function normalizeBinning(value, path) {
+  const input = record(value, path, ['enabled', 'mode', 'axes', 'bins', 'quantity', 'property', 'reduction', 'selectionGroupId', 'averageFrames', 'colorScheme']);
+  const enabled = boolean(input.enabled, `${path}.enabled`, false);
+  const mode = choice(input.mode ?? '1d', `${path}.mode`, new Set(['1d', '2d']));
+  const axes = list(input.axes ?? ['a', 'b'], `${path}.axes`, 2, 2).map((axis, index) => choice(axis, `${path}.axes[${index}]`, new Set(BINNING_AXES)));
+  const bins = list(input.bins ?? [50, 50], `${path}.bins`, 2, 2).map((count, index) => number(count, `${path}.bins[${index}]`, 1, MAX_BINS_PER_AXIS, true));
+  if (mode === '2d' && axes[0] === axes[1]) fail(`${path}.axes`, 'must name two different cell vectors for a map');
+  if (mode === '2d' && bins[0] * bins[1] > MAX_TOTAL_BINS) fail(`${path}.bins`, `must not exceed ${MAX_TOTAL_BINS} bins in a map`);
+  const quantity = choice(input.quantity ?? 'density', `${path}.quantity`, new Set(BINNING_QUANTITIES));
+  let property = null;
+  if (input.property !== undefined && input.property !== null) {
+    property = string(input.property, `${path}.property`, 512);
+    if (!/^property:./.test(property) && !BUILTIN_SCALAR_COLOR_MODES.includes(property)) fail(`${path}.property`, 'must be a property: key or a built-in scalar quantity');
+    if (FORBIDDEN_KEYS.has(property.replace(/^property:/, ''))) fail(`${path}.property`, 'is reserved');
+  }
+  if (quantity === 'property' && property === null) fail(`${path}.property`, 'is required when binning a property');
+  return { enabled, mode, axes, bins, quantity, property: quantity === 'property' ? property : null,
+    reduction: choice(input.reduction ?? 'mean', `${path}.reduction`, new Set(BINNING_REDUCTIONS)),
+    selectionGroupId: input.selectionGroupId === undefined || input.selectionGroupId === null ? null
+      : sliceIdentifier(input.selectionGroupId, `${path}.selectionGroupId`),
+    averageFrames: boolean(input.averageFrames, `${path}.averageFrames`, false),
+    colorScheme: choice(input.colorScheme ?? 'viridis', `${path}.colorScheme`, COLOR_SCHEMES) };
+}
+
+/** Smoothing changes analyzed coordinates; line settings recompute paths
+ * after import. Explicit line IDs are bounded before they are copied. */
+function normalizeTrajectory(value, path) {
+  const input = record(value, path, ['smoothing', 'lines']);
+  const smoothing = record(input.smoothing ?? {}, `${path}.smoothing`, ['enabled', 'window']);
+  const lines = record(input.lines ?? {}, `${path}.lines`, ['enabled', 'source', 'selectionGroupId', 'atomIds', 'firstFrame', 'lastFrame',
+    'stride', 'visible', 'color', 'width', 'colorByTime', 'colorScheme']);
+  const enabled = boolean(lines.enabled, `${path}.lines.enabled`, false);
+  const source = choice(lines.source ?? 'ids', `${path}.lines.source`, new Set(['ids', 'group']));
+  const selectionGroupId = lines.selectionGroupId === undefined || lines.selectionGroupId === null ? null
+    : sliceIdentifier(lines.selectionGroupId, `${path}.lines.selectionGroupId`);
+  if (source === 'group' && selectionGroupId === null) fail(`${path}.lines.selectionGroupId`, 'is required for a selection group source');
+  const atomIds = list(lines.atomIds ?? [], `${path}.lines.atomIds`, MAX_CONFIGURATION_TRAJECTORY_LINE_IDS).map((id, index) => typeof id === 'number'
+    ? number(id, `${path}.lines.atomIds[${index}]`, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true)
+    : identifier(id, `${path}.lines.atomIds[${index}]`));
+  ensureUnique(atomIds.map(String), `${path}.lines.atomIds`);
+  if (enabled && source === 'ids' && !atomIds.length) fail(`${path}.lines.atomIds`, 'must list atoms for enabled lines');
+  const firstFrame = number(lines.firstFrame ?? 0, `${path}.lines.firstFrame`, 0, Number.MAX_SAFE_INTEGER, true);
+  const lastFrame = lines.lastFrame === undefined || lines.lastFrame === null ? null
+    : number(lines.lastFrame, `${path}.lines.lastFrame`, 0, Number.MAX_SAFE_INTEGER, true);
+  if (lastFrame !== null && lastFrame < firstFrame) fail(`${path}.lines.lastFrame`, 'must not precede the first frame');
+  return {
+    smoothing: {
+      enabled: boolean(smoothing.enabled, `${path}.smoothing.enabled`, false),
+      window: number(smoothing.window ?? 2, `${path}.smoothing.window`, 1, MAX_SMOOTHING_WINDOW, true),
+    },
+    lines: {
+      enabled, source, selectionGroupId: source === 'group' ? selectionGroupId : null, atomIds: source === 'ids' ? atomIds : [],
+      firstFrame, lastFrame,
+      stride: number(lines.stride ?? 1, `${path}.lines.stride`, 1, Number.MAX_SAFE_INTEGER, true),
+      visible: boolean(lines.visible, `${path}.lines.visible`, true),
+      color: hexColor(lines.color ?? '#ff9f1c', `${path}.lines.color`),
+      width: number(lines.width ?? 2, `${path}.lines.width`, MIN_TRAJECTORY_LINE_WIDTH, MAX_TRAJECTORY_LINE_WIDTH),
+      colorByTime: boolean(lines.colorByTime, `${path}.lines.colorByTime`, false),
+      colorScheme: choice(lines.colorScheme ?? 'viridis', `${path}.lines.colorScheme`, COLOR_SCHEMES),
+    },
+  };
+}
+
+function normalizeComparisonLayout(value, path) {
+  if (value == null) return null;
+  const input = record(value, path, ['left', 'top', 'width', 'height']);
+  const layout = {
+    left: number(input.left, `${path}.left`, 0, 1),
+    top: number(input.top, `${path}.top`, 0, 1),
+    width: number(input.width, `${path}.width`, Number.EPSILON, 1),
+    height: number(input.height, `${path}.height`, Number.EPSILON, 1),
+  };
+  if (layout.left + layout.width > 1 + 1e-9 || layout.top + layout.height > 1 + 1e-9) {
+    fail(path, 'must fit within the viewport');
+  }
+  return layout;
+}
+
+function normalizeDxa(value, path) {
+  const input = record(value, path, ['enabled', 'lattice', 'trialCircuitLength', 'circuitStretchability',
+    'onlyPerfectDislocations', 'lineSmoothingIterations', 'linePointInterval', 'radius', 'visibleFamilies', 'familyColors', 'defectMesh']);
+  // The optional defect mesh: requested per extraction, with its own style.
+  const defectMesh = input.defectMesh === undefined ? null
+    : record(input.defectMesh, `${path}.defectMesh`, ['enabled', 'smoothingLevel', ...MESH_STYLE_KEYS]);
+  const lattice = choice(input.lattice ?? DXA_DEFAULTS.lattice, `${path}.lattice`, new Set(Object.keys(DXA_FAMILIES)));
+  const families = new Set(DXA_FAMILIES[lattice].map(family => family.id));
+  const visibleFamilies = list(input.visibleFamilies ?? [...families], `${path}.visibleFamilies`, 32)
+    .map((family, index) => choice(family, `${path}.visibleFamilies[${index}]`, families));
+  ensureUnique(visibleFamilies, `${path}.visibleFamilies`);
+  const familyColors = list(input.familyColors ?? [], `${path}.familyColors`, 32).map((value, index) => {
+    const entryPath = `${path}.familyColors[${index}]`, entry = record(value, entryPath, ['family', 'color']);
+    return { family: choice(entry.family, `${entryPath}.family`, families), color: hexColor(entry.color, `${entryPath}.color`) };
+  });
+  ensureUnique(familyColors.map(entry => entry.family), `${path}.familyColors`);
+  return {
+    enabled: boolean(input.enabled, `${path}.enabled`, false), lattice,
+    trialCircuitLength: number(input.trialCircuitLength ?? DXA_DEFAULTS.trialCircuitLength, `${path}.trialCircuitLength`, 3, 100, true),
+    circuitStretchability: number(input.circuitStretchability ?? DXA_DEFAULTS.circuitStretchability, `${path}.circuitStretchability`, 0, 100, true),
+    onlyPerfectDislocations: boolean(input.onlyPerfectDislocations, `${path}.onlyPerfectDislocations`, false),
+    lineSmoothingIterations: number(input.lineSmoothingIterations ?? DXA_DEFAULTS.lineSmoothingIterations, `${path}.lineSmoothingIterations`, 0, 100, true),
+    linePointInterval: number(input.linePointInterval ?? DXA_DEFAULTS.linePointInterval, `${path}.linePointInterval`, 0, 1e6),
+    radius: number(input.radius ?? 0.25, `${path}.radius`, 1e-12, MAX_COORDINATE),
+    visibleFamilies, familyColors,
+    ...(defectMesh === null ? {} : { defectMesh: {
+      enabled: boolean(defectMesh.enabled, `${path}.defectMesh.enabled`, false),
+      smoothingLevel: number(defectMesh.smoothingLevel ?? 8, `${path}.defectMesh.smoothingLevel`, 0, 100, true),
+      ...normalizeMeshStyle(defectMesh, `${path}.defectMesh`, DEFECT_MESH_STYLE),
+    } }),
+  };
+}
+
+function normalizeVectorMode(value, path) {
+  const mode = string(value, path, 256);
+  if (['generic', 'displacement', 'force', 'velocity'].includes(mode)) return mode;
+  if (mode.startsWith('property:')) {
+    const family = mode.slice('property:'.length);
+    if (!family.trim()) fail(path, 'must identify a non-empty vector property family');
+    if (FORBIDDEN_KEYS.has(family)) fail(path, 'is reserved');
+    return mode;
+  }
+  fail(path, 'is unsupported');
+}
+
+function normalizeVectorUp(value, path) {
+  const up = vector(value, path, -1e12, 1e12);
+  if (Math.hypot(...up) < 1e-12) fail(path, 'must be a non-zero vector');
+  return up;
+}
+
+function normalizeVectorFields(input, path) {
+  const fields = list(input.fields, `${path}.fields`, 16).map((value, index) => {
+    const fieldPath = `${path}.fields[${index}]`;
+    const entry = record(value, fieldPath, ['id', 'name', 'enabled', 'components', 'mode', 'componentScales', 'scale', 'color',
+      'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'upMode', 'up']);
+    const components = list(entry.components ?? [null, null, null], `${fieldPath}.components`, 3, 3).map((name, axis) => {
+      if (name === null) return null;
+      const component = string(name, `${fieldPath}.components[${axis}]`, 256);
+      if (FORBIDDEN_KEYS.has(component)) fail(`${fieldPath}.components[${axis}]`, 'is reserved');
+      return component;
+    });
+    const mode = normalizeVectorMode(entry.mode ?? 'generic', `${fieldPath}.mode`);
+    const enabled = boolean(entry.enabled, `${fieldPath}.enabled`, false);
+    if (enabled && mode === 'generic' && components.includes(null)) fail(`${fieldPath}.components`, 'needs three properties for enabled vectors');
+    return {
+      id: string(entry.id, `${fieldPath}.id`, 128), name: string(entry.name ?? `Vector ${index + 1}`, `${fieldPath}.name`, 256),
+      enabled, components, mode,
+      componentScales: vector(entry.componentScales ?? [1, 1, 1], `${fieldPath}.componentScales`, -1e12, 1e12),
+      scale: number(entry.scale ?? 1, `${fieldPath}.scale`, 1e-12, 1e12), color: hexColor(entry.color ?? '#f9ca57', `${fieldPath}.color`),
+      radius: number(entry.radius ?? 0.06, `${fieldPath}.radius`, 1e-12, MAX_COORDINATE),
+      headRadius: number(entry.headRadius ?? 0.15, `${fieldPath}.headRadius`, 1e-12, MAX_COORDINATE),
+      headLength: number(entry.headLength ?? 0.3, `${fieldPath}.headLength`, 1e-12, MAX_COORDINATE),
+      linkDimensions: boolean(entry.linkDimensions, `${fieldPath}.linkDimensions`, true),
+      anchor: choice(entry.anchor ?? 'tail', `${fieldPath}.anchor`, new Set(['tail', 'head', 'center'])),
+      dimension: choice(entry.dimension ?? '3d', `${fieldPath}.dimension`, new Set(['3d', '2d'])),
+      upMode: choice(entry.upMode ?? 'camera', `${fieldPath}.upMode`, new Set(['camera', 'fixed'])),
+      up: normalizeVectorUp(entry.up ?? [0, 1, 0], `${fieldPath}.up`),
+    };
+  });
+  ensureUnique(fields.map(field => field.id), `${path}.fields`);
+  const selectedId = input.selectedId === undefined ? fields[0]?.id ?? null
+    : input.selectedId === null ? null : string(input.selectedId, `${path}.selectedId`, 128);
+  if (selectedId !== null && !fields.some(field => field.id === selectedId)) fail(`${path}.selectedId`, 'must name an existing vector field');
+  return { fields, selectedId };
+}
+
+function normalizeCutoffAnalysis(input, path, fromSnapshot) {
+  const enabled = boolean(input.enabled, `${path}.enabled`, false);
+  const cutoff = nullablePositive(input.cutoff, `${path}.cutoff`, fromSnapshot);
+  if (enabled && cutoff === null) fail(`${path}.cutoff`, 'is required for enabled analysis');
+  return { enabled, cutoff };
+}
+
+function normalizeAppearance(input, path, fromSnapshot) {
+  return {
+    color: input.color === undefined || input.color === null ? null : hexColor(input.color, `${path}.color`),
+    radius: nullablePositive(input.radius, `${path}.radius`, fromSnapshot),
+    visible: boolean(input.visible, `${path}.visible`, true),
+  };
+}
+
+function typeLabel(value, path) {
+  const label = string(value, path, 256);
+  if (!label.trim()) fail(path, 'must contain a non-whitespace label');
+  if (FORBIDDEN_KEYS.has(label)) fail(path, 'is reserved');
+  return label;
+}
+
+function hexColor(value, path) {
+  const color = string(value, path, 7);
+  if (!/^#[\da-f]{6}$/i.test(color)) fail(path, 'must be a six-digit hex color');
+  return color.toLowerCase();
+}
+
+function ensureUnique(values, path) {
+  if (new Set(values).size !== values.length) fail(path, 'contains duplicates');
+}
+
+const VORONOI_RADICAL_KEYS = ['radical', 'radiusSource', 'typeRadii', 'radiusProperty'];
+
+/** Radical Voronoi settings are optional; recipes without them stay unweighted
+ * and normalize exactly as before. Radii are finite and nonnegative. */
+function normalizeVoronoiRadical(voronoi, path) {
+  if (VORONOI_RADICAL_KEYS.every(name => voronoi[name] === undefined)) return {};
+  const typeRadii = list(voronoi.typeRadii ?? [], `${path}.typeRadii`, MAX_PROPERTIES).map((value, index) => {
+    const entryPath = `${path}.typeRadii[${index}]`, entry = record(value, entryPath, ['label', 'radius']);
+    return { label: typeLabel(entry.label, `${entryPath}.label`), radius: number(entry.radius, `${entryPath}.radius`, 0, MAX_COORDINATE) };
+  });
+  ensureUnique(typeRadii.map(({ label }) => label), `${path}.typeRadii`);
+  let radiusProperty = voronoi.radiusProperty ?? null;
+  if (radiusProperty !== null) {
+    radiusProperty = string(radiusProperty, `${path}.radiusProperty`, 256);
+    if (FORBIDDEN_KEYS.has(radiusProperty)) fail(`${path}.radiusProperty`, 'is reserved');
+  }
+  return {
+    radical: boolean(voronoi.radical, `${path}.radical`, false),
+    radiusSource: choice(voronoi.radiusSource ?? 'types', `${path}.radiusSource`, new Set(['types', 'property'])),
+    typeRadii: typeRadii.sort((a, b) => a.label.localeCompare(b.label)), radiusProperty,
+  };
+}
+
+function normalizeDisplay(value) {
+  const input = record(value, 'settings.display', ['coordinateMode', 'colorMode', 'radiusPercent', 'background', 'showCell', 'showAxes', 'png', 'projectionMode', 'periodicOrigin', 'cellWireframeMode', 'ambientOcclusion']);
+  const png = record(input.png ?? {}, 'settings.display.png', ['background', 'legend', 'axes', 'resolution']);
+  let resolution;
+  try { resolution = normalizeExportResolution(png.resolution ?? {}); }
+  catch (error) { fail('settings.display.png.resolution', error.message); }
+  const colorMode = string(input.colorMode ?? 'type', 'settings.display.colorMode', 512);
+  if (colorMode !== 'type' && !BUILTIN_COLOR_MODES.includes(colorMode)
+      && (!colorMode.startsWith('property:') || colorMode.length === 9)) fail('settings.display.colorMode', 'must select atom type, a coordinate, speed or a property');
+  const background = string(input.background ?? '#000000', 'settings.display.background', 7);
+  if (!/^#[\da-f]{6}$/i.test(background)) fail('settings.display.background', 'must be a six-digit hex color');
+  return {
+    coordinateMode: choice(input.coordinateMode ?? 'wrapped', 'settings.display.coordinateMode', new Set(['wrapped', 'unwrapped'])),
+    colorMode,
+    radiusPercent: number(input.radiusPercent ?? 100, 'settings.display.radiusPercent', 5, 500, true),
+    background: background.toLowerCase(),
+    showCell: boolean(input.showCell, 'settings.display.showCell', true),
+    showAxes: boolean(input.showAxes, 'settings.display.showAxes', true),
+    periodicOrigin: vector(input.periodicOrigin ?? [0, 0, 0], 'settings.display.periodicOrigin', -1e12, 1e12),
+    cellWireframeMode: choice(input.cellWireframeMode ?? 'mono', 'settings.display.cellWireframeMode', new Set(['mono', 'rgb', 'rgb-origin', 'rgb-black'])),
+    png: {
+      background: boolean(png.background, 'settings.display.png.background', true),
+      legend: boolean(png.legend, 'settings.display.png.legend', true),
+      axes: boolean(png.axes, 'settings.display.png.axes', false),
+      resolution,
+    },
+    projectionMode: choice(input.projectionMode ?? 'perspective', 'settings.display.projectionMode', new Set(['perspective', 'orthographic'])),
+    // Recipes saved before ambient occlusion stay byte-for-byte unchanged.
+    ...(input.ambientOcclusion === undefined ? {} : { ambientOcclusion: normalizeAmbientOcclusion(input.ambientOcclusion) }),
+  };
+}
+
+function normalizeAmbientOcclusion(value) {
+  const path = 'settings.display.ambientOcclusion';
+  const input = record(value, path, ['enabled', 'intensity', 'directions', 'resolution']);
+  return {
+    enabled: boolean(input.enabled, `${path}.enabled`, false),
+    intensity: number(input.intensity ?? DEFAULT_AMBIENT_OCCLUSION.intensity, `${path}.intensity`, 0, 1),
+    directions: choice(input.directions ?? DEFAULT_AMBIENT_OCCLUSION.directions, `${path}.directions`, new Set(AMBIENT_OCCLUSION_DIRECTIONS)),
+    resolution: choice(input.resolution ?? DEFAULT_AMBIENT_OCCLUSION.resolution, `${path}.resolution`, new Set(AMBIENT_OCCLUSION_RESOLUTIONS)),
+  };
+}
+
+function normalizeAnalyses(value, fromSnapshot) {
+  const input = record(value, 'settings.analyses', ['coordination', 'cna', 'centrosymmetry', 'ptm', 'strain']);
+  const coordination = record(input.coordination ?? {}, 'settings.analyses.coordination', ['enabled', 'cutoff', 'preset']);
+  const cna = record(input.cna ?? {}, 'settings.analyses.cna', ['enabled', 'mode', 'cutoff']);
+  const centrosymmetry = record(input.centrosymmetry ?? {}, 'settings.analyses.centrosymmetry', ['enabled', 'mode', 'neighbors']);
+  const ptm = record(input.ptm ?? {}, 'settings.analyses.ptm', ['enabled', 'flags', 'rmsdCutoff']);
+  const strain = record(input.strain ?? {}, 'settings.analyses.strain', ['enabled', 'references']);
+  const coordinationEnabled = boolean(coordination.enabled, 'settings.analyses.coordination.enabled', false);
+  const cnaEnabled = boolean(cna.enabled, 'settings.analyses.cna.enabled', false);
+  const cnaMode = choice(cna.mode ?? 'adaptive', 'settings.analyses.cna.mode', new Set(['adaptive', 'fixed']));
+  const strainEnabled = boolean(strain.enabled, 'settings.analyses.strain.enabled', false);
+  const references = list(strain.references ?? [], 'settings.analyses.strain.references', MAX_PROPERTIES).map((value, index) => {
+    const path = `settings.analyses.strain.references[${index}]`;
+    const reference = record(value, path, ['label', 'element', 'structure', 'a', 'c']);
+    const structure = choice(reference.structure ?? 1, `${path}.structure`, STRAIN_STRUCTURES);
+    const output = {
+      element: string(reference.element ?? '', `${path}.element`, 8, true),
+      structure,
+      a: nullablePositive(reference.a, `${path}.a`, fromSnapshot),
+    };
+    if (!/^(?:[A-Z][a-z]?)?$/.test(output.element)) fail(`${path}.element`, 'must be an element symbol or empty');
+    if (reference.label !== undefined) output.label = string(reference.label, `${path}.label`, 256);
+    if (reference.c !== undefined || [2, 7].includes(structure)) output.c = nullablePositive(reference.c, `${path}.c`, fromSnapshot);
+    if (strainEnabled && (output.a === null || ([2, 7].includes(structure) && output.c === null))) {
+      fail(path, 'needs positive lattice constants for enabled strain');
+    }
+    return output;
+  });
+  if (strainEnabled && references.length === 0) fail('settings.analyses.strain.references', 'is required for enabled strain');
+  const cutoff = nullablePositive(coordination.cutoff, 'settings.analyses.coordination.cutoff', fromSnapshot);
+  if (coordinationEnabled && cutoff === null) fail('settings.analyses.coordination.cutoff', 'is required for enabled coordination');
+  const cnaCutoff = nullablePositive(cna.cutoff, 'settings.analyses.cna.cutoff', fromSnapshot);
+  if (cnaEnabled && cnaMode === 'fixed' && cnaCutoff === null) fail('settings.analyses.cna.cutoff', 'is required for fixed CNA');
+  const ptmEnabled = boolean(ptm.enabled, 'settings.analyses.ptm.enabled', false);
+  return {
+    coordination: { enabled: coordinationEnabled, cutoff,
+      ...(coordination.preset === undefined ? {} : {
+        preset: choice(coordination.preset, 'settings.analyses.coordination.preset', COORDINATION_CUTOFF_CHOICES),
+      }) },
+    cna: { enabled: cnaEnabled, mode: cnaMode, cutoff: cnaCutoff },
+    centrosymmetry: {
+      enabled: boolean(centrosymmetry.enabled, 'settings.analyses.centrosymmetry.enabled', false),
+      // Version 1 recipes exported before Auto stored only a global neighbor
+      // count; retain their manual behavior when restoring them.
+      mode: choice(centrosymmetry.mode === undefined ? (centrosymmetry.neighbors === undefined ? 'auto' : 'manual') : centrosymmetry.mode, 'settings.analyses.centrosymmetry.mode', new Set(['auto', 'manual'])),
+      neighbors: choice(centrosymmetry.neighbors ?? 12, 'settings.analyses.centrosymmetry.neighbors', new Set([8, 12])),
+    },
+    ptm: {
+      enabled: ptmEnabled,
+      flags: number(ptm.flags ?? 31, 'settings.analyses.ptm.flags', ptmEnabled ? 1 : 0, 255, true),
+      rmsdCutoff: number(ptm.rmsdCutoff ?? 0.1, 'settings.analyses.ptm.rmsdCutoff', 0, 1e12),
+    },
+    strain: { enabled: strainEnabled, references },
+  };
+}
+
+function normalizeSlices(value) {
+  const input = record(value, 'settings.slices', ['items', 'selectedId', 'showGizmo', 'showOutlines', 'exportOutlines']);
+  const items = list(input.items ?? [], 'settings.slices.items', MAX_CONFIGURATION_SLICES).map((value, index) => {
+    const path = `settings.slices.items[${index}]`;
+    const slice = record(value, path, ['id', 'name', 'normal', 'position', 'enabled', 'side', 'showGizmo', 'slab', 'thickness', 'step', 'miller']);
+    const normal = vector(slice.normal, `${path}.normal`, -1, 1);
+    const length = Math.hypot(...normal);
+    if (Math.abs(length - 1) > 1e-4) fail(`${path}.normal`, 'must be a unit vector');
+    const name = string(slice.name ?? `Slice ${index}`, `${path}.name`, 128);
+    if (!name.trim()) fail(`${path}.name`, 'must contain a non-whitespace name');
+    return {
+      id: sliceIdentifier(slice.id, `${path}.id`),
+      name,
+      normal: normal.map(component => component / length),
+      position: number(slice.position, `${path}.position`, -MAX_COORDINATE, MAX_COORDINATE),
+      enabled: boolean(slice.enabled, `${path}.enabled`, true),
+      side: choice(slice.side ?? 'negative', `${path}.side`, new Set(['negative', 'positive'])),
+      showGizmo: boolean(slice.showGizmo, `${path}.showGizmo`, true),
+      // Planes saved before slabs, sweep steps and Miller indices existed
+      // keep their half-space and Cartesian normal.
+      slab: boolean(slice.slab, `${path}.slab`, false),
+      thickness: number(slice.thickness ?? DEFAULT_SLAB_THICKNESS, `${path}.thickness`, MIN_SLICE_LENGTH, MAX_SLICE_LENGTH),
+      step: number(slice.step ?? DEFAULT_SLICE_STEP, `${path}.step`, MIN_SLICE_LENGTH, MAX_SLICE_LENGTH),
+      miller: millerIndices(slice.miller ?? null, `${path}.miller`),
+    };
+  });
+  const ids = new Set(items.map(slice => slice.id));
+  if (ids.size !== items.length) fail('settings.slices.items', 'contains duplicate IDs');
+  const selectedId = input.selectedId === null ? null
+    : sliceIdentifier(input.selectedId ?? (items[0]?.id ?? null), 'settings.slices.selectedId', true);
+  if (selectedId !== null && !ids.has(selectedId)) fail('settings.slices.selectedId', 'must identify an existing slice');
+  return { items, selectedId, showGizmo: boolean(input.showGizmo, 'settings.slices.showGizmo', true),
+    showOutlines: boolean(input.showOutlines, 'settings.slices.showOutlines', false),
+    exportOutlines: boolean(input.exportOutlines, 'settings.slices.exportOutlines', true) };
+}
+
+function millerIndices(value, path) {
+  if (value === null) return null;
+  const indices = vector(value, path, -MAX_MILLER_INDEX, MAX_MILLER_INDEX, true);
+  if (indices.every(index => index === 0)) fail(path, 'must not be all zero');
+  return indices.map(index => index + 0);
+}
+
+function normalizeColors(value) {
+  const input = record(value, 'settings.colors', ['ranges', 'schemes', 'hideOutside', 'hiddenStructureTypes', 'hiddenAtomTypes', 'hiddenCategories', 'crystalVisibilitySource', 'modes', 'orientation']);
+  const modes = input.modes === undefined ? null : propertyEntries(input.modes, 'settings.colors.modes', ['property', 'mode'], (entry, path) => ({
+    mode: choice(entry.mode, `${path}.mode`, new Set(['continuous', 'discrete'])),
+  }));
+  let orientation;
+  if (input.orientation !== undefined) {
+    const value = record(input.orientation, 'settings.colors.orientation', ['direction', 'custom']);
+    try { orientation = normalizeOrientationSettings(value); }
+    catch (error) { fail('settings.colors.orientation', error.message); }
+  }
+  const ranges = propertyEntries(input.ranges ?? [], 'settings.colors.ranges', ['property', 'minimum', 'maximum'], (entry, path) => {
+    const minimum = number(entry.minimum, `${path}.minimum`, -MAX_COORDINATE, MAX_COORDINATE);
+    const maximum = number(entry.maximum, `${path}.maximum`, -MAX_COORDINATE, MAX_COORDINATE);
+    if (!(maximum > minimum)) fail(path, 'must have maximum greater than minimum');
+    return { minimum, maximum };
+  });
+  const schemes = propertyEntries(input.schemes ?? [], 'settings.colors.schemes', ['property', 'scheme'], (entry, path) => ({
+    scheme: choice(entry.scheme, `${path}.scheme`, COLOR_SCHEMES),
+  }));
+  const hideOutside = propertyEntries(input.hideOutside ?? [], 'settings.colors.hideOutside', ['property', 'hide'], (entry, path) => ({
+    hide: boolean(entry.hide, `${path}.hide`),
+  }));
+  const hiddenStructureTypes = list(input.hiddenStructureTypes ?? [], 'settings.colors.hiddenStructureTypes', 9)
+    .map((value, index) => number(value, `settings.colors.hiddenStructureTypes[${index}]`, 0, 8, true));
+  if (new Set(hiddenStructureTypes).size !== hiddenStructureTypes.length) fail('settings.colors.hiddenStructureTypes', 'contains duplicates');
+  const hiddenAtomTypes = list(input.hiddenAtomTypes ?? [], 'settings.colors.hiddenAtomTypes', 65_536)
+    .map((value, index) => string(value, `settings.colors.hiddenAtomTypes[${index}]`, 256));
+  if (new Set(hiddenAtomTypes).size !== hiddenAtomTypes.length) fail('settings.colors.hiddenAtomTypes', 'contains duplicates');
+  const hiddenCategories = propertyEntries(input.hiddenCategories ?? [], 'settings.colors.hiddenCategories', ['property', 'ids'], (entry, path) => {
+    const ids = list(entry.ids, `${path}.ids`, 65_536).map((value, index) => typeof value === 'number'
+      ? number(value, `${path}.ids[${index}]`, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true)
+      : string(value, `${path}.ids[${index}]`, 256));
+    if (new Set(ids).size !== ids.length) fail(`${path}.ids`, 'contains duplicates');
+    return { ids };
+  });
+  return { ranges, schemes, hideOutside, hiddenStructureTypes, hiddenAtomTypes, hiddenCategories,
+    ...(modes ? { modes } : {}), ...(orientation ? { orientation } : {}),
+    ...(input.crystalVisibilitySource === undefined ? {} : {
+      crystalVisibilitySource: nullableChoice(input.crystalVisibilitySource, 'settings.colors.crystalVisibilitySource', new Set(CRYSTAL_VISIBILITY_SOURCE_NAMES)),
+    }) };
+}
+
+function propertyEntries(value, path, keys, normalize) {
+  const entries = list(value, path, MAX_PROPERTIES).map((value, index) => {
+    const entryPath = `${path}[${index}]`;
+    const entry = record(value, entryPath, keys);
+    const property = string(entry.property, `${entryPath}.property`, 256);
+    if (FORBIDDEN_KEYS.has(property)) fail(`${entryPath}.property`, 'is reserved');
+    return { property, ...normalize(entry, entryPath) };
+  });
+  if (new Set(entries.map(entry => entry.property)).size !== entries.length) fail(path, 'contains duplicate properties');
+  return entries;
+}
+
+function normalizeCamera(value) {
+  if (value === null) return null;
+  const input = record(value, 'settings.camera', ['yaw', 'pitch', 'target', 'pan', 'distance', 'orthographicScale', 'projectionMode', 'roll', 'fov', 'constrainUp']);
+  const constrainUp = boolean(input.constrainUp, 'settings.camera.constrainUp', true);
+  return {
+    yaw: number(input.yaw, 'settings.camera.yaw', -1e12, 1e12),
+    pitch: number(input.pitch, 'settings.camera.pitch', constrainUp ? -Math.PI / 2 - 1e-7 : -1e12,
+      constrainUp ? Math.PI / 2 + 1e-7 : 1e12),
+    roll: number(input.roll ?? 0, 'settings.camera.roll', -1e12, 1e12),
+    fov: number(input.fov ?? 40 * Math.PI / 180, 'settings.camera.fov', Math.PI / 180, 175 * Math.PI / 180),
+    constrainUp,
+    target: vector(input.target, 'settings.camera.target', -MAX_COORDINATE, MAX_COORDINATE),
+    pan: vector(input.pan, 'settings.camera.pan', -MAX_COORDINATE, MAX_COORDINATE),
+    distance: number(input.distance, 'settings.camera.distance', 1e-12, MAX_COORDINATE),
+    orthographicScale: number(input.orthographicScale, 'settings.camera.orthographicScale', 1e-12, MAX_COORDINATE),
+    projectionMode: choice(input.projectionMode, 'settings.camera.projectionMode', new Set(['perspective', 'orthographic'])),
+  };
+}
+
+function record(value, path, keys) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) fail(path, 'must be an object');
+  const allowed = new Set(keys);
+  for (const key of Object.keys(value)) {
+    if (FORBIDDEN_KEYS.has(key) || !allowed.has(key)) fail(`${path}.${key}`, 'is not a supported setting');
+  }
+  return value;
+}
+
+function list(value, path, maximum, minimum = 0) {
+  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) fail(path, `must contain ${minimum}–${maximum} entries`);
+  return value;
+}
+
+function vector(value, path, minimum, maximum, integer = false) {
+  return list(value, path, 3, 3).map((component, index) => number(component, `${path}[${index}]`, minimum, maximum, integer));
+}
+
+function number(value, path, minimum, maximum, integer = false) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum
+    || (integer && !Number.isSafeInteger(value))) fail(path, `must be a finite ${integer ? 'integer' : 'number'} from ${minimum} to ${maximum}`);
+  return value;
+}
+
+function nullablePositive(value, path, fromSnapshot) {
+  if (value === undefined || value === null || (fromSnapshot && typeof value === 'number' && Number.isNaN(value))) return null;
+  return number(value, path, 1e-12, MAX_COORDINATE);
+}
+
+function boolean(value, path, fallback) {
+  if (value === undefined && fallback !== undefined) return fallback;
+  if (typeof value !== 'boolean') fail(path, 'must be true or false');
+  return value;
+}
+
+function string(value, path, maximum, allowEmpty = false) {
+  if (typeof value !== 'string' || value.length > maximum || (!allowEmpty && !value.length) || /[\x00-\x1f\x7f]/.test(value)) {
+    fail(path, `must be ${allowEmpty ? 'a' : 'a non-empty'} string of at most ${maximum} characters without control characters`);
+  }
+  return value;
+}
+
+function choice(value, path, choices) {
+  if (!choices.has(value)) fail(path, 'is unsupported');
+  return value;
+}
+
+function nullableChoice(value, path, choices) {
+  return value === null ? null : choice(value, path, choices);
+}
+
+function identifier(value, path, nullable = false) {
+  if (nullable && value === null) return null;
+  if (typeof value === 'number') return number(value, path, 0, Number.MAX_SAFE_INTEGER, true);
+  const id = string(value, path, 128);
+  if (FORBIDDEN_KEYS.has(id)) fail(path, 'is reserved');
+  return id;
+}
+
+function sliceIdentifier(value, path, nullable = false) {
+  if (nullable && value === null) return null;
+  const id = string(value, path, 128);
+  if (!id.trim()) fail(path, 'must contain a non-whitespace identifier');
+  if (FORBIDDEN_KEYS.has(id)) fail(path, 'is reserved');
+  return id;
+}
+
+function canonicalFormat(format) {
+  if (format === 'cfg' || format === 'cfg-sequence') return 'cfg';
+  if (format === 'lammps-dump' || format === 'lammps-dump-sequence') return 'lammps-dump';
+  if (format === 'xyz' || format === 'xyz-sequence') return 'xyz';
+  if (format === 'pdb' || format === 'pdb-sequence') return 'pdb';
+  if (format === 'lammps-data' || format === 'poscar') return format;
+  return null;
+}
+
+function normalizePath(path) { return String(path).replace(/\\/g, '/'); }
+function hasDirectory(path) { return path.includes('/'); }
+function fileKey(file) { return JSON.stringify([file.name, file.size]); }
+function enforceTextSize(text) {
+  if (text.length > MAX_CONFIGURATION_BYTES || new TextEncoder().encode(text).byteLength > MAX_CONFIGURATION_BYTES) {
+    fail('file', 'is too large (maximum 8 MiB)');
+  }
+}
+function fail(path, message) { throw new Error(`Invalid AlloyView configuration: ${path} ${message}.`); }

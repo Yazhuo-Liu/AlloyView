@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyAppearance } from '../src/appearance.js';
-import { normalizeSelectionGroups } from '../src/selection-groups.js';
+import { applyAppearance } from '../src/render/appearance.js';
+import { normalizeSelectionGroups } from '../src/data/selection-groups.js';
 
 test('appearance follows IDs after reordering and combines visibility filters', () => {
   const frame = { ids: [42, 9, 10], types: [1, 0, 0], typeLabels: ['Fe', 'C'] };

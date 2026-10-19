@@ -264,7 +264,7 @@ for each edit and should not be reused.
 [shared geometry client](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/surface-geometry-client.js),
 [geometry Worker](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/surface-geometry-worker.js),
 [mesh layer](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/surface-mesh-layer.js),
-[panel](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/surface-tools.js),
+[panel](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/analysis/surface-tools.js),
 [mesh files](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/io/mesh-export.js).
 
 The tessellation, the manifold construction, `makeManifold()` and

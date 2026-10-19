@@ -1,11 +1,11 @@
 // Archived review evidence for baseline 77b24ad; see docs/REPOSITORY_REVIEW_2026-10-16.md.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initializeClusterTools, clusterCategories, clusterColor, CLUSTER_COLORS, CLUSTER_LEGEND_LIMIT } from '../../../src/cluster-tools.js';
+import { initializeClusterTools, clusterCategories, clusterColor, CLUSTER_COLORS, CLUSTER_LEGEND_LIMIT } from '../../../src/ui/analysis/cluster-tools.js';
 import { calculateClusters } from '../../../src/analysis/clusters.js';
 import { colorsByCategory, visibilityByCategory, UNLISTED_CATEGORY_ID } from '../../../src/render/palette.js';
-import { buildStatisticsTable } from '../../../src/statistics-export.js';
-import { createConfiguration, parseConfiguration } from '../../../src/configuration.js';
+import { buildStatisticsTable } from '../../../src/io/statistics-export.js';
+import { createConfiguration, parseConfiguration } from '../../../src/application/configuration.js';
 import { createCell, fractionalToCartesian } from '../../../src/data/model.js';
 
 class Element {
@@ -117,7 +117,7 @@ async function refreshExternalProperties({ restoring = false, reason, oldName, n
 
 
 
-import { initializeExternalPropertyControls } from '../../../src/external-property-controls.js';
+import { initializeExternalPropertyControls } from '../../../src/ui/properties/external-property-controls.js';
 const h = harness({after() {}}), frame = h.getFrame();
 frame.idSource = 'explicit'; frame.frameIndex = 0;
 let listener, nextId = 0; const replies = new Map();

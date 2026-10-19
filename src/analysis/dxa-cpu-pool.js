@@ -1,6 +1,6 @@
 import { estimateDxaMemory } from './dxa.js';
 import { DXA_STAGE_FIELDS, dxaStageMetadata, validateDxaLocalInput, validateDxaSnapshot } from './dxa-cpu-stages.js';
-import { yieldToMain } from '../task-yield.js';
+import { yieldToMain } from '../shared/task-yield.js';
 
 export const DXA_STAGE_KINDS = Object.freeze(['dxaLocal', 'dxaTetrahedra']);
 const DXA_INITIAL_HEAP_BYTES = 32 * 1024 ** 2;

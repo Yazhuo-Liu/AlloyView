@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCrystalVisibilityState } from '../src/crystal-visibility-controls.js';
+import { createCrystalVisibilityState } from '../src/ui/view/crystal-visibility-controls.js';
 import { combineVisibilityMasks, visibilityByProperty, visibilityByType } from '../src/render/palette.js';
 
 const categories = labels => labels.map(([id, label]) => ({ id, label, color: [id, 100, 200] }));

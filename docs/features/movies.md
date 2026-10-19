@@ -273,11 +273,11 @@ Importing a configuration never starts an export.
 
 ## Implementation
 
-- `src/camera-path.js`: keyframe editing, interpolation
+- `src/render/camera-path.js`: keyframe editing, interpolation
   (`sampleCameraPath`), the trajectory link and the movie timeline
   (`planMovie`).
-- `src/movie-export.js`: the render–encode loop with backpressure, progress,
-  cancellation and restoration; `src/movie-settings.js`: limits, quality
+- `src/video/movie-export.js`: the render–encode loop with backpressure, progress,
+  cancellation and restoration; `src/video/movie-settings.js`: limits, quality
   presets and validation.
 - `src/video/codecs.js`: codec strings and level tables, encoder probing, and
   the VP9 and AV1 configuration records (the AV1 record is read from the
@@ -290,7 +290,7 @@ Importing a configuration never starts an export.
   precede the Clusters; a Cluster starts at each video keyframe and has a cue;
   timestamps are in milliseconds.
 - `src/video/byte-sink.js`: the block store for encoded data.
-- `src/movie-controls.js`: the panel, the preview and the progress window.
+- `src/ui/export/movie-controls.js`: the panel, the preview and the progress window.
 
 Both writers are part of AlloyView; no third-party code or network access is
 involved. Tests: `tests/camera-path.test.js`, `tests/video-muxers.test.js`

@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { buildSite, checkLogoAssetBudget, LOGO_ASSET_BUDGET } from '../scripts/build.mjs';
 import { initializeBccLogo } from '../src/render/bcc-logo.js';
-import { initializeTheme } from '../src/theme.js';
+import { initializeTheme } from '../src/ui/shell/theme.js';
 
 const root = resolve(import.meta.dirname, '..');
 const pngSize = bytes => [bytes.readUInt32BE(16), bytes.readUInt32BE(20)];
@@ -14,7 +14,7 @@ test('runtime logos fit the aggregate budget with one small embedded mark per wo
   const total = await checkLogoAssetBudget(root);
   assert.ok(total > 0 && total <= LOGO_ASSET_BUDGET);
   for (const theme of ['dark', 'light']) {
-    const svg = await readFile(resolve(root, `src/asserts/logo/AlloyView_logo_${theme}.svg`), 'utf8');
+    const svg = await readFile(resolve(root, `src/assets/logo/AlloyView_logo_${theme}.svg`), 'utf8');
     const images = [...svg.matchAll(/data:image\/png;base64,([A-Za-z0-9+/=]+)/g)];
     assert.equal(images.length, 1, 'SVG must not duplicate the bitmap in href and xlink:href');
     const bitmap = Buffer.from(images[0][1], 'base64');
@@ -22,15 +22,15 @@ test('runtime logos fit the aggregate budget with one small embedded mark per wo
     assert.equal(bitmap[25], 6, 'the original transparent mark remains RGBA');
     assert.match(svg, /viewBox="0 0 1700 500"/);
   }
-  assert.deepEqual(pngSize(await readFile(resolve(root, 'src/asserts/logo/AlloyView_favicon.png'))), [64, 64]);
-  assert.deepEqual(pngSize(await readFile(resolve(root, 'src/asserts/logo/AlloyView_logo_only.png'))), [264, 264]);
+  assert.deepEqual(pngSize(await readFile(resolve(root, 'src/assets/logo/AlloyView_favicon.png'))), [64, 64]);
+  assert.deepEqual(pngSize(await readFile(resolve(root, 'src/assets/logo/AlloyView_logo_only.png'))), [264, 264]);
 });
 
 test('the budget is aggregate and recursive, permits absent fixtures and rejects before changing a build output', async () => {
   const temporary = await mkdtemp(resolve(tmpdir(), 'alloyview-logo-budget-'));
   try {
     assert.equal(await checkLogoAssetBudget(temporary), 0);
-    const logo = resolve(temporary, 'src/asserts/logo');
+    const logo = resolve(temporary, 'src/assets/logo');
     await mkdir(resolve(logo, 'nested'), { recursive: true });
     await writeFile(resolve(logo, 'one.png'), new Uint8Array(100 * 1024));
     await writeFile(resolve(logo, 'nested/two.png'), new Uint8Array(100 * 1024));
@@ -81,7 +81,7 @@ test('theme initialization requests only the saved choice and switches the image
 
 test('unsupported WebGL loads the fallback on demand and repeated initialization does not reload it', () => {
   let source = null, loads = 0;
-  const fallback = { hidden:true, dataset:{src:'./src/asserts/logo/AlloyView_logo_only.png'},
+  const fallback = { hidden:true, dataset:{src:'./src/assets/logo/AlloyView_logo_only.png'},
     getAttribute:()=>source, set src(value){source=value;loads++;} };
   const canvas = { hidden:true, getContext:()=>null };
   const container = { querySelector:selector=>selector==='canvas'?canvas:fallback };

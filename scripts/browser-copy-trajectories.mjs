@@ -99,7 +99,7 @@ async function exercise(isolated) {
 async function initialize() {
   const base = document.querySelector('script[type=module][src]').src;
   const [{ WebGLRenderer }, { StructureWorkerClient }] = await Promise.all([
-    import(new URL('./render/webgl-renderer.js', base)), import(new URL('./worker-client.js', base))]);
+    import(new URL('./render/webgl-renderer.js', base)), import(new URL('./data/structure-worker-client.js', base))]);
   const checks = window.copyChecks = { requests: [] };
   const setFrame = WebGLRenderer.prototype.setFrame;
   WebGLRenderer.prototype.setFrame = function(...args) {

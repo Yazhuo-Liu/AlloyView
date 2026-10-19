@@ -134,7 +134,7 @@ recalculated after import; no cluster arrays are stored.
 ## Implementation
 
 [Cluster kernel](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/clusters.js),
-[panel, colors and table](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/cluster-tools.js),
+[panel, colors and table](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/analysis/cluster-tools.js),
 [periodic neighbor search](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/neighbors.js),
 [Worker scheduling](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/analysis-pool.js).
 The connectivity and output definitions follow OVITO's cluster analysis

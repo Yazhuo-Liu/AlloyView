@@ -1,4 +1,4 @@
-import { importedVectorComponents } from '../vector-settings.js';
+import { importedVectorComponents } from './vector-settings.js';
 import { ORIENTATION_COLOR_MODES, grainOrientationSource, ptmOrientationSource } from './orientation-colors.js';
 
 export const BUILTIN_SCALAR_COLOR_MODES = Object.freeze([

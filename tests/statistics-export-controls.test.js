@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { StatisticsExportClient } from '../src/statistics-export-client.js';
-import { initializeStatisticsExports, STATISTICS_EXPORT_BUTTONS } from '../src/statistics-export-controls.js';
-import { buildStatisticsTable, serializeCsv } from '../src/statistics-export.js';
+import { StatisticsExportClient } from '../src/io/statistics-export-client.js';
+import { initializeStatisticsExports, STATISTICS_EXPORT_BUTTONS } from '../src/ui/export/statistics-export-controls.js';
+import { buildStatisticsTable, serializeCsv } from '../src/io/statistics-export.js';
 import { createCell } from '../src/data/model.js';
 
 test('persistent export Worker reuses snapshots, releases them without replacement and preserves source buffers', async t => {

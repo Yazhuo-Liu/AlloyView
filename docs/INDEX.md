@@ -43,6 +43,8 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 
 ## Understand and verify the implementation
 
+[Repository architecture](ARCHITECTURE.md) maps the source directories, explains where new modules belong, and describes entrypoint, Worker, asset and build conventions.
+
 [Analysis implementation](STRUCTURE_ANALYSIS.md) explains crystal classification, ideal lattice strain and the Worker scheduler. [Validation](VALIDATION.md) describes tests and comparisons. [Deployment](DEPLOYMENT.md) explains the static build, including these documentation pages. The [improvement backlog](TODO.md) lists known defects and planned performance work from the latest audit, in priority order; completed features are described in the feature pages.
 
 The [repository review of 2026-10-16](REPOSITORY_REVIEW_2026-10-16.md) records 11 reproduced functional defects and one scheduling-dependent test failure, with their impact, evidence scripts and review limits. All 12 findings are addressed in the [repair report of 2026-10-19](REPOSITORY_FIXES_2026-10-19.md), including regression coverage and Worker/GPU warmup checks. The original review and reproduction scripts remain a historical record of their baseline.

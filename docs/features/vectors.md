@@ -30,6 +30,6 @@ Shaft radius, head radius and head length are given in Å. The default linked pr
 
 ## Implementation and reference
 
-[Vector families and linked dimensions](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/vector-settings.js), [arrow primitives](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/atom-primitives.js), [vector controls](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/atomeye-tools.js).
+[Vector families and linked dimensions](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/vector-settings.js), [arrow primitives](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/atom-primitives.js), [vector controls](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/view/atomeye-tools.js).
 
 The display controls follow the concepts described in OVITO's [Vectors visual element](https://www.ovito.org/manual/reference/pipelines/visual_elements/vectors.html). The rendering behavior above describes AlloyView's implementation.

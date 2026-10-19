@@ -12,7 +12,7 @@ import {
   MAX_CONFIGURATION_RDF_BINS,
   MAX_CONFIGURATION_SELECTION_GROUPS,
   parseConfiguration,
-} from '../src/configuration.js';
+} from '../src/application/configuration.js';
 
 test('processing recipes round-trip full source, camera, analyses, filters and editable planes', () => {
   const snapshot = fullSnapshot();

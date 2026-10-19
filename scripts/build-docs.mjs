@@ -1,10 +1,11 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { FEATURE_HELP } from '../src/feature-help.js';
+import { FEATURE_HELP } from '../src/ui/shell/feature-help.js';
 
 export const DOC_GUIDES = Object.freeze([
   { source: 'USER_GUIDE.md', page: 'user-guide.html', title: 'User guide' },
   { source: 'FORMATS.md', page: 'formats.html', title: 'File formats' },
+  { source: 'ARCHITECTURE.md', page: 'architecture.html', title: 'Repository architecture' },
   { source: 'STRUCTURE_ANALYSIS.md', page: 'structure-analysis.html', title: 'Analysis implementation' },
   { source: 'VALIDATION.md', page: 'validation.html', title: 'Validation' },
   { source: 'DEPLOYMENT.md', page: 'deployment.html', title: 'Deployment' },

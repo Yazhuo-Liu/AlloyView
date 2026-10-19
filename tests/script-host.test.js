@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { compileScript, runScript } from '../src/command-script.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
-import { KeyboardCommandRegistry } from '../src/keyboard-commands.js';
-import { captureCamera } from '../src/camera-path.js';
+import { compileScript, runScript } from '../src/application/command-script.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
+import { KeyboardCommandRegistry } from '../src/ui/automation/keyboard-commands.js';
+import { captureCamera } from '../src/render/camera-path.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
-import { cameraCommand, createAutomationLock, createScriptHost, SCRIPT_EXAMPLES } from '../src/script-controls.js';
-import { BUILTIN_TOOLS } from '../src/tool-registry.js';
+import { cameraCommand, createAutomationLock, createScriptHost, SCRIPT_EXAMPLES } from '../src/ui/automation/script-controls.js';
+import { BUILTIN_TOOLS } from '../src/ui/shell/tool-registry.js';
 
 const DEGREE = Math.PI / 180;
 const close = (actual, expected, tolerance, label) => assert.ok(Math.abs(actual - expected) <= tolerance, `${label ?? 'value'}: ${actual} ≈ ${expected}`);
@@ -206,7 +206,7 @@ test('configurations carry scripts and the camera path only as validated data', 
 });
 
 test('a saved script ID beyond 2^53 cannot stall New; unsafe suffixes do not advance the counter', async () => {
-  const { initializeScriptControls } = await import('../src/script-controls.js');
+  const { initializeScriptControls } = await import('../src/ui/automation/script-controls.js');
   const listeners = new Map();
   // A permissive element: any DOM method the panel calls is a no-op.
   const element = id => new Proxy({ id, value: '', dataset: {}, style: {}, options: [], classList: { toggle() {}, add() {}, remove() {} },

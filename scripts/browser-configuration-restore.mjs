@@ -54,9 +54,9 @@ const report = await withWebGpuBrowser(async ({ call, evaluate }) => {
   await evaluate(`(async () => {
     if (document.getElementById('enable-gpu-computing').getAttribute('aria-pressed') === 'true') document.getElementById('enable-gpu-computing').click();
     const app = document.querySelector('script[type=module][src]').src;
-    const { createConfiguration } = await import(new URL('./configuration.js', app));
+    const { createConfiguration } = await import(new URL('./application/configuration.js', app));
     const { AnalysisPool } = await import(new URL('./analysis/analysis-pool.js', app));
-    const { StructureWorkerClient } = await import(new URL('./worker-client.js', app));
+    const { StructureWorkerClient } = await import(new URL('./data/structure-worker-client.js', app));
     const { WebGLRenderer } = await import(new URL('./render/webgl-renderer.js', app));
     const p = window.recipeChecks = {calls:[],downloads:[],hold:false,held:false,release:null,indexWaits:0,indexAborts:0};
     const waitIndex = StructureWorkerClient.prototype.waitForIndex;

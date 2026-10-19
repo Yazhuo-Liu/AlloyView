@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initializeTopologyTools } from '../src/topology-tools.js';
+import { initializeTopologyTools } from '../src/ui/analysis/topology-tools.js';
 import { distributionRows } from '../src/render/distribution-chart.js';
-import { createAnalysisDependencies } from '../src/analysis-dependencies.js';
-import { initializeExpressionControls } from '../src/expression-controls.js';
+import { createAnalysisDependencies } from '../src/application/analysis-dependencies.js';
+import { initializeExpressionControls } from '../src/ui/properties/expression-controls.js';
 import { estimateFrameBytes } from '../src/data/cache-policy.js';
 import { clearAnalysisResults, replaceAnalysisProperty } from '../src/analysis/results.js';
 

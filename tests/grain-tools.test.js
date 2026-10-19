@@ -1,20 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GRAIN_COLORS, GRAIN_LEGEND_LIMIT, GRAIN_NONE_COLOR, displayedGrainThreshold, grainCategories, grainColor, grainVolumes,
-  initializeGrainTools } from '../src/grain-tools.js';
+  initializeGrainTools } from '../src/ui/analysis/grain-tools.js';
 import { GRAIN_DEFAULT_MST_THRESHOLD, calculateGrains, quaternionBungeEuler } from '../src/analysis/grains.js';
 import { calculatePtm } from '../src/analysis/ptm.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
-import { createAttributeRegistry } from '../src/global-attributes.js';
-import { GrainSegmentationClient } from '../src/grains-client.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
+import { createAttributeRegistry } from '../src/properties/global-attributes.js';
+import { GrainSegmentationClient } from '../src/analysis/grains-client.js';
 import { BUILTIN_COLOR_MODES, BUILTIN_SCALAR_COLOR_MODES, initialColorQuantities } from '../src/render/color-quantities.js';
 import { GRAIN_CHART_MAX_POINTS, grainChartPoints, renderGrainMergeChart } from '../src/render/grain-merge-chart.js';
 import { GRAIN_ORIENTATION_COLOR_MODES, ORIENTATION_COLOR_MODES, OrientationColorResolver, UNDEFINED_ORIENTATION_COLOR,
   grainOrientationSource, ipfColor, rodriguesColor } from '../src/render/orientation-colors.js';
 import { DISTINCT_CATEGORY_COLORS, colorsByCategory, visibilityByCategory, UNLISTED_CATEGORY_ID } from '../src/render/palette.js';
-import { STATISTICS_EXPORT_BUTTONS } from '../src/statistics-export-controls.js';
-import { STATISTICS_TABLES, buildStatisticsTable } from '../src/statistics-export.js';
-import { BUILTIN_TOOLS } from '../src/tool-registry.js';
+import { STATISTICS_EXPORT_BUTTONS } from '../src/ui/export/statistics-export-controls.js';
+import { STATISTICS_TABLES, buildStatisticsTable } from '../src/io/statistics-export.js';
+import { BUILTIN_TOOLS } from '../src/ui/shell/tool-registry.js';
 import { GRAIN_FIXTURES } from './helpers/grain-fixtures.js';
 import { axisAngleQuaternion } from './helpers/polycrystal.js';
 

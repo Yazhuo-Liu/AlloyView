@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateSurfaceMesh } from '../src/analysis/surface-mesh.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
-import { createAttributeRegistry, SURFACE_ATTRIBUTES } from '../src/global-attributes.js';
-import { buildStatisticsTable, serializeCsv } from '../src/statistics-export.js';
-import { SURFACE_MESH_TOOL_DEFAULTS, initializeSurfaceTools, maskDigest, surfaceSummaryRows } from '../src/surface-tools.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
+import { createAttributeRegistry, SURFACE_ATTRIBUTES } from '../src/properties/global-attributes.js';
+import { buildStatisticsTable, serializeCsv } from '../src/io/statistics-export.js';
+import { SURFACE_MESH_TOOL_DEFAULTS, initializeSurfaceTools, maskDigest, surfaceSummaryRows } from '../src/ui/analysis/surface-tools.js';
 import { fccBlock, periodicDistance, subsetFrame } from './helpers/surfaces.js';
 
 class Element {

@@ -1,6 +1,6 @@
 import { cellFaceHeights, determinant3, invert3 } from '../data/model.js';
 import { atomRange } from './neighbors.js';
-import { yieldToEventLoop } from '../task-yield.js';
+import { yieldToEventLoop } from '../shared/task-yield.js';
 
 /** Per-atom classes, by the reference site an atom is assigned to. Atoms that
  * share a site are all interstitial, as in OVITO's atom output mode where

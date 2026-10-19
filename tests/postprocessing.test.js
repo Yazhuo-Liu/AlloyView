@@ -4,7 +4,7 @@ import { Worker } from 'node:worker_threads';
 import { AnalysisPool } from '../src/analysis/analysis-pool.js';
 import { coordinationStatistics } from '../src/analysis/coordination-statistics.js';
 import { summarizeWignerSeitz, summarizeWignerSeitzAsync } from '../src/analysis/wigner-seitz.js';
-import { createExpressionScope, compileFrameExpression, evaluateExpression } from '../src/expressions.js';
+import { createExpressionScope, compileFrameExpression, evaluateExpression } from '../src/properties/expressions.js';
 import { crystalFrame } from './helpers/crystals.js';
 
 function previousStatistics(values) {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { crc32, createImageArchive, ImageArchiveBuilder } from '../src/export-archive.js';
+import { crc32, createImageArchive, ImageArchiveBuilder } from '../src/io/export-archive.js';
 
 test('ZIP stores intact image bytes with matching CRC and directory offsets', async () => {
   const bytes = new TextEncoder().encode('123456789');

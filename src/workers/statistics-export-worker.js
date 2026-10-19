@@ -1,4 +1,4 @@
-import { buildStatisticsTable, csvChunks } from '../statistics-export.js';
+import { buildStatisticsTable, csvChunks } from '../io/statistics-export.js';
 
 let snapshot = null;
 self.addEventListener('message', event => {

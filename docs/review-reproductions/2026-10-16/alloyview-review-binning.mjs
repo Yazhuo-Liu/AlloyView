@@ -1,14 +1,14 @@
 // Archived review evidence for baseline 77b24ad; see docs/REPOSITORY_REVIEW_2026-10-16.md.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeBinningTools, binningQuantityOptions, BINNING_DEFAULTS } from '../../../src/binning-tools.js';
+import { initializeBinningTools, binningQuantityOptions, BINNING_DEFAULTS } from '../../../src/ui/analysis/binning-tools.js';
 import { calculateSpatialBins } from '../../../src/analysis/spatial-binning.js';
-import { buildStatisticsTable, serializeCsv } from '../../../src/statistics-export.js';
-import { createConfiguration, parseConfiguration } from '../../../src/configuration.js';
+import { buildStatisticsTable, serializeCsv } from '../../../src/io/statistics-export.js';
+import { createConfiguration, parseConfiguration } from '../../../src/application/configuration.js';
 import { createCell, fractionalToCartesian } from '../../../src/data/model.js';
 import { describeBin, niceRange, binningMapColors } from '../../../src/render/binning-chart.js';
-import { compileScript, runScript } from '../../../src/command-script.js';
-import { createScriptHost, waitUntilSettled } from '../../../src/script-controls.js';
+import { compileScript, runScript } from '../../../src/application/command-script.js';
+import { createScriptHost, waitUntilSettled } from '../../../src/ui/automation/script-controls.js';
 
 class Element {
   constructor(value = '') {

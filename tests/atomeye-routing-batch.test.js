@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { initializeAtomEyeTools } from '../src/atomeye-tools.js';
+import { initializeAtomEyeTools } from '../src/ui/view/atomeye-tools.js';
 import { createCell } from '../src/data/model.js';
 
 class Element {

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 import { accumulateSpatialBins, binIndex, binningGeometry, calculateSpatialBins, finalizeSpatialBins, mergeSpatialBins,
   normalizeBinningLayout, MAX_TOTAL_BINS } from '../src/analysis/spatial-binning.js';
-import { SpatialBinningClient } from '../src/binning-client.js';
+import { SpatialBinningClient } from '../src/analysis/binning-client.js';
 import { createCell, determinant3, fractionalToCartesian } from '../src/data/model.js';
 
 function random(seed) {

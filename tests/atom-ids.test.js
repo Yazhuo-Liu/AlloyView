@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { atomIdSet, atomIndexEntry, atomIndicesById, canonicalAtomNumber, frameAtomIdLookup, hasAtomId } from '../src/data/atom-ids.js';
-import { selectionGroupVisibility, summarizeSelectionGroups } from '../src/selection-groups.js';
+import { selectionGroupVisibility, summarizeSelectionGroups } from '../src/data/selection-groups.js';
 
 const awkward = [7, '7', '07', ' 7', '7.0', 7.5, '7.5', -0, 0, '0', '-0', NaN, 'NaN', Infinity, 'Infinity', 1e21, '1e+21',
   '1e21', 2 ** 53 + 2, String(2 ** 53 + 2), 5n, '5', 2n ** 60n + 1n, '', 'abc', 'ABC', 0.1 + 0.2, String(0.1 + 0.2), '0.3'];

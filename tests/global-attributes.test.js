@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { attributeSegment, cellAngles, cellLengths, cellStrain, createAttributeRegistry } from '../src/global-attributes.js';
-import { createGlobalAttributeSource, normalizeGlobalAttributeState } from '../src/global-attribute-source.js';
-import { buildStatisticsTable } from '../src/statistics-export.js';
+import { attributeSegment, cellAngles, cellLengths, cellStrain, createAttributeRegistry } from '../src/properties/global-attributes.js';
+import { createGlobalAttributeSource, normalizeGlobalAttributeState } from '../src/properties/global-attribute-source.js';
+import { buildStatisticsTable } from '../src/io/statistics-export.js';
 import { STRUCTURE_TYPES } from '../src/analysis/cna.js';
 import { PTM_TYPES } from '../src/analysis/ptm.js';
-import { DXA_STRUCTURE_TYPES } from '../src/dxa-tools.js';
+import { DXA_STRUCTURE_TYPES } from '../src/ui/analysis/dxa-tools.js';
 import { createCell, determinant3 } from '../src/data/model.js';
 
 /** Ten atoms in a triclinic cell with file, imported, analysis and expression columns. */

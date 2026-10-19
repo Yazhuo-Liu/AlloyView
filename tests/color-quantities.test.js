@@ -3,7 +3,7 @@ import test from 'node:test';
 import { ColorQuantityResolver, initialColorQuantities, BUILTIN_COLOR_MODES } from '../src/render/color-quantities.js';
 import { parseXyzFrame } from '../src/io/xyz.js';
 import { replicateFrame } from '../src/data/replicate.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 import { colorsByProperty } from '../src/render/palette.js';
 
 function fixture(velocities = true) {

@@ -7,7 +7,7 @@ import { initialColorQuantities } from '../src/render/color-quantities.js';
 import { visibilityByCategory } from '../src/render/palette.js';
 import { calculatePtm } from '../src/analysis/ptm.js';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 import { crystalFrame } from './helpers/crystals.js';
 
 const identity = [1, 0, 0, 0];

@@ -1,7 +1,7 @@
 <h1 align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="src/asserts/logo/AlloyView_logo_light.svg">
-    <img src="src/asserts/logo/AlloyView_logo_dark.svg" alt="AlloyView — atomistic structure visualization in your browser" width="640">
+    <source media="(prefers-color-scheme: dark)" srcset="src/assets/logo/AlloyView_logo_light.svg">
+    <img src="src/assets/logo/AlloyView_logo_dark.svg" alt="AlloyView — atomistic structure visualization in your browser" width="640">
   </picture>
 </h1>
 
@@ -402,6 +402,7 @@ modules from mixing file-loading protocols after deployment. See the
 | Topic | Reference |
 | --- | --- |
 | Detailed capabilities, local setup and current limits | [User & development guide](docs/USER_GUIDE.md) |
+| Repository layout and where to add modules | [Architecture](docs/ARCHITECTURE.md) |
 | CFG, LAMMPS, XYZ, PDB and POSCAR conventions | [Supported formats](docs/FORMATS.md) |
 | Static hosting and GitHub Pages | [Deployment](docs/DEPLOYMENT.md) |
 | Executed tests and benchmark results | [Validation record](docs/VALIDATION.md) |

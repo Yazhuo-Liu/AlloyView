@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { buildDocumentation, createDocumentationPages, DOC_GUIDES, renderMarkdown } from '../scripts/build-docs.mjs';
-import { FEATURE_HELP } from '../src/feature-help.js';
+import { FEATURE_HELP } from '../src/ui/shell/feature-help.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 

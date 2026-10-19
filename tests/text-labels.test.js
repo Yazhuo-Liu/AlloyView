@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   formatAttributeValue, MAX_LABEL_PLACEHOLDERS, MAX_LABEL_TEMPLATE_LENGTH, MAX_TEXT_LABELS, normalizeTextLabelState, parseFormatSpec,
   parseLabelTemplate, placeholderNames, renderLabelTemplate,
-} from '../src/text-labels.js';
+} from '../src/render/text-labels.js';
 import { contrastingText, drawTextLabelsOverlay, textLabelOrigin } from '../src/render/text-label-overlay.js';
 
 const values = new Map([['Timestep', 1200], ['CNA.FCC.fraction', 0.93125], ['Mean.c_stress[1]', -1.23456], ['Strain.a', 0.0125], ['AtomCount', 1234567]]);
@@ -72,7 +72,7 @@ test('templates are data: no member access, evaluation or unbounded output', asy
   // Reserved object keys never reach the lookup; other names are plain strings.
   assert.deepEqual(seen, ['toString', '${globalThis.leak = 1}', '`x`', 'alert(1)', 'Timestep']);
   assert.ok(seen.every(name => typeof name === 'string'));
-  const source = await readFile(new URL('../src/text-labels.js', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/render/text-labels.js', import.meta.url), 'utf8');
   assert.equal(/\beval\s*\(|new Function|Function\s*\(/.test(source), false, 'no dynamic code');
 
   const long = parseLabelTemplate('x'.repeat(MAX_LABEL_TEMPLATE_LENGTH + 50));

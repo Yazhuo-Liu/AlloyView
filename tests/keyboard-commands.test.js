@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DEFAULT_KEYBOARD_GEAR, KeyboardCommandRegistry, SHORTCUT_STORAGE_KEY, keyboardGearScale,
-  normalizeShortcutKey, validateShortcutBinding, isShortcutEditingTarget, scrollKeyBelongsToFocus, shouldIgnoreShortcut } from '../src/keyboard-commands.js';
+  normalizeShortcutKey, validateShortcutBinding, isShortcutEditingTarget, scrollKeyBelongsToFocus, shouldIgnoreShortcut } from '../src/ui/automation/keyboard-commands.js';
 
 function commands(calls = []) {
   return [

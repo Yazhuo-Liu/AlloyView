@@ -269,7 +269,7 @@ async function initializeChecks() {
   const app = document.querySelector('script[type=module][src]').src;
   const [{ WebGLRenderer }, { AnalysisPool }, { calculatePtm, PTM_FIELDS }, { calculateGrains }, { createAttributeRegistry }] = await Promise.all([
     import(new URL('./render/webgl-renderer.js', app)), import(new URL('./analysis/analysis-pool.js', app)),
-    import(new URL('./analysis/ptm.js', app)), import(new URL('./analysis/grains.js', app)), import(new URL('./global-attributes.js', app)),
+    import(new URL('./analysis/ptm.js', app)), import(new URL('./analysis/grains.js', app)), import(new URL('./properties/global-attributes.js', app)),
   ]);
   const checks = window.grainChecks = { ptmRuns: 0 };
   const setFrame = WebGLRenderer.prototype.setFrame;

@@ -3,7 +3,7 @@ import { NEIGHBOR_BINDINGS_WGSL } from './neighbors.js';
 import { gpuPreparationKinds } from './preparation.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, frameUploadBytes, gpuWorkspaceBytes,
   trajectoryCapacity, frameEvictionOrder } from './cache-policy.js';
-import { yieldToEventLoop as yieldWorker } from '../../task-yield.js';
+import { yieldToEventLoop as yieldWorker } from '../../shared/task-yield.js';
 
 const MAX_INPUT_BYTES = 256 * 1024 ** 2;
 const CONFIG_BYTES = 128;

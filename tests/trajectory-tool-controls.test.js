@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeTrajectoryToolControls } from '../src/trajectory-tool-controls.js';
+import { initializeTrajectoryToolControls } from '../src/ui/selection/trajectory-tool-controls.js';
 
 class Element {
   constructor(value = '') {

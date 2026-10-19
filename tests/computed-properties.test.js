@@ -3,12 +3,12 @@ import test from 'node:test';
 import {
   applyComputedProperties, compileComputedProperties, COMPUTED_PROPERTY_KIND, isComputedProperty,
   MAX_COMPUTED_PROPERTIES, normalizeComputedPropertyState, removeComputedProperties, validateComputedPropertyName,
-} from '../src/computed-properties.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+} from '../src/properties/computed-properties.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 import { replicateFrame } from '../src/data/replicate.js';
 import { clearAnalysisResults, replaceAnalysisProperty } from '../src/analysis/results.js';
-import { createAttributeRegistry } from '../src/global-attributes.js';
-import { TimeSeriesStore, recordRegistry } from '../src/time-series.js';
+import { createAttributeRegistry } from '../src/properties/global-attributes.js';
+import { TimeSeriesStore, recordRegistry } from '../src/data/time-series.js';
 
 function frame(step = 0, extra = []) {
   const ids = Float64Array.of(1, 2, 3);

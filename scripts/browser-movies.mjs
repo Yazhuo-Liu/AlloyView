@@ -619,8 +619,8 @@ async function installChecks(parserUrl) {
   const app = document.querySelector('script[type="module"][src]').src;
   const [{ WebGLRenderer }, { probeMovieFormats, MOVIE_FORMATS, parseAv1SequenceHeader }, { movieBitrate, movieRenderSize, DEFAULT_MOVIE_OUTPUT }, containers,
     { StructureWorkerClient }, { FrameCache }] = await Promise.all([
-    import(new URL('./render/webgl-renderer.js', app)), import(new URL('./video/codecs.js', app)), import(new URL('./movie-export.js', app)), import(parserUrl),
-    import(new URL('./worker-client.js', app)), import(new URL('./data/frame-cache.js', app))]);
+    import(new URL('./render/webgl-renderer.js', app)), import(new URL('./video/codecs.js', app)), import(new URL('./video/movie-export.js', app)), import(parserUrl),
+    import(new URL('./data/structure-worker-client.js', app)), import(new URL('./data/frame-cache.js', app))]);
   const checks = window.movieChecks = { download: null, recordText: null };
   // Keep the real parsed Worker result, source identity and navigation signal;
   // only delay delivery. Force that one cached index through the real loader.

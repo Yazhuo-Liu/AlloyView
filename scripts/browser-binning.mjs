@@ -212,7 +212,7 @@ async function initializeChecks() {
   const app = document.querySelector('script[type=module][src]').src;
   const [{ WebGLRenderer }, { accumulateSpatialBins, finalizeSpatialBins }, { SpatialBinningClient }] = await Promise.all([
     import(new URL('./render/webgl-renderer.js', app)), import(new URL('./analysis/spatial-binning.js', app)),
-    import(new URL('./binning-client.js', app)),
+    import(new URL('./analysis/binning-client.js', app)),
   ]);
   const checks = window.binningChecks = {};
   const setFrame = WebGLRenderer.prototype.setFrame;

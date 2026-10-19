@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createConfigurationRestoreQueue, settleConfigurationAnalyses } from '../src/configuration-restore.js';
+import { createConfigurationRestoreQueue, settleConfigurationAnalyses } from '../src/application/configuration-restore.js';
 
 function deferred() {
   let resolve, reject;

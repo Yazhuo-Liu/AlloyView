@@ -5,7 +5,7 @@ import {
   bindExpression, closeMatches, compileFrameExpression, createExpressionScope, evaluateExpression, evaluateSelection,
   expressionTypeNumbers, ExpressionError, MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_LENGTH, MAX_EXPRESSION_NESTING,
   parseExpression, tokenizeExpression,
-} from '../src/expressions.js';
+} from '../src/properties/expressions.js';
 
 function frame(overrides = {}) {
   return {
@@ -187,7 +187,7 @@ test('names never reach JavaScript globals, prototypes or code evaluation', asyn
   const target = frame({ properties: [{ name: 'constructor', data: Float64Array.of(1, 2, 3, 4) }] });
   assert.deepEqual(values('constructor * 2', target), [2, 4, 6, 8]);
   assert.equal(Object.prototype.polluted, undefined);
-  const source = await readFile(new URL('../src/expressions.js', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/properties/expressions.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /\beval\s*\(|new\s+Function|\bFunction\s*\(|\bwith\s*\(|import\s*\(/);
 });
 

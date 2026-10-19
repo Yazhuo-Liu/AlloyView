@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyAppearance } from '../src/appearance.js';
+import { applyAppearance } from '../src/render/appearance.js';
 import { colorsByProperty } from '../src/render/palette.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 import { prepareScalarColorData, scalarColorSettings, scalarPreviewAtomVisible } from '../src/render/scalar-colormap.js';

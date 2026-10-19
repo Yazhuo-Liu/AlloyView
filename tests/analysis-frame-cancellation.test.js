@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeAtomEyeTools } from '../src/atomeye-tools.js';
-import { StructureWorkerClient } from '../src/worker-client.js';
+import { initializeAtomEyeTools } from '../src/ui/view/atomeye-tools.js';
+import { StructureWorkerClient } from '../src/data/structure-worker-client.js';
 import { createCell } from '../src/data/model.js';
 
 class FakeWorker {

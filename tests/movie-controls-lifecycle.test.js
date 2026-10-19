@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { initializeMovieControls } from '../src/movie-controls.js';
-import { createAutomationLock } from '../src/script-controls.js';
+import { initializeMovieControls } from '../src/ui/export/movie-controls.js';
+import { createAutomationLock } from '../src/ui/automation/script-controls.js';
 
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const camera = () => ({ yaw: 0.2, pitch: 0.3, roll: 0, fov: 0.7, constrainUp: true, target: [1, 2, 3], pan: [0, 0, 0], distance: 20,

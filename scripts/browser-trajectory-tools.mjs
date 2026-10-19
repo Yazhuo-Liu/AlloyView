@@ -281,7 +281,7 @@ async function exercise({ isolated }) {
 async function initializeChecks() {
   const app = document.querySelector('script[type=module][src]').src;
   const [{ WebGLRenderer }, { StructureWorkerClient }] = await Promise.all([
-    import(new URL('./render/webgl-renderer.js', app)), import(new URL('./worker-client.js', app))]);
+    import(new URL('./render/webgl-renderer.js', app)), import(new URL('./data/structure-worker-client.js', app))]);
   const checks = window.trajectoryChecks = { requests: [], promotions: [] };
   const setFrame = WebGLRenderer.prototype.setFrame;
   WebGLRenderer.prototype.setFrame = function(...args) {

@@ -4,14 +4,14 @@ import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 import { DxaClient } from '../src/analysis/dxa-client.js';
 import { DXA_DEFECT_MESH_SMOOTHING, calculateDxa, normalizeDefectMeshRequest } from '../src/analysis/dxa.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
-import { DXA_DEFECT_MESH_DEFAULTS, DXA_STRUCTURE_PROPERTY, initializeDxaTools } from '../src/dxa-tools.js';
-import { createAttributeRegistry } from '../src/global-attributes.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
+import { DXA_DEFECT_MESH_DEFAULTS, DXA_STRUCTURE_PROPERTY, initializeDxaTools } from '../src/ui/analysis/dxa-tools.js';
+import { createAttributeRegistry } from '../src/properties/global-attributes.js';
 import { parseLammpsFrame } from '../src/io/lammps-dump.js';
 import {
   buildSurfaceDisplayMesh, displayMeshArea, displayMeshOpenEdges, displayMeshVolume, surfaceMeshArea,
 } from '../src/render/surface-mesh-geometry.js';
-import { buildStatisticsTable, serializeCsv } from '../src/statistics-export.js';
+import { buildStatisticsTable, serializeCsv } from '../src/io/statistics-export.js';
 import { crystalFrame } from './helpers/crystals.js';
 import { fccScrewFrame } from './helpers/dislocations.js';
 import { fccBlock, periodicDistance, subsetFrame } from './helpers/surfaces.js';

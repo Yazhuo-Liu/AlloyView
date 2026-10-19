@@ -165,12 +165,12 @@ a configuration without scripts leaves them as they are.
 
 ## Implementation
 
-`src/command-script.js` holds the language: `compileScript` tokenizes and
+`src/application/command-script.js` holds the language: `compileScript` tokenizes and
 validates a script into plain instruction records and static bounds, and
 `runScript` executes those records through a host object.
-`src/script-controls.js` provides the host bound to the application
+`src/ui/automation/script-controls.js` provides the host bound to the application
 (`createScriptHost`), the panel, and the lock shared with the Movie panel.
-Keyboard commands come from the registry in `src/keyboard-commands.js` and
-`src/keyboard-controls.js`.
+Keyboard commands come from the registry in `src/ui/automation/keyboard-commands.js` and
+`src/ui/automation/keyboard-controls.js`.
 
 Tests: `tests/command-script.test.js` and `npm run test:browser:movies`.

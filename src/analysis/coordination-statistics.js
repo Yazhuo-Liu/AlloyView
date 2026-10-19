@@ -1,4 +1,4 @@
-import { yieldToMain } from '../task-yield.js';
+import { yieldToMain } from '../shared/task-yield.js';
 
 // This table stays bounded even for a corrupt, huge or fractional value.
 // Float64 counters retain the old Map's numeric counts without u32 wrapping.

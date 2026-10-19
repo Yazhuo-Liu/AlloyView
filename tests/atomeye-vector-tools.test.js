@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeAtomEyeTools } from '../src/atomeye-tools.js';
+import { initializeAtomEyeTools } from '../src/ui/view/atomeye-tools.js';
 
 function withVectorControls(run, { requestDisplayRefresh = null } = {}) {
   const oldDocument = globalThis.document, elements = new Map(), draws = [];

@@ -34,4 +34,4 @@ CSV formatting and scans run in a reusable Worker using completed result arrays.
 
 ## Implementation
 
-[RDF counts and normalization](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/rdf.js), [statistics integration](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/atomeye-tools.js), [CSV table definitions](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/statistics-export.js), [persistent CSV Worker](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/statistics-export-worker.js).
+[RDF counts and normalization](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/rdf.js), [statistics integration](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/view/atomeye-tools.js), [CSV table definitions](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/io/statistics-export.js), [persistent CSV Worker](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/statistics-export-worker.js).

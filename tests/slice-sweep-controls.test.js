@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
 import { millerPlane } from '../src/render/slicing.js';
-import { initializeSliceControls } from '../src/slice-controls.js';
+import { initializeSliceControls } from '../src/ui/view/slice-controls.js';
 
 // A minimal DOM: every element keeps all of its listeners so a test can
 // dispatch the same events the browser would.

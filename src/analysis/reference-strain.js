@@ -1,6 +1,6 @@
 import { cellFaceHeights, determinant3, imageLatticeCell, invert3 } from '../data/model.js';
 import { atomRange, NeighborSearch, NeighborBuffer } from './neighbors.js';
-import { yieldToMain } from '../task-yield.js';
+import { yieldToMain } from '../shared/task-yield.js';
 import { canonicalAtomNumber } from '../data/atom-ids.js';
 import { cpuMemoryBudget } from './cpu-memory.js';
 

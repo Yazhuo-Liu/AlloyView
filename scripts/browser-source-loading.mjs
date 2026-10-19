@@ -33,7 +33,7 @@ try {
     await waitFor('document.readyState === "complete" && document.querySelector("[data-tool-button=coordination]")', 'Application startup');
     await evaluate(`(async () => {
       const app = document.querySelector('script[type=module][src]').src;
-      const { StructureWorkerClient } = await import(new URL('./worker-client.js', app));
+      const { StructureWorkerClient } = await import(new URL('./data/structure-worker-client.js', app));
       const { AnalysisPool } = await import(new URL('./analysis/analysis-pool.js', app));
       const { WebGLRenderer } = await import(new URL('./render/webgl-renderer.js', app));
       const checks = window.sourceLoadChecks = { starts: [], clearedGpu: 0, clearedCpu: 0, displays: 0, holds: false };

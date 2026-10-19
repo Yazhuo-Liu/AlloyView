@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initializeWignerSeitzTools, wignerSeitzExportSites, wignerSeitzMarkers, WIGNER_SEITZ_PROPERTIES } from '../src/wigner-seitz-tools.js';
+import { initializeWignerSeitzTools, wignerSeitzExportSites, wignerSeitzMarkers, WIGNER_SEITZ_PROPERTIES } from '../src/ui/analysis/wigner-seitz-tools.js';
 import { calculateWignerSeitz, WIGNER_SEITZ_SITE_CLASSES } from '../src/analysis/wigner-seitz.js';
 import { SiteMarkerLayer, normalizeSiteMarkerOptions, siteMarkerDisplayCoordinates } from '../src/render/site-marker-layer.js';
-import { buildStatisticsTable, serializeCsv } from '../src/statistics-export.js';
-import { createConfiguration, parseConfiguration } from '../src/configuration.js';
+import { buildStatisticsTable, serializeCsv } from '../src/io/statistics-export.js';
+import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 import { crystalFrame } from './helpers/crystals.js';
 

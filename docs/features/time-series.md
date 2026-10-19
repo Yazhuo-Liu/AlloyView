@@ -153,4 +153,4 @@ unused, so older recipes are unchanged.
 
 ## Implementation
 
-[Collection, store and CSV table](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/time-series.js), [panel and frame visits](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/time-series-controls.js), [chart](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/time-series-chart.js), [attribute registry](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/global-attributes.js).
+[Collection, store and CSV table](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/data/time-series.js), [panel and frame visits](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/properties/time-series-controls.js), [chart](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/time-series-chart.js), [attribute registry](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/properties/global-attributes.js).

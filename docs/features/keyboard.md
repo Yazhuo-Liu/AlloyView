@@ -90,4 +90,4 @@ reference** lists the names. In a script the step size comes from the script's
 own `gear` command (5 at the start), not from the keyboard gear, and rebinding
 a key does not change a name.
 
-Implementation: `src/keyboard-commands.js`, `src/keyboard-controls.js`.
+Implementation: `src/ui/automation/keyboard-commands.js`, `src/ui/automation/keyboard-controls.js`.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeSliceControls, MAX_SLICES } from '../src/slice-controls.js';
+import { initializeSliceControls, MAX_SLICES } from '../src/ui/view/slice-controls.js';
 
 function withControls(options, run) {
   const oldDocument = globalThis.document;

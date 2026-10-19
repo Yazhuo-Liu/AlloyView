@@ -182,7 +182,7 @@ after import; no occupancies are stored.
 ## Implementation
 
 [Wigner–Seitz kernel](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/wigner-seitz.js),
-[panel, outputs and markers](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/wigner-seitz-tools.js),
+[panel, outputs and markers](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/analysis/wigner-seitz-tools.js),
 [site marker layer](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/site-marker-layer.js),
 [Worker scheduling](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/analysis-pool.js).
 The definitions follow OVITO's Wigner–Seitz analysis modifier; the

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initializeToolPanels } from '../src/tool-panels.js';
-import { createToolRegistry } from '../src/tool-registry.js';
+import { initializeToolPanels } from '../src/ui/shell/tool-panels.js';
+import { createToolRegistry } from '../src/ui/shell/tool-registry.js';
 
 class Element {
   constructor(dataset = {}) {

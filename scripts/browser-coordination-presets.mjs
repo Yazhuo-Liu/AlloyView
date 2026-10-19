@@ -232,7 +232,7 @@ async function initializeChecks() {
   const app = document.querySelector('script[type=module][src]').src;
   const [{ WebGLRenderer }, { AnalysisPool }, { StructureWorkerClient }, { calculateCoordination }] = await Promise.all([
     import(new URL('./render/webgl-renderer.js', app)), import(new URL('./analysis/analysis-pool.js', app)),
-    import(new URL('./worker-client.js', app)), import(new URL('./analysis/coordination.js', app)),
+    import(new URL('./data/structure-worker-client.js', app)), import(new URL('./analysis/coordination.js', app)),
   ]);
   const checks = window.presetChecks = { analyses: 0, jobs: [] };
   const setFrame = WebGLRenderer.prototype.setFrame;

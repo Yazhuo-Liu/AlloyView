@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeAtomEyeTools } from '../src/atomeye-tools.js';
-import { createDisplayRefresh } from '../src/display-refresh.js';
+import { initializeAtomEyeTools } from '../src/ui/view/atomeye-tools.js';
+import { createDisplayRefresh } from '../src/render/display-refresh.js';
 import { createCell } from '../src/data/model.js';
 
 async function withDisplayControls(run) {

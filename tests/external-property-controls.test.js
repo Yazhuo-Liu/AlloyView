@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { initializeExternalPropertyControls } from '../src/external-property-controls.js';
-import { ExternalPropertyWorkerClient } from '../src/external-property-worker-client.js';
+import { initializeExternalPropertyControls } from '../src/ui/properties/external-property-controls.js';
+import { ExternalPropertyWorkerClient } from '../src/io/external-property-worker-client.js';
 
 test('attribute controller uses the persistent Worker for import, replicas, rename and portable restore', async t => {
   const originalSelf = globalThis.self;
