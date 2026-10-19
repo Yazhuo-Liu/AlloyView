@@ -84,6 +84,10 @@ whose key would do nothing at that moment, such as `frames.next` at the last
 frame, stops the script with “is not available now”. In a script, `frames.*`
 and `image.png` wait for the frame or the image like `frame` and `export png`.
 
+An unnamed PNG uses the source name and frame number at the start of capture.
+Navigating while capture or encoding finishes does not relabel that image with
+the new frame number. **Stop** retains the current-command completion behavior.
+
 `frame` does not reload a frame that is already displayed and then does not
 wait; `wait-analyses` waits for analyses that were started in another way,
 for example by a button just before **Run**. “A frame is loading” means that

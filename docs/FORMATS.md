@@ -67,8 +67,9 @@ numeric filenames such as `replica.2.cfg` before `replica.10.cfg`, matches atoms
 by stable `id`, and accumulates the minimum-image fractional displacement between
 successive images. This inference requires each atom to move less than half a
 cell per adjacent NEB image along each periodic axis; otherwise the direction is
-mathematically ambiguous. An explicit `id` auxiliary is required; row-order IDs,
-changing IDs, and missing IDs are rejected explicitly.
+mathematically ambiguous. An explicit `id` auxiliary is required in every frame;
+row-order IDs, changing IDs, and missing IDs are rejected explicitly, including
+frames that provide their own image flags or out-of-cell coordinates.
 
 ## LAMMPS text dump
 
@@ -124,15 +125,16 @@ and `*.data` names are also accepted.
   a comment, 5 or 8 columns are read as `atomic`; any other width is rejected
   with a request to add the comment, because `charge` and `molecular` rows have
   the same width. Three trailing image flags, when present for every atom,
-  unwrap the coordinates. Charge, molecule ID, diameter, density and dipole
-  columns become atom properties.
+  unwrap the coordinates; both supplied and normalized flags must fit signed
+  32-bit integers. Charge, molecule ID, diameter, density and dipole columns
+  become atom properties. Molecule IDs retain exact safe-integer precision.
 - **Type names:** an `Atom Type Labels` section, or a single-word comment after
   a mass (`1 55.845 # Fe`), names the types; these names also select element
   colors and radii. Atoms rows may then use the labels instead of numbers.
   Without names, types are shown as `Type 1`, `Type 2`, ….
 - **Other sections:** `Masses` becomes a `mass` property and `Velocities`
-  becomes `vx`, `vy`, `vz`. Coefficient, bond, angle and other topology
-  sections are skipped.
+  becomes `vx`, `vy`, `vz`, with one unique row per atom. Coefficient, bond,
+  angle and other topology sections are skipped.
 
 General triclinic boxes (`avec`, `bvec`, `cvec`, `abc origin`) and atom styles
 not listed above are rejected with a specific message. Atom IDs must be unique
@@ -207,6 +209,9 @@ fields are retained; multicomponent fields become scalar properties such as
 `force_0`, `force_1`, `force_2`, selectable in **Vector arrows**. Non-species
 string fields are consumed but are not retained as colorable properties.
 An explicit `id` field must contain unique positive safe integers.
+Integer (`I`) auxiliary columns also retain exact safe integers, including
+values above 2²⁴; real (`R`) and logical (`L`) properties retain their existing
+32-bit scalar storage.
 
 With a lattice, PBC defaults to all three axes; an explicit `pbc` triplet can
 override it. Without a lattice, the reader constructs a padded nonperiodic

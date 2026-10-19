@@ -123,6 +123,12 @@ the displayed frame; choose them without averaging. Reading every frame takes
 about as long as playing the trajectory once; a progress bar shows the frame
 being read, and **Cancel** stops it.
 
+Importing, replacing, renaming or removing an input column clears any completed
+average and cancels its old in-flight read. Speed also follows changes to imported
+velocity components. Unrelated columns retain ordinary property averages. Cached
+analysis or expression columns are rejected for trajectory averages, even if
+every frame happened to have been displayed before; use them on a single frame.
+
 ## Chart, inspection and CSV
 
 A profile is a step line, one step per bin, with the quantity on the vertical

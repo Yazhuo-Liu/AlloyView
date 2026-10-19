@@ -61,6 +61,31 @@ test('GPU exact histogram records retain shifted triclinic, mixed-PBC, type over
   assert.deepEqual(output.lengthCounts, expected.lengthCounts); assert.deepEqual(output.angleCounts, expected.angleCounts);
 });
 
+test('interleaved GPU correction records retain exact moments when each atom keeps its invocation order', async () => {
+  const frame = crystalFrame('fcc', 4), prepared = validateBondStatisticsParameters(frame, { cutoff: 3, angleBins: 180 });
+  const records = exactRecords(frame, prepared), groups = Array.from(frame.ids, () => []), width = BOND_STATISTICS_CORRECTION_WORDS;
+  for (let offset = 0; offset < records.length; offset += width) groups[records[offset + 1]].push(offset);
+  const expected = createBondStatisticsAccumulators(prepared);
+  await correctGpuBondStatisticsPairs(frame, prepared, records, expected);
+  // GPU atomics may interleave distinct invocations in any order, but an
+  // invocation emits its own records sequentially from a canonical bin list.
+  for (const interleave of [false, true]) {
+    const reordered = new Uint32Array(records.length), cursors = groups.map(() => 0);
+    let write = 0;
+    while (write < reordered.length) for (let atom = groups.length - 1; atom >= 0; atom--) {
+      const count = interleave ? Math.min(1, groups[atom].length - cursors[atom]) : groups[atom].length;
+      for (let index = 0; index < count; index++) {
+        const offset = groups[atom][cursors[atom]++];
+        reordered.set(records.subarray(offset, offset + width), write); write += width;
+      }
+    }
+    const snapshot = reordered.slice(), actual = createBondStatisticsAccumulators(prepared);
+    await correctGpuBondStatisticsPairs(frame, prepared, reordered, actual);
+    assert.deepEqual(actual, expected, 'record scheduling must not change moments or integer histograms');
+    assert.deepEqual(reordered, snapshot, 'readback records remain intact');
+  }
+});
+
 function fakeRuntime({ flags = BOND_STATISTICS_FLAG_PRECISION, failRead = false, allocationFailure = false,
   abortController, overflowOnce = false, requestedRecords = 0 } = {}) {
   const allocated = [], released = [], dispatches = [], preparations = [];

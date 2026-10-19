@@ -211,3 +211,73 @@ test('a new source clears its old strain reference, and a portable snapshot boun
   assert.deepEqual(source.serialize(), { strainReferenceFrame: 0 });
   assert.equal(source.current().get('Strain.a').value, 0);
 });
+
+function deferredReference() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+test('strain reference consumers cancel independently while sharing one read', async () => {
+  const gate = deferredReference(), frame = analyzedFrame({ scale: 1.02 });
+  const first = new AbortController(), second = new AbortController();
+  let reads = 0, readSignal;
+  const source = createGlobalAttributeSource({ getFrame: () => frame, getFrameIndex: () => 2, getFrameCount: () => 3,
+    getFrameAt: (_, { signal }) => { reads++; readSignal = signal; return gate.promise; }, schedule: () => {} });
+  const firstResult = source.ensureReference({ signal: first.signal }).catch(error => error);
+  const secondResult = source.ensureReference({ signal: second.signal }).catch(error => error);
+  const retained = source.ensureReference();
+  await Promise.resolve();
+  first.abort(); second.abort();
+  const readWasCancelled = readSignal.aborted;
+  gate.resolve(analyzedFrame());
+  const [firstValue, secondValue, cell] = await Promise.all([firstResult, secondResult, retained]);
+  assert.equal(reads, 1);
+  assert.equal(firstValue.name, 'AbortError');
+  assert.equal(secondValue.name, 'AbortError');
+  assert.equal(readWasCancelled, false, 'the label/export consumer still needs the shared cell');
+  assert.equal(cell.vectors[0], 10);
+  await assert.rejects(source.ensureReference({ signal: first.signal }), { name: 'AbortError' }, 'a cached cell still respects cancellation');
+});
+
+for (const change of ['set', 'restore', 'reset']) {
+  test(`strain reference ${change} ignores an obsolete read that completes after its replacement`, async () => {
+    const old = deferredReference(), replacement = deferredReference(), signals = [];
+    const source = createGlobalAttributeSource({ getFrame: () => analyzedFrame({ scale: 1.02 }), getFrameIndex: () => 2, getFrameCount: () => 3,
+      getFrameAt: (_, { signal }) => { signals.push(signal); return signals.length === 1 ? old.promise : replacement.promise; }, schedule: () => {} });
+    const pending = source.ensureReference().catch(error => error);
+    await Promise.resolve();
+    if (change === 'set') source.setStrainReferenceFrame(1);
+    else if (change === 'restore') source.restore({ strainReferenceFrame: 1 });
+    else source.reset();
+    const next = source.ensureReference();
+    await Promise.resolve();
+    replacement.resolve(analyzedFrame({ scale: 1.01 }));
+    await next;
+    // Simulate a parser that cannot interrupt its current read and delivers late.
+    old.resolve(analyzedFrame());
+    const obsolete = await pending;
+    const strain = source.current().get('Strain.a');
+    assert.ok(strain, 'the new reference remains available after the obsolete read');
+    assert.ok(Math.abs(strain.value - (10.2 - 10.1) / 10.1) < 1e-15);
+    assert.equal(signals[0].aborted, true);
+    assert.equal(obsolete.name, 'AbortError');
+  });
+}
+
+test('cancelling the last strain reference consumer stops the read and rejects late data', async () => {
+  const gate = deferredReference(), controller = new AbortController();
+  const frame = analyzedFrame({ scale: 1.02 });
+  let readSignal;
+  const source = createGlobalAttributeSource({ getFrame: () => frame, getFrameIndex: () => 2, getFrameCount: () => 3,
+    getFrameAt: (_, { signal }) => { readSignal = signal; return gate.promise; }, schedule: () => {} });
+  const pending = source.ensureReference({ signal: controller.signal }).catch(error => error);
+  await Promise.resolve();
+  controller.abort();
+  gate.resolve(analyzedFrame());
+  const result = await pending;
+  await Promise.resolve();
+  assert.equal(result.name, 'AbortError');
+  assert.equal(readSignal.aborted, true);
+  assert.equal(source.current().has('Strain.a'), false, 'cancelled data must not populate the reference cache');
+});

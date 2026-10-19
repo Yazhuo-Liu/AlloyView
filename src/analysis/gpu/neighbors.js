@@ -55,6 +55,59 @@ fn toCartesian(value: vec3f) -> vec3f {
   return value.x * config.cellA.xyz + value.y * config.cellB.xyz + value.z * config.cellC.xyz;
 }${NEIGHBOR_RESIDUAL_WGSL}`;
 
+/** Atomic insertion establishes membership, but its order depends on GPU
+ * scheduling. One invocation owns each bin and merge-sorts its disjoint list
+ * by descending atom index, just like a serial ascending-index insertion.
+ * Bottom-up merging uses no scratch allocation and O(n log n) work even for
+ * a dense bin; separate dispatches order insertion, sorting and consumers. */
+export const SORT_NEIGHBORS_SHADER = `${NEIGHBOR_BINDINGS_WGSL.replace('@group(0) @binding(3) var<storage, read>', '@group(0) @binding(3) var<storage, read_write>')}
+@compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let bin = gid.x;
+  if (bin >= config.dimX * config.dimY * config.dimZ) { return; }
+  var head = atomicLoad(&heads[bin]);
+  if (head < 0) { return; }
+  if (next[u32(head)] < 0) { return; }
+  var width = 1u;
+  loop {
+    var remaining = head;
+    var mergedHead = -1;
+    var tail = -1;
+    var merges = 0u;
+    while (remaining >= 0) {
+      merges++;
+      var left = remaining;
+      var right = left;
+      var leftCount = 0u;
+      for (var i = 0u; i < width && right >= 0; i++) {
+        leftCount++;
+        right = next[u32(right)];
+      }
+      var rightCount = width;
+      while (leftCount > 0u || (rightCount > 0u && right >= 0)) {
+        var chosen = -1;
+        if (leftCount == 0u) {
+          chosen = right; right = next[u32(right)]; rightCount--;
+        } else if (rightCount == 0u || right < 0) {
+          chosen = left; left = next[u32(left)]; leftCount--;
+        } else if (left > right) {
+          chosen = left; left = next[u32(left)]; leftCount--;
+        } else {
+          chosen = right; right = next[u32(right)]; rightCount--;
+        }
+        if (tail < 0) { mergedHead = chosen; }
+        else { next[u32(tail)] = chosen; }
+        tail = chosen;
+      }
+      remaining = right;
+    }
+    next[u32(tail)] = -1;
+    head = mergedHead;
+    if (merges <= 1u) { break; }
+    width *= 2u;
+  }
+  atomicStore(&heads[bin], head);
+}`;
+
 export function makeNeighborShader({ declarations = '', initialize = '', candidateVisit = '', visit = '', finish = '', mode = 'nearest' } = {}) {
   if (!['nearest', 'images'].includes(mode)) throw new Error('Unknown GPU neighbor traversal mode.');
   const imageVisit = mode === 'images' ? `

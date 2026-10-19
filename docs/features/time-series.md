@@ -70,6 +70,10 @@ Stepping to another frame does not cancel this collection. Readers of the
 same frame share its in-flight parse, but each reader can cancel independently;
 only departure of the last reader cancels the underlying work. Changing the
 source or processing settings still invalidates incompatible reads.
+The strain reference cell follows the same rule: cancelling a collection
+does not cancel another label or export waiting for that cell. Changing or
+restoring the reference frame, or resetting the source, discards outstanding
+reference reads so a late result cannot replace the new reference.
 
 **Analysis attributes** (CNA, PTM and DXA structure fractions, DXA line
 length and density, cluster and Wigner–Seitz counts, means of analysis outputs

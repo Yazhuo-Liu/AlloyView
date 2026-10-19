@@ -951,6 +951,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   function setEnabled(enabled) {
     for (const panel of document.querySelectorAll('[data-tool-panel="bonds"], [data-tool-panel="vectors"], [data-tool-panel="displacement"], [data-tool-panel="statistics"], [data-tool-panel="referenceStrain"], [data-tool-panel="localShear"]')) for (const input of panel.querySelectorAll('input, select, button')) input.disabled = !enabled;
     for (const id of ['find-atom', 'atom-search-id', 'measure-mode', 'measure-pbc', 'clear-measurements', 'compare-view', 'compare-preset', 'export-jpg', 'export-atom-indices', 'export-multiview', 'export-frame-series', 'export-series-first', 'export-series-last', 'export-series-step']) $(id).disabled = !enabled;
+    if (batch) $('export-multiview').disabled = $('export-frame-series').disabled = true;
     updateAtomStyle();
     for (const [kind, job] of Object.entries(jobs)) $(`cancel-${JOBS[kind].prefix}`).disabled = !enabled || !job.enabled;
     $('export-rdf').disabled = !enabled || !getFrame()?.atomeyeResults?.rdf;
@@ -972,7 +973,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     let releaseRouting = () => {};
     const original = getFrameIndex(), camera = cameraSnapshot(renderer), archive = new ImageArchiveBuilder(); let total = 0;
     let completed = false, failure = null;
-    stopPlayback(); $('cancel-frame-series').disabled = false; $('export-frame-series').disabled = true;
+    stopPlayback(); $('cancel-frame-series').disabled = false; $('export-frame-series').disabled = $('export-multiview').disabled = true;
     $('export-series-status').textContent = 'Preparing trajectory index…';
     try {
       releaseRouting = pool.beginRoutingBatch?.() ?? (() => {});
@@ -1002,7 +1003,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       try {
         if (task.restore && task.source === getSourceVersion()) {
           try { await showFrame(original); }
-          finally { restoreCamera(renderer, camera); }
+          finally { if (task.restore && task.source === getSourceVersion()) restoreCamera(renderer, camera); }
         }
       } catch (error) {
         failure = error; completed = false;
@@ -1013,26 +1014,36 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
           $('export-series-status').textContent = completed ? `Exported ${archive.count} frames in one ZIP archive.` : failure && !task.cancelled ? `Export failed: ${failure.message}` : 'Export cancelled.';
           archive.clear();
           if (batch === task) batch = null;
-          $('cancel-frame-series').disabled = true; $('export-frame-series').disabled = !getFrame();
+          $('cancel-frame-series').disabled = true; $('export-frame-series').disabled = $('export-multiview').disabled = !getFrame();
         }
       }
     }
   }
   async function exportViews() {
-    if (!getFrame()) return;
-    const camera = cameraSnapshot(renderer), views = ['front', 'back', 'left', 'right', 'top', 'bottom'];
-    // Text labels are stamped once on the whole sheet rather than in every view.
-    const { textLabels, ...options } = getExportOptions(), current = !options.resolution || options.resolution.mode === 'current';
-    const defaultWidth = renderer.canvas.width * 3, defaultHeight = (renderer.canvas.height + 28) * 2;
-    const size = current ? { width: defaultWidth, height: defaultHeight }
-      : resolveExportSize(options.resolution, renderer.canvas.width, renderer.canvas.height);
-    if (size.width < 3 || size.height < 4) throw new Error('A six-view sheet needs at least 3 × 4 pixels. Choose a larger image size.');
-    const sheet = document.createElement('canvas'); sheet.width = size.width; sheet.height = size.height;
-    const context = sheet.getContext('2d');
-    if (!context) throw new Error('Unable to allocate the six-view image. Choose a smaller size.');
-    const scale = current ? 1 : sheet.height / defaultHeight;
+    if (!getFrame() || batch) return;
+    const task = { cancelled: false, restore: true, source: getSourceVersion(), controller: new AbortController() };
+    batch = task;
+    const frame = getFrame(), camera = cameraSnapshot(renderer), filename = `${getFileStem()}-six-views.png`;
+    const sameFrame = () => task.source === getSourceVersion() && frame === getFrame();
+    const currentTask = () => !task.cancelled && sameFrame();
+    const views = ['front', 'back', 'left', 'right', 'top', 'bottom'];
+    let sheet;
+    stopPlayback(); $('export-multiview').disabled = $('export-frame-series').disabled = true;
     try {
+      await prepareExport({ signal: task.controller.signal });
+      if (!currentTask()) return;
+      // Text labels are stamped once on the whole sheet rather than in every view.
+      const { textLabels, ...options } = getExportOptions(), current = !options.resolution || options.resolution.mode === 'current';
+      const defaultWidth = renderer.canvas.width * 3, defaultHeight = (renderer.canvas.height + 28) * 2;
+      const size = current ? { width: defaultWidth, height: defaultHeight }
+        : resolveExportSize(options.resolution, renderer.canvas.width, renderer.canvas.height);
+      if (size.width < 3 || size.height < 4) throw new Error('A six-view sheet needs at least 3 × 4 pixels. Choose a larger image size.');
+      sheet = document.createElement('canvas'); sheet.width = size.width; sheet.height = size.height;
+      const context = sheet.getContext('2d');
+      if (!context) throw new Error('Unable to allocate the six-view image. Choose a smaller size.');
+      const scale = current ? 1 : sheet.height / defaultHeight;
       for (const [index, view] of views.entries()) {
+        if (!currentTask()) return;
         const column = index % 3, row = Math.floor(index / 3);
         const x = Math.floor(column * sheet.width / 3), y = Math.floor(row * sheet.height / 2);
         const slotWidth = Math.floor((column + 1) * sheet.width / 3) - x;
@@ -1041,10 +1052,12 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         const captureOptions = current ? options : { ...options,
           resolution: { mode: 'custom', width: slotWidth, height: slotHeight - caption, lockAspect: false } };
         renderer.setView(view); const image = await renderer.captureImage(captureOptions);
-        context.drawImage(image, x, y); context.fillStyle = '#ffffff'; context.fillRect(x, y + image.height, image.width, caption);
-        context.fillStyle = '#14252b'; context.font = `${16 * scale}px sans-serif`;
-        context.fillText(view, x + 10 * scale, y + image.height + 20 * scale);
-        image.width = image.height = 1;
+        try {
+          if (!currentTask()) return;
+          context.drawImage(image, x, y); context.fillStyle = '#ffffff'; context.fillRect(x, y + image.height, image.width, caption);
+          context.fillStyle = '#14252b'; context.font = `${16 * scale}px sans-serif`;
+          context.fillText(view, x + 10 * scale, y + image.height + 20 * scale);
+        } finally { image.width = image.height = 1; }
       }
       if (textLabels?.length) {
         // The scale of one view: device pixels per CSS pixel, times the view's
@@ -1054,8 +1067,19 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         drawTextLabelsOverlay(context, textLabels, sheet.width, sheet.height, pixelRatio * (current ? 1 : Math.max(1, viewHeight) / renderer.canvas.height),
           { includeBackground: options.includeBackground !== false, theme: legendExportTheme(renderer.canvas) });
       }
-      downloadBlob(await canvasBlob(sheet), `${getFileStem()}-six-views.png`);
-    } finally { restoreCamera(renderer, camera); }
+      const blob = await canvasBlob(sheet);
+      if (currentTask()) downloadBlob(blob, filename);
+    } catch (error) {
+      if (currentTask()) throw error;
+    } finally {
+      try {
+        if (task.restore && sameFrame()) restoreCamera(renderer, camera);
+      } finally {
+        if (sheet) sheet.width = sheet.height = 1;
+        if (batch === task) batch = null;
+        $('export-multiview').disabled = $('export-frame-series').disabled = !getFrame();
+      }
+    }
   }
 
   for (const [kind, { prefix }] of Object.entries(JOBS)) {

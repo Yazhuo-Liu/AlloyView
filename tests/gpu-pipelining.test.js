@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { GpuRuntime, GPU_HARDWARE_BATCH_ATOMS, GPU_SOFTWARE_BATCH_ATOMS, GPU_BATCHES_IN_FLIGHT, GPU_MAX_BATCH_ATOMS,
   GPU_MIN_BATCH_ATOMS, GPU_TARGET_BATCH_MS, isSoftwareGpuAdapter, readGpuBuffers } from '../src/analysis/gpu/runtime.js';
 import { exactCoordinateWords, prepareCspCoordinates } from '../src/analysis/gpu/centrosymmetry.js';
+import { SORT_NEIGHBORS_SHADER } from '../src/analysis/gpu/neighbors.js';
 import { crystalFrame } from './helpers/crystals.js';
 import { fakeDevice } from './helpers/fake-gpu.js';
 
@@ -124,18 +125,53 @@ test('runtimes without readMany read requested ranges sequentially', async () =>
   assert.deepEqual(calls, [['a', 2, 0], ['b', 1, 8]]); assert.equal(values[1].constructor, Float32Array);
 });
 
-test('a neighbor index is cleared and built in single dispatches with one occupancy readback', async () => {
+test('a neighbor index is cleared, built and sorted with only one occupancy readback, then reused', async () => {
   const { runtime, log, completions } = fakeRuntime();
   const frame = crystalFrame('fcc', 8);
   frame.gpuFrameId = 7;
   const context = await runtime.prepareNeighbors(frame, 3.1);
   assert.equal(context.atomCount, 2048);
-  assert.equal(log.filter(entry => entry.type === 'dispatch').length, 2);
+  assert.equal(log.filter(entry => entry.type === 'dispatch').length, 3);
   assert.equal(log.filter(entry => entry.type === 'copy').length, 1);
-  assert.equal(completions.length, 0, 'no completion round trips: the readback is queued behind both dispatches');
+  assert.equal(completions.length, 0, 'sorting is queued after the occupancy readback without another completion round trip');
+  assert.ok(runtime.pipelines.has(SORT_NEIGHBORS_SHADER));
   const bounds = log.filter(entry => entry.type === 'write' && entry.offset === 104).at(-1);
   assert.deepEqual(bounds.words, [0, 2048]);
   assert.equal(runtime.neighborIndexBuildCount, 1);
+  const mark = log.length;
+  assert.equal(await runtime.prepareNeighbors(frame, 3.1), context);
+  assert.equal(log.length, mark, 'a resident index is not rebuilt or sorted again');
+});
+
+test('a cancelled or failed bin sort releases its unpublished index and retains the warmed frame for retry', async () => {
+  for (const cancel of [false, true]) {
+    const { runtime } = fakeRuntime(), frame = crystalFrame('fcc', 2), controller = new AbortController();
+    const run = runtime.run.bind(runtime);
+    let bindings;
+    runtime.run = async (source, buffers, ...args) => {
+      const result = await run(source, buffers, ...args);
+      if (source === SORT_NEIGHBORS_SHADER) {
+        bindings = buffers;
+        if (cancel) controller.abort();
+        else throw new Error('sort failed');
+      }
+      return result;
+    };
+    try {
+      await assert.rejects(runtime.prepareNeighbors(frame, 3, { signal: controller.signal }), cancel ? { name: 'AbortError' } : /sort failed/);
+      assert.equal(runtime.indexes.size, 0);
+      assert.equal(runtime.neighborIndexBuildCount, 0);
+      for (const binding of [0, 2, 3]) assert.equal(bindings[binding].destroyed, true, 'unpublished index buffer released');
+      for (const binding of [1, 4]) assert.equal(bindings[binding].destroyed, false, 'resident input retained');
+      assert.equal(runtime.inputUploads, 1);
+      assert.ok(runtime.pipelines.has(SORT_NEIGHBORS_SHADER), 'sort pipeline remains warm');
+      runtime.run = run;
+      await runtime.prepareNeighbors(frame, 3);
+      assert.equal(runtime.indexes.size, 1);
+      assert.equal(runtime.neighborIndexBuildCount, 1);
+      assert.equal(runtime.inputUploads, 1);
+    } finally { runtime.close(); }
+  }
 });
 
 test('central symmetry and PTM neighbors share one exact coordinate encoding per immutable frame input', async () => {

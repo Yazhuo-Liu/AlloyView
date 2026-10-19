@@ -1010,7 +1010,8 @@ orientation** colors each grain by its mean orientation as an inverse pole
 figure or Rodrigues RGB. The panel plots the merge distances with the applied
 threshold and lists every grain's size, structure and orientation; both
 export as CSV. Grain count and mean grain size are available to labels and
-time series. A cell thinner than two neighbor distances along a periodic
+time series. Grain-volume CSV values refresh when atomic volumes change without
+repeating PTM or segmentation. A cell thinner than two neighbor distances along a periodic
 vector must first be replicated with **Replicate atoms for analysis**; the
 nickel example needs 1 × 1 × 2. Results follow OVITO 3.9.4. See
 [Grain segmentation](features/grains.md).
@@ -1044,7 +1045,9 @@ preparation report that reason instead of waiting indefinitely.
 For trajectories, **Average over all trajectory frames** reads each
 frame in order and averages counts and densities per frame while pooling the
 samples of means and other statistics; it supports counts, density, positions,
-speed and file columns. See [Spatial binning](features/binning.md).
+speed and file columns. Changing an input column refreshes the average; cached
+analysis and expression outputs are restricted to single-frame binning. See
+[Spatial binning](features/binning.md).
 
 ## Text labels and time series
 
@@ -1281,7 +1284,9 @@ The views also share prepared coordinates, atom bounds, bond shifts and mesh
 data. Each canvas retains its own graphics buffers and camera. Closing the
 second view releases its frame buffers and shared packing caches; reopening
 restores its camera. Camera movement does not launch another analysis. **Six-view PNG** exports
-a contact sheet of the six standard directions.
+a contact sheet of the six standard directions. Six-view and frame-image exports
+run one at a time. Changing the source or editing the camera during six-view
+capture cancels the old sheet and keeps the new view.
 
 **Export JPG** produces an opaque image with the selected legend and XYZ-arrow
 overlays. PNG retains the independent

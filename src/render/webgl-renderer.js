@@ -1742,9 +1742,15 @@ export class WebGLRenderer {
     const x = clientX - rectangle.left;
     const y = clientY - rectangle.top;
     let closest = -1;
-    let closestDepth = Number.NEGATIVE_INFINITY;
+    let closestDepth = Number.NEGATIVE_INFINITY, closestWindowDepth = Infinity;
     const positions = this.displayPositions, visibility = this.visibility, radii = this.atomRadii;
     const v = this.viewMatrix, p = this.projectionMatrix, width = rectangle.width, height = rectangle.height;
+    // Built-in camera projections keep depth independent of screen X/Y.
+    // Rank their clamped fragment depths, including hemispheres crossing the
+    // eye; positive view Z wraps to the far plane rather than the foreground.
+    const windowDepth = p[2] === 0 && p[6] === 0 && p[3] === 0 && p[7] === 0
+      && (p[11] === -1 && p[15] === 0 && p[10] <= -1 && p[14] < 0
+        || p[11] === 0 && p[15] === 1 && p[10] < 0);
     const planes = this.sliceMode === 'planes', vectors = this.frame.cell.vectors;
     const slices = planes ? this.slices.filter(slice => slice.enabled) : [];
     const fractional = this.displayFractional ?? this.frame.fractional, axis = this.sliceAxis;
@@ -1764,12 +1770,17 @@ export class WebGLRenderer {
         const viewZ = v[2] * wx + v[6] * wy + v[10] * wz + v[14];
         const radius = (radii?.[atom] ?? 0.7) * radiusScale;
         const depthRadius = Number.isFinite(radius) ? radius : 0;
-        if (viewZ >= 0 || viewZ + Math.max(0, depthRadius) <= closestDepth) continue;
+        if (viewZ >= 0) continue;
+        const frontDepth = viewZ + Math.max(0, depthRadius);
+        if ((!windowDepth || closestWindowDepth < 1 && frontDepth < 0) && frontDepth <= closestDepth) continue;
         const viewX = v[0] * wx + v[4] * wy + v[8] * wz + v[12];
         const viewY = v[1] * wx + v[5] * wy + v[9] * wz + v[13];
         const clipX = p[0] * viewX + p[4] * viewY + p[8] * viewZ + p[12];
         const clipW = p[3] * viewX + p[7] * viewY + p[11] * viewZ + p[15];
         if (clipW <= 0) continue;
+        // Both sphere shaders retain the original center-plane clipping.
+        const centerClipZ = p[10] * viewZ + p[14];
+        if (windowDepth && (centerClipZ < -clipW || centerClipZ > clipW)) continue;
         const screenX = (clipX / clipW * 0.5 + 0.5) * width;
         const dx = x - screenX;
         let bound = Infinity;
@@ -1806,7 +1817,9 @@ export class WebGLRenderer {
           const discRadiusSquared = projectedRadius > 0 && Number.isFinite(projectedRadius)
             ? (dx / projectedRadius) ** 2 + ((y - screenY) / projectedRadius) ** 2 : 1;
           const surfaceDepth = viewZ + depthRadius * Math.sqrt(Math.max(0, 1 - discRadiusSquared));
-          if (!(surfaceDepth > closestDepth)) continue;
+          const fragmentDepth = windowDepth ? Math.max(0, Math.min(1,
+            (p[10] * surfaceDepth + p[14]) / (p[11] * surfaceDepth + p[15]) * .5 + .5)) : 0;
+          if (windowDepth ? !(fragmentDepth < closestWindowDepth) : !(surfaceDepth > closestDepth)) continue;
           if (planes) {
             const px = positions[index] + ia * vectors[0] + ib * vectors[3] + ic * vectors[6];
             const py = positions[index + 1] + ia * vectors[1] + ib * vectors[4] + ic * vectors[7];
@@ -1820,7 +1833,7 @@ export class WebGLRenderer {
             if (!shown) continue;
           } else if (!((fractional[index + axis] + replica.indices[axis]) / repetition <= sliceMaximum)) continue;
           closest = atom;
-          closestDepth = surfaceDepth;
+          closestDepth = surfaceDepth; closestWindowDepth = fragmentDepth;
           this.lastPick = { index: atom, replica: Array.from(replica.indices), position: [wx, wy, wz] };
         }
       }

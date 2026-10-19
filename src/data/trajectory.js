@@ -14,12 +14,12 @@ export function prepareSequenceBaseline(frame) {
 
 export function unwrapSequenceFrame(frame, previousState, index) {
   if (!previousState) throw new Error('Cannot unwrap a sequence frame without a preceding reference state.');
+  if (frame.idSource !== 'explicit') {
+    throw new Error(`CFG sequence frame ${index + 1} requires an explicit per-atom id auxiliary so atoms can be matched safely between images.`);
+  }
   if (frame.ids.length !== previousState.ids.length) {
     throw new Error(`CFG sequence frame ${index + 1} has ${frame.ids.length} atoms; expected ${previousState.ids.length}.`);
   }
-
-  // Explicit image flags or out-of-cell CFG coordinates are authoritative.
-  if (frame.unwrappedPositions) return continuityState(frame, index);
 
   // Most CFG writers retain row order. Check the complete ID sequence before
   // using that order; a later mismatch must still use stable-ID matching for
@@ -34,14 +34,20 @@ export function unwrapSequenceFrame(frame, previousState, index) {
     for (let atom = 0; atom < previousState.ids.length; atom += 1) {
       previousById.set(previousState.ids[atom], atom);
     }
+    for (const id of frame.ids) {
+      if (!previousById.has(id)) {
+        throw new Error(`CFG sequence frame ${index + 1} contains atom ID ${id}, which is absent from the preceding image.`);
+      }
+    }
   }
+  // Explicit image flags or out-of-cell CFG coordinates are authoritative,
+  // but they do not establish identities for a different set of atoms.
+  if (frame.unwrappedPositions) return continuityState(frame, index);
+
   const unwrappedFractional = new Float64Array(frame.fractional.length);
   const imageFlags = new Int32Array(frame.fractional.length);
   for (let atom = 0; atom < frame.ids.length; atom += 1) {
     const previousAtom = sameOrder ? atom : previousById.get(frame.ids[atom]);
-    if (previousAtom === undefined) {
-      throw new Error(`CFG sequence frame ${index + 1} contains atom ID ${frame.ids[atom]}, which is absent from the preceding image.`);
-    }
     for (let axis = 0; axis < 3; axis += 1) {
       const currentOffset = atom * 3 + axis;
       const previousOffset = previousAtom * 3 + axis;

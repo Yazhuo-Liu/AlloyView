@@ -102,10 +102,10 @@ test('a single shader warmup rejection does not stop unrelated pipelines; succes
       return compile(options);
     };
     const status = await runtime.warmup();
-    assert.equal(status.initialized, true); assert.equal(status.pipelineCount, 20);
+    assert.equal(status.initialized, true); assert.equal(status.pipelineCount, 21);
     assert.deepEqual(status.kernelFailures, [{ kind: 'coordination', phase: 'warming', error: 'coordination compile failed' }]);
     rejectCoordination = false; await runtime.compilePipeline(COORDINATION_SHADER);
-    assert.deepEqual(runtime.cacheStatus().kernelFailures, []); assert.equal(runtime.cacheStatus().pipelineCount, 21);
+    assert.deepEqual(runtime.cacheStatus().kernelFailures, []); assert.equal(runtime.cacheStatus().pipelineCount, 22);
     device.createComputePipelineAsync = async options => {
       if (options.compute.module.code === VORONOI_CLIP_SHADER) throw new Error('optional Voronoi shader failed');
       return compile(options);

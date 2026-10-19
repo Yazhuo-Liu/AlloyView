@@ -1,5 +1,5 @@
 /** Unoptimized picking oracle: original traversal without R4 shortcuts,
- * updated to rank hits by the rendered sphere's surface depth. */
+ * updated to rank hits by the clipped, rendered sphere's fragment depth. */
 import { scalarPreviewAtomVisible } from '../../src/render/scalar-colormap.js';
 import { SLICE_EPSILON } from '../../src/render/slicing.js';
 
@@ -11,9 +11,12 @@ export function baselinePick(clientX, clientY) {
     const x = clientX - rectangle.left;
     const y = clientY - rectangle.top;
     let closest = -1;
-    let closestDepth = Number.NEGATIVE_INFINITY;
+    let closestDepth = Number.NEGATIVE_INFINITY, closestWindowDepth = Infinity;
     const positions = this.displayPositions, visibility = this.visibility, radii = this.atomRadii;
     const v = this.viewMatrix, p = this.projectionMatrix, width = rectangle.width, height = rectangle.height;
+    const windowDepth = p[2] === 0 && p[6] === 0 && p[3] === 0 && p[7] === 0
+      && (p[11] === -1 && p[15] === 0 && p[10] <= -1 && p[14] < 0
+        || p[11] === 0 && p[15] === 1 && p[10] < 0);
     const planes = this.sliceMode === 'planes', vectors = this.frame.cell.vectors;
     const slices = planes ? this.slices.filter(slice => slice.enabled) : [];
     const fractional = this.displayFractional ?? this.frame.fractional, axis = this.sliceAxis;
@@ -45,6 +48,8 @@ export function baselinePick(clientX, clientY) {
         const clipY = p[1] * viewX + p[5] * viewY + p[9] * viewZ + p[13];
         const clipW = p[3] * viewX + p[7] * viewY + p[11] * viewZ + p[15];
         if (clipW <= 0) continue;
+        const centerNdc = (p[10] * viewZ + p[14]) / clipW;
+        if (windowDepth && (centerNdc < -1 || centerNdc > 1)) continue;
         const screenX = (clipX / clipW * 0.5 + 0.5) * width;
         const screenY = (0.5 - clipY / clipW * 0.5) * height;
         const radius = (radii?.[atom] ?? 0.7) * this.radiusScale;
@@ -57,9 +62,11 @@ export function baselinePick(clientX, clientY) {
         const discRadiusSquared = projectedRadius > 0 && Number.isFinite(projectedRadius)
           ? ((x - screenX) / projectedRadius) ** 2 + ((y - screenY) / projectedRadius) ** 2 : 1;
         const surfaceDepth = viewZ + (Number.isFinite(radius) ? radius : 0) * Math.sqrt(Math.max(0, 1 - discRadiusSquared));
-        if (distanceSquared <= radiusPixels ** 2 && surfaceDepth > closestDepth) {
+        const fragmentDepth = windowDepth ? Math.max(0, Math.min(1,
+          (p[10] * surfaceDepth + p[14]) / (p[11] * surfaceDepth + p[15]) * .5 + .5)) : 0;
+        if (distanceSquared <= radiusPixels ** 2 && (windowDepth ? fragmentDepth < closestWindowDepth : surfaceDepth > closestDepth)) {
           closest = atom;
-          closestDepth = surfaceDepth;
+          closestDepth = surfaceDepth; closestWindowDepth = fragmentDepth;
           this.lastPick = { index: atom, replica: Array.from(replica.indices), position: [wx, wy, wz] };
         }
       }

@@ -45,12 +45,18 @@ each has a counterpart without isolation.
   and private paths. A different Worker count changes the grouping of
   Float64 bond-statistics moments and local-shear normalization, so their
   last bits can differ; see the [audit validation](../VALIDATION.md).
-- **WebGPU analyses.** Range sizes and the queue depth do not change
-  deterministic outputs, and ambiguous cutoff, ordering and image decisions
-  receive exact CPU corrections. Outputs that already depended on the GPU's
-  insertion or correction order keep that variation: bond edge order, Q4/Q6,
-  reference-frame strain and Voronoi values, and the last bits of
-  bond-distribution moments.
+- **WebGPU analyses.** Each neighbor bin is sorted by descending atom index
+  before analysis, removing traversal variation from parallel atomic insertion.
+  Rebuilding indices across two device lifetimes on the same SwiftShader
+  adapter reproduces the tested bond arrays, Q4/Q6, all reference-frame strain
+  fields and explicitly requested Voronoi arrays byte for byte. Bond-statistics
+  correction records are stably grouped by central atom before their Float64
+  moments are merged, preserving each invocation's fixed record order and
+  removing variation from the shared append cursor. This does not
+  promise identity across GPU drivers or with CPU floating-point arithmetic.
+  Ambiguous cutoff, ordering and image decisions still receive exact CPU
+  corrections. CPU Worker partition choices retain the separate numerical
+  behavior described above.
 - **DXA.** With one thread an extraction is deterministic, and every kernel
   change described in the [CPU profile](../DXA_CPU_PROFILE.md) kept its
   complete normalized result identical. With several threads the parallel
@@ -70,8 +76,10 @@ each has a counterpart without isolation.
   optimized path produces identical bytes for packed and component inputs.
   Picking rejects farther centers and a conservative screen bound before the
   exact radius and slice tests. Standard projections use that bound; arbitrary
-  projections keep the exact path. Center-depth ordering, equal-depth ties,
-  the minimum three CSS-pixel radius, replicas and visibility are unchanged.
+  projections keep the exact path. Picking uses sphere-surface depth and, for
+  standard projections, matches center-plane clipping and clamped fragment
+  depth. Equal-depth ties, the minimum three CSS-pixel radius, replicas and
+  visibility are retained.
 
 ### Measured effects
 
@@ -566,15 +574,17 @@ examples, in the build before and after this change). With the option checked
 the kernel returns the same values as before the routing existed: on one
 device and one uploaded frame, the previous and the present kernel code gave
 equal digests for standard, thresholded and radical runs of the HEA example
-and the Fe loop. Between page loads GPU Voronoi values differ in both builds,
-as they vary with the linked-cell insertion order; the number of exact
-recoveries for the HEA example ranged from 9 to 14 in each.
+and the Fe loop. In that earlier routing comparison, both builds still used
+atomic linked-cell insertion order, so GPU Voronoi values differed between
+page loads; the number of exact recoveries for the HEA example ranged from
+9 to 14 in each. Canonical bin sorting was added afterwards, and those earlier
+timings do not include its index-build dispatch.
 The Ni grain boundary now leaves the GPU 0.1–0.2 s into its first batch.
 Before, the kernel gave up after 15 s and 2,048 single-cell recoveries; see
 [Voronoi](voronoi.md#webgpu-acceleration).
 
 GPU preparation follows the same choice. Without the option it prepares the
-device, frame uploads and the 21 pipelines of the other kernels. It no longer
+device, frame uploads and the 22 pipelines of the other kernels. It no longer
 compiles the two Voronoi clipping pipelines or allocates the Voronoi cell
 workspace:
 
@@ -716,7 +726,7 @@ preparation also runs when GPU acceleration is off.
 
 GPU preparation follows the backends that automatic selection will run. It
 initializes the device, uploads the current frame's coordinates and types,
-uploads nearby trajectory frames, and then compiles the 21 pipelines of the
+uploads nearby trajectory frames, and then compiles the 22 pipelines of the
 kernels listed above. While no structure is loaded, the idle device compiles
 those pipelines straight away. Voronoi runs on CPU Workers, so no Voronoi
 pipeline, neighbor index or clipping workspace is prepared.
@@ -747,6 +757,17 @@ The GPU cache estimates the resident frame size and reserves space for calculati
 Standard WebGPU does not expose free VRAM. The cache starts with an allocation budget of 2 GiB for hardware or 128 MiB for a software adapter, including a calculation workspace reserve. This is a ceiling, not an upfront reservation: only the loaded frames and required calculation buffers consume memory. The cache checks individual buffer limits and, if an allocation runs out of memory, lowers its budget, evicts distant frames and retries once while protecting the current frame. Thus a GPU with less available memory can retain a smaller nearby-frame window. A frame that cannot be prepared safely uses the existing CPU fallback. Closing or changing the source clears structure buffers while retaining the GPU device and compiled pipelines; switching GPU acceleration off releases the GPU Worker after any accepted calculation finishes. A new cutoff can require a new neighbor index, and uncommon shader variants are still compiled on demand.
 
 Most GPU kernels use 32-bit floating point. High and low input components retain coordinate and PTM fit precision; strain kernels use compensated matrix arithmetic and apply the CPU threshold for numerical zeros. Central symmetry and fresh-strain neighbor preparation additionally emulate IEEE 64-bit arithmetic in their shaders to preserve strict neighbor ordering and CSP pair choices; this does not rely on native GPU float64. Ambiguous neighbor cutoff or ordering decisions in other kernels receive sparse CPU corrections. Continuous values can still differ slightly between backends, including small strain residuals, and inputs outside the supported precision range use CPU. In particular, GPU neighbor searches fall back when their padded search radius exceeds 32 times the face height along a periodic axis; small nonperiodic face heights do not trigger this limit.
+
+Canonical bin ordering adds one GPU merge-sort dispatch when an index is first
+built. It uses the existing linked-list buffers, needs no additional readback,
+and is reused with the resident index; its pipeline joins the existing warmup.
+The fixed accumulation order can change the last bits of earlier GPU outputs.
+`npm run test:browser:gpu-determinism` checks complete bin membership and order,
+repeated outputs and CPU tolerances, and reports the warmed sort and index-build
+times. Its software-adapter timings do not measure physical GPU performance.
+Correction-record grouping uses linear-time counting sort over each dispatch,
+with one temporary 32-bit offset per record and at most 64 KiB of atom counters;
+it adds no GPU dispatch, readback or persistent frame allocation.
 
 The compensated arithmetic stores a value as the unevaluated sum of two 32-bit
 numbers. It relies on error-free transforms, for example the rounding error of

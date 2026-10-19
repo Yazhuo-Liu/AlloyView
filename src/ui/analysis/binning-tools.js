@@ -309,6 +309,27 @@ export function initializeBinningTools({ tools, getFrame, getFrameAt = async () 
     return Boolean(first && second) && first.length === second.length && first.every((entry, index) => Object.is(entry, second[index]));
   }
 
+  /** External or computed columns can change without a new source version.
+   * Discard both completed averages and pending partials before the caller
+   * reattaches those columns. Its subsequent refresh starts the replacement;
+   * ordinary frame/color refreshes continue to reuse a trajectory average. */
+  function invalidateProperties(names = null) {
+    const settings = currentSettings();
+    if (!job.enabled || settings.quantity !== 'property' || names?.length === 0) return false;
+    if (settings.property !== 'builtin:velocity:magnitude') {
+      if (!settings.property?.startsWith('property:')) return false;
+      const property = settings.property.slice('property:'.length).toLowerCase();
+      if (names !== null && !names.some(name => String(name).replace(/^property:/i, '').toLowerCase() === property)) return false;
+    }
+    // Speed depends on imported velocity families, which may differ across
+    // frames or already be removed. Any column edit conservatively expires it.
+    abort(); abortAverage();
+    job.signature = null; job.average = null; job.failed = false;
+    clearView();
+    state('Not calculated', 'The input property changed. Waiting for updated values…');
+    return true;
+  }
+
   async function run({ automatic = false, isCurrent = () => true } = {}) {
     const frame = getFrame();
     if (!frame || !isCurrent()) return false;
@@ -389,6 +410,9 @@ export function initializeBinningTools({ tools, getFrame, getFrameAt = async () 
           if (!current()) return false;
           if (!frame) throw new Error(`Frame ${integer(index + 1)} could not be read for the average.`);
           const frameProperty = resolveProperty(frame, prepared.settings, quantityResolver);
+          if (frameProperty?.analysisKind) {
+            throw new Error(`${frameProperty.displayName ?? frameProperty.name} is an analysis or expression result in frame ${integer(index + 1)}. Choose it without trajectory averaging; averages support positions, speed and imported columns.`);
+          }
           if (prepared.settings.quantity === 'property' && !frameProperty) {
             throw new Error(`${prepared.settings.property.replace(/^property:/, '')} is not available in frame ${integer(index + 1)}. Averages support positions, speed and columns read from the file; analysis and expression results exist only for the displayed frame.`);
           }
@@ -523,7 +547,7 @@ export function initializeBinningTools({ tools, getFrame, getFrameAt = async () 
   updateSchemeOptions();
   state('Not calculated', HELP);
 
-  return Object.freeze({ run, refresh, onFrame, reset, cancel, serialize, restore, warm,
+  return Object.freeze({ run, refresh, invalidateProperties, onFrame, reset, cancel, serialize, restore, warm,
     abortJobs: abort,
     dispose() { abort(); abortAverage(); client.dispose?.(); },
     isEnabled: () => job.enabled,

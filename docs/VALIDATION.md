@@ -1,6 +1,69 @@
 # Validation record
 
-Latest validation: 2026-10-14 (America/New_York). Earlier entries retain their own dates.
+Latest validation: 2026-10-19 (UTC). Earlier entries retain their own dates.
+
+## Whole-repository follow-up repairs (2026-10-19)
+
+Baseline: `812ea64014702baa133dd0e8180d68f4f6100ac5`, synchronized with remote
+main before work and checked again before committing. The
+[follow-up report](REPOSITORY_REVIEW_2026-10-19.md) records 18 reproduced
+functional defects and one scheduling-dependent browser assertion, their fixes,
+regression entry points and the current status of every historical performance
+item. The preceding twelve fixes remain documented separately.
+
+Validation uses Node.js 24 and Chromium/SwiftShader. `npm test` passes all
+**2258 tests**, with zero failures, cancellations or skips, and `npm run build`
+passes. A provisional run while the new
+documentation page was still being written failed two documentation checks,
+then the completed documentation checks passed. No assertions were removed.
+
+The real-browser checks cover:
+
+- The full production browser smoke passes, including versioned module/Wasm
+  loading, source transactions, analyses, configuration replay, phone gestures,
+  image exports and the 204,800-atom CFG clipping/rendering/picking case.
+- Binning property import, unrelated-cache reuse, removal, replacement, rename,
+  and a transitive computed-property edit. The displayed frame and prewarmed
+  Worker remain unchanged. The main Binning suite passes on isolated and
+  nonisolated hosts, including direct-kernel/Worker comparisons.
+- Six-view exports at 4K, JPG, second-view images and frame ZIPs; actual pixel
+  comparisons for clipped/eye-crossing spheres, alongside the existing camera
+  and Bottom-drag regression. Controller tests force source changes at capture,
+  encoding and frame-restoration awaits.
+- CPU warmup on simulated 8/16-core pages: physical replication starts warmup
+  before display, foreground coordination reuses Workers, and source reset
+  retains Worker/Wasm state. Actual WebGPU device destruction and recovery
+  pass, including input/index reuse and recoverable validation failures.
+- Configuration restoration, cancellation and failed restore recovery.
+- The existing GPU main suite passes 261 numerical checks, 12 cancellation,
+  8 displacement-validation and 19 application checks. Its final-progress
+  assertion now accepts the existing animation-frame coalescing contract.
+  After correction-record bucketing, all 15 bond-statistics browser cases pass
+  (13 GPU paths and two expected CPU fallbacks).
+
+The new GPU determinism regression passes against the production build. It checks complete descending neighbor-list
+membership, 17 boundary list lengths from 0 to 770, six rebuilds across two
+device lifetimes for each FCC fixture, bonds, Q4/Q6 and all 19 reference-strain
+fields. It also explicitly requests GPU Voronoi for four comparisons across
+two lifetimes. Observed maximum CPU differences are below `2.54e-7` for Q4/Q6,
+`2.33e-10` for strain, `1.91e-6` for Voronoi volume and `5.19e-7` for surface
+area. These tolerances and same-adapter identity do not imply cross-driver or
+CPU/GPU byte identity. A separate fixed-index reproduction showed eight
+different bond-statistics summaries before stable correction-record bucketing,
+and one summary after it; CPU Worker-count partitioning remains unchanged.
+The production runs also reproduce the complete statistics summaries exactly;
+their maximum CPU difference is `6.611e-6`, within the angle-statistics tolerance
+of `5e-4` and other-statistics tolerance of `5e-5`.
+
+The sort pipeline joins existing GPU preparation and runs once per resident
+index. The final production run reports warmed sort medians of 2.1–2.6 ms and
+initial-index medians of 5.1–14.2 ms (earlier source-only observations were
+0.6–0.7 ms and 3.6–4.3 ms). These are small-fixture software-adapter measurements
+with other regression work active, not a controlled performance comparison or physical-GPU
+speed claims. Existing Workers, Wasm caches, GPU device/pipeline reuse and
+trajectory prefetch remain enabled. Production CDN inspection was blocked by
+the execution proxy's CONNECT 403; physical-GPU conservative-depth validation
+and the remaining performance items in [TODO](TODO.md) remain open.
 
 ## Parallel Grains, measured G2 routing and guarded R7 depth (2026-10-14)
 

@@ -1,6 +1,12 @@
 # Improvement backlog
 
-Last updated: 2026-10-14 (America/New_York). Audited commit: `dbe6055`.
+Last updated: 2026-10-19 (UTC). Re-audited baseline: `812ea64`.
+
+The [2026-10-19 follow-up review](REPOSITORY_REVIEW_2026-10-19.md) closes
+B34, checks the historical movie-range suspicion, and records the newly
+reproduced fixes. The performance items below were checked against current
+source. Their older measurements and estimates have not been remeasured unless
+the new report explicitly says so; the remaining implementations are still open.
 
 The feature plan is complete, so this backlog now tracks defects and
 performance work only. Earlier backlog items (P1–P18, O1–O16, A1–A9,
@@ -100,16 +106,16 @@ and R7 guarded shader/safe replica ordering. R7 hardware verification and K1's
 further ordered-merge work remain below.
 Their contracts and validation are recorded in [VALIDATION.md](VALIDATION.md).
 
-### Lower-severity defects
+B34 is complete: GPU neighbor lists now have a canonical descending atom-index
+order, with repeated real-WebGPU checks. See [performance](features/performance.md)
+and the dated [validation record](VALIDATION.md). The movie range is reset on
+source changes; existing lifecycle tests cover it. Neither remains an open defect.
 
-| ID | Problem | Evidence | Fix | Effort |
-| --- | --- | --- | --- | --- |
-| B34 | GPU results that depend on neighbor order are not reproducible between runs: frame strain on 6,912 and 60,229 atoms differs in 7–11 of 1,144,351 values (at most 1.5×10⁻⁸), HEA bonds and Q4/Q6 differ between two pools, and GPU Voronoi digests differ between page loads | Found while fixing B1 and B5; the GPU neighbor grid is filled with `atomicExchange`, so the order of each cell's list varies [M] | Sort each cell's list, or accumulate in an order-independent way; decide first whether run-to-run identity is required on the GPU | M |
-
-Suspected but not reproduced: the movie frame range persists across files
-beyond the new frame count. Compound physical-copy IDs still give NaN in the
-numeric expression variable `ID`; B35 trajectory paths now resolve their
-encoded source ID and offset directly.
+Compound physical-copy IDs give NaN in the numeric expression variable `ID`, as
+documented in [expressions](features/expressions.md). This is an input limitation,
+not a newly reproduced regression. B35 trajectory paths resolve their encoded
+source ID and offset directly. Extending numeric expressions to compound identity
+requires an explicit representation decision.
 
 ## Part 2: performance, phase 1 (small changes)
 

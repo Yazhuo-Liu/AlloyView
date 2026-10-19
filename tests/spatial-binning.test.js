@@ -318,3 +318,23 @@ test('small frames bin directly; without Worker support every frame does', async
   plain.warm();
   await assert.rejects(plain.accumulate(frame, { axes: [0], bins: [4] }, { signal: AbortSignal.abort() }), { name: 'AbortError' });
 });
+
+test('resident binning keeps current cell geometry when frames share reduced coordinates', async t => {
+  const created = [], messages = [];
+  const client = new SpatialBinningClient({ createWorker: nodeWorkerFactory(created, data => messages.push(data)), workerMinAtoms: 1 });
+  t.after(() => client.dispose());
+  const frame = randomFrame({ count: 40, spread: [-.2, 1.2] });
+  const request = { axes: [0], bins: [4] };
+  await client.accumulate(frame, request);
+  const stretched = { ...frame, cell: createCell({ vectors: [40, 0, 0, 0, 16, 0, 0, 0, 12] }) };
+  let actual = await client.accumulate(stretched, request), expected = accumulateSpatialBins(stretched, request);
+  assertIdentical(actual.densitySum, expected.densitySum, 'a different cell changes density');
+  assert.deepEqual(actual.axisLengthSum, expected.axisLengthSum);
+  stretched.cell.pbc[0] = false;
+  actual = await client.accumulate(stretched, request); expected = accumulateSpatialBins(stretched, request);
+  assert.deepEqual(actual.totals, expected.totals, 'a changed open boundary excludes out-of-domain atoms');
+  assertIdentical(actual.counts, expected.counts, 'open-boundary populations');
+  await client.accumulate(stretched, { axes: [0], bins: [8] });
+  assert.equal(messages.at(-1).fractional, undefined, 'unchanged geometry retains coordinate residency');
+  assert.equal(created.length, 1, 'cell edits retain the warmed Worker');
+});

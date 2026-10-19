@@ -38,6 +38,27 @@ test('CFG sequence unwrapping rejects implicit row-order IDs', () => {
   const input = frame([1], [0.1, 0.2, 0.3], cell);
   input.idSource = 'row-order';
   assert.throws(() => prepareSequenceBaseline(input), /requires an explicit per-atom id auxiliary/);
+  const explicit = frame([1], [0.1, 0.2, 0.3], cell);
+  const state = prepareSequenceBaseline(explicit);
+  for (const unwrapped of [null, Float32Array.from(explicit.positions)]) {
+    input.unwrappedPositions = unwrapped;
+    assert.throws(() => unwrapSequenceFrame(input, state, 1), /frame 2 requires an explicit per-atom id auxiliary/);
+  }
+});
+
+test('CFG sequence validates changed IDs before accepting authoritative out-of-cell coordinates', () => {
+  const cfg = (rows) => `Number of particles = 2\nH0(1,1) = 10\nH0(1,2) = 0\nH0(1,3) = 0\nH0(2,1) = 0\nH0(2,2) = 10\nH0(2,3) = 0\nH0(3,1) = 0\nH0(3,2) = 0\nH0(3,3) = 10\n.NO_VELOCITY.\nentry_count = 4\nauxiliary[0] = id\n55.845\nFe\n${rows}`;
+  const initial = parseCfg(cfg('0.9 0 0 1\n0.2 0 0 2\n'));
+  const state = prepareSequenceBaseline(initial);
+  const changed = parseCfg(cfg('1.1 0 0 3\n0.3 0 0 2\n'));
+  assert.ok(changed.unwrappedPositions, 'parser preserves original out-of-cell data');
+  assert.throws(() => unwrapSequenceFrame(changed, state, 1), /atom ID 3.*absent/);
+  const reordered = parseCfg(cfg('0.3 0 0 2\n2.1 0 0 1\n'));
+  const original = reordered.unwrappedPositions;
+  const next = unwrapSequenceFrame(reordered, state, 1);
+  assert.equal(reordered.unwrappedPositions, original, 'valid file image data stays authoritative');
+  assert.deepEqual([...next.ids], [2, 1]);
+  assertArrayClose(reordered.unwrappedPositions, [3, 0, 0, 21, 0, 0]);
 });
 
 test('fixed_end_climb NEB replicas unwrap continuously in numeric filename order', async () => {

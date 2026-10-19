@@ -1,4 +1,5 @@
 import { createAttributeRegistry } from './global-attributes.js';
+import { SharedFrameRequests } from '../data/shared-frame-requests.js';
 
 export const GLOBAL_ATTRIBUTE_DEFAULTS = Object.freeze({ strainReferenceFrame: 0 });
 
@@ -24,9 +25,9 @@ export function createGlobalAttributeSource({ getFrame, getFrameIndex = () => 0,
   getFrameAt = async () => null, getSourceVersion = () => 0, getDxaNetwork = () => null,
   getFrameHeaderAt = null,
   schedule = callback => setTimeout(callback, 0) } = {}) {
-  let strainReferenceFrame = 0, reference = null, referenceRequest = null, registry = null, signature = [];
+  let strainReferenceFrame = 0, reference = null, backgroundRequest = null, registry = null, signature = [];
   let scheduled = false, notified = null;
-  const listeners = new Set();
+  const listeners = new Set(), referenceRequests = new SharedFrameRequests();
 
   function referenceKey(index = strainReferenceFrame) { return `${getSourceVersion()}\0${index}`; }
 
@@ -45,28 +46,39 @@ export function createGlobalAttributeSource({ getFrame, getFrameIndex = () => 0,
   /** Start reading the reference cell; listeners are notified when it arrives. */
   function requestReference() {
     if (!getFrame() || referenceCell() || strainReferenceFrame >= getFrameCount()) return;
-    void ensureReference().catch(() => {});
+    const key = referenceKey();
+    if (backgroundRequest?.key === key) return;
+    const promise = ensureReference().catch(() => {});
+    backgroundRequest = { key, promise };
+    void promise.finally(() => { if (backgroundRequest?.promise === promise) backgroundRequest = null; });
   }
 
   async function ensureReference({ signal } = {}) {
+    if (signal?.aborted) throw new DOMException('Reference cell request cancelled.', 'AbortError');
     const key = referenceKey();
     if (reference?.key === key) return reference.cell;
     if (strainReferenceFrame >= getFrameCount()) return null;
-    if (referenceRequest?.key !== key) {
-      const index = strainReferenceFrame;
-      const promise = Promise.resolve().then(async () => {
-        const header = typeof getFrameHeaderAt === 'function' ? await getFrameHeaderAt(index, { signal }) : null;
-        if (signal?.aborted) throw new DOMException('Reference cell request cancelled.', 'AbortError');
-        return header && !header.headerUnavailable ? header : getFrameAt(index, { signal });
-      }).then(frame => {
-        if (referenceKey(index) !== key || !frame?.cell) return null;
-        reference = { key, cell: copyCell(frame.cell) };
-        refresh();
-        return reference.cell;
-      }).finally(() => { if (referenceRequest?.promise === promise) referenceRequest = null; });
-      referenceRequest = { key, promise };
-    }
-    return referenceRequest.promise;
+    const index = strainReferenceFrame;
+    return referenceRequests.join(key, { signal }, async entry => {
+      // A caller cancels only its own wait. The underlying read stops after
+      // the last consumer leaves, or when the selected reference is replaced.
+      const signal = entry.controller.signal;
+      const header = typeof getFrameHeaderAt === 'function' ? await getFrameHeaderAt(index, { signal }) : null;
+      if (signal.aborted) throw new DOMException('Reference cell request cancelled.', 'AbortError');
+      const frame = header && !header.headerUnavailable ? header : await getFrameAt(index, { signal });
+      // A parser may finish despite cancellation. Neither those late results
+      // nor a previous source/reference may overwrite the current cell.
+      if (signal.aborted) throw new DOMException('Reference cell request cancelled.', 'AbortError');
+      if (referenceKey() !== key || !frame?.cell) return null;
+      reference = { key, cell: copyCell(frame.cell) };
+      refresh();
+      return reference.cell;
+    });
+  }
+
+  function clearReference() {
+    referenceRequests.clear();
+    reference = null; backgroundRequest = null;
   }
 
   function contextFor(frame, frameIndex, { fileOnly = false } = {}) {
@@ -113,16 +125,19 @@ export function createGlobalAttributeSource({ getFrame, getFrameIndex = () => 0,
     getStrainReferenceFrame: () => strainReferenceFrame,
     setStrainReferenceFrame(index) {
       if (!Number.isSafeInteger(index) || index < 0 || index === strainReferenceFrame) return false;
-      strainReferenceFrame = index; refresh();
+      strainReferenceFrame = index; clearReference(); refresh();
       return true;
     },
     serialize: ({ frameCount } = {}) => ({ strainReferenceFrame: Number.isSafeInteger(frameCount) && frameCount > 0
       ? Math.min(strainReferenceFrame, frameCount - 1) : strainReferenceFrame }),
-    restore(saved) { strainReferenceFrame = normalizeGlobalAttributeState(saved ?? {}).strainReferenceFrame; refresh({ force: true }); },
+    restore(saved) {
+      strainReferenceFrame = normalizeGlobalAttributeState(saved ?? {}).strainReferenceFrame;
+      clearReference(); refresh({ force: true });
+    },
     /** Forget the reference cell, for example when the source closes. */
     reset({ resetReference = false } = {}) {
       if (resetReference) strainReferenceFrame = 0;
-      reference = null; referenceRequest = null; registry = null; signature = []; refresh({ force: true });
+      clearReference(); registry = null; signature = []; refresh({ force: true });
     },
   });
 }

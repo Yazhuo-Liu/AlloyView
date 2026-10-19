@@ -6,6 +6,30 @@ const builtins = new Set(EXPRESSION_BUILTIN_NAMES.map(name => name.toLowerCase()
 const ready = name => ({ name, state: 'ready' });
 const unavailable = (name, message) => ({ name, state: 'unavailable', message: message ?? `${name} is unavailable in this frame. No active calculation will produce it.` });
 
+/** Include computed columns whose parsed inputs depend on an edited column.
+ * This only inspects recipe metadata; it never evaluates per-atom values. */
+export function affectedPropertyNames(names, definitions, referencesFor) {
+  if (names === null) return null;
+  const affected = new Map(names.map(name => [String(name).toLowerCase(), String(name)]));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const { name } of definitions) {
+      if (affected.has(name.toLowerCase())) continue;
+      const depends = (referencesFor(name) ?? []).some(reference => {
+        const key = reference.name.toLowerCase();
+        // Velocity builtins resolve an imported vector family. A removal or
+        // rename can change that family, so current columns alone cannot
+        // identify the previous inputs. Conservatively refresh these recipes.
+        return affected.has(key) || (!reference.quoted && (affected.has(EXPRESSION_ALIASES.get(key)?.toLowerCase())
+          || affected.size > 0 && key.startsWith('velocity.') && builtins.has(key)));
+      });
+      if (depends) { affected.set(name.toLowerCase(), name); changed = true; }
+    }
+  }
+  return [...affected.values()];
+}
+
 /** Resolve only the inputs a consumer uses, without evaluating expressions or
  * allocating any per-atom arrays. Producer state belongs to the displayed
  * frame; background trajectory reads must never wait for its analyses. */

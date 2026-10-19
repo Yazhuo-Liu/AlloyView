@@ -240,6 +240,53 @@ test('the surface can be restricted to a selection group or to the visible atoms
   assert.equal(tools.refreshVisibility(), false);
 });
 
+test('different visible-atom masks cannot reuse a surface or running request when their digests collide', async t => {
+  const h = harness(t), { tools, fields } = h, frame = frames[0];
+  await tools.onFrame();
+  fields['surface-mesh-radius'].value = '3.25';
+  fields['surface-mesh-smoothing'].value = '0';
+  fields['surface-mesh-selection'].value = 'visible';
+  // Different 64-atom selections with the same FNV-1a digest, followed by an
+  // identical visible suffix. Their exact input populations differ by two.
+  const masks = [
+    '0001111000100100001001010111011011001001101101000001011000111011',
+    '0100010100110010001111010000000011101010000100011111110010101001',
+  ].map(bits => Uint8Array.from({ length: frame.ids.length }, (_, atom) => atom < bits.length ? Number(bits[atom]) : 1));
+  assert.equal(maskDigest(masks[0]), maskDigest(masks[1]));
+  assert.notEqual(masks[0].reduce((sum, value) => sum + value, 0), masks[1].reduce((sum, value) => sum + value, 0));
+
+  h.setVisibility(masks[0]);
+  const first = tools.run();
+  await h.settle();
+  assert.equal(await first, true);
+  const firstResult = tools.getResult();
+  h.setVisibility(masks[1]);
+  const second = tools.run();
+  assert.equal(h.pending.length, 2, 'a matching digest must still compare the exact mask before reusing a result');
+  await h.settle();
+  assert.equal(await second, true);
+  assert.equal(tools.getResult().inputCount, masks[1].reduce((sum, value) => sum + value, 0));
+  assert.notEqual(tools.getResult(), firstResult);
+
+  h.setVisibility(masks[0]);
+  const stale = tools.run();
+  assert.equal(h.pending.length, 3);
+  h.setVisibility(masks[1]);
+  assert.equal(tools.refreshVisibility(), true);
+  assert.equal(h.pending[2].options.signal.aborted, true, 'a colliding visibility change immediately cancels the old calculation');
+  assert.equal(fields['surface-mesh-state'].textContent, 'Queued');
+  assert.equal(tools.getResult(), null);
+  h.timers.find(Boolean)();
+  assert.equal(h.pending.length, 4);
+  h.pending[2].resolve(firstResult);
+  assert.equal(await stale, false, 'a late reply for the old mask cannot publish');
+  assert.equal(tools.getResult(), null);
+  await h.settle();
+  assert.equal(tools.getResult().inputCount, masks[1].reduce((sum, value) => sum + value, 0));
+  assert.equal(await tools.run({ automatic: true }), true);
+  assert.equal(h.pending.length, 4, 'an unchanged mask still reuses the warmed result');
+});
+
 test('surface settings round-trip through a validated configuration and old recipes are unaffected', async t => {
   const h = harness(t), { tools, fields } = h;
   await tools.onFrame();

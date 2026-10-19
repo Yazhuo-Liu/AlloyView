@@ -74,8 +74,9 @@ export function createScriptHost({ renderer, registry, getFrameIndex, getFrameCo
   /** PNG with the current image settings; resolves once the download was started. */
   async function exportImage(name) {
     requireFrame();
+    const filename = `${name ?? getImageName()}.png`;
     const canvas = await captureImage();
-    try { saveBlob(await encodeCanvas(canvas), `${name ?? getImageName()}.png`); }
+    try { saveBlob(await encodeCanvas(canvas), filename); }
     finally { canvas.width = canvas.height = 1; }
   }
   return {

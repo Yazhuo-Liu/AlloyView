@@ -160,6 +160,9 @@ Otherwise, in a fully periodic cell, it is the atom count times the mean
 atomic volume of the cell. The CSV names the source. A cell with an open
 direction has no volume estimate without Voronoi volumes.
 
+When atomic volumes arrive, are replaced or removed, the cached grain volumes
+and subsequent CSV exports update without rerunning PTM or segmentation.
+
 ## Differences from OVITO
 
 The arithmetic follows OVITO 3.9.4 operation by operation. The differences

@@ -51,7 +51,7 @@ export function parseLammpsData(text, sourceName = 'LAMMPS data') {
   }
   const ids = new Float64Array(count), rawTypes = new Float64Array(count), raw = new Float64Array(count * 3);
   const propertyNames = columns.filter(name => PROPERTY_COLUMNS[name]);
-  const propertyData = propertyNames.map(() => new Float32Array(count));
+  const propertyData = propertyNames.map(name => name === 'mol' ? new Float64Array(count) : new Float32Array(count));
   let images = null;
   const rowById = new Map();
   atoms.rows.forEach(({ tokens, line }, atom) => {
@@ -73,7 +73,7 @@ export function parseLammpsData(text, sourceName = 'LAMMPS data') {
       else if (column === 'x' || column === 'y' || column === 'z') raw[atom * 3 + 'xyz'.indexOf(column)] = finite(token, line, column);
       else propertyData[propertyNames.indexOf(column)][atom] = column === 'mol' ? integer(token, line, 'molecule ID') : finite(token, line, column);
     });
-    if (images) for (let axis = 0; axis < 3; axis += 1) images[atom * 3 + axis] = integer(tokens[columns.length + 1 + axis], line, 'image flag');
+    if (images) for (let axis = 0; axis < 3; axis += 1) images[atom * 3 + axis] = checkedImageFlag(integer(tokens[columns.length + 1 + axis], line, 'image flag'));
   });
 
   const sortedTypes = [...new Set(rawTypes)].sort((left, right) => left - right);
@@ -92,10 +92,13 @@ export function parseLammpsData(text, sourceName = 'LAMMPS data') {
   if (velocities) {
     if (velocities.rows.length !== count) throw dataError(`the Velocities section has ${velocities.rows.length} rows for ${count} atoms.`);
     const components = ['vx', 'vy', 'vz'].map(name => ({ name, unit: '', data: new Float32Array(count).fill(NaN) }));
+    const seen = new Uint8Array(count);
     for (const { tokens, line } of velocities.rows) {
       if (tokens.length < 4) throw dataError(`line ${line + 1}: a velocity row needs an atom ID and three components.`);
       const atom = rowById.get(integer(tokens[0], line, 'atom ID'));
       if (atom === undefined) throw dataError(`line ${line + 1}: velocity for an unknown atom ID.`);
+      if (seen[atom]) throw dataError(`line ${line + 1}: duplicate velocity for atom ID ${tokens[0]}.`);
+      seen[atom] = 1;
       components.forEach((component, axis) => { component.data[atom] = finite(tokens[axis + 1], line, component.name); });
     }
     properties.push(...components);
@@ -110,7 +113,7 @@ export function parseLammpsData(text, sourceName = 'LAMMPS data') {
     for (let atom = 0; atom < count; atom += 1) {
       for (let image = 0; image < 3; image += 1) {
         const shift = images[atom * 3 + image];
-        imageFlags[atom * 3 + image] += shift;
+        imageFlags[atom * 3 + image] = checkedImageFlag(imageFlags[atom * 3 + image] + shift);
         for (let axis = 0; axis < 3; axis += 1) unwrappedPositions[atom * 3 + axis] += shift * cell.vectors[image * 3 + axis];
       }
     }
@@ -121,6 +124,11 @@ export function parseLammpsData(text, sourceName = 'LAMMPS data') {
     timestep: null, title: sourceName, sourceFormat: 'lammps-data', atomStyle: style,
     parseMs: performance.now() - startedAt,
   });
+}
+
+function checkedImageFlag(value) {
+  if (value < -2_147_483_648 || value > 2_147_483_647) throw dataError('image flag is outside the supported 32-bit range.');
+  return value;
 }
 
 function parseHeader(lines) {

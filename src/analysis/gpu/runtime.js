@@ -1,5 +1,5 @@
 import { cellFaceHeights } from '../../data/model.js';
-import { NEIGHBOR_BINDINGS_WGSL } from './neighbors.js';
+import { NEIGHBOR_BINDINGS_WGSL, SORT_NEIGHBORS_SHADER } from './neighbors.js';
 import { gpuPreparationKinds } from './preparation.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, frameUploadBytes, gpuWorkspaceBytes,
   trajectoryCapacity, frameEvictionOrder } from './cache-policy.js';
@@ -225,7 +225,7 @@ export class GpuRuntime {
         // driver to finish compilation before releasing the worker queue.
         checkSignal(signal);
         // Each clip kernel is compiled only for the tessellation that uses it.
-        const sources = [[CLEAR_NEIGHBORS_SHADER, 'neighbors'], [INDEX_NEIGHBORS_SHADER, 'neighbors'],
+        const sources = [[CLEAR_NEIGHBORS_SHADER, 'neighbors'], [INDEX_NEIGHBORS_SHADER, 'neighbors'], [SORT_NEIGHBORS_SHADER, 'neighbors'],
           [voronoi.VORONOI_INITIALIZE_SHADER, 'voronoi'],
           ...(kinds.includes('voronoi') ? [[voronoi.VORONOI_CLIP_SHADER, 'voronoi']] : []),
           ...(kinds.includes('voronoiRadical') ? [[voronoi.VORONOI_RADICAL_CLIP_SHADER, 'voronoiRadical']] : [])];
@@ -246,7 +246,7 @@ export class GpuRuntime {
         ]);
         // The kernels automatic selection runs. Voronoi goes to the GPU only
         // by explicit request, so its pipelines belong to targeted warmup.
-        const sources = [[CLEAR_NEIGHBORS_SHADER, 'neighbors'], [INDEX_NEIGHBORS_SHADER, 'neighbors'],
+        const sources = [[CLEAR_NEIGHBORS_SHADER, 'neighbors'], [INDEX_NEIGHBORS_SHADER, 'neighbors'], [SORT_NEIGHBORS_SHADER, 'neighbors'],
           [COORDINATION_SHADER, 'coordination'], [RDF_SHADER, 'rdf'],
           ...[shear.makeShearCoordinationShader(), shear.makeShearMetricsShader(8), shear.makeShearMetricsShader(12),
             shear.SHEAR_CORRECTION_SHADER, shear.SHEAR_REDUCTION_SHADER, shear.SHEAR_FINALIZE_SHADER].map(source => [source, 'localShear']),
@@ -793,15 +793,19 @@ export class GpuRuntime {
       this.configContexts.set(context.configBuffer, context);
       // Clearing bins and indexing atoms are GPU operations; no JS linked-cell
       // construction or quadratic all-pairs upload is required. Each costs one
-      // atomic per bin/atom, so both are single dispatches, and the only round
-      // trip is the occupancy readback queued behind them. Bin list order was
-      // already set by racing atomics within each dispatch.
+      // atomic per bin/atom, so both are single dispatches. The occupancy
+      // readback bounds traversal before sorting each disjoint bin list.
       await this.run(CLEAR_NEIGHBORS_SHADER, this.neighborBindings(context), totalBins, { signal, batchSize: 0, updateRange: false, wait: false });
       const occupancyBuffer = own(this.createBuffer((totalBins + 1) * 4));
       await this.run(INDEX_NEIGHBORS_SHADER, this.neighborBindings(context, [occupancyBuffer]), atomCount, { signal, batchSize: 0, wait: false });
       const occupied = await this.read(occupancyBuffer, Uint32Array, 1, { signal });
       this.disposeBuffers([occupancyBuffer]); owned.splice(owned.indexOf(occupancyBuffer), 1);
       if (occupied[0]) throw new GpuUnavailableError('The neighbor cells are too densely occupied for a bounded GPU dispatch.');
+      // Queue order makes the canonical list visible before any analysis.
+      // Sorting is done once per resident index and needs no extra readback.
+      await this.run(SORT_NEIGHBORS_SHADER, this.neighborBindings(context), totalBins,
+        { signal, batchSize: 0, updateRange: false, wait: false });
+      checkSignal(signal);
       while (this.indexes.size >= 2) { const [oldKey, old] = this.indexes.entries().next().value; this.disposeBuffers([old.configBuffer, old.headsBuffer, old.nextBuffer]); this.indexes.delete(oldKey); }
       this.indexes.set(key, context);
       this.neighborIndexBuildCount++;

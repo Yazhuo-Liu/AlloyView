@@ -21,11 +21,19 @@ const format = (value, digits = 6) => Number.isFinite(value)
 const percent = value => `${(100 * value).toLocaleString('en-US', { maximumFractionDigits: 2 })}%`;
 const duration = ms => ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 
-/** 32-bit FNV-1a of a mask, so a cached result is reused only for the same atoms. */
+/** A quick cache discriminator; matching hashes still require an exact mask check. */
 export function maskDigest(mask) {
   let hash = 0x811c9dc5;
   for (let index = 0; index < mask.length; index += 1) hash = Math.imul(hash ^ (mask[index] ? 1 : 0), 0x01000193);
   return (hash >>> 0).toString(16);
+}
+
+/** Masks produced by atomMask are immutable, normalized 0/1 snapshots. */
+function sameMask(first, second) {
+  if (first === second) return true;
+  if (!first || !second || first.length !== second.length) return false;
+  for (let atom = 0; atom < first.length; atom++) if (first[atom] !== second[atom]) return false;
+  return true;
 }
 
 /** Rows of the statistics table: [label, value, unit]. */
@@ -56,7 +64,7 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
   const memberSerials = new WeakMap();
   const displayStatusRequests = new WeakMap();
   let controlsEnabled = false, generation = 0, nextMemberSerial = 1, visibilityTimer = null, radiusEdited = false;
-  let visibilityKey = null, meshExportController = null;
+  let visibilityKey = null, visibilityMask = null, meshExportController = null;
   const visibilityWaiters = new Set();
 
   function visibilityDependencies(frame) {
@@ -183,6 +191,7 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
     job.controller?.abort();
     job.controller = null;
     job.queued = false;
+    visibilityKey = null; visibilityMask = null;
     if (visibilityTimer !== null) { clearTimer(visibilityTimer); visibilityTimer = null; }
     if ($('surface-mesh-progress')) $('surface-mesh-progress').hidden = true;
     updateControls();
@@ -323,10 +332,11 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
       if (!current()) return false;
       const mask = atomMask(frame, settings, group);
       visibilityKey = settings.atoms === 'visible' ? mask ? maskDigest(mask) : 'all' : null;
+      visibilityMask = settings.atoms === 'visible' ? mask : null;
       const key = JSON.stringify({ radius: settings.radius, smoothingLevel: settings.smoothingLevel, atoms: mask ? settings.atoms : 'all',
         selection: settings.atoms === 'group' ? [group.id, memberSerial(group.atomIds)] : mask ? maskDigest(mask) : null, sourceVersion: source });
       let cached = frame.atomeyeResults?.surfaceMesh;
-      if (cached?.key !== key) {
+      if (cached?.key !== key || !sameMask(cached.visibilityMask ?? null, visibilityMask)) {
         if (frame.atomeyeResults) delete frame.atomeyeResults.surfaceMesh;
         clearView(); job.frame = frame;
         state('Calculating…', `Preparing the surface of ${integer(frame.ids.length)} atoms…`);
@@ -343,7 +353,9 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
           },
         });
         if (!current()) return false;
-        cached = { key, result };
+        // Retain the exact visible selection alongside the result; different
+        // filters may have the same digest. The Worker receives its own copy.
+        cached = { key, result, visibilityMask };
         frame.atomeyeResults ??= {}; frame.atomeyeResults.surfaceMesh = cached;
       }
       if (!current()) return false;
@@ -460,7 +472,7 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
     if (frame) {
       const mask = atomMask(frame, job.settings, null);
       const nextKey = mask ? maskDigest(mask) : 'all';
-      if (!job.queued && (visibilityDependencies(frame).length || nextKey !== visibilityKey)) {
+      if (!job.queued && (visibilityDependencies(frame).length || nextKey !== visibilityKey || !sameMask(mask, visibilityMask))) {
         if (frame.atomeyeResults) delete frame.atomeyeResults.surfaceMesh;
         abort(); clearView(); job.queued = true;
         state('Queued', 'The visible atoms changed; preparing an updated surface…');

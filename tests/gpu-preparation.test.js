@@ -27,19 +27,19 @@ function fixture({ beforeCompile, afterRun } = {}) {
 const nextTick = () => new Promise(resolve=>setTimeout(resolve,0));
 async function until(test) { for(let attempt=0;attempt<200;attempt++){if(test())return;await nextTick();}assert.fail('timed out'); }
 
-test('targeted GPU warmup shares just four Voronoi/index pipelines without allocating frame or unrelated workspaces', async () => {
+test('targeted GPU warmup shares just five Voronoi/index pipelines without allocating frame or unrelated workspaces', async () => {
   const {runtime,compiled,allocations}=fixture();
   try {
     const status=await runtime.warmup({analysisKinds:['voronoi']});
-    assert.equal(status.pipelineCount,4);assert.equal(compiled.length,4);assert.equal(allocations.length,0);
+    assert.equal(status.pipelineCount,5);assert.equal(compiled.length,5);assert.equal(allocations.length,0);
     assert.ok(runtime.pipelines.has(VORONOI_CLIP_SHADER));
-    await runtime.warmup({analysisKinds:['voronoi','voronoi']}); assert.equal(compiled.length,4);
+    await runtime.warmup({analysisKinds:['voronoi','voronoi']}); assert.equal(compiled.length,5);
     await runtime.warmup();
     // The general warmup adds the 19 kernels it does not share with Voronoi.
-    assert.equal(compiled.length,23);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
+    assert.equal(compiled.length,24);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
     assert.equal(runtime.pipelines.has(VORONOI_RADICAL_CLIP_SHADER),false,'the radical clip kernel waits for radical radii');
     await runtime.warmup({analysisKinds:['voronoi','voronoiRadical']});
-    assert.equal(compiled.length,24);assert.ok(runtime.pipelines.has(VORONOI_RADICAL_CLIP_SHADER));
+    assert.equal(compiled.length,25);assert.ok(runtime.pipelines.has(VORONOI_RADICAL_CLIP_SHADER));
     await assert.rejects(runtime.warmup({analysisKinds:['ptm']}),/analysisKinds/);
   } finally {runtime.close();}
 });
@@ -50,12 +50,12 @@ test('general warmup compiles no Voronoi pipeline, and an empty list prepares th
     const device=await runtime.warmup({analysisKinds:[]});
     assert.equal(device.pipelineCount,0);assert.equal(compiled.length,0);
     const status=await runtime.warmup();
-    assert.equal(status.pipelineCount,21);assert.equal(compiled.length,21);assert.equal(allocations.length,0);
+    assert.equal(status.pipelineCount,22);assert.equal(compiled.length,22);assert.equal(allocations.length,0);
     for (const source of [VORONOI_INITIALIZE_SHADER,VORONOI_CLIP_SHADER,VORONOI_RADICAL_CLIP_SHADER]) assert.equal(runtime.pipelines.has(source),false);
     assert.ok(runtime.pipelines.has(COORDINATION_SHADER));
     // A radical request compiles its own clip kernel, not the standard one.
     await runtime.warmup({analysisKinds:['voronoiRadical']});
-    assert.equal(compiled.length,23);assert.ok(runtime.pipelines.has(VORONOI_RADICAL_CLIP_SHADER));assert.equal(runtime.pipelines.has(VORONOI_CLIP_SHADER),false);
+    assert.equal(compiled.length,24);assert.ok(runtime.pipelines.has(VORONOI_RADICAL_CLIP_SHADER));assert.equal(runtime.pipelines.has(VORONOI_CLIP_SHADER),false);
   } finally {runtime.close();}
 });
 
@@ -76,16 +76,16 @@ test('load-time preparation primes source indexing and one discarded cell, and r
       allocationCount=allocations.length,runCount=runs.length;
     await runtime.prepareFrame(frame,{frameIndex:0,analysisKinds:['voronoi']});
     assert.equal(allocations.length,allocationCount);assert.equal(runs.length,runCount);assert.equal(runtime.inputUploads,uploadCount);
-    assert.equal(runtime.voronoiWorkspace,workspace);assert.equal([...runtime.indexes.values()][0],index);assert.equal(compiled.length,4);
+    assert.equal(runtime.voronoiWorkspace,workspace);assert.equal([...runtime.indexes.values()][0],index);assert.equal(compiled.length,5);
     assert.deepEqual(frame.fractional,source);
     runtime.clearIndexes();assert.deepEqual(runtime.cacheStatus().preparedVoronoiFrameIds,[],'evicted index invalidates readiness');
     await runtime.prepareFrame(frame,{frameIndex:0,analysisKinds:['voronoi']});
-    assert.equal(runtime.cacheStatus().neighborIndexBuildCount,2);assert.equal(runtime.voronoiWorkspace,workspace);assert.equal(compiled.length,4);
+    assert.equal(runtime.cacheStatus().neighborIndexBuildCount,2);assert.equal(runtime.voronoiWorkspace,workspace);assert.equal(compiled.length,5);
     runtime.disposeBuffers(workspace.buffers);runtime.voronoiWorkspace=null;
     assert.deepEqual(runtime.cacheStatus().preparedVoronoiFrameIndexes,[],'released scratch invalidates readiness');
     await runtime.prepareFrame(frame,{frameIndex:0,analysisKinds:['voronoi']});assert.notEqual(runtime.voronoiWorkspace,workspace);
     runtime.clearFrames();assert.equal(runtime.allocatedBytes,0);assert.deepEqual(runtime.cacheStatus().preparedVoronoiFrameIds,[]);
-    assert.equal(runtime.pipelines.size,4,'source clear retains warmed pipelines');
+    assert.equal(runtime.pipelines.size,5,'source clear retains warmed pipelines');
   } finally {runtime.close();}
   assert.ok(allocations.every(buffer=>buffer.destroyed));
 });
@@ -102,10 +102,10 @@ test('a withdrawn Voronoi request frees its workspace and readiness while the fr
     assert.ok(workspace.buffers.every(buffer=>buffer.destroyed));assert.equal(runtime.allocatedBytes,allocated-workspace.bytes);
     assert.equal(status.voronoiWorkspaceAtoms,0);assert.deepEqual(status.preparedVoronoiFrameIds,[]);
     assert.deepEqual(status.cachedFrameIndexes,[0]);assert.equal(status.uploadCount,1);assert.equal([...runtime.indexes.values()][0],index);
-    assert.equal(status.pipelineCount,4);
+    assert.equal(status.pipelineCount,5);
     runtime.releaseVoronoi();assert.equal(runtime.allocatedBytes,allocated-workspace.bytes,'releasing twice is harmless');
     const again=await runtime.prepareFrame(frame,{frameIndex:0,analysisKinds:['voronoi']});
-    assert.deepEqual(again.preparedVoronoiFrameIds,[104]);assert.equal(again.uploadCount,1);assert.equal(compiled.length,4);
+    assert.deepEqual(again.preparedVoronoiFrameIds,[104]);assert.equal(again.uploadCount,1);assert.equal(compiled.length,5);
   } finally {runtime.close();}
   assert.ok(allocations.every(buffer=>buffer.destroyed));
 });
@@ -121,7 +121,7 @@ test('cancelling shared targeted compilation releases the wait promptly while fo
     assert.equal(scopes.length,0,'background native compilation retains no error scopes');
     await runtime.compilePipeline(COORDINATION_SHADER);assert.ok(runtime.pipelines.has(COORDINATION_SHADER));
     assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
-    release();await runtime.warmup({analysisKinds:['voronoi']});assert.equal(compiled.length,5);
+    release();await runtime.warmup({analysisKinds:['voronoi']});assert.equal(compiled.length,6);
   } finally {release();runtime.close();}
 });
 
@@ -150,7 +150,7 @@ test('full warmup cancellation frees its task while shared pipelines finish with
     await until(()=>compiled.includes(COORDINATION_SHADER));controller.abort();await cancelled;
     await runtime.warmup({analysisKinds:['voronoi']});assert.ok(runtime.pipelines.has(VORONOI_CLIP_SHADER));
     release();await runtime.warmup();
-    assert.equal(compiled.length,23);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
+    assert.equal(compiled.length,24);assert.equal(compiled.filter(source=>source===VORONOI_CLIP_SHADER).length,1);
   } finally {release();runtime.close();}
 });
 

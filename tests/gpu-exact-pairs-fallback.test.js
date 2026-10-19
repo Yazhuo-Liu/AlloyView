@@ -88,6 +88,6 @@ test('GPU preparation on such a device keeps the frame resident without Voronoi 
     assert.deepEqual(prepared.cachedFrameIndexes, [0]); assert.deepEqual(prepared.preparedVoronoiFrameIndexes, []);
     assert.equal(prepared.voronoiWorkspaceAtoms, 0);
     const warmed = await pool.warmupGpu();
-    assert.equal(warmed.pipelineCount, 18, 'the general warmup compiles the 18 kernels that can run');
+    assert.equal(warmed.pipelineCount, 19, 'the general warmup compiles the 19 kernels that can run');
   } finally { pool.close(); }
 });

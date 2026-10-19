@@ -114,9 +114,9 @@ test('the kernels that need exact pairs are the Voronoi, ideal-strain, reference
     assert.equal(runtime.exactPairs, true);
     compiled.length = 0;
     await runtime.warmup();
-    assert.equal(compiled.length, 21, 'the general warmup compiles every kernel that automatic selection runs');
+    assert.equal(compiled.length, 22, 'the general warmup compiles every kernel that automatic selection runs');
     await runtime.warmup({ analysisKinds: ['voronoi', 'voronoiRadical'] });
-    assert.equal(compiled.length, 24, 'and the Voronoi kernels compile on request');
+    assert.equal(compiled.length, 25, 'and the Voronoi kernels compile on request');
     assert.deepEqual(new Set(compiled.filter(usesExactPairs)), new Set(PAIR_SHADERS));
     assert.deepEqual([...EXACT_PAIR_ANALYSIS_KINDS].sort(), ['displacement', 'referenceStrain', 'strain', 'voronoi']);
     assert.equal(usesExactPairs(EXACT_PAIR_TEST_SHADER), true);
@@ -189,9 +189,9 @@ test('a runtime without exact pairs refuses pair pipelines, skips them in warmup
     }
     await runtime.compilePipeline(COORDINATION_SHADER);
     compiled.length = 0;
-    assert.equal((await runtime.warmup({ analysisKinds: ['voronoi', 'voronoiRadical'] })).pipelineCount, 3, 'only the neighbor index pipelines are added');
+    assert.equal((await runtime.warmup({ analysisKinds: ['voronoi', 'voronoiRadical'] })).pipelineCount, 4, 'only the neighbor index pipelines are added');
     assert.equal(compiled.some(usesExactPairs), false);
-    assert.equal((await runtime.warmup()).pipelineCount, 18);
+    assert.equal((await runtime.warmup()).pipelineCount, 19);
     assert.equal(compiled.some(usesExactPairs), false);
     runtime.configureCache({ frameCount: 1, currentIndex: 0 });
     const status = await runtime.prepareFrame(frame, { frameIndex: 0, analysisKinds: ['voronoi'] });

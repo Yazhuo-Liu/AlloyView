@@ -337,6 +337,12 @@ PNG preserves alpha when **Include background in PNG** is unchecked. Legend and 
 
 Six-view PNG combines the six Cartesian directions. Frame images export the requested first/last/step range in a ZIP archive; cancellation stops the export and the original frame is restored. Visible atom ID export uses current display visibility. EPS is unavailable because the previous output stored raster pixels rather than vector geometry.
 
+Six-view and frame-image exports run one at a time. A source change or camera
+edit cancels an in-progress six-view capture without downloading the old sheet
+or restoring its old camera. Frame-image restoration also respects a newly
+opened source. Atom picking follows the visible sphere surface, including
+center-plane clipping and fragment depth when the camera enters a sphere.
+
 Videos are made in the **Movie** tool: it renders a camera path, a trajectory or both through the same image export, at the image resolution chosen here, and encodes MP4 or WebM in the browser. See [Camera path and movie](movies.md). A [command script](scripts.md) can download a series of PNG images with `export png`.
 
 ## Implementation

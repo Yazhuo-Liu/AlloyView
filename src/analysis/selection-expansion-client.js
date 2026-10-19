@@ -31,8 +31,17 @@ export class SelectionExpansionClient {
 
   request(frame, mask, options, { signal, onProgress }) {
     const worker = this.ensureWorker();
-    let key = frameKeys.get(frame.fractional);
-    if (key === undefined) frameKeys.set(frame.fractional, key = nextFrameKey++);
+    // The resident neighbor index also depends on the cell metric and PBC.
+    // Snapshot values so sharing reduced coordinates or editing a cell in
+    // place never reuses the previous geometry's neighbors.
+    const values = [frame.geometryRevision ?? 0, ...frame.cell.vectors, ...frame.cell.pbc];
+    let resident = frameKeys.get(frame.fractional);
+    if (!resident || resident.values.length !== values.length
+      || values.some((value, index) => !Object.is(value, resident.values[index]))) {
+      resident = { key: nextFrameKey++, values };
+      frameKeys.set(frame.fractional, resident);
+    }
+    const key = resident.key;
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const abort = () => this.terminate(abortError());

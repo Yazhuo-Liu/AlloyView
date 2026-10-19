@@ -64,7 +64,9 @@ const report = await withWebGpuBrowser(async ({ evaluate, adapter, call }) => {
         : await window.gpuTests.cpu.analyze(frame, parameters);
       const progressAtoms = [];
       const actual = await window.gpuTests.gpu.analyze(frame, parameters, { onProgress: progress => {
-        if (progress.backend === 'gpu' && progress.phase === 'analyzing' && progress.completedAtoms > 0) progressAtoms.push(progress.completedAtoms);
+        // The pool coalesces progress between paints: complete can replace
+        // the final analyzing update while retaining its finished atom count.
+        if (progress.backend === 'gpu' && ['analyzing', 'complete'].includes(progress.phase) && progress.completedAtoms > 0) progressAtoms.push(progress.completedAtoms);
       } });
       assertInputsIntact();
       if (requireGpu && !window.gpuTests.isGpu(actual)) throw new Error(label + ' silently fell back: ' + JSON.stringify({ engine: actual.engine, fallbackReason: actual.fallbackReason }));

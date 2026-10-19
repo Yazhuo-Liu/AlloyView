@@ -84,7 +84,7 @@ import { createConfiguration, parseConfiguration, matchesSource, downloadConfigu
 import { createConfigurationRestoreQueue, settleConfigurationAnalyses } from './application/configuration-restore.js';
 import { initializeAtomEyeTools } from './ui/view/atomeye-tools.js';
 import { createDisplayRefresh } from './render/display-refresh.js';
-import { createAnalysisDependencies } from './application/analysis-dependencies.js';
+import { affectedPropertyNames, createAnalysisDependencies } from './application/analysis-dependencies.js';
 import { REFERENCE_STRAIN_FIELDS } from './analysis/reference-strain.js';
 import { initializeDxaTools, DXA_STRUCTURE_PROPERTY } from './ui/analysis/dxa-tools.js';
 import { initializeFeatureHelp } from './ui/shell/feature-help.js';
@@ -839,7 +839,13 @@ surfaceTools = initializeSurfaceTools({
 binningTools = initializeBinningTools({
   tools: toolPanels,
   getFrame: () => state.frame,
-  getFrameAt: (index, { signal } = {}) => getFrame(index, { background: true, cacheFrame: false, signal }),
+  getFrameAt: async (index, { signal } = {}) => {
+    const frame = await getFrame(index, { background: true, cacheFrame: false, signal });
+    // Cached frames may still be awaiting attachment during an import/rename.
+    // An average must consume the current columns on every frame it reads.
+    if (frame && !signal?.aborted) await externalProperties.applyToFrame(frame, { sourceFrame: sourceFrame(frame) });
+    return frame;
+  },
   getFrameCount: () => state.frameCount,
   ensureIndexed: waitForSourceIndex,
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
@@ -2457,6 +2463,8 @@ async function refreshExternalProperties({ restoring = false, reason, oldName, n
   // Stop reads before cached frames are reattached so old points and missing
   // markers cannot survive an import, rename or removal of their input column.
   timeSeries?.invalidateProperties(changedNames);
+  binningTools?.invalidateProperties(affectedPropertyNames(changedNames,
+    expressionTools?.getState().properties ?? [], name => expressionTools?.getPropertyReferences(name)));
   const version = state.sourceVersion;
   const frames = new Set([state.frame, ...cache.frames.values()]);
   for (const frame of [...frames]) frames.add(sourceFrame(frame));
@@ -2503,6 +2511,9 @@ async function refreshExternalProperties({ restoring = false, reason, oldName, n
  * by refreshColorOptions(); cached frames recalculate when displayed. A renamed
  * property keeps its color choice and legend settings. */
 function refreshComputedProperties({ reason, name, removed = [] } = {}) {
+  const changedNames = name === undefined ? null : affectedPropertyNames([name, ...removed],
+    expressionTools?.getState().properties ?? [], key => expressionTools?.getPropertyReferences(key));
+  binningTools?.invalidateProperties(changedNames);
   for (const oldName of removed) {
     const oldKey = colorPropertyKey(oldName), key = colorPropertyKey(name);
     const renamed = reason === 'replace' && name !== undefined;
@@ -2686,6 +2697,7 @@ function applyColorsNow() {
     atomEyeTools.flushDisplayRefresh({ radii: true, statistics: true });
     statisticsExports?.refresh();
     globalAttributes?.refresh();
+    grainTools?.refreshProperties();
     void binningTools?.refresh();
     void topologyTools?.refreshProperties();
   } catch (error) {

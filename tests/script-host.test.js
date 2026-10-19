@@ -150,6 +150,24 @@ test('colors, tools, slices, images, keyframes and analysis waits reach the appl
   assert.deepEqual(log, ['sleep', 'sleep', 'sleep', 'sleep'], 'three busy checks, then two quiet ones');
 });
 
+test('script image names belong to the captured frame even when navigation finishes during capture or encoding', async () => {
+  for (const command of ['export png', 'image.png']) for (const stage of ['capture', 'encode']) {
+    let frame = 1;
+    const canvas = { width: 640, height: 480 }, saved = [];
+    const host = createScriptHost({ renderer: stubRenderer(),
+      registry: { byId: new Map([['image.png', {}]]) },
+      getImageName: () => `structure-frame-${frame}`,
+      captureImage: async () => { if (stage === 'capture') frame = 2; return canvas; },
+      encodeCanvas: async () => { if (stage === 'encode') frame = 2; return new Blob(['PNG']); },
+      saveBlob: (_, name) => saved.push(name) });
+    const { program, problems } = compileScript(command, { registry: ['image.png'] });
+    assert.deepEqual(problems, []);
+    await runScript(program, host);
+    assert.deepEqual(saved, ['structure-frame-1.png'], `${command}: navigation during ${stage}`);
+    assert.deepEqual([canvas.width, canvas.height], [1, 1], 'the captured image is released');
+  }
+});
+
 test('the shipped examples compile, and one lock serializes scripts, previews and exports', () => {
   const registry = ['camera.yaw-left', 'camera.zoom-in', 'frames.next', 'image.png'];
   for (const example of SCRIPT_EXAMPLES) {

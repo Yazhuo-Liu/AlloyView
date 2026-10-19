@@ -38,6 +38,10 @@ dependencies, so unrelated work can continue in parallel.
 settings. Results are cached per frame, so returning to a frame redraws its
 surface without a new calculation.
 
+For visible-atom surfaces, cache reuse checks the complete normalized visibility
+mask as well as its hash; different masks cannot reuse a surface merely because
+their compact hashes match. A changed mask also cancels an obsolete calculation.
+
 Surface and DXA cancel their own requests in the shared native queue. Cancelling
 one tool leaves the other's queued or running request intact; an externally
 aborted surface request leaves a terminal **Cancelled** state.

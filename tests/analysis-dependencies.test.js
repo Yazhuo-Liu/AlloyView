@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAnalysisDependencies } from '../src/application/analysis-dependencies.js';
+import { affectedPropertyNames, createAnalysisDependencies } from '../src/application/analysis-dependencies.js';
 import { initializeExpressionControls } from '../src/ui/properties/expression-controls.js';
 
 function harness() {
@@ -13,6 +13,40 @@ function harness() {
     getFilters: () => filters });
   return { frame, producers, calls, filters, expressions, deps };
 }
+
+test('column edits invalidate transitive computed consumers without evaluating unrelated recipes', () => {
+  const h = harness();
+  h.expressions.setState({ properties: [
+    { name: 'base', expression: '`energy` * 2', unit: '' },
+    { name: 'chained', expression: 'BASE + 1', unit: '' },
+    { name: 'symmetry', expression: 'CSP ^ 2', unit: '' },
+    { name: 'literal', expression: '`CSP` + 1', unit: '' },
+    { name: 'unrelated', expression: 'Position.X', unit: '' },
+  ] });
+  const affected = names => affectedPropertyNames(names, h.expressions.getState().properties,
+    name => h.expressions.getPropertyReferences(name));
+  assert.deepEqual(affected(['ENERGY']), ['ENERGY', 'base', 'chained']);
+  assert.deepEqual(affected(['centralSymmetry']), ['centralSymmetry', 'symmetry']);
+  assert.deepEqual(affected(['CSP']), ['CSP', 'symmetry', 'literal']);
+  assert.deepEqual(affected(['base']), ['base', 'chained']);
+  assert.deepEqual(affected([]), []);
+  assert.equal(affected(null), null);
+  assert.equal(h.frame.properties.length, 0);
+});
+
+test('column edits invalidate velocity builtins and their consumers after an imported family changes', () => {
+  const h = harness();
+  h.expressions.setState({ properties: [
+    { name: 'speed2', expression: 'Velocity.Magnitude * 2', unit: '' },
+    { name: 'downstream', expression: 'speed2 + 1', unit: '' },
+    { name: 'component', expression: 'Velocity.X', unit: '' },
+    { name: 'literal', expression: '`Velocity.X`', unit: '' },
+  ] });
+  const affected = names => affectedPropertyNames(names, h.expressions.getState().properties,
+    name => h.expressions.getPropertyReferences(name));
+  assert.deepEqual(affected(['vx']), ['vx', 'speed2', 'downstream', 'component']);
+  assert.deepEqual(affected([]), []);
+});
 
 test('only a current-frame active producer makes a missing quantity pending; present arrays remain ready', () => {
   const h = harness();

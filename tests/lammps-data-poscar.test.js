@@ -178,6 +178,28 @@ test('LAMMPS data rejects ambiguous or inconsistent input with specific messages
   assert.throws(() => parseLammpsData(`${header.replace('Atoms', 'Atoms # body')}1 1 1 1 1\n2 1 2 2 2\n`), /“body” is not supported/);
 });
 
+test('LAMMPS data rejects duplicate velocity IDs while allowing reordered complete rows', () => {
+  assert.throws(() => parseLammpsData(writeData.replace('3 0.5 0 0', '1 0.5 0 0')), /duplicate velocity for atom ID 1/);
+  const velocities = parseLammpsData(writeData).properties.find(property => property.name === 'vx').data;
+  near(velocities, [0.1, 0.2, 0.5, 0.4]);
+});
+
+test('LAMMPS data validates image ranges before storage and after out-of-cell normalization', () => {
+  const single = (x, image) => `title\n1 atoms\n1 atom types\n0 10 xlo xhi\n0 10 ylo yhi\n0 10 zlo zhi\n\nAtoms # atomic\n\n1 1 ${x} 0 0 ${image} 0 0\n`;
+  for (const image of [-2_147_483_649, 2_147_483_648]) {
+    assert.throws(() => parseLammpsData(single(1, image)), /image flag.*32-bit range/);
+  }
+  for (const [x, image] of [[11, 2_147_483_647], [-1, -2_147_483_648]]) {
+    assert.throws(() => parseLammpsData(single(x, image)), /image flag.*32-bit range/);
+  }
+  for (const [x, image, expected] of [[1, -2_147_483_648, -2_147_483_648], [1, 2_147_483_647, 2_147_483_647], [11, 2_147_483_646, 2_147_483_647], [-1, -2_147_483_647, -2_147_483_648]]) {
+    const frame = parseLammpsData(single(x, image));
+    assert.equal(frame.imageFlags[0], expected);
+    assert.equal(frame.unwrappedPositions[0], x + 10 * image);
+    assert.ok(Math.abs(frame.positions[0] + 10 * expected - frame.unwrappedPositions[0]) < 1e-5);
+  }
+});
+
 const cu3au = `Cu3Au L12
 3.75
 1.0 0.0 0.0

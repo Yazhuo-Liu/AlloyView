@@ -157,6 +157,60 @@ test('a calculation publishes grain IDs, a table, a merge plot and the automatic
   assert.equal(h.property().data, property.data);
 });
 
+test('cached grains refresh volumes after atomic-volume replacement and removal without repeating segmentation', async t => {
+  const h = harness(t), frame = [...h.frames][0];
+  await h.tools.run();
+  const result = h.tools.getResult(), ids = result.grainId, mean = result.volumes.slice();
+  const volumes = { name: 'atomicVolume', data: new Float64Array(frame.ids.length).fill(1) };
+  frame.properties.push(volumes);
+  await h.tools.run();
+  assert.equal(result.volumeSource, 'voronoi');
+  assert.deepEqual([...result.volumes], [...result.sizes]);
+  assert.equal(h.fits.length, 1, 'changing derived volumes does not repeat PTM or segmentation');
+  assert.equal(h.tools.getResult().grainId, ids);
+  const unchanged = result.volumes, notifications = h.changes.length;
+  assert.equal(h.tools.refreshProperties(), false);
+  assert.equal(result.volumes, unchanged, 'ordinary color refreshes keep derived volume arrays');
+  assert.equal(h.changes.length, notifications);
+  volumes.data = new Float64Array(frame.ids.length).fill(2);
+  assert.equal(h.tools.refreshProperties(), true);
+  assert.deepEqual([...result.volumes], [...result.sizes].map(size => size * 2));
+  const volumeRows = () => [...buildStatisticsTable({ frame, frameIndex: 0 }, 'grains').rows].map(row => row.slice(19));
+  assert.deepEqual(volumeRows(), [...result.sizes].map(size => [size * 2, 'Voronoi atomic volumes']),
+    'CSV reads refreshed volumes immediately, without another Run');
+  frame.properties = frame.properties.filter(property => property !== volumes);
+  assert.equal(h.tools.refreshProperties(), true);
+  assert.equal(result.volumeSource, 'mean');
+  assert.deepEqual(result.volumes, mean);
+  frame.cell = { ...frame.cell, pbc: [false, false, false] };
+  assert.equal(h.tools.refreshProperties(), true);
+  assert.equal(result.volumes, undefined, 'open cells clear an obsolete mean-volume estimate');
+  assert.equal(result.volumeSource, undefined);
+  assert.deepEqual(volumeRows(), [...result.sizes].map(() => ['', '']));
+  assert.equal(h.fits.length, 1);
+});
+
+test('grain volume refresh updates cached frames and preserves stable external-column versions', async t => {
+  const h = harness(t), first = [...h.frames][0];
+  const second = bicrystal(); second.frameIndex = 1;
+  await h.tools.run();
+  h.setFrame(second); await h.tools.onFrame();
+  const result = second.atomeyeResults.grains.result;
+  first.properties.push({ name: 'atomicVolume', data: new Float64Array(first.ids.length).fill(3) });
+  second.properties.push({ name: 'atomicVolume', data: new Float64Array(second.ids.length).fill(4),
+    externalImportId: 'volume-csv', externalPropertyVersion: 7 });
+  assert.equal(h.tools.refreshProperties(), true);
+  assert.deepEqual([...first.atomeyeResults.grains.result.volumes], [...first.atomeyeResults.grains.result.sizes].map(size => size * 3));
+  assert.deepEqual([...result.volumes], [...result.sizes].map(size => size * 4));
+  const retained = result.volumes;
+  second.properties.find(property => property.name === 'atomicVolume').data = new Float64Array(second.ids.length).fill(4);
+  assert.equal(h.tools.refreshProperties(), false, 'an unrelated import can retransfer an unchanged column');
+  assert.equal(result.volumes, retained);
+  h.setFrame(first); await h.tools.onFrame();
+  assert.equal(h.tools.getResult().volumeSource, 'voronoi');
+  assert.equal(h.fits.length, 2, 'cached frames retain both segmentations');
+});
+
 test('settings recalculate automatically, reuse the PTM fit and follow the algorithm', async t => {
   const h = harness(t), frame = h.frames.values().next().value;
   h.fields['run-grains'].dispatch('click'); await h.settle();

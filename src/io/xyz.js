@@ -117,7 +117,9 @@ export function readXyzHeader(lines, usableLines = lines.length, projection = 'f
   const propertyFields = fields.filter((field) => ![speciesField, positionField, idField].includes(field) && field.type !== 'S');
   const properties = propertyFields.flatMap((field) => Array.from({ length: field.width }, (_, component) => ({
     name: field.width === 1 ? field.name : `${field.name}_${component}`,
-    unit: '', data: projection === 'coordinates' ? null : new Float32Array(count), field, component,
+    // Integer auxiliaries may encode identities/categories, so retain the
+    // same safe-integer precision as native atom IDs.
+    unit: '', data: projection === 'coordinates' ? null : field.type === 'I' ? new Float64Array(count) : new Float32Array(count), field, component,
   })));
   if (new Set(properties.map((property) => property.name)).size !== properties.length) throw xyzError('Flattened numeric property names are duplicated.');
   return { cursor, count, comment, metadata, fields, speciesField, positionField, idField, properties };

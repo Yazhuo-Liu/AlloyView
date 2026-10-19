@@ -14,6 +14,7 @@ export const DOC_GUIDES = Object.freeze([
   { source: 'DXA_CPU_PROFILE.md', page: 'dxa-cpu-profile.html', title: 'DXA CPU profile' },
   { source: 'REPOSITORY_REVIEW_2026-10-16.md', page: 'repository-review-2026-10-16.html', title: 'Repository review (2026-10-16)' },
   { source: 'REPOSITORY_FIXES_2026-10-19.md', page: 'repository-fixes-2026-10-19.html', title: 'Repository fixes (2026-10-19)' },
+  { source: 'REPOSITORY_REVIEW_2026-10-19.md', page: 'repository-review-2026-10-19.html', title: 'Follow-up repository review (2026-10-19)' },
   { source: 'TODO.md', page: 'todo.html', title: 'Improvement backlog' },
 ]);
 

@@ -234,6 +234,131 @@ test('a trajectory average reads every frame once and survives frame changes', a
   assert.match(h.fields['binning-status'].textContent, /not available in frame 1/);
 });
 
+test('property edits invalidate completed averages before the updated values are attached', async t => {
+  const frames = [layeredFrame({ energy: () => 1 }), layeredFrame({ frameIndex: 1, energy: () => 3 })];
+  const h = harness(t, { frames });
+  h.change('binning-quantity', 'property:pe');
+  h.change('binning-average-frames', true);
+  await h.tools.run();
+  const first = h.tools.getResult();
+  assert.deepEqual([...first.values], Array(8).fill(2));
+  assert.equal(h.tools.invalidateProperties(['unrelated']), false);
+  await h.tools.refresh();
+  assert.equal(h.tools.getResult(), first);
+  assert.deepEqual(h.loaded, [0, 1], 'unrelated imports preserve the cached average');
+
+  assert.equal(h.tools.invalidateProperties(['property:PE']), true);
+  assert.equal(h.tools.getResult(), null);
+  assert.deepEqual(h.tools.exportResults(), {});
+  assert.deepEqual(h.loaded, [0, 1], 'invalidation does not read partially reattached inputs');
+  for (const frame of frames) frame.properties[0] = { ...frame.properties[0],
+    externalImportId: 'replacement', externalPropertyVersion: 2, data: new Float64Array(16).fill(10) };
+  await h.tools.refresh();
+  assert.deepEqual([...h.tools.getResult().values], Array(8).fill(10));
+  assert.deepEqual(h.loaded, [0, 1, 0, 1]);
+  await h.tools.run();
+  assert.deepEqual(h.loaded, [0, 1, 0, 1], 'manual reruns still reuse the new complete average');
+
+  h.tools.invalidateProperties(['pe']);
+  for (const frame of frames) frame.properties = frame.properties.filter(property => property.name !== 'pe');
+  await h.tools.refresh();
+  assert.equal(h.fields['binning-state'].textContent, 'Failed');
+  assert.equal(h.tools.getResult(), null);
+  assert.deepEqual(h.tools.exportResults(), {}, 'removing the averaged column cannot export its previous values');
+});
+
+test('property invalidation cancels an average and rejects late partials from its old column', async t => {
+  const frames = [layeredFrame({ energy: () => 1 }), layeredFrame({ frameIndex: 1, energy: () => 3 })];
+  let release, oldSignal, held = false;
+  const gate = new Promise(resolve => { release = resolve; });
+  const h = harness(t, { frames, readFrame: async (index, { signal }) => {
+    if (index === 1 && !held) { held = true; oldSignal = signal; await gate; }
+    return frames[index];
+  } });
+  h.change('binning-quantity', 'property:pe');
+  h.change('binning-average-frames', true);
+  const original = h.tools.run();
+  await settle();
+  assert.deepEqual(h.loaded, [0, 1]);
+  assert.equal(h.tools.invalidateProperties(['unrelated']), false);
+  await h.tools.refresh();
+  assert.equal(oldSignal.aborted, false);
+  assert.deepEqual(h.loaded, [0, 1], 'unrelated edits also preserve ongoing work');
+
+  assert.equal(h.tools.invalidateProperties(['pe']), true);
+  assert.equal(oldSignal.aborted, true);
+  frames.forEach((frame, index) => { frame.properties[0] = { ...frame.properties[0], data: new Float64Array(16).fill((index + 1) * 10) }; });
+  await h.tools.refresh();
+  const result = h.tools.getResult();
+  assert.deepEqual([...result.values], Array(8).fill(15));
+  release();
+  assert.equal(await original, false);
+  assert.equal(h.tools.getResult(), result, 'a reader ignoring cancellation cannot publish old or mixed partials');
+  assert.equal(h.charts.length, 1);
+  assert.deepEqual(h.tools.pendingKinds(), []);
+});
+
+test('column invalidation preserves density, counts and coordinate averages', async t => {
+  const h = harness(t, { frames: [layeredFrame(), layeredFrame({ frameIndex: 1 })] });
+  h.change('binning-average-frames', true);
+  for (const quantity of ['density', 'count', 'builtin:position:z']) {
+    h.change('binning-quantity', quantity);
+    await h.tools.run();
+    const result = h.tools.getResult(), reads = h.loaded.length;
+    assert.equal(h.tools.invalidateProperties(), false);
+    await h.tools.refresh();
+    assert.equal(h.tools.getResult(), result);
+    assert.equal(h.loaded.length, reads);
+  }
+});
+
+test('speed averages refresh after imported velocity components change or disappear', async t => {
+  const frames = [layeredFrame(), layeredFrame({ frameIndex: 1 })];
+  frames.forEach((frame, index) => frame.properties.push(...['vx', 'vy', 'vz'].map((name, axis) => ({
+    name, data: new Float64Array(frame.ids.length).fill(axis ? 0 : index + 1), externalImportId: 'velocity', externalPropertyVersion: 1,
+  }))));
+  const h = harness(t, { frames });
+  h.change('binning-quantity', 'builtin:velocity:magnitude');
+  h.change('binning-average-frames', true);
+  await h.tools.run();
+  assert.deepEqual([...h.tools.getResult().values], Array(8).fill(1.5));
+  assert.equal(h.tools.invalidateProperties([]), false, 'an empty change list preserves the average');
+  assert.equal(h.tools.invalidateProperties(['vx']), true);
+  assert.equal(h.tools.getResult(), null);
+  frames.forEach((frame, index) => {
+    const property = frame.properties.find(property => property.name === 'vx');
+    property.data = new Float64Array(frame.ids.length).fill((index + 1) * 10);
+    property.externalPropertyVersion++;
+  });
+  await h.tools.refresh();
+  assert.deepEqual([...h.tools.getResult().values], Array(8).fill(15));
+  for (const frame of frames) frame.properties = frame.properties.filter(property => property.name !== 'vx');
+  assert.equal(h.tools.invalidateProperties(['vx']), true, 'removal still invalidates after the velocity family disappears');
+  await h.tools.refresh();
+  assert.equal(h.tools.getResult(), null);
+  assert.deepEqual(h.tools.exportResults(), {});
+  assert.equal(h.fields['binning-state'].textContent, 'Failed');
+});
+
+for (const kind of ['expression', 'centrosymmetry']) {
+  test(`trajectory averages reject cached ${kind} columns while single-frame binning remains available`, async t => {
+    const frames = [layeredFrame({ energy: () => 1 }), layeredFrame({ frameIndex: 1, energy: () => 3 })];
+    Object.assign(frames[1].properties[0], { analysisKind: kind, analysisKey: 'cached-result' });
+    const h = harness(t, { frames });
+    h.setFrame(1);
+    h.change('binning-quantity', 'property:pe');
+    assert.equal(await h.tools.run(), true);
+    assert.deepEqual([...h.tools.getResult().values], Array(8).fill(3));
+    h.setFrame(0); await h.tools.onFrame();
+    h.change('binning-average-frames', true);
+    assert.equal(await h.tools.run(), false, 'a cached result on another frame is not an authoritative trajectory column');
+    assert.equal(h.tools.getResult(), null);
+    assert.deepEqual(h.tools.exportResults(), {});
+    assert.equal(h.fields['binning-state'].textContent, 'Failed');
+    assert.match(h.fields['binning-status'].textContent, /analysis|expression/);
+  });
+}
+
 test('editing group members replaces an in-flight average without publishing old partials', async t => {
   const frames = [layeredFrame(), layeredFrame({ frameIndex: 1 })];
   let release, firstSignal, reads = 0;

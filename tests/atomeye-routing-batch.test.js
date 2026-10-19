@@ -33,7 +33,7 @@ function fixture(t, { prepareExport = async () => {}, showFrame = null } = {}) {
   const frame = { ids: Uint32Array.of(1, 2), types: Uint16Array.of(0, 1), typeLabels: ['Ni', 'Fe'],
     properties: [], fractional: Float64Array.of(.2, .2, .2, .4, .4, .4),
     cell: createCell({ vectors: [10, 0, 0, 0, 10, 0, 0, 0, 10] }) };
-  const state = { index: 1, shown: [], routing: 0, starts: 0, releases: 0, captures: 0, notifications: [], analyses: [], checks: [] };
+  const state = { source: 'source', index: 1, shown: [], routing: 0, starts: 0, releases: 0, captures: 0, notifications: [], analyses: [], checks: [] };
   const renderer = { frame, atomCount: 2, projectionMode: 'perspective', yaw: .3, pan: [1, 2, 3],
     setSelectedAtoms() {}, setVectorFields() {}, setBonds() {}, setProjection() {}, requestRender() {},
     captureImage() { state.captures++; throw new Error('Test image unavailable'); } };
@@ -54,7 +54,7 @@ function fixture(t, { prepareExport = async () => {}, showFrame = null } = {}) {
     } };
   const controls = initializeAtomEyeTools({ renderer, pool, tools: { setToolEnabled() {}, isToolEnabled: () => false },
     getFrame: () => frame, getFrames: () => [frame], getFrameIndex: () => state.index, getFrameCount: () => 3,
-    getSelectedIndex: () => -1, getSourceVersion: () => 'source', getColorMode: () => 'type', refresh() {}, chooseProperty() {},
+    getSelectedIndex: () => -1, getSourceVersion: () => state.source, getColorMode: () => 'type', refresh() {}, chooseProperty() {},
     stopPlayback() {}, getExportOptions: () => ({}), getFileStem: () => 'sample', prepareExport,
     showFrame: async index => { state.shown.push(index); if (showFrame) await showFrame(index, state, renderer); state.index = index; return true; },
     notify: message => state.notifications.push(message) });
@@ -118,4 +118,19 @@ test('bond and RDF cache checks honor batch backend and use the same normalized 
     await h.controls.run(kind, { automatic: true }); assert.equal(h.state.analyses.length, calls + 1);
   }
   assert.deepEqual(h.state.notifications, []);
+});
+
+test('frame ZIP does not restore a stale camera if the source changes during original-frame restoration', async t => {
+  let finishRestoration, entered = false;
+  const pending = new Promise(resolve => { finishRestoration = resolve; });
+  const h = fixture(t, { showFrame: async index => {
+    if (index === 1) { entered = true; await pending; }
+  } });
+  h.field('export-frame-series').dispatch('click'); await waitFor(() => entered);
+  h.state.source = 'replacement'; h.renderer.yaw = 8;
+  h.controls.cancelBatch({ restore: false }); finishRestoration();
+  await waitFor(() => h.state.releases === 1);
+  assert.equal(h.renderer.yaw, 8, 'a late restoration completion preserves the replacement camera');
+  assert.equal(h.state.routing, 0);
+  assert.equal(h.field('export-frame-series').disabled, false);
 });

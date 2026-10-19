@@ -40,8 +40,17 @@ export class SpatialBinningClient {
 
   request(frame, request, { signal }) {
     const worker = this.ensureWorker();
-    let key = frameKeys.get(frame.fractional);
-    if (key === undefined) frameKeys.set(frame.fractional, key = nextFrameKey++);
+    // Reduced coordinates can be shared by frames with different cells. The
+    // resident Worker also keeps the cell, so its volume and boundary flags
+    // must participate in the key (including edits made to the same cell).
+    const values = [frame.geometryRevision ?? 0, ...frame.cell.vectors, ...frame.cell.pbc];
+    let resident = frameKeys.get(frame.fractional);
+    if (!resident || resident.values.length !== values.length
+      || values.some((value, index) => !Object.is(value, resident.values[index]))) {
+      resident = { key: nextFrameKey++, values };
+      frameKeys.set(frame.fractional, resident);
+    }
+    const key = resident.key;
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const abort = () => this.terminate(abortError());

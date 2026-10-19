@@ -167,6 +167,39 @@ export function initializeGrainTools({ client, tools, getFrame, getFrames = () =
     job.frame = null;
   }
 
+  /** Volumes depend on properties that may arrive after segmentation, such
+   * as a completed Voronoi job or a replaced external column. Keep this
+   * derived result fresh without repeating PTM or the merge sequence. */
+  function refreshVolumes(frame, cached) {
+    const property = frame.properties?.find(field => field.name === 'atomicVolume'
+      && field.data?.length === cached.result.grainId.length);
+    const inputs = [property?.externalImportId, property?.externalPropertyVersion,
+      property?.externalImportId && property.externalPropertyVersion !== undefined ? null : property?.data,
+      property?.analysisKey, ...(frame.cell?.vectors ?? []), ...(frame.cell?.pbc ?? [])];
+    if (cached.volumeInputs?.length === inputs.length
+      && inputs.every((value, index) => Object.is(value, cached.volumeInputs[index]))) return false;
+    const estimate = grainVolumes(frame, cached.result);
+    if (estimate) { cached.result.volumes = estimate.volumes; cached.result.volumeSource = estimate.source; }
+    else { delete cached.result.volumes; delete cached.result.volumeSource; }
+    cached.volumeInputs = inputs;
+    return true;
+  }
+
+  function refreshProperties() {
+    let changed = false, currentChanged = false;
+    const currentFrame = getFrame();
+    for (const frame of new Set([...(getFrames() ?? []), currentFrame, job.frame])) {
+      const cached = frame?.atomeyeResults?.grains;
+      if (!cached || !refreshVolumes(frame, cached)) continue;
+      changed = true;
+      if (frame === currentFrame && cached.result === job.result) currentChanged = true;
+    }
+    // Dependencies are recorded before notifying: the display refresh can
+    // call this hook again without rescanning atoms or recursively notifying.
+    if (currentChanged) onResultsChange({ frame: currentFrame, clearSettings: false });
+    return changed;
+  }
+
   function cancel({ clearSettings = true, silent = false } = {}) {
     abort();
     job.enabled = false; job.failed = false;
@@ -317,12 +350,11 @@ export function initializeGrainTools({ client, tools, getFrame, getFrames = () =
         }
         const result = { ...segmented, ptmMs, ptmReused: Boolean(fitted.reused), ptmKey: fitted.ptm.key, totalMs: performance.now() - startedAt,
           engine: `${fitted.reused ? 'PTM (reused)' : fitted.engine ?? 'PTM'} + ${segmented.worker ? `CPU · ${segmented.workerCount ?? 1} Worker${(segmented.workerCount ?? 1) === 1 ? '' : 's'}` : 'CPU · main thread'}` };
-        const estimate = grainVolumes(frame, result);
-        if (estimate) { result.volumes = estimate.volumes; result.volumeSource = estimate.source; }
         cached = { key, result };
         frame.atomeyeResults ??= {}; frame.atomeyeResults.grains = cached;
       } else tableRows = Math.max(TABLE_ROWS, tableRows);
       if (!current()) return false;
+      refreshVolumes(frame, cached);
       job.controller = null;
       showResult(cached, frame, key, current);
       if (!automatic && colorChoice === getColorChoiceVersion()) chooseProperty('grainId');
@@ -430,7 +462,7 @@ export function initializeGrainTools({ client, tools, getFrame, getFrames = () =
   applySettings(job.settings);
   state('Not calculated', HELP);
 
-  return Object.freeze({ run, onFrame, reset, cancel, serialize, restore, refreshPtmParameters,
+  return Object.freeze({ run, onFrame, reset, cancel, serialize, restore, refreshPtmParameters, refreshProperties,
     abortJobs: abort,
     warm: () => client.warm?.(getFrame()?.ids?.length ?? 0),
     dispose() { abort(); client.dispose?.(); },

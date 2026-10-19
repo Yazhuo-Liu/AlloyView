@@ -149,7 +149,7 @@ export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, 
       }
       if (records) {
         wrapped ??= wrappedFractional(frame);
-        await correctGpuBondStatisticsPairs(frame, prepared, records, output, { signal, wrapped });
+        await correctGpuBondStatisticsPairs(frame, prepared, records, output, { signal, wrapped, startAtom: begin, endAtom: end });
         correctedPairs += diagnostics[0];
       }
       onProgress({ phase: 'analyzing', completedAtoms: end - startAtom, totalAtoms: count,
@@ -166,17 +166,21 @@ export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, 
 /** Recover only bin-boundary pairs with the exact wrapped f64 source vectors.
  * IDs and explicit image shifts distinguish repeated/self images in thin and
  * tilted periodic cells. This does not create a second neighbor index. */
-export async function correctGpuBondStatisticsPairs(frame, prepared, records, output, { signal, wrapped = wrappedFractional(frame) } = {}) {
+export async function correctGpuBondStatisticsPairs(frame, prepared, records, output, {
+  signal, wrapped = wrappedFractional(frame), startAtom = prepared.startAtom, endAtom = prepared.endAtom,
+} = {}) {
   const signed = new Int32Array(records.buffer, records.byteOffset, records.length);
+  const order = await correctionRecordOrder(records, startAtom, endAtom, signal);
   // Millions of boundary pairs occur in near-perfect crystals with integer-
   // degree bins. Pre-wrapped coordinates and scalar locals avoid per-record
-  // arrays and views; the f64 operations and their order are unchanged.
+  // arrays and views; each record keeps the existing f64 formulas.
   const h = frame.cell.vectors, vectors = new Float64Array(6);
   const { maximumCutoff, lengthBins, angleBins } = prepared, { lengthCounts, angleCounts, moments } = output;
-  for (let offset = 0; offset < records.length; offset += BOND_STATISTICS_CORRECTION_WORDS) {
-    if (offset % (4096 * BOND_STATISTICS_CORRECTION_WORDS) === 0) {
-      checkSignal(signal); if (offset) await yieldWorker();
+  for (let index = 0; index < order.length; index++) {
+    if (index % 4096 === 0) {
+      checkSignal(signal); if (index) await yieldWorker();
     }
+    const offset = order[index];
     const kind = records[offset], atom = records[offset + 1];
     if (kind !== 0 && kind !== 1) throw new GpuUnavailableError('The GPU bond statistics correction record is invalid.');
     exactImageVector(vectors, 0, wrapped, h, atom, records[offset + 2], signed[offset + 4], signed[offset + 5], signed[offset + 6]);
@@ -195,6 +199,37 @@ export async function correctGpuBondStatisticsPairs(frame, prepared, records, ou
       addBondStatisticsSample(moments.angle, angle);
     }
   }
+}
+
+/** One WGSL invocation owns each central atom and emits its records in loop
+ * order over the canonical neighbor list. Only different atoms race for the
+ * append cursor. Stable counting sort restores ascending central-atom order
+ * without changing the deterministic order within each invocation. Counts are
+ * bounded by the current dispatch, not the whole trajectory/frame. */
+async function correctionRecordOrder(records, startAtom, endAtom, signal) {
+  const width = BOND_STATISTICS_CORRECTION_WORDS, count = records.length / width;
+  const counts = new Uint32Array(endAtom - startAtom), order = new Uint32Array(count);
+  let lastYieldAt = performance.now();
+  for (let index = 0; index < count; index++) {
+    if (index % 8192 === 0) {
+      checkSignal(signal);
+      if (performance.now() - lastYieldAt >= 12) { await yieldWorker(); checkSignal(signal); lastYieldAt = performance.now(); }
+    }
+    const atom = records[index * width + 1];
+    if (atom < startAtom || atom >= endAtom) throw new GpuUnavailableError('The GPU bond statistics correction atom is outside its dispatch.');
+    counts[atom - startAtom]++;
+  }
+  let offset = 0;
+  for (let atom = 0; atom < counts.length; atom++) { const length = counts[atom]; counts[atom] = offset; offset += length; }
+  for (let index = 0; index < count; index++) {
+    if (index % 8192 === 0) {
+      checkSignal(signal);
+      if (performance.now() - lastYieldAt >= 12) { await yieldWorker(); checkSignal(signal); lastYieldAt = performance.now(); }
+    }
+    const record = index * width;
+    order[counts[records[record + 1] - startAtom]++] = record;
+  }
+  return order;
 }
 
 /** Source fractional coordinates, wrapped into [0, 1) on periodic axes. */

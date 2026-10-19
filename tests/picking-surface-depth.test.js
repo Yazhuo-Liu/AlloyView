@@ -60,3 +60,23 @@ for (const projection of ['perspective', 'orthographic']) {
     assert.equal(r.pick(213.1, 220), -1);
   });
 }
+
+for (const projection of ['perspective', 'orthographic']) {
+  test(`${projection}: center planes outside the clipping volume cannot win a pick`, () => {
+    const r = fixture(projection, [[0, 0, -.001], [0, 0, -5], [0, 0, -101]], [1, 1, 110]);
+    assert.equal(r.pick(210, 220), 1, 'near- and far-clipped billboards leave the visible middle sphere');
+    r.visibility = Uint8Array.of(255, 0, 255);
+    assert.equal(r.pick(210, 220), -1, 'fully clipped atoms are not selectable');
+  });
+}
+
+test('perspective: a hemisphere behind the eye has far-plane depth and cannot obscure the visible sphere', () => {
+  for (const reverse of [false, true]) {
+    const positions = [[0, 0, -.1], [0, 0, -5]], radii = [1, 1];
+    if (reverse) positions.reverse();
+    const r = fixture('perspective', positions, radii);
+    assert.equal(r.pick(210, 220), reverse ? 0 : 1);
+    r.visibility = Uint8Array.from(positions, ([, , z]) => z === -.1 ? 255 : 0);
+    assert.equal(r.pick(210, 220), reverse ? 1 : 0, 'a lone far-depth fragment still passes LEQUAL against the clear depth');
+  }
+});
