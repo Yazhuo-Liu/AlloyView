@@ -1,4 +1,5 @@
 import { cartesianToFractional, createCell, fractionalToCartesian, validateFrame, wrapFractional } from '../data/model.js';
+import { attachFrameSummary, collectFrameSummary, fractionalToCartesianSummary } from '../data/frame-summary.js';
 import {
   AsciiRowReader,
   FALLBACK,
@@ -259,9 +260,10 @@ function readXyzRowsBytes(bytes, start, { count, speciesField, positionField, id
 function finishXyzFrame(header, atoms, sourceName, startedAt) {
   const { metadata, fields, speciesField, idField, properties, comment } = header;
   const { ids, types, positions, typeLabels } = atoms;
-  const cell = cellFromMetadata(metadata, positions);
-  const coordinates = coordinatesForCell(positions, cell, 'XYZ');
-  return validateFrame({
+  const summaryOutput = { types, typeCount: typeLabels.length };
+  const cell = cellFromMetadata(metadata, positions, summaryOutput);
+  const coordinates = coordinatesForCell(positions, cell, 'XYZ', summaryOutput);
+  return attachFrameSummary(validateFrame({
     ids, idSource: idField ? 'explicit' : 'row-order', types, typeLabels,
     ...coordinates, cell,
     properties: properties.filter(property => property.data).map(({ field, component, ...property }) => property),
@@ -269,17 +271,24 @@ function finishXyzFrame(header, atoms, sourceName, startedAt) {
     title: sourceName, sourceFormat: 'xyz', comment,
     ignoredStringProperties: fields.filter((field) => field.type === 'S' && field !== speciesField).map((field) => field.name),
     parseMs: performance.now() - startedAt,
-  });
+  }), summaryOutput.summary);
 }
 
 export function parseXyzTimestep(metadata) {
   return metadata.Step !== undefined ? numeric(metadata.Step, 'Step') : null;
 }
 
-export function coordinatesForCell(rawPositions, cell, format) {
+export function coordinatesForCell(rawPositions, cell, format, summaryOutput) {
   const rawFractional = cartesianToFractional(rawPositions, cell, new Float64Array(rawPositions.length));
   const fractional = wrapFractional(rawFractional, cell.pbc);
-  const positions = cell.pbc.some(Boolean) ? fractionalToCartesian(fractional, cell) : rawPositions;
+  let positions = rawPositions;
+  if (cell.pbc.some(Boolean)) {
+    if (summaryOutput) {
+      const result = fractionalToCartesianSummary(fractional, cell, summaryOutput.types, summaryOutput.typeCount);
+      positions = result.positions;
+      summaryOutput.summary = result.summary;
+    } else positions = fractionalToCartesian(fractional, cell);
+  } else if (summaryOutput && !summaryOutput.summary) summaryOutput.summary = collectFrameSummary(summaryOutput.types, positions, summaryOutput.typeCount);
   const hasImages = rawFractional.some((value, index) => cell.pbc[index % 3] && (value < 0 || value >= 1));
   if (!hasImages) return { positions, fractional };
   const imageFlags = new Int32Array(rawPositions.length);
@@ -291,10 +300,13 @@ export function coordinatesForCell(rawPositions, cell, format) {
   return { positions, fractional, imageFlags, unwrappedPositions: rawPositions, unwrapSource: `out-of-cell ${format} coordinates` };
 }
 
-export function inferNonperiodicCell(positions) {
-  const min = [Infinity, Infinity, Infinity];
-  const max = [-Infinity, -Infinity, -Infinity];
-  for (let index = 0; index < positions.length; index += 1) {
+export function inferNonperiodicCell(positions, summaryOutput) {
+  // Free structures already need a bounds pass to infer their cell. Count
+  // types there too, and reuse the same extrema for later display.
+  if (summaryOutput) summaryOutput.summary = collectFrameSummary(summaryOutput.types, positions, summaryOutput.typeCount);
+  const min = summaryOutput?.summary.minimum ?? [Infinity, Infinity, Infinity];
+  const max = summaryOutput?.summary.maximum ?? [-Infinity, -Infinity, -Infinity];
+  if (!summaryOutput) for (let index = 0; index < positions.length; index += 1) {
     const axis = index % 3;
     min[axis] = Math.min(min[axis], positions[index]);
     max[axis] = Math.max(max[axis], positions[index]);
@@ -305,14 +317,14 @@ export function inferNonperiodicCell(positions) {
     vectors: [lengths[0], 0, 0, 0, lengths[1], 0, 0, 0, lengths[2]], pbc: [false, false, false] });
 }
 
-export function cellFromMetadata(metadata, positions) {
+export function cellFromMetadata(metadata, positions, summaryOutput) {
   const pbcTokens = metadata.pbc?.trim().split(/\s+/);
   if (pbcTokens && pbcTokens.length !== 3) throw xyzError('pbc requires three boolean flags.');
   if (metadata.Lattice === undefined) {
     if (pbcTokens?.some((token) => booleanValue(token))) {
       throw xyzError('Periodic pbc flags require a Lattice matrix.');
     }
-    return inferNonperiodicCell(positions);
+    return inferNonperiodicCell(positions, summaryOutput);
   }
   const vectors = metadata.Lattice.trim().split(/\s+/).map((token) => numeric(token, 'Lattice'));
   if (vectors.length !== 9) throw xyzError('Lattice requires nine values, grouped as the three cell vectors.');

@@ -1,0 +1,238 @@
+{
+  "scope": "Real browser Worker selection and gzip decompression/indexing; no rendering or GPU timing",
+  "atoms": 20000,
+  "frames": 30,
+  "trials": 5,
+  "baseline": "/tmp/alloyview-perf-baseline-adb0648",
+  "exactOutputs": true,
+  "medians": {
+    "before": {
+      "startupSelectionMs": 58,
+      "replacementSelectionMs": 55.20000001788139,
+      "gzipFirstFrameMs": 128.7000000178814,
+      "gzipFullIndexMs": 168.59999999403954
+    },
+    "after": {
+      "startupSelectionMs": 6.0999999940395355,
+      "replacementSelectionMs": 6.199999988079071,
+      "gzipFirstFrameMs": 23.5,
+      "gzipFullIndexMs": 166.09999999403954
+    }
+  },
+  "samples": {
+    "before": {
+      "source": [
+        [
+          {
+            "milliseconds": 61,
+            "workersCreatedDuringSelection": 2
+          },
+          {
+            "milliseconds": 55.20000001788139,
+            "workersCreatedDuringSelection": 2
+          }
+        ],
+        [
+          {
+            "milliseconds": 57.30000001192093,
+            "workersCreatedDuringSelection": 2
+          },
+          {
+            "milliseconds": 54.20000001788139,
+            "workersCreatedDuringSelection": 2
+          }
+        ],
+        [
+          {
+            "milliseconds": 58.599999994039536,
+            "workersCreatedDuringSelection": 2
+          },
+          {
+            "milliseconds": 50.80000001192093,
+            "workersCreatedDuringSelection": 2
+          }
+        ],
+        [
+          {
+            "milliseconds": 52.900000005960464,
+            "workersCreatedDuringSelection": 2
+          },
+          {
+            "milliseconds": 56.30000001192093,
+            "workersCreatedDuringSelection": 2
+          }
+        ],
+        [
+          {
+            "milliseconds": 58,
+            "workersCreatedDuringSelection": 2
+          },
+          {
+            "milliseconds": 58,
+            "workersCreatedDuringSelection": 2
+          }
+        ]
+      ],
+      "gzip": [
+        {
+          "firstMs": 145.09999999403954,
+          "indexMs": 214.40000000596046,
+          "early": true,
+          "rangeReadBytes": 21978276,
+          "frameCount": 30,
+          "byteDigest": "444060a9aedd25dc0f05a0df90a9ace84a8f9fbea868ef2188aa123cb18f6a51",
+          "firstDigest": "1af23cb4e5dffe17ca9696d6617f6d324d5907f77147004011b383946988bb6f",
+          "lastDigest": "b17ecbce7e02036d4ded8e402ec4f649befe102aa3dc58a652db68a51009cbef"
+        },
+        {
+          "firstMs": 192.59999999403954,
+          "indexMs": 262.69999998807907,
+          "early": true,
+          "rangeReadBytes": 21978276,
+          "frameCount": 30,
+          "byteDigest": "444060a9aedd25dc0f05a0df90a9ace84a8f9fbea868ef2188aa123cb18f6a51",
+          "firstDigest": "1af23cb4e5dffe17ca9696d6617f6d324d5907f77147004011b383946988bb6f",
+          "lastDigest": "b17ecbce7e02036d4ded8e402ec4f649befe102aa3dc58a652db68a51009cbef"
+        },
+        {
+          "firstMs": 125,
+          "indexMs": 168.59999999403954,
+          "early": true,
+          "rangeReadBytes": 21978276,
+          "frameCount": 30,
+          "byteDigest": "444060a9aedd25dc0f05a0df90a9ace84a8f9fbea868ef2188aa123cb18f6a51",
+          "firstDigest": "1af23cb4e5dffe17ca9696d6617f6d324d5907f77147004011b383946988bb6f",
+          "lastDigest": "b17ecbce7e02036d4ded8e402ec4f649befe102aa3dc58a652db68a51009cbef"
+        },
+        {
+          "firstMs": 117.40000000596046,
+          "indexMs": 157,
+          "early": true,
+          "rangeReadBytes": 21978276,
+          "frameCount": 30,
+          "byteDigest": "444060a9aedd25dc0f05a0df90a9ace84a8f9fbea868ef2188aa123cb18f6a51",
+          "firstDigest": "1af23cb4e5dffe17ca9696d6617f6d324d5907f77147004011b383946988bb6f",
+          "lastDigest": "b17ecbce7e02036d4ded8e402ec4f649befe102aa3dc58a652db68a51009cbef"
+        },
+        {
+          "firstMs": 128.7000000178814,
+          "indexMs": 165.2000000178814,
+          "early": true,
+          "rangeReadBytes": 21978276,
+          "frameCount": 30,
+          "byteDigest": "444060a9aedd25dc0f05a0df90a9ace84a8f9fbea868ef2188aa123cb18f6a51",
+          "firstDigest": "1af23cb4e5dffe17ca9696d6617f6d324d5907f77147004011b383946988bb6f",
+          "lastDigest": "b17ecbce7e02036d4ded8e402ec4f649befe102aa3dc58a652db68a51009cbef"
+        }
+      ]
+    },
+    "after": {
+      "source": [
+        [
+          {
+            "milliseconds": 7.200000017881393,
+            "workersCreatedDuringSelection": 0
+          },
+          {
+            "milliseconds": 7.899999976158142,
+            "workersCreatedDuringSelection": 0
+          }
+        ],
+        [
+          {
+            "milliseconds": 6.800000011920929,
+            "workersCreatedDuringSelection": 0
+          },
+          {
+            "milliseconds": 6.199999988079071,
+            "workersCreatedDuringSelection": 0
+          }
+        ],
+        [
+          {
+            "milliseconds": 5.699999988079071,
+            "workersCreatedDuringSelection": 0
+          },
+          {
+            "milliseconds": 6.199999988079071,
+            "workersCreatedDuringSelection": 0
+          }
+        ],
+        [
+          {
+            "milliseconds": 6.0999999940395355,
+            "workersCreatedDuringSelection": 0
+          },
+          {
+            "milliseconds": 6.5999999940395355,
+            "workersCreatedDuringSelection": 0
+          }
+        ],
+        [
+          {
+            "milliseconds": 5.800000011920929,
+            "workersCreatedDuringSelection": 0
+          },
+          {
+            "milliseconds": 5.9000000059604645,
+            "workersCreatedDuringSelection": 0
+          }
+        ]
+      ],
+      "gzip": [
+        {
+          "firstMs": 23.5,
+          "indexMs": 180.80000001192093,
+          "early": true,
+          "rangeReadBytes": 708976,
+          "frameCount": 30,
+          "byteDigest": "444060a9aedd25dc0f05a0df90a9ace84a8f9fbea868ef2188aa123cb18f6a51",
+          "firstDigest": "1af23cb4e5dffe17ca9696d6617f6d324d5907f77147004011b383946988bb6f",
+          "lastDigest": "b17ecbce7e02036d4ded8e402ec4f649befe102aa3dc58a652db68a51009cbef"
+        },
+        {
+          "firstMs": 19,
+          "indexMs": 166.09999999403954,
+          "early": true,
+          "rangeReadBytes": 708976,
+          "frameCount": 30,
+          "byteDigest": "444060a9aedd25dc0f05a0df90a9ace84a8f9fbea868ef2188aa123cb18f6a51",
+          "firstDigest": "1af23cb4e5dffe17ca9696d6617f6d324d5907f77147004011b383946988bb6f",
+          "lastDigest": "b17ecbce7e02036d4ded8e402ec4f649befe102aa3dc58a652db68a51009cbef"
+        },
+        {
+          "firstMs": 31.600000023841858,
+          "indexMs": 161.90000000596046,
+          "early": true,
+          "rangeReadBytes": 708976,
+          "frameCount": 30,
+          "byteDigest": "444060a9aedd25dc0f05a0df90a9ace84a8f9fbea868ef2188aa123cb18f6a51",
+          "firstDigest": "1af23cb4e5dffe17ca9696d6617f6d324d5907f77147004011b383946988bb6f",
+          "lastDigest": "b17ecbce7e02036d4ded8e402ec4f649befe102aa3dc58a652db68a51009cbef"
+        },
+        {
+          "firstMs": 19,
+          "indexMs": 159.69999998807907,
+          "early": true,
+          "rangeReadBytes": 708976,
+          "frameCount": 30,
+          "byteDigest": "444060a9aedd25dc0f05a0df90a9ace84a8f9fbea868ef2188aa123cb18f6a51",
+          "firstDigest": "1af23cb4e5dffe17ca9696d6617f6d324d5907f77147004011b383946988bb6f",
+          "lastDigest": "b17ecbce7e02036d4ded8e402ec4f649befe102aa3dc58a652db68a51009cbef"
+        },
+        {
+          "firstMs": 33.599999994039536,
+          "indexMs": 171.5,
+          "early": true,
+          "rangeReadBytes": 708976,
+          "frameCount": 30,
+          "byteDigest": "444060a9aedd25dc0f05a0df90a9ace84a8f9fbea868ef2188aa123cb18f6a51",
+          "firstDigest": "1af23cb4e5dffe17ca9696d6617f6d324d5907f77147004011b383946988bb6f",
+          "lastDigest": "b17ecbce7e02036d4ded8e402ec4f649befe102aa3dc58a652db68a51009cbef"
+        }
+      ]
+    }
+  },
+  "compressedBytes": 9358139,
+  "decodedBytes": 21269300
+}

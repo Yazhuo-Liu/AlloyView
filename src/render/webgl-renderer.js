@@ -1,5 +1,6 @@
 import { createConservativeDepthProgram, resetConservativeDepth, orderedOpaqueReplicas } from './conservative-depth.js';
 import { cartesianToFractional, cellVertices } from '../data/model.js';
+import { frameCoordinateBounds, invalidateFrameCoordinateBounds } from '../data/frame-summary.js';
 import { createReplication } from './replication.js';
 import { installCameraInteractions } from './camera-interactions.js';
 import { selectAtomsInRectangle } from './box-selection.js';
@@ -509,7 +510,7 @@ export class WebGLRenderer {
     upload(this.cellBuffer, buildCellLines(this.displayCell), gl.STATIC_DRAW);
   }
 
-  setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions, { coordinateMode, preparedDisplay } = {}) {
+  setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions, { coordinateMode, preparedDisplay, useFrameSummary = false } = {}) {
     if (preparedDisplay) validatePreparedDisplay(preparedDisplay, frame, displayPositions,
       coordinateMode ?? (displayPositions === frame.positions ? 'wrapped' : 'unwrapped'), { radii: atomRadii });
     // A frame can arrive between driver loss and its queued DOM event.
@@ -520,6 +521,14 @@ export class WebGLRenderer {
     const startedAt = performance.now();
     this.frame = frame;
     this.processDisplayCoordinates(displayPositions, coordinateMode, preparedDisplay);
+    // The app opts in for immutable parsed/processed frames. Public setters
+    // still rescan arbitrary arrays, including values edited in place.
+    const summaryBounds = useFrameSummary && !preparedDisplay && frameCoordinateBounds(frame, this.displayPositions);
+    if (summaryBounds) {
+      this.sourceBoundsRevision = (this.sourceBoundsRevision ?? 0) + 1;
+      this.sourceBoundsCache = { positions: this.displayPositions, length: this.displayPositions.length,
+        minimum: [...summaryBounds.minimum], maximum: [...summaryBounds.maximum] };
+    }
     this.atomCount = frame.ids.length;
     this.atomColors = colors;
     this.colorRevision = (this.colorRevision ?? 0) + 1;
@@ -554,7 +563,7 @@ export class WebGLRenderer {
     this.voronoiCellLayer?.clear();
     this.voronoiAllCellGeometry = null;
     this.voronoiAllCellLayer?.clear();
-    this.updateSceneBounds({ reuseSourceBounds: Boolean(preparedDisplay) });
+    this.updateSceneBounds({ reuseSourceBounds: Boolean(preparedDisplay || summaryBounds) });
     // The returned time covers submitting the uploads. Waiting for the GPU
     // with gl.finish() here would stall every frame change just to time it.
     this.requestRender();
@@ -1397,6 +1406,7 @@ export class WebGLRenderer {
     // reuse only these six numbers; cell, replicas and every layer still merge.
     let source = this.sourceBoundsCache;
     if (!reuseSourceBounds || source?.positions !== this.displayPositions || source.length !== this.displayPositions.length) {
+      invalidateFrameCoordinateBounds(this.frame, this.displayPositions);
       this.invalidatePreparedDisplay();
       this.sourceBoundsRevision = (this.sourceBoundsRevision ?? 0) + 1;
       source = this.sourceBoundsCache = { positions: this.displayPositions, length: this.displayPositions.length,

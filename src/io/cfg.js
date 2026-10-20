@@ -5,6 +5,7 @@ import {
   validateFrame,
   wrapFractional,
 } from '../data/model.js';
+import { attachFrameSummary, fractionalToCartesianSummary } from '../data/frame-summary.js';
 import {
   AsciiRowReader,
   FALLBACK,
@@ -203,12 +204,13 @@ function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt) {
       unwrapSource = 'out-of-cell CFG coordinates';
     }
   }
+  const { positions, summary } = fractionalToCartesianSummary(fractional, cell, parsed.types, parsed.typeLabels.length);
   const frame = validateFrame({
     ids: semantics.ids ?? rowOrderIds(count),
     types: parsed.types,
     typeLabels: parsed.typeLabels,
     idSource: semantics.ids ? 'explicit' : 'row-order',
-    positions: fractionalToCartesian(fractional, cell),
+    positions,
     unwrappedPositions,
     imageFlags,
     unwrapSource,
@@ -220,7 +222,7 @@ function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt) {
     sourceFormat: 'cfg',
     parseMs: performance.now() - startedAt,
   });
-  return frame;
+  return attachFrameSummary(frame, summary);
 }
 
 function rowOrderIds(count) {

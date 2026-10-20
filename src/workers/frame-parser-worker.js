@@ -3,6 +3,7 @@ import { parseFrameDescriptor } from './frame-parser.js';
 
 const requests = new Map();
 self.addEventListener('message', async ({ data: { id, type, descriptor } }) => {
+  if (type === 'warm-parser') { self.postMessage({ id, ok: true }); return; }
   if (type === 'cancel-parser') {
     const active = requests.get(id);
     if (active) { active.cancelled = true; active.controller.abort(); }

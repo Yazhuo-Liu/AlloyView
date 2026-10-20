@@ -3,6 +3,7 @@ import { CSP_SUMMARY_FIELDS } from './centrosymmetry.js';
 import { MAX_BONDS } from './bonds.js';
 import { mergeBondStatisticsPartials } from './bond-statistics.js';
 import { VORONOI_FIELDS, mergeVoronoiPartials } from './voronoi.js';
+import { materializeVoronoiIndices } from './voronoi-indices.js';
 import { prepareVoronoiSelection, expandVoronoiResult, mapVoronoiGeometry,
   compactVoronoiAtomIndices, compactVoronoiRadii } from './voronoi-selection.js';
 import { validateVoronoiRadii } from './voronoi-radii.js';
@@ -790,7 +791,9 @@ export class AnalysisPool {
       neighborBytes = PTM_NEIGHBOR_FIELDS.reduce((bytes, field) => bytes + sharedNeighborTable[field].byteLength, 0);
       if (fullNeighborTable) extraBytes += neighborBytes;
     }
-    const outputFields = EXTRA_OUTPUT_FIELDS[parameters.kind] ?? (parameters.kind === 'ptm' ? ptmResultFields(parameters)
+    const fusedLocalShear = parameters.kind === 'localShearMetrics' && parameters.collectCoordination;
+    const outputFields = fusedLocalShear ? { ...EXTRA_OUTPUT_FIELDS.localShearMetrics, coordination: [Uint32Array, 1] }
+      : EXTRA_OUTPUT_FIELDS[parameters.kind] ?? (parameters.kind === 'ptm' ? ptmResultFields(parameters)
       : parameters.kind === 'strain' ? { ...STRAIN_OUTPUT_FIELDS, ...(parameters.ptmInput ? {} : ptmResultFields(parameters)) }
         : autoCentrosymmetry ? { centrosymmetry: [Float32Array, 1], cspStructureTypes: [Uint8Array, 1], cspNeighborCounts: [Uint8Array, 1] }
           : { values: [parameters.kind === 'cna' ? Uint8Array : Float32Array, 1] });
@@ -829,9 +832,28 @@ export class AnalysisPool {
     const targetAtoms = coordinationStage ? 16_384
       : ['displacement', 'localShearFinalize'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000
       : parameters.kind === 'wignerSeitzAssign' ? 16_384 : 4_096;
-    const preflight = this.cpuResidentWorkerPolicy(atomCount, ownedRows ? 0 : frameBytes + privateIndexBytes,
-      residentAnalysisBytes, fixedBytes, targetAtoms, modules, sharedMemory, { includeRetainedInputs: false, nativeCapacityBytes,
+    const preflightPolicy = (bytes) => this.cpuResidentWorkerPolicy(atomCount, ownedRows ? 0 : frameBytes + privateIndexBytes,
+      residentAnalysisBytes, bytes, targetAtoms, modules, sharedMemory, { includeRetainedInputs: false, nativeCapacityBytes,
         privateContextBytes: !sharedMemory && referenceStrain ? normalizedCurrentBytes + normalizedReferenceBytes + referenceCount * 4 : 0 });
+    let preflight;
+    try { preflight = preflightPolicy(fixedBytes); }
+    catch (error) { if (fusedLocalShear) return { fusionUnavailable: true }; throw error; }
+    // The extra coordination output must not change the logical partitions:
+    // floating-point reductions retain the original two-pass metrics order.
+    const legacyShearBytes = fixedBytes - 2 * atomCount * Uint32Array.BYTES_PER_ELEMENT;
+    const targetWorkerCount = Math.min(this.limit, Math.max(1, Math.ceil(atomCount / targetAtoms)));
+    // The old coordination pass may populate any idle slot before metrics
+    // admission. Reserve an entire new frame/index (including Float64 wrapping
+    // and small cell/scratch storage) per slot. Only fuse when even that upper
+    // bound admits the full target degree; comparing both paths against just
+    // today's residency would miss a cold, partially populated pool.
+    const coordinationReserve = this.limit * (sharedMemory ? 4096 : frameBytes + privateIndexBytes + atomCount * 24 + 4096);
+    if (fusedLocalShear) {
+      try {
+        if (preflight.workerCount !== targetWorkerCount
+          || preflightPolicy(legacyShearBytes + coordinationReserve).workerCount !== targetWorkerCount) return { fusionUnavailable: true };
+      } catch { return { fusionUnavailable: true }; }
+    }
     const controller = new AbortController();
     if (routingOwner) controller.signal[ROUTING_OWNER] = routingOwner;
     this.controllers.add(controller);
@@ -855,25 +877,35 @@ export class AnalysisPool {
       const privateContextBytes = !sharedMemory && referenceStrain ? referenceCount * 4
         + (snapshot.requiresWrappedCopy || !(snapshot.coordinates instanceof Float64Array) ? normalizedCurrentBytes : 0)
         + (referenceSnapshot.requiresWrappedCopy || !(referenceSnapshot.coordinates instanceof Float64Array) ? normalizedReferenceBytes : 0) : 0;
-      const selectMemory = () => this.cpuResidentWorkerPolicy(atomCount, ownedRows ? 0 : frameBytes + privateIndexBytes + wrappingBytes,
-        residentAnalysisBytes, fixedBytes, targetAtoms, modules, sharedMemory, { frameKey: snapshot.key,
+      const selectMemory = (bytes = fixedBytes) => this.cpuResidentWorkerPolicy(atomCount, ownedRows ? 0 : frameBytes + privateIndexBytes + wrappingBytes,
+        residentAnalysisBytes, bytes, targetAtoms, modules, sharedMemory, { frameKey: snapshot.key,
           fixedSnapshotKeys: controller.cpuFrameKeys, nativeCapacityBytes, privateContextBytes });
+      // Decline before trimming anything: a speculative preparation must not
+      // change which slots the original two-pass fallback would retain.
+      if (fusedLocalShear) {
+        try {
+          if (selectMemory().workerCount !== targetWorkerCount
+            || selectMemory(legacyShearBytes + coordinationReserve).workerCount !== targetWorkerCount) return { fusionUnavailable: true };
+        } catch { return { fusionUnavailable: true }; }
+      }
       let memoryPolicy;
       try { memoryPolicy = selectMemory(); }
       catch {
         this.trimIdleCpuInputs(snapshot.key);
         try { memoryPolicy = selectMemory(); }
         catch (error) {
-          if (sharedMemory) throw error;
+          if (sharedMemory) { if (fusedLocalShear) return { fusionUnavailable: true }; throw error; }
           // Admission conservatively reserves a cold slot beside retained
           // private input. Under a tight budget, release even the matching
           // idle frame before retrying, keeping its Worker and native heaps.
           // Busy/leased slots remain charged and cannot be reclaimed here.
           this.trimIdleCpuInputs(snapshot.key, { releaseCurrentFrame: true });
-          memoryPolicy = selectMemory();
+          try { memoryPolicy = selectMemory(); }
+          catch (error) { if (fusedLocalShear) return { fusionUnavailable: true }; throw error; }
         }
       }
       if (memoryPolicy.workerCount < preflight.workerCount) { this.trimIdleCpuInputs(snapshot.key); memoryPolicy = selectMemory(); }
+      if (fusedLocalShear && memoryPolicy.workerCount !== selectMemory(legacyShearBytes).workerCount) return { fusionUnavailable: true };
       const { workerCount, residentFrameLimit } = memoryPolicy;
       // Preserve the former logical reduction partitions. Chunks may migrate
       // between Workers, but Welford/normalization sums continue in the exact
@@ -889,7 +921,14 @@ export class AnalysisPool {
       // stages. Larger bounded messages amortize transport and validation;
       // fresh template fits and skew image searches keep their prior bounds.
       const rowChunk = parameters.kind === 'strain' && inputs.ptmInput ? 32_768 : cheapDisplacement ? 16_384 : 0;
-      const chunkSize = coordinationStage ? Math.min(8192, Math.ceil(atomCount / workerCount))
+      // Fused preparation replaces the coordination pass, including its
+      // bounded transport batches. Logical metrics partitions stay identical;
+      // their reductions still visit every atom/neighbor in the original order.
+      // Keep at least four frame-wide batches for observable intermediate
+      // progress/cancellation, even when a fast one-Worker job never reaches
+      // the Worker's time-based progress-message interval.
+      const chunkSize = coordinationStage || fusedLocalShear
+        ? Math.min(8192, Math.ceil(atomCount / Math.max(workerCount, fusedLocalShear ? 4 : 1)))
         : rowChunk ? Math.min(rowChunk, Math.ceil(atomCount / workerCount))
         : compactMetrics ? Math.min(65_536, Math.ceil(atomCount / workerCount))
         : Math.max(128, Math.min(maxChunk, Math.ceil(atomCount / (workerCount * (['ptm', 'strain'].includes(parameters.kind) ? 4 : 8)))));
@@ -1026,7 +1065,7 @@ export class AnalysisPool {
         if (parameters.kind === 'voronoi') {
           return { ...metadata, ...mergeVoronoiPartials(partials, atomCount, { bins: parameters.bins ?? 50 }) };
         }
-        const fields = EXTRA_OUTPUT_FIELDS[parameters.kind];
+        const fields = outputFields;
         const values = Object.fromEntries(Object.keys(fields).map(name => [name, merged[name]]));
         if (parameters.kind === 'rdf') {
           const counts = new Float64Array(parameters.bins ?? 100);
@@ -1060,8 +1099,15 @@ export class AnalysisPool {
         if (parameters.kind === 'localShearMetrics') {
           const metricSum = new Array(6).fill(0);
           for (const partial of partials) for (let component = 0; component < 6; component += 1) metricSum[component] += partial.metricSum[component];
+          const histogram = [];
+          if (fusedLocalShear) for (const partial of partials) for (let index = 0; index < partial.histogram.length; index++) {
+            histogram[index] = (histogram[index] ?? 0) + partial.histogram[index];
+          }
           return { ...metadata, ...values, metricSum, normalizationSum: partials.reduce((sum, partial) => sum + partial.normalizationSum, 0),
-            normalizationParticipants: partials.reduce((sum, partial) => sum + partial.normalizationParticipants, 0) };
+            normalizationParticipants: partials.reduce((sum, partial) => sum + partial.normalizationParticipants, 0),
+            ...(fusedLocalShear ? { histogram, coordinationSum: partials.reduce((sum, partial) => sum + partial.coordinationSum, 0),
+              candidateCoordinationMode: partials.every(partial => partial.candidateCoordinationMode === partials[0].candidateCoordinationMode
+                && !partial.candidateMetricsAborted) ? partials[0].candidateCoordinationMode : -1 } : {}) };
         }
         if (parameters.kind === 'wignerSeitzAssign') return { ...metadata, ...values, siteCount: partials[0]?.siteCount, warning: null };
         if (parameters.kind === 'displacement') {
@@ -1206,6 +1252,7 @@ export class AnalysisPool {
         report(null, 'finalizing', undefined, true);
         output = await this.runTask({ kind: 'voronoiFinalize', partials, atomCount, bins: parameters.bins ?? 50 },
           controller.signal, signal, phase => report(null, phase), true);
+        materializeVoronoiIndices(output);
         output = expandVoronoiResult(output, selection);
       }
       if (controller.signal.aborted) throw abortError();
@@ -1447,14 +1494,27 @@ export class AnalysisPool {
     const controller = new AbortController(), abort = () => controller.abort();
     this.controllers.add(controller);
     signal?.addEventListener('abort', abort, { once: true });
-    const progress = (stage) => (update) => onProgress({ ...update, stage,
-      completedAtoms: atomCount * stage + update.completedAtoms, totalAtoms: atomCount * 3 });
+    let completedAtoms = 0;
+    const report = (stage, update, atoms) => {
+      completedAtoms = Math.max(completedAtoms, atoms);
+      onProgress({ ...update, stage, completedAtoms, totalAtoms: atomCount * 3 });
+    };
+    const progress = (stage) => (update) => report(stage, update, atomCount * stage + update.completedAtoms);
     try {
-      const coordination = await this.analyzeCPU(frame, { ...parameters, kind: 'localShearCoordination' }, {
+      let coordination = await this.analyzeCPU(frame, { ...parameters, kind: 'localShearMetrics', collectCoordination: true }, {
+        signal: controller.signal, onProgress: (update) => report(update.completedAtoms < atomCount / 2 ? 0 : 1,
+          update, update.completedAtoms * 2),
+      });
+      if (coordination.fusionUnavailable) coordination = await this.analyzeCPU(frame, { ...parameters, kind: 'localShearCoordination' }, {
         signal: controller.signal, onProgress: progress(0),
       });
       const coordinationMode = modalCoordination(coordination.histogram);
-      const metrics = await this.analyzeCPU(frame, { ...parameters, kind: 'localShearMetrics', coordinationMode }, {
+      const fusedMetrics = coordinationMode === coordination.candidateCoordinationMode;
+      // A complete histogram, including every partition, decides whether the
+      // candidate moments are valid. Never select a scientific mode by sample.
+      if (!fusedMetrics) delete coordination.metrics;
+      const metrics = fusedMetrics ? coordination : await this.analyzeCPU(frame, { ...parameters, kind: 'localShearMetrics',
+        coordinationMode, verifiedCoordinationMode: true }, {
         signal: controller.signal, onProgress: progress(1),
       });
       const normalization = metrics.normalizationParticipants ? metrics.normalizationSum / metrics.normalizationParticipants / 3 : NaN;
@@ -1464,7 +1524,7 @@ export class AnalysisPool {
       return { ...result, workerCount: Math.max(coordination.workerCount, metrics.workerCount, result.workerCount),
         finalizeWorkerCount: result.workerCount, elapsedMs: performance.now() - startedAt, coordination: coordination.coordination,
         coordinationMode, normalization, meanMetric, averageCoordination: coordination.coordinationSum / atomCount,
-        averageShear: shearInvariant(meanMetric), warning: null };
+        averageShear: shearInvariant(meanMetric), fusedMetrics, warning: null };
     } finally {
       signal?.removeEventListener('abort', abort);
       this.controllers.delete(controller);
@@ -1706,7 +1766,10 @@ export class AnalysisPool {
           && task.slot.voronoiFrameKey === payload.residentFrameKey
           && (payload.cpuFrameKey === undefined || task.slot.cpuFrameKeys?.has(payload.cpuFrameKey))) {
         payload = { ...payload };
-        delete payload.fractional; delete payload.cell;
+        delete payload.fractional; delete payload.cell; delete payload.types;
+        // A completed Voronoi preparation retains both the source and its
+        // neighbor index. Subsequent chunks need only their resident keys.
+        delete payload.cpuNeighborIndex; delete payload.cpuCoordinationIndex;
       } else if (payload.cpuOwnedRange) {
         // Cheap per-row stages need neither a full coordinate upload nor a
         // retained analysis table. These owned rows leave the Worker's warm

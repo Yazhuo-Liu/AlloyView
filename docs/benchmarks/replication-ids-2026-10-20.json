@@ -1,0 +1,135 @@
+{
+  "runtime": "v24.19.0",
+  "availableParallelism": 4,
+  "cpuQuota": "400000 100000",
+  "baseline": "/tmp/alloyview-perf-baseline-adb0648",
+  "sourceAtoms": 119164,
+  "replicatedAtoms": 953312,
+  "repetitions": [
+    2,
+    2,
+    2
+  ],
+  "scientificHashes": [
+    "22f343802c068685c9dea412dbda1f8b02ed47ee69a2a64ef37ed94188e55a6d",
+    "81443ac318cb1eee121b2d2837173f7aaa1a57c622d85e4b0f7956834f836fb0"
+  ],
+  "direct": {
+    "scope": "Warm replication including validation and summary; scheduler yields excluded",
+    "samplesMs": {
+      "before": [
+        323.115315,
+        203.36253399999987,
+        314.2086549999999,
+        230.53104199999962,
+        296.7281430000003
+      ],
+      "after": [
+        92.5021099999999,
+        118.25540999999976,
+        52.61533700000018,
+        54.0167220000003,
+        56.372668999999405
+      ]
+    },
+    "mediansMs": {
+      "before": 296.7281430000003,
+      "after": 56.372668999999405
+    }
+  },
+  "invalidation": {
+    "scope": "Reordered source IDs direct rebuild; exact IDs/coordinate hash checked",
+    "scientificHash": "919790597109859741ed55f41cebfd0a71039fd19b24b4a8842a65f59df340a0",
+    "samplesMs": {
+      "before": [
+        264.7465199999997
+      ],
+      "after": [
+        464.7234760000001
+      ]
+    },
+    "mediansMs": {
+      "before": 264.7465199999997,
+      "after": 464.7234760000001
+    },
+    "workerPayloadIdsAfterReorderAndSourceReplacement": {
+      "before": [
+        953312,
+        953312
+      ],
+      "after": [
+        953312,
+        953312
+      ]
+    }
+  },
+  "worker": {
+    "scope": "Real Worker round trip including source clone, production yields, result transfer and page ID restoration; startup excluded",
+    "samplesMs": {
+      "before": [
+        582.6477739999991,
+        675.3112409999994,
+        505.73723099999916,
+        411.58028399999966,
+        533.0971450000015
+      ],
+      "after": [
+        207.5672770000001,
+        96.75072900000123,
+        200.40287100000023,
+        75.21325400000023,
+        65.82876699999906
+      ]
+    },
+    "mediansMs": {
+      "before": 533.0971450000015,
+      "after": 96.75072900000123
+    },
+    "transmittedIds": {
+      "before": [
+        953312,
+        953312,
+        953312,
+        953312,
+        953312
+      ],
+      "after": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "distinctPageIdArraysAcrossMeasuredReplies": {
+      "before": 5,
+      "after": 1
+    },
+    "retainedWorkerIdLayoutBytes": 61363122,
+    "retainedWorkerSourceSnapshotBytes": 476656
+  },
+  "accounting": {
+    "scope": "Exact byte estimate of the same Worker result with all metadata",
+    "accountedBytes": 97589078,
+    "samplesMs": {
+      "before": [
+        18.787175999999818,
+        17.857711000000563,
+        17.470156999999745,
+        17.272807999999714,
+        16.441854000000603
+      ],
+      "after": [
+        0.06651000000056229,
+        0.010917000001427368,
+        0.035974000000351225,
+        0.008372999998755404,
+        0.06085200000052282
+      ]
+    },
+    "mediansMs": {
+      "before": 17.470156999999745,
+      "after": 0.035974000000351225
+    }
+  }
+}

@@ -53,6 +53,10 @@ The [follow-up repository review of 2026-10-19](REPOSITORY_REVIEW_2026-10-19.md)
 records further reproduced defects and repairs, closes GPU neighbor-order
 nondeterminism, and distinguishes remaining performance work from verified fixes.
 
+The [performance report of 2026-10-20](PERFORMANCE_IMPROVEMENTS_2026-10-20.md)
+records the following loading, replication, frame-summary, Voronoi, grain,
+local-shear and DXA improvements, their baseline comparisons and remaining limits.
+
 [DXA implementation review](DXA_REVIEW.md) records the source, licensing and
 CPU/Wasm algorithm and historical WebGPU research. The current DXA tool uses
 complete CPU/Wasm extraction with automatic pthreads or private local-stage

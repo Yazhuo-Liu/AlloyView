@@ -1,3 +1,5 @@
+import { frameTypeCounts } from '../data/frame-summary.js';
+
 const DEFAULT_ATOM_COLOR = [218, 201, 164];
 
 const TYPE_COLORS = [
@@ -107,14 +109,24 @@ export function colorMapStops(scheme) {
 
 export function colorsByType(frame, hiddenLabels = new Set()) {
   const colors = new Uint8Array(frame.types.length * 3);
-  const counts = new Uint32Array(frame.typeLabels.length);
+  const summarized = frameTypeCounts(frame, { scan: false });
+  const counts = summarized ?? new Uint32Array(frame.typeLabels.length);
   const palette = frame.typeLabels.length === 1
     ? [DEFAULT_ATOM_COLOR]
     : frame.typeLabels.map((label, index) => ELEMENT_COLORS[label] ?? TYPE_COLORS[index % TYPE_COLORS.length]);
-  for (let atom = 0; atom < frame.types.length; atom += 1) {
-    const type = frame.types[atom], rgb = palette[type];
-    colors[atom * 3] = rgb[0]; colors[atom * 3 + 1] = rgb[1]; colors[atom * 3 + 2] = rgb[2];
-    counts[type] += 1;
+  // Keep the summary decision outside the per-atom loop. Unsummarized
+  // callers retain their original fused color/count pass.
+  if (summarized) {
+    for (let atom = 0; atom < frame.types.length; atom += 1) {
+      const rgb = palette[frame.types[atom]];
+      colors[atom * 3] = rgb[0]; colors[atom * 3 + 1] = rgb[1]; colors[atom * 3 + 2] = rgb[2];
+    }
+  } else {
+    for (let atom = 0; atom < frame.types.length; atom += 1) {
+      const type = frame.types[atom], rgb = palette[type];
+      colors[atom * 3] = rgb[0]; colors[atom * 3 + 1] = rgb[1]; colors[atom * 3 + 2] = rgb[2];
+      counts[type]++;
+    }
   }
   return {
     colors,

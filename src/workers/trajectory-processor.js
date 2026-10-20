@@ -3,6 +3,7 @@ import {
   inferredUnwrappedPositions, smoothingWindow, trajectoryLineFrames,
 } from '../data/trajectory-tools.js';
 import { cpuMemoryBudget } from '../analysis/cpu-memory.js';
+import { attachFrameSummary } from '../data/frame-summary.js';
 
 /** Raw coordinates kept for reuse by neighbouring smoothing windows, the
  * unwrapping frontier and line sampling. It is a cache: any frame can be read
@@ -395,7 +396,7 @@ export class TrajectoryProcessor {
         const { first, last } = smoothingWindow(index, window, frameCount);
         if (last > first) {
           const center = { frameIndex: index, ids: frame.ids, idSource: frame.idSource, fractional: frame.fractional,
-            positions: frame.positions, cell: frame.cell };
+            positions: frame.positions, cell: frame.cell, types: frame.types, typeLabels: frame.typeLabels };
           const accumulator = new SmoothingAccumulator(center);
           for (let current = first; current <= last; current += 1) {
             checkSignal(signal);
@@ -414,6 +415,14 @@ export class TrajectoryProcessor {
           frame.fractional = result.fractional;
           frame.positions = result.positions;
           frame.cell = result.cell;
+          // Replace aliases to the unsmoothed coordinates before transfer;
+          // those arrays belong only to the raw-coordinate cache now.
+          if (!result.unchanged) {
+            // Coordinate-only trajectory callers need no atom-type metadata.
+            // Their smoothing result has no complete display summary.
+            if (result.coordinateSummary) attachFrameSummary(frame, result.coordinateSummary);
+            else delete frame.summary;
+          }
           if (frame.unwrappedPositions) {
             frame.unwrappedPositions = result.unwrappedPositions;
             if (frame.imageFlags) frame.imageFlags = result.imageFlags;

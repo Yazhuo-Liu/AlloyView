@@ -1,4 +1,5 @@
 import { determinant3 } from '../data/model.js';
+import { frameTypeCounts } from '../data/frame-summary.js';
 import { quaternionAxisAngle, quaternionBungeEuler } from '../analysis/grains.js';
 
 /** CSV values use JavaScript's shortest round-trip decimal representation.
@@ -222,8 +223,8 @@ function statisticsRow(analysis, name, unit, statistics) {
 }
 
 function* categoryRows(frame, properties) {
-  const typeCounts = countsFor(frame.types);
-  for (let type = 0; type < (frame.typeLabels?.length ?? 0); type++) yield ['input', 'atomType', type, frame.typeLabels[type], typeCounts.get(type) ?? 0, (typeCounts.get(type) ?? 0) / frame.ids.length];
+  const typeCounts = frameTypeCounts(frame);
+  for (let type = 0; type < (frame.typeLabels?.length ?? 0); type++) yield ['input', 'atomType', type, frame.typeLabels[type], typeCounts[type] ?? 0, (typeCounts[type] ?? 0) / frame.ids.length];
   for (const property of properties) {
     if (!property.categories?.length) continue;
     const counts = countsFor(property.data), known = new Set();

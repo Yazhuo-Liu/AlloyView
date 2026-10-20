@@ -1,0 +1,644 @@
+{
+  "date": "2026-10-20",
+  "baselineCommit": "adb06489831cf2f78f50790c25eb7d0ae0c2c762",
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "AMD EPYC 9V74 80-Core Processor"
+  },
+  "commandPrivate": "node scripts/benchmark-grains-shear.mjs /tmp/alloyview-perf-baseline-adb0648 30 5 4 all",
+  "commandShared": "node scripts/benchmark-grains-shear.mjs /tmp/alloyview-perf-baseline-adb0648 20 3 4 shear shared",
+  "methodology": [
+    "Exclusive CPU timing window; three complete warmups before alternating baseline/current pairs.",
+    "All scientific scalar and typed-array values compare with Object.is, including NaN; complete grain models and segmentations compare exactly.",
+    "K1 timings exclude common PTM preparation, include complete grain-model construction and segmentation; ordered graph/MST remains serial.",
+    "Repeated shear timing retains the same immutable snapshot and cutoff; mixed and misleading-pilot cases can reuse a mode verified by the first full histogram.",
+    "firstPreparedRequestMs is a single diagnostic observation with warm Workers/indexes but without a previously verified mode; it is not a JIT-warm median.",
+    "freshSnapshots is a separate three-sample interleaved trajectory-like test after JIT warmup; every sample changes a real coordinate and invalidates verified mode. All three current calls must take the exact fallback.",
+    "Direct cold neighbor-query counts instrument uncached mutable frames; they are not repeated immutable-Worker timings.",
+    "Generation-stamp graph prototype was rejected after no reliable end-to-end gain. Final K1 retains only root reuse, no additional per-atom arrays.",
+    "Measured K1 wall times vary by stage and run; reduced find counts are not evidence of a general end-to-end speedup.",
+    "Fresh misleading-pilot snapshots retain a fallback cost, measured explicitly rather than hidden by same-frame mode reuse."
+  ],
+  "private": {
+    "baseline": "/tmp/alloyview-perf-baseline-adb0648",
+    "repeat": 30,
+    "samples": 5,
+    "warmupRuns": 3,
+    "workerLimit": 4,
+    "sharedMemory": false,
+    "results": [
+      {
+        "kind": "grains-automatic",
+        "atoms": 108000,
+        "bonds": 648000,
+        "merges": 107996,
+        "exactEntireModels": true,
+        "exactEntireSegmentations": true,
+        "medians": {
+          "baseline": {
+            "modelMs": 288.12872300000026,
+            "mergeMs": 93.1392909999995,
+            "thresholdMs": 88.37940700000036,
+            "totalMs": 301.68856000000005
+          },
+          "current": {
+            "modelMs": 292.20633799999996,
+            "mergeMs": 92.61120399999982,
+            "thresholdMs": 88.64161400000012,
+            "totalMs": 310.53619400000025
+          }
+        },
+        "samples": {
+          "baseline": [
+            {
+              "modelMs": 288.12872300000026,
+              "mergeMs": 93.1392909999995,
+              "thresholdMs": 88.27897600000051,
+              "totalMs": 301.68856000000005
+            },
+            {
+              "modelMs": 300.7083850000008,
+              "mergeMs": 104.15631500000018,
+              "thresholdMs": 89.00336900000002,
+              "totalMs": 323.60264200000074
+            },
+            {
+              "modelMs": 278.6320190000006,
+              "mergeMs": 83.16485699999976,
+              "thresholdMs": 89.48818100000062,
+              "totalMs": 289.73699000000033
+            },
+            {
+              "modelMs": 275.0269270000008,
+              "mergeMs": 86.85243300000002,
+              "thresholdMs": 88.37940700000036,
+              "totalMs": 283.2398640000001
+            },
+            {
+              "modelMs": 290.0048149999993,
+              "mergeMs": 99.73138199999994,
+              "thresholdMs": 84.57757899999979,
+              "totalMs": 308.10936199999924
+            }
+          ],
+          "current": [
+            {
+              "modelMs": 302.67299600000024,
+              "mergeMs": 97.51366400000006,
+              "thresholdMs": 85.7864639999998,
+              "totalMs": 323.12460400000055
+            },
+            {
+              "modelMs": 291.98525400000017,
+              "mergeMs": 95.5365499999998,
+              "thresholdMs": 87.05957500000022,
+              "totalMs": 310.3949510000002
+            },
+            {
+              "modelMs": 286.7498720000003,
+              "mergeMs": 84.03801500000009,
+              "thresholdMs": 91.66045900000063,
+              "totalMs": 297.8859110000003
+            },
+            {
+              "modelMs": 340.3088029999999,
+              "mergeMs": 80.62315000000035,
+              "thresholdMs": 152.2558309999995,
+              "totalMs": 348.0022349999999
+            },
+            {
+              "modelMs": 292.20633799999996,
+              "mergeMs": 92.61120399999982,
+              "thresholdMs": 88.64161400000012,
+              "totalMs": 310.53619400000025
+            }
+          ]
+        },
+        "operationCounts": {
+          "baseline": {
+            "adjacencyClearVisits": 1889307,
+            "findCalls": 431984
+          },
+          "current": {
+            "adjacencyClearVisits": 1889307,
+            "findCalls": 215992
+          }
+        },
+        "addedStampBytes": 0
+      },
+      {
+        "kind": "grains-mst",
+        "atoms": 108000,
+        "bonds": 648000,
+        "merges": 107996,
+        "exactEntireModels": true,
+        "exactEntireSegmentations": true,
+        "medians": {
+          "baseline": {
+            "modelMs": 161.99402800000098,
+            "mergeMs": 28.956535999999687,
+            "thresholdMs": 12.730655999999726,
+            "totalMs": 253.50203800000054
+          },
+          "current": {
+            "modelMs": 152.23892499999965,
+            "mergeMs": 23.83117999999922,
+            "thresholdMs": 15.698806000000332,
+            "totalMs": 229.40725999999995
+          }
+        },
+        "samples": {
+          "baseline": [
+            {
+              "modelMs": 166.70724300000074,
+              "mergeMs": 29.33755100000053,
+              "thresholdMs": 12.730655999999726,
+              "totalMs": 253.50203800000054
+            },
+            {
+              "modelMs": 164.022821999999,
+              "mergeMs": 29.514478999999483,
+              "thresholdMs": 15.707718999999997,
+              "totalMs": 260.1249749999988
+            },
+            {
+              "modelMs": 161.99402800000098,
+              "mergeMs": 28.956535999999687,
+              "thresholdMs": 6.296603000000687,
+              "totalMs": 262.75804400000015
+            },
+            {
+              "modelMs": 157.82204199999978,
+              "mergeMs": 25.61034599999948,
+              "thresholdMs": 15.21769900000072,
+              "totalMs": 241.89827399999922
+            },
+            {
+              "modelMs": 138.46931099999892,
+              "mergeMs": 22.775777000000744,
+              "thresholdMs": 4.965844999998808,
+              "totalMs": 218.9087989999989
+            }
+          ],
+          "current": [
+            {
+              "modelMs": 149.61024799999905,
+              "mergeMs": 21.688075000000026,
+              "thresholdMs": 14.023326999998972,
+              "totalMs": 229.40725999999995
+            },
+            {
+              "modelMs": 131.26171299999987,
+              "mergeMs": 23.83117999999922,
+              "thresholdMs": 4.473222000000533,
+              "totalMs": 213.8125629999995
+            },
+            {
+              "modelMs": 194.27366599999914,
+              "mergeMs": 27.462271000000328,
+              "thresholdMs": 19.795618999998624,
+              "totalMs": 283.84391499999947
+            },
+            {
+              "modelMs": 152.23892499999965,
+              "mergeMs": 24.068898999999874,
+              "thresholdMs": 15.698806000000332,
+              "totalMs": 215.78452800000014
+            },
+            {
+              "modelMs": 196.2968349999992,
+              "mergeMs": 21.02403299999969,
+              "thresholdMs": 71.56561899999906,
+              "totalMs": 291.809088
+            }
+          ]
+        },
+        "operationCounts": {
+          "baseline": {
+            "adjacencyClearVisits": 0,
+            "findCalls": 1886376
+          },
+          "current": {
+            "adjacencyClearVisits": 0,
+            "findCalls": 1454392
+          }
+        },
+        "addedStampBytes": 0
+      },
+      {
+        "kind": "shear-fcc",
+        "atoms": 108000,
+        "workers": 4,
+        "firstRequestFusedMetrics": true,
+        "fusedMetrics": true,
+        "firstPreparedRequestMs": {
+          "baseline": 203.80123099999946,
+          "current": 197.0620850000014
+        },
+        "coordinationMode": 12,
+        "exactAllScientificFields": true,
+        "directColdNeighborQueries": {
+          "baseline": 216000,
+          "current": 108064
+        },
+        "medianWallMs": {
+          "baseline": 128.8410440000007,
+          "current": 69.27563200000077
+        },
+        "samples": {
+          "baseline": [
+            108.54885099999956,
+            131.2853639999994,
+            128.8410440000007,
+            129.90242600000056,
+            120.2747640000016
+          ],
+          "current": [
+            66.14661999999953,
+            84.54289199999948,
+            79.54698599999938,
+            67.10877199999959,
+            69.27563200000077
+          ]
+        }
+      },
+      {
+        "kind": "shear-bcc",
+        "atoms": 54000,
+        "workers": 4,
+        "firstRequestFusedMetrics": true,
+        "fusedMetrics": true,
+        "firstPreparedRequestMs": {
+          "baseline": 115.84143699999913,
+          "current": 136.09342499999912
+        },
+        "coordinationMode": 8,
+        "exactAllScientificFields": true,
+        "directColdNeighborQueries": {
+          "baseline": 108000,
+          "current": 54064
+        },
+        "medianWallMs": {
+          "baseline": 70.77618799999982,
+          "current": 39.94278900000063
+        },
+        "samples": {
+          "baseline": [
+            69.29682500000126,
+            85.17197700000179,
+            70.77618799999982,
+            64.1549649999979,
+            72.09669599999688
+          ],
+          "current": [
+            45.86967000000004,
+            45.36583999999857,
+            28.447407999999996,
+            39.94278900000063,
+            38.97695599999861
+          ]
+        }
+      },
+      {
+        "kind": "shear-mixed",
+        "atoms": 72000,
+        "workers": 4,
+        "firstRequestFusedMetrics": false,
+        "fusedMetrics": true,
+        "firstPreparedRequestMs": {
+          "baseline": 177.0666859999983,
+          "current": 203.95391000000018
+        },
+        "freshSnapshots": {
+          "samples": {
+            "baseline": [
+              199.2961890000006,
+              132.35488299999997,
+              136.82114499999807
+            ],
+            "current": [
+              213.60309399999824,
+              124.64269299999796,
+              135.9941149999977
+            ]
+          },
+          "medianWallMs": {
+            "baseline": 136.82114499999807,
+            "current": 135.9941149999977
+          },
+          "fusedMetrics": [
+            false,
+            false,
+            false
+          ],
+          "exactAllScientificFields": true
+        },
+        "coordinationMode": 8,
+        "exactAllScientificFields": true,
+        "directColdNeighborQueries": {
+          "baseline": 144000,
+          "current": 144064
+        },
+        "medianWallMs": {
+          "baseline": 108.84621999999945,
+          "current": 77.25153200000204
+        },
+        "samples": {
+          "baseline": [
+            116.2262699999992,
+            106.43795599999794,
+            92.60490600000048,
+            120.43241299999863,
+            108.84621999999945
+          ],
+          "current": [
+            82.33000700000048,
+            66.3030609999987,
+            77.25153200000204,
+            134.24735099999816,
+            77.06948700000066
+          ]
+        }
+      },
+      {
+        "kind": "shear-pilot-mismatch",
+        "atoms": 63000,
+        "workers": 4,
+        "firstRequestFusedMetrics": false,
+        "fusedMetrics": true,
+        "firstPreparedRequestMs": {
+          "baseline": 122.60265300000174,
+          "current": 219.97799300000042
+        },
+        "freshSnapshots": {
+          "samples": {
+            "baseline": [
+              135.86069399999906,
+              96.89668299999903,
+              104.17090299999836
+            ],
+            "current": [
+              175.29662699999972,
+              97.66197300000204,
+              145.68767200000002
+            ]
+          },
+          "medianWallMs": {
+            "baseline": 104.17090299999836,
+            "current": 145.68767200000002
+          },
+          "fusedMetrics": [
+            false,
+            false,
+            false
+          ],
+          "exactAllScientificFields": true
+        },
+        "coordinationMode": 8,
+        "exactAllScientificFields": true,
+        "directColdNeighborQueries": {
+          "baseline": 126000,
+          "current": 126064
+        },
+        "medianWallMs": {
+          "baseline": 77.53731200000038,
+          "current": 49.11298999999781
+        },
+        "samples": {
+          "baseline": [
+            85.39158700000189,
+            77.53731200000038,
+            76.76912799999991,
+            80.14258899999913,
+            68.50190400000065
+          ],
+          "current": [
+            43.914662999999564,
+            56.55862799999886,
+            43.96571100000074,
+            49.11298999999781,
+            54.37974399999803
+          ]
+        }
+      }
+    ],
+    "defectModelComparisons": [
+      {
+        "fixture": "bicrystal",
+        "algorithm": "automatic",
+        "atoms": 1792,
+        "exact": true
+      },
+      {
+        "fixture": "bicrystal",
+        "algorithm": "mst",
+        "atoms": 1792,
+        "exact": true
+      },
+      {
+        "fixture": "twinFault",
+        "algorithm": "automatic",
+        "atoms": 1440,
+        "exact": true
+      },
+      {
+        "fixture": "twinFault",
+        "algorithm": "mst",
+        "atoms": 1440,
+        "exact": true
+      }
+    ]
+  },
+  "shared": {
+    "baseline": "/tmp/alloyview-perf-baseline-adb0648",
+    "repeat": 20,
+    "samples": 3,
+    "warmupRuns": 3,
+    "workerLimit": 4,
+    "sharedMemory": true,
+    "results": [
+      {
+        "kind": "shear-fcc",
+        "atoms": 32000,
+        "workers": 4,
+        "firstRequestFusedMetrics": true,
+        "fusedMetrics": true,
+        "firstPreparedRequestMs": {
+          "baseline": 89.99307799999997,
+          "current": 87.26952199999994
+        },
+        "coordinationMode": 12,
+        "exactAllScientificFields": true,
+        "directColdNeighborQueries": {
+          "baseline": 64000,
+          "current": 32064
+        },
+        "medianWallMs": {
+          "baseline": 56.90895699999987,
+          "current": 40.883914000000004
+        },
+        "samples": {
+          "baseline": [
+            56.90895699999987,
+            60.04105000000004,
+            56.36890099999982
+          ],
+          "current": [
+            34.603849999999966,
+            40.883914000000004,
+            41.65968100000009
+          ]
+        }
+      },
+      {
+        "kind": "shear-bcc",
+        "atoms": 16000,
+        "workers": 4,
+        "firstRequestFusedMetrics": true,
+        "fusedMetrics": true,
+        "firstPreparedRequestMs": {
+          "baseline": 62.661109000000124,
+          "current": 65.05100599999992
+        },
+        "coordinationMode": 8,
+        "exactAllScientificFields": true,
+        "directColdNeighborQueries": {
+          "baseline": 32000,
+          "current": 16064
+        },
+        "medianWallMs": {
+          "baseline": 45.31262400000014,
+          "current": 19.69608900000003
+        },
+        "samples": {
+          "baseline": [
+            49.28122399999984,
+            45.31262400000014,
+            39.07722200000035
+          ],
+          "current": [
+            19.69608900000003,
+            19.073949999999968,
+            22.814816999999948
+          ]
+        }
+      },
+      {
+        "kind": "shear-mixed",
+        "atoms": 21600,
+        "workers": 4,
+        "firstRequestFusedMetrics": false,
+        "fusedMetrics": true,
+        "firstPreparedRequestMs": {
+          "baseline": 76.57631200000014,
+          "current": 97.36122399999977
+        },
+        "freshSnapshots": {
+          "samples": {
+            "baseline": [
+              97.13031099999989,
+              97.2593850000003,
+              73.50729999999976
+            ],
+            "current": [
+              94.05539899999985,
+              97.44666300000017,
+              78.24473599999965
+            ]
+          },
+          "medianWallMs": {
+            "baseline": 97.13031099999989,
+            "current": 94.05539899999985
+          },
+          "fusedMetrics": [
+            false,
+            false,
+            false
+          ],
+          "exactAllScientificFields": true
+        },
+        "coordinationMode": 8,
+        "exactAllScientificFields": true,
+        "directColdNeighborQueries": {
+          "baseline": 43200,
+          "current": 43264
+        },
+        "medianWallMs": {
+          "baseline": 49.40066900000011,
+          "current": 28.79120600000033
+        },
+        "samples": {
+          "baseline": [
+            49.40066900000011,
+            57.00254799999993,
+            45.4119740000001
+          ],
+          "current": [
+            33.1382480000002,
+            28.79120600000033,
+            26.868794999999864
+          ]
+        }
+      },
+      {
+        "kind": "shear-pilot-mismatch",
+        "atoms": 19200,
+        "workers": 4,
+        "firstRequestFusedMetrics": false,
+        "fusedMetrics": true,
+        "firstPreparedRequestMs": {
+          "baseline": 77.44354699999985,
+          "current": 131.50174100000004
+        },
+        "freshSnapshots": {
+          "samples": {
+            "baseline": [
+              90.74138200000016,
+              68.25687500000004,
+              58.61552700000084
+            ],
+            "current": [
+              80.8793770000002,
+              48.86617800000022,
+              94.61389800000052
+            ]
+          },
+          "medianWallMs": {
+            "baseline": 68.25687500000004,
+            "current": 80.8793770000002
+          },
+          "fusedMetrics": [
+            false,
+            false,
+            false
+          ],
+          "exactAllScientificFields": true
+        },
+        "coordinationMode": 8,
+        "exactAllScientificFields": true,
+        "directColdNeighborQueries": {
+          "baseline": 38400,
+          "current": 38464
+        },
+        "medianWallMs": {
+          "baseline": 38.073245999999926,
+          "current": 24.64376700000048
+        },
+        "samples": {
+          "baseline": [
+            38.073245999999926,
+            45.01006700000016,
+            34.93956600000001
+          ],
+          "current": [
+            28.624434000000292,
+            20.23225899999943,
+            24.64376700000048
+          ]
+        }
+      }
+    ]
+  }
+}

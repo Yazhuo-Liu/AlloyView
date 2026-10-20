@@ -255,6 +255,13 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
         // Process nodes from the queue until it becomes empty or until a valid Burgers circuit has been found.
         for(BurgersCircuitSearchStruct* current = start; current != nullptr && foundBurgersCircuit == false; current = current->nextToProcess) {
             InterfaceMesh::Vertex* currentNode = current->node;
+            // These values belong to the queued node and never change while
+            // examining its outgoing edges. Keep copies independent of writes
+            // to other search records and circuit state in the loop below.
+            const Point3 currentCoord = current->latticeCoord;
+            const Matrix3 currentTm = current->tm;
+            const int nextDepth = current->recursiveDepth + 1;
+            const bool canEnqueue = current->recursiveDepth < searchDepth;
             for(InterfaceMesh::Edge* edge = currentNode->edges(); edge != nullptr; edge = edge->nextVertexEdge()) {
 
                 OVITO_ASSERT((edge->circuit == nullptr) == (edge->nextCircuitEdge == nullptr));
@@ -273,8 +280,8 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
                 InterfaceMesh::Vertex* neighbor = edge->vertex2();
 
                 // Calculate reference lattice coordinates of the neighboring vertex.
-                Point3 neighborCoord = current->latticeCoord;
-                neighborCoord += current->tm * edge->clusterVector;
+                Point3 neighborCoord = currentCoord;
+                neighborCoord += currentTm * edge->clusterVector;
 
                 // If this neighbor has been assigned reference lattice coordinates before,
                 // then perform the Burgers circuit test now by comparing the previous to the new coordinates.
@@ -286,7 +293,7 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
                     if(burgersVector.isZero(CA_LATTICE_VECTOR_EPSILON) == false) {
                         // Found circuit with non-zero Burgers vector.
                         // Check if circuit encloses disclination.
-                        Matrix3 frankRotation = current->tm * edge->clusterTransition->reverse->tm;
+                        Matrix3 frankRotation = currentTm * edge->clusterTransition->reverse->tm;
                         if(frankRotation.equals(neighborStruct->tm, CA_TRANSITION_MATRIX_EPSILON)) {
                             // Stop as soon as a valid Burgers circuit has been found.
                             if(createBurgersCircuit(edge, maxBurgersCircuitSize)) {
@@ -296,17 +303,17 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
                         }
                     }
                 }
-                else if(current->recursiveDepth < searchDepth) {
+                else if(canEnqueue) {
                     // This neighbor has not been visited before. Put it at the end of the queue.
                     neighborStruct = structPool.construct();
                     neighborStruct->node = neighbor;
                     neighborStruct->latticeCoord = neighborCoord;
                     neighborStruct->predecessorEdge = edge;
-                    neighborStruct->recursiveDepth = current->recursiveDepth + 1;
+                    neighborStruct->recursiveDepth = nextDepth;
                     if(edge->clusterTransition->isSelfTransition())
-                        neighborStruct->tm = current->tm;
+                        neighborStruct->tm = currentTm;
                     else
-                        neighborStruct->tm = current->tm * edge->clusterTransition->reverse->tm;
+                        neighborStruct->tm = currentTm * edge->clusterTransition->reverse->tm;
                     neighborStruct->nextToProcess = nullptr;
                     neighbor->burgersSearchStruct = neighborStruct;
                     OVITO_ASSERT(end_of_queue->nextToProcess == nullptr);

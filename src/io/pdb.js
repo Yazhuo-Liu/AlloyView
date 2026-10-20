@@ -1,4 +1,5 @@
 import { createCell, validateFrame } from '../data/model.js';
+import { attachFrameSummary } from '../data/frame-summary.js';
 import { coordinatesForCell, inferNonperiodicCell } from './xyz.js';
 import { lineText, scanLineBytes } from './text-lines.js';
 
@@ -161,11 +162,12 @@ export function parsePdbFrame(text, sourceName = 'structure.pdb', { projection =
       properties[1].data[atom] = value.bfactor;
     }
   }
-  cell ??= inferNonperiodicCell(rawPositions);
-  const coordinates = coordinatesForCell(rawPositions, cell, 'PDB');
-  return validateFrame({ ids, idSource: 'explicit', types, typeLabels,
+  const summaryOutput = { types, typeCount: typeLabels.length };
+  cell ??= inferNonperiodicCell(rawPositions, summaryOutput);
+  const coordinates = coordinatesForCell(rawPositions, cell, 'PDB', summaryOutput);
+  return attachFrameSummary(validateFrame({ ids, idSource: 'explicit', types, typeLabels,
     ...coordinates, cell, properties, timestep, title: sourceName,
-    pdbTitle: titles.join(' '), sourceFormat: 'pdb', parseMs: performance.now() - startedAt });
+    pdbTitle: titles.join(' '), sourceFormat: 'pdb', parseMs: performance.now() - startedAt }), summaryOutput.summary);
 }
 
 export function parseCrystalCell(line) {

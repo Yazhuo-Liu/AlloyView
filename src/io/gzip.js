@@ -4,9 +4,9 @@
 // decompressed content, exactly as for an uncompressed file.
 //
 // Memory: a trajectory whose frames are read in any order (LAMMPS dump, XYZ,
-// PDB) is decompressed once into a Blob (decompressToFile). The Worker copies
-// the output into the Blob in bounded parts, so its own heap holds at most one
-// part at a time; the browser keeps the Blob data, which Chromium moves to
+// PDB) streams into range Blobs while it is indexed (streamGzipBytes). Legacy
+// readers use decompressToFile. Both keep bounded decoded chunks on the JS
+// heap; the browser keeps the Blob data, which Chromium moves to
 // disk when large and other browsers may keep in memory. Single-frame files
 // (CFG, LAMMPS data, POSCAR), including the files of a CFG sequence, are
 // decompressed whenever they are read (readFileBytes), so only the file being
@@ -56,6 +56,40 @@ function decompressedStream(file, compressed = file.slice(0, file.size)) {
 function decompressionError(file, error) {
   const detail = error?.message ? `: ${error.message}` : '.';
   return new Error(`“${file.name}” could not be decompressed as a single gzip stream${detail}`);
+}
+
+/** Decompressed bytes for incremental indexing. Backpressure limits the
+ * decoded heap to the platform's stream buffers and the current chunk. */
+export async function* streamGzipBytes(file, { signal, onCompressedProgress = () => {} } = {}) {
+  const cancelled = () => new DOMException('Trajectory indexing cancelled.', 'AbortError');
+  if (signal?.aborted) throw cancelled();
+  if (typeof DecompressionStream !== 'function') throw unsupportedError(file);
+  let loaded = 0;
+  const compressed = file.slice(0, file.size).stream().pipeThrough(new TransformStream({
+    transform(chunk, controller) {
+      loaded += chunk.length;
+      onCompressedProgress({ loaded, total: file.size });
+      controller.enqueue(chunk);
+    },
+  }));
+  const reader = compressed.pipeThrough(new DecompressionStream('gzip')).getReader();
+  const abort = () => { void reader.cancel(cancelled()).catch(() => {}); };
+  signal?.addEventListener('abort', abort, { once: true });
+  try {
+    for (;;) {
+      if (signal?.aborted) throw cancelled();
+      const { done, value } = await reader.read();
+      if (signal?.aborted) throw cancelled();
+      if (done) break;
+      yield value;
+    }
+  } catch (error) {
+    if (signal?.aborted) throw cancelled();
+    throw decompressionError(file, error);
+  } finally {
+    signal?.removeEventListener('abort', abort);
+    void reader.cancel().catch(() => {});
+  }
 }
 
 /**

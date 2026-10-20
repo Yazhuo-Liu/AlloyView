@@ -1,0 +1,304 @@
+{
+  "atoms": 1000000,
+  "repeats": 5,
+  "warmup": 2,
+  "timingUnit": "ms",
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux"
+  },
+  "formats": {
+    "dump": {
+      "bytes": 50563285,
+      "exactEquality": "passed",
+      "baseline": {
+        "parse": {
+          "median": 182.545,
+          "min": 170.182,
+          "max": 210.402
+        },
+        "transfer": {
+          "median": 0.16,
+          "min": 0.127,
+          "max": 0.182
+        },
+        "coldTotal": {
+          "median": 247.244,
+          "min": 238.484,
+          "max": 303.839
+        },
+        "coldDisplay": {
+          "colors": {
+            "median": 7.252,
+            "min": 6.665,
+            "max": 16.637
+          },
+          "radii": {
+            "median": 3.32,
+            "min": 3.25,
+            "max": 5.178
+          },
+          "attributes": {
+            "median": 34.831,
+            "min": 31.195,
+            "max": 39.981
+          },
+          "renderer": {
+            "median": 22.446,
+            "min": 20.149,
+            "max": 31.461
+          },
+          "total": {
+            "median": 65.231,
+            "min": 64.143,
+            "max": 93.257
+          }
+        },
+        "cachedDisplay": {
+          "colors": {
+            "median": 6.599,
+            "min": 3.773,
+            "max": 9.564
+          },
+          "radii": {
+            "median": 0.332,
+            "min": 0.321,
+            "max": 2.557
+          },
+          "attributes": {
+            "median": 32.116,
+            "min": 30.814,
+            "max": 37.998
+          },
+          "renderer": {
+            "median": 16.978,
+            "min": 15.051,
+            "max": 21.842
+          },
+          "total": {
+            "median": 55.252,
+            "min": 51.04,
+            "max": 71.911
+          }
+        }
+      },
+      "current": {
+        "parse": {
+          "median": 193.778,
+          "min": 173.286,
+          "max": 261.756
+        },
+        "transfer": {
+          "median": 0.166,
+          "min": 0.145,
+          "max": 0.203
+        },
+        "coldTotal": {
+          "median": 220.639,
+          "min": 199.507,
+          "max": 290.214
+        },
+        "coldDisplay": {
+          "colors": {
+            "median": 6.317,
+            "min": 6.169,
+            "max": 7.056
+          },
+          "radii": {
+            "median": 3.614,
+            "min": 2.825,
+            "max": 4.421
+          },
+          "attributes": {
+            "median": 0.261,
+            "min": 0.146,
+            "max": 0.414
+          },
+          "renderer": {
+            "median": 16.421,
+            "min": 14.557,
+            "max": 16.727
+          },
+          "total": {
+            "median": 26.499,
+            "min": 23.844,
+            "max": 28.312
+          }
+        },
+        "cachedDisplay": {
+          "colors": {
+            "median": 6.095,
+            "min": 3.346,
+            "max": 9.129
+          },
+          "radii": {
+            "median": 0.387,
+            "min": 0.32,
+            "max": 1.986
+          },
+          "attributes": {
+            "median": 0.138,
+            "min": 0.113,
+            "max": 0.205
+          },
+          "renderer": {
+            "median": 12.914,
+            "min": 11.678,
+            "max": 15.212
+          },
+          "total": {
+            "median": 19.577,
+            "min": 15.674,
+            "max": 22.63
+          }
+        }
+      }
+    },
+    "xyz": {
+      "bytes": 44674304,
+      "exactEquality": "passed",
+      "baseline": {
+        "parse": {
+          "median": 221.437,
+          "min": 218.763,
+          "max": 256.967
+        },
+        "transfer": {
+          "median": 0.135,
+          "min": 0.103,
+          "max": 0.158
+        },
+        "coldTotal": {
+          "median": 286.834,
+          "min": 282.984,
+          "max": 336.376
+        },
+        "coldDisplay": {
+          "colors": {
+            "median": 6.619,
+            "min": 6.441,
+            "max": 7.604
+          },
+          "radii": {
+            "median": 4.217,
+            "min": 3.473,
+            "max": 5.148
+          },
+          "attributes": {
+            "median": 34.665,
+            "min": 33.435,
+            "max": 45.622
+          },
+          "renderer": {
+            "median": 21.058,
+            "min": 19.878,
+            "max": 23.351
+          },
+          "total": {
+            "median": 67.19,
+            "min": 64.064,
+            "max": 81.348
+          }
+        },
+        "cachedDisplay": {
+          "colors": {
+            "median": 6.861,
+            "min": 6.339,
+            "max": 7.472
+          },
+          "radii": {
+            "median": 0.392,
+            "min": 0.312,
+            "max": 0.423
+          },
+          "attributes": {
+            "median": 32.082,
+            "min": 31.874,
+            "max": 33.705
+          },
+          "renderer": {
+            "median": 16.01,
+            "min": 15.575,
+            "max": 17.004
+          },
+          "total": {
+            "median": 55.621,
+            "min": 54.429,
+            "max": 57.262
+          }
+        }
+      },
+      "current": {
+        "parse": {
+          "median": 230.483,
+          "min": 215.34,
+          "max": 233.278
+        },
+        "transfer": {
+          "median": 0.15,
+          "min": 0.126,
+          "max": 0.186
+        },
+        "coldTotal": {
+          "median": 262.067,
+          "min": 243.75,
+          "max": 263.276
+        },
+        "coldDisplay": {
+          "colors": {
+            "median": 7.718,
+            "min": 6.259,
+            "max": 10.112
+          },
+          "radii": {
+            "median": 7.666,
+            "min": 7.112,
+            "max": 8.213
+          },
+          "attributes": {
+            "median": 0.153,
+            "min": 0.136,
+            "max": 0.233
+          },
+          "renderer": {
+            "median": 14.42,
+            "min": 12.795,
+            "max": 14.889
+          },
+          "total": {
+            "median": 29.847,
+            "min": 28.233,
+            "max": 31.453
+          }
+        },
+        "cachedDisplay": {
+          "colors": {
+            "median": 6.157,
+            "min": 3.314,
+            "max": 6.401
+          },
+          "radii": {
+            "median": 0.361,
+            "min": 0.327,
+            "max": 0.52
+          },
+          "attributes": {
+            "median": 0.109,
+            "min": 0.103,
+            "max": 0.15
+          },
+          "renderer": {
+            "median": 13.276,
+            "min": 11.583,
+            "max": 14.055
+          },
+          "total": {
+            "median": 20.087,
+            "min": 15.389,
+            "max": 20.99
+          }
+        }
+      }
+    }
+  }
+}

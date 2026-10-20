@@ -1,6 +1,82 @@
 # Validation record
 
-Latest validation: 2026-10-19 (UTC). Earlier entries retain their own dates.
+Latest validation: 2026-10-20 (UTC). Earlier entries retain their own dates.
+
+## Loading and analysis performance improvements (2026-10-20)
+
+Baseline: `adb06489831cf2f78f50790c25eb7d0ae0c2c762`, synchronized with
+remote main before this work. The
+[performance report](PERFORMANCE_IMPROVEMENTS_2026-10-20.md) records S6, T8,
+T7, T10, C10, K1, K3 and the bounded K4 tracing change, including reproducible
+commands, raw interleaved samples and limitations. Worker/Wasm/GPU prewarming,
+the shared CPU quota and trajectory prefetch remain enabled.
+
+`npm test -- --test-concurrency=4` passes all **2301 tests**, with zero
+failures, cancellations or skips. `npm run build` passes. The full-suite
+follow-up fixed coordinate-only smoothing compatibility, a scheduling-dependent
+replication assertion and a benchmark-script link that could not resolve from
+the published documentation subpath.
+
+Formal measurements ran sequentially on Node.js 24.19.0 with a four-core CPU
+quota, with no compiler, full test suite or unrelated browser job competing.
+Source-loading measurements use actual Chromium Workers and gzip streams;
+render preparation measurements exclude GPU drawing. SwiftShader measurements
+do not establish performance on physical GPU hardware.
+
+Regression coverage includes source rollback and standby failures, parser
+warmup admission/cancellation, progressive gzip frame bytes and corrupt tails,
+bounded Blob parts and long lines, concurrent replication ID tokens and source
+reordering, incremental replication memory rejection, summary transfer aliases
+and revision invalidation, Voronoi compact-label remapping and resident-input
+reuse, and local-shear logical partitions under low memory. Scientific arrays,
+labels and metadata are compared exactly with the baseline. In-place type
+edits followed by the existing `geometryRevision` invalidation also reject
+stale type counts and ordering.
+
+Integration checks also preserve coordinate-only smoothing callers, which do
+not supply type metadata. The replication cancellation regression now
+deterministically delays progress delivery until after the Worker has committed
+a different layout. It verifies `AbortError`, exact restored IDs, one complete
+retransmission after single-entry eviction, then immediate array reuse and
+omitted IDs on the following hot request. It does not assume that cancellation
+always reaches the Worker before its cache commit.
+
+Local-shear tests additionally cover a logical partition migrating from a
+Worker with pilot mode 12 to another with verified mode 8. A mode change
+abandons the whole candidate partition, retaining its complete coordination
+histogram and forcing exact metrics recomputation. All 66 targeted grain/shear
+tests pass; misleading fresh snapshots remain a measured performance limit,
+not an approximation of the scientific calculation.
+
+Both DXA production Wasm variants were rebuilt with Emscripten 3.1.69.
+The native source manifest and all four generated artifact hashes match;
+36 targeted DXA tests pass, including cancellation and same-heap reuse,
+staged/mesh/Fe cases and four-thread edge passes. Formal before/after DXA
+comparisons use one thread in both kernels to hold Delaunay topology fixed;
+all complete scientific-result hashes match for HEA, Fe and replicated NiGB.
+The unhelpful frontier-pruning candidate was reverted before the final build.
+
+All **19 browser suites** pass: production smoke, source loading on private and
+isolated hosts, progressive series, trajectory Workers, trajectory copying,
+CPU prewarm, renderer bounds/context recovery, comparison preparation, Grains,
+Voronoi tools, DXA extraction/visuals/parallel fallback, bundled runtime, GPU
+recovery, GPU frame revisions and the main GPU suite. The main GPU suite passes
+261 numerical checks, 12 cancellation cases, eight displacement-validation
+cases and 19 application checks. DXA parallel/startup-fallback verification
+runs separately from other browser jobs.
+
+Faster loading exposed another timing assumption in the CPU prewarm test:
+an already-posted old-source initialization can acknowledge beside the new
+source's one-Worker target. The test now checks that exact requested target,
+bounded retained slots, at most one PTM initialization per Worker and actual
+CPU permits. Its final separate production run passes simulated 8/16-core
+pages: peak permits are 6/14, equal to their limits; idle initial preparation
+holds zero permits. Expansion, source reset and foreground analysis retain
+Workers and the same DXA Wasm generation, including parallel code prewarm.
+No production warmup was disabled to satisfy the check.
+
+Physical-GPU conservative-depth validation, production CDN configuration and
+the larger serial DXA redesign remain separate items in [TODO](TODO.md).
 
 ## Whole-repository follow-up repairs (2026-10-19)
 

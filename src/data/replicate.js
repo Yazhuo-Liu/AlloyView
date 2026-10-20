@@ -1,6 +1,8 @@
 import { createCell, invert3, validateFrame } from './model.js';
 import { normalizeRepetitions } from '../render/replication.js';
 import { yieldToMain } from '../shared/task-yield.js';
+import { ReplicationIdCache, retainedIdBytes } from './replication-ids.js';
+import { attachFrameSummary, createFrameSummaryAccumulator, includeFrameSummaryAtom } from './frame-summary.js';
 
 export const MAX_PHYSICAL_REPLICATION_ATOMS = 4_000_000;
 export const MAX_PHYSICAL_REPLICATION_BYTES = 512 * 1024 ** 2;
@@ -11,6 +13,12 @@ const ANALYSIS_FIELDS = ['ptm', 'atomeyeResults', 'vectorPropertyResults', 'anal
 export function physicalReplicationPlan(frame, values, {
   maxAtoms = MAX_PHYSICAL_REPLICATION_ATOMS, maxBytes = MAX_PHYSICAL_REPLICATION_BYTES,
 } = {}) {
+  return replicationPlan(frame, values, { maxAtoms, maxBytes });
+}
+
+function replicationPlan(frame, values, {
+  maxAtoms = MAX_PHYSICAL_REPLICATION_ATOMS, maxBytes = MAX_PHYSICAL_REPLICATION_BYTES,
+} = {}, knownEncodedCharacters = null) {
   const count = frame?.ids?.length;
   if (!Number.isSafeInteger(count) || count < 1 || frame.fractional?.length !== count * 3
       || frame.positions?.length !== count * 3 || frame.types?.length !== count) {
@@ -37,8 +45,8 @@ export function physicalReplicationPlan(frame, values, {
     if (ArrayBuffer.isView(property.data)) sourcePropertyBytes += property.data.byteLength;
     else for (const value of property.data) sourcePropertyBytes += typeof value === 'string' ? 40 + value.length * 2 : 8;
   }
-  let encodedCharacters = 0;
-  for (const id of frame.ids) encodedCharacters += encodeURIComponent(String(id)).length;
+  let encodedCharacters = knownEncodedCharacters ?? 0;
+  if (knownEncodedCharacters === null) for (const id of frame.ids) encodedCharacters += encodeURIComponent(String(id)).length;
   const positionBytes = frame.positions instanceof Float64Array ? 24 : 12;
   const unwrappedBytes = frame.unwrappedPositions instanceof Float64Array
     || !frame.unwrappedPositions && frame.positions instanceof Float64Array ? 24 : 12;
@@ -60,25 +68,33 @@ export function physicalReplicationPlan(frame, values, {
  * this, and analyses that compare two frames then resolve periodic images
  * against the source lattice (see wrappedSourceRepetitions in model.js).
  */
-export async function replicateFrame(frame, values, { signal, onProgress = () => {}, yieldTask = yieldToMain, ...limits } = {}) {
+export async function replicateFrame(frame, values, { signal, onProgress = () => {}, yieldTask = yieldToMain,
+  idCache = new ReplicationIdCache(), ...limits } = {}) {
   checkSignal(signal);
-  const plan = physicalReplicationPlan(frame, values, limits);
+  // Cheap shape/limit checks precede any source-sized ID allocation. Exact
+  // encoded-string accounting follows the cancellable ID check below.
+  const preliminary = replicationPlan(frame, values, limits, 0);
+  const maxBytes = limits.maxBytes ?? MAX_PHYSICAL_REPLICATION_BYTES;
+  const memoryLimitError = () => new Error(`Physical replication exceeds the ${Math.round(maxBytes / 1024 ** 2)} MiB memory limit; reduce the repeat counts.`);
+  const maxEncodedCharacters = preliminary.copies > 1
+    ? (maxBytes - preliminary.estimatedBytes) / (2 * (preliminary.copies - 1)) : Infinity;
+  const identity = await idCache.prepare(frame.ids, preliminary.repetitions,
+    { signal, yieldTask, maxEncodedCharacters, memoryLimitError });
+  // The preflight already counted properties and geometry. Only the copied
+  // ID strings depend on the encoded source length; do not scan properties a
+  // second time when validating the full allocation.
+  const estimatedBytes = preliminary.estimatedBytes + (preliminary.copies - 1) * identity.encodedCharacters * 2;
+  if (estimatedBytes > maxBytes) throw memoryLimitError();
+  const plan = { ...preliminary, estimatedBytes };
+  idCache.makeRoom(identity, estimatedBytes, maxBytes);
   const { repetitions, sourceAtomCount: count, atomCount } = plan;
   onProgress({ phase: 'replicating', completedAtoms: 0, totalAtoms: atomCount });
   const h = frame.cell.vectors;
   const vectors = Float64Array.from(h, (value, index) => value * repetitions[Math.floor(index / 3)]);
   const cell = createCell({ origin: frame.cell.origin, vectors, pbc: frame.cell.pbc, triclinic: frame.cell.triclinic });
-  const sourceKeys = new Array(count), seen = new Set();
+  const sourceKeys = identity.keys;
   const inverse = frame.unwrappedPositions && !frame.imageFlags ? invert3(h) : null;
   for (let atom = 0; atom < count; atom += 1) {
-    const id = frame.ids[atom];
-    if (!(typeof id === 'number' && Number.isSafeInteger(id) || typeof id === 'string' && id.length && !/[\x00-\x1f\x7f]/.test(id))) {
-      throw new Error('Physical replication requires finite, unique atom IDs.');
-    }
-    const key = String(id);
-    if (seen.has(key)) throw new Error('Physical replication requires unique source atom IDs.');
-    seen.add(key);
-    sourceKeys[atom] = encodeURIComponent(key);
     for (let axis = 0; axis < 3; axis += 1) {
       const index = atom * 3 + axis;
       if (!Number.isFinite(frame.fractional[index]) || !Number.isFinite(frame.positions[index])
@@ -93,13 +109,15 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
   const fractional = new Float64Array(atomCount * 3), positions = new PositionArray(atomCount * 3);
   const unwrappedPositions = frame.unwrappedPositions || frame.imageFlags ? new UnwrappedArray(atomCount * 3) : undefined;
   const imageFlags = frame.imageFlags || unwrappedPositions ? new Int32Array(atomCount * 3) : undefined;
-  const ids = new Array(atomCount);
+  const reuseIds = Boolean(identity.ids), ids = identity.ids ?? new Array(atomCount);
+  let idsBytes = reuseIds ? retainedIdBytes(ids) : 0;
   const types = ArrayBuffer.isView(frame.types) ? new frame.types.constructor(atomCount) : new Uint16Array(atomCount);
   const properties = importedProperties(frame).map((property) => {
     const { data, ...metadata } = property;
     return { ...structuredClone(metadata), data: Array.isArray(data) ? new Array(atomCount) : new data.constructor(atomCount) };
   });
   const sourceProperties = importedProperties(frame);
+  const summary = createFrameSummaryAccumulator(frame.typeLabels.length);
   let copy = 0, completedAtoms = 0;
   for (let c = 0; c < repetitions[2]; c += 1) for (let b = 0; b < repetitions[1]; b += 1) for (let a = 0; a < repetitions[0]; a += 1) {
     const offset = [0, 1, 2].map((axis) => a * h[axis] + b * h[3 + axis] + c * h[6 + axis]);
@@ -107,9 +125,13 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
     for (let atom = 0; atom < count; atom += 1) {
       const target = copy * count + atom;
       const sourceBase = atom * 3, targetBase = target * 3;
-      const originalId = frame.ids[atom];
-      ids[target] = copy ? `${ID_PREFIX}copy:${a}:${b}:${c}:${sourceKeys[atom]}`
-        : typeof originalId === 'string' && originalId.startsWith(ID_PREFIX) ? `${ID_PREFIX}base:${sourceKeys[atom]}` : originalId;
+      if (!reuseIds) {
+        const originalId = frame.ids[atom];
+        const id = copy ? `${ID_PREFIX}copy:${a}:${b}:${c}:${sourceKeys[atom]}`
+          : typeof originalId === 'string' && originalId.startsWith(ID_PREFIX) ? `${ID_PREFIX}base:${sourceKeys[atom]}` : originalId;
+        ids[target] = id;
+        idsBytes += 16 + (typeof id === 'string' ? id.length * 2 : 8);
+      }
       types[target] = frame.types[atom];
       for (let axis = 0; axis < 3; axis += 1) {
         let image = frame.imageFlags?.[sourceBase + axis] ?? 0;
@@ -138,6 +160,7 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
             || unwrappedPositions && !Number.isFinite(unwrappedPositions[targetBase + axis])) throw new Error('The enlarged coordinates exceed the supported numeric range.');
       }
       for (let property = 0; property < properties.length; property += 1) properties[property].data[target] = sourceProperties[property].data[atom];
+      includeFrameSummaryAtom(summary, types[target], positions, targetBase);
       completedAtoms += 1;
       if (completedAtoms % 16_384 === 0) {
         onProgress({ phase: 'replicating', completedAtoms, totalAtoms: atomCount });
@@ -152,8 +175,11 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
     unwrappedPositions, imageFlags, cell, properties,
     physicalReplication: { repetitions: repetitions.slice(), sourceAtomCount: count, wrappedSource: !imageFlags } };
   for (const name of ANALYSIS_FIELDS) delete result[name];
+  attachFrameSummary(result, summary);
+  validateFrame(result);
+  idCache.commit(identity, ids, idsBytes);
   onProgress({ phase: 'replicating', completedAtoms: atomCount, totalAtoms: atomCount });
-  return validateFrame(result);
+  return result;
 }
 
 function importedProperties(frame) {

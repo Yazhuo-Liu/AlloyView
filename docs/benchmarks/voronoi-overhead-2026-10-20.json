@@ -1,0 +1,220 @@
+{
+  "date": "2026-10-20",
+  "baselineCommit": "adb06489831cf2f78f50790c25eb7d0ae0c2c762",
+  "scope": "C10 CPU Voronoi; real Worker pool measurements also include T10 omission of already resident types/index payloads.",
+  "method": "Exclusive measurement window, no competing build or benchmark; alternating before/after then after/before, after one warmup of each implementation. FCC has 7 repetitions, full NiGB has 3. All source atoms and original cell geometry are retained.",
+  "verification": "Every measured and warmup calculation matches the baseline SHA-256 over all 5 per-atom fields, 6 face CSR arrays, labels, summary, coordination/volume/face-area distributions and index counts. Timing/cache metadata excluded. Every transport sample compares the entire expanded string array.",
+  "limits": "Node CPU and native structuredClone timings, not browser rendering or GPU performance. Transport microbenchmark includes 3 clone/transfer hops and final public decoding, excludes creation of input ID arrays and OS thread scheduling. Kernel timing excludes first Wasm initialization and neighbor index creation. Pool timing covers warmed full-frame foreground execution.",
+  "commands": [
+    "node scripts/benchmark-voronoi-overhead.mjs --baseline /tmp/alloyview-perf-baseline-adb0648 --dataset fcc --repetitions 7 --workers 2 --shared true",
+    "node scripts/benchmark-voronoi-overhead.mjs --baseline /tmp/alloyview-perf-baseline-adb0648 --dataset nigb --repetitions 3 --workers 2 --shared true"
+  ],
+  "results": [
+    {
+      "runtime": "v24.19.0",
+      "availableParallelism": 4,
+      "cpuQuota": "400000 100000",
+      "baseline": "/tmp/alloyview-perf-baseline-adb0648",
+      "dataset": "fcc",
+      "sourceAtoms": 6912,
+      "analyzedAtoms": 6912,
+      "scientificHash": "a56b8fd42e339f994a8e6655bc098c412d0ff1e0b250dbe035ed72a6be26df46",
+      "kernel": {
+        "scope": "Resident CPU Voro++ kernel + typed face assembly + topology labels + statistics; index/first Wasm initialization excluded",
+        "samplesMs": {
+          "before": [
+            129.04463800000002,
+            139.01793199999997,
+            129.48411099999998,
+            116.78527400000007,
+            109.7630049999998,
+            105.56997499999989,
+            108.71463300000005
+          ],
+          "after": [
+            101.48428899999999,
+            94.37304599999993,
+            98.46280799999988,
+            80.55160300000011,
+            83.56436099999996,
+            83.4664630000002,
+            83.19126699999993
+          ]
+        },
+        "mediansMs": {
+          "before": 116.78527400000007,
+          "after": 83.56436099999996
+        }
+      },
+      "pool": {
+        "scope": "Full-frame warmed real Worker pool, all three transport hops and finalization, public labels expanded",
+        "requestedWorkers": 2,
+        "metadata": {
+          "before": {
+            "workerCount": 2,
+            "sharedMemory": true,
+            "chunkCount": 27,
+            "kernelInitializations": 0,
+            "indexBuilds": 0
+          },
+          "after": {
+            "workerCount": 2,
+            "sharedMemory": true,
+            "chunkCount": 27,
+            "kernelInitializations": 0,
+            "indexBuilds": 0
+          }
+        },
+        "samplesMs": {
+          "before": [
+            92.26559700000007,
+            85.979198,
+            77.39978999999994,
+            78.503154,
+            72.72607599999992,
+            93.588123,
+            73.07629399999996
+          ],
+          "after": [
+            67.28953500000034,
+            58.200642000000244,
+            74.42266699999982,
+            59.38886000000002,
+            62.20970299999999,
+            58.24553500000002,
+            63.6444590000001
+          ]
+        },
+        "mediansMs": {
+          "before": 78.503154,
+          "after": 62.20970299999999
+        }
+      },
+      "transport": {
+        "scope": "Three native structured-clone hops, transferable compact IDs; final public string expansion included; no thread scheduling",
+        "atoms": 1000000,
+        "uniqueLabels": 1,
+        "perHopStrings": {
+          "before": 1000000,
+          "after": 1
+        },
+        "compactIdBytes": 4000000,
+        "samplesMs": {
+          "before": [
+            272.42284800000016,
+            360.15025999999943,
+            361.01435499999934,
+            396.35234500000024,
+            293.9034590000001,
+            338.80610499999966,
+            314.76471499999934
+          ],
+          "after": [
+            6.931362000000263,
+            6.057112999999845,
+            4.067739999999503,
+            5.706602000000203,
+            6.733041999999841,
+            5.970691000000443,
+            4.498799999999392
+          ]
+        },
+        "mediansMs": {
+          "before": 338.80610499999966,
+          "after": 5.970691000000443
+        }
+      }
+    },
+    {
+      "runtime": "v24.19.0",
+      "availableParallelism": 4,
+      "cpuQuota": "400000 100000",
+      "baseline": "/tmp/alloyview-perf-baseline-adb0648",
+      "dataset": "nigb",
+      "sourceAtoms": 129904,
+      "analyzedAtoms": 129904,
+      "scientificHash": "6905c6678d3cbe57b39123df18555f1586d04cb01f75b770a4cd79147e2f3d22",
+      "kernel": {
+        "scope": "Resident CPU Voro++ kernel + typed face assembly + topology labels + statistics; index/first Wasm initialization excluded",
+        "samplesMs": {
+          "before": [
+            23025.367045,
+            22656.193986,
+            22539.745788
+          ],
+          "after": [
+            21540.188330999998,
+            21296.709652999998,
+            21295.50786100002
+          ]
+        },
+        "mediansMs": {
+          "before": 22656.193986,
+          "after": 21296.709652999998
+        }
+      },
+      "pool": {
+        "scope": "Full-frame warmed real Worker pool, all three transport hops and finalization, public labels expanded",
+        "requestedWorkers": 2,
+        "metadata": {
+          "before": {
+            "workerCount": 2,
+            "sharedMemory": true,
+            "chunkCount": 508,
+            "kernelInitializations": 0,
+            "indexBuilds": 0
+          },
+          "after": {
+            "workerCount": 2,
+            "sharedMemory": true,
+            "chunkCount": 508,
+            "kernelInitializations": 0,
+            "indexBuilds": 0
+          }
+        },
+        "samplesMs": {
+          "before": [
+            12614.798622000002,
+            12591.532669999986,
+            13547.79107300003
+          ],
+          "after": [
+            11993.61624599999,
+            11605.408395000006,
+            12483.320237999957
+          ]
+        },
+        "mediansMs": {
+          "before": 12614.798622000002,
+          "after": 11993.61624599999
+        }
+      },
+      "transport": {
+        "scope": "Three native structured-clone hops, transferable compact IDs; final public string expansion included; no thread scheduling",
+        "atoms": 1000000,
+        "uniqueLabels": 20,
+        "perHopStrings": {
+          "before": 1000000,
+          "after": 20
+        },
+        "compactIdBytes": 4000000,
+        "samplesMs": {
+          "before": [
+            316.52718500001356,
+            335.1625519999652,
+            297.47224400000414
+          ],
+          "after": [
+            4.878996999992523,
+            4.71172399999341,
+            4.292661999992561
+          ]
+        },
+        "mediansMs": {
+          "before": 316.52718500001356,
+          "after": 4.71172399999341
+        }
+      }
+    }
+  ]
+}

@@ -90,6 +90,15 @@ Rebuild with Emscripten by running `bash wasm/build-dxa.sh` from the repository.
 The build maps the checkout directory to `.` in embedded source paths
 (`-ffile-prefix-map`), so the binaries do not depend on where it is checked out.
 
+`DislocationTracer.cpp` keeps each BFS node's immutable lattice coordinates,
+reference transform and depth in local values while visiting its outgoing edges.
+The original edge filtering, floating-point operations, queue order, circuit
+creation, junction state and cancellation points remain unchanged. This avoids
+reloading those values through potentially aliased search/circuit state; it does
+not parallelize or skip a search because a preceding extraction had no
+dislocations. The original upstream digest remains in `UPSTREAM_SHA256SUMS`;
+`SHA256SUMS` records the adapted source.
+
 This version predates OVITO 3.15's low-c/a HCP correction. HCP and diamond retain
 the capabilities and limitations of the pinned release; new datasets require
 comparison with an independent reference. Runtime settings use one input lattice

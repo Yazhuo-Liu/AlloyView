@@ -1,4 +1,5 @@
 import { createCell, determinant3, fractionalToCartesian, validateFrame } from '../data/model.js';
+import { attachFrameSummary } from '../data/frame-summary.js';
 import { coordinatesForCell } from './xyz.js';
 
 const poscarError = (message) => new Error(`POSCAR: ${message}`);
@@ -119,9 +120,11 @@ export function parsePoscar(text, sourceName = 'POSCAR') {
   });
   const ids = new Float64Array(count);
   for (let index = 0; index < count; index += 1) ids[index] = index + 1;
-  return validateFrame({
-    ids, idSource: 'row-order', types, typeLabels, ...coordinatesForCell(positions, cell, 'POSCAR'), cell,
+  const summaryOutput = { types, typeCount: typeLabels.length };
+  const coordinates = coordinatesForCell(positions, cell, 'POSCAR', summaryOutput);
+  return attachFrameSummary(validateFrame({
+    ids, idSource: 'row-order', types, typeLabels, ...coordinates, cell,
     properties: flags, timestep: null, title: sourceName, sourceFormat: 'poscar', comment,
     parseMs: performance.now() - startedAt,
-  });
+  }), summaryOutput.summary);
 }

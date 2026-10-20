@@ -1,0 +1,164 @@
+{
+  "runtime": "v24.19.0",
+  "availableParallelism": 4,
+  "cpuQuota": "400000 100000",
+  "baseline": "/tmp/alloyview-perf-baseline-adb0648",
+  "sourceAtoms": 119164,
+  "replicatedAtoms": 953312,
+  "scientificHashes": [
+    "22f343802c068685c9dea412dbda1f8b02ed47ee69a2a64ef37ed94188e55a6d",
+    "919790597109859741ed55f41cebfd0a71039fd19b24b4a8842a65f59df340a0"
+  ],
+  "allocation": {
+    "retainedIdsBytes": 61363122,
+    "sourceSnapshotBytes": 476656,
+    "sourceSnapshotArrays": 1,
+    "retainedExpandedIdArrays": 1,
+    "retainedEncodedKeyArrays": 0
+  },
+  "direct": {
+    "sourceReplacement": {
+      "scope": "Complete cold layout including validation, strings, geometry and summary; scheduler yields excluded",
+      "samplesMs": {
+        "before": [
+          440.11994400000003,
+          296.34957699999995,
+          203.72707199999968,
+          287.11794199999986,
+          189.2165840000007
+        ],
+        "after": [
+          292.4428700000003,
+          306.4163319999998,
+          289.9358259999999,
+          207.08702899999935,
+          307.6833349999997
+        ]
+      },
+      "mediansMs": {
+        "before": 287.11794199999986,
+        "after": 292.4428700000003
+      },
+      "newLayoutCounts": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "afterIdPrepareMs": [
+        27.018242999999984,
+        18.814400000000205,
+        18.72157900000002,
+        18.3209939999997,
+        17.64633700000013
+      ],
+      "afterIdFreezeAndCommitMs": [
+        0.0149730000002819,
+        0.012339000000793021,
+        0.01417200000014418,
+        0.011105999999927008,
+        0.015413999999509542
+      ]
+    },
+    "rowReorder": {
+      "scope": "Complete cold layout including validation, strings, geometry and summary; scheduler yields excluded",
+      "samplesMs": {
+        "before": [
+          436.53066899999976,
+          262.3190630000008,
+          344.78251099999943,
+          203.29775999999947,
+          348.06411800000024
+        ],
+        "after": [
+          236.60773899999913,
+          306.7853350000005,
+          215.62212800000088,
+          287.27744600000005,
+          274.3842600000007
+        ]
+      },
+      "mediansMs": {
+        "before": 344.78251099999943,
+        "after": 274.3842600000007
+      },
+      "newLayoutCounts": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "afterIdPrepareMs": [
+        27.66962699999931,
+        22.05863599999975,
+        20.660845999998855,
+        18.680065999998988,
+        22.56766400000015
+      ],
+      "afterIdFreezeAndCommitMs": [
+        0.023746000000755885,
+        0.012968999999429798,
+        0.011808000001110486,
+        0.014472000000750995,
+        0.010526000000027125
+      ]
+    }
+  },
+  "workerSourceReplacement": {
+    "scope": "Real Worker round trip with full ID construction/clone after every source generation change; module startup excluded",
+    "samplesMs": {
+      "before": [
+        607.7546629999997,
+        417.482129,
+        553.431195000001,
+        439.46827699999994,
+        607.1859880000011
+      ],
+      "after": [
+        645.0793619999986,
+        685.3173039999965,
+        559.0059989999972,
+        573.0909769999998,
+        385.3873429999985
+      ]
+    },
+    "mediansMs": {
+      "before": 553.431195000001,
+      "after": 573.0909769999998
+    },
+    "pageRestoreMs": {
+      "before": [
+        0.020449999999982538,
+        0.0063599999994039536,
+        0.008372000000235857,
+        0.007431000001815846,
+        0.007550999998784391
+      ],
+      "after": [
+        0.043585999999777414,
+        0.05368099999759579,
+        0.04174299999795039,
+        0.054100999997899635,
+        0.04464700000244193
+      ]
+    },
+    "transmittedIds": {
+      "before": [
+        953312,
+        953312,
+        953312,
+        953312,
+        953312
+      ],
+      "after": [
+        953312,
+        953312,
+        953312,
+        953312,
+        953312
+      ]
+    }
+  }
+}

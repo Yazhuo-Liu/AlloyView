@@ -1,4 +1,5 @@
 import { clearAnalysisResults, replaceAnalysisProperty } from '../../analysis/results.js';
+import { frameTypeCounts } from '../../data/frame-summary.js';
 import { analysisBackendLabel, analysisBackendDetails, analysisProgressText } from '../../analysis/status.js';
 import { renderDistributionChart, renderStatisticsTable } from '../../render/distribution-chart.js';
 import { initializeVoronoiResults } from '../../render/voronoi-results.js';
@@ -181,8 +182,7 @@ export function initializeTopologyTools({ pool, tools, getFrame, getFrames = () 
     if (container && typeFrame !== frame) {
       typeFrame = frame; typeChoices = [];
       const root = container.ownerDocument;
-      const counts = new Uint32Array(frame?.typeLabels?.length ?? 0);
-      for (const type of frame?.types ?? []) counts[type]++;
+      const counts = frame ? frameTypeCounts(frame) : [];
       for (const [type, label] of (frame?.typeLabels ?? []).entries()) {
         const row = root.createElement('label'), input = root.createElement('input'), text = root.createElement('span');
         row.className = 'slice-toggle'; input.type = 'checkbox'; input.setAttribute('data-voronoi-type', label);

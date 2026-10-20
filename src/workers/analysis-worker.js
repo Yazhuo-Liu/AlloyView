@@ -8,7 +8,7 @@ import { calculateBondStatistics, prepareBondStatisticsContext, calculatePrepare
 import { calculateVoronoi, calculateVoronoiGeometry, calculateVoronoiGeometryBatch, mergeVoronoiPartials,
   warmupVoronoi, prepareVoronoiFrame, voronoiKernelMemoryBytes } from '../analysis/voronoi.js';
 import { calculateRdf, prepareRdfContext, calculatePreparedRdf } from '../analysis/rdf.js';
-import { calculateLocalShearCoordination, calculateLocalShearMetrics, finalizeLocalShear } from '../analysis/local-shear.js';
+import { calculateLocalShearCoordination, calculateLocalShearMetrics, calculateLocalShearPreparation, finalizeLocalShear } from '../analysis/local-shear.js';
 import { calculateReferenceStrain, prepareReferenceStrainContext } from '../analysis/reference-strain.js';
 import { calculatePreparedDisplacements, prepareDisplacementCalculation } from '../analysis/displacement.js';
 import { calculateClusterEdges, finalizeClusters } from '../analysis/clusters.js';
@@ -236,7 +236,7 @@ self.addEventListener('message', async ({ data }) => {
       result = await prepareVoronoiFrame(frame, { ...parameters, onPhase });
       result.frameUploaded = frameUploaded;
     } else if (kind === 'voronoi') {
-      result = await calculateVoronoi(frame, { ...parameters, onPhase, onAtoms });
+      result = await calculateVoronoi(frame, { ...parameters, onPhase, onAtoms, compactIndices: true });
       result.frameUploaded = frameUploaded;
     } else if (kind === 'voronoiGeometry') {
       result = await calculateVoronoiGeometry(frame, { ...parameters, onPhase, onAtoms });
@@ -246,7 +246,7 @@ self.addEventListener('message', async ({ data }) => {
       result.frameUploaded = frameUploaded;
     } else if (kind === 'voronoiFinalize') {
       onPhase('finalizing');
-      result = mergeVoronoiPartials(parameters.partials, parameters.atomCount, { bins: parameters.bins, consumePartials: true });
+      result = mergeVoronoiPartials(parameters.partials, parameters.atomCount, { bins: parameters.bins, consumePartials: true, compactIndices: true });
     } else if (kind === 'rdf') {
       result = cpuFrameKey !== undefined && parameters.preparedContext
         ? calculatePreparedRdf(parameters.preparedContext, { ...parameters, onPhase, onAtoms })
@@ -277,7 +277,7 @@ self.addEventListener('message', async ({ data }) => {
     } else if (kind === 'localShearCoordination') {
       result = calculateLocalShearCoordination(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'localShearMetrics') {
-      result = calculateLocalShearMetrics(frame, { ...parameters, onPhase, onAtoms });
+      result = (parameters.collectCoordination ? calculateLocalShearPreparation : calculateLocalShearMetrics)(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'localShearFinalize') {
       onPhase('analyzing');
       const offset = (parameters.startAtom - (parameters.metricStartAtom ?? 0)) * 6;

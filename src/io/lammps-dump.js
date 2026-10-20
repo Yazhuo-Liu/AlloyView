@@ -3,6 +3,8 @@ import {
   invert3,
   validateFrame,
 } from '../data/model.js';
+import { attachFrameSummary, createFrameSummaryAccumulator, includeFrameSummaryAtom } from '../data/frame-summary.js';
+import { scanByteChunks } from './text-lines.js';
 import {
   AsciiRowReader,
   FALLBACK,
@@ -40,7 +42,7 @@ const RESERVED_COLUMNS = new Set([
   ...IMAGE_COLUMNS,
 ]);
 
-export async function indexLammpsDump(blob, onProgress = () => {}, { onFrame = () => {}, chunkSize = 4 * 1024 * 1024, signal } = {}) {
+export async function indexLammpsDump(blob, onProgress = () => {}, { onFrame = () => {}, ...options } = {}) {
   const startedAt = performance.now();
   const overlap = TIMESTEP_MARKER.length + 1;
   const offsets = [];
@@ -51,10 +53,7 @@ export async function indexLammpsDump(blob, onProgress = () => {}, { onFrame = (
   let leadingBom = false;
   const firstBytes = new Uint8Array(3);
 
-  for (let offset = 0; offset < blob.size; offset += chunkSize) {
-    if (signal?.aborted) throw new DOMException('Trajectory indexing cancelled.', 'AbortError');
-    const end = Math.min(blob.size, offset + chunkSize);
-    const chunk = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
+  for await (const { chunk, offset, end, final } of scanByteChunks(blob, options)) {
     if (offset < 3) {
       firstBytes.set(chunk.subarray(0, Math.min(3 - offset, chunk.length)), offset);
       leadingBom = firstBytes[0] === 0xef && firstBytes[1] === 0xbb && firstBytes[2] === 0xbf;
@@ -68,7 +67,7 @@ export async function indexLammpsDump(blob, onProgress = () => {}, { onFrame = (
       const absolute = baseOffset + index;
       if (index > 0 && combined[index - 1] !== 10 && !(leadingBom && absolute === 3)) continue;
       for (const marker of FRAME_MARKERS) {
-        if (index + marker.bytes.length >= combined.length && end < blob.size) continue;
+        if (index + marker.bytes.length >= combined.length && !final) continue;
         let matches = true;
         for (let markerIndex = 0; markerIndex < marker.bytes.length; markerIndex += 1) {
           if (combined[index + markerIndex] !== marker.bytes[markerIndex]) { matches = false; break; }
@@ -475,6 +474,7 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
     : unwrappedCoordinateSet || unwrapImages ? new Float32Array(count * 3) : null;
   const unwrapSource = unwrappedCoordinateSet ? unwrappedCoordinateSet.names.join('/') : unwrapImages ? 'ix/iy/iz' : null;
   const { origin, vectors, pbc } = cell;
+  const summary = createFrameSummaryAccumulator(typeLabels.length);
   for (let atom = 0; atom < count; atom += 1) {
     const rawType = rawTypes[atom];
     types[atom] = rawType < denseTypeLimit ? denseTypeMap[rawType] : sparseTypeMap.get(rawType);
@@ -495,6 +495,7 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
     positions[offset] = origin[0] + wrappedA * vectors[0] + wrappedB * vectors[3] + wrappedC * vectors[6];
     positions[offset + 1] = origin[1] + wrappedA * vectors[1] + wrappedB * vectors[4] + wrappedC * vectors[7];
     positions[offset + 2] = origin[2] + wrappedA * vectors[2] + wrappedB * vectors[5] + wrappedC * vectors[8];
+    includeFrameSummaryAtom(summary, types[atom], positions, offset);
     if (unwrapImages || unwrappedScaled) {
       const unwrappedA = unwrapImages ? Math.fround(a + imageFlags[offset]) : unwrappedValues[offset];
       const unwrappedB = unwrapImages ? Math.fround(b + imageFlags[offset + 1]) : unwrappedValues[offset + 1];
@@ -524,7 +525,7 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
     }
   }
 
-  return validateFrame({
+  return attachFrameSummary(validateFrame({
     ids,
     // The id column is required, so dump IDs are always the file's own.
     idSource: 'explicit',
@@ -547,7 +548,7 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
     },
     unwrapSource,
     parseMs: performance.now() - startedAt,
-  });
+  }), summary);
 }
 
 function normalizedImageFlag(image) {

@@ -258,9 +258,10 @@ inner format. The structure Worker decompresses with the browser's
 older browsers report that the file must be decompressed first.
 
 - **Trajectories read in any order** (LAMMPS dumps, XYZ and PDB, including
-  numbered sequences) are decompressed once when opened. The Worker copies the
-  output into a `Blob` in 8 MiB parts, so its own memory holds one part at a
-  time, then indexes and slices that Blob exactly like an uncompressed file.
+  numbered sequences) are decompressed once while their frame boundaries are
+  indexed. Complete frames can be displayed before decompression finishes.
+  The Worker stages decoded chunks as Blob parts and gives each frame its own
+  byte-range slices; it does not decompress or scan the full file a second time.
   The Blob takes the decompressed size. Chromium-based browsers move large
   Blob data to disk; Firefox and Safari may keep it in memory, so there a
   trajectory whose decompressed size approaches the free memory of the device
@@ -331,8 +332,10 @@ again, preserving the pool instead of recreating Workers while scrubbing.
 Malformed later frame boundaries are reported even if an earlier valid frame
 has already been displayed. Configuration replay waits for indexing before
 checking that its saved frame exists, and exports that cover the whole
-trajectory wait for it too. gzip trajectories still require the
-existing full decompression before random-access indexing.
+trajectory wait for it too. gzip trajectories publish complete frames during
+decompression. A corrupt compressed tail stops indexing and reports an error;
+an already displayed complete frame remains available, but the missing tail is
+never treated as a completed trajectory.
 
 The atom rows of LAMMPS dumps, CFG files and XYZ frames are converted directly
 from these bytes instead of splitting decoded lines into strings. Every value

@@ -20,6 +20,38 @@ function fixture(options = {}) {
   return { pool, workers };
 }
 
+test('parser startup is admitted once, promoted for display and reused across source resets', async () => {
+  const budget = new CpuBudget({ environment: { navigator: { hardwareConcurrency: 3 } } });
+  const occupied = await budget.acquire(1);
+  const { pool, workers } = fixture({
+    acquire: ({ priority, signal }) => budget.acquire(1, { signal, priority }),
+    promote: ({ priority, signal }) => budget.promote(signal, priority),
+  });
+  const warmed = pool.warm();
+  await tick();
+  assert.equal(budget.queue[0].priority, -20);
+  pool.reset();
+  const frame = pool.parse({ index: 0 });
+  assert.equal(budget.queue[0].priority, 20, 'first frame promotes the pending warm admission');
+  occupied.release(); await tick();
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].messages[0].type, 'warm-parser');
+  assert.equal(budget.active, 1);
+  workers[0].complete(); await warmed; await tick();
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].messages.at(-1).descriptor.index, 0);
+  workers[0].complete({ first: true });
+  assert.deepEqual(await frame, { first: true });
+  pool.reset();
+  const next = pool.parse({ index: 10 });
+  await tick();
+  assert.equal(workers.length, 1, 'loading another source retains parser modules');
+  workers[0].complete({ next: true });
+  assert.deepEqual(await next, { next: true });
+  assert.equal(budget.active, 0);
+  pool.close();
+});
+
 test('prefetch parses concurrently and leaves a separate foreground lane available', async () => {
   const { pool, workers } = fixture();
   const bg1 = pool.parse({ index: 1 }, { background: true });

@@ -1,4 +1,5 @@
 import { FrameCache } from './data/frame-cache.js';
+import { frameTypeOrder } from './data/frame-summary.js';
 import { SharedFrameRequests } from './data/shared-frame-requests.js';
 import { ColorQuantityResolver, colorPropertyKey, initialColorQuantities } from './render/color-quantities.js';
 import { colorsByDiscreteProperty, discreteValues } from './render/discrete-colors.js';
@@ -1977,7 +1978,7 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   framePaletteSeed = { frame, mode: state.colorMode, palette, properties: frame.properties.map(property =>
     [property.name, property.data, property.categories, property.displayName, property.unit]), groups: state.selectionGroups.groups };
   const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), atomEyeTools.getRadii(), displayRepetitions(),
-    { coordinateMode: displayCoordinateMode(frame) });
+    { coordinateMode: displayCoordinateMode(frame), useFrameSummary: true });
   trajectoryTools?.onFrame();
   if (state.coordinateMode === 'unwrapped' && trajectoryTools?.needsInferredUnwrap(frame)) {
     // Frames shown outside normal navigation (replication, restore) catch up.
@@ -2922,7 +2923,7 @@ const LATTICE_ESTIMATE_HELP = 'Missing references can be estimated from PTM geom
 
 function missingReferenceTypes(frame = state.frame) {
   if (!frame) return [];
-  return [...new Set(frame.types)].filter(type => {
+  return frameTypeOrder(frame).filter(type => {
     const reference = state.references[type];
     return !reference || !Number.isFinite(reference.a)
       || ([2, 7].includes(reference.structure) && !Number.isFinite(reference.c));

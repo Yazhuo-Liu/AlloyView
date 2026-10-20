@@ -28,8 +28,24 @@ async function checkCores(cores) {
         constructor(...args) {
           const source = String(args[0]);
           super(...args);
-          const row = { url: source, terminated: false, created: performance.now() };
+          const row = { id: cpuWorkerEvents.length, url: source, terminated: false, created: performance.now(), jobs: [] };
           cpuWorkerEvents.push(row);
+          this.cpuWarmupEventRow = row;
+          if (/\\/(analysis|dxa)-worker\\.js(?:$|[?#])/.test(source)) {
+            const postMessage = this.postMessage.bind(this);
+            this.postMessage = (message, ...rest) => {
+              if (message.id !== undefined) row.jobs.push({ id: message.id, kind: message.kind ?? message.type,
+                modules: message.modules, started: performance.now() });
+              return postMessage(message, ...rest);
+            };
+            this.addEventListener('message', ({ data }) => {
+              if (data.id === undefined || data.phase || data.event) return;
+              const job = row.jobs.findLast(job => job.id === data.id);
+              if (job) Object.assign(job, { finished: performance.now(), ok: data.ok,
+                modules: data.result?.modules ?? job.modules, kernelReused: data.result?.kernelReused,
+                ptmKernelReused: data.result?.initializedModules?.ptm?.kernelReused });
+            });
+          }
           const terminate = this.terminate.bind(this);
           this.terminate = () => { row.terminated = true; return terminate(); };
         }
@@ -49,9 +65,16 @@ async function checkCores(cores) {
     await evaluate(`(async () => {
       const app = document.querySelector('script[type=module][src]').src;
       const { AnalysisPool } = await import(new URL('./analysis/analysis-pool.js', app));
+      const { CpuBudget } = await import(new URL('./analysis/cpu-budget.js', app));
       const { DxaClient } = await import(new URL('./analysis/dxa-client.js', app));
       const { WebGLRenderer } = await import(new URL('./render/webgl-renderer.js', app));
-      const checks = window.cpuWarmupChecks = { events: [], analyses: 0 };
+      const checks = window.cpuWarmupChecks = { events: [], analyses: 0, peakCpuPermits: 0 };
+      const pumpBudget = CpuBudget.prototype.pump;
+      CpuBudget.prototype.pump = function(...args) {
+        const result = pumpBudget.apply(this, args);
+        checks.peakCpuPermits = Math.max(checks.peakCpuPermits, this.active);
+        return result;
+      };
       const instrument = (prototype, method, backend) => {
         const original = prototype[method];
         prototype[method] = function(options = {}) {
@@ -88,6 +111,9 @@ async function checkCores(cores) {
       };
       checks.snapshot = () => ({ events: checks.events, analyses: checks.analyses,
         workers: cpuWorkerEvents.filter(row => /\\/(analysis|dxa)-worker\\.js(?:$|[?#])/.test(row.url)),
+        peakCpuPermits: checks.peakCpuPermits, activeCpuPermits: checks.analysis?.cpuBudget.active,
+        slots: [...(checks.analysis?.slots ?? [])].map(slot => ({ worker: slot.worker.cpuWarmupEventRow?.id,
+          task: slot.task?.payload.kind, ptmWarmed: slot.ptmWarmed, voronoiWarmed: slot.voronoiWarmed })),
         status: checks.analysis?.cpuWarmupStatus, limit: checks.analysis?.limit,
         gpuEnabled: checks.analysis?.gpuEnabled, gpu: checks.analysis?.gpuCacheStatus,
         voronoiTarget: checks.renderer ? checks.analysis?.voronoiWorkerCount(checks.renderer.frame) : null,
@@ -102,12 +128,25 @@ async function checkCores(cores) {
       await waitFor(`cpuWarmupChecks.renderer?.frame.ids.length === ${atoms}`, 'Source import');
       await waitFor(`['analysis','dxa'].every(backend => cpuWarmupChecks.events.some(row => row.backend === backend && row.atoms === ${atoms} && row.status))`, 'Loaded-source CPU and DXA prewarm');
     }
+    function assertWarmupResources(snapshot, label) {
+      const diagnostic = JSON.stringify({ scope: label, snapshot });
+      assert.ok(snapshot.peakCpuPermits <= snapshot.limit, `CPU admission stays within its shared quota: ${diagnostic}`);
+      assert.ok(snapshot.slots.length <= snapshot.limit, `Retained ordinary Workers stay within their limit: ${diagnostic}`);
+      assert.equal(snapshot.status.workerCount, snapshot.slots.length);
+      for (const worker of snapshot.workers) {
+        const initializations = worker.jobs.filter(job => job.ok && job.ptmKernelReused === false);
+        assert.ok(initializations.length <= 1, `A retained Worker initializes PTM at most once: ${diagnostic}`);
+      }
+    }
     await load();
     // GPU acceleration is on by default. Voronoi still runs on CPU Workers, so
     // its resident frame is prepared there, and the GPU prepares nothing for it.
     await waitFor('cpuWarmupChecks.analysis.cpuWarmupStatus.preparedVoronoiWorkers >= 1 && !cpuWarmupChecks.analysis.cpuFramePreparation', 'CPU Voronoi frame preparation with GPU acceleration on');
     await waitFor('cpuWarmupChecks.analysis.gpuCacheStatus.cachedFrameIndexes.includes(0)', 'GPU frame upload');
+    await waitFor('cpuWarmupChecks.analysis.active.size === 0 && cpuWarmupChecks.analysis.cpuBudget.active === 0',
+      'All initial CPU preparation acknowledges completion and returns its permits');
     const loaded = await evaluate('cpuWarmupChecks.snapshot()');
+    assertWarmupResources(loaded, 'Loaded-source prewarm');
     assert.equal(loaded.gpuEnabled, true);
     assert.ok(loaded.voronoiTarget >= 1 && loaded.status.readyModules.voronoi >= loaded.voronoiTarget, 'the Voro++ modules are warm');
     assert.equal(loaded.status.preparedVoronoiWorkers, loaded.voronoiTarget, 'the displayed frame is resident in every Voronoi Worker it will use');
@@ -116,7 +155,14 @@ async function checkCores(cores) {
     assert.equal(loaded.limit, cores - 2);
     assert.equal(loaded.sharedBudget, true, 'Both analysis systems must share one application concurrency budget.');
     assert.equal(loaded.analyses, 0, 'Loading prewarms modules without running any analysis.');
-    assert.equal(loaded.status.readyWorkers, 1);
+    const loadedWarmup = loaded.events.find(row => row.backend === 'analysis' && row.atoms === atoms && row.status).status;
+    assert.equal(loadedWarmup.targetWorkers, 1, 'The small source requests exactly one PTM module Worker.');
+    // A quick source commit can cancel its initial module-only subscriber
+    // while that Worker's initialization is already posted. The useful ACK
+    // is retained, so it can finish beside the new source's requested Worker.
+    assert.ok(loaded.status.readyWorkers >= loadedWarmup.targetWorkers && loaded.status.readyWorkers <= loaded.limit,
+      JSON.stringify({ scope: 'Loaded-source module readiness', loaded }));
+    assert.equal(loaded.activeCpuPermits, 0, 'Idle prewarmed Workers hold no CPU permits.');
     const initialDxa = loaded.events.find(row => row.backend === 'dxa' && row.atoms === atoms && row.status).status;
     // One DXA thread per 2,048 atoms; this small source stays below the
     // code warm-up threshold.
@@ -135,6 +181,7 @@ async function checkCores(cores) {
     await waitFor(`cpuWarmupChecks.renderer.frame.ids.length === ${expandedAtoms}`, 'Physical replication');
     await waitFor(`['analysis','dxa'].every(backend => cpuWarmupChecks.events.some(row => row.backend === backend && row.atoms === ${expandedAtoms} && row.status))`, 'Expanded-source prewarm');
     const expanded = await evaluate('cpuWarmupChecks.snapshot()');
+    assertWarmupResources(expanded, 'Physical-replication prewarm');
     assert.equal(expanded.analyses, 0);
     assert.equal(expanded.status.readyWorkers, cores - 2);
     const expansionDisplay = expanded.events.find(row => row.kind === 'display' && row.atoms === expandedAtoms);
@@ -158,6 +205,7 @@ async function checkCores(cores) {
     const reloaded = await evaluate('cpuWarmupChecks.snapshot()');
     await waitFor(`cpuWarmupChecks.events.filter(row => row.backend === 'dxa' && row.atoms === ${atoms} && row.status).length >= 2`, 'Reloaded-source prewarm');
     const final = await evaluate('cpuWarmupChecks.snapshot()');
+    assertWarmupResources(final, 'Reloaded-source prewarm');
     const reloadedDxa = final.events.filter(row => row.backend === 'dxa' && row.atoms === atoms && row.status).at(-1).status;
     assert.equal(final.workers.length, expanded.workers.length);
     assert.ok(final.workers.every(row => !row.terminated));
@@ -175,6 +223,7 @@ async function checkCores(cores) {
     const analyzed = await evaluate(`({ snapshot: cpuWarmupChecks.snapshot(),
       hasCoordination: cpuWarmupChecks.renderer.frame.properties.some(property => property.name === 'coordination'),
       sourceCoordinateBytes: cpuWarmupChecks.renderer.frame.fractional.byteLength })`);
+    assertWarmupResources(analyzed.snapshot, 'Foreground coordination');
     assert.equal(analyzed.snapshot.analyses, 1);
     assert.equal(analyzed.snapshot.workers.length, final.workers.length);
     assert.ok(analyzed.snapshot.workers.every(row => !row.terminated));
@@ -187,6 +236,8 @@ async function checkCores(cores) {
       expanded: { ordinaryReady: expanded.status.readyWorkers, dxa: expandedDxa },
       reloaded: { ordinaryReady: reloaded.status.readyWorkers, dxa: reloadedDxa },
       workerCoordinatorsCreated: final.workers.length, analysesRunDuringPrewarm: final.analyses,
+      peakCpuPermits: analyzed.snapshot.peakCpuPermits, smallSourceTargetWorkers: loadedWarmup.targetWorkers,
+      retainedPtmInitializedAtMostOnce: true,
       foregroundCoordinationReusedWorkers: true,
       replicationStartedWarmupBeforeRender: true, retainedAcrossSourceReset: true };
   }, { software: useSoftwareAdapter(true), isolated: true });

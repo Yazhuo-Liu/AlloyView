@@ -33,6 +33,89 @@ function firstFrame(client, result = { format: 'xyz', frameCount: 12, frame: { t
   return worker;
 }
 
+test('startup and replacement selections reuse prewarmed backends and close releases every standby', async t => {
+  const original = globalThis.Worker;
+  globalThis.Worker = FakeWorker; FakeWorker.all = [];
+  const budget = new CpuBudget({ environment: { navigator: { hardwareConcurrency: 4 } } });
+  const client = new StructureWorkerClient(() => {}, { cpuBudget: budget });
+  t.after(() => { client.close(); globalThis.Worker = original; });
+  const startup = client.worker;
+  assert.equal(startup.messages[0].type, 'warm');
+  startup.emit({ event: 'cpu-acquire', leaseId: 1, priority: -20 });
+  // Transfer even a startup admission that has not resolved yet.
+  const pending = client.prepareSource(file('first.xyz'));
+  assert.equal(client.stagedSource.candidate.worker, startup);
+  assert.equal(FakeWorker.all.length, 1, 'selection creates no cold Worker');
+  await tick();
+  assert.equal(budget.active, 1);
+  assert.ok(startup.messages.some(message => message.type === 'cpu-granted'));
+  firstFrame(client);
+  (await pending).commit();
+  assert.equal(client.worker, startup);
+  assert.equal(budget.active, 1, 'adopted startup work retains its admission');
+  startup.emit({ event: 'cpu-release', leaseId: 1 });
+  const standby = client.standbyClient.worker;
+  assert.equal(standby.messages[0].type, 'warm');
+  assert.equal(FakeWorker.all.length, 2);
+  const replacement = client.prepareSource(file('second.xyz'));
+  assert.equal(client.stagedSource.candidate.worker, standby);
+  assert.equal(FakeWorker.all.length, 2, 'replacement selection also creates no cold Worker');
+  firstFrame(client);
+  (await replacement).commit();
+  assert.equal(client.worker, standby);
+  assert.equal(startup.terminated, true);
+  assert.equal(FakeWorker.all.length, 3, 'one replacement is warmed after commit');
+  client.close();
+  assert.ok(FakeWorker.all.every(worker => worker.terminated));
+  assert.equal(budget.active, 0);
+});
+
+test('optional standby allocation failure never breaks a commit or masks a candidate parse error', async t => {
+  const client = await fixture(t), originalWorker = globalThis.Worker;
+  const pending = client.prepareSource(file('replacement.xyz'));
+  const next = firstFrame(client), prepared = await pending;
+  globalThis.Worker = class { constructor() { throw new Error('Worker quota reached'); } };
+  try {
+    assert.equal(prepared.commit().frame.title, 'replacement');
+    assert.equal(client.worker, next);
+    assert.equal(client.standbyClient, null);
+  } finally { globalThis.Worker = originalWorker; }
+  const retry = client.prepareSource(file('bad.xyz'));
+  const rejected = assert.rejects(retry, /original parse error/);
+  const candidate = client.stagedSource.candidate;
+  globalThis.Worker = class { constructor() { throw new Error('Worker quota reached'); } };
+  try {
+    candidate.worker.emit({ id: candidate.loadId, ok: false, error: 'original parse error' });
+    await rejected;
+    assert.equal(client.worker, next);
+  } finally { globalThis.Worker = originalWorker; }
+});
+
+test('a failed prewarm backend is terminated and rebuilt before the next candidate load', async t => {
+  const client = await fixture(t);
+  client.ensureStandby();
+  const failed = client.standbyClient.worker;
+  failed.listeners.get('error')({ message: 'Module fetch failed' });
+  assert.equal(failed.terminated, true);
+  assert.equal(client.standbyClient.worker, null);
+  const pending = client.prepareSource(file('next.xyz'));
+  const next = firstFrame(client);
+  assert.notEqual(next, failed);
+  (await pending).commit();
+  assert.equal(client.worker, next);
+});
+
+test('a ready candidate whose backend dies cannot replace the still usable active source', async t => {
+  const client = await fixture(t), active = client.worker;
+  const pending = client.prepareSource(file('next.xyz'));
+  const next = firstFrame(client), prepared = await pending;
+  next.listeners.get('error')({ message: 'Worker stopped before confirmation' });
+  assert.throws(() => prepared.commit(), /failed before the source was committed/);
+  assert.equal(client.worker, active);
+  assert.equal(active.terminated, undefined);
+  prepared.cancel();
+});
+
 test('a malformed candidate preserves the real old backend, index, identity and uncached readers', async t => {
   const client = await fixture(t);
   const worker = client.worker, generation = client.sourceGeneration, info = client.sourceInfo;

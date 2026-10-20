@@ -83,10 +83,17 @@ self.addEventListener('message', async (event) => {
   }
   let task, requestLoadController;
   try {
+    if (type === 'warm') {
+      useCpuBudget = Boolean(payload.cpuBudget);
+      parserBackgroundCount = payload.parserConcurrency;
+      await getParserPool().warm();
+      self.postMessage({ id, ok: true, result: {} });
+      return;
+    }
     if (type === 'load') {
       loadController?.abort();
       for (const request of frameRequests.values()) request.controller.abort();
-      parserPool?.close(); parserPool = null;
+      parserPool?.reset();
       trajectory?.close(); trajectory = null;
       requestLoadController = loadController = new AbortController();
       useCpuBudget = Boolean(payload.cpuBudget);

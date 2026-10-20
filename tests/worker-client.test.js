@@ -14,6 +14,7 @@ class FakeWorker {
   }
 
   postMessage(message) {
+    if (message.type === 'warm') return; // Source request assertions exclude lifecycle prewarming.
     this.messages.push(message);
   }
 

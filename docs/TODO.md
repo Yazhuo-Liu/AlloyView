@@ -1,12 +1,14 @@
 # Improvement backlog
 
-Last updated: 2026-10-19 (UTC). Re-audited baseline: `812ea64`.
+Last updated: 2026-10-20 (UTC). Performance baseline: `adb0648`.
 
 The [2026-10-19 follow-up review](REPOSITORY_REVIEW_2026-10-19.md) closes
 B34, checks the historical movie-range suspicion, and records the newly
 reproduced fixes. The performance items below were checked against current
 source. Their older measurements and estimates have not been remeasured unless
-the new report explicitly says so; the remaining implementations are still open.
+a dated report explicitly says so. The [2026-10-20 performance report](PERFORMANCE_IMPROVEMENTS_2026-10-20.md)
+completes S6, T7, T8, T10 and C10 with new measurements; completed entries
+have moved to the feature documentation. Remaining items are listed below.
 
 The feature plan is complete, so this backlog now tracks defects and
 performance work only. Earlier backlog items (P1–P18, O1–O16, A1–A9,
@@ -74,10 +76,9 @@ The items with the best return, drawn from all parts below:
 
 | Order | Item | What it gives | Effort |
 | --- | --- | --- | --- |
-| 1 | C10 | Voronoi transport | M |
-| 2 | R7 | Validate conservative-depth acceleration on a supporting physical GPU | S–M |
-| 3 | K1 | Further optimize the ordered grain merge | M |
-| 4 | S4 | Enable the prepared immutable-asset rules on the production CDN | S |
+| 1 | R7 | Validate conservative-depth acceleration on a supporting physical GPU | S–M |
+| 2 | K1 | Further optimize the ordered grain merge | M |
+| 3 | S4 | Enable the prepared immutable-asset rules on the production CDN | S |
 
 C1–C9, R2–R6/R8, S1–S3/S5, T1–T6 and K2 have moved to the feature
 documentation and dated [validation record](VALIDATION.md). R1 retains its MSAA
@@ -163,57 +164,6 @@ moves use a constant-size projection/depth check, without scanning every bond.
 
 ## Part 2: performance, phase 2 (medium changes)
 
-### C10. CPU Voronoi: JavaScript overhead and index labels
-
-**Effort:** M. **Deployments:** all hosts: Voronoi runs on CPU Workers unless
-its WebGPU kernel is turned on.
-
-- **Evidence [M]:** of 51.9 µs per atom, `initialCell` is 16%, `within` 11%,
-  the clip and core loops 15%, `indexLabel` 7%; Wasm is about 28%. In a fully
-  periodic cell `initialCell` returns the same planes for every atom. One
-  index string per atom crosses three message hops: `structuredClone` of 1M
-  strings takes 214 ms per hop, against 1.3 ms for interned IDs plus a label
-  table.
-- **Change:** cache the initial planes per context; use `collect()` (C9);
-  write faces into growable typed buffers; return index IDs plus a table of
-  unique labels and expand lazily.
-- **Gain [E]:** 30–35% of kernel CPU and 0.2–0.4 s of main-thread time at 1M.
-
-### T7. Replicated frames: reuse the ID array
-
-**Effort:** S (estimate cache), S–M (reuse), L (typed IDs).
-**Deployments:** all.
-
-- **Where:** `src/data/replicate.js`, `src/workers/replication-worker.js`,
-  `src/data/structure-worker-client.js`, `src/data/cache-policy.js`.
-- **Evidence [M]:** physical replication gives every copy a string ID. For
-  120,458 × 2×2×2 atoms, 380 ms of the 723 ms replication is ID validation and
-  string building, and posting the result takes 471 ms because 843,206 strings
-  are cloned. Receiving a 1M-entry ID array costs 243–382 ms on the main
-  thread per frame, including background prefetch arrivals.
-  `estimateFrameBytes` loops over every ID: 20–95 ms per frame change at 1M,
-  after every analysis completion. IDs are identical between consecutive
-  frames of an ID-stable trajectory.
-- **Change:** cache the byte estimate per ID array. When the source ID sequence
-  and repetitions match the previous frame, skip the ID work and send a token;
-  the page reuses the previous array by reference. Longer term: a typed source
-  ID plus a copy index, formatting strings only at the UI and configuration
-  boundary.
-- **Gain [E]:** about 0.85 s of 1.2 s per replicated frame after the first,
-  and about 60 MB per cached frame.
-
-### T8. gzip trajectories: index while decompressing
-
-**Effort:** M. **Deployments:** all.
-
-- **Evidence [M]:** a 57 MB gzip trajectory shows its first frame after
-  1,040 ms against 303 ms uncompressed, and this grows with file size. A
-  streaming scan parses frame 0 after 2.4 MB of decompressed data, with an
-  identical result.
-- **Change:** scan each decompressed chunk for frame markers while staging the
-  parts, and publish each descriptor with a Blob composed of slices of the
-  parts already built. Memory limits are unchanged; no OPFS.
-
 ### T9. Frame-ZIP: encode PNGs in a Worker
 
 **Effort:** M. **Deployments:** all.
@@ -224,34 +174,6 @@ its WebGPU kernel is turned on.
   (`OffscreenCanvas.convertToBlob` plus CRC) with a queue of 2 and a
   main-thread fallback. About 70–80 ms per frame [E]. ZIP bytes must stay
   identical.
-
-### T10. Per-frame summary from the parser
-
-**Effort:** M. **Deployments:** all.
-
-- **Evidence [M]:** at 1M atoms a cached frame change costs 290–530 ms on the
-  main thread: `updateSceneBounds` 92 ms, `colorsByType` 50 ms, radii 74 ms,
-  type controls 30 ms. Types are counted three separate times, and nonisolated
-  Workers each get their own coordinate copy (`copyCoordinates`, 511 ms over 4
-  steps).
-- **Change:** compute type counts and the position bounds in the parser's row
-  loop and ship them with the frame; bounds, legend and type controls read the
-  summary; copy coordinates once per frame for nonisolated Workers. Recompute
-  after smoothing and replication.
-- **Gain [E]:** 150–250 ms per frame at 1M in the original audit. Re-measure
-  after the completed S2/S3 batching and R3 bounds/radius work.
-
-### S6. Keep a standby structure Worker
-
-**Effort:** S. **Deployments:** all.
-
-- **Evidence [M]:** the structure Worker created at startup is terminated on
-  the first open, and its parser pool is closed on each load; a 60k file has
-  about 80–120 ms of unexplained overhead per open.
-- **Change:** let the Worker's own load handler replace the source, or keep
-  one standby Worker with a prewarmed parser and swap it in. B20 now uses
-  candidate-source commit to preserve the old source on failure; keep that
-  transaction and shared CPU admission when reusing a standby parser.
 
 ### G3. Keep thin cells and slabs on the GPU
 
@@ -333,20 +255,34 @@ stays as the fallback where float blending is missing.
   persistent Workers, with shared/private snapshots, memory admission and the
   shared CPU budget. Merges and coherent-interface decisions retain original
   order; threshold/size edits reuse the retained merge model.
+- **Completed 2026-10-20:** reuse already-resolved union–find roots in MST
+  merging and dendrogram sizing. A generation-stamp graph prototype was
+  reverted because fewer adjacency visits did not produce a stable wall-time
+  gain. Root reuse preserves the complete model and segmentation; further
+  whole-stage speedups still require measurement.
 - **Remaining:** profile and optimize the dependency-ordered graph/MST merge
   without changing orientation accumulation, stable tie order, thresholds or
   grain IDs. This serial stage releases the parallel CPU permits before it runs.
 - See [grains](features/grains.md) and [validation](VALIDATION.md) for actual
   interleaved timings and exact-output comparisons.
 
-### K3. Local shear: one neighbor pass
+### K3. Local shear: reduce fallback cost on misleading new frames
 
 **Effort:** M. **Deployments:** all CPU paths.
 
-- **Evidence [M]:** the coordination pass (466 ms) and the metrics pass
-  (774 ms at 1M, 12 Workers) search the same neighbors. A sampled mode guess
-  with a fallback could remove one pass with identical results [E]; not
-  prototyped.
+- **Completed 2026-10-20:** a guarded single neighbor pass computes coordination
+  and candidate moments together. The full histogram decides acceptance;
+  low memory, rejected candidates and differing modes across migrating
+  Worker chunks use the original exact metrics pass. Verified modes can be
+  reused only for the same immutable search and cutoff.
+- **Remaining:** a deliberately reordered new frame can mislead the pilot.
+  The measured three-sample fresh-snapshot medians increased from 104.17 to
+  145.69 ms privately and 68.26 to 80.88 ms in shared mode, with substantial
+  sample variation. Repeated identical snapshots become faster after the
+  exact mode is known; that does not remove this new-frame fallback cost.
+  Ordinary mixed fresh snapshots were approximately unchanged. See the
+  [performance report](PERFORMANCE_IMPROVEMENTS_2026-10-20.md) for raw samples
+  and the larger gains on dominant FCC/BCC neighborhoods.
 
 ## Part 2: performance, phase 3 (large changes and decisions)
 
@@ -354,6 +290,14 @@ stays as the fallback where float blending is missing.
 
 **Effort:** L. See [DXA CPU profile](DXA_CPU_PROFILE.md#prioritized-further-work).
 
+- **Completed 2026-10-20:** retain immutable BFS vertex coordinates, matrix
+  and depth once per vertex. Both production Wasm kernels were rebuilt;
+  complete scientific outputs match the baseline. HEA tracing improves by
+  11.7–11.9% and the replicated NiGB case by 3.4–3.6% in the measured
+  one-thread comparisons. A frontier-pruning candidate was rejected after
+  measurement. These are bounded tracing improvements, not completion of
+  the remaining serial-stage work; see the
+  [performance report](PERFORMANCE_IMPROVEMENTS_2026-10-20.md).
 - **Evidence [M]:** Burgers circuit tracing, cluster traversal, junction
   merging and the ordered graph and mesh commits are serial; the estimated
   floor for HEA is about 400 ms. The global Delaunay tessellation scales 2.1×

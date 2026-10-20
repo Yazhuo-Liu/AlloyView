@@ -303,6 +303,27 @@ field by field during merging to reduce temporary memory. Cancellation
 preserves the resident Worker and Wasm instances. There is no OVITO runtime
 dependency.
 
+The six initial planes and their radius bound are cached within each resident
+context for fully periodic cells; finite-domain walls reuse context-local
+scratch buffers. Faces are written into growable typed columns and trimmed
+before transfer. Topology labels are interned once per unique face-order
+histogram: partial results, finalization requests and final results carry
+transferable 32-bit IDs plus a label table. The pool expands the original
+per-atom `voronoiIndices` string array once at the public-result boundary, so
+tools, exports and cached results keep the same API. These changes preserve
+the clipping order, exact numerical results and existing preparation policy.
+
+The [2026-10-20 comparison](../benchmarks/voronoi-overhead-2026-10-20.json)
+against `adb0648` measured resident CPU calculation reductions of 28.4% for
+6,912 FCC atoms and 6.0% for the complete 129,904-atom NiGB example. Warm
+two-Worker foreground time fell by 20.8% and 4.9%, respectively; these pool
+figures also include omitting types/index inputs already resident in a Worker.
+Every sample matched all baseline scientific arrays, labels and statistics.
+Reproduce with `node scripts/benchmark-voronoi-overhead.mjs --baseline PATH`
+and optionally `--dataset nigb --repetitions 3`; the baseline path must contain
+a separate pre-change checkout, including its Wasm modules. The benchmark also
+isolates three label-message hops and includes the final public decoding.
+
 AlloyView uses its fractional linked-cell search to enumerate periodic images
 and Voro++ to clip the cell against their perpendicular bisectors. The search
 expands until it covers twice the distance to the farthest remaining cell

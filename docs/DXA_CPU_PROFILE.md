@@ -463,6 +463,56 @@ production C++, checksum manifests or Wasm binaries. The GPU snapshot exporter
 uses a separate unordered map of edge keys; this CSR index does not accelerate
 its six lookups per tetrahedron.
 
+## Immutable tracing state (2026-10-20)
+
+The production tracer now copies each dequeued BFS node's lattice coordinate,
+reference transform and next depth once before visiting its outgoing edges.
+Those fields are initialized when the node is enqueued and remain unchanged
+during circuit reconstruction and tracing. The queue link itself remains a live
+read because appending a neighbor can change it. Edge visits, filtering,
+floating-point expression order, visited flags, circuit creation, junctions
+and cancellation points retain their original behavior. This adds only local
+values, with no second mesh or per-edge index.
+
+Both serial and threaded production kernels were rebuilt with Emscripten
+3.1.69. The adapted source manifest and all four generated artifact digests
+match the files recorded in the
+[raw measurements](benchmarks/dxa-tracing-2026-10-20.json). The pinned upstream
+manifest is unchanged. The baseline is `adb0648`, measured on Node.js 24.19.0
+under a four-core CPU quota. Each retained module receives one warmup per
+fixture, followed by three alternating complete baseline/current extractions;
+startup and input upload are excluded. Both binary variants use one thread for
+this comparison so that parallel Delaunay tie choices do not change the input
+topology. These measurements do not establish a four-thread speedup.
+
+| Fixture | Kernel | Tracing before (ms) | Tracing after (ms) | Complete extraction before → after (ms) |
+| --- | --- | ---: | ---: | ---: |
+| HEA, 28,800 atoms | Serial | 62.03 | 54.78 | 646.61 → 628.81 |
+| HEA, 28,800 atoms | Threaded, one thread | 60.61 | 53.37 | 653.53 → 639.03 |
+| Fe, 60,229 atoms | Serial | 0.121 | 0.121 | 1,649.50 → 1,675.83 |
+| Fe, 60,229 atoms | Threaded, one thread | 0.112 | 0.163 | 1,730.71 → 1,709.29 |
+| NiGB, 259,808 atoms | Serial | 885.65 | 853.43 | 13,491.25 → 12,578.81 |
+| NiGB, 259,808 atoms | Threaded, one thread | 846.27 | 817.11 | 12,513.88 → 12,370.01 |
+
+All entries are medians. HEA tracing improves by 11.7–11.9%; NiGB tracing
+improves by 3.4–3.6%, with appreciable sample variation. The NiGB frame is the
+real input physically replicated 1×1×2. Fe's tracing cost is already around
+0.1 ms, so no meaningful Fe speedup is claimed. Whole-extraction times include
+variation in unchanged stages and must not all be attributed to this change.
+
+Every measured extraction has the baseline's exact complete scientific JSON
+SHA-256, including labels, clusters, line points, junctions and Burgers vectors;
+only parallel-work diagnostics are omitted. The 36 targeted regression tests
+also pass, covering depth-limit searches, cancellation and reuse of the same
+native heap, staged and mesh results, the real Fe loop, and four-thread edge
+passes. The existing Worker/Wasm warmup and GPU preparation remain enabled.
+
+An earlier frontier-pruning candidate was not adopted because its measurements
+did not show a reliable gain. Its
+[diagnostic record](benchmarks/dxa-tracing-frontier-rejected-2026-10-20.json)
+is retained separately. The immutable-state change is a bounded improvement to
+K4; the remaining serial and global topology work below is still open.
+
 ## Prioritized further work
 
 1. Profile global periodic Delaunay construction and elastic classification
@@ -479,8 +529,10 @@ its six lookups per tetrahedron.
    halfedge linking and junction behavior must retain their ordering. Every
    filled local cell still requires wrapped-vector validation, including
    interior cells.
-4. Investigate the serial circuit search on the NiGB grain-boundary mesh.
-   Its empty final network still costs about 0.9 seconds in Wasm. Any pruning
+4. Continue investigating the serial circuit search on the NiGB grain-boundary
+   mesh after the immutable-state improvement. Its empty final network still
+   costs about 0.8–0.9 seconds in the measured one-thread Wasm runs. The first
+   frontier-pruning experiment did not justify adoption. Any further pruning
    or component-based concurrency must preserve visited state, junctions,
    periodic connectivity and the circuit search order that determines output.
    A previously empty network is insufficient reason to skip tracing.

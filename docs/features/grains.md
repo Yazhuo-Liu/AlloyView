@@ -342,6 +342,24 @@ IDs 4 bytes per atom. While it builds a merge sequence the Worker holds
 roughly 0.7 kB per atom, an estimate from its array sizes; afterwards it
 keeps about a third of that.
 
+MST and merge-size construction reuse the union–find roots they already
+resolved, avoiding duplicate lookups without additional per-atom storage.
+Edge visitation, equal-weight ties, orientation sums, stable merge sorting and
+the retained model used for threshold edits remain unchanged; the dependent
+merge remains serial.
+
+In the 108,000-atom four-slab benchmark, root reuse reduced union–find calls
+from 431,984 to 215,992 for the automatic model and from 1,886,376 to
+1,454,392 for MST. It adds no per-atom storage. Five interleaved samples after
+three warmups measured model plus segmentation medians of 301.69 → 310.54 ms
+for automatic and 253.50 → 229.41 ms for MST. Stage and total times varied
+between repeated runs, so these counts establish less duplicate work rather
+than a general speedup. A generation-stamp adjacency prototype was rejected
+because its extra storage did not produce a reliable overall gain. Complete
+models and segmentations matched the previous implementation, including the
+real bicrystal and twin-fault fixtures.
+[Raw samples and methodology](../benchmarks/grains-shear-2026-10-20.json).
+
 ## Limitations
 
 - The ordered graph merge, coherent-interface conversion and regression still

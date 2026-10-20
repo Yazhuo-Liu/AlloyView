@@ -1535,8 +1535,9 @@ for adapter options and timing interpretation.
   Structures without `CRYST1` use a padded nonperiodic bounding cell.
 - gzip: every format above may be gzip-compressed (`.gz`). Files are
   recognized by content and decompressed in the structure Worker, and numbered
-  `.gz` files form sequences. Trajectories are decompressed once into a browser
-  Blob of the decompressed size; single-frame files are decompressed whenever
+  `.gz` files form sequences. Trajectories are indexed during decompression,
+  so complete early frames can open before the compressed tail is read. Decoded
+  bytes remain in browser Blobs of the decompressed size; single-frame files are decompressed whenever
   they are read. Concatenated multi-stream gzip files are rejected. See
   [gzip-compressed files](FORMATS.md#gzip-compressed-files).
 - Trajectories: LAMMPS byte offsets are indexed incrementally; requested frames
@@ -1602,6 +1603,12 @@ preserving source-relative native assets. A failed GPU kernel warm-up leaves
 the other kernels available, and actual device loss recovers on the next
 request. Surface display geometry and mesh-file formatting run in a persistent
 Worker shared by both views; image exports wait for the corresponding mesh.
+The first open reuses the startup structure Worker. A successful open prepares
+one standby structure Worker and parser for the next source, within the shared
+CPU budget. Invalid replacement files preserve the displayed source. Stable
+physical-copy IDs are reused between frames; parser summaries supply type
+counts and bounds to display and statistics, and smoothing and replication
+update those summaries for their new coordinates.
 See [performance](features/performance.md) for verified effects and limits.
 
 More detail is in [docs/FORMATS.md](FORMATS.md) and actual executed results

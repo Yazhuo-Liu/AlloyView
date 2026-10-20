@@ -181,6 +181,7 @@ export function frameTransferables(frame) {
   if (ArrayBuffer.isView(frame.ids)) transferables.push(frame.ids.buffer);
   if (frame.unwrappedPositions) transferables.push(frame.unwrappedPositions.buffer);
   if (frame.imageFlags) transferables.push(frame.imageFlags.buffer);
+  if (frame.summary?.typeCounts) transferables.push(frame.summary.typeCounts.buffer);
   for (const property of frame.properties) if (ArrayBuffer.isView(property.data)) transferables.push(property.data.buffer);
   return [...new Set(transferables)];
 }

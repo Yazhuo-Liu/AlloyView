@@ -29,12 +29,26 @@ export class FrameParserPool {
       Math.floor(128 * 1024 ** 2 / Math.max(1, count * 64))));
   }
 
+  /** Load the foreground parser's modules before a source is selected. Its
+   * startup owns one low-priority CPU permit until the Worker acknowledges. */
+  warm() {
+    if (this.closed || this.slots.some(slot => !slot.background) || this.queue.some(task => task.warm)) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const task = { id: this.nextId++, warm: true, background: false, priority: -20,
+        resolve, reject, controller: new AbortController() };
+      this.queue.push(task); this.pump();
+    });
+  }
+
   parse(descriptor, { background = false, signal, priority = background ? -20 : 20 } = {}) {
     if (this.closed || signal?.aborted) return Promise.reject(aborted());
     // Smoothing/unwrapping can enqueue more reads after a foreground join.
     // Keep their parallel background lanes but retain the promoted admission
     // priority throughout that request's lifetime.
     if (signal && this.promotedSignals.has(signal)) priority = Math.max(priority, this.promotedSignals.get(signal));
+    if (!background) for (const slot of this.slots) {
+      if (slot.task?.warm && !slot.task.started) this.promoteAcquire?.({ signal: slot.task.controller.signal, priority });
+    }
     return new Promise((resolve, reject) => {
       const task = { id: this.nextId++, descriptor, background, signal, priority, resolve, reject, controller: new AbortController() };
       task.abort = () => this.cancel(task);
@@ -88,6 +102,7 @@ export class FrameParserPool {
       task.lease = await this.acquire?.({ background: task.background, signal: task.controller.signal, priority: task.priority });
       if (task.controller.signal.aborted || slot.task !== task) { task.lease?.release(); return; }
       if (!this.workerFactory) {
+        if (task.warm) { this.finish(slot, task, null); return; }
         const frame = await parseFrameDescriptor(task.descriptor, { signal: task.controller.signal });
         this.finish(slot, task, null, frame);
         return;
@@ -108,7 +123,7 @@ export class FrameParserPool {
         });
       }
       task.started = true;
-      slot.worker.postMessage({ id: task.id, descriptor: task.descriptor });
+      slot.worker.postMessage({ id: task.id, ...(task.warm ? { type: 'warm-parser' } : { descriptor: task.descriptor }) });
     } catch (error) {
       if (slot.task === task) this.finish(slot, task, error);
     }
@@ -160,5 +175,13 @@ export class FrameParserPool {
       slot.worker?.terminate();
     }
     this.slots = [];
+  }
+
+  /** Cancel source-owned jobs while retaining imported parser modules. A
+   * cancelled synchronous parse keeps its slot/permit until its final ACK. */
+  reset() {
+    for (const task of [...this.queue]) this.cancel(task);
+    for (const slot of this.slots) if (slot.task && !slot.task.warm) this.cancel(slot.task);
+    this.promotedSignals = new WeakMap();
   }
 }

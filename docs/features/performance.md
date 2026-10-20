@@ -32,6 +32,27 @@ over background preparation. Shared-memory paths are selected from
 `crossOriginIsolated` and `SharedArrayBuffer`, never from the host name, and
 each has a counterpart without isolation.
 
+The startup structure Worker is used for the first source. After a successful
+source replacement, one standby backend warms a parser under that same CPU
+budget; a failed replacement preserves the active source. gzip dump/XYZ/PDB
+indexing consumes decoded chunks immediately and publishes complete early
+frames while later bytes are still being decompressed.
+
+Native parsers produce type counts and Cartesian bounds from the stored
+Float32 coordinates during their existing row/conversion pass. Parsed and
+processed frames carry a small summary whose array aliases survive transfer;
+smoothing and physical replication regenerate it. The app uses it for bounds,
+type legends, category statistics and type controls. Public renderer setters
+still rescan arbitrary mutable arrays. Code editing summarized arrays in place
+must advance `geometryRevision` for coordinates or types; type-only edits may
+instead advance `typesRevision`. Replacing an array invalidates the
+corresponding summary automatically.
+
+Nonisolated CPU analyses already share one page-side snapshot and upload it
+once to each Worker that needs the frame. They retain separate private Worker
+buffers; this is not a zero-copy shared-memory path. Subsequent resident
+Voronoi chunks now omit redundant type arrays and index descriptors as well.
+
 ### Where results stay exact
 
 - **Parsing.** Byte-level conversion of dump, CFG and XYZ atom rows returns
@@ -82,6 +103,12 @@ each has a counterpart without isolation.
   visibility are retained.
 
 ### Measured effects
+
+The [2026-10-20 report](../PERFORMANCE_IMPROVEMENTS_2026-10-20.md) records
+interleaved comparisons for standby source loading, streaming gzip, replicated
+IDs, frame summaries and CPU analyses. It includes cold-path costs and retained
+memory, and separates transport microbenchmarks from full calculations. Earlier
+measurements below retain their original hardware and implementation scope.
 
 The reference machine has 32 logical processors and a GTX 1080 Ti. Values are
 medians of 3–9 runs in Node.js unless Chrome is named, on a machine shared

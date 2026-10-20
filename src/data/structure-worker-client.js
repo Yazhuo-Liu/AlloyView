@@ -1,11 +1,13 @@
 import { normalizeLocalFiles } from '../io/local-files.js';
 import { cpuWorkerLimit } from '../analysis/cpu-budget.js';
 import { SharedFrameRequests } from './shared-frame-requests.js';
+import { ReplicationIdsReceiver } from './replication-ids.js';
 
 const cancelled = () => new DOMException('Structure request cancelled.', 'AbortError');
+const workerOwners = new WeakMap();
 
 export class StructureWorkerClient {
-  constructor(onProgress = () => {}, { cpuBudget, onSourceInfo = () => {} } = {}) {
+  constructor(onProgress = () => {}, { cpuBudget, onSourceInfo = () => {}, startWorker = true } = {}) {
     this.onProgress = onProgress;
     this.onSourceInfo = onSourceInfo;
     this.cpuBudget = cpuBudget;
@@ -15,35 +17,74 @@ export class StructureWorkerClient {
     this.sourceInfo = null;
     this.loadId = null;
     this.sourceGeneration = 0;
+    this.replicationIds = new ReplicationIdsReceiver();
     this.replicationControllers = new Set();
     this.replicationPreparations = new Map();
     this.frameRequests = new SharedFrameRequests();
     this.stagedSource = null;
     this.forwardTo = null;
-    this.createWorker();
+    this.sourceUsed = false;
+    this.standbyClient = null;
+    this.closed = false;
+    if (startWorker) this.createWorker();
   }
 
   attachWorker(worker) {
+    workerOwners.set(worker, this);
     worker.addEventListener('message', (event) => {
-      const owner = this.forwardTo ?? this;
+      const owner = workerOwners.get(worker);
       if (worker === owner.worker || worker === owner.replicationWorker) owner.handleMessage(event.data, worker);
     });
     worker.addEventListener('error', (event) => {
-      const owner = this.forwardTo ?? this;
+      const owner = workerOwners.get(worker);
       if (worker !== owner.worker && worker !== owner.replicationWorker) return;
+      // A failed preload must not leave a dead standby that accepts messages
+      // forever. Terminate before releasing any outstanding CPU admissions.
+      worker.terminate();
       for (const [id, pending] of owner.pending) {
         if (pending.worker !== worker) continue;
         owner.pending.delete(id);
         owner.cleanup(pending);
         pending.reject(new Error(event.message || 'The Worker failed.'));
       }
-      if (worker === owner.worker) owner.clearCpuLeases();
+      if (worker === owner.worker) { owner.worker = null; owner.clearCpuLeases(); }
+      else { owner.replicationWorker = null; owner.replicationIds.clear(); }
     });
   }
 
   createWorker() {
     this.worker = new Worker(new URL('../workers/structure-worker.js', import.meta.url), { type: 'module' });
     this.attachWorker(this.worker);
+    // Warm one parser lane under the shared CPU quota. A source selected
+    // before this completes joins the same lane instead of creating another.
+    // This is a backend lifecycle event, not a source request. CPU admission
+    // is tracked by cpuLeases even if ownership changes before its ACK.
+    try { this.worker.postMessage({ type: 'warm', payload: { cpuBudget: Boolean(this.cpuBudget),
+      parserConcurrency: Math.max(1, Math.min(4, (this.cpuBudget?.limit ?? cpuWorkerLimit()) - 1)) } }); }
+    catch { /* A later source request reports transport failures to its caller. */ }
+  }
+
+  adoptBackend(candidate) {
+    this.worker = candidate.worker;
+    this.pending = candidate.pending;
+    this.cpuLeases = candidate.cpuLeases;
+    this.nextId = Math.max(this.nextId, candidate.nextId);
+    this.loadId = candidate.loadId;
+    this.sourceInfo = candidate.sourceInfo;
+    this.sourceUsed = candidate.sourceUsed;
+    if (this.worker) workerOwners.set(this.worker, this);
+    candidate.worker = null;
+    candidate.pending = new Map();
+    candidate.cpuLeases = new Map();
+  }
+
+  ensureStandby() {
+    if (!this.closed && !this.standbyClient) {
+      // Prewarming is best effort. Failing to allocate an optional standby
+      // must not undo a committed source or replace a candidate's own error.
+      try { this.standbyClient = new StructureWorkerClient(() => {}, { cpuBudget: this.cpuBudget }); }
+      catch { /* The next selection will create its candidate on demand. */ }
+    }
   }
 
   request(type, payload, { reportProgress = true, background = false, signal, worker, onProgress, lease, onDispatch } = {}) {
@@ -73,7 +114,9 @@ export class StructureWorkerClient {
   }
 
   load(input) {
+    this.sourceUsed = true;
     this.sourceGeneration++;
+    this.replicationIds.clear();
     this.frameRequests.clear();
     for (const controller of this.replicationControllers) controller.abort();
     const files = normalizeLocalFiles(input);
@@ -95,14 +138,23 @@ export class StructureWorkerClient {
     const files = normalizeLocalFiles(input);
     this.cancelSourceLoad();
     const staged = { signal, committed: false };
-    const candidate = new StructureWorkerClient(progress => {
+    let candidate = this.standbyClient;
+    this.standbyClient = null;
+    if (!candidate) {
+      // The startup backend has no source to protect: use its already-loaded
+      // modules as the first candidate, including its in-flight warmup lease.
+      const startup = !this.sourceUsed && this.worker;
+      candidate = new StructureWorkerClient(() => {}, { cpuBudget: this.cpuBudget, startWorker: !startup });
+      if (startup) candidate.adoptBackend(this);
+    }
+    candidate.onProgress = progress => {
       if (this.stagedSource === staged && !signal?.aborted) this.onProgress(progress);
-    }, { cpuBudget: this.cpuBudget });
+    };
     staged.candidate = candidate;
     staged.cancel = () => {
       signal?.removeEventListener?.('abort', staged.cancel);
       if (this.stagedSource === staged) this.stagedSource = null;
-      if (!staged.committed) candidate.close();
+      if (!staged.committed) { candidate.close(); this.ensureStandby(); }
     };
     this.stagedSource = staged;
     signal?.addEventListener?.('abort', staged.cancel, { once: true });
@@ -115,22 +167,18 @@ export class StructureWorkerClient {
         cancel: staged.cancel,
         commit: () => {
           if (this.stagedSource !== staged || signal?.aborted) throw cancelled();
+          if (!candidate.worker) throw new Error('The candidate structure Worker failed before the source was committed.');
           // Detach first: resetting the previous backend must not cancel its
           // already-confirmed replacement. It releases only the old leases.
           this.stagedSource = null;
           signal?.removeEventListener?.('abort', staged.cancel);
-          this.reset();
+          this.reset({ keepStandby: true });
           staged.committed = true;
-          this.worker = candidate.worker;
-          this.pending = candidate.pending;
-          this.cpuLeases = candidate.cpuLeases;
-          this.nextId = Math.max(this.nextId, candidate.nextId);
-          this.loadId = candidate.loadId;
-          this.sourceInfo = candidate.sourceInfo;
+          this.adoptBackend(candidate);
           candidate.forwardTo = this;
-          candidate.worker = null;
-          candidate.pending = new Map();
-          candidate.cpuLeases = new Map();
+          // Keep one ready replacement beside the active source. Old source
+          // teardown still happens only after a successful candidate parse.
+          this.ensureStandby();
           return result;
         },
       };
@@ -221,11 +269,13 @@ export class StructureWorkerClient {
       }
       const ownedLease = lease;
       lease = null;
-      const result = await this.request('replicate', { frame, repetitions }, {
+      const known = this.replicationIds.current;
+      const result = await this.request('replicate', { frame, repetitions, sourceGeneration: generation,
+        knownIdsToken: known?.token }, {
         worker: this.replicationWorker, signal: controller.signal, onProgress, background, reportProgress: false, lease: ownedLease,
       });
-      if (signal?.aborted) throw cancelled();
-      return result.frame;
+      if (signal?.aborted || controller.signal.aborted || generation !== this.sourceGeneration) throw cancelled();
+      return this.replicationIds.restore(result, known);
     } finally {
       lease?.release();
       this.replicationControllers.delete(controller);
@@ -258,11 +308,11 @@ export class StructureWorkerClient {
     this.cpuLeases.set(message.leaseId, request);
     try {
       request.lease = await this.cpuBudget.acquire(1, { signal: controller.signal, priority: message.priority ?? (message.background ? -20 : 20) });
-      const owner = this.forwardTo ?? this;
+      const owner = workerOwners.get(worker);
       if (worker !== owner.worker || controller.signal.aborted) { request.lease.release(); return; }
       worker.postMessage({ type: 'cpu-granted', payload: { leaseId: message.leaseId } });
     } catch (error) {
-      if (worker === (this.forwardTo ?? this).worker) worker.postMessage({ type: 'cpu-denied', payload: { leaseId: message.leaseId, error: error.message, name: error.name } });
+      if (worker === workerOwners.get(worker)?.worker) worker.postMessage({ type: 'cpu-denied', payload: { leaseId: message.leaseId, error: error.message, name: error.name } });
     }
   }
 
@@ -307,9 +357,10 @@ export class StructureWorkerClient {
     else pending.reject(Object.assign(new Error(message.error), { name: message.name ?? 'Error' }));
   }
 
-  reset() {
+  reset({ keepStandby = true } = {}) {
     this.cancelSourceLoad();
     this.sourceGeneration++;
+    this.replicationIds.clear();
     this.frameRequests.clear();
     for (const controller of this.replicationControllers) controller.abort();
     this.replicationControllers.clear();
@@ -320,10 +371,12 @@ export class StructureWorkerClient {
     this.replicationWorker = null;
     this.loadId = null;
     this.sourceInfo = null;
+    this.sourceUsed = false;
     this.clearCpuLeases();
     for (const pending of this.pending.values()) { this.cleanup(pending); pending.reject(cancelled()); }
     this.pending.clear();
+    if (!keepStandby) { this.standbyClient?.close(); this.standbyClient = null; }
   }
 
-  close() { this.reset(); }
+  close() { this.closed = true; this.reset({ keepStandby: false }); }
 }

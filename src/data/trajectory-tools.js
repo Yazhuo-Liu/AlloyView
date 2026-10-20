@@ -1,5 +1,6 @@
 import { canonicalAtomNumber } from './atom-ids.js';
 import { cartesianToFractional, createCell, fractionalToCartesian, invert3 } from './model.js';
+import { fractionalToCartesianSummary } from './frame-summary.js';
 import { normalizeRepetitions } from '../render/replication.js';
 
 /** Label shown beside display coordinates inferred by `TrajectoryUnwrapper`. */
@@ -339,9 +340,12 @@ export class SmoothingAccumulator {
         }
       }
     }
+    const summarized = center.types && center.typeLabels
+      ? fractionalToCartesianSummary(fractional, cell, center.types, center.typeLabels.length) : null;
     return {
       fractional,
-      positions: fractionalToCartesian(fractional, cell),
+      positions: summarized?.positions ?? fractionalToCartesian(fractional, cell),
+      ...(summarized ? { coordinateSummary: summarized.summary } : {}),
       cell,
       imageFlags: imageFlags ? flags : null,
       unwrappedPositions: continuous ? fractionalToCartesian(continuous, cell) : null,

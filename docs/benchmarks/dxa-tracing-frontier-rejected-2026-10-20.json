@@ -1,0 +1,237 @@
+{
+  "status": "rejected; stopped after all serial fixtures and threaded HEA/Fe",
+  "reason": "No repeatable tracing benefit; preserve the original edge filtering order instead.",
+  "candidate": "Check unvisited neighbors at maximum BFS depth before existing circuit membership filters.",
+  "baseline": "adb06489831cf2f78f50790c25eb7d0ae0c2c762",
+  "protocol": "One warmup; three alternating baseline/current complete extractions. One thread across all stages. Each completed extraction passed full scientific JSON hash equality (only parallel-work diagnostics omitted). Printed hashes were not checkpointed before the run was stopped.",
+  "artifacts": {
+    "src/analysis/dxa-kernel.mjs": {
+      "baseline": "88f963f2592134a7fccd816d4112a0e35e53a926d2f983fefc2d5d54486cb1b1",
+      "candidate": "3257834cb7dd352fd26a5900c9c23a9c36a532ef0b39c4185a4cadc3e6a76de9"
+    },
+    "src/analysis/dxa-kernel.wasm": {
+      "baseline": "691910bdfbb066e36ac7e3757794cc373dc44ec2a4d97e61620bf696212ca86f",
+      "candidate": "55db3ef300778b028ca695aa0af1b1d187cd4ffb2687aa7ee4fba941873001fd"
+    },
+    "src/analysis/dxa-kernel-threaded.mjs": {
+      "baseline": "7fd2f3b63ba9520fb21fabddd14d4f3edcb7db500d216c28815e59451c22d412",
+      "candidate": "ac7094a94f96e57d60a753150352dc589a3df2c73acf0d229fc943ed47bdf3cf"
+    },
+    "src/analysis/dxa-kernel-threaded.wasm": {
+      "baseline": "56dee2e8de7850ad1816a19df9200e5dc20e38cbd636a51a2df098b6945c41d3",
+      "candidate": "26c542ade7c05590aff9c591595aa69b48b5e693015b0de737f48c3a152a905f"
+    }
+  },
+  "runs": [
+    {
+      "fixture": "hea",
+      "kernel": "serial",
+      "version": "baseline",
+      "tracingMs": 76.29,
+      "elapsedMs": 686.64
+    },
+    {
+      "fixture": "hea",
+      "kernel": "serial",
+      "version": "current",
+      "tracingMs": 77.99,
+      "elapsedMs": 695.82
+    },
+    {
+      "fixture": "hea",
+      "kernel": "serial",
+      "version": "current",
+      "tracingMs": 70.18,
+      "elapsedMs": 792.26
+    },
+    {
+      "fixture": "hea",
+      "kernel": "serial",
+      "version": "baseline",
+      "tracingMs": 65.09,
+      "elapsedMs": 679.67
+    },
+    {
+      "fixture": "hea",
+      "kernel": "serial",
+      "version": "baseline",
+      "tracingMs": 67.42,
+      "elapsedMs": 761.78
+    },
+    {
+      "fixture": "hea",
+      "kernel": "serial",
+      "version": "current",
+      "tracingMs": 67.69,
+      "elapsedMs": 702.72
+    },
+    {
+      "fixture": "fe",
+      "kernel": "serial",
+      "version": "baseline",
+      "tracingMs": 0.17,
+      "elapsedMs": 1782.18
+    },
+    {
+      "fixture": "fe",
+      "kernel": "serial",
+      "version": "current",
+      "tracingMs": 0.24,
+      "elapsedMs": 1746.63
+    },
+    {
+      "fixture": "fe",
+      "kernel": "serial",
+      "version": "current",
+      "tracingMs": 0.18,
+      "elapsedMs": 1729.69
+    },
+    {
+      "fixture": "fe",
+      "kernel": "serial",
+      "version": "baseline",
+      "tracingMs": 0.12,
+      "elapsedMs": 1775.97
+    },
+    {
+      "fixture": "fe",
+      "kernel": "serial",
+      "version": "baseline",
+      "tracingMs": 0.12,
+      "elapsedMs": 1670.83
+    },
+    {
+      "fixture": "fe",
+      "kernel": "serial",
+      "version": "current",
+      "tracingMs": 0.13,
+      "elapsedMs": 1707.01
+    },
+    {
+      "fixture": "nigb",
+      "kernel": "serial",
+      "version": "baseline",
+      "tracingMs": 817.36,
+      "elapsedMs": 12335.25
+    },
+    {
+      "fixture": "nigb",
+      "kernel": "serial",
+      "version": "current",
+      "tracingMs": 890.04,
+      "elapsedMs": 13056.05
+    },
+    {
+      "fixture": "nigb",
+      "kernel": "serial",
+      "version": "current",
+      "tracingMs": 927.5,
+      "elapsedMs": 12440.75
+    },
+    {
+      "fixture": "nigb",
+      "kernel": "serial",
+      "version": "baseline",
+      "tracingMs": 881.39,
+      "elapsedMs": 12884.68
+    },
+    {
+      "fixture": "nigb",
+      "kernel": "serial",
+      "version": "baseline",
+      "tracingMs": 936.15,
+      "elapsedMs": 12986.39
+    },
+    {
+      "fixture": "nigb",
+      "kernel": "serial",
+      "version": "current",
+      "tracingMs": 866.35,
+      "elapsedMs": 12869.11
+    },
+    {
+      "fixture": "hea",
+      "kernel": "threaded",
+      "version": "baseline",
+      "tracingMs": 59.64,
+      "elapsedMs": 638.75
+    },
+    {
+      "fixture": "hea",
+      "kernel": "threaded",
+      "version": "current",
+      "tracingMs": 63.75,
+      "elapsedMs": 638.98
+    },
+    {
+      "fixture": "hea",
+      "kernel": "threaded",
+      "version": "current",
+      "tracingMs": 61.58,
+      "elapsedMs": 640.5
+    },
+    {
+      "fixture": "hea",
+      "kernel": "threaded",
+      "version": "baseline",
+      "tracingMs": 59.07,
+      "elapsedMs": 638.19
+    },
+    {
+      "fixture": "hea",
+      "kernel": "threaded",
+      "version": "baseline",
+      "tracingMs": 58.66,
+      "elapsedMs": 626.78
+    },
+    {
+      "fixture": "hea",
+      "kernel": "threaded",
+      "version": "current",
+      "tracingMs": 61.18,
+      "elapsedMs": 624.06
+    },
+    {
+      "fixture": "fe",
+      "kernel": "threaded",
+      "version": "baseline",
+      "tracingMs": 0.17,
+      "elapsedMs": 1715.49
+    },
+    {
+      "fixture": "fe",
+      "kernel": "threaded",
+      "version": "current",
+      "tracingMs": 0.19,
+      "elapsedMs": 1685.68
+    },
+    {
+      "fixture": "fe",
+      "kernel": "threaded",
+      "version": "current",
+      "tracingMs": 0.12,
+      "elapsedMs": 1776.89
+    },
+    {
+      "fixture": "fe",
+      "kernel": "threaded",
+      "version": "baseline",
+      "tracingMs": 0.21,
+      "elapsedMs": 1713.36
+    },
+    {
+      "fixture": "fe",
+      "kernel": "threaded",
+      "version": "baseline",
+      "tracingMs": 0.12,
+      "elapsedMs": 1801.47
+    },
+    {
+      "fixture": "fe",
+      "kernel": "threaded",
+      "version": "current",
+      "tracingMs": 0.12,
+      "elapsedMs": 1815.55
+    }
+  ]
+}

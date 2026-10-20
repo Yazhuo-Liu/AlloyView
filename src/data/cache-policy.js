@@ -1,4 +1,5 @@
 import { referenceMappingCacheBytes } from '../analysis/reference-strain.js';
+import { retainedIdBytes } from './replication-ids.js';
 
 const MEBIBYTE = 1024 ** 2;
 const GIBIBYTE = 1024 ** 3;
@@ -12,7 +13,9 @@ export function estimateFrameBytes(frame) {
   // Physical replication retains the parsed source for switching back, and
   // uses stable compound IDs stored as strings rather than a typed ID buffer.
   bytes += Math.max(0, Number(frame?.processingSourceBytes) || 0);
-  if (Array.isArray(frame?.ids)) {
+  const knownIdBytes = frame?.ids ? retainedIdBytes(frame.ids) : undefined;
+  if (knownIdBytes !== undefined) bytes += knownIdBytes;
+  else if (Array.isArray(frame?.ids)) {
     for (const id of frame.ids) bytes += 16 + (typeof id === 'string' ? id.length * 2 : 8);
   }
   const includeBuffer = (buffer) => {
@@ -27,6 +30,7 @@ export function estimateFrameBytes(frame) {
     const value = pending.pop();
     if (!value || typeof value !== 'object' || visited.has(value)) continue;
     visited.add(value);
+    if (value === frame.ids && knownIdBytes !== undefined) continue;
     if (ArrayBuffer.isView(value)) { includeBuffer(value.buffer); continue; }
     if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer === 'function' && value instanceof SharedArrayBuffer)) {
       includeBuffer(value); continue;

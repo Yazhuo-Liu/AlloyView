@@ -87,7 +87,11 @@ export class DisjointSet {
 
   /** The root of the larger set survives; the first argument's on a tie. */
   merge(first, second) {
-    const a = this.find(first), b = this.find(second);
+    return this.mergeRoots(this.find(first), this.find(second));
+  }
+
+  /** Internal hot path for callers that have already resolved both roots. */
+  mergeRoots(a, b) {
     if (a === b) return a;
     if (this.sizes[a] < this.sizes[b]) {
       this.parents[a] = b;
@@ -498,7 +502,7 @@ function minimumSpanningTreeClustering(bonds, order, types, handleCoherentInterf
     if (!(angle < GRAIN_MISORIENTATION_LIMIT)) break;
     const first = sets.find(bonds.a[bond]), second = sets.find(bonds.b[bond]);
     if (first !== second && isCrystallineBond(types[bonds.a[bond]], types[bonds.b[bond]], handleCoherentInterfaces)) {
-      const parent = sets.merge(first, second), child = parent === first ? second : first;
+      const parent = sets.mergeRoots(first, second), child = parent === first ? second : first;
       accumulateOrientation(types[parent], sums, parent, child);
       dendrogram.add(parent, child, angle, sums);
     }
@@ -677,10 +681,10 @@ export function buildGrainDendrogram(input, { algorithm = GRAIN_DEFAULTS.algorit
     const source = mergeOrder[index], a = merges.a[source], b = merges.b[source];
     dendrogram.a[index] = a; dendrogram.b[index] = b; dendrogram.distance[index] = merges.distance[source];
     for (let k = 0; k < 4; k += 1) dendrogram.orientation[index * 4 + k] = merges.orientation[source * 4 + k];
-    const sa = sets.size(sets.find(a)), sb = sets.size(sets.find(b));
+    const rootA = sets.find(a), rootB = sets.find(b), sa = sets.size(rootA), sb = sets.size(rootB);
     dendrogram.size[index] = Math.min(sa, sb);
     dendrogram.mergeSize[index] = 2 / (1 / sa + 1 / sb); // Harmonic mean.
-    sets.merge(a, b);
+    sets.mergeRoots(rootA, rootB);
     if (dendrogram.size[index] >= GRAIN_MIN_PLOT_SIZE) plotted += 1;
   }
 

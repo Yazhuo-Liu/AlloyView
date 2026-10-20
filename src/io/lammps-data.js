@@ -1,4 +1,5 @@
 import { createCell, validateFrame } from '../data/model.js';
+import { attachFrameSummary } from '../data/frame-summary.js';
 import { coordinatesForCell } from './xyz.js';
 
 // Column layouts of the Atoms section for the supported atom styles, after
@@ -105,7 +106,8 @@ export function parseLammpsData(text, sourceName = 'LAMMPS data') {
   }
 
   const cell = createCell({ origin: header.origin, vectors: header.vectors, pbc: [true, true, true], triclinic: header.triclinic });
-  const coordinates = coordinatesForCell(raw, cell, 'LAMMPS data');
+  const summaryOutput = { types, typeCount: typeLabels.length };
+  const coordinates = coordinatesForCell(raw, cell, 'LAMMPS data', summaryOutput);
   if (images) {
     // Stored image flags count box crossings on top of any out-of-box offset.
     const imageFlags = coordinates.imageFlags ?? new Int32Array(count * 3);
@@ -119,11 +121,11 @@ export function parseLammpsData(text, sourceName = 'LAMMPS data') {
     }
     Object.assign(coordinates, { imageFlags, unwrappedPositions, unwrapSource: 'image flags' });
   }
-  return validateFrame({
+  return attachFrameSummary(validateFrame({
     ids, idSource: 'explicit', types, typeLabels, ...coordinates, cell, properties,
     timestep: null, title: sourceName, sourceFormat: 'lammps-data', atomStyle: style,
     parseMs: performance.now() - startedAt,
-  });
+  }), summaryOutput.summary);
 }
 
 function checkedImageFlag(value) {

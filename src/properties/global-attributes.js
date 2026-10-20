@@ -1,4 +1,5 @@
 import { determinant3 } from '../data/model.js';
+import { frameTypeCounts } from '../data/frame-summary.js';
 import { scalarStatistics } from '../io/statistics-export.js';
 
 /** Per-frame scalar attributes for text labels and time series. Names are
@@ -152,7 +153,7 @@ function addFrameAttributes(frame, context, add) {
     add('Strain.volumetric', { group: 'Strain', signature, description: 'Volumetric strain (V − V₀)/V₀', compute: () => strain.volumetric });
   }
   addCategoryAttributes(frame, 'Type', 'atomType', frame.types, (frame.typeLabels ?? []).map((label, id) => ({ id, label })),
-    { kind: 'file', analysis: 'input', signature: '' }, add);
+    { kind: 'file', analysis: 'input', signature: '', frameTypes: true }, add);
   const properties = (frame.properties ?? []).filter(property => property.data?.length === atomCount
     && (!context.fileOnly || propertyKind(property) === 'file'));
   for (const property of properties) {
@@ -230,10 +231,13 @@ export const SURFACE_ATTRIBUTES = Object.freeze([
   ['surface_component_count', 'surfaceComponentCount', '', 'Number of connected surface sheets'],
 ].map(Object.freeze));
 
-function addCategoryAttributes(frame, prefix, propertyName, values, categories, { kind, analysis, signature }, add) {
+function addCategoryAttributes(frame, prefix, propertyName, values, categories, { kind, analysis, signature, frameTypes = false }, add) {
   if (!values?.length || !categories?.length) return;
   let tally = null;
-  const count = id => { tally ??= counts(values); return tally.get(id) ?? 0; };
+  const count = id => {
+    tally ??= frameTypes ? frameTypeCounts(frame) : counts(values);
+    return (frameTypes ? tally[id] : tally.get(id)) ?? 0;
+  };
   const used = new Set();
   for (const category of categories) {
     let segment = attributeSegment(category.label);
