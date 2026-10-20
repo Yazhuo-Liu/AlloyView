@@ -1,0 +1,24 @@
+{
+  "adapter": {
+    "available": true,
+    "vendor": "google",
+    "architecture": "swiftshader",
+    "device": "",
+    "description": "",
+    "isFallbackAdapter": true,
+    "limits": {
+      "maxStorageBufferBindingSize": 1073741824,
+      "maxComputeWorkgroupsPerDimension": 65535
+    }
+  },
+  "physicalGpuPerformanceMeasured": false,
+  "timingScope": "Diagnostic wall times, including direct runtime upload, dispatch, readback and bounded exact corrections; no speedup claim.",
+  "legacy": true,
+  "atoms": 1039232,
+  "initialRadius": 3.7841537338293665,
+  "refusedRadius": 6.054645974126987,
+  "refusal": "The neighbor cells are too densely occupied for a bounded GPU dispatch.",
+  "explicitValidationBudgetBytes": 536870912,
+  "stages": [],
+  "baselineCommit": "c93a58f5b0cd9130b44114e45b8e5950ca13ad9c"
+}

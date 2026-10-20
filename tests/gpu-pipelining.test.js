@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GpuRuntime, GPU_HARDWARE_BATCH_ATOMS, GPU_SOFTWARE_BATCH_ATOMS, GPU_BATCHES_IN_FLIGHT, GPU_MAX_BATCH_ATOMS,
-  GPU_MIN_BATCH_ATOMS, GPU_TARGET_BATCH_MS, isSoftwareGpuAdapter, readGpuBuffers } from '../src/analysis/gpu/runtime.js';
+  GPU_MIN_BATCH_ATOMS, GPU_TARGET_BATCH_MS, GPU_MAX_BIN_OCCUPANCY, GPU_MAX_NEIGHBOR_DENSITY_FACTOR,
+  isSoftwareGpuAdapter, readGpuBuffers, neighborDispatchPolicy } from '../src/analysis/gpu/runtime.js';
 import { exactCoordinateWords, prepareCspCoordinates } from '../src/analysis/gpu/centrosymmetry.js';
 import { SORT_NEIGHBORS_SHADER } from '../src/analysis/gpu/neighbors.js';
 import { crystalFrame } from './helpers/crystals.js';
@@ -83,6 +84,71 @@ test('measured dispatch times shrink slow pipelines at once and grow fast ones o
   assert.equal(runtime.adaptBatch('steady', 65_536, GPU_TARGET_BATCH_MS, 65_536), 65_536);
 });
 
+test('thin or dense neighbor cells reduce batch work instead of rejecting ordinary occupancy', () => {
+  const ordinary = neighborDispatchPolicy(32, 27, 125);
+  assert.equal(ordinary.supported, true); assert.equal(ordinary.batchScale, 1);
+  const dense = neighborDispatchPolicy(128, 27, 125);
+  assert.equal(dense.supported, true); assert.equal(dense.batchScale, .25);
+  const collapsed = neighborDispatchPolicy(108, 1, 25);
+  assert.equal(collapsed.referenceOccupancy, 2000); assert.equal(collapsed.batchScale, 1);
+  assert.equal(neighborDispatchPolicy(GPU_MAX_BIN_OCCUPANCY, 1, 1).supported, true);
+  assert.equal(neighborDispatchPolicy(GPU_MAX_BIN_OCCUPANCY + 1, 1, 1).supported, false, 'a single merge sort still has a finite bound');
+  const denseLimit = neighborDispatchPolicy(0, 9, 125).referenceOccupancy * GPU_MAX_NEIGHBOR_DENSITY_FACTOR;
+  assert.equal(neighborDispatchPolicy(denseLimit, 9, 125).supported, true);
+  assert.equal(neighborDispatchPolicy(denseLimit + 1, 9, 125).supported, false,
+    'an excessively costly single-atom neighborhood still falls back');
+  assert.equal(neighborDispatchPolicy(4096, 1, 4096).supported, false,
+    'the reference occupancy floor cannot admit excessive single-atom image enumeration');
+});
+
+test('dense hardware and software dispatches retain their cap after rounding and adaptation', async () => {
+  for (const software of [false, true]) {
+    const { runtime, log } = fakeRuntime({}, { software });
+    const config = runtime.createBuffer(128, 64 | 8), output = runtime.createBuffer(4);
+    runtime.configContexts.set(config, { neighborDispatch: { batchScale: 1 / 256 } });
+    runtime.adaptBatch = () => GPU_MAX_BATCH_ATOMS;
+    await runtime.run(SOURCE, [config, output], 5000);
+    const ranges = batches(log).map(batch => batch.bounds);
+    assert.deepEqual(ranges[0], [0, software ? 128 : 256]);
+    let next = 0;
+    for (const [start, end] of ranges) {
+      assert.equal(start, next); next = end;
+      assert.ok(end - start <= (software ? 128 : 1024), 'neither workgroup rounding nor adaptation removes the density cap');
+    }
+    assert.equal(next, 5000, 'density changes cover all atoms exactly once');
+  }
+  const { runtime } = fakeRuntime();
+  assert.equal(runtime.adaptBatch('dense', 256, GPU_TARGET_BATCH_MS * 100, 256, 128), 128,
+    'slow dense batches may shrink below the ordinary 4096-atom minimum');
+});
+
+test('compact-output kernels keep their output base while dense dispatch ranges advance', async () => {
+  const { runtime, log } = fakeRuntime({}, { software: true });
+  const config = runtime.createBuffer(128, 64 | 8), output = runtime.createBuffer(4);
+  runtime.configContexts.set(config, { neighborDispatch: { batchScale: .25 } });
+  const dispatched = [];
+  await runtime.run(SOURCE, [config, output], 512,
+    { startAtom: 2048, endAtom: 2560, initialBatchSize: 512, workgroupSize: 32, wait: false,
+      onDispatch: bounds => dispatched.push([bounds.startAtom, bounds.endAtom]) });
+  assert.deepEqual(batches(log).map(batch => batch.bounds), [[2048, 2176], [2176, 2304], [2304, 2432], [2432, 2560]]);
+  assert.deepEqual(dispatched, batches(log).map(batch => batch.bounds), 'diagnostics count actual dispatches after subdivision');
+  assert.equal(log.filter(entry => entry.type === 'write' && entry.buffer === output).length, 0,
+    'only config.start/end change; compact result settings retain the outer-batch base');
+});
+
+test('successive RDF-style output batches reuse a measured dispatch hint without repeatedly applying density', async () => {
+  const { runtime, log } = fakeRuntime({}, { software: true });
+  const config = runtime.createBuffer(128, 64 | 8), output = runtime.createBuffer(4);
+  runtime.configContexts.set(config, { neighborDispatch: { batchScale: .25 } });
+  let hint;
+  for (let slot = 0; slot < 3; slot++) {
+    hint = await runtime.run(SOURCE, [config, output], 8192,
+      { initialBatchSize: 16_384, batchSizeHint: hint, startAtom: slot * 8192, endAtom: (slot + 1) * 8192 });
+    assert.equal(hint, 4096);
+  }
+  assert.deepEqual(batches(log).map(batch => batch.bounds[1] - batch.bounds[0]), [4096, 4096, 4096, 4096, 4096, 4096]);
+});
+
 test('single dispatches followed by a readback skip the separate completion round trip', async () => {
   const { runtime, log, completions } = fakeRuntime();
   const output = runtime.createBuffer(16);
@@ -141,6 +207,32 @@ test('a neighbor index is cleared, built and sorted with only one occupancy read
   const mark = log.length;
   assert.equal(await runtime.prepareNeighbors(frame, 3.1), context);
   assert.equal(log.length, mark, 'a resident index is not rebuilt or sorted again');
+});
+
+test('the measured GPU occupancy sizes a reusable dense index and extreme occupancy releases it before sorting', async () => {
+  for (const occupancy of [128, GPU_MAX_BIN_OCCUPANCY + 1]) {
+    const { runtime, log } = fakeRuntime({ execute(buffers) {
+      if (buffers.length === 6) new Uint32Array(buffers[5].data.buffer)[0] = occupancy;
+    } });
+    const frame = crystalFrame('fcc', 8); frame.gpuFrameId = 73;
+    if (occupancy === 128) {
+      const context = await runtime.prepareNeighbors(frame, 3.1);
+      assert.equal(context.neighborDispatch.maximumOccupancy, 128);
+      assert.equal(context.neighborDispatch.batchScale, .25);
+      assert.equal(await runtime.prepareNeighbors(frame, 3.1), context);
+      assert.equal(log.filter(entry => entry.type === 'copy').length, 1, 'no CPU scan or second occupancy read is added');
+      assert.ok(runtime.pipelines.has(SORT_NEIGHBORS_SHADER));
+    } else {
+      await assert.rejects(runtime.prepareNeighbors(frame, 3.1), error =>
+        error.name === 'GpuUnavailableError' && error.gpuUnsupportedCode === 'neighbor-density-budget');
+      assert.equal(runtime.indexes.size, 0);
+      assert.equal(runtime.pipelines.has(SORT_NEIGHBORS_SHADER), false, 'the extreme bin is refused before serial list sorting');
+      const buffers = log.filter(entry => entry.type === 'dispatch').at(-1).buffers;
+      for (const index of [0, 2, 3, 5]) assert.equal(buffers[index].destroyed, true);
+      for (const index of [1, 4]) assert.equal(buffers[index].destroyed, false, 'uploaded input survives fallback');
+    }
+    runtime.close();
+  }
 });
 
 test('a cancelled or failed bin sort releases its unpublished index and retains the warmed frame for retry', async () => {

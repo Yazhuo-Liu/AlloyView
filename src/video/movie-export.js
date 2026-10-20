@@ -2,7 +2,7 @@
  * export, encode it with WebCodecs and write an MP4 or WebM file, or collect
  * PNG frames in a ZIP archive. The application is reached through a host
  * object, so the pipeline also runs with test doubles. */
-import { ImageArchiveBuilder } from '../io/export-archive.js';
+import { PngArchiveQueue } from './png-archive-queue.js';
 import { planMovie } from '../render/camera-path.js';
 import { DEFAULT_MOVIE_OUTPUT, MOVIE_LIMITS, PNG_SEQUENCE_FORMAT } from './movie-settings.js';
 import { Mp4Muxer } from './mp4-muxer.js';
@@ -34,7 +34,7 @@ function encoderProgress(encoder) {
  * Render and encode every frame of a plan.
  *
  * host: getFrameIndex(), showFrame(index) → shown?, setCamera(camera),
- * capture() → canvas, encodeImage(canvas) → PNG bytes (ZIP only),
+ * capture() → canvas, optional encodeImage(canvas) → PNG bytes (ZIP only),
  * release(canvas). Encoded chunks go straight to the muxer; at most
  * `maxEncodeQueue` frames wait in the encoder, so memory stays bounded by a
  * few images plus the encoded movie.
@@ -48,8 +48,13 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
   const archive = format.id === PNG_SEQUENCE_FORMAT.id;
   if (archive && frameTotal > limits.maxArchiveFrames) throw new Error(`A ZIP of frames holds at most ${limits.maxArchiveFrames} images; this movie has ${frameTotal.toLocaleString('en-US')}.`);
   if (!archive && (typeof VideoEncoderClass !== 'function' || typeof VideoFrameClass !== 'function')) throw new Error('This browser has no WebCodecs video encoder.');
-  let failure = null, encoder = null, muxer = null, archiveBytes = 0;
-  const imageArchive = archive ? new ImageArchiveBuilder() : null;
+  let failure = null, encoder = null, muxer = null;
+  const progress = (done, bytes) => {
+    const elapsedMs = now() - started;
+    onProgress({ frame: done, frameTotal, bytes, elapsedMs, etaMs: elapsedMs / done * (frameTotal - done) });
+  };
+  const imageArchive = archive ? new PngArchiveQueue({ signal, encode: host.encodeImage?.bind(host), release: host.release?.bind(host),
+    checkCurrent: host.checkCurrent?.bind(host), onEncoded: ({ count, bytes }) => progress(count, bytes) }) : null;
   const digits = Math.max(4, String(frameTotal).length);
   if (!archive) {
     const Muxer = format.container === 'mp4' ? Mp4Muxer : WebmMuxer;
@@ -85,14 +90,12 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
       const camera = plan.cameraAt(index);
       if (camera) host.setCamera(camera);
       const canvas = await host.capture();
+      let imageOwned = false;
       try {
         throwIfAborted(signal);
         if (archive) {
-          const bytes = await host.encodeImage(canvas);
-          throwIfAborted(signal);
-          archiveBytes += bytes.length;
-          if (archiveBytes > 256 * 1024 ** 2) throw new Error('The frame archive exceeds 256 MiB. Choose a smaller image size or fewer frames.');
-          imageArchive.add({ name: `${fileStem}-${String(index + 1).padStart(digits, '0')}.png`, bytes }, { signal });
+          imageOwned = true;
+          await imageArchive.add(canvas, `${fileStem}-${String(index + 1).padStart(digits, '0')}.png`);
         } else {
           if (canvas.width !== config.width || canvas.height !== config.height) {
             throw new Error('The image size changed during the export. Keep the window size, or choose a fixed image resolution.');
@@ -100,16 +103,15 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
           const frame = new VideoFrameClass(canvas, { timestamp: Math.round(index * 1e6 / fps), duration: frameDuration });
           try { encoder.encode(frame, { keyFrame: index % keyInterval === 0 }); } finally { frame.close(); }
         }
-      } finally { host.release?.(canvas); }
+      } finally { if (!imageOwned) host.release?.(canvas); }
       // Backpressure: do not render faster than the encoder accepts frames.
       while (encoder && encoder.encodeQueueSize > limits.maxEncodeQueue && !failure) { await encoderProgress(encoder); throwIfAborted(signal); }
-      const elapsedMs = now() - started, done = index + 1;
-      onProgress({ frame: done, frameTotal, bytes: archive ? archiveBytes : muxer.dataSize, elapsedMs, etaMs: elapsedMs / done * (frameTotal - done) });
+      if (!archive) progress(index + 1, muxer.dataSize);
       await pause();
     }
     throwIfAborted(signal);
     if (archive) {
-      const blob = imageArchive.finish({ signal });
+      const blob = await imageArchive.finish();
       return { parts: [blob], size: blob.size, mimeType: format.mimeType, frames: imageArchive.count, durationSeconds: imageArchive.count / fps, elapsedMs: now() - started };
     }
     await encoder.flush();
@@ -122,7 +124,7 @@ export async function renderMovie({ plan, format, config = null, keyframeSeconds
     throw error;
   } finally {
     signal?.removeEventListener('abort', stopEncoding);
-    imageArchive?.clear();
+    imageArchive?.dispose();
     stopEncoding();
   }
 }
@@ -149,11 +151,13 @@ export async function exportMovie({ path, output, format, config = null, host, s
     // nothing more is rendered from, or changed in, the new source.
     const current = () => { if (host.getSourceVersion() !== source) throw abortError(); };
     const guarded = { ...host,
+      checkCurrent: current,
       showFrame: async index => { current(); const shown = await host.showFrame(index); current(); return shown; },
       setCamera: camera => { current(); host.setCamera(camera); },
       capture: () => { current(); return host.capture(); } };
     started = true;
     const result = await renderMovie({ plan, format, config, keyframeSeconds: output.keyframeSeconds, host: guarded, signal, onProgress, limits, ...rest });
+    current();
     return { ...result, plan };
   } finally {
     if (started && host.getSourceVersion() === source) {

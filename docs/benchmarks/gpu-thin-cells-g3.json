@@ -1,0 +1,366 @@
+{
+  "adapter": {
+    "available": true,
+    "vendor": "google",
+    "architecture": "swiftshader",
+    "device": "",
+    "description": "",
+    "isFallbackAdapter": true,
+    "limits": {
+      "maxStorageBufferBindingSize": 1073741824,
+      "maxComputeWorkgroupsPerDimension": 65535
+    }
+  },
+  "physicalGpuPerformanceMeasured": false,
+  "timingScope": "Diagnostic wall times, including direct runtime upload, dispatch, readback and bounded exact corrections; no speedup claim.",
+  "rows": [
+    {
+      "label": "Actual NiGB complete resident neighbor index",
+      "atoms": 1039232,
+      "gpuWallMs": 379.30000001192093,
+      "radius": 3.7841537338293665,
+      "explicitValidationBudgetBytes": 536870912
+    },
+    {
+      "label": "Actual NiGB adaptive CNA",
+      "atoms": 1039232,
+      "startAtom": 0,
+      "endAtom": 64,
+      "gpuWallMs": 451.40000000596046,
+      "comparison": {
+        "maxAbsoluteError": 0,
+        "nanAtoms": 0
+      },
+      "correctedAtoms": 64,
+      "radiusAttempts": 2
+    },
+    {
+      "label": "Actual NiGB central symmetry",
+      "atoms": 1039232,
+      "startAtom": 0,
+      "endAtom": 64,
+      "neighbors": 14,
+      "gpuWallMs": 6467.0999999940395,
+      "comparison": {
+        "maxAbsoluteError": 2.9802322387695312e-08,
+        "nanAtoms": 0
+      },
+      "correctedAtoms": 0,
+      "radiusAttempts": 2
+    },
+    {
+      "label": "Actual NiGB adaptive CNA",
+      "atoms": 1039232,
+      "startAtom": 519616,
+      "endAtom": 519680,
+      "gpuWallMs": 121.59999999403954,
+      "comparison": {
+        "maxAbsoluteError": 0,
+        "nanAtoms": 0
+      },
+      "correctedAtoms": 64,
+      "radiusAttempts": 2
+    },
+    {
+      "label": "Actual NiGB central symmetry",
+      "atoms": 1039232,
+      "startAtom": 519616,
+      "endAtom": 519680,
+      "neighbors": 14,
+      "gpuWallMs": 313.39999997615814,
+      "comparison": {
+        "maxAbsoluteError": 2.9802322387695312e-08,
+        "nanAtoms": 0
+      },
+      "correctedAtoms": 0,
+      "radiusAttempts": 2
+    },
+    {
+      "label": "Thin FCC RDF at half-face radius",
+      "atoms": 1728,
+      "gpuWallMs": 181.7999999821186,
+      "counts": {
+        "maxAbsoluteError": 0,
+        "nanAtoms": 0
+      },
+      "values": {
+        "maxAbsoluteError": 0,
+        "nanAtoms": 0
+      },
+      "correctedPairs": 0
+    },
+    {
+      "label": "Open vacuum slab",
+      "atoms": 2048,
+      "startAtom": 0,
+      "endAtom": 16,
+      "gpuWallMs": 85289,
+      "fields": {
+        "atomicVolume": {
+          "maxAbsoluteError": 4.159375043855107e-05,
+          "nanAtoms": 0
+        },
+        "voronoiSurfaceArea": {
+          "maxAbsoluteError": 4.837382903133403e-06,
+          "nanAtoms": 0
+        },
+        "voronoiCoordination": {
+          "maxAbsoluteError": 0,
+          "nanAtoms": 0
+        },
+        "voronoiBoundaryFaces": {
+          "maxAbsoluteError": 0,
+          "nanAtoms": 0
+        },
+        "voronoiMaxFaceOrder": {
+          "maxAbsoluteError": 0,
+          "nanAtoms": 0
+        },
+        "faceOffsets": {
+          "maxAbsoluteError": 0,
+          "nanAtoms": 0
+        }
+      },
+      "correctedAtoms": 0,
+      "correctionReasons": {
+        "geometry": 0,
+        "threshold": 0,
+        "coverage": 0
+      }
+    },
+    {
+      "label": "Maximum admitted single-bin occupancy",
+      "atoms": 16384,
+      "canonicalSortedLinks": 16384,
+      "refusedAtoms": 16385,
+      "refusal": "The neighbor cells exceed the GPU per-bin or per-atom traversal safety bound."
+    }
+  ],
+  "indices": [
+    {
+      "label": "Actual NiGB 2×2×2",
+      "atoms": 1039232,
+      "cutoff": 3.7841537338293665,
+      "dimensions": [
+        256,
+        126,
+        2
+      ],
+      "peakOccupancy": 30,
+      "legacyOccupancyLimit": 32,
+      "legacyWouldRefuse": false,
+      "neighborDispatch": {
+        "maximumOccupancy": 30,
+        "referenceOccupancy": 32,
+        "densityFactor": 1,
+        "candidateWork": 67500,
+        "batchScale": 1,
+        "supported": true
+      }
+    },
+    {
+      "label": "Actual NiGB 2×2×2",
+      "atoms": 1039232,
+      "cutoff": 6.054645974126987,
+      "dimensions": [
+        256,
+        79,
+        1
+      ],
+      "peakOccupancy": 80,
+      "legacyOccupancyLimit": 44,
+      "legacyWouldRefuse": true,
+      "neighborDispatch": {
+        "maximumOccupancy": 80,
+        "referenceOccupancy": 44,
+        "densityFactor": 1.8181818181818181,
+        "candidateWork": 90000,
+        "batchScale": 0.55,
+        "supported": true
+      }
+    },
+    {
+      "label": "Thin FCC RDF at half-face radius",
+      "atoms": 1728,
+      "cutoff": 5.28011329542833,
+      "dimensions": [
+        7,
+        7,
+        1
+      ],
+      "peakOccupancy": 48,
+      "legacyOccupancyLimit": 44,
+      "legacyWouldRefuse": true,
+      "neighborDispatch": {
+        "maximumOccupancy": 48,
+        "referenceOccupancy": 44,
+        "densityFactor": 1.0909090909090908,
+        "candidateWork": 54000,
+        "batchScale": 0.9166666666666667,
+        "supported": true
+      }
+    },
+    {
+      "label": "Open vacuum slab",
+      "atoms": 2048,
+      "cutoff": 8.8,
+      "dimensions": [
+        3,
+        3,
+        12
+      ],
+      "peakOccupancy": 108,
+      "legacyOccupancyLimit": 74,
+      "legacyWouldRefuse": true,
+      "neighborDispatch": {
+        "maximumOccupancy": 108,
+        "referenceOccupancy": 74,
+        "densityFactor": 1.4594594594594594,
+        "candidateWork": 72900,
+        "batchScale": 0.6851851851851852,
+        "supported": true
+      }
+    },
+    {
+      "label": "Open vacuum slab",
+      "atoms": 2048,
+      "cutoff": 15.840000000000002,
+      "dimensions": [
+        1,
+        1,
+        7
+      ],
+      "peakOccupancy": 1152,
+      "legacyOccupancyLimit": 666,
+      "legacyWouldRefuse": true,
+      "neighborDispatch": {
+        "maximumOccupancy": 1152,
+        "referenceOccupancy": 666,
+        "densityFactor": 1.7297297297297298,
+        "candidateWork": 86400,
+        "batchScale": 0.578125,
+        "supported": true
+      }
+    },
+    {
+      "label": "Open vacuum slab",
+      "atoms": 2048,
+      "cutoff": 28.512000000000004,
+      "dimensions": [
+        1,
+        1,
+        3
+      ],
+      "peakOccupancy": 2048,
+      "legacyOccupancyLimit": 340,
+      "legacyWouldRefuse": true,
+      "neighborDispatch": {
+        "maximumOccupancy": 2048,
+        "referenceOccupancy": 340,
+        "densityFactor": 6.023529411764706,
+        "candidateWork": 301056,
+        "batchScale": 0.166015625,
+        "supported": true
+      }
+    },
+    {
+      "label": "Open vacuum slab",
+      "atoms": 2048,
+      "cutoff": 51.32160000000001,
+      "dimensions": [
+        1,
+        1,
+        2
+      ],
+      "peakOccupancy": 1024,
+      "legacyOccupancyLimit": 510,
+      "legacyWouldRefuse": true,
+      "neighborDispatch": {
+        "maximumOccupancy": 1024,
+        "referenceOccupancy": 510,
+        "densityFactor": 2.007843137254902,
+        "candidateWork": 100352,
+        "batchScale": 0.498046875,
+        "supported": true
+      }
+    },
+    {
+      "label": "Open vacuum slab",
+      "atoms": 2048,
+      "cutoff": 84.56175733215332,
+      "dimensions": [
+        1,
+        1,
+        1
+      ],
+      "peakOccupancy": 2048,
+      "legacyOccupancyLimit": 413,
+      "legacyWouldRefuse": true,
+      "neighborDispatch": {
+        "maximumOccupancy": 2048,
+        "referenceOccupancy": 413,
+        "densityFactor": 4.958837772397095,
+        "candidateWork": 247808,
+        "batchScale": 0.20166015625,
+        "supported": true
+      }
+    },
+    {
+      "label": "Maximum admitted single-bin occupancy",
+      "atoms": 16384,
+      "cutoff": 2,
+      "dimensions": [
+        4,
+        4,
+        4
+      ],
+      "peakOccupancy": 16384,
+      "legacyOccupancyLimit": 1851,
+      "legacyWouldRefuse": true,
+      "neighborDispatch": {
+        "maximumOccupancy": 16384,
+        "referenceOccupancy": 1851,
+        "densityFactor": 8.85143165856294,
+        "candidateWork": 442368,
+        "batchScale": 0.11297607421875,
+        "supported": true
+      }
+    }
+  ],
+  "scope": "Full million-atom NiGB neighbor indexing; 128 NiGB central atoms for CNA/CSP (14 neighbors) with all neighbors; full 1,728-atom thin RDF; 16 vacuum-slab Voronoi centers with all 2,048 sites; canonical links at maximum bin occupancy and safe refusal above it.",
+  "stages": [
+    {
+      "label": "full 1,039,232-atom NiGB index remains on GPU",
+      "elapsedMs": 1613.7543860000003
+    },
+    {
+      "label": "NiGB adaptive CNA central atoms 0–64",
+      "elapsedMs": 502.3772649999996
+    },
+    {
+      "label": "NiGB central symmetry central atoms 0–64",
+      "elapsedMs": 6512.312997999999
+    },
+    {
+      "label": "NiGB adaptive CNA central atoms 519616–519680",
+      "elapsedMs": 182.62824600000022
+    },
+    {
+      "label": "NiGB central symmetry central atoms 519616–519680",
+      "elapsedMs": 364.31551599999875
+    },
+    {
+      "label": "full thin-cell RDF preserves exact counts and unique periodic pairs",
+      "elapsedMs": 206.76028000000042
+    },
+    {
+      "label": "vacuum-slab Voronoi surface cells retain CPU topology and geometry",
+      "elapsedMs": 85337.211623
+    },
+    {
+      "label": "maximum admitted bin sorts exactly; next occupancy safely refuses",
+      "elapsedMs": 141.94345000000612
+    }
+  ],
+  "baselineCommit": "c93a58f5b0cd9130b44114e45b8e5950ca13ad9c"
+}

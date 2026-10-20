@@ -10,6 +10,7 @@ const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 // evicts their GPU buffers.
 const MAX_TASKS_IN_FLIGHT = 2;
 const EMPTY_CACHE = { capacity: 0, cachedFrameIds: [], cachedFrameIndexes: [], fullTrajectory: false,
+  hostFrameIds: [], hostInputBytes: 0,
   frameCount: 0, currentIndex: 0, budgetBytes: 0, allocatedBytes: 0, residentBytes: 0, frameBytes: 0, workspaceBytes: 0,
   preparedVoronoiFrameIds: [], preparedVoronoiFrameIndexes: [], voronoiWorkspaceAtoms: 0,
   kernelFailures: [],
@@ -37,6 +38,7 @@ export class GpuAnalysisClient {
     this.invalidatedFrameIds = new Set();
     this.derivedFrameIds = new Map();
     this.cachedFrameIds = new Set();
+    this.cachedInputFrameIds = new Set();
     this.cachedCartesianFrames = new Map();
     this.positionSources = new Map();
     this.ptmSources = new Map();
@@ -64,6 +66,7 @@ export class GpuAnalysisClient {
     const cachedFrameIndexes = frameIndexes(this.cachedFrameIds);
     const preparedVoronoiFrameIds = (this._cacheStatus.preparedVoronoiFrameIds ?? []).filter(id => this.frameMetadata.has(id) && !this.invalidatedFrameIds.has(id));
     return { ...this._cacheStatus, cachedFrameIds: [...this.cachedFrameIds], cachedFrameIndexes,
+      cachedInputFrameIds: [...this.cachedInputFrameIds], cachedInputFrameIndexes: frameIndexes(this.cachedInputFrameIds),
       fullyCached: this._cacheStatus.frameCount > 0 && cachedFrameIndexes.length === this._cacheStatus.frameCount
         && cachedFrameIndexes[0] === 0 && cachedFrameIndexes.at(-1) === this._cacheStatus.frameCount - 1,
       cachedPtmFits: [...this.cachedPtmFits].map(([frameId, fitId]) => ({ frameId, fitId })),
@@ -139,7 +142,7 @@ export class GpuAnalysisClient {
     this.frameMetadata.delete(id);
     for (const derivedId of this.derivedFrameIds.get(id) ?? []) this.retireFrame(derivedId);
     this.derivedFrameIds.delete(id);
-    this.cachedFrameIds.delete(id); this.cachedCartesianFrames.delete(id);
+    this.cachedFrameIds.delete(id); this.cachedInputFrameIds.delete(id); this.cachedCartesianFrames.delete(id);
     this.positionSources.delete(id); this.ptmSources.delete(id); this.cachedPtmFits.delete(id);
     for (const task of [...this.pending.values()]) {
       if (task.frameDependencies?.includes(id)) this.cancel(task);
@@ -221,7 +224,7 @@ export class GpuAnalysisClient {
     this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexedFrames = new WeakSet(); this.indexFrameIds.clear();
     this.frameSnapshots = new WeakMap(); this.frameMetadata.clear(); this.invalidatedFrameIds.clear(); this.derivedFrameIds.clear();
     this.referenceFrames = new WeakMap();
-    this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear(); this._cacheStatus = { ...EMPTY_CACHE };
+    this.cachedFrameIds.clear(); this.cachedInputFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear(); this._cacheStatus = { ...EMPTY_CACHE };
     this.ptmSources.clear(); this.cachedPtmFits.clear();
     if (!this.worker || this.closed) return Promise.resolve(this.cacheStatus);
     return this.enqueue('clear-frames', {}, 0, { resume: false });
@@ -320,6 +323,7 @@ export class GpuAnalysisClient {
       if (data.fatal === true) { fail({ message: data.error || 'The GPU analysis Worker failed.' }); return; }
       if (task.generation === this.generation) {
         this.cachedFrameIds = new Set((data.cachedFrameIds ?? data.cacheStatus?.cachedFrameIds ?? []).filter(id => !this.invalidatedFrameIds.has(id)));
+        this.cachedInputFrameIds = new Set((data.cachedInputFrameIds ?? [...this.cachedFrameIds]).filter(id => !this.invalidatedFrameIds.has(id)));
         this.cachedCartesianFrames = new Map((data.cachedCartesianFrames ?? []).filter(({ frameId }) => !this.invalidatedFrameIds.has(frameId)).map(({ frameId, variants }) => [frameId, new Set(variants)]));
         this.cachedPtmFits = new Map((data.cachedPtmFits ?? []).filter(({ frameId }) => !this.invalidatedFrameIds.has(frameId)).map(({ frameId, fitId }) => [frameId, fitId]));
         // Replies describe the worker state before later posted tasks run.
@@ -331,7 +335,7 @@ export class GpuAnalysisClient {
           && !active.settled && active.generation === this.generation);
         for (const [frameId, variants] of this.positionSources) {
           for (const [variant, source] of variants) {
-            const acknowledged = this.cachedFrameIds.has(frameId) && this.cachedCartesianFrames.get(frameId)?.has(variant);
+            const acknowledged = this.cachedInputFrameIds.has(frameId) && this.cachedCartesianFrames.get(frameId)?.has(variant);
             const posted = awaiting.some(active => active.positionSources?.some(pending =>
               pending.id === frameId && pending.variant === variant && pending.source === source));
             if (!acknowledged && !posted) variants.delete(variant);
@@ -339,7 +343,7 @@ export class GpuAnalysisClient {
           if (!variants.size) this.positionSources.delete(frameId);
         }
         for (const [frameId, fit] of this.ptmSources) {
-          const acknowledged = this.cachedFrameIds.has(frameId) && this.cachedPtmFits.get(frameId) === fit.id;
+          const acknowledged = this.cachedInputFrameIds.has(frameId) && this.cachedPtmFits.get(frameId) === fit.id;
           const posted = awaiting.some(active => active.ptmSource?.frameId === frameId && active.ptmSource.source === fit);
           if (!acknowledged && !posted) this.ptmSources.delete(frameId);
         }
@@ -374,7 +378,7 @@ export class GpuAnalysisClient {
       // not start a replacement device merely to run their queued GPU jobs.
       if (this.releaseWhenIdle) for (const task of this.queue) this.settle(task, error);
       this.worker?.terminate(); this.worker = null; this.active = [];
-      this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
+      this.cachedFrameIds.clear(); this.cachedInputFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
       this.ptmSources.clear(); this.cachedPtmFits.clear();
       this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = this.deviceWarmed = false; this.warmedAnalysisKinds.clear(); this.pump();
     };
@@ -400,8 +404,13 @@ export class GpuAnalysisClient {
    * the worker still receives and runs tasks in queue order. */
   canPipeline(task) {
     if (this.active.length >= MAX_TASKS_IN_FLIGHT || task.type !== 'analyze' || task.generation !== this.generation) return false;
-    if (this.active.some(active => !active.dispatched || ['clear-frames', 'release-frame'].includes(active.type))) return false;
-    const resident = frame => { const id = this.frameIds.get(frame); return id !== undefined && this.cachedFrameIds.has(id); };
+    if (this.active.some(active => !active.dispatched || active.type !== 'analyze')) return false;
+    // A foreground switch can retire previously acknowledged host copies.
+    // Pipeline only inputs still leased by the most recently posted analysis;
+    // cache/configuration/background jobs are serialized barriers.
+    const leased = this.active.at(-1).frameDependencies ?? [];
+    if (task.frameDependencies?.some(id => !leased.includes(id))) return false;
+    const resident = frame => { const id = this.frameIds.get(frame); return id !== undefined && this.cachedInputFrameIds.has(id); };
     if (!task.frame || !resident(task.frame)) return false;
     if (REFERENCE_KINDS.has(task.parameters?.kind)) {
       try { if (!resident(this.referenceFrame(task.parameters))) return false; } catch { return false; }
@@ -431,7 +440,7 @@ export class GpuAnalysisClient {
         const id = this.frameRevision(source);
         const index = this.frameIndexes.get(source);
         let payload;
-        if (!this.cachedFrameIds.has(id) && !preparedIds.has(id)) {
+        if (!this.cachedInputFrameIds.has(id) && !preparedIds.has(id)) {
           const fractional = await copyArray(source.fractional, task);
           const types = source.types ? await copyArray(source.types, task) : undefined;
           payload = { fractional, types, typeLabels: source.typeLabels, cell: source.cell, gpuFrameId: id,
@@ -603,7 +612,7 @@ export class GpuAnalysisClient {
     this.fallbackGeneration++;
     for (const task of this.pending.values()) this.settle(task, abortError());
     this.queue.length = 0; this.worker?.terminate(); this.worker = null; this.active = [];
-    this.cachedFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
+    this.cachedFrameIds.clear(); this.cachedInputFrameIds.clear(); this.cachedCartesianFrames.clear(); this.positionSources.clear();
     this.ptmSources.clear(); this.cachedPtmFits.clear();
     this._cacheStatus = { ...EMPTY_CACHE }; this.warmedUp = this.deviceWarmed = false; this.warmedAnalysisKinds.clear();
     this.frameIds = new WeakMap(); this.frameIndexes = new WeakMap(); this.indexedFrames = new WeakSet(); this.indexFrameIds.clear();

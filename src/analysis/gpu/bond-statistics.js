@@ -74,7 +74,7 @@ export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, 
     // A batch shares one histogram, queue and row range. Its dispatches start
     // at the former 2,048 atoms and follow the measured dispatch time, since
     // dense environments make the angular enumeration quadratic per atom.
-    let batchSize = initialBatch, recordDensity = 0, dispatchSize = 2048;
+    let batchSize = initialBatch, recordDensity = 0, dispatchSize;
     const launch = async begin => {
       checkSignal(signal);
       const end = Math.min(endAtom, begin + batchSize);
@@ -86,7 +86,7 @@ export async function analyzeGpuBondStatistics(runtime, frame, parameters = {}, 
       await runtime.zeroBuffer(histogram); await runtime.zeroBuffer(corrections, 0, 16);
       runtime.write(settings, new Uint32Array([begin]), 32);
       dispatchSize = await runtime.run(BOND_STATISTICS_SHADER, bindings, end - begin,
-        { signal, startAtom: begin, endAtom: end, initialBatchSize: dispatchSize, wait: false }) ?? dispatchSize;
+        { signal, startAtom: begin, endAtom: end, initialBatchSize: 2048, batchSizeHint: dispatchSize, wait: false }) ?? dispatchSize;
       // One mapping returns the queue header, rows and histogram together.
       const readback = readGpuBuffers(runtime, [
         { buffer: corrections, Type: Uint32Array, length: 4 },

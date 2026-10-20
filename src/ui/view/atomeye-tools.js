@@ -10,7 +10,8 @@ import { createReferenceMappingAsync, REFERENCE_STRAIN_FIELDS } from '../../anal
 import { wrappedSourceRepetitions } from '../../data/model.js';
 import { STRAIN_FIELDS } from '../../analysis/atomic-strain.js';
 import { measureAtoms } from '../../analysis/measurements.js';
-import { ImageArchiveBuilder, downloadBlob } from '../../io/export-archive.js';
+import { downloadBlob } from '../../io/export-archive.js';
+import { PngArchiveQueue } from '../../video/png-archive-queue.js';
 import { resolveExportSize } from '../../render/export-resolution.js';
 import { COLOR_TILE_CATEGORIES, colorTileLabels, MAX_COLOR_TILES, prepareDisplacements } from '../../analysis/displacement.js';
 import { registerVectorProperties, vectorPropertyNames } from '../../analysis/vector-properties.js';
@@ -971,7 +972,8 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     const task = { cancelled: false, restore: true, source: getSourceVersion(), controller: new AbortController() };
     batch = task;
     let releaseRouting = () => {};
-    const original = getFrameIndex(), camera = cameraSnapshot(renderer), archive = new ImageArchiveBuilder(); let total = 0;
+    const original = getFrameIndex(), camera = cameraSnapshot(renderer), archive = new PngArchiveQueue({ signal: task.controller.signal,
+      checkCurrent: () => { if (task.source !== getSourceVersion()) throw new DOMException('The image export was cancelled.', 'AbortError'); } });
     let completed = false, failure = null;
     stopPlayback(); $('cancel-frame-series').disabled = false; $('export-frame-series').disabled = $('export-multiview').disabled = true;
     $('export-series-status').textContent = 'Preparing trajectory index…';
@@ -989,17 +991,18 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         $('export-series-status').textContent = `Rendering frame ${index + 1} · ${archive.count} / ${count} exported`;
         if (!await showFrame(index)) throw new Error(`Could not load frame ${index + 1}.`);
         if (task.cancelled || task.source !== getSourceVersion()) return;
-        const image = await renderer.captureImage(getExportOptions()), blob = await canvasBlob(image), bytes = new Uint8Array(await blob.arrayBuffer());
-        total += bytes.length;
-        if (total > 256 * 1024 ** 2) throw new Error('Image export exceeds 256 MiB. Select fewer frames.');
-        archive.add({ name: `${getFileStem()}-frame-${String(index + 1).padStart(6, '0')}.png`, bytes }, { signal: task.controller.signal });
+        const image = await renderer.captureImage(getExportOptions());
+        await archive.add(image, `${getFileStem()}-frame-${String(index + 1).padStart(6, '0')}.png`);
         await new Promise(resolve => setTimeout(resolve, 0));
       }
-      if (!task.cancelled && task.source === getSourceVersion()) { downloadBlob(archive.finish({ signal: task.controller.signal }), `${getFileStem()}-frames.zip`); completed = true; }
+      const blob = await archive.finish();
+      if (!task.cancelled && task.source === getSourceVersion()) { downloadBlob(blob, `${getFileStem()}-frames.zip`); completed = true; }
     } catch (error) {
       failure = error;
-      if (!task.cancelled) throw error;
+      if (!task.cancelled && error?.name !== 'AbortError') throw error;
     } finally {
+      const exported = archive.count;
+      archive.dispose();
       try {
         if (task.restore && task.source === getSourceVersion()) {
           try { await showFrame(original); }
@@ -1011,8 +1014,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       } finally {
         try { releaseRouting(); }
         finally {
-          $('export-series-status').textContent = completed ? `Exported ${archive.count} frames in one ZIP archive.` : failure && !task.cancelled ? `Export failed: ${failure.message}` : 'Export cancelled.';
-          archive.clear();
+          $('export-series-status').textContent = completed ? `Exported ${exported} frames in one ZIP archive.` : failure && !task.cancelled && failure.name !== 'AbortError' ? `Export failed: ${failure.message}` : 'Export cancelled.';
           if (batch === task) batch = null;
           $('cancel-frame-series').disabled = true; $('export-frame-series').disabled = $('export-multiview').disabled = !getFrame();
         }

@@ -8,7 +8,10 @@ reproduced fixes. The performance items below were checked against current
 source. Their older measurements and estimates have not been remeasured unless
 a dated report explicitly says so. The [2026-10-20 performance report](PERFORMANCE_IMPROVEMENTS_2026-10-20.md)
 completes S6, T7, T8, T10 and C10 with new measurements; completed entries
-have moved to the feature documentation. Remaining items are listed below.
+have moved to the feature documentation. The [T9/G3/G4 report](PERFORMANCE_T9_G3_G4.md)
+records Worker PNG encoding, thin-cell GPU dispatch and bounded GPU prefetch
+against baseline `c93a58f`; those completed items have also moved out of this backlog.
+Remaining items are listed below.
 
 The feature plan is complete, so this backlog now tracks defects and
 performance work only. Earlier backlog items (P1–P18, O1–O16, A1–A9,
@@ -163,42 +166,6 @@ moves use a constant-size projection/depth check, without scanning every bond.
   [Deployment](DEPLOYMENT.md#cache-content-addressed-assets).
 
 ## Part 2: performance, phase 2 (medium changes)
-
-### T9. Frame-ZIP: encode PNGs in a Worker
-
-**Effort:** M. **Deployments:** all.
-
-- **Evidence [M]:** 147 ms per frame at 60k atoms and 1050×928, of which
-  `toBlob` is 62 ms on the main thread.
-- **Change:** hand each frame as an `ImageBitmap` to a Worker
-  (`OffscreenCanvas.convertToBlob` plus CRC) with a queue of 2 and a
-  main-thread fallback. About 70–80 ms per frame [E]. ZIP bytes must stay
-  identical.
-
-### G3. Keep thin cells and slabs on the GPU
-
-**Effort:** S–M. **Deployments:** WebGPU.
-
-- **Where:** `src/analysis/gpu/runtime.js`: an axis whose height is between
-  one and two search radii gets one long bin, and the occupancy limit is a
-  hard failure.
-- **Evidence [M]:** NiGB 2×2×2 (9.96 Å thick) fails for adaptive CNA, central
-  symmetry and RDF and falls back to the CPU; a vacuum slab fails for the
-  Voronoi radius.
-- **Change:** turn the limit into an input to the initial batch size (batches
-  already adapt to dispatch time) and fail only at a much higher bound.
-
-### G4. Bound GPU trajectory prefetch
-
-**Effort:** S–M. **Deployments:** WebGPU.
-
-- **Evidence [M]:** a 160-frame, 130k-atom trajectory fills 812 MiB of GPU
-  memory and 278 MiB in the GPU Worker, with 159 background frame reads; the
-  budget is a fixed 2 GiB, and the Worker keeps the CPU-side input of every
-  resident frame.
-- **Change:** a window of a few frames around the current one; a budget from
-  the adapter limits and `navigator.deviceMemory`; drop the Worker's CPU copy
-  for frames that are not current or pinned.
 
 ### R7. Supporting-GPU depth validation
 

@@ -22,32 +22,35 @@ export class ImageArchiveBuilder {
   get count() { return this.parts.length; }
   get size() { return this.offset + this.directorySize + 22; }
 
-  add({ name, bytes }, { signal } = {}) {
+  add({ name, bytes, blob, crc: preparedCrc }, { signal } = {}) {
     checkSignal(signal);
     if (this.count >= 500) throw new Error('Export at most 500 images in one archive.');
-    if (!(bytes instanceof Uint8Array)) throw new Error('Archive entries require image bytes.');
+    const prepared = blob instanceof Blob;
+    if (!prepared && !(bytes instanceof Uint8Array)) throw new Error('Archive entries require image bytes.');
+    if (prepared && (!Number.isInteger(preparedCrc) || preparedCrc < 0 || preparedCrc > 0xffffffff)) throw new Error('Encoded archive entries require a CRC-32 checksum.');
+    const size = prepared ? blob.size : bytes.length;
     const filename = encoder.encode(String(name).replace(/[\\/\x00-\x1f]/g, '_'));
     if (!filename.length || filename.length > 65535) throw new Error('Invalid archive filename.');
     // Reject before CRC, record allocation or copying the image into a Blob.
-    if (this.size + bytes.length + 76 + filename.length * 2 > this.maxBytes) throw new Error('The image archive exceeds 256 MiB; export fewer or smaller images.');
-    const crc = crc32(bytes);
+    if (this.size + size + 76 + filename.length * 2 > this.maxBytes) throw new Error('The image archive exceeds 256 MiB; export fewer or smaller images.');
+    const crc = prepared ? preparedCrc : crc32(bytes);
     const local = new Uint8Array(30 + filename.length);
     const view = new DataView(local.buffer);
     view.setUint32(0, 0x04034b50, true); view.setUint16(4, 20, true);
     view.setUint16(6, 0x0800, true); // UTF-8
     view.setUint32(14, crc, true);
-    view.setUint32(18, bytes.length, true); view.setUint32(22, bytes.length, true);
+    view.setUint32(18, size, true); view.setUint32(22, size, true);
     view.setUint16(26, filename.length, true); local.set(filename, 30);
     const central = new Uint8Array(46 + filename.length);
     const index = new DataView(central.buffer);
     index.setUint32(0, 0x02014b50, true); index.setUint16(4, 20, true); index.setUint16(6, 20, true);
     index.setUint16(8, 0x0800, true); index.setUint32(16, crc, true);
-    index.setUint32(20, bytes.length, true); index.setUint32(24, bytes.length, true);
+    index.setUint32(20, size, true); index.setUint32(24, size, true);
     index.setUint16(28, filename.length, true); index.setUint32(42, this.offset, true);
     central.set(filename, 46);
     checkSignal(signal);
-    this.parts.push(new Blob([local, bytes])); this.directory.push(central);
-    this.offset += local.length + bytes.length; this.directorySize += central.length;
+    this.parts.push(new Blob([local, prepared ? blob : bytes])); this.directory.push(central);
+    this.offset += local.length + size; this.directorySize += central.length;
     return this.count;
   }
 

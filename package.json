@@ -102,7 +102,12 @@
     "benchmark:replication-ids": "node scripts/benchmark-replication-ids.mjs",
     "benchmark:replication-cold": "node scripts/benchmark-replication-cold.mjs",
     "benchmark:frame-summary": "node --expose-gc scripts/benchmark-frame-summary.mjs",
-    "benchmark:source-loading": "node scripts/benchmark-source-loading.mjs"
+    "benchmark:source-loading": "node scripts/benchmark-source-loading.mjs",
+    "test:browser:png-worker": "node scripts/browser-png-worker.mjs",
+    "benchmark:png-worker": "node scripts/benchmark-png-worker.mjs",
+    "test:browser:gpu-thin-cells": "node scripts/browser-gpu-thin-cells.mjs",
+    "test:browser:gpu-prefetch": "node scripts/browser-gpu-prefetch.mjs",
+    "benchmark:gpu-prefetch": "node scripts/benchmark-gpu-prefetch.mjs"
   },
   "engines": {
     "node": ">=20"

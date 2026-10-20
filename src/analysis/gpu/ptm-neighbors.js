@@ -50,7 +50,7 @@ export async function analyzeGpuPtmNeighbors(runtime, frame, parameters = {}, { 
         const start = starts[index], end = Math.min(start + batchAtoms, count), rowsBuffer = rowSlots[index % rowSlots.length];
         runtime.write(settingsBuffer, new Uint32Array([start, end - start]), 4);
         await runtime.run(PTM_NEIGHBORS_SHADER, runtime.neighborBindings(context, [rowsBuffer, sourceBuffer, settingsBuffer, resolvedBuffer]), end - start,
-          { signal, startAtom: start, endAtom: end, batchSize: 0, wait: false });
+          { signal, startAtom: start, endAtom: end, initialBatchSize: batchAtoms, wait: false });
         const readback = runtime.read(rowsBuffer, Uint32Array, (end - start) * PTM_NEIGHBOR_ROW_WORDS, { signal });
         readback.catch(() => {});
         return { start, end, readback };

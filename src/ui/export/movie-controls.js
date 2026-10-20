@@ -6,8 +6,6 @@ import { DEFAULT_MOVIE_OUTPUT, estimateMovieBytes, exportMovie, movieBitrate, mo
 import { MOVIE_FORMATS, probeMovieFormats } from '../../video/codecs.js';
 import { createAutomationLock, waitUntilSettled } from '../automation/script-controls.js';
 
-const canvasBlob = canvas => new Promise((resolve, reject) => canvas.toBlob(
-  blob => blob ? resolve(blob) : reject(new Error('Could not encode the image.')), 'image/png'));
 const cancelled = () => new DOMException('The movie export was cancelled.', 'AbortError');
 // WebCodecs has no signal for its support query. Stop waiting immediately,
 // while consuming the eventual answer without publishing a stale probe.
@@ -418,7 +416,6 @@ export function initializeMovieControls({ renderer, tools = null, lock = createA
           prepare: async ({ signal }) => { await ensureIndexed({ signal }); await prepareExport({ signal }); await waitUntilSettled(analysesSettled, { signal }); },
           // Movies have no transparency: the background is always drawn, as for JPG.
           capture: () => renderer.captureImage({ ...getExportOptions(), includeBackground: true, resolution: size.resolution }),
-          encodeImage: async canvas => new Uint8Array(await (await canvasBlob(canvas)).arrayBuffer()),
           release: canvas => { canvas.width = canvas.height = 1; },
         },
         onProgress: ({ frame, frameTotal, bytes, elapsedMs, etaMs }) => {

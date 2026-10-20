@@ -9,7 +9,7 @@ export const GPU_CELL_CUTOFF_FAILURE_CODES = new Set([
 ]);
 export const GPU_INPUT_FAILURE_CODES = new Set(['cna-candidate-budget', 'cna-search-budget', 'cna-correction-budget',
   'bond-neighbor-budget', 'bond-correction-budget', 'bonds-correction-budget', 'rdf-neighbor-budget', 'rdf-correction-budget',
-  'csp-environment-budget', 'csp-search-budget']);
+  'csp-environment-budget', 'csp-search-budget', 'neighbor-density-budget']);
 const INPUT_KINDS = new Set(['cna', 'centrosymmetry', 'bonds', 'bondStatistics', 'rdf']);
 const MAX_ENTRIES = 128, MAX_KEY_CHARS = 4096;
 

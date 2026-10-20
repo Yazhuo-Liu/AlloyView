@@ -56,7 +56,7 @@ async function run(production) {
     const revisionEdit = Array.from((await analyze(reparsed, { frameIndex: 0 })).coordination);
     const additionalInputUploads = client.cacheStatus.uploadCount - uploads;
     const retained = await analyze(other, { frameIndex: 1 });
-    const unrelatedFrameRetained = retained.inputReused && retained.gpuInputReused && client.frameRevision(other) === otherId;
+    const unrelatedFrameRetained = !retained.inputReused && retained.gpuInputReused && client.frameRevision(other) === otherId;
     // Cancellation during reference preparation must be AbortError, and the
     // old two-input job must not publish a result after its reference changes.
     const reference = other, mapping = Int32Array.from([0, 1, 2]);

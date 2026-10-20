@@ -779,9 +779,46 @@ snapshots and indices. A changed search radius can require another GPU index.
 Load-time preparation includes all atom types; a chosen Voronoi subset prepares
 its compact input as needed.
 
-The GPU cache estimates the resident frame size and reserves space for calculation buffers. If the complete sequence fits its conservative budget, all frames are uploaded in the background. Otherwise, it keeps a window around the current frame, preferring the next and previous frames. Adjacent frames receive coordinate uploads. With the WebGPU Voronoi kernel requested, Voronoi index and workspace preparation follows the displayed frame; during playback it waits until a frame has stayed displayed for 1.25 s or playback stops, so frames that playback replaces after its 1 s interval are only uploaded. Moving through the trajectory updates this window; foreground calculations take priority over background uploads. CPU and GPU caches have independent capacities, and reparsing a frame after CPU eviction still reuses its resident GPU data.
+The GPU cache keeps at most five nearby trajectory frames, including the
+current one, subject to its byte budget. It prefers the next and previous
+frames and fills available slots toward the remaining trajectory near an end.
+Moving through the trajectory slides this window; it does not scan and upload
+an entire long trajectory while idle. Foreground and reference inputs are
+pinned while needed, displacing speculative neighbors when necessary.
+Adjacent frames receive coordinate uploads. With the WebGPU Voronoi kernel
+requested, index and workspace preparation follows the displayed frame;
+during playback it waits until a frame has stayed displayed for 1.25 s or
+playback stops. Foreground calculations take priority over background uploads.
 
-Standard WebGPU does not expose free VRAM. The cache starts with an allocation budget of 2 GiB for hardware or 128 MiB for a software adapter, including a calculation workspace reserve. This is a ceiling, not an upfront reservation: only the loaded frames and required calculation buffers consume memory. The cache checks individual buffer limits and, if an allocation runs out of memory, lowers its budget, evicts distant frames and retries once while protecting the current frame. Thus a GPU with less available memory can retain a smaller nearby-frame window. A frame that cannot be prepared safely uses the existing CPU fallback. Closing or changing the source clears structure buffers while retaining the GPU device and compiled pipelines; switching GPU acceleration off releases the GPU Worker after any accepted calculation finishes. A new cutoff can require a new neighbor index, and uncommon shader variants are still compiled on demand.
+GPU residency and Worker input residency are tracked separately. The Worker
+releases unneeded background CPU coordinate/type arrays while preserving their
+GPU buffers. A later calculation resends its original precision-correction
+inputs when necessary and can reuse the existing GPU upload. Current and
+pinned foreground/reference inputs remain available; source changes and
+revision invalidation retain their cancellation and recovery semantics.
+Reported host-input bytes count retained typed-array buffers, not total Worker
+heap or browser memory.
+
+Standard WebGPU exposes capability limits rather than free VRAM. The default
+allocation ceiling is the minimum of 2 GiB, four times `maxBufferSize`, eight
+times `maxStorageBufferBindingSize`, and one eighth of reported device RAM
+when these hints are available, with a 64 MiB floor. Hardware without usable
+hints starts at 512 MiB; software adapters are capped at 128 MiB. This budget
+includes a calculation workspace reserve and is allocated lazily. Individual
+buffer limits remain enforced. An allocation failure lowers the budget,
+evicts speculative inputs and retries once while protecting active inputs.
+Inputs that cannot fit safely use CPU Workers. Closing or changing the source
+clears structure buffers while retaining the GPU device and compiled pipelines;
+switching GPU acceleration off releases the Worker after accepted work finishes.
+
+Neighbor indexing measures the fullest bin on the GPU. Higher occupancy
+reduces dispatch sizes instead of rejecting ordinary thin periodic cells or
+vacuum slabs. The same bound applies to later adaptive batches and compact
+PTM/Voronoi passes. Canonical neighbor order, complete image searches and
+precision corrections are unchanged. Extreme per-bin or per-atom work still
+falls back to CPU; the limits protect individual traversals that smaller
+batches alone cannot shorten. See the [T9/G3/G4 report](../PERFORMANCE_T9_G3_G4.md)
+for the tested geometries and limits.
 
 Most GPU kernels use 32-bit floating point. High and low input components retain coordinate and PTM fit precision; strain kernels use compensated matrix arithmetic and apply the CPU threshold for numerical zeros. Central symmetry and fresh-strain neighbor preparation additionally emulate IEEE 64-bit arithmetic in their shaders to preserve strict neighbor ordering and CSP pair choices; this does not rely on native GPU float64. Ambiguous neighbor cutoff or ordering decisions in other kernels receive sparse CPU corrections. Continuous values can still differ slightly between backends, including small strain residuals, and inputs outside the supported precision range use CPU. In particular, GPU neighbor searches fall back when their padded search radius exceeds 32 times the face height along a periodic axis; small nonperiodic face heights do not trigger this limit.
 

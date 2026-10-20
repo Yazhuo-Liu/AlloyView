@@ -1,18 +1,7 @@
 import { DEFAULT_PLAYBACK_INTERVAL_MS } from './playback.js';
 
-/** Keep the displayed frame first, then expand into adjacent trajectory frames. */
-export function gpuPrefetchOrder(currentIndex, frameCount, capacity) {
-  const count = Math.max(0, Math.trunc(frameCount));
-  if (!count || !Number.isInteger(currentIndex) || currentIndex < 0 || currentIndex >= count) return [];
-  const limit = Math.min(count, Math.max(1, Math.trunc(capacity) || 1));
-  const indices = [currentIndex];
-  for (let distance = 1; indices.length < limit; distance += 1) {
-    if (currentIndex + distance < count) indices.push(currentIndex + distance);
-    if (indices.length >= limit) break;
-    if (currentIndex - distance >= 0) indices.push(currentIndex - distance);
-  }
-  return indices;
-}
+export { gpuTrajectoryWindow as gpuPrefetchOrder } from '../analysis/gpu/cache-policy.js';
+import { gpuTrajectoryWindow as gpuPrefetchOrder } from '../analysis/gpu/cache-policy.js';
 
 // A frame shown by playback is replaced after the playback interval. Its
 // Voronoi inputs are built only if it stays displayed longer than that.
@@ -178,7 +167,13 @@ export class GpuPrefetchScheduler {
     const needsVoronoi = voronoi && !status?.preparedVoronoiFrameIndexes?.includes(source.currentIndex);
     const settled = needsVoronoi && source.playing ? this.settlePlayback() : null;
     if (needsVoronoi && !settled) await prepareVoronoi();
-    else if (!status?.cachedFrameIndexes?.includes(source.currentIndex)) await prepareCurrent();
+    else if (!status?.cachedFrameIndexes?.includes(source.currentIndex)
+      || status.cachedInputFrameIndexes && !status.cachedInputFrameIndexes.includes(source.currentIndex)) {
+      // The displayed frame is already on the page. Restore its correction
+      // payload now without a parser read or another GPU upload, so the first
+      // foreground analysis benefits from preparation too.
+      await prepareCurrent();
+    }
     if (!current()) return;
     const targets = gpuPrefetchOrder(source.currentIndex, source.frameCount, status?.capacity);
     for (const index of targets.slice(1)) {

@@ -2,7 +2,7 @@ import { cellFaceHeights } from '../../data/model.js';
 import { NEIGHBOR_BINDINGS_WGSL, SORT_NEIGHBORS_SHADER } from './neighbors.js';
 import { gpuPreparationKinds } from './preparation.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, frameUploadBytes, gpuWorkspaceBytes,
-  trajectoryCapacity, frameEvictionOrder } from './cache-policy.js';
+  trajectoryCapacity, frameEvictionOrder, gpuTrajectoryWindow } from './cache-policy.js';
 import { yieldToEventLoop as yieldWorker } from '../../shared/task-yield.js';
 
 const MAX_INPUT_BYTES = 256 * 1024 ** 2;
@@ -19,6 +19,11 @@ export const GPU_MAX_BATCH_ATOMS = 262_144;
 export const GPU_MIN_BATCH_ATOMS = 4096;
 export const GPU_BATCHES_IN_FLIGHT = 3;
 export const GPU_TARGET_BATCH_MS = 60;
+// Density changes dispatch granularity, not the scientific neighborhood. A
+// single linked-list sort / atom traversal still needs an absolute work bound.
+export const GPU_MAX_BIN_OCCUPANCY = 16_384;
+export const GPU_MAX_NEIGHBOR_DENSITY_FACTOR = 256;
+export const GPU_MAX_NEIGHBOR_CANDIDATE_WORK = 50_000 * GPU_MAX_NEIGHBOR_DENSITY_FACTOR;
 // Staging buffers are pooled by power-of-two size and reused across reads.
 const STAGING_MIN_BYTES = 64 * 1024;
 const STAGING_POOLED_MAX_BYTES = 32 * 1024 ** 2;
@@ -34,8 +39,21 @@ const INDEX_NEIGHBORS_SHADER = `${NEIGHBOR_BINDINGS_WGSL.replace('@group(0) @bin
   let atom = gid.x + config.startAtom; if (atom >= config.endAtom || atom >= config.count) { return; }
   let bin = flattenBin(positionBin(fractionalHigh(atom)));
   next[atom] = atomicExchange(&heads[bin], i32(atom));
-  if (atomicAdd(&occupancy[bin + 1u], 1u) >= config.padding.x) { atomicStore(&occupancy[0], 1u); }
+  let length = atomicAdd(&occupancy[bin + 1u], 1u) + 1u;
+  if (length > atomicLoad(&occupancy[0])) { atomicMax(&occupancy[0], length); }
 }`;
+
+/** Bound initial and subsequent dispatch work by the measured fullest bin.
+ * Collapsed axes visit each bin only once; imageBudget is a conservative bound
+ * on the image loops, not a truncation of their actual geometry. */
+export function neighborDispatchPolicy(maximumOccupancy, stencilBins, imageBudget) {
+  const referenceOccupancy = Math.max(32, Math.floor(50_000 / stencilBins / imageBudget));
+  const densityFactor = Math.max(1, maximumOccupancy / referenceOccupancy);
+  const candidateWork = maximumOccupancy * stencilBins * imageBudget;
+  return { maximumOccupancy, referenceOccupancy, densityFactor, candidateWork, batchScale: 1 / densityFactor,
+    supported: maximumOccupancy <= GPU_MAX_BIN_OCCUPANCY && densityFactor <= GPU_MAX_NEIGHBOR_DENSITY_FACTOR
+      && candidateWork <= GPU_MAX_NEIGHBOR_CANDIDATE_WORK };
+}
 
 export function gpuInputUnsupported(message, code) {
   const error = new GpuUnavailableError(message);
@@ -174,7 +192,7 @@ export class GpuRuntime {
     this.adapterInfo = adapter.info ? { vendor: adapter.info.vendor, architecture: adapter.info.architecture,
       device: adapter.info.device, description: adapter.info.description, isFallbackAdapter: Boolean(adapter.info.isFallbackAdapter) } : {};
     this.softwareAdapter = isSoftwareGpuAdapter(this.adapterInfo);
-    if (!this.explicitBudget) this.budgetBytes = conservativeGpuBudget(adapter.limits, this.adapterInfo);
+    if (!this.explicitBudget) this.budgetBytes = conservativeGpuBudget(adapter.limits, this.adapterInfo, this.environment.navigator?.deviceMemory);
     const device = await adapter.requestDevice({ requiredLimits: {
       maxStorageBuffersPerShaderStage: Math.min(10, adapter.limits.maxStorageBuffersPerShaderStage),
       maxStorageBufferBindingSize: Math.min(MAX_INPUT_BYTES, adapter.limits.maxStorageBufferBindingSize),
@@ -780,8 +798,7 @@ export class GpuRuntime {
     floats[25] = distanceTolerance;
     ints[26] = 0; ints[27] = atomCount;
     const stencilBins = dimensions.reduce((product, dimension) => product * Math.min(3, dimension), 1);
-    const maximumOccupancy = Math.max(32, Math.floor(50_000 / stencilBins / imageBudget));
-    ints[28] = maximumOccupancy;
+    ints[28] = neighborDispatchPolicy(0, stencilBins, imageBudget).referenceOccupancy;
     const owned = [];
     const own = (buffer) => { owned.push(buffer); return buffer; };
     try {
@@ -794,13 +811,16 @@ export class GpuRuntime {
       // Clearing bins and indexing atoms are GPU operations; no JS linked-cell
       // construction or quadratic all-pairs upload is required. Each costs one
       // atomic per bin/atom, so both are single dispatches. The occupancy
-      // readback bounds traversal before sorting each disjoint bin list.
+      // readback sizes traversal batches before sorting each disjoint bin list.
       await this.run(CLEAR_NEIGHBORS_SHADER, this.neighborBindings(context), totalBins, { signal, batchSize: 0, updateRange: false, wait: false });
       const occupancyBuffer = own(this.createBuffer((totalBins + 1) * 4));
       await this.run(INDEX_NEIGHBORS_SHADER, this.neighborBindings(context, [occupancyBuffer]), atomCount, { signal, batchSize: 0, wait: false });
       const occupied = await this.read(occupancyBuffer, Uint32Array, 1, { signal });
       this.disposeBuffers([occupancyBuffer]); owned.splice(owned.indexOf(occupancyBuffer), 1);
-      if (occupied[0]) throw new GpuUnavailableError('The neighbor cells are too densely occupied for a bounded GPU dispatch.');
+      const dispatchPolicy = neighborDispatchPolicy(occupied[0], stencilBins, imageBudget);
+      if (!dispatchPolicy.supported) throw gpuInputUnsupported(
+        'The neighbor cells exceed the GPU per-bin or per-atom traversal safety bound.', 'neighbor-density-budget');
+      context.neighborDispatch = dispatchPolicy;
       // Queue order makes the canonical list visible before any analysis.
       // Sorting is done once per resident index and needs no extra readback.
       await this.run(SORT_NEIGHBORS_SHADER, this.neighborBindings(context), totalBins,
@@ -862,9 +882,10 @@ export class GpuRuntime {
    * `batchSize: 0` use one dispatch. With `wait: false` the call returns once
    * everything is submitted, for callers whose next step (another kernel or a
    * readback) is ordered behind it on the same queue anyway. Returns the
-   * batch size the next batched call of this kernel can start from. */
-  async run(source, bindings, invocations, { signal, startAtom = 0, endAtom = invocations, batchSize, initialBatchSize,
-    updateRange = true, workgroupSize = 128, onProgress, range, wait = true } = {}) {
+   * batch size the next call on this same neighbor index can pass back as
+   * `batchSizeHint`; `initialBatchSize` is an unscaled kernel starting limit. */
+  async run(source, bindings, invocations, { signal, startAtom = 0, endAtom = invocations, batchSize, initialBatchSize, batchSizeHint,
+    updateRange = true, workgroupSize = 128, onProgress, onDispatch, range, wait = true } = {}) {
     await this.initialize(signal);
     const device = this.device;
     const pipeline = await waitForGpu(this.compilePipeline(source), signal);
@@ -882,11 +903,18 @@ export class GpuRuntime {
       const context = updateRange ? this.configContexts.get(bindings[0]) : null;
       const batched = Boolean(context || range) && batchSize !== 0;
       const adaptive = batched && !batchSize && !this.softwareAdapter;
-      const roundBatch = value => Math.max(workgroupSize, Math.ceil(value / workgroupSize) * workgroupSize);
+      const densityScale = context?.neighborDispatch?.batchScale ?? 1;
+      const maximumBatch = Math.max(workgroupSize, Math.floor(GPU_MAX_BATCH_ATOMS * densityScale / workgroupSize) * workgroupSize);
+      const roundBatch = value => Math.min(maximumBatch, Math.max(workgroupSize, Math.ceil(value / workgroupSize) * workgroupSize));
       let size = endAtom - startAtom;
       if (batched) {
-        const initial = batchSize || (this.softwareAdapter ? GPU_SOFTWARE_BATCH_ATOMS : initialBatchSize ?? GPU_HARDWARE_BATCH_ATOMS);
-        size = roundBatch(adaptive ? Math.min(initial, this.batchHints.get(source) ?? initial) : initial);
+        const requested = batchSize || (this.softwareAdapter ? Math.min(GPU_SOFTWARE_BATCH_ATOMS, initialBatchSize ?? GPU_SOFTWARE_BATCH_ATOMS)
+          : initialBatchSize ?? GPU_HARDWARE_BATCH_ATOMS);
+        const initial = requested * densityScale;
+        // A caller may reuse this run's returned size for the next output slot
+        // on the same index. It already includes density: do not scale it twice.
+        const hinted = batchSizeHint ?? initial;
+        size = roundBatch(adaptive ? Math.min(hinted, this.batchHints.get(source) ?? hinted) : hinted);
       }
       let completedAt = performance.now();
       const settle = async () => {
@@ -894,7 +922,8 @@ export class GpuRuntime {
         await batch.done;
         const now = performance.now(), elapsed = now - Math.max(completedAt, batch.submittedAt);
         completedAt = now;
-        if (adaptive) size = roundBatch(this.adaptBatch(source, batch.atoms, elapsed, size));
+        if (adaptive) size = roundBatch(this.adaptBatch(source, batch.atoms, elapsed, size,
+          densityScale < 1 ? workgroupSize : GPU_MIN_BATCH_ATOMS));
         checkSignal(signal);
         onProgress?.({ completedAtoms: batch.end, totalAtoms: endAtom });
       };
@@ -908,6 +937,7 @@ export class GpuRuntime {
         const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
         pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.dispatchWorkgroups(workgroups); pass.end();
         device.queue.submit([encoder.finish()]);
+        onDispatch?.({ startAtom: offset, endAtom: end });
         const submittedAt = performance.now(), atoms = end - offset;
         offset = end;
         if (!wait && offset >= endAtom) break;
@@ -927,12 +957,12 @@ export class GpuRuntime {
   /** Keep each queued dispatch near GPU_TARGET_BATCH_MS. Slow pipelines shrink
    * at once and remember it for later runs; fast ones grow only within a run,
    * so a new cutoff or frame never starts above the initial batch. */
-  adaptBatch(source, atoms, elapsedMs, current) {
+  adaptBatch(source, atoms, elapsedMs, current, minimumBatch = GPU_MIN_BATCH_ATOMS) {
     if (!(elapsedMs > 0) || !(atoms > 0)) return current;
     const predicted = atoms / elapsedMs * GPU_TARGET_BATCH_MS;
     let next = current;
     if (elapsedMs > 2 * GPU_TARGET_BATCH_MS) {
-      next = Math.floor(Math.max(GPU_MIN_BATCH_ATOMS, Math.min(current, predicted)));
+      next = Math.floor(Math.max(minimumBatch, Math.min(current, predicted)));
       this.batchHints.set(source, next);
     } else if (elapsedMs < GPU_TARGET_BATCH_MS / 2 && atoms * 2 >= current) {
       next = Math.floor(Math.min(GPU_MAX_BATCH_ATOMS, Math.max(current, Math.min(current * 4, predicted))));
@@ -1035,10 +1065,31 @@ export class GpuRuntime {
 
   trimFrames({ incomingBytes = 0 } = {}) {
     const { capacity, frameBudgetBytes } = this.cacheStatus();
-    for (const key of frameEvictionOrder(this.frames, this.currentIndex, this.protectedKeys())) {
+    const window = new Set(gpuTrajectoryWindow(this.currentIndex, this.frameCount, capacity));
+    const order = frameEvictionOrder(this.frames, this.currentIndex, this.protectedKeys());
+    for (const key of order) {
+      const frame = this.frames.get(key);
+      if (window.size && Number.isInteger(frame.frameIndex) && !window.has(frame.frameIndex)) this.evictFrame(key);
+    }
+    for (const key of order) {
       if (this.frames.size + (incomingBytes > 0 ? 1 : 0) <= capacity && this.residentBytes + incomingBytes <= frameBudgetBytes) break;
       this.evictFrame(key);
     }
+  }
+
+  /** Background GPU buffers outlive their host payload. Remove every strong
+   * array reference, including the copies spread into neighbour contexts. */
+  releaseHostFrame(frameKey) {
+    const release = entry => {
+      if (!entry) return;
+      delete entry.typesSource;
+      if (entry.ptm) for (const name of ['structures', 'scales', 'deformation', 'types']) delete entry.ptm[name];
+      for (const variant of entry.cartesian?.values() ?? []) delete variant.source;
+    };
+    release(this.frames.get(frameKey));
+    for (const index of this.indexes.values()) if (index.frameKey === frameKey) release(index);
+    this.adaptiveCna.delete(frameKey);
+    if (this.voronoiCpuContext?.frameKey === frameKey) this.voronoiCpuContext = null;
   }
 
   disposeBuffers(buffers) {

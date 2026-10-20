@@ -1,0 +1,121 @@
+{
+  "benchmark": "T9 real WebGL capture + PNG + CRC + ZIP",
+  "atoms": 60000,
+  "frames": 12,
+  "width": 1050,
+  "height": 928,
+  "trials": 3,
+  "command": [
+    "node",
+    "scripts/benchmark-png-worker.mjs",
+    "--baseline=/tmp/alloyview-t9-g3-g4-baseline",
+    "--atoms=60000",
+    "--frames=12",
+    "--trials=3",
+    "--width=1050",
+    "--height=928"
+  ],
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "softwareAdapter": true,
+  "scope": "Same unchanged renderer; interleaved export pipelines; Worker startup included; full ZIP SHA-256 equality. Heartbeat includes unavoidable main-thread WebGL capture.",
+  "summary": {
+    "before": {
+      "elapsedMs": 16051.40000000596,
+      "perFrameMs": 1337.6166666671634,
+      "captureMs": 14007.200000017881,
+      "maxHeartbeatGapMs": 2355.399999976158,
+      "lateHeartbeatMs": 15859.899999856949
+    },
+    "after": {
+      "elapsedMs": 17445.5,
+      "perFrameMs": 1453.7916666666667,
+      "captureMs": 15754.199999988079,
+      "maxHeartbeatGapMs": 2241.7999999821186,
+      "lateHeartbeatMs": 15875.5999994874
+    }
+  },
+  "before": [
+    {
+      "elapsedMs": 16051.40000000596,
+      "perFrameMs": 1337.6166666671634,
+      "captureMs": 13349.299999982119,
+      "archiveMs": 32.00000002980232,
+      "peakRetainedImages": 1,
+      "heartbeats": 44,
+      "maxHeartbeatGapMs": 2355.399999976158,
+      "lateHeartbeatMs": 15859.899999856949,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 15328.399999976158,
+      "perFrameMs": 1277.3666666646798,
+      "captureMs": 14007.200000017881,
+      "archiveMs": 32.69999995827675,
+      "peakRetainedImages": 1,
+      "heartbeats": 41,
+      "maxHeartbeatGapMs": 2415.7000000178814,
+      "lateHeartbeatMs": 15139.500000089407,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 16409.19999998808,
+      "perFrameMs": 1367.43333333234,
+      "captureMs": 15519.90000000596,
+      "archiveMs": 29.400000005960464,
+      "peakRetainedImages": 1,
+      "heartbeats": 46,
+      "maxHeartbeatGapMs": 1796.2999999821186,
+      "lateHeartbeatMs": 16209.199999958277,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    }
+  ],
+  "after": [
+    {
+      "elapsedMs": 17445.5,
+      "perFrameMs": 1453.7916666666667,
+      "captureMs": 15754.199999988079,
+      "archiveMs": null,
+      "peakRetainedImages": 2,
+      "heartbeats": 325,
+      "maxHeartbeatGapMs": 2241.7999999821186,
+      "lateHeartbeatMs": 15875.5999994874,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 18064.19999998808,
+      "perFrameMs": 1505.3499999990065,
+      "captureMs": 16849.599999934435,
+      "archiveMs": null,
+      "peakRetainedImages": 2,
+      "heartbeats": 236,
+      "maxHeartbeatGapMs": 1894,
+      "lateHeartbeatMs": 16928.899999976158,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 16107.199999988079,
+      "perFrameMs": 1342.2666666656733,
+      "captureMs": 14880.300000041723,
+      "archiveMs": null,
+      "peakRetainedImages": 2,
+      "heartbeats": 240,
+      "maxHeartbeatGapMs": 3174.800000011921,
+      "lateHeartbeatMs": 14924.600000858307,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    }
+  ],
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+  "workerStaging": "2D willReadFrequently=true CPU staging",
+  "status": "Diagnostic CPU 2D candidate; superseded by subsequent candidate measurements.",
+  "baselineCommit": "c93a58f5b0cd9130b44114e45b8e5950ca13ad9c"
+}

@@ -64,3 +64,5 @@ Workers around one global serial kernel;
 broader scientific validation remains ongoing.
 
 The source is available in the [GitHub repository](https://github.com/Yazhuo-Liu/AlloyView). AlloyView is inspired by [OVITO](https://www.ovito.org/) and [AtomEye](http://li.mit.edu/Archive/Graphics/A/).
+
+[PNG export and GPU optimizations (T9/G3/G4)](PERFORMANCE_T9_G3_G4.md) describes Worker PNG encoding, thin-cell GPU dispatch and bounded trajectory prefetch.

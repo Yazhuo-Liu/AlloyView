@@ -55,13 +55,51 @@ test('GPU budgets reserve compute memory without treating buffer limits as free 
   const hugeLimits = { maxBufferSize: 8 * 1024 ** 3, maxStorageBufferBindingSize: 4 * 1024 ** 3 };
   assert.equal(conservativeGpuBudget(hugeLimits), DEFAULT_GPU_BUDGET_BYTES);
   assert.equal(DEFAULT_GPU_BUDGET_BYTES, 2 * 1024 ** 3);
-  assert.equal(conservativeGpuBudget({ maxBufferSize: 256 * 1024 ** 2, maxStorageBufferBindingSize: 128 * 1024 ** 2 }), DEFAULT_GPU_BUDGET_BYTES);
+  assert.equal(conservativeGpuBudget({ maxBufferSize: 256 * 1024 ** 2, maxStorageBufferBindingSize: 128 * 1024 ** 2 }), 1024 ** 3);
   assert.equal(conservativeGpuBudget(hugeLimits, { isFallbackAdapter: true }), FALLBACK_GPU_BUDGET_BYTES);
   const frameBytes = frameUploadBytes(input(0)), workspaceBytes = gpuWorkspaceBytes(frameBytes);
   assert.equal(frameBytes, 32 * 36);
   assert.equal(trajectoryCapacity({ frameCount: 20, frameBytes, budgetBytes: workspaceBytes + frameBytes * 3 }), 3);
   assert.equal(trajectoryCapacity({ frameCount: 2, frameBytes, budgetBytes: workspaceBytes + frameBytes * 3 }), 2);
   assert.equal(trajectoryCapacity({ frameCount: 2, frameBytes, budgetBytes: workspaceBytes }), 0);
+});
+
+test('GPU capability and device-memory hints bound the budget without disabling a small working set', () => {
+  const GiB = 1024 ** 3, MiB = 1024 ** 2;
+  const limits = { maxBufferSize: 4 * GiB, maxStorageBufferBindingSize: 2 * GiB };
+  assert.equal(conservativeGpuBudget(limits, {}, 2), 256 * MiB);
+  assert.equal(conservativeGpuBudget(limits, {}, 8), GiB);
+  assert.equal(conservativeGpuBudget(limits, {}, 32), 2 * GiB);
+  assert.equal(conservativeGpuBudget(limits, {}, .25), 64 * MiB);
+  assert.equal(conservativeGpuBudget({}, {}, undefined), 512 * MiB);
+  assert.equal(conservativeGpuBudget({}, {}, NaN), 512 * MiB);
+  assert.equal(conservativeGpuBudget(limits, { description: 'SwiftShader' }, 8), 128 * MiB);
+  assert.equal(trajectoryCapacity({ frameCount: 160, frameBytes: 130_000 * 36, budgetBytes: 2 * GiB }), 5);
+});
+
+test('dropping a background host input removes source arrays from all resident caches while retaining GPU buffers', async () => {
+  const { runtime } = fixture();
+  try {
+    const frame = input(0), positions = Float64Array.from(frame.positions);
+    runtime.configureCache({ frameCount: 2, currentIndex: 0 });
+    await runtime.prepareCartesianFrame(frame, positions, { frameIndex: 0 });
+    await runtime.uploadFrame(frame, { frameIndex: 0 });
+    const context = await runtime.prepareNeighbors(frame, 3.1), gpuFrame = runtime.frames.get(frame.gpuFrameId);
+    const ptm = { structures: new Uint8Array(frame.types.length), scales: new Float64Array(frame.types.length),
+      deformation: new Float64Array(frame.types.length * 9), types: frame.types };
+    gpuFrame.ptm = ptm; context.ptm = ptm;
+    runtime.voronoiCpuContext = { frameKey: frame.gpuFrameId, frame };
+    const uploads = runtime.inputUploads;
+    runtime.releaseHostFrame(frame.gpuFrameId);
+    assert.equal(gpuFrame.typesSource, undefined); assert.equal(context.typesSource, undefined);
+    assert.equal(gpuFrame.cartesian.get('cartesian').source, undefined);
+    for (const name of ['structures', 'scales', 'deformation', 'types']) assert.equal(ptm[name], undefined);
+    assert.equal(runtime.voronoiCpuContext, null);
+    assert.equal(context.positionsBuffer.destroyed, false);
+    assert.equal(gpuFrame.cartesian.get('cartesian').positionsBuffer.destroyed, false);
+    await runtime.uploadFrame({ ...frame, fractional: frame.fractional.slice(), types: frame.types.slice() });
+    assert.equal(runtime.inputUploads, uploads, 'restoring CPU coordinates must reuse the immutable GPU upload');
+  } finally { runtime.close(); }
 });
 
 test('oversized frames fail before packing coordinates or allocating host and GPU buffers', async () => {
@@ -135,15 +173,15 @@ test('a constrained cache evicts the furthest frames and follows a moved current
     const distant = runtime.frames.get(109).positionsBuffer;
     await runtime.uploadFrame(input(5), { frameIndex: 5 });
     assert.equal(distant.destroyed, true);
-    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [0, 4, 5]);
+    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [4, 5]);
     await runtime.uploadFrame(input(3), { frameIndex: 3 });
     assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [3, 4, 5]);
     assert.equal(runtime.cacheStatus().capacity, 3); assert.equal(runtime.cacheStatus().fullTrajectory, false);
     runtime.configureCache({ currentIndex: 8 });
     await runtime.uploadFrame(input(8), { frameIndex: 8 });
-    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [4, 5, 8]);
+    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [8]);
     assert.equal(runtime.frames.get(108).positionsBuffer.destroyed, false);
-    assert.equal(allocations.filter(buffer => !buffer.destroyed).length, 6);
+    assert.equal(allocations.filter(buffer => !buffer.destroyed).length, 2);
   } finally { runtime.close(); }
 });
 
@@ -223,7 +261,7 @@ test('a dual-frame reference job retains both inputs during compute OOM recovery
     unpin(); unpin = null; runtime.finishAnalysis();
     runtime.configureCache({ currentIndex: 3 });
     await runtime.uploadFrame(frames[3], { frameIndex: 3 });
-    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [1, 3]);
+    assert.deepEqual(runtime.cacheStatus().cachedFrameIndexes, [3]);
     assert.equal(referencePositions.destroyed, true, 'the completed reference job no longer pins its input');
   } finally { unpin?.(); runtime.close(); }
 });
@@ -235,10 +273,10 @@ test('nested worker and kernel pins survive the outer release and a reference ca
     const bytes = frameUploadBytes(input(0));
     runtime.configureCache({ frameCount: 5, currentIndex: 1, budgetBytes: gpuWorkspaceBytes(bytes) + bytes * 2 });
     const reference = input(0), current = input(1), background = input(2);
-    await runtime.uploadFrame(reference, { frameIndex: 0 });
-    await runtime.uploadFrame(current, { frameIndex: 1 });
     outer = runtime.pinFrames([current, reference]);
     inner = runtime.pinFrames([reference]);
+    await runtime.uploadFrame(reference, { frameIndex: 0 });
+    await runtime.uploadFrame(current, { frameIndex: 1 });
     outer(); outer = null;
     runtime.configureCache({ currentIndex: 1 });
     await assert.rejects(runtime.uploadFrame(background, { frameIndex: 2 }), /cache budget/);

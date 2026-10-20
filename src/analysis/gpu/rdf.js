@@ -99,7 +99,7 @@ export async function analyzeGpuRdf(runtime, frame, parameters, { signal, onProg
     const counts = new Float64Array(bins);
     // Dispatches within a batch start at the former 16k atoms and follow the
     // measured dispatch time; the histogram bound applies to the whole batch.
-    let dispatchSize = MAX_BATCH_ATOMS;
+    let dispatchSize;
     const launch = async (startAtom, slot) => {
       signal?.throwIfAborted();
       const endAtom = Math.min(count, startAtom + batchSize);
@@ -107,7 +107,7 @@ export async function analyzeGpuRdf(runtime, frame, parameters, { signal, onProg
       // Only the 16-byte header is read before the counted records.
       await runtime.zeroBuffer(slot.corrections, 0, 16);
       dispatchSize = await runtime.run(RDF_SHADER, slot.bindings, endAtom - startAtom,
-        { signal, context, startAtom, endAtom, initialBatchSize: dispatchSize, wait: false }) ?? dispatchSize;
+        { signal, context, startAtom, endAtom, initialBatchSize: MAX_BATCH_ATOMS, batchSizeHint: dispatchSize, wait: false }) ?? dispatchSize;
       const readback = readGpuBuffers(runtime, [{ buffer: slot.histogram, Type: Uint32Array, length: bins },
         { buffer: slot.corrections, Type: Uint32Array, length: 4 }], { signal });
       readback.catch(() => {});

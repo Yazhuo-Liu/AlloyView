@@ -1,0 +1,120 @@
+{
+  "benchmark": "T9 real WebGL capture + PNG + CRC + ZIP",
+  "atoms": 60000,
+  "frames": 12,
+  "width": 1050,
+  "height": 928,
+  "trials": 3,
+  "command": [
+    "node",
+    "scripts/benchmark-png-worker.mjs",
+    "--baseline=/tmp/alloyview-t9-g3-g4-baseline",
+    "--atoms=60000",
+    "--frames=12",
+    "--trials=3",
+    "--width=1050",
+    "--height=928"
+  ],
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "workerStaging": "bitmaprenderer transferFromImageBitmap; CPU 2D fallback",
+  "softwareAdapter": true,
+  "scope": "Same unchanged renderer; interleaved export pipelines; Worker startup included; full ZIP SHA-256 equality. Heartbeat includes unavoidable main-thread WebGL capture.",
+  "summary": {
+    "before": {
+      "elapsedMs": 18994.19999998808,
+      "perFrameMs": 1582.8499999990065,
+      "captureMs": 17206.999999970198,
+      "maxHeartbeatGapMs": 2502.199999988079,
+      "lateHeartbeatMs": 18800.499999940395
+    },
+    "after": {
+      "elapsedMs": 17651.79999998212,
+      "perFrameMs": 1470.9833333318431,
+      "captureMs": 16888.800000041723,
+      "maxHeartbeatGapMs": 3106.199999988079,
+      "lateHeartbeatMs": 17034.80000001192
+    }
+  },
+  "before": [
+    {
+      "elapsedMs": 19888.40000000596,
+      "perFrameMs": 1657.3666666671634,
+      "captureMs": 17206.999999970198,
+      "archiveMs": 30.400000005960464,
+      "peakRetainedImages": 1,
+      "heartbeats": 43,
+      "maxHeartbeatGapMs": 2737.5,
+      "lateHeartbeatMs": 19707.400000095367,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 18994.19999998808,
+      "perFrameMs": 1582.8499999990065,
+      "captureMs": 17659.899999976158,
+      "archiveMs": 27,
+      "peakRetainedImages": 1,
+      "heartbeats": 48,
+      "maxHeartbeatGapMs": 2502.199999988079,
+      "lateHeartbeatMs": 18800.499999940395,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 16307.09999999404,
+      "perFrameMs": 1358.9249999995034,
+      "captureMs": 15198.399999916553,
+      "archiveMs": 30.700000017881393,
+      "peakRetainedImages": 1,
+      "heartbeats": 43,
+      "maxHeartbeatGapMs": 2016.0999999940395,
+      "lateHeartbeatMs": 16108.499999970198,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    }
+  ],
+  "after": [
+    {
+      "elapsedMs": 17453.40000000596,
+      "perFrameMs": 1454.4500000004966,
+      "captureMs": 16785.899999976158,
+      "archiveMs": null,
+      "peakRetainedImages": 2,
+      "heartbeats": 130,
+      "maxHeartbeatGapMs": 3126.699999988079,
+      "lateHeartbeatMs": 16815.799999713898,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 18530.09999999404,
+      "perFrameMs": 1544.1749999995034,
+      "captureMs": 16888.800000041723,
+      "archiveMs": null,
+      "peakRetainedImages": 2,
+      "heartbeats": 297,
+      "maxHeartbeatGapMs": 3106.199999988079,
+      "lateHeartbeatMs": 17056.599999815226,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 17651.79999998212,
+      "perFrameMs": 1470.9833333318431,
+      "captureMs": 17006.699999958277,
+      "archiveMs": null,
+      "peakRetainedImages": 2,
+      "heartbeats": 128,
+      "maxHeartbeatGapMs": 2111.600000023842,
+      "lateHeartbeatMs": 17034.80000001192,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    }
+  ],
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+  "baselineCommit": "c93a58f5b0cd9130b44114e45b8e5950ca13ad9c"
+}

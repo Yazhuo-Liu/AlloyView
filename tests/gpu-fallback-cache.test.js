@@ -4,7 +4,7 @@ import { Worker } from 'node:worker_threads';
 import { AnalysisPool } from '../src/analysis/analysis-pool.js';
 import { GpuFallbackCache } from '../src/analysis/gpu-fallback-cache.js';
 import { GpuAnalysisClient } from '../src/analysis/gpu/client.js';
-import { GpuRuntime, GpuUnavailableError } from '../src/analysis/gpu/runtime.js';
+import { GpuRuntime, GpuUnavailableError, gpuInputUnsupported } from '../src/analysis/gpu/runtime.js';
 import { calculateCoordination } from '../src/analysis/coordination.js';
 import { createCell } from '../src/data/model.js';
 import { crystalFrame } from './helpers/crystals.js';
@@ -186,6 +186,21 @@ test('runtime emits explicit stable codes before building or dispatching a neigh
   await assert.rejects(runtime.prepareNeighbors(frame, 1.1), error => error.gpuUnsupportedScope === 'cell-cutoff'
     && error.gpuUnsupportedCode === 'periodic-image-budget');
   assert.equal(runtime.indexes.size, 0);
+});
+
+test('extreme density refusals are reused only for the same explicitly versioned scientific input', () => {
+  const frame = crystalFrame('fcc', 2), options = { kind: 'rdf', cutoff: 3, bins: 20 };
+  const error = gpuInputUnsupported('The neighbor cells exceed the GPU traversal safety bound.', 'neighbor-density-budget');
+  const unversioned = new GpuFallbackCache();
+  assert.equal(unversioned.remember(unversioned.request(frame, options), error), false);
+  let revision = 1;
+  const cache = new GpuFallbackCache({ inputRevisionFor: () => revision });
+  const request = cache.request(frame, options);
+  assert.equal(cache.remember(request, error), true);
+  assert.equal(cache.lookup(cache.request(frame, options)).fallbackCode, 'neighbor-density-budget');
+  revision++;
+  assert.equal(cache.lookup(cache.request(frame, options)), null, 'a coordinate edit retries the GPU occupancy check');
+  assert.equal(cache.remember(request, error), false, 'a late refusal from the preceding input revision cannot be published');
 });
 
 test('cached geometry routing uses present mutable coordinates in a reused real CPU Worker', async () => {

@@ -521,7 +521,7 @@ async function runGpuPreloadChecks({ evaluate }) {
         await gpu.configureGpuCache({ currentIndex: frameIndex });
         const actual = await gpu.analyze(frame, { kind: 'coordination', cutoff: 2.8 });
         const expected = await cpu.analyze(frame, { kind: 'coordination', cutoff: 2.8 });
-        check(actual.backend === 'gpu' && actual.inputReused && actual.gpuInputReused, 'Preloaded frames must avoid input transfer/upload on analysis.');
+        check(actual.backend === 'gpu' && actual.inputReused === (frameIndex === 0) && actual.gpuInputReused, 'Preloaded GPU buffers survive; only the current frame retains its CPU correction input.');
         compare(actual.coordination, expected.coordination);
       }
       // A frame reparsed after CPU eviction retains its source index identity.
@@ -529,7 +529,7 @@ async function runGpuPreloadChecks({ evaluate }) {
       gpu.associateGpuFrame(reparsed, 2);
       const reused = await gpu.analyze(reparsed, { kind: 'coordination', cutoff: 2.8 });
       const expected = await cpu.analyze(reparsed, { kind: 'coordination', cutoff: 2.8 });
-      check(reused.inputReused && reused.gpuInputReused, 'CPU reparse must reuse its existing GPU frame.');
+      check(!reused.inputReused && reused.gpuInputReused, 'CPU reparse restores its correction input and reuses its existing GPU frame.');
       compare(reused.coordination, expected.coordination);
       const cna = await gpu.analyze(reparsed, { kind: 'cna', mode: 'adaptive' });
       const cnaExpected = await cpu.analyze(reparsed, { kind: 'cna', mode: 'adaptive' });
@@ -652,7 +652,7 @@ async function runApplicationSmoke({ evaluate, call }) {
     const { calculateAtomicStrain, STRAIN_FIELDS } = await import('./src/analysis/atomic-strain.js');
     const { compareGpuArrays, compareGpuFields, compareGpuCentrosymmetry, compareGpuDisplacements, snapshotGpuInputs } = await import('./scripts/gpu-comparison.js');
     const analyze = AnalysisPool.prototype.analyze, setVectorFields = WebGLRenderer.prototype.setVectorFields;
-    window.applicationGpuChecks = { rows: [], adaptive: null, arrows: null };
+    window.applicationGpuChecks = { rows: [], adaptive: null, arrows: null, pool: null };
     window.restoreApplicationGpuHooks = () => { AnalysisPool.prototype.analyze = analyze; WebGLRenderer.prototype.setVectorFields = setVectorFields; };
     // The application draws every arrow field through setVectorFields.
     WebGLRenderer.prototype.setVectorFields = function(fields = []) {
@@ -662,6 +662,7 @@ async function runApplicationSmoke({ evaluate, call }) {
       return result;
     };
     AnalysisPool.prototype.analyze = async function(frame, parameters, options) {
+      window.applicationGpuChecks.pool = this;
       const checkInputs = snapshotGpuInputs(frame, parameters);
       const result = await analyze.call(this, frame, parameters, options);
       checkInputs();
@@ -816,15 +817,25 @@ async function runApplicationSmoke({ evaluate, call }) {
       input.files = transfer.files; input.dispatchEvent(new Event('change'));
     })()`);
     await waitFor(`document.getElementById('file-name').textContent === ${JSON.stringify(name)} && document.getElementById('loading').hidden`, name);
-    await waitFor(`document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && Number(document.getElementById('cache-label').dataset.gpuCachedFrames) === ${count}`, name + ' complete GPU preload');
+    const expectedFrames = Math.min(count, 5);
+    await waitFor(`document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && Number(document.getElementById('cache-label').dataset.gpuCachedFrames) === ${expectedFrames}`, name + ' nearby GPU preload');
+    const status = await evaluate('window.applicationGpuChecks.pool.gpuCacheStatus');
+    assert.equal(status.capacity, expectedFrames, 'GPU cache capacity must bound even a tiny six-frame trajectory.');
+    assert.deepEqual(status.cachedFrameIndexes, Array.from({ length: expectedFrames }, (_, index) => index), 'Initial prefetch must contain only the nearest window.');
+    assert.deepEqual(status.cachedInputFrameIndexes, [0], 'Only the displayed input is retained for CPU corrections after preparation.');
   }
   await evaluate(`document.getElementById('close-file').click();`);
   await loadTrajectory(6, 'gpu-preload.xyz');
   assert.equal(await evaluate('document.getElementById("analysis-state").textContent'), 'Not calculated', 'Preloading must not calculate analysis results.');
   await evaluate(`const slider = document.getElementById('frame-slider'); slider.value = '5'; slider.dispatchEvent(new Event('input'));`);
-  await waitFor(`document.getElementById('frame-label').textContent === '6 / 6' && document.getElementById('timestep-label').textContent.includes('5') && document.getElementById('cache-label').dataset.gpuCacheState === 'ready'`, 'rendered preloaded last frame');
+  await waitFor(`document.getElementById('frame-label').textContent === '6 / 6' && document.getElementById('timestep-label').textContent.includes('5') && document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && window.applicationGpuChecks.pool.gpuCacheStatus.currentIndex === 5 && window.applicationGpuChecks.pool.gpuCacheStatus.cachedFrameIndexes.join() === '1,2,3,4,5'`, 'rendered preloaded last frame');
   const trajectoryPreload = await evaluate(`({ cachedFrames: Number(document.getElementById('cache-label').dataset.gpuCachedFrames),
-    capacity: Number(document.getElementById('cache-label').dataset.gpuCacheCapacity), label: document.getElementById('cache-label').textContent })`);
+    capacity: Number(document.getElementById('cache-label').dataset.gpuCacheCapacity), label: document.getElementById('cache-label').textContent,
+    indexes: window.applicationGpuChecks.pool.gpuCacheStatus.cachedFrameIndexes,
+    hostIndexes: window.applicationGpuChecks.pool.gpuCacheStatus.cachedInputFrameIndexes })`);
+  assert.equal(trajectoryPreload.cachedFrames, 5); assert.equal(trajectoryPreload.capacity, 5);
+  assert.deepEqual(trajectoryPreload.indexes, [1,2,3,4,5], 'Jumping to the end slides the bounded window.');
+  assert.deepEqual(trajectoryPreload.hostIndexes, [5], 'The selected frame restores its host input during preparation.');
   const referenceRouting = [];
   await evaluate(`(() => {
     const button = document.querySelector('[data-tool-button="referenceStrain"]');
@@ -838,7 +849,7 @@ async function runApplicationSmoke({ evaluate, call }) {
       const toggle = document.getElementById('enable-gpu-computing');
       if (toggle.getAttribute('aria-pressed') !== '${enabled}') toggle.click();
     })()`);
-    if (enabled) await waitFor(`document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && document.getElementById('cache-label').dataset.gpuCachedFrames === '6'`, 'reference trajectory GPU preload');
+    if (enabled) await waitFor(`document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && document.getElementById('cache-label').dataset.gpuCachedFrames === '5'`, 'reference trajectory GPU preload');
     await evaluate(`document.getElementById('run-reference-strain').click();`);
     await waitFor(`document.getElementById('reference-strain-state').textContent === 'Calculated' && window.applicationGpuChecks.rows.slice(${before}).some(row => row.kind === 'referenceStrain' && row.gpu === ${enabled})`, 'reference strain GPU preference ' + enabled);
     const result = await evaluate('window.applicationGpuChecks.rows.filter(row => row.kind === "referenceStrain").at(-1)');
@@ -982,7 +993,7 @@ async function runPhysicalReplicationGpuChecks({ evaluate, waitFor }) {
     await evaluate(`document.getElementById('run-analysis').click();`);
     assert.equal(await evaluate('window.physicalGpuChecks.rows.length'), 1, 'Display replication must reuse its original atom analysis.');
     await evaluate(`(() => { const checkbox = document.getElementById('replicate-atoms'); checkbox.checked = true; checkbox.dispatchEvent(new Event('change')); })()`);
-    await waitFor(`document.getElementById('atom-count').textContent === '64' && document.getElementById('cache-label').dataset.gpuCachedFrames === '6' && document.getElementById('cache-label').dataset.gpuCacheState === 'ready'`, 'expanded geometry GPU preload');
+    await waitFor(`document.getElementById('atom-count').textContent === '64' && document.getElementById('cache-label').dataset.gpuCachedFrames === '5' && document.getElementById('cache-label').dataset.gpuCacheState === 'ready'`, 'expanded geometry GPU preload');
     await evaluate(`document.getElementById('run-analysis').click();`);
     await waitFor(`window.physicalGpuChecks.rows.some(row => row.atoms === 64) && document.getElementById('analysis-state').textContent === 'Calculated'`, 'expanded GPU analysis');
     const expanded = await evaluate('window.physicalGpuChecks.rows.find(row => row.atoms === 64)');
@@ -1009,7 +1020,7 @@ async function runPhysicalReplicationGpuChecks({ evaluate, waitFor }) {
     const next = await evaluate('window.physicalGpuChecks.rows.at(-1)');
     assert.equal(next.atoms, 64); assert.equal(next.cellA, 7.04 * 2);
     await evaluate(`(() => { const checkbox = document.getElementById('replicate-atoms'); checkbox.checked = false; checkbox.dispatchEvent(new Event('change')); })()`);
-    await waitFor(`document.getElementById('atom-count').textContent === '32' && document.getElementById('cache-label').dataset.gpuCachedFrames === '6' && document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && document.getElementById('analysis-state').textContent === 'Calculated' && window.physicalGpuChecks.rows.at(-1)?.atoms === 32 && window.physicalGpuChecks.rows.at(-1)?.cellA === 7.04`, 'restored raw GPU preload');
+    await waitFor(`document.getElementById('atom-count').textContent === '32' && document.getElementById('cache-label').dataset.gpuCachedFrames === '5' && document.getElementById('cache-label').dataset.gpuCacheState === 'ready' && document.getElementById('analysis-state').textContent === 'Calculated' && window.physicalGpuChecks.rows.at(-1)?.atoms === 32 && window.physicalGpuChecks.rows.at(-1)?.cellA === 7.04`, 'restored raw GPU preload');
     const restored = await evaluate('window.physicalGpuChecks.rows.at(-1)');
     assert.equal(restored.atoms, 32); assert.equal(restored.cellA, 7.04);
     assert.ok(restored.cacheGeneration > expanded.cacheGeneration);

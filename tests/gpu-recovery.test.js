@@ -161,7 +161,7 @@ test('loss rejects both posted jobs, then queued work creates one replacement an
     await prepare(client, workers, frame, 0); await prepare(client, workers, other, 1);
     const worker = workers[0], offset = worker.messages.length;
     const first = client.analyze(frame, { kind: 'coordination', cutoff: 3 });
-    const second = client.analyze(other, { kind: 'coordination', cutoff: 3 });
+    const second = client.analyze(frame, { kind: 'coordination', cutoff: 3.2 });
     const failures = [assert.rejects(first, { name: 'GpuDeviceLostError' }), assert.rejects(second, { name: 'GpuDeviceLostError' })];
     await until(() => worker.messages.slice(offset).filter(message => message.type === 'analyze').length === 2);
     assert.ok(worker.messages.slice(offset).every(message => message.frame === undefined));

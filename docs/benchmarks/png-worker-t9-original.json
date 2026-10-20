@@ -1,0 +1,121 @@
+{
+  "benchmark": "T9 real WebGL capture + PNG + CRC + ZIP",
+  "atoms": 60000,
+  "frames": 12,
+  "width": 1050,
+  "height": 928,
+  "trials": 3,
+  "softwareAdapter": true,
+  "scope": "Same unchanged renderer; interleaved export pipelines; Worker startup included; full ZIP SHA-256 equality. Heartbeat includes unavoidable main-thread WebGL capture.",
+  "summary": {
+    "before": {
+      "elapsedMs": 15866.09999999404,
+      "perFrameMs": 1322.1749999995034,
+      "captureMs": 14595.899999916553,
+      "maxHeartbeatGapMs": 2436.899999976158,
+      "lateHeartbeatMs": 15681.799999982119
+    },
+    "after": {
+      "elapsedMs": 18943.899999976158,
+      "perFrameMs": 1578.6583333313465,
+      "captureMs": 17502.79999998212,
+      "maxHeartbeatGapMs": 2314.7999999821186,
+      "lateHeartbeatMs": 17596.99999946356
+    }
+  },
+  "before": [
+    {
+      "elapsedMs": 18585.79999998212,
+      "perFrameMs": 1548.8166666651766,
+      "captureMs": 16762.500000059605,
+      "archiveMs": 31.400000035762787,
+      "peakRetainedImages": 1,
+      "heartbeats": 42,
+      "maxHeartbeatGapMs": 2436.899999976158,
+      "lateHeartbeatMs": 18400.100000083447,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 15182.700000017881,
+      "perFrameMs": 1265.2250000014901,
+      "captureMs": 14263.59999999404,
+      "archiveMs": 29.099999994039536,
+      "peakRetainedImages": 1,
+      "heartbeats": 41,
+      "maxHeartbeatGapMs": 1843.300000011921,
+      "lateHeartbeatMs": 14999.200000047684,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 15866.09999999404,
+      "perFrameMs": 1322.1749999995034,
+      "captureMs": 14595.899999916553,
+      "archiveMs": 28.499999970197678,
+      "peakRetainedImages": 1,
+      "heartbeats": 41,
+      "maxHeartbeatGapMs": 2665.5999999940395,
+      "lateHeartbeatMs": 15681.799999982119,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    }
+  ],
+  "after": [
+    {
+      "elapsedMs": 18943.899999976158,
+      "perFrameMs": 1578.6583333313465,
+      "captureMs": 17502.79999998212,
+      "archiveMs": null,
+      "peakRetainedImages": 2,
+      "heartbeats": 281,
+      "maxHeartbeatGapMs": 3454.5999999940395,
+      "lateHeartbeatMs": 17596.99999946356,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 19682.09999999404,
+      "perFrameMs": 1640.1749999995034,
+      "captureMs": 18313.70000001788,
+      "archiveMs": null,
+      "peakRetainedImages": 2,
+      "heartbeats": 259,
+      "maxHeartbeatGapMs": 2089.4000000059605,
+      "lateHeartbeatMs": 18409.60000053048,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    },
+    {
+      "elapsedMs": 14759.09999999404,
+      "perFrameMs": 1229.9249999995034,
+      "captureMs": 13456.400000035763,
+      "archiveMs": null,
+      "peakRetainedImages": 2,
+      "heartbeats": 243,
+      "maxHeartbeatGapMs": 2314.7999999821186,
+      "lateHeartbeatMs": 13562.999999701977,
+      "size": 8966558,
+      "sha256": "29a38fbec013b9bc162d3fd623acff4ad162606432d14fee0cf60c7a379b41dc"
+    }
+  ],
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+  "command": [
+    "node",
+    "scripts/benchmark-png-worker.mjs",
+    "--baseline=/tmp/alloyview-t9-g3-g4-baseline",
+    "--atoms=60000",
+    "--frames=12",
+    "--trials=3",
+    "--width=1050",
+    "--height=928"
+  ],
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "status": "Diagnostic original GPU-backed 2D staging; superseded by subsequent candidate measurements.",
+  "workerStaging": "2D default GPU-backed drawImage",
+  "baselineCommit": "c93a58f5b0cd9130b44114e45b8e5950ca13ad9c"
+}

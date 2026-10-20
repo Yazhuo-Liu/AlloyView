@@ -161,8 +161,14 @@ async function* runVoronoiChecks() {
     yield 'binary element subset and all-site topology';
     check(binaryAll.voronoiCoordination.every(value => value === 6) && binaryAll.atomicVolume.every(value => Math.abs(value - 8) < 5e-5),
       'All-site SC analytic volume/CN');
-    const nickelReused = await run('Switch all back to unchanged subset reuses compact GPU input', binary, { selectedTypes: ['Ni'] });
-    check(nickelReused.inputReused && nickelReused.gpuInputReused && nickelReused.kernelReused, 'Subset/all caches remain distinct and reusable');
+    const subsetUploads = gpu.gpuCacheStatus.uploadCount;
+    const nickelReused = await run('Switch all back to unchanged subset restores CPU input and reuses compact GPU input', binary, { selectedTypes: ['Ni'] });
+    check(!nickelReused.inputReused && nickelReused.gpuInputReused && nickelReused.kernelReused,
+      'Switching subsets restores the released CPU correction payload while reusing the distinct compact GPU input');
+    check(gpu.gpuCacheStatus.uploadCount === subsetUploads, 'Restoring subset CPU input must not reupload its resident GPU buffers');
+    const nickelHot = await run('Repeated current subset retains its CPU correction and GPU inputs', binary, { selectedTypes: ['Ni'] });
+    check(nickelHot.inputReused && nickelHot.gpuInputReused && nickelHot.kernelReused,
+      'The active subset keeps both its restored CPU correction payload and compact GPU upload');
     await run('Binary Cu subset remaps complementary original atom IDs', binary, { selectedTypes: ['Cu'] });
     await run('Selected original center range keeps all included neighbors', binary, { selectedTypes: ['Cu'], startAtom: 2, endAtom: 7 });
     const ternary = { ...binary, fractional: Float64Array.from([...binary.fractional, ...binary.fractional.slice(0, 12)]),

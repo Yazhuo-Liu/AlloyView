@@ -1,5 +1,52 @@
 # Validation record
 
+
+## PNG export and bounded GPU preparation (2026-10-20)
+
+The [T9/G3/G4 report](PERFORMANCE_T9_G3_G4.md) records the final implementations,
+exact scope, commands and raw before/after samples against `c93a58f`.
+The final full Node suite passes **2,322 tests**, with no failures, cancellations
+or skips. Worker, Wasm and GPU prewarming remain enabled.
+
+The production build and documentation checks pass. All **14 relevant browser
+suites** pass: main GPU, Voronoi GPU, GPU determinism, recovery, frame revisions,
+fallback cache, thin cells, bounded prefetch, export resolution, movies,
+trajectory archives, bundled runtime, production PNG Worker and CPU prewarm.
+The main GPU suite retains 261 numerical checks, 12 cancellation cases, eight
+displacement-validation cases and 19 application checks.
+
+T9 covers both trajectory-image and movie PNG ZIPs. A two-frame queue transfers
+ImageBitmaps to a bundled Worker, adopts them directly where supported, then
+encodes PNGs and computes CRC. Tests cover byte-identical transparent/opaque
+PNG and ZIP content, fallback, cancellation, source replacement, ordered output
+and resource ownership. The final interleaved SwiftShader export median is
+18,994 → 17,652 ms for twelve 1050×928 images of 60,000 atoms; the report also
+retains slower rejected staging candidates and the substantial capture cost.
+
+G3 reproduces the archived million-atom NiGB occupancy rejection at its expanded
+search radius, then verifies the new full neighbor index and 128 central CNA/CSP
+results using all neighbors. It additionally checks full thin-cell RDF,
+16 vacuum-slab Voronoi surface cells, canonical sorting at the maximum admitted
+bin occupancy and safe refusal above it. CNA's original precision corrections
+remain active; this does not establish whole-million-atom CNA execution without
+other fallbacks or physical GPU speed.
+
+G4 uses actual Worker/WebGPU uploads for 160 generated frames of 130,000 atoms.
+Under a common explicit 2 GiB diagnostic budget, background reads fall from
+159 to 4, GPU frame buffers from 714.1 to 22.3 MiB, and retained Worker input
+arrays from 515.8 to 3.22 MiB. These are payload bytes, not total heap usage.
+Focused browser checks also verify selected-frame input prewarming, exact CPU
+coordination/displacement parity, reference reuse, stale-read cancellation and
+retained Worker/pipelines. Software defaults remain capped at 128 MiB; adapter
+and device-memory budget selection has separate unit coverage.
+
+The browser regression updates the old all-frame preload and background CPU
+residency assertions to the new cache contract. It checks the exact five-frame
+window before and after a trajectory jump, restores CPU correction input
+without another GPU upload when switching back to a subset, and verifies both
+input layers are reused on the next calculation. Scientific comparisons remain
+in place.
+
 Latest validation: 2026-10-20 (UTC). Earlier entries retain their own dates.
 
 ## Loading and analysis performance improvements (2026-10-20)

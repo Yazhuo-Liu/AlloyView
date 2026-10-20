@@ -136,8 +136,10 @@ test('trajectory capacity reserves the actual resident hardware Voronoi batch in
     assert.ok(runtime.voronoiWorkspace.bytes>32*1024**2);
     assert.equal(status.workspaceBytes,runtime.voronoiWorkspace.bytes);
     assert.equal(status.frameBudgetBytes,budgetBytes-runtime.voronoiWorkspace.bytes);
-    assert.equal(status.capacity,Math.floor(status.frameBudgetBytes/frameUploadBytes(frame)));
+    assert.equal(status.capacity,Math.min(5,Math.floor(status.frameBudgetBytes/frameUploadBytes(frame))));
     assert.ok(status.allocatedBytes<=budgetBytes);
+    const constrained=runtime.configureCache({budgetBytes:status.workspaceBytes+frameUploadBytes(frame)*2.5});
+    assert.equal(constrained.capacity,2,'actual Voronoi workspace still bounds a window smaller than five');
   } finally {runtime.close();}
 });
 

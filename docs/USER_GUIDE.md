@@ -697,6 +697,12 @@ enabling GPU acceleration does not guarantee a speedup. See
 [Performance](features/performance.md) for algorithm choices and the backend
 layout in `src/analysis/gpu/`.
 
+GPU preparation keeps up to five nearby trajectory frames, including the current
+one, within a budget adapted to available hardware hints. It releases background
+CPU input copies while retaining reusable GPU uploads. Thin cells and vacuum
+slabs can use smaller GPU batches; precision and extreme-work limits still use
+the existing CPU fallback. Worker, Wasm and GPU prewarming remain enabled.
+
 For larger central-symmetry, bond, bond-statistics and RDF jobs, routing can
 learn from completed calculations on your device. It uses a few GPU and CPU
 observations, then prefers a backend with a clear measured advantage. Each
@@ -1394,6 +1400,11 @@ restored, and other page controls become available afterwards. Without a video
 encoder (an old browser or a page that is not served over HTTPS), the panel
 offers **PNG frames · ZIP** with the same frames, up to 500. See
 [Camera path and movie](features/movies.md).
+
+Both trajectory frame-image ZIPs and movie PNG ZIPs encode up to two captured
+images in a Worker while rendering continues. Image order and PNG content are
+preserved. Browsers without the required Worker canvas support automatically
+use the page encoder; **Cancel** still stops the export and restores the view.
 
 ## Feature help and documentation
 

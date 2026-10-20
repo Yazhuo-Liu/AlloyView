@@ -3,13 +3,37 @@ const MiB = 1024 ** 2;
 export const DEFAULT_GPU_BUDGET_BYTES = 2 * 1024 ** 3;
 export const FALLBACK_GPU_BUDGET_BYTES = 128 * MiB;
 export const MIN_GPU_WORKSPACE_BYTES = 32 * MiB;
+export const GPU_TRAJECTORY_WINDOW = 5;
 
-/** WebGPU exposes buffer limits, not free VRAM. These are conservative app
- * budgets; successful allocation, not an adapter limit, determines residency. */
-export function conservativeGpuBudget(_limits = {}, { isFallbackAdapter = false } = {}) {
-  // A single-buffer limit is independent of the total residency budget.
-  // Allocate lazily, then reduce this budget if a real allocation fails.
-  return isFallbackAdapter ? FALLBACK_GPU_BUDGET_BYTES : DEFAULT_GPU_BUDGET_BYTES;
+/** Limits are capability hints, never a measurement of free VRAM. Bound the
+ * app allocation budget by both adapter capabilities and coarse host memory;
+ * real allocation failures can still reduce it. Unknown hardware gets 512 MiB. */
+export function conservativeGpuBudget(limits = {}, info = {}, deviceMemoryGiB) {
+  const candidates = [DEFAULT_GPU_BUDGET_BYTES];
+  for (const [value, factor] of [[limits.maxBufferSize, 4], [limits.maxStorageBufferBindingSize, 8],
+    [deviceMemoryGiB, 1024 ** 3 / 8]]) {
+    if (Number.isFinite(value) && value > 0) candidates.push(value * factor);
+  }
+  if (candidates.length === 1) candidates.push(512 * MiB);
+  if (info.isFallbackAdapter || /swiftshader|software|llvmpipe/i.test(`${info.vendor ?? ''} ${info.architecture ?? ''} ${info.description ?? ''}`)) {
+    candidates.push(FALLBACK_GPU_BUDGET_BYTES);
+  }
+  return Math.max(64 * MiB, Math.floor(Math.min(...candidates)));
+}
+
+/** A small nearest-first window, including the displayed frame. Near either
+ * end, unused slots look farther in the available direction. */
+export function gpuTrajectoryWindow(currentIndex, frameCount, capacity = GPU_TRAJECTORY_WINDOW) {
+  const count = Math.max(0, Math.trunc(frameCount));
+  if (!count || !Number.isInteger(currentIndex) || currentIndex < 0 || currentIndex >= count) return [];
+  const limit = Math.min(count, GPU_TRAJECTORY_WINDOW, Math.max(1, Math.trunc(capacity) || 1));
+  const indices = [currentIndex];
+  for (let distance = 1; indices.length < limit; distance += 1) {
+    if (currentIndex + distance < count) indices.push(currentIndex + distance);
+    if (indices.length >= limit) break;
+    if (currentIndex - distance >= 0) indices.push(currentIndex - distance);
+  }
+  return indices;
 }
 
 export function frameUploadBytes(frame) {
@@ -25,7 +49,7 @@ export function gpuWorkspaceBytes(frameBytes = 0) {
 
 export function trajectoryCapacity({ frameCount = 0, frameBytes = 0, budgetBytes, workspaceBytes = gpuWorkspaceBytes(frameBytes) }) {
   if (!frameBytes) return Math.min(frameCount || 2, 2);
-  return Math.max(0, Math.min(frameCount || 2, Math.floor(Math.max(0, budgetBytes - workspaceBytes) / frameBytes)));
+  return Math.max(0, Math.min(frameCount || 2, GPU_TRAJECTORY_WINDOW, Math.floor(Math.max(0, budgetBytes - workspaceBytes) / frameBytes)));
 }
 
 /** Furthest frame first; equal-distance eviction keeps the more recent frame.

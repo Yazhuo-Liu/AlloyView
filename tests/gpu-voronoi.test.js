@@ -28,6 +28,7 @@ async function hostFixture(frame, { flags = 0, onRun, onRead, radii, rowState } 
     neighborBindings(context, extra) { return [context, null, null, null, null, ...extra]; },
     async run(source, bindings, count, options) {
       runs.push({ source, count, options }); pendingSignal = options.signal;
+      options.onDispatch?.({ startAtom: options.startAtom, endAtom: options.endAtom });
       const settings = new Uint32Array(bindings[5].values.buffer), begin = settings[26];
       const states = new Uint32Array(bindings[8].values.buffer), floats = new Float32Array(states.buffer);
       const descriptors = new Uint32Array(bindings[7].values.buffer), areas = new Float32Array(descriptors.buffer);

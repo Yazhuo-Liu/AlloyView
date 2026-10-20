@@ -6,14 +6,18 @@ import { fatalAnalysisError } from '../errors.js';
 
 const runtime = new GpuRuntime({ onDeviceLost: error => self.postMessage({ type: 'device-lost', error, gpuDeviceLost: true }) });
 const controllers = new Map();
-// Double precision inputs stay available for the kernels' sparse corrections,
-// and are released after their actual GPU buffers are evicted.
+// Double precision inputs are needed for sparse corrections only on the
+// current frame and the latest foreground reference. Background GPU uploads
+// keep no host payload; the client restores one before foreground analysis.
 const frames = new Map();
 // The client may post a task without its payload while an earlier task still
 // runs. Received tasks retain their inputs here, so the earlier task can evict
 // GPU buffers and the later one simply uploads them again.
 const receivedFrameIds = new Map();
 let queue = Promise.resolve();
+let foregroundHostPins = new Set();
+let releaseForegroundPins;
+let executingFrameIds = new Set();
 
 self.addEventListener('message', ({ data }) => {
   if (data.type === 'cancel') { controllers.get(data.id)?.abort(); return; }
@@ -29,44 +33,76 @@ self.addEventListener('message', ({ data }) => {
   });
 });
 
-/** Release inputs whose GPU upload was evicted. This runs when a task starts,
- * after every task posted before it has been received; a reply cannot prune
- * a frame that the client already posted a later task for. */
-function pruneFrames() {
+/** Received jobs lease their payloads. The client pipelines only analyses
+ * using the running job's own inputs, so an old ACK cannot lease an unrelated
+ * input after a cache barrier or another foreground frame has released it. */
+function pruneFrames(completing = false) {
   const resident = new Set(runtime.cacheStatus().cachedFrameIds);
-  for (const frameId of frames.keys()) if (!resident.has(frameId) && !receivedFrameIds.has(frameId)) frames.delete(frameId);
+  for (const [frameId, frame] of frames) {
+    const current = !frame.gpuDerivedFrame && Number.isInteger(frame.gpuFrameIndex) && frame.gpuFrameIndex === runtime.currentIndex;
+    const received = (receivedFrameIds.get(frameId) ?? 0) > (completing && executingFrameIds.has(frameId) ? 1 : 0);
+    const pinned = foregroundHostPins.has(frameId) || runtime.analysisFramePins.has(frameId);
+    if (!received && !pinned && (!resident.has(frameId) || !current)) {
+      frames.delete(frameId);
+      runtime.releaseHostFrame(frameId);
+    }
+  }
+}
+
+function hostInputBytes() {
+  const buffers = new Set(), add = array => { if (ArrayBuffer.isView(array)) buffers.add(array.buffer); };
+  // Count payload buffers, not Worker heap or kernel scratch. Never walk
+  // arbitrary labels/metadata: a large species table must not slow every ACK.
+  for (const frame of frames.values()) {
+    add(frame.fractional); add(frame.types); add(frame.cell?.origin); add(frame.cell?.vectors);
+    for (const positions of frame.cartesianPositions?.values() ?? []) add(positions);
+    for (const name of ['structures', 'scales', 'deformation']) add(frame.ptmFit?.input?.[name]);
+  }
+  return [...buffers].reduce((total, buffer) => total + buffer.byteLength, 0);
 }
 
 function cacheState() {
+  pruneFrames(true);
   const cacheStatus = runtime.cacheStatus();
-  // The client may omit a payload only if both its f64 input and GPU upload exist.
-  const cachedFrameIds = cacheStatus.cachedFrameIds.filter(frameId => frames.has(frameId));
-  const resident = new Set(cachedFrameIds);
+  // GPU residency skips speculative reads; host residency independently
+  // authorizes payload omission when a foreground task is posted.
+  const cachedFrameIds = cacheStatus.cachedFrameIds;
+  const cachedInputFrameIds = cachedFrameIds.filter(frameId => frames.has(frameId));
+  const resident = new Set(cachedInputFrameIds);
   const cachedCartesianFrames = [...runtime.frames].filter(([frameId]) => resident.has(frameId))
     .map(([frameId, frame]) => ({ frameId, variants: [...(frame.cartesian?.keys() ?? [])] }));
   const cachedPtmFits = [...runtime.frames].filter(([frameId, frame]) => resident.has(frameId) && frame.ptm?.fitId !== undefined
     && frames.get(frameId)?.ptmFit?.id === frame.ptm.fitId).map(([frameId, frame]) => ({ frameId, fitId: frame.ptm.fitId }));
-  return { cacheStatus: { ...cacheStatus, cachedFrameIds }, cachedFrameIds, cachedCartesianFrames, cachedPtmFits };
+  return { cacheStatus: { ...cacheStatus, hostFrameIds: [...frames.keys()], hostInputBytes: hostInputBytes() },
+    cachedFrameIds, cachedInputFrameIds, cachedCartesianFrames, cachedPtmFits };
 }
 
 async function run(data, controller) {
   const startedAt = performance.now();
+  executingFrameIds = new Set([data.frameId, data.referenceFrameId].filter(id => id !== undefined));
   let releasePins, activeFrame, newPtmFitId;
   const progress = (update) => self.postMessage({ id: data.id, progress: { ...update, backend: 'gpu', workerCount: 1 } });
   try {
     pruneFrames();
     checkSignal(controller.signal);
     if (data.type === 'clear-frames') {
-      runtime.clearFrames(); frames.clear();
+      releaseForegroundPins?.(); releaseForegroundPins = null;
+      runtime.clearFrames(); frames.clear(); foregroundHostPins.clear();
       self.postMessage({ id: data.id, ok: true, ...cacheState() });
       return;
     }
     if (data.type === 'release-frame') {
+      if (foregroundHostPins.has(data.releasedFrameId)) {
+        releaseForegroundPins?.(); releaseForegroundPins = null; foregroundHostPins.clear();
+      }
       runtime.releaseFrame(data.releasedFrameId); frames.delete(data.releasedFrameId);
       self.postMessage({ id: data.id, ok: true, ...cacheState() });
       return;
     }
     if (data.type === 'configure-cache') {
+      if (data.options.currentIndex !== undefined) {
+        releaseForegroundPins?.(); releaseForegroundPins = null; foregroundHostPins.clear();
+      }
       runtime.configureCache(data.options);
       self.postMessage({ id: data.id, ok: true, ...cacheState() });
       return;
@@ -105,7 +141,16 @@ async function run(data, controller) {
       parameters = { ...parameters, referenceFrame, referenceFrameIndex: data.referenceFrameIndex,
         referenceFractional: referenceFrame.fractional, referenceCell: referenceFrame.cell };
     }
-    if (data.type === 'analyze' && Number.isInteger(data.frameIndex)) runtime.configureCache({ currentIndex: data.frameIndex });
+    if (data.type === 'analyze') {
+      releaseForegroundPins?.();
+      foregroundHostPins = new Set([data.frameId, data.referenceFrameId].filter(id => id !== undefined));
+      releaseForegroundPins = runtime.pinFrames([frame, referenceFrame]);
+      if (Number.isInteger(data.frameIndex)) runtime.configureCache({ currentIndex: data.frameIndex });
+    } else if (data.type === 'prepare-frame' && data.frameIndex === undefined) {
+      releaseForegroundPins?.();
+      foregroundHostPins = new Set([data.frameId]);
+      releaseForegroundPins = runtime.pinFrames([frame]);
+    }
     if (['analyze','prepare-frame'].includes(data.type)) releasePins = runtime.pinFrames([frame, referenceFrame]);
     if (data.type === 'prepare-frame') {
       const prepare = () => runtime.withErrors(() => runtime.prepareFrame(frame,

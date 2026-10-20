@@ -1,0 +1,148 @@
+{
+  "command": [
+    "node",
+    "/workspace/AlloyView/scripts/benchmark-gpu-prefetch.mjs",
+    "--baseline=/tmp/alloyview-t9-g3-g4-baseline",
+    "--trials=3"
+  ],
+  "baseline": "/tmp/alloyview-t9-g3-g4-baseline",
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux",
+    "architecture": "x64"
+  },
+  "adapter": {
+    "available": true,
+    "vendor": "google",
+    "architecture": "swiftshader",
+    "device": "",
+    "description": "",
+    "isFallbackAdapter": true,
+    "limits": {
+      "maxStorageBufferBindingSize": 1073741824,
+      "maxComputeWorkgroupsPerDimension": 65535
+    }
+  },
+  "browser": {
+    "protocolVersion": "1.3",
+    "product": "Chrome/154.0.8037.57",
+    "revision": "@73c14f6228d7cd537c855007e8f88678969cc0eb",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "jsVersion": "15.4.80.11"
+  },
+  "atoms": 130000,
+  "frames": 160,
+  "trials": 3,
+  "nativeBudgets": {
+    "before": 134217728,
+    "after": 134217728
+  },
+  "deviceMemoryGiB": 32,
+  "commonBudgetBytes": 2147483648,
+  "samples": [
+    {
+      "version": "before",
+      "trial": 0,
+      "elapsedMs": 2066.4000000059605,
+      "backgroundReads": 159,
+      "capacity": 160,
+      "residentFrames": 160,
+      "residentBytes": 748800000,
+      "allocatedBytes": 748800000,
+      "hostFrames": 160,
+      "hostInputBytes": 540815360,
+      "budgetBytes": 2147483648,
+      "retainedWorkerAndPipelines": true
+    },
+    {
+      "version": "after",
+      "trial": 0,
+      "elapsedMs": 56.400000005960464,
+      "backgroundReads": 4,
+      "capacity": 5,
+      "residentFrames": 5,
+      "residentBytes": 23400000,
+      "allocatedBytes": 23400000,
+      "hostFrames": 1,
+      "hostInputBytes": 3380096,
+      "budgetBytes": 2147483648,
+      "retainedWorkerAndPipelines": true
+    },
+    {
+      "version": "after",
+      "trial": 1,
+      "elapsedMs": 71.5,
+      "backgroundReads": 4,
+      "capacity": 5,
+      "residentFrames": 5,
+      "residentBytes": 23400000,
+      "allocatedBytes": 23400000,
+      "hostFrames": 1,
+      "hostInputBytes": 3380096,
+      "budgetBytes": 2147483648,
+      "retainedWorkerAndPipelines": true
+    },
+    {
+      "version": "before",
+      "trial": 1,
+      "elapsedMs": 1737.9000000059605,
+      "backgroundReads": 159,
+      "capacity": 160,
+      "residentFrames": 160,
+      "residentBytes": 748800000,
+      "allocatedBytes": 748800000,
+      "hostFrames": 160,
+      "hostInputBytes": 540815360,
+      "budgetBytes": 2147483648,
+      "retainedWorkerAndPipelines": true
+    },
+    {
+      "version": "before",
+      "trial": 2,
+      "elapsedMs": 1783.5999999940395,
+      "backgroundReads": 159,
+      "capacity": 160,
+      "residentFrames": 160,
+      "residentBytes": 748800000,
+      "allocatedBytes": 748800000,
+      "hostFrames": 160,
+      "hostInputBytes": 540815360,
+      "budgetBytes": 2147483648,
+      "retainedWorkerAndPipelines": true
+    },
+    {
+      "version": "after",
+      "trial": 2,
+      "elapsedMs": 62.10000002384186,
+      "backgroundReads": 4,
+      "capacity": 5,
+      "residentFrames": 5,
+      "residentBytes": 23400000,
+      "allocatedBytes": 23400000,
+      "hostFrames": 1,
+      "hostInputBytes": 3380096,
+      "budgetBytes": 2147483648,
+      "retainedWorkerAndPipelines": true
+    }
+  ],
+  "medians": {
+    "before": {
+      "elapsedMs": 1783.5999999940395,
+      "backgroundReads": 159,
+      "residentFrames": 160,
+      "residentBytes": 748800000,
+      "hostFrames": 160,
+      "hostInputBytes": 540815360
+    },
+    "after": {
+      "elapsedMs": 62.10000002384186,
+      "backgroundReads": 4,
+      "residentFrames": 5,
+      "residentBytes": 23400000,
+      "hostFrames": 1,
+      "hostInputBytes": 3380096
+    }
+  },
+  "note": "Interleaved real browser Worker/WebGPU residency benchmark. A common explicit 2 GiB limit isolates the five-frame policy; native adapter budgets are also shown. Inputs are generated binary64 coordinates and uint16 species. Upload completion excludes rendering, analysis and the normal 40 ms background delay. SwiftShader timing does not predict physical GPU throughput.",
+  "baselineCommit": "c93a58f5b0cd9130b44114e45b8e5950ca13ad9c"
+}

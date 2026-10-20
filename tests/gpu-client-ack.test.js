@@ -40,7 +40,7 @@ async function resident(client, worker, frame) {
 const ackFit = (worker, message, extras = {}) => worker.answer(message,
   { cachedPtmFits: [{ frameId: message.frameId, fitId: message.parameters.ptmFitId }], ...extras });
 
-test('a cancelled warmup ACK preserves the raw PTM upload posted behind it until its own ACK', async () => {
+test('a cancelled warmup is a host-residency barrier before raw PTM upload and its own ACK', async () => {
   const { worker, client, frame, fit } = fixture();
   try {
     const frameId = await resident(client, worker, frame);
@@ -49,12 +49,13 @@ test('a cancelled warmup ACK preserves the raw PTM upload posted behind it until
     await until(() => worker.messages.at(-1).type === 'warmup');
     const warmup = worker.messages.at(-1);
     const first = client.analyze(frame, { kind: 'strain', ptmInput: fit });
-    await until(() => worker.analyses().length === 2); await backgroundRejected;
+    await backgroundRejected;
+    assert.equal(worker.analyses().length, 1, 'warmup must acknowledge host residency before the analysis can omit its payload');
+    worker.answer(warmup, { ok: false, name: 'AbortError', error: 'Cancelled.', cachedFrameIds: [frameId], cachedPtmFits: [] });
+    await until(() => worker.analyses().length === 2);
     const posted = worker.analyses()[1];
     assert.ok(posted.parameters.ptmInput); assert.equal(posted.frame, undefined);
-    const source = client.ptmSources.get(frameId);
-    worker.answer(warmup, { ok: false, name: 'AbortError', error: 'Cancelled.', cachedFrameIds: [frameId], cachedPtmFits: [] });
-    assert.strictEqual(client.ptmSources.get(frameId), source);
+    assert.equal(client.ptmSources.get(frameId).id, posted.parameters.ptmFitId);
     assert.equal(client.cachedPtmFits.size, 0, 'a posted upload is not an acknowledgement');
     ackFit(worker, posted); await first;
     const edited = client.analyze(frame, { kind: 'strain', ptmInput: { ...fit }, references: [{ a: 3.4 }] });
@@ -123,7 +124,7 @@ function displacement(frame, positions = Float64Array.from(frame.positions)) {
 const ackPositions = (worker, message, extras = {}) => worker.answer(message, { cachedCartesianFrames: [
   { frameId: message.frameId, variants: ['cartesian'] }], ...extras });
 
-test('a stale warmup ACK preserves posted Cartesian sources and only the upload ACK enables reuse', async () => {
+test('a warmup barrier precedes Cartesian upload and only the upload ACK enables reuse', async () => {
   const { worker, client, frame } = fixture();
   try {
     const frameId = await resident(client, worker, frame), parameters = displacement(frame);
@@ -132,9 +133,11 @@ test('a stale warmup ACK preserves posted Cartesian sources and only the upload 
     await until(() => worker.messages.at(-1).type === 'warmup');
     const warmup = worker.messages.at(-1);
     const first = client.analyze(frame, parameters);
-    await until(() => worker.analyses().length === 2); await rejected;
-    const posted = worker.analyses()[1];
+    await rejected;
+    assert.equal(worker.analyses().length, 1, 'background work cannot race a payload-free analysis');
     worker.answer(warmup, { ok: false, name: 'AbortError', error: 'Cancelled.', cachedFrameIds: [frameId], cachedCartesianFrames: [] });
+    await until(() => worker.analyses().length === 2);
+    const posted = worker.analyses()[1];
     assert.strictEqual(client.positionSources.get(frameId).get('cartesian'), parameters.currentPositions);
     assert.equal(client.cachedCartesianFrames.size, 0);
     ackPositions(worker, posted); await first;
@@ -198,4 +201,31 @@ test('GPU progress callback errors reject promptly, keep the posted lease until 
     assert.equal(client.active.length, 0); assert.equal(client.pending.size, 0);
     assert.equal(client.worker, worker);
   } finally { pool.close(); }
+});
+
+
+test('GPU-only residency skips no required host transfer and old ACKs cannot pipeline across a foreground switch', async () => {
+  const { worker, client, frame } = fixture();
+  try {
+    const firstId = await resident(client, worker, frame), other = structuredClone(frame);
+    const prepare = client.prepareFrame(other, { frameIndex: 1 });
+    await until(() => worker.messages.at(-1).type === 'prepare-frame');
+    const upload = worker.messages.at(-1), secondId = upload.frameId;
+    worker.answer(upload, { cachedFrameIds: [firstId, secondId], cachedInputFrameIds: [firstId] }); await prepare;
+    assert.deepEqual([...client.cachedFrameIds], [firstId, secondId], 'GPU-only frames remain visible to prefetch');
+    assert.deepEqual([...client.cachedInputFrameIds], [firstId]);
+    const second = client.analyze(other, { kind: 'bonds', cutoff: 3 });
+    await until(() => worker.analyses().length === 2);
+    const switching = worker.analyses()[1];
+    assert.ok(switching.frame, 'background inputs restore their private binary64 CPU correction payload');
+    const back = client.analyze(frame, { kind: 'bonds', cutoff: 3 });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(worker.analyses().length, 2, 'the previous input cannot pipeline from a stale ACK while another foreground frame can prune it');
+    worker.answer(switching, { cachedFrameIds: [firstId, secondId], cachedInputFrameIds: [secondId] }); await second;
+    await until(() => worker.analyses().length === 3);
+    const restored = worker.analyses()[2];
+    assert.ok(restored.frame, 'the cache switch ACK expires old host ownership before dispatch');
+    worker.answer(restored, { cachedFrameIds: [firstId, secondId], cachedInputFrameIds: [firstId] }); await back;
+    assert.ok(frame.fractional.byteLength && other.fractional.byteLength);
+  } finally { client.close(); }
 });

@@ -174,6 +174,14 @@ async function runJobs({text,isolated,entries}) {
     const gpu=new GpuAnalysisClient(), accelerated=await gpu.analyze(frame,{kind:'coordination',cutoff:3},{frameIndex:0});
     check(accelerated.coordination.every(value=>value===12),'Bundled GPU coordination');
     result.gpu={backend:accelerated.backend,coordination:accelerated.coordination.length}; gpu.close(); result.executedEntries.push('src/analysis/gpu/worker.js');
+    const [{PngFrameEncoder},{crc32}]=await Promise.all(['video/png-frame-encoder.js','io/export-archive.js'].map(path=>import(new URL(path,appUrl))));
+    const pngEncoder=new PngFrameEncoder(), canvas=await trace.renderer.captureImage();
+    try {
+      const png=await pngEncoder.encode(canvas), bytes=new Uint8Array(await png.blob.arrayBuffer());
+      check(pngEncoder.worker && bytes.length>8 && crc32(bytes)===png.crc, 'Bundled PNG Worker must encode and compute CRC without fallback');
+      check(trace.workers.some(url=>url===new URL('src/workers/png-encoder-worker.js',assetRoot).href), 'PNG Worker must load from the same versioned asset tree');
+      result.pngBytes=bytes.length; result.executedEntries.push('src/workers/png-encoder-worker.js');
+    } finally { pngEncoder.dispose(); canvas.width=canvas.height=1; }
   }
   result.buffersRetained=Object.entries(originals).every(([name,values])=>frame[name].length===values.length&&values.every((value,index)=>Object.is(frame[name][index],value)));
   result.workerUrls=Array.from(new Set(trace.workers)).map(url=>new URL(url).pathname.replace(assetRoot.pathname,''));

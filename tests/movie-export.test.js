@@ -61,6 +61,20 @@ function fakeHost({ frameCount = 10, size = [320, 240], showFrame = null } = {})
 const h264 = movieFormat('mp4-h264'), config = { codec: 'avc1.64001e', width: 320, height: 240, bitrate: 1e6, framerate: 10 };
 const bytesOf = async file => new Uint8Array(await new Blob(file.parts).arrayBuffer());
 
+test('PNG movie queue preserves the host receiver of custom encoding and release methods', async () => {
+  const { host } = fakeHost();
+  let encoded = 0, released = 0, checked = 0;
+  host.encodeImage = async function(canvas) { assert.equal(this, host); encoded++; return Uint8Array.of(canvas.id & 255); };
+  host.release = function() { assert.equal(this, host); released++; };
+  host.checkCurrent = function() { assert.equal(this, host); checked++; };
+  const plan = planMovie(cameraPath(), { fps: 3, frameCount: 10 });
+  const result = await renderMovie({ plan, format: PNG_SEQUENCE_FORMAT, host });
+  assert.equal(result.frames, plan.frameTotal);
+  assert.equal(encoded, plan.frameTotal);
+  assert.equal(released, plan.frameTotal);
+  assert.ok(checked >= plan.frameTotal);
+});
+
 test('movie frames await asynchronous Surface capture before encoding or advancing the camera', async () => {
   const codec = fakeCodec(), { host, log, app } = fakeHost();
   let pending = 0;
@@ -189,6 +203,20 @@ test('PNG frames go into a ZIP archive without an encoder, within its limits', a
   await assert.rejects(exportMovie({ path: long, output: { ...DEFAULT_MOVIE_OUTPUT, fps: 30 }, format: PNG_SEQUENCE_FORMAT, host: fake.host }), /601 frames; the limit is 500/);
   const heavy = fakeHost(); heavy.host.encodeImage = async () => new Uint8Array(100 * 1024 ** 2);
   await assert.rejects(renderMovie({ plan: planMovie(cameraPath(), { fps: 4 }), format: PNG_SEQUENCE_FORMAT, host: heavy.host }), /exceeds 256 MiB/);
+});
+
+test('replacing the source during the final PNG cannot return an archive or restore the old view', async () => {
+  const fake = fakeHost(), original = fake.host.encodeImage;
+  let encoded = 0;
+  fake.host.encodeImage = async canvas => {
+    const bytes = await original(canvas);
+    if (++encoded === 2) { fake.app.source = 'new'; fake.app.frame = 0; fake.app.camera = camera(7); }
+    return bytes;
+  };
+  await assert.rejects(exportMovie({ path: cameraPath(), output: { ...DEFAULT_MOVIE_OUTPUT, fps: 1 }, format: PNG_SEQUENCE_FORMAT,
+    host: fake.host }), { name: 'AbortError' });
+  assert.deepEqual([fake.app.source, fake.app.frame, fake.app.camera], ['new', 0, camera(7)]);
+  assert.equal(fake.app.released, 2);
 });
 
 test('bitrates follow quality presets, and odd sizes become even for video but not for PNG frames', () => {

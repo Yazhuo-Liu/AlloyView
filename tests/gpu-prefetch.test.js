@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GpuPrefetchScheduler, gpuPrefetchOrder } from '../src/data/gpu-prefetch.js';
 
-test('GPU prefetch expands from the current frame and includes the full sequence when it fits', () => {
-  assert.deepEqual(gpuPrefetchOrder(3, 7, 7), [3, 4, 2, 5, 1, 6, 0]);
+test('GPU prefetch expands from the current frame and bounds even an oversized cache to five nearby frames', () => {
+  assert.deepEqual(gpuPrefetchOrder(3, 7, 7), [3, 4, 2, 5, 1]);
   assert.deepEqual(gpuPrefetchOrder(3, 7, 4), [3, 4, 2, 5]);
   assert.deepEqual(gpuPrefetchOrder(0, 7, 3), [0, 1, 2]);
   assert.deepEqual(gpuPrefetchOrder(6, 7, 3), [6, 5, 4]);
@@ -20,10 +20,10 @@ test('GPU enable warms without a source; a displayed frame is uploaded before ba
   assert.deepEqual(pool.uploads, []);
   assert.equal(statuses.at(-1).phase, 'ready');
   await scheduler.setFrame(source('A', 6, 2));
-  assert.deepEqual(pool.uploads, [2, 3, 1, 4, 0, 5]);
-  assert.deepEqual(reads, [3, 1, 4, 0, 5]);
+  assert.deepEqual(pool.uploads, [2, 3, 1, 4, 0]);
+  assert.deepEqual(reads, [3, 1, 4, 0]);
   assert.equal(statuses.at(-1).phase, 'ready');
-  assert.deepEqual(statuses.at(-1).cacheStatus.cachedFrameIndexes, [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(statuses.at(-1).cacheStatus.cachedFrameIndexes, [0, 1, 2, 3, 4]);
 });
 
 test('prewarm follows the router: without the Voronoi kernel request it prepares uploads and general pipelines only', async () => {
@@ -418,3 +418,20 @@ function fakePool(capacity) {
     },
   };
 }
+
+
+test('selecting a GPU-only resident frame warms its host payload from the displayed frame without rereading neighbors', async () => {
+  const pool = fakePool(5), reads = [], scheduler = makeScheduler(pool, { reads });
+  pool.gpuCacheStatus = { capacity: 5, frameCount: 160, cachedFrameIndexes: [78,79,80,81,82], cachedInputFrameIndexes: [80] };
+  const prepare = pool.prepareGpuFrame.bind(pool), restored = [];
+  pool.prepareGpuFrame = async (frame, options) => {
+    restored.push(options.frameIndex);
+    const status = await prepare(frame, options);
+    pool.gpuCacheStatus = { ...status, cachedInputFrameIndexes: [81] };
+    return pool.gpuCacheStatus;
+  };
+  scheduler.setFrame(source('A', 160, 81));
+  await scheduler.setEnabled(true);
+  assert.deepEqual(restored, [81,83], 'current CPU payload first, then the one new neighbor');
+  assert.deepEqual(reads, [83], 'restoring displayed input cannot reread an already resident frame');
+});
