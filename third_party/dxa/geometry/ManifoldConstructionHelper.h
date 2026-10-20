@@ -23,6 +23,7 @@
 #pragma once
 #include "DelaunayTessellation.h"
 #include "SurfaceMeshBuilder.h"
+#include "DxaProfiling.h"
 
 namespace Ovito::Delaunay {
 using namespace Ovito::Mesh;
@@ -60,6 +61,7 @@ private:
     template<typename CellRegionFunc>
     bool classifyTetrahedra(CellRegionFunc&& determineCellRegion, ProgressingTask& operation)
     {
+        DxaProfiling::Scope classificationTiming("mesh.classification");
         operation.setProgressMaximum(_tessellation.numberOfTetrahedra());
 
         _numFilledCells = 0;
@@ -108,6 +110,8 @@ private:
             _tessellation.setUserField(cell, region);
         })) return false;
 
+        classificationTiming.stop();
+        DxaProfiling::Scope numberingTiming("mesh.cell-numbering");
         for(DelaunayTessellation::CellIterator cellIter = _tessellation.begin_cells(); cellIter != _tessellation.end_cells(); ++cellIter) {
             DelaunayTessellation::CellHandle cell = *cellIter;
             if(operation.isCanceled()) return false;
@@ -140,6 +144,7 @@ private:
     template<typename PrepareMeshFaceFunc, typename PrepareMeshVertexFunc>
     bool createInterfaceFacets(PrepareMeshFaceFunc&& prepareMeshFaceFunc, PrepareMeshVertexFunc&& prepareMeshVertexFunc, ProgressingTask& operation)
     {
+        DxaProfiling::Scope preparationTiming("mesh.facet-preparation");
         // Regions and coordinates are complete and immutable at this point.
         // Parallel work records decisions only; mesh numbering and callbacks
         // remain in the original cell/face order below.
@@ -176,10 +181,13 @@ private:
             if(operation.isCanceled()) return false;
         }
 
+        DxaProfiling::set("mesh.facet-mask-bytes", facetMasks.capacity() * sizeof(uint8_t));
+        preparationTiming.stop();
+        DxaProfiling::Scope commitTiming("mesh.facet-commit");
         // Stores the triangle mesh vertices created for the vertices of the tetrahedral mesh.
         std::vector<SurfaceMesh::vertex_index> vertexMap(_positions.size(), SurfaceMesh::InvalidIndex);
         _tetrahedraFaceList.clear();
-        _faceLookupMap.clear();
+        _faceLookup.clear();
 
         // Create the vertex coordinates array, which will dynamically grow.
         std::vector<Point3> vertexPositions;
@@ -248,9 +256,10 @@ private:
                 // Create additional face for exterior region if requested.
                 
 
-                // Insert new facet into lookup map.
+                // Append to the ghost-face lookup in original creation order.
+                // It is queried only after every facet has been committed.
                 reorderFaceVertices(vertexIndices);
-                _faceLookupMap.emplace(vertexIndices, face);
+                _faceLookup.push_back({ vertexIndices, face });
 
                 // Insert into contiguous list of tetrahedron faces.
                 if(_tessellation.getCellIndex(cell) == -1) {
@@ -266,6 +275,20 @@ private:
 
         // Store the per-face region information in the mesh.
         _mesh.setFaceRegions(std::move(faceRegions));
+
+        commitTiming.stop();
+        if(operation.isCanceled()) return false;
+        DxaProfiling::Scope lookupTiming("mesh.ghost-face-lookup");
+        // The old map's emplace retained the first-created face for duplicate
+        // keys. Face IDs are assigned in increasing creation order, so sorting
+        // by (key, face) followed by deduplication retains that exact choice.
+        std::sort(_faceLookup.begin(), _faceLookup.end(), [](const FaceLookupEntry& a, const FaceLookupEntry& b) {
+            return a.vertices < b.vertices || (a.vertices == b.vertices && a.face < b.face);
+        });
+        _faceLookup.erase(std::unique(_faceLookup.begin(), _faceLookup.end(),
+            [](const FaceLookupEntry& a, const FaceLookupEntry& b) { return a.vertices == b.vertices; }), _faceLookup.end());
+        DxaProfiling::set("mesh.ghost-face-lookup-bytes", _faceLookup.capacity() * sizeof(FaceLookupEntry));
+        DxaProfiling::set("mesh.interface-faces", _mesh.faceCount());
 
         return !operation.isCanceled();
     }
@@ -338,6 +361,7 @@ private:
 
     bool linkHalfedges(ProgressingTask& operation)
     {
+        DxaProfiling::Scope linkingTiming("mesh.halfedge-linking");
         operation.setProgressMaximum(_tetrahedraFaceList.size());
 
 #ifdef OVITO_DEBUG
@@ -400,8 +424,10 @@ private:
                 faceVerts[i] = _tessellation.vertexIndex(_tessellation.cellVertex(cell, vertexIndex));
             }
             reorderFaceVertices(faceVerts);
-            if(auto item = _faceLookupMap.find(faceVerts); item != _faceLookupMap.end())
-                return item->second;
+            const auto item = std::lower_bound(_faceLookup.cbegin(), _faceLookup.cend(), faceVerts,
+                [](const FaceLookupEntry& entry, const std::array<size_t,3>& vertices) { return entry.vertices < vertices; });
+            if(item != _faceLookup.cend() && item->vertices == faceVerts)
+                return item->face;
             else
                 return SurfaceMesh::InvalidIndex;
         }
@@ -424,6 +450,10 @@ private:
     bool _flipOrientation = false;
     size_t _numFilledCells = 0;
     std::vector<std::array<SurfaceMesh::face_index, 4>> _tetrahedraFaceList;
-    std::map<std::array<size_t,3>, SurfaceMesh::face_index> _faceLookupMap;
+    struct FaceLookupEntry {
+        std::array<size_t,3> vertices;
+        SurfaceMesh::face_index face;
+    };
+    std::vector<FaceLookupEntry> _faceLookup;
 };
 }

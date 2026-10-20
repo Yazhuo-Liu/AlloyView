@@ -17,6 +17,7 @@ export const DOC_GUIDES = Object.freeze([
   { source: 'REPOSITORY_REVIEW_2026-10-19.md', page: 'repository-review-2026-10-19.html', title: 'Follow-up repository review (2026-10-19)' },
   { source: 'PERFORMANCE_IMPROVEMENTS_2026-10-20.md', page: 'performance-improvements-2026-10-20.html', title: 'Performance improvements (2026-10-20)' },
   { source: 'PERFORMANCE_T9_G3_G4.md', page: 'performance-t9-g3-g4.html', title: 'PNG export and GPU optimizations (T9/G3/G4)' },
+  { source: 'PERFORMANCE_DXA_K4.md', page: 'performance-dxa-k4.html', title: 'DXA data layout and ordered mesh lookup (K4)' },
   { source: 'TODO.md', page: 'todo.html', title: 'Improvement backlog' },
 ]);
 

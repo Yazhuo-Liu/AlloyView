@@ -98,6 +98,7 @@
     "benchmark:grains": "node scripts/benchmark-grain-pipeline.mjs",
     "benchmark:grains-shear": "node scripts/benchmark-grains-shear.mjs",
     "benchmark:dxa-tracing": "node scripts/benchmark-dxa-tracing.mjs",
+    "benchmark:dxa-k4": "node scripts/benchmark-dxa-k4.mjs",
     "benchmark:voronoi-overhead": "node scripts/benchmark-voronoi-overhead.mjs",
     "benchmark:replication-ids": "node scripts/benchmark-replication-ids.mjs",
     "benchmark:replication-cold": "node scripts/benchmark-replication-cold.mjs",

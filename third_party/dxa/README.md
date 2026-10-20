@@ -74,7 +74,11 @@ Two adaptations support it. `geometry/SurfaceMeshBuilder` restores upstream's
 `InterfaceMesh.cpp`, the `OVITO_ASSERT(false)` for a defect mesh that cannot
 be closed is replaced by an `Exception`: assertions are live in the Wasm build
 and would abort the module, whereas the entry point reports the open mesh and
-keeps the dislocation lines. The file is otherwise identical to upstream.
+keeps the dislocation lines. `InterfaceMesh.cpp` also contains optional timing
+diagnostics. The shared headless manifold builder retains its parallel boundary
+and wrapped-vector prepass and uses a compact ghost-face lookup that preserves
+the first-created face for each key. Mesh creation and callbacks remain in their
+original order; see the DXA performance documentation.
 
 `wasm/surface.cpp` reuses `geometry/` for AlloyView's alpha-shape surface
 analysis (after upstream's `ConstructSurfaceModifier` alpha-shape engine):
@@ -98,6 +102,22 @@ reloading those values through potentially aliased search/circuit state; it does
 not parallelize or skip a search because a preceding extraction had no
 dislocations. The original upstream digest remains in `UPSTREAM_SHA256SUMS`;
 `SHA256SUMS` records the adapted source.
+
+The tracer's `geometry/TracingScratch.h` retains stable record addresses while
+reusing pages between search seeds. It bounds retained pages without limiting
+the size of one search, and releases all of them when the search stage ends.
+The original queue order, explicit node-state cleanup and circuit operations
+remain unchanged.
+
+`ElasticMapping` stores the completed edge graph as contiguous adjacency rows
+and separate vector payloads. Rows preserve the original leaving-then-arriving
+order, first-seen edge direction and Worker snapshot order. Construction-only
+endpoint/link records are released before vector payload allocation.
+
+`geometry/DxaProfiling.h` provides optional, session-scoped diagnostics through
+`Module.onDxaProfile`. Timed comparisons disable the callback and collect
+diagnostics in a separate extraction; normal scientific JSON is unchanged.
+Named allocation counters describe specific buffers, not total heap usage.
 
 This version predates OVITO 3.15's low-c/a HCP correction. HCP and diamond retain
 the capabilities and limitations of the pinned release; new datasets require

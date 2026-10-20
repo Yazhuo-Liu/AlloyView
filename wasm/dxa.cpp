@@ -5,6 +5,7 @@
 #include <ovito/crystalanalysis/modifier/dxa/InterfaceMesh.h>
 #include <ovito/crystalanalysis/modifier/dxa/DislocationTracer.h>
 #include <geometry/DelaunayTessellation.h>
+#include <geometry/DxaProfiling.h>
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
@@ -19,8 +20,16 @@ EM_JS(void, alloy_dxa_progress, (const char* phase, int completed, int total), {
     Module.onDxaProgress(UTF8ToString(phase), completed, total);
   }
 });
+EM_JS(int, alloy_dxa_profile_requested, (), {
+  return typeof Module.onDxaProfile === 'function';
+});
+EM_JS(void, alloy_dxa_emit_profile, (const char* json), {
+  if (typeof Module.onDxaProfile === 'function') Module.onDxaProfile(JSON.parse(UTF8ToString(json)));
+});
 #else
 static void alloy_dxa_progress(const char*, int, int) {}
+static int alloy_dxa_profile_requested() { return 0; }
+static void alloy_dxa_emit_profile(const char*) {}
 #endif
 
 using namespace Ovito;
@@ -51,6 +60,22 @@ void vectorJson(std::ostream& out, const Vector3& v) {
 }
 void pointJson(std::ostream& out, const Point3& p) {
     out << '[' << p.x() << ',' << p.y() << ',' << p.z() << ']';
+}
+void emitProfile(const DxaProfiling::Profile& profile) {
+    if(!profile.enabled) return;
+    std::ostringstream out;
+    out << std::setprecision(17) << "{\"timingsMs\":{";
+    for(size_t index = 0; index < profile.timingCount; ++index) {
+        if(index) out << ',';
+        out << '\"' << profile.timings[index].name << "\":" << profile.timings[index].value;
+    }
+    out << "},\"counters\":{";
+    for(size_t index = 0; index < profile.counterCount; ++index) {
+        if(index) out << ',';
+        out << '\"' << profile.counters[index].name << "\":" << profile.counters[index].value;
+    }
+    out << "},\"overflow\":" << (profile.overflow ? "true" : "false") << '}';
+    alloy_dxa_emit_profile(out.str().c_str());
 }
 void requireStage(bool success) {
     if (!success || Task::current()->isCanceled()) throw std::runtime_error("DXA analysis was canceled.");
@@ -101,6 +126,7 @@ __attribute__((noinline)) bool packTetrahedra(const DelaunayTessellation& tessel
 // One whole-frame CPU pipeline retained in the reusable Wasm heap between
 // topology preparation and interface construction/tracing. Pthreads share it.
 struct DxaSession {
+    DxaProfiling::Profile profile;
     SimulationCellObject cell;
     PropertyPtr positions, structures;
     std::unique_ptr<StructureAnalysis> structure;
@@ -126,6 +152,7 @@ struct DxaSession {
         positions(std::make_shared<PropertyStorage>(atomCount, sizeof(Point3))),
         structures(std::make_shared<PropertyStorage>(atomCount, sizeof(int32_t))),
         count(atomCount), lattice(latticeType), smoothing(smooth), coarsening(interval) {
+        profile.enabled = alloy_dxa_profile_requested() != 0;
         std::vector<Matrix3> preferredCrystalOrientations;
         if (lattice == StructureAnalysis::LATTICE_FCC ||
                 lattice == StructureAnalysis::LATTICE_BCC ||
@@ -432,6 +459,7 @@ int alloy_dxa_begin(const double* coordinates, int count,
     if(!alloy_dxa_prepare(coordinates, count, cellData, pbcBits, lattice, trial,
             stretch, perfectOnly, smoothing, coarsening)) return 0;
     try {
+        DxaProfiling::Attach profiling(activeSession->profile);
         alloy_dxa_progress("Identify local crystal structures", 0, 11);
         requireStage(activeSession->structure->identifyStructures());
         buildCpuMapping(*activeSession);
@@ -447,6 +475,7 @@ int alloy_dxa_import_local(const int32_t* types, const int32_t* neighbors,
         requireStage(true);
         if(!activeSession || activeSession->mappingReady || count < 1 || width < 1)
             throw std::runtime_error("CPU DXA has no prepared local-analysis workspace.");
+        DxaProfiling::Attach profiling(activeSession->profile);
         requireStage(activeSession->structure->importLocalStructures(types, neighbors,
             count, width, maximumDistance));
         buildCpuMapping(*activeSession);
@@ -522,6 +551,7 @@ const char* alloy_dxa_finish() {
         requireStage(true);
         if (!activeSession) throw std::runtime_error("DXA has no active staged analysis.");
         auto& session = *activeSession;
+        DxaProfiling::Attach profiling(session.profile);
         if (!session.mappingReady) throw std::runtime_error("DXA crystal mapping has not been constructed.");
         auto& cell = session.cell;
         auto& structure = *session.structure;
@@ -639,6 +669,7 @@ const char* alloy_dxa_finish() {
         }
         resultJson = out.str();
         alloy_dxa_progress("DXA complete", 11, 11);
+        emitProfile(session.profile);
         return resultJson.c_str();
 
     } catch (...) { saveCurrentError(true); }

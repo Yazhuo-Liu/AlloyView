@@ -877,6 +877,10 @@ this heap and divide independent work; they do not copy a full analysis per
 atom. Tessellation-edge candidates and independent lattice-path searches also
 run in parallel, with deduplication and graph-cache updates committed in their
 original order. Burgers tracing and junction construction retain ordered work.
+Compact edge storage, reusable search memory and contiguous ghost-face lookup
+reduce repeated data handling while preserving traversal order. Worker and
+Wasm prewarming remain enabled. See the [K4 report](PERFORMANCE_DXA_K4.md)
+for implementation and validation details.
 Without isolation, sufficiently large jobs can reuse the existing CPU
 Worker pool for local identification and tetrahedron classification. One
 coordinator retains the global network; private stage Workers receive bounded

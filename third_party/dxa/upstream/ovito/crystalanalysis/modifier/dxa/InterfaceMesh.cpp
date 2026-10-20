@@ -24,6 +24,7 @@
 #include <ovito/delaunay/ManifoldConstructionHelper.h>
 #include <ovito/core/utilities/concurrent/Task.h>
 #include "InterfaceMesh.h"
+#include <geometry/DxaProfiling.h>
 #include "DislocationTracer.h"
 #include "DislocationAnalysisModifier.h"
 #include "DislocationAnalysisEngine.h"
@@ -123,7 +124,10 @@ bool InterfaceMesh::createMesh(FloatType maximumNeighborDistance, BufferReadAcce
     operation.nextProgressSubStep();
 
     // Make sure each vertex is only part of a single manifold.
+    DxaProfiling::Scope manifoldTiming("mesh.manifold-split");
     makeManifold();
+    manifoldTiming.stop();
+    DxaProfiling::Scope payloadTiming("mesh.topology-copy");
 
     // Allocate the internal per-vertex and per-face data arrays.
     _faces.resize(faceCount());

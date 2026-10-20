@@ -24,6 +24,8 @@
 #include <ovito/core/utilities/concurrent/Task.h>
 #include "DislocationTracer.h"
 #include "InterfaceMesh.h"
+#include "geometry/TracingScratch.h"
+#include "geometry/DxaProfiling.h"
 
 namespace Ovito::CrystalAnalysis {
 
@@ -219,7 +221,8 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
     int searchDepth =  (maxBurgersCircuitSize - 1) / 2;
     OVITO_ASSERT(searchDepth >= 1);
 
-    MemoryPool<BurgersCircuitSearchStruct> structPool;
+    DxaProfiling::Scope searchProfile("tracing.primarySearch");
+    TracingScratch<BurgersCircuitSearchStruct> structPool(DxaProfiling::enabled());
 
     operation.setProgressMaximum(mesh().vertexCount());
     int progressCounter = 0;
@@ -328,9 +331,20 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
             s->node->burgersSearchStruct = nullptr;
             s->node->visited = false;
         }
-        structPool.clear(true);
+        structPool.reset();
     }
 
+    if(DxaProfiling::enabled()) {
+        const auto& stats = structPool.statistics();
+        DxaProfiling::add("tracing.scratch.searches", stats.searches);
+        DxaProfiling::add("tracing.scratch.pageAllocations", stats.pageAllocations);
+        DxaProfiling::add("tracing.scratch.pageReuses", stats.pageReuses);
+        DxaProfiling::add("tracing.scratch.releasedPages", stats.releasedPages);
+        DxaProfiling::maximum("tracing.scratch.peakRecords", stats.peakRecords);
+        DxaProfiling::maximum("tracing.scratch.peakBytes", stats.peakBytes);
+        DxaProfiling::maximum("tracing.scratch.retainedBytes", stats.peakRetainedBytes);
+        DxaProfiling::maximum("tracing.scratch.recordBytes", sizeof(BurgersCircuitSearchStruct));
+    }
     return !operation.isCanceled();
 }
 

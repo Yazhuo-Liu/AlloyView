@@ -1,0 +1,1516 @@
+{
+  "complete": true,
+  "generatedAt": "2026-10-20T18:51:07.588Z",
+  "baseline": "ea9245d0ea339ec0530d81271c53e61d3bf1e7c0",
+  "command": [
+    "/workspace/AlloyView/scripts/benchmark-dxa-k4.mjs",
+    "--baseline-ref",
+    "ea9245d",
+    "--kernel",
+    "threaded",
+    "--threads",
+    "4",
+    "--repetitions",
+    "3",
+    "--diagnostics",
+    "yes",
+    "--output",
+    "/tmp/alloyview-k4-final-four-thread.json"
+  ],
+  "runtime": "v24.19.0",
+  "cpuModel": "AMD EPYC 9V74 80-Core Processor",
+  "logicalCpus": 4,
+  "cpuQuota": "400000 100000",
+  "repetitions": 3,
+  "warmupsPerModuleAndFixture": 1,
+  "diagnosticsOnly": false,
+  "parameters": {
+    "circuit": 14,
+    "stretch": 9
+  },
+  "requestedDownstreamThreads": 4,
+  "baselineDirectory": "git archive artifacts",
+  "currentDirectory": "/workspace/AlloyView/src/analysis",
+  "protocol": [
+    "One warmup per retained module and fixture; alternating baseline/current measured order.",
+    "Serial local analysis, clusters and Delaunay in both versions. Threaded kernels use the requested count only from edge construction onward, including mesh classification and preparation.",
+    "Complete native extraction includes native graph release; excludes input upload, startup, JSON parsing and hash comparison.",
+    "Every complete scientific result (all labels, clusters, points, junctions and Burgers vectors) has an exact SHA-256 match. Only parallel-work counters are omitted.",
+    "Module.onDxaProfile is null in every timed run. Optional inner timings/counters come from separate untimed extractions checked against the same scientific hash.",
+    "Wasm memory values are retained heap capacities, not live allocation or browser/Worker peak RSS. Diagnostic byte counters describe only named data structures.",
+    "This fixed-topology protocol does not measure whole-pipeline multi-threaded Delaunay performance."
+  ],
+  "kernels": [
+    {
+      "mode": "threaded",
+      "downstreamThreads": 4,
+      "artifacts": {
+        "baseline": {
+          "dxa-kernel-threaded.mjs": "ac7094a94f96e57d60a753150352dc589a3df2c73acf0d229fc943ed47bdf3cf",
+          "dxa-kernel-threaded.wasm": "d900bd094de5b946706e54b09119a838958d0cef0de3e22fa208eb81c79091e9"
+        },
+        "current": {
+          "dxa-kernel-threaded.mjs": "da4339df2e010055636871f3e2c835069ee2d9b6f643356b210e399e758c77e0",
+          "dxa-kernel-threaded.wasm": "cfba2de79f5ce541c5839c8774b67c20e0ac68ca6ef93d58db10e1d867a6ef72"
+        }
+      },
+      "datasets": [
+        {
+          "fixture": "hea",
+          "atoms": 28800,
+          "replication": [
+            1,
+            1,
+            1
+          ],
+          "runs": [
+            {
+              "version": "baseline",
+              "elapsedMs": 525.2546079999997,
+              "scienceSha256": "46ed8ec35fd0d88ea1a6b51a4e7c9b5ebd5122b4e93a9a6a51bd2fdbcbcdd470",
+              "heapCapacityBytesBefore": 48365568,
+              "heapCapacityBytesAfter": 48365568,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 100.92347699999982
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 6.9930560000002515
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 0.9940699999997378
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 236.42285500000025
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 42.0951699999996
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.3660530000001927
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 24.80999900000006
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 50.06485999999995
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 54.827268000000004
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.018036999999822
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.008864000000357919
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 7.408511999999973
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.042734999999993306
+                }
+              ]
+            },
+            {
+              "version": "current",
+              "elapsedMs": 514.0843669999999,
+              "scienceSha256": "46ed8ec35fd0d88ea1a6b51a4e7c9b5ebd5122b4e93a9a6a51bd2fdbcbcdd470",
+              "heapCapacityBytesBefore": 48365568,
+              "heapCapacityBytesAfter": 48365568,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 102.64118099999996
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 7.833493999999973
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 1.109925000000203
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 236.07666199999994
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 42.70832599999994
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.3783809999999903
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 20.181732999999895
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 42.32834200000025
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 53.21351299999969
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.0181470000002264
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.009944999999788706
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 7.26119000000017
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.04544899999973495
+                }
+              ]
+            },
+            {
+              "version": "current",
+              "elapsedMs": 513.3321109999997,
+              "scienceSha256": "46ed8ec35fd0d88ea1a6b51a4e7c9b5ebd5122b4e93a9a6a51bd2fdbcbcdd470",
+              "heapCapacityBytesBefore": 48365568,
+              "heapCapacityBytesAfter": 48365568,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 101.06080500000007
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 6.951833000000079
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 0.9398080000000846
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 240.24455399999988
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 41.682586999999785
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.3906200000001263
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 20.460003000000142
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 40.36214399999972
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 53.84291300000041
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.01818699999967066
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.009364000000005035
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 7.084313000000293
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.0474819999999454
+                }
+              ]
+            },
+            {
+              "version": "baseline",
+              "elapsedMs": 534.2491350000005,
+              "scienceSha256": "46ed8ec35fd0d88ea1a6b51a4e7c9b5ebd5122b4e93a9a6a51bd2fdbcbcdd470",
+              "heapCapacityBytesBefore": 48365568,
+              "heapCapacityBytesAfter": 48365568,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 102.21857200000022
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 8.201129000000037
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 0.9583269999998265
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 233.8481179999999
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 41.00537500000064
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.35904199999913544
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 28.905141000000185
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 54.76649600000019
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 57.00471500000003
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.018788000000313332
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.025107999999818276
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 6.674915999999939
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.03735599999981787
+                }
+              ]
+            },
+            {
+              "version": "baseline",
+              "elapsedMs": 542.7309069999992,
+              "scienceSha256": "46ed8ec35fd0d88ea1a6b51a4e7c9b5ebd5122b4e93a9a6a51bd2fdbcbcdd470",
+              "heapCapacityBytesBefore": 48365568,
+              "heapCapacityBytesAfter": 48365568,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 98.8787710000006
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 8.097611999999572
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 0.9798900000005233
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 241.32934999999998
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 45.329342
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.4126929999993081
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 30.552287000000433
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 53.4661930000002
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 56.50615299999936
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.017496000000392087
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.011496999999508262
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 6.943742000000384
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.038016999999854306
+                }
+              ]
+            },
+            {
+              "version": "current",
+              "elapsedMs": 510.5855649999994,
+              "scienceSha256": "46ed8ec35fd0d88ea1a6b51a4e7c9b5ebd5122b4e93a9a6a51bd2fdbcbcdd470",
+              "heapCapacityBytesBefore": 48365568,
+              "heapCapacityBytesAfter": 48365568,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 100.45175500000005
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 7.482153999999355
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 0.9197580000000016
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 240.49261800000022
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 41.9595360000003
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.26470900000003894
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 19.202925999999934
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 40.60944699999982
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 51.884516000000076
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.017036000000189233
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.008902999999918393
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 6.9473870000001625
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.12092299999949319
+                }
+              ]
+            }
+          ],
+          "diagnostics": {
+            "baseline": {
+              "available": false,
+              "scienceSha256": "46ed8ec35fd0d88ea1a6b51a4e7c9b5ebd5122b4e93a9a6a51bd2fdbcbcdd470",
+              "diagnosticElapsedMs": 538.9278460000005,
+              "heapCapacityBytesBefore": 48365568,
+              "heapCapacityBytesAfter": 48365568
+            },
+            "current": {
+              "available": true,
+              "scienceSha256": "46ed8ec35fd0d88ea1a6b51a4e7c9b5ebd5122b4e93a9a6a51bd2fdbcbcdd470",
+              "diagnosticElapsedMs": 520.2933799999992,
+              "heapCapacityBytesBefore": 48365568,
+              "heapCapacityBytesAfter": 48365568,
+              "timingsMs": {
+                "delaunay.initialization": 0.008057,
+                "delaunay.inputPoints": 0.8125,
+                "delaunay.ghostPoints": 0.259522,
+                "delaunay.generatorSetup": 0.010254,
+                "delaunay.construct": 233.451172,
+                "delaunay.classifyGhostCells": 3.632813,
+                "delaunay.numberLocalCells": 1.487549,
+                "edges.candidate_masks": 3.638184,
+                "edges.ordered_construction": 37.905518,
+                "edges.compact_adjacency": 4.196777,
+                "mesh.classification": 27.656738,
+                "mesh.cell-numbering": 1.006348,
+                "mesh.facet-preparation": 3.342529,
+                "mesh.face-batch-admission": 0.267823,
+                "mesh.facet-commit": 5.714356,
+                "mesh.ghost-face-lookup": 0.280029,
+                "mesh.halfedge-linking": 3.761231,
+                "mesh.manifold-split": 0.12378,
+                "mesh.topology-copy": 0.083252,
+                "tracing.primarySearch": 50.726562
+              },
+              "counters": {
+                "delaunay.primaryPoints": 28800,
+                "delaunay.totalPoints": 44069,
+                "delaunay.totalCells": 263703,
+                "delaunay.localCells": 172625,
+                "delaunay.pointCapacityBytes": 1572864,
+                "delaunay.particleIndexCapacityBytes": 262144,
+                "delaunay.cellInfoCapacityBytes": 4219248,
+                "edges.count": 201420,
+                "edges.payload_bytes": 6445440,
+                "edges.adjacency_bytes": 3222720,
+                "edges.offset_bytes": 230404,
+                "edges.retained_bytes": 9898564,
+                "edges.build_peak_bytes": 9898564,
+                "mesh.facet-mask-bytes": 165873,
+                "mesh.face-batch-admission-cells": 165873,
+                "mesh.face-batch-admitted": 0,
+                "mesh.face-plan-bytes": 0,
+                "mesh.ghost-face-lookup-bytes": 131072,
+                "mesh.interface-faces": 4510,
+                "tracing.scratch.searches": 13530,
+                "tracing.scratch.pageAllocations": 6,
+                "tracing.scratch.pageReuses": 13524,
+                "tracing.scratch.releasedPages": 0,
+                "tracing.scratch.peakRecords": 127,
+                "tracing.scratch.peakBytes": 122880,
+                "tracing.scratch.retainedBytes": 122880,
+                "tracing.scratch.recordBytes": 120
+              },
+              "overflow": false
+            }
+          },
+          "summary": {
+            "baseline": {
+              "elapsedMs": 534.2491350000005,
+              "heapCapacityBytes": 48365568,
+              "stageMediansMs": {
+                "Identify local crystal structures": 100.92347699999982,
+                "Build crystal clusters": 8.097611999999572,
+                "Connect crystal reference frames": 0.9798900000005233,
+                "Periodic Delaunay tessellation": 236.42285500000025,
+                "Build tessellation edges": 42.0951699999996,
+                "Assign crystal clusters": 0.3660530000001927,
+                "Map edges to the ideal lattice": 28.905141000000185,
+                "Construct crystal interface mesh": 53.4661930000002,
+                "Trace Burgers circuits and dislocation lines": 56.50615299999936,
+                "Connect dislocation junctions": 0.018036999999822,
+                "Smooth and coarsen dislocation lines": 0.011496999999508262,
+                "Serialize dislocation network": 6.943742000000384,
+                "DXA complete": 0.038016999999854306
+              }
+            },
+            "current": {
+              "elapsedMs": 513.3321109999997,
+              "heapCapacityBytes": 48365568,
+              "stageMediansMs": {
+                "Identify local crystal structures": 101.06080500000007,
+                "Build crystal clusters": 7.482153999999355,
+                "Connect crystal reference frames": 0.9398080000000846,
+                "Periodic Delaunay tessellation": 240.24455399999988,
+                "Build tessellation edges": 41.9595360000003,
+                "Assign crystal clusters": 0.3783809999999903,
+                "Map edges to the ideal lattice": 20.181732999999895,
+                "Construct crystal interface mesh": 40.60944699999982,
+                "Trace Burgers circuits and dislocation lines": 53.21351299999969,
+                "Connect dislocation junctions": 0.0181470000002264,
+                "Smooth and coarsen dislocation lines": 0.009364000000005035,
+                "Serialize dislocation network": 7.084313000000293,
+                "DXA complete": 0.0474819999999454
+              }
+            }
+          }
+        },
+        {
+          "fixture": "fe",
+          "atoms": 60229,
+          "replication": [
+            1,
+            1,
+            1
+          ],
+          "runs": [
+            {
+              "version": "baseline",
+              "elapsedMs": 1407.8037949999998,
+              "scienceSha256": "625d772ca60c7e854c90e46025bd9f25370764cb1814fdf7e1566baf70c78d80",
+              "heapCapacityBytesBefore": 100466688,
+              "heapCapacityBytesAfter": 100466688,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 374.16087999999945
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 24.020629000000554
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 2.2750340000002325
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 702.7336999999989
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 97.73360400000092
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.39959300000009534
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 46.068357000000105
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 144.5375869999989
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 0.17462300000079267
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.004426999999850523
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.006159000000479864
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 15.00092399999994
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.03136699999959092
+                }
+              ]
+            },
+            {
+              "version": "current",
+              "elapsedMs": 1436.5433539999995,
+              "scienceSha256": "625d772ca60c7e854c90e46025bd9f25370764cb1814fdf7e1566baf70c78d80",
+              "heapCapacityBytesBefore": 87031808,
+              "heapCapacityBytesAfter": 87031808,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 401.8514619999987
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 27.80914699999994
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 2.370198000000528
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 718.5129049999996
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 102.41835499999979
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.41527700000006007
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 36.92350400000032
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 131.1614210000007
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 0.1810429999986809
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.0043570000016188715
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.005748999999923399
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 14.357360999998491
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.031338000000687316
+                }
+              ]
+            },
+            {
+              "version": "current",
+              "elapsedMs": 1483.0582449999984,
+              "scienceSha256": "625d772ca60c7e854c90e46025bd9f25370764cb1814fdf7e1566baf70c78d80",
+              "heapCapacityBytesBefore": 87031808,
+              "heapCapacityBytesAfter": 87031808,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 401.1646660000006
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 23.05043299999852
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 2.315164999999979
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 756.6410480000013
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 129.21904899999936
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.39651899999989837
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 34.01101700000072
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 122.54956200000015
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 0.1200009999993199
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.0035759999991569202
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.006219000000783126
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 13.183139999999185
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.02263400000083493
+                }
+              ]
+            },
+            {
+              "version": "baseline",
+              "elapsedMs": 1416.8815610000001,
+              "scienceSha256": "625d772ca60c7e854c90e46025bd9f25370764cb1814fdf7e1566baf70c78d80",
+              "heapCapacityBytesBefore": 100466688,
+              "heapCapacityBytesAfter": 100466688,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 366.958168000001
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 24.98704600000019
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 2.3426959999997052
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 694.5867309999994
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 108.94273299999986
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.38353900000038266
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 37.30897600000026
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 166.29033600000002
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 0.13896999999997206
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.004306999999243999
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.005979000001389068
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 14.457431999999244
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.032509000000572996
+                }
+              ]
+            },
+            {
+              "version": "baseline",
+              "elapsedMs": 1427.0363130000005,
+              "scienceSha256": "625d772ca60c7e854c90e46025bd9f25370764cb1814fdf7e1566baf70c78d80",
+              "heapCapacityBytesBefore": 100466688,
+              "heapCapacityBytesAfter": 100466688,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 376.2975499999993
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 23.517769000000044
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 2.418050000000221
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 704.5886179999998
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 97.44010999999955
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.4345659999999043
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 37.56744600000093
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 170.58544000000074
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 0.15705700000034994
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.004205999997793697
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.0061390000009851065
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 13.58846099999937
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.03465200000209734
+                }
+              ]
+            },
+            {
+              "version": "current",
+              "elapsedMs": 1418.0775700000013,
+              "scienceSha256": "625d772ca60c7e854c90e46025bd9f25370764cb1814fdf7e1566baf70c78d80",
+              "heapCapacityBytesBefore": 87031808,
+              "heapCapacityBytesAfter": 87031808,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 377.32711500000005
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 23.007458000000042
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 2.687007000000449
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 695.133095000001
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 105.93984999999884
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 0.405071000001044
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 32.846379999999044
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 167.15509200000088
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 0.12299500000153785
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.0034959999975399114
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.006279000001086388
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 13.054955999999947
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.02035999999861815
+                }
+              ]
+            }
+          ],
+          "diagnostics": {
+            "baseline": {
+              "available": false,
+              "scienceSha256": "625d772ca60c7e854c90e46025bd9f25370764cb1814fdf7e1566baf70c78d80",
+              "diagnosticElapsedMs": 1499.551873999997,
+              "heapCapacityBytesBefore": 100466688,
+              "heapCapacityBytesAfter": 100466688
+            },
+            "current": {
+              "available": true,
+              "scienceSha256": "625d772ca60c7e854c90e46025bd9f25370764cb1814fdf7e1566baf70c78d80",
+              "diagnosticElapsedMs": 1377.371264999998,
+              "heapCapacityBytesBefore": 87031808,
+              "heapCapacityBytesAfter": 87031808,
+              "timingsMs": {
+                "delaunay.initialization": 0.023437,
+                "delaunay.inputPoints": 1.863037,
+                "delaunay.ghostPoints": 4.967774,
+                "delaunay.generatorSetup": 0.011963,
+                "delaunay.construct": 666.404296,
+                "delaunay.classifyGhostCells": 9.782227,
+                "delaunay.numberLocalCells": 4.23169,
+                "edges.candidate_masks": 10.57959,
+                "edges.ordered_construction": 76.464111,
+                "edges.compact_adjacency": 9.292725,
+                "mesh.classification": 106.084717,
+                "mesh.cell-numbering": 2.381836,
+                "mesh.facet-preparation": 13.352051,
+                "mesh.face-batch-admission": 0.57666,
+                "mesh.facet-commit": 8.859619,
+                "mesh.ghost-face-lookup": 0.023438,
+                "mesh.halfedge-linking": 1.421875,
+                "mesh.manifold-split": 0.010498,
+                "mesh.topology-copy": 0.009521,
+                "tracing.primarySearch": 0.114503
+              },
+              "counters": {
+                "delaunay.primaryPoints": 60229,
+                "delaunay.totalPoints": 126334,
+                "delaunay.totalCells": 760983,
+                "delaunay.localCells": 361374,
+                "delaunay.pointCapacityBytes": 3145728,
+                "delaunay.particleIndexCapacityBytes": 524288,
+                "delaunay.cellInfoCapacityBytes": 12175728,
+                "edges.count": 421603,
+                "edges.payload_bytes": 13491296,
+                "edges.adjacency_bytes": 6745648,
+                "edges.offset_bytes": 481836,
+                "edges.retained_bytes": 20718780,
+                "edges.build_peak_bytes": 20718780,
+                "mesh.facet-mask-bytes": 361194,
+                "mesh.face-batch-admission-cells": 361194,
+                "mesh.face-batch-admitted": 0,
+                "mesh.face-plan-bytes": 0,
+                "mesh.ghost-face-lookup-bytes": 8192,
+                "mesh.interface-faces": 348,
+                "tracing.scratch.searches": 1044,
+                "tracing.scratch.pageAllocations": 6,
+                "tracing.scratch.pageReuses": 1038,
+                "tracing.scratch.releasedPages": 0,
+                "tracing.scratch.peakRecords": 9,
+                "tracing.scratch.peakBytes": 122880,
+                "tracing.scratch.retainedBytes": 122880,
+                "tracing.scratch.recordBytes": 120
+              },
+              "overflow": false
+            }
+          },
+          "summary": {
+            "baseline": {
+              "elapsedMs": 1416.8815610000001,
+              "heapCapacityBytes": 100466688,
+              "stageMediansMs": {
+                "Identify local crystal structures": 374.16087999999945,
+                "Build crystal clusters": 24.020629000000554,
+                "Connect crystal reference frames": 2.3426959999997052,
+                "Periodic Delaunay tessellation": 702.7336999999989,
+                "Build tessellation edges": 97.73360400000092,
+                "Assign crystal clusters": 0.39959300000009534,
+                "Map edges to the ideal lattice": 37.56744600000093,
+                "Construct crystal interface mesh": 166.29033600000002,
+                "Trace Burgers circuits and dislocation lines": 0.15705700000034994,
+                "Connect dislocation junctions": 0.004306999999243999,
+                "Smooth and coarsen dislocation lines": 0.0061390000009851065,
+                "Serialize dislocation network": 14.457431999999244,
+                "DXA complete": 0.032509000000572996
+              }
+            },
+            "current": {
+              "elapsedMs": 1436.5433539999995,
+              "heapCapacityBytes": 87031808,
+              "stageMediansMs": {
+                "Identify local crystal structures": 401.1646660000006,
+                "Build crystal clusters": 23.05043299999852,
+                "Connect crystal reference frames": 2.370198000000528,
+                "Periodic Delaunay tessellation": 718.5129049999996,
+                "Build tessellation edges": 105.93984999999884,
+                "Assign crystal clusters": 0.405071000001044,
+                "Map edges to the ideal lattice": 34.01101700000072,
+                "Construct crystal interface mesh": 131.1614210000007,
+                "Trace Burgers circuits and dislocation lines": 0.12299500000153785,
+                "Connect dislocation junctions": 0.0035759999991569202,
+                "Smooth and coarsen dislocation lines": 0.006219000000783126,
+                "Serialize dislocation network": 13.183139999999185,
+                "DXA complete": 0.02263400000083493
+              }
+            }
+          }
+        },
+        {
+          "fixture": "nigb",
+          "atoms": 259808,
+          "replication": [
+            1,
+            1,
+            2
+          ],
+          "runs": [
+            {
+              "version": "baseline",
+              "elapsedMs": 10053.917844999996,
+              "scienceSha256": "29565cc3270f9fa7e5be839912a1a07128e2ed4bf2f697008854dd5e77f1087a",
+              "heapCapacityBytesBefore": 480116736,
+              "heapCapacityBytesAfter": 480116736,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 1434.2301320000042
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 86.35168500000145
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 8.94826699999976
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 5606.513929000001
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 571.1926989999993
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 2.5411949999979697
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 342.6508160000012
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 1117.560540999999
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 821.6340800000035
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.08157299999584211
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.0052280000018072315
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 60.51246099999844
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.05359100000350736
+                }
+              ]
+            },
+            {
+              "version": "current",
+              "elapsedMs": 9662.531091999997,
+              "scienceSha256": "29565cc3270f9fa7e5be839912a1a07128e2ed4bf2f697008854dd5e77f1087a",
+              "heapCapacityBytesBefore": 476119040,
+              "heapCapacityBytesAfter": 476119040,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 1420.789896999995
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 82.70319800000289
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 8.512859000002209
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 5387.023148999993
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 639.7192270000014
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 2.039228000001458
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 323.0612390000024
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 952.6446319999959
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 785.6167690000002
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.019089000001258682
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.009504000001470558
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 58.87739399999555
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.04171300000598421
+                }
+              ]
+            },
+            {
+              "version": "current",
+              "elapsedMs": 9686.847267000005,
+              "scienceSha256": "29565cc3270f9fa7e5be839912a1a07128e2ed4bf2f697008854dd5e77f1087a",
+              "heapCapacityBytesBefore": 476119040,
+              "heapCapacityBytesAfter": 476119040,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 1364.058216000005
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 78.65247300000192
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 8.465087999997195
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 5511.412818000004
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 586.1129159999982
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 2.0251859999989392
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 318.88044799999625
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 971.395491000003
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 785.7987439999997
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.02135199999611359
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.0031949999975040555
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 58.510931000011624
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.046979999999166466
+                }
+              ]
+            },
+            {
+              "version": "baseline",
+              "elapsedMs": 10189.363434999992,
+              "scienceSha256": "29565cc3270f9fa7e5be839912a1a07128e2ed4bf2f697008854dd5e77f1087a",
+              "heapCapacityBytesBefore": 480116736,
+              "heapCapacityBytesAfter": 480116736,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 1420.1235030000098
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 85.58216299999913
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 8.855907999997726
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 5593.380795999998
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 581.1459679999971
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 2.6517319999984466
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 365.2727150000137
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 1227.3015039999882
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 842.8726940000051
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.018517999997129664
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.0029440000071190298
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 60.47735799998918
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.05380100000184029
+                }
+              ]
+            },
+            {
+              "version": "baseline",
+              "elapsedMs": 10098.980098999993,
+              "scienceSha256": "29565cc3270f9fa7e5be839912a1a07128e2ed4bf2f697008854dd5e77f1087a",
+              "heapCapacityBytesBefore": 480116736,
+              "heapCapacityBytesAfter": 480116736,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 1436.8705499999924
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 83.14592599999742
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 9.145945000011125
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 5451.892952999988
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 561.2357630000042
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 2.4655020000063814
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 362.97191799999564
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 1239.050191000002
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 883.8984909999999
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.020029999999678694
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.0031549999985145405
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 66.64896400000725
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.0543819999875268
+                }
+              ]
+            },
+            {
+              "version": "current",
+              "elapsedMs": 10035.786114000002,
+              "scienceSha256": "29565cc3270f9fa7e5be839912a1a07128e2ed4bf2f697008854dd5e77f1087a",
+              "heapCapacityBytesBefore": 476119040,
+              "heapCapacityBytesAfter": 476119040,
+              "stages": [
+                {
+                  "phase": "Identify local crystal structures",
+                  "ms": 1455.9915809999948
+                },
+                {
+                  "phase": "Build crystal clusters",
+                  "ms": 88.05800000000454
+                },
+                {
+                  "phase": "Connect crystal reference frames",
+                  "ms": 8.87893299999996
+                },
+                {
+                  "phase": "Periodic Delaunay tessellation",
+                  "ms": 5736.398899000007
+                },
+                {
+                  "phase": "Build tessellation edges",
+                  "ms": 584.406232999987
+                },
+                {
+                  "phase": "Assign crystal clusters",
+                  "ms": 1.8625910000118893
+                },
+                {
+                  "phase": "Map edges to the ideal lattice",
+                  "ms": 322.0163249999896
+                },
+                {
+                  "phase": "Construct crystal interface mesh",
+                  "ms": 897.6374440000072
+                },
+                {
+                  "phase": "Trace Burgers circuits and dislocation lines",
+                  "ms": 874.5337279999949
+                },
+                {
+                  "phase": "Connect dislocation junctions",
+                  "ms": 0.018297999995411374
+                },
+                {
+                  "phase": "Smooth and coarsen dislocation lines",
+                  "ms": 0.0027040000131819397
+                },
+                {
+                  "phase": "Serialize dislocation network",
+                  "ms": 64.28262399999949
+                },
+                {
+                  "phase": "DXA complete",
+                  "ms": 0.04282399998919573
+                }
+              ]
+            }
+          ],
+          "diagnostics": {
+            "baseline": {
+              "available": false,
+              "scienceSha256": "29565cc3270f9fa7e5be839912a1a07128e2ed4bf2f697008854dd5e77f1087a",
+              "diagnosticElapsedMs": 10084.171596,
+              "heapCapacityBytesBefore": 480116736,
+              "heapCapacityBytesAfter": 480116736
+            },
+            "current": {
+              "available": true,
+              "scienceSha256": "29565cc3270f9fa7e5be839912a1a07128e2ed4bf2f697008854dd5e77f1087a",
+              "diagnosticElapsedMs": 9767.83632100001,
+              "heapCapacityBytesBefore": 476119040,
+              "heapCapacityBytesAfter": 476119040,
+              "timingsMs": {
+                "delaunay.initialization": 0.007813,
+                "delaunay.inputPoints": 7.599365,
+                "delaunay.ghostPoints": 34.830078,
+                "delaunay.generatorSetup": 0.014892,
+                "delaunay.construct": 5376.478028,
+                "delaunay.classifyGhostCells": 75.676026,
+                "delaunay.numberLocalCells": 30.800537,
+                "edges.candidate_masks": 56.995606,
+                "edges.ordered_construction": 460.178223,
+                "edges.compact_adjacency": 85.24414,
+                "mesh.classification": 722.880615,
+                "mesh.cell-numbering": 17.613282,
+                "mesh.facet-preparation": 102.95874,
+                "mesh.face-batch-admission": 2.455811,
+                "mesh.facet-commit": 66.966797,
+                "mesh.ghost-face-lookup": 1.585205,
+                "mesh.halfedge-linking": 41.012207,
+                "mesh.manifold-split": 1.560791,
+                "mesh.topology-copy": 0.506104,
+                "tracing.primarySearch": 830.218505
+              },
+              "counters": {
+                "delaunay.primaryPoints": 259808,
+                "delaunay.totalPoints": 857324,
+                "delaunay.totalCells": 5161691,
+                "delaunay.localCells": 1560677,
+                "delaunay.pointCapacityBytes": 25165824,
+                "delaunay.particleIndexCapacityBytes": 4194304,
+                "delaunay.cellInfoCapacityBytes": 82587056,
+                "edges.count": 1820286,
+                "edges.payload_bytes": 58249152,
+                "edges.adjacency_bytes": 29124576,
+                "edges.offset_bytes": 2078468,
+                "edges.retained_bytes": 89452196,
+                "edges.build_peak_bytes": 89452196,
+                "mesh.facet-mask-bytes": 1518793,
+                "mesh.face-batch-admission-cells": 1518793,
+                "mesh.face-batch-admitted": 0,
+                "mesh.face-plan-bytes": 0,
+                "mesh.ghost-face-lookup-bytes": 524288,
+                "mesh.interface-faces": 23132,
+                "tracing.scratch.searches": 69396,
+                "tracing.scratch.pageAllocations": 6,
+                "tracing.scratch.pageReuses": 69390,
+                "tracing.scratch.releasedPages": 0,
+                "tracing.scratch.peakRecords": 88,
+                "tracing.scratch.peakBytes": 122880,
+                "tracing.scratch.retainedBytes": 122880,
+                "tracing.scratch.recordBytes": 120
+              },
+              "overflow": false
+            }
+          },
+          "summary": {
+            "baseline": {
+              "elapsedMs": 10098.980098999993,
+              "heapCapacityBytes": 480116736,
+              "stageMediansMs": {
+                "Identify local crystal structures": 1434.2301320000042,
+                "Build crystal clusters": 85.58216299999913,
+                "Connect crystal reference frames": 8.94826699999976,
+                "Periodic Delaunay tessellation": 5593.380795999998,
+                "Build tessellation edges": 571.1926989999993,
+                "Assign crystal clusters": 2.5411949999979697,
+                "Map edges to the ideal lattice": 362.97191799999564,
+                "Construct crystal interface mesh": 1227.3015039999882,
+                "Trace Burgers circuits and dislocation lines": 842.8726940000051,
+                "Connect dislocation junctions": 0.020029999999678694,
+                "Smooth and coarsen dislocation lines": 0.0031549999985145405,
+                "Serialize dislocation network": 60.51246099999844,
+                "DXA complete": 0.05380100000184029
+              }
+            },
+            "current": {
+              "elapsedMs": 9686.847267000005,
+              "heapCapacityBytes": 476119040,
+              "stageMediansMs": {
+                "Identify local crystal structures": 1420.789896999995,
+                "Build crystal clusters": 82.70319800000289,
+                "Connect crystal reference frames": 8.512859000002209,
+                "Periodic Delaunay tessellation": 5511.412818000004,
+                "Build tessellation edges": 586.1129159999982,
+                "Assign crystal clusters": 2.0251859999989392,
+                "Map edges to the ideal lattice": 322.0163249999896,
+                "Construct crystal interface mesh": 952.6446319999959,
+                "Trace Burgers circuits and dislocation lines": 785.7987439999997,
+                "Connect dislocation junctions": 0.019089000001258682,
+                "Smooth and coarsen dislocation lines": 0.0031949999975040555,
+                "Serialize dislocation network": 58.87739399999555,
+                "DXA complete": 0.04282399998919573
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

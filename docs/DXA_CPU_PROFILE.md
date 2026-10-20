@@ -511,27 +511,58 @@ An earlier frontier-pruning candidate was not adopted because its measurements
 did not show a reliable gain. Its
 [diagnostic record](benchmarks/dxa-tracing-frontier-rejected-2026-10-20.json)
 is retained separately. The immutable-state change is a bounded improvement to
-K4; the remaining serial and global topology work below is still open.
+K4; the following data-layout work has since extended that improvement.
+
+## Compact edges and ghost-face lookup (2026-10-20)
+
+The [K4 implementation report](PERFORMANCE_DXA_K4.md) compares the new kernels
+against `ea9245d`. Elastic mapping now uses contiguous neighbor/edge IDs and
+separate vector payloads, while keeping the original edge orientation,
+leaving/arriving traversal and deferred graph updates. Construction links are
+released before allocating final vector payloads. This replaces the old
+representation rather than adding the rejected full secondary index.
+
+Circuit-search records use stable pages, retaining at most 1 MiB of complete
+pages between search seeds and releasing the workspace when the primary-search
+pass finishes. The default HEA, Fe and replicated NiGB cases all fit within one
+1,024-record page, so these fixtures do not demonstrate fewer page allocations.
+Native stress checks cover multi-page reuse and release separately.
+
+Ghost-face lookup uses contiguous sorted records with the old first-created
+face semantics. The existing parallel boundary-mask and wrapped-vector prepass
+is retained, while face payloads and topology are committed through the
+original ordered path. The same geometry helper still serves Surface, whose
+complete mesh buffers are checked against the old implementation.
+
+A separate candidate split read-only face payload preparation from ordered
+vertex, face and edge commits, with bounded buffers and sparse-batch admission.
+The dense screw comparison exercised actual parallel preparation but did not
+demonstrate a benefit in construction or complete extraction. That candidate
+was rejected; the report retains its measurements and reproduction patch.
+
+Optional `Module.onDxaProfile` diagnostics expose periodic point preparation,
+Geogram construction, classification, mesh substeps and named workspace
+capacities. Ordinary benchmark runs disable that callback. Geogram's internal
+sorting and insertion still share the `set_vertices` measurement; its robust
+predicates and triangulation algorithm have not changed. See the report for
+raw timings, memory limits and the fixed-topology four-thread protocol.
 
 ## Prioritized further work
 
-1. Profile global periodic Delaunay construction and elastic classification
-   first. They dominate both real examples after the existing safe parallelism.
+1. Use the new substage diagnostics to investigate global periodic Delaunay
+   construction and remaining elastic classification.
    Improve data access within their current floating-point and robust-predicate
    rules; measure whole-frame gains at the available CPU budget.
-2. Consider replacing the existing pointer-heavy edge representation with a
-   compact immutable representation, rather than allocating a second full
-   index. Preserve first-seen edge orientation, graph transitions and ordered
-   edge construction. The lookup experiment demonstrates a locality benefit,
-   while also showing why an additional index does not justify its cost here.
-3. Continue reducing ordered topology-creation costs after the implemented
-   boundary/wrapped-vector prepass. Face and vertex numbering, callbacks,
+2. Continue reducing ordered topology-creation costs after the implemented
+   compact adjacency and ghost-face lookup. The additional face-payload
+   batching candidate did not justify adoption. Face and vertex numbering, callbacks,
    halfedge linking and junction behavior must retain their ordering. Every
    filled local cell still requires wrapped-vector validation, including
    interior cells.
-4. Continue investigating the serial circuit search on the NiGB grain-boundary
-   mesh after the immutable-state improvement. Its empty final network still
-   costs about 0.8–0.9 seconds in the measured one-thread Wasm runs. The first
+3. Continue investigating the serial circuit search on the NiGB grain-boundary
+   mesh after the immutable-state and scratch-storage improvements. Before this
+   restructuring, its empty final network cost about 0.8–0.9 seconds of tracing
+   in the measured one-thread Wasm runs; the K4 report contains the new samples. The first
    frontier-pruning experiment did not justify adoption. Any further pruning
    or component-based concurrency must preserve visited state, junctions,
    periodic connectivity and the circuit search order that determines output.

@@ -11,6 +11,9 @@ completes S6, T7, T8, T10 and C10 with new measurements; completed entries
 have moved to the feature documentation. The [T9/G3/G4 report](PERFORMANCE_T9_G3_G4.md)
 records Worker PNG encoding, thin-cell GPU dispatch and bounded GPU prefetch
 against baseline `c93a58f`; those completed items have also moved out of this backlog.
+The [K4 implementation report](PERFORMANCE_DXA_K4.md) records reusable tracing
+storage, compact elastic adjacency, contiguous ghost-face lookup and optional
+substage diagnostics against `ea9245d`. Further global algorithm work remains below.
 Remaining items are listed below.
 
 The feature plan is complete, so this backlog now tracks defects and
@@ -253,28 +256,32 @@ stays as the fallback where float blending is missing.
 
 ## Part 2: performance, phase 3 (large changes and decisions)
 
-### K4. DXA: remaining serial stages
+### K4. DXA: further global algorithm work
 
 **Effort:** L. See [DXA CPU profile](DXA_CPU_PROFILE.md#prioritized-further-work).
 
-- **Completed 2026-10-20:** retain immutable BFS vertex coordinates, matrix
-  and depth once per vertex. Both production Wasm kernels were rebuilt;
-  complete scientific outputs match the baseline. HEA tracing improves by
-  11.7–11.9% and the replicated NiGB case by 3.4–3.6% in the measured
-  one-thread comparisons. A frontier-pruning candidate was rejected after
-  measurement. These are bounded tracing improvements, not completion of
-  the remaining serial-stage work; see the
-  [performance report](PERFORMANCE_IMPROVEMENTS_2026-10-20.md).
+- **Completed scope:** immutable tracing state, bounded reusable search
+  storage, compact edge rows preserving first-seen orientation and traversal,
+  contiguous ghost-face lookup, and optional substage diagnostics. The existing
+  ordered topology commits and parallel boundary-mask/wrapped-vector prepass
+  are preserved. The implementation, measurements and remaining limits
+  are in the [K4 report](PERFORMANCE_DXA_K4.md) and
+  [CPU profile](DXA_CPU_PROFILE.md).
+- **Rejected candidate:** bounded parallel face-payload preparation followed
+  by ordered commits did not demonstrate a benefit on the dense comparison.
+  Its sparse-batch admission variant was also excluded; the report retains
+  the experiments. Further topology-construction redesign remains open.
 - **Evidence [M]:** Burgers circuit tracing, cluster traversal, junction
   merging and the ordered graph and mesh commits are serial; the estimated
   floor for HEA is about 400 ms. The global Delaunay tessellation scales 2.1×
   with threads. Without isolation, tetrahedron-classification offload is about
   break-even because of table packing (63–98 ms on HEA).
-- **Change:** profile the periodic Delaunay construction and elastic
-  classification first; consider a compact immutable edge representation;
-  investigate the serial circuit search on the NiGB mesh (0.9 s for an empty
-  network). Any change must preserve visited state, junctions and search
-  order.
+- **Next:** use the new diagnostics to evaluate Geogram's combined
+  sorting/insertion cost and the remaining serial search/cluster work.
+  Delaunay construction, cluster traversal, junction merging and ordered
+  topology commits still require their global dependencies. Larger algorithm
+  changes must preserve visited state, junctions, search order and full
+  scientific outputs; an empty final network is not a reason to skip tracing.
 
 ### G5. Double-float guard cost
 

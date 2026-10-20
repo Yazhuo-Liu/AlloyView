@@ -22,6 +22,7 @@
 
 #include "compat/compat.h"
 #include "DelaunayTessellation.h"
+#include "DxaProfiling.h"
 
 #include <random>
 #include <cstdlib>
@@ -125,6 +126,7 @@ namespace Ovito::Delaunay {
 ******************************************************************************/
 bool DelaunayTessellation::generateTessellation(const SimulationCellObject* simCell, const Point3* positions, size_t numPoints, FloatType ghostLayerSize, bool coverDomainWithFiniteTets, const SelectionIntType* selectedPoints, ProgressingTask& operation)
 {
+    DxaProfiling::Scope initializationProfile("delaunay.initialization");
     operation.setProgressMaximum(0);
 
     // Initialize the Geogram library.
@@ -162,7 +164,9 @@ bool DelaunayTessellation::generateTessellation(const SimulationCellObject* simC
     // Build the list of input points.
     _particleIndices.clear();
     _pointData.clear();
+    initializationProfile.stop();
 
+    DxaProfiling::Scope pointsProfile("delaunay.inputPoints");
     for(size_t i = 0; i < numPoints; i++, ++positions) {
 
         // Skip points which are not included.
@@ -183,7 +187,9 @@ bool DelaunayTessellation::generateTessellation(const SimulationCellObject* simC
             return false;
     }
     _primaryVertexCount = _particleIndices.size();
+    pointsProfile.stop();
 
+    DxaProfiling::Scope ghostsProfile("delaunay.ghostPoints");
     if(simCell) {
         // Determine how many periodic copies of the input particles are needed in each cell direction
         // to ensure a consistent periodic topology in the border region.
@@ -256,7 +262,9 @@ bool DelaunayTessellation::generateTessellation(const SimulationCellObject* simC
             _particleIndices.push_back(std::numeric_limits<size_t>::max());
         }
     }
+    ghostsProfile.stop();
 
+    DxaProfiling::Scope generatorProfile("delaunay.generatorSetup");
     // Create the internal Delaunay generator object.
     _dt = GEO::Delaunay::create(3, dxaThreadCount() > 1 ? "PDEL" : "BDEL");
     _dt->set_keeps_infinite(true);
@@ -266,22 +274,28 @@ bool DelaunayTessellation::generateTessellation(const SimulationCellObject* simC
     // input points. This results in unstable ordering of the Delaunay cell list, unless we fix the seed number:
     std::srand(1);
     GEO::Numeric::random_reset();
+    generatorProfile.stop();
 
     // Construct Delaunay tessellation.
+    DxaProfiling::Scope constructionProfile("delaunay.construct");
     bool result = _dt->set_vertices(_pointData.size(), reinterpret_cast<const double*>(_pointData.data()), [&operation](size_t value, size_t maxProgress) {
         operation.setProgressMaximum(maxProgress, false);
         return operation.setProgressValueIntermittent(value);
     });
+    constructionProfile.stop();
     if(!result) return false;
 
     // Classify tessellation cells as ghost or local cells.
+    DxaProfiling::Scope ghostCellsProfile("delaunay.classifyGhostCells");
     _numPrimaryTetrahedra = 0;
     _cellInfo.resize(_dt->nb_cells());
     parallelFor(_cellInfo.size(), [this](size_t index) {
         _cellInfo[index].isGhost = classifyGhostCell(index);
     });
+    ghostCellsProfile.stop();
     // Retain the original cell ordering and numbering independently of the
     // order in which the classification threads finish.
+    DxaProfiling::Scope numberingProfile("delaunay.numberLocalCells");
     for(CellIterator cellIter = begin_cells(); cellIter != end_cells(); ++cellIter) {
         CellHandle cell = *cellIter;
         if(_cellInfo[cell].isGhost) {
@@ -291,6 +305,14 @@ bool DelaunayTessellation::generateTessellation(const SimulationCellObject* simC
             _cellInfo[cell].index = _numPrimaryTetrahedra++;
         }
     }
+    numberingProfile.stop();
+    DxaProfiling::set("delaunay.primaryPoints", _primaryVertexCount);
+    DxaProfiling::set("delaunay.totalPoints", _pointData.size());
+    DxaProfiling::set("delaunay.totalCells", _cellInfo.size());
+    DxaProfiling::set("delaunay.localCells", _numPrimaryTetrahedra);
+    DxaProfiling::set("delaunay.pointCapacityBytes", _pointData.capacity() * sizeof(_pointData[0]));
+    DxaProfiling::set("delaunay.particleIndexCapacityBytes", _particleIndices.capacity() * sizeof(_particleIndices[0]));
+    DxaProfiling::set("delaunay.cellInfoCapacityBytes", _cellInfo.capacity() * sizeof(_cellInfo[0]));
 
     return true;
 }

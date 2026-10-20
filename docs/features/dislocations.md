@@ -104,8 +104,9 @@ separate networks from arbitrary atom chunks. Cluster construction and ordered
 graph/topology operations retain their required global coordination.
 
 Local crystal identification, robust periodic Delaunay insertion, ghost-cell
-and interface-cell classification, and bounded interface preparation can use
-shared-memory threads. Final interface faces retain their original order.
+and interface-cell classification, and the existing interface boundary-mask
+and wrapped-vector prepass can use shared-memory threads. Final interface
+faces retain their original order.
 Edge construction prepares immutable candidate masks in parallel and commits
 deduplicated edges in the original cell/edge order. Edge-to-lattice mapping
 uses a private path finder per thread and bounded result batches. Searches
@@ -114,9 +115,25 @@ so parallel workers never mutate the graph's transition cache. Cheap direct
 neighbors within one crystal cluster bypass batch staging; small search tails
 run serially to avoid scheduling overhead. The result's `parallelEdgePasses`
 reports candidate cells, direct paths, searched edges, batches and deferred
-searches. Temporary mapping storage is capped at 262,144 edges (about 3 MiB);
-the reusable native heap
-and pthread pool are retained.
+searches. Temporary mapping storage is capped at 262,144 edges (about 4 MiB);
+the reusable native heap and pthread pool are retained.
+
+Elastic mapping stores edge vectors and transitions in a compact array with
+stable integer edge IDs and contiguous adjacency rows. Construction preserves
+each edge's first-seen direction, and traversals preserve the original
+leaving-then-arriving neighbor order. Interface construction uses a contiguous,
+sorted ghost-face lookup that preserves the original first-created face for
+each key. The existing boundary-mask and wrapped-vector prepass is retained;
+face payloads are computed by the original ordered callbacks. Vertex/face
+numbering, periodic checks, topology connections and commit order are preserved.
+
+Burgers tracing reuses stable-address pages of search records between starting
+vertices. Retained record pages are capped at 1 MiB between searches; a larger
+individual search can temporarily use more and releases excess pages at its
+end. The workspace is released after each search-depth pass. FIFO discovery,
+predecessor paths, visited-state cleanup and circuit/junction traversal retain
+their original order. Worker, Wasm and thread-pool prewarming remain enabled.
+
 Isolation does not make every extraction step parallel. With more than one
 native thread, Delaunay construction uses Geogram's parallel **PDEL** engine;
 one thread uses **BDEL**. The full tessellation still needs global coordination,
@@ -232,6 +249,16 @@ one heap across concurrency changes. Each result also lists `hostTimings`:
 kernel and pool readiness, input conversion and upload, and result decoding.
 [CPU profiles](../DXA_CPU_PROFILE.md) retain earlier measurements; they are
 device-specific records.
+
+Development callers can provide the optional `onDxaProfile` module callback
+to collect per-session scopes and aggregate allocation counters. Profiling is
+disabled when that callback is absent and does not change the scientific
+result. The [K4 restructuring report](../PERFORMANCE_DXA_K4.md) describes the
+compact edge representation, bounded tracing workspace, contiguous ghost-face
+lookup and the scope of the before/after validation. A separate candidate
+prepared face payloads in parallel before ordered commits; its measured
+construction and total costs did not demonstrate a benefit, so it was not
+adopted.
 
 `npm run test:browser:dxa-parallel -- --software` checks both isolated pthreads
 and ordinary nonisolated CPU stage offload, including initialization failures, pool reuse,

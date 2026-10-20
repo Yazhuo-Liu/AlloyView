@@ -57,6 +57,11 @@ The [performance report of 2026-10-20](PERFORMANCE_IMPROVEMENTS_2026-10-20.md)
 records the following loading, replication, frame-summary, Voronoi, grain,
 local-shear and DXA improvements, their baseline comparisons and remaining limits.
 
+[PNG export and GPU optimizations (T9/G3/G4)](PERFORMANCE_T9_G3_G4.md)
+describes Worker PNG encoding, thin-cell GPU dispatch and bounded trajectory prefetch.
+The [K4 report](PERFORMANCE_DXA_K4.md) covers DXA search storage, compact edge
+data and ordered mesh lookup, with complete-result comparisons.
+
 [DXA implementation review](DXA_REVIEW.md) records the source, licensing and
 CPU/Wasm algorithm and historical WebGPU research. The current DXA tool uses
 complete CPU/Wasm extraction with automatic pthreads or private local-stage
@@ -64,5 +69,3 @@ Workers around one global serial kernel;
 broader scientific validation remains ongoing.
 
 The source is available in the [GitHub repository](https://github.com/Yazhuo-Liu/AlloyView). AlloyView is inspired by [OVITO](https://www.ovito.org/) and [AtomEye](http://li.mit.edu/Archive/Graphics/A/).
-
-[PNG export and GPU optimizations (T9/G3/G4)](PERFORMANCE_T9_G3_G4.md) describes Worker PNG encoding, thin-cell GPU dispatch and bounded trajectory prefetch.

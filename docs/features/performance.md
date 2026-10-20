@@ -110,6 +110,13 @@ IDs, frame summaries and CPU analyses. It includes cold-path costs and retained
 memory, and separates transport microbenchmarks from full calculations. Earlier
 measurements below retain their original hardware and implementation scope.
 
+The [K4 DXA report](../PERFORMANCE_DXA_K4.md) measures compact elastic-edge
+lookups, reusable circuit-search storage and compact mesh lookup against
+`ea9245d`. It separates ordinary timings from optional diagnostics and checks
+complete scientific results. Its four-thread comparison holds Delaunay to one
+thread to compare the same topology; it does not measure the full parallel
+Delaunay pipeline.
+
 The reference machine has 32 logical processors and a GTX 1080 Ti. Values are
 medians of 3–9 runs in Node.js unless Chrome is named, on a machine shared
 with other jobs; multithreaded timings vary by about 10%.

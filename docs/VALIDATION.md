@@ -1,5 +1,50 @@
 # Validation record
 
+## DXA compact layout and ordered mesh lookup (2026-10-20)
+
+Baseline: `ea9245d`. The [K4 report](PERFORMANCE_DXA_K4.md) records the
+implementation, separate candidate comparisons, exact-output checks and raw
+measurements. Both production Wasm variants were rebuilt with Emscripten
+3.1.69. Worker, Wasm and GPU prewarming and the shared CPU budget are retained.
+
+The final production artifacts pass all **2,332 Node tests**, with no failures,
+cancellations or skips, and the production build passes. The 61 focused
+DXA/Surface tests pass. Eight new regression cases freeze old
+scientific JSON, Worker snapshot arrays, defect mesh buffers and shared Surface
+output. They cover mixed periodicity, a triclinic corner void, FCC/HCP twins and
+a larger screw fixture with parallel classification and ordered mesh creation.
+The large fixture checks one/four/one-thread downstream execution with the same
+serial Delaunay topology; cancellation after the primary mesh recovers on the
+same heap. Existing tests separately exercise the real parallel Delaunay path.
+
+Two new profiling tests check enabled/disabled diagnostics, removal of the
+callback, cancellation, same-heap reuse, counter reset and unchanged scientific
+results. The native scratch test passes optimized and ASan/UBSan builds,
+including 100 reuse cycles, growth to 26 pages, stable queue/predecessor
+pointers, bounded release and recovery from both page and ownership-vector
+allocation failures.
+
+Final artifact measurements use the original baseline binaries: 54 timed
+extractions, 18 warmups and six separate diagnostic extractions preserve exact
+scientific hashes. Nine total medians decrease by 2.13–15.45%; interface-mesh
+medians decrease by 12.35–30.13%. Four-thread comparisons hold Delaunay at one
+thread. Unchanged Delaunay timing variation contributes to total differences,
+so these observations do not establish an equivalent gain on every input or
+device. The report records increased Fe heap capacity in the one-thread runs.
+The separate parallel face-payload candidate was rejected after its dense
+comparison showed higher mesh and total costs; no batching/admission workspace
+is present in the final implementation.
+
+All **eight browser commands** pass sequentially on Chromium 154/SwiftShader,
+without failures or retries: `browser-dxa.mjs` both plain and `--isolated`,
+`browser-dxa-visual.mjs`, `browser-surface-mesh.mjs`,
+`browser-bundled-runtime.mjs`, `browser-dxa-parallel.mjs`,
+`browser-cpu-warmup.mjs` and `browser-smoke.mjs`. They cover real HEA/Fe
+analyses, Surface on both hosts, production content-hashed assets, pool growth,
+private-stage and startup fault recovery, cancellation, retained Workers and
+kernels at simulated 8/16-core budgets, and 204,800-atom CFG clipping/picking.
+These software-rendered checks do not establish physical GPU performance.
+
 
 ## PNG export and bounded GPU preparation (2026-10-20)
 
