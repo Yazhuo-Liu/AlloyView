@@ -271,13 +271,22 @@ stays as the fallback where float blending is missing.
   by ordered commits did not demonstrate a benefit on the dense comparison.
   Its sparse-batch admission variant was also excluded; the report retains
   the experiments. Further topology-construction redesign remains open.
+- **P0/P1 (2026-10-21):** the [diagnostics and validation report](DXA_P0_P1.md)
+  records Geogram/BDEL/PDEL internals, actual junction merging, worker-private
+  work counters, complete scientific readback, a genuine full-pipeline PDEL
+  benchmark, and geometric/network reference tests. Formal timings keep
+  diagnostics disabled; an explicitly patched baseline is used only for
+  untimed scientific readback. Unproved parallel differences remain
+  inconclusive and cannot pass the default acceptance gate.
 - **Evidence [M]:** Burgers circuit tracing, cluster traversal, junction
-  merging and the ordered graph and mesh commits are serial; the estimated
-  floor for HEA is about 400 ms. The global Delaunay tessellation scales 2.1×
-  with threads. Without isolation, tetrahedron-classification offload is about
-  break-even because of table packing (63–98 ms on HEA).
-- **Next:** use the new diagnostics to evaluate Geogram's combined
-  sorting/insertion cost and the remaining serial search/cluster work.
+  merging and ordered graph/mesh commits still have global serial work.
+  The earlier 400 ms HEA floor and 2.1× Delaunay scaling are historical
+  observations, not current guarantees. Without isolation, earlier
+  tetrahedron-classification offload was about break-even because of table
+  packing (63–98 ms on HEA).
+- **Next:** follow P2–P6 and R1/R2 in the
+  [global algorithm plan](DXA_GLOBAL_ALGORITHM_PLAN.md), using the separate
+  sorting, insertion, compaction and tracing diagnostics to select candidates.
   Delaunay construction, cluster traversal, junction merging and ordered
   topology commits still require their global dependencies. Larger algorithm
   changes must preserve visited state, junctions, search order and full

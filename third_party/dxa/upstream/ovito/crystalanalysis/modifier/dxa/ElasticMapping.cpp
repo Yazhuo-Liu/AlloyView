@@ -168,6 +168,7 @@ bool ElasticMapping::generateTessellationEdges(ProgressingTask& operation)
 ******************************************************************************/
 bool ElasticMapping::assignVerticesToClusters(ProgressingTask& operation)
 {
+    DxaProfiling::Scope timing("clusters.assignVertices");
     // Unknown runtime length.
     operation.setProgressMaximum(0);
 
@@ -188,6 +189,7 @@ bool ElasticMapping::assignVerticesToClusters(ProgressingTask& operation)
             return false;
 
         notDone = false;
+        DxaProfiling::add("clusters.assignmentPasses", 1);
         for(size_t vertexIndex = 0; vertexIndex < _vertexClusters.size(); vertexIndex++) {
             if(clusterOfVertex(vertexIndex)->id != 0) continue;
             for(size_t index = _vertexOffsets[vertexIndex]; index < _vertexOffsets[vertexIndex + 1]; ++index) {
@@ -210,7 +212,13 @@ bool ElasticMapping::assignVerticesToClusters(ProgressingTask& operation)
 ******************************************************************************/
 bool ElasticMapping::assignIdealVectorsToEdges(int crystalPathSteps, ProgressingTask& operation)
 {
+    DxaProfiling::Scope mappingTiming("mapping.total");
+    const bool profileMapping = DxaProfiling::enabled();
+    std::atomic<uint64_t> contextConstructions{0}, contextConstructionNs{0};
+    size_t serialSearches = 0;
+    DxaProfiling::Scope serialContextTiming("mapping.serialContext");
     CrystalPathFinder pathFinder(_structureAnalysis, crystalPathSteps);
+    serialContextTiming.stop();
     operation.setProgressMaximum(_leavingCounts.size());
 
     // Graph cache writes are committed in the original vertex/linked-list order.
@@ -247,8 +255,19 @@ bool ElasticMapping::assignIdealVectorsToEdges(int crystalPathSteps, Progressing
     }
     auto flush = [&]() {
         if(batch.empty()) return true;
+        DxaProfiling::Scope searchTiming("mapping.batchSearch");
         if(!dxaParallelForWithContext(batch.size(),
-            [&] { return std::make_unique<CrystalPathFinder>(_structureAnalysis, crystalPathSteps); },
+            [&] {
+                if(!profileMapping) return std::make_unique<CrystalPathFinder>(_structureAnalysis, crystalPathSteps);
+                const auto started = std::chrono::steady_clock::now();
+                auto context = std::make_unique<CrystalPathFinder>(_structureAnalysis, crystalPathSteps);
+                const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - started).count();
+                // Once per context, never an atomic operation per searched edge.
+                contextConstructions.fetch_add(1, std::memory_order_relaxed);
+                contextConstructionNs.fetch_add(elapsed, std::memory_order_relaxed);
+                return context;
+            },
             [&](std::unique_ptr<CrystalPathFinder>& finder, size_t index) {
                 const auto& work = batch[index];
                 const auto& adjacent = _adjacency[work.adjacency];
@@ -256,6 +275,8 @@ bool ElasticMapping::assignIdealVectorsToEdges(int crystalPathSteps, Progressing
                 results[index].cluster = vector ? vector->cluster() : nullptr;
                 if(vector) _edges[adjacent.edge].clusterVector = vector->localVec();
             }, true)) return false;
+        searchTiming.stop();
+        DxaProfiling::Scope commitTiming("mapping.orderedBatchCommit");
         _parallelPathEdges += batch.size();
         ++_parallelPathBatches;
         for(size_t index = 0; index < batch.size(); ++index) {
@@ -299,7 +320,10 @@ bool ElasticMapping::assignIdealVectorsToEdges(int crystalPathSteps, Progressing
             Cluster* cluster2 = clusterOfVertex(adjacent.vertex);
             OVITO_ASSERT(cluster1 && cluster2);
             if(cluster1->id == 0 || cluster2->id == 0) continue;
-            if(results.empty()) commit(work, pathFinder.findPath(vertex, adjacent.vertex));
+            if(results.empty()) {
+                if(profileMapping) ++serialSearches;
+                commit(work, pathFinder.findPath(vertex, adjacent.vertex));
+            }
             else {
                 // Most perfect-bulk edges return at findPath's first neighbor
                 // test. Avoid staging that cheap work twice. This branch uses
@@ -326,6 +350,14 @@ bool ElasticMapping::assignIdealVectorsToEdges(int crystalPathSteps, Progressing
     }
     if(!flush()) return false;
 
+    DxaProfiling::set("mapping.contextConstructions", contextConstructions.load(std::memory_order_relaxed));
+    DxaProfiling::addTiming("mapping.contextConstructionCpuMs", contextConstructionNs.load(std::memory_order_relaxed) * 1e-6);
+    DxaProfiling::set("mapping.serialSearches", serialSearches);
+    DxaProfiling::set("mapping.parallelSearches", _parallelPathEdges);
+    DxaProfiling::set("mapping.parallelBatches", _parallelPathBatches);
+    DxaProfiling::set("mapping.deferredSearches", _deferredPathEdges);
+    DxaProfiling::set("mapping.directPaths", _directPathEdges);
+    DxaProfiling::set("mapping.batchCapacityBytes", batch.capacity() * sizeof(EdgeWork) + results.capacity() * sizeof(SearchResult));
     return !operation.isCanceled();
 }
 

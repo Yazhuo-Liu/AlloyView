@@ -542,10 +542,19 @@ was rejected; the report retains its measurements and reproduction patch.
 
 Optional `Module.onDxaProfile` diagnostics expose periodic point preparation,
 Geogram construction, classification, mesh substeps and named workspace
-capacities. Ordinary benchmark runs disable that callback. Geogram's internal
-sorting and insertion still share the `set_vertices` measurement; its robust
-predicates and triangulation algorithm have not changed. See the report for
+capacities. Ordinary benchmark runs disable that callback. The later
+[P0/P1 implementation](DXA_P0_P1.md) separates Geogram sorting, insertion,
+compaction and remapping, with private PDEL worker statistics. Its robust
+predicates and triangulation algorithm have not changed. See the K4 report for
 raw timings, memory limits and the fixed-topology four-thread protocol.
+
+The P0/P1 benchmark retains the requested thread count throughout the entire
+pipeline, so its multi-thread measurements exercise real PDEL. They must not
+be mixed with K4's fixed single-thread geometry comparisons. Diagnostic scopes
+are nested; worker CPU sums also overlap wall-clock intervals. In particular,
+the public “Connect dislocation junctions” phase calls finalization, while the
+actual `joinSegments()` work is inside the tracing phase. Its new internal
+timer, rather than the old public finalization timer, measures that work.
 
 ## Prioritized further work
 

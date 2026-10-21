@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <iomanip>
 #include <sstream>
+#include <streambuf>
 #include <stdexcept>
 #include <vector>
 #ifdef __EMSCRIPTEN__
@@ -144,6 +145,8 @@ struct DxaSession {
     std::vector<uint32_t> tetData, edgeData;
     std::vector<int32_t> workerRegions;
     std::vector<int32_t> diagnosticRegions;
+    // Optional scientific readback, owned only by this staged session.
+    std::vector<char> scienceSnapshotJson;
 
     DxaSession(const AffineTransformation& matrix, int pbcBits, int atomCount,
             int latticeType, int trial, int stretch, int perfectOnly,
@@ -541,6 +544,139 @@ const int32_t* alloy_dxa_worker_regions_ptr() {
     return nullptr;
 }
 
+// Diagnostic scientific state is read only. In particular, this never asks
+// ClusterGraph to determine/create a transition, because that mutates its cache.
+// Two streaming passes bound the output before allocating it. The budget covers
+// serialized bytes including the NUL terminator; no full intermediate string or
+// transition-index map is constructed. Matrix entries are explicitly row-major.
+namespace {
+class ScienceJsonBuffer final : public std::streambuf {
+public:
+    ScienceJsonBuffer(char* destination, size_t limit) : _destination(destination), _limit(limit) {}
+    size_t size() const { return _size; }
+protected:
+    std::streamsize xsputn(const char* data, std::streamsize count) override {
+        if(count < 0 || uint64_t(count) > _limit - _size)
+            throw std::runtime_error("DXA scientific snapshot exceeds its output byte budget.");
+        if(_destination && count) std::memcpy(_destination + _size, data, size_t(count));
+        _size += size_t(count);
+        return count;
+    }
+    int_type overflow(int_type character) override {
+        if(traits_type::eq_int_type(character, traits_type::eof())) return traits_type::not_eof(character);
+        const char byte = traits_type::to_char_type(character);
+        xsputn(&byte, 1);
+        return character;
+    }
+private:
+    char* _destination;
+    size_t _limit;
+    size_t _size = 0;
+};
+
+void scienceNumberJson(std::ostream& out, double value) {
+    if(!std::isfinite(value)) throw std::runtime_error("DXA scientific snapshot contains a non-finite value.");
+    out << value;
+}
+void scienceMatrixJson(std::ostream& out, const Matrix3& matrix) {
+    out << '[';
+    for(int row = 0; row < 3; ++row) for(int column = 0; column < 3; ++column) {
+        if(row || column) out << ',';
+        scienceNumberJson(out, matrix.column(column)[row]);
+    }
+    out << ']';
+}
+void scienceTransitionJson(std::ostream& out, const ClusterTransition* transition) {
+    if(!transition || !transition->cluster1 || !transition->cluster2 || !transition->reverse)
+        throw std::runtime_error("DXA scientific snapshot contains an incomplete cluster transition.");
+    out << "{\"source\":" << transition->cluster1->id
+        << ",\"target\":" << transition->cluster2->id
+        << ",\"distance\":" << transition->distance
+        << ",\"area\":" << transition->area
+        << ",\"self\":" << (transition->reverse == transition ? "true" : "false")
+        << ",\"matrix\":";
+    scienceMatrixJson(out, transition->tm);
+    out << ",\"reverseMatrix\":";
+    scienceMatrixJson(out, transition->reverse->tm);
+    out << ",\"reverseDistance\":" << transition->reverse->distance
+        << ",\"reverseArea\":" << transition->reverse->area << '}';
+}
+size_t serializeScienceSnapshot(const DxaSession& session, char* destination, size_t limit) {
+    ScienceJsonBuffer buffer(destination, limit);
+    std::ostream out(&buffer);
+    out.exceptions(std::ios::badbit | std::ios::failbit);
+    out << std::setprecision(17)
+        << "{\"schemaVersion\":1,\"phase\":\"" << (session.meshConstructed ? "finished" : "mapped")
+        << "\",\"matrixLayout\":\"row-major\",\"atomClusters\":[";
+    BufferReadAccess<int64_t> atomClusters(session.structure->atomClusters());
+    for(int atom = 0; atom < session.count; ++atom) {
+        if((atom & 1023) == 0) requireStage(true);
+        if(atom) out << ',';
+        out << atomClusters[atom];
+    }
+    out << "],\"clusters\":[";
+    bool first = true;
+    for(const Cluster* cluster : session.structure->clusterGraph()->clusters()) {
+        requireStage(true);
+        if(!first) out << ',';
+        first = false;
+        out << "{\"id\":" << cluster->id << ",\"structure\":" << cluster->structure
+            << ",\"atomCount\":" << cluster->atomCount << ",\"orientation\":";
+        scienceMatrixJson(out, cluster->orientation);
+        out << ",\"symmetryTransformation\":" << cluster->symmetryTransformation
+            << ",\"centerOfMass\":[";
+        for(int axis = 0; axis < 3; ++axis) {
+            if(axis) out << ',';
+            scienceNumberJson(out, cluster->centerOfMass[axis]);
+        }
+        out << "],\"parentTransition\":";
+        if(cluster->parentTransition) scienceTransitionJson(out, cluster->parentTransition);
+        else out << "null";
+        out << '}';
+    }
+    out << "],\"transitions\":[";
+    first = true;
+    for(const Cluster* cluster : session.structure->clusterGraph()->clusters())
+        for(const ClusterTransition* transition = cluster->transitions; transition; transition = transition->next) {
+            requireStage(true);
+            if(!first) out << ',';
+            first = false;
+            scienceTransitionJson(out, transition);
+        }
+    out << "]}";
+    return buffer.size();
+}
+} // namespace
+
+// Call after staged begin/finish, before dispose. _analyze releases its session
+// and therefore intentionally has no retained scientific readback. The pointer
+// is invalidated by another readback, finish, prepare, or dispose. A readback
+// error clears only this diagnostic storage, retaining the scientific result.
+const char* alloy_dxa_science_snapshot(uint32_t budgetBytes) {
+    lastError.clear();
+    try {
+        if(!activeSession || !activeSession->mappingReady)
+            throw std::runtime_error("DXA scientific snapshot requires an active mapped staged session.");
+        auto& session = *activeSession;
+        std::vector<char>().swap(session.scienceSnapshotJson);
+        requireStage(true);
+        if(budgetBytes < 2) throw std::runtime_error("DXA scientific snapshot requires a positive output byte budget.");
+        const size_t size = serializeScienceSnapshot(session, nullptr, size_t(budgetBytes) - 1);
+        session.scienceSnapshotJson.resize(size + 1);
+        const size_t written = serializeScienceSnapshot(session, session.scienceSnapshotJson.data(), size);
+        if(written != size) throw std::runtime_error("DXA scientific snapshot changed during readback.");
+        session.scienceSnapshotJson[size] = '\0';
+        return session.scienceSnapshotJson.data();
+    } catch (...) {
+        if(activeSession) std::vector<char>().swap(activeSession->scienceSnapshotJson);
+        saveCurrentError(false);
+    }
+    return nullptr;
+}
+void alloy_dxa_release_science_snapshot() {
+    if(activeSession) std::vector<char>().swap(activeSession->scienceSnapshotJson);
+}
+
 // Continue the retained CPU topology through classification and tracing.
 const char* alloy_dxa_finish() {
     lastError.clear();
@@ -551,6 +687,7 @@ const char* alloy_dxa_finish() {
         requireStage(true);
         if (!activeSession) throw std::runtime_error("DXA has no active staged analysis.");
         auto& session = *activeSession;
+        std::vector<char>().swap(session.scienceSnapshotJson);
         DxaProfiling::Attach profiling(session.profile);
         if (!session.mappingReady) throw std::runtime_error("DXA crystal mapping has not been constructed.");
         auto& cell = session.cell;

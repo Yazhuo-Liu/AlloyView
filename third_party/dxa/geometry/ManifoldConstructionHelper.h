@@ -68,18 +68,58 @@ private:
         _mesh.setSpaceFillingRegion(SurfaceMesh::InvalidIndex);
         bool spaceFillingRegionUndetermined = true;
         bool isSpaceFilling = true;
+        // Diagnostics use bounded, worker-private accumulators. Registration
+        // performs one atomic operation per worker, not one per cell. Their
+        // CPU times sum active workers and are distinct from the wall scope.
+        struct alignas(64) ClassificationWork {
+            uint64_t cells = 0, importedCells = 0, finiteCells = 0;
+            uint64_t alphaCalls = 0, alphaInconclusive = 0, regionCalls = 0;
+            double alphaCpuMs = 0, regionCpuMs = 0;
+        };
+        const bool profileClassification = DxaProfiling::enabled();
+        std::vector<ClassificationWork> diagnosticWork;
+        std::atomic<size_t> nextDiagnosticSlot{0};
+        std::atomic<bool> diagnosticOverflow{false};
+        static std::atomic<uint64_t> diagnosticGeneration{0};
+        const uint64_t generation = profileClassification
+            ? diagnosticGeneration.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
+        if(profileClassification) diagnosticWork.resize(std::max(1, dxaThreadCount()));
         // Alpha tests and DXA's elastic-compatibility callback only read the
         // completed tessellation/edge mapping. Each thread owns one cell's
         // region field; numbering and mesh-wide reductions stay in cell order.
-        if(!parallelForWithProgress(_tessellation.numberOfTetrahedra(), [&](size_t cell) {
+        const bool classified = parallelForWithProgress(_tessellation.numberOfTetrahedra(), [&](size_t cell) {
+            ClassificationWork* work = nullptr;
+            if(profileClassification) {
+                struct Slot { uint64_t generation = 0; size_t index = 0; };
+                static thread_local Slot slot;
+                if(slot.generation != generation) {
+                    slot.generation = generation;
+                    slot.index = nextDiagnosticSlot.fetch_add(1, std::memory_order_relaxed);
+                }
+                if(slot.index < diagnosticWork.size()) work = &diagnosticWork[slot.index];
+                else diagnosticOverflow.store(true, std::memory_order_relaxed);
+                if(work) ++work->cells;
+            }
+            auto alphaTest = [&](DelaunayTessellation::CellHandle testedCell) {
+                if(!work) return _tessellation.alphaTest(testedCell, _alpha);
+                const auto started = std::chrono::steady_clock::now();
+                const auto result = _tessellation.alphaTest(testedCell, _alpha);
+                work->alphaCpuMs += std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - started).count();
+                ++work->alphaCalls;
+                if(!result) ++work->alphaInconclusive;
+                return result;
+            };
             if(const int32_t* regions = _tessellation.workerRegions()) {
+                if(work) ++work->importedCells;
                 _tessellation.setUserField(cell, regions[cell]);
                 return;
             }
             // Alpha-shape criterion: This determines whether the Delaunay tetrahedron is part of a filled region.
             bool isFilledTetrehedron = false;
             if(_tessellation.isFiniteCell(cell)) {
-                if(auto alphaTestResult = _tessellation.alphaTest(cell, _alpha)) {
+                if(work) ++work->finiteCells;
+                if(auto alphaTestResult = alphaTest(cell)) {
                     isFilledTetrehedron = *alphaTestResult;
                 }
                 else {
@@ -91,7 +131,7 @@ private:
                         DelaunayTessellation::CellHandle adjacentCell = _tessellation.mirrorFacet(cell, f).first;
                         if(!_tessellation.isFiniteCell(adjacentCell))
                             break;
-                        auto adjacentAlphaTestResult = _tessellation.alphaTest(adjacentCell, _alpha);
+                        auto adjacentAlphaTestResult = alphaTest(adjacentCell);
                         if(adjacentAlphaTestResult && !*adjacentAlphaTestResult)
                             break;
                     }
@@ -102,13 +142,35 @@ private:
 
             SurfaceMesh::region_index region = SurfaceMesh::InvalidIndex;
             if(isFilledTetrehedron) {
-                region = determineCellRegion(cell);
+                if(work) {
+                    const auto started = std::chrono::steady_clock::now();
+                    region = determineCellRegion(cell);
+                    work->regionCpuMs += std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - started).count();
+                    ++work->regionCalls;
+                }
+                else region = determineCellRegion(cell);
                 OVITO_ASSERT(region >= 0 || region == SurfaceMesh::InvalidIndex);
                 
                 OVITO_ASSERT(region < _mesh.regionCount() || region == SurfaceMesh::InvalidIndex);
             }
             _tessellation.setUserField(cell, region);
-        })) return false;
+        });
+        if(profileClassification) {
+            for(const auto& work : diagnosticWork) {
+                DxaProfiling::add("mesh.classification.cells", work.cells);
+                DxaProfiling::add("mesh.classification.importedCells", work.importedCells);
+                DxaProfiling::add("mesh.classification.finiteCells", work.finiteCells);
+                DxaProfiling::add("mesh.alpha.calls", work.alphaCalls);
+                DxaProfiling::add("mesh.alpha.inconclusive", work.alphaInconclusive);
+                DxaProfiling::addTiming("mesh.alpha.cpuMs", work.alphaCpuMs);
+                DxaProfiling::add("mesh.region.calls", work.regionCalls);
+                DxaProfiling::addTiming("mesh.region.cpuMs", work.regionCpuMs);
+            }
+            DxaProfiling::maximum("mesh.classification.workerSlots", nextDiagnosticSlot.load(std::memory_order_relaxed));
+            DxaProfiling::maximum("mesh.classification.workerOverflow", diagnosticOverflow.load(std::memory_order_relaxed) ? 1 : 0);
+        }
+        if(!classified) return false;
 
         classificationTiming.stop();
         DxaProfiling::Scope numberingTiming("mesh.cell-numbering");

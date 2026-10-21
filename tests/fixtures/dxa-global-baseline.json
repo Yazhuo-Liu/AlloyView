@@ -1,0 +1,1563 @@
+{
+  "baselineCommit": "d1bfe2f4f810c4c204bc0ddad417332fafbd7368",
+  "kernel": "threaded binary constrained to one thread; BDEL backend",
+  "artifacts": {
+    "dxa-kernel-threaded.mjs": "1f74bd796ba176c2c635a83fa7f432885c689ec80771ff72d03fd7eaf183c170",
+    "dxa-kernel-threaded.wasm": "3d174d08320b6586659b7bd2d636dbebac84092866306d6f809e7710f9203661"
+  },
+  "fixtures": {
+    "fcc-pbc-0": {
+      "scienceHash": "fe59b6923870e05e407bce7bf6aef4206679f4ccdd5dbda365a1f30af62f6a58",
+      "snapshotHash": "e5ee84820d3d353d917b904ab13bbf0d4c6cf4270ef7fe56cad14be5a97788e5",
+      "geometry": {
+        "vertexCount": 256,
+        "cellCount": 1466,
+        "finiteTetrahedra": 1376,
+        "finiteNeighborPairs": 2707,
+        "exactEmptySpherePairs": 2707,
+        "cosphericalPairs": 0,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "e99039dd5c466be509f1167fad0e7509c56863de381e826653ac8b05002c140b",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            false,
+            false,
+            false
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "374c5a8bce83b5becbd699d858bede870638c74616f1df7694fcdc6fbc9e8cf0"
+    },
+    "fcc-pbc-1": {
+      "scienceHash": "ee9aa89e4d82f2ecbc5deb8300be5938a2f2a9541cb0d2ffb2c8c4817b32c215",
+      "snapshotHash": "6344d2739be858aae9e014fb9d5ca7125017fb000e46f2b5483cd882de552151",
+      "geometry": {
+        "vertexCount": 608,
+        "cellCount": 3564,
+        "finiteTetrahedra": 3446,
+        "finiteNeighborPairs": 6833,
+        "exactEmptySpherePairs": 6833,
+        "cosphericalPairs": 0,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "e99039dd5c466be509f1167fad0e7509c56863de381e826653ac8b05002c140b",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            false,
+            false
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "07857114a0c0bd7e0be7c903373b011e7a9db668be3409651f5d9ffcc5b9d114"
+    },
+    "fcc-pbc-2": {
+      "scienceHash": "6126e217ed403d2483cc5f1657a57c8f2f4033bee1acc4705acf2334086863f5",
+      "snapshotHash": "b77773e90ae2c416a37a35b9b62e79d6bc0ddadf3f3f37484842da3f4694627b",
+      "geometry": {
+        "vertexCount": 608,
+        "cellCount": 3562,
+        "finiteTetrahedra": 3422,
+        "finiteNeighborPairs": 6774,
+        "exactEmptySpherePairs": 6774,
+        "cosphericalPairs": 0,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "e99039dd5c466be509f1167fad0e7509c56863de381e826653ac8b05002c140b",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            false,
+            true,
+            false
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "e6c2d0467bf1b8d4724ad131ebd1d9b48fed45cb04f91cecdcb92bc6bba69ea3"
+    },
+    "fcc-pbc-3": {
+      "scienceHash": "653ecc7366ce22fa39bff6cf79da29b1d50a57d2efba846cfa2c71fdac201f3d",
+      "snapshotHash": "b2b97995d5fe00328d601cbc4ab1fa837f27c8526bad02c0a02eba3709391738",
+      "geometry": {
+        "vertexCount": 1444,
+        "cellCount": 8572,
+        "finiteTetrahedra": 8398,
+        "finiteNeighborPairs": 16709,
+        "exactEmptySpherePairs": 16709,
+        "cosphericalPairs": 4,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "e99039dd5c466be509f1167fad0e7509c56863de381e826653ac8b05002c140b",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            false
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "7e3f8ab5387566907a49cf2163f7addf38bd11d6b8a9e1fc95012c65bd979a13"
+    },
+    "fcc-pbc-4": {
+      "scienceHash": "34d236a2767316d2d0ff3f43faf8dc93269d7228c4d1d64c22ab5ac5a18d6afb",
+      "snapshotHash": "97c077da2cb257ac66196c22f51f6d3e483a1d11e29a696189a4a26ff0a8465c",
+      "geometry": {
+        "vertexCount": 608,
+        "cellCount": 3544,
+        "finiteTetrahedra": 3412,
+        "finiteNeighborPairs": 6758,
+        "exactEmptySpherePairs": 6758,
+        "cosphericalPairs": 0,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "e99039dd5c466be509f1167fad0e7509c56863de381e826653ac8b05002c140b",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            false,
+            false,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "7710cdeade645cda02f26ca6adcb90f5e46fc259f4cc80b5335b0b7de7a5014b"
+    },
+    "fcc-pbc-5": {
+      "scienceHash": "9450883accf06f9b12d7f98ae1e86e563de49dc436e1519ae58bdc0b1bf60df4",
+      "snapshotHash": "2aa1f6302fbfd5c5936fecfe5d0f82b50678f248011b940dbf86e3cbf69eefd5",
+      "geometry": {
+        "vertexCount": 1444,
+        "cellCount": 8581,
+        "finiteTetrahedra": 8389,
+        "finiteNeighborPairs": 16682,
+        "exactEmptySpherePairs": 16682,
+        "cosphericalPairs": 2,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "e99039dd5c466be509f1167fad0e7509c56863de381e826653ac8b05002c140b",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            false,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "359d506cd7a8520e02950a24e84af8a3523d765354e63f664574cd484181892f"
+    },
+    "fcc-pbc-6": {
+      "scienceHash": "50b193e69714d72e4c14c8c18c61f65bd3e06757c20826b9147052d7a6e5ef85",
+      "snapshotHash": "f8c4b8c197c90e8143322b47cf32db5846dc4d785efde0098d33cb9781ab4fa3",
+      "geometry": {
+        "vertexCount": 1444,
+        "cellCount": 8565,
+        "finiteTetrahedra": 8369,
+        "finiteNeighborPairs": 16640,
+        "exactEmptySpherePairs": 16640,
+        "cosphericalPairs": 5,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "e99039dd5c466be509f1167fad0e7509c56863de381e826653ac8b05002c140b",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            false,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "8b617c7c1456693c8f5ea025031bb204037325669c78ab8342914fe107aa6312"
+    },
+    "fcc-pbc-7": {
+      "scienceHash": "4d024810dac9205b7d0efebfe70960820feaa34cc7cd7e7a75d8b53594328a2a",
+      "snapshotHash": "115ed5a04ec2ec1ec674b740b8d35bc56ee988f8b133bef29a92ac0f6b56eaff",
+      "geometry": {
+        "vertexCount": 3429,
+        "cellCount": 20529,
+        "finiteTetrahedra": 20279,
+        "finiteNeighborPairs": 40433,
+        "exactEmptySpherePairs": 40433,
+        "cosphericalPairs": 12,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "e99039dd5c466be509f1167fad0e7509c56863de381e826653ac8b05002c140b",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "b5a3e95a3078d6b1d45532826a0f4ec5406ab06d5462b674597e5a52f2fc7e56"
+    },
+    "triclinic-mixed": {
+      "scienceHash": "9450883accf06f9b12d7f98ae1e86e563de49dc436e1519ae58bdc0b1bf60df4",
+      "snapshotHash": "1de11a466d1e10aad8e8b2edb32d397c5298212599cecdc9f78d8d748c281836",
+      "geometry": {
+        "vertexCount": 1444,
+        "cellCount": 8569,
+        "finiteTetrahedra": 8381,
+        "finiteNeighborPairs": 16668,
+        "exactEmptySpherePairs": 16668,
+        "cosphericalPairs": 0,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "0c069af71824c2eb25a978c0b1f56a5096e2844bfa5deb5c96f361878c8dcc50",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0.9856000000000001,
+            14.08,
+            0,
+            0.4224,
+            0.5632,
+            14.08
+          ],
+          "origin": [
+            -3,
+            5,
+            7
+          ],
+          "pbc": [
+            true,
+            false,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "10b453d773b060d65b3249bc931867f1733e77de28c49f113d21241d3633cc41"
+    },
+    "near-cospherical": {
+      "scienceHash": "4d024810dac9205b7d0efebfe70960820feaa34cc7cd7e7a75d8b53594328a2a",
+      "snapshotHash": "1f52be42013409ba07b192e8ca1e2399cc222773b126b4f56e02ace4de100194",
+      "geometry": {
+        "vertexCount": 3429,
+        "cellCount": 20528,
+        "finiteTetrahedra": 20280,
+        "finiteNeighborPairs": 40436,
+        "exactEmptySpherePairs": 40436,
+        "cosphericalPairs": 12,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "369e06cbedbe33d327d80f4a5ba629f901db37feeae7ca3700e3bc709d936b18",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "0b55a2a8021dc6de178ada73a75c3cf8ff7cd6464a192b628495206d29c3b8d5"
+    },
+    "thin-valid": {
+      "scienceHash": "e7a4edcf3a40c279c759c6c9162926e9f2771ab27023ee63218927344bbb8132",
+      "snapshotHash": "7b757b053218421c0b9dc3492ab91ec9554ce38c24235f52698efec5400a4072",
+      "geometry": {
+        "vertexCount": 6196,
+        "cellCount": 37065,
+        "finiteTetrahedra": 36789,
+        "finiteNeighborPairs": 73440,
+        "exactEmptySpherePairs": 73440,
+        "cosphericalPairs": 7,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "5d6fd3c6603b6d0356577d5bfd2047f6be05dbbd2e15fb1a12e5635409057608",
+      "input": {
+        "atomCount": 768,
+        "cell": {
+          "vectors": [
+            28.16,
+            0,
+            0,
+            0,
+            28.16,
+            0,
+            0,
+            0,
+            10.56
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "a60b99e3320c997bf9ed332a551b34a879ab05977906b0d6cd57c582aaa6c780"
+    },
+    "thin-small": {
+      "error": "Cannot construct manifold. Simulation cell length is too small for the given probe sphere radius parameter.",
+      "snapshotHash": "42ec34eac37549c16a5f40bbf344415135234afdec5544f8f82f19ab5ae808ad",
+      "geometry": {
+        "vertexCount": 2346,
+        "cellCount": 13939,
+        "finiteTetrahedra": 13621,
+        "finiteNeighborPairs": 27083,
+        "exactEmptySpherePairs": 27083,
+        "cosphericalPairs": 36,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "4adf9fc1b0b43809599b2cefcc704c6bf0805eeb82709db8ecd214ac5470b6de",
+      "input": {
+        "atomCount": 64,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            3.52
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "4a72b070be3181c7d035bb00e7b66b298d9f77caefbe906a907da3726352d78b"
+    },
+    "duplicate-position": {
+      "scienceHash": "b1d4fa03df6b62803b17ce27a543a7bc89a459a652e9ae31a4f3dd9d422ec68e",
+      "snapshotHash": "d9f50d3cca9bdbc484e988911cd486f4c6197f1a9b9ecb199b2a8e995fb44024",
+      "geometry": {
+        "vertexCount": 3429,
+        "cellCount": 20585,
+        "finiteTetrahedra": 20335,
+        "finiteNeighborPairs": 40545,
+        "exactEmptySpherePairs": 40545,
+        "cosphericalPairs": 12,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "8aaf15b4fe1953ce0fee541aaca2457a1debcc62e28e7979801ac7aa46b0ac8d",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "a9b5f9e00c47bc1e1b901c34d178b527378aaf959f553942a521042a451b4985"
+    },
+    "vacuum-slab": {
+      "scienceHash": "c179a8738d504225aa699010bce69ac22f386cf19b97dc995bc18efe5bf243e2",
+      "snapshotHash": "43edae01a5bc3de9e0b02fac0e8faacefa9e139ad41edf6462c8fb869d393292",
+      "geometry": {
+        "vertexCount": 1444,
+        "cellCount": 8575,
+        "finiteTetrahedra": 8401,
+        "finiteNeighborPairs": 16715,
+        "exactEmptySpherePairs": 16715,
+        "cosphericalPairs": 4,
+        "orientationSign": -1
+      },
+      "coordinatesSha256": "0cec582921faa79c87056f8b4f9d2f5662a6f6da49b6271c1256f12468c536d9",
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            40
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            false
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "8f8185ea7c67eebc44bdeada45541d37c7dd6ad532b8ccf2059cf6fb9fefdf97"
+    },
+    "junction-network": {
+      "scienceHash": "a824a54a005304356847257aaf07b33731caa71d856f1efd211b1d60063f10ed",
+      "geometry": null,
+      "coordinatesSha256": "c5c6970f1dcc43e3873c593321e10d1688ee80cdfd80577184bff260532becf8",
+      "input": {
+        "atomCount": 25600,
+        "cell": {
+          "vectors": [
+            79.64850783285272,
+            0,
+            0,
+            0,
+            70.4,
+            0,
+            0,
+            0,
+            49.78031739553295
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            false,
+            false,
+            false
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "f97c4617ff6d4af8400c88be73e5dc047bfd88b53f841dc35280f3e9695fbd27"
+    },
+    "screw-pair": {
+      "scienceHash": "a6291f70c02b019486988ea933fe2debae392e41e52213806d3df678b376f197",
+      "coordinatesSha256": "14fa14858813fef37aa1fa0cac6ddb7a2a9731005d1df843ae4245b27c7ff262",
+      "input": {
+        "atomCount": 9216,
+        "cell": {
+          "vectors": [
+            79.64850783285272,
+            0,
+            0,
+            0,
+            84.48,
+            0,
+            0,
+            0,
+            14.934095218659884
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            false,
+            false,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "scientificInputSha256": "5b44df2ee33938e7350af0b2526a4d8955dde417668f40d909371caf1c661720"
+    },
+    "trajectory-initial": {
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "coordinatesSha256": "e99039dd5c466be509f1167fad0e7509c56863de381e826653ac8b05002c140b",
+      "scientificInputSha256": "b5a3e95a3078d6b1d45532826a0f4ec5406ab06d5462b674597e5a52f2fc7e56",
+      "snapshotHash": "115ed5a04ec2ec1ec674b740b8d35bc56ee988f8b133bef29a92ac0f6b56eaff",
+      "scienceHash": "4d024810dac9205b7d0efebfe70960820feaa34cc7cd7e7a75d8b53594328a2a"
+    },
+    "trajectory-translated": {
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "coordinatesSha256": "a18d5f0c85593b222338f91decb76b5af73474f692b115c750a9bea4b248544a",
+      "scientificInputSha256": "8763ab441c6c8da87bf687321d1a815348afd1d333ec7e881edcd0190cf6f30c",
+      "snapshotHash": "433378801e7850a0fc482008ae6c6cf80e9b8ac219faa692972d1ea163547d3e",
+      "scienceHash": "4d024810dac9205b7d0efebfe70960820feaa34cc7cd7e7a75d8b53594328a2a"
+    },
+    "trajectory-perturbed": {
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "coordinatesSha256": "b2f9af27e99adec6f7e227b903c788a64a862c64950bc04e68234171cd0dc775",
+      "scientificInputSha256": "17159e9ad773ddf93d575952edda9b3d2ec94d66cec5a0f592e2b19f32e5d9d7",
+      "snapshotHash": "1ac2a4fe84945bd4af210768f8192fbd461fdd8df45f460c795b5fe0bfe0c52c",
+      "scienceHash": "4d024810dac9205b7d0efebfe70960820feaa34cc7cd7e7a75d8b53594328a2a"
+    },
+    "trajectory-cell": {
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.10816,
+            0,
+            0,
+            0.04224,
+            14.08,
+            0,
+            0,
+            0.02816,
+            14.06592
+          ],
+          "origin": [
+            -2,
+            3,
+            1
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "coordinatesSha256": "c14ed76d953dc605a554f225f2656a5d1f46ef32f2468a8ee0c3d02e5173797a",
+      "scientificInputSha256": "db2c11c0396ff7aa0775b4b2ac0d70a9c33901f57d7220a1e54162cd0b559298",
+      "snapshotHash": "a874619b5fd97f855030c97397cb0cc25943d74fb79655e2dd135735aced0d74",
+      "scienceHash": "8acd456ad5d0cc90c253a4885599049f5961f94771c89702382bca17888294c2"
+    },
+    "trajectory-vacancy": {
+      "input": {
+        "atomCount": 255,
+        "cell": {
+          "vectors": [
+            14.10816,
+            0,
+            0,
+            0.04224,
+            14.08,
+            0,
+            0,
+            0.02816,
+            14.06592
+          ],
+          "origin": [
+            -2,
+            3,
+            1
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "coordinatesSha256": "40f81d6f59ba8664a9d970d7fa65f5b2a970391b620adf3ee6c71aed4967ad0f",
+      "scientificInputSha256": "2fd981b2440e71794ec6c98c239deb60124705f485d5f03ccdd4af7520598bd7",
+      "snapshotHash": "20a0e45c5ccd748310467e1fd851b572aab39e5cd1e688c2f0a1e359cba076b4",
+      "scienceHash": "71d14fe5a3557133f65ff240d56dd11669a6f2a11f4b11d0dd11511dd1616815"
+    },
+    "trajectory-return": {
+      "input": {
+        "atomCount": 256,
+        "cell": {
+          "vectors": [
+            14.08,
+            0,
+            0,
+            0,
+            14.08,
+            0,
+            0,
+            0,
+            14.08
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            true,
+            true
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "coordinatesSha256": "e99039dd5c466be509f1167fad0e7509c56863de381e826653ac8b05002c140b",
+      "scientificInputSha256": "b5a3e95a3078d6b1d45532826a0f4ec5406ab06d5462b674597e5a52f2fc7e56",
+      "snapshotHash": "115ed5a04ec2ec1ec674b740b8d35bc56ee988f8b133bef29a92ac0f6b56eaff",
+      "scienceHash": "4d024810dac9205b7d0efebfe70960820feaa34cc7cd7e7a75d8b53594328a2a"
+    },
+    "shockley-partials": {
+      "input": {
+        "atomCount": 6912,
+        "cell": {
+          "vectors": [
+            14.934095218659884,
+            0,
+            0,
+            0,
+            103.46644673516144,
+            0,
+            0,
+            0,
+            48.77455074113959
+          ],
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "pbc": [
+            true,
+            false,
+            false
+          ]
+        },
+        "lattice": 1,
+        "parameters": {
+          "trialCircuitLength": 14,
+          "circuitStretchability": 9,
+          "onlyPerfectDislocations": false,
+          "lineSmoothingIterations": 1,
+          "linePointInterval": 2.5
+        }
+      },
+      "coordinatesSha256": "4e8ea02ff39a3493ce19ac94da886564a0237885561462276f5760e46386bf2e",
+      "scientificInputSha256": "b65d544fb689c8ad6cf50bae12d242de77a11b64a28a1de5ee85ff5b7c1a591f",
+      "scienceHash": "348625eb29de2b1fe11a495d7a8fb93d5b8e9d6ec11290904dedd0def4d2c202"
+    }
+  },
+  "surfaceVoid": {
+    "summary": {
+      "algorithm": "OVITO alpha shape 3.9.4",
+      "radius": 3.2,
+      "smoothingLevel": 2,
+      "atomCount": 1993,
+      "inputCount": 1993,
+      "tetrahedronCount": 68398,
+      "filledTetrahedronCount": 11904,
+      "vertexCount": 32,
+      "faceCount": 60,
+      "duplicatedVertices": 0,
+      "surfaceComponentCount": 1,
+      "regionCount": 2,
+      "spaceFilling": false,
+      "surfaceArea": 354.84717404848436,
+      "cellVolume": 22330.474496,
+      "filledVolume": 21698.06848029735,
+      "emptyVolume": 632.4060157027317,
+      "voidVolume": 632.4060157027317,
+      "filledRegionCount": 1,
+      "emptyRegionCount": 1,
+      "voidRegionCount": 1
+    },
+    "counts": [
+      32,
+      60,
+      2
+    ],
+    "hash": "fb36c550bfd5436e2ef8d855ba42dbb9861f5513b9351bcc0fc9789d385b2394",
+    "vertices": [
+      20.158075305222116,
+      7.325720734585,
+      7,
+      20.68880715433809,
+      5.52358961731815,
+      33.17948086590745,
+      22.806439503436955,
+      8.67977159741459,
+      31.939587018227837,
+      23.423991217810606,
+      10.195427789747272,
+      6.999999999999999,
+      -2.6771681493792965,
+      10.096946493485177,
+      9.34429399815328,
+      22.154864282343283,
+      8.245388116685474,
+      10.22041298177217,
+      23.860041796108202,
+      5.458361938374201,
+      29.91809691871003,
+      2.257935717656715,
+      30.477811883314526,
+      31.939587018227837,
+      3.0419616976163604,
+      5.52358961731815,
+      33.17948086590745,
+      -0.32495598098560297,
+      5.458361938374201,
+      29.91809691871003,
+      2.3159928456619134,
+      5.039610382681851,
+      8.98051913409254,
+      2.23449676823638,
+      7.325720734585001,
+      7,
+      -1.774174210731508,
+      28.15682526644095,
+      9.34429399815328,
+      23.244766296638282,
+      30.043428402585413,
+      10.22041298177217,
+      -1.5568288187134505,
+      30.92483712485893,
+      12.06652844977942,
+      -1.973025789268493,
+      10.566374733559046,
+      32.81570600184673,
+      19.96283830238364,
+      5.0396103826818495,
+      8.98051913409254,
+      23.329755980985603,
+      5.1048380616258,
+      12.241903081289971,
+      23.89634151773195,
+      30.477811883314526,
+      31.939587018227837,
+      -1.0160205257002155,
+      31.28537598686775,
+      30.093471550220578,
+      -2.1903711812865505,
+      7.798362875141069,
+      30.093471550220578,
+      24.312448438835883,
+      27.964572210252726,
+      6.999999999999999,
+      21.333503231763615,
+      30.834279265415,
+      7,
+      0.14400878218939117,
+      27.964572210252726,
+      6.999999999999999,
+      -1.0700318506207047,
+      28.626253506514825,
+      32.81570600184673,
+      1.6063604965630454,
+      30.04342840258541,
+      10.22041298177217,
+      -0.7444484388358816,
+      10.195427789747272,
+      6.999999999999999,
+      -2.7311794742997844,
+      7.4378240131322455,
+      12.06652844977942,
+      0.5164584822680485,
+      8.245388116685477,
+      10.22041298177217,
+      -0.8552417961082042,
+      5.1048380616258,
+      12.241903081289971,
+      3.409924694777881,
+      30.834279265415,
+      7,
+      1.1680337033617183,
+      8.67977159741459,
+      31.939587018227837
+    ],
+    "particles": [
+      1505,
+      1532,
+      1806,
+      1781,
+      22,
+      1782,
+      1778,
+      475,
+      256,
+      20,
+      231,
+      232,
+      178,
+      1969,
+      209,
+      47,
+      1504,
+      1759,
+      1992,
+      228,
+      19,
+      1940,
+      1729,
+      180,
+      206,
+      451,
+      23,
+      0,
+      261,
+      1,
+      450,
+      285
+    ],
+    "faces": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      2,
+      1,
+      6,
+      7,
+      8,
+      9,
+      8,
+      10,
+      11,
+      12,
+      13,
+      14,
+      3,
+      2,
+      15,
+      16,
+      5,
+      17,
+      18,
+      19,
+      6,
+      6,
+      19,
+      9,
+      20,
+      6,
+      9,
+      21,
+      13,
+      12,
+      13,
+      22,
+      16,
+      5,
+      16,
+      0,
+      21,
+      23,
+      24,
+      18,
+      22,
+      21,
+      13,
+      16,
+      17,
+      21,
+      22,
+      13,
+      13,
+      17,
+      14,
+      23,
+      21,
+      12,
+      23,
+      12,
+      25,
+      12,
+      14,
+      25,
+      4,
+      3,
+      26,
+      27,
+      4,
+      28,
+      4,
+      27,
+      5,
+      3,
+      5,
+      0,
+      28,
+      4,
+      26,
+      2,
+      3,
+      0,
+      17,
+      5,
+      27,
+      1,
+      0,
+      16,
+      22,
+      1,
+      16,
+      17,
+      27,
+      29,
+      29,
+      27,
+      28,
+      6,
+      1,
+      18,
+      1,
+      22,
+      18,
+      8,
+      7,
+      30,
+      19,
+      7,
+      9,
+      2,
+      20,
+      15,
+      20,
+      31,
+      15,
+      20,
+      2,
+      6,
+      31,
+      20,
+      9,
+      8,
+      31,
+      9,
+      17,
+      29,
+      14,
+      29,
+      10,
+      25,
+      14,
+      29,
+      25,
+      31,
+      8,
+      11,
+      29,
+      28,
+      10,
+      11,
+      28,
+      26,
+      31,
+      11,
+      26,
+      15,
+      31,
+      26,
+      3,
+      15,
+      26,
+      23,
+      7,
+      24,
+      7,
+      23,
+      30,
+      23,
+      25,
+      30,
+      25,
+      10,
+      30,
+      10,
+      8,
+      30,
+      28,
+      11,
+      10,
+      18,
+      24,
+      19,
+      24,
+      18,
+      21,
+      19,
+      24,
+      7
+    ],
+    "faceRegions": [
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1
+    ],
+    "regions": [
+      21698.06848029735,
+      354.84717404848436,
+      1,
+      0,
+      632.4060157027317,
+      354.84717404848436,
+      0,
+      0
+    ],
+    "input": {
+      "atomCount": 1993,
+      "cell": {
+        "vectors": [
+          28.16,
+          0,
+          0,
+          1.4080000000000001,
+          28.16,
+          0,
+          0.8448,
+          0.5632,
+          28.16
+        ],
+        "origin": [
+          -3,
+          5,
+          7
+        ],
+        "pbc": [
+          true,
+          true,
+          true
+        ]
+      },
+      "parameters": {
+        "radius": 3.2,
+        "smoothingLevel": 2,
+        "selection": null
+      }
+    },
+    "scientificInputSha256": "db0ffc786f71708412073c957fa9a7f2f6fea1bf3691c1869d66147c7e49c107"
+  }
+}

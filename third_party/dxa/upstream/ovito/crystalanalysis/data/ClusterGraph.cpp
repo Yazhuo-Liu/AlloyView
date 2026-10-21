@@ -22,6 +22,7 @@
 
 #include <ovito/crystalanalysis/CrystalAnalysis.h>
 #include "ClusterGraph.h"
+#include "geometry/DxaProfiling.h"
 
 namespace Ovito::CrystalAnalysis {
 
@@ -180,25 +181,44 @@ ClusterTransition* ClusterGraph::createSelfTransition(Cluster* cluster)
 ClusterTransition* ClusterGraph::determineClusterTransition(Cluster* clusterA, Cluster* clusterB)
 {
     OVITO_ASSERT(clusterA != nullptr && clusterB != nullptr);
+    // Queries and cache writes execute in coordinator order. Worker path searches
+    // only inspect existing transitions and defer any query that would mutate this graph.
+    DxaProfiling::Scope queryTiming("transitions.query");
+    const bool profileQuery = DxaProfiling::enabled();
+    DxaProfiling::add("transitions.queries", 1);
 
     // Handle trivial case (self-transition).
-    if(clusterA == clusterB)
+    if(clusterA == clusterB) {
+        DxaProfiling::Scope selfTiming("transitions.selfTransition");
+        DxaProfiling::add("transitions.selfQueries", 1);
         return createSelfTransition(clusterA);
+    }
 
     // Check if there is a direct transition to the target cluster.
+    DxaProfiling::Scope directTiming("transitions.directLookup");
+    size_t directEntriesVisited = 0;
     for(ClusterTransition* t = clusterA->transitions; t != nullptr; t = t->next) {
+        if(profileQuery) ++directEntriesVisited;
         // Verify that the linked list is ordered.
         OVITO_ASSERT(t->next == nullptr || t->next->distance >= t->distance);
-        if(t->cluster2 == clusterB)
+        if(t->cluster2 == clusterB) {
+            DxaProfiling::add("transitions.directEntriesVisited", directEntriesVisited);
+            DxaProfiling::add("transitions.directHits", 1);
+            if(profileQuery && t->distance > 1) DxaProfiling::add("transitions.cachedPathHits", 1);
             return t;
+        }
     }
+    directTiming.stop();
+    DxaProfiling::add("transitions.directEntriesVisited", directEntriesVisited);
 
     // Check if either the start or the destination cluster has no transitions to other clusters.
     // Then there cannot be a path connecting them.
     if(clusterA->transitions == nullptr || (clusterA->transitions->isSelfTransition() && clusterA->transitions->next == nullptr)) {
+        DxaProfiling::add("transitions.isolatedSourceFailures", 1);
         return nullptr;
     }
     if(clusterB->transitions == nullptr || (clusterB->transitions->isSelfTransition() && clusterB->transitions->next == nullptr)) {
+        DxaProfiling::add("transitions.isolatedTargetFailures", 1);
         return nullptr;
     }
 
@@ -208,29 +228,40 @@ ClusterTransition* ClusterGraph::determineClusterTransition(Cluster* clusterA, C
     if(clusterA->id > clusterB->id) {
         reversedSearch = true;
         std::swap(clusterA, clusterB);
+        DxaProfiling::add("transitions.reversedSearches", 1);
     }
 
     // Check if the transition between the same pair of clusters has been requested
     // in the past and we already found that they are part of disconnected components of the graph.
+    DxaProfiling::Scope disconnectedTiming("transitions.disconnectedLookup");
     if(_disconnectedClusters.find(std::make_pair(clusterA, clusterB)) != _disconnectedClusters.end()) {
+        DxaProfiling::add("transitions.disconnectedCacheHits", 1);
         return nullptr;
     }
+    disconnectedTiming.stop();
 
     OVITO_ASSERT(_maximumClusterDistance == 2);
 
     // A hardcoded shortest path search for maximum depth 2:
+    DxaProfiling::Scope searchTiming("transitions.search");
+    DxaProfiling::add("transitions.searches", 1);
+    size_t firstEdgesVisited = 0, secondEdgesVisited = 0, targetMatches = 0, bestUpdates = 0;
     int shortestDistance = _maximumClusterDistance + 1;
     ClusterTransition* shortestPath1 = nullptr;
     ClusterTransition* shortestPath2;
     for(ClusterTransition* t1 = clusterA->transitions; t1 != nullptr; t1 = t1->next) {
+        if(profileQuery) ++firstEdgesVisited;
         OVITO_ASSERT(t1->cluster2 != clusterB);
         if(t1->cluster2 == clusterA) continue;
         OVITO_ASSERT(t1->distance >= 1);
         for(ClusterTransition* t2 = t1->cluster2->transitions; t2 != nullptr; t2 = t2->next) {
+            if(profileQuery) ++secondEdgesVisited;
             if(t2->cluster2 == clusterB) {
+                if(profileQuery) ++targetMatches;
                 OVITO_ASSERT(t2->distance >= 1);
                 int distance = t1->distance + t2->distance;
                 if(distance < shortestDistance) {
+                    if(profileQuery) ++bestUpdates;
                     shortestDistance = distance;
                     shortestPath1 = t1;
                     shortestPath2 = t2;
@@ -239,10 +270,18 @@ ClusterTransition* ClusterGraph::determineClusterTransition(Cluster* clusterA, C
             }
         }
     }
+    searchTiming.stop();
+    DxaProfiling::add("transitions.searchFirstEdgesVisited", firstEdgesVisited);
+    DxaProfiling::add("transitions.searchSecondEdgesVisited", secondEdgesVisited);
+    DxaProfiling::add("transitions.searchTargetMatches", targetMatches);
+    DxaProfiling::add("transitions.searchBestUpdates", bestUpdates);
     if(shortestPath1) {
         // Create a direct transition (edge) between the two nodes in the cluster graph to speed up subsequent path queries.
         OVITO_ASSERT(shortestDistance >= 1);
+        DxaProfiling::add("transitions.searchSuccesses", 1);
+        DxaProfiling::Scope cacheTiming("transitions.cacheTransition");
         ClusterTransition* newTransition = createClusterTransition(clusterA, clusterB, shortestPath2->tm * shortestPath1->tm, shortestDistance);
+        DxaProfiling::add("transitions.cachedSearchTransitions", 1);
         if(reversedSearch == false)
             return newTransition;
         else
@@ -250,7 +289,10 @@ ClusterTransition* ClusterGraph::determineClusterTransition(Cluster* clusterA, C
     }
 
     // Flag this pair as disconnected to speed up subsequent queries for the same pair.
+    DxaProfiling::add("transitions.searchFailures", 1);
+    DxaProfiling::Scope cacheTiming("transitions.cacheDisconnected");
     _disconnectedClusters.insert(std::make_pair(clusterA, clusterB));
+    DxaProfiling::add("transitions.cachedDisconnectedPairs", 1);
 
     return nullptr;
 }

@@ -26,8 +26,66 @@
 #include "InterfaceMesh.h"
 #include "geometry/TracingScratch.h"
 #include "geometry/DxaProfiling.h"
+#include <cstdio>
 
 namespace Ovito::CrystalAnalysis {
+
+namespace {
+// Diagnostic labels have process lifetime because Profile stores name pointers.
+// Public DXA parameters admit trial <= 100 and trial + stretch <= 200.
+enum TracingDepthMetric { Seeds, Records, ProcessedRecords, ExaminedEdges, BlockedEdges,
+    StoppedSeeds, SeedsWithSegment, ExhaustedSeeds, BlockedByCircuit, BlockedByFace,
+    RevisitedNeighbors, ZeroBurgersRevisits, FrankMismatchRevisits, DepthLimitedNeighbors, PrimaryCircuitAttempts,
+    PrimaryWorkMetricCount, ExtensionCalls = PrimaryWorkMetricCount, Junctions, PrimaryTime,
+    ExtensionTime, JoinTime, SecondaryTime, PrimaryCleanupTime, JoinCleanupTime,
+    TracingDepthMetricCount };
+const char* tracingDepthName(int depth, TracingDepthMetric metric)
+{
+    struct Names {
+        std::array<std::array<std::array<char, 64>, TracingDepthMetricCount>, 201> values{};
+        Names() {
+            constexpr const char* suffixes[] = { "primarySeeds", "primaryRecords", "primaryProcessedRecords",
+                "primaryExaminedEdges", "primaryBlockedEdges", "primaryStoppedSeeds", "primarySeedsWithSegment",
+                "primaryExhaustedSeeds", "primaryBlockedByCircuit", "primaryBlockedByFace",
+                "primaryRevisitedNeighbors", "primaryZeroBurgersRevisits", "primaryFrankMismatchRevisits",
+                "primaryDepthLimitedNeighbors", "primaryCircuitAttempts", "extensionCalls", "junctions", "primarySearch",
+                "extendExisting", "joinSegments", "createSecondarySegment", "primaryCleanup", "joinCleanup" };
+            for(size_t depth = 0; depth < values.size(); ++depth)
+                for(size_t metric = 0; metric < TracingDepthMetricCount; ++metric)
+                    std::snprintf(values[depth][metric].data(), values[depth][metric].size(),
+                        "tracing.depth.%zu.%s", depth, suffixes[metric]);
+        }
+    };
+    static const Names names;
+    return depth >= 0 && depth <= 200 ? names.values[depth][metric].data() : "tracing.depth.outOfRange";
+}
+struct PrimarySearchWork {
+    const bool enabled;
+    const int depth;
+    std::array<size_t, PrimaryWorkMetricCount> counts{};
+    ~PrimarySearchWork() {
+        if(!enabled) return;
+        constexpr const char* totals[] = { "tracing.primary.seeds", "tracing.primary.records",
+            "tracing.primary.processedRecords", "tracing.primary.examinedEdges", "tracing.primary.blockedEdges",
+            "tracing.primary.stoppedSeeds", "tracing.primary.seedsWithSegment", "tracing.primary.exhaustedSeeds",
+            "tracing.primary.blockedByCircuit", "tracing.primary.blockedByFace", "tracing.primary.revisitedNeighbors",
+            "tracing.primary.zeroBurgersRevisits", "tracing.primary.frankMismatchRevisits",
+            "tracing.primary.depthLimitedNeighbors", "tracing.primary.circuitAttempts" };
+        for(size_t metric = 0; metric < counts.size(); ++metric) {
+            DxaProfiling::add(totals[metric], counts[metric]);
+            DxaProfiling::add(tracingDepthName(depth, static_cast<TracingDepthMetric>(metric)), counts[metric]);
+        }
+    }
+};
+// Wrapping each existing predicate preserves its short-circuit evaluation order.
+// Only the first rejecting predicate contributes, making reason totals additive.
+bool profileFirstRejection(bool rejected, const char* reason)
+{
+    if(rejected) DxaProfiling::add(reason, 1);
+    return rejected;
+}
+}
+
 
 /******************************************************************************
 * Allocates a new BurgersCircuit instance.
@@ -70,13 +128,38 @@ bool DislocationTracer::traceDislocationSegments(ProgressingTask& operation)
     operation.beginProgressSubStepsWithWeights(subStepWeights);
 
     mesh().clearFaceFlag(0);
+    DxaProfiling::Scope tracingTiming("tracing.total");
+    const bool profileTracing = DxaProfiling::enabled();
+    if(profileTracing) {
+        constexpr const char* outcomeCounters[] = {
+            "tracing.circuitAttempts", "tracing.acceptedCircuitAttempts", "tracing.discardedCircuitAttempts",
+            "tracing.intersectingCircuitAttempts", "tracing.circuitRejected.zeroBurgers",
+            "tracing.circuitRejected.periodicNonclosure", "tracing.circuitRejected.intersection",
+            "tracing.secondaryAttempts", "tracing.createdSecondarySegments",
+            "tracing.secondaryRejected.singleCircuit", "tracing.secondaryRejected.lengthLimit",
+            "tracing.secondaryRejected.zeroBurgers", "tracing.secondaryRejected.periodicNonclosure",
+            "tracing.secondaryRejected.frankMismatch", "tracing.join.candidates",
+            "tracing.join.skippedAlreadyJoined", "tracing.join.skippedUnblocked",
+            "tracing.join.skippedSingleArm", "tracing.join.skippedIncompleteRing",
+            "tracing.closedTwoArmLoops", "tracing.mergedSegments"
+        };
+        for(const char* name : outcomeCounters) DxaProfiling::add(name, 0);
+    }
 
     // Incrementally extend search radius for new Burgers circuits and extend existing segments by enlarging
     // the maximum circuit size until segments meet at a junction.
     size_t numJunctions = 0;
     for(int circuitLength = 3; circuitLength <= _maxExtendedBurgersCircuitSize; circuitLength++) {
 
+        DxaProfiling::add("tracing.depthPasses", 1);
+        if(profileTracing) {
+            DxaProfiling::add(tracingDepthName(circuitLength, ExtensionCalls), danglingNodes().size());
+            // Emit zero for depths where no secondary candidate is encountered.
+            DxaProfiling::addTiming(tracingDepthName(circuitLength, SecondaryTime), 0);
+        }
         // Extend existing segments with dangling ends.
+        DxaProfiling::Scope extensionTiming("tracing.extendExisting");
+        DxaProfiling::Scope depthExtensionTiming(profileTracing ? tracingDepthName(circuitLength, ExtensionTime) : "tracing.extendExisting");
         for(DislocationNode* node : danglingNodes()) {
             OVITO_ASSERT(node->circuit->isDangling);
             OVITO_ASSERT(node->circuit->countEdges() == node->circuit->edgeCount);
@@ -85,6 +168,8 @@ bool DislocationTracer::traceDislocationSegments(ProgressingTask& operation)
             traceSegment(*node->segment, *node, circuitLength, circuitLength <= _maxBurgersCircuitSize);
         }
 
+        depthExtensionTiming.stop();
+        extensionTiming.stop();
         // Find dislocation segments by generating trial Burgers circuits on the interface mesh
         // and then moving them in both directions along the dislocation segment.
         if(circuitLength <= _maxBurgersCircuitSize && (circuitLength % 2) != 0) {
@@ -93,7 +178,9 @@ bool DislocationTracer::traceDislocationSegments(ProgressingTask& operation)
         }
 
         // Join segments forming dislocation junctions.
-        numJunctions += joinSegments(circuitLength);
+        const size_t joined = joinSegments(circuitLength);
+        numJunctions += joined;
+        if(profileTracing) DxaProfiling::add(tracingDepthName(circuitLength, Junctions), joined);
 
         // Store circuits of dangling ends.
         if(circuitLength >= _maxBurgersCircuitSize) {
@@ -124,6 +211,8 @@ bool DislocationTracer::traceDislocationSegments(ProgressingTask& operation)
 ******************************************************************************/
 void DislocationTracer::finishDislocationSegments(int crystalStructure)
 {
+    // This is finishing/alignment, not the joinSegments work inside tracing.
+    DxaProfiling::Scope finishTiming("tracing.finishAndAlign");
     // Remove extra line points from segments that do not end in a junction.
     // Also assign consecutive IDs to final segments.
     for(int segmentIndex = 0; segmentIndex < network()->segments().size(); segmentIndex++) {
@@ -222,7 +311,11 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
     OVITO_ASSERT(searchDepth >= 1);
 
     DxaProfiling::Scope searchProfile("tracing.primarySearch");
-    TracingScratch<BurgersCircuitSearchStruct> structPool(DxaProfiling::enabled());
+    const bool profileSearch = DxaProfiling::enabled();
+    DxaProfiling::Scope depthProfile(profileSearch ? tracingDepthName(maxBurgersCircuitSize, PrimaryTime) : "tracing.primarySearch");
+    if(profileSearch) DxaProfiling::addTiming(tracingDepthName(maxBurgersCircuitSize, PrimaryCleanupTime), 0);
+    PrimarySearchWork work{profileSearch, maxBurgersCircuitSize};
+    TracingScratch<BurgersCircuitSearchStruct> structPool(profileSearch);
 
     operation.setProgressMaximum(mesh().vertexCount());
     int progressCounter = 0;
@@ -238,6 +331,8 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
 
         // The first node is the seed of our recursive walk.
         // It is mapped to the origin of the reference lattice.
+        const size_t segmentsBefore = profileSearch ? network()->segments().size() : 0;
+        if(profileSearch) { ++work.counts[Seeds]; ++work.counts[Records]; }
         BurgersCircuitSearchStruct* start = structPool.construct();
         start->latticeCoord = Point3::Origin();
         start->predecessorEdge = nullptr;
@@ -257,6 +352,7 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
 
         // Process nodes from the queue until it becomes empty or until a valid Burgers circuit has been found.
         for(BurgersCircuitSearchStruct* current = start; current != nullptr && foundBurgersCircuit == false; current = current->nextToProcess) {
+            if(profileSearch) ++work.counts[ProcessedRecords];
             InterfaceMesh::Vertex* currentNode = current->node;
             // These values belong to the queued node and never change while
             // examining its outgoing edges. Keep copies independent of writes
@@ -266,18 +362,23 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
             const int nextDepth = current->recursiveDepth + 1;
             const bool canEnqueue = current->recursiveDepth < searchDepth;
             for(InterfaceMesh::Edge* edge = currentNode->edges(); edge != nullptr; edge = edge->nextVertexEdge()) {
+                if(profileSearch) ++work.counts[ExaminedEdges];
 
                 OVITO_ASSERT((edge->circuit == nullptr) == (edge->nextCircuitEdge == nullptr));
                 OVITO_ASSERT((edge->oppositeEdge()->circuit == nullptr) == (edge->oppositeEdge()->nextCircuitEdge == nullptr));
                 OVITO_ASSERT(edge->face() != nullptr);
 
                 // Skip edges which are, or have already been, part of a Burgers circuit.
-                if(edge->nextCircuitEdge != nullptr || edge->oppositeEdge()->nextCircuitEdge != nullptr)
+                if(edge->nextCircuitEdge != nullptr || edge->oppositeEdge()->nextCircuitEdge != nullptr) {
+                    if(profileSearch) { ++work.counts[BlockedEdges]; ++work.counts[BlockedByCircuit]; }
                     continue;
+                }
 
                 // Skip edges that border an existing Burgers circuit.
-                if(edge->face()->circuit != nullptr)
+                if(edge->face()->circuit != nullptr) {
+                    if(profileSearch) { ++work.counts[BlockedEdges]; ++work.counts[BlockedByFace]; }
                     continue;
+                }
 
                 // Get the neighbor node.
                 InterfaceMesh::Vertex* neighbor = edge->vertex2();
@@ -290,6 +391,7 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
                 // then perform the Burgers circuit test now by comparing the previous to the new coordinates.
                 BurgersCircuitSearchStruct* neighborStruct = neighbor->burgersSearchStruct;
                 if(neighborStruct != nullptr) {
+                    if(profileSearch) ++work.counts[RevisitedNeighbors];
 
                     // Compute Burgers vector of the current circuit.
                     Vector3 burgersVector = neighborStruct->latticeCoord - neighborCoord;
@@ -298,16 +400,20 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
                         // Check if circuit encloses disclination.
                         Matrix3 frankRotation = currentTm * edge->clusterTransition->reverse->tm;
                         if(frankRotation.equals(neighborStruct->tm, CA_TRANSITION_MATRIX_EPSILON)) {
+                            if(profileSearch) ++work.counts[PrimaryCircuitAttempts];
                             // Stop as soon as a valid Burgers circuit has been found.
                             if(createBurgersCircuit(edge, maxBurgersCircuitSize)) {
                                 foundBurgersCircuit = true;
                                 break;
                             }
                         }
+                        else if(profileSearch) ++work.counts[FrankMismatchRevisits];
                     }
+                    else if(profileSearch) ++work.counts[ZeroBurgersRevisits];
                 }
                 else if(canEnqueue) {
                     // This neighbor has not been visited before. Put it at the end of the queue.
+                    if(profileSearch) ++work.counts[Records];
                     neighborStruct = structPool.construct();
                     neighborStruct->node = neighbor;
                     neighborStruct->latticeCoord = neighborCoord;
@@ -323,10 +429,17 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
                     end_of_queue->nextToProcess = neighborStruct;
                     end_of_queue = neighborStruct;
                 }
+                else if(profileSearch) ++work.counts[DepthLimitedNeighbors];
             }
         }
 
+        if(profileSearch) {
+            ++work.counts[foundBurgersCircuit ? StoppedSeeds : ExhaustedSeeds];
+            if(network()->segments().size() > segmentsBefore) ++work.counts[SeedsWithSegment];
+        }
         // Clear the pointers of the nodes that have been visited during the last pass.
+        DxaProfiling::Scope cleanupTiming("tracing.primaryCleanup");
+        DxaProfiling::Scope depthCleanupTiming(profileSearch ? tracingDepthName(maxBurgersCircuitSize, PrimaryCleanupTime) : "tracing.primaryCleanup");
         for(BurgersCircuitSearchStruct* s = start; s != nullptr; s = s->nextToProcess) {
             s->node->burgersSearchStruct = nullptr;
             s->node->visited = false;
@@ -353,6 +466,7 @@ bool DislocationTracer::findPrimarySegments(int maxBurgersCircuitSize, Progressi
 ******************************************************************************/
 bool DislocationTracer::createBurgersCircuit(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize)
 {
+    DxaProfiling::Scope timing("tracing.createCircuit");
     OVITO_ASSERT(edge->circuit == nullptr);
 
     InterfaceMesh::Vertex* currentNode = edge->vertex1();
@@ -361,6 +475,7 @@ bool DislocationTracer::createBurgersCircuit(InterfaceMesh::Edge* edge, int maxB
     BurgersCircuitSearchStruct* neighborStruct = neighborNode->burgersSearchStruct;
     OVITO_ASSERT(currentStruct != neighborStruct);
 
+    DxaProfiling::add("tracing.circuitAttempts", 1);
     // Reconstruct the Burgers circuit from the path we took along the mesh edges.
     BurgersCircuit* forwardCircuit = allocateCircuit();
     forwardCircuit->edgeCount = 1;
@@ -438,7 +553,9 @@ bool DislocationTracer::createBurgersCircuit(InterfaceMesh::Edge* edge, int maxB
 
     // Make sure new circuit does not intersect other circuits.
     bool intersects = intersectsOtherCircuits(forwardCircuit);
-    if(b.isZero(CA_LATTICE_VECTOR_EPSILON) || edgeSum.isZero(CA_ATOM_VECTOR_EPSILON) == false || intersects) {
+    if(profileFirstRejection(b.isZero(CA_LATTICE_VECTOR_EPSILON), "tracing.circuitRejected.zeroBurgers")
+            || profileFirstRejection(edgeSum.isZero(CA_ATOM_VECTOR_EPSILON) == false, "tracing.circuitRejected.periodicNonclosure")
+            || profileFirstRejection(intersects, "tracing.circuitRejected.intersection")) {
         // Reset edges.
         InterfaceMesh::Edge* e = forwardCircuit->firstEdge;
         do {
@@ -463,12 +580,15 @@ bool DislocationTracer::createBurgersCircuit(InterfaceMesh::Edge* edge, int maxB
         OVITO_ASSERT(edge->oppositeEdge()->circuit == nullptr);
 #endif
 
+        DxaProfiling::add("tracing.discardedCircuitAttempts", 1);
+        if(intersects) DxaProfiling::add("tracing.intersectingCircuitAttempts", 1);
         discardCircuit(forwardCircuit);
         return intersects;
     }
 
     OVITO_ASSERT(!forwardCircuit->calculateBurgersVector().localVec().isZero(CA_LATTICE_VECTOR_EPSILON));
     OVITO_ASSERT(!b.isZero(CA_LATTICE_VECTOR_EPSILON));
+    DxaProfiling::add("tracing.acceptedCircuitAttempts", 1);
     createAndTraceSegment(ClusterVector(b, forwardCircuit->firstEdge->clusterTransition->cluster1), forwardCircuit, maxBurgersCircuitSize);
 
     return true;
@@ -480,11 +600,13 @@ bool DislocationTracer::createBurgersCircuit(InterfaceMesh::Edge* edge, int maxB
 ******************************************************************************/
 void DislocationTracer::createAndTraceSegment(const ClusterVector& burgersVector, BurgersCircuit* forwardCircuit, int maxCircuitLength)
 {
+    DxaProfiling::Scope timing("tracing.createAndTraceSegment");
     // Generate the reverse circuit.
     BurgersCircuit* backwardCircuit = buildReverseCircuit(forwardCircuit);
 
     // Create new dislocation segment.
     DislocationSegment* segment = network()->createSegment(burgersVector);
+    DxaProfiling::add("tracing.createdSegments", 1);
     segment->forwardNode().circuit = forwardCircuit;
     segment->backwardNode().circuit = backwardCircuit;
     forwardCircuit->dislocationNode = &segment->forwardNode();
@@ -510,6 +632,7 @@ void DislocationTracer::createAndTraceSegment(const ClusterVector& burgersVector
 ******************************************************************************/
 bool DislocationTracer::intersectsOtherCircuits(BurgersCircuit* circuit)
 {
+    DxaProfiling::Scope timing("tracing.circuitIntersections");
     InterfaceMesh::Edge* edge1 = circuit->firstEdge;
     do {
         InterfaceMesh::Edge* edge2 = edge1->nextCircuitEdge;
@@ -541,6 +664,7 @@ bool DislocationTracer::intersectsOtherCircuits(BurgersCircuit* circuit)
 ******************************************************************************/
 BurgersCircuit* DislocationTracer::buildReverseCircuit(BurgersCircuit* forwardCircuit)
 {
+    DxaProfiling::Scope timing("tracing.reverseCircuit");
     BurgersCircuit* backwardCircuit = allocateCircuit();
 
     // Build the backward circuit along inner outline.
@@ -627,6 +751,8 @@ BurgersCircuit* DislocationTracer::buildReverseCircuit(BurgersCircuit* forwardCi
 ******************************************************************************/
 void DislocationTracer::traceSegment(DislocationSegment& segment, DislocationNode& node, int maxCircuitLength, bool isPrimarySegment)
 {
+    DxaProfiling::Scope segmentTiming("tracing.traceSegment");
+    DxaProfiling::add("tracing.traceSegmentCalls", 1);
     BurgersCircuit& circuit = *node.circuit;
     OVITO_ASSERT(circuit.countEdges() == circuit.edgeCount);
     OVITO_ASSERT(circuit.isDangling);
@@ -1010,6 +1136,12 @@ void DislocationTracer::circuitCircuitIntersection(InterfaceMesh::Edge* circuitA
 ******************************************************************************/
 size_t DislocationTracer::joinSegments(int maxCircuitLength)
 {
+    DxaProfiling::Scope timing("tracing.joinSegments");
+    const bool profileJoin = DxaProfiling::enabled();
+    DxaProfiling::Scope depthTiming(profileJoin ? tracingDepthName(maxCircuitLength, JoinTime) : "tracing.joinSegments");
+    DxaProfiling::add("tracing.joinCalls", 1);
+    DxaProfiling::maximum("tracing.peakDanglingNodes", danglingNodes().size());
+    DxaProfiling::Scope secondaryTiming("tracing.join.secondaryScan");
     // First iteration over all dangling circuits.
     // Try to create secondary dislocation segments in the adjacent regions of the
     // interface mesh.
@@ -1038,6 +1170,8 @@ size_t DislocationTracer::joinSegments(int maxCircuitLength)
         while(edge != circuit->firstEdge);
     }
 
+    secondaryTiming.stop();
+    DxaProfiling::Scope ringTiming("tracing.join.blockedRings");
     // Second pass over all dangling nodes.
     // Mark circuits that are completely blocked by other circuits.
     // They are candidates for the formation of junctions.
@@ -1070,6 +1204,8 @@ size_t DislocationTracer::joinSegments(int maxCircuitLength)
         while(edge != circuit->firstEdge);
     }
 
+    ringTiming.stop();
+    DxaProfiling::Scope mergeTiming("tracing.join.merge");
     // Count number of created dislocation junctions.
     size_t numJunctions = 0;
 
@@ -1077,15 +1213,24 @@ size_t DislocationTracer::joinSegments(int maxCircuitLength)
     for(DislocationNode* node : danglingNodes()) {
         BurgersCircuit* circuit = node->circuit;
 
+        DxaProfiling::add("tracing.join.candidates", 1);
+        // The first rejected condition partitions each merge-pass candidate.
         // Skip circuits which have already become part of a junction.
-        if(circuit->isDangling == false) continue;
+        if(circuit->isDangling == false) {
+            DxaProfiling::add("tracing.join.skippedAlreadyJoined", 1);
+            continue;
+        }
         // Skip dangling circuits, which are not completely blocked by other circuits;
         if(!circuit->isCompletelyBlocked) {
+            DxaProfiling::add("tracing.join.skippedUnblocked", 1);
             node->dissolveJunction();
             continue;
         }
         // Junctions must consist of at least two dislocation segments.
-        if(node->junctionRing == node) continue;
+        if(node->junctionRing == node) {
+            DxaProfiling::add("tracing.join.skippedSingleArm", 1);
+            continue;
+        }
 
         OVITO_ASSERT(node->segment->replacedWith == nullptr);
 
@@ -1109,6 +1254,7 @@ size_t DislocationTracer::joinSegments(int maxCircuitLength)
 
         // All circuits of the junction must be fully blocked by other circuits.
         if(!allCircuitsCompletelyBlocked) {
+            DxaProfiling::add("tracing.join.skippedIncompleteRing", 1);
             node->dissolveJunction();
             continue;
         }
@@ -1118,6 +1264,8 @@ size_t DislocationTracer::joinSegments(int maxCircuitLength)
 
         // Only create a real junction for three or more segments.
         if(armCount >= 3) {
+            DxaProfiling::add("tracing.junctionArms", armCount);
+            DxaProfiling::maximum("tracing.maxJunctionArms", armCount);
             Point3 centerOfMass = basePoint + centerOfMassVector / armCount;
 
             // Iterate over all arms of the new junction.
@@ -1160,6 +1308,7 @@ size_t DislocationTracer::joinSegments(int maxCircuitLength)
 
             // Check if this is a closed dislocation loop.
             if(node1->oppositeNode == node2) {
+                DxaProfiling::add("tracing.closedTwoArmLoops", 1);
                 OVITO_ASSERT(node1->segment == node2->segment);
                 DislocationSegment* loop = node1->segment;
                 OVITO_ASSERT(loop->isClosedLoop());
@@ -1183,6 +1332,8 @@ size_t DislocationTracer::joinSegments(int maxCircuitLength)
                 DislocationNode* farEnd2 = node2->oppositeNode;
                 DislocationSegment* segment1 = node1->segment;
                 DislocationSegment* segment2 = node2->segment;
+                DxaProfiling::add("tracing.mergedSegments", 1);
+                DxaProfiling::add("tracing.mergedLinePoints", segment2->line.size() - 1);
                 if(node1->isBackwardNode()) {
                     segment1->nodes[1] = farEnd2;
                     Vector3 shiftVector;
@@ -1230,6 +1381,10 @@ size_t DislocationTracer::joinSegments(int maxCircuitLength)
         }
     }
 
+    mergeTiming.stop();
+    DxaProfiling::Scope cleanupTiming("tracing.join.cleanup");
+    DxaProfiling::Scope depthCleanupTiming(profileJoin ? tracingDepthName(maxCircuitLength, JoinCleanupTime) : "tracing.join.cleanup");
+    DxaProfiling::add("tracing.junctions", numJunctions);
     // Clean up list of dangling nodes. Remove joined nodes.
     _danglingNodes.erase(std::remove_if(_danglingNodes.begin(), _danglingNodes.end(),
             [](DislocationNode* node) { return !node->isDangling(); }), _danglingNodes.end());
@@ -1242,6 +1397,9 @@ size_t DislocationTracer::joinSegments(int maxCircuitLength)
 ******************************************************************************/
 void DislocationTracer::createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength)
 {
+    DxaProfiling::Scope timing("tracing.createSecondarySegment");
+    DxaProfiling::Scope depthTiming(DxaProfiling::enabled() ? tracingDepthName(maxCircuitLength, SecondaryTime) : "tracing.createSecondarySegment");
+    DxaProfiling::add("tracing.secondaryAttempts", 1);
     OVITO_ASSERT(firstEdge->circuit == outerCircuit);
 
     // Create circuit along the border of the hole.
@@ -1289,11 +1447,11 @@ void DislocationTracer::createSecondarySegment(InterfaceMesh::Edge* firstEdge, B
     }
 
     // Create secondary segment only for dislocations (b != 0) and small enough dislocation cores.
-    if(numCircuits == 1
-            || edgeCount > maxCircuitLength
-            || burgersVector.isZero(CA_LATTICE_VECTOR_EPSILON)
-            || edgeSum.isZero(CA_ATOM_VECTOR_EPSILON) == false
-            || !frankRotation.equals(Matrix3::Identity(), CA_TRANSITION_MATRIX_EPSILON)) {
+    if(profileFirstRejection(numCircuits == 1, "tracing.secondaryRejected.singleCircuit")
+            || profileFirstRejection(edgeCount > maxCircuitLength, "tracing.secondaryRejected.lengthLimit")
+            || profileFirstRejection(burgersVector.isZero(CA_LATTICE_VECTOR_EPSILON), "tracing.secondaryRejected.zeroBurgers")
+            || profileFirstRejection(edgeSum.isZero(CA_ATOM_VECTOR_EPSILON) == false, "tracing.secondaryRejected.periodicNonclosure")
+            || profileFirstRejection(!frankRotation.equals(Matrix3::Identity(), CA_TRANSITION_MATRIX_EPSILON), "tracing.secondaryRejected.frankMismatch")) {
 
         // Discard unused circuit.
         edge = circuitStart;
@@ -1322,6 +1480,7 @@ void DislocationTracer::createSecondarySegment(InterfaceMesh::Edge* firstEdge, B
     while(edge != circuitStart);
     OVITO_ASSERT(forwardCircuit->countEdges() == forwardCircuit->edgeCount);
 
+    DxaProfiling::add("tracing.createdSecondarySegments", 1);
     // Do all the rest.
     createAndTraceSegment(ClusterVector(burgersVector, baseCluster), forwardCircuit, maxCircuitLength);
 }

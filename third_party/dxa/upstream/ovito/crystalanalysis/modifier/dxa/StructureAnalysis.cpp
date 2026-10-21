@@ -27,6 +27,7 @@
 #include <ovito/core/utilities/concurrent/Task.h>
 #include "StructureAnalysis.h"
 #include "DislocationAnalysisModifier.h"
+#include "geometry/DxaProfiling.h"
 
 namespace Ovito::CrystalAnalysis {
 
@@ -848,6 +849,10 @@ void StructureAnalysis::determineLocalStructure(NearestNeighborFinder& neighList
 ******************************************************************************/
 bool StructureAnalysis::buildClusters()
 {
+    DxaProfiling::Scope buildTiming("clusters.build");
+    DxaProfiling::Scope bfsTiming("clusters.orderedBfs");
+    const bool profileClusters = DxaProfiling::enabled();
+    size_t visitedAtoms = 0, examinedNeighbors = 0;
     OVITO_ASSERT(Task::current() && Task::current()->isProgressingTask());
     ProgressingTask& operation = static_cast<ProgressingTask&>(*Task::current());
     operation.setProgressMaximum(positions()->size());
@@ -883,6 +888,7 @@ bool StructureAnalysis::buildClusters()
         do {
             int currentAtomIndex = atomsToVisit.front();
             atomsToVisit.pop_front();
+            if(profileClusters) ++visitedAtoms;
 
             // Update progress indicator.
             if(!operation.setProgressValueIntermittent(++progressCounter))
@@ -894,6 +900,7 @@ bool StructureAnalysis::buildClusters()
 
             // Visit neighbors of the current atom.
             for(int neighborIndex = 0; neighborIndex < coordStructure.numNeighbors; neighborIndex++) {
+                if(profileClusters) ++examinedNeighbors;
 
                 // An atom should not be a neighbor of itself.
                 // We use the minimum image convention for simulation cells with periodic boundary conditions.
@@ -998,6 +1005,11 @@ bool StructureAnalysis::buildClusters()
 #endif
     }
 
+    bfsTiming.stop();
+    DxaProfiling::set("clusters.build.visitedAtoms", visitedAtoms);
+    DxaProfiling::set("clusters.build.examinedNeighbors", examinedNeighbors);
+    DxaProfiling::set("clusters.count", clusterGraph()->clusters().size());
+    DxaProfiling::Scope reorientTiming("clusters.reorientAtoms");
     // Reorient atoms to align clusters with global coordinate system.
     for(size_t atomIndex = 0; atomIndex < positions()->size(); atomIndex++) {
         int clusterId = _atomClustersArray[atomIndex];
@@ -1021,6 +1033,7 @@ bool StructureAnalysis::buildClusters()
 ******************************************************************************/
 bool StructureAnalysis::connectClusters()
 {
+    DxaProfiling::Scope timing("clusters.connect");
     OVITO_ASSERT(Task::current() && Task::current()->isProgressingTask());
     ProgressingTask& operation = static_cast<ProgressingTask&>(*Task::current());
     operation.setProgressMaximum(positions()->size());
@@ -1127,6 +1140,7 @@ bool StructureAnalysis::connectClusters()
 ******************************************************************************/
 bool StructureAnalysis::formSuperClusters()
 {
+    DxaProfiling::Scope timing("clusters.superclusters");
     OVITO_ASSERT(Task::current());
     Task& operation = *Task::current();
     size_t oldTransitionCount = clusterGraph()->clusterTransitions().size();

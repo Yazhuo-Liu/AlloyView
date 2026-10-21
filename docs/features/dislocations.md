@@ -339,3 +339,10 @@ returns per-atom structure labels as a byte buffer that the Worker transfers,
 instead of JSON text. The [CPU profile](../DXA_CPU_PROFILE.md) records the
 flags, kernel sizes and measured effects of these choices, the thread-count
 rule, the first-extraction warm-up and the parallel edge passes.
+
+Developer diagnostics and the full-pipeline BDEL/PDEL comparison protocol are
+documented in [P0/P1 validation](../DXA_P0_P1.md). Profiling and complete
+scientific readback are opt-in developer interfaces; normal analysis retains
+the existing Worker/Wasm/GPU prewarming and CPU budget. The
+[global algorithm plan](../DXA_GLOBAL_ALGORITHM_PLAN.md) tracks the subsequent
+algorithm work and its scientific acceptance requirements.

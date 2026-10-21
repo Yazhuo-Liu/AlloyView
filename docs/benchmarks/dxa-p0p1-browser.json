@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-21",
+  "browser": "Chromium 154 / SwiftShader",
+  "sequence": "sequential",
+  "results": [
+    {
+      "command": [
+        "node",
+        "scripts/browser-dxa.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 9.108915856995736
+    },
+    {
+      "command": [
+        "node",
+        "scripts/browser-dxa.mjs",
+        "--isolated"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 7.587932263995754
+    },
+    {
+      "command": [
+        "node",
+        "scripts/browser-dxa-visual.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 18.30673794700124
+    },
+    {
+      "command": [
+        "node",
+        "scripts/browser-surface-mesh.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 67.75183513799857
+    },
+    {
+      "command": [
+        "node",
+        "scripts/browser-bundled-runtime.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 5.86386096500064
+    },
+    {
+      "command": [
+        "node",
+        "scripts/browser-dxa-parallel.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 26.41530153999338
+    },
+    {
+      "command": [
+        "node",
+        "scripts/browser-cpu-warmup.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 8.334049771001446
+    },
+    {
+      "command": [
+        "node",
+        "scripts/browser-smoke.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 76.15544067599694
+    }
+  ]
+}

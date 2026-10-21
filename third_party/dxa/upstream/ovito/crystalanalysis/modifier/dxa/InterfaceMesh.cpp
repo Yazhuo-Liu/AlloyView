@@ -25,6 +25,7 @@
 #include <ovito/core/utilities/concurrent/Task.h>
 #include "InterfaceMesh.h"
 #include <geometry/DxaProfiling.h>
+#include <cstdio>
 #include "DislocationTracer.h"
 #include "DislocationAnalysisModifier.h"
 #include "DislocationAnalysisEngine.h"
@@ -132,6 +133,9 @@ bool InterfaceMesh::createMesh(FloatType maximumNeighborDistance, BufferReadAcce
     // Allocate the internal per-vertex and per-face data arrays.
     _faces.resize(faceCount());
     _vertices.resize(vertexCount());
+    DxaProfiling::set("mesh.internalFaceCapacityBytes", _faces.capacity() * sizeof(Face));
+    DxaProfiling::set("mesh.internalVertexCapacityBytes", _vertices.capacity() * sizeof(Vertex));
+    DxaProfiling::set("mesh.internalEdgeCapacityBytes", _edges.capacity() * sizeof(Edge));
     OVITO_ASSERT(edgeCount() == _edges.size());
     BufferReadAccess<Point3> vertexPositions(expectVertexProperty(SurfaceMeshVertices::PositionProperty));
     // Copy the topology from the SurfaceMeshTopology fields to the internal data structures of the InterfaceMesh.
@@ -153,6 +157,68 @@ bool InterfaceMesh::createMesh(FloatType maximumNeighborDistance, BufferReadAcce
         _edges[e]._prevFaceEdge = &_edges[prevFaceEdge(e)];
         if(nextVertexEdge(e) != SurfaceMesh::InvalidIndex)
             _edges[e]._nextVertexEdge = &_edges[nextVertexEdge(e)];
+    }
+
+    payloadTiming.stop();
+    if(DxaProfiling::enabled()) {
+        DxaProfiling::Scope componentTiming("mesh.staticComponents.census");
+        // This is a read-only census of the initial interface topology. These
+        // connected components are NOT proven independent tracing tasks: cluster
+        // transitions, periodic identification, and later junctions can couple
+        // their scientific state. Never use these labels to schedule P5 work.
+        std::vector<uint8_t> visited(_vertices.size(), 0);
+        std::vector<size_t> queue;
+        std::array<size_t, 32> componentBins{}, vertexBins{};
+        size_t components = 0, totalHalfedges = 0, largestVertices = 0, largestHalfedges = 0;
+        for(size_t seed = 0; seed < _vertices.size(); ++seed) {
+            if(visited[seed]) continue;
+            queue.clear();
+            queue.push_back(seed);
+            visited[seed] = 1;
+            size_t halfedges = 0;
+            for(size_t head = 0; head < queue.size(); ++head) {
+                // Diagnostic-only traversal has its own cancellation checks.
+                if((head & 4095) == 0 && operation.isCanceled()) return false;
+                for(const Edge* edge = _vertices[queue[head]].edges(); edge; edge = edge->nextVertexEdge()) {
+                    ++halfedges;
+                    const size_t neighbor = edge->vertex2() - _vertices.data();
+                    OVITO_ASSERT(neighbor < visited.size());
+                    if(!visited[neighbor]) {
+                        visited[neighbor] = 1;
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+            ++components;
+            totalHalfedges += halfedges;
+            largestVertices = std::max(largestVertices, queue.size());
+            largestHalfedges = std::max(largestHalfedges, halfedges);
+            // Bin k contains sizes [2^k, 2^(k+1)); the last bin saturates.
+            size_t bin = 0;
+            for(size_t size = queue.size(); size > 1 && bin < componentBins.size() - 1; size >>= 1) ++bin;
+            ++componentBins[bin];
+            vertexBins[bin] += queue.size();
+        }
+        struct BinNames {
+            std::array<std::array<std::array<char, 64>, 2>, 32> values{};
+            BinNames() {
+                for(size_t bin = 0; bin < values.size(); ++bin) {
+                    std::snprintf(values[bin][0].data(), values[bin][0].size(), "mesh.staticComponents.bin.%zu.count", bin);
+                    std::snprintf(values[bin][1].data(), values[bin][1].size(), "mesh.staticComponents.bin.%zu.vertices", bin);
+                }
+            }
+        };
+        static const BinNames names;
+        for(size_t bin = 0; bin < componentBins.size(); ++bin) {
+            DxaProfiling::set(names.values[bin][0].data(), componentBins[bin]);
+            DxaProfiling::set(names.values[bin][1].data(), vertexBins[bin]);
+        }
+        DxaProfiling::set("mesh.staticComponents.count", components);
+        DxaProfiling::set("mesh.staticComponents.vertices", _vertices.size());
+        DxaProfiling::set("mesh.staticComponents.halfedges", totalHalfedges);
+        DxaProfiling::set("mesh.staticComponents.largestVertices", largestVertices);
+        DxaProfiling::set("mesh.staticComponents.largestHalfedges", largestHalfedges);
+        DxaProfiling::set("mesh.staticComponents.scratchCapacityBytes", visited.capacity() * sizeof(uint8_t) + queue.capacity() * sizeof(size_t));
     }
 
     // Validate constructed mesh.
@@ -195,6 +261,7 @@ bool InterfaceMesh::createMesh(FloatType maximumNeighborDistance, BufferReadAcce
 ******************************************************************************/
 bool InterfaceMesh::generateDefectMesh(const DislocationTracer& tracer, SurfaceMeshBuilder& defectMesh, ProgressingTask& operation)
 {
+    DxaProfiling::Scope timing("mesh.generateDefect");
     // Adopt all vertices from the interface mesh.
     BufferReadAccess<Point3> vertexPositions(expectVertexProperty(SurfaceMeshVertices::PositionProperty));
     defectMesh.createVerticesRange(vertexPositions);

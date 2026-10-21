@@ -1,5 +1,39 @@
 # Validation record
 
+## DXA internal diagnostics and global validation, P0/P1 (2026-10-21)
+
+Baseline: `d1bfe2f`. Both production kernels were rebuilt with Emscripten
+3.1.69. The [P0/P1 report](DXA_P0_P1.md) documents optional Geogram/tracing/
+transition diagnostics, complete bounded scientific readback, genuine PDEL
+benchmarks and full-network reference fixtures. Worker, Wasm and GPU prewarming
+and the shared CPU budget remain unchanged; no P2+ algorithm is adopted.
+
+All **2,380 Node tests pass**, including 48 additional cases. The new coverage
+includes exact finite-tetrahedron predicates, every PBC mask, thin-cell failure
+and recovery, complete junction incidence, nonzero Shockley partials with a
+stacking-fault ribbon, retained-kernel frame changes, Surface auxiliary corners,
+readback budgets/cancellation, diagnostic reset, and strict comparator mutations.
+Pinned OVITO 3.9.4 full references are retained with input and archive hashes.
+The exporter tests need Python's standard library; OVITO is not a test or
+application dependency.
+
+The real-input matrix contains 90 timed extractions, 30 warmups and 60 independent
+full audits; generated fixtures add 96/96/192 respectively. All single-thread
+comparisons are exact. Real PDEL comparisons include unresolved polyline/mesh
+differences, and partial-vector last-bit differences remain strictly different
+in the fixture matrix, including repeated original-baseline runs. Full coverage
+is available, but the strict all-comparisons/full-audit pass flags are false.
+Invariant-test success must not be described as complete scientific equivalence.
+The report records measured disabled-diagnostic overhead and avoids claiming
+algorithm speedups. All 564 run references and 154 deduplicated archives verify.
+
+The production build and eight sequential Chromium 154/SwiftShader browser
+commands pass: DXA plain/isolated, DXA visual, Surface, bundled runtime,
+DXA parallel recovery, CPU warmup and general smoke. These checks retain real
+Workers, warmed kernels and recovery behavior; they do not establish physical
+GPU performance. Infinite-cell hull geometry and physical dislocation reactions
+remain outside the stated fixture coverage.
+
 ## DXA compact layout and ordered mesh lookup (2026-10-20)
 
 Baseline: `ea9245d`. The [K4 report](PERFORMANCE_DXA_K4.md) records the

@@ -1,4 +1,140 @@
 #include "Delaunay_psm.h"
+#include "../DxaProfiling.h"
+#include <cstdio>
+#include <memory>
+#include <limits>
+#include <algorithm>
+
+// AlloyView modification by Yazhuo Liu, 2026-10-21: optional diagnostics only.
+// No input ordering, predicates, allocation policy or insertion rule changes.
+namespace AlloyDelaunayDiagnostic {
+    enum Counter {
+        Attempts, Inserted, AlreadyPresent, CreatedTetrahedra, ConflictVisits,
+        LocateExactSteps, LocateInexactSteps, OrientCalls, OrientExact,
+        InSphereCalls, InSphereExact, Rollbacks, FailedLocate, Waits,
+        PoolExhaustions, PoolGrowth, PoolInitialSlots, PoolMinimumFree,
+        PoolMaximumSlot, MaximumPendingCreate, CounterCount
+    };
+    enum Timing { Run, Locate, Conflict, Stellate, Wait, TimingCount };
+    struct Statistics {
+        double counters[CounterCount]{};
+        double timings[TimingCount]{};
+        Statistics() { counters[PoolMinimumFree] = std::numeric_limits<double>::infinity(); }
+    };
+    inline thread_local Statistics* current = nullptr;
+    class Attach {
+    public:
+        explicit Attach(Statistics* stats) : previous_(current) { current = stats; }
+        ~Attach() { current = previous_; }
+        Attach(const Attach&) = delete;
+        Attach& operator=(const Attach&) = delete;
+    private:
+        Statistics* previous_;
+    };
+    inline void add(Counter counter, double value = 1) {
+        if(current) current->counters[counter] += value;
+    }
+    inline void maximum(Counter counter, double value) {
+        if(current && value > current->counters[counter]) current->counters[counter] = value;
+    }
+    inline void minimum(Counter counter, double value) {
+        if(current && value < current->counters[counter]) current->counters[counter] = value;
+    }
+    class Timer {
+    public:
+        explicit Timer(Timing timing) : stats_(current), timing_(timing) {
+            if(stats_) start_ = Clock::now();
+        }
+        ~Timer() { stop(); }
+        void stop() {
+            if(!stats_) return;
+            stats_->timings[timing_] +=
+                std::chrono::duration<double, std::milli>(Clock::now() - start_).count();
+            stats_ = nullptr;
+        }
+        Timer(const Timer&) = delete;
+        Timer& operator=(const Timer&) = delete;
+    private:
+        using Clock = std::chrono::steady_clock;
+        Statistics* stats_;
+        Timing timing_;
+        Clock::time_point start_;
+    };
+    // Owned once per module: callback snapshots never refer to stack strings.
+    // 0=BDEL, 1=PDEL aggregate, 2..65=PDEL worker slots. All writes and
+    // aggregation happen on the coordinator after worker completion.
+    struct Names {
+        char counters[66][CounterCount][96]{};
+        char timings[66][TimingCount][96]{};
+        char levelTimings[64][64]{};
+        char levelPoints[64][64]{};
+        Names() {
+            const char* counterNames[CounterCount] = {
+                "pointAttempts", "insertedPoints", "alreadyPresentPoints", "createdTetrahedra", "conflictVisitedCells",
+                "locateExactSteps", "locateInexactSteps", "orientCalls", "orientExactFallbacks",
+                "inSphereCalls", "inSphereExactFallbacks", "rollbacks", "failedLocate", "waitCalls",
+                "poolExhaustions", "poolGrowthSlots", "poolInitialSlots", "poolMinimumFreeSlots",
+                "poolMaximumSlotIndex", "maximumPendingCreate"
+            };
+            const char* timingNames[TimingCount] = { "run", "locate", "conflict", "stellate", "wait" };
+            for(unsigned level = 0; level < 64; ++level) {
+                std::snprintf(levelTimings[level], sizeof(levelTimings[level]), "geogram.pdel.level.%u", level);
+                std::snprintf(levelPoints[level], sizeof(levelPoints[level]), "geogram.pdel.level.%u.points", level);
+            }
+            for(unsigned row = 0; row < 66; ++row) {
+                char prefix[48];
+                if(row < 2) std::snprintf(prefix, sizeof(prefix), "geogram.%s", row ? "pdel.work" : "bdel.work");
+                else std::snprintf(prefix, sizeof(prefix), "geogram.pdel.worker.%u", row - 2);
+                for(unsigned i = 0; i < CounterCount; ++i)
+                    std::snprintf(counters[row][i], sizeof(counters[row][i]), "%s.%s", prefix, counterNames[i]);
+                for(unsigned i = 0; i < TimingCount; ++i)
+                    std::snprintf(timings[row][i], sizeof(timings[row][i]), "%s.%s", prefix, timingNames[i]);
+            }
+        }
+    };
+    inline const Names& names() { static const Names value; return value; }
+    inline const char* levelName(unsigned level, bool points = false) {
+        if(!Ovito::DxaProfiling::enabled()) return "geogram.pdel.level.disabled";
+        if(level >= 64) {
+            Ovito::DxaProfiling::active->overflow = true;
+            return "geogram.pdel.level.overflow";
+        }
+        return points ? names().levelPoints[level] : names().levelTimings[level];
+    }
+    inline void publish(const Statistics& stats, unsigned row) {
+        if(!Ovito::DxaProfiling::enabled()) return;
+        if(row >= 66) { Ovito::DxaProfiling::active->overflow = true; return; }
+        const auto& labels = names();
+        for(unsigned i = 0; i < CounterCount; ++i)
+            Ovito::DxaProfiling::set(labels.counters[row][i],
+                stats.counters[i] == std::numeric_limits<double>::infinity() ? 0 : stats.counters[i]);
+        auto* profile = Ovito::DxaProfiling::active;
+        for(unsigned i = 0; i < TimingCount; ++i)
+            if(auto* value = profile->find(profile->timings, profile->timingCount, labels.timings[row][i]))
+                value->value = stats.timings[i];
+    }
+    inline void merge(Statistics& destination, const Statistics& source) {
+        for(unsigned i = 0; i < CounterCount; ++i) {
+            if(i == PoolMinimumFree) destination.counters[i] = std::min(destination.counters[i], source.counters[i]);
+            else if(i == PoolMaximumSlot || i == MaximumPendingCreate)
+                destination.counters[i] = std::max(destination.counters[i], source.counters[i]);
+            else destination.counters[i] += source.counters[i];
+        }
+        for(unsigned i = 0; i < TimingCount; ++i) destination.timings[i] += source.timings[i];
+    }
+    class SerialSession {
+    public:
+        SerialSession() : enabled_(Ovito::DxaProfiling::enabled()), attach_(enabled_ ? &stats_ : nullptr), runTiming_(Run) {}
+        ~SerialSession() { runTiming_.stop(); if(enabled_) publish(stats_, 0); }
+    private:
+        bool enabled_;
+        Statistics stats_;
+        Attach attach_;
+        Timer runTiming_;
+    };
+}
+namespace DXAD = AlloyDelaunayDiagnostic;
+
 
 /*
  *  Copyright (c) 2012-2014, Bruno Levy
@@ -9212,6 +9348,8 @@ namespace {
             )) return false;
         }
 
+        Ovito::DxaProfiling::Scope hilbertTiming("geogram.sort.hilbert");
+        Ovito::DxaProfiling::add("geogram.sort.hilbertPasses", 1);
         VertexMesh M(nb_vertices, vertices, stride);
     if(dimension == 3) {
         HilbertSort3d<Hilbert_vcmp, VertexMesh>(
@@ -9325,6 +9463,9 @@ namespace GEO {
         double ratio,
         vector<index_t>* levels
     ) {
+        Ovito::DxaProfiling::Scope sortingTiming("geogram.sort.total");
+        Ovito::DxaProfiling::set("geogram.sort.points", nb_vertices);
+        Ovito::DxaProfiling::Scope shuffleTiming("geogram.sort.initializeShuffle");
         if(levels != nullptr) {
             levels->clear();
             levels->push_back(0);
@@ -9342,6 +9483,7 @@ namespace GEO {
         std::mt19937 urng(1);
         std::shuffle(sorted_indices.begin(), sorted_indices.end(), urng);
 
+        shuffleTiming.stop();
         return compute_BRIO_order_recursive(
             nb_vertices, vertices,
             progressCallback,
@@ -20977,6 +21119,7 @@ namespace GEO {
             // Therefore:
             // in_sphere_3d(p0,p1,p2,p3,p4) = -side4_3d(p0,p1,p2,p3,p4)
 
+            DXAD::add(DXAD::InSphereCalls);
             cnt_side4_total++;
             
             // This specialized filter supposes that orient_3d(p0,p1,p2,p3) > 0
@@ -20984,6 +21127,7 @@ namespace GEO {
             Sign result = Sign(in_sphere_3d_filter_optim(p0, p1, p2, p3, p4));
 
             if(result == 0) {
+                DXAD::add(DXAD::InSphereExact);
                 result = side4_3d_exact_SOS(p0, p1, p2, p3, p4);
             }
             return Sign(-result);
@@ -21087,9 +21231,11 @@ namespace GEO {
             const double* p0, const double* p1,
             const double* p2, const double* p3
             ) {
+            DXAD::add(DXAD::OrientCalls);
             cnt_orient3d_total++;
             Sign result = Sign(orient_3d_filter(p0, p1, p2, p3));
             if(result == 0) {
+                DXAD::add(DXAD::OrientExact);
                 result = orient_3d_exact(p0, p1, p2, p3);
             }
             return result;
@@ -21786,8 +21932,10 @@ namespace GEO {
         }
 
         index_t new_tetrahedron() {
+            DXAD::add(DXAD::CreatedTetrahedra);
             index_t result;
             if(first_free_ == END_OF_LIST) {
+                DXAD::add(DXAD::PoolGrowth);
                 cell_to_v_store_.resize(cell_to_v_store_.size() + 4, -1);
                 cell_to_cell_store_.resize(cell_to_cell_store_.size() + 4, -1);
                 // index_t(NOT_IN_LIST) is necessary, else with
@@ -21806,6 +21954,7 @@ namespace GEO {
             cell_to_cell_store_[4 * result + 2] = -1;
             cell_to_cell_store_[4 * result + 3] = -1;
 
+            DXAD::maximum(DXAD::PoolMaximumSlot, result);
             return result;
         }
 
@@ -23811,6 +23960,8 @@ namespace GEO {
     bool Delaunay3d::set_vertices(
         index_t nb_vertices, const double* vertices, const std::function<bool(index_t,index_t)>& progressCallback
     ) {
+        DXAD::SerialSession diagnostics;
+        Ovito::DxaProfiling::Scope allocationTiming("geogram.bdel.allocateInitialize");
         Stopwatch* W = nullptr;
         if(benchmark_mode_) {
             W = new Stopwatch("DelInternal");
@@ -23848,6 +23999,7 @@ namespace GEO {
         cell_next_.resize(0);
         first_free_ = END_OF_LIST;
 
+        allocationTiming.stop();
         //   Sort the vertices spatially. This makes localisation
         // faster.
         if(do_reorder_) {
@@ -23871,6 +24023,7 @@ namespace GEO {
                                        << std::endl;
         } 
 
+        Ovito::DxaProfiling::Scope bootstrapTiming("geogram.bdel.bootstrap");
         // The indices of the vertices of the first tetrahedron.
         index_t v0, v1, v2, v3;
         if(!create_first_tetrahedron(v0, v1, v2, v3)) {
@@ -23879,6 +24032,8 @@ namespace GEO {
             return true;
         }
 
+        bootstrapTiming.stop();
+        Ovito::DxaProfiling::Scope insertionTiming("geogram.bdel.insertion");
         index_t hint = NO_TETRAHEDRON;
         // Insert all the vertices incrementally.
         for(index_t i = 0; i < nb_vertices; ++i) {
@@ -23894,6 +24049,7 @@ namespace GEO {
             }
         }
 
+        insertionTiming.stop();
         if(benchmark_mode_) {
             Logger::out("DelInternal2") << "Core insertion algo:"
                                        << W->elapsed_time() - sorting_time
@@ -23917,6 +24073,7 @@ namespace GEO {
         // smaller or equal to t, we never overwrite a value
         // before needing it.
         
+        Ovito::DxaProfiling::Scope compactTiming("geogram.bdel.compact");
         vector<index_t>& old2new = cell_next_;
         index_t nb_tets = 0;
         index_t nb_tets_to_delete = 0;
@@ -23948,6 +24105,8 @@ namespace GEO {
             }
             cell_to_v_store_.resize(4 * nb_tets);
             cell_to_cell_store_.resize(4 * nb_tets);
+            compactTiming.stop();
+            Ovito::DxaProfiling::Scope remapTiming("geogram.bdel.remapCompact");
             for(index_t i = 0; i < 4 * nb_tets; ++i) {
                 signed_index_t t = cell_to_cell_store_[i];
                 geo_debug_assert(t >= 0);
@@ -23965,6 +24124,7 @@ namespace GEO {
         // and infinite cells have indices [nb_finite_cells_ .. nb_cells_-1]
         
         if(keep_infinite_) {
+            Ovito::DxaProfiling::Scope finiteTiming("geogram.bdel.orderFiniteInfinite");
             nb_finite_cells_ = 0;
             index_t finite_ptr = 0;
             index_t infinite_ptr = nb_tets - 1;
@@ -23999,6 +24159,8 @@ namespace GEO {
                 ++finite_ptr;
                 --infinite_ptr;
             }
+            finiteTiming.stop();
+            Ovito::DxaProfiling::Scope finalRemapTiming("geogram.bdel.remapFiniteInfinite");
             for(index_t i = 0; i < 4 * nb_tets; ++i) {
                 signed_index_t t = cell_to_cell_store_[i];
                 geo_debug_assert(t >= 0);
@@ -24020,6 +24182,12 @@ namespace GEO {
             }
         }
         
+        Ovito::DxaProfiling::set("geogram.bdel.outputCells", nb_tets);
+        Ovito::DxaProfiling::set("geogram.bdel.removedCells", nb_tets_to_delete);
+        Ovito::DxaProfiling::set("geogram.bdel.topologyCapacityBytes",
+            cell_to_v_store_.capacity() * sizeof(cell_to_v_store_[0]) +
+            cell_to_cell_store_.capacity() * sizeof(cell_to_cell_store_[0]) +
+            cell_next_.capacity() * sizeof(cell_next_[0]));
         set_arrays(
             nb_tets,
             cell_to_v_store_.data(), cell_to_cell_store_.data()
@@ -24098,6 +24266,7 @@ namespace GEO {
         index_t t_pred = NO_TETRAHEDRON;
 
     still_walking:
+        DXAD::add(DXAD::LocateInexactSteps);
         {
             const double* pv[4];
             pv[0] = vertex_ptr(finite_tet_vertex(t,0));
@@ -24175,6 +24344,7 @@ namespace GEO {
         const double* p, index_t hint, bool thread_safe,
         Sign* orient
     ) const {
+        DXAD::Timer locateTiming(DXAD::Locate);
 
         //   Try improving the hint by using the 
         // inexact locate function. This gains
@@ -24227,6 +24397,7 @@ namespace GEO {
 
 
     still_walking:
+        DXAD::add(DXAD::LocateExactSteps);
         {
             const double* pv[4];
             pv[0] = vertex_ptr(finite_tet_vertex(t,0));
@@ -24321,6 +24492,7 @@ namespace GEO {
         index_t& t_bndry, index_t& f_bndry,
         index_t& first, index_t& last
     ) {
+        DXAD::Timer conflictTiming(DXAD::Conflict);
     cavity_.clear(); 
     
         first = last = END_OF_LIST;
@@ -24345,6 +24517,7 @@ namespace GEO {
             (orient[3] == ZERO) ;
 
         if(nb_zero >= 3) {
+            DXAD::add(DXAD::AlreadyPresent);
             return; 
         }
 
@@ -24405,6 +24578,7 @@ namespace GEO {
 
             index_t t = S_.top();
             S_.pop();
+            DXAD::add(DXAD::ConflictVisits);
             
             for(index_t lf = 0; lf < 4; ++lf) {
                 index_t t2 = index_t(tet_adjacent(t, lf));
@@ -24457,6 +24631,7 @@ namespace GEO {
     index_t Delaunay3d::stellate_conflict_zone_iterative(
         index_t v_in, index_t t1, index_t t1fbord, index_t t1fprev
     ) {
+        DXAD::Timer stellateTiming(DXAD::Stellate);
         //   This function is de-recursified because some degenerate
         // inputs can cause stack overflow (system stack is limited to
         // a few megs). For instance, it can happen when a large number
@@ -24555,6 +24730,7 @@ namespace GEO {
     }
                         
     index_t Delaunay3d::stellate_cavity(index_t v) {
+        DXAD::Timer stellateTiming(DXAD::Stellate);
     
     index_t new_tet = index_t(-1);
     
@@ -24584,6 +24760,7 @@ namespace GEO {
     }
     
     index_t Delaunay3d::insert(index_t v, index_t hint) {
+       DXAD::add(DXAD::Attempts);
        index_t t_bndry = NO_TETRAHEDRON;
        index_t f_bndry = index_t(-1);
        index_t first_conflict = NO_TETRAHEDRON;
@@ -24616,6 +24793,7 @@ namespace GEO {
        first_free_ = first_conflict;
        
        // Return one of the newly created tets
+       DXAD::add(DXAD::Inserted);
        return new_tet;
     }
 
@@ -24950,6 +25128,7 @@ namespace GEO {
             index_t pool_end
         ) : 
             master_(master),
+            diagnostics_(Ovito::DxaProfiling::enabled() ? new DXAD::Statistics : nullptr),
             cell_to_v_store_(master_->cell_to_v_store_),
             cell_to_cell_store_(master_->cell_to_cell_store_),
             cell_next_(master_->cell_next_),
@@ -24977,6 +25156,10 @@ namespace GEO {
             }
             cell_next_[pool_end-1] = END_OF_LIST;
             nb_free_ = pool_end - pool_begin;
+            if(diagnostics_) {
+                diagnostics_->counters[DXAD::PoolInitialSlots] = nb_free_;
+                diagnostics_->counters[DXAD::PoolMinimumFree] = nb_free_;
+            }
             memory_overflow_ = false;
 
             work_begin_ = -1;
@@ -25021,6 +25204,8 @@ namespace GEO {
             v4_ = rhs->v4_;
         }
 
+        const DXAD::Statistics* diagnostic_statistics() const { return diagnostics_.get(); }
+
         index_t nb_rollbacks() const {
             return nb_rollbacks_;
         }
@@ -25056,6 +25241,8 @@ namespace GEO {
         }
 
     void run() override {
+            DXAD::Attach diagnosticAttachment(diagnostics_.get());
+            DXAD::Timer runTiming(DXAD::Run);
             
             finished_ = false;
 
@@ -25095,6 +25282,7 @@ namespace GEO {
                     }
                 } else {
                     ++nb_rollbacks_;
+                    DXAD::add(DXAD::Rollbacks);
                     if(interfering_thread_ != NO_THREAD) {
                         interfering_thread_ = thread_index_t(
                             interfering_thread_ >> 1
@@ -25163,6 +25351,7 @@ namespace GEO {
 
 
         index_t create_first_tetrahedron() {
+            DXAD::Attach diagnosticAttachment(diagnostics_.get());
             index_t iv0,iv1,iv2,iv3;
             if(nb_vertices() < 4) {
                 return NO_TETRAHEDRON;
@@ -25266,6 +25455,7 @@ namespace GEO {
 
 
     index_t stellate_cavity(index_t v) {
+        DXAD::Timer stellateTiming(DXAD::Stellate);
         index_t new_tet = index_t(-1);
 
         for(index_t f=0; f<cavity_.nb_facets(); ++f) {
@@ -25296,6 +25486,7 @@ namespace GEO {
     }
     
         bool insert(index_t v, index_t& hint) {
+            DXAD::add(DXAD::Attempts);
 
             // If v is one of the vertices of the
             // first tetrahedron, nothing to do.
@@ -25315,6 +25506,7 @@ namespace GEO {
             // other threads.
             if(t == NO_TETRAHEDRON) {
                 ++nb_failed_locate_;
+                DXAD::add(DXAD::FailedLocate);
                 geo_debug_assert(nb_acquired_tets_ == 0);
                 return false;
             }
@@ -25333,6 +25525,7 @@ namespace GEO {
                 (orient[3] == ZERO) ;
 
             if(nb_zero >= 3) {
+                DXAD::add(DXAD::AlreadyPresent);
                 release_tet(t);
                 return true;
             }
@@ -25356,6 +25549,7 @@ namespace GEO {
                 Process::is_running_threads()
             ) {
                 memory_overflow_ = true;
+                DXAD::add(DXAD::PoolExhaustions);
                 ok = false;
             }
 
@@ -25435,6 +25629,7 @@ namespace GEO {
 #endif
        
             // Return one of the newly created tets
+            DXAD::add(DXAD::Inserted);
             hint=new_tet;
 
             release_tets();
@@ -25447,6 +25642,7 @@ namespace GEO {
             index_t v, index_t t, 
             index_t& t_bndry, index_t& f_bndry
         ) {
+            DXAD::Timer conflictTiming(DXAD::Conflict);
             nb_tets_to_create_ = 0;
 
             geo_debug_assert(t != NO_TETRAHEDRON);
@@ -25480,6 +25676,7 @@ namespace GEO {
 
             // Determine the conflict list by greedy propagation from t.
             bool result = find_conflict_zone_iterative(p,t);
+            DXAD::maximum(DXAD::MaximumPendingCreate, nb_tets_to_create_);
             t_bndry = t_boundary_;
             f_bndry = f_boundary_;
             return result;
@@ -25495,6 +25692,7 @@ namespace GEO {
             while(S_.size() != 0) {
                 index_t t = *(S_.rbegin());
                 S_.pop_back();
+                DXAD::add(DXAD::ConflictVisits);
 
                 geo_debug_assert(owns_tet(t));
 
@@ -25666,6 +25864,7 @@ namespace GEO {
             const double* p, index_t hint = NO_TETRAHEDRON,
             Sign* orient = nullptr
          ) {
+             DXAD::Timer locateTiming(DXAD::Locate);
              //   Try improving the hint by using the 
              // inexact locate function. This gains
              // (a little bit) performance (a few 
@@ -25741,6 +25940,7 @@ namespace GEO {
 
 
          still_walking:
+             DXAD::add(DXAD::LocateExactSteps);
              {
                  if(t_pred != NO_TETRAHEDRON) {
                      release_tet(t_pred);
@@ -25991,6 +26191,7 @@ namespace GEO {
              index_t t_pred = NO_TETRAHEDRON;
              
          still_walking:
+             DXAD::add(DXAD::LocateInexactSteps);
              {
 
                  // Lookup the vertices of the current tetrahedron.
@@ -26255,10 +26456,12 @@ namespace GEO {
 
 
         index_t new_tetrahedron() {
+            DXAD::add(DXAD::CreatedTetrahedra);
 
             // If the memory pool is full, then we expand it.
             // This cannot be done when running multiple threads.
             if(first_free_ == END_OF_LIST) {
+                DXAD::add(DXAD::PoolGrowth);
                 geo_debug_assert(!Process::is_running_threads());
                 master_->cell_to_v_store_.resize(
                     master_->cell_to_v_store_.size() + 4, -1
@@ -26290,6 +26493,8 @@ namespace GEO {
             max_used_t_ = std::max(max_used_t_, result);
 
             --nb_free_;
+            DXAD::minimum(DXAD::PoolMinimumFree, nb_free_);
+            DXAD::maximum(DXAD::PoolMaximumSlot, result);
             return result;
         }
 
@@ -26330,6 +26535,8 @@ namespace GEO {
         }
         
         void wait_for_event(index_t t) {
+            DXAD::Timer waitTiming(DXAD::Wait);
+            DXAD::add(DXAD::Waits);
         // Fixed by Hiep Vu: enlarged critical section (contains
         // now the test (!thrd->finished)
             Delaunay3dThread* thrd = thread(t);
@@ -26418,6 +26625,7 @@ namespace GEO {
             index_t v_in, index_t t1, index_t t1fbord,
             index_t t1fprev = index_t(-1)
         ) {
+            DXAD::Timer stellateTiming(DXAD::Stellate);
             //   This function is de-recursified because some degenerate
             // inputs can cause stack overflow (system stack is limited to
             // a few megs). For instance, it can happen when a large number
@@ -26732,6 +26940,7 @@ namespace GEO {
 
     private:
         ParallelDelaunay3d* master_;
+        std::unique_ptr<DXAD::Statistics> diagnostics_;
         index_t nb_vertices_;
         const double* vertices_;
         const double* heights_;
@@ -26876,6 +27085,7 @@ namespace GEO {
     bool ParallelDelaunay3d::set_vertices(
         index_t nb_vertices, const double* vertices, const std::function<bool(index_t,index_t)>& progressCallback
     ) {
+        Ovito::DxaProfiling::Scope allocationTiming("geogram.pdel.allocateInitialize");
         Stopwatch* W = nullptr ;
         if(benchmark_mode_) {
             W = new Stopwatch("DelInternal");
@@ -26909,6 +27119,7 @@ namespace GEO {
         cell_next_.assign(expected_tetra,index_t(-1));
         cell_thread_.assign(expected_tetra,thread_index_t(-1));
 
+        allocationTiming.stop();
         // Reorder the points
         if(do_reorder_) {
             compute_BRIO_order(
@@ -26934,6 +27145,7 @@ namespace GEO {
                                        << std::endl;
         } 
 
+        Ovito::DxaProfiling::Scope workerSetupTiming("geogram.pdel.workerSetup");
         // Create the threads
         index_t nb_threads = Process::maximum_concurrent_threads();
         index_t pool_size = expected_tetra / nb_threads;
@@ -26949,6 +27161,8 @@ namespace GEO {
         }
 
 
+        workerSetupTiming.stop();
+        Ovito::DxaProfiling::Scope bootstrapTiming("geogram.pdel.bootstrap");
         // Create first tetrahedron and triangulate first set of points 
         // in sequential mode.
 
@@ -26972,10 +27186,16 @@ namespace GEO {
         thread0->set_work(levels_[0], levels_[lvl]);
         thread0->run();
 
+        bootstrapTiming.stop();
+        Ovito::DxaProfiling::set("geogram.pdel.bootstrapPoints", levels_[lvl]);
+        Ovito::DxaProfiling::set("geogram.pdel.workerCount", nb_threads);
+        Ovito::DxaProfiling::set("geogram.pdel.brioLevels", levels_.size() - 1);
+        Ovito::DxaProfiling::Scope parallelTiming("geogram.pdel.parallelInsertion");
         index_t first_lvl = lvl;
 
         // Insert points in all BRIO levels
         for(; lvl<levels_.size()-1; ++lvl) {
+            Ovito::DxaProfiling::Scope levelTiming(DXAD::levelName(lvl));
 
             if(benchmark_mode_) {
                 Logger::out("PDEL") << "Level " 
@@ -26984,6 +27204,7 @@ namespace GEO {
 
             index_t lvl_b = levels_[lvl];
             index_t lvl_e = levels_[lvl+1];
+            Ovito::DxaProfiling::set(DXAD::levelName(lvl, true), lvl_e - lvl_b);
             index_t work_size = (lvl_e - lvl_b)/index_t(threads_.size());
 
             // Initialize threads
@@ -27005,6 +27226,7 @@ namespace GEO {
         }
 
 
+        parallelTiming.stop();
         if(benchmark_mode_) {
             index_t tot_rollbacks = 0 ;
             index_t tot_failed_locate = 0 ;
@@ -27030,6 +27252,7 @@ namespace GEO {
         // memory overflow was encountered (in sequential mode,
         // dynamic memory growing works)
 
+        Ovito::DxaProfiling::Scope tailTiming("geogram.pdel.sequentialTail");
         index_t nb_sequential_points = 0;
         for(index_t t=0; t<threads_.size(); ++t) {
             Delaunay3dThread* t1 = 
@@ -27045,6 +27268,17 @@ namespace GEO {
                 t1->initialize_from(t2);
             }
             t1->run();
+        }
+
+        tailTiming.stop();
+        Ovito::DxaProfiling::set("geogram.pdel.sequentialTailPoints", nb_sequential_points);
+        if(Ovito::DxaProfiling::enabled()) {
+            DXAD::Statistics total;
+            for(index_t index = 0; index < threads_.size(); ++index) {
+                const auto* stats = static_cast<Delaunay3dThread*>(threads_[index].get())->diagnostic_statistics();
+                if(stats) { DXAD::publish(*stats, index + 2); DXAD::merge(total, *stats); }
+            }
+            DXAD::publish(total, 1);
         }
 
         //  If some tetrahedra were created in sequential mode, then
@@ -27112,6 +27346,7 @@ namespace GEO {
         // smaller or equal to t, we never overwrite a value
         // before needing it.
         
+        Ovito::DxaProfiling::Scope compactTiming("geogram.pdel.compact");
         vector<index_t>& old2new = cell_next_;
         index_t nb_tets = 0;
         index_t nb_tets_to_delete = 0;
@@ -27144,6 +27379,8 @@ namespace GEO {
 
             cell_to_v_store_.resize(4 * nb_tets);
             cell_to_cell_store_.resize(4 * nb_tets);
+            compactTiming.stop();
+            Ovito::DxaProfiling::Scope remapTiming("geogram.pdel.remapCompact");
             for(index_t i = 0; i < 4 * nb_tets; ++i) {
                 signed_index_t t = cell_to_cell_store_[i];
                 geo_debug_assert(t >= 0);
@@ -27162,6 +27399,7 @@ namespace GEO {
         // and infinite cells have indices [nb_finite_cells_ .. nb_cells_-1]
         
         if(keep_infinite_) {
+            Ovito::DxaProfiling::Scope finiteTiming("geogram.pdel.orderFiniteInfinite");
             nb_finite_cells_ = 0;
             index_t finite_ptr = 0;
             index_t infinite_ptr = nb_tets - 1;
@@ -27196,6 +27434,8 @@ namespace GEO {
                 ++finite_ptr;
                 --infinite_ptr;
             }
+            finiteTiming.stop();
+            Ovito::DxaProfiling::Scope finalRemapTiming("geogram.pdel.remapFiniteInfinite");
             for(index_t i = 0; i < 4 * nb_tets; ++i) {
                 signed_index_t t = cell_to_cell_store_[i];
                 geo_debug_assert(t >= 0);
@@ -27220,6 +27460,13 @@ namespace GEO {
 
         delete W;
 
+        Ovito::DxaProfiling::set("geogram.pdel.outputCells", nb_tets);
+        Ovito::DxaProfiling::set("geogram.pdel.removedCells", nb_tets_to_delete);
+        Ovito::DxaProfiling::set("geogram.pdel.topologyCapacityBytes",
+            cell_to_v_store_.capacity() * sizeof(cell_to_v_store_[0]) +
+            cell_to_cell_store_.capacity() * sizeof(cell_to_cell_store_[0]) +
+            cell_next_.capacity() * sizeof(cell_next_[0]) +
+            cell_thread_.capacity() * sizeof(cell_thread_[0]));
         set_arrays(
             nb_tets,
             cell_to_v_store_.data(),

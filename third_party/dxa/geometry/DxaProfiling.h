@@ -1,4 +1,4 @@
-// Optional, main-thread diagnostics for AlloyView's retained DXA session.
+// Optional, bounded diagnostics for AlloyView's retained DXA session.
 // The scientific output and normal execution do not depend on these values.
 #pragma once
 
@@ -17,11 +17,12 @@ struct Value {
 struct Profile {
     bool enabled = false;
     bool overflow = false;
-    std::array<Value, 64> timings{};
-    std::array<Value, 64> counters{};
+    std::array<Value, 2048> timings{};
+    std::array<Value, 4096> counters{};
     std::size_t timingCount = 0, counterCount = 0;
 
-    Value* find(std::array<Value, 64>& values, std::size_t& count, const char* name) {
+    template<std::size_t Capacity>
+    Value* find(std::array<Value, Capacity>& values, std::size_t& count, const char* name) {
         for(std::size_t index = 0; index < count; ++index)
             if(std::strcmp(values[index].name, name) == 0) return &values[index];
         if(count == values.size()) { overflow = true; return nullptr; }
@@ -72,6 +73,13 @@ private:
 inline void add(const char* name, double amount) {
     if(active)
         if(auto* value = active->find(active->counters, active->counterCount, name)) value->value += amount;
+}
+// Aggregate elapsed time collected in private workers after they have joined.
+// Such values are summed worker time, not a coordinator wall-clock interval.
+inline void addTiming(const char* name, double milliseconds) {
+    if(active)
+        if(auto* value = active->find(active->timings, active->timingCount, name))
+            value->value += milliseconds;
 }
 inline void set(const char* name, double amount) {
     if(active)

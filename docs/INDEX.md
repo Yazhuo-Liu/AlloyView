@@ -61,6 +61,9 @@ local-shear and DXA improvements, their baseline comparisons and remaining limit
 describes Worker PNG encoding, thin-cell GPU dispatch and bounded trajectory prefetch.
 The [K4 report](PERFORMANCE_DXA_K4.md) covers DXA search storage, compact edge
 data and ordered mesh lookup, with complete-result comparisons.
+The [global algorithm plan](DXA_GLOBAL_ALGORITHM_PLAN.md) sets out the next
+stages. The [P0/P1 implementation report](DXA_P0_P1.md) records internal
+diagnostics, true PDEL comparisons and complete scientific readback.
 
 [DXA implementation review](DXA_REVIEW.md) records the source, licensing and
 CPU/Wasm algorithm and historical WebGPU research. The current DXA tool uses

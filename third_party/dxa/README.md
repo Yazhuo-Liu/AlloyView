@@ -119,6 +119,31 @@ endpoint/link records are released before vector payload allocation.
 diagnostics in a separate extraction; normal scientific JSON is unchanged.
 Named allocation counters describe specific buffers, not total heap usage.
 
+The P0/P1 diagnostics added on 2026-10-21 split Geogram BRIO/Hilbert ordering,
+BDEL/PDEL allocation, insertion, compaction and remapping. Predicate, search,
+rollback and pool counts accumulate in private thread-local records and are
+published only after worker completion. Summed worker elapsed times include
+scheduling and waiting; they are not CPU utilization or additional wall stages.
+No insertion order, geometric
+predicate, random sequence or cancellation boundary is changed. In particular,
+the existing PDEL insertion/tail still acknowledges cancellation at its next
+existing safe boundary. Tracing scopes distinguish primary searches, extension,
+actual junction merging and finalization; the old public progress labels remain
+compatible. Per-depth tracing scopes and first-failure counters preserve
+short-circuit evaluation and traversal. A diagnostic-only census describes
+static interface components; it does not prove tracing independence. Cluster
+transition queries measure ordered lookup, positive/negative caches and actual
+depth-two searches without changing the graph mutation rules. Diagnostic
+buffers have 2,048 timing and 4,096 counter slots and explicitly report overflow.
+Disabled diagnostics do not read clocks or run the component census.
+
+The optional staged `alloy_dxa_science_snapshot` readback in `wasm/dxa.cpp`
+exports every atom's cluster, cluster metadata and directed cached transitions.
+It never creates transitions, allocates only when requested, enforces a caller
+output-byte budget, and is released with the session. It does not add fields to
+normal scientific output. See `docs/DXA_P0_P1.md` for the separate original-binary
+timing and readback-only reference-build protocols.
+
 This version predates OVITO 3.15's low-c/a HCP correction. HCP and diamond retain
 the capabilities and limitations of the pinned release; new datasets require
 comparison with an independent reference. Runtime settings use one input lattice
