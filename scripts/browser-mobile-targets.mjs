@@ -29,6 +29,7 @@ const report = await withWebGpuBrowser(async ({ evaluate, call }) => {
     return `(() => [...document.querySelectorAll(${JSON.stringify(selector)})].filter(node=>node.getClientRects().length).map(node=>{const b=node.getBoundingClientRect();return {id:node.id || node.getAttribute('aria-label') || node.textContent.trim().slice(0,45),width:b.width,height:b.height}}))()`;
   }
   const desktop = await evaluate(measurements('#close-tool, .feature-help-link, .trajectory-controls > button'));
+  assert.deepEqual(await evaluate(`['#theme-light','#theme-dark','#theme-toggle'].map(selector=>Boolean(document.querySelector(selector).getClientRects().length))`), [true, true, false]);
   assert.equal(desktop.find(row => row.id === 'close-tool').height < 32, true, 'desktop text action remains compact');
   assert.ok(desktop.some(row => row.width === 19 && row.height === 19), 'desktop help retains its original size');
   let mobile = true;
@@ -55,6 +56,32 @@ const report = await withWebGpuBrowser(async ({ evaluate, call }) => {
     await call('Page.navigate', { url: `${origin}/AlloyView/${production ? 'dist/' : ''}index.html` });
     await wait('document.querySelector(".feature-help-link") && document.querySelector("#show-keyboard-shortcuts")', 'mobile page styles');
     await evaluate('if(document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")==="true")document.getElementById("enable-gpu-computing").click()');
+    await wait('document.getElementById("brand-logo").complete && document.getElementById("brand-logo").naturalWidth > 0', 'compact logo');
+    const header = await evaluate(`(() => {
+      const bounds=selector=>{const b=document.querySelector(selector).getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,width:b.width,height:b.height}};
+      return {bar:bounds('.topbar'),logo:bounds('#brand-logo'),theme:bounds('#theme-toggle'),gpu:bounds('#enable-gpu-computing'),
+        source:document.getElementById('brand-logo').currentSrc,
+        buttons:[...document.querySelectorAll('.compute-theme-controls button')].filter(node=>node.getClientRects().length).map(node=>node.id),
+        resources:performance.getEntriesByType('resource').filter(entry=>entry.name.includes('/assets/logo/')).map(entry=>entry.name.split('/').at(-1))};
+    })()`);
+    assert.deepEqual(header.buttons, ['theme-toggle', 'enable-gpu-computing'], 'phone shows one theme toggle and one GPU toggle');
+    assert.equal(header.logo.width, 32); assert.equal(header.logo.height, 32);
+    assert.ok(header.source.endsWith('AlloyView_favicon.png'), 'phone uses the small icon instead of the full wordmark');
+    assert.ok(!header.resources.some(name=>name.endsWith('.svg')), 'phone does not download an unused desktop wordmark');
+    assert.ok(header.bar.height <= (width >= 540 ? 50 : 90), `compact header: ${JSON.stringify(header.bar)}`);
+    assert.ok(header.logo.right < header.theme.left && header.theme.right < header.gpu.left && header.gpu.right <= width, 'logo and toggles fit without overlap');
+    for (const control of [header.theme, header.gpu]) assert.ok(control.height >= 36 && control.width >= 36, 'compact controls retain touch targets');
+    const themeBefore = await evaluate('document.documentElement.dataset.theme');
+    await press('#theme-toggle');
+    const expectedTheme = themeBefore === 'dark' ? 'light' : 'dark';
+    assert.deepEqual(await evaluate(`({theme:document.documentElement.dataset.theme,saved:localStorage.getItem('alloyview-theme'),pressed:document.getElementById('theme-toggle').getAttribute('aria-pressed')})`),
+      {theme:expectedTheme,saved:expectedTheme,pressed:String(expectedTheme==='dark')});
+    await press('#theme-toggle');
+    assert.equal(await evaluate('document.documentElement.dataset.theme'), themeBefore, 'second tap turns dark mode off or on again');
+    await press('#enable-gpu-computing');
+    assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'true');
+    await press('#enable-gpu-computing');
+    assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'false');
     await evaluate(`(() => {const files=new DataTransfer();files.items.add(new File([${JSON.stringify(fixture.repeat(3))}],'touch-targets.xyz'));const input=document.getElementById('file-input');input.files=files.files;input.dispatchEvent(new Event('change'));})()`);
     await wait('document.getElementById("file-name").textContent === "touch-targets.xyz" && document.getElementById("loading").hidden && !document.getElementById("frame-next").disabled', 'mobile fixture');
     await delay(100);
@@ -128,13 +155,19 @@ const report = await withWebGpuBrowser(async ({ evaluate, call }) => {
     await evaluate('(() => {const color=document.getElementById("color-mode");color.value="type";color.dispatchEvent(new Event("change"));})()');
     const overflow = await evaluate('({page:document.documentElement.scrollWidth>innerWidth,sidebar:document.querySelector(".sidebar").scrollWidth>document.querySelector(".sidebar").clientWidth})');
     assert.deepEqual(overflow, { page: false, sidebar: false }, `${width}px page and tool panel stay within the phone`);
-    screens.push({ width, height, checked, screenshotPath });
+    screens.push({ width, height, header, checked, screenshotPath });
   }
   mobile = false;
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   await delay(100);
   await evaluate('if(!document.querySelector("[data-tool-button=display]").classList.contains("active"))document.querySelector("[data-tool-button=display]").click()');
   assert.deepEqual(await evaluate(measurements('#close-tool, .feature-help-link, .trajectory-controls > button')), desktop, 'desktop dimensions restore after every mobile viewport');
+  await wait('document.getElementById("brand-logo").currentSrc.endsWith(".svg") && document.getElementById("brand-logo").naturalWidth>0', 'desktop wordmark restored');
+  assert.deepEqual(await evaluate(`['#theme-light','#theme-dark','#theme-toggle'].map(selector=>Boolean(document.querySelector(selector).getClientRects().length))`), [true, true, false]);
+  await evaluate('document.getElementById("theme-dark").click()');
+  assert.equal(await evaluate('document.getElementById("theme-toggle").getAttribute("aria-pressed")'), 'true', 'desktop theme choices synchronize the phone toggle');
+  await evaluate('document.getElementById("theme-light").click()');
+  assert.equal(await evaluate('document.getElementById("theme-toggle").getAttribute("aria-pressed")'), 'false');
   return { production, desktop, screens };
 }, { requireGpu: false });
 console.log(JSON.stringify(report, null, 2));

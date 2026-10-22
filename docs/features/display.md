@@ -222,7 +222,7 @@ For a periodic direction, wrapped mode displays a source fractional coordinate `
 
 ### Drag the crystal
 
-Like AtomEye, AlloyView can move the crystal through its periodic boundaries with the pointer, for example to bring a dislocation or void to the middle of the cell. Turn on **Move crystal**: the four-arrow button in the viewport toolbar on desktop, or **Drag crystal in view** under **Display → Periodic display origin** on any screen, including phones. Then drag with the left mouse button or one finger. Without the mode, hold **Alt** (**Option** on macOS) while dragging with the left button. **M** toggles the mode. A click or tap without movement still selects an atom, and double-click anchoring, Shift/right/middle-button panning, wheel zoom and two-finger gestures keep their usual meaning. Box selection does not start while the mode is on.
+Like AtomEye, AlloyView can move the crystal through its periodic boundaries with the pointer, for example to bring a dislocation or void to the middle of the cell. Turn on **Move crystal**: the four-arrow button in the viewport toolbar on desktop, or the **Move crystal** button directly below that toolbar on phones. **Drag crystal in view** under **Display → Periodic display origin** controls the same mode. Then drag with the left mouse button or one finger. Tap **Move crystal** again to return to rotation. Without the mode, hold **Alt** (**Option** on macOS) while dragging with the left button. **M** toggles the mode. A click or tap without movement still selects an atom, and double-click anchoring, Shift/right/middle-button panning, wheel zoom and two-finger gestures keep their usual meaning. Box selection does not start while the mode is on.
 
 The pointer motion becomes a Cartesian displacement in the plane parallel to the screen, at the depth of the atom under the pointer when the drag starts (otherwise the orbit center). In perspective the grabbed atom therefore stays under the pointer. The displacement `d` is converted with the inverse of the actual, possibly tilted, cell matrix, and the origin changes by `−H⁻¹d` along periodic directions only. Nonperiodic directions never move; the crystal follows the part of the motion along the periodic vectors. A label in the view shows the origin that the release will apply.
 
@@ -232,7 +232,7 @@ Releasing applies the origin through the same path as typing it, so bonds, vecto
 exactly `(0, 0, 0)`, including in unwrapped mode. On desktop, its circular-arrow
 button appears beside Move crystal while that mode is on or the crystal has
 shifted, and is disabled at the original position. On any screen, including
-phones, use **Display → Periodic display origin → Reset crystal**. Reset also
+phones, tap **↺** beside **Move crystal**, or use **Display → Periodic display origin → Reset crystal**. Reset also
 ends an active drag, so later pointer movement or release cannot reapply it.
 It keeps the camera, coordinate mode, replication settings and scientific
 results, and updates both views and their attached geometry.

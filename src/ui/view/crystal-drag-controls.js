@@ -3,8 +3,8 @@ import { CrystalDragGesture, snapCrystalOrigin } from '../../render/crystal-drag
 const AXES = ['a', 'b', 'c'];
 
 /** "Move crystal": drag the structure through its periodic boundaries.
- * The mode toggle (viewport toolbar on desktop, Periodic display origin
- * controls everywhere) makes a left drag or one-finger drag move the crystal;
+ * The mode toggle (viewport toolbar on desktop, compact viewport actions on
+ * phones, Periodic display origin controls everywhere) makes a left drag or one-finger drag move the crystal;
  * Alt/Option + left drag does so without the mode. Taps still select atoms. */
 export function initializeCrystalDragControls({ renderer, getOrigin, getCoordinateMode, commit } = {}) {
   const document = renderer.canvas.ownerDocument;
@@ -29,6 +29,23 @@ export function initializeCrystalDragControls({ renderer, getOrigin, getCoordina
   resetButton.setAttribute('aria-label', 'Reset crystal position');
   resetButton.textContent = '↺';
   toolbarButton.after(resetButton);
+  // Keep the narrow top row clear of Details/View while making this gesture
+  // discoverable without opening the sidebar's collapsed origin editor.
+  const mobileActions = document.createElement('div');
+  mobileActions.className = 'mobile-crystal-actions'; mobileActions.hidden = true;
+  mobileActions.setAttribute('role', 'group');
+  mobileActions.setAttribute('aria-label', 'Periodic crystal position');
+  const mobileButton = document.createElement('button');
+  mobileButton.id = 'mobile-toggle-crystal-drag'; mobileButton.type = 'button';
+  mobileButton.textContent = 'Move crystal';
+  mobileButton.setAttribute('aria-label', 'Move crystal through periodic boundaries');
+  mobileButton.title = 'Move crystal: drag with one finger; use two fingers to pan or zoom. Tap again to rotate.';
+  const mobileReset = document.createElement('button');
+  mobileReset.id = 'mobile-reset-crystal'; mobileReset.type = 'button';
+  mobileReset.textContent = '↺'; mobileReset.title = resetButton.title;
+  mobileReset.setAttribute('aria-label', 'Reset crystal position');
+  mobileActions.append(mobileButton, mobileReset);
+  viewport?.append(mobileActions);
   const status = document.createElement('output');
   status.id = 'crystal-drag-status'; status.className = 'crystal-drag-status'; status.hidden = true;
   // Pointer moves update it continuously; the origin fields announce the result.
@@ -39,7 +56,7 @@ export function initializeCrystalDragControls({ renderer, getOrigin, getCoordina
   const gesture = new CrystalDragGesture(renderer, {
     getOrigin, getCoordinateMode,
     onChange: origin => { showStatus(origin); sync(); },
-    onCommit: origin => commit(origin),
+    onCommit: origin => { commit(origin); sync(); },
     onEnd: () => { status.hidden = true; renderer.canvas.classList.remove('crystal-dragging'); sync(); },
   });
   const periodic = () => Boolean(renderer.frame?.cell.pbc.some(Boolean));
@@ -51,14 +68,17 @@ export function initializeCrystalDragControls({ renderer, getOrigin, getCoordina
     status.hidden = false;
   }
   function sync() {
-    for (const button of [toolbarButton, sidebarButton]) {
+    for (const button of [toolbarButton, sidebarButton, mobileButton]) {
       if (!button) continue;
       button.disabled = !enabled;
       button.setAttribute('aria-pressed', String(mode));
     }
     const shifted = Boolean(renderer.frame && getOrigin().some((value, axis) => renderer.frame.cell.pbc[axis] && value !== 0));
-    resetButton.hidden = !enabled || (!mode && !shifted && !gesture.active);
-    resetButton.disabled = !enabled || (!shifted && !gesture.active);
+    mobileActions.hidden = !enabled;
+    for (const button of [resetButton, mobileReset]) {
+      button.hidden = !enabled || (!mode && !shifted && !gesture.active);
+      button.disabled = !enabled || (!shifted && !gesture.active);
+    }
     renderer.canvas.classList.toggle('crystal-drag-mode', mode && enabled);
   }
   function setMode(value) {
@@ -111,7 +131,9 @@ export function initializeCrystalDragControls({ renderer, getOrigin, getCoordina
 
   const toggle = () => setMode(!mode);
   toolbarButton.addEventListener('click', toggle);
+  mobileButton.addEventListener('click', toggle);
   resetButton.addEventListener('click', reset);
+  mobileReset.addEventListener('click', reset);
   sidebarButton?.addEventListener('click', toggle);
   sync();
   return {
@@ -119,8 +141,9 @@ export function initializeCrystalDragControls({ renderer, getOrigin, getCoordina
     dispose() {
       gesture.cancel();
       toolbarButton.removeEventListener('click', toggle); sidebarButton?.removeEventListener('click', toggle);
+      mobileButton.removeEventListener('click', toggle); mobileReset.removeEventListener('click', reset);
       resetButton.removeEventListener('click', reset);
-      toolbarButton.remove(); resetButton.remove(); status.remove();
+      toolbarButton.remove(); resetButton.remove(); mobileActions.remove(); status.remove();
       if (renderer.crystalDragController) delete renderer.crystalDragController;
     },
   };

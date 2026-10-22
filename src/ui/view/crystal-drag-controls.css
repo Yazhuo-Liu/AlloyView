@@ -18,10 +18,19 @@
 .crystal-drag-status { position: absolute; z-index: 18; bottom: 18px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; pointer-events: none; border: 1px solid var(--line-strong); border-radius: 6px; padding: 7px 12px; background: var(--overlay-strong); color: var(--text-soft); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .crystal-drag-status[hidden] { display: none; }
 .viewport-panel.trajectory-visible .crystal-drag-status { bottom: 108px; }
+.mobile-crystal-actions { display: none; }
 @media (max-width: 920px) {
-  /* The phone toolbar keeps its four-button footprint beside Details and
-     View; phones toggle the mode from Display → Periodic display origin. */
+  /* The phone toolbar keeps its four-button footprint beside Details/View.
+     A separate compact row exposes touch movement without opening Tools. */
   .view-toolbar #toggle-crystal-drag, .view-toolbar #reset-crystal { display: none; }
-  /* Below the top row, clear of the legend toggle and trajectory bar. */
-  .crystal-drag-status, .viewport-panel.trajectory-visible .crystal-drag-status { top: 58px; bottom: auto; font-size: 11px; }
+  .mobile-crystal-actions { position: absolute; z-index: 2; top: 62px; left: 12px; display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text-soft); background: var(--overlay); backdrop-filter: blur(12px); box-shadow: var(--shadow); }
+  .mobile-crystal-actions[hidden], .mobile-crystal-actions button[hidden] { display: none; }
+  .mobile-crystal-actions button { min-height: 36px; border: 0; border-radius: 4px; color: inherit; background: transparent; }
+  #mobile-toggle-crystal-drag { width: 86px; padding: 0 4px; font-size: 11px; }
+  #mobile-toggle-crystal-drag[aria-pressed="true"] { color: var(--cyan); background: var(--accent-soft); box-shadow: inset 0 -2px var(--cyan); }
+  #mobile-reset-crystal { width: 32px; padding: 0; font-size: 19px; }
+  .mobile-crystal-actions button:disabled { color: var(--disabled-text); }
+  /* Status shares the second row, leaving short landscape views clear above
+     the legend/playback controls. Its text may elide but it cannot steal taps. */
+  .crystal-drag-status, .viewport-panel.trajectory-visible .crystal-drag-status { top: 66px; bottom: auto; left: 150px; transform: none; max-width: calc(100% - 162px); padding: 7px 8px; font-size: 11px; }
 }

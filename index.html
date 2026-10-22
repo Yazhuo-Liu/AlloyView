@@ -25,7 +25,10 @@
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="./" aria-label="AlloyView home">
-          <img id="brand-logo" class="brand-logo" alt="AlloyView" width="1700" height="500">
+          <picture>
+            <source media="(max-width: 920px)" srcset="./src/assets/logo/AlloyView_favicon.png">
+            <img id="brand-logo" class="brand-logo" alt="AlloyView" width="1700" height="500">
+          </picture>
         </a>
 
         <div class="file-actions">
@@ -57,9 +60,12 @@
               <button id="theme-light" type="button" aria-pressed="false"><span aria-hidden="true">☀</span> Light</button>
               <button id="theme-dark" type="button" aria-pressed="true"><span aria-hidden="true">☾</span> Dark</button>
             </div>
+            <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="true" title="Toggle dark mode">
+              <span aria-hidden="true">☾</span> Dark
+            </button>
             <button id="enable-gpu-computing" class="gpu-switch" type="button" aria-label="Enable GPU acceleration" aria-pressed="true" title="Prefer WebGPU for supported analyses; unavailable or unsupported GPU execution uses CPU Workers">
               <span class="gpu-switch-indicator" aria-hidden="true"></span>
-              <span><span class="gpu-switch-prefix">Enable </span>GPU acceleration</span>
+              <span><span class="gpu-switch-prefix">Enable </span>GPU<span class="gpu-switch-suffix"> acceleration</span></span>
             </button>
           </div>
         </div>

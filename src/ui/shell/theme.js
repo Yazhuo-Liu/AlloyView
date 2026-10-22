@@ -25,16 +25,22 @@ export function initializeTheme(onChange = () => {}) {
     for (const value of ['light', 'dark']) {
       document.getElementById(`theme-${value}`).setAttribute('aria-pressed', String(theme === value));
     }
+    document.getElementById('theme-toggle')?.setAttribute('aria-pressed', String(theme === 'dark'));
     onChange(theme);
   }
 
-  for (const theme of ['light', 'dark']) {
-    document.getElementById(`theme-${theme}`).addEventListener('click', () => {
-      selected = theme;
-      try { localStorage.setItem(STORAGE_KEY, theme); } catch { /* Storage is optional. */ }
-      apply(theme);
-    });
+  function select(theme) {
+    selected = theme;
+    try { localStorage.setItem(STORAGE_KEY, theme); } catch { /* Storage is optional. */ }
+    apply(theme);
   }
+
+  for (const theme of ['light', 'dark']) {
+    document.getElementById(`theme-${theme}`).addEventListener('click', () => select(theme));
+  }
+  document.getElementById('theme-toggle')?.addEventListener('click', () => {
+    select(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+  });
   preference.addEventListener('change', () => {
     if (!selected) apply(preference.matches ? 'light' : 'dark');
   });

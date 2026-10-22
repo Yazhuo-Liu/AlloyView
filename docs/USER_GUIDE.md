@@ -74,6 +74,11 @@ current tool again or **Close / cancel** to cancel that analysis and clear its
 results. **Cancel** clears the result while leaving the settings open to retry.
 
 On phones, the viewport stays above an independently scrolling tools panel.
+The compact header shows the logo, a single **Dark** toggle and a **GPU**
+toggle; their highlighted states mean on. Tap **Dark** again to return to
+light mode. File-opening buttons occupy a second row on narrow phones and
+share the same row on wider screens. Theme and GPU choices stay synchronized
+when switching between phone and desktop layouts.
 Buttons and help links have larger touch areas; tap a checkbox's label to
 change its setting as well as tapping the box itself.
 **View**, **Legend / atoms** and **Details** start collapsed; tap to open
@@ -243,8 +248,9 @@ Source coordinates, cell geometry and analysis results remain unchanged.
 Configurations save the fractional origin.
 
 To move the crystal with the pointer instead, turn on **Move crystal** (the
-four-arrow toolbar button on desktop, or **Drag crystal in view** in the same
-section on any screen) and drag the structure with the left mouse button or
+four-arrow toolbar button on desktop, the **Move crystal** button below the
+viewport toolbar on phones, or **Drag crystal in view** in the same section
+on any screen) and drag the structure with the left mouse button or
 one finger; Alt-drag (Option-drag on macOS) works without the mode, and **M**
 toggles it. The atom under the pointer follows it in the plane of the screen;
 only periodic directions move. Clicks and taps still select atoms. Releasing
@@ -259,7 +265,10 @@ vector. Slice planes stay in place while the crystal moves through them. See
 On desktop, the circular-arrow **Reset crystal** button appears beside Move
 crystal while the mode is enabled or the crystal is shifted. It restores the
 source display origin to `(0, 0, 0)` without resetting the camera or calculations.
-The same action is available in **Display → Periodic display origin** on phones.
+On phones, the **↺** button beside **Move crystal** provides the same reset;
+**Display → Periodic display origin** also retains it. Tap **Move crystal**
+again to return to one-finger rotation. Two fingers still pan or zoom while
+Move crystal is enabled. The phone movement controls appear for periodic cells.
 It also stops an active drag so releasing the pointer cannot apply an old shift.
 
 ## Display replication

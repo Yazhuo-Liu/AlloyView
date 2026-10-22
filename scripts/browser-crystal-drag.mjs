@@ -12,12 +12,14 @@ import { withWebGpuBrowser } from './webgpu-browser.mjs';
 // second view exactly as typing the same origin does.
 // `--performance` adds hardware-GPU frame timings on the 60,229-atom Fe loop,
 // also with a 2 × 2 × 2 display (481,832 atoms).
+// `--mobile-only` runs the viewport-control and touch checks independently.
 const root = resolve(import.meta.dirname, '..');
 assert.ok(existsSync(resolve(root, 'dist/index.html')), 'Run npm run build first.');
 const temporary = await mkdtemp(resolve(tmpdir(), 'alloyview-crystal-drag-fixtures-'));
 const artifacts = resolve(tmpdir(), 'alloyview-crystal-drag');
 await mkdir(artifacts, { recursive: true });
 const performanceRun = process.argv.includes('--performance');
+const mobileOnly = process.argv.includes('--mobile-only');
 const example = resolve(root, 'examples/Fe_disloc_loop.dump');
 
 // A tilted BCC-like crystal: all three cell vectors are skewed.
@@ -155,6 +157,7 @@ try {
     const { evaluate, waitFor } = h;
     const result = {};
     progress('page ready');
+    if (!mobileOnly) {
     await h.load(resolve(temporary, 'tilted-bcc.xyz'), 'tilted-bcc.xyz', atoms.length);
     progress('tilted fixture loaded');
     await h.showTool('bonds');
@@ -344,9 +347,10 @@ try {
     result.dxa = { origin: dxaDragged.origin, uploadsDuringDrag: dxaPreview.uploads, linePixels: lines, lineHash: dxaDragged.dxa.slice(0, 16) };
     result.desktopScreenshot = await h.screenshot('crystal-drag-desktop.png');
 
+    }
     progress('Phone layout and touch');
-    // Phones: the toolbar keeps its footprint; the origin controls toggle the
-    // mode and one finger drags the crystal.
+    // Phones expose Move/Reset in the viewport itself; no sidebar opening or
+    // test-only DOM relocation is needed to reach either action.
     h.setMobile(true);
     await h.call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await h.call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
@@ -354,16 +358,12 @@ try {
     await h.load(resolve(temporary, 'tilted-bcc.xyz'), 'tilted-bcc.xyz', atoms.length);
     const layout = await evaluate(`(() => {
       const boxes = ['.view-toolbar', '#toggle-atom-details', '#toggle-view-controls'].map(selector => document.querySelector(selector).getBoundingClientRect());
-      // The footprint without the desktop-only button, for comparison.
-      const button = document.getElementById('toggle-crystal-drag'), next = button.nextSibling, toolbar = button.parentElement;
-      button.remove(); const without = toolbar.getBoundingClientRect().width; toolbar.insertBefore(button, next);
-      return { toolbarWidthChange: boxes[0].width - without, hidden: getComputedStyle(button).display === 'none',
+      const action = document.querySelector('.mobile-crystal-actions').getBoundingClientRect();
+      return { mobileMoveVisible: action.width > 0 && action.height >= 36, belowToolbar: action.top >= boxes[0].bottom,
         overlap: !boxes.every((box, index) => box.left >= 0 && box.right <= innerWidth && boxes.slice(index + 1).every(other => box.right <= other.left || other.right <= box.left || box.bottom <= other.top || other.bottom <= box.top)) };
     })()`);
-    assert.deepEqual(layout, { toolbarWidthChange: 0, hidden: true, overlap: false }, 'phone toolbar layout is unchanged');
-    await h.showTool('display');
-    await h.expand('.periodic-origin-controls');
-    await h.press('#origin-drag-mode');
+    assert.deepEqual(layout, { mobileMoveVisible: true, belowToolbar: true, overlap: false }, 'phone movement controls are visible without crowding the top row');
+    await h.press('#mobile-toggle-crystal-drag');
     assert.equal(await evaluate('document.getElementById("origin-drag-mode").getAttribute("aria-pressed")'), 'true');
     const phoneCenter = await evaluate('crystalChecks.canvasPoint()');
     await evaluate('crystalChecks.resetUploads()');
@@ -382,13 +382,71 @@ try {
     assert.equal(await evaluate('crystalChecks.renderer.selected'), atom.index, 'a tap in the mode still selects the atom');
     assert.deepEqual((await evaluate('crystalChecks.snapshot()')).origin, touched.origin, 'a tap does not move the crystal');
     const phoneCamera = await evaluate('crystalChecks.camera()');
-    assert.equal(await evaluate('getComputedStyle(document.getElementById("reset-crystal")).display'), 'none', 'phone toolbar keeps its existing footprint');
-    await h.press('#origin-reset');
+    await h.press('#mobile-reset-crystal');
     assert.deepEqual((await evaluate('crystalChecks.snapshot()')).origin, [0, 0, 0], 'the phone Reset crystal control restores the original position');
     assert.deepEqual(await evaluate('crystalChecks.camera()'), phoneCamera);
     result.phone = { layout, origin: touched.origin, screenshot: touchPreview.screenshot };
     return result;
   }, { software: true, requireGpu: false });
+
+  // Independent browser sessions avoid retaining native touch state when
+  // emulating different phone orientations after a two-finger gesture.
+  report.mobileScreens = [];
+  for (const [width, height] of [[320, 740], [844, 390]]) {
+    report.mobileScreens.push(await session(async h => {
+      const { evaluate } = h;
+      h.setMobile(true);
+      await h.call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 2, mobile: true });
+      await h.call('Emulation.setTouchEmulationEnabled', { enabled: false });
+      await h.call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
+      await h.open();
+      await h.load(resolve(temporary, 'tilted-bcc.xyz'), 'tilted-bcc.xyz', atoms.length);
+      await h.press('#mobile-toggle-crystal-drag');
+      assert.equal(await evaluate('document.getElementById("mobile-toggle-crystal-drag").getAttribute("aria-pressed")'), 'true', `${width}px tap enables Move mode`);
+      const start = await evaluate('crystalChecks.canvasPoint()');
+      const before = await evaluate('crystalChecks.snapshot()');
+      await evaluate('crystalChecks.resetUploads()');
+      const preview = await h.drag(line(start, 35, -10), { during: () => evaluate('crystalChecks.duringDrag()') });
+      assert.ok(preview.dragging && preview.statusInsideCanvas && preview.statusClear, `${width}px mobile preview: ${JSON.stringify(preview)}`);
+      assert.equal(preview.uploads, 0, `${width}px touch preview uploads no atom arrays`);
+      const moved = await evaluate('crystalChecks.snapshot()');
+      assert.notDeepEqual(moved.origin, before.origin);
+      const camera = await evaluate('crystalChecks.camera()');
+      await h.press('#mobile-reset-crystal');
+      const restored = await evaluate('crystalChecks.snapshot()');
+      for (const key of ['origin', 'positions', 'fractional']) assert.deepEqual(restored[key], before[key]);
+      assert.deepEqual(await evaluate('crystalChecks.camera()'), camera);
+      // Adding a second finger cancels an in-progress crystal preview, then
+      // native two-finger zoom remains available in Move mode.
+      await h.drag(line(start, 15, 0), { release: false });
+      assert.equal(await evaluate('Boolean(crystalChecks.renderer.crystalDrag)'), true);
+      await h.call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: start.x + 15, y: start.y }, { id: 2, x: start.x + 70, y: start.y }] });
+      assert.equal(await evaluate('Boolean(crystalChecks.renderer.crystalDrag)'), false);
+      await h.call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: start.x + 5, y: start.y }, { id: 2, x: start.x + 85, y: start.y }] });
+      await h.call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      assert.deepEqual((await evaluate('crystalChecks.snapshot()')).origin, before.origin);
+      assert.notEqual((await evaluate('crystalChecks.camera()')).distance, camera.distance);
+      await h.press('#mobile-toggle-crystal-drag');
+      const orbit = await evaluate('crystalChecks.camera()');
+      await h.drag(line(start, 25, 0));
+      assert.notEqual((await evaluate('crystalChecks.camera()')).yaw, orbit.yaw, 'leaving Move mode restores one-finger rotation');
+      // Opening a panel must put its controls above the floating Move row.
+      await h.press('#toggle-camera-controls');
+      await h.press('.camera-controls > header button');
+      await h.press('#toggle-atom-details');
+      const panelHit = await evaluate(`(() => { const button = document.getElementById('mobile-toggle-crystal-drag'), b = button.getBoundingClientRect(); const hit = document.elementFromPoint(b.left + b.width/2, b.top + b.height/2); return document.getElementById('atom-details').contains(hit); })()`);
+      assert.equal(panelHit, true, 'expanded Details owns its area above the Move controls');
+      await h.press('#toggle-atom-details');
+      for (const [toggle, panel] of [['#toggle-view-controls', '#view-controls'], ['#toggle-legend', '#legend']]) {
+        await h.press(toggle);
+        const coveredCorrectly = await evaluate(`(() => { const button = document.getElementById('mobile-toggle-crystal-drag'), b = button.getBoundingClientRect(); const panel = document.querySelector(${JSON.stringify(panel)}), p = panel.getBoundingClientRect(), x = b.left + b.width/2, y = b.top + b.height/2; return x < p.left || x > p.right || y < p.top || y > p.bottom || panel.contains(document.elementFromPoint(x, y)); })()`);
+        assert.equal(coveredCorrectly, true, `${panel} remains above the floating movement controls`);
+        await h.press(toggle);
+      }
+      await h.press('#mobile-toggle-crystal-drag');
+      return { width, height, uploadsDuringDrag: preview.uploads, screenshot: await h.screenshot(`crystal-drag-phone-${width}.png`) };
+    }, { software: true, requireGpu: false }));
+  }
 
   if (performanceRun) report.performance = await session(async h => {
     const { evaluate, waitFor } = h;
@@ -505,7 +563,7 @@ async function initializeChecks() {
     const statusBox = status.getBoundingClientRect(), canvasBox = r.canvas.getBoundingClientRect();
     const intervals = (checks.rafs ?? []).slice(1).map((time, index) => time - checks.rafs[index]).sort((a, b) => a - b);
     return { dragging: Boolean(r.crystalDrag), uploads: checks.uploads, status: status.textContent, statusHidden: status.hidden,
-      statusClear: ['#toggle-legend', '#toggle-atom-details', '#toggle-view-controls', '.view-toolbar'].map(selector => document.querySelector(selector)?.getBoundingClientRect())
+      statusClear: ['#toggle-legend', '#toggle-atom-details', '#toggle-view-controls', '.view-toolbar', '.mobile-crystal-actions'].map(selector => document.querySelector(selector)?.getBoundingClientRect())
         .filter(box => box?.width).every(box => box.right <= statusBox.left || statusBox.right <= box.left || box.bottom <= statusBox.top || statusBox.bottom <= box.top),
       statusInsideCanvas: statusBox.left >= canvasBox.left && statusBox.right <= canvasBox.right && statusBox.bottom <= canvasBox.bottom && statusBox.top >= canvasBox.top,
       inputs: ['a', 'b', 'c'].map(axis => document.getElementById(`display-origin-${axis}`).value),

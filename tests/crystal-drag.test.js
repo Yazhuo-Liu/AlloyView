@@ -445,6 +445,43 @@ test('keyboard nudges move the crystal along periodic cell vectors and snap the 
   assert.equal(controls.canNudge(0), false);
 });
 
+test('mobile viewport controls share mode and reset state, retain source data, and disappear when disabled', () => {
+  const f = controlsFixture(), r = f.renderer;
+  const actions = f.canvas.parentElement.children.find(node => node.className === 'mobile-crystal-actions');
+  const [move, reset] = actions.children;
+  const source = structuredClone(f.frame), camera = r.getCameraState();
+  assert.equal(actions.hidden, false);
+  assert.equal(move.getAttribute('aria-pressed'), 'false');
+  assert.equal(reset.hidden, true);
+  move.click();
+  assert.equal(move.getAttribute('aria-pressed'), 'true');
+  assert.equal(f.nodes['origin-drag-mode'].getAttribute('aria-pressed'), 'true');
+  assert.equal(reset.hidden, false);
+  assert.equal(reset.disabled, true);
+  const touch = { pointerType: 'touch', pointerId: 7 };
+  f.pointer('pointerdown', 320, 240, touch);
+  f.pointer('pointermove', 370, 210, touch);
+  assert.equal(f.uploads.length, 0, 'touch preview continues to use shader uniforms only');
+  f.pointer('pointerup', 370, 210, touch);
+  assert.ok(r.periodicOrigin.some(value => value !== 0));
+  assert.equal(reset.disabled, false);
+  f.nodes['origin-drag-mode'].click();
+  assert.equal(move.getAttribute('aria-pressed'), 'false');
+  assert.equal(reset.hidden, false, 'reset remains reachable after leaving Move mode');
+  reset.click();
+  assert.deepEqual(r.periodicOrigin, [0, 0, 0]);
+  assert.deepEqual(r.getCameraState(), camera);
+  assert.deepEqual(f.frame, source);
+  assert.equal(reset.hidden, true);
+  f.controls.setEnabled(false);
+  assert.equal(actions.hidden, true);
+  assert.equal(move.disabled, true);
+  f.controls.dispose();
+  assert.equal(actions.removed, true);
+  assert.equal(move.handlers.get('click').size, 0);
+  assert.equal(reset.handlers.get('click').size, 0);
+});
+
 test('Reset crystal restores the source origin in both coordinate modes without changing the view or source', () => {
   for (const mode of ['wrapped', 'unwrapped']) {
     const f = controlsFixture(), r = f.renderer;

@@ -1,5 +1,50 @@
 # Validation record
 
+## Compact phone header and accessible crystal movement (2026-10-22)
+
+Baseline: `4c57f60`, synchronized from `origin/main`. Phone CSS previously hid
+the viewport Move/Reset buttons even though the shared touch gesture already
+worked through Display's collapsed periodic-origin controls. A compact
+**Move crystal / ↺** group now exposes both actions below the viewport toolbar
+for periodic structures. It shares state with the desktop and Display controls;
+open View, Details, legend and camera panels draw above it. A post-commit state
+refresh makes Reset available as soon as a touch drag finishes.
+
+The narrow header now uses the existing 64px logo asset at 32 CSS pixels, one
+**Dark** toggle and one **GPU** toggle, with 36px-high touch targets. It measures
+89 CSS pixels including the file-opening row on portrait phones and 49 pixels
+on wider screens with one row. The `<picture>` source avoids downloading an
+unused desktop wordmark on initial phone loads. Desktop theme selectors,
+saved preferences and configuration restoration use the same theme state.
+
+During browser regression, Reset also exposed a pre-existing bond-image
+inconsistency: a periodic Float32 fraction can round to exactly 1, while the
+neighbor search wraps it to 0. The display's source-array fast path incorrectly
+reused the search's image indices. It now verifies canonical periodic fractions
+before reuse and otherwise uses the existing vector-based display shifts.
+Scientific coordinates and bond outputs remain unchanged; prepared views still
+share their cached rows/shifts. This check runs on display updates, not pointer
+moves or ordinary redraws.
+
+Validation:
+
+- `npm test`: **2,382 pass**, zero failures, cancellations or skips. New coverage
+  checks synchronized mobile actions, cleanup, source-preserving reset and
+  actual short bond vectors at skew-cell upper boundaries.
+- Production `test:browser:mobile-targets`: 320×740, 375×812, 430×932 and 844×390
+  at DPR 2. Real taps toggle Dark/GPU; dimensions, visibility, desktop resize,
+  logo resource requests, panel hit targets and lack of horizontal overflow pass.
+- `node scripts/browser-crystal-drag.mjs --mobile-only`: actual visible phone
+  buttons at 390px, 320px and landscape 844px. One finger shifts the crystal,
+  Reset restores origin/coordinates without moving the camera, a second finger
+  cancels the shift and zooms, and leaving Move restores rotation. Shader
+  previews perform **zero buffer/texture uploads**. Each orientation's pinch
+  check uses its own browser session to isolate Chromium's native touch state.
+- The complete `test:browser:crystal-drag` regression also passes, including
+  desktop reset/typed-origin equivalence for skew-cell bonds, Voronoi, the
+  second view and the 60,229-atom Fe dislocation loop. The production build and
+  documentation checks pass.
+
 ## DXA internal diagnostics and global validation, P0/P1 (2026-10-21)
 
 Baseline: `d1bfe2f`. Both production kernels were rebuilt with Emscripten

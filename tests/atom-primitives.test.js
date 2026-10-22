@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCell } from '../src/data/model.js';
+import { createCell, fractionalToCartesian } from '../src/data/model.js';
+import { calculateBonds } from '../src/analysis/bonds.js';
 import { AtomPrimitiveLayer, analyzeBondCapCoverage, bondCapsAreCovered, bondDisplayShifts, createFlatArrowMesh, createIndexedPrimitiveMesh, createPrimitiveMesh, normalizeVectorOptions,
   parsePrimitiveColor, validateBonds, vectorArrowEndpoints } from '../src/render/atom-primitives.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
@@ -15,6 +16,24 @@ test('bond image shifts follow skew vectors and unwrapped atom positions', () =>
   assert.deepEqual([...bondDisplayShifts(result, frame, unwrapped)], [0, 0, 0]);
   const skew = { ...result, vectors: new Float32Array([11, 8, 0]), shifts: undefined };
   assert.deepEqual([...bondDisplayShifts(skew, frame)], [0, 1, 0]);
+});
+
+test('resetting to source coordinates preserves short bonds when periodic fractions round to the upper face', () => {
+  const fractional = new Float32Array([1, 1, .5, .1, .1, .5]);
+  const frame = { cell, fractional, positions: fractionalToCartesian(fractional, cell), types: new Uint8Array(2) };
+  const bonds = calculateBonds(frame, { cutoff: 2 });
+  assert.equal(bonds.count, 1);
+  const sourceShifts = bonds.shifts.slice();
+  const prepared = bondDisplayShifts(bonds, frame, frame.positions.slice());
+  const reset = bondDisplayShifts(bonds, frame);
+  assert.deepEqual(Array.from(reset), [1, 1, 0]);
+  assert.deepEqual(reset, prepared, 'restoring the original array uses the same images as prepared display copies');
+  assert.deepEqual(bonds.shifts, sourceShifts, 'scientific bond results retain their own image convention');
+  for (let axis = 0; axis < 3; axis++) {
+    const actual = frame.positions[3 + axis] - frame.positions[axis]
+      + reset[0] * cell.vectors[axis] + reset[1] * cell.vectors[3 + axis] + reset[2] * cell.vectors[6 + axis];
+    assert.ok(Math.abs(actual - bonds.vectors[axis]) < 1e-6, 'the rendered bond keeps the physical short displacement');
+  }
 });
 
 test('bond arrays retain periodic self edges and reject malformed endpoints', () => {

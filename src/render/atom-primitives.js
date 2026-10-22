@@ -288,7 +288,19 @@ export function validateBonds(result, atomCount) {
 // Adjust image indices when showing unwrapped positions, without changing the
 // physically short displacement supplied by the periodic neighbor worker.
 export function bondDisplayShifts(result, frame, positions = frame.positions) {
-  if (positions === frame.positions && result.shifts) return result.shifts;
+  if (positions === frame.positions && result.shifts) {
+    // Neighbor search wraps periodic fractions again. A parsed Float32
+    // fraction can round to exactly 1, placing the source atom on the opposite
+    // face from that search. Reusing its image index would then draw a long
+    // bond after resetting the display origin. Keep the allocation-free path
+    // only when the source fractions already use the search's periodic images.
+    let canonical = true;
+    const fractional = frame.fractional;
+    for (let i = 0; i < (fractional?.length ?? 0); i++) {
+      if (frame.cell.pbc[i % 3] && (fractional[i] < 0 || fractional[i] >= 1)) { canonical = false; break; }
+    }
+    if (canonical) return result.shifts;
+  }
   const inverse = invert3(frame.cell.vectors), shifts = new Int32Array(result.count * 3);
   for (let bond = 0; bond < result.count; bond += 1) {
     const first = result.indices[bond * 2] * 3, second = result.indices[bond * 2 + 1] * 3;
