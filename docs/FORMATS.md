@@ -436,7 +436,7 @@ parser fallback for coordinate requests; no reduced-allocation speedup is
 claimed for those formats. Coordinate projection reduces source allocations and
 Worker transport, but still reads and validates every atom row, so files with
 few scalar columns may see little timing improvement. A reproducible parser-only
-comparison is available through `node scripts/benchmark-coordinate-projection.mjs`.
+comparison is available through `node scripts/benchmarks/benchmark-coordinate-projection.mjs`.
 
 File-derived time series can also request a **header projection** in the same
 reusable parser pool. It reads a bounded prefix for declared counts, cells and

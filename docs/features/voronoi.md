@@ -319,7 +319,7 @@ against `adb0648` measured resident CPU calculation reductions of 28.4% for
 two-Worker foreground time fell by 20.8% and 4.9%, respectively; these pool
 figures also include omitting types/index inputs already resident in a Worker.
 Every sample matched all baseline scientific arrays, labels and statistics.
-Reproduce with `node scripts/benchmark-voronoi-overhead.mjs --baseline PATH`
+Reproduce with `node scripts/benchmarks/benchmark-voronoi-overhead.mjs --baseline PATH`
 and optionally `--dataset nigb --repetitions 3`; the baseline path must contain
 a separate pre-change checkout, including its Wasm modules. The benchmark also
 isolates three label-message hops and includes the final public decoding.

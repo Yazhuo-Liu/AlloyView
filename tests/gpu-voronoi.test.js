@@ -12,7 +12,7 @@ import { GpuAnalysisClient } from '../src/analysis/gpu/client.js';
 import { prepareVoronoiSelection, expandVoronoiResult } from '../src/analysis/voronoi-selection.js';
 
 // These tests exercise host assembly/lifecycle, not numerical shader claims.
-// scripts/browser-voronoi-gpu.mjs independently runs real WGSL and compares
+// scripts/browser/browser-voronoi-gpu.mjs independently runs real WGSL and compares
 // complete scalar, face/topology and geometric results against exact Wasm.
 async function hostFixture(frame, { flags = 0, onRun, onRead, radii, rowState } = {}) {
   const expected = await calculateVoronoi(frame, radii ? { radii } : {}), scale = Math.cbrt(expected.cellVolume / expected.sourceAtomCount);

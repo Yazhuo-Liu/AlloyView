@@ -321,7 +321,7 @@ regression, adoption and result readback; PTM and first module startup are
 excluded. At 19,652 atoms, forced parallel preparation was slower, so the
 default keeps small frames serial. These are measurements of this fixture and
 host, not a general speedup claim. Reproduce the large comparison with
-`node scripts/benchmark-grain-pipeline.mjs 30 5 3`; use
+`node scripts/benchmarks/benchmark-grain-pipeline.mjs 30 5 3`; use
 `17 5 3 --force-small` to examine small-frame messaging overhead.
 
 In headless Chrome on the reference workstation (40 logical processors):

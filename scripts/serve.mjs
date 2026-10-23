@@ -2,7 +2,7 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, relative as relativePath, resolve, sep } from 'node:path';
 import { createDocumentationPages } from './build-docs.mjs';
-import { createExampleCatalog, serializeExampleCatalog } from './example-catalog.mjs';
+import { createExampleCatalog, serializeExampleCatalog } from './lib/example-catalog.mjs';
 
 const root = resolve(process.argv[2] ?? '.');
 const port = Number(process.argv[3] ?? 5173);

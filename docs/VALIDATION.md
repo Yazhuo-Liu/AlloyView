@@ -1,5 +1,27 @@
 # Validation record
 
+## Review consolidation and script organization (2026-10-22)
+
+Checked against `70f6ed5`. The 2026-10-16/19 reviews' 29 functional findings
+and two test findings have fixes and normal regression coverage. Completed
+performance work was also checked against current source. Remaining work is
+consolidated in [TODO](TODO.md), with external checks and deferred research
+separate from unresolved validation. [DXA](DXA.md) preserves the current
+scientific comparison contract, including the still-failing strict gates.
+Eleven superseded reports and ten historical bug-reproduction scripts were
+removed; source provenance, feature guides, normal regressions and raw benchmark
+evidence remain. Old reports can be recovered from Git history.
+
+Browser checks, benchmarks and shared helpers now live in `scripts/browser/`,
+`scripts/benchmarks/` and `scripts/lib/`; npm command names are unchanged.
+Validation passed all **2,382 Node tests**, script syntax/import checks, the
+production build, documentation links and heading fragments, and a small grain
+benchmark's serial/private/shared execution paths. The production bundled-runtime
+browser check passed with no missing resources or page errors. The complete
+browser smoke also passed, including 204,800-atom clipping/picking, exports,
+configuration, source changes and mobile controls. These checks validate the
+reorganization; no historical performance measurement was repeated.
+
 ## Compact phone header and accessible crystal movement (2026-10-22)
 
 Baseline: `4c57f60`, synchronized from `origin/main`. Phone CSS previously hid
@@ -34,7 +56,7 @@ Validation:
 - Production `test:browser:mobile-targets`: 320×740, 375×812, 430×932 and 844×390
   at DPR 2. Real taps toggle Dark/GPU; dimensions, visibility, desktop resize,
   logo resource requests, panel hit targets and lack of horizontal overflow pass.
-- `node scripts/browser-crystal-drag.mjs --mobile-only`: actual visible phone
+- `node scripts/browser/browser-crystal-drag.mjs --mobile-only`: actual visible phone
   buttons at 390px, 320px and landscape 844px. One finger shifts the crystal,
   Reset restores origin/coordinates without moving the camera, a second finger
   cancels the shift and zooms, and leaving Move restores rotation. Shader
@@ -48,7 +70,7 @@ Validation:
 ## DXA internal diagnostics and global validation, P0/P1 (2026-10-21)
 
 Baseline: `d1bfe2f`. Both production kernels were rebuilt with Emscripten
-3.1.69. The [P0/P1 report](DXA_P0_P1.md) documents optional Geogram/tracing/
+3.1.69. The [DXA validation reference](DXA.md#scientific-comparison-contract) documents optional Geogram/tracing/
 transition diagnostics, complete bounded scientific readback, genuine PDEL
 benchmarks and full-network reference fixtures. Worker, Wasm and GPU prewarming
 and the shared CPU budget remain unchanged; no P2+ algorithm is adopted.
@@ -81,7 +103,7 @@ remain outside the stated fixture coverage.
 
 ## DXA compact layout and ordered mesh lookup (2026-10-20)
 
-Baseline: `ea9245d`. The [K4 report](PERFORMANCE_DXA_K4.md) records the
+Baseline: `ea9245d`. The [DXA implementation and evidence](DXA.md#retained-evidence) records the
 implementation, separate candidate comparisons, exact-output checks and raw
 measurements. Both production Wasm variants were rebuilt with Emscripten
 3.1.69. Worker, Wasm and GPU prewarming and the shared CPU budget are retained.
@@ -127,8 +149,9 @@ These software-rendered checks do not establish physical GPU performance.
 
 ## PNG export and bounded GPU preparation (2026-10-20)
 
-The [T9/G3/G4 report](PERFORMANCE_T9_G3_G4.md) records the final implementations,
-exact scope, commands and raw before/after samples against `c93a58f`.
+This entry records PNG encoding, thin-cell GPU dispatch and bounded prefetch
+against `c93a58f`. Raw samples remain in `docs/benchmarks/png-worker-t9*.json`,
+`gpu-thin-cells-g3*.json` and `gpu-prefetch-g4.json`.
 The final full Node suite passes **2,322 tests**, with no failures, cancellations
 or skips. Worker, Wasm and GPU prewarming remain enabled.
 
@@ -176,10 +199,10 @@ Latest validation: 2026-10-20 (UTC). Earlier entries retain their own dates.
 ## Loading and analysis performance improvements (2026-10-20)
 
 Baseline: `adb06489831cf2f78f50790c25eb7d0ae0c2c762`, synchronized with
-remote main before this work. The
-[performance report](PERFORMANCE_IMPROVEMENTS_2026-10-20.md) records S6, T8,
-T7, T10, C10, K1, K3 and the bounded K4 tracing change, including reproducible
-commands, raw interleaved samples and limitations. Worker/Wasm/GPU prewarming,
+remote main before this work. This entry covers S6, T8, T7, T10, C10,
+K1, K3 and the bounded K4 tracing change. The dated loading, replication,
+frame-summary, Voronoi, grains/shear and tracing JSON records remain in
+`docs/benchmarks/`; runnable entrypoints are in `scripts/benchmarks/`. Worker/Wasm/GPU prewarming,
 the shared CPU quota and trajectory prefetch remain enabled.
 
 `npm test -- --test-concurrency=4` passes all **2301 tests**, with zero
@@ -252,11 +275,11 @@ the larger serial DXA redesign remain separate items in [TODO](TODO.md).
 ## Whole-repository follow-up repairs (2026-10-19)
 
 Baseline: `812ea64014702baa133dd0e8180d68f4f6100ac5`, synchronized with remote
-main before work and checked again before committing. The
-[follow-up report](REPOSITORY_REVIEW_2026-10-19.md) records 18 reproduced
-functional defects and one scheduling-dependent browser assertion, their fixes,
-regression entry points and the current status of every historical performance
-item. The preceding twelve fixes remain documented separately.
+main before work and checked again before committing. This follow-up repaired
+18 reproduced functional defects and one scheduling-dependent browser assertion.
+The preceding 11 functional fixes and one test fix also remain covered by normal
+regressions. Superseded detailed reports are available in Git history; remaining
+work is maintained in [TODO](TODO.md).
 
 Validation uses Node.js 24 and Chromium/SwiftShader. `npm test` passes all
 **2258 tests**, with zero failures, cancellations or skips, and `npm run build`
@@ -439,7 +462,7 @@ R7 audit gains are historical evidence, not reproduced gains for this build.
   `test:browser:measured-gpu-routing`, `test:browser:conservative-depth`,
   `test:browser:bundled-runtime`, `test:browser:trajectory-tools`,
   `test:browser:movies`, `test:browser:time-series-headers` and
-  `node scripts/browser-gpu.mjs --application-only`.
+  `node scripts/browser/browser-gpu.mjs --application-only`.
 - Independent focused regressions cover scientific parity, weighted-budget
   transitions, private/shared Workers, cancellation/ACKs, routing contention,
   late resets, nested batch cleanup and depth arithmetic/precision failure.
@@ -571,7 +594,7 @@ npm run test:browser:gpu-frame-revisions
 npm run test:browser:comparison-preparation
 npm run test:browser:surface-mesh -- --production
 npm run test:browser:renderer-context -- --production
-node scripts/browser-gpu.mjs --built-only
+node scripts/browser/browser-gpu.mjs --built-only
 npm run benchmark:display-preparation
 npm run benchmark:primitive-preparation -- 1000000 9
 ```
@@ -757,7 +780,7 @@ This continuation passed `npm test`, `npm run build` and the complete
 ```bash
 npm run test:browser:copy-trajectories
 npm run test:browser:time-series-headers
-node scripts/browser-progressive-series.mjs
+node scripts/browser/browser-progressive-series.mjs
 npm run test:browser:mobile-targets
 npm run test:browser:gpu-fallback-cache
 ```
@@ -919,19 +942,19 @@ Run `npm run build` before production browser checks. This batch passed:
 - `npm run test:browser:movies -- --production`, including four pending-frame
   preview races and real MP4/WebM decoding with ffprobe.
 - `npm run test:browser:radical-dependencies` and
-  `node scripts/browser-voronoi-radical.mjs --production`; actual CPU/GPU
+  `node scripts/browser/browser-voronoi-radical.mjs --production`; actual CPU/GPU
   radical radii, failed/replaced dependencies and cancellation were exercised.
 - `npm run test:browser:legend-retention`,
-  `node scripts/browser-scalar-legend-preview.mjs --production` and
-  `node scripts/browser-orientation-discrete.mjs --production`.
-- `node scripts/browser-trajectory-tools.mjs --production` and
-  `node scripts/browser-trajectory-workers.mjs --production`, including
+  `node scripts/browser/browser-scalar-legend-preview.mjs --production` and
+  `node scripts/browser/browser-orientation-discrete.mjs --production`.
+- `node scripts/browser/browser-trajectory-tools.mjs --production` and
+  `node scripts/browser/browser-trajectory-workers.mjs --production`, including
   nonisolated/shared paths, foreground promotion, source cancellation and
   parser reuse. The latter stayed within its three-permit budget and returned
   to zero active permits on close.
 - `npm run test:browser:render-hot-loops`,
   `npm run test:browser:transparent-current` and
-  `node scripts/browser-export-resolution.mjs --production`; the resolution
+  `node scripts/browser/browser-export-resolution.mjs --production`; the resolution
   regression includes a 6,000 × 4,000 image tiled across twelve targets.
 - `npm run test:browser` for the complete integration smoke, and
   `npm run test:browser:blended-annotations` for the preceding B22 opacity
@@ -941,7 +964,7 @@ Run `npm run build` before production browser checks. This batch passed:
 - `npm run test:browser:bundled-runtime` against the final documented build;
   the actual versioned page and Worker entries load at the project subpath.
 
-Use `node scripts/browser-render-hot-loops.mjs --production --benchmark`,
+Use `node scripts/browser/browser-render-hot-loops.mjs --production --benchmark`,
 `npm run benchmark:matte` and
 `npm run benchmark:parser-tail -- --rounds=7` to repeat the measured CPU loops.
 The benchmark scripts assert output agreement before reporting timing.
@@ -1577,7 +1600,7 @@ assertions. No GPU assertion was skipped to obtain a pass.
 | --- | --- |
 | `npm test` | 1,819 passed; zero failures, cancellations or skipped tests |
 | `npm run build` | Static viewer and standalone documentation built successfully |
-| `node scripts/browser-gpu.mjs --application-only` | All 19 application scenarios passed on actual WebGPU with SwiftShader |
+| `node scripts/browser/browser-gpu.mjs --application-only` | All 19 application scenarios passed on actual WebGPU with SwiftShader |
 | `npm run test:browser:advanced-tools` | Passed; restored external quantity selection, rename, replica attributes, camera controls and wrapped-copy analyses |
 | `npm run test:browser:initial-colors` | Passed; initial upload, cached radius data, coordinate/velocity coloring and configuration replay |
 | `npm run test:browser:legend-preview` | Passed; exact committed atom/Voronoi pixels, main/second-view synchronization and zero WebGL errors |
@@ -2224,7 +2247,7 @@ in the cloud environment; they do not measure a physical GPU.
   regions. Parallel workers use private path scratch and defer graph-cache
   writes to the original ordered commit. Measurements of candidate/path stages
   fix Delaunay geometry to avoid attributing existing PDEL tie variation to
-  these changes; see [the CPU profile](DXA_CPU_PROFILE.md).
+  these changes; see [the DXA reference](DXA.md#benchmark-and-build-protocol).
 
 The final build and all **1,286 Node tests** pass. Targeted browser checks pass
 for scalar legend preview, trajectory Workers, view/Voronoi and CPU prewarm.
@@ -2253,7 +2276,7 @@ Updated warm calls report zero coordinate uploads and index builds.
 The private Fe Auto CSP measurement is slower. Initialization/preparation and
 these warm calculations have different costs; reuse does not guarantee every
 analysis is faster on every host. DXA stage measurements and exact-network
-checks are recorded separately in [the CPU profile](DXA_CPU_PROFILE.md).
+checks are recorded separately in [the DXA reference](DXA.md#benchmark-and-build-protocol).
 
 ## Backlog phase 1: performance and feature additions (2026-10-07)
 
@@ -2892,7 +2915,7 @@ Reproduce with `npm test`, `npm run build`,
   also fluctuate, so whole-frame gains are measurements of this cloud run,
   not isolated attribution or physical-GPU performance claims. Serial whole-
   frame gains are not consistent. Protocol, stage timings, hashes and raw
-  results are retained in the [CPU profile](DXA_CPU_PROFILE.md).
+  results are retained in the [DXA benchmark reference](DXA.md#benchmark-and-build-protocol).
 - The cutoff list covers **35 metal elements**, retains Custom as its first
   option and keeps the numeric input above it. Automatic selection uses only
   element labels actually present in the loaded frame. Mixed known elements
@@ -2974,7 +2997,7 @@ Reproduce with `npm test`, `npm run build`, `npm run test:browser`,
   check also passes without isolation headers: serial Worker extraction,
   periodic screw lines, slicing, line styles, PNG and recipe replay, cooperative
   cancellation/recovery, physical replication and trajectory updates.
-- The [CPU profile](DXA_CPU_PROFILE.md) records retained-heap Wasm stage timings
+- The [DXA benchmark reference](DXA.md#benchmark-and-build-protocol) records retained-heap Wasm stage timings
   on Fe and physically replicated NiGB, a 1/2/4-thread sweep, and temporary
   native optimization experiments. This environment exposes four logical CPUs;
   six-thread diagnostic runs oversubscribe it. Existing native parallelism and
@@ -3255,8 +3278,8 @@ input/replicated JS arrays and retained Wasm capacity; it is not a sampled peak
 or an isolated kernel allocation measurement. Shared-memory execution requires
 an isolated host; GitHub Pages without these headers uses the serial kernel.
 These CPU measurements predate the hybrid classifier described above. The
-[resident GPU design](DXA_REVIEW.md) records the remaining periodic geometry
-and tracing work for a fully GPU extraction. WebGL2 drawing requires final
+[current backlog](TODO.md#deferred-decisions-not-required-fixes) treats complete
+GPU geometry and tracing as conditional research. WebGL2 drawing requires final
 network transfer; changing the renderer is not a prerequisite for that work.
 
 Reproduce with `npm test`, `npm run test:browser:dxa-parallel -- --software`,
@@ -3310,7 +3333,7 @@ research tooling outside the application's dependencies.
 This is initial validation, not broad parity across realistic networks. Edge
 dislocations, partials, loops, junctions, complicated interfaces and newer HCP
 low-c/a behavior still need independent fixtures. The source review and first
-native NiGB record remain in [DXA review](DXA_REVIEW.md).
+native NiGB record are summarized in [DXA](DXA.md#retained-evidence).
 
 ## GPU ideal lattice reference and the enabled default
 

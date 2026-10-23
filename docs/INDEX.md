@@ -45,30 +45,15 @@ Each detailed settings heading has a **?**: hover or focus it for a brief explan
 
 [Repository architecture](ARCHITECTURE.md) maps the source directories, explains where new modules belong, and describes entrypoint, Worker, asset and build conventions.
 
-[Analysis implementation](STRUCTURE_ANALYSIS.md) explains crystal classification, ideal lattice strain and the Worker scheduler. [Validation](VALIDATION.md) describes tests and comparisons. [Deployment](DEPLOYMENT.md) explains the static build, including these documentation pages. The [improvement backlog](TODO.md) lists known defects and planned performance work from the latest audit, in priority order; completed features are described in the feature pages.
+[Analysis implementation](STRUCTURE_ANALYSIS.md) explains crystal classification, ideal lattice strain and the Worker scheduler. [Validation](VALIDATION.md) describes tests and comparisons. [Deployment](DEPLOYMENT.md) explains the static build, including these documentation pages. [Open work](TODO.md) is the single backlog for unresolved validation, performance candidates and external checks, with deferred decisions marked separately. Completed features are described in the feature pages.
 
-The [repository review of 2026-10-16](REPOSITORY_REVIEW_2026-10-16.md) records 11 reproduced functional defects and one scheduling-dependent test failure, with their impact, evidence scripts and review limits. All 12 findings are addressed in the [repair report of 2026-10-19](REPOSITORY_FIXES_2026-10-19.md), including regression coverage and Worker/GPU warmup checks. The original review and reproduction scripts remain a historical record of their baseline.
+[DXA implementation and scientific validation](DXA.md) describes the current
+CPU/Wasm algorithm, provenance, diagnostics and complete-result comparisons.
+The backlog distinguishes unresolved validation from optional optimizations,
+external checks and deferred research. Historical review reports are available
+in Git history; completed findings are no longer separate development pages.
 
-The [follow-up repository review of 2026-10-19](REPOSITORY_REVIEW_2026-10-19.md)
-records further reproduced defects and repairs, closes GPU neighbor-order
-nondeterminism, and distinguishes remaining performance work from verified fixes.
-
-The [performance report of 2026-10-20](PERFORMANCE_IMPROVEMENTS_2026-10-20.md)
-records the following loading, replication, frame-summary, Voronoi, grain,
-local-shear and DXA improvements, their baseline comparisons and remaining limits.
-
-[PNG export and GPU optimizations (T9/G3/G4)](PERFORMANCE_T9_G3_G4.md)
-describes Worker PNG encoding, thin-cell GPU dispatch and bounded trajectory prefetch.
-The [K4 report](PERFORMANCE_DXA_K4.md) covers DXA search storage, compact edge
-data and ordered mesh lookup, with complete-result comparisons.
-The [global algorithm plan](DXA_GLOBAL_ALGORITHM_PLAN.md) sets out the next
-stages. The [P0/P1 implementation report](DXA_P0_P1.md) records internal
-diagnostics, true PDEL comparisons and complete scientific readback.
-
-[DXA implementation review](DXA_REVIEW.md) records the source, licensing and
-CPU/Wasm algorithm and historical WebGPU research. The current DXA tool uses
-complete CPU/Wasm extraction with automatic pthreads or private local-stage
-Workers around one global serial kernel;
-broader scientific validation remains ongoing.
+Script organization and command conventions are described in
+[Repository architecture](ARCHITECTURE.md#development-scripts).
 
 The source is available in the [GitHub repository](https://github.com/Yazhuo-Liu/AlloyView). AlloyView is inspired by [OVITO](https://www.ovito.org/) and [AtomEye](http://li.mit.edu/Archive/Graphics/A/).

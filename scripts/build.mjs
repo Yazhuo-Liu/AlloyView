@@ -3,8 +3,8 @@ import { access, cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDocumentation } from './build-docs.mjs';
-import { createExampleCatalog, serializeExampleCatalog } from './example-catalog.mjs';
-import { createBrowserBundles } from './bundle-runtime.mjs';
+import { createExampleCatalog, serializeExampleCatalog } from './lib/example-catalog.mjs';
+import { createBrowserBundles } from './lib/bundle-runtime.mjs';
 
 const projectRoot = resolve(import.meta.dirname, '..');
 export const LOGO_ASSET_BUDGET = 200 * 1024;

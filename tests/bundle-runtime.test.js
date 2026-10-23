@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { buildSite } from '../scripts/build.mjs';
-import { preserveModuleUrls } from '../scripts/bundle-runtime.mjs';
+import { preserveModuleUrls } from '../scripts/lib/bundle-runtime.mjs';
 
 test('bundling preserves original module URLs without rewriting source text', async () => {
   const source = [

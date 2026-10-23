@@ -15,7 +15,7 @@ and GPU warmup lifecycle.
 | `src/` | Browser application modules, Worker entrypoints and runtime assets. |
 | `tests/` | Node tests; `tests/helpers/` supplies fixtures, reference implementations and Node Worker adapters. |
 | `scripts/` | Development server, static build, documentation generation, browser checks and benchmarks. |
-| `docs/` | User and developer guides, feature pages, validation records and historical reviews. |
+| `docs/` | User and developer guides, feature pages, validation evidence and one active backlog. |
 | `examples/` | Structures and trajectories bundled with the viewer; the build generates their catalog. |
 | `wasm/` | Native interface sources and Emscripten build scripts; optional coordination build output also lives here. |
 | `third_party/` | Sources and provenance for the native analysis implementations. |
@@ -111,7 +111,7 @@ build scripts and current implementation documentation.
 
 ## Entrypoints and runtime paths
 
-`src/app.js` stays at a stable location. `scripts/bundle-runtime.mjs` builds
+`src/app.js` stays at a stable location. `scripts/lib/bundle-runtime.mjs` builds
 the page entry, `src/workers/*-worker.js`, and
 `src/analysis/gpu/worker.js`. Worker helpers that are not entrypoints stay in
 the Worker subtree without becoming independent bundles. Production module
@@ -184,15 +184,32 @@ checks and benchmarks are listed in `package.json`. These commands describe
 the verification workflow; executed results are recorded separately in
 [validation](VALIDATION.md) and dated reports.
 
-## Documentation and historical paths
+## Development scripts
 
-Register new guide pages in `DOC_GUIDES` in `scripts/build-docs.mjs` and link
-them from [the documentation index](INDEX.md). Feature pages are connected to
-the contextual help registry in `ui/shell/feature-help.js`.
+| Directory | Contents |
+| --- | --- |
+| `scripts/` | Stable build, documentation, server and CI entrypoints. |
+| `scripts/browser/` | Browser regression suites and feature-specific smoke helpers. |
+| `scripts/benchmarks/` | CPU, browser and GPU performance comparisons. |
+| `scripts/lib/` | Shared browser harness, fixtures, build and comparison helpers. |
+| `scripts/research/` | Optional external scientific reference tools. |
 
-Dated review reports and benchmark records describe the repository at the
-recorded commit. Their source paths and line numbers are historical snapshots
-and may name the former flat layout. Use this guide and the current feature
-implementation links to locate moved modules. Archived reproduction scripts
-may have their import paths updated so they remain runnable, while their
-original evidence and expected behavior stay part of the historical record.
+Keep existing npm command names stable when moving implementations. New checks
+belong beside the relevant scripts; reusable support belongs in `lib/`. For
+command examples, prerequisites and path conventions see the
+[script guide](https://github.com/Yazhuo-Liu/AlloyView/blob/main/scripts/README.md).
+
+## Documentation maintenance
+
+[TODO](TODO.md) is the only review/performance backlog. Keep actionable unfinished
+work there, with current code evidence and acceptance criteria; explicitly mark
+hardware-dependent checks and deferred decisions. Remove completed entries.
+Feature guides describe current behavior, [DXA](DXA.md) preserves its scientific
+validation contract, and [Validation](VALIDATION.md) retains executed evidence.
+Historical reviews and superseded reports remain in Git history.
+
+Register maintained guide pages in `DOC_GUIDES` in `scripts/build-docs.mjs` and
+link them from [the documentation index](INDEX.md). Feature pages are connected
+to the contextual help registry in `ui/shell/feature-help.js`. Benchmark records
+retain their original revisions, commands and hardware; do not rewrite those
+records to imply that old measurements ran against the current checkout.

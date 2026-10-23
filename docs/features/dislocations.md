@@ -247,13 +247,13 @@ extraction on the NiGB example physically repeated twice along Z. Repeat with
 records native stage times and scientific label/topology checks while reusing
 one heap across concurrency changes. Each result also lists `hostTimings`:
 kernel and pool readiness, input conversion and upload, and result decoding.
-[CPU profiles](../DXA_CPU_PROFILE.md) retain earlier measurements; they are
+[Benchmark protocols and retained records](../DXA.md#benchmark-and-build-protocol) retain earlier measurements; they are
 device-specific records.
 
 Development callers can provide the optional `onDxaProfile` module callback
 to collect per-session scopes and aggregate allocation counters. Profiling is
 disabled when that callback is absent and does not change the scientific
-result. The [K4 restructuring report](../PERFORMANCE_DXA_K4.md) describes the
+result. The [DXA implementation and evidence](../DXA.md#retained-evidence) describes the
 compact edge representation, bounded tracing workspace, contiguous ghost-face
 lookup and the scope of the before/after validation. A separate candidate
 prepared face payloads in parallel before ordered commits; its measured
@@ -279,9 +279,8 @@ copying or the remaining global extraction.
 For an alternating CPU comparison with earlier binaries, use
 `npm run benchmark:dxa-compare -- --baseline-ref d6f9010`. The script reads the
 baseline into a temporary directory, retains each backend's heap and verifies
-the physical output. Earlier DXA GPU experiments and their numerical records
-remain historical in the [implementation review](../DXA_REVIEW.md); they are
-not an available backend.
+the physical output. Earlier DXA GPU experiments remain in Git history; production extraction uses
+the CPU/Wasm implementation described in [DXA](../DXA.md).
 
 ## Limitations
 
@@ -328,7 +327,7 @@ gains.
 [private native stage kernels](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/dxa-cpu-stages.js),
 [line renderer](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/dislocation-layer.js),
 [defect mesh display](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/surface-mesh-layer.js).
-The [source review](../DXA_REVIEW.md) records the algorithm, pinned upstream
+The [implementation reference](../DXA.md#source-and-algorithm) records the algorithm, pinned upstream
 source, per-file MIT option and Geogram BSD license. Preserve all upstream
 notices when rebuilding the numerical module.
 
@@ -336,13 +335,13 @@ notices when rebuilding the numerical module.
 with Emscripten 3.1.69 through `wasm/build-dxa.sh`, using link-time
 optimization, WebAssembly SIMD and native WebAssembly exceptions. The kernel
 returns per-atom structure labels as a byte buffer that the Worker transfers,
-instead of JSON text. The [CPU profile](../DXA_CPU_PROFILE.md) records the
-flags, kernel sizes and measured effects of these choices, the thread-count
-rule, the first-extraction warm-up and the parallel edge passes.
+instead of JSON text. The [DXA benchmark reference](../DXA.md#benchmark-and-build-protocol)
+explains build flags, retained-heap measurements and the difference between
+fixed-topology comparisons and true parallel Delaunay runs.
 
 Developer diagnostics and the full-pipeline BDEL/PDEL comparison protocol are
-documented in [P0/P1 validation](../DXA_P0_P1.md). Profiling and complete
+documented in [P0/P1 validation](../DXA.md#scientific-comparison-contract). Profiling and complete
 scientific readback are opt-in developer interfaces; normal analysis retains
 the existing Worker/Wasm/GPU prewarming and CPU budget. The
-[global algorithm plan](../DXA_GLOBAL_ALGORITHM_PLAN.md) tracks the subsequent
+[DXA backlog](../TODO.md#k4-dxa-performance-candidates-p2-p5) tracks the subsequent
 algorithm work and its scientific acceptance requirements.

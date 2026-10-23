@@ -141,7 +141,7 @@ The optional staged `alloy_dxa_science_snapshot` readback in `wasm/dxa.cpp`
 exports every atom's cluster, cluster metadata and directed cached transitions.
 It never creates transitions, allocates only when requested, enforces a caller
 output-byte budget, and is released with the session. It does not add fields to
-normal scientific output. See `docs/DXA_P0_P1.md` for the separate original-binary
+normal scientific output. See `docs/DXA.md#scientific-comparison-contract` for the separate original-binary
 timing and readback-only reference-build protocols.
 
 This version predates OVITO 3.15's low-c/a HCP correction. HCP and diamond retain

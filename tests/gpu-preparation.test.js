@@ -9,7 +9,7 @@ import { crystalFrame } from './helpers/crystals.js';
 import { frameUploadBytes } from '../src/analysis/gpu/cache-policy.js';
 
 // Host scheduling/resource tests. Real dispatch parity is checked by
-// scripts/browser-voronoi-gpu.mjs, including load-style frame preparation.
+// scripts/browser/browser-voronoi-gpu.mjs, including load-style frame preparation.
 function fixture({ beforeCompile, afterRun } = {}) {
   const runtime = new GpuRuntime(), allocations = [], compiled = [], runs = [], scopes = [];
   const device = { limits:{maxBufferSize:256*1024**2,maxStorageBufferBindingSize:256*1024**2},

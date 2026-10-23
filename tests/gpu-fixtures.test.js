@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { cnaDirectFixtures, cnaFixtures, cloneFrame, cspFixtures, displacementFixtures, displacementValidationFixtures,
   idealStrainFixtures, pointFrame, referenceStrainFixtures, reorderFrame, replicatedDisplacementFixtures,
-  replicatedReferenceStrainFixtures, transformFrame } from '../scripts/gpu-fixtures.js';
+  replicatedReferenceStrainFixtures, transformFrame } from '../scripts/lib/gpu-fixtures.js';
 import { calculateCna } from '../src/analysis/cna.js';
 import { calculateAtomicStrain, STRAIN_FIELDS } from '../src/analysis/atomic-strain.js';
 import { calculateCentrosymmetry } from '../src/analysis/centrosymmetry.js';

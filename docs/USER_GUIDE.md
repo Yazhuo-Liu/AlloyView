@@ -888,7 +888,7 @@ run in parallel, with deduplication and graph-cache updates committed in their
 original order. Burgers tracing and junction construction retain ordered work.
 Compact edge storage, reusable search memory and contiguous ghost-face lookup
 reduce repeated data handling while preserving traversal order. Worker and
-Wasm prewarming remain enabled. See the [K4 report](PERFORMANCE_DXA_K4.md)
+Wasm prewarming remain enabled. See the [DXA implementation and evidence](DXA.md#retained-evidence)
 for implementation and validation details.
 Without isolation, sufficiently large jobs can reuse the existing CPU
 Worker pool for local identification and tetrahedron classification. One
@@ -1642,7 +1642,7 @@ are in [docs/VALIDATION.md](VALIDATION.md).
 
 The upstream review is pinned to
 `jameskermode/AtomEye@c418eb2553f6793460d4a956236fc698c39fbe74` in
-[docs/ATOMEYE_REVIEW.md](ATOMEYE_REVIEW.md). AtomEye's CFG conventions,
+[Source provenance](STRUCTURE_ANALYSIS.md#source-references-and-provenance). AtomEye's CFG conventions,
 fractional-coordinate data model, and linked-cell neighbor-list design informed
 the interfaces and tests here.
 
@@ -1650,7 +1650,7 @@ No AtomEye C source or asset is copied into this MIT-licensed repository. The
 reviewed upstream snapshot has no repository-wide license file; its Python
 bridge alone contains an explicit GPLv2 notice. Until the copyright holders
 clarify terms, shipping modified upstream C/Wasm would be legally ambiguous.
-The source evidence and reuse boundary are recorded in the review document.
+The source evidence and reuse boundary are recorded in the provenance section.
 This is a provenance and risk statement, not legal advice.
 
 ## Known limits and next steps
@@ -1684,9 +1684,9 @@ This is a provenance and risk statement, not legal advice.
   Following a trajectory file while a running simulation appends frames is not
   supported and is no longer planned. The initial DXA module
   comes from the separately reviewed OVITO core, not the reviewed AtomEye
-  snapshot. See [DXA implementation review](DXA_REVIEW.md) for the source-backed
-  CPU/Wasm algorithm and historical GPU research, and
-  `docs/ATOMEYE_REVIEW.md` for AtomEye.
+  snapshot. See [DXA implementation](DXA.md#source-and-algorithm) for the source-backed
+  CPU/Wasm algorithm and scientific validation contract, and
+  [source provenance](STRUCTURE_ANALYSIS.md#source-references-and-provenance) for AtomEye.
 - Coordination, adaptive/fixed CNA, manual/Auto central symmetry, displacement,
   reference-frame strain, RDF, local geometric shear, bonds, bond statistics, Voronoi and ideal-strain
   tensors can use optional WebGPU acceleration or Workers.

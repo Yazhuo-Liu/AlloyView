@@ -78,13 +78,13 @@ Voronoi chunks now omit redundant type arrays and index descriptors as well.
   Ambiguous cutoff, ordering and image decisions still receive exact CPU
   corrections. CPU Worker partition choices retain the separate numerical
   behavior described above.
-- **DXA.** With one thread an extraction is deterministic, and every kernel
-  change described in the [CPU profile](../DXA_CPU_PROFILE.md) kept its
-  complete normalized result identical. With several threads the parallel
-  Delaunay tessellation can choose different valid triangulations of nearly
-  degenerate sites; in the bundled examples line lengths then vary by up to
-  about 1% between runs, with the same atom labels, Burgers vectors and
-  junction topology.
+- **DXA.** Recorded fixed single-thread baseline comparisons preserve complete
+  normalized outputs exactly. True parallel Delaunay can vary in full curves
+  and meshes; partial Burgers vectors also show last-bit differences, including
+  repeated baseline runs. These differences are not all proved physically
+  equivalent. The [scientific comparison contract](../DXA.md#scientific-comparison-contract)
+  records the still-failing strict gates; resolving them remains in
+  [open work](../TODO.md#k4-dxa-scientific-validation).
 - **Display.** Table-driven category colors and masks and flattened color
   maps produce the same bytes as the per-atom lookups they replaced. The
   legend drag preview uses normalized 32-bit scalars, and the exact CPU
@@ -104,13 +104,13 @@ Voronoi chunks now omit redundant type arrays and index descriptors as well.
 
 ### Measured effects
 
-The [2026-10-20 report](../PERFORMANCE_IMPROVEMENTS_2026-10-20.md) records
+The [2026-10-20 validation record](../VALIDATION.md#loading-and-analysis-performance-improvements-2026-10-20) records
 interleaved comparisons for standby source loading, streaming gzip, replicated
 IDs, frame summaries and CPU analyses. It includes cold-path costs and retained
 memory, and separates transport microbenchmarks from full calculations. Earlier
 measurements below retain their original hardware and implementation scope.
 
-The [K4 DXA report](../PERFORMANCE_DXA_K4.md) measures compact elastic-edge
+The [retained DXA evidence](../DXA.md#retained-evidence) measures compact elastic-edge
 lookups, reusable circuit-search storage and compact mesh lookup against
 `ea9245d`. It separates ordinary timings from optional diagnostics and checks
 complete scientific results. Its four-thread comparison holds Delaunay to one
@@ -162,9 +162,9 @@ with other jobs; multithreaded timings vary by about 10%.
   one-frame private residency described below.
 - **WebGPU analyses.** See the table under
   [Dispatch batching and readback](#dispatch-batching-and-readback).
-- **DXA.** See [DXA](dislocations.md) and the
-  [CPU profile](../DXA_CPU_PROFILE.md): the kernel build flags, the thread
-  count, the first-extraction warm-up and stage transfer are measured there.
+- **DXA.** [Dislocations](dislocations.md) describes execution, warmup and stage
+  transfer. The [DXA benchmark reference](../DXA.md#benchmark-and-build-protocol)
+  documents build and comparison protocols and links retained measurements.
 
 ### Alternatives measured and not adopted
 
@@ -522,7 +522,7 @@ performance routing threshold is inferred from software-adapter timings.
 
 ```bash
 node --test tests/gpu-fallback-cache.test.js
-node scripts/browser-gpu-fallback-cache.mjs --production
+node scripts/browser/browser-gpu-fallback-cache.mjs --production
 ```
 
 ### Routing from local measurements
@@ -824,7 +824,7 @@ vacuum slabs. The same bound applies to later adaptive batches and compact
 PTM/Voronoi passes. Canonical neighbor order, complete image searches and
 precision corrections are unchanged. Extreme per-bin or per-atom work still
 falls back to CPU; the limits protect individual traversals that smaller
-batches alone cannot shorten. See the [T9/G3/G4 report](../PERFORMANCE_T9_G3_G4.md)
+batches alone cannot shorten. See the [PNG and GPU validation record](../VALIDATION.md#png-export-and-bounded-gpu-preparation-2026-10-20)
 for the tested geometries and limits.
 
 Most GPU kernels use 32-bit floating point. High and low input components retain coordinate and PTM fit precision; strain kernels use compensated matrix arithmetic and apply the CPU threshold for numerical zeros. Central symmetry and fresh-strain neighbor preparation additionally emulate IEEE 64-bit arithmetic in their shaders to preserve strict neighbor ordering and CSP pair choices; this does not rely on native GPU float64. Ambiguous neighbor cutoff or ordering decisions in other kernels receive sparse CPU corrections. Continuous values can still differ slightly between backends, including small strain residuals, and inputs outside the supported precision range use CPU. In particular, GPU neighbor searches fall back when their padded search radius exceeds 32 times the face height along a periodic axis; small nonperiodic face heights do not trigger this limit.
@@ -944,7 +944,7 @@ oracles, read counts and interleaved measurements. To reproduce the CPU loops:
 
 ```bash
 npm run build
-node scripts/browser-render-hot-loops.mjs --production --benchmark
+node scripts/browser/browser-render-hot-loops.mjs --production --benchmark
 npm run benchmark:matte
 npm run benchmark:parser-tail -- --rounds=7
 ```
@@ -992,9 +992,9 @@ example, run the browser benchmark against the production build:
 
 ```bash
 npm run build
-node scripts/benchmark-voronoi-browser.mjs --output /tmp/alloyview-voronoi-hea.json
+node scripts/benchmarks/benchmark-voronoi-browser.mjs --output /tmp/alloyview-voronoi-hea.json
 # Check scientific outputs against a previously saved report:
-node scripts/benchmark-voronoi-browser.mjs --reference /tmp/alloyview-voronoi-hea.json --output /tmp/alloyview-voronoi-hea-next.json
+node scripts/benchmarks/benchmark-voronoi-browser.mjs --reference /tmp/alloyview-voronoi-hea.json --output /tmp/alloyview-voronoi-hea-next.json
 ```
 
 It records source visibility and preparation readiness separately from the

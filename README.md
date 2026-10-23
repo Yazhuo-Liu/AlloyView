@@ -406,7 +406,10 @@ modules from mixing file-loading protocols after deployment. See the
 | CFG, LAMMPS, XYZ, PDB and POSCAR conventions | [Supported formats](docs/FORMATS.md) |
 | Static hosting and GitHub Pages | [Deployment](docs/DEPLOYMENT.md) |
 | Executed tests and benchmark results | [Validation record](docs/VALIDATION.md) |
-| AtomEye design references and source provenance | [AtomEye review](docs/ATOMEYE_REVIEW.md) |
+| Open review findings and conditional performance work | [Open work](docs/TODO.md) |
+| Development scripts and command conventions | [Script guide](scripts/README.md) |
+| DXA algorithm, diagnostics and scientific comparison limits | [DXA reference](docs/DXA.md) |
+| AtomEye design references and source provenance | [Source provenance](docs/STRUCTURE_ANALYSIS.md#source-references-and-provenance) |
 | CNA, PTM, ideal-lattice strain, central symmetry and parallel execution | [Structure analysis](docs/STRUCTURE_ANALYSIS.md) |
 
 WebGL 2 is required. Binary dumps, LAMMPS input scripts, general triclinic
@@ -436,4 +439,4 @@ is copied into this repository. The vendored PTM library is MIT licensed and
 its embedded Voro++ code is BSD licensed; [third-party notices](licenses/)
 ship with the static build. Dislocation analysis and grain segmentation
 derive from OVITO 3.9.4 under the MIT option of its dual license. Voro++ also supplies the per-atom Voronoi clipping
-kernel. See the [provenance review](docs/ATOMEYE_REVIEW.md).
+kernel. See the [source provenance](docs/STRUCTURE_ANALYSIS.md#source-references-and-provenance).

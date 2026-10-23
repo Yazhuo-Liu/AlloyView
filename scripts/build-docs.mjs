@@ -9,17 +9,7 @@ export const DOC_GUIDES = Object.freeze([
   { source: 'STRUCTURE_ANALYSIS.md', page: 'structure-analysis.html', title: 'Analysis implementation' },
   { source: 'VALIDATION.md', page: 'validation.html', title: 'Validation' },
   { source: 'DEPLOYMENT.md', page: 'deployment.html', title: 'Deployment' },
-  { source: 'ATOMEYE_REVIEW.md', page: 'atomeye-review.html', title: 'AtomEye implementation review' },
-  { source: 'DXA_REVIEW.md', page: 'dxa-review.html', title: 'DXA implementation review' },
-  { source: 'DXA_CPU_PROFILE.md', page: 'dxa-cpu-profile.html', title: 'DXA CPU profile' },
-  { source: 'REPOSITORY_REVIEW_2026-10-16.md', page: 'repository-review-2026-10-16.html', title: 'Repository review (2026-10-16)' },
-  { source: 'REPOSITORY_FIXES_2026-10-19.md', page: 'repository-fixes-2026-10-19.html', title: 'Repository fixes (2026-10-19)' },
-  { source: 'REPOSITORY_REVIEW_2026-10-19.md', page: 'repository-review-2026-10-19.html', title: 'Follow-up repository review (2026-10-19)' },
-  { source: 'PERFORMANCE_IMPROVEMENTS_2026-10-20.md', page: 'performance-improvements-2026-10-20.html', title: 'Performance improvements (2026-10-20)' },
-  { source: 'PERFORMANCE_T9_G3_G4.md', page: 'performance-t9-g3-g4.html', title: 'PNG export and GPU optimizations (T9/G3/G4)' },
-  { source: 'PERFORMANCE_DXA_K4.md', page: 'performance-dxa-k4.html', title: 'DXA data layout and ordered mesh lookup (K4)' },
-  { source: 'DXA_GLOBAL_ALGORITHM_PLAN.md', page: 'dxa-global-algorithm-plan.html', title: 'DXA global algorithm plan' },
-  { source: 'DXA_P0_P1.md', page: 'dxa-p0-p1.html', title: 'DXA internal diagnostics and global validation (P0/P1)' },
+  { source: 'DXA.md', page: 'dxa.html', title: 'DXA implementation and validation' },
   { source: 'TODO.md', page: 'todo.html', title: 'Improvement backlog' },
 ]);
 

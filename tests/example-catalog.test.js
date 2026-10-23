@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildSite } from '../scripts/build.mjs';
-import { createExampleCatalog, serializeExampleCatalog } from '../scripts/example-catalog.mjs';
+import { createExampleCatalog, serializeExampleCatalog } from '../scripts/lib/example-catalog.mjs';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const headers = {

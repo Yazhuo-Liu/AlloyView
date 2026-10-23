@@ -69,6 +69,6 @@ enumerated `N + 64` neighborhoods instead of `2N`; mixed fallbacks retained
 `2N + 64`. The optimization does not promise a gain for every new mixed frame.
 
 [Raw samples and methodology](../benchmarks/grains-shear-2026-10-20.json) and
-[benchmark script](https://github.com/Yazhuo-Liu/AlloyView/blob/main/scripts/benchmark-grains-shear.mjs).
+[benchmark script](https://github.com/Yazhuo-Liu/AlloyView/blob/main/scripts/benchmarks/benchmark-grains-shear.mjs).
 
 [Coordination, second moments and shear invariant](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/analysis/local-shear.js).

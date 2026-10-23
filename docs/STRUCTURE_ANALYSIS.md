@@ -328,13 +328,13 @@ tasks. Closing the pool settles every pending promise and releases its Workers.
 The legacy coordination facade preserves its latest-request queue while using
 the same global scheduler.
 
-## Reference scan and further work
+## Source references and provenance
 
 Reviewed snapshots (2026-10-02):
 
 - [AtomEye](https://github.com/jameskermode/AtomEye/tree/c418eb2553f6793460d4a956236fc698c39fbe74),
-  `A3/geo.c`, especially `compute_central_symm()`; see
-  [the broader AtomEye inventory](ATOMEYE_REVIEW.md).
+  `A3/geo.c`, especially `compute_central_symm()`, and `Atoms/Config.c`
+  and `Atoms/Neighborlist.c` for CFG and fractional-coordinate conventions.
 - [OVITO](https://gitlab.com/stuko/ovito/-/tree/81d76297a22ba00793b16487e821884e3c77028a),
   CNA documentation and `CommonNeighborAnalysisModifier.cpp`, predefined
   structure colors in `ParticleType.cpp`, PTM documentation and the separately
@@ -348,6 +348,15 @@ The CNA/CSP browser kernels independently implement these algorithmic
 definitions. No AtomEye or OVITO application source is bundled. AtomEye's
 reviewed tree does not contain CNA or PTM; these are separate additions inspired
 by OVITO's structure-identification workflow.
+
+The pinned AtomEye review found no repository-wide license grant; the explicit
+GPLv2 notice in `Python/atomeyemodule.c` covers that bridge's portions only.
+AlloyView uses AtomEye as a behavioral and format reference, with independently
+written browser implementations. Direct source reuse requires clarified terms;
+public availability alone was not treated as a redistribution grant. Native
+X11 rendering, MPI/window threading and the Python bridge are not browser
+implementation commitments. Current capabilities and limits live in the feature
+guides, rather than a separate migration inventory.
 
 PTM uses the separately licensed library from the pinned OVITO snapshot,
 vendored unchanged in `third_party/ptm/`. Its modified Voro++ cell code retains
