@@ -7,8 +7,10 @@ Each parsed frame contains:
 - `Float64Array ids` and compact `Uint16Array types` plus type labels;
 - canonical Cartesian `Float32Array positions` and fractional `Float32Array
   fractional`, wrapped only along axes marked periodic;
-- optional `Float32Array unwrappedPositions` when the input provides enough
-  information to reconstruct unwrapped coordinates;
+- optional `filePositions` preserving CFG positions written outside the primary
+  cell, independently of canonical wrapped analysis coordinates;
+- optional `unwrappedPositions` materialized from file data when Unwrap or an
+  analysis needs continuous coordinates;
 - optional interleaved `Int32Array imageFlags` storing explicit or safely
   inferred `ix/iy/iz` values;
 - a cell origin, three row vectors, and three PBC flags;
@@ -23,8 +25,10 @@ file), Extended XYZ `id`, and PDB serial numbers.
 
 Cell vectors follow the AtomEye CFG convention `x = origin + s * H`, where each
 row of `H` is a cell edge. Canonical wrapped coordinates are used for slicing and
-analysis. The renderer can independently upload `unwrappedPositions`; switching
-the display mode does not mutate the analysis frame or rerun an analysis.
+analysis. The default File display uses `filePositions` when present, otherwise
+`positions`. The renderer can independently upload `unwrappedPositions` after an
+explicit Unwrap request. Switching display modes does not replace canonical
+analysis geometry or rerun a single-frame analysis.
 
 ## AtomEye CFG
 
@@ -37,7 +41,7 @@ Supported:
 - `Transform` or symmetric Lagrangian `eta` deformation;
 - LAMMPS-generated extended CFG auxiliaries named `id`, `ix`, `iy`, and `iz`:
   `id` becomes the frame's unique identifier array and a complete image triplet
-  is retained and used to reconstruct unwrapped coordinates;
+  is retained as metadata and can reconstruct unwrapped coordinates on demand;
 - orthogonal and fully populated triclinic cells.
 
 Rejected explicitly:
@@ -54,11 +58,18 @@ three axes are treated as periodic. A complete `ix/iy/iz` auxiliary triplet is
 interpreted using the [LAMMPS image-flag definition](https://docs.lammps.org/dump.html):
 the integers multiply the three cell vectors, including for triclinic cells.
 Partial triplets, non-integer flags, and duplicate/non-positive `id` values are
-rejected. Fractional CFG coordinates are always canonicalized into the primary
-cell. If a coordinate lies meaningfully outside `[0,1)` (beyond a `1e-5`
-boundary tolerance), its integer part supplies an image flag and the original
-coordinate is retained as an unwrapped view. Tiny negative values or values just
-above 1 are treated as exporter round-off, not crossing history.
+rejected. Canonical fractional CFG coordinates are normalized into the primary
+cell for analysis. The File display separately preserves positions written in
+the CFG, including out-of-cell positions; it does not add image counts. The
+application's ordinary CFG reads retain `ix/iy/iz` without allocating an
+additional continuous-position array. Explicit Unwrap reconstructs those positions
+from the selected frame alone.
+
+If a coordinate lies meaningfully outside `[0,1)` (beyond a `1e-5` boundary
+tolerance), its integer part supplies an image flag and the original position
+also supplies a direct Unwrapped view. Tiny negative values or values just above
+1 remain visible in File mode but are treated as exporter round-off, not reliable
+crossing history.
 
 If all coordinates of a single CFG are already wrapped and no image flags exist,
 historical crossings cannot be recovered uniquely from that frame. For NEB
@@ -66,10 +77,14 @@ output, users may select an ordered set of CFG files together. AlloyView sorts
 numeric filenames such as `replica.2.cfg` before `replica.10.cfg`, matches atoms
 by stable `id` when continuous coordinates are needed, and accumulates the
 minimum-image fractional displacement between successive images. Ordinary
-navigation and single-frame analysis parse only the selected CFG; unwrapping is
-requested separately for Unwrapped display or total displacement. This inference
-requires each atom to move less than half a
-cell per adjacent NEB image along each periodic axis; otherwise the direction is
+navigation and single-frame analysis parse only the selected CFG. Choosing
+Unwrapped first uses that frame's image counts or already continuous coordinates.
+Missing crossing history is inferred only after the user explicitly checks
+**Infer missing image counts from previous frames**; this permission also gates
+history reconstruction for total displacement. With inference off, no earlier
+frames are scanned and an unavailable Unwrapped view falls back to the indicated
+File display. The inference requires each atom to move less than half a cell per
+adjacent NEB image along each periodic axis; otherwise the direction is
 mathematically ambiguous. CFG total-displacement continuity requires an explicit
 `id` auxiliary and a fixed ID set in every integrated frame; row-order IDs,
 changing IDs and missing IDs are rejected for that calculation, including frames
@@ -453,8 +468,11 @@ header. Header reads do not certify atom rows; opening or displaying a frame
 still performs complete row validation.
 
 A single parsed frame still has transient copies during Worker-to-main transfer
-and GPU upload. A frame with explicit/reconstructable unwrapped coordinates
-retains one additional three-component `Float32Array`. Coordination uses shared
+and GPU upload. A CFG whose source coordinates differ from its canonical wrapped
+coordinates retains a separate file-position array for faithful default display.
+Known image counts alone do not require an additional continuous-position array
+during ordinary CFG display; requesting Unwrap or a calculation that needs those
+positions materializes it on demand. Coordination uses shared
 coordinates on a cross-origin-isolated host; otherwise every parallel Worker
 receives a bounded structured-clone copy inside the same client browser. No mode
 sends coordinates to the static host for calculation. This is why one million

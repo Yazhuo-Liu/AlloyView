@@ -161,6 +161,9 @@ export function validateFrame(frame) {
   if (frame.unwrappedPositions && frame.unwrappedPositions.length !== count * 3) {
     throw new Error('The unwrapped coordinate array length does not match the atom count.');
   }
+  if (frame.filePositions && frame.filePositions.length !== count * 3) {
+    throw new Error('The file coordinate array length does not match the atom count.');
+  }
   if (frame.imageFlags && frame.imageFlags.length !== count * 3) {
     throw new Error('The image flag array length does not match the atom count.');
   }
@@ -180,6 +183,7 @@ export function frameTransferables(frame) {
   ];
   if (ArrayBuffer.isView(frame.ids)) transferables.push(frame.ids.buffer);
   if (frame.unwrappedPositions) transferables.push(frame.unwrappedPositions.buffer);
+  if (frame.filePositions) transferables.push(frame.filePositions.buffer);
   if (frame.imageFlags) transferables.push(frame.imageFlags.buffer);
   if (frame.summary?.typeCounts) transferables.push(frame.summary.typeCounts.buffer);
   for (const property of frame.properties) if (ArrayBuffer.isView(property.data)) transferables.push(property.data.buffer);

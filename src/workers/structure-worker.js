@@ -13,6 +13,7 @@ import { parsePoscar } from '../io/poscar.js';
 import { FrameParserPool } from '../data/frame-parser-pool.js';
 import { openIndexedTrajectory } from './indexed-trajectory.js';
 import { TrajectoryProcessor } from './trajectory-processor.js';
+import { ensureFileUnwrappedPositions, hasFileUnwrap } from '../data/coordinate-display.js';
 
 const SINGLE_FRAME_PARSERS = { 'lammps-data': parseLammpsData, poscar: parsePoscar };
 
@@ -118,7 +119,11 @@ self.addEventListener('message', async (event) => {
       const frame = await readSourceFrame(source, payload.index, id, task);
       if (task.controller.signal.aborted) throw new DOMException('Frame parsing cancelled.', 'AbortError');
       if (payload.trajectory) {
-        await trajectoryProcessor().prepare(frame, payload.index, { ...payload.trajectory, signal: task.controller.signal,
+        // Single-frame image data is authoritative. Historical inference is
+        // allowed only by its own explicit flag, independent of display mode.
+        if (payload.trajectory.unwrap || payload.trajectory.smoothing > 0) ensureFileUnwrappedPositions(frame);
+        await trajectoryProcessor().prepare(frame, payload.index, { ...payload.trajectory,
+          unwrap: Boolean(payload.trajectory.unwrap && payload.trajectory.infer), signal: task.controller.signal,
           background: task.background, onProgress: progress => { if (!task.background) self.postMessage({ id, event: 'progress', ...progress }); } });
         if (task.controller.signal.aborted) throw new DOMException('Frame parsing cancelled.', 'AbortError');
       }
@@ -142,13 +147,28 @@ self.addEventListener('message', async (event) => {
       frameRequests.set(id, task);
       const onProgress = progress => self.postMessage({ id, event: 'progress', ...progress });
       if (type === 'trajectory-unwrap') {
-        const inferred = await trajectoryProcessor().inferredUnwrap(payload.index, { smoothing: payload.smoothing,
+        // Inspect only the selected file first. No image flags means no
+        // reconstruction unless the user separately opted into inference.
+        const frame = await readSourceFrame(source, payload.index, null, { ...task, projection: 'coordinates', deferUnwrap: true });
+        let inferred = null;
+        if (hasFileUnwrap(frame)) {
+          ensureFileUnwrappedPositions(frame);
+          await trajectoryProcessor().prepare(frame, payload.index, { smoothing: payload.smoothing,
+            signal: task.controller.signal, background: task.background, onProgress });
+          const unwrappedPositions = ensureFileUnwrappedPositions(frame);
+          if (task.controller.signal.aborted) throw new DOMException('Trajectory processing cancelled.', 'AbortError');
+          self.postMessage({ id, ok: true, result: { unwrappedPositions, imageFlags: frame.imageFlags, unwrapSource: frame.unwrapSource } },
+            [...new Set([unwrappedPositions.buffer, ...(frame.imageFlags ? [frame.imageFlags.buffer] : [])])]);
+          return;
+        }
+        if (payload.infer) inferred = await trajectoryProcessor().inferredUnwrap(payload.index, { smoothing: payload.smoothing,
           signal: task.controller.signal, background: task.background, onProgress });
         if (task.controller.signal.aborted) throw new DOMException('Trajectory processing cancelled.', 'AbortError');
         self.postMessage({ id, ok: true, result: { inferredUnwrap: inferred } },
           inferred ? [inferred.imageFlags.buffer, inferred.unwrappedPositions.buffer] : []);
       } else {
-        const lines = await trajectoryProcessor().lines(payload, { signal: task.controller.signal, onProgress });
+        const lines = await trajectoryProcessor().lines({ ...payload, inferMissingImages: Boolean(payload.inferMissingImages) },
+          { signal: task.controller.signal, onProgress });
         if (task.controller.signal.aborted) throw new DOMException('Trajectory processing cancelled.', 'AbortError');
         self.postMessage({ id, ok: true, result: lines }, [lines.vertices.buffer, lines.lineOffsets.buffer, lines.frames.buffer]);
       }
@@ -183,7 +203,7 @@ function trajectoryProcessor() {
     const current = source;
     trajectory = new TrajectoryProcessor({
       readFrame: (index, { signal, background, priority }) => readSourceFrame(current, index, null,
-        { background, priority, projection: 'coordinates', controller: { signal } }),
+        { background, priority, projection: 'coordinates', deferUnwrap: true, controller: { signal } }),
       promoteRead: ({ signal, priority }) => getParserPool().promote(signal, priority),
       getFrameCount: options => sourceFrameCount(current, options),
     });
@@ -218,11 +238,11 @@ async function readSourceFrame(current, index, requestId, task) {
     // Continuous coordinates are an explicit dependency of total displacement,
     // never an implicit prerequisite for reading a CFG frame.
     if (task.sequenceUnwrap && projection !== 'header') return readCfgSequenceFrame(current, index, requestId, options);
-    return getParserPool().parse({ format: 'cfg', file: current.files[index], index, projection }, options);
+    return getParserPool().parse({ format: 'cfg', file: current.files[index], index, projection, deferUnwrap: task.deferUnwrap ?? projection === 'full' }, options);
   }
   if (current.format === 'cfg' || SINGLE_FRAME_PARSERS[current.format]) {
     if (index !== 0) throw new Error('A single structure contains only one frame.');
-    return getParserPool().parse({ format: current.format, file: current.file, index, projection }, options);
+    return getParserPool().parse({ format: current.format, file: current.file, index, projection, deferUnwrap: task.deferUnwrap ?? projection === 'full' }, options);
   }
   let chunk = current;
   let localIndex = index;
@@ -280,7 +300,7 @@ async function loadSource(inputFiles, requestId, incremental = false, controller
   if (format === 'cfg') {
     const startedAt = performance.now();
     source = { file: inputFile, format: 'cfg', offsets: [0] };
-    const frame = await getParserPool().parse({ format, file: inputFile, index: 0 }, { signal: controller.signal });
+    const frame = await getParserPool().parse({ format, file: inputFile, index: 0, deferUnwrap: true }, { signal: controller.signal });
     return { format: source.format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
   }
   if (format === 'xyz' || format === 'pdb') return loadIndexedTextSource(await decompressFiles(files), format, requestId);
@@ -376,7 +396,7 @@ async function loadCfgSequence(inputFiles, requestId, controller = loadControlle
       stage: 'sequence-index',
     });
   }
-  const first = await getParserPool().parse({ format: 'cfg', file: files[0], index: 0 }, { signal: controller.signal });
+  const first = await getParserPool().parse({ format: 'cfg', file: files[0], index: 0, deferUnwrap: true }, { signal: controller.signal });
   source = { files, format: 'cfg-sequence', checkpoints: new Map() };
   return {
     format: source.format,

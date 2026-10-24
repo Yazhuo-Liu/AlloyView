@@ -32,7 +32,7 @@ const result = await withWebGpuBrowser(async ({ call, evaluate }) => {
     };
     const unwrap = StructureWorkerClient.prototype.trajectoryUnwrap;
     StructureWorkerClient.prototype.trajectoryUnwrap = async function(index, options) {
-      checks.unwraps.push({index, background:options.background, analysis:document.getElementById('analysis-state').textContent});
+      checks.unwraps.push({index, infer:Boolean(options.infer), background:options.background, analysis:document.getElementById('analysis-state').textContent});
       if(checks.hold) await new Promise((resolve,reject) => {
         const abort=()=>reject(new DOMException('Cancelled','AbortError'));
         options.signal.addEventListener('abort',abort,{once:true});
@@ -49,7 +49,7 @@ const result = await withWebGpuBrowser(async ({ call, evaluate }) => {
     WebGLRenderer.prototype.exportPng = async function() {
       checks.captures.push({mode:this.coordinateMode, x:this.rawDisplayPositions[0]});
     };
-    checks.change=(id,value)=>{const input=document.getElementById(id);input.value=String(value);
+    checks.change=(id,value)=>{const input=document.getElementById(id);if(typeof value==='boolean')input.checked=value;else input.value=String(value);
       if(id==='frame-slider') input.dispatchEvent(new Event('input',{bubbles:true}));
       input.dispatchEvent(new Event('change',{bubbles:true}));};
     const files=Array.from({length:165},(_,index)=>new File([
@@ -66,9 +66,13 @@ const result = await withWebGpuBrowser(async ({ call, evaluate }) => {
   await waitFor('frameFirst.renderer.frame.frameIndex === 164 && document.getElementById("loading").hidden', 'Late frame without inference');
   assert.equal(await evaluate('frameFirst.unwraps.length'), 0);
   assert.equal(await evaluate('frameFirst.reads.every(read=>!read.trajectory)'), true);
+  assert.equal(await evaluate('document.getElementById("coordinate-mode").value'), 'file');
+  assert.equal(await evaluate('document.getElementById("trajectory-infer-unwrap").checked'), false);
   await evaluate('document.getElementById("run-analysis").click()');
   await waitFor('document.getElementById("analysis-state").textContent === "Calculated"', 'Single-frame coordination');
   await evaluate('frameFirst.change("coordinate-mode","unwrapped")');
+  assert.equal(await evaluate('frameFirst.unwraps.length'), 0, 'Unwrap alone does not authorize a trajectory scan');
+  await evaluate('frameFirst.change("trajectory-infer-unwrap",true)');
   await waitFor('frameFirst.held.length > 0', 'Optional inference held');
   assert.equal(await evaluate('document.getElementById("loading").hidden && frameFirst.renderer.coordinateMode === "wrapped"'), true);
   await evaluate('frameFirst.change("frame-slider",2)');
@@ -78,6 +82,7 @@ const result = await withWebGpuBrowser(async ({ call, evaluate }) => {
     warmWorker:frameFirst.originalWorker===frameFirst.client.worker})`);
   assert.equal(pending.mode, 'unwrapped'); assert.equal(pending.hidden, true);
   assert.equal(pending.warmWorker, true); assert.equal(pending.inference.analysis, 'Calculated');
+  assert.equal(pending.inference.infer, true);
   assert.equal(pending.inference.background, true);
   await evaluate('frameFirst.release()');
   await waitFor('frameFirst.renderer.coordinateMode === "unwrapped"', 'Deferred continuous coordinates');

@@ -12,10 +12,10 @@ class Element {
   replaceChildren(...children) { this.children = children; this.options = children; }
 }
 
-function harness(t, { frameCount = 12, frame = { ids: Float64Array.from([1, 2, 3]), frameIndex: 0 }, groups = [] } = {}) {
+function harness(t, { frameCount = 12, frame = { ids: Float64Array.from([1, 2, 3]), frameIndex: 0 }, groups = [], canInferUnwrap = () => frameCount > 1 } = {}) {
   const previousDocument = globalThis.document;
   const fields = {};
-  for (const id of ['trajectory-unwrap-status', 'cancel-trajectory-unwrap', 'trajectory-smooth-status', 'trajectory-lines-ids-field',
+  for (const id of ['trajectory-unwrap-enabled', 'trajectory-infer-unwrap', 'trajectory-unwrap-status', 'cancel-trajectory-unwrap', 'trajectory-smooth-status', 'trajectory-lines-ids-field',
     'trajectory-lines-scheme-field', 'trajectory-lines-color-field', 'generate-trajectory-lines', 'cancel-trajectory-lines', 'clear-trajectory-lines',
     'trajectory-lines-status', 'trajectory-lines-scheme', 'trajectory-lines-source']) fields[id] = new Element();
   Object.assign(fields, { 'trajectory-smooth-enabled': new Element(), 'trajectory-smooth-window': new Element('2'),
@@ -28,7 +28,7 @@ function harness(t, { frameCount = 12, frame = { ids: Float64Array.from([1, 2, 3
   for (const element of Object.values(fields)) element.ownerDocument = globalThis.document;
   t.after(() => { globalThis.document = previousDocument; });
   const calls = { smoothing: [], lines: [], unwrap: [], edits: 0, notes: [], rendered: [] };
-  let mode = 'wrapped';
+  let mode = 'file';
   const worker = {
     trajectoryLines: async (request, { onProgress }) => {
       calls.lines.push(request);
@@ -37,14 +37,16 @@ function harness(t, { frameCount = 12, frame = { ids: Float64Array.from([1, 2, 3
         frames: Int32Array.from([0, 1]), missingAtomIds: [], missingCount: 0, bounds: { minimum: [0, 0, 0], maximum: [1, 1, 1] } };
     },
     trajectoryUnwrap: async (index, options) => {
-      calls.unwrap.push({ index, smoothing: options.smoothing });
+      calls.unwrap.push({ index, smoothing: options.smoothing, infer: options.infer });
       return { inferredUnwrap: { imageFlags: new Int32Array(frame.ids.length * 3), unwrappedPositions: new Float32Array(frame.ids.length * 3) } };
     },
   };
   const renderer = { setTrajectoryLines: (lines, options) => calls.rendered.push({ lines, options }) };
   const tools = initializeTrajectoryToolControls({ tools: { setToolEnabled: (name, enabled) => { calls.enabled = enabled; } }, renderer, worker,
     getFrame: () => frame, getFrameIndex: () => 3, getFrameCount: () => frameCount, getSourceVersion: () => 1,
-    getSelectionGroups: () => groups, getCoordinateMode: () => mode, canInferUnwrap: () => frameCount > 1,
+    getSelectionGroups: () => groups, getCoordinateMode: () => mode, canInferUnwrap,
+    onUnwrapChange: async enabled => { mode = enabled ? 'unwrapped' : 'file'; calls.unwrapToggle = enabled; },
+    onInferenceChange: async enabled => { calls.inferenceToggle = enabled; },
     onSmoothingChange: async settings => { calls.smoothing.push(settings); }, onEdit: () => { calls.edits++; }, notify: message => calls.notes.push(message) });
   tools.setEnabled(true);
   const change = (id, value, checkbox = false) => {
@@ -56,6 +58,7 @@ function harness(t, { frameCount = 12, frame = { ids: Float64Array.from([1, 2, 3
 
 test('cancelled inference cannot attach late data or remove the replacement request for the same frame', async t => {
   const { tools, frame, worker } = harness(t);
+  tools.setInferenceEnabled(true);
   const pending = [];
   worker.trajectoryUnwrap = () => new Promise(resolve => pending.push(resolve));
   const previous = tools.ensureInferredUnwrap(frame, 3);
@@ -77,6 +80,9 @@ test('with every option off, frame requests are unchanged and nothing is enabled
   const { tools, fields, setMode } = harness(t);
   assert.equal(tools.frameRequestOptions(), null);
   assert.equal(tools.smoothingWindow(), 0);
+  assert.equal(tools.inferenceEnabled(), false);
+  assert.equal(fields['trajectory-unwrap-enabled'].checked, false);
+  assert.equal(fields['trajectory-infer-unwrap'].checked, false);
   assert.equal(fields['trajectory-smooth-enabled'].disabled, false);
   setMode('unwrapped');
   assert.equal(tools.frameRequestOptions(), null, 'display inference never delays ordinary reads or prefetch');
@@ -123,7 +129,7 @@ test('lines read IDs or groups, enforce the point limit before reading, and roun
   fields['trajectory-lines-ids'].value = '7, 8 X1';
   fields['trajectory-lines-stride'].value = '5';
   assert.equal(await tools.generateLines(), true);
-  assert.deepEqual(calls.lines.at(-1), { ids: [7, 8, 'X1'], first: 0, last: 11, stride: 5 });
+  assert.deepEqual(calls.lines.at(-1), { ids: [7, 8, 'X1'], first: 0, last: 11, stride: 5, inferMissingImages: false });
   assert.match(fields['trajectory-lines-status'].textContent, /^1 path · 2 points · frames 1–12, every 5 frames\./);
   assert.ok(calls.rendered.at(-1).lines);
   await change('trajectory-lines-width', '4');
@@ -155,11 +161,12 @@ test('lines read IDs or groups, enforce the point limit before reading, and roun
 
 test('inferred unwrapping is requested once per delivered frame and follows its smoothing', async t => {
   const { tools, calls, frame } = harness(t);
+  tools.setInferenceEnabled(true);
   frame.smoothing = { window: 2 };
   assert.equal(tools.needsInferredUnwrap(frame), true);
   const [first, second] = await Promise.all([tools.ensureInferredUnwrap(frame, 3), tools.ensureInferredUnwrap(frame, 3)]);
   assert.equal(first && second, true);
-  assert.deepEqual(calls.unwrap, [{ index: 3, smoothing: 2 }]);
+  assert.deepEqual(calls.unwrap, [{ index: 3, smoothing: 2, infer: true }]);
   assert.ok(frame.inferredUnwrap.imageFlags instanceof Int32Array);
   assert.equal(tools.needsInferredUnwrap(frame), false);
   const fileFrame = { ids: [1], unwrappedPositions: new Float32Array(3) };
@@ -177,6 +184,77 @@ test('closing the tool removes lines and turns smoothing off; reset restores def
   assert.equal(calls.rendered.at(-1).lines, null);
   assert.equal(calls.enabled, false);
   tools.reset();
-  assert.deepEqual(tools.serialize(), { smoothing: { enabled: false, window: 2 }, lines: { enabled: false, source: 'ids', selectionGroupId: null,
+  assert.deepEqual(tools.serialize(), { unwrap: { inferFromFrames: false }, smoothing: { enabled: false, window: 2 }, lines: { enabled: false, source: 'ids', selectionGroupId: null,
     atomIds: [], firstFrame: 0, lastFrame: null, stride: 1, visible: true, color: '#ff9f1c', width: 2, colorByTime: false, colorScheme: 'viridis' } });
+});
+
+test('turning on Unwrap alone never requests missing crossing history', async t => {
+  const { tools, fields, calls, change, frame } = harness(t);
+  await change('trajectory-unwrap-enabled', true, true);
+  assert.equal(calls.unwrapToggle, true);
+  assert.equal(fields['trajectory-unwrap-enabled'].checked, true);
+  assert.equal(tools.needsUnwrap(frame), false);
+  assert.equal(tools.needsInferredUnwrap(frame), false);
+  assert.equal(await tools.ensureUnwrap(frame, 8), false);
+  assert.deepEqual(calls.unwrap, []);
+  assert.match(fields['trajectory-unwrap-status'].textContent, /Showing file coordinates/);
+  await change('trajectory-infer-unwrap', true, true);
+  assert.equal(calls.inferenceToggle, true);
+  assert.equal(tools.needsInferredUnwrap(frame), true);
+  assert.equal(await tools.ensureUnwrap(frame, 8), true);
+  assert.equal(calls.unwrap[0].infer, true);
+  await change('trajectory-infer-unwrap', false, true);
+  assert.equal(tools.inferenceEnabled(), false);
+  assert.equal(await tools.ensureUnwrap(frame, 8), false, 'cached inferred coordinates require continuing explicit consent');
+  await change('trajectory-unwrap-enabled', false, true);
+  assert.equal(calls.unwrapToggle, false);
+  assert.equal(fields['trajectory-unwrap-enabled'].checked, false);
+});
+
+test('file image counts use a single-frame request even when trajectory inference is enabled', async t => {
+  const { tools, worker, frame, calls } = harness(t);
+  frame.imageFlags = Int32Array.of(3, -1, 2, 0, 0, 0, 1, 0, 0);
+  frame.unwrapSource = 'ix/iy/iz';
+  worker.trajectoryUnwrap = async (index, options) => {
+    calls.unwrap.push({ index, infer: options.infer });
+    return { imageFlags: frame.imageFlags, unwrappedPositions: Float32Array.of(30.2, -8, 23, 1, 2, 3, 12, 2, 3), unwrapSource: 'ix/iy/iz' };
+  };
+  tools.setInferenceEnabled(true);
+  assert.equal(tools.needsInferredUnwrap(frame), false);
+  assert.equal(tools.needsUnwrap(frame), true);
+  assert.equal(await tools.ensureUnwrap(frame, 164), true);
+  assert.deepEqual(calls.unwrap, [{ index: 164, infer: false }]);
+  assert.equal(frame.unwrapSource, 'ix/iy/iz');
+  assert.ok(Math.abs(frame.unwrappedPositions[0] - 30.2) < 1e-5);
+  assert.equal(tools.needsUnwrap(frame), false);
+});
+
+test('source inference consent stays editable on file-image frames and physical copies', t => {
+  const { tools, fields, frame } = harness(t, { canInferUnwrap: () => false });
+  frame.imageFlags = new Int32Array(frame.ids.length * 3);
+  frame.physicalReplication = { repetitions: [2, 1, 1] };
+  tools.setInferenceEnabled(true);
+  assert.equal(fields['trajectory-infer-unwrap'].disabled, false);
+  tools.setInferenceEnabled(false);
+  assert.equal(fields['trajectory-infer-unwrap'].checked, false);
+});
+
+test('generated paths follow the inference checkbox and changing it invalidates the old convention', async t => {
+  const { tools, fields, calls, change } = harness(t);
+  fields['trajectory-lines-ids'].value = '1';
+  await tools.generateLines();
+  assert.equal(calls.lines.at(-1).inferMissingImages, false);
+  assert.match(fields['trajectory-lines-status'].textContent, /missing image counts were not inferred/);
+  await change('trajectory-infer-unwrap', true, true);
+  assert.equal(calls.rendered.at(-1).lines, null);
+  await tools.generateLines();
+  assert.equal(calls.lines.at(-1).inferMissingImages, true);
+});
+
+test('deactivating Trajectory revokes inference for dependent calculations too', async t => {
+  const { tools, calls } = harness(t);
+  tools.setInferenceEnabled(true);
+  await tools.deactivate();
+  assert.equal(tools.inferenceEnabled(), false);
+  assert.equal(calls.inferenceToggle, false);
 });

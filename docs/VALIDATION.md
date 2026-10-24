@@ -1,5 +1,60 @@
 # Validation record
 
+## Explicit Unwrap and direct frame navigation (2026-10-24)
+
+Baseline: `e38ad3d`, synchronized from `origin/main` before implementation.
+The default coordinate mode is now **File coordinates**. In CFG files this
+preserves the saved positions, including coordinates outside the primary cell,
+without adding `ix/iy/iz`. Canonical wrapped coordinates remain the input to
+single-frame analyses. Normal application CFG parsing retains image counters
+as metadata and defers the extra continuous-position array; existing low-level
+parser defaults remain compatible for scientific callers.
+
+**Unwrap coordinates using this frame's data** is explicit and off by default.
+It directly uses available image counters/cell vectors or saved out-of-cell
+positions. The separate **Infer missing image counts from previous frames**
+checkbox defaults off. Unwrap alone cannot start historical inference. Missing
+single-frame data leaves an explained File preview. Turning inference off
+cancels outstanding requests and stops displaying cached inferred coordinates.
+The same consent gates missing-history reconstruction for total displacement
+and minimum-image stitching of sampled trajectory lines. Without it, paths
+retain the saved positions and their periodic jumps; available file image data
+continues to work. A changed line-coordinate convention requires regeneration.
+Consent remains editable on frames with image data and on physical copies.
+
+The timeline now has a one-based **Frame** input and **Go** button. Enter/Go
+jump directly to arbitrary indexed frames. Pointer scrubbing previews the
+number and submits only the final release; keyboard steps debounce. A newer
+intent cancels obsolete navigation/inference immediately, retains useful frame
+cache entries, and prevents late results from overwriting the chosen frame.
+Failed/cancelled requests restore the controls, progressive indexing expands
+the valid range, and completing an earlier load cannot overwrite a newer number
+being typed. Closing/replacing the source invalidates queued UI requests.
+Explicit trajectory processing also yields between bounded CPU time slices,
+so a scan over cached coordinates still admits Worker cancellation messages;
+ordinary frame reads do not enter this processing loop.
+
+Review also caught and fixed a File-display smoothing regression: smoothing
+saved fractional coordinates `1.2 → 1.3` in a 10 Å cell must show **12.5 Å**,
+while canonical analysis uses **2.5 Å**. File and image-counter conventions are
+now smoothed separately, including changing cells. Physical copies expand the
+source display positions separately from their image-aware analysis placement.
+New buffers are transferred, validated, counted against cache budgets and
+deduplicated; line-only derived arrays do not leak into the raw-coordinate cache.
+
+Validation passes **2,430 Node tests**, the production build and documentation
+checks. Browser coverage includes `test:browser:explicit-unwrap` on ordinary and
+isolated hosts, `test:browser:trajectory-tools`, `test:browser:frame-first`,
+`test:browser:trajectory-workers`, `test:browser:copy-trajectories`,
+`test:browser:source-loading`, `test:browser:movies`,
+`test:browser:bundled-runtime`, `test:browser:cpu-warmup` and
+`test:browser:gpu-prefetch`. The new 165-file fixture verifies Enter/Go, large
+forward/backward jumps, latest-only scrub submission, explicit history consent,
+file image-count reconstruction, preserved out-of-cell source coordinates,
+cache reuse and the retained warmed structure Worker. A **390 px** phone view
+keeps the input, Go button and slider visible without overlap. Software GPU
+checks validate behavior; they do not measure physical GPU performance.
+
 ## Show CFG structures before trajectory inference (2026-10-24)
 
 Baseline: `5ecc7fb`, synchronized from `origin/main`. CFG folder reads previously

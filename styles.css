@@ -260,8 +260,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 
 .trajectory-bar { position: absolute; z-index: 4; left: 50%; bottom: 16px; width: min(760px, calc(100% - 190px)); transform: translateX(-50%); padding: 10px 12px 8px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--overlay); backdrop-filter: blur(14px); box-shadow: var(--shadow); }
 .trajectory-bar[hidden] { display: none; }
-.trajectory-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; color: var(--text-soft); font-size: 10px; }
-.trajectory-header div { display: flex; gap: 11px; align-items: baseline; }
+.trajectory-header { display: flex; flex-wrap: wrap; gap: 5px 10px; align-items: center; justify-content: space-between; margin-bottom: 5px; color: var(--text-soft); font-size: 10px; }
+.trajectory-header > div:first-child { display: flex; flex: 1 1 75px; min-width: 0; gap: 11px; align-items: baseline; overflow: hidden; }
+.trajectory-header > div:first-child > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frame-jump { display: flex; flex: 0 0 auto; gap: 5px; align-items: center; margin-left: auto; }
+.frame-jump output { margin-right: 5px; white-space: nowrap; }
+.frame-jump label { font-size: 10px; color: var(--text-soft); }
+.frame-jump input { width: 66px; min-width: 0; height: 26px; padding: 3px 5px; font: 11px var(--mono); }
+.frame-jump button { height: 26px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); color: var(--text-soft); font-size: 11px; }
+.frame-jump button:hover:not(:disabled) { color: var(--cyan); border-color: var(--cyan); }
+.frame-jump button:disabled { color: var(--disabled-text); background: var(--disabled-bg); cursor: not-allowed; }
 .trajectory-header span { color: var(--subtle); font-size: 9px; }
 .trajectory-header output { color: var(--cyan); font: 700 10px var(--mono); }
 .trajectory-controls { display: grid; grid-template-columns: 30px 30px 34px minmax(120px, 1fr) 30px 30px; gap: 5px; align-items: start; }
@@ -882,6 +890,9 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .trajectory-controls { grid-template-columns: 27px 27px 29px minmax(80px, 1fr) 27px 27px; gap: 3px; }
   .trajectory-controls > button { width: 27px; }
   .trajectory-controls > .frame-play { width: 29px; }
+  .frame-jump input { width: 62px; }
+  .trajectory-header > div:first-child { gap: 6px; }
+  .trajectory-header > div:first-child > span:last-child { display: none; }
   .viewport-panel.trajectory-visible .axis-triad { bottom: 108px; }
 }
 
@@ -995,6 +1006,7 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .element-style-row input[type="checkbox"] { width: 32px; height: 32px; }
   .trajectory-controls { grid-template-columns: repeat(3, 32px) minmax(36px, 1fr) repeat(2, 32px); gap: 3px; }
   .trajectory-controls > button, .trajectory-controls > .frame-play { width: 32px; height: 36px; }
+  .frame-jump input, .frame-jump button { height: 32px; }
   .view-toolbar:has(#show-keyboard-shortcuts) { gap: 0; }
   .view-toolbar:has(#show-keyboard-shortcuts) > button { width: 32px; }
   .atom-details-toggle { margin-left: 142px; }

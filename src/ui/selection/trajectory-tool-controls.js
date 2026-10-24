@@ -2,8 +2,10 @@ import { MAX_SMOOTHING_WINDOW, MAX_TRAJECTORY_LINE_VERTICES, TRAJECTORY_LINE_DEF
 import { parseSelectionAtomIds } from '../../data/selection-groups.js';
 import { SCALAR_COLOR_SCHEMES } from '../../render/palette.js';
 import { normalizeTrajectoryLineOptions } from '../../render/trajectory-line-layer.js';
+import { hasFileUnwrap } from '../../data/coordinate-display.js';
 
 export const TRAJECTORY_SMOOTHING_DEFAULTS = Object.freeze({ enabled: false, window: 2 });
+export const TRAJECTORY_UNWRAP_DEFAULTS = Object.freeze({ inferFromFrames: false });
 /** Explicit trajectory-line IDs kept in configuration JSON. Selection groups
  * store their own members; this bounds the separately typed list. */
 export const MAX_TRAJECTORY_LINE_IDS = 100_000;
@@ -23,10 +25,12 @@ const CONTROL_IDS = ['trajectory-smooth-enabled', 'trajectory-smooth-window', 't
  */
 export function initializeTrajectoryToolControls({ tools, renderer, worker, getFrame = () => null, getFrameIndex = () => 0,
   getFrameCount = () => 0, ensureIndexed = async () => {}, getSourceVersion = () => 0, getSelectionGroups = () => [],
-  getCoordinateMode = () => 'wrapped', canInferUnwrap = () => false, onSmoothingChange = async () => {}, onLinesChange = () => {},
+  getCoordinateMode = () => 'file', canInferUnwrap = () => false, onSmoothingChange = async () => {}, onLinesChange = () => {},
+  onUnwrapChange = async () => {}, onInferenceChange = async () => {},
   onEdit = () => {}, notify = () => {}, setBusy = () => {} } = {}) {
   const $ = id => globalThis.document?.getElementById(id) ?? null;
   const smoothing = { ...TRAJECTORY_SMOOTHING_DEFAULTS };
+  const unwrap = { ...TRAJECTORY_UNWRAP_DEFAULTS };
   const lines = { settings: { ...TRAJECTORY_LINE_SETTINGS_DEFAULTS, atomIds: [] }, result: null, controller: null, serial: 0 };
   const unwrapRequests = new Map();
   let controlsEnabled = false, unwrapController = null, applyingSmoothing = false;
@@ -37,7 +41,7 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
 
   function text(id, value) { if ($(id)) $(id).textContent = value; }
 
-  function syncTool() { tools?.setToolEnabled('trajectory', smoothing.enabled || Boolean(lines.result)); }
+  function syncTool() { tools?.setToolEnabled('trajectory', getCoordinateMode() === 'unwrapped' || unwrap.inferFromFrames || smoothing.enabled || Boolean(lines.result)); }
 
   function populateSchemes() {
     const select = $('trajectory-lines-scheme');
@@ -67,6 +71,8 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
 
   function writeControls() {
     populateSchemes();
+    if ($('trajectory-unwrap-enabled')) $('trajectory-unwrap-enabled').checked = getCoordinateMode() === 'unwrapped';
+    if ($('trajectory-infer-unwrap')) $('trajectory-infer-unwrap').checked = unwrap.inferFromFrames;
     if ($('trajectory-smooth-enabled')) $('trajectory-smooth-enabled').checked = smoothing.enabled;
     if ($('trajectory-smooth-window')) $('trajectory-smooth-window').value = String(smoothing.window);
     const settings = lines.settings, frameCount = Math.max(1, getFrameCount());
@@ -80,12 +86,17 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     if ($('trajectory-lines-scheme')) $('trajectory-lines-scheme').value = settings.colorScheme;
     if ($('trajectory-lines-visible')) $('trajectory-lines-visible').checked = settings.visible;
     updateSourceOptions();
+    syncTool();
     updateControls();
   }
 
   function updateControls() {
     const frame = getFrame(), multiFrame = getFrameCount() > 1;
     const available = controlsEnabled && Boolean(frame) && multiFrame;
+    if ($('trajectory-unwrap-enabled')) $('trajectory-unwrap-enabled').disabled = !controlsEnabled || !frame;
+    // Consent belongs to the source, so it remains editable on a frame with
+    // image counts and when physical-copy displacement needs that history.
+    if ($('trajectory-infer-unwrap')) $('trajectory-infer-unwrap').disabled = !controlsEnabled || !frame || !multiFrame;
     for (const id of CONTROL_IDS) if ($(id)) $(id).disabled = !available || (id === 'generate-trajectory-lines' && Boolean(lines.controller));
     if ($('trajectory-smooth-window')) $('trajectory-smooth-window').disabled ||= applyingSmoothing;
     if ($('trajectory-smooth-enabled')) $('trajectory-smooth-enabled').disabled ||= applyingSmoothing;
@@ -104,13 +115,18 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     if (unwrapController) return;
     const frame = getFrame();
     if (!frame) text('trajectory-unwrap-status', 'Open a trajectory to unwrap, smooth or trace atom paths.');
-    else if (frame.unwrappedPositions) text('trajectory-unwrap-status', `This frame provides unwrapped coordinates (${frame.unwrapSource ?? 'file data'}); they take precedence over inference.`);
+    else if (getCoordinateMode() !== 'unwrapped') text('trajectory-unwrap-status', 'Off. Display uses the selected file coordinates; no Unwrap calculation or trajectory scan is requested.');
+    else if (hasFileUnwrap(frame)) text('trajectory-unwrap-status', frame.unwrappedPositions
+      ? `Unwrapped coordinates use this frame's ${frame.unwrapSource ?? 'file data'}; no other frames are needed.`
+      : `Preparing Unwrapped coordinates from this frame's ${frame.unwrapSource ?? 'image counts'}; no other frames are needed.`);
     else if (!canInferUnwrap()) {
       text('trajectory-unwrap-status', getFrameCount() > 1
-        ? 'Inference is unavailable while Replicate atoms is on; the file has no image data.'
-        : 'This structure has one frame and no image data, so unwrapped coordinates are unavailable.');
+        ? 'This frame has no image data and inference is unavailable while Replicate atoms is on. Showing file coordinates.'
+        : 'This structure has one frame and no image data. Showing file coordinates.');
+    } else if (!unwrap.inferFromFrames) {
+      text('trajectory-unwrap-status', 'This frame has no image counts or continuous coordinates. Showing file coordinates. Enable “Infer missing image counts” to scan earlier frames.');
     } else if (frame.inferredUnwrap) text('trajectory-unwrap-status', `Unwrapped coordinates of frame ${getFrameIndex() + 1} were inferred from frames 1–${getFrameIndex() + 1} in order.`);
-    else text('trajectory-unwrap-status', 'No image data in the file. Choosing Display → Coordinates → Unwrapped infers image counts from consecutive frames.');
+    else text('trajectory-unwrap-status', 'Missing image counts will be inferred from earlier frames because trajectory inference is enabled.');
   }
 
   function updateSmoothingStatus() {
@@ -164,28 +180,37 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
   }
 
   function needsInferredUnwrap(frame) {
-    return Boolean(frame) && !frame.unwrappedPositions && !frame.inferredUnwrap && canInferUnwrap();
+    return Boolean(frame) && !hasFileUnwrap(frame) && !frame.inferredUnwrap && unwrap.inferFromFrames && canInferUnwrap();
+  }
+
+  function needsUnwrap(frame) {
+    return Boolean(frame) && !frame.unwrappedPositions && (hasFileUnwrap(frame) || needsInferredUnwrap(frame));
   }
 
   /** Attach inferred display coordinates to an already delivered frame. */
-  async function ensureInferredUnwrap(frame, index, { signal, showProgress = true, background = false } = {}) {
-    if (!needsInferredUnwrap(frame)) return Boolean(frame?.unwrappedPositions || frame?.inferredUnwrap);
+  async function ensureUnwrap(frame, index, { signal, showProgress = true, background = false } = {}) {
+    if (!needsUnwrap(frame)) return Boolean(frame?.unwrappedPositions || (unwrap.inferFromFrames && frame?.inferredUnwrap));
     const source = getSourceVersion();
     let request = unwrapRequests.get(frame);
     if (!request) {
       unwrapController ??= new AbortController();
       const controller = unwrapController;
-      request = worker.trajectoryUnwrap(index, { smoothing: frame.smoothing?.window ?? 0, background, signal: controller.signal,
+      request = worker.trajectoryUnwrap(index, { smoothing: frame.smoothing?.window ?? 0, infer: unwrap.inferFromFrames && !hasFileUnwrap(frame), background, signal: controller.signal,
         onProgress: ({ loaded, total, stage }) => {
           if (controller.signal.aborted || unwrapController !== controller) return;
           const label = stage === 'trajectory-smooth' ? 'Averaging frames' : 'Unwrapping frames';
           const message = `${label}… ${integer(loaded)} / ${integer(total)}`;
           if (unwrapController === controller) updateUnwrapStatus(message);
           if (showProgress) setBusy(message);
-        } }).then(({ inferredUnwrap }) => {
+        } }).then(({ inferredUnwrap, unwrappedPositions, imageFlags, unwrapSource }) => {
         if (controller.signal.aborted || source !== getSourceVersion()) return false;
-        if (inferredUnwrap?.imageFlags.length === frame.ids.length * 3) frame.inferredUnwrap = inferredUnwrap;
-        return Boolean(frame.inferredUnwrap);
+        if (unwrappedPositions?.length === frame.ids.length * 3) {
+          frame.unwrappedPositions = unwrappedPositions;
+          if (imageFlags) frame.imageFlags = imageFlags;
+          if (unwrapSource) frame.unwrapSource = unwrapSource;
+        }
+        if (unwrap.inferFromFrames && inferredUnwrap?.imageFlags.length === frame.ids.length * 3) frame.inferredUnwrap = inferredUnwrap;
+        return Boolean(frame.unwrappedPositions || (unwrap.inferFromFrames && frame.inferredUnwrap));
       }).finally(() => {
         if (unwrapRequests.get(frame) === request) unwrapRequests.delete(frame);
         if (unwrapController === controller) {
@@ -214,6 +239,35 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     updateControls();
   }
 
+  function setInferenceEnabled(enabled) {
+    const next = Boolean(enabled), changed = next !== unwrap.inferFromFrames;
+    if (changed) {
+      unwrap.inferFromFrames = next;
+      cancelUnwrap();
+    }
+    writeControls();
+    return changed;
+  }
+
+  async function editUnwrap() {
+    onEdit();
+    if (!$('trajectory-unwrap-enabled')?.checked) cancelUnwrap();
+    try { await onUnwrapChange(Boolean($('trajectory-unwrap-enabled')?.checked)); }
+    catch (error) { if (error.name !== 'AbortError') notify(error.message); }
+    finally { writeControls(); }
+  }
+
+  async function editInference() {
+    onEdit();
+    const enabled = Boolean($('trajectory-infer-unwrap')?.checked);
+    if (setInferenceEnabled(enabled) && (lines.result || lines.controller)) {
+      clearLines({ status: 'Inference setting changed. Generate paths again with the selected coordinate convention.' });
+    }
+    try { await onInferenceChange(enabled); }
+    catch (error) { if (error.name !== 'AbortError') notify(error.message); }
+    finally { writeControls(); }
+  }
+
   function readLineRequest() {
     const frameCount = getFrameCount();
     const settings = readLineSettings();
@@ -226,7 +280,8 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     if (settings.firstFrame >= frameCount || last >= frameCount) throw new Error(`Choose frames from 1 to ${frameCount}.`);
     const frames = trajectoryLineFrames(settings.firstFrame, last, settings.stride);
     trajectoryLineVertexCount(ids.length, frames.length, MAX_TRAJECTORY_LINE_VERTICES);
-    const request = { ids: Array.from(ids), first: settings.firstFrame, last, stride: settings.stride };
+    const request = { ids: Array.from(ids), first: settings.firstFrame, last, stride: settings.stride,
+      inferMissingImages: unwrap.inferFromFrames };
     const physical = getFrame()?.physicalReplication;
     // The structure Worker reads each original frame once. Only selected IDs
     // and this small copy context cross the boundary, never an expanded frame.
@@ -295,7 +350,8 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
       renderer.setTrajectoryLines(result, options());
       onLinesChange();
       const missing = result.missingCount ? ` ${plural(result.missingCount, 'ID')} not found (${result.missingAtomIds.slice(0, 5).join(', ')}${result.missingCount > 5 ? ', …' : ''}).` : '';
-      text('trajectory-lines-status', `${plural(result.lineCount, 'path')} · ${plural(result.vertexCount, 'point')} · frames ${prepared.request.first + 1}–${prepared.request.last + 1}, every ${plural(prepared.request.stride, 'frame')}.${missing}`);
+      const convention = prepared.request.inferMissingImages ? '' : ' File data only; missing image counts were not inferred.';
+      text('trajectory-lines-status', `${plural(result.lineCount, 'path')} · ${plural(result.vertexCount, 'point')} · frames ${prepared.request.first + 1}–${prepared.request.last + 1}, every ${plural(prepared.request.stride, 'frame')}.${missing}${convention}`);
       return true;
     } catch (error) {
       if (serial === lines.serial) text('trajectory-lines-status', error.name === 'AbortError' ? 'Cancelled.' : error.message);
@@ -342,6 +398,8 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     updateControls();
   }
 
+  $('trajectory-unwrap-enabled')?.addEventListener('change', editUnwrap);
+  $('trajectory-infer-unwrap')?.addEventListener('change', editInference);
   $('trajectory-smooth-enabled')?.addEventListener('change', () => { void editSmoothing(); });
   $('trajectory-smooth-window')?.addEventListener('change', () => { if (smoothing.enabled) void editSmoothing(); else { onEdit(); try { smoothing.window = readWindow(); } catch (error) { notify(error.message); writeControls(); } } });
   for (const id of ['trajectory-lines-source', 'trajectory-lines-ids', 'trajectory-lines-first', 'trajectory-lines-last', 'trajectory-lines-stride',
@@ -356,8 +414,12 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
 
   return {
     frameRequestOptions,
+    needsUnwrap,
     needsInferredUnwrap,
-    ensureInferredUnwrap,
+    ensureUnwrap,
+    ensureInferredUnwrap: ensureUnwrap,
+    inferenceEnabled: () => unwrap.inferFromFrames,
+    setInferenceEnabled,
     cancelUnwrap,
     generateLines,
     cancelLines,
@@ -391,6 +453,7 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
       lines.result = null;
       lines.settings = { ...TRAJECTORY_LINE_SETTINGS_DEFAULTS, atomIds: [] };
       Object.assign(smoothing, TRAJECTORY_SMOOTHING_DEFAULTS);
+      Object.assign(unwrap, TRAJECTORY_UNWRAP_DEFAULTS);
       renderer.setTrajectoryLines(null, options());
       text('trajectory-lines-status', 'Generate lines to trace the chosen atoms.');
       syncTool();
@@ -399,12 +462,16 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     /** Closing the tool turns smoothing off and removes the lines. */
     async deactivate() {
       clearLines();
+      cancelUnwrap();
+      if (setInferenceEnabled(false)) await onInferenceChange(false);
+      if (getCoordinateMode() === 'unwrapped') await onUnwrapChange(false);
       if (smoothing.enabled) await changeSmoothing({ enabled: false, window: smoothing.window });
       syncTool();
     },
     serialize() {
       const settings = lines.settings;
       return {
+        unwrap: { inferFromFrames: unwrap.inferFromFrames },
         smoothing: { enabled: smoothing.enabled, window: smoothing.window },
         lines: { enabled: Boolean(lines.result), source: settings.source, selectionGroupId: settings.source === 'group' ? settings.selectionGroupId : null,
           atomIds: settings.source === 'ids' ? [...settings.atomIds] : [], firstFrame: settings.firstFrame, lastFrame: settings.lastFrame,

@@ -1,4 +1,6 @@
 import { FrameCache } from './data/frame-cache.js';
+import { fileDisplayPositions, hasFileUnwrap } from './data/coordinate-display.js';
+import { initializeFrameNavigationControls } from './ui/view/frame-navigation-controls.js';
 import { frameTypeOrder } from './data/frame-summary.js';
 import { SharedFrameRequests } from './data/shared-frame-requests.js';
 import { ColorQuantityResolver, colorPropertyKey, initialColorQuantities } from './render/color-quantities.js';
@@ -98,7 +100,7 @@ import { createLegendRangeSlider } from './render/legend-range-slider.js';
 const elements = Object.fromEntries([
   'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar', 'enable-gpu-computing',
   'empty-state', 'file-name', 'file-meta', 'format-chip', 'close-file', 'file-drop-overlay', 'atom-count', 'frame-count',
-  'cell-kind', 'pbc-flags', 'trajectory-section', 'frame-slider', 'frame-label', 'timestep-label',
+  'cell-kind', 'pbc-flags', 'trajectory-section', 'frame-slider', 'frame-label', 'timestep-label', 'frame-jump-input', 'frame-jump-go',
   'cache-label', 'frame-first', 'frame-previous', 'frame-play', 'frame-next', 'frame-last', 'frame-ticks',
   'coordinate-mode', 'color-mode', 'radius-scale', 'radius-percent', 'voronoi-radius-scale', 'voronoi-radius-percent', 'projection-perspective', 'projection-orthographic',
   'background-picker', 'background-current', 'background', 'show-axes',
@@ -162,7 +164,7 @@ const state = {
   selectionGroups: normalizeSelectionGroups(),
   frameRequest: 0,
   colorMode: 'type',
-  coordinateMode: 'wrapped',
+  coordinateMode: 'file',
   periodicOrigin: [0, 0, 0],
   repetitions: [1, 1, 1],
   replicateAtoms: false,
@@ -192,7 +194,7 @@ const FOLDER_FILE_LIMIT = 20_000;
 const localPathCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
 let toastTimer = null;
-let frameTimer = null;
+let frameNavigationControls;
 let playbackTimer = null;
 let playbackBuffer = null;
 let framePrefetchController = null;
@@ -870,6 +872,16 @@ trajectoryTools = initializeTrajectoryToolControls({
   getSelectionGroups: () => state.selectionGroups.groups,
   getCoordinateMode: () => state.coordinateMode,
   canInferUnwrap: () => canInferUnwrap(),
+  onUnwrapChange: enabled => {
+    elements['coordinate-mode'].value = enabled ? 'unwrapped' : 'file';
+    return updateCoordinateMode();
+  },
+  onInferenceChange: async () => {
+    // Changing history consent must not retain a total-displacement result
+    // computed with the previous coordinate convention.
+    atomEyeTools.cancelDisplacement();
+    if (state.frame) await updateCoordinateMode();
+  },
   onSmoothingChange: () => applyTrajectoryProcessing(),
   onLinesChange: () => atomEyeTools?.syncComparison(),
   onEdit: () => interruptConfigurationRestore('a trajectory tool edit'),
@@ -957,15 +969,23 @@ elements['source-dialog-close'].addEventListener('click', () => elements['source
 elements['open-examples'].addEventListener('click', showExampleChooser);
 elements['close-file'].addEventListener('click', closeSource);
 
-elements['frame-slider'].addEventListener('input', () => {
-  gpuPrefetch.cancel();
-  atomEyeTools.cancelBatch({ restore: false });
-  interruptConfigurationRestore('a frame change');
-  stopFramePlayback();
-  const index = Number(elements['frame-slider'].value);
-  elements['frame-label'].textContent = `${index + 1} / ${state.frameCount}`;
-  clearTimeout(frameTimer);
-  frameTimer = setTimeout(() => showFrame(index), 70);
+frameNavigationControls = initializeFrameNavigationControls({
+  slider: elements['frame-slider'], input: elements['frame-jump-input'], go: elements['frame-jump-go'], label: elements['frame-label'],
+  getState: () => ({ index: state.frameIndex, count: state.frameCount, indexComplete: state.indexComplete,
+    enabled: Boolean(state.frame) && sourceLoadingOwner === null }),
+  onIntent: index => {
+    gpuPrefetch.cancel();
+    atomEyeTools.cancelBatch({ restore: false });
+    interruptConfigurationRestore('a frame change');
+    stopFramePlayback();
+    ++state.frameRequest;
+    beginFrameNavigation();
+    trajectoryTools.cancelUnwrap();
+    cancelFramePrefetch(prefetchWindow(index));
+  },
+  onNavigate: index => showFrame(index),
+  onPreview: () => setRangeProgress(elements['frame-slider']),
+  notify: showToast,
 });
 elements['frame-first'].addEventListener('click', () => showFrameManually(0));
 elements['frame-previous'].addEventListener('click', () => showFrameManually(Math.max(0, state.frameIndex - 1)));
@@ -1236,6 +1256,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 function beginSourceOpen() {
+  frameNavigationControls?.cancel();
   worker.cancelSourceLoad();
   replicationController?.abort();
   replicationRequest++;
@@ -1286,7 +1307,7 @@ function closeSource() {
   state.sourceVersion++;
   state.frameRequest++;
   state.prefetchToken++;
-  clearTimeout(frameTimer);
+  frameNavigationControls?.cancel();
   clearTimeout(cutoffTimer);
   clearTimeout(toastTimer);
   clearTimeout(interactionHintTimer);
@@ -1318,7 +1339,7 @@ function closeSource() {
   cache.setLimit(3);
   Object.assign(state, {
     file: null, files: [], frame: null, format: null, frameCount: 0, frameIndex: 0, indexComplete: true, indexError: null,
-    selectedId: null, colorMode: 'type', coordinateMode: 'wrapped', periodicOrigin: [0, 0, 0], repetitions: [1, 1, 1], replicateAtoms: false,
+    selectedId: null, colorMode: 'type', coordinateMode: 'file', periodicOrigin: [0, 0, 0], repetitions: [1, 1, 1], replicateAtoms: false,
     source: null, availableSources: [], availableEntries: [], cachePlan: null,
     references: [], referenceLabels: [],
   });
@@ -1358,7 +1379,8 @@ function closeSource() {
   elements['timestep-label'].textContent = 'timestep —';
   updateFrameNavigation(); updateCacheLabel();
   elements['color-mode'].replaceChildren(option('type', 'Atom type'));
-  elements['coordinate-mode'].value = 'wrapped';
+  elements['coordinate-mode'].value = 'file';
+  frameNavigationControls?.reset();
   elements['coordinate-mode'].querySelector('[value="unwrapped"]').disabled = true;
   elements['lattice-references'].replaceChildren();
   elements['selection-data'].replaceChildren();
@@ -1692,9 +1714,9 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     selectionGroupControls.refresh();
     toolPanels.setToolEnabled('selectionGroups', false);
     state.colorMode = 'type';
-    state.coordinateMode = 'wrapped';
+    state.coordinateMode = 'file';
     state.periodicOrigin = [0, 0, 0];
-    renderer.setPeriodicOrigin(state.periodicOrigin, { coordinateMode: state.coordinateMode });
+    renderer.setPeriodicOrigin(state.periodicOrigin, { coordinateMode: 'wrapped' });
     renderer.setCellWireframeMode('mono');
     externalProperties.reset();
     expressionTools.reset();
@@ -1719,6 +1741,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     surfaceTools?.reset();
     binningTools?.reset();
     trajectoryTools?.reset();
+    frameNavigationControls?.reset();
     voronoiCells?.reset();
     timeSeries?.reset({ resetRange: true });
     movieControls?.reset();
@@ -2044,10 +2067,10 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   }
   await Promise.all(pending);
   displayRefresh.flush();
-  if (state.frame === frame && state.coordinateMode === 'unwrapped' && trajectoryTools?.needsInferredUnwrap(frame)) {
+  if (state.frame === frame && state.coordinateMode === 'unwrapped' && trajectoryTools?.needsUnwrap(frame)) {
     // Single-frame analyses have priority. Wrapped geometry remains usable
     // until optional continuous display coordinates are ready.
-    void trajectoryTools.ensureInferredUnwrap(frame, state.frameIndex, { showProgress: false, background: true }).then(ready => {
+    void trajectoryTools.ensureUnwrap(frame, state.frameIndex, { showProgress: false, background: true }).then(ready => {
       if (ready && state.frame === frame && state.coordinateMode === 'unwrapped') applyCoordinateMode({ resetCamera: false });
     }).catch(error => { if (error.name !== 'AbortError' && state.frame === frame) showToast(error.message); });
   }
@@ -2125,7 +2148,8 @@ async function getFrame(index, { background = false, speculative = false, cacheF
 /** Keep CFG crossing history available to displacement without delaying
  * ordinary frame reads or changing the displayed/cached analysis geometry. */
 async function prepareDisplacementFrame(frame, index, { minimumImage, signal } = {}) {
-  if (state.format !== 'cfg-sequence' || frame.unwrappedPositions || (minimumImage && !frame.physicalReplication)) return frame;
+  if (state.format !== 'cfg-sequence' || hasFileUnwrap(frame) || !trajectoryTools.inferenceEnabled()
+    || (minimumImage && !frame.physicalReplication)) return frame;
   const identity = processingSourceKey();
   const repetitions = [...state.repetitions], physical = state.replicateAtoms;
   const preparationSignal = framePreparationSignal(signal, () => identity === processingSourceKey());
@@ -2233,6 +2257,7 @@ function niceFrameInterval(frameCount) {
 }
 
 function updateFrameNavigation() {
+  frameNavigationControls?.refresh();
   const atStart = state.frameIndex <= 0;
   const atEnd = state.frameIndex >= state.frameCount - 1;
   elements['frame-first'].disabled = atStart;
@@ -2243,6 +2268,7 @@ function updateFrameNavigation() {
 }
 
 function showFrameManually(index) {
+  frameNavigationControls?.cancel();
   atomEyeTools.cancelBatch({ restore: false });
   interruptConfigurationRestore('a frame change');
   stopFramePlayback();
@@ -2250,6 +2276,7 @@ function showFrameManually(index) {
 }
 
 function toggleFramePlayback() {
+  frameNavigationControls?.cancel();
   atomEyeTools.cancelBatch({ restore: false });
   interruptConfigurationRestore('trajectory playback');
   if (state.playing) {
@@ -2377,39 +2404,37 @@ function setRadiusPercent(rawValue, { source = 'number' } = {}) {
 
 /** File image data wins; inferred coordinates serve display paths only. */
 function unwrappedPositionsOf(frame) {
-  return frame?.unwrappedPositions ?? frame?.inferredUnwrap?.unwrappedPositions ?? null;
+  return frame?.unwrappedPositions ?? (trajectoryTools?.inferenceEnabled() ? frame?.inferredUnwrap?.unwrappedPositions : null) ?? null;
 }
 
 /** Inference needs more than one frame and the source atoms themselves:
  * physical replication derives copies from image flags, so it is excluded. */
 function canInferUnwrap(frame = state.frame) {
-  return Boolean(frame) && !frame.unwrappedPositions && (state.frameCount > 1 || !state.indexComplete) && !state.replicateAtoms;
+  return Boolean(frame) && !hasFileUnwrap(frame) && (state.frameCount > 1 || !state.indexComplete) && !state.replicateAtoms;
 }
 
 /** The mode actually drawn: Unwrapped waits for inferred coordinates. */
 function displayCoordinateMode(frame = state.frame) {
-  return state.coordinateMode === 'unwrapped' && unwrappedPositionsOf(frame) ? 'unwrapped' : 'wrapped';
+  if (state.coordinateMode === 'unwrapped' && unwrappedPositionsOf(frame)) return 'unwrapped';
+  return state.coordinateMode !== 'wrapped' && fileDisplayPositions(frame) !== frame?.positions ? 'unwrapped' : 'wrapped';
 }
 
 function configureCoordinateMode(frame) {
   const unwrappedOption = elements['coordinate-mode'].querySelector('option[value="unwrapped"]');
-  const inferable = canInferUnwrap(frame);
-  const available = Boolean(frame.unwrappedPositions) || inferable;
-  unwrappedOption.disabled = !available;
-  unwrappedOption.textContent = frame.unwrappedPositions
-    ? `Unwrapped coordinates (${frame.unwrapSource})`
+  const inferable = canInferUnwrap(frame) && trajectoryTools.inferenceEnabled();
+  unwrappedOption.disabled = !frame;
+  unwrappedOption.textContent = hasFileUnwrap(frame)
+    ? `Unwrapped coordinates (${frame.unwrapSource ?? 'file data'})`
     : inferable ? state.coordinateMode === 'unwrapped' && !frame.inferredUnwrap
-      ? 'Unwrapped coordinates (preparing; showing wrapped)'
-      : `Unwrapped coordinates (${INFERRED_UNWRAP_SOURCE})` : 'Unwrapped coordinates (not available)';
-  if (!available && state.coordinateMode === 'unwrapped') {
-    state.coordinateMode = 'wrapped';
-    showToast('This frame has no unwrapped coordinates; display returned to wrapped coordinates.');
-  }
+      ? 'Unwrapped coordinates (preparing; showing file coordinates)'
+      : `Unwrapped coordinates (${INFERRED_UNWRAP_SOURCE})` : 'Unwrapped coordinates (no image data)';
   elements['coordinate-mode'].value = state.coordinateMode;
+  trajectoryTools.refresh();
 }
 
 function displayPositionsForFrame(frame = state.frame) {
-  return displayCoordinateMode(frame) === 'unwrapped' ? unwrappedPositionsOf(frame) : frame?.positions;
+  if (state.coordinateMode === 'wrapped') return frame?.positions;
+  return (state.coordinateMode === 'unwrapped' ? unwrappedPositionsOf(frame) : null) ?? fileDisplayPositions(frame);
 }
 
 function displayedAtomPoint(id, replicaIndices = [0, 0, 0]) {
@@ -2555,23 +2580,19 @@ function refreshComputedProperties({ reason, name, removed = [] } = {}) {
 async function updateCoordinateMode() {
   if (!state.frame) return;
   const requested = elements['coordinate-mode'].value;
-  if (requested === 'unwrapped' && !unwrappedPositionsOf(state.frame) && !canInferUnwrap()) {
-    elements['coordinate-mode'].value = 'wrapped';
-    showToast('Unwrapped display requires explicit image data, meaningful out-of-cell CFG coordinates, or more than one trajectory frame.');
-    return;
-  }
   if (requested !== 'unwrapped') trajectoryTools.cancelUnwrap();
   state.coordinateMode = requested;
-  if (requested === 'unwrapped' && trajectoryTools.needsInferredUnwrap(state.frame)) {
+  trajectoryTools.refresh();
+  if (requested === 'unwrapped' && trajectoryTools.needsUnwrap(state.frame)) {
     const frame = state.frame, index = state.frameIndex;
     configureCoordinateMode(frame);
     try {
-      if (!await trajectoryTools.ensureInferredUnwrap(frame, index, { showProgress: false, background: true })) throw new Error('Unwrapped coordinates could not be inferred for this frame.');
+      if (!await trajectoryTools.ensureUnwrap(frame, index, { showProgress: false, background: true })) throw new Error('Unwrapped coordinates could not be prepared for this frame.');
     } catch (error) {
       if (error.name === 'AbortError') return;
       if (state.frame === frame && state.coordinateMode === 'unwrapped') {
-        state.coordinateMode = 'wrapped';
-        elements['coordinate-mode'].value = 'wrapped';
+        state.coordinateMode = 'file';
+        elements['coordinate-mode'].value = 'file';
         if (error.name !== 'AbortError') showToast(error.message);
       }
       return;
@@ -2583,6 +2604,8 @@ async function updateCoordinateMode() {
 
 function applyCoordinateMode({ resetCamera = true } = {}) {
   configureCoordinateMode(state.frame);
+  // Deferred display arrays count toward the same adaptive frame budget.
+  reassessFrameCache(state.frame);
   elements['metric-upload'].textContent = formatDuration(renderer.setDisplayPositions(displayPositionsForFrame(), { coordinateMode: displayCoordinateMode() }));
   if (resetCamera) renderer.resetCamera();
   if (state.colorMode.startsWith('builtin:position:')) applyColors();
@@ -2597,8 +2620,8 @@ function applyCoordinateMode({ resetCamera = true } = {}) {
  * exported images must wait for the explicitly selected coordinate mode. */
 async function prepareDisplayCoordinates({ signal } = {}) {
   const frame = state.frame;
-  if (state.coordinateMode !== 'unwrapped' || !trajectoryTools.needsInferredUnwrap(frame)) return;
-  const ready = await trajectoryTools.ensureInferredUnwrap(frame, state.frameIndex, { signal, showProgress: false });
+  if (state.coordinateMode !== 'unwrapped' || !trajectoryTools.needsUnwrap(frame)) return;
+  const ready = await trajectoryTools.ensureUnwrap(frame, state.frameIndex, { signal, showProgress: false });
   if (signal?.aborted || state.frame !== frame) throw new DOMException('Image preparation cancelled.', 'AbortError');
   if (state.coordinateMode !== 'unwrapped') return;
   if (!ready) throw new Error('Unwrapped coordinates could not be prepared for this image.');
@@ -2778,7 +2801,8 @@ function paletteForCurrentMode() {
   }
   orientationColorResolver.clear();
   if (state.colorMode === 'type') { colorQuantityResolver.clear(); return colorsByType(state.frame, hiddenAtomTypes); }
-  const property = colorQuantityResolver.resolve(state.frame, state.colorMode, { coordinateMode: state.coordinateMode });
+  const colorCoordinateMode = state.coordinateMode === 'unwrapped' && !unwrappedPositionsOf(state.frame) ? 'file' : state.coordinateMode;
+  const property = colorQuantityResolver.resolve(state.frame, state.colorMode, { coordinateMode: colorCoordinateMode });
   if (!property) {
     return colorsByType(state.frame, hiddenAtomTypes);
   }
@@ -3563,7 +3587,7 @@ function updateSelectionPanel(index = null) {
   }
   const frame = state.frame;
   const base = index * 3;
-  const inferred = !frame.unwrappedPositions && state.coordinateMode === 'unwrapped' ? frame.inferredUnwrap : null;
+  const inferred = !frame.unwrappedPositions && state.coordinateMode === 'unwrapped' && trajectoryTools.inferenceEnabled() ? frame.inferredUnwrap : null;
   const coordinateRows = frame.unwrappedPositions || inferred
     ? [
         ['Cartesian (wrapped)', formatVector(frame.positions, base, ' Å')],
@@ -3571,7 +3595,7 @@ function updateSelectionPanel(index = null) {
         ['Fractional (wrapped)', formatVector(frame.fractional, base)],
       ]
     : [
-        ['Cartesian', formatVector(frame.positions, base, ' Å')],
+        ['Cartesian (file)', formatVector(fileDisplayPositions(frame), base, ' Å')],
         ['Fractional', formatVector(frame.fractional, base)],
       ];
   const rows = [
@@ -4299,6 +4323,7 @@ function setControlsEnabled(enabled) {
   elements['background-picker'].classList.toggle('is-disabled', !enabled);
   if (!enabled) elements['background-picker'].open = false;
   configureReplicationUi(enabled);
+  frameNavigationControls?.refresh();
   sliceControls.setEnabled(enabled);
   syncAxisVisibility();
 }
@@ -4494,6 +4519,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
   const saved = config.settings;
   const targetIndex = config.source?.frameIndex ?? state.frameIndex;
   const previousSmoothing = trajectoryTools.getSmoothing();
+  const previousInference = trajectoryTools.inferenceEnabled();
   let displayed = false, smoothingRequest = null, completed = false, failure = null;
   const controller = new AbortController();
   restorationController = controller;
@@ -4502,10 +4528,11 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     cancelLatticeEstimation();
     replicationController?.abort();
     replicationRequest++;
-    clearTimeout(frameTimer);
+    frameNavigationControls?.cancel();
     if (config.source && targetIndex >= state.frameCount && !state.indexComplete) await waitForSourceIndex({ signal: controller.signal });
     if (!current()) return;
     if (config.source && targetIndex >= state.frameCount) throw new Error('The saved frame is not available in the loaded source.');
+    trajectoryTools.setInferenceEnabled(saved.extensions.trajectory?.unwrap?.inferFromFrames ?? false);
     // Smoothing defines the analyzed coordinates, so it applies before the
     // target frame is prepared. Recipes without it restore file coordinates.
     if (state.frame && trajectoryTools.setSmoothing(saved.extensions.trajectory?.smoothing ?? { enabled: false })) {
@@ -4529,8 +4556,8 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
       }
     }
     if (!current()) return;
-    if (targetFrame && saved.display.coordinateMode === 'unwrapped' && !targetFrame.unwrappedPositions
-      && !(state.frameCount > 1 && !saved.replicateAtoms)) {
+    if (targetFrame && saved.display.coordinateMode === 'unwrapped' && !hasFileUnwrap(targetFrame)
+      && !(trajectoryTools.inferenceEnabled() && state.frameCount > 1 && !saved.replicateAtoms)) {
       throw new Error('The saved unwrapped view requires coordinates that this source does not provide.');
     }
     const references = targetFrame ? targetFrame.typeLabels.map((label, type) => {
@@ -4583,8 +4610,8 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     state.coordinateMode = saved.display.coordinateMode;
     if (state.frame) {
       configureCoordinateMode(state.frame);
-      if (state.coordinateMode === 'unwrapped' && trajectoryTools.needsInferredUnwrap(state.frame)) {
-        await trajectoryTools.ensureInferredUnwrap(state.frame, state.frameIndex);
+      if (state.coordinateMode === 'unwrapped' && trajectoryTools.needsUnwrap(state.frame)) {
+        await trajectoryTools.ensureUnwrap(state.frame, state.frameIndex);
         if (!current()) return;
       }
       renderer.setDisplayPositions(displayPositionsForFrame(), { coordinateMode: displayCoordinateMode() });
@@ -4720,6 +4747,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     // the frame still on screen.
     if (request === configurationRequest && !displayed && smoothingRequest === state.frameRequest && restorationOwner === null
       && sourceVersion === state.sourceVersion && sourceRequest === sourceOpenRequest) {
+      trajectoryTools.setInferenceEnabled(previousInference);
       matchSmoothingToDisplayedFrame(previousSmoothing.window);
     }
   }
@@ -4846,7 +4874,7 @@ function invalidateProcessedFrames() {
 async function applyTrajectoryProcessing() {
   if (!state.frame || sourceLoadingOwner !== null) return;
   stopFramePlayback();
-  clearTimeout(frameTimer);
+  frameNavigationControls?.cancel();
   atomEyeTools.cancelBatch({ restore: false });
   const navigation = beginFrameNavigation();
   abortAnalysisJobs();
@@ -4924,7 +4952,7 @@ async function changeReplication(counts, physical) {
   const controller = new AbortController();
   replicationController = controller;
   stopFramePlayback();
-  clearTimeout(frameTimer);
+  frameNavigationControls?.cancel();
   state.frameRequest++;
   abortAnalysisJobs();
   gpuPrefetch.pause();

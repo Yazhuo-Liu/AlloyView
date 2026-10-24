@@ -40,6 +40,7 @@ test('display-only recipes work without source files and use stable defaults', (
   const recipe = createConfiguration();
   assert.equal(recipe.source, null);
   assert.equal(recipe.settings.display.colorMode, 'type');
+  assert.equal(recipe.settings.display.coordinateMode, 'file');
   assert.deepEqual(recipe.settings.replicate, [1, 1, 1]);
   assert.deepEqual(recipe.settings.slices.items, []);
   assert.equal(recipe.settings.slices.selectedId, null);
@@ -971,15 +972,28 @@ test('trajectory recipes round-trip smoothing and line settings; older recipes o
   const restored = parseConfiguration(JSON.stringify(recipe));
   assert.deepEqual(restored, recipe);
   assert.equal(restored.settings.activeCategory, 'modification');
-  assert.deepEqual(restored.settings.extensions.trajectory, { smoothing: { enabled: true, window: 4 },
+  assert.deepEqual(restored.settings.extensions.trajectory, { unwrap: { inferFromFrames: false }, smoothing: { enabled: true, window: 4 },
     lines: { enabled: true, source: 'group', selectionGroupId: 'solutes', atomIds: [], firstFrame: 1, lastFrame: 9, stride: 2,
       visible: false, color: '#aa3300', width: 3.5, colorByTime: true, colorScheme: 'magma' } });
   const explicit = createConfiguration({ ...snapshot, settings: { ...snapshot.settings, extensions: { trajectory: {
     lines: { enabled: true, atomIds: [5, -2, 'Fe12'], lastFrame: null } } } } });
-  assert.deepEqual(explicit.settings.extensions.trajectory, { smoothing: { enabled: false, window: 2 },
+  assert.deepEqual(explicit.settings.extensions.trajectory, { unwrap: { inferFromFrames: false }, smoothing: { enabled: false, window: 2 },
     lines: { enabled: true, source: 'ids', selectionGroupId: null, atomIds: [5, -2, 'Fe12'], firstFrame: 0, lastFrame: null, stride: 1,
       visible: true, color: '#ff9f1c', width: 2, colorByTime: false, colorScheme: 'viridis' } });
   assert.equal(Object.hasOwn(createConfiguration().settings.extensions, 'trajectory'), false);
+});
+
+test('file coordinates are the default and trajectory inference requires an explicit saved option', () => {
+  const recipe = createConfiguration({ settings: { extensions: { trajectory: {} } } });
+  assert.equal(recipe.settings.display.coordinateMode, 'file');
+  assert.equal(recipe.settings.extensions.trajectory.unwrap.inferFromFrames, false);
+  const enabled = createConfiguration({ settings: { display: { coordinateMode: 'unwrapped' },
+    extensions: { trajectory: { unwrap: { inferFromFrames: true } } } } });
+  const restored = parseConfiguration(JSON.stringify(enabled));
+  assert.equal(restored.settings.display.coordinateMode, 'unwrapped');
+  assert.equal(restored.settings.extensions.trajectory.unwrap.inferFromFrames, true);
+  const legacy = createConfiguration({ settings: { display: { coordinateMode: 'wrapped' } } });
+  assert.equal(legacy.settings.display.coordinateMode, 'wrapped', 'existing explicit wrapped views retain their meaning');
 });
 
 test('trajectory recipes are validated before restoration', () => {
@@ -990,6 +1004,8 @@ test('trajectory recipes are validated before restoration', () => {
     return () => parseConfiguration(JSON.stringify(copy));
   };
   assert.throws(invalid({ smoothing: { enabled: true, window: 0 } }), /smoothing\.window/);
+  assert.throws(invalid({ unwrap: { inferFromFrames: 'yes' } }), /unwrap\.inferFromFrames/);
+  assert.throws(invalid({ unwrap: { inferFromFrames: true, unknown: true } }), /unwrap\.unknown is not a supported setting/);
   assert.throws(invalid({ smoothing: { enabled: true, window: 51 } }), /smoothing\.window/);
   assert.throws(invalid({ smoothing: { enabled: 'yes' } }), /smoothing\.enabled/);
   assert.throws(invalid({ smoothing: { code: 'x' } }), /smoothing\.code is not a supported setting/);

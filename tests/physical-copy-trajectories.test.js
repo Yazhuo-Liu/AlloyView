@@ -125,7 +125,8 @@ function controls({ frame = fixture(0), worker = {}, ensureIndexed = async () =>
     renderer: { setTrajectoryLines: result => rendered.push(result) }, worker: { trajectoryLines: async (request, options) => {
       requests.push(request);
       if (worker.trajectoryLines) return worker.trajectoryLines(request, options);
-      return build(request.ids, [fixture(0), fixture(1)], { physicalReplication: request.physicalReplication });
+      return build(request.ids, [fixture(0), fixture(1)], { physicalReplication: request.physicalReplication,
+        inferMissingImages: request.inferMissingImages });
     } } });
   return { tool, requests, rendered, setFrame: next => { currentFrame = next; }, setVersion: next => { version = next; } };
 }
@@ -135,7 +136,7 @@ test('B35 controls send only copy counts, retain compound settings and clear pat
   const { tool, requests, setFrame } = controls({ frame });
   const id = copyId(7, [1, 2, 1]);
   assert.equal(await tool.restoreLines({ enabled: true, atomIds: [id], firstFrame: 0, lastFrame: 1, stride: 1 }), true);
-  assert.deepEqual(requests[0], { ids: [id], first: 0, last: 1, stride: 1, physicalReplication: { repetitions } });
+  assert.deepEqual(requests[0], { ids: [id], first: 0, last: 1, stride: 1, inferMissingImages: false, physicalReplication: { repetitions } });
   assert.notEqual(requests[0].physicalReplication.repetitions, repetitions, 'request takes an immutable small snapshot');
   assert.deepEqual(tool.serialize().lines.atomIds, [id]);
   assert.equal(tool.getLines().missingCount, 0);

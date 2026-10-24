@@ -1,21 +1,38 @@
 # Trajectory tools
 
-**Modification tools → Trajectory** collects three operations that need more
-than one frame: unwrapped coordinates inferred from consecutive frames, a
-moving average of the coordinates (smoothing), and lines that trace chosen
-atoms through the trajectory. All three are off by default. With them off,
-ordinary frame navigation reads only the selected structure. This also applies
-to numbered CFG folders: opening a late frame does not reconstruct the preceding
-trajectory. Nearby frames may still be prefetched using the existing cache.
+**Modification tools → Trajectory** contains explicit Unwrap controls, coordinate
+smoothing and atom-path lines. All are off by default. **File coordinates
+(default)** displays the positions saved in the selected CFG, including positions
+outside the primary cell, without adding image counts. Ordinary navigation reads
+only the selected structure; even a jump to frame 165 of a 165-file folder does
+not require parsing frames 1–164. Nearby frames can still be prefetched using
+the existing cache and warmed Workers.
 
-## Unwrapped coordinates from adjacent frames
+## Unwrap coordinates
 
-**Display → Coordinates → Unwrapped** shows atoms at continuous positions
-instead of folding them back into the cell. Sources with image flags
-(`ix iy iz`), unwrapped columns (`xu yu zu`, `xsu ysu zsu`) or out-of-cell CFG
-coordinates already provide these coordinates and always take precedence.
-For any other trajectory with more than one
-frame, choosing Unwrapped infers them:
+Enable **Unwrap coordinates using this frame's data**, or choose **Display →
+Coordinates → Unwrapped**. Unwrap and **Infer missing image counts from previous
+frames** are separate switches, both off by default. Choosing Unwrapped alone
+never requests a scan of preceding frames.
+
+| Information saved in the frame | Unwrap behavior |
+| --- | --- |
+| Wrapped coordinates, cell and `ix/iy/iz` image counts | Add each count times its cell vector, using only this frame. |
+| Continuous positions already saved outside the cell | Use the saved continuous positions, using only this frame. |
+| Wrapped coordinates without image counts | Keep showing File coordinates unless the separate inference checkbox is enabled. |
+
+A CFG's image counts remain metadata during ordinary display. The application
+constructs the additional continuous-position array only when Unwrap or a
+calculation explicitly needs it. The default File view preserves the source
+position; **Wrapped into periodic cell** is available separately. The coordinate
+selector and Trajectory status explain when the selected Unwrapped view has no
+single-frame data and is temporarily showing File coordinates.
+
+### Unwrapped coordinates from adjacent frames
+
+For a trajectory without sufficient single-frame data, explicitly check **Infer
+missing image counts from previous frames** and enable Unwrap. Only then are
+crossings inferred:
 
 1. Frame 1 defines image counts of zero for every atom.
 2. For each later frame, in trajectory order, every atom's reduced (fractional)
@@ -25,39 +42,53 @@ frame, choosing Unwrapped infers them:
 3. The unwrapped position is the wrapped reduced coordinate plus the image
    count, converted with that frame's own cell.
 
-Reduced coordinates make the test exact for triclinic cells and cells that
-change between frames (NPT, deformation). Open axes are never shifted.
-Atoms are matched by ID, so frames may list atoms in any order; files without
-IDs are matched by row. An atom missing from some frames is compared with its
-last observed position when it returns, and an atom that first appears later
-starts at image zero. As with any inference from snapshots, an atom that moves
-more than half a cell between two stored frames cannot be followed; such
-trajectories need image flags in the file.
+Reduced coordinates support triclinic cells and cells that change between frames
+(NPT, deformation). Open axes are never shifted. Atoms are matched by ID, so
+frames may list atoms in any order; files without IDs are matched by row. An atom
+missing from some frames is compared with its last observed position when it
+returns, and an atom that first appears later starts at image zero. As with any
+inference from snapshots, motion of more than half a reduced cell between saved
+observations is ambiguous; such trajectories need image counts in the file.
 
-Frames are integrated strictly in order when Unwrapped is requested. Showing
-frame *k* first displays its wrapped structure and starts the enabled single-frame
-analyses. After those finish, optional inference extends integration to frame
-*k* in the background; the coordinate selector states that wrapped coordinates
-are temporarily shown. Navigation cancels obsolete inference and never waits for
-it. Frames before the integration frontier are reused. Every
-crossing is logged (8 bytes each), so frames behind the integration frontier
-are recovered by undoing the later crossings. The log is limited to 256 MiB
-(about 32 million crossings); beyond that the oldest entries are dropped and
-an earlier frame is recomputed from frame 1 when needed. Results do not depend
-on the order in which frames were viewed, prefetched or played.
+Frames are integrated strictly in trajectory order even when the user jumps
+arbitrarily. Selecting frame *k* first displays its File coordinates and starts
+the enabled single-frame analyses. After those finish, requested inference
+extends integration to frame *k* in the background. Navigation cancels obsolete
+inference and does not wait for it. Frames before the integration frontier are
+reused. Every crossing is logged (8 bytes each), so frames behind the frontier
+are recovered by undoing later crossings. The log is limited to 256 MiB (about
+32 million crossings); beyond that the oldest entries are dropped and an earlier
+frame is recomputed from frame 1 when needed. Results do not depend on viewing,
+prefetch or playback order. Turning inference off cancels outstanding work and
+stops using cached inferred display coordinates; known single-frame file data
+continues to work.
 
-Inferred coordinates are used for display, Position X/Y/Z colors (unwrapped),
-atom details (shown as *inferred*) and the second view. They are not passed to
-analyses: displacement, clusters and every other tool keep using the
-coordinates in the file, so their results never depend on whether a frame was
-viewed in Unwrapped mode. The existing CFG continuous-coordinate convention for
-total displacement is resolved separately, on demand by that analysis, including
-physical copies. It does not attach inferred file data to the displayed frame.
-Display inference is unavailable while **Replicate atoms for
-analysis** is on, because physical copies are placed from image flags; display
-replication works normally. Image exports wait for the selected Unwrapped view
-to finish, so a temporary wrapped preview cannot enter a PNG, JPG, movie or
-frame-series export.
+Unwrap display supplies Position X/Y/Z colors, atom details and the second view.
+It does not change the canonical wrapped geometry used by ordinary single-frame
+analyses. Total displacement resolves available file image counts on demand,
+independently of the display mode. Reconstructing missing CFG crossing history
+for total displacement requires the same explicit inference checkbox, including
+for physical copies. With it off, calculations use the information supplied by
+the selected frames and do not scan history automatically.
+
+Display inference is unavailable while **Replicate atoms for analysis** is on;
+display replication works normally. Image exports wait for any requested,
+available Unwrapped view to finish, so its temporary File preview cannot enter
+a PNG, JPG, movie or frame-series export. If no image data exists and inference
+is off, the clearly indicated File fallback is the view that is exported.
+
+## Jump to a frame
+
+The time bar includes a **Frame** input and **Go** button. Frame numbers start at
+1: enter a number and press **Enter** or **Go** to jump directly. The allowed
+range follows the known frame count, including while progressive indexing finds
+more frames. Invalid numbers leave the current structure unchanged.
+
+Dragging the time slider previews the frame number and loads the selected frame
+when the pointer is released. Keyboard changes use a short debounce. A new
+navigation target cancels obsolete frame and inference requests; the latest
+selection owns the visible result. Cached frames and incremental crossing history
+are reused for large forward jumps, backward seeks and repeated frames.
 
 ## Smooth trajectory
 
@@ -114,10 +145,14 @@ shared CPU admission budget are reused.
 Choose the atoms (a [selection group](selection-groups.md) or a list of IDs),
 the first and last frame and a step (**Every**), then **Generate lines**. The
 Worker reads the sampled frames, matches the atoms by ID and builds one
-polyline per atom. Lines do not break at periodic boundaries: where a frame
-provides unwrapped coordinates they are used directly, otherwise each step adds
-the minimum-image displacement since the atom's previous sample. Choose a step
-small enough that atoms move less than half a cell between samples. Atoms found
+polyline per atom. File image counts and saved continuous coordinates are used
+directly. Without them, paths keep the saved positions and their periodic jumps
+unless **Infer missing image counts from previous frames** is checked. With that
+explicit consent, each step adds the minimum-image displacement since the atom's
+previous sample. This reads only the chosen samples; it does not scan unselected
+history. Choose a step small enough that atoms move less than half a cell between
+samples. Changing the inference checkbox removes generated or pending paths;
+generate them again using the new coordinate convention. Atoms found
 in fewer than two sampled frames produce no line; missing IDs are listed.
 
 Atoms created with **Replicate atoms for analysis** can also be traced, from
@@ -147,25 +182,30 @@ would exceed it.
 
 ## Limitations
 
-- Inferred unwrapping integrates the frames in order, so the first Unwrapped
-  view of a late frame reads and parses every earlier frame once. Later views
-  of any frame reuse the crossing log.
+- Explicitly enabled cross-frame inference integrates frames in order, so its
+  first view of a late frame can read every earlier frame once. Single-frame
+  image data never needs that scan; subsequent inferred views reuse the crossing
+  log within its memory limit.
 - The integration runs in the structure Worker and occupies it for about
   72 ms per 1,000,000-atom frame.
 
 ## Configuration
 
-`settings.extensions.trajectory` stores `smoothing.enabled`, `smoothing.window`
+`settings.display.coordinateMode` stores `file` (the default), `wrapped` or
+`unwrapped`. `settings.extensions.trajectory.unwrap.inferFromFrames` stores the
+separate inference checkbox and defaults to `false`; selecting Unwrapped in an
+older configuration does not implicitly enable trajectory inference.
+
+`settings.extensions.trajectory` also stores `smoothing.enabled`, `smoothing.window`
 (1–50) and the line settings: `enabled`, `source` (`ids` or `group`),
 `selectionGroupId`, `atomIds` (at most 100,000), `firstFrame`, `lastFrame`
 (`null` means the last frame), `stride`, `visible`, `color`, `width` (0.5–16),
 `colorByTime` and `colorScheme`. Smoothing is applied before the saved frame is
 prepared; enabled lines are recalculated after import. Configurations without
-the extension restore unsmoothed coordinates and no lines.
+the extension restore inference off, unsmoothed coordinates and no lines.
 
 The smoothing setting always describes the displayed frame. A configuration
-that is rejected or interrupted before its frame is shown (for example, one
-that asks for an unwrapped view the source cannot provide) leaves the setting
+that is rejected or interrupted before its frame is shown leaves the setting
 that produced the frame on screen, and analyses keep using those coordinates.
 Selecting the displayed frame again while a smoothing change is still being
 applied prepares that frame with the new setting instead of keeping the old

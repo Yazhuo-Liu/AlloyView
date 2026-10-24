@@ -15,7 +15,7 @@ export async function parseFrameDescriptor(descriptor, { signal } = {}) {
   if (projection === 'header') return readFrameHeaderDescriptor(descriptor, { signal });
   const options = { projection };
   let frame;
-  if (format === 'cfg') frame = parseCfg(await readFileBytes(file), file.name, options);
+  if (format === 'cfg') frame = parseCfg(await readFileBytes(file), file.name, { ...options, deferUnwrap: Boolean(descriptor.deferUnwrap) });
   else if (format === 'lammps-dump') frame = parseLammpsFrame(new Uint8Array(await file.slice(start, end).arrayBuffer()), file.name, options);
   else if (format === 'xyz') frame = parseXyzFrame(new Uint8Array(await file.slice(start, end).arrayBuffer()), file.name, options);
   else if (format === 'pdb') {

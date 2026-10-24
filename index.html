@@ -195,7 +195,12 @@
           <section class="trajectory-bar" id="trajectory-section" aria-label="Trajectory controls" hidden>
             <div class="trajectory-header">
               <div><strong id="timestep-label">timestep —</strong><span id="cache-label">cache 1 / 3</span><span>1 s/frame</span></div>
-              <output id="frame-label">1 / 1</output>
+              <div class="frame-jump">
+                <output id="frame-label">1 / 1</output>
+                <label for="frame-jump-input">Frame</label>
+                <input id="frame-jump-input" type="number" min="1" max="1" step="1" value="1" inputmode="numeric" autocomplete="off" disabled>
+                <button id="frame-jump-go" type="button" disabled>Go</button>
+              </div>
             </div>
             <div class="trajectory-controls">
               <button id="frame-first" type="button" title="First frame" aria-label="First frame">|◀</button>
@@ -298,6 +303,7 @@
             <label class="field">
               <span>Coordinates</span>
               <select id="coordinate-mode" disabled>
+                <option value="file">File coordinates (default)</option>
                 <option value="wrapped">Wrapped into periodic cell</option>
                 <option value="unwrapped" disabled>Unwrapped coordinates</option>
               </select>
@@ -505,9 +511,11 @@
           <section id="tool-trajectory" class="side-section trajectory-tools-section" data-tool-panel="trajectory" hidden>
             <div class="section-heading"><div><p class="section-kicker">TRAJECTORY</p><h3>Unwrap, smooth and trace</h3></div></div>
             <div class="section-heading statistics-subheading"><div><h3>Unwrapped coordinates</h3></div></div>
+            <label class="slice-toggle"><input id="trajectory-unwrap-enabled" type="checkbox" disabled><span>Unwrap coordinates using this frame's data</span></label>
+            <label class="slice-toggle"><input id="trajectory-infer-unwrap" type="checkbox" disabled><span>Infer missing image counts from previous frames</span></label>
             <p id="trajectory-unwrap-status" class="help" role="status" aria-live="polite">Open a trajectory to unwrap, smooth or trace atom paths.</p>
             <button id="cancel-trajectory-unwrap" class="text-button" type="button" disabled>Cancel unwrapping</button>
-            <p class="help">Image flags or unwrapped columns in the file are used as they are. Otherwise each atom's periodic crossings are counted from frame 1 in order, by atom ID. Inferred coordinates are for display, Position colors and atom details; analyses keep using the file coordinates.</p>
+            <p class="help">Both options are off by default. Unwrap uses image counts or continuous coordinates saved in this frame. Inferring missing counts is a separate opt-in operation: it reads earlier frames and can be slow for a long trajectory. It assumes less than half a cell of motion between saved frames. Display inference does not change analysis coordinates.</p>
 
             <div class="section-heading statistics-subheading"><div><h3>Smooth trajectory</h3></div></div>
             <label class="slice-toggle"><input id="trajectory-smooth-enabled" type="checkbox" disabled><span>Replace coordinates by a moving average</span></label>

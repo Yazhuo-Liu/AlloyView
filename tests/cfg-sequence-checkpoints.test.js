@@ -90,6 +90,55 @@ test('on-demand CFG continuity retains multi-cell total displacement before and 
   assert.equal(raw.unwrappedPositions, undefined, 'analysis preparation does not mutate the ordinary frame');
 });
 
+test('file image counts stay lazy and explicit Unwrap reads only the selected CFG, including zero counts', async () => {
+  const reads = [];
+  for (const image of [0, 3]) {
+    const files = syntheticSequence(165, reads).map(file => new File([
+      `Number of particles = 1\n${Array.from({ length: 9 }, (_, axis) => `H0(${Math.floor(axis / 3) + 1},${axis % 3 + 1}) = ${axis % 4 === 0 ? 10 : 0}`).join('\n')}\n.NO_VELOCITY.\nentry_count = 7\nauxiliary[0] = ix\nauxiliary[1] = iy\nauxiliary[2] = iz\nauxiliary[3] = id\n55.845\nFe\n.02 .2 .3 ${image} -1 2 1\n`,
+    ], file.name));
+    // Header reads are intentionally excluded; count complete atom parsing.
+    for (const file of files) {
+      const arrayBuffer = file.arrayBuffer.bind(file);
+      file.arrayBuffer = () => { reads.push(file.name); return arrayBuffer(); };
+    }
+    const loaded = await request('load', { files });
+    assert.equal(loaded.frame.unwrappedPositions, undefined);
+    assert.equal(loaded.frame.imageFlags[0], image);
+    reads.length = 0; replies.length = 0;
+    const raw = (await request('frame', { index: 164 })).frame;
+    assert.equal(raw.unwrappedPositions, undefined);
+    assert.deepEqual(reads, ['frame.164.cfg']);
+    reads.length = 0;
+    const result = await request('trajectory-unwrap', { index: 164, infer: true });
+    assert.ok(Math.abs(result.unwrappedPositions[0] - (.2 + image * 10)) < 1e-5);
+    assert.equal(result.inferredUnwrap, undefined);
+    assert.deepEqual(reads, ['frame.164.cfg']);
+    assert.equal(replies.some(message => message.stage === 'trajectory-unwrap' || message.stage === 'sequence-unwrap'), false);
+  }
+});
+
+test('missing image counts never trigger inference without its separate opt-in', async () => {
+  const reads = [], files = syntheticSequence(165, reads);
+  await request('load', { files });
+  for (const payload of [{ index: 164 }, { index: 164, infer: false }]) {
+    reads.length = 0; replies.length = 0;
+    assert.equal((await request('trajectory-unwrap', payload)).inferredUnwrap, null);
+    assert.deepEqual(reads, ['frame.164.cfg']);
+    assert.equal(replies.some(message => message.stage === 'trajectory-unwrap'), false);
+  }
+  const raw = await request('frame', { index: 164, trajectory: { unwrap: true } });
+  assert.equal(raw.frame.inferredUnwrap, undefined, 'display unwrap alone grants no historical scan');
+});
+
+test('opted-in inference retains identical crossing history across large forward and backward jumps', async () => {
+  const reads = [], files = syntheticSequence(165, reads);
+  await request('load', { files });
+  for (const index of [164, 3, 120, 1, 163, 164, 0]) {
+    const { inferredUnwrap } = await request('trajectory-unwrap', { index, infer: true });
+    assert.ok(Math.abs(inferredUnwrap.unwrappedPositions[0] - 10 * (.9 + .23 * index)) < 1e-4, `frame ${index + 1}`);
+  }
+});
+
 test('CFG sequence frames resume from saved continuity and match a strict forward pass', async () => {
   const files = await sequence(12);
   await request('load', { files });

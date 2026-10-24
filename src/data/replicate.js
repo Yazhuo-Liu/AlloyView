@@ -7,7 +7,7 @@ import { attachFrameSummary, createFrameSummaryAccumulator, includeFrameSummaryA
 export const MAX_PHYSICAL_REPLICATION_ATOMS = 4_000_000;
 export const MAX_PHYSICAL_REPLICATION_BYTES = 512 * 1024 ** 2;
 const ID_PREFIX = '@AlloyView:';
-const ANALYSIS_FIELDS = ['ptm', 'atomeyeResults', 'vectorPropertyResults', 'analysisOriginalProperties', 'gpuFrameId', 'gpuKey'];
+const ANALYSIS_FIELDS = ['ptm', 'atomeyeResults', 'vectorPropertyResults', 'analysisOriginalProperties', 'gpuFrameId', 'gpuKey', 'inferredUnwrap'];
 
 /** Validate the expansion before allocating or altering any source arrays. */
 export function physicalReplicationPlan(frame, values, {
@@ -25,6 +25,7 @@ function replicationPlan(frame, values, {
     throw new Error('Physical replication requires coordinates, IDs and an element type for every atom.');
   }
   if (frame.unwrappedPositions && frame.unwrappedPositions.length !== count * 3
+      || frame.filePositions && frame.filePositions.length !== count * 3
       || frame.imageFlags && frame.imageFlags.length !== count * 3) throw new Error('Physical replication found incomplete image or unwrapped coordinates.');
   if (!frame.cell || frame.cell.pbc?.length !== 3 || frame.cell.vectors?.length !== 9 || frame.cell.origin?.length !== 3
       || [...frame.cell.vectors, ...frame.cell.origin].some((value) => !Number.isFinite(value))) {
@@ -50,7 +51,10 @@ function replicationPlan(frame, values, {
   const positionBytes = frame.positions instanceof Float64Array ? 24 : 12;
   const unwrappedBytes = frame.unwrappedPositions instanceof Float64Array
     || !frame.unwrappedPositions && frame.positions instanceof Float64Array ? 24 : 12;
-  const coordinatesBytes = 24 + positionBytes + (frame.imageFlags || frame.unwrappedPositions ? unwrappedBytes + 12 : 0);
+  const hasFilePositions = Boolean(frame.filePositions && frame.filePositions !== frame.positions || frame.imageFlags || frame.unwrappedPositions);
+  const sourceFilePositions = frame.filePositions ?? frame.positions;
+  const filePositionBytes = hasFilePositions ? sourceFilePositions instanceof Float64Array ? 24 : 12 : 0;
+  const coordinatesBytes = 24 + positionBytes + filePositionBytes + (frame.imageFlags || frame.unwrappedPositions ? unwrappedBytes + 12 : 0);
   const originalIdsBytes = count * 8;
   const copyIdsBytes = (copies - 1) * (count * 96 + encodedCharacters * 2);
   const estimatedBytes = atomCount * (coordinatesBytes + (frame.types.BYTES_PER_ELEMENT ?? 2) + 8) + sourcePropertyBytes * copies
@@ -98,6 +102,7 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
     for (let axis = 0; axis < 3; axis += 1) {
       const index = atom * 3 + axis;
       if (!Number.isFinite(frame.fractional[index]) || !Number.isFinite(frame.positions[index])
+          || frame.filePositions && !Number.isFinite(frame.filePositions[index])
           || frame.unwrappedPositions && !Number.isFinite(frame.unwrappedPositions[index])
           || frame.imageFlags && !Number.isSafeInteger(frame.imageFlags[index])) throw new Error('Physical replication requires finite coordinates and integer image flags.');
     }
@@ -107,6 +112,13 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
   const UnwrappedArray = frame.unwrappedPositions instanceof Float64Array
     || !frame.unwrappedPositions && frame.positions instanceof Float64Array ? Float64Array : Float32Array;
   const fractional = new Float64Array(atomCount * 3), positions = new PositionArray(atomCount * 3);
+  // Analysis copies retain the image-aware placement above. Default display
+  // separately follows the actual source positions plus each copy's lattice
+  // offset, without adding ix/iy/iz or leaking a base-sized source array.
+  const sourceFilePositions = frame.filePositions ?? frame.positions;
+  const FilePositionArray = sourceFilePositions instanceof Float64Array ? Float64Array : Float32Array;
+  const filePositions = frame.filePositions && frame.filePositions !== frame.positions || frame.imageFlags || frame.unwrappedPositions
+    ? new FilePositionArray(atomCount * 3) : undefined;
   const unwrappedPositions = frame.unwrappedPositions || frame.imageFlags ? new UnwrappedArray(atomCount * 3) : undefined;
   const imageFlags = frame.imageFlags || unwrappedPositions ? new Int32Array(atomCount * 3) : undefined;
   const reuseIds = Boolean(identity.ids), ids = identity.ids ?? new Array(atomCount);
@@ -150,6 +162,7 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
       for (let axis = 0; axis < 3; axis += 1) {
         positions[targetBase + axis] = cell.origin[axis] + fractional[targetBase] * vectors[axis]
           + fractional[targetBase + 1] * vectors[3 + axis] + fractional[targetBase + 2] * vectors[6 + axis];
+        if (filePositions) filePositions[targetBase + axis] = sourceFilePositions[sourceBase + axis] + offset[axis];
         if (unwrappedPositions && !frame.unwrappedPositions) {
           let value = cell.origin[axis] + offset[axis];
           for (let direction = 0; direction < 3; direction += 1) value += (frame.fractional[sourceBase + direction]
@@ -157,6 +170,7 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
           unwrappedPositions[targetBase + axis] = value;
         }
         if (!Number.isFinite(positions[targetBase + axis]) || !Number.isFinite(fractional[targetBase + axis])
+            || filePositions && !Number.isFinite(filePositions[targetBase + axis])
             || unwrappedPositions && !Number.isFinite(unwrappedPositions[targetBase + axis])) throw new Error('The enlarged coordinates exceed the supported numeric range.');
       }
       for (let property = 0; property < properties.length; property += 1) properties[property].data[target] = sourceProperties[property].data[atom];
@@ -172,7 +186,7 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
   }
   checkSignal(signal);
   const result = { ...frame, ids, types, typeLabels: structuredClone(frame.typeLabels), fractional, positions,
-    unwrappedPositions, imageFlags, cell, properties,
+    filePositions, unwrappedPositions, imageFlags, cell, properties,
     physicalReplication: { repetitions: repetitions.slice(), sourceAtomCount: count, wrappedSource: !imageFlags } };
   for (const name of ANALYSIS_FIELDS) delete result[name];
   attachFrameSummary(result, summary);

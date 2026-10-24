@@ -44,16 +44,25 @@ while the rest of the file is indexed. A `+` after the frame count indicates
 that more frames may still be found. A reserved foreground parser handles
 requested frames while a bounded background pool prefetches nearby ones;
 playback prepares the next frame while the current frame remains visible.
+The **Frame** input beside the time slider accepts a one-based frame number;
+press **Enter** or **Go** to jump directly. The available range grows as more
+frames are indexed. Dragging the slider previews the target number and loads it
+on release; keyboard changes use a short debounce. New selections cancel obsolete
+navigation so the latest target wins. Large jumps reuse cached frames and any
+explicitly enabled inference history, and ordinary CFG navigation needs only the
+target file, even in a 165-file folder.
 Saved configurations wait for indexing when their target frame is not yet
 available. Cancelling prefetch discards obsolete results and stops queued work;
 an active synchronous parse finishes before its reusable Worker and CPU
 capacity are released.
 
 The loading indicator over the view belongs to the operation that showed it:
-opening a file, a frame change, a smoothing change, inferring unwrapped
-coordinates, a configuration import, replication or the coordination analysis. That operation hides it when it
-ends, fails or is replaced; for example, choosing a cached frame while another
-frame is still being read hides it at once. A reference frame that a tool
+opening a file, a frame change, a smoothing change, a configuration import,
+replication or the coordination analysis. Optional display inference reports its
+progress in Trajectory while the selected structure remains usable. The operation
+that showed the loading indicator hides it when it ends, fails or is replaced;
+for example, choosing a cached frame while another frame is still being read
+hides it at once. A reference frame that a tool
 reads for itself (displacement, reference strain, Wigner–Seitz, time series,
 trajectory lines) is reported in that tool's panel and never shows it.
 
@@ -312,25 +321,32 @@ background analysis preparation grows its existing pools during the copy.
 
 ## Trajectory tools
 
-Select **Modification tools → Trajectory** for operations that use more than
-one frame. All three are off by default; with them off, frames and results are
-unchanged.
+Select **Modification tools → Trajectory** for Unwrap, smoothing and atom paths.
+They are off by default. **File coordinates (default)** shows the positions saved
+in a CFG, including out-of-cell positions, without adding `ix/iy/iz` counts.
+**Wrapped into periodic cell** remains an independent display choice.
 
-- **Unwrapped coordinates.** When a CFG folder, LAMMPS dump, XYZ or PDB trajectory has no
-  image flags or unwrapped columns, **Display → Coordinates → Unwrapped
-  coordinates (inferred from adjacent frames)** counts every atom's periodic
-  crossings from frame 1 onward. A reduced-coordinate step larger than half a
-  cell on a periodic axis is a crossing, so triclinic and changing cells work;
-  atoms are matched by ID and an atom missing from some frames resumes from
-  its last position. Frames are integrated once and in order in the structure
-  Worker, so the result never depends on which frames were viewed first.
-  A newly selected frame appears immediately in wrapped coordinates; enabled
-  single-frame analyses finish before background inference starts. The selector
-  identifies this temporary preview. Ordinary wrapped navigation never requests
-  the preceding trajectory. Image exports wait for the selected coordinates. The
-  inferred positions are used for display, Position colors, atom details and
-  the second view only; analyses use the file coordinates. File image data
-  always wins. Inference is unavailable with **Replicate atoms for analysis**.
+- **Unwrap coordinates using this frame's data.** Enable this checkbox or choose
+  **Display → Coordinates → Unwrapped**. If the selected frame has image counts,
+  its continuous positions are calculated directly from those counts and the
+  cell vectors. Positions already saved outside the cell can be used directly.
+  Neither case reads other frames. CFG image counts remain metadata until Unwrap
+  or a calculation needs continuous positions.
+- **Infer missing image counts from previous frames.** This separate checkbox is
+  also off by default. Choosing Unwrapped without it keeps showing the indicated
+  File view when single-frame information is missing. Enabling inference permits
+  scanning earlier frames, which can take time for a long trajectory. Reduced
+  displacements are integrated in order and matched by atom ID, so arbitrary
+  jumps give the same inferred coordinates as sequential viewing. This assumes
+  less than half a reduced cell of motion between saved observations; image
+  counts in the file are required to resolve larger motion reliably. The target
+  structure appears first and enabled single-frame analyses finish before
+  background display inference starts. Turning inference off cancels pending
+  work and stops using cached inferred positions. Image exports wait for the
+  requested coordinates when available. Display inference is unavailable with
+  **Replicate atoms for analysis**. Unwrap display does not change canonical
+  single-frame analysis geometry; known file image data remains available to
+  calculations on demand.
 - **Smooth trajectory.** Each frame's coordinates are replaced by the average
   over up to *w* frames before and after it (fewer at the trajectory ends),
   using minimum-image displacements relative to that frame, in an averaged
@@ -1125,7 +1141,11 @@ It uses stable atom IDs; equal-size frames without explicit IDs use row order
 with a warning that atom ordering must stay unchanged. Mixed ID schemes and
 unequal row counts are rejected. Minimum-image correction resolves periodic
 crossings in the full cell metric. Without correction, available unwrapped
-positions are used. The Cartesian current-minus-reference difference includes
+positions are used, materializing known file image counts on demand. If CFG
+crossing history is missing, reconstructing it also requires **Trajectory → Infer
+missing image counts from previous frames**. With that option off, displacement
+uses the selected frames' own information and does not scan earlier frames.
+The Cartesian current-minus-reference difference includes
 affine cell deformation. Its physical X, Y and Z components and magnitude in Å
 remain selectable in **Color by** independently of arrow drawing. While enabled,
 frame and reference changes recalculate them. **Cancel** removes the fields from
@@ -1526,10 +1546,11 @@ for adapter options and timing interpretation.
 - AtomEye CFG: basic and extended CFG, `H0`, `A`, `Transform`, `eta`, optional
   velocities, and scalar `auxiliary[]` columns. LAMMPS-written CFG auxiliaries
   `id` and complete `ix/iy/iz` image flags are recognized for stable atom IDs
-  and unwrapped display. Meaningful out-of-cell fractional coordinates are
-  wrapped while retaining the original unwrapped view. Multiple CFG files can
-  be selected together and are continuously unwrapped by ID and adjacent
-  minimum-image displacement. A non-identity `Transform`
+  and on-demand Unwrap. Default File display preserves the written positions,
+  including out-of-cell positions, while canonical analysis coordinates remain
+  wrapped. Multiple CFG files can be selected together; their missing crossing
+  history is inferred by ID and adjacent minimum-image displacement only after
+  the separate inference checkbox is explicitly enabled. A non-identity `Transform`
   combined with non-zero `eta` is rejected because upstream AtomEye gives those
   fields ambiguous precedence.
 - LAMMPS text dump: `id`, optional numeric `type` and `element`, common scalar columns, `x/y/z`,

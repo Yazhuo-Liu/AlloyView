@@ -47,6 +47,7 @@
     "test:browser:trajectory-workers": "node scripts/browser/browser-trajectory-workers.mjs",
     "test:browser:source-loading": "node scripts/browser/browser-source-loading.mjs",
     "test:browser:frame-first": "node scripts/browser/browser-frame-first.mjs",
+    "test:browser:explicit-unwrap": "node scripts/browser/browser-explicit-unwrap.mjs",
     "test:browser:renderer-context": "node scripts/browser/browser-renderer-context.mjs",
     "test:browser:picking-camera": "node scripts/browser/browser-picking-camera.mjs",
     "test:browser:picking-clipping": "node scripts/browser/browser-picking-clipping.mjs --production",

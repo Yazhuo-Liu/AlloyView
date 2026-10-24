@@ -33,26 +33,26 @@ const CFG_BOUNDARY_TOLERANCE = 1e-5;
  * Internal coordinate-only reads validate every column but omit unrelated
  * scalar buffers; IDs and image-flag auxiliaries keep their full semantics.
  */
-export function parseCfg(input, sourceName = 'structure.cfg', { projection = 'full' } = {}) {
+export function parseCfg(input, sourceName = 'structure.cfg', { projection = 'full', deferUnwrap = false } = {}) {
   const startedAt = performance.now();
-  if (!isByteInput(input)) return parseCfgText(input, sourceName, startedAt, projection);
+  if (!isByteInput(input)) return parseCfgText(input, sourceName, startedAt, projection, deferUnwrap);
   return parseBytesWithFallback(
     asBytes(input),
-    (bytes) => parseCfgBytes(bytes, sourceName, startedAt, projection),
-    (text) => parseCfgText(text, sourceName, startedAt, projection),
+    (bytes) => parseCfgBytes(bytes, sourceName, startedAt, projection, deferUnwrap),
+    (text) => parseCfgText(text, sourceName, startedAt, projection, deferUnwrap),
   );
 }
 
-function parseCfgText(text, sourceName, startedAt, projection) {
+function parseCfgText(text, sourceName, startedAt, projection, deferUnwrap) {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
   const header = readCfgHeader(lines);
   const parsed = header.entryCount === null
     ? parseBasicAtoms(lines, header.dataIndex, header.count, projection)
     : parseExtendedAtoms(lines, header.dataIndex, header.count, extendedLayout(header, projection));
-  return finishCfgFrame(header, parsed, sourceName, startedAt);
+  return finishCfgFrame(header, parsed, sourceName, startedAt, deferUnwrap);
 }
 
-function parseCfgBytes(bytes, sourceName, startedAt, projection) {
+function parseCfgBytes(bytes, sourceName, startedAt, projection, deferUnwrap) {
   const header = readHeaderLines(bytes, readCfgHeader);
   if (!header) return null;
   const start = lineStartAfter(bytes, header.dataIndex);
@@ -60,7 +60,7 @@ function parseCfgBytes(bytes, sourceName, startedAt, projection) {
   const parsed = header.entryCount === null
     ? readBasicAtomBytes(bytes, start, header.count, projection)
     : readExtendedAtomBytes(bytes, start, header.count, extendedLayout(header, projection));
-  return finishCfgFrame(header, parsed, sourceName, startedAt);
+  return finishCfgFrame(header, parsed, sourceName, startedAt, deferUnwrap);
 }
 
 // Reads the header from `lines`. Only the first `usableLines` lines are known
@@ -179,7 +179,7 @@ export function readCfgHeader(lines, usableLines = lines.length) {
   return { count, cell, dataIndex, entryCount, noVelocity, auxiliary };
 }
 
-function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt) {
+function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt, deferUnwrap) {
   const rawFractional = parsed.fractional;
   const fractional = wrapCfgFractional(rawFractional, cell.pbc);
   const semantics = extractExtendedSemantics(parsed.properties, count);
@@ -187,24 +187,34 @@ function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt) {
   let imageFlags = semantics.imageFlags;
   let unwrapSource;
   if (semantics.imageFlags) {
-    const unwrappedFractional = Float64Array.from(fractional);
-    for (let atom = 0; atom < count; atom += 1) {
-      for (let axis = 0; axis < 3; axis += 1) {
-        unwrappedFractional[atom * 3 + axis] += semantics.imageFlags[atom * 3 + axis];
+    if (!deferUnwrap) {
+      const unwrappedFractional = Float64Array.from(fractional);
+      for (let atom = 0; atom < count; atom += 1) {
+        for (let axis = 0; axis < 3; axis += 1) {
+          unwrappedFractional[atom * 3 + axis] += semantics.imageFlags[atom * 3 + axis];
+        }
       }
+      unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
     }
-    unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
     unwrapSource = 'ix/iy/iz';
   } else {
     imageFlags = inferCfgImageFlags(rawFractional, cell.pbc);
     if (imageFlags) {
-      const unwrappedFractional = new Float64Array(fractional.length);
-      for (let index = 0; index < fractional.length; index += 1) unwrappedFractional[index] = fractional[index] + imageFlags[index];
-      unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
+      if (!deferUnwrap) {
+        const unwrappedFractional = new Float64Array(fractional.length);
+        for (let index = 0; index < fractional.length; index += 1) unwrappedFractional[index] = fractional[index] + imageFlags[index];
+        unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
+      }
       unwrapSource = 'out-of-cell CFG coordinates';
     }
   }
   const { positions, summary } = fractionalToCartesianSummary(fractional, cell, parsed.types, parsed.typeLabels.length);
+  // Analysis coordinates retain their existing wrapped/Float32 convention.
+  // A source-position display preserves actual out-of-cell and near-boundary
+  // values from the file, without adding the optional ix/iy/iz counters. Most
+  // in-cell files need no separate display buffer.
+  const filePositions = deferUnwrap && rawFractional.some((value, index) => Math.fround(value) !== fractional[index])
+    ? fractionalToCartesian(rawFractional, cell) : null;
   const frame = validateFrame({
     ids: semantics.ids ?? rowOrderIds(count),
     types: parsed.types,
@@ -222,6 +232,7 @@ function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt) {
     sourceFormat: 'cfg',
     parseMs: performance.now() - startedAt,
   });
+  if (filePositions) frame.filePositions = filePositions;
   return attachFrameSummary(frame, summary);
 }
 

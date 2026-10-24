@@ -1,5 +1,6 @@
 import { importedVectorComponents } from './vector-settings.js';
 import { ORIENTATION_COLOR_MODES, grainOrientationSource, ptmOrientationSource } from './orientation-colors.js';
+import { fileDisplayPositions } from '../data/coordinate-display.js';
 
 export const BUILTIN_SCALAR_COLOR_MODES = Object.freeze([
   ...['x', 'y', 'z'].map(axis => `builtin:position:${axis}`),
@@ -46,7 +47,7 @@ export function initialColorQuantities(frame) {
 export class ColorQuantityResolver {
   clear() { this.current = null; }
 
-  resolve(frame, mode, { coordinateMode = 'wrapped' } = {}) {
+  resolve(frame, mode, { coordinateMode = 'file' } = {}) {
     if (!frame) { this.clear(); return null; }
     if (mode.startsWith('property:')) {
       this.clear();
@@ -61,9 +62,9 @@ export class ColorQuantityResolver {
     if (mode.startsWith('builtin:position:') && axis >= 0) {
       // File image data wins; otherwise display-only inferred coordinates.
       const unwrapped = coordinateMode === 'unwrapped' && (frame.unwrappedPositions || frame.inferredUnwrap?.unwrappedPositions);
-      sources = [unwrapped || frame.positions];
+      sources = [unwrapped || (coordinateMode === 'file' ? fileDisplayPositions(frame) : frame.positions)];
       if (sources[0]?.length !== frame.ids.length * 3) return null;
-      displayName = `Position ${'XYZ'[axis]} (${unwrapped ? 'unwrapped' : 'wrapped'})`;
+      displayName = `Position ${'XYZ'[axis]} (${unwrapped ? 'unwrapped' : coordinateMode === 'file' ? 'file' : 'wrapped'})`;
       unit = 'Å';
     } else if (mode === 'builtin:velocity:magnitude') {
       const velocity = velocityComponents(frame);

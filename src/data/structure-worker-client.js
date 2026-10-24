@@ -235,8 +235,8 @@ export class StructureWorkerClient {
   }
 
   /** Display-only unwrapped coordinates inferred for an already delivered frame. */
-  trajectoryUnwrap(index, { smoothing = 0, background = false, signal, onProgress } = {}) {
-    return this.request('trajectory-unwrap', { index, smoothing, background }, { reportProgress: false, background, signal, onProgress });
+  trajectoryUnwrap(index, { smoothing = 0, infer = false, background = false, signal, onProgress } = {}) {
+    return this.request('trajectory-unwrap', { index, smoothing, infer, background }, { reportProgress: false, background, signal, onProgress });
   }
 
   trajectoryLines(request, { signal, onProgress } = {}) {

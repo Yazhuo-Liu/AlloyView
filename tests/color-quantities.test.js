@@ -68,7 +68,7 @@ test('velocity aliases preserve imported units, zero speed and invalid-value con
 test('replication colors use enlarged physical coordinates and repeated original velocities', async () => {
   const frame = fixture(), resolver = new ColorQuantityResolver();
   const replicated = await replicateFrame(frame, [2, 1, 1]);
-  const position = resolver.resolve(replicated, 'builtin:position:x');
+  const position = resolver.resolve(replicated, 'builtin:position:x', { coordinateMode: 'wrapped' });
   assert.deepEqual([...position.data], Array.from({ length: 4 }, (_, atom) => replicated.positions[atom * 3]));
   const unwrapped = resolver.resolve(replicated, 'builtin:position:x', { coordinateMode: 'unwrapped' });
   assert.equal(unwrapped.data[2] - unwrapped.data[0], 10);

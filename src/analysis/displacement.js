@@ -1,6 +1,7 @@
 import { cellFaceHeights, fractionalToCartesian, imageLatticeCell, invert3, wrappedSourceRepetitions } from '../data/model.js';
 import { createReferenceMappingAsync } from './reference-strain.js';
 import { yieldToMain } from '../shared/task-yield.js';
+import { ensureFileUnwrappedPositions } from '../data/coordinate-display.js';
 
 const MAX_IMAGE_CANDIDATES = 100_000;
 const derivedCartesianPositions = new WeakMap();
@@ -207,7 +208,9 @@ function coordinateCount(frame) {
 
 function displacementPositions(frame, minimumImage, cacheDerivedPositions) {
   const count = coordinateCount(frame);
-  let positions = !minimumImage && frame.unwrappedPositions ? frame.unwrappedPositions : frame.positions;
+  // Image counters are sufficient for exact total displacement even if the
+  // display never requested Unwrap and parsing deferred that array.
+  let positions = !minimumImage ? ensureFileUnwrappedPositions(frame) ?? frame.positions : frame.positions;
   if (!positions) {
     let derived = cacheDerivedPositions ? derivedCartesianPositions.get(frame) : null;
     if (!derived || derived.fractional !== frame.fractional || derived.cell !== frame.cell) {

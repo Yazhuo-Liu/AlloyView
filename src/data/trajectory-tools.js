@@ -423,17 +423,20 @@ function trajectoryLineSource(id, repetitions) {
 /**
  * Continuous paths of selected atoms over sampled frames. A frame's own
  * unwrapped coordinates (image flags or unwrapped columns) are used where
- * present; otherwise each step adds the minimum-image reduced displacement
- * since the previous sample of that atom. Samples must be added in order.
+ * present. With inferMissingImages enabled, each otherwise missing image is
+ * reconstructed from the minimum-image displacement since the previous sample.
+ * With it disabled, samples keep their file positions, including boundary jumps.
+ * Samples must be added in order.
  */
 export class TrajectoryLineBuilder {
-  constructor(atomIds, frames, { maxVertices = MAX_TRAJECTORY_LINE_VERTICES, physicalReplication = null } = {}) {
+  constructor(atomIds, frames, { maxVertices = MAX_TRAJECTORY_LINE_VERTICES, physicalReplication = null, inferMissingImages = true } = {}) {
     const ids = Array.from(atomIds ?? []);
     if (!ids.length) throw new Error('Choose at least one atom for trajectory lines.');
     if (!Array.isArray(frames) || !frames.length) throw new Error('Trajectory lines require at least one sampled frame.');
     trajectoryLineVertexCount(ids.length, frames.length, maxVertices);
     this.atomIds = ids;
     this.frames = frames;
+    this.inferMissingImages = Boolean(inferMissingImages);
     const repetitions = physicalReplication === null ? null
       : normalizeRepetitions(physicalReplication?.repetitions ?? [], [true, true, true]);
     this.lookup = new IdIndex();
@@ -481,6 +484,8 @@ export class TrajectoryLineBuilder {
     const sample = this.next++, samples = this.frames.length;
     const rows = this.rowsFor(frame.ids), cell = frame.cell, pbc = cell.pbc, h = cell.vectors, origin = cell.origin;
     const unwrapped = frame.unwrappedPositions?.length === frame.fractional.length ? frame.unwrappedPositions : null;
+    const filePositions = !this.inferMissingImages && !unwrapped ? frame.filePositions ?? frame.positions : null;
+    if (filePositions && filePositions.length !== frame.fractional.length) throw new Error('Trajectory line file positions do not match the frame coordinates.');
     const inverse = unwrapped ? invert3(h) : null;
     const u = [0, 0, 0];
     for (let atom = 0; atom < this.atomIds.length; atom += 1) {
@@ -493,7 +498,7 @@ export class TrajectoryLineBuilder {
         if (unwrapped) {
           const x = unwrapped[row * 3] - origin[0], y = unwrapped[row * 3 + 1] - origin[1], z = unwrapped[row * 3 + 2] - origin[2];
           u[axis] = x * inverse[axis] + y * inverse[3 + axis] + z * inverse[6 + axis];
-        } else if (!this.started[atom]) u[axis] = value;
+        } else if (!this.inferMissingImages || !this.started[atom]) u[axis] = value;
         else {
           let displacement = value - this.wrapped[base + axis];
           if (pbc[axis]) displacement -= Math.round(displacement);
@@ -506,6 +511,7 @@ export class TrajectoryLineBuilder {
       const point = (atom * samples + sample) * 3;
       for (let axis = 0; axis < 3; axis += 1) {
         this.points[point + axis] = unwrapped ? unwrapped[row * 3 + axis]
+          : filePositions ? filePositions[row * 3 + axis]
           : origin[axis] + u[0] * h[axis] + u[1] * h[3 + axis] + u[2] * h[6 + axis];
         if (this.copyOffsets[base] || this.copyOffsets[base + 1] || this.copyOffsets[base + 2]) {
           this.points[point + axis] += this.copyOffsets[base] * h[axis]

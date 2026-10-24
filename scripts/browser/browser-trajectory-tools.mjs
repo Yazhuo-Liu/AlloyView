@@ -98,11 +98,14 @@ async function exercise({ isolated }) {
     // Unwrapping off: requests carry no trajectory options.
     assert.equal(await evaluate('trajectoryChecks.requests.every(request => !request.trajectory)'), true);
     const option = await evaluate(`(() => { const item = document.querySelector('#coordinate-mode option[value=unwrapped]'); return { disabled: item.disabled, text: item.textContent }; })()`);
-    assert.deepEqual(option, { disabled: false, text: 'Unwrapped coordinates (inferred from adjacent frames)' });
+    assert.deepEqual(option, { disabled: false, text: 'Unwrapped coordinates (no image data)' });
+    assert.equal(await evaluate('document.getElementById("coordinate-mode").value'), 'file');
+    assert.equal(await evaluate('document.getElementById("trajectory-infer-unwrap").checked'), false);
 
     // Jump to the last frame first, then unwrap, then visit earlier frames.
     await evaluate('document.getElementById("frame-last").click()');
     await waitFor(`trajectoryChecks.renderer.frame.frameIndex === ${frameCount - 1} && document.getElementById('loading').hidden`, 'Last frame');
+    await change('trajectory-infer-unwrap', true, true);
     await change('coordinate-mode', 'unwrapped');
     await waitFor(`trajectoryChecks.renderer.coordinateMode === 'unwrapped' && trajectoryChecks.renderer.frame.inferredUnwrap`, 'Inferred unwrapping of the last frame');
     const unwrappedChecks = [];
@@ -190,7 +193,7 @@ async function exercise({ isolated }) {
 
     // Configuration round trip: export, then restore lines without smoothing.
     const recipe = await evaluate('trajectoryChecks.exportRecipe()');
-    assert.deepEqual(recipe.settings.extensions.trajectory, { smoothing: { enabled: true, window: 3 },
+    assert.deepEqual(recipe.settings.extensions.trajectory, { smoothing: { enabled: true, window: 3 }, unwrap: { inferFromFrames: true },
       lines: { enabled: true, source: 'ids', selectionGroupId: null, atomIds: lineIds, firstFrame: 0, lastFrame: null, stride: 1,
         visible: true, color: '#ff9f1c', width: 3, colorByTime: false, colorScheme: 'viridis' } });
     recipe.settings.extensions.trajectory.smoothing.enabled = false;
@@ -257,7 +260,7 @@ async function exercise({ isolated }) {
     await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await evaluate('trajectoryChecks.showTool("trajectory"); document.getElementById("generate-trajectory-lines").scrollIntoView({ block: "center" })');
     await delay(150);
-    const mobile = await evaluate(`(() => ['trajectory-smooth-enabled', 'trajectory-smooth-window', 'trajectory-lines-source', 'trajectory-lines-ids',
+    const mobile = await evaluate(`(() => ['trajectory-unwrap-enabled', 'trajectory-infer-unwrap', 'trajectory-smooth-enabled', 'trajectory-smooth-window', 'trajectory-lines-source', 'trajectory-lines-ids',
       'trajectory-lines-first', 'trajectory-lines-last', 'trajectory-lines-stride', 'trajectory-lines-width', 'generate-trajectory-lines', 'cancel-trajectory-lines'].map(id => {
       const box = document.getElementById(id).getBoundingClientRect();
       return { id, width: box.width, fits: box.left >= 0 && box.right <= innerWidth };

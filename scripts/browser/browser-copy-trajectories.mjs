@@ -57,7 +57,8 @@ async function exercise(isolated) {
       copyChecks.change('selection-group-name', 'Physical copy paths'); document.getElementById('selection-group-ids').value = ${JSON.stringify(ids.join(' '))};
       document.getElementById('apply-selection-group-ids').click()`);
     await wait('document.getElementById("selection-group-count").textContent.includes("3")', 'Copy selection group');
-    await evaluate(`copyChecks.show('trajectory'); const source = document.getElementById('trajectory-lines-source');
+    await evaluate(`copyChecks.show('trajectory'); copyChecks.change('trajectory-infer-unwrap', true, true);
+      const source = document.getElementById('trajectory-lines-source');
       copyChecks.change(source.id, [...source.options].find(option => option.value.startsWith('group:')).value);
       copyChecks.change('trajectory-lines-first', 1); copyChecks.change('trajectory-lines-last', ${count});
       document.getElementById('generate-trajectory-lines').click()`);

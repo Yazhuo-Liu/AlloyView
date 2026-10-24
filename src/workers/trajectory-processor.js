@@ -4,6 +4,8 @@ import {
 } from '../data/trajectory-tools.js';
 import { cpuMemoryBudget } from '../analysis/cpu-memory.js';
 import { attachFrameSummary } from '../data/frame-summary.js';
+import { ensureFileUnwrappedPositions } from '../data/coordinate-display.js';
+import { yieldToEventLoop } from '../shared/task-yield.js';
 
 /** Raw coordinates kept for reuse by neighbouring smoothing windows, the
  * unwrapping frontier and line sampling. It is a cache: any frame can be read
@@ -20,6 +22,23 @@ export function trajectoryCoordinateBudgetLimit(environment = globalThis) {
 
 const cancelled = () => new DOMException('Trajectory processing cancelled.', 'AbortError');
 const checkSignal = signal => { if (signal?.aborted) throw cancelled(); };
+const PROCESSING_SLICE_MS = 10;
+
+/** Cached coordinate reads resolve in microtasks. Periodically admit actual
+ * Worker message tasks so cancellation/navigation can interrupt a long cached
+ * scan. Small requests allocate no timer and never wait for an idle interval. */
+function processingTimeSlice(signal) {
+  let resumedAt = performance.now();
+  return () => {
+    checkSignal(signal);
+    if (performance.now() - resumedAt < PROCESSING_SLICE_MS) return null;
+    // Node's setImmediate keeps standalone benchmark/test processes alive;
+    // browser Workers use a MessagePort task behind queued cancel messages.
+    const nextTask = typeof globalThis.setImmediate === 'function'
+      ? new Promise(resolve => globalThis.setImmediate(resolve)) : yieldToEventLoop();
+    return nextTask.then(() => { resumedAt = performance.now(); checkSignal(signal); });
+  };
+}
 
 function cloneCell(cell) {
   return { origin: Float64Array.from(cell.origin), vectors: Float64Array.from(cell.vectors),
@@ -29,7 +48,12 @@ function cloneCell(cell) {
 /** Only what other frames' calculations read. A frame that will be
  * transferred to the page is copied; a frame read here is retained as is. */
 function coordinateSnapshot(frame, index, copy, ids) {
-  const own = value => value && (copy ? value.slice() : value);
+  const owned = new Map();
+  const own = value => {
+    if (!value || !copy) return value;
+    if (!owned.has(value)) owned.set(value, value.slice());
+    return owned.get(value);
+  };
   return {
     frameIndex: index,
     ids,
@@ -37,6 +61,9 @@ function coordinateSnapshot(frame, index, copy, ids) {
     fractional: own(frame.fractional),
     cell: copy ? cloneCell(frame.cell) : frame.cell,
     unwrappedPositions: own(frame.unwrappedPositions) ?? null,
+    filePositions: own(frame.filePositions) ?? null,
+    imageFlags: own(frame.imageFlags) ?? null,
+    unwrapSource: frame.unwrapSource,
     hasImages: Boolean(frame.imageFlags),
   };
 }
@@ -51,7 +78,7 @@ function arrayBytes(value) {
 
 function snapshotReferences(snapshot) {
   const references = new Map();
-  for (const value of [snapshot.ids, snapshot.fractional, snapshot.unwrappedPositions, snapshot.cell.origin, snapshot.cell.vectors]) {
+  for (const value of [snapshot.ids, snapshot.fractional, snapshot.unwrappedPositions, snapshot.filePositions, snapshot.imageFlags, snapshot.cell.origin, snapshot.cell.vectors]) {
     if (!value) continue;
     const identity = ArrayBuffer.isView(value) ? value.buffer : value;
     references.set(identity, arrayBytes(value));
@@ -344,6 +371,7 @@ export class TrajectoryProcessor {
   async integrateTo(index, options = {}, onProgress = () => {}) {
     if (this.unwrapper.frontier >= index) return;
     await this.lock(async () => {
+      const timeSlice = processingTimeSlice(options.signal);
       const start = this.unwrapper.frontier + 1;
       while (this.unwrapper.frontier < index) {
         checkSignal(options.signal);
@@ -352,6 +380,7 @@ export class TrajectoryProcessor {
         const coordinates = await this.coordinates(next, options);
         this.unwrapper.append(next, coordinates);
         onProgress({ loaded: next - start + 1, total: index - start + 1 });
+        const pause = timeSlice(); if (pause) await pause;
       }
     });
   }
@@ -362,11 +391,13 @@ export class TrajectoryProcessor {
     // The crossing log exceeded its budget. Replay from the first frame
     // without retaining history; the result is the same, only slower.
     const replay = new TrajectoryUnwrapper({ eventBudgetBytes: 0 });
+    const timeSlice = processingTimeSlice(options.signal);
     for (let frame = 0; frame <= index; frame += 1) {
       checkSignal(options.signal);
       this.readAheadFrom(Array.from({ length: Math.min(index, frame + this.readAhead) - frame }, (_, offset) => frame + offset + 1), options);
       replay.append(frame, await this.coordinates(frame, options));
       onProgress({ loaded: frame + 1, total: index + 1 });
+      const pause = timeSlice(); if (pause) await pause;
     }
     return replay.imageFlags(index, ids);
   }
@@ -377,8 +408,9 @@ export class TrajectoryProcessor {
    * `inferredUnwrap`, which only display paths read.
    */
   async prepare(frame, index, { unwrap = false, smoothing = 0, signal, background = false, onProgress = () => {} } = {}) {
-    const needsUnwrap = Boolean(unwrap) && !frame.unwrappedPositions;
     const window = Number(smoothing) || 0;
+    if (unwrap || window > 0) ensureFileUnwrappedPositions(frame);
+    const needsUnwrap = Boolean(unwrap) && !frame.unwrappedPositions;
     if (!needsUnwrap && window <= 0) return frame;
     const options = { signal, background: true, priority: background ? -20 : 20 };
     const frameCount = await this.getFrameCount({ atLeast: index + window + 1, signal });
@@ -398,13 +430,17 @@ export class TrajectoryProcessor {
           const center = { frameIndex: index, ids: frame.ids, idSource: frame.idSource, fractional: frame.fractional,
             positions: frame.positions, cell: frame.cell, types: frame.types, typeLabels: frame.typeLabels };
           const accumulator = new SmoothingAccumulator(center);
+          const timeSlice = processingTimeSlice(signal);
           for (let current = first; current <= last; current += 1) {
             checkSignal(signal);
-            if (current === index) { accumulator.add(center, { center: true }); continue; }
-            this.readAheadFrom(Array.from({ length: Math.min(last, current + this.readAhead) - current }, (_, offset) => current + offset + 1)
-              .filter(value => value !== index), options);
-            accumulator.add(await this.coordinates(current, options));
-            onProgress({ loaded: current - first + 1, total: last - first + 1, stage: 'trajectory-smooth' });
+            if (current === index) accumulator.add(center, { center: true });
+            else {
+              this.readAheadFrom(Array.from({ length: Math.min(last, current + this.readAhead) - current }, (_, offset) => current + offset + 1)
+                .filter(value => value !== index), options);
+              accumulator.add(await this.coordinates(current, options));
+              onProgress({ loaded: current - first + 1, total: last - first + 1, stage: 'trajectory-smooth' });
+            }
+            const pause = timeSlice(); if (pause) await pause;
           }
           checkSignal(signal);
           const fileImages = frame.unwrappedPositions ? frame.imageFlags ?? null : null;
@@ -412,12 +448,24 @@ export class TrajectoryProcessor {
             imageFlags: fileImages ?? inferred?.imageFlags ?? null,
             unwrappedPositions: fileImages ? null : frame.unwrappedPositions ?? null,
           });
+          // File display has its own image convention: raw CFG positions
+          // may be outside the box even when explicit image counters refer
+          // to a different continuous image. Smooth that display alongside
+          // the analysis geometry, without adding those counters to it.
+          const filePositions = frame.filePositions && frame.filePositions !== frame.positions
+            ? frame.filePositions === frame.unwrappedPositions ? result.unwrappedPositions
+              : accumulator.finish({ imageFlags: null, unwrappedPositions: frame.filePositions }).unwrappedPositions
+            : null;
           frame.fractional = result.fractional;
           frame.positions = result.positions;
           frame.cell = result.cell;
           // Replace aliases to the unsmoothed coordinates before transfer;
           // those arrays belong only to the raw-coordinate cache now.
           if (!result.unchanged) {
+            // Smoothing replaces the source geometry. A raw-file display
+            // buffer must not outlive those coordinate/cell replacements.
+            if (filePositions) frame.filePositions = filePositions;
+            else delete frame.filePositions;
             // Coordinate-only trajectory callers need no atom-type metadata.
             // Their smoothing result has no complete display summary.
             if (result.coordinateSummary) attachFrameSummary(frame, result.coordinateSummary);
@@ -451,17 +499,23 @@ export class TrajectoryProcessor {
   }
 
   /** Polylines of the listed atoms over sampled frames. */
-  async lines({ ids, first, last, stride, physicalReplication, maxVertices = MAX_TRAJECTORY_LINE_VERTICES }, { signal, onProgress = () => {} } = {}) {
+  async lines({ ids, first, last, stride, physicalReplication, inferMissingImages = true, maxVertices = MAX_TRAJECTORY_LINE_VERTICES }, { signal, onProgress = () => {} } = {}) {
     const frames = trajectoryLineFrames(first, last, stride);
-    const builder = new TrajectoryLineBuilder(ids, frames, { maxVertices, physicalReplication });
+    const builder = new TrajectoryLineBuilder(ids, frames, { maxVertices, physicalReplication, inferMissingImages });
     const frameCount = await this.getFrameCount({ atLeast: last + 1, signal });
     if (last >= frameCount) throw new Error(`Frame ${last + 1} is outside this ${frameCount}-frame trajectory.`);
     const options = { signal, background: true, priority: 10 };
+    const timeSlice = processingTimeSlice(signal);
     for (let sample = 0; sample < frames.length; sample += 1) {
       checkSignal(signal);
       this.readAheadFrom(frames.slice(sample + 1, sample + 1 + this.readAhead), options);
-      builder.add(await this.coordinates(frames[sample], options));
+      const frame = { ...await this.coordinates(frames[sample], options) };
+      // Line generation explicitly needs continuous file coordinates, while
+      // ordinary coordinate-cache entries may still defer that allocation.
+      ensureFileUnwrappedPositions(frame);
+      builder.add(frame);
       onProgress({ loaded: sample + 1, total: frames.length, stage: 'trajectory-lines' });
+      const pause = timeSlice(); if (pause) await pause;
     }
     checkSignal(signal);
     return builder.finish();

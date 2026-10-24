@@ -548,7 +548,8 @@ function normalizeBinning(value, path) {
 /** Smoothing changes analyzed coordinates; line settings recompute paths
  * after import. Explicit line IDs are bounded before they are copied. */
 function normalizeTrajectory(value, path) {
-  const input = record(value, path, ['smoothing', 'lines']);
+  const input = record(value, path, ['unwrap', 'smoothing', 'lines']);
+  const unwrap = record(input.unwrap ?? {}, `${path}.unwrap`, ['inferFromFrames']);
   const smoothing = record(input.smoothing ?? {}, `${path}.smoothing`, ['enabled', 'window']);
   const lines = record(input.lines ?? {}, `${path}.lines`, ['enabled', 'source', 'selectionGroupId', 'atomIds', 'firstFrame', 'lastFrame',
     'stride', 'visible', 'color', 'width', 'colorByTime', 'colorScheme']);
@@ -567,6 +568,7 @@ function normalizeTrajectory(value, path) {
     : number(lines.lastFrame, `${path}.lines.lastFrame`, 0, Number.MAX_SAFE_INTEGER, true);
   if (lastFrame !== null && lastFrame < firstFrame) fail(`${path}.lines.lastFrame`, 'must not precede the first frame');
   return {
+    unwrap: { inferFromFrames: boolean(unwrap.inferFromFrames, `${path}.unwrap.inferFromFrames`, false) },
     smoothing: {
       enabled: boolean(smoothing.enabled, `${path}.smoothing.enabled`, false),
       window: number(smoothing.window ?? 2, `${path}.smoothing.window`, 1, MAX_SMOOTHING_WINDOW, true),
@@ -753,7 +755,7 @@ function normalizeDisplay(value) {
   const background = string(input.background ?? '#000000', 'settings.display.background', 7);
   if (!/^#[\da-f]{6}$/i.test(background)) fail('settings.display.background', 'must be a six-digit hex color');
   return {
-    coordinateMode: choice(input.coordinateMode ?? 'wrapped', 'settings.display.coordinateMode', new Set(['wrapped', 'unwrapped'])),
+    coordinateMode: choice(input.coordinateMode ?? 'file', 'settings.display.coordinateMode', new Set(['file', 'wrapped', 'unwrapped'])),
     colorMode,
     radiusPercent: number(input.radiusPercent ?? 100, 'settings.display.radiusPercent', 5, 500, true),
     background: background.toLowerCase(),
