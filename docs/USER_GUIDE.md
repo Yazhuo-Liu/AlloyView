@@ -316,14 +316,18 @@ Select **Modification tools → Trajectory** for operations that use more than
 one frame. All three are off by default; with them off, frames and results are
 unchanged.
 
-- **Unwrapped coordinates.** When a LAMMPS dump, XYZ or PDB trajectory has no
+- **Unwrapped coordinates.** When a CFG folder, LAMMPS dump, XYZ or PDB trajectory has no
   image flags or unwrapped columns, **Display → Coordinates → Unwrapped
   coordinates (inferred from adjacent frames)** counts every atom's periodic
   crossings from frame 1 onward. A reduced-coordinate step larger than half a
   cell on a periodic axis is a crossing, so triclinic and changing cells work;
   atoms are matched by ID and an atom missing from some frames resumes from
   its last position. Frames are integrated once and in order in the structure
-  Worker, so the result never depends on which frames were viewed first. The
+  Worker, so the result never depends on which frames were viewed first.
+  A newly selected frame appears immediately in wrapped coordinates; enabled
+  single-frame analyses finish before background inference starts. The selector
+  identifies this temporary preview. Ordinary wrapped navigation never requests
+  the preceding trajectory. Image exports wait for the selected coordinates. The
   inferred positions are used for display, Position colors, atom details and
   the second view only; analyses use the file coordinates. File image data
   always wins. Inference is unavailable with **Replicate atoms for analysis**.

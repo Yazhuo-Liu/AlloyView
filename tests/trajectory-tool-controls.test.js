@@ -51,8 +51,27 @@ function harness(t, { frameCount = 12, frame = { ids: Float64Array.from([1, 2, 3
     if (checkbox) fields[id].checked = value; else fields[id].value = String(value);
     return fields[id].dispatch(id === 'trajectory-lines-color' ? 'input' : 'change');
   };
-  return { tools, fields, calls, change, setMode: value => { mode = value; }, frame };
+  return { tools, fields, calls, worker, change, setMode: value => { mode = value; }, frame };
 }
+
+test('cancelled inference cannot attach late data or remove the replacement request for the same frame', async t => {
+  const { tools, frame, worker } = harness(t);
+  const pending = [];
+  worker.trajectoryUnwrap = () => new Promise(resolve => pending.push(resolve));
+  const previous = tools.ensureInferredUnwrap(frame, 3);
+  tools.cancelUnwrap();
+  const replacement = tools.ensureInferredUnwrap(frame, 3, { showProgress: false, background: true });
+  const result = () => ({ inferredUnwrap: { imageFlags: new Int32Array(9), unwrappedPositions: new Float32Array(9) } });
+  pending[0](result());
+  assert.equal(await previous, false);
+  assert.equal(frame.inferredUnwrap, undefined);
+  const joined = tools.ensureInferredUnwrap(frame, 3);
+  assert.equal(pending.length, 2, 'late completion cannot erase the live shared request');
+  pending[1](result());
+  assert.equal(await replacement, true);
+  assert.equal(await joined, true);
+  assert.equal(tools.needsInferredUnwrap(frame), false);
+});
 
 test('with every option off, frame requests are unchanged and nothing is enabled', t => {
   const { tools, fields, setMode } = harness(t);
@@ -60,7 +79,7 @@ test('with every option off, frame requests are unchanged and nothing is enabled
   assert.equal(tools.smoothingWindow(), 0);
   assert.equal(fields['trajectory-smooth-enabled'].disabled, false);
   setMode('unwrapped');
-  assert.deepEqual(tools.frameRequestOptions(), { unwrap: true, smoothing: 0 });
+  assert.equal(tools.frameRequestOptions(), null, 'display inference never delays ordinary reads or prefetch');
   assert.deepEqual(tools.serialize().smoothing, { enabled: false, window: 2 });
 });
 

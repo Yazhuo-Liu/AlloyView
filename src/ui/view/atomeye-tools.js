@@ -39,6 +39,7 @@ const canvasBlob = (canvas, type = 'image/png') => new Promise((resolve, reject)
 /** Own analysis lifecycles separately from display-only vector settings, and
  * invalidate pending results on source/frame edits. */
 export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFrameAt,
+  prepareDisplacementFrame = async frame => frame,
   getFrameIndex, getFrameCount, getFrames, getSourceVersion, getSelectedIndex, ensureIndexed = async () => {},
   selectAtom, refresh, chooseProperty, getColorMode, getSelectionGroups = () => [], getColorChoiceVersion = () => 0, getPendingAnalysisKinds = () => [], getAnalysisPropertyKind = () => null, getExportOptions, prepareExport = async () => {}, showFrame,
   stopPlayback, getFileStem, notify = () => {}, onEdit = () => {}, onMemoryChange = () => {},
@@ -519,7 +520,15 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
             : await getFrameAt(parameters.referenceFrame, { background: true, signal: controller.signal });
           if (!current()) return;
           if (!reference) throw new Error('The displacement reference frame is no longer available.');
-          const prepared = await prepareDisplacements(frame, reference, { minimumImage: parameters.minimumImage, signal: controller.signal,
+          // Total displacement can depend on crossing history. Resolve it only
+          // for this analysis, after the ordinary structure is already visible.
+          const preparation = { minimumImage: parameters.minimumImage, signal: controller.signal };
+          const displacementFrame = await prepareDisplacementFrame(frame, getFrameIndex(), preparation);
+          if (!current()) return;
+          const displacementReference = reference === frame ? displacementFrame
+            : await prepareDisplacementFrame(reference, parameters.referenceFrame, preparation);
+          if (!current()) return;
+          const prepared = await prepareDisplacements(displacementFrame, displacementReference, { minimumImage: parameters.minimumImage, signal: controller.signal,
             onProgress: ({ completed, total }) => { if (current()) $('displacement-status').textContent = `Matching atom IDs… ${completed} / ${total}`; } });
           if (!current()) return;
           const result = await pool.analyze(frame, { kind: 'displacement', ...prepared, referenceFrameIndex: parameters.referenceFrame },
@@ -730,7 +739,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
       exportPng.setAttribute('aria-label', 'Export second view as PNG'); exportPng.title = 'Export this view as PNG';
       exportPng.addEventListener('click', async () => {
         if (!comparison?.frame) return;
-        try { await comparison.exportPng(`${getFileStem()}-frame-${getFrameIndex() + 1}-second-view.png`, getExportOptions()); }
+        try { await prepareExport(); await comparison.exportPng(`${getFileStem()}-frame-${getFrameIndex() + 1}-second-view.png`, getExportOptions()); }
         catch (error) { notify(error.message); }
       });
       const applyCamera = document.createElement('button'); applyCamera.id = 'apply-comparison-camera'; applyCamera.type = 'button'; applyCamera.textContent = 'Apply to main';
@@ -990,6 +999,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
         if (task.cancelled || task.source !== getSourceVersion()) return;
         $('export-series-status').textContent = `Rendering frame ${index + 1} · ${archive.count} / ${count} exported`;
         if (!await showFrame(index)) throw new Error(`Could not load frame ${index + 1}.`);
+        await prepareExport({ signal: task.controller.signal });
         if (task.cancelled || task.source !== getSourceVersion()) return;
         const image = await renderer.captureImage(getExportOptions());
         await archive.add(image, `${getFileStem()}-frame-${String(index + 1).padStart(6, '0')}.png`);
@@ -1160,7 +1170,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   });
   $('export-jpg').addEventListener('click', async () => {
     if (!getFrame()) return;
-    try { await renderer.exportJpg(`${getFileStem()}-frame-${getFrameIndex() + 1}.jpg`, getExportOptions()); }
+    try { await prepareExport(); await renderer.exportJpg(`${getFileStem()}-frame-${getFrameIndex() + 1}.jpg`, getExportOptions()); }
     catch (error) { notify(error.message); }
   });
   $('export-atom-indices').addEventListener('click', () => {

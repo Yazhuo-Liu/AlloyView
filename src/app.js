@@ -611,6 +611,7 @@ atomEyeTools = initializeAtomEyeTools({
   renderer, pool: analysisPool, tools: toolPanels,
   requestDisplayRefresh, afterDisplayRefresh,
   getFrame: () => state.frame, getFrameAt: getFrame,
+  prepareDisplacementFrame,
   getFrameIndex: () => state.frameIndex, getFrameCount: () => state.frameCount,
   ensureIndexed: waitForSourceIndex,
   getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
@@ -645,7 +646,7 @@ atomEyeTools = initializeAtomEyeTools({
   getColorMode: () => state.colorMode,
   getColorChoiceVersion: () => colorChoiceVersion,
   getExportOptions: imageExportOptions,
-  prepareExport: options => { displayRefresh.flush(); return textLabelControls?.prepareExport(options); },
+  prepareExport: prepareImageExport,
   showFrame, stopPlayback: stopFramePlayback,
   getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
   notify: message => { showToast(message); notifyAnalysisDependencies(); },
@@ -1087,6 +1088,7 @@ elements['export-png'].addEventListener('click', async () => {
   displayRefresh.flush();
   const stem = (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, '');
   try {
+    await prepareImageExport();
     await renderer.exportPng(`${stem}-frame-${state.frameIndex + 1}.png`, {
       includeBackground: elements['png-background'].checked,
       includeAxes: elements['png-axes'].checked,
@@ -1153,11 +1155,13 @@ const analysesSettled = () => {
   return elements.loading.hidden && ![...document.querySelectorAll('.analysis-section .state-pill')]
     .some(pill => /…$|^Queued$|^Waiting$/.test(pill.textContent.trim()));
 };
-const showFrameForAutomation = (index) => {
+const showFrameForAutomation = async (index) => {
   atomEyeTools.cancelBatch({ restore: false });
   interruptConfigurationRestore('a frame change');
   stopFramePlayback();
-  return showFrame(index);
+  const shown = await showFrame(index);
+  if (shown) await prepareDisplayCoordinates();
+  return shown;
 };
 movieControls = initializeMovieControls({
   beginRoutingBatch: () => analysisPool.beginRoutingBatch(),
@@ -1166,7 +1170,7 @@ movieControls = initializeMovieControls({
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
   ensureIndexed: waitForSourceIndex, showFrame: showFrameForAutomation, stopPlayback: stopFramePlayback,
   getExportOptions: imageExportOptions, getResolution: () => exportResolutionControls.getState(), analysesSettled,
-  prepareExport: options => textLabelControls?.prepareExport(options),
+  prepareExport: prepareImageExport,
   getFileStem: exportFileStem,
   onEdit: () => interruptConfigurationRestore('a camera path or movie edit'), notify: showToast,
 });
@@ -1183,7 +1187,7 @@ scriptControls = initializeScriptControls({
     getColorOptions: () => [...elements['color-mode'].options].map(item => ({ value: item.value, label: item.textContent })),
     chooseColor: selectColorMode,
     getSliceControls: () => sliceControls,
-    captureImage: () => renderer.captureImage(imageExportOptions()),
+    captureImage: async () => { await prepareImageExport(); return renderer.captureImage(imageExportOptions()); },
     getImageName: () => `${exportFileStem()}-frame-${state.frameIndex + 1}`,
     addKeyframe: options => movieControls.addKeyframe(options),
     clearKeyframes: () => movieControls.clearKeyframes(),
@@ -1907,6 +1911,7 @@ async function showFrame(index) {
     scheduleGpuFramePrefetch();
     return true;
   }
+  trajectoryTools.cancelUnwrap();
   gpuPrefetch.cancel();
   cancelFramePrefetch(prefetchWindow(index));
   const requiresLoad = !cache.has(index);
@@ -1922,16 +1927,13 @@ async function showFrame(index) {
     const frame = await requestedFrame;
     if (request !== state.frameRequest) return false;
     if (!frame) return false;
-    if (state.coordinateMode === 'unwrapped' && trajectoryTools.needsInferredUnwrap(frame)) {
-      // A frame cached before Unwrapped was chosen: attach its inferred
-      // coordinates first, rather than showing it wrapped for a moment.
-      try { await trajectoryTools.ensureInferredUnwrap(frame, index, { signal: navigation.signal, showProgress: requiresLoad }); }
-      catch (error) { if (error.name === 'AbortError') return false; showToast(error.message); }
-      if (request !== state.frameRequest) return false;
-    }
     state.frameIndex = index;
     if (state.playing) preparePlaybackBuffer();
-    await displayFrame(frame);
+    const displayed = displayFrame(frame);
+    // Geometry is uploaded synchronously; analyses and optional trajectory
+    // work can continue while the user sees and interacts with the new frame.
+    if (loadingOwner === navigation) setLoading(false);
+    await displayed;
     if (request !== state.frameRequest) return false;
     scheduleFramePrefetch(index);
     return true;
@@ -1980,12 +1982,6 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), atomEyeTools.getRadii(), displayRepetitions(),
     { coordinateMode: displayCoordinateMode(frame), useFrameSummary: true });
   trajectoryTools?.onFrame();
-  if (state.coordinateMode === 'unwrapped' && trajectoryTools?.needsInferredUnwrap(frame)) {
-    // Frames shown outside normal navigation (replication, restore) catch up.
-    void trajectoryTools.ensureInferredUnwrap(frame, state.frameIndex, { showProgress: false }).then(ready => {
-      if (ready && state.frame === frame && state.coordinateMode === 'unwrapped') applyCoordinateMode({ resetCamera: false });
-    }).catch(() => {});
-  }
   configurePeriodicOriginUi();
   sliceControls.refreshPickedAtoms();
   configureReplicationUi();
@@ -2048,6 +2044,13 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   }
   await Promise.all(pending);
   displayRefresh.flush();
+  if (state.frame === frame && state.coordinateMode === 'unwrapped' && trajectoryTools?.needsInferredUnwrap(frame)) {
+    // Single-frame analyses have priority. Wrapped geometry remains usable
+    // until optional continuous display coordinates are ready.
+    void trajectoryTools.ensureInferredUnwrap(frame, state.frameIndex, { showProgress: false, background: true }).then(ready => {
+      if (ready && state.frame === frame && state.coordinateMode === 'unwrapped') applyCoordinateMode({ resetCamera: false });
+    }).catch(error => { if (error.name !== 'AbortError' && state.frame === frame) showToast(error.message); });
+  }
 }
 
 /** Header-derived series avoid atom parsing. An inferred cell or smoothing
@@ -2117,6 +2120,19 @@ async function getFrame(index, { background = false, speculative = false, cacheF
       return frame;
     });
   });
+}
+
+/** Keep CFG crossing history available to displacement without delaying
+ * ordinary frame reads or changing the displayed/cached analysis geometry. */
+async function prepareDisplacementFrame(frame, index, { minimumImage, signal } = {}) {
+  if (state.format !== 'cfg-sequence' || frame.unwrappedPositions || (minimumImage && !frame.physicalReplication)) return frame;
+  const identity = processingSourceKey();
+  const repetitions = [...state.repetitions], physical = state.replicateAtoms;
+  const preparationSignal = framePreparationSignal(signal, () => identity === processingSourceKey());
+  const { frame: continuous } = await worker.frame(index, { background: true, reportProgress: false, signal: preparationSignal,
+    trajectory: { sequenceUnwrap: true, smoothing: frame.smoothing?.window ?? 0 } });
+  if (preparationSignal.aborted) throw new DOMException('Displacement preparation cancelled.', 'AbortError');
+  return physical ? prepareAnalysisFrame(continuous, repetitions, true, { signal: preparationSignal, background: true }) : continuous;
 }
 
 function cancelFramePrefetch(retainIndices = []) {
@@ -2382,7 +2398,9 @@ function configureCoordinateMode(frame) {
   unwrappedOption.disabled = !available;
   unwrappedOption.textContent = frame.unwrappedPositions
     ? `Unwrapped coordinates (${frame.unwrapSource})`
-    : inferable ? `Unwrapped coordinates (${INFERRED_UNWRAP_SOURCE})` : 'Unwrapped coordinates (not available)';
+    : inferable ? state.coordinateMode === 'unwrapped' && !frame.inferredUnwrap
+      ? 'Unwrapped coordinates (preparing; showing wrapped)'
+      : `Unwrapped coordinates (${INFERRED_UNWRAP_SOURCE})` : 'Unwrapped coordinates (not available)';
   if (!available && state.coordinateMode === 'unwrapped') {
     state.coordinateMode = 'wrapped';
     showToast('This frame has no unwrapped coordinates; display returned to wrapped coordinates.');
@@ -2546,11 +2564,11 @@ async function updateCoordinateMode() {
   state.coordinateMode = requested;
   if (requested === 'unwrapped' && trajectoryTools.needsInferredUnwrap(state.frame)) {
     const frame = state.frame, index = state.frameIndex;
-    // Neighboring frames prefetched from now on carry inferred coordinates.
-    scheduleFramePrefetch(index);
+    configureCoordinateMode(frame);
     try {
-      if (!await trajectoryTools.ensureInferredUnwrap(frame, index)) throw new Error('Unwrapped coordinates could not be inferred for this frame.');
+      if (!await trajectoryTools.ensureInferredUnwrap(frame, index, { showProgress: false, background: true })) throw new Error('Unwrapped coordinates could not be inferred for this frame.');
     } catch (error) {
+      if (error.name === 'AbortError') return;
       if (state.frame === frame && state.coordinateMode === 'unwrapped') {
         state.coordinateMode = 'wrapped';
         elements['coordinate-mode'].value = 'wrapped';
@@ -2564,6 +2582,7 @@ async function updateCoordinateMode() {
 }
 
 function applyCoordinateMode({ resetCamera = true } = {}) {
+  configureCoordinateMode(state.frame);
   elements['metric-upload'].textContent = formatDuration(renderer.setDisplayPositions(displayPositionsForFrame(), { coordinateMode: displayCoordinateMode() }));
   if (resetCamera) renderer.resetCamera();
   if (state.colorMode.startsWith('builtin:position:')) applyColors();
@@ -2572,6 +2591,24 @@ function applyCoordinateMode({ resetCamera = true } = {}) {
   atomEyeTools.syncComparison();
   sliceControls.refreshPickedAtoms();
   displayRefresh.flush();
+}
+
+/** Interactive navigation can show wrapped geometry while inference runs;
+ * exported images must wait for the explicitly selected coordinate mode. */
+async function prepareDisplayCoordinates({ signal } = {}) {
+  const frame = state.frame;
+  if (state.coordinateMode !== 'unwrapped' || !trajectoryTools.needsInferredUnwrap(frame)) return;
+  const ready = await trajectoryTools.ensureInferredUnwrap(frame, state.frameIndex, { signal, showProgress: false });
+  if (signal?.aborted || state.frame !== frame) throw new DOMException('Image preparation cancelled.', 'AbortError');
+  if (state.coordinateMode !== 'unwrapped') return;
+  if (!ready) throw new Error('Unwrapped coordinates could not be prepared for this image.');
+  applyCoordinateMode({ resetCamera: false });
+}
+
+async function prepareImageExport(options = {}) {
+  await prepareDisplayCoordinates(options);
+  displayRefresh.flush();
+  await textLabelControls?.prepareExport(options);
 }
 
 function selectColorMode(value) {
@@ -4819,11 +4856,9 @@ async function applyTrajectoryProcessing() {
   try {
     const frame = await getFrame(index, { signal: navigation.signal });
     if (!frame || request !== state.frameRequest) return;
-    if (state.coordinateMode === 'unwrapped' && trajectoryTools.needsInferredUnwrap(frame)) {
-      await trajectoryTools.ensureInferredUnwrap(frame, index, { signal: navigation.signal, showProgress: false });
-      if (request !== state.frameRequest) return;
-    }
-    await displayFrame(frame);
+    const displayed = displayFrame(frame);
+    if (loadingOwner === navigation) setLoading(false);
+    await displayed;
     if (request === state.frameRequest) scheduleFramePrefetch(index);
   } catch (error) {
     if (error.name === 'AbortError' || request !== state.frameRequest) return;

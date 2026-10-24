@@ -64,12 +64,17 @@ If all coordinates of a single CFG are already wrapped and no image flags exist,
 historical crossings cannot be recovered uniquely from that frame. For NEB
 output, users may select an ordered set of CFG files together. AlloyView sorts
 numeric filenames such as `replica.2.cfg` before `replica.10.cfg`, matches atoms
-by stable `id`, and accumulates the minimum-image fractional displacement between
-successive images. This inference requires each atom to move less than half a
+by stable `id` when continuous coordinates are needed, and accumulates the
+minimum-image fractional displacement between successive images. Ordinary
+navigation and single-frame analysis parse only the selected CFG; unwrapping is
+requested separately for Unwrapped display or total displacement. This inference
+requires each atom to move less than half a
 cell per adjacent NEB image along each periodic axis; otherwise the direction is
-mathematically ambiguous. An explicit `id` auxiliary is required in every frame;
-row-order IDs, changing IDs, and missing IDs are rejected explicitly, including
-frames that provide their own image flags or out-of-cell coordinates.
+mathematically ambiguous. CFG total-displacement continuity requires an explicit
+`id` auxiliary and a fixed ID set in every integrated frame; row-order IDs,
+changing IDs and missing IDs are rejected for that calculation, including frames
+that provide their own image flags or out-of-cell coordinates. These cross-frame
+requirements do not prevent independent structures from being displayed.
 
 ## LAMMPS text dump
 

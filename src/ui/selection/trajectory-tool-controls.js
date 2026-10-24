@@ -156,11 +156,11 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     catch (error) { if (error.name !== 'AbortError') notify(error.message); }
   }
 
-  /** Request fields for frames; null keeps the pre-existing request exactly. */
+  /** Smoothing changes analyzed geometry and must precede analysis. Display
+   * unwrapping is attached separately after the frame has been shown. */
   function frameRequestOptions() {
     const window = smoothing.enabled ? smoothing.window : 0;
-    const unwrap = getCoordinateMode() === 'unwrapped' && canInferUnwrap();
-    return window || unwrap ? { unwrap, smoothing: window } : null;
+    return window ? { unwrap: false, smoothing: window } : null;
   }
 
   function needsInferredUnwrap(frame) {
@@ -168,28 +168,31 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
   }
 
   /** Attach inferred display coordinates to an already delivered frame. */
-  async function ensureInferredUnwrap(frame, index, { signal, showProgress = true } = {}) {
+  async function ensureInferredUnwrap(frame, index, { signal, showProgress = true, background = false } = {}) {
     if (!needsInferredUnwrap(frame)) return Boolean(frame?.unwrappedPositions || frame?.inferredUnwrap);
     const source = getSourceVersion();
     let request = unwrapRequests.get(frame);
     if (!request) {
       unwrapController ??= new AbortController();
       const controller = unwrapController;
-      request = worker.trajectoryUnwrap(index, { smoothing: frame.smoothing?.window ?? 0, signal: controller.signal,
+      request = worker.trajectoryUnwrap(index, { smoothing: frame.smoothing?.window ?? 0, background, signal: controller.signal,
         onProgress: ({ loaded, total, stage }) => {
+          if (controller.signal.aborted || unwrapController !== controller) return;
           const label = stage === 'trajectory-smooth' ? 'Averaging frames' : 'Unwrapping frames';
           const message = `${label}… ${integer(loaded)} / ${integer(total)}`;
           if (unwrapController === controller) updateUnwrapStatus(message);
           if (showProgress) setBusy(message);
         } }).then(({ inferredUnwrap }) => {
-        if (source !== getSourceVersion()) return false;
+        if (controller.signal.aborted || source !== getSourceVersion()) return false;
         if (inferredUnwrap?.imageFlags.length === frame.ids.length * 3) frame.inferredUnwrap = inferredUnwrap;
         return Boolean(frame.inferredUnwrap);
       }).finally(() => {
-        unwrapRequests.delete(frame);
-        if (unwrapController === controller && !unwrapRequests.size) unwrapController = null;
-        setBusy(null);
-        updateControls();
+        if (unwrapRequests.get(frame) === request) unwrapRequests.delete(frame);
+        if (unwrapController === controller) {
+          if (!unwrapRequests.size) unwrapController = null;
+          setBusy(null);
+          updateControls();
+        }
       });
       unwrapRequests.set(frame, request);
       updateControls();
@@ -372,6 +375,7 @@ export function initializeTrajectoryToolControls({ tools, renderer, worker, getF
     setEnabled(enabled) { controlsEnabled = Boolean(enabled); writeControls(); },
     refresh: writeControls,
     onFrame() {
+      if (unwrapRequests.size && !unwrapRequests.has(getFrame())) cancelUnwrap();
       // Frame navigation leaves paths intact, but a different physical-copy
       // layout changes their meaning. Abort old work before it can publish.
       if ((lines.result || lines.controller) && lines.replicationKey !== replicationKey()) {

@@ -1,0 +1,62 @@
+{
+  "baselineCommit": "5ecc7fb",
+  "measurement": "Synthetic CFG seek; Node in-process parser fallback; excludes folder header checks, first-frame load, renderer, app prefetch and analyses. Not browser latency.",
+  "baseline": {
+    "runtime": "v24.19.0",
+    "mode": "Node in-process parser fallback",
+    "atomsPerFrame": 5000,
+    "frames": 165,
+    "targetIndex": 164,
+    "runs": 3,
+    "medianMs": 199.03154500000005,
+    "samples": [
+      {
+        "elapsedMs": 235.15608000000003,
+        "fullFileReads": 164,
+        "sequenceSteps": 164
+      },
+      {
+        "elapsedMs": 199.03154500000005,
+        "fullFileReads": 164,
+        "sequenceSteps": 164
+      },
+      {
+        "elapsedMs": 196.62451599999997,
+        "fullFileReads": 164,
+        "sequenceSteps": 164
+      }
+    ]
+  },
+  "current": {
+    "runtime": "v24.19.0",
+    "mode": "Node in-process parser fallback",
+    "atomsPerFrame": 5000,
+    "frames": 165,
+    "targetIndex": 164,
+    "runs": 3,
+    "medianMs": 1.4700539999999478,
+    "samples": [
+      {
+        "elapsedMs": 3.9229830000000163,
+        "fullFileReads": 1,
+        "sequenceSteps": 0
+      },
+      {
+        "elapsedMs": 1.4700539999999478,
+        "fullFileReads": 1,
+        "sequenceSteps": 0
+      },
+      {
+        "elapsedMs": 1.3711569999999824,
+        "fullFileReads": 1,
+        "sequenceSteps": 0
+      }
+    ]
+  },
+  "currentSourceSha256": {
+    "src/app.js": "69c3412004b9fbdc38b70e4a113b4a88cc85dda083f8ff872c500700dd0b0d1c",
+    "src/workers/structure-worker.js": "7a2f2ce647d5cee8508dc44e0da0bcd572188daa7731624bd0f96862b3b3b856",
+    "src/ui/selection/trajectory-tool-controls.js": "93ead6c27ef6589686844eae396a12399d6866a0e096c16d253f3cd901dae2d8",
+    "src/ui/view/atomeye-tools.js": "fda3376297180898fe332d4cd0943b5d811fd5a015e2a42fde5f021e929d1891"
+  }
+}

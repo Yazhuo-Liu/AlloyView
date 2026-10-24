@@ -1,5 +1,49 @@
 # Validation record
 
+## Show CFG structures before trajectory inference (2026-10-24)
+
+Baseline: `5ecc7fb`, synchronized from `origin/main`. CFG folder reads previously
+reconstructed every intermediate frame's continuous coordinates before returning
+the requested structure. Both navigation and speculative prefetch invoked this
+path, even with wrapped display and no trajectory-dependent calculation enabled.
+
+Ordinary reads now parse only the requested CFG. Smoothing still prepares its
+local window before analysis because it changes analyzed geometry. Unwrapped
+display is resolved separately after the structure is uploaded and enabled
+single-frame analyses finish. The selector identifies the temporary wrapped
+preview; navigation cancels obsolete inference. Export consumers explicitly wait
+for the selected coordinate mode. Total-displacement analysis obtains the former
+CFG continuity convention on demand, including physically replicated atoms,
+without mutating ordinary display/analysis frames. Existing parser, CPU/Wasm,
+GPU preparation, caches and CPU admission limits remain in use.
+
+The new regression opens a **165-file** CFG folder, holds inference unfinished,
+and verifies that another structure becomes visible, coordination reaches
+Calculated, and the warmed structure Worker is retained. Releasing inference
+produces the expected continuous position; PNG capture waits for it. A trajectory
+crossing many cells gives **377.2 Å** total displacement both before and after
+physical replication. Node tests verify one full-file read per ordinary seek,
+local-window smoothing, malformed intermediate-frame isolation, checkpoint reuse,
+and late cancelled results not replacing live inference.
+
+All **2,387 Node tests** pass. Production build and browser checks pass:
+`test:browser:frame-first` (ordinary and `--isolated`),
+`test:browser:trajectory-tools` (ordinary and isolated hosts),
+`test:browser:trajectory-workers`, `test:browser:source-loading`,
+`test:browser:movies`, `test:browser:cpu-warmup` and
+`test:browser:gpu-prefetch`. GPU checks use SwiftShader and validate behavior,
+not physical GPU speed.
+
+The reproducible parser-work benchmark uses 165 synthetic CFG files, 5,000 atoms
+per frame and three seeks from a freshly opened source. The median target-frame
+read changes from **199.03 ms / 164 full-file parses** to **1.47 ms / one parse**.
+This Node in-process-parser measurement excludes initial header checks, rendering,
+application prefetch and analyses; it is not an end-to-end browser latency claim.
+Raw samples and source hashes are in
+[the benchmark record](benchmarks/cfg-frame-first-2026-10-24.json).
+Run `node scripts/benchmarks/benchmark-cfg-seek.mjs`; `--repository PATH` selects
+an independently extracted baseline source tree.
+
 ## Review consolidation and script organization (2026-10-22)
 
 Checked against `70f6ed5`. The 2026-10-16/19 reviews' 29 functional findings

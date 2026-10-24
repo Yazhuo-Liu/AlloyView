@@ -155,12 +155,12 @@ test('the structure Worker opens gzip structures, trajectories and sequences', a
       const contents = await Promise.all(names.map((name) => example(`fixed_end_climb/${name}`)));
       const plain = await send('load', { files: contents.map((bytes, index) => new File([bytes], names[index])) });
       const plainFrames = [];
-      for (let index = 0; index < names.length; index += 1) plainFrames.push((await send('frame', { index })).frame);
+      for (let index = 0; index < names.length; index += 1) plainFrames.push((await send('frame', { index, trajectory: { sequenceUnwrap: true } })).frame);
       const loaded = await send('load', { files: contents.map((bytes, index) => gzipFile(bytes, `${names[index]}.gz`)) });
       assert.equal(loaded.format, 'cfg-sequence');
       assert.equal(loaded.frameCount, plain.frameCount);
       for (const index of [3, 1, 2, 0]) {
-        const frame = (await send('frame', { index })).frame;
+        const frame = (await send('frame', { index, trajectory: { sequenceUnwrap: true } })).frame;
         assertSameFrame(frame, { ...plainFrames[index], title: `${names[index]}.gz` }, `replica ${index}`);
       }
     });

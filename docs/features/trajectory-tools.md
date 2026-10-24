@@ -4,15 +4,17 @@
 than one frame: unwrapped coordinates inferred from consecutive frames, a
 moving average of the coordinates (smoothing), and lines that trace chosen
 atoms through the trajectory. All three are off by default. With them off,
-frames, analyses and exports are exactly as before.
+ordinary frame navigation reads only the selected structure. This also applies
+to numbered CFG folders: opening a late frame does not reconstruct the preceding
+trajectory. Nearby frames may still be prefetched using the existing cache.
 
 ## Unwrapped coordinates from adjacent frames
 
 **Display → Coordinates → Unwrapped** shows atoms at continuous positions
 instead of folding them back into the cell. Sources with image flags
-(`ix iy iz`), unwrapped columns (`xu yu zu`, `xsu ysu zsu`), out-of-cell CFG
-coordinates or a numbered CFG sequence already provide these coordinates, and
-they always take precedence. For any other trajectory with more than one
+(`ix iy iz`), unwrapped columns (`xu yu zu`, `xsu ysu zsu`) or out-of-cell CFG
+coordinates already provide these coordinates and always take precedence.
+For any other trajectory with more than one
 frame, choosing Unwrapped infers them:
 
 1. Frame 1 defines image counts of zero for every atom.
@@ -32,8 +34,12 @@ starts at image zero. As with any inference from snapshots, an atom that moves
 more than half a cell between two stored frames cannot be followed; such
 trajectories need image flags in the file.
 
-Frames are integrated strictly in order, once. Showing frame *k* extends the
-integration to frame *k*; frames before it are never reprocessed. Every
+Frames are integrated strictly in order when Unwrapped is requested. Showing
+frame *k* first displays its wrapped structure and starts the enabled single-frame
+analyses. After those finish, optional inference extends integration to frame
+*k* in the background; the coordinate selector states that wrapped coordinates
+are temporarily shown. Navigation cancels obsolete inference and never waits for
+it. Frames before the integration frontier are reused. Every
 crossing is logged (8 bytes each), so frames behind the integration frontier
 are recovered by undoing the later crossings. The log is limited to 256 MiB
 (about 32 million crossings); beyond that the oldest entries are dropped and
@@ -44,9 +50,14 @@ Inferred coordinates are used for display, Position X/Y/Z colors (unwrapped),
 atom details (shown as *inferred*) and the second view. They are not passed to
 analyses: displacement, clusters and every other tool keep using the
 coordinates in the file, so their results never depend on whether a frame was
-viewed in Unwrapped mode. Inference is unavailable while **Replicate atoms for
+viewed in Unwrapped mode. The existing CFG continuous-coordinate convention for
+total displacement is resolved separately, on demand by that analysis, including
+physical copies. It does not attach inferred file data to the displayed frame.
+Display inference is unavailable while **Replicate atoms for
 analysis** is on, because physical copies are placed from image flags; display
-replication works normally.
+replication works normally. Image exports wait for the selected Unwrapped view
+to finish, so a temporary wrapped preview cannot enter a PNG, JPG, movie or
+frame-series export.
 
 ## Smooth trajectory
 

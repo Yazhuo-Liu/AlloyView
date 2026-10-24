@@ -112,7 +112,8 @@ self.addEventListener('message', async (event) => {
     }
     if (type === 'frame') {
       assertSource();
-      task = { controller: new AbortController(), background: Boolean(payload.background) };
+      task = { controller: new AbortController(), background: Boolean(payload.background),
+        sequenceUnwrap: Boolean(payload.trajectory?.sequenceUnwrap) };
       frameRequests.set(id, task);
       const frame = await readSourceFrame(source, payload.index, id, task);
       if (task.controller.signal.aborted) throw new DOMException('Frame parsing cancelled.', 'AbortError');
@@ -212,11 +213,12 @@ async function readSourceFrame(current, index, requestId, task) {
     return getParserPool().parse({ ...descriptor, projection }, options);
   }
   if (current.format === 'cfg-sequence') {
-    if (projection === 'header') {
-      if (!Number.isInteger(index) || index < 0 || index >= current.files.length) throw new Error(`CFG sequence frame ${index} is outside the available range.`);
-      return getParserPool().parse({ format: 'cfg', file: current.files[index], index, projection }, options);
-    }
-    return readCfgSequenceFrame(current, index, requestId, options);
+    if (!Number.isInteger(index) || index < 0 || index >= current.files.length) throw new Error(`CFG sequence frame ${index} is outside the available range.`);
+    // Ordinary display, prefetch and single-frame analyses need only this file.
+    // Continuous coordinates are an explicit dependency of total displacement,
+    // never an implicit prerequisite for reading a CFG frame.
+    if (task.sequenceUnwrap && projection !== 'header') return readCfgSequenceFrame(current, index, requestId, options);
+    return getParserPool().parse({ format: 'cfg', file: current.files[index], index, projection }, options);
   }
   if (current.format === 'cfg' || SINGLE_FRAME_PARSERS[current.format]) {
     if (index !== 0) throw new Error('A single structure contains only one frame.');
@@ -375,9 +377,7 @@ async function loadCfgSequence(inputFiles, requestId, controller = loadControlle
     });
   }
   const first = await getParserPool().parse({ format: 'cfg', file: files[0], index: 0 }, { signal: controller.signal });
-  const continuity = prepareSequenceBaseline(first);
-  source = { files, format: 'cfg-sequence', continuity, checkpoints: new Map() };
-  rememberContinuity(source, continuity);
+  source = { files, format: 'cfg-sequence', checkpoints: new Map() };
   return {
     format: source.format,
     frameCount: files.length,
