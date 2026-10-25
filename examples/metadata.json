@@ -2,5 +2,7 @@
   "fixed_end_climb/": "{count} numbered CFG files · NEB sequence",
   "hea-fcc-screw.dump": "Equiatomic CoCrFeMnNi FCC · 28,800 atoms · one screw dislocation · unrelaxed",
   "fe-bcc-carbon-inclusion.dump": "BCC Fe + spherical diamond-C inclusion · 28,248 atoms · slice through the center to reveal C · unrelaxed",
-  "NiGB_minimized.cfg": "Nickel grain boundary · 129,904 atoms · CPU/GPU benchmark"
+  "NiGB_minimized.cfg": "Nickel grain boundary · 129,904 atoms · CPU/GPU benchmark",
+  "crystals/SrTiO3.cif": "Ideal cubic SrTiO3 · CIF symmetry expansion: 3 sites → 5 atoms · Ti–O octahedra at 2.2 Å cutoff",
+  "crystals/POSCAR-SrTiO3": "Ideal cubic SrTiO3 · POSCAR · 5 atoms · Ti–O octahedra at 2.2 Å cutoff"
 }

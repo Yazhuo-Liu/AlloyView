@@ -5,8 +5,8 @@
 Each parsed frame contains:
 
 - `Float64Array ids` and compact `Uint16Array types` plus type labels;
-- canonical Cartesian `Float32Array positions` and fractional `Float32Array
-  fractional`, wrapped only along axes marked periodic;
+- canonical Cartesian `positions` and fractional `fractional` typed arrays
+  (`Float64Array` for CIF/POSCAR; other parsers may use `Float32Array`), wrapped only along axes marked periodic;
 - optional `filePositions` preserving CFG positions written outside the primary
   cell, independently of canonical wrapped analysis coordinates;
 - optional `unwrappedPositions` materialized from file data when Unwrap or an
@@ -160,6 +160,39 @@ General triclinic boxes (`avec`, `bvec`, `cvec`, `abc origin`) and atom styles
 not listed above are rejected with a specific message. Atom IDs must be unique
 positive integers.
 
+## Crystallographic CIF
+
+CIF files are recognized by their `data_` container, including `.cif.gz`.
+The parser supports core CIF 1.x cell lengths and angles, fractional or Cartesian
+atom sites, element symbols/site labels, occupancy and equivalent isotropic U/B.
+Coordinates and cell values retain Float64 precision. Quoted strings, semicolon
+text fields, comments, case-insensitive tags, dictionary dot aliases and loop rows
+split across lines are supported. Uncertainty notation such as `3.905(2)` retains
+the central value; standard uncertainties are not currently retained. Unknown
+optional numeric values (`.` and `?`) remain NaN.
+
+Explicit `_space_group_symop_operation_xyz` or legacy
+`_symmetry_equiv_pos_as_xyz` operations expand the asymmetric unit. Operations
+are parsed as restricted affine expressions, never JavaScript. Equivalent images
+of each special-position site are deduplicated; different asymmetric sites and
+mixed-occupancy species are preserved independently. If operations are absent,
+only undeclared/P1 or unambiguous P−1 structures can be expanded. Other groups require
+explicit operations: the application does not guess a setting or origin from a
+space-group number. Multiple crystal data blocks must be separated for the UI;
+the parser API also accepts a named `block` option.
+
+Occupancy, `asymmetricSiteIndex`, `Uiso` and `Biso` are numeric atom properties
+available for coloring and inspection when present. Partial/zero/unknown
+occupancies do not remove sites or weight existing atom analyses. Disordered
+coincident sites can be displayed but may be unsuitable for analyses that
+require distinct sites. CIF2 collection values, macromolecular mmCIF dictionaries,
+anisotropic displacement ellipsoids and space-group inference are not implemented.
+The parser bounds file size, token count, operations and expansion to reject
+excessive inputs instead of truncating them.
+
+Use **Visualization → Crystal** for cell information, coordination polyhedra,
+CIF/POSCAR export and CSV statistics. See [Crystal structures](features/crystal.md).
+
 ## VASP POSCAR and CONTCAR
 
 A POSCAR or CONTCAR file holds one periodic configuration. It is recognized by
@@ -178,6 +211,9 @@ Browsers may hide files without an extension in the file picker; choose
   properties (1 for T). `Direct` and `Cartesian` (or `K`) coordinates are both
   supported; velocity and predictor blocks after the coordinates are ignored.
 
+POSCAR coordinates and cells retain Float64 precision through parsing and
+analysis input. Fortran D exponents and inline `!` comments are accepted; unsafe
+counts and incomplete coordinate/flag rows are rejected before allocation.
 Atoms are numbered in file order. XDATCAR trajectories are not yet supported.
 
 Without an `element` column, atom types and their legend entries use the original

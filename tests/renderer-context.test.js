@@ -123,3 +123,24 @@ test('a failed restore remains visibly unavailable and retains CPU inputs for re
   assert.match(r.contextNotice.textContent, /GPU memory unavailable/); assert.ok(events.includes('error'));
   assert.throws(() => r.captureImage(), /graphics context is unavailable/);
 });
+
+test('coordination hull descriptors survive graphics loss, restore once and clear on frame replacement', () => {
+  const {r,frame} = fixture();
+  const result = { geometry: {chunks:[],cellCount:0,complete:true} };
+  r.coordinationPolyhedra = result;
+  r.coordinationPolyhedraLayer = {clear() { assert.fail('lost GL resources cannot be cleared'); }};
+  r.handleContextLost();
+  assert.equal(r.coordinationPolyhedra,result); assert.equal(r.coordinationPolyhedraLayer,null);
+  r.setCoordinationPolyhedra(result,{opacity:.6,showEdges:false});
+  let restored = 0;
+  r.initializeGl = () => {}; r.uploadFrameBuffers = () => {}; r.updateSceneBounds = () => {};
+  const setter = r.setCoordinationPolyhedra;
+  r.setCoordinationPolyhedra = (value,options) => {
+    assert.equal(value,result); assert.equal(options.opacity,.6); assert.equal(options.showEdges,false); restored++;
+  };
+  r.handleContextRestored(); assert.equal(restored,1);
+  r.setCoordinationPolyhedra = setter;
+  r.handleContextLost();
+  r.setFrame({...frame,ids:Uint32Array.of(3,4)},r.atomColors,frame.positions,r.atomRadii);
+  assert.equal(r.coordinationPolyhedra,null);
+});

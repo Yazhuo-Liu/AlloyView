@@ -32,8 +32,8 @@ export const MAX_CONFIGURATION_SELECTION_GROUPS = MAX_SELECTION_GROUPS;
 export const MAX_CONFIGURATION_SELECTION_ATOM_IDS = MAX_SELECTION_ATOM_IDS;
 export const MAX_CONFIGURATION_TRAJECTORY_LINE_IDS = 100_000;
 
-const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'lammps-data', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence', 'poscar']);
-const TOOLS = new Set(['display', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'timeSeries', 'textLabels', 'scripts', 'movie', 'grains']);
+const FORMATS = new Set(['cfg', 'cfg-sequence', 'lammps-dump', 'lammps-dump-sequence', 'lammps-data', 'xyz', 'xyz-sequence', 'pdb', 'pdb-sequence', 'poscar', 'cif']);
+const TOOLS = new Set(['display', 'crystal', 'replicate', 'slice', 'coordination', 'cna', 'centrosymmetry', 'ptm', 'strain', 'selectionGroups', 'performance', 'bonds', 'vectors', 'displacement', 'statistics', 'referenceStrain', 'localShear', 'dxa', 'externalProperties', 'voronoi', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'timeSeries', 'textLabels', 'scripts', 'movie', 'grains']);
 const COLOR_SCHEMES = new Set(SCALAR_COLOR_SCHEMES.map(({ value }) => value));
 const COORDINATION_CUTOFF_CHOICES = new Set(['custom', ...COORDINATION_CUTOFF_PRESETS.map(preset => preset.symbol)]);
 const STRAIN_STRUCTURES = new Set([1, 2, 3, 5, 6, 7]);
@@ -270,7 +270,7 @@ function normalizeSelections(value) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'playback', 'textLabels', 'timeSeries', 'globalAttributes', 'scripts', 'movie', 'grains']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'playback', 'textLabels', 'timeSeries', 'globalAttributes', 'scripts', 'movie', 'grains', 'crystal']);
   const playback = input.playback === undefined ? null : record(input.playback, `${path}.playback`, ['fps', 'mode']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
   const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
@@ -367,6 +367,7 @@ function normalizeExtensions(value, fromSnapshot) {
     ...(input.wignerSeitz === undefined ? {} : { wignerSeitz: normalizeWignerSeitz(input.wignerSeitz, `${path}.wignerSeitz`) }),
     ...(input.grains === undefined ? {} : { grains: normalizeGrains(input.grains, `${path}.grains`) }),
     ...(input.surfaceMesh === undefined ? {} : { surfaceMesh: normalizeSurfaceMesh(input.surfaceMesh, `${path}.surfaceMesh`, fromSnapshot) }),
+    ...(input.crystal === undefined ? {} : { crystal: normalizeCrystal(input.crystal, `${path}.crystal`) }),
     ...(input.trajectory === undefined ? {} : { trajectory: normalizeTrajectory(input.trajectory, `${path}.trajectory`) }),
     // Label templates are stored as text and parsed again by the safe template parser; no values are stored.
     ...(input.textLabels === undefined ? {} : { textLabels: normalizeTextLabelState(input.textLabels, { path: `${path}.textLabels` }) }),
@@ -506,6 +507,24 @@ function normalizeMeshStyle(input, path, defaults) {
 const MESH_STYLE_KEYS = ['visible', 'caps', 'opacity', 'color', 'interiorColor', 'capColor'];
 const SURFACE_MESH_STYLE = { color: '#c9d4e3', interiorColor: '#b5524a', capColor: '#8fa3bf' };
 const DEFECT_MESH_STYLE = { color: '#d9c06a', interiorColor: '#c7ae5c', capColor: '#b39b52' };
+
+/** Type labels survive file reordering; calculated polyhedra are never saved. */
+function normalizeCrystal(value, path) {
+  const input = record(value, path, ['enabled', 'cutoff', 'centerTypes', 'neighborTypes', 'visible', 'color', 'opacity', 'showEdges']);
+  const labels = key => {
+    if (input[key] === undefined || input[key] === null) return null;
+    const values = list(input[key], `${path}.${key}`, 65535).map((value, index) => typeLabel(value, `${path}.${key}[${index}]`));
+    ensureUnique(values, `${path}.${key}`);
+    return values;
+  };
+  return { enabled: boolean(input.enabled, `${path}.enabled`, false),
+    cutoff: number(input.cutoff === undefined ? 3 : input.cutoff, `${path}.cutoff`, Number.MIN_VALUE, 1e6),
+    centerTypes: labels('centerTypes'), neighborTypes: labels('neighborTypes'),
+    visible: boolean(input.visible, `${path}.visible`, true),
+    color: hexColor(input.color ?? '#3b82f6', `${path}.color`),
+    opacity: number(input.opacity ?? 0.35, `${path}.opacity`, 0, 1),
+    showEdges: boolean(input.showEdges, `${path}.showEdges`, true) };
+}
 
 /** Surface settings hold the probe radius, smoothing, atom restriction and
  * display style; the mesh and its statistics are recalculated after import.
@@ -1038,7 +1057,7 @@ function canonicalFormat(format) {
   if (format === 'lammps-dump' || format === 'lammps-dump-sequence') return 'lammps-dump';
   if (format === 'xyz' || format === 'xyz-sequence') return 'xyz';
   if (format === 'pdb' || format === 'pdb-sequence') return 'pdb';
-  if (format === 'lammps-data' || format === 'poscar') return format;
+  if (format === 'lammps-data' || format === 'poscar' || format === 'cif') return format;
   return null;
 }
 

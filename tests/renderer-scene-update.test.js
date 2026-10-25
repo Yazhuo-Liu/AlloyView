@@ -124,3 +124,20 @@ test('presentation barrier waits for a committed draw and rejects abort, superse
   }
   await assert.rejects(r.whenPresented({ frameIndex: -1 }), error => error.name === 'AbortError');
 });
+
+test('scene transactions keep coordination hulls attached to their original displayed frame', () => {
+  const {renderer:r} = fixture(), result = {geometry:{chunks:[],cellCount:0}}, options = {visible:true,opacity:.35};
+  let cleared = 0;
+  const layer = {clear() { cleared++; }};
+  Object.assign(r,{coordinationPolyhedra:result,coordinationPolyhedraOptions:options,coordinationPolyhedraLayer:layer});
+  const first = r.beginSceneUpdate();
+  assert.equal(r.presentedRenderer.coordinationPolyhedra,result);
+  assert.equal(r.coordinationPolyhedraLayer,null);
+  r.frame = {frameIndex:2}; r.coordinationPolyhedra = null;
+  r.cancelSceneUpdate(first);
+  assert.equal(r.coordinationPolyhedra,result); assert.equal(r.coordinationPolyhedraLayer,layer);
+  assert.equal(r.coordinationPolyhedraOptions,options); assert.equal(cleared,0);
+  const second = r.beginSceneUpdate(); r.frame = {frameIndex:3}; r.coordinationPolyhedra = null;
+  r.commitSceneUpdate(second);
+  assert.equal(cleared,1); assert.equal(r.coordinationPolyhedra,null);
+});

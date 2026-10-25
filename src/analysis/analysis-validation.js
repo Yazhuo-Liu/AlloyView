@@ -5,6 +5,7 @@ import { validateRdfParameters } from './rdf.js';
 import { validateBondStatisticsSchema } from './bond-statistics.js';
 import { validateCentrosymmetryParameters } from './centrosymmetry.js';
 import { MAX_BONDS } from './bonds.js';
+import { validateCoordinationPolyhedraParameters } from './coordination-polyhedra.js';
 import { analysisValidationError } from './errors.js';
 import { determinant3 } from '../data/model.js';
 
@@ -30,7 +31,7 @@ export function validateAnalysisParameters(frame, parameters = {}) {
         throw new Error('The displacement atom range is invalid.');
       }
     } else atomRange(count, parameters);
-    if (['strain', 'bonds', 'rdf', 'bondStatistics', 'clusterEdges'].includes(kind)
+    if (['strain', 'bonds', 'rdf', 'bondStatistics', 'clusterEdges', 'coordinationPolyhedra'].includes(kind)
         && (!ArrayBuffer.isView(frame.types) || frame.types instanceof DataView || frame.types.length !== count)) {
       throw new Error('Analysis requires one element type per atom.');
     }
@@ -46,6 +47,7 @@ export function validateAnalysisParameters(frame, parameters = {}) {
     } else if (kind === 'centrosymmetry') validateCentrosymmetryParameters(parameters);
     else if (kind === 'rdf') validateRdfParameters(frame, parameters);
     else if (kind === 'bondStatistics') validateBondStatisticsSchema(frame, parameters);
+    else if (kind === 'coordinationPolyhedra') validateCoordinationPolyhedraParameters(parameters);
     else if (kind.startsWith('voronoi') && kind !== 'voronoiFinalize') validateVoronoiParameters(parameters);
     else if (['coordination', 'referenceStrain', 'localShear', 'localShearCoordination', 'localShearMetrics', 'bonds', 'clusterEdges'].includes(kind)) {
       if (!Number.isFinite(parameters.cutoff) || parameters.cutoff <= 0) throw new Error('The cutoff radius must be a finite value greater than zero.');

@@ -10,12 +10,13 @@ import { indexXyz } from '../io/xyz.js';
 import { indexPdb } from '../io/pdb.js';
 import { parseLammpsData } from '../io/lammps-data.js';
 import { parsePoscar } from '../io/poscar.js';
+import { parseCif } from '../io/cif.js';
 import { FrameParserPool } from '../data/frame-parser-pool.js';
 import { openIndexedTrajectory } from './indexed-trajectory.js';
 import { TrajectoryProcessor } from './trajectory-processor.js';
 import { ensureFileUnwrappedPositions, hasFileUnwrap } from '../data/coordinate-display.js';
 
-const SINGLE_FRAME_PARSERS = { 'lammps-data': parseLammpsData, poscar: parsePoscar };
+const SINGLE_FRAME_PARSERS = { 'lammps-data': parseLammpsData, poscar: parsePoscar, cif: parseCif };
 
 let source = null;
 let wasmModulePromise;
@@ -281,7 +282,7 @@ async function loadSource(inputFiles, requestId, incremental = false, controller
     if (formats.every((format) => format === 'lammps-dump')) return loadLammpsDumpSequence(await decompressFiles(files), requestId, controller);
     if (formats.every((format) => format === 'xyz')) return loadIndexedTextSource(await decompressFiles(files), 'xyz', requestId, controller);
     if (formats.every((format) => format === 'pdb')) return loadIndexedTextSource(await decompressFiles(files), 'pdb', requestId, controller);
-    throw new Error('A numbered file sequence must contain a single format: CFG, LAMMPS text dump, XYZ, or PDB. LAMMPS data and POSCAR files open one at a time.');
+    throw new Error('A numbered file sequence must contain a single format: CFG, LAMMPS text dump, XYZ, or PDB. CIF, LAMMPS data and POSCAR files open one at a time.');
   }
   const [inputFile] = files;
   const header = await readStructureHeader(inputFile);
@@ -311,7 +312,7 @@ async function loadSource(inputFiles, requestId, incremental = false, controller
     const frame = await getParserPool().parse({ format, file, index: 0 }, { signal: controller.signal });
     return { format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
   }
-  throw new Error('Unrecognized file format. Supported structures are AtomEye CFG, LAMMPS text dump and data files, XYZ / Extended XYZ, PDB, and VASP POSCAR, uncompressed or gzip-compressed.');
+  throw new Error('Unrecognized file format. Supported structures are AtomEye CFG, LAMMPS text dump and data files, XYZ / Extended XYZ, PDB, CIF, and VASP POSCAR, uncompressed or gzip-compressed.');
 }
 
 async function loadProgressive(files, format, requestId, controller = loadController) {

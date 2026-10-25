@@ -1,9 +1,10 @@
 import { looksLikeLammpsData } from './lammps-data.js';
 import { looksLikePoscar } from './poscar.js';
+import { looksLikeCif } from './cif.js';
 
 // A `.gz` suffix marks a gzip-compressed file; the content, not the name,
 // decides whether a file is compressed (see gzip.js).
-const SUPPORTED_EXTENSION = /\.(?:cfg|dump|lmp|lammpstrj|lammpstraj|data|lammps|xyz|extxyz|pdb|ent|vasp|poscar|txt)(?:\.gz)?$/i;
+const SUPPORTED_EXTENSION = /\.(?:cfg|cif|dump|lmp|lammpstrj|lammpstraj|data|lammps|xyz|extxyz|pdb|ent|vasp|poscar|txt)(?:\.gz)?$/i;
 // VASP names its structure files without an extension.
 const VASP_NAME = /^(?:POSCAR|CONTCAR)/i;
 const NUMBER_RUN = /\d+/g;
@@ -11,7 +12,7 @@ const NUMBER_RUN = /\d+/g;
 const naturalCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
 export function isSupportedStructurePath(path) {
-  return SUPPORTED_EXTENSION.test(path);
+  return SUPPORTED_EXTENSION.test(path) || VASP_NAME.test(String(path).replaceAll('\\', '/').split('/').at(-1));
 }
 
 export function isPotentialStructurePath(path) {
@@ -22,6 +23,7 @@ export function isPotentialStructurePath(path) {
 export function inferStructureFormatFromPath(path) {
   const filename = String(path).replaceAll('\\', '/').split('/').at(-1);
   if (/(?:^|\.)cfg(?:\.|$)/i.test(filename)) return 'cfg';
+  if (/\.cif(?:\.gz)?$/i.test(filename)) return 'cif';
   if (VASP_NAME.test(filename) || /\.(?:vasp|poscar)(?:\.gz)?$/i.test(filename)) return 'poscar';
   if (/(?:^|\.)data(?:\.|$)/i.test(filename)) return 'lammps-data';
   if (/(?:^|\.)(?:dump|lmp|lammpstrj|lammpstraj)(?:\.|$)/i.test(filename)) return 'lammps-dump';
@@ -35,6 +37,7 @@ export function detectStructureFormatHeader(text) {
   const firstDataLine = lines.find((line) => line.trim() && !line.trim().startsWith('#'))?.trim() ?? '';
   if (/^Number\s+of\s+particles\s*=\s*\d+/i.test(firstDataLine)) return 'cfg';
   if (/^ITEM:\s+(?:TIMESTEP|UNITS|TIME)\b/i.test(firstDataLine)) return 'lammps-dump';
+  if (looksLikeCif(text)) return 'cif';
   // A data file's free-text title can be anything, so check its header first.
   if (looksLikeLammpsData(text)) return 'lammps-data';
   // POSCAR also has a free-text title, which may be a positive integer.

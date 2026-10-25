@@ -32,7 +32,7 @@
         </a>
 
         <div class="file-actions">
-          <input id="file-input" type="file" accept=".cfg,.dump,.lammpstrj,.lammps,.lmp,.data,.xyz,.extxyz,.pdb,.ent,.vasp,.poscar,.gz,text/plain,application/gzip" multiple hidden>
+          <input id="file-input" type="file" accept=".cif,.cfg,.dump,.lammpstrj,.lammps,.lmp,.data,.xyz,.extxyz,.pdb,.ent,.vasp,.poscar,.gz,text/plain,application/gzip" multiple hidden>
           <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
           <button id="open-local" class="button button-primary" type="button" title="Open individual structure files or browse a local folder">
             <span aria-hidden="true">＋</span> Open local
@@ -82,7 +82,7 @@
             </div>
             <p class="eyebrow">BROWSER-NATIVE MATERIALS VIEWER</p>
             <h1>See materials<br>atom by atom</h1>
-            <p class="empty-copy">Open CFG, LAMMPS dump or data, XYZ, PDB or VASP POSCAR structures, plain or gzip-compressed, or select a folder to detect numbered structure sequences. Parsing, analysis, and rendering all stay in this browser.</p>
+            <p class="empty-copy">Open CFG, LAMMPS dump or data, XYZ, PDB, CIF or VASP POSCAR structures, plain or gzip-compressed, or select a folder to detect numbered structure sequences. Parsing, analysis, and rendering all stay in this browser.</p>
             <button id="empty-open" class="button button-primary button-large" type="button">Open local structures</button>
             <p class="format-note">Orthogonal and restricted triclinic cells supported</p>
           </div>
@@ -270,6 +270,7 @@
             </div>
             <div id="visualization-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="visualization" aria-labelledby="tool-category-visualization">
               <button type="button" data-tool-button="display" aria-controls="tool-display" aria-pressed="true" aria-expanded="true"><span class="tool-button-label">Display</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="crystal" aria-controls="tool-crystal" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Crystal</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="slice" aria-controls="tool-slice" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Slice</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="coordination" aria-controls="tool-coordination" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Coordination</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="bonds" aria-controls="tool-bonds" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Bonds</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
@@ -832,6 +833,53 @@
               <p id="clusters-table-caption" class="help"></p>
               <button id="clusters-show-more" class="button button-secondary tool-run-button" type="button" hidden>Show more</button>
               <p class="help">Centers of mass use unwrapped coordinates. A cluster connected to its own periodic image is marked <b>Periodic</b>; it has no finite center or radius of gyration. Atoms outside the chosen group have cluster ID 0.</p>
+            </div>
+          </section>
+
+          <section id="tool-crystal" class="side-section analysis-section" data-tool-panel="crystal" hidden>
+            <div class="section-heading">
+              <div><p class="section-kicker">CRYSTAL STRUCTURE</p><h3>Cell and coordination polyhedra</h3></div>
+              <div class="analysis-state-controls"><span id="crystal-state" class="state-pill">Not calculated</span><button id="cancel-crystal" class="text-button" type="button" disabled>Cancel</button></div>
+            </div>
+            <div class="cluster-table-wrap"><table class="cluster-table" aria-label="Crystal cell parameters">
+              <tbody>
+                <tr><th scope="row">a · b · c (Å)</th><td id="crystal-cell-lengths">—</td></tr>
+                <tr><th scope="row">α · β · γ (°)</th><td id="crystal-cell-angles">—</td></tr>
+                <tr><th scope="row">Cell volume (Å³)</th><td id="crystal-cell-volume">—</td></tr>
+                <tr><th scope="row">Source space group</th><td id="crystal-space-group">Not declared</td></tr>
+              </tbody>
+            </table></div>
+            <p id="crystal-sites" class="help">Open a crystal structure to inspect its cell.</p>
+            <details><summary>Symmetry and occupancy</summary>
+              <p id="crystal-symmetry" class="help">Space-group labels are read from the file, not inferred from the displayed geometry.</p>
+              <p id="crystal-occupancy-note" class="help" hidden>Fractional, zero and unknown occupancies are preserved as site properties. Atom analyses and coordination polyhedra count sites; they are not weighted by occupancy. POSCAR export requires fully occupied sites.</p>
+            </details>
+            <p id="crystal-warnings" class="help" role="status" hidden></p>
+            <div class="paired-actions statistics-export-actions">
+              <button id="export-crystal-cif" class="button button-secondary" type="button" disabled>Export CIF</button>
+              <button id="export-crystal-poscar" class="button button-secondary" type="button" disabled>Export POSCAR</button>
+            </div>
+            <p class="help">Export the full current structure, including physical replication. Display shifts, hiding and display-only replicas do not change exported positions.</p>
+            <div class="section-heading statistics-subheading"><h3>Coordination polyhedra</h3></div>
+            <p class="help">Connect neighboring atom positions around each center to form a convex polyhedron, such as an oxygen octahedron. These are neighbor hulls, not Voronoi cells.</p>
+            <div class="paired-fields">
+              <details><summary>Central atom types</summary><div id="crystal-center-types"></div></details>
+              <details><summary>Neighbor atom types</summary><div id="crystal-neighbor-types"></div></details>
+            </div>
+            <label class="field"><span>Neighbor cutoff</span><span class="input-unit"><input id="crystal-cutoff" type="number" value="3" min="0.000001" max="1000000" step="0.05" disabled><i>Å</i></span></label>
+            <button id="run-crystal" class="button button-accent tool-run-button" type="button" disabled>Construct polyhedra</button>
+            <div class="analysis-backend-row"><span>Backend</span><output id="crystal-backend">—</output></div>
+            <progress id="crystal-progress" class="analysis-progress" max="1" value="0" aria-label="Coordination polyhedra progress" hidden></progress>
+            <p id="crystal-status" class="help" role="status" aria-live="polite">Construct convex polyhedra from neighbors within the cutoff, including periodic images.</p>
+            <label class="slice-toggle"><input id="crystal-visible" type="checkbox" checked disabled><span>Show polyhedra</span></label>
+            <label class="slice-toggle"><input id="crystal-edges" type="checkbox" checked disabled><span>Show edges</span></label>
+            <div class="paired-fields">
+              <label class="field"><span>Face color</span><input id="crystal-color" type="color" value="#3b82f6" disabled></label>
+              <label class="field"><span>Opacity <output id="crystal-opacity-value">35%</output></span><input id="crystal-opacity" type="range" min="0" max="1" step="0.01" value="0.35" disabled></label>
+            </div>
+            <div id="crystal-results" class="analysis-statistics-results" hidden>
+              <p id="crystal-summary" class="help"></p>
+              <button id="export-crystal-statistics" class="button button-secondary tool-run-button" type="button" disabled>Polyhedron table CSV</button>
             </div>
           </section>
 
@@ -1490,7 +1538,7 @@
     </div>
 
     <div id="file-drop-overlay" class="file-drop-overlay" aria-hidden="true" hidden>
-      <div><strong>Drop a structure file to open</strong><span>CFG / LAMMPS / XYZ / PDB / POSCAR, also .gz · One file at a time</span></div>
+      <div><strong>Drop a structure file to open</strong><span>CFG / LAMMPS / XYZ / PDB / CIF / POSCAR, also .gz · One file at a time</span></div>
     </div>
     <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-dialog-title">
       <div class="source-dialog-card">

@@ -940,15 +940,17 @@ export class VoronoiAllCellLayer {
     this.outline.begin(renderer, planes, { batched: true, textureWidth: this.textureWidth, scale,
       depthFade: surface ? 0 : XRAY_EDGE_FADE });
     const edges = voronoiEdgeStyle(color, renderer.exportAppearanceBackground ?? renderer.background, ALL_CELL_EDGE_WIDTH, ALL_CELL_SHORT_EDGE);
-    for (const replica of renderer.replicas) {
-      this.outline.setAnchor(trueSize ? 0 : -1);
-      for (const chunk of this.chunks) {
-        this.outline.draw(chunk, chunk.mesh.vertexCount, chunk.mesh.edgeCount, replica.offset, edges, 1, trueSize ? 1 : 3);
-      }
-      if (trueSize) {
-        const { firstSlots, secondSlots } = this.copyEdges;
-        this.outline.setAnchor(1); this.outline.draw(this.copyEdges, 0, firstSlots, replica.offset, edges);
-        this.outline.setAnchor(2); this.outline.draw(this.copyEdges, firstSlots, secondSlots, replica.offset, edges);
+    if (this.showEdges !== false) {
+      for (const replica of renderer.replicas) {
+        this.outline.setAnchor(trueSize ? 0 : -1);
+        for (const chunk of this.chunks) {
+          this.outline.draw(chunk, chunk.mesh.vertexCount, chunk.mesh.edgeCount, replica.offset, edges, 1, trueSize ? 1 : 3);
+        }
+        if (trueSize) {
+          const { firstSlots, secondSlots } = this.copyEdges;
+          this.outline.setAnchor(1); this.outline.draw(this.copyEdges, 0, firstSlots, replica.offset, edges);
+          this.outline.setAnchor(2); this.outline.draw(this.copyEdges, firstSlots, secondSlots, replica.offset, edges);
+        }
       }
     }
     const highlightEdges = alpha => {

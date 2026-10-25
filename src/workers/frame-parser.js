@@ -4,6 +4,7 @@ import { parseXyzFrameAsync } from '../io/xyz.js';
 import { parsePdbFrameAsync } from '../io/pdb.js';
 import { parseLammpsDataAsync } from '../io/lammps-data.js';
 import { parsePoscarAsync } from '../io/poscar.js';
+import { parseCifAsync } from '../io/cif.js';
 import { readFileBytes, readFileText } from '../io/gzip.js';
 import { readFrameHeaderDescriptor } from '../io/frame-header.js';
 
@@ -24,6 +25,7 @@ export async function parseFrameDescriptor(descriptor, { signal } = {}) {
     frame = await parsePdbFrameAsync(header ? `${header}\n${text}` : text, file.name, options);
   } else if (format === 'lammps-data') frame = await parseLammpsDataAsync(await readFileText(file, { signal }), file.name, options);
   else if (format === 'poscar') frame = await parsePoscarAsync(await readFileText(file, { signal }), file.name, options);
+  else if (format === 'cif') frame = await parseCifAsync(await readFileText(file, { signal }), file.name, options);
   else throw new Error(`Unsupported frame parser: ${format}`);
   // Single-frame LAMMPS data/POSCAR retain their complete validation path.
   // They have no trajectory coordinate consumer; retain an explicit fallback

@@ -2,6 +2,7 @@
 export const FEATURE_HELP = Object.freeze({
   keyboard: { title: 'Keyboard shortcuts', page: 'keyboard', summary: 'Navigate the camera, trajectory and selected cutting plane with configurable keys and a 0–9 camera step gearbox. Open the viewport ? button to review or rebind commands.' },
   display: { title: 'Display', page: 'display', summary: 'Choose coordinates, atom colors and radii, ambient occlusion, image options, and an independent second camera. Display changes preserve the source data.' },
+  crystal: { title: 'Crystal structures', page: 'crystal', summary: 'Inspect CIF/POSCAR cell parameters, symmetry and occupancy; draw coordination polyhedra from selected center and neighbor elements, and export crystal structures or polyhedron statistics.' },
   replicate: { title: 'Replicate', page: 'replicate', summary: 'Repeat along periodic cell vectors. Display copies reuse source atoms; optional Replicate atoms enlarges the cell and analyzes the additional atoms.' },
   externalProperties: { title: 'External properties', page: 'external-properties', summary: 'Attach numeric per-atom columns from CSV or AUX files by stable ID or row order. Imported values are available for colors, atom details and vector fields; coordinates remain unchanged.' },
   trajectory: { title: 'Trajectory tools', page: 'trajectory-tools', summary: 'Infer unwrapped coordinates from consecutive frames, replace coordinates by a moving average before every analysis, and draw continuous paths of chosen atoms. Image data in the file takes precedence.' },

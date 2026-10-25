@@ -1,6 +1,7 @@
 import { MeasuredGpuRouting } from './gpu-routing.js';
 import { CSP_SUMMARY_FIELDS } from './centrosymmetry.js';
 import { MAX_BONDS } from './bonds.js';
+import { MAX_POLYHEDRA, MAX_POLYHEDRA_BYTES, emptyPolyhedraSummary } from './coordination-polyhedra.js';
 import { mergeBondStatisticsPartials } from './bond-statistics.js';
 import { VORONOI_FIELDS, mergeVoronoiPartials } from './voronoi.js';
 import { materializeVoronoiIndices } from './voronoi-indices.js';
@@ -60,6 +61,7 @@ const EXTRA_OUTPUT_FIELDS = {
   coordination: { coordination: [Uint32Array, 1] },
   bonds: { coordination: [Uint32Array, 1] },
   bondStatistics: { coordination: [Uint32Array, 1], q4: [Float32Array, 1], q6: [Float32Array, 1] },
+  coordinationPolyhedra: { coordination: [Uint32Array, 1], volumes: [Float64Array, 1], surfaceAreas: [Float64Array, 1] },
   clusterEdges: {},
   voronoi: VORONOI_FIELDS,
   rdf: {},
@@ -795,7 +797,7 @@ export class AnalysisPool {
       }
       extraBytes += parameters.structureInput.byteLength;
     }
-    if (['strain', 'bonds', 'rdf', 'bondStatistics', 'clusterEdges'].includes(parameters.kind)) {
+    if (['strain', 'bonds', 'rdf', 'bondStatistics', 'clusterEdges', 'coordinationPolyhedra'].includes(parameters.kind)) {
       inputs.types = frame.types;
       if (!ArrayBuffer.isView(frame.types) || frame.types.length !== atomCount) throw new Error('Analysis requires one element type per atom.');
       extraBytes += frame.types.byteLength;
@@ -866,7 +868,11 @@ export class AnalysisPool {
     // Source plus immutable pool snapshot and disjoint/merged outputs are
     // fixed. Sliced private neighbor rows occupy one aggregate table; only
     // multishell tables grow with the number of Workers.
-    const fixedBytes = 2 * frameBytes + 2 * atomCount * outputBytesPerAtom + (ownedRows ? analysisBytes + ownedRowBytes : 2 * analysisBytes)
+    // A 64-vertex convex hull has at most 124 triangular faces and 186 edges;
+    // reserve both source polygons and the Worker-packed render buffers.
+    const polyhedraGeometryReserve = parameters.kind === 'coordinationPolyhedra'
+      ? Math.min(MAX_POLYHEDRA_BYTES, Math.min(atomCount, parameters.maxCells ?? MAX_POLYHEDRA) * 32_768) : 0;
+    const fixedBytes = polyhedraGeometryReserve + 2 * frameBytes + 2 * atomCount * outputBytesPerAtom + (ownedRows ? analysisBytes + ownedRowBytes : 2 * analysisBytes)
       + (sharedMemory && !noIndex ? (referenceStrain ? normalizedReferenceBytes : frame.fractional.byteLength) + privateIndexBytes : 0)
       + (sharedMemory && referenceStrain ? normalizedCurrentBytes + referenceCount * 4 : 0)
       + (!sharedMemory && sharedNeighborTable && !fullNeighborTable ? neighborBytes : 0);
@@ -876,7 +882,7 @@ export class AnalysisPool {
     const coordinationStage = ['coordination', 'localShearCoordination'].includes(parameters.kind);
     const targetAtoms = coordinationStage ? 16_384
       : ['displacement', 'localShearFinalize'].includes(parameters.kind) || (parameters.kind === 'strain' && parameters.ptmInput) ? 50_000
-      : parameters.kind === 'wignerSeitzAssign' ? 16_384 : 4_096;
+      : parameters.kind === 'wignerSeitzAssign' ? 16_384 : parameters.kind === 'coordinationPolyhedra' ? 1024 : 4_096;
     const preflightPolicy = (bytes) => this.cpuResidentWorkerPolicy(atomCount, ownedRows ? 0 : frameBytes + privateIndexBytes,
       residentAnalysisBytes, bytes, targetAtoms, modules, sharedMemory, { includeRetainedInputs: false, nativeCapacityBytes,
         privateContextBytes: !sharedMemory && referenceStrain ? normalizedCurrentBytes + normalizedReferenceBytes + referenceCount * 4 : 0 });
@@ -957,7 +963,8 @@ export class AnalysisPool {
       // between Workers, but Welford/normalization sums continue in the exact
       // original atom order inside each partition before the ordered merge.
       const orderedReduction = ['bondStatistics', 'localShearMetrics'].includes(parameters.kind);
-      const maxChunk = ['coordination', 'displacement', 'localShearFinalize', 'wignerSeitzAssign'].includes(parameters.kind) ? 8192
+      const maxChunk = parameters.kind === 'coordinationPolyhedra' ? 128
+        : ['coordination', 'displacement', 'localShearFinalize', 'wignerSeitzAssign'].includes(parameters.kind) ? 8192
         : parameters.kind === 'ptm' || parameters.kind === 'strain' ? 4096 : 2048;
       const h = snapshot.cell.vectors;
       const cheapDisplacement = parameters.kind === 'displacement' && (parameters.minimumImage === false
@@ -990,6 +997,7 @@ export class AnalysisPool {
       else if (parameters.kind === 'centrosymmetry' && !autoCentrosymmetry) merged.centrosymmetry = merged.values;
       const reductions = new Array(workerCount), reducedPartials = new Array(workerCount);
       let completedAtoms = 0, completedChunks = 0, completed = 0, lastCompletedAtoms = 0, inputPreparations = 0, completedBondCount = 0;
+      let completedPolyhedra = 0, polyhedraGeometryBytes = 0;
       const report = (index, phase, progress) => {
         if (controller.signal.aborted) return;
         if (index !== null) phases[index] = phase;
@@ -1061,6 +1069,12 @@ export class AnalysisPool {
             const maxBonds = parameters.maxBonds ?? MAX_BONDS;
             if (completedBondCount > maxBonds) throw new Error(`Bond output exceeds ${maxBonds.toLocaleString('en-US')} edges; reduce the cutoff.`);
           }
+          if (parameters.kind === 'coordinationPolyhedra') {
+            completedPolyhedra += partial.cells.length; polyhedraGeometryBytes += partial.geometryBytes;
+            if (completedPolyhedra > (parameters.maxCells ?? MAX_POLYHEDRA) || polyhedraGeometryBytes > MAX_POLYHEDRA_BYTES) {
+              throw new Error('Coordination polyhedra exceed the geometry limit; select fewer center elements.');
+            }
+          }
           inputPreparations += partial.inputPreparations ?? 0;
           for (const [name, [, stride]] of Object.entries(outputFields)) {
             const field = name === 'values' ? parameters.kind === 'cna' ? 'structures' : 'centrosymmetry' : name;
@@ -1113,6 +1127,15 @@ export class AnalysisPool {
         }
         const fields = outputFields;
         const values = Object.fromEntries(Object.keys(fields).map(name => [name, merged[name]]));
+        if (parameters.kind === 'coordinationPolyhedra') {
+          const cells = [], geometryChunks = [], summary = emptyPolyhedraSummary();
+          for (const partial of partials) {
+            cells.push(...partial.cells); geometryChunks.push(...partial.geometry.chunks);
+            for (const field of Object.keys(summary)) summary[field] += partial.summary[field];
+          }
+          return { ...metadata, ...values, startAtom: 0, endAtom: atomCount, cells, summary, geometryBytes: polyhedraGeometryBytes,
+            geometry: { chunks: geometryChunks, cellCount: cells.length, complete: true }, warning: null };
+        }
         if (parameters.kind === 'rdf') {
           const counts = new Float64Array(parameters.bins ?? 100);
           for (const partial of partials) for (let bin = 0; bin < counts.length; bin += 1) counts[bin] += partial.counts[bin];

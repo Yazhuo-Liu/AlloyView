@@ -14,7 +14,7 @@
 </p>
 
 AlloyView is a browser-based viewer for atomistic structures and trajectories
-in metals and alloys. Open AtomEye CFG, LAMMPS dumps and data files, XYZ, PDB or VASP POSCAR
+in metals, alloys and crystalline materials. Open AtomEye CFG, LAMMPS dumps and data files, XYZ, PDB, CIF or VASP POSCAR
 (also gzip-compressed), inspect atoms, calculate structural properties, and
 export figures. Files are parsed and analyzed on your device; structure data is
 never uploaded by the application.
@@ -32,9 +32,12 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 
 ## Features
 
-- AtomEye CFG, LAMMPS text dumps and data files, plain/extended XYZ, PDB and
+- AtomEye CFG, LAMMPS text dumps and data files, plain/extended XYZ, PDB, CIF and
   VASP POSCAR/CONTCAR, including
   triclinic cells, numeric scalar/vector properties and periodic boundary flags.
+- Crystal inspection: CIF symmetry expansion and occupancies, precise POSCAR
+  coordinates, element-selected coordination polyhedra in reusable CPU Workers,
+  and CIF/POSCAR structure export plus polyhedron CSV statistics.
 - Individual files, multi-frame trajectories and numbered structure sequences,
   with a timeline and continuous playback.
 - WebGL 2 sphere rendering, element-aware atom radii, six standard views,

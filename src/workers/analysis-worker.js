@@ -16,6 +16,8 @@ import { assignWignerSeitzSites, prepareWignerSeitzContext, summarizeWignerSeitz
 import { calculateDxaLocalRange, calculateDxaTetrahedraRange, releaseDxaCpuStageData, warmupDxaCpuStages, dxaCpuKernelMemoryBytes } from '../analysis/dxa-cpu-stages.js';
 
 import { NeighborSearch } from '../analysis/neighbors.js';
+import { calculateCoordinationPolyhedra, MAX_POLYHEDRA_BYTES } from '../analysis/coordination-polyhedra.js';
+import { createVoronoiCellBatch } from '../render/voronoi-cell-layer.js';
 import { createAtomProgressThrottle } from '../analysis/progress.js';
 
 const atomProgressDue = createAtomProgressThrottle();
@@ -224,6 +226,15 @@ self.addEventListener('message', async ({ data }) => {
         : calculateCentrosymmetry(frame, { ...parameters, onPhase, onAtoms });
     } else if (kind === 'bonds') {
       result = calculateBonds(frame, { ...parameters, onPhase, onAtoms });
+    } else if (kind === 'coordinationPolyhedra') {
+      result = calculateCoordinationPolyhedra(frame, { ...parameters, onPhase, onAtoms });
+      const chunk = result.cells.length ? createVoronoiCellBatch(result.cells) : null;
+      if (chunk?.values.some(value => !Number.isFinite(value))) {
+        throw new Error('Coordination-polyhedron coordinates exceed the supported Float32 rendering range.');
+      }
+      result.geometry = { chunks: chunk ? [chunk] : [], cellCount: result.cells.length, complete: true };
+      if (chunk) result.geometryBytes += Object.values(chunk).filter(ArrayBuffer.isView).reduce((bytes, value) => bytes + value.byteLength, 0);
+      if (result.geometryBytes > MAX_POLYHEDRA_BYTES) throw new Error('Coordination polyhedra exceed the geometry memory limit; select fewer centers.');
     } else if (kind === 'bondStatistics') {
       result = cpuFrameKey !== undefined && parameters.preparedContext
         ? calculatePreparedBondStatistics(parameters.preparedContext, { ...parameters, onPhase, onAtoms })
@@ -286,7 +297,8 @@ self.addEventListener('message', async ({ data }) => {
     } else throw new Error(`Unknown analysis kind: ${kind}`);
     result = { ...result, ...(cpuFrameKey !== undefined ? { frameUploaded, indexBuilt: cpuIndexBuilt, indexReused: cpuIndexReused, inputPreparations } : {}), nativeHeapBytes: { ptm: ptmKernelMemoryBytes(), voronoi: voronoiKernelMemoryBytes(),
       dxa: dxaCpuKernelMemoryBytes() }, ...residentInputMemory() };
-    const fields = [...Object.values(result), ...(kind === 'voronoiGeometryBatch' ? result.cells.flatMap(cell => Object.values(cell)) : [])];
+    const fields = [...Object.values(result), ...(['voronoiGeometryBatch', 'coordinationPolyhedra'].includes(kind) ? result.cells.flatMap(cell => Object.values(cell)) : []),
+      ...(kind === 'coordinationPolyhedra' ? result.geometry.chunks.flatMap(chunk => Object.values(chunk)) : [])];
     const buffers = [...new Set(fields.filter(ArrayBuffer.isView).map((value) => value.buffer).filter(buffer => buffer instanceof ArrayBuffer))];
     self.postMessage({ id, ok: true, result }, buffers);
   } catch (error) {

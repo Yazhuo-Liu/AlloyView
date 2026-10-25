@@ -20,6 +20,7 @@ import { CRYSTAL_DRAG_GLSL, CRYSTAL_DRAG_UNIFORMS, applyCrystalDragUniforms, cre
 import { DislocationLayer, normalizeDislocationOptions } from './dislocation-layer.js';
 import { TrajectoryLineLayer, normalizeTrajectoryLineOptions } from './trajectory-line-layer.js';
 import { VoronoiCellLayer, VoronoiAllCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
+import { CoordinationPolyhedraLayer, coordinationPolyhedraGeometry, normalizeCoordinationPolyhedraOptions } from './coordination-polyhedra-layer.js';
 import { SiteMarkerLayer, normalizeSiteMarkerOptions } from './site-marker-layer.js';
 import { SurfaceMeshLayer, normalizeSurfaceMeshOptions, SURFACE_MESH_DEFAULTS } from './surface-mesh-layer.js';
 import { sharedSurfaceGeometryClient } from './surface-geometry-client.js';
@@ -214,10 +215,11 @@ const SCENE_FIELDS = [
   'scalarColorTexture', 'scalarColorTextureWidth', 'scalarColorInput', 'scalarColorPreview',
   'ambientOcclusionBuffer', 'ambientOcclusionFactors', 'ambientOcclusionIntensity',
   'primitiveLayer', 'dislocationLayer', 'siteMarkerLayer', 'surfaceMeshLayer', 'trajectoryLineLayer',
-  'voronoiCellLayer', 'voronoiAllCellLayer', 'exportLineLayer', 'retainedSurfaceMeshes',
+  'voronoiCellLayer', 'voronoiAllCellLayer', 'coordinationPolyhedraLayer', 'exportLineLayer', 'retainedSurfaceMeshes',
   'atomBonds', 'atomVectors', 'atomVectorFields', 'bondOptions', 'vectorOptions',
   'dislocationNetwork', 'dislocationOptions', 'siteMarkers', 'siteMarkerOptions',
   'trajectoryLines', 'trajectoryLineOptions', 'voronoiCellGeometry', 'voronoiAllCellGeometry', 'voronoiCellOptions',
+  'coordinationPolyhedra', 'coordinationPolyhedraOptions',
   'voronoiDisplayRevision', 'displayRevision', 'sourceBoundsRevision', 'sourceBoundsCache',
   'preparedDisplaySnapshot', 'ownPreparedDisplaySnapshot', 'preparedDisplayUploads',
   'preparedPrimitivePreparation', 'ownPreparedPrimitivePreparation', 'ownPreparedBondSnapshot', 'preparedBondSnapshot',
@@ -226,7 +228,7 @@ const SCENE_FIELDS = [
   'sliceAxis', 'sliceMaximum', 'sliceMode', 'slices', 'slicePlaneValues', 'sliceCount', 'sliceOutlineGeometry',
 ];
 const SCENE_LAYERS = ['primitiveLayer', 'dislocationLayer', 'siteMarkerLayer', 'surfaceMeshLayer', 'trajectoryLineLayer',
-  'voronoiCellLayer', 'voronoiAllCellLayer', 'exportLineLayer'];
+  'voronoiCellLayer', 'voronoiAllCellLayer', 'coordinationPolyhedraLayer', 'exportLineLayer'];
 const CAMERA_FIELDS = ['yaw', 'pitch', 'roll', 'constrainUp', 'target', 'pan', 'distance', 'orthographicScale',
   'projectionMode', 'fov', 'radiusScale', 'background', 'cellVisible', 'cellColor', 'cellWireframeMode',
   'sliceOutlinesVisible', 'sliceOutlineColor', 'renderViewport', 'exportAppearanceBackground'];
@@ -306,6 +308,9 @@ export class WebGLRenderer {
     this.voronoiCellOptions = normalizeVoronoiCellOptions();
     this.voronoiAllCellLayer = null;
     this.voronoiAllCellGeometry = null;
+    this.coordinationPolyhedraLayer = null;
+    this.coordinationPolyhedra = null;
+    this.coordinationPolyhedraOptions = normalizeCoordinationPolyhedraOptions();
     this.voronoiDisplayRevision = 0;
     this.siteMarkerLayer = null;
     this.siteMarkers = null;
@@ -620,7 +625,7 @@ export class WebGLRenderer {
     // Lost GL objects cannot be reused on restore. Retain only descriptors and
     // typed arrays; the setters below keep these current while drawing is paused.
     for (const name of ['primitiveLayer', 'dislocationLayer', 'siteMarkerLayer', 'surfaceMeshLayer',
-      'trajectoryLineLayer', 'voronoiCellLayer', 'voronoiAllCellLayer', 'exportLineLayer']) this[name] = null;
+      'trajectoryLineLayer', 'voronoiCellLayer', 'voronoiAllCellLayer', 'coordinationPolyhedraLayer', 'exportLineLayer']) this[name] = null;
     this.scalarColorTexture = this.ambientOcclusionBuffer = null;
     this.reportContextState('lost', 'Graphics context lost. Drawing and image export are paused while the view recovers. Atom data and calculations are retained.');
   }
@@ -657,6 +662,7 @@ export class WebGLRenderer {
     if (this.trajectoryLines) this.setTrajectoryLines(this.trajectoryLines, this.trajectoryLineOptions);
     if (this.voronoiCellGeometry) this.setVoronoiCellGeometry(this.voronoiCellGeometry, this.voronoiCellOptions);
     if (this.voronoiAllCellGeometry) this.setVoronoiAllCellGeometry(this.voronoiAllCellGeometry, this.voronoiCellOptions);
+    if (this.coordinationPolyhedra) this.setCoordinationPolyhedra(this.coordinationPolyhedra, this.coordinationPolyhedraOptions);
     if (this.ambientOcclusionFactors) {
       const factors = this.ambientOcclusionFactors;
       this.ambientOcclusionFactors = null;
@@ -740,6 +746,8 @@ export class WebGLRenderer {
     this.voronoiCellLayer?.clear();
     this.voronoiAllCellGeometry = null;
     this.voronoiAllCellLayer?.clear();
+    this.coordinationPolyhedra = null;
+    this.coordinationPolyhedraLayer?.clear();
     this.updateSceneBounds({ reuseSourceBounds: Boolean(preparedDisplay || summaryBounds) });
     if (this.trajectoryLines && !this.trajectoryLineLayer) this.setTrajectoryLines(this.trajectoryLines, this.trajectoryLineOptions);
     // The returned time covers submitting the uploads. Waiting for the GPU
@@ -793,6 +801,8 @@ export class WebGLRenderer {
     this.voronoiCellLayer?.clear();
     this.voronoiAllCellGeometry = null;
     this.voronoiAllCellLayer?.clear();
+    this.coordinationPolyhedra = null;
+    this.coordinationPolyhedraLayer?.clear();
     this.displayCell = this.sceneBounds = this.minimumOffset = this.maximumOffset = null;
     this.atomCount = this.displayAtomCount = 0;
     this.repetitions = [1, 1, 1];
@@ -1383,6 +1393,23 @@ export class WebGLRenderer {
     this.requestRender();
   }
 
+  setCoordinationPolyhedra(result, options = {}) {
+    if (result && !this.frame) throw new Error('Load a structure before displaying coordination polyhedra.');
+    const settings = normalizeCoordinationPolyhedraOptions(options, this.coordinationPolyhedraOptions);
+    const geometry = coordinationPolyhedraGeometry(result, this.atomCount);
+    const boundsChanged = result !== this.coordinationPolyhedra
+      || settings.visible !== this.coordinationPolyhedraOptions?.visible;
+    if (!this.graphicsUnavailable()) {
+      if (geometry && !this.coordinationPolyhedraLayer) this.coordinationPolyhedraLayer = new CoordinationPolyhedraLayer(this.gl);
+      if (geometry) this.coordinationPolyhedraLayer?.setPolyhedra(geometry, settings);
+      else if (this.coordinationPolyhedraLayer?.geometry || this.coordinationPolyhedraLayer?.textureValues) this.coordinationPolyhedraLayer.clear();
+    }
+    this.coordinationPolyhedra = result ?? null;
+    this.coordinationPolyhedraOptions = settings;
+    if (boundsChanged && this.frame && !this.graphicsUnavailable()) this.updateSceneBounds({ reuseSourceBounds: true });
+    this.requestRender();
+  }
+
   setSlice(axis, maximum) {
     this.cancelSelectionGesture({ preserveCamera: true, preserveCrystal: true });
     this.sliceMode = 'legacy';
@@ -1625,6 +1652,7 @@ export class WebGLRenderer {
     this.trajectoryLineLayer?.extendBounds(this, minimum, maximum);
     this.voronoiCellLayer?.extendBounds(this, minimum, maximum);
     this.voronoiAllCellLayer?.extendBounds(this, minimum, maximum);
+    this.coordinationPolyhedraLayer?.extendBounds(this, minimum, maximum);
     this.sceneBounds = { minimum, maximum };
     this.selectionSourceBounds = { minimum: [...source.minimum], maximum: [...source.maximum] };
     return this.sceneBounds;
@@ -1747,12 +1775,13 @@ export class WebGLRenderer {
     this.trajectoryLineLayer?.render(this);
     // Opaque meshes write depth like atoms; translucent ones blend over them.
     this.surfaceMeshLayer?.render(this);
-    // Voronoi cells are built for the committed origin; they reappear,
-    // rebuilt, when a crystal drag is released.
+    // Local cell and coordination hull anchors use committed display positions.
+    // Keep them hidden while the atom shader previews an uncommitted drag.
     if (!this.crystalDrag) {
       if (!(this.voronoiCellOptions.allEnabled && this.voronoiAllCellGeometry?.complete)) this.voronoiCellLayer?.render(this);
       else if (this.voronoiCellLayer) this.voronoiCellLayer.renderedReplicaCount = 0;
       this.voronoiAllCellLayer?.render(this);
+      this.coordinationPolyhedraLayer?.render(this);
     }
 
     if (this.cellVisible) {

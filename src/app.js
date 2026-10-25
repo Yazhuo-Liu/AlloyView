@@ -71,6 +71,9 @@ import { initializeGrainTools } from './ui/analysis/grain-tools.js';
 import { GrainSegmentationClient } from './analysis/grains-client.js';
 import { initializeWignerSeitzTools } from './ui/analysis/wigner-seitz-tools.js';
 import { initializeSurfaceTools } from './ui/analysis/surface-tools.js';
+import { initializeCrystalTools } from './ui/view/crystal-tools.js';
+import { StructureExportClient } from './io/structure-export-client.js';
+import { downloadBlob } from './io/export-archive.js';
 import { initializeBinningTools } from './ui/analysis/binning-tools.js';
 import { createGlobalAttributeSource } from './properties/global-attribute-source.js';
 import { initializeTextLabels } from './ui/view/text-label-controls.js';
@@ -143,6 +146,7 @@ const crystalCategoryProperties = new Set(['structureType', 'ptmStructureType', 
   'idealStrainStructureType', DXA_STRUCTURE_PROPERTY]);
 const cpuBudget = new CpuBudget({ environment: globalThis });
 const analysisPool = new AnalysisPool({ cpuBudget });
+const structureExportClient = new StructureExportClient({ cpuBudget });
 const analysisPrediction = new AnalysisPrefetchScheduler({ pool: analysisPool });
 const dxaClient = new DxaClient({ cpuBudget, cpuStageBackend: analysisPool });
 const coordinationPool = new CoordinationPool({
@@ -240,6 +244,8 @@ let clusterTools;
 let grainTools;
 let wignerSeitzTools;
 let surfaceTools;
+let crystalTools;
+let structureExportController;
 let binningTools;
 let trajectoryTools;
 let voronoiCells;
@@ -452,6 +458,7 @@ function visibleScenePending(completion = displayCompletion) {
   const prefixes = new Set(completion?.layerPrefixes);
   if (dxaTools?.isEnabled()) prefixes.add('dxa');
   if (surfaceTools?.isEnabled() && surfaceTools.serialize().visible) prefixes.add('surface-mesh');
+  if (crystalTools?.isEnabled() && crystalTools.serialize().visible) prefixes.add('crystal');
   const sites = wignerSeitzTools?.serialize();
   if (sites?.enabled && sites.showMarkers) prefixes.add('wigner-seitz');
   if (document.getElementById('show-voronoi-cell')?.checked || renderer.voronoiAllCellOptions?.enabled) prefixes.add('voronoi');
@@ -596,6 +603,7 @@ const toolPanels = initializeToolPanels({
     else if (kind === 'grains') grainTools?.cancel();
     else if (kind === 'wignerSeitz') wignerSeitzTools?.cancel();
     else if (kind === 'surfaceMesh') surfaceTools?.cancel();
+    else if (kind === 'crystal') crystalTools?.cancel();
     else if (kind === 'binning') binningTools?.cancel();
     else if (kind === 'displacement') atomEyeTools?.cancelDisplacement();
     else if (state.analysis[kind]) cancelAnalysis(kind);
@@ -1099,6 +1107,23 @@ surfaceTools = initializeSurfaceTools({
   notify: showToast,
 });
 
+crystalTools = initializeCrystalTools({
+  renderer, tools: toolPanels, pool: analysisPool,
+  getFrame: () => state.frame,
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  getFrameIndex: () => state.frameIndex,
+  onResultsChange: () => {
+    if (!state.frame) return;
+    updateMemoryMetric(); reassessFrameCache(state.frame);
+    tryCommitCurrentAppearance(); updateAppearanceStatus();
+  },
+  onDisplayChange: () => atomEyeTools?.syncComparison(),
+  onEdit: () => interruptConfigurationRestore('a crystal display edit'),
+  notify: showToast,
+  onExport: format => exportCrystalStructure(format),
+  onExportStatistics: result => exportCrystalStructure('polyhedra', result),
+});
+
 binningTools = initializeBinningTools({
   tools: toolPanels,
   getFrame: () => state.frame,
@@ -1520,9 +1545,12 @@ window.addEventListener('beforeunload', () => {
   grainTools?.dispose();
   wignerSeitzTools?.abortJobs();
   surfaceTools?.abortJobs();
+  crystalTools?.abortJobs();
+  structureExportController?.abort();
   binningTools?.dispose();
   voronoiCells?.abortJobs();
   statisticsExports?.dispose();
+  structureExportClient.dispose();
 });
 
 function beginSourceOpen() {
@@ -1603,6 +1631,8 @@ function closeSource() {
   grainTools?.reset();
   wignerSeitzTools?.reset();
   surfaceTools?.reset();
+  crystalTools?.reset();
+  void structureExportClient.clearSnapshot().catch(() => {});
   binningTools?.reset();
   trajectoryTools?.reset();
   voronoiCells?.reset();
@@ -1753,7 +1783,7 @@ async function classifyStructureEntries(entries, originLabel, isCurrent) {
         if (!isCurrent()) return;
         const detectedFormat = detectStructureFormatHeader(header);
         const filenameHint = inferStructureFormatFromPath(entry.relativePath);
-        format = detectedFormat ?? (['cfg', 'xyz', 'pdb', 'poscar'].includes(filenameHint) ? filenameHint : null);
+        format = detectedFormat ?? (['cfg', 'xyz', 'pdb', 'poscar', 'cif'].includes(filenameHint) ? filenameHint : null);
       }
       classified[index] = { ...entry, format };
       completed += 1;
@@ -1772,7 +1802,7 @@ async function unrecognizedFilesMessage(candidates) {
   const first = candidates[0];
   const preview = await first.file.slice(0, 120).text();
   const compactPreview = preview.replace(/\s+/g, ' ').trim().slice(0, 72) || '(empty file)';
-  return `No CFG, LAMMPS, XYZ, PDB or POSCAR data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
+  return `No CFG, LAMMPS, XYZ, PDB, CIF or POSCAR data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
 }
 
 function showSourceChooser(catalog, originLabel, entries = state.availableEntries, { singleFiles = false } = {}) {
@@ -2024,6 +2054,8 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     grainTools?.reset();
     wignerSeitzTools?.reset();
     surfaceTools?.reset();
+    crystalTools?.reset();
+    void structureExportClient.clearSnapshot().catch(() => {});
     binningTools?.reset();
     trajectoryTools?.reset();
     frameNavigationControls?.reset();
@@ -2190,7 +2222,7 @@ async function waitForSourceIndex({ signal } = {}) {
 function sourceFormatLabel(format) {
   const sequence = format.endsWith('-sequence');
   const base = sequence ? format.slice(0, -9) : format;
-  return `${({ cfg: 'CFG', 'lammps-dump': 'LAMMPS', 'lammps-data': 'LAMMPS data', xyz: 'XYZ', pdb: 'PDB', poscar: 'POSCAR' })[base] ?? base.toUpperCase()}${sequence ? ' · sequence' : ''}`;
+  return `${({ cfg: 'CFG', 'lammps-dump': 'LAMMPS', 'lammps-data': 'LAMMPS data', xyz: 'XYZ', pdb: 'PDB', poscar: 'POSCAR', cif: 'CIF' })[base] ?? base.toUpperCase()}${sequence ? ' · sequence' : ''}`;
 }
 
 async function showFrame(index, { waitForAnalyses = true, completePresentation = false, signal } = {}) {
@@ -2289,6 +2321,7 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
   completion.retainedLegend = currentColorLegend;
   if (renderer.dislocationNetwork || dxaTools?.isEnabled()) completion.layerPrefixes.add('dxa');
   if (renderer.surfaceMeshes().length || surfaceTools?.isEnabled()) completion.layerPrefixes.add('surface-mesh');
+  if (renderer.coordinationPolyhedra || crystalTools?.isEnabled()) completion.layerPrefixes.add('crystal');
   if (renderer.siteMarkers) completion.layerPrefixes.add('wigner-seitz');
   if (renderer.voronoiCellGeometry || renderer.voronoiAllCellGeometry) completion.layerPrefixes.add('voronoi');
   completion.promise.catch(() => {});
@@ -2298,6 +2331,7 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
   displayRefresh.begin();
   try {
   abortAnalysisJobs();
+  if (state.frame !== frame) void structureExportClient.clearSnapshot().catch(() => {});
   state.frame = frame;
   cache.pin(state.frameIndex);
   cache.set(state.frameIndex, frame);
@@ -2332,7 +2366,7 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
   const palette = appearancePreview?.palette ?? fallbackPalette;
   const geometricLayers = renderer.atomBonds || renderer.atomVectorFields?.length || renderer.dislocationNetwork
     || renderer.siteMarkers || renderer.surfaceMeshes().length || renderer.voronoiCellGeometry || renderer.voronoiAllCellGeometry
-    || surfaceTools?.isEnabled() || dxaTools?.isEnabled();
+    || surfaceTools?.isEnabled() || crystalTools?.isEnabled() || dxaTools?.isEnabled();
   if (renderer.frame && (completePresentation || geometricLayers || !currentAppearanceAvailable() && !appearancePreview)) {
     transaction = renderer.beginSceneUpdate();
     sceneUpdateToken = transaction;
@@ -2402,6 +2436,7 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
   pending.push(grainTools.onFrame());
   pending.push(wignerSeitzTools.onFrame());
   pending.push(surfaceTools.onFrame());
+  pending.push(crystalTools.onFrame());
   pending.push(binningTools.onFrame());
   syncCancelButton('coordination');
   completion.geometryDone = true;
@@ -3287,6 +3322,8 @@ function abortAnalysisJobs() {
   grainTools?.abortJobs();
   wignerSeitzTools?.abortJobs();
   surfaceTools?.abortJobs();
+  crystalTools?.abortJobs();
+  structureExportController?.abort();
   binningTools?.abortJobs();
   voronoiCells?.abortJobs();
   for (const controller of analysisControllers.values()) controller.abort();
@@ -4775,6 +4812,7 @@ function setControlsEnabled(enabled) {
   grainTools?.setEnabled(enabled);
   wignerSeitzTools?.setEnabled(enabled);
   surfaceTools?.setEnabled(enabled);
+  crystalTools?.setEnabled(enabled);
   binningTools?.setEnabled(enabled);
   trajectoryTools?.setEnabled(enabled);
   voronoiCells?.setEnabled(enabled);
@@ -4845,6 +4883,26 @@ function imageExportOptions() {
   return { includeBackground: elements['png-background'].checked, includeAxes: elements['png-axes'].checked,
     legend: elements['png-legend'].checked ? paletteForCurrentMode().legend : null,
     ...exportResolutionControls.getOptions(), ...sliceOutlineExportOptions(), ...textLabelExportOptions() };
+}
+
+/** Export the scientific frame, never display-only replicas or visibility cuts. */
+async function exportCrystalStructure(format, result = null) {
+  const frame = state.frame;
+  if (!frame) return;
+  structureExportController?.abort();
+  const controller = new AbortController(); structureExportController = controller;
+  const version = `${state.sourceVersion}:${state.processingRevision}`;
+  const options = { format, stem: exportFileStem(), title: state.file?.name ?? 'AlloyView crystal' };
+  try {
+    const output = format === 'polyhedra'
+      ? await structureExportClient.exportPolyhedra(frame, result, options, { signal: controller.signal })
+      : await structureExportClient.export(frame, options, { signal: controller.signal });
+    if (controller.signal.aborted || frame !== state.frame || version !== `${state.sourceVersion}:${state.processingRevision}`) return;
+    if (result && result !== crystalTools.getResult()) return;
+    downloadBlob(output.blob, output.filename);
+  } finally {
+    if (structureExportController === controller) structureExportController = null;
+  }
 }
 
 function exportFileStem() { return (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''); }
@@ -4926,6 +4984,7 @@ function captureConfiguration() {
         clusters: clusterTools.serialize(), grains: grainTools.serialize(), wignerSeitz: wignerSeitzTools.serialize(), binning: binningTools.serialize(), trajectory: trajectoryTools.serialize(),
         // The surface mesh is saved only once it is used or changed.
         ...(surfaceTools.isUntouched() ? {} : { surfaceMesh: surfaceTools.serialize() }),
+        ...(crystalTools.isUntouched() ? {} : { crystal: crystalTools.serialize() }),
         playback: playbackControls.getSettings(), ...attributeExtensions() },
       theme: document.documentElement.dataset.theme,
     },
@@ -5068,6 +5127,8 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     grainTools?.reset();
     wignerSeitzTools?.reset();
     surfaceTools?.reset();
+    crystalTools?.reset();
+    void structureExportClient.clearSnapshot().catch(() => {});
     binningTools?.reset();
     voronoiCells?.reset();
     globalAttributes.restore(saved.extensions.globalAttributes);
@@ -5200,6 +5261,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
       clusterTools.restore(saved.extensions.clusters, { isCurrent: current }),
       wignerSeitzTools.restore(saved.extensions.wignerSeitz, { isCurrent: current }),
       surfaceTools.restore(saved.extensions.surfaceMesh, { isCurrent: current }),
+      crystalTools.restore(saved.extensions.crystal, { isCurrent: current }),
       binningTools.restore(saved.extensions.binning, { isCurrent: current }),
       timeSeries.restore(saved.extensions.timeSeries, { isCurrent: current }),
       trajectoryTools.restoreLines(saved.extensions.trajectory?.lines ?? null, { isCurrent: current })]);
@@ -5216,7 +5278,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     const failed = [...Object.keys(state.analysis).filter(kind => {
       const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
       return state.analysis[kind].enabled && elements[`${prefix}-state`].textContent === 'Failed';
-    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...grainTools.failed(), ...wignerSeitzTools.failed(), ...surfaceTools.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
+    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...grainTools.failed(), ...wignerSeitzTools.failed(), ...surfaceTools.failed(), ...crystalTools.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
     elements['configuration-status'].textContent = failed.length
       ? `Configuration restored; these analyses could not complete: ${failed.join(', ')}.`
       : externalProperties.getPendingFiles().length

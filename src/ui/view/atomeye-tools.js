@@ -835,6 +835,7 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     comparison.setTrajectoryLines(sourceRenderer.trajectoryLines ?? null, sourceRenderer.trajectoryLineOptions ?? {});
     comparison.setVoronoiCellGeometry(sourceRenderer.voronoiCellGeometry, sourceRenderer.voronoiCellOptions);
     comparison.setVoronoiAllCellGeometry(sourceRenderer.voronoiAllCellGeometry, sourceRenderer.voronoiCellOptions);
+    comparison.setCoordinationPolyhedra?.(sourceRenderer.coordinationPolyhedra ?? null, sourceRenderer.coordinationPolyhedraOptions ?? {});
     syncScalarColorPreview(sourceRenderer);
     comparisonRestore.apply(comparison, comparisonWindow);
     syncComparisonToolbar();

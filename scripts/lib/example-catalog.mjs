@@ -3,7 +3,7 @@ import { basename, resolve } from 'node:path';
 import { catalogLocalSources, detectStructureFormatHeader } from '../../src/io/file-sequences.js';
 
 const naturalCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
-const formatLabels = { cfg: 'CFG structure', 'lammps-dump': 'LAMMPS dump', xyz: 'XYZ structure', pdb: 'PDB structure' };
+const formatLabels = { cfg: 'CFG structure', 'lammps-dump': 'LAMMPS dump', 'lammps-data': 'LAMMPS data', xyz: 'XYZ structure', pdb: 'PDB structure', cif: 'CIF crystal', poscar: 'POSCAR crystal' };
 const generatedFiles = new Set(['manifest.json', 'metadata.json']);
 
 function comparePaths(left, right) {

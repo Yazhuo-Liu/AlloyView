@@ -1,13 +1,13 @@
 # AlloyView user and development guide
 
 AlloyView is a browser-only atomistic structure viewer and analysis prototype for
-metals and alloys. Local AtomEye CFG, LAMMPS text dump and data, XYZ, PDB and VASP POSCAR files,
+metals, alloys and crystals. Local AtomEye CFG, LAMMPS text dump and data, XYZ, PDB, CIF and VASP POSCAR files,
 also gzip-compressed, are parsed in a Web Worker, rendered with WebGL 2 sphere
 impostors, and never uploaded by the application.
 
 The viewer supports this workflow:
 
-1. open individual CFG/LAMMPS/XYZ/PDB files, a multi-file selection, or a detected
+1. open individual CFG/LAMMPS/XYZ/PDB/CIF/POSCAR files, a multi-file selection, or a detected
    numbered structure sequence from a local folder;
 2. render atoms and the simulation cell on the GPU;
 3. calculate coordination, crystal structure, bonds, strain and RDF off the UI thread;
@@ -16,13 +16,18 @@ The viewer supports this workflow:
 5. save the processing and view as a JSON configuration and restore it with the
    matching source files.
 
+For CIF/POSCAR structures, **Visualization → Crystal** shows the current cell
+and source symmetry, draws element-selected coordination polyhedra, and exports
+CIF, POSCAR or polyhedron CSV statistics. The bundled SrTiO3 examples demonstrate
+Ti–O octahedra with a 2.2 Å cutoff. See [Crystal structures](features/crystal.md).
+
 The single **Examples** button opens an in-app listing generated from supported
 structure files and numbered sequence folders under `examples/`. Add a file or
 sequence and rebuild to include it automatically; optional descriptions live in
 `examples/metadata.json`. Development discovers additions when the chooser opens.
 See [Deployment](DEPLOYMENT.md#bundled-examples) for discovery rules and metadata.
 
-Drop a CFG, LAMMPS, XYZ, PDB or POSCAR file anywhere on the page, including the homepage, header
+Drop a CFG, LAMMPS, XYZ, PDB, CIF or POSCAR file anywhere on the page, including the homepage, header
 or controls panel, to open it directly. Dropping multiple files opens a chooser
 for a single file; numbered names stay independent. Use **Open local → Choose
 files…** or **Choose folder…** when you want to open a multi-file sequence.
