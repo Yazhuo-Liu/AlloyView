@@ -388,7 +388,7 @@ export function dxaCodeWarmupFrame() {
 
 const codeVariant = workerCount => workerCount > 1 ? 'parallel' : 'serial';
 
-async function warmDxaCode(ready, { memoryBudgetBytes, signal }) {
+async function warmDxaCode(ready, { memoryBudgetBytes, signal, onCheckpoint }) {
   const module = await getKernel();
   const warmed = module.dxaCodeWarmed ??= new Set();
   const variant = codeVariant(ready.workerCount);
@@ -399,7 +399,7 @@ async function warmDxaCode(ready, { memoryBudgetBytes, signal }) {
     // Two threads select the parallel Delaunay and interface paths, which
     // differ from the one-thread code. Results are discarded.
     await performDxaCalculation(dxaCodeWarmupFrame(), {}, { workerCount: Math.min(2, ready.workerCount),
-      memoryBudgetBytes, resetCancellation: false, signal, yieldBetweenStages: true });
+      memoryBudgetBytes, resetCancellation: false, signal, yieldBetweenStages: true, onCheckpoint });
   } catch (error) {
     if (error?.name === 'AbortError' || signal?.aborted) throw error;
     // Best effort: never retry a failing warm-up or block the real analysis.
@@ -449,13 +449,15 @@ async function initializeDxa({ atomCount = 1, workerCount: requestedWorkers,
  * the prepared thread count, and must leave the native workspace released.
  */
 export async function runDxaKernelTask({ atomCount, workerCount, memoryBudgetBytes, onProgress, onControl,
-  resetCancellation, signal, startupTimeoutMs } = {}, task) {
+  resetCancellation, signal, startupTimeoutMs, onCheckpoint } = {}, task) {
   if (activeDxaCalculation) throw new Error('A DXA calculation is already using the native workspace.');
   activeDxaCalculation = true;
   try {
     const ready = await initializeDxa({ atomCount, workerCount, memoryBudgetBytes, onProgress, onControl,
       resetCancellation, signal, startupTimeoutMs });
     const module = await getKernel();
+    checkSignal(signal);
+    if (onCheckpoint) await onCheckpoint('before-native');
     checkSignal(signal);
     module._alloy_dxa_set_threads(ready.workerCount);
     return await task(module, { workerCount: ready.workerCount,
@@ -493,7 +495,7 @@ export async function calculateDxa(frame, parameters = {}, options = {}) {
 
 async function performDxaCalculation(frame, parameters = {}, { onProgress = () => {}, onControl = () => {}, resetCancellation = true,
   memoryBudgetBytes, workerCount: requestedWorkers, signal, startupTimeoutMs, runCpuStage, yieldBetweenStages = false,
-  defectMesh: defectMeshRequest } = {}) {
+  defectMesh: defectMeshRequest, onCheckpoint } = {}) {
   checkSignal(signal);
   const settings = validateDxaParameters(parameters), count = validateDxaFrame(frame);
   const defectMesh = normalizeDefectMeshRequest(defectMeshRequest);
@@ -505,6 +507,10 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
     memoryBudgetBytes, onProgress: report, onControl, resetCancellation, signal, startupTimeoutMs });
   workerCount = ready.workerCount;
   const module = await getKernel();
+  checkSignal(signal);
+  // A Worker host acknowledges this boundary before synchronous native work
+  // starts. Cancellation during module startup can then keep the warmed heap.
+  if (onCheckpoint) await onCheckpoint('before-native');
   checkSignal(signal);
   module._alloy_dxa_set_threads(workerCount);
   // Host-side work around the native stages: kernel/pool readiness, input
@@ -598,7 +604,8 @@ async function performDxaCalculation(frame, parameters = {}, { onProgress = () =
     if (!localImported && !module._alloy_dxa_begin(...argumentsList)) throw nativeDxaError(module);
     // A background warm-up lets a Worker cancel message arrive between the
     // two synchronous native halves, even without shared cancellation memory.
-    if (yieldBetweenStages) await new Promise(resolve => setTimeout(resolve, 0));
+    if (onCheckpoint) await onCheckpoint('before-tracing');
+    else if (yieldBetweenStages) await new Promise(resolve => setTimeout(resolve, 0));
     checkSignal(signal);
     checkDxaCancellation(module);
     if (offload) {

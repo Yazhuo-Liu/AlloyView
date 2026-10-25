@@ -1,0 +1,168 @@
+{
+  "date": "2026-10-25",
+  "alloyviewCommit": "2b80367d60f9e9e8c54fbad2ee96ee9fc1d2bbb5",
+  "productionBuild": "9bb5615e43e49f39",
+  "ovitoSourceCommit": "8c76f5262598135dfcbdf04778a2e7bf93dee4eb",
+  "method": "Production Chromium UI with real analyses; selected promises are held to control completion order. Software rendering, not a physical GPU speed benchmark. OVITO is source-reviewed, not GUI-benchmarked.",
+  "interactiveTransitions": {
+    "build": "9bb5615e43e49f39",
+    "atoms": 256,
+    "initial": {
+      "time": 2942.5999999940395,
+      "frame": 0,
+      "colors": [
+        117504,
+        45180288
+      ],
+      "visible": 256,
+      "cna": true,
+      "csp": true,
+      "mode": "property:structureType",
+      "legend": "Color byAtom typePosition X [Å]Position Y [Å]Position Z [Å]Crystal structure (CNA)Central symmetry (normalized)Crystal s"
+    },
+    "filtered": {
+      "time": 3018.800000011921,
+      "frame": 0,
+      "colors": [
+        117504,
+        45180288
+      ],
+      "visible": 0,
+      "cna": true,
+      "csp": true,
+      "mode": "property:structureType",
+      "legend": "Color byAtom typePosition X [Å]Position Y [Å]Position Z [Å]Crystal structure (CNA)Central symmetry (normalized)Crystal s"
+    },
+    "pending": {
+      "time": 3138.5,
+      "frame": 1,
+      "colors": [
+        149248,
+        57372032
+      ],
+      "visible": 256,
+      "cna": false,
+      "csp": false,
+      "mode": "property:structureType",
+      "legend": "Color byAtom typePosition X [Å]Position Y [Å]Position Z [Å]Crystal structure (CNA) (calculating…)Central symmetry (norma"
+    },
+    "completed": {
+      "time": 3502.7000000178814,
+      "frame": 1,
+      "colors": [
+        117504,
+        45180288
+      ],
+      "visible": 0,
+      "cna": true,
+      "csp": false,
+      "mode": "property:structureType",
+      "legend": "Color byAtom typePosition X [Å]Position Y [Å]Position Z [Å]Crystal structure (CNA)Central symmetry (normalized) (calcula"
+    },
+    "pendingPaints": [
+      {
+        "kind": "render",
+        "time": 3087,
+        "frame": 1,
+        "colors": [
+          149248,
+          57372032
+        ],
+        "visible": 256,
+        "cna": false,
+        "csp": false,
+        "mode": "property:structureType",
+        "legend": "Color byAtom typePosition X [Å]Position Y [Å]Position Z [Å]Crystal structure (CNA) (calculating…)Central symmetry (norma"
+      }
+    ],
+    "camera": {
+      "beforeRelease": -0.7,
+      "afterMove": -0.7,
+      "continuedDragCancelled": true
+    },
+    "unrelatedCompletion": {
+      "selected": "structureType",
+      "completed": "centralSymmetry",
+      "extraColorUploads": 2
+    },
+    "cachedReturn": {
+      "newAnalyses": 0,
+      "noFallbackPaint": true
+    },
+    "playbackControlledDelay": {
+      "heldMs": 600,
+      "displayIntervalMs": 1665.5,
+      "nominalIntervalMs": 1000
+    },
+    "glError": 0
+  },
+  "exactFileUnwrap": {
+    "pending": {
+      "x": 2,
+      "hasImageFlags": true,
+      "hasUnwrapped": false,
+      "unwrapRequests": 0,
+      "cna": "Calculating…"
+    },
+    "completed": {
+      "x": 12,
+      "requests": [
+        {
+          "index": 1,
+          "infer": false,
+          "cna": "Calculated"
+        }
+      ]
+    },
+    "glError": 0
+  },
+  "cameraMethodRepro": [
+    {
+      "input": "same-array",
+      "yawBeforeRefresh": -0.7,
+      "yawAfterRefreshAndMove": -0.7,
+      "expectedYawIfDragContinued": -0.7799999999999999,
+      "dragInterrupted": true,
+      "capturesAfterRefresh": [],
+      "uploads": [
+        {
+          "target": 34962,
+          "bytes": 1,
+          "usage": 35048
+        },
+        {
+          "target": 34962,
+          "bytes": 1,
+          "usage": 35048
+        }
+      ]
+    },
+    {
+      "input": "new-equal-array",
+      "yawBeforeRefresh": -0.7,
+      "yawAfterRefreshAndMove": -0.7,
+      "expectedYawIfDragContinued": -0.7799999999999999,
+      "dragInterrupted": true,
+      "capturesAfterRefresh": [],
+      "uploads": [
+        {
+          "target": 34962,
+          "bytes": 1,
+          "usage": 35048
+        },
+        {
+          "target": 34962,
+          "bytes": 1,
+          "usage": 35048
+        }
+      ]
+    }
+  ],
+  "focusedTests": {
+    "tests": 66,
+    "passed": 66,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 0
+  }
+}

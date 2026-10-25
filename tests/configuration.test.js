@@ -51,6 +51,19 @@ test('display-only recipes work without source files and use stable defaults', (
   assert.deepEqual(parseConfiguration(JSON.stringify(recipe)), recipe);
 });
 
+test('playback recipes retain fps and mode while older recipes keep default behavior', () => {
+  assert.equal(Object.hasOwn(createConfiguration().settings.extensions, 'playback'), false);
+  const defaults = createConfiguration({ settings: { extensions: { playback: {} } } });
+  assert.deepEqual(defaults.settings.extensions.playback, { fps: 1, mode: 'complete' });
+  for (const playback of [{ fps: .1, mode: 'complete' }, { fps: 24, mode: 'preview' }, { fps: 60, mode: 'complete' }]) {
+    const recipe = createConfiguration({ settings: { extensions: { playback } } });
+    assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.extensions.playback, playback);
+  }
+  for (const playback of [{ fps: 0 }, { fps: 61 }, { fps: '24' }, { mode: 'fast' }, { playing: true }]) {
+    assert.throws(() => createConfiguration({ settings: { extensions: { playback } } }), /settings\.extensions\.playback/);
+  }
+});
+
 test('advanced view recipes retain independent vector fields, free camera and periodic origin without atom arrays', () => {
   const snapshot = fullSnapshot();
   Object.assign(snapshot.settings.display, { periodicOrigin: [0.4, -0.25, 1.1], cellWireframeMode: 'rgb-origin' });

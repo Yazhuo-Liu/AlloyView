@@ -8,6 +8,8 @@ const source = process.argv.includes('--source'), root = resolve(import.meta.dir
 if (!source) assert.ok(existsSync(resolve(root, 'dist/index.html')), 'Run npm run build first, or pass --source.');
 // Delaying selected requests controls completion order; after release, the
 // application uses its real CPU pool, Wasm kernels, masks and CSV lifecycle.
+// Prediction has its own browser check. Suppress only speculative scheduling
+// here so a completed next-frame result cannot bypass an injected failure.
 const report = await withWebGpuBrowser(async ({ call, evaluate }) => {
   const origin = await evaluate('location.origin');
   await call('Emulation.setDeviceMetricsOverride', { width: 1400, height: 1000, deviceScaleFactor: 1, mobile: false });
@@ -25,7 +27,9 @@ const report = await withWebGpuBrowser(async ({ call, evaluate }) => {
     const {WebGLRenderer}=await import('${modulePath}/render/webgl-renderer.js');
     const {AnalysisPool}=await import('${modulePath}/analysis/analysis-pool.js');
     const {DxaClient}=await import('${modulePath}/analysis/dxa-client.js');
+    const {AnalysisPrefetchScheduler}=await import('${modulePath}/application/analysis-prefetch.js');
     window.dependencyChecks={gates:new Map(),pending:[],started:[],surfaceRequests:[]}; const checks=dependencyChecks;
+    AnalysisPrefetchScheduler.prototype.schedule=function(){this.cancel()};
     const render=WebGLRenderer.prototype.render;WebGLRenderer.prototype.render=function(...args){if(this.canvas.id==='viewport')checks.renderer=this;return render.apply(this,args)};
     const analyze=AnalysisPool.prototype.analyze;AnalysisPool.prototype.analyze=async function(frame,parameters,options={}){
       checks.pool=this;checks.started.push(parameters.kind);

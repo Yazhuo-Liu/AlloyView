@@ -16,7 +16,8 @@ test('small trajectories are eligible for lazy all-frame caching', () => {
 test('large trajectories use a bounded adaptive cache', () => {
   const frame = sampleFrame(1_000_000);
   const policy = chooseFrameCachePolicy(frame, 500, { heapLimit: 512 * 1024 ** 2, deviceMemoryGiB: 2 });
-  assert.ok(policy.limit >= 3);
+  assert.ok(policy.limit >= 1);
+  assert.ok(policy.limit * policy.estimatedFrameBytes <= policy.budgetBytes);
   assert.ok(policy.limit < 500);
   assert.equal(policy.fullTrajectory, false);
 });
@@ -60,8 +61,16 @@ test('retained analysis buffers reduce trajectory cache capacity under the same 
   assert.equal(before.limit, 500);
   assert.equal(after.fullTrajectory, false);
   assert.equal(after.estimatedFrameBytes, Math.ceil(estimateFrameBytes(frame) * 1.35));
-  assert.equal(after.limit, Math.max(3, Math.floor(after.budgetBytes / after.estimatedFrameBytes)));
+  assert.equal(after.limit, Math.max(1, Math.floor(after.budgetBytes / after.estimatedFrameBytes)));
   assert.ok(after.limit < before.limit);
+});
+
+test('an oversized frame does not enlarge the device budget or force three resident frames', () => {
+  const frame = sampleFrame(1_000_000);
+  const policy = chooseFrameCachePolicy(frame, 50, { heapLimit: 32 * 1024 ** 2, heapUsed: 30 * 1024 ** 2 });
+  assert.equal(policy.limit, 1);
+  assert.ok(policy.budgetBytes < policy.estimatedFrameBytes);
+  assert.ok(policy.budgetBytes <= 2 * 1024 ** 2 * .4);
 });
 
 test('physical replication accounts for compound IDs and retained source geometry', () => {

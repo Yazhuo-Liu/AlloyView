@@ -5,8 +5,8 @@ const aborted = () => new DOMException('Frame parsing cancelled.', 'AbortError')
 
 /** One foreground lane is never consumed by speculative parsing. A bounded
  * background pool retains modules between frames. Cancelling a numeric parse
- * rejects its caller immediately; the slot and CPU permit stay occupied until
- * the Worker acknowledges completion, then its result is discarded. */
+ * rejects its caller immediately; cooperative readers acknowledge the abort at
+ * their next time slice. The slot/CPU permit stay occupied until that ACK. */
 export class FrameParserPool {
   constructor({ environment = globalThis, backgroundCount, acquire, promote, workerFactory } = {}) {
     this.backgroundCount = backgroundCount ?? Math.max(1, Math.min(4, cpuWorkerLimit(environment) - 1));
@@ -152,8 +152,8 @@ export class FrameParserPool {
     const slot = task.slot;
     if (slot?.task !== task) return;
     if (task.started && slot.worker) {
-      // Keep the reusable Worker and its permit: releasing a permit before
-      // the synchronous parse finishes would oversubscribe the CPU budget.
+      // Keep the reusable Worker and its permit until its cooperative abort
+      // ACK: releasing early would oversubscribe the CPU budget.
       task.cancelled = true;
       task.signal?.removeEventListener('abort', task.abort);
       task.reject(aborted());
@@ -178,7 +178,7 @@ export class FrameParserPool {
   }
 
   /** Cancel source-owned jobs while retaining imported parser modules. A
-   * cancelled synchronous parse keeps its slot/permit until its final ACK. */
+   * cancelled reader keeps its slot/permit until its final ACK. */
   reset() {
     for (const task of [...this.queue]) this.cancel(task);
     for (const slot of this.slots) if (slot.task && !slot.task.warm) this.cancel(slot.task);

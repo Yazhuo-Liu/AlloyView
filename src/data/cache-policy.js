@@ -5,23 +5,36 @@ const MEBIBYTE = 1024 ** 2;
 const GIBIBYTE = 1024 ** 3;
 
 export function estimateFrameBytes(frame) {
+  let bytes = 0;
+  for (const size of frameMemoryUsage(frame).values()) bytes += size;
+  return bytes;
+}
+
+/** Retained allocations, keyed by their owner, let caches charge a shared
+ * backing buffer once even when several frames/properties refer to it. */
+export function frameMemoryUsage(frame) {
   const buffers = new Set(), visited = new Set(), pending = [frame];
+  const allocations = new Map();
   // Numeric correspondence lookups are weakly keyed by the reference IDs.
   // Their private snapshot/table remains live beside an otherwise unchanged
   // frame, so include it without exposing it as a scientific property.
-  let bytes = frame?.ids ? referenceMappingCacheBytes(frame.ids) : 0;
+  let idBytes = frame?.ids ? referenceMappingCacheBytes(frame.ids) : 0;
   // Physical replication retains the parsed source for switching back, and
   // uses stable compound IDs stored as strings rather than a typed ID buffer.
-  bytes += Math.max(0, Number(frame?.processingSourceBytes) || 0);
   const knownIdBytes = frame?.ids ? retainedIdBytes(frame.ids) : undefined;
-  if (knownIdBytes !== undefined) bytes += knownIdBytes;
+  if (knownIdBytes !== undefined) idBytes += knownIdBytes;
   else if (Array.isArray(frame?.ids)) {
-    for (const id of frame.ids) bytes += 16 + (typeof id === 'string' ? id.length * 2 : 8);
+    for (const id of frame.ids) idBytes += 16 + (typeof id === 'string' ? id.length * 2 : 8);
   }
+  if (idBytes) allocations.set(frame.ids, idBytes);
+  // Source storage is distinct from ID lookups/compound ID storage. Keep the
+  // opaque source estimate against the frame that owns it.
+  const sourceBytes = Math.max(0, Number(frame?.processingSourceBytes) || 0);
+  if (sourceBytes) allocations.set(frame, sourceBytes);
   const includeBuffer = (buffer) => {
     if (buffers.has(buffer)) return;
     buffers.add(buffer);
-    bytes += buffer.byteLength;
+    allocations.set(buffer, buffer.byteLength);
   };
   // Analysis caches can nest arrays below result/metadata records, Maps and
   // Sets. Walk their containers, but never enumerate per-atom typed elements.
@@ -30,7 +43,7 @@ export function estimateFrameBytes(frame) {
     const value = pending.pop();
     if (!value || typeof value !== 'object' || visited.has(value)) continue;
     visited.add(value);
-    if (value === frame.ids && knownIdBytes !== undefined) continue;
+    if (value === frame?.ids && (knownIdBytes !== undefined || Array.isArray(value))) continue;
     if (ArrayBuffer.isView(value)) { includeBuffer(value.buffer); continue; }
     if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer === 'function' && value instanceof SharedArrayBuffer)) {
       includeBuffer(value); continue;
@@ -43,7 +56,7 @@ export function estimateFrameBytes(frame) {
       for (const entry of Object.values(value)) if (entry && typeof entry === 'object') pending.push(entry);
     }
   }
-  return bytes;
+  return allocations;
 }
 
 export function chooseFrameCachePolicy(frame, frameCount, environment = {}) {
@@ -56,9 +69,10 @@ export function chooseFrameCachePolicy(frame, frameCount, environment = {}) {
   if (heapLimit) budgets.push(heapLimit * 0.22);
   if (heapLimit && heapUsed && heapUsed < heapLimit) budgets.push((heapLimit - heapUsed) * 0.40);
   if (deviceMemoryGiB) budgets.push(deviceMemoryGiB * GIBIBYTE * 0.12);
-  const budgetBytes = Math.max(estimatedFrameBytes, Math.floor(Math.min(...budgets)));
-  const minimum = Math.min(count, 3);
-  const capacity = Math.max(minimum, Math.floor(budgetBytes / estimatedFrameBytes));
+  const budgetBytes = Math.max(1, Math.floor(Math.min(...budgets)));
+  // The displayed frame is always admitted. Neighbours are optional: three
+  // enormous frames must not bypass a small device's memory budget.
+  const capacity = Math.max(1, Math.floor(budgetBytes / estimatedFrameBytes));
   const limit = Math.min(count, capacity);
   return {
     limit,

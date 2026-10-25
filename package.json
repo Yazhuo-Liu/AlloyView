@@ -47,6 +47,7 @@
     "test:browser:trajectory-workers": "node scripts/browser/browser-trajectory-workers.mjs",
     "test:browser:source-loading": "node scripts/browser/browser-source-loading.mjs",
     "test:browser:frame-first": "node scripts/browser/browser-frame-first.mjs",
+    "test:browser:interactive-smoothness": "node scripts/browser/browser-interactive-smoothness.mjs",
     "test:browser:explicit-unwrap": "node scripts/browser/browser-explicit-unwrap.mjs",
     "test:browser:renderer-context": "node scripts/browser/browser-renderer-context.mjs",
     "test:browser:picking-camera": "node scripts/browser/browser-picking-camera.mjs",
@@ -111,7 +112,10 @@
     "benchmark:png-worker": "node scripts/benchmarks/benchmark-png-worker.mjs",
     "test:browser:gpu-thin-cells": "node scripts/browser/browser-gpu-thin-cells.mjs",
     "test:browser:gpu-prefetch": "node scripts/browser/browser-gpu-prefetch.mjs",
-    "benchmark:gpu-prefetch": "node scripts/benchmarks/benchmark-gpu-prefetch.mjs"
+    "benchmark:gpu-prefetch": "node scripts/benchmarks/benchmark-gpu-prefetch.mjs",
+    "test:browser:analysis-prefetch": "node scripts/browser/browser-analysis-prefetch.mjs",
+    "test:browser:scene-transactions": "node scripts/browser/browser-scene-transactions.mjs",
+    "benchmark:interactive-smoothness": "node scripts/benchmarks/benchmark-interactive-smoothness.mjs"
   },
   "engines": {
     "node": ">=20"

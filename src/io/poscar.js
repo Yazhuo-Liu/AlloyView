@@ -1,6 +1,8 @@
-import { createCell, determinant3, fractionalToCartesian, validateFrame } from '../data/model.js';
+import { PARSER_CHECKPOINT_MASK, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
+import { fractionalToCartesianSteps } from './cooperative-coordinates.js';
+import { createCell, determinant3, validateFrame } from '../data/model.js';
 import { attachFrameSummary } from '../data/frame-summary.js';
-import { coordinatesForCell } from './xyz.js';
+import { coordinatesForCellSteps } from './xyz.js';
 
 const poscarError = (message) => new Error(`POSCAR: ${message}`);
 const SYMBOL = /^[A-Z][a-z]?$/;
@@ -31,8 +33,16 @@ export function looksLikePoscar(text) {
  * numbered in file order; all axes are periodic. Velocities and predictor
  * blocks after the coordinates are ignored. */
 export function parsePoscar(text, sourceName = 'POSCAR') {
+  return runParserSteps(parsePoscarSteps(text, sourceName));
+}
+
+export function parsePoscarAsync(text, sourceName = 'POSCAR', options = {}) {
+  return runParserStepsAsync(parsePoscarSteps(text, sourceName), options);
+}
+
+function* parsePoscarSteps(text, sourceName) {
   const startedAt = performance.now();
-  const lines = String(text).replace(/^﻿/, '').split(/\r?\n/);
+  const lines = yield* splitParserLines(text);
   const comment = lines[0]?.trim() ?? '';
   const values = (index, label) => {
     const tokens = (lines[index] ?? '').trim().split(/\s+/).filter(token => token && !token.startsWith('!'));
@@ -91,6 +101,7 @@ export function parsePoscar(text, sourceName = 'POSCAR') {
   const raw = new Float64Array(count * 3);
   const flags = selective ? ['X', 'Y', 'Z'].map(axis => ({ name: `selectiveDynamics${axis}`, unit: '', data: new Float32Array(count) })) : [];
   for (let atom = 0; atom < count; atom += 1, cursor += 1) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
     const tokens = (lines[cursor] ?? '').trim().split(/\s+/);
     if (tokens.length < (selective ? 6 : 3)) throw poscarError(`line ${cursor + 1}: atom ${atom + 1} needs three coordinates${selective ? ' and three T/F flags' : ''}.`);
     for (let axis = 0; axis < 3; axis += 1) {
@@ -107,8 +118,14 @@ export function parsePoscar(text, sourceName = 'POSCAR') {
 
   const cell = createCell({ vectors, pbc: [true, true, true], triclinic: vectors.some((value, index) => index % 4 !== 0 && value !== 0) });
   // Cartesian coordinates carry the same scaling as the lattice.
-  const positions = cartesian ? raw.map((value, index) => value * factors[index % 3])
-    : fractionalToCartesian(raw, cell, new Float64Array(raw.length));
+  let positions;
+  if (cartesian) {
+    positions = new Float64Array(raw.length);
+    for (let index = 0; index < raw.length; index++) {
+      if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
+      positions[index] = raw[index] * factors[index % 3];
+    }
+  } else positions = yield* fractionalToCartesianSteps(raw, cell, new Float64Array(raw.length));
 
   const typeIndex = new Map(), typeLabels = [], types = new Uint16Array(count);
   let atom = 0;
@@ -119,9 +136,12 @@ export function parsePoscar(text, sourceName = 'POSCAR') {
     atom += speciesCount;
   });
   const ids = new Float64Array(count);
-  for (let index = 0; index < count; index += 1) ids[index] = index + 1;
+  for (let index = 0; index < count; index += 1) {
+    if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
+    ids[index] = index + 1;
+  }
   const summaryOutput = { types, typeCount: typeLabels.length };
-  const coordinates = coordinatesForCell(positions, cell, 'POSCAR', summaryOutput);
+  const coordinates = yield* coordinatesForCellSteps(positions, cell, 'POSCAR', summaryOutput);
   return attachFrameSummary(validateFrame({
     ids, idSource: 'row-order', types, typeLabels, ...coordinates, cell,
     properties: flags, timestep: null, title: sourceName, sourceFormat: 'poscar', comment,

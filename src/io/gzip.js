@@ -125,21 +125,43 @@ export async function readStructureHeader(file, limit = HEADER_BYTES) {
 }
 
 /** The complete contents of a file, decompressed if it is gzip-compressed. */
-export async function readFileBytes(file) {
+export async function readFileBytes(file, { signal } = {}) {
+  const check = () => { if (signal?.aborted) throw new DOMException('File reading cancelled.', 'AbortError'); };
+  check();
   const bytes = new Uint8Array(await file.arrayBuffer());
+  check();
   if (!rememberGzip(file, bytes)) return bytes;
   const stream = decompressedStream(file, new Blob([bytes]));
+  const reader = stream.getReader(), chunks = [];
+  let length = 0;
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal?.addEventListener('abort', abort, { once: true });
   try {
-    return new Uint8Array(await new Response(stream).arrayBuffer());
+    for (;;) {
+      check();
+      const { done, value } = await reader.read();
+      check();
+      if (done) break;
+      chunks.push(value); length += value.length;
+    }
+    const output = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.length; }
+    check();
+    return output;
   } catch (error) {
+    check();
     throw decompressionError(file, error);
+  } finally {
+    signal?.removeEventListener('abort', abort);
+    void reader.cancel().catch(() => {});
   }
 }
 
 /** The complete text of a file, decompressed if it is gzip-compressed; the
  * same text as `file.text()` for an uncompressed file. */
-export async function readFileText(file) {
-  return new TextDecoder().decode(await readFileBytes(file));
+export async function readFileText(file, options) {
+  return new TextDecoder().decode(await readFileBytes(file, options));
 }
 
 /**

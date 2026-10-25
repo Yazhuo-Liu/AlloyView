@@ -53,6 +53,9 @@ export function surfaceSummaryRows(result) {
 /** Alpha-shape surface of the displayed frame. The result is cached per frame,
  * settings and atom restriction; display choices never recalculate. */
 export function initializeSurfaceTools({ renderer, tools, client = new DxaClient(), getFrame, getFrames = () => [getFrame()],
+  // Applications with preliminary appearance snapshots supply the formal
+  // current-frame mask here. The visible renderer may still show an old mask
+  // while a different, non-filtering color quantity is being calculated.
   getSourceVersion = () => 0, getSelectionGroups = () => [], getVisibility = () => renderer?.visibility ?? null,
   getVisibilityDependencies = () => [],
   getFileStem = () => 'structure', getFrameIndex = () => 0, onResultsChange = () => {}, onDisplayChange = () => {},
@@ -176,8 +179,10 @@ export function initializeSurfaceTools({ renderer, tools, client = new DxaClient
     if (settings.atoms === 'all') return null;
     const mask = new Uint8Array(frame.ids.length);
     if (settings.atoms === 'visible') {
-      const visibility = getVisibility();
-      if (visibility?.length !== mask.length) return null;
+      const visibility = getVisibility(frame);
+      if (visibility == null) return null;
+      if (visibility.preview === true) throw new Error('Visible-atom analysis requires current-frame filters, not a temporary appearance preview.');
+      if (visibility.length !== mask.length) throw new Error('The visible-atom filter does not match the current frame.');
       for (let atom = 0; atom < mask.length; atom += 1) mask[atom] = visibility[atom] ? 1 : 0;
     } else {
       const members = atomIdSet(group.atomIds);

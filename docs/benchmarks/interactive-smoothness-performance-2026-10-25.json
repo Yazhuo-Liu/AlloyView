@@ -1,0 +1,3423 @@
+{
+  "date": "2026-10-25",
+  "method": "Serial production Chromium runs using the same benchmark script. Software SwiftShader; draw submission timings, not physical GPU/display latency. Controlled CNA delays verify presentation behavior, not scientific compute speed.",
+  "changes": {
+    "scalarNeighbor": {
+      "before": {
+        "count": 12,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 721.9,
+          "p95": 901,
+          "p99": 901
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 721.9,
+          "p95": 901,
+          "p99": 901
+        },
+        "fallbackFlashFrames": 0,
+        "previewFrames": 0,
+        "atomColorUploads": 12,
+        "atomColorUploadBytes": 1800000,
+        "atomVisibilityUploads": 24,
+        "atomVisibilityUploadBytes": 1200000,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      },
+      "after": {
+        "count": 12,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 617.4,
+          "p95": 854,
+          "p99": 854
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 617.4,
+          "p95": 854,
+          "p99": 854
+        },
+        "fallbackFlashFrames": 0,
+        "previewFrames": 0,
+        "atomColorUploads": 12,
+        "atomColorUploadBytes": 1800000,
+        "atomVisibilityUploads": 12,
+        "atomVisibilityUploadBytes": 600000,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      }
+    },
+    "scalarRandom": {
+      "before": {
+        "count": 12,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 582.3,
+          "p95": 838.8,
+          "p99": 838.8
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 582.3,
+          "p95": 838.8,
+          "p99": 838.8
+        },
+        "fallbackFlashFrames": 0,
+        "previewFrames": 0,
+        "atomColorUploads": 12,
+        "atomColorUploadBytes": 1800000,
+        "atomVisibilityUploads": 24,
+        "atomVisibilityUploadBytes": 1200000,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      },
+      "after": {
+        "count": 12,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 742,
+          "p95": 911.9,
+          "p99": 911.9
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 742,
+          "p95": 911.9,
+          "p99": 911.9
+        },
+        "fallbackFlashFrames": 0,
+        "previewFrames": 0,
+        "atomColorUploads": 12,
+        "atomColorUploadBytes": 1800000,
+        "atomVisibilityUploads": 12,
+        "atomVisibilityUploadBytes": 600000,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      }
+    },
+    "controlledCna": {
+      "before": {
+        "count": 6,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 268.6,
+          "p95": 588.4,
+          "p99": 588.4
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 268.6,
+          "p95": 588.4,
+          "p99": 588.4
+        },
+        "fallbackFlashFrames": 1,
+        "previewFrames": 1,
+        "atomColorUploads": 8,
+        "atomColorUploadBytes": 263424,
+        "atomVisibilityUploads": 14,
+        "atomVisibilityUploadBytes": 153664,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      },
+      "after": {
+        "count": 6,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 122.6,
+          "p95": 715.6,
+          "p99": 715.6
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 238.7,
+          "p95": 1020.4,
+          "p99": 1020.4
+        },
+        "fallbackFlashFrames": 0,
+        "previewFrames": 6,
+        "atomColorUploads": 6,
+        "atomColorUploadBytes": 197568,
+        "atomVisibilityUploads": 12,
+        "atomVisibilityUploadBytes": 131712,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      }
+    }
+  },
+  "unrelatedCsp": {
+    "before": {
+      "completions": 6,
+      "colorUploads": 12,
+      "colorBytes": 395136,
+      "visibilityUploads": 12,
+      "visibilityBytes": 131712
+    },
+    "after": {
+      "completions": 6,
+      "colorUploads": 0,
+      "colorBytes": 0,
+      "visibilityUploads": 0,
+      "visibilityBytes": 0
+    }
+  },
+  "cancellation": {
+    "before": {
+      "atoms": 500000,
+      "callerRejectionMs": 0.4000000059604645,
+      "workerAckMs": 133.2999999821186,
+      "nextForegroundReadyMs": 135.2999999821186,
+      "ackOk": false,
+      "ackName": "AbortError",
+      "workersCreated": 1,
+      "warmWorkerReused": true,
+      "permitsImmediatelyAfterCancel": 1,
+      "permitsAfterCompletion": 0,
+      "nextFrameIndex": 150
+    },
+    "after": {
+      "atoms": 500000,
+      "callerRejectionMs": 0.4000000059604645,
+      "workerAckMs": 14.799999982118607,
+      "nextForegroundReadyMs": 19.299999982118607,
+      "ackOk": false,
+      "ackName": "AbortError",
+      "workersCreated": 1,
+      "warmWorkerReused": true,
+      "permitsImmediatelyAfterCancel": 1,
+      "permitsAfterCompletion": 0,
+      "nextFrameIndex": 150
+    }
+  },
+  "baseline": {
+    "date": "2026-10-25",
+    "label": "baseline",
+    "source": "2b80367",
+    "method": {
+      "production": true,
+      "softwareGpu": true,
+      "physicalGpuBenchmark": false,
+      "cpuAnalyses": true,
+      "analysisGpuEnabled": false,
+      "reportedHardwareConcurrency": 8,
+      "drawTiming": "Input event to end of the actual target viewport render() call. Measures submitted draws; no gl.finish/fence and no promise of physical display latency.",
+      "uploadScope": "Actual main atom RGB/visibility WebGL bufferData and bufferSubData calls, including frame uploads. Optional primitive/overlay buffers are excluded.",
+      "memoryScope": "Chromium Runtime.getHeapUsage and performance.memory; excludes GPU memory, native/Wasm allocator reservations and Blob backing storage unless Chromium reports them separately.",
+      "cancellationScope": "Separate direct production FrameParserPool probe in the same browser, not a UI seek. Worker ACK includes any remaining Blob read, numeric chunk and message transport; immediate client rejection is measured separately.",
+      "controlledCna": "100ms held completions, then real CPU CNA/CSP. These values verify continuity and upload behavior; do not interpret the artificial delay as calculation speed.",
+      "statistics": "Nearest-rank percentiles; 24 scalar seeks and 6 controlled CNA seeks by default. Small samples and shared-host/SwiftShader noise limit timing conclusions."
+    },
+    "runtime": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/app.js",
+    "browser": {
+      "protocolVersion": "1.3",
+      "product": "Chrome/154.0.8037.57",
+      "revision": "@73c14f6228d7cd537c855007e8f88678969cc0eb",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+      "jsVersion": "15.4.80.11"
+    },
+    "graphics": {
+      "vendor": "Google Inc. (Google)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+    },
+    "navigator": {
+      "hardwareConcurrency": 8,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+      "deviceMemory": 32
+    },
+    "scalar": {
+      "requestedAtoms": 50000,
+      "frameCount": 10,
+      "samples": [
+        {
+          "id": 10,
+          "target": 0,
+          "kind": "cached-neighbor",
+          "inputAt": 7705,
+          "firstTargetDrawSubmittedMs": 874.7999999821186,
+          "finalSelectedAppearanceDrawSubmittedMs": 874.7999999821186,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 8579.799999982119
+        },
+        {
+          "id": 11,
+          "target": 1,
+          "kind": "cached-neighbor",
+          "inputAt": 8591.299999982119,
+          "firstTargetDrawSubmittedMs": 577.5,
+          "finalSelectedAppearanceDrawSubmittedMs": 577.5,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 9168.799999982119
+        },
+        {
+          "id": 12,
+          "target": 2,
+          "kind": "cached-neighbor",
+          "inputAt": 9179.59999999404,
+          "firstTargetDrawSubmittedMs": 672.2999999821186,
+          "finalSelectedAppearanceDrawSubmittedMs": 672.2999999821186,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 9851.899999976158
+        },
+        {
+          "id": 13,
+          "target": 3,
+          "kind": "cached-neighbor",
+          "inputAt": 9864.59999999404,
+          "firstTargetDrawSubmittedMs": 882.1999999880791,
+          "finalSelectedAppearanceDrawSubmittedMs": 882.1999999880791,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 10746.799999982119
+        },
+        {
+          "id": 14,
+          "target": 4,
+          "kind": "cached-neighbor",
+          "inputAt": 10757.799999982119,
+          "firstTargetDrawSubmittedMs": 859.5999999940395,
+          "finalSelectedAppearanceDrawSubmittedMs": 859.5999999940395,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 11617.399999976158
+        },
+        {
+          "id": 15,
+          "target": 5,
+          "kind": "cached-neighbor",
+          "inputAt": 11642.09999999404,
+          "firstTargetDrawSubmittedMs": 633.1999999880791,
+          "finalSelectedAppearanceDrawSubmittedMs": 633.1999999880791,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 12275.299999982119
+        },
+        {
+          "id": 16,
+          "target": 6,
+          "kind": "cached-neighbor",
+          "inputAt": 12294.5,
+          "firstTargetDrawSubmittedMs": 618.6999999880791,
+          "finalSelectedAppearanceDrawSubmittedMs": 618.6999999880791,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 12913.199999988079
+        },
+        {
+          "id": 17,
+          "target": 7,
+          "kind": "cached-neighbor",
+          "inputAt": 12925.59999999404,
+          "firstTargetDrawSubmittedMs": 763.7999999821186,
+          "finalSelectedAppearanceDrawSubmittedMs": 763.7999999821186,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 13689.399999976158
+        },
+        {
+          "id": 18,
+          "target": 8,
+          "kind": "cached-neighbor",
+          "inputAt": 13704.299999982119,
+          "firstTargetDrawSubmittedMs": 835,
+          "finalSelectedAppearanceDrawSubmittedMs": 835,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 14539.299999982119
+        },
+        {
+          "id": 19,
+          "target": 9,
+          "kind": "cached-neighbor",
+          "inputAt": 14543.299999982119,
+          "firstTargetDrawSubmittedMs": 901,
+          "finalSelectedAppearanceDrawSubmittedMs": 901,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 15444.299999982119
+        },
+        {
+          "id": 20,
+          "target": 0,
+          "kind": "cached-neighbor",
+          "inputAt": 15458.899999976158,
+          "firstTargetDrawSubmittedMs": 661.8000000119209,
+          "finalSelectedAppearanceDrawSubmittedMs": 661.8000000119209,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 16120.699999988079
+        },
+        {
+          "id": 21,
+          "target": 1,
+          "kind": "cached-neighbor",
+          "inputAt": 16142,
+          "firstTargetDrawSubmittedMs": 721.8999999761581,
+          "finalSelectedAppearanceDrawSubmittedMs": 721.8999999761581,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 16863.899999976158
+        },
+        {
+          "id": 22,
+          "target": 7,
+          "kind": "cached-random",
+          "inputAt": 16877,
+          "firstTargetDrawSubmittedMs": 801.3999999761581,
+          "finalSelectedAppearanceDrawSubmittedMs": 801.3999999761581,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 17678.399999976158
+        },
+        {
+          "id": 23,
+          "target": 4,
+          "kind": "cached-random",
+          "inputAt": 17693.899999976158,
+          "firstTargetDrawSubmittedMs": 672.3000000119209,
+          "finalSelectedAppearanceDrawSubmittedMs": 672.3000000119209,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 18366.19999998808
+        },
+        {
+          "id": 24,
+          "target": 1,
+          "kind": "cached-random",
+          "inputAt": 18376.29999998212,
+          "firstTargetDrawSubmittedMs": 587.3000000119209,
+          "finalSelectedAppearanceDrawSubmittedMs": 587.3000000119209,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 18963.59999999404
+        },
+        {
+          "id": 25,
+          "target": 8,
+          "kind": "cached-random",
+          "inputAt": 18977.69999998808,
+          "firstTargetDrawSubmittedMs": 578.1999999880791,
+          "finalSelectedAppearanceDrawSubmittedMs": 578.1999999880791,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 19555.899999976158
+        },
+        {
+          "id": 26,
+          "target": 5,
+          "kind": "cached-random",
+          "inputAt": 19561.79999998212,
+          "firstTargetDrawSubmittedMs": 560.9000000059605,
+          "finalSelectedAppearanceDrawSubmittedMs": 560.9000000059605,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 20122.69999998808
+        },
+        {
+          "id": 27,
+          "target": 2,
+          "kind": "cached-random",
+          "inputAt": 20140.399999976158,
+          "firstTargetDrawSubmittedMs": 582.3000000119209,
+          "finalSelectedAppearanceDrawSubmittedMs": 582.3000000119209,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 20722.69999998808
+        },
+        {
+          "id": 28,
+          "target": 9,
+          "kind": "cached-random",
+          "inputAt": 20744.09999999404,
+          "firstTargetDrawSubmittedMs": 570,
+          "finalSelectedAppearanceDrawSubmittedMs": 570,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 21314.09999999404
+        },
+        {
+          "id": 29,
+          "target": 6,
+          "kind": "cached-random",
+          "inputAt": 21320.69999998808,
+          "firstTargetDrawSubmittedMs": 592.3000000119209,
+          "finalSelectedAppearanceDrawSubmittedMs": 592.3000000119209,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 21913
+        },
+        {
+          "id": 30,
+          "target": 3,
+          "kind": "cached-random",
+          "inputAt": 21919.899999976158,
+          "firstTargetDrawSubmittedMs": 577.3000000119209,
+          "finalSelectedAppearanceDrawSubmittedMs": 577.3000000119209,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 22497.19999998808
+        },
+        {
+          "id": 31,
+          "target": 0,
+          "kind": "cached-random",
+          "inputAt": 22507.09999999404,
+          "firstTargetDrawSubmittedMs": 553.7999999821186,
+          "finalSelectedAppearanceDrawSubmittedMs": 553.7999999821186,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 23060.899999976158
+        },
+        {
+          "id": 32,
+          "target": 7,
+          "kind": "cached-random",
+          "inputAt": 23075.09999999404,
+          "firstTargetDrawSubmittedMs": 732.6999999880791,
+          "finalSelectedAppearanceDrawSubmittedMs": 732.6999999880791,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 23807.79999998212
+        },
+        {
+          "id": 33,
+          "target": 4,
+          "kind": "cached-random",
+          "inputAt": 23824.29999998212,
+          "firstTargetDrawSubmittedMs": 838.8000000119209,
+          "finalSelectedAppearanceDrawSubmittedMs": 838.8000000119209,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 100000
+            }
+          },
+          "finishedAt": 24663.09999999404
+        }
+      ],
+      "memoryBefore": {
+        "usedSize": 103882772,
+        "totalSize": 149684224,
+        "embedderHeapUsedSize": 13184624,
+        "backingStorageSize": 23782427,
+        "usedJSHeapSize": 127665847,
+        "totalJSHeapSize": 173466651,
+        "jsHeapSizeLimit": 4395630592
+      },
+      "memoryAfter": {
+        "usedSize": 7082148,
+        "totalSize": 10199040,
+        "embedderHeapUsedSize": 7813488,
+        "backingStorageSize": 26051222,
+        "usedJSHeapSize": 33133610,
+        "totalJSHeapSize": 36250262,
+        "jsHeapSizeLimit": 4395630592
+      },
+      "workers": {
+        "structureWorkerRetained": true,
+        "workers": [
+          {
+            "id": 0,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/structure-worker.js",
+            "created": 928.8999999761581,
+            "terminated": false
+          },
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/analysis/gpu/worker.js",
+            "created": 973,
+            "terminated": true,
+            "terminatedAt": 1760.0999999940395
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 1779.199999988079,
+            "terminated": false
+          },
+          {
+            "id": 3,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/dxa-worker.js",
+            "created": 1784.7999999821186,
+            "terminated": false
+          },
+          {
+            "id": 4,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/structure-worker.js",
+            "created": 1869.0999999940395,
+            "terminated": false
+          },
+          {
+            "id": 5,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/surface-geometry-worker.js",
+            "created": 1937.5999999940395,
+            "terminated": false
+          },
+          {
+            "id": 6,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 1940.2999999821186,
+            "terminated": false
+          },
+          {
+            "id": 7,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 1940.5,
+            "terminated": false
+          },
+          {
+            "id": 8,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 1963.5999999940395,
+            "terminated": false
+          },
+          {
+            "id": 9,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 2115.5,
+            "terminated": false
+          },
+          {
+            "id": 10,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 2168.5999999940395,
+            "terminated": false
+          }
+        ],
+        "cpuPermits": 0,
+        "cpuLimit": 6,
+        "cpuWarmup": {
+          "readyWorkers": 6,
+          "readyModules": {
+            "voronoi": 6,
+            "ptm": 6,
+            "dxa": 0
+          },
+          "preparedVoronoiWorkers": 6,
+          "preparedVoronoiFrameKey": 34,
+          "workerCount": 6,
+          "targetWorkers": 0,
+          "maximumWorkers": 6
+        }
+      }
+    },
+    "controlledCna": {
+      "atoms": 10976,
+      "samples": [
+        {
+          "id": 34,
+          "target": 1,
+          "kind": "controlled-cna",
+          "inputAt": 26804.399999976158,
+          "firstTargetDrawSubmittedMs": 588.4000000059605,
+          "finalSelectedAppearanceDrawSubmittedMs": 588.4000000059605,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 27392.79999998212
+        },
+        {
+          "id": 35,
+          "target": 2,
+          "kind": "controlled-cna",
+          "inputAt": 28495.59999999404,
+          "firstTargetDrawSubmittedMs": 369.09999999403954,
+          "finalSelectedAppearanceDrawSubmittedMs": 369.09999999403954,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 28864.69999998808
+        },
+        {
+          "id": 36,
+          "target": 3,
+          "kind": "controlled-cna",
+          "inputAt": 29298.59999999404,
+          "firstTargetDrawSubmittedMs": 268.59999999403954,
+          "finalSelectedAppearanceDrawSubmittedMs": 268.59999999403954,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 29567.19999998808
+        },
+        {
+          "id": 37,
+          "target": 4,
+          "kind": "controlled-cna",
+          "inputAt": 29945,
+          "firstTargetDrawSubmittedMs": 69.7999999821186,
+          "finalSelectedAppearanceDrawSubmittedMs": 182.2999999821186,
+          "previewFrames": 1,
+          "fallbackFlashFrames": 1,
+          "uploads": {
+            "colors": {
+              "count": 3,
+              "bytes": 98784
+            },
+            "visibility": {
+              "count": 4,
+              "bytes": 43904
+            }
+          },
+          "finishedAt": 30127.29999998212
+        },
+        {
+          "id": 38,
+          "target": 5,
+          "kind": "controlled-cna",
+          "inputAt": 30402.5,
+          "firstTargetDrawSubmittedMs": 183.89999997615814,
+          "finalSelectedAppearanceDrawSubmittedMs": 183.89999997615814,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 30586.399999976158
+        },
+        {
+          "id": 39,
+          "target": 6,
+          "kind": "controlled-cna",
+          "inputAt": 30775.09999999404,
+          "firstTargetDrawSubmittedMs": 298.2999999821186,
+          "finalSelectedAppearanceDrawSubmittedMs": 298.2999999821186,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 31073.399999976158
+        }
+      ],
+      "unrelatedCompletions": [
+        {
+          "index": 1,
+          "inputAt": 27416.5,
+          "uploads": {
+            "colors": {
+              "count": 2,
+              "bytes": 65856
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          }
+        },
+        {
+          "index": 2,
+          "inputAt": 28875.399999976158,
+          "uploads": {
+            "colors": {
+              "count": 2,
+              "bytes": 65856
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          }
+        },
+        {
+          "index": 3,
+          "inputAt": 29581.899999976158,
+          "uploads": {
+            "colors": {
+              "count": 2,
+              "bytes": 65856
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          }
+        },
+        {
+          "index": 4,
+          "inputAt": 30139.899999976158,
+          "uploads": {
+            "colors": {
+              "count": 2,
+              "bytes": 65856
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          }
+        },
+        {
+          "index": 5,
+          "inputAt": 30599.09999999404,
+          "uploads": {
+            "colors": {
+              "count": 2,
+              "bytes": 65856
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          }
+        },
+        {
+          "index": 6,
+          "inputAt": 31083.5,
+          "uploads": {
+            "colors": {
+              "count": 2,
+              "bytes": 65856
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          }
+        }
+      ],
+      "holdMs": 100,
+      "memoryBefore": {
+        "usedSize": 8229708,
+        "totalSize": 28286976,
+        "embedderHeapUsedSize": 12117432,
+        "backingStorageSize": 9322090,
+        "usedJSHeapSize": 17552038,
+        "totalJSHeapSize": 37609066,
+        "jsHeapSizeLimit": 4395630592
+      },
+      "memoryAfter": {
+        "usedSize": 13933316,
+        "totalSize": 26714112,
+        "embedderHeapUsedSize": 15121784,
+        "backingStorageSize": 9161330,
+        "usedJSHeapSize": 23094886,
+        "totalJSHeapSize": 35617394,
+        "jsHeapSizeLimit": 4395630592
+      },
+      "workers": {
+        "structureWorkerRetained": true,
+        "workers": [
+          {
+            "id": 0,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/structure-worker.js",
+            "created": 928.8999999761581,
+            "terminated": true,
+            "terminatedAt": 24687.69999998808
+          },
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/analysis/gpu/worker.js",
+            "created": 973,
+            "terminated": true,
+            "terminatedAt": 1760.0999999940395
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 1779.199999988079,
+            "terminated": false
+          },
+          {
+            "id": 3,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/dxa-worker.js",
+            "created": 1784.7999999821186,
+            "terminated": false
+          },
+          {
+            "id": 4,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/structure-worker.js",
+            "created": 1869.0999999940395,
+            "terminated": false
+          },
+          {
+            "id": 5,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/surface-geometry-worker.js",
+            "created": 1937.5999999940395,
+            "terminated": false
+          },
+          {
+            "id": 6,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 1940.2999999821186,
+            "terminated": false
+          },
+          {
+            "id": 7,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 1940.5,
+            "terminated": false
+          },
+          {
+            "id": 8,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 1963.5999999940395,
+            "terminated": false
+          },
+          {
+            "id": 9,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 2115.5,
+            "terminated": false
+          },
+          {
+            "id": 10,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+            "created": 2168.5999999940395,
+            "terminated": false
+          },
+          {
+            "id": 11,
+            "url": "http://127.0.0.1:45063/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/structure-worker.js",
+            "created": 24867.19999998808,
+            "terminated": false
+          }
+        ],
+        "cpuPermits": 0,
+        "cpuLimit": 6,
+        "cpuWarmup": {
+          "readyWorkers": 6,
+          "readyModules": {
+            "voronoi": 6,
+            "ptm": 6,
+            "dxa": 0
+          },
+          "preparedVoronoiWorkers": 6,
+          "preparedVoronoiFrameKey": 41,
+          "workerCount": 6,
+          "targetWorkers": 0,
+          "maximumWorkers": 6
+        }
+      }
+    },
+    "cancellation": {
+      "atoms": 500000,
+      "callerRejectionMs": 0.4000000059604645,
+      "workerAckMs": 133.2999999821186,
+      "nextForegroundReadyMs": 135.2999999821186,
+      "ackOk": false,
+      "ackName": "AbortError",
+      "workersCreated": 1,
+      "warmWorkerReused": true,
+      "permitsImmediatelyAfterCancel": 1,
+      "permitsAfterCompletion": 0,
+      "nextFrameIndex": 150
+    },
+    "longTasks": [
+      {
+        "startTime": 194.39999997615814,
+        "duration": 813
+      },
+      {
+        "startTime": 1238.199999988079,
+        "duration": 516
+      },
+      {
+        "startTime": 1866.699999988079,
+        "duration": 97
+      },
+      {
+        "startTime": 24676.19999998808,
+        "duration": 129
+      },
+      {
+        "startTime": 31607.09999999404,
+        "duration": 166
+      }
+    ],
+    "glError": 0,
+    "summary": {
+      "scalarNeighbor": {
+        "count": 12,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 721.9,
+          "p95": 901,
+          "p99": 901
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 721.9,
+          "p95": 901,
+          "p99": 901
+        },
+        "fallbackFlashFrames": 0,
+        "previewFrames": 0,
+        "atomColorUploads": 12,
+        "atomColorUploadBytes": 1800000,
+        "atomVisibilityUploads": 24,
+        "atomVisibilityUploadBytes": 1200000,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      },
+      "scalarRandom": {
+        "count": 12,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 582.3,
+          "p95": 838.8,
+          "p99": 838.8
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 582.3,
+          "p95": 838.8,
+          "p99": 838.8
+        },
+        "fallbackFlashFrames": 0,
+        "previewFrames": 0,
+        "atomColorUploads": 12,
+        "atomColorUploadBytes": 1800000,
+        "atomVisibilityUploads": 24,
+        "atomVisibilityUploadBytes": 1200000,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      },
+      "controlledCna": {
+        "count": 6,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 268.6,
+          "p95": 588.4,
+          "p99": 588.4
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 268.6,
+          "p95": 588.4,
+          "p99": 588.4
+        },
+        "fallbackFlashFrames": 1,
+        "previewFrames": 1,
+        "atomColorUploads": 8,
+        "atomColorUploadBytes": 263424,
+        "atomVisibilityUploads": 14,
+        "atomVisibilityUploadBytes": 153664,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      },
+      "unrelatedCsp": {
+        "completions": 6,
+        "colorUploads": 12,
+        "colorBytes": 395136,
+        "visibilityUploads": 12,
+        "visibilityBytes": 131712
+      }
+    }
+  },
+  "candidate": {
+    "date": "2026-10-25",
+    "label": "candidate",
+    "source": "working-tree-after-2b80367",
+    "method": {
+      "production": true,
+      "softwareGpu": true,
+      "physicalGpuBenchmark": false,
+      "cpuAnalyses": true,
+      "analysisGpuEnabled": false,
+      "reportedHardwareConcurrency": 8,
+      "drawTiming": "Input event to end of the actual target viewport render() call. Measures submitted draws; no gl.finish/fence and no promise of physical display latency.",
+      "uploadScope": "Actual main atom RGB/visibility WebGL bufferData and bufferSubData calls, including frame uploads. Optional primitive/overlay buffers are excluded.",
+      "memoryScope": "Chromium Runtime.getHeapUsage and performance.memory; excludes GPU memory, native/Wasm allocator reservations and Blob backing storage unless Chromium reports them separately.",
+      "cancellationScope": "Separate direct production FrameParserPool probe in the same browser, not a UI seek. Worker ACK includes any remaining Blob read, numeric chunk and message transport; immediate client rejection is measured separately.",
+      "controlledCna": "100ms held completions, then real CPU CNA/CSP. These values verify continuity and upload behavior; do not interpret the artificial delay as calculation speed.",
+      "statistics": "Nearest-rank percentiles; 24 scalar seeks and 6 controlled CNA seeks by default. Small samples and shared-host/SwiftShader noise limit timing conclusions."
+    },
+    "runtime": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/app.js",
+    "browser": {
+      "protocolVersion": "1.3",
+      "product": "Chrome/154.0.8037.57",
+      "revision": "@73c14f6228d7cd537c855007e8f88678969cc0eb",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+      "jsVersion": "15.4.80.11"
+    },
+    "graphics": {
+      "vendor": "Google Inc. (Google)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+    },
+    "navigator": {
+      "hardwareConcurrency": 8,
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+      "deviceMemory": 32
+    },
+    "scalar": {
+      "requestedAtoms": 50000,
+      "frameCount": 10,
+      "samples": [
+        {
+          "id": 10,
+          "target": 0,
+          "kind": "cached-neighbor",
+          "inputAt": 8124.5,
+          "firstTargetDrawSubmittedMs": 565.1999999880791,
+          "finalSelectedAppearanceDrawSubmittedMs": 565.1999999880791,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 8689.699999988079
+        },
+        {
+          "id": 11,
+          "target": 1,
+          "kind": "cached-neighbor",
+          "inputAt": 8705.399999976158,
+          "firstTargetDrawSubmittedMs": 617.4000000059605,
+          "finalSelectedAppearanceDrawSubmittedMs": 617.4000000059605,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 9322.799999982119
+        },
+        {
+          "id": 12,
+          "target": 2,
+          "kind": "cached-neighbor",
+          "inputAt": 9328.59999999404,
+          "firstTargetDrawSubmittedMs": 588.5,
+          "finalSelectedAppearanceDrawSubmittedMs": 588.5,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 9917.09999999404
+        },
+        {
+          "id": 13,
+          "target": 3,
+          "kind": "cached-neighbor",
+          "inputAt": 9927.199999988079,
+          "firstTargetDrawSubmittedMs": 568.9000000059605,
+          "finalSelectedAppearanceDrawSubmittedMs": 568.9000000059605,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 10496.09999999404
+        },
+        {
+          "id": 14,
+          "target": 4,
+          "kind": "cached-neighbor",
+          "inputAt": 10509.09999999404,
+          "firstTargetDrawSubmittedMs": 675.5,
+          "finalSelectedAppearanceDrawSubmittedMs": 675.5,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 11184.59999999404
+        },
+        {
+          "id": 15,
+          "target": 5,
+          "kind": "cached-neighbor",
+          "inputAt": 11194.09999999404,
+          "firstTargetDrawSubmittedMs": 854,
+          "finalSelectedAppearanceDrawSubmittedMs": 854,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 12048.09999999404
+        },
+        {
+          "id": 16,
+          "target": 6,
+          "kind": "cached-neighbor",
+          "inputAt": 12056,
+          "firstTargetDrawSubmittedMs": 630.5,
+          "finalSelectedAppearanceDrawSubmittedMs": 630.5,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 12686.5
+        },
+        {
+          "id": 17,
+          "target": 7,
+          "kind": "cached-neighbor",
+          "inputAt": 12695.399999976158,
+          "firstTargetDrawSubmittedMs": 652.5,
+          "finalSelectedAppearanceDrawSubmittedMs": 652.5,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 13347.899999976158
+        },
+        {
+          "id": 18,
+          "target": 8,
+          "kind": "cached-neighbor",
+          "inputAt": 13361.09999999404,
+          "firstTargetDrawSubmittedMs": 683.9000000059605,
+          "finalSelectedAppearanceDrawSubmittedMs": 683.9000000059605,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 14045
+        },
+        {
+          "id": 19,
+          "target": 9,
+          "kind": "cached-neighbor",
+          "inputAt": 14074.399999976158,
+          "firstTargetDrawSubmittedMs": 564.9000000059605,
+          "finalSelectedAppearanceDrawSubmittedMs": 564.9000000059605,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 14639.299999982119
+        },
+        {
+          "id": 20,
+          "target": 0,
+          "kind": "cached-neighbor",
+          "inputAt": 14656,
+          "firstTargetDrawSubmittedMs": 669.0999999940395,
+          "finalSelectedAppearanceDrawSubmittedMs": 669.0999999940395,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 15325.09999999404
+        },
+        {
+          "id": 21,
+          "target": 1,
+          "kind": "cached-neighbor",
+          "inputAt": 15341.09999999404,
+          "firstTargetDrawSubmittedMs": 566,
+          "finalSelectedAppearanceDrawSubmittedMs": 566,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 15907.09999999404
+        },
+        {
+          "id": 22,
+          "target": 7,
+          "kind": "cached-random",
+          "inputAt": 15912,
+          "firstTargetDrawSubmittedMs": 869.5,
+          "finalSelectedAppearanceDrawSubmittedMs": 869.5,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 16781.5
+        },
+        {
+          "id": 23,
+          "target": 4,
+          "kind": "cached-random",
+          "inputAt": 16792.69999998808,
+          "firstTargetDrawSubmittedMs": 632.4000000059605,
+          "finalSelectedAppearanceDrawSubmittedMs": 632.4000000059605,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 17425.09999999404
+        },
+        {
+          "id": 24,
+          "target": 1,
+          "kind": "cached-random",
+          "inputAt": 17439.79999998212,
+          "firstTargetDrawSubmittedMs": 606.2000000178814,
+          "finalSelectedAppearanceDrawSubmittedMs": 606.2000000178814,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 18046
+        },
+        {
+          "id": 25,
+          "target": 8,
+          "kind": "cached-random",
+          "inputAt": 18056.69999998808,
+          "firstTargetDrawSubmittedMs": 853.0999999940395,
+          "finalSelectedAppearanceDrawSubmittedMs": 853.0999999940395,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 18909.79999998212
+        },
+        {
+          "id": 26,
+          "target": 5,
+          "kind": "cached-random",
+          "inputAt": 18927,
+          "firstTargetDrawSubmittedMs": 911.8999999761581,
+          "finalSelectedAppearanceDrawSubmittedMs": 911.8999999761581,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 19838.899999976158
+        },
+        {
+          "id": 27,
+          "target": 2,
+          "kind": "cached-random",
+          "inputAt": 19858.399999976158,
+          "firstTargetDrawSubmittedMs": 780.6000000238419,
+          "finalSelectedAppearanceDrawSubmittedMs": 780.6000000238419,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 20639
+        },
+        {
+          "id": 28,
+          "target": 9,
+          "kind": "cached-random",
+          "inputAt": 20647.399999976158,
+          "firstTargetDrawSubmittedMs": 742,
+          "finalSelectedAppearanceDrawSubmittedMs": 742,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 21389.399999976158
+        },
+        {
+          "id": 29,
+          "target": 6,
+          "kind": "cached-random",
+          "inputAt": 21399,
+          "firstTargetDrawSubmittedMs": 816.3999999761581,
+          "finalSelectedAppearanceDrawSubmittedMs": 816.3999999761581,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 22215.399999976158
+        },
+        {
+          "id": 30,
+          "target": 3,
+          "kind": "cached-random",
+          "inputAt": 22226.09999999404,
+          "firstTargetDrawSubmittedMs": 582.5999999940395,
+          "finalSelectedAppearanceDrawSubmittedMs": 582.5999999940395,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 22808.69999998808
+        },
+        {
+          "id": 31,
+          "target": 0,
+          "kind": "cached-random",
+          "inputAt": 22828.09999999404,
+          "firstTargetDrawSubmittedMs": 589.5,
+          "finalSelectedAppearanceDrawSubmittedMs": 589.5,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 23417.59999999404
+        },
+        {
+          "id": 32,
+          "target": 7,
+          "kind": "cached-random",
+          "inputAt": 23428.29999998212,
+          "firstTargetDrawSubmittedMs": 762,
+          "finalSelectedAppearanceDrawSubmittedMs": 762,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 24190.29999998212
+        },
+        {
+          "id": 33,
+          "target": 4,
+          "kind": "cached-random",
+          "inputAt": 24199.399999976158,
+          "firstTargetDrawSubmittedMs": 701,
+          "finalSelectedAppearanceDrawSubmittedMs": 701,
+          "previewFrames": 0,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 150000
+            },
+            "visibility": {
+              "count": 1,
+              "bytes": 50000
+            }
+          },
+          "finishedAt": 24900.399999976158
+        }
+      ],
+      "memoryBefore": {
+        "usedSize": 107398704,
+        "totalSize": 150482944,
+        "embedderHeapUsedSize": 13356736,
+        "backingStorageSize": 26509247,
+        "usedJSHeapSize": 133908599,
+        "totalJSHeapSize": 176992191,
+        "jsHeapSizeLimit": 4395630592
+      },
+      "memoryAfter": {
+        "usedSize": 9977268,
+        "totalSize": 76795904,
+        "embedderHeapUsedSize": 11430936,
+        "backingStorageSize": 32880136,
+        "usedJSHeapSize": 42857644,
+        "totalJSHeapSize": 109676040,
+        "jsHeapSizeLimit": 4395630592
+      },
+      "workers": {
+        "structureWorkerRetained": true,
+        "workers": [
+          {
+            "id": 0,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/structure-worker.js",
+            "created": 936.3999999761581,
+            "terminated": false
+          },
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/analysis/gpu/worker.js",
+            "created": 975.7999999821186,
+            "terminated": true,
+            "terminatedAt": 1260.0999999940395
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 1838.699999988079,
+            "terminated": false
+          },
+          {
+            "id": 3,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/dxa-worker.js",
+            "created": 1839.3999999761581,
+            "terminated": false
+          },
+          {
+            "id": 4,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/structure-worker.js",
+            "created": 1924.3999999761581,
+            "terminated": false
+          },
+          {
+            "id": 5,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/surface-geometry-worker.js",
+            "created": 1994.5999999940395,
+            "terminated": false
+          },
+          {
+            "id": 6,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 1997.0999999940395,
+            "terminated": false
+          },
+          {
+            "id": 7,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 1997.199999988079,
+            "terminated": false
+          },
+          {
+            "id": 8,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 2019,
+            "terminated": false
+          },
+          {
+            "id": 9,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 2143,
+            "terminated": false
+          },
+          {
+            "id": 10,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 2180.0999999940395,
+            "terminated": false
+          }
+        ],
+        "cpuPermits": 0,
+        "cpuLimit": 6,
+        "cpuWarmup": {
+          "readyWorkers": 6,
+          "readyModules": {
+            "voronoi": 6,
+            "ptm": 6,
+            "dxa": 0
+          },
+          "preparedVoronoiWorkers": 6,
+          "preparedVoronoiFrameKey": 34,
+          "workerCount": 6,
+          "targetWorkers": 0,
+          "maximumWorkers": 6
+        }
+      }
+    },
+    "controlledCna": {
+      "atoms": 10976,
+      "samples": [
+        {
+          "id": 34,
+          "target": 1,
+          "kind": "controlled-cna",
+          "inputAt": 27035.399999976158,
+          "firstTargetDrawSubmittedMs": 715.6000000238419,
+          "finalSelectedAppearanceDrawSubmittedMs": 1020.4000000059605,
+          "previewFrames": 1,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 28055.79999998212
+        },
+        {
+          "id": 35,
+          "target": 2,
+          "kind": "controlled-cna",
+          "inputAt": 28440.79999998212,
+          "firstTargetDrawSubmittedMs": 161.7000000178814,
+          "finalSelectedAppearanceDrawSubmittedMs": 171.2000000178814,
+          "previewFrames": 1,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 28612
+        },
+        {
+          "id": 36,
+          "target": 3,
+          "kind": "controlled-cna",
+          "inputAt": 28883.79999998212,
+          "firstTargetDrawSubmittedMs": 122.59999999403954,
+          "finalSelectedAppearanceDrawSubmittedMs": 238.7000000178814,
+          "previewFrames": 1,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 29122.5
+        },
+        {
+          "id": 37,
+          "target": 4,
+          "kind": "controlled-cna",
+          "inputAt": 29274.29999998212,
+          "firstTargetDrawSubmittedMs": 229.80000001192093,
+          "finalSelectedAppearanceDrawSubmittedMs": 240,
+          "previewFrames": 1,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 29514.29999998212
+        },
+        {
+          "id": 38,
+          "target": 5,
+          "kind": "controlled-cna",
+          "inputAt": 29664,
+          "firstTargetDrawSubmittedMs": 76.69999998807907,
+          "finalSelectedAppearanceDrawSubmittedMs": 192.2999999821186,
+          "previewFrames": 1,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 29856.29999998212
+        },
+        {
+          "id": 39,
+          "target": 6,
+          "kind": "controlled-cna",
+          "inputAt": 30091.09999999404,
+          "firstTargetDrawSubmittedMs": 12.799999982118607,
+          "finalSelectedAppearanceDrawSubmittedMs": 256.59999999403954,
+          "previewFrames": 1,
+          "fallbackFlashFrames": 0,
+          "uploads": {
+            "colors": {
+              "count": 1,
+              "bytes": 32928
+            },
+            "visibility": {
+              "count": 2,
+              "bytes": 21952
+            }
+          },
+          "finishedAt": 30347.69999998808
+        }
+      ],
+      "unrelatedCompletions": [
+        {
+          "index": 1,
+          "inputAt": 28060.899999976158,
+          "uploads": {
+            "colors": {
+              "count": 0,
+              "bytes": 0
+            },
+            "visibility": {
+              "count": 0,
+              "bytes": 0
+            }
+          }
+        },
+        {
+          "index": 2,
+          "inputAt": 28614.5,
+          "uploads": {
+            "colors": {
+              "count": 0,
+              "bytes": 0
+            },
+            "visibility": {
+              "count": 0,
+              "bytes": 0
+            }
+          }
+        },
+        {
+          "index": 3,
+          "inputAt": 29133,
+          "uploads": {
+            "colors": {
+              "count": 0,
+              "bytes": 0
+            },
+            "visibility": {
+              "count": 0,
+              "bytes": 0
+            }
+          }
+        },
+        {
+          "index": 4,
+          "inputAt": 29534.399999976158,
+          "uploads": {
+            "colors": {
+              "count": 0,
+              "bytes": 0
+            },
+            "visibility": {
+              "count": 0,
+              "bytes": 0
+            }
+          }
+        },
+        {
+          "index": 5,
+          "inputAt": 29864.19999998808,
+          "uploads": {
+            "colors": {
+              "count": 0,
+              "bytes": 0
+            },
+            "visibility": {
+              "count": 0,
+              "bytes": 0
+            }
+          }
+        },
+        {
+          "index": 6,
+          "inputAt": 30354.29999998212,
+          "uploads": {
+            "colors": {
+              "count": 0,
+              "bytes": 0
+            },
+            "visibility": {
+              "count": 0,
+              "bytes": 0
+            }
+          }
+        }
+      ],
+      "holdMs": 100,
+      "memoryBefore": {
+        "usedSize": 15992212,
+        "totalSize": 77582336,
+        "embedderHeapUsedSize": 12047464,
+        "backingStorageSize": 10229362,
+        "usedJSHeapSize": 26230398,
+        "totalJSHeapSize": 87811698,
+        "jsHeapSizeLimit": 4395630592
+      },
+      "memoryAfter": {
+        "usedSize": 34411436,
+        "totalSize": 77844480,
+        "embedderHeapUsedSize": 33274096,
+        "backingStorageSize": 15455021,
+        "usedJSHeapSize": 49866697,
+        "totalJSHeapSize": 93299501,
+        "jsHeapSizeLimit": 4395630592
+      },
+      "workers": {
+        "structureWorkerRetained": true,
+        "workers": [
+          {
+            "id": 0,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/structure-worker.js",
+            "created": 936.3999999761581,
+            "terminated": true,
+            "terminatedAt": 24924.69999998808
+          },
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/analysis/gpu/worker.js",
+            "created": 975.7999999821186,
+            "terminated": true,
+            "terminatedAt": 1260.0999999940395
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 1838.699999988079,
+            "terminated": false
+          },
+          {
+            "id": 3,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/dxa-worker.js",
+            "created": 1839.3999999761581,
+            "terminated": false
+          },
+          {
+            "id": 4,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/structure-worker.js",
+            "created": 1924.3999999761581,
+            "terminated": false
+          },
+          {
+            "id": 5,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/surface-geometry-worker.js",
+            "created": 1994.5999999940395,
+            "terminated": false
+          },
+          {
+            "id": 6,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 1997.0999999940395,
+            "terminated": false
+          },
+          {
+            "id": 7,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 1997.199999988079,
+            "terminated": false
+          },
+          {
+            "id": 8,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 2019,
+            "terminated": false
+          },
+          {
+            "id": 9,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 2143,
+            "terminated": false
+          },
+          {
+            "id": 10,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+            "created": 2180.0999999940395,
+            "terminated": false
+          },
+          {
+            "id": 11,
+            "url": "http://127.0.0.1:35081/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/structure-worker.js",
+            "created": 25118.399999976158,
+            "terminated": false
+          }
+        ],
+        "cpuPermits": 0,
+        "cpuLimit": 6,
+        "cpuWarmup": {
+          "readyWorkers": 6,
+          "readyModules": {
+            "voronoi": 6,
+            "ptm": 6,
+            "dxa": 0
+          },
+          "preparedVoronoiWorkers": 6,
+          "preparedVoronoiFrameKey": 41,
+          "workerCount": 6,
+          "targetWorkers": 0,
+          "maximumWorkers": 6
+        }
+      }
+    },
+    "cancellation": {
+      "atoms": 500000,
+      "callerRejectionMs": 0.4000000059604645,
+      "workerAckMs": 14.799999982118607,
+      "nextForegroundReadyMs": 19.299999982118607,
+      "ackOk": false,
+      "ackName": "AbortError",
+      "workersCreated": 1,
+      "warmWorkerReused": true,
+      "permitsImmediatelyAfterCancel": 1,
+      "permitsAfterCompletion": 0,
+      "nextFrameIndex": 150
+    },
+    "longTasks": [
+      {
+        "startTime": 177.2999999821186,
+        "duration": 837
+      },
+      {
+        "startTime": 1260.699999988079,
+        "duration": 558
+      },
+      {
+        "startTime": 1922.2999999821186,
+        "duration": 100
+      },
+      {
+        "startTime": 24912.69999998808,
+        "duration": 137
+      },
+      {
+        "startTime": 30587.399999976158,
+        "duration": 111
+      }
+    ],
+    "glError": 0,
+    "summary": {
+      "scalarNeighbor": {
+        "count": 12,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 617.4,
+          "p95": 854,
+          "p99": 854
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 617.4,
+          "p95": 854,
+          "p99": 854
+        },
+        "fallbackFlashFrames": 0,
+        "previewFrames": 0,
+        "atomColorUploads": 12,
+        "atomColorUploadBytes": 1800000,
+        "atomVisibilityUploads": 12,
+        "atomVisibilityUploadBytes": 600000,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      },
+      "scalarRandom": {
+        "count": 12,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 742,
+          "p95": 911.9,
+          "p99": 911.9
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 742,
+          "p95": 911.9,
+          "p99": 911.9
+        },
+        "fallbackFlashFrames": 0,
+        "previewFrames": 0,
+        "atomColorUploads": 12,
+        "atomColorUploadBytes": 1800000,
+        "atomVisibilityUploads": 12,
+        "atomVisibilityUploadBytes": 600000,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      },
+      "controlledCna": {
+        "count": 6,
+        "firstTargetDrawSubmittedMs": {
+          "p50": 122.6,
+          "p95": 715.6,
+          "p99": 715.6
+        },
+        "finalSelectedAppearanceDrawSubmittedMs": {
+          "p50": 238.7,
+          "p95": 1020.4,
+          "p99": 1020.4
+        },
+        "fallbackFlashFrames": 0,
+        "previewFrames": 6,
+        "atomColorUploads": 6,
+        "atomColorUploadBytes": 197568,
+        "atomVisibilityUploads": 12,
+        "atomVisibilityUploadBytes": 131712,
+        "longTasksOver50ms": 0,
+        "longestTaskMs": 0
+      },
+      "unrelatedCsp": {
+        "completions": 6,
+        "colorUploads": 0,
+        "colorBytes": 0,
+        "visibilityUploads": 0,
+        "visibilityBytes": 0
+      }
+    }
+  },
+  "supplementalDiagnostic": {
+    "method": "Supplemental8-seek50k-atomscalar phase diagnostic, sameproductionruntime andSwiftShader; original24/6 benchmark records are unchanged. Conventional median averages the two middle observations. CDPCPUprofile categorizes idle/GC/other; original module URL matching cannot separately identify snapshot work in the production bundle.",
+    "summary": {
+      "baseline": {
+        "phaseMediansMs": {
+          "inputToSetFrameStartMs": 4.9000000059604645,
+          "setFrameDurationMs": 0.5,
+          "setFrameEndToTargetRenderStartMs": 722.8499999791384,
+          "targetRenderCpuMs": 0.30000001192092896,
+          "renderCallsUntilFinalAppearance": 1.0
+        },
+        "profileAttribution": {
+          "appearanceSnapshotUs": null,
+          "idleUs": 5715151,
+          "gcUs": 19684,
+          "otherSamplesUs": 633777,
+          "appearanceAttributionNote": "Unavailable: production module facades execute in a shared app.js bundle, so matching original module URLs cannot isolate snapshot CPU samples. Zero from the initial matcher must not be interpreted as zero snapshot work."
+        },
+        "shape": {
+          "canvas": [
+            850,
+            778
+          ],
+          "cssCanvas": [
+            850,
+            778
+          ],
+          "atomCount": 50000,
+          "displayAtomCount": 50000,
+          "camera": {
+            "yaw": -0.62,
+            "pitch": 0.38,
+            "distance": 277.5314994783193,
+            "projection": "perspective",
+            "radiusScale": 1
+          },
+          "appearance": null
+        }
+      },
+      "candidate": {
+        "phaseMediansMs": {
+          "inputToSetFrameStartMs": 4.799999997019768,
+          "setFrameDurationMs": 0.45000000298023224,
+          "setFrameEndToTargetRenderStartMs": 743.3499999940395,
+          "targetRenderCpuMs": 0.30000001192092896,
+          "renderCallsUntilFinalAppearance": 1.0
+        },
+        "profileAttribution": {
+          "appearanceSnapshotUs": null,
+          "idleUs": 5329176,
+          "gcUs": 31843,
+          "otherSamplesUs": 747261,
+          "appearanceAttributionNote": "Unavailable: production module facades execute in a shared app.js bundle, so matching original module URLs cannot isolate snapshot CPU samples. Zero from the initial matcher must not be interpreted as zero snapshot work."
+        },
+        "shape": {
+          "canvas": [
+            850,
+            778
+          ],
+          "cssCanvas": [
+            850,
+            778
+          ],
+          "atomCount": 50000,
+          "displayAtomCount": 50000,
+          "camera": {
+            "yaw": -0.62,
+            "pitch": 0.38,
+            "distance": 277.5314994783193,
+            "projection": "perspective",
+            "radiusScale": 1
+          },
+          "appearance": "ready"
+        }
+      }
+    },
+    "baseline": {
+      "date": "2026-10-25",
+      "label": "baseline-diagnostic",
+      "source": "2b80367",
+      "method": "Supplemental8-seek50k-atomscalar diagnostic; sameproductionUI andSwiftShader. CallsandCPUprofileinstrumented; original24/6 resultartifact preserved. CPUprofileattribution is sampled, not an exact capture() stopwatch.",
+      "runtime": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/app.js",
+      "browser": {
+        "protocolVersion": "1.3",
+        "product": "Chrome/154.0.8037.57",
+        "revision": "@73c14f6228d7cd537c855007e8f88678969cc0eb",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+        "jsVersion": "15.4.80.11"
+      },
+      "shape": {
+        "canvas": [
+          850,
+          778
+        ],
+        "cssCanvas": [
+          850,
+          778
+        ],
+        "atomCount": 50000,
+        "displayAtomCount": 50000,
+        "camera": {
+          "yaw": -0.62,
+          "pitch": 0.38,
+          "distance": 277.5314994783193,
+          "projection": "perspective",
+          "radiusScale": 1
+        },
+        "appearance": null
+      },
+      "scalar": {
+        "samples": [
+          {
+            "id": 10,
+            "target": 0,
+            "kind": "cached-neighbor",
+            "inputAt": 8018.5999999940395,
+            "firstTargetDrawSubmittedMs": 741.7000000178814,
+            "finalSelectedAppearanceDrawSubmittedMs": 741.7000000178814,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 2,
+                "bytes": 100000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 8023.5,
+                "finished": 8027.200000017881
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 8760,
+                "finished": 8760.300000011921,
+                "presented": 0
+              }
+            ],
+            "finishedAt": 8760.300000011921,
+            "phases": {
+              "inputToSetFrameStartMs": 4.9000000059604645,
+              "setFrameDurationMs": 3.7000000178813934,
+              "setFrameEndToTargetRenderStartMs": 732.7999999821186,
+              "targetRenderCpuMs": 0.30000001192092896,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 11,
+            "target": 1,
+            "kind": "cached-neighbor",
+            "inputAt": 8781.59999999404,
+            "firstTargetDrawSubmittedMs": 871.3000000119209,
+            "finalSelectedAppearanceDrawSubmittedMs": 871.3000000119209,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 2,
+                "bytes": 100000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 8786.59999999404,
+                "finished": 8788.90000000596
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 9652.59999999404,
+                "finished": 9652.90000000596,
+                "presented": 1
+              }
+            ],
+            "finishedAt": 9652.90000000596,
+            "phases": {
+              "inputToSetFrameStartMs": 5.0,
+              "setFrameDurationMs": 2.300000011920929,
+              "setFrameEndToTargetRenderStartMs": 863.6999999880791,
+              "targetRenderCpuMs": 0.30000001192092896,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 12,
+            "target": 2,
+            "kind": "cached-neighbor",
+            "inputAt": 9667.40000000596,
+            "firstTargetDrawSubmittedMs": 649.8000000119209,
+            "finalSelectedAppearanceDrawSubmittedMs": 649.8000000119209,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 2,
+                "bytes": 100000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 9682.700000017881,
+                "finished": 9683.09999999404
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 10316.90000000596,
+                "finished": 10317.200000017881,
+                "presented": 2
+              }
+            ],
+            "finishedAt": 10317.200000017881,
+            "phases": {
+              "inputToSetFrameStartMs": 15.300000011920929,
+              "setFrameDurationMs": 0.3999999761581421,
+              "setFrameEndToTargetRenderStartMs": 633.8000000119209,
+              "targetRenderCpuMs": 0.30000001192092896,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 13,
+            "target": 3,
+            "kind": "cached-neighbor",
+            "inputAt": 10334.700000017881,
+            "firstTargetDrawSubmittedMs": 827.5,
+            "finalSelectedAppearanceDrawSubmittedMs": 827.5,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 2,
+                "bytes": 100000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 10338.800000011921,
+                "finished": 10339.200000017881
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 11161.90000000596,
+                "finished": 11162.200000017881,
+                "presented": 3
+              }
+            ],
+            "finishedAt": 11162.200000017881,
+            "phases": {
+              "inputToSetFrameStartMs": 4.0999999940395355,
+              "setFrameDurationMs": 0.4000000059604645,
+              "setFrameEndToTargetRenderStartMs": 822.6999999880791,
+              "targetRenderCpuMs": 0.30000001192092896,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 14,
+            "target": 1,
+            "kind": "cached-random",
+            "inputAt": 11184,
+            "firstTargetDrawSubmittedMs": 718.9000000059605,
+            "finalSelectedAppearanceDrawSubmittedMs": 718.9000000059605,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 2,
+                "bytes": 100000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 11189,
+                "finished": 11189.700000017881
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 11902.59999999404,
+                "finished": 11902.90000000596,
+                "presented": 1
+              }
+            ],
+            "finishedAt": 11902.90000000596,
+            "phases": {
+              "inputToSetFrameStartMs": 5,
+              "setFrameDurationMs": 0.7000000178813934,
+              "setFrameEndToTargetRenderStartMs": 712.8999999761581,
+              "targetRenderCpuMs": 0.30000001192092896,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 15,
+            "target": 8,
+            "kind": "cached-random",
+            "inputAt": 11920.800000011921,
+            "firstTargetDrawSubmittedMs": 696.5,
+            "finalSelectedAppearanceDrawSubmittedMs": 696.5,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 2,
+                "bytes": 100000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 11925.700000017881,
+                "finished": 11926.200000017881
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 12616.90000000596,
+                "finished": 12617.300000011921,
+                "presented": 8
+              }
+            ],
+            "finishedAt": 12617.300000011921,
+            "phases": {
+              "inputToSetFrameStartMs": 4.9000000059604645,
+              "setFrameDurationMs": 0.5,
+              "setFrameEndToTargetRenderStartMs": 690.6999999880791,
+              "targetRenderCpuMs": 0.4000000059604645,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 16,
+            "target": 5,
+            "kind": "cached-random",
+            "inputAt": 12633.40000000596,
+            "firstTargetDrawSubmittedMs": 895.5999999940395,
+            "finalSelectedAppearanceDrawSubmittedMs": 895.5999999940395,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 2,
+                "bytes": 100000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 12637.90000000596,
+                "finished": 12638.300000011921
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 13528.800000011921,
+                "finished": 13529,
+                "presented": 5
+              }
+            ],
+            "finishedAt": 13529,
+            "phases": {
+              "inputToSetFrameStartMs": 4.5,
+              "setFrameDurationMs": 0.4000000059604645,
+              "setFrameEndToTargetRenderStartMs": 890.5,
+              "targetRenderCpuMs": 0.19999998807907104,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 17,
+            "target": 2,
+            "kind": "cached-random",
+            "inputAt": 13533.5,
+            "firstTargetDrawSubmittedMs": 656.7000000178814,
+            "finalSelectedAppearanceDrawSubmittedMs": 656.7000000178814,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 2,
+                "bytes": 100000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 13538,
+                "finished": 13538.5
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 14189.800000011921,
+                "finished": 14190.200000017881,
+                "presented": 2
+              }
+            ],
+            "finishedAt": 14190.200000017881,
+            "phases": {
+              "inputToSetFrameStartMs": 4.5,
+              "setFrameDurationMs": 0.5,
+              "setFrameEndToTargetRenderStartMs": 651.3000000119209,
+              "targetRenderCpuMs": 0.4000000059604645,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          }
+        ],
+        "memoryBefore": {
+          "usedSize": 89975680,
+          "totalSize": 136740864,
+          "embedderHeapUsedSize": 16233048,
+          "backingStorageSize": 23782471,
+          "usedJSHeapSize": 113758799,
+          "totalJSHeapSize": 160523335,
+          "jsHeapSizeLimit": 4395630592
+        },
+        "memoryAfter": {
+          "usedSize": 7037924,
+          "totalSize": 75472896,
+          "embedderHeapUsedSize": 7862408,
+          "backingStorageSize": 26051161,
+          "usedJSHeapSize": 33089325,
+          "totalJSHeapSize": 101524057,
+          "jsHeapSizeLimit": 4395630592
+        },
+        "workers": {
+          "structureWorkerRetained": true,
+          "workers": [
+            {
+              "id": 0,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/structure-worker.js",
+              "created": 979.4000000059605,
+              "terminated": false
+            },
+            {
+              "id": 1,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/analysis/gpu/worker.js",
+              "created": 1029.5999999940395,
+              "terminated": true,
+              "terminatedAt": 1763.5999999940395
+            },
+            {
+              "id": 2,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+              "created": 1784.7000000178814,
+              "terminated": false
+            },
+            {
+              "id": 3,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/dxa-worker.js",
+              "created": 1795.800000011921,
+              "terminated": false
+            },
+            {
+              "id": 4,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/structure-worker.js",
+              "created": 1852.5,
+              "terminated": false
+            },
+            {
+              "id": 5,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/surface-geometry-worker.js",
+              "created": 1904.9000000059605,
+              "terminated": false
+            },
+            {
+              "id": 6,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+              "created": 1908.300000011921,
+              "terminated": false
+            },
+            {
+              "id": 7,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+              "created": 1908.5,
+              "terminated": false
+            },
+            {
+              "id": 8,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+              "created": 1932,
+              "terminated": false
+            },
+            {
+              "id": 9,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+              "created": 1932.800000011921,
+              "terminated": false
+            },
+            {
+              "id": 10,
+              "url": "http://127.0.0.1:43551/AlloyView/dist/assets/9bb5615e43e49f39/src/workers/analysis-worker.js",
+              "created": 2145,
+              "terminated": false
+            }
+          ],
+          "cpuPermits": 0,
+          "cpuLimit": 6,
+          "cpuWarmup": {
+            "readyWorkers": 6,
+            "readyModules": {
+              "voronoi": 6,
+              "ptm": 6,
+              "dxa": 0
+            },
+            "preparedVoronoiWorkers": 6,
+            "preparedVoronoiFrameKey": 18,
+            "workerCount": 6,
+            "targetWorkers": 0,
+            "maximumWorkers": 6
+          }
+        }
+      },
+      "longTasks": [
+        {
+          "startTime": 177,
+          "duration": 885
+        },
+        {
+          "startTime": 1202.4000000059605,
+          "duration": 556
+        },
+        {
+          "startTime": 1849.5,
+          "duration": 82
+        }
+      ],
+      "glError": 0,
+      "profileAttribution": {
+        "appearanceSnapshotUs": null,
+        "idleUs": 5715151,
+        "gcUs": 19684,
+        "otherSamplesUs": 633777,
+        "appearanceAttributionNote": "Unavailable: production module facades execute in a shared app.js bundle, so matching original module URLs cannot isolate snapshot CPU samples. Zero from the initial matcher must not be interpreted as zero snapshot work."
+      }
+    },
+    "candidate": {
+      "date": "2026-10-25",
+      "label": "candidate-diagnostic",
+      "source": "working-tree-after-2b80367",
+      "method": "Supplemental8-seek50k-atomscalar diagnostic; sameproductionUI andSwiftShader. CallsandCPUprofileinstrumented; original24/6 resultartifact preserved. CPUprofileattribution is sampled, not an exact capture() stopwatch.",
+      "runtime": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/app.js",
+      "browser": {
+        "protocolVersion": "1.3",
+        "product": "Chrome/154.0.8037.57",
+        "revision": "@73c14f6228d7cd537c855007e8f88678969cc0eb",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+        "jsVersion": "15.4.80.11"
+      },
+      "shape": {
+        "canvas": [
+          850,
+          778
+        ],
+        "cssCanvas": [
+          850,
+          778
+        ],
+        "atomCount": 50000,
+        "displayAtomCount": 50000,
+        "camera": {
+          "yaw": -0.62,
+          "pitch": 0.38,
+          "distance": 277.5314994783193,
+          "projection": "perspective",
+          "radiusScale": 1
+        },
+        "appearance": "ready"
+      },
+      "scalar": {
+        "samples": [
+          {
+            "id": 10,
+            "target": 0,
+            "kind": "cached-neighbor",
+            "inputAt": 8399.59999999404,
+            "firstTargetDrawSubmittedMs": 537.5999999940395,
+            "finalSelectedAppearanceDrawSubmittedMs": 537.5999999940395,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 1,
+                "bytes": 50000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 8406.09999999404,
+                "finished": 8412.90000000596
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 8936.90000000596,
+                "finished": 8937.199999988079,
+                "presented": 0
+              }
+            ],
+            "finishedAt": 8937.199999988079,
+            "phases": {
+              "inputToSetFrameStartMs": 6.5,
+              "setFrameDurationMs": 6.800000011920929,
+              "setFrameEndToTargetRenderStartMs": 524,
+              "targetRenderCpuMs": 0.29999998211860657,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 11,
+            "target": 1,
+            "kind": "cached-neighbor",
+            "inputAt": 8945,
+            "firstTargetDrawSubmittedMs": 749.1999999880791,
+            "finalSelectedAppearanceDrawSubmittedMs": 749.1999999880791,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 1,
+                "bytes": 50000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 8950.40000000596,
+                "finished": 8953.800000011921
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 9693.90000000596,
+                "finished": 9694.199999988079,
+                "presented": 1
+              }
+            ],
+            "finishedAt": 9694.199999988079,
+            "phases": {
+              "inputToSetFrameStartMs": 5.4000000059604645,
+              "setFrameDurationMs": 3.4000000059604645,
+              "setFrameEndToTargetRenderStartMs": 740.0999999940395,
+              "targetRenderCpuMs": 0.29999998211860657,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 12,
+            "target": 2,
+            "kind": "cached-neighbor",
+            "inputAt": 9706.59999999404,
+            "firstTargetDrawSubmittedMs": 639.3000000119209,
+            "finalSelectedAppearanceDrawSubmittedMs": 639.3000000119209,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 1,
+                "bytes": 50000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 9711.09999999404,
+                "finished": 9711.5
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 10345.5,
+                "finished": 10345.90000000596,
+                "presented": 2
+              }
+            ],
+            "finishedAt": 10345.90000000596,
+            "phases": {
+              "inputToSetFrameStartMs": 4.5,
+              "setFrameDurationMs": 0.4000000059604645,
+              "setFrameEndToTargetRenderStartMs": 634,
+              "targetRenderCpuMs": 0.4000000059604645,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 13,
+            "target": 3,
+            "kind": "cached-neighbor",
+            "inputAt": 10356.800000011921,
+            "firstTargetDrawSubmittedMs": 833.5,
+            "finalSelectedAppearanceDrawSubmittedMs": 833.5,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 1,
+                "bytes": 50000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 10361.90000000596,
+                "finished": 10362.40000000596
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 11190,
+                "finished": 11190.300000011921,
+                "presented": 3
+              }
+            ],
+            "finishedAt": 11190.300000011921,
+            "phases": {
+              "inputToSetFrameStartMs": 5.0999999940395355,
+              "setFrameDurationMs": 0.5,
+              "setFrameEndToTargetRenderStartMs": 827.5999999940395,
+              "targetRenderCpuMs": 0.30000001192092896,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 14,
+            "target": 1,
+            "kind": "cached-random",
+            "inputAt": 11206.300000011921,
+            "firstTargetDrawSubmittedMs": 623.1999999880791,
+            "finalSelectedAppearanceDrawSubmittedMs": 623.1999999880791,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 1,
+                "bytes": 50000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 11210.300000011921,
+                "finished": 11210.699999988079
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 11829.199999988079,
+                "finished": 11829.5,
+                "presented": 1
+              }
+            ],
+            "finishedAt": 11829.5,
+            "phases": {
+              "inputToSetFrameStartMs": 4,
+              "setFrameDurationMs": 0.3999999761581421,
+              "setFrameEndToTargetRenderStartMs": 618.5,
+              "targetRenderCpuMs": 0.30000001192092896,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 15,
+            "target": 8,
+            "kind": "cached-random",
+            "inputAt": 11838.59999999404,
+            "firstTargetDrawSubmittedMs": 794.5,
+            "finalSelectedAppearanceDrawSubmittedMs": 794.5,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 1,
+                "bytes": 50000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 11842.59999999404,
+                "finished": 11843
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 12632.800000011921,
+                "finished": 12633.09999999404,
+                "presented": 8
+              }
+            ],
+            "finishedAt": 12633.09999999404,
+            "phases": {
+              "inputToSetFrameStartMs": 4,
+              "setFrameDurationMs": 0.4000000059604645,
+              "setFrameEndToTargetRenderStartMs": 789.8000000119209,
+              "targetRenderCpuMs": 0.29999998211860657,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 16,
+            "target": 5,
+            "kind": "cached-random",
+            "inputAt": 12638.300000011921,
+            "firstTargetDrawSubmittedMs": 860.1999999880791,
+            "finalSelectedAppearanceDrawSubmittedMs": 860.1999999880791,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 1,
+                "bytes": 50000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 12643.800000011921,
+                "finished": 12644.300000011921
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 13498.199999988079,
+                "finished": 13498.5,
+                "presented": 5
+              }
+            ],
+            "finishedAt": 13498.5,
+            "phases": {
+              "inputToSetFrameStartMs": 5.5,
+              "setFrameDurationMs": 0.5,
+              "setFrameEndToTargetRenderStartMs": 853.8999999761581,
+              "targetRenderCpuMs": 0.30000001192092896,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          },
+          {
+            "id": 17,
+            "target": 2,
+            "kind": "cached-random",
+            "inputAt": 13505.300000011921,
+            "firstTargetDrawSubmittedMs": 751.6999999880791,
+            "finalSelectedAppearanceDrawSubmittedMs": 751.6999999880791,
+            "previewFrames": 0,
+            "fallbackFlashFrames": 0,
+            "uploads": {
+              "colors": {
+                "count": 1,
+                "bytes": 150000
+              },
+              "visibility": {
+                "count": 1,
+                "bytes": 50000
+              }
+            },
+            "setFrameEvents": [
+              {
+                "started": 13509.59999999404,
+                "finished": 13510
+              }
+            ],
+            "renderEvents": [
+              {
+                "started": 14256.59999999404,
+                "finished": 14257,
+                "presented": 2
+              }
+            ],
+            "finishedAt": 14257,
+            "phases": {
+              "inputToSetFrameStartMs": 4.299999982118607,
+              "setFrameDurationMs": 0.4000000059604645,
+              "setFrameEndToTargetRenderStartMs": 746.5999999940395,
+              "targetRenderCpuMs": 0.4000000059604645,
+              "renderCallsUntilFinalAppearance": 1
+            }
+          }
+        ],
+        "memoryBefore": {
+          "usedSize": 69987016,
+          "totalSize": 136048640,
+          "embedderHeapUsedSize": 13317248,
+          "backingStorageSize": 26458988,
+          "usedJSHeapSize": 96446668,
+          "totalJSHeapSize": 162507628,
+          "jsHeapSizeLimit": 4395630592
+        },
+        "memoryAfter": {
+          "usedSize": 12382848,
+          "totalSize": 77058048,
+          "embedderHeapUsedSize": 12065288,
+          "backingStorageSize": 35331506,
+          "usedJSHeapSize": 47714594,
+          "totalJSHeapSize": 112389554,
+          "jsHeapSizeLimit": 4395630592
+        },
+        "workers": {
+          "structureWorkerRetained": true,
+          "workers": [
+            {
+              "id": 0,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/structure-worker.js",
+              "created": 1051.4000000059605,
+              "terminated": false
+            },
+            {
+              "id": 1,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/analysis/gpu/worker.js",
+              "created": 1102.4000000059605,
+              "terminated": true,
+              "terminatedAt": 1372.699999988079
+            },
+            {
+              "id": 2,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+              "created": 1884.0999999940395,
+              "terminated": false
+            },
+            {
+              "id": 3,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/dxa-worker.js",
+              "created": 1888.800000011921,
+              "terminated": false
+            },
+            {
+              "id": 4,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/structure-worker.js",
+              "created": 1961.800000011921,
+              "terminated": false
+            },
+            {
+              "id": 5,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/surface-geometry-worker.js",
+              "created": 2025.300000011921,
+              "terminated": false
+            },
+            {
+              "id": 6,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+              "created": 2027.4000000059605,
+              "terminated": false
+            },
+            {
+              "id": 7,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+              "created": 2027.5,
+              "terminated": false
+            },
+            {
+              "id": 8,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+              "created": 2044.4000000059605,
+              "terminated": false
+            },
+            {
+              "id": 9,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+              "created": 2236.4000000059605,
+              "terminated": false
+            },
+            {
+              "id": 10,
+              "url": "http://127.0.0.1:35413/AlloyView/dist/assets/5e9de5ac54f82cf1/src/workers/analysis-worker.js",
+              "created": 2301,
+              "terminated": false
+            }
+          ],
+          "cpuPermits": 0,
+          "cpuLimit": 6,
+          "cpuWarmup": {
+            "readyWorkers": 6,
+            "readyModules": {
+              "voronoi": 6,
+              "ptm": 6,
+              "dxa": 0
+            },
+            "preparedVoronoiWorkers": 6,
+            "preparedVoronoiFrameKey": 18,
+            "workerCount": 6,
+            "targetWorkers": 0,
+            "maximumWorkers": 6
+          }
+        }
+      },
+      "longTasks": [
+        {
+          "startTime": 233.69999998807907,
+          "duration": 900
+        },
+        {
+          "startTime": 1373.0999999940395,
+          "duration": 487
+        },
+        {
+          "startTime": 1959.300000011921,
+          "duration": 87
+        }
+      ],
+      "glError": 0,
+      "profileAttribution": {
+        "appearanceSnapshotUs": null,
+        "idleUs": 5329176,
+        "gcUs": 31843,
+        "otherSamplesUs": 747261,
+        "appearanceAttributionNote": "Unavailable: production module facades execute in a shared app.js bundle, so matching original module URLs cannot isolate snapshot CPU samples. Zero from the initial matcher must not be interpreted as zero snapshot work."
+      }
+    }
+  }
+}

@@ -24,7 +24,7 @@ class Element {
   dispatch(name) { this.listeners.get(name)?.({ target: this }); }
 }
 
-function harness(t, { gpuPreference, client: providedClient, initialFrame } = {}) {
+function harness(t, { gpuPreference, client: providedClient, initialFrame, resultCacheBytes, resultCacheLimit, automaticDelayMs = 0 } = {}) {
   const previousDocument = globalThis.document;
   const ids = ['dxa-lattice', 'dxa-trial-length', 'dxa-stretchability', 'dxa-smoothing',
     'dxa-point-interval', 'dxa-perfect-only', 'dxa-line-radius', 'run-dxa', 'cancel-dxa',
@@ -45,6 +45,9 @@ function harness(t, { gpuPreference, client: providedClient, initialFrame } = {}
   const renderer = { atomColors: new Uint8Array([10, 20, 30]),
     setDislocationNetwork(network, settings) { this.network = network; this.settings = settings; draws.push({ network, settings }); } };
   const tools = initializeDxaTools({ renderer, client,
+    automaticDelayMs,
+    ...(resultCacheBytes === undefined ? {} : { resultCacheBytes }),
+    ...(resultCacheLimit === undefined ? {} : { resultCacheLimit }),
     tools: { setToolEnabled(name, enabled) { if (enabled) enabledTools.add(name); else enabledTools.delete(name); } },
     getFrame: () => frame, getSourceVersion: () => version,
     // An obsolete preference callback must never affect the CPU-only tool.
@@ -347,7 +350,7 @@ test('global GPU preference changes reuse the same CPU DXA result without readin
   assert.equal(property.analysisWorkerCount, 1);
 });
 
-test('DXA retains only the latest result rather than caching line graphs across a trajectory', async t => {
+test('DXA reuses recent frame graphs under a separate bounded cache', async t => {
   const h = harness(t), firstFrame = h.getFrame(), first = h.tools.run();
   h.pending[0].resolve(network()); await first;
   h.setFrame({ ids: new Uint32Array([1, 2, 3, 4]), properties: [] });
@@ -355,9 +358,62 @@ test('DXA retains only the latest result rather than caching line graphs across 
   h.pending[1].resolve(network(5)); await second;
   h.setFrame(firstFrame);
   const revisited = h.tools.onFrame();
-  assert.equal(h.pending.length, 3);
-  h.pending[2].resolve(network()); await revisited;
+  await revisited;
+  assert.equal(h.pending.length, 2);
   assert.equal(h.renderer.network.totalLength, 4);
+  assert.equal(h.tools.cacheStatus().size, 2);
+});
+
+test('DXA LRU limits and source changes reject obsolete cached graphs', async t => {
+  const h = harness(t, { resultCacheLimit: 2 }), frames = [h.getFrame(),
+    { ids: Uint32Array.of(1, 2, 3, 4), properties: [] }, { ids: Uint32Array.of(1, 2, 3, 4), properties: [] }];
+  for (let index = 0; index < frames.length; index++) {
+    h.setFrame(frames[index]); const task = index ? h.tools.onFrame() : h.tools.run();
+    h.pending[index].resolve(network(index + 1)); await task;
+  }
+  assert.equal(h.tools.cacheStatus().size, 2);
+  h.setFrame(frames[0]); const missed = h.tools.onFrame();
+  assert.equal(h.pending.length, 4, 'oldest graph was evicted');
+  h.pending[3].resolve(network(4)); await missed;
+  h.setFrame(frames[0], 'replacement-source'); const replaced = h.tools.onFrame();
+  assert.equal(h.pending.length, 5, 'source version invalidates even the same frame object');
+  h.pending[4].resolve(network(5)); await replaced;
+  assert.equal(h.tools.cacheStatus().size, 1);
+});
+
+test('DXA byte budget includes retained source geometry and evicts it after navigation', async t => {
+  const frame = { ids: Uint32Array.of(1, 2, 3, 4), properties: [], positions: new Float64Array(3000) };
+  const h = harness(t, { initialFrame: frame, resultCacheBytes: 1024 });
+  const first = h.tools.run(); h.pending[0].resolve(network()); await first;
+  assert.ok(h.tools.cacheStatus().bytes > 1024, 'only the currently displayed graph may exceed the budget');
+  h.setFrame({ ids: Uint32Array.of(1, 2, 3, 4), properties: [] });
+  const second = h.tools.onFrame(); h.pending[1].resolve(network(5)); await second;
+  assert.equal(h.tools.cacheStatus().size, 1);
+  h.setFrame(frame); const revisited = h.tools.onFrame();
+  assert.equal(h.pending.length, 3, 'oversized departed frame was not retained');
+  h.pending[2].resolve(network()); await revisited;
+});
+
+test('rapid automatic frame changes compute only the settled target; manual Calculate remains immediate', async t => {
+  const h = harness(t, { automaticDelayMs: 40 }), first = h.tools.run();
+  assert.equal(h.pending.length, 1, 'manual calculation starts immediately');
+  h.pending[0].resolve(network()); await first;
+  const obsoleteFrame = { ids: Uint32Array.of(1, 2, 3, 4), properties: [] };
+  const targetFrame = { ids: Uint32Array.of(1, 2, 3, 4), properties: [] };
+  h.setFrame(obsoleteFrame); const obsolete = h.tools.onFrame();
+  assert.equal(h.pending.length, 1);
+  assert.equal(h.fields['dxa-state'].textContent, 'Queued');
+  h.setFrame(targetFrame); const target = h.tools.onFrame();
+  await obsolete;
+  assert.equal(h.pending.length, 1, 'superseded debounce never starts a native job');
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(h.pending.length, 2);
+  assert.equal(h.pending[1].inputFrame, targetFrame);
+  h.pending[1].resolve(network(7)); await target;
+  h.setFrame(obsoleteFrame); const waiting = h.tools.onFrame();
+  const manual = h.tools.run();
+  assert.equal(h.pending.length, 3, 'manual Calculate bypasses the pending navigation delay');
+  h.pending[2].resolve(network(8)); await manual; await waiting;
 });
 
 test('portable DXA recipes restore settings and replay calculation without storing a computed network', async t => {

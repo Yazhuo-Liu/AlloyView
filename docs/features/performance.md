@@ -53,6 +53,32 @@ once to each Worker that needs the frame. They retain separate private Worker
 buffers; this is not a zero-copy shared-memory path. Subsequent resident
 Voronoi chunks now omit redundant type arrays and index descriptors as well.
 
+### Continuous frame presentation
+
+Manual navigation can map the last completed colors and display filters onto
+new positions using reliable, unique atom IDs. Borrowed appearance is marked
+as updating and never enters a frame's scientific properties. Unreliable
+identity and complex geometry keep the previous whole scene interactive until
+the target can be committed. The second view follows the presented scene.
+Updates preserve camera gestures and skip unchanged color/visibility uploads.
+
+Complete playback waits for the required formal scene and an actual animation
+frame draw, subtracting preparation time from the requested interval. Quick
+preview follows its clock and coalesces obsolete navigation. Exports retain
+strict result preparation. The timeline exposes 0.1–60 FPS and both modes.
+
+After foreground work and preparation become idle, a bounded predictor can
+compute the next frame's visible coordination/CNA/CSP/PTM/strain chain. A real
+foreground request joins or consumes that exact result through its ordinary
+validation and publication path. Complex graphs use bounded recent-result
+caches rather than speculative full trajectory calculations. Worker, CPU and
+GPU prewarm remain enabled.
+
+All six structure formats share exact synchronous and cancellable asynchronous
+numeric parsers. Checkpoints every 1,024 rows yield after an approximately 8 ms
+slice. Blob reads and individual allocations remain platform operations;
+posted work keeps its CPU lease until acknowledgment.
+
 ### Where results stay exact
 
 - **Parsing.** Byte-level conversion of dump, CFG and XYZ atom rows returns
@@ -419,6 +445,24 @@ Worker, which stays in the pool with its module, snapshot and index; a fatally
 failed Worker is terminated and replaced.
 
 An adaptive memory budget limits cached trajectory frames and results. Cancellation and source/frame/parameter ownership checks prevent late Worker messages from applying obsolete results. Closing the source stops playback and analysis, releases cached structure data, and restores the homepage. While GPU acceleration stays enabled, its device and compiled pipelines can be reused for the next source.
+
+The frame LRU enforces retained allocation bytes as well as the estimated
+frame-count limit. Shared backing buffers referenced by several fields or
+frames are charged once. Attaching an analysis or deferred coordinate array
+reassesses its owner, so a variable-size trajectory does not silently retain
+several large frames based on the first frame's smaller estimate. The currently
+displayed frame is pinned; only that frame may exceed the budget by itself.
+Neighbour prefetch can shrink to zero when it cannot fit rather than forcing
+three enormous frames to remain resident.
+
+DXA keeps a separate small recent-result LRU (four frames, 64 MiB), including
+retained source geometry and graph arrays. Its current displayed result is
+the only oversized exception. Automatic frame changes are coalesced for
+120 ms before starting native DXA, while manual calculation stays immediate.
+Host-acknowledged native-stage boundaries can cancel without losing the warmed
+coordinator. A serial stage already executing synchronous Wasm still needs
+Worker termination on hosts without shared control memory; the next job then
+reinitializes that coordinator. Shared-memory cancellation retains its pool.
 
 ## Enable GPU acceleration
 

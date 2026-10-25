@@ -125,6 +125,32 @@ test('per-atom visibility mask uploads without replacing the analysis frame', ()
   assert.throws(() => renderer.setVisibility(new Uint8Array(2)), /does not match/);
 });
 
+test('equal visibility and colors avoid uploads while in-place mutations remain visible to the GPU', () => {
+  const renderer = Object.assign(Object.create(WebGLRenderer.prototype), {
+    frame: {}, atomCount: 2, visibilityBuffer: {}, colorBuffer: {}, voronoiDisplayRevision: 0,
+    clearScalarColorPreview() { this.scalarColorPreview = null; }, requestRender() {},
+  });
+  const uploads = [], gestures = [];
+  renderer.gl = { ARRAY_BUFFER: 1, DYNAMIC_DRAW: 2, bindBuffer() {}, bufferData(target, values) { uploads.push(values.slice()); } };
+  renderer.interactions = { invalidateSelection(options) { gestures.push(options); }, reset() { throw new Error('camera drag was reset'); } };
+  const colors = Uint8Array.of(1, 2, 3, 4, 5, 6), mask = Uint8Array.of(255, 0);
+  renderer.setColors(colors); renderer.setVisibility(mask);
+  const revision = renderer.voronoiDisplayRevision;
+  assert.equal(uploads.length, 2);
+  assert.equal(renderer.setColors(colors), false);
+  assert.equal(renderer.setColors(colors.slice()), false);
+  assert.equal(renderer.setVisibility(mask), false);
+  assert.equal(renderer.setVisibility(mask.slice()), false);
+  assert.equal(uploads.length, 2);
+  assert.equal(renderer.voronoiDisplayRevision, revision, 'unchanged filtering does not invalidate Voronoi data');
+  colors[0] = 10; mask[1] = 255;
+  renderer.setColors(colors); renderer.setVisibility(mask);
+  assert.equal(uploads.length, 4, 'public setters detect mutations to the original array');
+  assert.deepEqual([...uploads[2]], [10, 2, 3, 4, 5, 6]);
+  assert.deepEqual([...uploads[3]], [255, 255]);
+  assert.equal(gestures.length, 2, 'only changed visibility invalidates selection work');
+});
+
 test('selection visibility reaches attached primitives while malformed masks leave renderer state unchanged', () => {
   const renderer = Object.create(WebGLRenderer.prototype), uploads = [], primitiveMasks = [];
   const frame = { properties: { energy: new Float64Array([1, 2, 100]) } };

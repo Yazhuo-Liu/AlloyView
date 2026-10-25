@@ -1,21 +1,18 @@
+import { PARSER_CHECKPOINT_MASK, parseInputSteps, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
+import { fractionalToCartesianSteps, fractionalToCartesianSummarySteps, wrapFractionalSteps, someParserValues } from './cooperative-coordinates.js';
 import {
   createCell,
-  fractionalToCartesian,
   multiply3,
   validateFrame,
-  wrapFractional,
 } from '../data/model.js';
-import { attachFrameSummary, fractionalToCartesianSummary } from '../data/frame-summary.js';
+import { attachFrameSummary } from '../data/frame-summary.js';
 import {
   AsciiRowReader,
   FALLBACK,
   NUMBER,
   SYMBOL_OR_NUMBER,
   TEXT,
-  asBytes,
-  isByteInput,
   lineStartAfter,
-  parseBytesWithFallback,
   readHeaderLines,
 } from './ascii-rows.js';
 
@@ -33,34 +30,39 @@ const CFG_BOUNDARY_TOLERANCE = 1e-5;
  * Internal coordinate-only reads validate every column but omit unrelated
  * scalar buffers; IDs and image-flag auxiliaries keep their full semantics.
  */
-export function parseCfg(input, sourceName = 'structure.cfg', { projection = 'full', deferUnwrap = false } = {}) {
-  const startedAt = performance.now();
-  if (!isByteInput(input)) return parseCfgText(input, sourceName, startedAt, projection, deferUnwrap);
-  return parseBytesWithFallback(
-    asBytes(input),
-    (bytes) => parseCfgBytes(bytes, sourceName, startedAt, projection, deferUnwrap),
-    (text) => parseCfgText(text, sourceName, startedAt, projection, deferUnwrap),
-  );
+export function parseCfg(input, sourceName = 'structure.cfg', options = {}) {
+  return runParserSteps(parseCfgSteps(input, sourceName, options));
 }
 
-function parseCfgText(text, sourceName, startedAt, projection, deferUnwrap) {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+export function parseCfgAsync(input, sourceName = 'structure.cfg', options = {}) {
+  return runParserStepsAsync(parseCfgSteps(input, sourceName, options), options);
+}
+
+function* parseCfgSteps(input, sourceName, { projection = 'full', deferUnwrap = false }) {
+  const startedAt = performance.now();
+  return yield* parseInputSteps(input,
+    bytes => parseCfgBytes(bytes, sourceName, startedAt, projection, deferUnwrap),
+    text => parseCfgText(text, sourceName, startedAt, projection, deferUnwrap));
+}
+
+function* parseCfgText(text, sourceName, startedAt, projection, deferUnwrap) {
+  const lines = yield* splitParserLines(text);
   const header = readCfgHeader(lines);
   const parsed = header.entryCount === null
-    ? parseBasicAtoms(lines, header.dataIndex, header.count, projection)
-    : parseExtendedAtoms(lines, header.dataIndex, header.count, extendedLayout(header, projection));
-  return finishCfgFrame(header, parsed, sourceName, startedAt, deferUnwrap);
+    ? (yield* parseBasicAtoms(lines, header.dataIndex, header.count, projection))
+    : (yield* parseExtendedAtoms(lines, header.dataIndex, header.count, extendedLayout(header, projection)));
+  return yield* finishCfgFrame(header, parsed, sourceName, startedAt, deferUnwrap);
 }
 
-function parseCfgBytes(bytes, sourceName, startedAt, projection, deferUnwrap) {
+function* parseCfgBytes(bytes, sourceName, startedAt, projection, deferUnwrap) {
   const header = readHeaderLines(bytes, readCfgHeader);
   if (!header) return null;
   const start = lineStartAfter(bytes, header.dataIndex);
   if (start < 0) return null;
   const parsed = header.entryCount === null
-    ? readBasicAtomBytes(bytes, start, header.count, projection)
-    : readExtendedAtomBytes(bytes, start, header.count, extendedLayout(header, projection));
-  return finishCfgFrame(header, parsed, sourceName, startedAt, deferUnwrap);
+    ? (yield* readBasicAtomBytes(bytes, start, header.count, projection))
+    : (yield* readExtendedAtomBytes(bytes, start, header.count, extendedLayout(header, projection)));
+  return yield* finishCfgFrame(header, parsed, sourceName, startedAt, deferUnwrap);
 }
 
 // Reads the header from `lines`. Only the first `usableLines` lines are known
@@ -179,10 +181,10 @@ export function readCfgHeader(lines, usableLines = lines.length) {
   return { count, cell, dataIndex, entryCount, noVelocity, auxiliary };
 }
 
-function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt, deferUnwrap) {
+function* finishCfgFrame({ count, cell }, parsed, sourceName, startedAt, deferUnwrap) {
   const rawFractional = parsed.fractional;
-  const fractional = wrapCfgFractional(rawFractional, cell.pbc);
-  const semantics = extractExtendedSemantics(parsed.properties, count);
+  const fractional = yield* wrapCfgFractional(rawFractional, cell.pbc);
+  const semantics = yield* extractExtendedSemantics(parsed.properties, count);
   let unwrappedPositions;
   let imageFlags = semantics.imageFlags;
   let unwrapSource;
@@ -190,33 +192,37 @@ function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt, deferUnw
     if (!deferUnwrap) {
       const unwrappedFractional = Float64Array.from(fractional);
       for (let atom = 0; atom < count; atom += 1) {
+        if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
         for (let axis = 0; axis < 3; axis += 1) {
           unwrappedFractional[atom * 3 + axis] += semantics.imageFlags[atom * 3 + axis];
         }
       }
-      unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
+      unwrappedPositions = (yield* fractionalToCartesianSteps(unwrappedFractional, cell));
     }
     unwrapSource = 'ix/iy/iz';
   } else {
-    imageFlags = inferCfgImageFlags(rawFractional, cell.pbc);
+    imageFlags = yield* inferCfgImageFlags(rawFractional, cell.pbc);
     if (imageFlags) {
       if (!deferUnwrap) {
         const unwrappedFractional = new Float64Array(fractional.length);
-        for (let index = 0; index < fractional.length; index += 1) unwrappedFractional[index] = fractional[index] + imageFlags[index];
-        unwrappedPositions = fractionalToCartesian(unwrappedFractional, cell);
+        for (let index = 0; index < fractional.length; index += 1) {
+          if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
+          unwrappedFractional[index] = fractional[index] + imageFlags[index];
+        }
+        unwrappedPositions = (yield* fractionalToCartesianSteps(unwrappedFractional, cell));
       }
       unwrapSource = 'out-of-cell CFG coordinates';
     }
   }
-  const { positions, summary } = fractionalToCartesianSummary(fractional, cell, parsed.types, parsed.typeLabels.length);
+  const { positions, summary } = (yield* fractionalToCartesianSummarySteps(fractional, cell, parsed.types, parsed.typeLabels.length));
   // Analysis coordinates retain their existing wrapped/Float32 convention.
   // A source-position display preserves actual out-of-cell and near-boundary
   // values from the file, without adding the optional ix/iy/iz counters. Most
   // in-cell files need no separate display buffer.
-  const filePositions = deferUnwrap && rawFractional.some((value, index) => Math.fround(value) !== fractional[index])
-    ? fractionalToCartesian(rawFractional, cell) : null;
+  const filePositions = deferUnwrap && (yield* someParserValues(rawFractional, (value, index) => Math.fround(value) !== fractional[index]))
+    ? (yield* fractionalToCartesianSteps(rawFractional, cell)) : null;
   const frame = validateFrame({
-    ids: semantics.ids ?? rowOrderIds(count),
+    ids: semantics.ids ?? (yield* rowOrderIds(count)),
     types: parsed.types,
     typeLabels: parsed.typeLabels,
     idSource: semantics.ids ? 'explicit' : 'row-order',
@@ -236,20 +242,24 @@ function finishCfgFrame({ count, cell }, parsed, sourceName, startedAt, deferUnw
   return attachFrameSummary(frame, summary);
 }
 
-function rowOrderIds(count) {
+function* rowOrderIds(count) {
   const ids = new Float64Array(count);
-  for (let index = 0; index < count; index += 1) ids[index] = index + 1;
+  for (let index = 0; index < count; index += 1) {
+    if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
+    ids[index] = index + 1;
+  }
   return ids;
 }
 
-function wrapCfgFractional(fractional, pbc) {
+function* wrapCfgFractional(fractional, pbc) {
   const stabilized = new Float64Array(fractional.length);
   for (let index = 0; index < fractional.length; index += 1) {
+    if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
     const value = fractional[index];
     if (!pbc[index % 3]) { stabilized[index] = value; continue; }
     stabilized[index] = stabilizeCfgFractional(value);
   }
-  return wrapFractional(stabilized, pbc);
+  return yield* wrapFractionalSteps(stabilized, pbc);
 }
 
 function stabilizeCfgFractional(value) {
@@ -257,10 +267,11 @@ function stabilizeCfgFractional(value) {
   return Math.abs(value - nearestInteger) <= CFG_BOUNDARY_TOLERANCE ? nearestInteger : value;
 }
 
-function inferCfgImageFlags(rawFractional, pbc) {
+function* inferCfgImageFlags(rawFractional, pbc) {
   let hasMeaningfulImage = false;
   const flags = new Int32Array(rawFractional.length);
   for (let index = 0; index < rawFractional.length; index += 1) {
+    if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
     if (!pbc[index % 3]) continue;
     const value = rawFractional[index];
     if (value < -CFG_BOUNDARY_TOLERANCE || value > 1 + CFG_BOUNDARY_TOLERANCE) {
@@ -277,7 +288,7 @@ function inferCfgImageFlags(rawFractional, pbc) {
   return hasMeaningfulImage ? flags : undefined;
 }
 
-function parseBasicAtoms(lines, start, count, projection) {
+function* parseBasicAtoms(lines, start, count, projection) {
   const fractional = new Float64Array(count * 3);
   const types = new Uint16Array(count);
   const masses = projection === 'coordinates' ? null : new Float32Array(count);
@@ -287,6 +298,7 @@ function parseBasicAtoms(lines, start, count, projection) {
   let atom = 0;
 
   for (let index = start; index < lines.length && atom < count; index += 1) {
+    if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
     const line = lines[index].trim();
     if (!line || line.startsWith('#')) continue;
     const tokens = line.split(/\s+/);
@@ -329,7 +341,7 @@ function basicAtomResult(fractional, types, typeMap, masses, hasVelocity, veloci
 
 // Byte-level counterpart of parseBasicAtoms: the same arrays, and FALLBACK
 // wherever parseBasicAtoms would throw (see ascii-rows.js).
-function readBasicAtomBytes(bytes, start, count, projection) {
+function* readBasicAtomBytes(bytes, start, count, projection) {
   const fractional = new Float64Array(count * 3);
   const types = new Uint16Array(count);
   const masses = projection === 'coordinates' ? null : new Float32Array(count);
@@ -343,7 +355,9 @@ function readBasicAtomBytes(bytes, start, count, projection) {
   let hasVelocity = null;
   let atom = 0;
 
+  let scannedRows = 0;
   while (atom < count && !reader.atEnd()) {
+    if ((scannedRows++ & PARSER_CHECKPOINT_MASK) === 0) yield;
     if (reader.skipLineStartingWith(HASH)) continue;
     const tokenCount = reader.readRow(kinds, values, texts);
     if (tokenCount === 0) continue;
@@ -417,13 +431,14 @@ function extendedAtomResult({ fractional, types, typeMap, masses, propertyDefini
   };
 }
 
-function parseExtendedAtoms(lines, start, count, layout) {
+function* parseExtendedAtoms(lines, start, count, layout) {
   const { entryCount, propertyData, masses, fractional, types, typeMap } = layout;
   let currentMass = null;
   let currentSymbol = null;
   let atom = 0;
 
   for (let index = start; index < lines.length && atom < count; index += 1) {
+    if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
     const line = lines[index].trim();
     if (!line || line.startsWith('#')) continue;
     const tokens = line.split(/\s+/);
@@ -472,7 +487,7 @@ function parseExtendedAtoms(lines, start, count, layout) {
 // wherever parseExtendedAtoms would throw (see ascii-rows.js). A token that
 // starts with a letter is never a finite number, so it is read as text: a
 // mass line is a single finite number, a symbol line a single valid symbol.
-function readExtendedAtomBytes(bytes, start, count, layout) {
+function* readExtendedAtomBytes(bytes, start, count, layout) {
   const { entryCount, propertyData, masses, fractional, types, typeMap } = layout;
   const propertyCount = propertyData.length;
   const kinds = new Uint8Array(entryCount + 2).fill(NUMBER);
@@ -486,7 +501,9 @@ function readExtendedAtomBytes(bytes, start, count, layout) {
   let currentSymbol = null;
   let atom = 0;
 
+  let scannedRows = 0;
   while (atom < count && !reader.atEnd()) {
+    if ((scannedRows++ & PARSER_CHECKPOINT_MASK) === 0) yield;
     if (reader.skipLineStartingWith(HASH)) continue;
     const tokenCount = reader.readRow(kinds, values, texts);
     if (tokenCount === 0) continue;
@@ -552,7 +569,7 @@ class SymbolCache {
   }
 }
 
-function extractExtendedSemantics(properties, count) {
+function* extractExtendedSemantics(properties, count) {
   const byName = new Map();
   for (const property of properties) {
     const name = property.name.toLowerCase();
@@ -572,6 +589,7 @@ function extractExtendedSemantics(properties, count) {
     ids = Float64Array.from(byName.get('id').data);
     const seen = new Set();
     for (let atom = 0; atom < count; atom += 1) {
+      if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
       const id = ids[atom];
       if (!Number.isSafeInteger(id) || id <= 0) {
         throw cfgError(`Auxiliary id value ${id} at atom row ${atom + 1} is not a positive safe integer.`);
@@ -587,6 +605,7 @@ function extractExtendedSemantics(properties, count) {
     imageFlags = new Int32Array(count * 3);
     for (let axis = 0; axis < 3; axis += 1) {
       for (let atom = 0; atom < count; atom += 1) {
+        if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
         const image = imageColumns[axis][atom];
         if (!Number.isSafeInteger(image) || image < -2_147_483_648 || image > 2_147_483_647) {
           throw cfgError(`Auxiliary ${imageNames[axis]} value ${image} at atom row ${atom + 1} is not a supported 32-bit integer.`);

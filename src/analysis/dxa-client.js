@@ -151,13 +151,25 @@ export class DxaClient {
       if (this.worker !== worker) return;
       const task = this.current;
       if (!task || task.id !== data.id) return;
+      if (data.cooperativeStages) {
+        task.cooperativeStages = true;
+        task.nativeRunning = false;
+        if (task.settled) worker.postMessage({ type: 'cancel', id: task.id });
+        return;
+      }
+      if (data.checkpoint) {
+        void this.acknowledgeCheckpoint(task, worker, data.checkpoint);
+        return;
+      }
       if (Object.hasOwn(data, 'control')) {
         this.control = data.control;
         task.sharedMemory = Boolean(data.control);
         if (!data.control) this.singleThreadOnly = true;
         if (task.settled) {
           if (data.control) this.setCancellation(1);
-          else if (foreground(task) && !task.cpuStageWaiting) { this.terminateWorker(); this.retire(task); }
+          else if (foreground(task) && !task.cpuStageWaiting && !(task.cooperativeStages && !task.nativeRunning)) {
+            this.terminateWorker(); this.retire(task);
+          }
         }
         return;
       }
@@ -212,6 +224,27 @@ export class DxaClient {
     return worker;
   }
 
+  async acknowledgeCheckpoint(task, worker, { requestId }) {
+    task.nativeCheckpoint = requestId;
+    task.nativeRunning = false;
+    try {
+      // Give pending navigation/input a turn before permitting a heavy stage.
+      await this.yieldToMain();
+      if (this.worker !== worker || this.current !== task) return;
+      if (task.settled || task.controller.signal.aborted) {
+        worker.postMessage({ type: 'cancel', id: task.id });
+        return;
+      }
+      // Once permission is posted the Worker may enter synchronous Wasm.
+      // A later abort must retain the existing hard-cancellation fallback.
+      task.nativeRunning = true;
+      task.nativeCheckpoint = undefined;
+      worker.postMessage({ type: 'resume-checkpoint', id: task.id, requestId });
+    } catch (error) {
+      this.cancel(task, error);
+    }
+  }
+
   pump() {
     if (this.current || this.closed) return;
     const first = this.queue.findIndex(foreground);
@@ -264,6 +297,7 @@ export class DxaClient {
       this.setCancellation(0);
       worker.postMessage({ id: task.id, type: task.type, frame, atomCount: task.count,
         parameters: task.parameters, memoryBudgetBytes: this.memoryBudgetBytes, workerCount: task.workerCount,
+        cooperativeStages: true,
         cpuOffload: Boolean(task.cpuOffload), warmCode: Boolean(task.warmCode),
         ...(task.defectMesh ? { defectMesh: task.defectMesh } : {}), ...(mask ? { mask } : {}) }, transfer);
       task.dispatched = true;
@@ -379,10 +413,11 @@ export class DxaClient {
     if (this.current === task) {
       if (!task.dispatched) { this.retire(task); return; }
       const shared = this.setCancellation(1);
+      const checkpoint = task.cooperativeStages && !task.nativeRunning || task.nativeCheckpoint !== undefined;
       const awaitingControl = task.sharedMemory === undefined
         && this.environment.crossOriginIsolated === true && typeof this.environment.SharedArrayBuffer === 'function';
-      if (task.type === 'warmup' || shared || awaitingControl || task.cpuStageWaiting) {
-        if (task.type === 'warmup' || awaitingControl || task.cpuStageWaiting) this.worker?.postMessage({ type: 'cancel', id: task.id });
+      if (task.type === 'warmup' || shared || awaitingControl || task.cpuStageWaiting || checkpoint) {
+        if (task.type === 'warmup' || awaitingControl || task.cpuStageWaiting || checkpoint) this.worker?.postMessage({ type: 'cancel', id: task.id });
         // Reject/clear the UI immediately, but retain the lease until native
         // work acknowledges cancellation and every pthread has joined. If
         // initialization falls back to serial, its null control announcement

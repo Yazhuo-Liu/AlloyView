@@ -1,6 +1,7 @@
+import { PARSER_CHECKPOINT_MASK, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
 import { createCell, validateFrame } from '../data/model.js';
 import { attachFrameSummary } from '../data/frame-summary.js';
-import { coordinatesForCell } from './xyz.js';
+import { coordinatesForCellSteps } from './xyz.js';
 
 // Column layouts of the Atoms section for the supported atom styles, after
 // atom-ID. Three optional image-flag columns may follow every layout.
@@ -37,10 +38,18 @@ export function looksLikeLammpsData(text) {
  * is ignored; boundaries are not stored in data files, so every axis is
  * periodic, as `read_data` assumes until a `boundary` command says otherwise. */
 export function parseLammpsData(text, sourceName = 'LAMMPS data') {
+  return runParserSteps(parseLammpsDataSteps(text, sourceName));
+}
+
+export function parseLammpsDataAsync(text, sourceName = 'LAMMPS data', options = {}) {
+  return runParserStepsAsync(parseLammpsDataSteps(text, sourceName), options);
+}
+
+function* parseLammpsDataSteps(text, sourceName) {
   const startedAt = performance.now();
-  const lines = String(text).replace(/^﻿/, '').split(/\r?\n/);
+  const lines = yield* splitParserLines(text);
   const header = parseHeader(lines);
-  const sections = splitSections(lines, header.end);
+  const sections = yield* splitSections(lines, header.end);
   const atoms = sections.get('Atoms');
   if (!atoms) throw dataError('the file has no Atoms section.');
   const labels = typeLabelsFromSections(sections, header.atomTypes);
@@ -55,7 +64,9 @@ export function parseLammpsData(text, sourceName = 'LAMMPS data') {
   const propertyData = propertyNames.map(name => name === 'mol' ? new Float64Array(count) : new Float32Array(count));
   let images = null;
   const rowById = new Map();
-  atoms.rows.forEach(({ tokens, line }, atom) => {
+  for (let atom = 0; atom < count; atom++) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
+    const { tokens, line } = atoms.rows[atom];
     const hasImages = tokens.length === columns.length + 4;
     if (!hasImages && tokens.length !== columns.length + 1) {
       throw dataError(`line ${line + 1}: ${style} atoms need ${columns.length + 1} columns (or ${columns.length + 4} with image flags); found ${tokens.length}.`);
@@ -75,26 +86,42 @@ export function parseLammpsData(text, sourceName = 'LAMMPS data') {
       else propertyData[propertyNames.indexOf(column)][atom] = column === 'mol' ? integer(token, line, 'molecule ID') : finite(token, line, column);
     });
     if (images) for (let axis = 0; axis < 3; axis += 1) images[atom * 3 + axis] = checkedImageFlag(integer(tokens[columns.length + 1 + axis], line, 'image flag'));
-  });
+  }
 
-  const sortedTypes = [...new Set(rawTypes)].sort((left, right) => left - right);
+  const uniqueTypes = new Set();
+  for (let atom = 0; atom < count; atom++) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
+    uniqueTypes.add(rawTypes[atom]);
+  }
+  const sortedTypes = [...uniqueTypes].sort((left, right) => left - right);
   if (sortedTypes.length > 65_535) throw dataError('more than 65,535 atom types cannot be represented.');
   const typeIndex = new Map(sortedTypes.map((type, index) => [type, index]));
-  const types = Uint16Array.from(rawTypes, type => typeIndex.get(type));
+  const types = new Uint16Array(count);
+  for (let atom = 0; atom < count; atom++) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
+    types[atom] = typeIndex.get(rawTypes[atom]);
+  }
   const typeLabels = sortedTypes.map(type => labels.names.get(type) ?? `Type ${type}`);
 
   const properties = propertyNames.map((name, index) => ({ name, unit: '', data: propertyData[index] }));
   const masses = sections.get('Masses');
   if (masses) {
     const massByType = new Map(masses.rows.map(({ tokens, line }) => [typeNumber(tokens[0], labels, line, header.atomTypes), finite(tokens[1], line, 'mass')]));
-    properties.push({ name: 'mass', unit: '', data: Float32Array.from(rawTypes, type => massByType.get(type) ?? NaN) });
+    const data = new Float32Array(count);
+    for (let atom = 0; atom < count; atom++) {
+      if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
+      data[atom] = massByType.get(rawTypes[atom]) ?? NaN;
+    }
+    properties.push({ name: 'mass', unit: '', data });
   }
   const velocities = sections.get('Velocities');
   if (velocities) {
     if (velocities.rows.length !== count) throw dataError(`the Velocities section has ${velocities.rows.length} rows for ${count} atoms.`);
     const components = ['vx', 'vy', 'vz'].map(name => ({ name, unit: '', data: new Float32Array(count).fill(NaN) }));
     const seen = new Uint8Array(count);
+    let velocityRow = 0;
     for (const { tokens, line } of velocities.rows) {
+      if ((velocityRow++ & PARSER_CHECKPOINT_MASK) === 0) yield;
       if (tokens.length < 4) throw dataError(`line ${line + 1}: a velocity row needs an atom ID and three components.`);
       const atom = rowById.get(integer(tokens[0], line, 'atom ID'));
       if (atom === undefined) throw dataError(`line ${line + 1}: velocity for an unknown atom ID.`);
@@ -107,12 +134,13 @@ export function parseLammpsData(text, sourceName = 'LAMMPS data') {
 
   const cell = createCell({ origin: header.origin, vectors: header.vectors, pbc: [true, true, true], triclinic: header.triclinic });
   const summaryOutput = { types, typeCount: typeLabels.length };
-  const coordinates = coordinatesForCell(raw, cell, 'LAMMPS data', summaryOutput);
+  const coordinates = yield* coordinatesForCellSteps(raw, cell, 'LAMMPS data', summaryOutput);
   if (images) {
     // Stored image flags count box crossings on top of any out-of-box offset.
     const imageFlags = coordinates.imageFlags ?? new Int32Array(count * 3);
     const unwrappedPositions = Float64Array.from(raw);
     for (let atom = 0; atom < count; atom += 1) {
+      if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
       for (let image = 0; image < 3; image += 1) {
         const shift = images[atom * 3 + image];
         imageFlags[atom * 3 + image] = checkedImageFlag(imageFlags[atom * 3 + image] + shift);
@@ -168,11 +196,12 @@ function parseHeader(lines) {
 
 /** Section keywords delimit rows. A row may start with a type label, so its
  * first letter cannot distinguish it from a section heading. */
-function splitSections(lines, start) {
+function* splitSections(lines, start) {
   const sections = new Map();
   const atomLabels = new Set();
   let current = null;
   for (let index = start; index < lines.length; index += 1) {
+    if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
     const raw = lines[index], line = stripComment(raw).trim();
     if (!line) continue;
     const tokens = line.split(/\s+/);

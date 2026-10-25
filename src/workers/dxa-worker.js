@@ -9,7 +9,25 @@ import { dxaStageMetadata, serveDxaStageInput } from '../analysis/dxa-cpu-stages
 let requests = Promise.resolve();
 const controllers = new Map();
 const cpuStageRequests = new Map();
+const checkpoints = new Map();
 let nextCpuStageId = 1;
+let nextCheckpointId = 1;
+
+function nativeCheckpoint(id, phase, signal) {
+  if (signal.aborted) return Promise.reject(new DOMException('DXA calculation cancelled.', 'AbortError'));
+  const requestId = nextCheckpointId++;
+  return new Promise((resolve, reject) => {
+    const finish = error => {
+      checkpoints.delete(requestId); signal.removeEventListener('abort', abort);
+      if (error) reject(error); else resolve();
+    };
+    const abort = () => finish(new DOMException('DXA calculation cancelled.', 'AbortError'));
+    checkpoints.set(requestId, { id, finish });
+    signal.addEventListener('abort', abort, { once: true });
+    try { self.postMessage({ id, checkpoint: { requestId, phase } }); }
+    catch (error) { finish(error); }
+  });
+}
 
 function requestCpuStage(id, stage, input, { signal } = {}) {
   if (signal?.aborted) return Promise.reject(new DOMException('CPU DXA stage cancelled.', 'AbortError'));
@@ -33,6 +51,9 @@ async function handleRequest(data) {
   const { id, frame, parameters, memoryBudgetBytes, workerCount, type } = data;
   const controller = new AbortController();
   controllers.set(id, controller);
+  // Every native entry below is guarded by an acknowledged checkpoint. The
+  // host may safely cancel asynchronous initialization without losing Wasm.
+  if (data.cooperativeStages) self.postMessage({ id, cooperativeStages: true });
   try {
     const options = {
       memoryBudgetBytes,
@@ -43,6 +64,7 @@ async function handleRequest(data) {
       onControl: control => self.postMessage({ id, control }),
       onProgress: progress => self.postMessage({ id, progress }),
       signal: controller.signal,
+      ...(data.cooperativeStages ? { onCheckpoint: phase => nativeCheckpoint(id, phase, controller.signal) } : {}),
       runCpuStage: data.cpuOffload ? (stage, input, options) => requestCpuStage(id, stage, input, options) : undefined,
     };
     if (type === 'warmup') {
@@ -69,6 +91,11 @@ async function handleRequest(data) {
   }
 }
 self.addEventListener('message', ({ data }) => {
+  if (data.type === 'resume-checkpoint') {
+    const checkpoint = checkpoints.get(data.requestId);
+    if (checkpoint?.id === data.id) checkpoint.finish();
+    return;
+  }
   if (data.type === 'cpu-stage-input') {
     const request = cpuStageRequests.get(data.requestId);
     if (request?.id === data.id) serveDxaStageInput(request.stage, request.input, data.port);

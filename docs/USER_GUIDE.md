@@ -51,10 +51,22 @@ on release; keyboard changes use a short debounce. New selections cancel obsolet
 navigation so the latest target wins. Large jumps reuse cached frames and any
 explicitly enabled inference history, and ordinary CFG navigation needs only the
 target file, even in a 165-file folder.
+The timeline's **FPS** input accepts 0.1–60 frames per second. **Complete
+results** waits for each required visual result and its rendered frame;
+preparation time counts toward the interval. **Quick preview** follows the
+clock and may skip superseded frames. Configuration restore saves these choices
+without starting playback.
+
+During manual navigation, compatible atom IDs allow new positions to appear
+with the last completed colors and display filters while the new calculation
+runs. The status identifies the borrowed appearance. Without reliable IDs, or
+while complex geometry is being prepared, the previous complete scene remains
+interactive. Statistics and exports use the current frame's formal results.
+
 Saved configurations wait for indexing when their target frame is not yet
 available. Cancelling prefetch discards obsolete results and stops queued work;
-an active synchronous parse finishes before its reusable Worker and CPU
-capacity are released.
+numeric parsing checks cancellation in short slices and retains its reusable
+Worker and CPU capacity until cleanup is acknowledged.
 
 The loading indicator over the view belongs to the operation that showed it:
 opening a file, a frame change, a smoothing change, a configuration import,

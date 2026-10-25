@@ -102,7 +102,7 @@ function harness(t, spec) {
   let controls;
   if (spec.family === 'topology') controls = initializeTopologyTools({ ...common, pool, getBondParameters: () => ({ cutoff: 1.05, pairCutoffs: [] }) });
   else if (spec.family === 'clusters') controls = initializeClusterTools({ ...common, pool });
-  else if (spec.family === 'dxa') controls = initializeDxaTools({ ...common, renderer, client: { analyze: enqueue, release() {} } });
+  else if (spec.family === 'dxa') controls = initializeDxaTools({ ...common, renderer, automaticDelayMs: 0, client: { analyze: enqueue, release() {} } });
   else if (spec.family === 'wignerSeitz') controls = initializeWignerSeitzTools({ ...common, renderer, pool });
   else controls = initializeGrainTools({ ...common,
     ensurePtm: async target => ({ ptm: { key: 'fit', structureTypes: new Uint8Array(target.ids.length),

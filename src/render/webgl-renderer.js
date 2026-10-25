@@ -202,6 +202,35 @@ export function cellWireframeDraws(mode = 'mono', color = [0.62, 0.78, 0.81]) {
 
 const SOURCE_REPLICA = [0, 0, 0];
 
+// Camera, callbacks, shader programs and analysis clients are shared by the
+// canvas. Everything below belongs to one displayed/preparing scene bank.
+const SCENE_FIELDS = [
+  'frame', 'displayPositions', 'rawDisplayPositions', 'displayFractional', 'periodicOrigin', 'coordinateMode',
+  'crystalDrag', 'visibility', 'selectionVisibility', 'atomCount', 'repetitions', 'replicas', 'displayAtomCount',
+  'atomRadii', 'maximumAtomRadius', 'atomColors', 'colorRevision', 'radiusRevision',
+  'colorUploadSnapshot', 'visibilityUploadSnapshot', 'selectionVisibilitySnapshot',
+  'sphereVao', 'sphereQuadBuffer', 'positionBuffer', 'colorBuffer', 'fractionalBuffer', 'visibilityBuffer',
+  'radiusBuffer', 'scalarColorBuffer', 'colorOverrideBuffer', 'cellVao', 'cellBuffer', 'sliceOutlineVao', 'sliceOutlineBuffer',
+  'scalarColorTexture', 'scalarColorTextureWidth', 'scalarColorInput', 'scalarColorPreview',
+  'ambientOcclusionBuffer', 'ambientOcclusionFactors', 'ambientOcclusionIntensity',
+  'primitiveLayer', 'dislocationLayer', 'siteMarkerLayer', 'surfaceMeshLayer', 'trajectoryLineLayer',
+  'voronoiCellLayer', 'voronoiAllCellLayer', 'exportLineLayer', 'retainedSurfaceMeshes',
+  'atomBonds', 'atomVectors', 'atomVectorFields', 'bondOptions', 'vectorOptions',
+  'dislocationNetwork', 'dislocationOptions', 'siteMarkers', 'siteMarkerOptions',
+  'trajectoryLines', 'trajectoryLineOptions', 'voronoiCellGeometry', 'voronoiAllCellGeometry', 'voronoiCellOptions',
+  'voronoiDisplayRevision', 'displayRevision', 'sourceBoundsRevision', 'sourceBoundsCache',
+  'preparedDisplaySnapshot', 'ownPreparedDisplaySnapshot', 'preparedDisplayUploads',
+  'preparedPrimitivePreparation', 'ownPreparedPrimitivePreparation', 'ownPreparedBondSnapshot', 'preparedBondSnapshot',
+  'selected', 'selectedAtoms', 'sliceSelectedAtoms', 'lastPick', 'selectionSourceBounds',
+  'displayCell', 'sceneBounds', 'modelRadius', 'minimumOffset', 'maximumOffset',
+  'sliceAxis', 'sliceMaximum', 'sliceMode', 'slices', 'slicePlaneValues', 'sliceCount', 'sliceOutlineGeometry',
+];
+const SCENE_LAYERS = ['primitiveLayer', 'dislocationLayer', 'siteMarkerLayer', 'surfaceMeshLayer', 'trajectoryLineLayer',
+  'voronoiCellLayer', 'voronoiAllCellLayer', 'exportLineLayer'];
+const CAMERA_FIELDS = ['yaw', 'pitch', 'roll', 'constrainUp', 'target', 'pan', 'distance', 'orthographicScale',
+  'projectionMode', 'fov', 'radiusScale', 'background', 'cellVisible', 'cellColor', 'cellWireframeMode',
+  'sliceOutlinesVisible', 'sliceOutlineColor', 'renderViewport', 'exportAppearanceBackground'];
+
 export class WebGLRenderer {
   constructor(canvas, {
     onPick = () => {},
@@ -327,6 +356,26 @@ export class WebGLRenderer {
     const sphere = createConservativeDepthProgram(gl, SPHERE_VERTEX, SPHERE_FRAGMENT, createProgram);
     this.sphereProgram = sphere.program; this.conservativeDepth = sphere;
     this.lineProgram = createProgram(gl, LINE_VERTEX, LINE_FRAGMENT);
+    this.initializeSceneBuffers();
+    this.sphereUniforms = uniforms(gl, this.sphereProgram, [
+      'uView', 'uProjection', 'uRadiusScale', 'uSliceAxis', 'uSliceMaximum', 'uSelected',
+      'uReplicaOffset', 'uReplicaIndex', 'uRepetitions',
+      'uSliceMode', 'uSliceCount', 'uSlicePlanes[0]',
+      'uSelectedAtoms[0]', 'uAmbientOcclusion', 'uOcclusionIntensity',
+      ...SCALAR_COLOR_UNIFORMS, ...CRYSTAL_DRAG_UNIFORMS,
+    ]);
+    this.lineUniforms = uniforms(gl, this.lineProgram, ['uViewProjection', 'uColor']);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+  }
+
+  // Each presentation transaction uses one of two bounded scene banks.
+  // Shader programs and analysis clients remain owned by the canvas.
+  initializeSceneBuffers() {
+    const gl = this.gl;
     this.sphereVao = gl.createVertexArray();
     this.positionBuffer = gl.createBuffer();
     this.colorBuffer = gl.createBuffer();
@@ -341,7 +390,7 @@ export class WebGLRenderer {
     this.sliceOutlineBuffer = gl.createBuffer();
 
     gl.bindVertexArray(this.sphereVao);
-    const quadBuffer = gl.createBuffer();
+    const quadBuffer = this.sphereQuadBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
@@ -385,19 +434,137 @@ export class WebGLRenderer {
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
 
-    this.sphereUniforms = uniforms(gl, this.sphereProgram, [
-      'uView', 'uProjection', 'uRadiusScale', 'uSliceAxis', 'uSliceMaximum', 'uSelected',
-      'uReplicaOffset', 'uReplicaIndex', 'uRepetitions',
-      'uSliceMode', 'uSliceCount', 'uSlicePlanes[0]',
-      'uSelectedAtoms[0]', 'uAmbientOcclusion', 'uOcclusionIntensity',
-      ...SCALAR_COLOR_UNIFORMS, ...CRYSTAL_DRAG_UNIFORMS,
-    ]);
-    this.lineUniforms = uniforms(gl, this.lineProgram, ['uViewProjection', 'uColor']);
-    gl.enable(gl.DEPTH_TEST);
-    gl.depthFunc(gl.LEQUAL);
-    gl.enable(gl.CULL_FACE);
-    gl.cullFace(gl.BACK);
-    gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+  }
+
+  get presentationPending() { return Boolean(this.sceneUpdate || this.presentationBlocked); }
+  get presentedFrame() { return this.sceneUpdate?.retained.frame ?? this.frame; }
+  get presentedRenderer() { return this.sceneUpdate?.retained ?? this; }
+
+  /** A dependent viewport can show the primary's already presented scene
+   * without duplicating its unpublished target. Its camera stays available,
+   * but old pixels cannot edit the application's newer scientific frame. */
+  setPresentationBlocked(blocked) { this.presentationBlocked = Boolean(blocked); }
+
+  /** Resolve after this canvas actually draws the requested committed frame.
+   * This is a submission/viewport barrier; it never stalls the GPU driver. */
+  whenPresented(frame = this.frame, { signal } = {}) {
+    if (signal?.aborted) return Promise.reject(new DOMException('Frame presentation cancelled.', 'AbortError'));
+    if (!frame || frame !== this.frame) return Promise.reject(new DOMException('The requested frame was superseded.', 'AbortError'));
+    if (this.graphicsUnavailable()) return Promise.reject(new Error('The graphics context is unavailable.'));
+    const revision = this.framePresentationRevision ?? 0;
+    if (!this.presentationPending && this.lastPresentedFrame === frame && this.lastPresentedRevision === revision
+        && this.lastPresentedDrawRevision === (this.drawRevision ?? 0)) return Promise.resolve(frame);
+    const promise = new Promise((resolve, reject) => {
+      this.presentationWaiters ??= new Set();
+      const entry = { frame, revision, resolve, reject, removeAbort: () => signal?.removeEventListener('abort', abort) };
+      const abort = () => {
+        if (!this.presentationWaiters.delete(entry)) return;
+        entry.removeAbort(); reject(new DOMException('Frame presentation cancelled.', 'AbortError'));
+      };
+      this.presentationWaiters.add(entry);
+      signal?.addEventListener('abort', abort, { once: true });
+    });
+    this.requestRender();
+    return promise;
+  }
+
+  invalidatePresentation(message = 'The requested frame was superseded.') {
+    this.framePresentationRevision = (this.framePresentationRevision ?? 0) + 1;
+    for (const entry of this.presentationWaiters ?? []) {
+      entry.removeAbort(); entry.reject(new DOMException(message, 'AbortError'));
+    }
+    this.presentationWaiters?.clear();
+    this.lastPresentedFrame = null;
+  }
+
+  completePresentation() {
+    if (this.presentationPending || !this.frame) return;
+    this.lastPresentedFrame = this.frame;
+    this.lastPresentedRevision = this.framePresentationRevision ?? 0;
+    this.lastPresentedDrawRevision = this.drawRevision ?? 0;
+    for (const entry of this.presentationWaiters ?? []) {
+      if (entry.frame !== this.frame || entry.revision !== this.lastPresentedRevision) continue;
+      this.presentationWaiters.delete(entry); entry.removeAbort(); entry.resolve(this.frame);
+    }
+  }
+
+  /** Retain the complete previous scene while a new scientific frame builds.
+   * Two banks share the canvas programs and clients. A replacement request
+   * discards only the unpublished bank, never the scene still being shown. */
+  beginSceneUpdate() {
+    if (this.graphicsUnavailable() || !(this.sceneUpdate?.retained.frame ?? this.frame)) return null;
+    this.invalidatePresentation();
+    const token = Object.freeze({ revision: this.sceneUpdateRevision = (this.sceneUpdateRevision ?? 0) + 1 });
+    const retained = this.sceneUpdate?.retained ?? this.captureSceneBank();
+    if (this.sceneUpdate) this.applySceneBank(this.clearSceneBank(this.captureSceneBank()));
+    else if (this.sceneSpare) {
+      this.applySceneBank(this.sceneSpare);
+      this.sceneSpare = null;
+    } else {
+      this.initializeSceneBuffers();
+      for (const name of SCENE_LAYERS) this[name] = null;
+      this.scalarColorTexture = this.ambientOcclusionBuffer = null;
+      this.scalarColorInput = this.scalarColorPreview = this.ambientOcclusionFactors = null;
+      this.ownPreparedDisplaySnapshot = this.preparedDisplaySnapshot = this.preparedDisplayUploads = null;
+      this.ownPreparedPrimitivePreparation = this.preparedPrimitivePreparation = null;
+      this.ownPreparedBondSnapshot = this.preparedBondSnapshot = null;
+      this.sourceBoundsCache = null;
+      this.colorUploadSnapshot = this.visibilityUploadSnapshot = this.selectionVisibilitySnapshot = null;
+      this.selectedAtoms = new Int32Array(16).fill(-1);
+      this.sliceSelectedAtoms = new Int32Array(3).fill(-1);
+      this.retainedSurfaceMeshes = null;
+      this.frame = null;
+    }
+    this.sceneUpdate = { token, retained };
+    // Generated trajectory paths belong to the source and persist on seeks.
+    this.trajectoryLines = retained.trajectoryLines;
+    this.trajectoryLineOptions = retained.trajectoryLineOptions;
+    this.cancelSelectionGesture({ preserveCamera: true });
+    this.lastPick = null;
+    return token;
+  }
+
+  commitSceneUpdate(token = this.sceneUpdate?.token) {
+    if (!token || token !== this.sceneUpdate?.token) return false;
+    const { retained } = this.sceneUpdate;
+    this.sceneUpdate = null;
+    this.sceneSpare = this.clearSceneBank(retained);
+    this.requestRender();
+    return true;
+  }
+
+  cancelSceneUpdate(token = this.sceneUpdate?.token) {
+    if (!token || token !== this.sceneUpdate?.token) return false;
+    this.invalidatePresentation('The requested frame was cancelled.');
+    const { retained } = this.sceneUpdate;
+    const discarded = this.clearSceneBank(this.captureSceneBank());
+    this.sceneUpdate = null;
+    this.applySceneBank(retained);
+    this.sceneSpare = discarded;
+    this.requestRender();
+    return true;
+  }
+
+  captureSceneBank() {
+    const bank = Object.assign(Object.create(WebGLRenderer.prototype), this);
+    bank.sceneUpdate = bank.sceneSpare = null;
+    bank.presentationWaiters = new Set();
+    bank.interactions = bank.selectionController = null;
+    bank.requestRender = () => {};
+    bank.onProjectionChange = () => {};
+    return bank;
+  }
+
+  applySceneBank(bank) {
+    for (const name of SCENE_FIELDS) {
+      if (Object.hasOwn(bank, name)) this[name] = bank[name];
+      else delete this[name];
+    }
+  }
+
+  clearSceneBank(bank) {
+    bank.clearFrame();
+    return bank;
   }
 
   graphicsUnavailable() { return Boolean(this.contextLost || this.gl?.isContextLost?.()); }
@@ -437,6 +604,12 @@ export class WebGLRenderer {
     // Preventing the default opts in to the browser's restoration mechanism.
     event?.preventDefault();
     if (this.contextLost) return;
+    this.invalidatePresentation('The graphics context was lost before the frame was displayed.');
+    // Driver-owned buffers in both banks are invalid now. Keep the preparing
+    // frame descriptors for restoration, and cancel old mesh subscriptions.
+    this.sceneUpdate?.retained.surfaceMeshLayer?.detach?.();
+    this.sceneSpare?.surfaceMeshLayer?.detach?.();
+    this.sceneUpdate = this.sceneSpare = null;
     this.retainedSurfaceMeshes = new Map([...(this.surfaceMeshLayer?.entries.values() ?? [])].filter(entry => entry.mesh).map(entry => [entry.id,
       { id: entry.id, mesh: entry.mesh, options: { ...entry.options } }]));
     this.surfaceMeshLayer?.detach?.();
@@ -506,6 +679,8 @@ export class WebGLRenderer {
     upload(this.fractionalBuffer, this.displayUploadCoordinates('fractional'), gl.STATIC_DRAW);
     upload(this.colorBuffer, this.atomColors, gl.DYNAMIC_DRAW);
     upload(this.visibilityBuffer, this.visibility, gl.DYNAMIC_DRAW);
+    this.colorUploadSnapshot = copyValues(this.atomColors, this.colorUploadSnapshot);
+    this.visibilityUploadSnapshot = copyValues(this.visibility, this.visibilityUploadSnapshot);
     upload(this.radiusBuffer, this.atomRadii, gl.STATIC_DRAW);
     upload(this.cellBuffer, buildCellLines(this.displayCell), gl.STATIC_DRAW);
   }
@@ -513,11 +688,12 @@ export class WebGLRenderer {
   setFrame(frame, colors, displayPositions = frame.positions, atomRadii = null, repetitions = this.repetitions, { coordinateMode, preparedDisplay, useFrameSummary = false } = {}) {
     if (preparedDisplay) validatePreparedDisplay(preparedDisplay, frame, displayPositions,
       coordinateMode ?? (displayPositions === frame.positions ? 'wrapped' : 'unwrapped'), { radii: atomRadii });
+    this.invalidatePresentation();
     // A frame can arrive between driver loss and its queued DOM event.
     if (!this.contextLost && this.graphicsUnavailable()) this.handleContextLost();
     this.clearScalarColorPreview();
     this.scalarColorInput = null;
-    this.cancelSelectionGesture();
+    this.cancelSelectionGesture({ preserveCamera: true });
     const startedAt = performance.now();
     this.frame = frame;
     this.processDisplayCoordinates(displayPositions, coordinateMode, preparedDisplay);
@@ -554,6 +730,7 @@ export class WebGLRenderer {
     this.maximumAtomRadius = maximumRadius;
     this.visibility = new Uint8Array(this.atomCount).fill(255);
     this.selectionVisibility = null;
+    this.selectionVisibilitySnapshot = null;
     if (!this.graphicsUnavailable()) {
       this.uploadFrameBuffers();
       this.primitiveLayer?.setFrame(this, colors);
@@ -564,6 +741,7 @@ export class WebGLRenderer {
     this.voronoiAllCellGeometry = null;
     this.voronoiAllCellLayer?.clear();
     this.updateSceneBounds({ reuseSourceBounds: Boolean(preparedDisplay || summaryBounds) });
+    if (this.trajectoryLines && !this.trajectoryLineLayer) this.setTrajectoryLines(this.trajectoryLines, this.trajectoryLineOptions);
     // The returned time covers submitting the uploads. Waiting for the GPU
     // with gl.finish() here would stall every frame change just to time it.
     this.requestRender();
@@ -571,6 +749,14 @@ export class WebGLRenderer {
   }
 
   clearFrame() {
+    this.invalidatePresentation('The source was closed before the frame was displayed.');
+    this.presentationBlocked = false;
+    // Source close must not leave a retained old scene visible or resident.
+    if (this.sceneUpdate) {
+      const { retained } = this.sceneUpdate;
+      this.sceneUpdate = null;
+      this.sceneSpare = this.clearSceneBank(retained);
+    }
     if (!this.contextLost && this.graphicsUnavailable()) this.handleContextLost();
     this.clearScalarColorPreview();
     this.scalarColorInput = null;
@@ -589,6 +775,7 @@ export class WebGLRenderer {
     this.crystalDrag = null;
     this.cellWireframeMode = 'mono';
     this.atomColors = null;
+    this.colorUploadSnapshot = this.visibilityUploadSnapshot = this.selectionVisibilitySnapshot = null;
     this.atomBonds = this.atomVectors = null;
     revokePrimitiveBondPreparation(this.ownPreparedBondSnapshot);
     this.ownPreparedBondSnapshot = this.preparedBondSnapshot = null;
@@ -650,16 +837,23 @@ export class WebGLRenderer {
   }
 
   setColors(colors) {
+    const previewChanged = Boolean(this.scalarColorPreview);
     this.clearScalarColorPreview();
     if (this.frame && colors.length !== this.atomCount * 3) throw new Error('The color array does not match the current frame.');
     this.atomColors = colors;
+    if (valuesEqual(this.colorUploadSnapshot, colors)) {
+      if (previewChanged) this.requestRender();
+      return false;
+    }
     this.colorRevision = (this.colorRevision ?? 0) + 1;
-    if (this.graphicsUnavailable()) { this.requestRender(); return; }
+    if (this.graphicsUnavailable()) { this.requestRender(); return false; }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.colorBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
+    this.colorUploadSnapshot = copyValues(colors, this.colorUploadSnapshot);
     this.primitiveLayer?.updateColors(colors);
     this.requestRender();
+    return true;
   }
 
   /** Immutable data/override buffers are uploaded once per edit; subsequent
@@ -672,7 +866,7 @@ export class WebGLRenderer {
     if (!preview.safe) { this.clearScalarColorPreview(); return null; }
     if (this.graphicsUnavailable()) {
       this.scalarColorInput = input; this.scalarColorPreview = preview;
-      this.cancelSelectionGesture(); return preview;
+      this.cancelSelectionGesture({ preserveCamera: true, preserveCrystal: true }); return preview;
     }
     if (input !== this.scalarColorInput) {
       this.scalarColorInput = input;
@@ -708,7 +902,7 @@ export class WebGLRenderer {
     this.gl.enableVertexAttribArray(6); this.gl.enableVertexAttribArray(7);
     this.gl.bindVertexArray(null);
     this.primitiveLayer?.updateScalarColorPreview(input);
-    this.cancelSelectionGesture();
+    this.cancelSelectionGesture({ preserveCamera: true, preserveCrystal: true });
     this.requestRender();
     return this.scalarColorPreview;
   }
@@ -737,20 +931,27 @@ export class WebGLRenderer {
     if (selectionVisibility !== null && selectionVisibility.length !== this.atomCount) {
       throw new Error('The selection visibility mask does not match the current frame.');
     }
-    this.cancelSelectionGesture();
-    const selectionBoundsChanged = Boolean(this.selectionVisibility || selectionVisibility);
+    const visibilityChanged = !valuesEqual(this.visibilityUploadSnapshot, values);
+    const selectionBoundsChanged = !optionalValuesEqual(this.selectionVisibilitySnapshot, selectionVisibility);
     this.visibility = values;
-    this.voronoiDisplayRevision++;
     this.selectionVisibility = selectionVisibility;
-    if (this.graphicsUnavailable()) { this.requestRender(); return; }
+    if (!visibilityChanged && !selectionBoundsChanged) return false;
+    this.cancelSelectionGesture({ preserveCamera: true, preserveCrystal: true });
+    this.voronoiDisplayRevision = (this.voronoiDisplayRevision ?? 0) + 1;
+    this.selectionVisibilitySnapshot = copyValues(selectionVisibility, this.selectionVisibilitySnapshot);
+    if (this.graphicsUnavailable()) { this.requestRender(); return false; }
     const gl = this.gl;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, values, gl.DYNAMIC_DRAW);
+    if (visibilityChanged) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.visibilityBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, values, gl.DYNAMIC_DRAW);
+      this.visibilityUploadSnapshot = copyValues(values, this.visibilityUploadSnapshot);
+    }
     this.primitiveLayer?.updateVisibility(this);
     // Selection hiding also hides its arrows; refresh their scene extents when
     // this changes without a vector/style setter. Scientific arrays stay intact.
     if (selectionBoundsChanged && this.atomVectorFields?.length) this.updateSceneBounds({ reuseSourceBounds: true });
     this.requestRender();
+    return visibilityChanged;
   }
 
   invalidatePreparedDisplay() {
@@ -862,7 +1063,7 @@ export class WebGLRenderer {
     if (!this.frame || positions.length !== this.atomCount * 3) {
       throw new Error('The display coordinate array does not match the current frame.');
     }
-    this.cancelSelectionGesture();
+    this.cancelSelectionGesture({ preserveCamera: true });
     const startedAt = performance.now();
     this.processDisplayCoordinates(positions, coordinateMode, preparedDisplay);
     if (this.graphicsUnavailable()) { this.updateSceneBounds({ reuseSourceBounds: Boolean(preparedDisplay) }); return performance.now() - startedAt; }
@@ -893,7 +1094,7 @@ export class WebGLRenderer {
   setReplications(counts) {
     if (!this.frame) return;
     const replication = createReplication(this.frame.cell, counts);
-    this.cancelSelectionGesture();
+    this.cancelSelectionGesture({ preserveCamera: true });
     Object.assign(this, replication);
     this.displayAtomCount = this.atomCount * this.replicas.length;
     this.updateSceneBounds({ reuseSourceBounds: true });
@@ -1183,7 +1384,7 @@ export class WebGLRenderer {
   }
 
   setSlice(axis, maximum) {
-    this.cancelSelectionGesture();
+    this.cancelSelectionGesture({ preserveCamera: true, preserveCrystal: true });
     this.sliceMode = 'legacy';
     this.sliceAxis = axis;
     this.sliceMaximum = maximum;
@@ -1191,7 +1392,7 @@ export class WebGLRenderer {
   }
   setSlices(slices) {
     const normalized = validateSlices(slices);
-    this.cancelSelectionGesture();
+    this.cancelSelectionGesture({ preserveCamera: true, preserveCrystal: true });
     // Every half-space is kept where n · r ≤ w; a slab contributes two.
     const halfSpaces = sliceHalfSpaces(normalized);
     const values = new Float32Array(MAX_SLICE_PLANES * 4);
@@ -1472,6 +1673,7 @@ export class WebGLRenderer {
   }
 
   requestRender() {
+    this.drawRevision = (this.drawRevision ?? 0) + 1;
     if (this.renderRequested || this.graphicsUnavailable()) return;
     this.renderRequested = true;
     this.renderHandle = requestAnimationFrame((timestamp) => {
@@ -1483,6 +1685,16 @@ export class WebGLRenderer {
 
   render(timestamp = performance.now(), { transparentBackground = false, trackStats = true, sliceOutlines = true } = {}) {
     if (this.graphicsUnavailable()) return;
+    if (this.sceneUpdate && !this.renderViewport) {
+      const retained = this.sceneUpdate.retained;
+      for (const name of CAMERA_FIELDS) retained[name] = this[name];
+      retained.onCameraChange = this.onCameraChange;
+      retained.onRender = this.onRender;
+      // The retained scene uses the live camera without mutating target data.
+      retained.render(timestamp, { transparentBackground, trackStats: false, sliceOutlines });
+      if (trackStats) this.recordFrame(timestamp);
+      return;
+    }
     const gl = this.gl;
     if (!this.renderViewport) this.resize();
     this.updateMatrices();
@@ -1558,7 +1770,10 @@ export class WebGLRenderer {
     gl.bindVertexArray(null);
     gl.colorMask(true, true, true, true);
     if (trackStats) this.recordFrame(timestamp);
-    if (!this.renderViewport) this.onRender?.(this);
+    if (!this.renderViewport) {
+      if (trackStats) this.completePresentation();
+      this.onRender?.(this);
+    }
   }
 
   drawAnnotationLines(buffer, first, count, color) {
@@ -1676,14 +1891,16 @@ export class WebGLRenderer {
     if (this.canvas.style) this.canvas.style.cursor = mode === 'box' ? 'crosshair' : '';
   }
 
-  cancelSelectionGesture() {
+  cancelSelectionGesture({ preserveCamera = false, preserveCrystal = false } = {}) {
     this.selectionRevision = (this.selectionRevision ?? 0) + 1;
     this.selectionController?.abort();
     this.selectionController = null;
-    this.interactions?.reset();
+    if (preserveCamera) this.interactions?.invalidateSelection?.({ preserveCrystal });
+    else this.interactions?.reset();
   }
 
   async selectInRectangle(rectangle, { signal, onProgress } = {}) {
+    if (this.presentationPending) return [];
     this.selectionController?.abort();
     const controller = new AbortController();
     this.selectionController = controller;
@@ -1745,6 +1962,7 @@ export class WebGLRenderer {
    * depths and screen bounds avoid projecting or slicing distant atoms.
    * Retain first-hit depth ties and the 3 CSS-pixel picking tolerance. */
   pick(clientX, clientY) {
+    if (this.presentationPending) { this.lastPick = null; return -1; }
     this.lastPick = null;
     if (!this.frame || this.graphicsUnavailable()) return -1;
     this.updateMatrices();
@@ -1852,6 +2070,7 @@ export class WebGLRenderer {
   }
 
   captureImage({ includeBackground = true, legend = null, includeAxes = false, includeSliceOutlines = true, resolution = null, tileSize = null, textLabels = null } = {}) {
+    if (this.presentationPending) throw new Error('Wait for the requested frame to finish before exporting its image.');
     this.assertGraphicsAvailable();
     // PNG/JPG and contact sheets always use the exact byte-rounded CPU palette.
     this.onBeforeCapture?.();
@@ -2264,4 +2483,21 @@ function coordinateBounds(positions) {
 // WebGL vertex attributes consume Float32; keep that conversion at upload.
 function floatDisplayCoordinates(values) {
   return values instanceof Float32Array ? values : Float32Array.from(values);
+}
+
+function valuesEqual(previous, values) {
+  if (!previous || !values || previous.length !== values.length) return false;
+  for (let index = 0; index < values.length; index++) if (!Object.is(previous[index], values[index])) return false;
+  return true;
+}
+
+function optionalValuesEqual(previous, values) {
+  return previous == null && values == null || valuesEqual(previous, values);
+}
+
+function copyValues(values, previous) {
+  if (values == null) return null;
+  if (!previous || previous.length !== values.length || previous.constructor !== values.constructor) return values.slice();
+  previous.set(values);
+  return previous;
 }

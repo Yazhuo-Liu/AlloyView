@@ -1,11 +1,12 @@
 import { FrameCache } from './data/frame-cache.js';
-import { fileDisplayPositions, hasFileUnwrap } from './data/coordinate-display.js';
+import { ensureFileUnwrappedPositions, fileDisplayPositions, hasFileUnwrap } from './data/coordinate-display.js';
 import { initializeFrameNavigationControls } from './ui/view/frame-navigation-controls.js';
 import { frameTypeOrder } from './data/frame-summary.js';
 import { SharedFrameRequests } from './data/shared-frame-requests.js';
 import { ColorQuantityResolver, colorPropertyKey, initialColorQuantities } from './render/color-quantities.js';
 import { colorsByDiscreteProperty, discreteValues } from './render/discrete-colors.js';
-import { DEFAULT_ORIENTATION_SETTINGS, OrientationColorResolver, drawIpfKey, normalizeOrientationSettings, ORIENTATION_COLOR_MODES } from './render/orientation-colors.js';
+import { DEFAULT_ORIENTATION_SETTINGS, OrientationColorResolver, drawIpfKey, normalizeOrientationSettings, ORIENTATION_COLOR_MODES,
+  ptmOrientationSource, grainOrientationSource } from './render/orientation-colors.js';
 import { framePreparationSignal } from './data/frame-preparation.js';
 import { processedFrameHeader } from './data/processed-frame-header.js';
 import { findAtomIndex } from './render/appearance.js';
@@ -13,7 +14,10 @@ import { chooseFrameCachePolicy, estimateFrameBytes } from './data/cache-policy.
 import { normalizeRepetitions } from './render/replication.js';
 import { GpuPrefetchScheduler } from './data/gpu-prefetch.js';
 import { CpuPrefetchScheduler } from './data/cpu-prefetch.js';
-import { DEFAULT_PLAYBACK_INTERVAL_MS, nextPlaybackFrame } from './data/playback.js';
+import { AnalysisPrefetchScheduler } from './application/analysis-prefetch.js';
+import { createVisibleAnalysisRequests } from './application/visible-analysis-requests.js';
+import { createPlaybackController, nextPlaybackFrame } from './data/playback.js';
+import { initializePlaybackControls } from './ui/view/playback-controls.js';
 import { recommendCoordinationCutoff, COORDINATION_CUTOFF_PRESETS,
   coordinationCutoffPresetForElement, inferCoordinationCutoffPreset } from './analysis/cutoff.js';
 import { CoordinationPool } from './analysis/coordination-pool.js';
@@ -59,6 +63,7 @@ import { initializeMovieControls } from './ui/export/movie-controls.js';
 import { initializeExternalPropertyControls } from './ui/properties/external-property-controls.js';
 import { initializeExpressionControls } from './ui/properties/expression-controls.js';
 import { removeComputedProperties } from './properties/computed-properties.js';
+import { EXPRESSION_ALIASES } from './properties/expressions.js';
 import { SelectionExpansionClient } from './analysis/selection-expansion-client.js';
 import { initializeTopologyTools } from './ui/analysis/topology-tools.js';
 import { initializeClusterTools } from './ui/analysis/cluster-tools.js';
@@ -87,6 +92,7 @@ import { createConfiguration, parseConfiguration, matchesSource, downloadConfigu
 import { createConfigurationRestoreQueue, settleConfigurationAnalyses } from './application/configuration-restore.js';
 import { initializeAtomEyeTools } from './ui/view/atomeye-tools.js';
 import { createDisplayRefresh } from './render/display-refresh.js';
+import { createAppearanceSnapshots } from './render/appearance-snapshot.js';
 import { affectedPropertyNames, createAnalysisDependencies } from './application/analysis-dependencies.js';
 import { REFERENCE_STRAIN_FIELDS } from './analysis/reference-strain.js';
 import { initializeDxaTools, DXA_STRUCTURE_PROPERTY } from './ui/analysis/dxa-tools.js';
@@ -126,6 +132,7 @@ const scalarColorRanges = new Map();
 const colorQuantityResolver = new ColorQuantityResolver();
 const scalarColorSchemes = new Map();
 const scalarColorModes = new Map();
+const appearanceSnapshots = createAppearanceSnapshots();
 const orientationColorResolver = new OrientationColorResolver();
 let orientationSettings = normalizeOrientationSettings(DEFAULT_ORIENTATION_SETTINGS);
 const scalarHideOutside = new Map();
@@ -136,8 +143,12 @@ const crystalCategoryProperties = new Set(['structureType', 'ptmStructureType', 
   'idealStrainStructureType', DXA_STRUCTURE_PROPERTY]);
 const cpuBudget = new CpuBudget({ environment: globalThis });
 const analysisPool = new AnalysisPool({ cpuBudget });
+const analysisPrediction = new AnalysisPrefetchScheduler({ pool: analysisPool });
 const dxaClient = new DxaClient({ cpuBudget, cpuStageBackend: analysisPool });
-const coordinationPool = new CoordinationPool(analysisPool);
+const coordinationPool = new CoordinationPool({
+  analyze: (...args) => { analysisPrediction.setSourceKey(processingSourceKey()); return analysisPrediction.analyze(...args); },
+  close: () => analysisPool.close(),
+});
 const analysisControllers = new Map();
 const analysisTasks = new Map();
 const ANALYSES = {
@@ -195,7 +206,7 @@ const localPathCollator = new Intl.Collator('en', { numeric: true, sensitivity: 
 
 let toastTimer = null;
 let frameNavigationControls;
-let playbackTimer = null;
+let playbackControls;
 let playbackBuffer = null;
 let framePrefetchController = null;
 const framePrefetchRequests = new Map();
@@ -204,7 +215,13 @@ let interactionHintTimer = null;
 let interactionHintFadeTimer = null;
 let cutoffTimer = null;
 let coordinationQueue = Promise.resolve();
-let loadingOwner = null, loadingReadProgress = false;
+let loadingOwner = null, loadingReadProgress = false, loadingTimer = null;
+let appearancePreview = null, appearanceDependency = null, displayCompletion = null;
+let sceneUpdateToken = null, navigationDirection = 1;
+let rememberedAppearance = null;
+let formalVisibilityCache = null;
+const appearanceObjectIds = new WeakMap();
+let appearanceObjectSequence = 0;
 let sourceOpenRequest = 0;
 let sourceFetchController = null;
 let sourceLoadingOwner = null;
@@ -253,6 +270,15 @@ let replicationController = null;
 let replicationRequest = 0;
 const analysisFrameSources = new WeakMap();
 const displayRefresh = createDisplayRefresh({ apply: flushDisplayRefresh });
+const playback = createPlaybackController({
+  getState: () => ({ index: state.frameIndex, count: state.frameCount, indexComplete: state.indexComplete,
+    sourceKey: processingSourceKey() }),
+  navigate: (index, { mode, signal }) => showFrame(index, { waitForAnalyses: mode === 'preview' ? false : 'appearance',
+    completePresentation: mode === 'complete', signal }),
+  onPrepareNext: () => preparePlaybackBuffer(),
+  onStateChange: playing => { state.playing = playing; updatePlaybackButton(); },
+  onError: error => showToast(error.message),
+});
 const analysisDependencies = createAnalysisDependencies({
   getFrame: () => state.frame,
   getProducer: propertyProducer,
@@ -264,12 +290,240 @@ const analysisDependencies = createAnalysisDependencies({
 });
 let framePaletteSeed = null;
 function requestDisplayRefresh(flags) { displayRefresh.request(flags); }
+
+function appearanceObjectKey(value) {
+  if (!value || typeof value !== 'object') return value ?? null;
+  if (!appearanceObjectIds.has(value)) appearanceObjectIds.set(value, ++appearanceObjectSequence);
+  return appearanceObjectIds.get(value);
+}
+
+/** Presentation has its own identity. Borrowed colors never become analysis
+ * properties, and a parameter/source change cannot borrow an obsolete style. */
+function appearanceContext() {
+  const names = new Set();
+  if (state.colorMode.startsWith('property:')) names.add(state.colorMode.slice(9));
+  else if (state.colorMode.startsWith('builtin:ptm:')) {
+    names.add('ptmStructureType');
+    if (!state.analysis.ptm.enabled && state.analysis.strain.enabled) names.add('idealStrainStructureType');
+  }
+  else if (state.colorMode.startsWith('builtin:grains:')) { names.add('grainId'); names.add('ptmStructureType'); }
+  const crystalSource = crystalVisibility?.serialize().source;
+  if (crystalSource && hiddenCategories.get(crystalSource)?.size) names.add(crystalSource);
+  // Expression references are metadata only. Never evaluate a per-atom field
+  // or serialize selection-group IDs just to decide if colors are unchanged.
+  const definitions = expressionTools?.getState().properties ?? [];
+  const expressionSettings = [];
+  for (const name of names) {
+    const definition = definitions.find(item => item.name.toLowerCase() === name.toLowerCase());
+    if (!definition) continue;
+    expressionSettings.push(definition);
+    for (const reference of expressionTools.getPropertyReferences(name) ?? []) {
+      const resolved = !reference.quoted && /^(?:csp|centrosymmetry)$/i.test(reference.name) ? 'centralSymmetry' : reference.name;
+      if (![...names].some(item => item.toLowerCase() === resolved.toLowerCase())) names.add(resolved);
+    }
+  }
+  const lowerNames = new Set([...names].map(name => name.toLowerCase()));
+  const uses = fields => fields.some(name => lowerNames.has(name.toLowerCase()));
+  const analyses = [];
+  for (const [kind, job] of Object.entries(state.analysis)) {
+    const fields = kind === 'coordination' ? ['coordination']
+      : kind === 'strain' ? [...STRAIN_FIELDS, 'idealStrainStructureType']
+        : kind === 'ptm' ? [ANALYSES.ptm.name, ...PTM_EXTRA_OUTPUTS.map(([name]) => name)]
+          : kind === 'centrosymmetry' ? [ANALYSES[kind].name, 'centralSymmetryStructureType', 'centralSymmetryNeighbors']
+            : [ANALYSES[kind].name];
+    if (uses(fields)) analyses.push([kind, job.enabled, job.cutoff, job.parameters]);
+  }
+  for (const [name, tool] of [['topology', topologyTools], ['clusters', clusterTools], ['grains', grainTools], ['wignerSeitz', wignerSeitzTools]]) {
+    const kinds = new Set([...names].map(field => tool?.getPropertyKind(field)).filter(Boolean));
+    if (kinds.size) {
+      const settings = tool.serialize();
+      analyses.push([name, name === 'topology' ? [...kinds].map(kind => [kind, settings[kind]]) : settings]);
+    }
+  }
+  if (uses([DXA_STRUCTURE_PROPERTY])) analyses.push(['dxa', dxaTools?.getPresentationKey()]);
+  // AtomEye's full recipe can contain thousands of per-atom styles. These
+  // bounded numeric editor values are the relevant analysis parameters.
+  const editor = ids => ids.map(id => { const input = document.getElementById(id); return [id, input?.type === 'checkbox' ? input.checked : input?.value]; });
+  if (uses(['bondCoordination'])) analyses.push(['bonds', atomEyeTools?.isEnabled('bonds'), atomEyeTools?.getBondParameters()]);
+  if (uses(['localShear'])) analyses.push(['localShear', atomEyeTools?.isEnabled('localShear'), editor(['local-shear-cutoff', 'local-shear-subtract-mean'])]);
+  if (uses(REFERENCE_STRAIN_FIELDS)) analyses.push(['referenceStrain', atomEyeTools?.isEnabled('referenceStrain'), editor(['reference-frame', 'reference-cutoff'])]);
+  if ([...lowerNames].some(name => name.startsWith('displacement'))) analyses.push(['displacement', editor([
+    'displacement-reference-frame', 'displacement-minimum-image', 'displacement-tiles-a', 'displacement-tiles-b', 'displacement-tiles-c'])]);
+  return { sourceKey: state.sourceVersion, processingKey: processingSourceKey(), colorMode: state.colorMode,
+    settingsKey: JSON.stringify([state.colorMode, state.coordinateMode, trajectoryTools?.inferenceEnabled(),
+      [...scalarColorRanges], [...scalarColorSchemes], [...scalarColorModes], [...scalarHideOutside],
+      [...hiddenAtomTypes], [...hiddenCategories].map(([name, ids]) => [name, [...ids]]),
+      crystalSource && hiddenCategories.get(crystalSource)?.size ? crystalSource : null, orientationSettings,
+      appearanceObjectKey(state.selectionGroups.groups), atomEyeTools?.getAppearanceKey(),
+      analyses, expressionSettings]) };
+}
+
+function appearanceInputs() {
+  const frame = state.frame, context = appearanceContext();
+  const property = state.colorMode.startsWith('property:')
+    ? frame.properties.find(item => item.name === state.colorMode.slice(9)) : null;
+  const crystalSource = crystalVisibility?.serialize().source;
+  const crystalProperty = crystalSource && hiddenCategories.get(crystalSource)?.size
+    ? frame.properties.find(item => item.name === crystalSource) : null;
+  const refs = [frame, context.settingsKey, property?.data, property?.categories, property?.displayName, property?.unit,
+    property?.unlistedCategories, property?.autoRangeRelativeTolerance,
+    crystalProperty?.data, state.selectionGroups.groups];
+  if (state.colorMode.startsWith('builtin:position:')) refs.push(displayPositionsForFrame(frame));
+  else if (state.colorMode === 'builtin:velocity:magnitude') {
+    const imported = [...frame.properties.map(item => frame.analysisOriginalProperties?.get(item.name) ?? item),
+      ...(frame.analysisOriginalProperties?.values() ?? [])];
+    refs.push(...imported.filter(item => !item.analysisKind && /^(?:velocity|velocities|vel|v)(?:[xyz]|[0123])$/
+      .test(item.name.toLowerCase().replace(/[._\[\]\s]/g, ''))).flatMap(item => [item.data, item.unit]));
+  }
+  else if (state.colorMode.startsWith('builtin:ptm:')) {
+    const source = ptmOrientationSource(frame); refs.push(source?.structures, source?.orientations, ...(source?.components ?? []));
+  } else if (state.colorMode.startsWith('builtin:grains:')) {
+    const source = grainOrientationSource(frame); refs.push(source?.grainId, source?.structures, source?.orientations);
+  }
+  return { context, refs };
+}
+
+function currentAppearanceAvailable() {
+  const frame = state.frame;
+  if (!frame) return false;
+  if ((state.colorMode.startsWith('property:') || state.colorMode === 'builtin:velocity:magnitude')
+    && analysisDependencies.getPropertyDependency(state.colorMode, frame, { waitForProducers: true }).state !== 'ready') return false;
+  if (state.colorMode.startsWith('builtin:ptm:')) {
+    if (!ptmOrientationSource(frame)) return false;
+    const source = frame.properties.some(item => item.name === 'ptmStructureType') ? 'ptmStructureType' : 'idealStrainStructureType';
+    if (analysisDependencies.getPropertyDependency(`property:${source}`, frame, { waitForProducers: true }).state !== 'ready') return false;
+  }
+  if (state.colorMode.startsWith('builtin:grains:') && (!grainOrientationSource(frame)
+    || analysisDependencies.getPropertyDependency('property:grainId', frame, { waitForProducers: true }).state !== 'ready')) return false;
+  if (analysisDependencies.getVisibilityDependencies(frame).length) return false;
+  return true;
+}
+
+function sameAppearanceInputs(first, second) {
+  return first?.length === second?.length && first.every((value, index) => Object.is(value, second[index]));
+}
+
+function rememberCompletedAppearance(palette = null) {
+  if (!state.frame || appearancePreview || !currentAppearanceAvailable() || renderer.presentationPending) return;
+  const context = appearanceContext(), legend = palette?.legend ?? currentColorLegend;
+  if (!legend || legend.preview) return;
+  const identity = [state.frame, renderer.atomColors, renderer.visibility, renderer.atomRadii, context.settingsKey,
+    legend.property?.data, legend.property?.categories, legend.title, legend.unit, legend.minimum, legend.maximum];
+  if (sameAppearanceInputs(identity, rememberedAppearance)) return;
+  if (sameAppearanceInputs(identity, rememberCompletedAppearance.pending?.identity)) return;
+  rememberCompletedAppearance.pending?.controller.abort();
+  const args = { frame: state.frame, frameIndex: state.frame.frameIndex ?? state.frameIndex, context,
+    palette: palette ?? { colors: renderer.atomColors, legend }, visibility: renderer.visibility, radii: renderer.atomRadii };
+  if (state.frame.ids.length < 100_000) {
+    appearanceSnapshots.capture(args);
+    rememberedAppearance = identity;
+    rememberCompletedAppearance.pending = null;
+  } else {
+    const task = { identity, controller: new AbortController() };
+    rememberCompletedAppearance.pending = task;
+    void appearanceSnapshots.captureAsync(args, { signal: task.controller.signal }).then(() => {
+      if (rememberCompletedAppearance.pending === task) rememberedAppearance = identity;
+    }).catch(error => {
+      if (error.name !== 'AbortError') console.warn('Appearance snapshot preparation failed:', error.message);
+    }).finally(() => {
+      if (rememberCompletedAppearance.pending === task) rememberCompletedAppearance.pending = null;
+    });
+  }
+}
+
+function updateAppearanceStatus() {
+  const parent = elements.viewport.parentElement;
+  const pending = renderer.presentationPending || Boolean(appearancePreview) || !currentAppearanceAvailable();
+  const kind = renderer.presentationPending ? 'pending' : appearancePreview ? 'preview' : pending ? 'pending' : 'ready';
+  parent.dataset.appearanceState = kind;
+  parent.dataset.appearanceSourceFrame = String(appearancePreview?.sourceFrameIndex ?? renderer.presentedFrame?.frameIndex ?? state.frameIndex);
+  let label = document.getElementById('frame-appearance-status');
+  if (!label) {
+    label = document.createElement('span'); label.id = 'frame-appearance-status'; label.className = 'help';
+    label.setAttribute('role', 'status'); elements['frame-label'].parentElement.append(label);
+  }
+  label.hidden = !pending || !state.frame;
+  label.textContent = renderer.presentationPending ? `Preparing frame ${state.frameIndex + 1}…`
+    : appearancePreview ? `Updating · appearance from frame ${appearancePreview.sourceFrameIndex + 1}`
+      : 'Appearance unavailable for this frame';
+}
+
+function visibleScenePending(completion = displayCompletion) {
+  const prefixes = new Set(completion?.layerPrefixes);
+  if (dxaTools?.isEnabled()) prefixes.add('dxa');
+  if (surfaceTools?.isEnabled() && surfaceTools.serialize().visible) prefixes.add('surface-mesh');
+  const sites = wignerSeitzTools?.serialize();
+  if (sites?.enabled && sites.showMarkers) prefixes.add('wigner-seitz');
+  if (document.getElementById('show-voronoi-cell')?.checked || renderer.voronoiAllCellOptions?.enabled) prefixes.add('voronoi');
+  const prefixFor = { coordination: 'analysis', centrosymmetry: 'csp', referenceStrain: 'reference-strain',
+    localShear: 'local-shear', bondStatistics: 'bond-statistics', wignerSeitz: 'wigner-seitz' };
+  for (const kind of atomEyeTools?.getVisibleAnalysisKinds() ?? []) prefixes.add(prefixFor[kind] ?? kind);
+  return [...prefixes].some(prefix => /…$|^Queued$|^Waiting$/.test(document.getElementById(`${prefix}-state`)?.textContent.trim() ?? ''));
+}
+
+/** Geometry, selected appearance and all scientific outputs have independent
+ * completion signals. A background statistic does not hold a complete scene. */
+function tryCommitCurrentAppearance() {
+  const completion = displayCompletion;
+  if (!completion || completion.appearanceDone || !completion.geometryDone || completion.committing
+    || completion.frame !== state.frame || !currentAppearanceAvailable() || visibleScenePending(completion)) return;
+  completion.committing = true;
+  void renderer.whenSurfaceMeshesReady().then(() => {
+    if (displayCompletion !== completion || state.frame !== completion.frame) return;
+    if (!currentAppearanceAvailable() || visibleScenePending(completion)) return;
+    if (completion.transaction) renderer.commitSceneUpdate(completion.transaction);
+    if (sceneUpdateToken === completion.transaction) sceneUpdateToken = null;
+    completion.appearanceDone = true;
+    appearancePreview = null;
+    if (currentColorLegend) renderLegend(currentColorLegend);
+    atomEyeTools.syncComparison();
+    displayRefresh.flush();
+    rememberCompletedAppearance();
+    updateAppearanceStatus();
+    completion.resolveAppearance(true);
+  }).catch(error => completion.rejectAppearance(error)).finally(() => { completion.committing = false; });
+}
+
 function notifyAnalysisDependencies() {
   if (!state.frame) return;
   expressionTools?.sync(state.frame);
   // The consumers are notified by applyColorsNow only after their current
   // visibility masks and expression values have reached the renderer.
   requestDisplayRefresh({ options: true, colors: true, vectors: true });
+}
+
+/** Predict only the analysis behind the active appearance, on idle resources.
+ * Result publication remains in the ordinary foreground controllers. */
+function scheduleAnalysisPrediction() {
+  if (!state.frame || state.frameCount < 2 || sourceLoadingOwner !== null || restorationOwner !== null) return;
+  const sourceKey = processingSourceKey();
+  let index = state.frameIndex + navigationDirection;
+  if (index >= state.frameCount) index = state.indexComplete ? 0 : state.frameCount - 1;
+  if (index < 0) index = state.frameCount - 1;
+  if (index === state.frameIndex) return;
+  const quantity = state.colorMode;
+  const crystalSource = crystalVisibility?.serialize().source;
+  const required = new Set(quantity.startsWith('property:') ? [quantity.slice(9)] : []);
+  if (crystalSource && hiddenCategoriesFor(crystalSource).size) required.add(crystalSource);
+  for (const name of required) for (const reference of expressionTools?.getPropertyReferences(name) ?? []) {
+    const resolved = !reference.quoted ? EXPRESSION_ALIASES.get(reference.name.toLowerCase()) ?? reference.name : reference.name;
+    if (![...required].some(field => field.toLowerCase() === resolved.toLowerCase())) required.add(resolved);
+  }
+  const saved = structuredClone(Object.fromEntries(Object.entries(state.analysis).map(([kind, job]) => [kind,
+    { enabled: job.enabled, parameters: job.parameters, cutoff: job.cutoff ?? (kind === 'coordination' ? elements.cutoff.valueAsNumber : null) }])));
+  const references = state.references.map(reference => ({ ...reference }));
+  const hidden = Boolean(crystalSource && hiddenCategoriesFor(crystalSource).size);
+  const grainEnabled = grainTools?.isEnabled();
+  const requestOptions = { quantity, visibilitySource: crystalSource, hidden, analyses: saved, references,
+    requiredProperties: [...required], gpuRequested: analysisPool.gpuEnabled,
+    canReuseResult: (frame, parameters, result) => analysisPool.canReuseRoutingResult(frame, parameters, result) };
+  if (!createVisibleAnalysisRequests({ ...requestOptions, frame: state.frame,
+    neighborLists: grainEnabled || retainPtmNeighborLists(state.frame) }).length) { analysisPrediction.cancel(); return; }
+  analysisPrediction.schedule({ sourceKey, frameIndex: index,
+    getFrame: (target, options) => getFrame(target, options),
+    requests: frame => createVisibleAnalysisRequests({ ...requestOptions, frame,
+      neighborLists: grainEnabled || retainPtmNeighborLists(frame) }),
+  });
 }
 function propertyProducer(name, frame) {
   if (frame !== state.frame) return null;
@@ -316,6 +570,8 @@ function afterDisplayRefresh(callback) {
     notifyAnalysisDependencies();
     // Vector-source waiting labels follow the completed analysis pills.
     requestDisplayRefresh({ vectors: true });
+    tryCommitCurrentAppearance();
+    scheduleAnalysisPrediction();
   });
 }
 const cpuPrefetch = new CpuPrefetchScheduler({ pool: analysisPool, dxaClient });
@@ -447,7 +703,9 @@ try {
     onStats: ({ fps }) => { elements['metric-fps'].textContent = `${fps.toFixed(1)} FPS`; },
     onCameraChange: updateAxisTriad,
     onProjectionChange: syncProjectionControls,
-    onRender: () => { sliceGizmo?.update(); ambientOcclusion?.update(); },
+    onRender: () => {
+      if (!renderer?.presentationPending) { sliceGizmo?.update(); ambientOcclusion?.update(); }
+    },
     // Exports wait for current ambient occlusion, after a legend edit commits.
     onBeforeCapture: () => { commitScalarLegendEdit?.(); displayRefresh.flush(); ambientOcclusion?.ensureCurrent(); },
   });
@@ -827,6 +1085,7 @@ surfaceTools = initializeSurfaceTools({
   getFrameIndex: () => state.frameIndex,
   getSelectionGroups: () => state.selectionGroups.groups,
   getVisibilityDependencies: frame => analysisDependencies.getVisibilityDependencies(frame),
+  getVisibility: () => formalVisibility(),
   getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
   onResultsChange: () => {
     if (!state.frame) return;
@@ -905,7 +1164,7 @@ statisticsExports = initializeStatisticsExports({
   getFrameIndex: () => state.frameIndex,
   getDxaNetwork: () => renderer.dislocationNetwork,
   getSelectionGroups: () => state.selectionGroups,
-  getLegend: () => currentColorLegend,
+  getLegend: () => appearancePreview || renderer.presentationPending ? null : currentColorLegend,
   getResults: () => binningTools?.exportResults() ?? {},
   notify: showToast,
 });
@@ -975,8 +1234,9 @@ frameNavigationControls = initializeFrameNavigationControls({
     enabled: Boolean(state.frame) && sourceLoadingOwner === null }),
   onIntent: index => {
     gpuPrefetch.cancel();
+    analysisPrediction.cancel({ keepFrameIndex: index });
     atomEyeTools.cancelBatch({ restore: false });
-    interruptConfigurationRestore('a frame change');
+    interruptConfigurationRestore('a frame change', { keepPredictionFrame: index });
     stopFramePlayback();
     ++state.frameRequest;
     beginFrameNavigation();
@@ -985,6 +1245,14 @@ frameNavigationControls = initializeFrameNavigationControls({
   },
   onNavigate: index => showFrame(index),
   onPreview: () => setRangeProgress(elements['frame-slider']),
+  notify: showToast,
+});
+playbackControls = initializePlaybackControls({
+  fpsInput: document.getElementById('frame-playback-fps'), modeInput: document.getElementById('frame-playback-mode'),
+  summary: document.getElementById('frame-playback-summary'), playButton: elements['frame-play'],
+  getState: () => ({ enabled: Boolean(state.frame) && state.frameCount > 1 && sourceLoadingOwner === null,
+    playing: state.playing }),
+  onChange: settings => { interruptConfigurationRestore('a playback setting change'); playback.setSettings(settings); },
   notify: showToast,
 });
 elements['frame-first'].addEventListener('click', () => showFrameManually(0));
@@ -1172,12 +1440,12 @@ const analysesSettled = () => {
   displayRefresh.flush();
   const error = binningTools?.getAutomationError();
   if (error) return { settled: false, error };
-  return elements.loading.hidden && ![...document.querySelectorAll('.analysis-section .state-pill')]
+  return loadingOwner === null && elements.loading.hidden && ![...document.querySelectorAll('.analysis-section .state-pill')]
     .some(pill => /…$|^Queued$|^Waiting$/.test(pill.textContent.trim()));
 };
 const showFrameForAutomation = async (index) => {
   atomEyeTools.cancelBatch({ restore: false });
-  interruptConfigurationRestore('a frame change');
+  interruptConfigurationRestore('a frame change', { keepPredictionFrame: index });
   stopFramePlayback();
   const shown = await showFrame(index);
   if (shown) await prepareDisplayCoordinates();
@@ -1229,6 +1497,8 @@ const fileDrop = initializeFileDrop({
 
 for (const range of document.querySelectorAll('.range')) setRangeProgress(range);
 window.addEventListener('beforeunload', () => {
+  analysisPrediction.clearSource();
+  playback.dispose();
   cpuPrefetch.cancel();
   gpuPrefetch.cancel();
   bccLogo.dispose();
@@ -1256,6 +1526,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 function beginSourceOpen() {
+  analysisPrediction.cancel();
   frameNavigationControls?.cancel();
   worker.cancelSourceLoad();
   replicationController?.abort();
@@ -1289,6 +1560,14 @@ function finishSourceOpen(request) {
 }
 
 function closeSource() {
+  analysisPrediction.clearSource();
+  displayCompletion?.rejectAppearance(new DOMException('Structure source closed.', 'AbortError'));
+  rememberCompletedAppearance.pending?.controller.abort();
+  rememberCompletedAppearance.pending = null;
+  formalVisibilityCache = null;
+  previewLegendControls.clear();
+  appearanceSnapshots.clear();
+  appearancePreview = appearanceDependency = rememberedAppearance = displayCompletion = sceneUpdateToken = null;
   externalProperties?.reset();
   expressionTools?.reset();
   toolPanels.setToolEnabled('expressions', false);
@@ -1689,6 +1968,10 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     clearTimeout(cutoffTimer);
     abortAnalysisJobs();
     state.sourceVersion = sourceVersion;
+    analysisPrediction.setSourceKey(processingSourceKey());
+    appearanceSnapshots.clear();
+    formalVisibilityCache = null;
+    appearancePreview = appearanceDependency = rememberedAppearance = null;
     state.pendingFrames.clear();
     analysisPool.clearVoronoiFrames();
     void gpuPrefetch.clearSource();
@@ -1696,6 +1979,8 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     cache.clear();
     state.cachePlan = cachePlan;
     cache.setLimit(state.cachePlan.limit);
+    cache.setByteBudget(state.cachePlan.budgetBytes);
+    cache.pin(0);
     cache.set(0, result.frame);
     state.file = files[0];
     state.files = files;
@@ -1867,6 +2152,7 @@ function updateSourceIndex(info) {
       deviceMemoryGiB: navigator.deviceMemory,
     });
     cache.setLimit(state.cachePlan.limit);
+    cache.setByteBudget(state.cachePlan.budgetBytes);
     renderFrameTicks(state.frameCount);
     for (const name of ['reference-frame', 'displacement-reference-frame', 'export-series-first', 'export-series-last']) {
       const input = document.getElementById(name);
@@ -1907,11 +2193,16 @@ function sourceFormatLabel(format) {
   return `${({ cfg: 'CFG', 'lammps-dump': 'LAMMPS', 'lammps-data': 'LAMMPS data', xyz: 'XYZ', pdb: 'PDB', poscar: 'POSCAR' })[base] ?? base.toUpperCase()}${sequence ? ' · sequence' : ''}`;
 }
 
-async function showFrame(index) {
+async function showFrame(index, { waitForAnalyses = true, completePresentation = false, signal } = {}) {
+  if (signal?.aborted) return false;
   if (sourceLoadingOwner !== null) return false;
   if (!Number.isInteger(index) || index < 0 || index >= state.frameCount) return false;
   const interruptedNavigation = frameNavigationController;
   const navigation = beginFrameNavigation({ deferAbort: true });
+  analysisPrediction.cancel({ keepFrameIndex: index });
+  const abort = () => navigation.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  if (index !== state.frameIndex) navigationDirection = Math.sign(index - state.frameIndex);
   if (index !== state.frameIndex) cancelLatticeEstimation();
   const interruptedReplication = Boolean(replicationController);
   if (interruptedReplication) {
@@ -1924,12 +2215,17 @@ async function showFrame(index) {
   // The displayed frame is kept unless a smoothing change has not reached it,
   // for example when this request interrupts the one that applies the change.
   if (index === state.frameIndex && displayedSmoothingWindow() === trajectoryTools.smoothingWindow()) {
+    signal?.removeEventListener('abort', abort);
     interruptedNavigation?.abort();
     elements['frame-slider'].value = String(index);
     elements['frame-label'].textContent = `${index + 1} / ${state.frameCount}`;
     setRangeProgress(elements['frame-slider']);
     setLoading(false);
     if (interruptedReplication) await displayFrame(state.frame);
+    else if (waitForAnalyses && displayCompletion?.frame === state.frame) {
+      await (waitForAnalyses === 'appearance' ? displayCompletion.appearanceReady : displayCompletion.promise);
+      if (completePresentation) await renderer.whenPresented(state.frame, { signal: navigation.signal });
+    }
     if (request !== state.frameRequest) return false;
     scheduleGpuFramePrefetch();
     return true;
@@ -1938,7 +2234,7 @@ async function showFrame(index) {
   gpuPrefetch.cancel();
   cancelFramePrefetch(prefetchWindow(index));
   const requiresLoad = !cache.has(index);
-  if (requiresLoad) setLoading(true, `Preparing frame ${index + 1}…`, navigation, true);
+  if (requiresLoad) setLoading(true, `Preparing frame ${index + 1}…`, navigation, true, { delay: 120 });
   try {
     const requestedFrame = getFrame(index, { signal: navigation.signal });
     // A repeated request for the same index joins before the old navigation
@@ -1952,33 +2248,62 @@ async function showFrame(index) {
     if (!frame) return false;
     state.frameIndex = index;
     if (state.playing) preparePlaybackBuffer();
-    const displayed = displayFrame(frame);
+    const displayed = displayFrame(frame, { completePresentation });
+    displayed.catch(() => {});
     // Geometry is uploaded synchronously; analyses and optional trajectory
     // work can continue while the user sees and interacts with the new frame.
     if (loadingOwner === navigation) setLoading(false);
-    await displayed;
+    if (waitForAnalyses === 'appearance') {
+      await displayCompletion.appearanceReady;
+      await renderer.whenPresented(frame, { signal: navigation.signal });
+    } else if (waitForAnalyses) await displayed;
+    else void displayed.catch(error => { if (frame === state.frame && error.name !== 'AbortError') showToast(error.message); });
     if (request !== state.frameRequest) return false;
     scheduleFramePrefetch(index);
     return true;
   } catch (error) {
     if (request === state.frameRequest) {
       elements['frame-slider'].value = String(state.frameIndex);
-      showToast(error.message);
+      if (error.name !== 'AbortError') showToast(error.message);
       scheduleGpuFramePrefetch();
     }
     return false;
   } finally {
+    signal?.removeEventListener('abort', abort);
     // Also when another request took over without showing the indicator.
     if (loadingOwner === navigation) setLoading(false);
   }
 }
 
-async function displayFrame(frame, { resetCamera = false } = {}) {
+async function displayFrame(frame, { resetCamera = false, completePresentation = false } = {}) {
+  if (!resetCamera) rememberCompletedAppearance();
+  if (displayCompletion && !displayCompletion.appearanceDone) displayCompletion.rejectAppearance(
+    new DOMException('The requested frame was superseded.', 'AbortError'));
+  let resolveCompletion, rejectCompletion;
+  const completion = { frame, settled: false,
+    promise: new Promise((resolve, reject) => { resolveCompletion = resolve; rejectCompletion = reject; }) };
+  completion.geometryReady = new Promise(resolve => { completion.resolveGeometry = resolve; });
+  completion.appearanceReady = new Promise((resolve, reject) => { completion.resolveAppearance = resolve; completion.rejectAppearance = reject; });
+  completion.appearanceReady.catch(() => {});
+  completion.layerPrefixes = new Set();
+  completion.retainedLegend = currentColorLegend;
+  if (renderer.dislocationNetwork || dxaTools?.isEnabled()) completion.layerPrefixes.add('dxa');
+  if (renderer.surfaceMeshes().length || surfaceTools?.isEnabled()) completion.layerPrefixes.add('surface-mesh');
+  if (renderer.siteMarkers) completion.layerPrefixes.add('wigner-seitz');
+  if (renderer.voronoiCellGeometry || renderer.voronoiAllCellGeometry) completion.layerPrefixes.add('voronoi');
+  completion.promise.catch(() => {});
+  displayCompletion = completion;
   const pending = [];
+  let transaction = null;
   displayRefresh.begin();
   try {
   abortAnalysisJobs();
   state.frame = frame;
+  cache.pin(state.frameIndex);
+  cache.set(state.frameIndex, frame);
+  appearanceDependency = null;
+  appearancePreview = null;
+  if (state.coordinateMode === 'unwrapped' && hasFileUnwrap(frame)) ensureFileUnwrappedPositions(frame);
   void renderer.surfaceGeometryClient?.warm();
   // Prepare modules, snapshots and neighbour indices alongside the first
   // render. Automatic analyses retain priority over both background queues.
@@ -1999,10 +2324,27 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   configureCoordinateMode(frame);
   atomEyeTools.prepareFrame(frame);
   refreshColorOptions();
-  const palette = atomEyeTools.customizePalette(paletteForCurrentMode());
+  const fallbackPalette = atomEyeTools.customizePalette(paletteForCurrentMode());
+  const radii = atomEyeTools.getRadii();
+  if (!currentAppearanceAvailable()) appearancePreview = appearanceSnapshots.preview({ frame, frameIndex: state.frameIndex,
+    context: appearanceContext(), fallbackPalette, fallbackVisibility: visibilityForLegend(fallbackPalette.legend), fallbackRadii: radii });
+  if (appearancePreview) appearancePreview.contextKey = appearanceContext().settingsKey;
+  const palette = appearancePreview?.palette ?? fallbackPalette;
+  const geometricLayers = renderer.atomBonds || renderer.atomVectorFields?.length || renderer.dislocationNetwork
+    || renderer.siteMarkers || renderer.surfaceMeshes().length || renderer.voronoiCellGeometry || renderer.voronoiAllCellGeometry
+    || surfaceTools?.isEnabled() || dxaTools?.isEnabled();
+  if (renderer.frame && (completePresentation || geometricLayers || !currentAppearanceAvailable() && !appearancePreview)) {
+    transaction = renderer.beginSceneUpdate();
+    sceneUpdateToken = transaction;
+    completion.transaction = transaction;
+  } else if (renderer.presentationPending) {
+    // A compatible preview can replace an earlier retained scene immediately.
+    renderer.commitSceneUpdate(sceneUpdateToken);
+    sceneUpdateToken = null;
+  }
   framePaletteSeed = { frame, mode: state.colorMode, palette, properties: frame.properties.map(property =>
     [property.name, property.data, property.categories, property.displayName, property.unit]), groups: state.selectionGroups.groups };
-  const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), atomEyeTools.getRadii(), displayRepetitions(),
+  const uploadMs = renderer.setFrame(frame, palette.colors, displayPositionsForFrame(frame), appearancePreview?.radii ?? radii, displayRepetitions(),
     { coordinateMode: displayCoordinateMode(frame), useFrameSummary: true });
   trajectoryTools?.onFrame();
   configurePeriodicOriginUi();
@@ -2062,17 +2404,71 @@ async function displayFrame(frame, { resetCamera = false } = {}) {
   pending.push(surfaceTools.onFrame());
   pending.push(binningTools.onFrame());
   syncCancelButton('coordination');
+  completion.geometryDone = true;
+  completion.resolveGeometry(true);
+  updateAppearanceStatus();
+  } catch (error) {
+    completion.settled = true;
+    if (displayCompletion === completion && transaction) {
+      if (renderer.frame === frame) renderer.commitSceneUpdate(transaction);
+      else {
+        renderer.cancelSceneUpdate(transaction);
+        state.frame = renderer.frame;
+        state.frameIndex = renderer.frame?.frameIndex ?? 0;
+      }
+      sceneUpdateToken = null;
+    }
+    rejectCompletion(error);
+    completion.rejectAppearance(error);
+    throw error;
   } finally {
     try { displayRefresh.end(); } finally { framePaletteSeed = null; }
   }
+  try {
+  tryCommitCurrentAppearance();
   await Promise.all(pending);
-  displayRefresh.flush();
+  completion.settled = true;
+  if (state.frame === frame && displayCompletion === completion) {
+    const hadPreview = Boolean(appearancePreview);
+    appearancePreview = null;
+    if (hadPreview || !currentAppearanceAvailable()) appearanceDependency = null;
+    applyColors();
+    displayRefresh.flush();
+    await renderer.whenSurfaceMeshesReady();
+    if (state.frame !== frame || displayCompletion !== completion) { resolveCompletion(false); return; }
+    if (transaction) renderer.commitSceneUpdate(transaction);
+    if (currentColorLegend) renderLegend(currentColorLegend);
+    atomEyeTools.syncComparison();
+    displayRefresh.flush();
+    if (sceneUpdateToken === transaction) sceneUpdateToken = null;
+    rememberCompletedAppearance();
+    updateAppearanceStatus();
+    if (!completion.appearanceDone) {
+      completion.appearanceDone = true;
+      if (currentAppearanceAvailable()) completion.resolveAppearance(true);
+      else completion.rejectAppearance(new Error('The requested appearance is unavailable for this frame.'));
+    }
+    scheduleAnalysisPrediction();
+  }
   if (state.frame === frame && state.coordinateMode === 'unwrapped' && trajectoryTools?.needsUnwrap(frame)) {
     // Single-frame analyses have priority. Wrapped geometry remains usable
     // until optional continuous display coordinates are ready.
     void trajectoryTools.ensureUnwrap(frame, state.frameIndex, { showProgress: false, background: true }).then(ready => {
       if (ready && state.frame === frame && state.coordinateMode === 'unwrapped') applyCoordinateMode({ resetCamera: false });
     }).catch(error => { if (error.name !== 'AbortError' && state.frame === frame) showToast(error.message); });
+  }
+  resolveCompletion(true);
+  } catch (error) {
+    completion.settled = true;
+    if (displayCompletion === completion && transaction) {
+      renderer.commitSceneUpdate(transaction);
+      sceneUpdateToken = null;
+      appearancePreview = null;
+      updateAppearanceStatus();
+    }
+    rejectCompletion(error);
+    completion.rejectAppearance(error);
+    throw error;
   }
 }
 
@@ -2115,7 +2511,9 @@ async function getFrame(index, { background = false, speculative = false, cacheF
   const identity = processingSourceKey();
   // Smoothing and inferred unwrapping run in the structure Worker. Without
   // them the request is unchanged; smoothing edits bump processingRevision.
-  const trajectory = trajectoryTools?.frameRequestOptions() ?? null;
+  const requestedTrajectory = trajectoryTools?.frameRequestOptions() ?? null;
+  const trajectory = state.coordinateMode === 'unwrapped'
+    ? { ...requestedTrajectory, unwrap: true, infer: false } : requestedTrajectory;
   const key = JSON.stringify([identity, index, physical, repetitions, trajectory]);
   return state.pendingFrames.join(key, { signal, background, speculative, cacheFrame }, pending => {
     pending.index = index;
@@ -2221,12 +2619,15 @@ function scheduleFramePrefetch(centerIndex) {
 }
 
 function prefetchOrder(center, count, limit, fullTrajectory) {
-  if (fullTrajectory) return Array.from({ length: count - 1 }, (_, offset) => (center + offset + 1) % count);
+  if (fullTrajectory) return Array.from({ length: count - 1 }, (_, offset) =>
+    (center + navigationDirection * (offset + 1) + count) % count);
   const indices = [];
   for (let distance = 1; indices.length < Math.max(0, limit - 1) && distance < count; distance += 1) {
-    if (center + distance < count) indices.push(center + distance);
-    if (indices.length >= limit - 1) break;
-    if (center - distance >= 0) indices.push(center - distance);
+    for (const direction of [navigationDirection, -navigationDirection]) {
+      const index = center + direction * distance;
+      if (index >= 0 && index < count) indices.push(index);
+      if (indices.length >= limit - 1) break;
+    }
   }
   return indices;
 }
@@ -2258,6 +2659,7 @@ function niceFrameInterval(frameCount) {
 
 function updateFrameNavigation() {
   frameNavigationControls?.refresh();
+  playbackControls?.refresh();
   const atStart = state.frameIndex <= 0;
   const atEnd = state.frameIndex >= state.frameCount - 1;
   elements['frame-first'].disabled = atStart;
@@ -2270,7 +2672,7 @@ function updateFrameNavigation() {
 function showFrameManually(index) {
   frameNavigationControls?.cancel();
   atomEyeTools.cancelBatch({ restore: false });
-  interruptConfigurationRestore('a frame change');
+  interruptConfigurationRestore('a frame change', { keepPredictionFrame: index });
   stopFramePlayback();
   void showFrame(index);
 }
@@ -2278,20 +2680,17 @@ function showFrameManually(index) {
 function toggleFramePlayback() {
   frameNavigationControls?.cancel();
   atomEyeTools.cancelBatch({ restore: false });
-  interruptConfigurationRestore('trajectory playback');
+  interruptConfigurationRestore('trajectory playback', { keepPredictionFrame: nextPlaybackFrame(state.frameIndex, state.frameCount) });
   if (state.playing) {
     stopFramePlayback();
     return;
   }
   if (state.frameCount <= 1) return;
-  state.playing = true;
-  updatePlaybackButton();
-  preparePlaybackBuffer();
-  schedulePlaybackStep();
+  playback.start();
 }
 
 function preparePlaybackBuffer() {
-  if (!state.playing || state.frameCount <= 1) return;
+  if (!playback.playing || state.frameCount <= 1) return;
   const index = nextPlaybackFrame(state.frameIndex, state.frameCount);
   const sourceVersion = state.sourceVersion;
   if (playbackBuffer?.index === index && playbackBuffer.sourceVersion === sourceVersion) return;
@@ -2302,35 +2701,12 @@ function preparePlaybackBuffer() {
   playbackBuffer = { index, sourceVersion, promise, controller };
 }
 
-function schedulePlaybackStep() {
-  clearTimeout(playbackTimer);
-  playbackTimer = setTimeout(async () => {
-    if (!state.playing || state.frameCount <= 1) return;
-    const sourceVersion = state.sourceVersion;
-    if (!state.indexComplete && state.frameIndex === state.frameCount - 1) {
-      schedulePlaybackStep(); // Wait for the next discovered frame instead of wrapping early.
-      return;
-    }
-    const next = nextPlaybackFrame(state.frameIndex, state.frameCount);
-    try {
-      if (playbackBuffer?.index === next && playbackBuffer.sourceVersion === sourceVersion) await playbackBuffer.promise;
-      const displayed = await showFrame(next);
-      if (!displayed || !state.playing || sourceVersion !== state.sourceVersion) { stopFramePlayback(); return; }
-      preparePlaybackBuffer();
-      schedulePlaybackStep();
-    } catch (error) {
-      stopFramePlayback();
-      if (error.name !== 'AbortError' && sourceVersion === state.sourceVersion) showToast(error.message);
-    }
-  }, DEFAULT_PLAYBACK_INTERVAL_MS);
-}
-
 function stopFramePlayback() {
-  clearTimeout(playbackTimer);
-  playbackTimer = null;
+  const wasPlaying = state.playing;
+  playback.stop();
   playbackBuffer?.controller.abort();
   playbackBuffer = null;
-  if (!state.playing) return;
+  if (!wasPlaying) return;
   state.playing = false;
   updatePlaybackButton();
   // The frame playback stopped on stays displayed: prepare it without the playback delay.
@@ -2339,10 +2715,10 @@ function stopFramePlayback() {
 
 function updatePlaybackButton() {
   elements['frame-play'].textContent = state.playing ? '❚❚' : '▶';
-  elements['frame-play'].title = state.playing ? 'Pause trajectory' : 'Play at 1 frame per second';
   elements['frame-play'].setAttribute('aria-label', state.playing ? 'Pause trajectory' : 'Play trajectory');
   elements['frame-play'].setAttribute('aria-pressed', String(state.playing));
   elements['frame-play'].classList.toggle('active', state.playing);
+  playbackControls?.refresh();
 }
 
 function updateCacheLabel() {
@@ -2368,6 +2744,9 @@ function updateCacheLabel() {
 }
 
 function reassessFrameCache(frame) {
+  if (frame?.frameIndex !== undefined) cache.reassess(frame.frameIndex);
+  else cache.reassess();
+  dxaTools?.reassessCache(frame);
   updateCacheLabel();
   if (!state.cachePlan || state.frameCount <= 1) return;
   const revised = chooseFrameCachePolicy(frame, state.frameCount, {
@@ -2375,6 +2754,7 @@ function reassessFrameCache(frame) {
     heapUsed: performance.memory?.usedJSHeapSize,
     deviceMemoryGiB: navigator.deviceMemory,
   });
+  cache.setByteBudget(revised.budgetBytes);
   if (revised.limit >= cache.limit) return;
   state.cachePlan = revised;
   cancelFramePrefetch();
@@ -2629,9 +3009,48 @@ async function prepareDisplayCoordinates({ signal } = {}) {
 }
 
 async function prepareImageExport(options = {}) {
+  const frame = state.frame;
+  if (displayCompletion?.frame === frame) {
+    await waitForDisplayTask(displayCompletion.promise, options.signal);
+    if (options.signal?.aborted || state.frame !== frame) throw new DOMException('Image preparation cancelled.', 'AbortError');
+  }
   await prepareDisplayCoordinates(options);
   displayRefresh.flush();
+  while (visibleScenePending()) {
+    await waitForDisplayTask(new Promise(resolve => setTimeout(resolve, 30)), options.signal);
+    if (state.frame !== frame) throw new DOMException('The frame changed during image preparation.', 'AbortError');
+    displayRefresh.flush();
+  }
+  while (!currentAppearanceAvailable()) {
+    const dependencies = analysisDependencies.getVisibilityDependencies(frame);
+    if (state.colorMode.startsWith('property:') || state.colorMode === 'builtin:velocity:magnitude') {
+      dependencies.push(analysisDependencies.getPropertyDependency(state.colorMode, frame, { waitForProducers: true }));
+    } else if (state.colorMode.startsWith('builtin:ptm:')) {
+      const source = state.analysis.ptm.enabled ? 'ptmStructureType' : 'idealStrainStructureType';
+      dependencies.push(analysisDependencies.getPropertyDependency(`property:${source}`, frame, { waitForProducers: true }));
+    } else if (state.colorMode.startsWith('builtin:grains:')) {
+      dependencies.push(analysisDependencies.getPropertyDependency('property:grainId', frame, { waitForProducers: true }));
+    }
+    if (!dependencies.some(dependency => dependency.state === 'pending')) break;
+    await waitForDisplayTask(new Promise(resolve => setTimeout(resolve, 30)), options.signal);
+    if (state.frame !== frame) throw new DOMException('The frame changed during image preparation.', 'AbortError');
+    displayRefresh.flush();
+  }
+  if (appearancePreview || renderer.presentationPending || !currentAppearanceAvailable()) {
+    throw new Error('The requested appearance is not available for this frame. Complete its calculation before exporting.');
+  }
   await textLabelControls?.prepareExport(options);
+}
+
+function waitForDisplayTask(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new DOMException('Display preparation cancelled.', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(new DOMException('Display preparation cancelled.', 'AbortError')); };
+    signal.addEventListener('abort', abort, { once: true });
+    Promise.resolve(promise).then(value => { signal.removeEventListener('abort', abort); resolve(value); },
+      error => { signal.removeEventListener('abort', abort); reject(error); });
+  });
 }
 
 function selectColorMode(value) {
@@ -2726,7 +3145,11 @@ function refreshColorOptionsNow() {
     if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
   }
   const available = [...elements['color-mode'].options].some((item) => item.value === previous);
-  state.colorMode = available ? previous : 'type';
+  // Missing/failed output changes availability, never the user's requested
+  // quantity. A later frame can recover without a second manual selection.
+  if (!available) elements['color-mode'].append(option(previous,
+    `${previous.startsWith('property:') ? previous.slice(9) : previous} (unavailable in this frame)`));
+  state.colorMode = previous;
   elements['color-mode'].value = state.colorMode;
 }
 
@@ -2745,29 +3168,50 @@ function flushDisplayRefresh(flags) {
 function applyColorsNow() {
   if (!state.frame) return;
   try {
+    const { context, refs } = appearanceInputs();
+    const available = currentAppearanceAvailable();
+    refs.push(available, Boolean(displayCompletion?.settled && !available));
+    const changed = !sameAppearanceInputs(appearanceDependency, refs);
+    if (changed) {
     const seed = framePaletteSeed;
     const reuse = seed?.frame === state.frame && renderer.atomColors === seed.palette.colors && seed.mode === state.colorMode && seed.groups === state.selectionGroups.groups
       && seed.properties.length === state.frame.properties.length && seed.properties.every(([name, data, categories, displayName, unit], index) => {
         const property = state.frame.properties[index];
         return property.name === name && property.data === data && property.categories === categories && property.displayName === displayName && property.unit === unit;
       });
-    const palette = reuse ? seed.palette : atomEyeTools.customizePalette(paletteForCurrentMode());
-    if (!reuse) renderer.setColors(palette.colors);
+    let palette = reuse ? seed.palette : atomEyeTools.customizePalette(paletteForCurrentMode());
+    if (!available && !displayCompletion?.settled) {
+      if (!appearancePreview || appearancePreview.contextKey !== context.settingsKey) {
+        appearancePreview = appearanceSnapshots.preview({ frame: state.frame, frameIndex: state.frameIndex, context,
+          fallbackPalette: palette, fallbackVisibility: visibilityForLegend(palette.legend), fallbackRadii: atomEyeTools.getRadii() });
+        if (appearancePreview) appearancePreview.contextKey = context.settingsKey;
+      }
+      if (appearancePreview) palette = appearancePreview.palette;
+    } else appearancePreview = null;
+    if (renderer.atomColors !== palette.colors) renderer.setColors(palette.colors);
     applyScalarVisibility(palette.legend);
     renderLegend(palette.legend);
+    appearanceDependency = refs;
+    rememberCompletedAppearance(palette);
+    updateAppearanceStatus();
+    } else {
+      // Waiting consumers still need the producer state transition even when
+      // their displayed mask and palette have not changed.
+      surfaceTools?.refreshVisibility();
+    }
     atomEyeTools.flushDisplayRefresh({ radii: true, statistics: true });
     statisticsExports?.refresh();
     globalAttributes?.refresh();
     grainTools?.refreshProperties();
     void binningTools?.refresh();
     void topologyTools?.refreshProperties();
+    tryCommitCurrentAppearance();
   } catch (error) {
     showToast(error.message);
   }
 }
 
-function applyScalarVisibility(legend, { includeScalarRange = true } = {}) {
-  currentColorLegend = legend;
+function visibilityForLegend(legend, { includeScalarRange = true } = {}) {
   let colorMask = null;
   if (legend.kind === 'types' && legend.property) {
     colorMask = visibilityByCategory(legend.property, hiddenCategoriesFor(legend.property.name));
@@ -2781,7 +3225,21 @@ function applyScalarVisibility(legend, { includeScalarRange = true } = {}) {
   const mask = combineVisibilityMasks(
     visibilityByType(state.frame, hiddenAtomTypes), colorMask, crystalVisibility?.getMask(),
   );
-  renderer.setVisibility(atomEyeTools.filterVisibility(mask), {
+  return atomEyeTools.filterVisibility(mask);
+}
+
+function formalVisibility() {
+  const { refs } = appearanceInputs();
+  if (!sameAppearanceInputs(formalVisibilityCache?.refs, refs)) {
+    formalVisibilityCache = { refs, mask: visibilityForLegend(paletteForCurrentMode().legend) };
+  }
+  return formalVisibilityCache.mask;
+}
+
+function applyScalarVisibility(legend, options = {}) {
+  currentColorLegend = legend;
+  const mask = appearancePreview && legend.preview ? appearancePreview.visibility : visibilityForLegend(legend, options);
+  renderer.setVisibility(mask, {
     selectionVisibility: selectionGroupVisibility(state.frame, state.selectionGroups.groups),
   });
   // A surface restricted to the visible atoms follows the display filters.
@@ -3336,7 +3794,8 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       ...(['ptm', 'strain'].includes(kind) && (grainTools?.isEnabled() || retainPtmNeighborLists(frame)) ? { neighborLists: true } : {}),
       ...(adaptiveCna ? { structureInput: adaptiveCna.data } : {}),
       ...(kind === 'strain' && frame.ptm?.key === ptmKey ? { ptmInput: frame.ptm } : {}) };
-    const task = analysisPool.analyze(frame, inputs, {
+    analysisPrediction.setSourceKey(processingSourceKey());
+    const task = analysisPrediction.analyze(frame, inputs, {
       signal: controller.signal,
       frameIndex: state.frameIndex,
       onProgress: (progress) => {
@@ -3650,7 +4109,22 @@ function updateSelectionPanel(index = null) {
 }
 
 let legendView = null;
+const previewLegendControls = new Map();
 function renderLegend(legend) {
+  for (const [control, disabled] of previewLegendControls) control.disabled = disabled;
+  previewLegendControls.clear();
+  const held = renderer.presentationPending && displayCompletion?.retainedLegend;
+  if (!held) renderLegendContents(legend);
+  if (held || legend.preview) {
+    for (const control of elements['color-legend'].querySelectorAll('input, select, button')) {
+      if (control.id === 'legend-color-mode') continue;
+      previewLegendControls.set(control, control.disabled);
+      control.disabled = true;
+    }
+  }
+}
+
+function renderLegendContents(legend) {
   currentColorLegend = legend;
   crystalVisibility?.refresh();
   const eligible = legend.property && (!legend.property.categories || legend.discrete)
@@ -3863,6 +4337,12 @@ function renderLegend(legend) {
     }
     schemeSelect.value = legend.scheme;
     schemeControl.append(schemeLabel, schemeSelect);
+    const rangePolicyControl = document.createElement('label');
+    rangePolicyControl.className = 'legend-scheme';
+    const rangePolicyLabel = document.createElement('span'); rangePolicyLabel.textContent = 'Range across frames';
+    const rangePolicy = document.createElement('select'); rangePolicy.id = 'legend-range-policy';
+    rangePolicy.append(option('frame', 'Fit each frame'), option('fixed', 'Keep fixed range'));
+    rangePolicyControl.append(rangePolicyLabel, rangePolicy);
     let step = scalarLegendStep(legend);
     const minimumControl = legendNumberControl('Min', legend.minimum, step);
     const editableMaximum = legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step;
@@ -3882,6 +4362,7 @@ function renderLegend(legend) {
     automatic.textContent = 'Auto';
     const syncAutomatic = () => {
       const enabled = !scalarColorRanges.has(legend.property.name);
+      rangePolicy.value = enabled ? 'frame' : 'fixed';
       automatic.classList.toggle('active', enabled);
       automatic.setAttribute('aria-pressed', String(enabled));
       automatic.setAttribute('aria-label', `Automatic color range ${enabled ? 'on' : 'off'}`);
@@ -3928,7 +4409,7 @@ function renderLegend(legend) {
       },
       onCommit: (limits) => finishSliderPreview(limits),
     });
-    controls.append(schemeControl, rangeSlider.element, minimumControl.label, maximumControl.label, visibility, actions);
+    controls.append(schemeControl, rangePolicyControl, rangeSlider.element, minimumControl.label, maximumControl.label, visibility, actions);
     const freezeCurrentRange = () => {
       const limits = scalarColorRanges.get(legend.property.name)
         ?? { minimum: legend.minimum, maximum: legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step };
@@ -4030,6 +4511,13 @@ function renderLegend(legend) {
       if (!isCurrent()) return;
       interruptConfigurationRestore('a color range change');
       if (scalarColorRanges.has(legend.property.name)) scalarColorRanges.delete(legend.property.name);
+      else freezeCurrentRange();
+      applyColors();
+    });
+    rangePolicy.addEventListener('change', () => {
+      if (!isCurrent()) return;
+      interruptConfigurationRestore('a color range policy change');
+      if (rangePolicy.value === 'frame') scalarColorRanges.delete(legend.property.name);
       else freezeCurrentRange();
       applyColors();
     });
@@ -4367,7 +4855,9 @@ function syncSliceGizmo() {
     && toolPanels.getActiveTool() === 'slice' && !sliceControls.isPicking() });
 }
 
-function interruptConfigurationRestore(reason) {
+function interruptConfigurationRestore(reason, { keepPredictionFrame } = {}) {
+  // Edits may invalidate a prediction even when no recipe is being restored.
+  analysisPrediction.cancel({ keepFrameIndex: keepPredictionFrame });
   if (restorationOwner === null) return;
   configurationRequest++;
   restorationController?.abort();
@@ -4436,7 +4926,7 @@ function captureConfiguration() {
         clusters: clusterTools.serialize(), grains: grainTools.serialize(), wignerSeitz: wignerSeitzTools.serialize(), binning: binningTools.serialize(), trajectory: trajectoryTools.serialize(),
         // The surface mesh is saved only once it is used or changed.
         ...(surfaceTools.isUntouched() ? {} : { surfaceMesh: surfaceTools.serialize() }),
-        ...attributeExtensions() },
+        playback: playbackControls.getSettings(), ...attributeExtensions() },
       theme: document.documentElement.dataset.theme,
     },
   });
@@ -4516,6 +5006,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
   if (!configurationAutomationAvailable()) throw new Error('Configuration import requires the script or movie to finish first.');
   const releaseAutomation = automationLock.acquire('configuration');
   if (!releaseAutomation) throw new Error('Another configuration is still being restored.');
+  const rawAnalyses = analysisPrediction.createForegroundScope();
   const saved = config.settings;
   const targetIndex = config.source?.frameIndex ?? state.frameIndex;
   const previousSmoothing = trajectoryTools.getSmoothing();
@@ -4584,6 +5075,8 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     // Saved scripts replace the panel's scripts and wait for Run; a recipe without scripts keeps them.
     if (saved.extensions.scripts) scriptControls.restore(saved.extensions.scripts);
     movieControls.restore(saved.extensions.movie);
+    playbackControls.setSettings(saved.extensions.playback);
+    playback.setSettings(playbackControls.getSettings());
     if (targetFrame) {
       await commitReplicationFrame(targetFrame, repetitions, saved.replicateAtoms, targetIndex, { resetCamera: false });
       displayed = true;
@@ -4734,6 +5227,9 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     failure = error;
     throw error;
   } finally {
+    // A navigation consumer can cancel immediately, but recipe restoration
+    // keeps its serial slot until its original backend promises have settled.
+    await rawAnalyses.settle();
     releaseAutomation();
     if (current() && !completed) {
       elements['configuration-status'].textContent = failure
@@ -4922,6 +5418,8 @@ async function commitReplicationFrame(frame, counts, physical, index, { resetCam
     deviceMemoryGiB: navigator.deviceMemory,
   });
   cache.setLimit(state.cachePlan.limit);
+  cache.setByteBudget(state.cachePlan.budgetBytes);
+  cache.pin(index);
   cache.set(index, frame);
   await displayFrame(frame, { resetCamera });
   if (state.frame === frame && revision === state.processingRevision) scheduleFramePrefetch(index);
@@ -5008,11 +5506,19 @@ function dismissInteractionHint() {
  * that others can interrupt passes an `owner`, and hides it only while
  * `loadingOwner` is still that owner. `readProgress` lets structure Worker
  * progress replace the text. */
-function setLoading(visible, text = '', owner = null, readProgress = owner === null) {
-  elements.loading.hidden = !visible;
+function setLoading(visible, text = '', owner = null, readProgress = owner === null, { delay = 0 } = {}) {
+  clearTimeout(loadingTimer);
+  loadingTimer = null;
   loadingOwner = visible ? owner : null;
   loadingReadProgress = visible && readProgress;
   if (text) elements['loading-text'].textContent = text;
+  if (visible && delay > 0) {
+    elements.loading.hidden = true;
+    loadingTimer = setTimeout(() => {
+      loadingTimer = null;
+      if (loadingOwner === owner) elements.loading.hidden = false;
+    }, delay);
+  } else elements.loading.hidden = !visible;
 }
 
 /** Progress of a structure Worker read describes a wait that some caller

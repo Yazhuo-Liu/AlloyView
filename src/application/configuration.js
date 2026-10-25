@@ -20,6 +20,7 @@ import { normalizeTimeSeriesState } from '../data/time-series.js';
 import { normalizeGlobalAttributeState } from '../properties/global-attribute-source.js';
 import { normalizeScriptState } from './command-script.js';
 import { normalizeMovieState } from '../video/movie-settings.js';
+import { MAX_PLAYBACK_FPS, MIN_PLAYBACK_FPS } from '../data/playback.js';
 
 export const CONFIGURATION_VERSION = 1;
 export const MAX_CONFIGURATION_BYTES = 8 * 1024 * 1024;
@@ -269,7 +270,8 @@ function normalizeSelections(value) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'textLabels', 'timeSeries', 'globalAttributes', 'scripts', 'movie', 'grains']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'playback', 'textLabels', 'timeSeries', 'globalAttributes', 'scripts', 'movie', 'grains']);
+  const playback = input.playback === undefined ? null : record(input.playback, `${path}.playback`, ['fps', 'mode']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
   const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
   const displacement = record(input.displacement ?? {}, `${path}.displacement`, ['enabled', 'referenceFrame', 'minimumImage', 'tiles']);
@@ -333,6 +335,10 @@ function normalizeExtensions(value, fromSnapshot) {
   });
   ensureUnique(atoms.map(({ id }) => String(id)), `${path}.appearance.atoms`);
   return {
+    ...(playback === null ? {} : { playback: {
+      fps: number(playback.fps ?? 1, `${path}.playback.fps`, MIN_PLAYBACK_FPS, MAX_PLAYBACK_FPS),
+      mode: choice(playback.mode ?? 'complete', `${path}.playback.mode`, new Set(['complete', 'preview'])),
+    } }),
     // Keep older version 1 recipes unchanged. DXA contains parameters and
     // display choices only; its network is recalculated after import.
     ...(input.dxa === undefined ? {} : { dxa: normalizeDxa(input.dxa, `${path}.dxa`) }),

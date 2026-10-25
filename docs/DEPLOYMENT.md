@@ -223,7 +223,10 @@ the ordinary analysis pool works with either shared coordinate snapshots or
 resident private copies. DXA always computes on CPU; isolated DXA can use its reusable threaded Wasm pool
 and cooperative cancellation; nonisolated DXA can offload eligible local stages
 to the existing private CPU Worker pool. Its global native kernel remains
-single-threaded and synchronous work cancels by terminating the dedicated Worker. Background module
+single-threaded. Cancellations during initialization or at an acknowledged
+native-stage boundary retain the Worker. Cancellation inside an already
+executing synchronous native stage still terminates the dedicated Worker,
+and the next extraction must initialize its replacement. Background module
 initialization retains reusable resources across source changes.
 `npm run dev` and `npm run preview` nevertheless send:
 

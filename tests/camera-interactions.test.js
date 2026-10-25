@@ -166,6 +166,64 @@ test('desktop left drag, right/Shift drag, click and wheel retain their controls
   assert.equal(r.yaw, before);
 });
 
+test('asynchronous visibility and slice updates preserve active orbit, pan and pinch gestures', () => {
+  for (const action of ['orbit', 'pan', 'pinch']) {
+    const { renderer: r, canvas, touch, captures } = fixture();
+    Object.assign(r, { atomCount: 1, visibilityBuffer: {}, voronoiDisplayRevision: 0,
+      gl: { ARRAY_BUFFER: 1, DYNAMIC_DRAW: 2, bindBuffer() {}, bufferData() {} } });
+    if (action === 'pinch') {
+      touch('pointerdown', 1, 160, 220); touch('pointerdown', 2, 260, 220);
+      touch('pointermove', 2, 280, 220);
+    } else {
+      const mouse = { pointerType: 'mouse', button: action === 'pan' ? 2 : 0 };
+      touch('pointerdown', 1, 160, 220, mouse); touch('pointermove', 1, 170, 220, mouse);
+    }
+    const before = { yaw: r.yaw, pan: [...r.pan], distance: r.distance };
+    r.setVisibility(Uint8Array.of(255));
+    r.setSlice(2, 1);
+    assert.equal(captures.size, action === 'pinch' ? 2 : 1);
+    if (action === 'pinch') {
+      touch('pointermove', 2, 300, 220);
+      assert.ok(r.distance < before.distance);
+    } else {
+      touch('pointermove', 1, 180, 220, { pointerType: 'mouse', button: action === 'pan' ? 2 : 0 });
+      if (action === 'orbit') close(r.yaw, before.yaw - .08);
+      else assert.notDeepEqual(r.pan, before.pan);
+    }
+    assert.deepEqual(r.picks, []);
+    r.interactions.dispose();
+    assert.equal(canvas.hasPointerCapture(1), false);
+  }
+});
+
+test('selection invalidation cancels an in-flight box but keeps unrelated camera captures', () => {
+  const { renderer: r, touch, captures } = fixture();
+  r.setSelectionInteraction({ mode: 'box', onBox() {} });
+  touch('pointerdown', 1, 160, 220, { pointerType: 'mouse' });
+  r.cancelSelectionGesture({ preserveCamera: true });
+  assert.equal(captures.size, 0, 'obsolete box capture is released');
+  r.setSelectionInteraction({ mode: 'off' });
+  touch('pointerdown', 1, 160, 220, { pointerType: 'mouse' });
+  touch('pointermove', 1, 170, 220, { pointerType: 'mouse' });
+  r.cancelSelectionGesture({ preserveCamera: true });
+  touch('pointermove', 1, 180, 220, { pointerType: 'mouse' });
+  close(r.yaw, -.78);
+  assert.equal(captures.size, 1);
+});
+
+test('a retained old scene accepts camera gestures but does not emit target-frame selection or crystal edits', () => {
+  const { renderer: r, touch, captures } = fixture();
+  r.sceneUpdate = { retained: { frame: {} } };
+  const selected = [], edited = [];
+  r.setSelectionInteraction({ mode: 'box', onBox: atoms => selected.push(atoms) });
+  r.crystalDragController = { accepts() { edited.push('start'); return true; } };
+  touch('pointerdown', 1, 160, 220); touch('pointerup', 1, 160, 220);
+  touch('pointerdown', 1, 160, 220); touch('pointermove', 1, 170, 220); touch('pointerup', 1, 170, 220);
+  close(r.yaw, -.70);
+  assert.deepEqual(r.picks, []); assert.deepEqual(selected, []); assert.deepEqual(edited, []);
+  assert.equal(captures.size, 0);
+});
+
 test('a quick second tap or click on the same atom centers the camera on that replica', () => {
   const { renderer: r, touch, document } = fixture();
   const centered = [];

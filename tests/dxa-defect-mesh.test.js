@@ -161,7 +161,7 @@ test('the DXA Worker transfers the same defect mesh and omits it unless requeste
   assert.equal(Object.hasOwn(plain, 'defectMesh'), false);
   assert.equal(Object.hasOwn(messages.at(-1), 'defectMesh'), false, 'the default request is unchanged');
   const remote = await client.analyze(voidFrame, {}, { defectMesh: { smoothingLevel: 3 } });
-  assert.deepEqual(messages.at(-1).defectMesh, { smoothingLevel: 3 });
+  assert.deepEqual(messages.findLast(message => message.type === 'analyze').defectMesh, { smoothingLevel: 3 });
   assert.deepEqual(scientific(remote), scientific(direct));
   assert.deepEqual(scientific(plain), scientific(direct));
   assert.deepEqual(remote.defectMesh.vertices, direct.defectMesh.vertices);

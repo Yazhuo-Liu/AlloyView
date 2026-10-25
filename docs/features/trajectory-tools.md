@@ -191,6 +191,19 @@ would exceed it.
 
 ## Configuration
 
+The timeline provides an editable **FPS** rate (0.1–60) and two playback modes.
+**Complete results** displays each frame after its required visual results are
+ready and actually drawn; unrelated background statistics do not hold the
+display. Preparation time counts toward its frame interval. Slow calculations can reduce
+the achieved rate. **Quick preview** follows the requested clock and replaces
+obsolete frame requests, so it may skip frames. Interactive preview appearance
+does not replace a frame's formal scientific values. Image, movie and data
+exports continue to wait for the requested formal results.
+
+`settings.extensions.playback` stores `fps` (default 1) and `mode`
+(`complete`, the default, or `preview`). Restoring these settings does not start
+playback; older recipes use the defaults.
+
 `settings.display.coordinateMode` stores `file` (the default), `wrapped` or
 `unwrapped`. `settings.extensions.trajectory.unwrap.inferFromFrames` stores the
 separate inference checkbox and defaults to `false`; selecting Unwrapped in an

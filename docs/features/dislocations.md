@@ -233,8 +233,13 @@ without shared memory it first waits for the current half of the warm-up
 as warm. The warm-up does not change any result.
 Shared-memory cancellation is cooperative and preserves the pthread pool.
 Private stage tasks follow the analysis pool's cancellation path. Without
-shared control memory, cancelling synchronous native work terminates its
-coordinator Worker. The interface clears cancelled results immediately; a
+shared control memory, startup and the boundary between native topology and
+tracing now use host-acknowledged cancellation checkpoints, keeping the warmed
+module when navigation changes at those points. Automatic frame replay waits
+120 ms for navigation to settle before starting a new extraction; a manual
+**Calculate** and explicit parameter edits remain immediate. Cancelling inside
+an already running synchronous native stage still terminates its coordinator
+Worker. The interface clears cancelled results immediately; a
 parallel native stage can need time to join its threads before the CPU
 reservation is released.
 
@@ -303,8 +308,13 @@ Segment IDs are local to one extraction and do not track lines across frames.
 The initial memory preflight estimates 32 MiB plus 3 KiB per atom against a
 1.5 GiB job budget, independently of the renderer and GPU cache. This is a
 conservative estimate, not a measured peak-memory guarantee; jobs exceeding it
-are rejected before extraction rather than analyzed partially. Only the latest
-DXA network is cached. Idle pools and Wasm heap capacity remain available for
+are rejected before extraction rather than analyzed partially. Up to four
+recent frame networks are kept in a separate 64 MiB LRU budget that includes
+the frame geometry they retain and graph storage. The current displayed
+network may exceed this budget by itself; it is evictable as soon as another
+frame becomes current. Results reuse the exact frame, source/processing
+version, extraction parameters and requested defect-mesh smoothing. **Cancel**
+clears these cached DXA networks. Idle pools and Wasm heap capacity remain available for
 reuse until backend shutdown or page closure.
 
 The defect mesh can be saved as STL or PLY, not OBJ. Its caps close periodic

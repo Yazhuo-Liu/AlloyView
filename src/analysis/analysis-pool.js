@@ -35,6 +35,10 @@ const CPU_CACHED_INPUT_FIELDS = [...['structureInput', 'types', 'referenceFracti
 const CPU_MODULES = ['voronoi', 'ptm', 'dxa'];
 const COPY_CHUNK_BYTES = 4 * 1024 ** 2;
 const ROUTING_OWNER = Symbol('routing timing owner');
+// Scheduling belongs to the request, not the scientific parameter key. A
+// promoted prediction keeps its running chunks and raises queued admissions.
+const ANALYSIS_PRIORITIES = new WeakMap();
+const gpuAnalysisPriority = signal => (signal && ANALYSIS_PRIORITIES.get(signal)?.priority < 0) ? 3 : 1;
 const PTM_OUTPUT_FIELDS = { structures: [Uint8Array, 1], rmsd: [Float32Array, 1], scales: [Float64Array, 1],
   deformation: [Float64Array, 9], distances: [Float32Array, 1] };
 // Standalone PTM also returns orientations and chemical ordering; strain
@@ -91,6 +95,7 @@ export class AnalysisPool {
     this.active = new Set();
     this.idle = [];
     this.controllers = new Set();
+    this.backgroundAnalyses = new Map();
     this.queue = [];
     this.nextId = 1;
     this.slots = new Set();
@@ -533,7 +538,39 @@ export class AnalysisPool {
     });
   }
 
-  async analyze(frame, parameters, { onProgress = () => {}, signal, frameIndex } = {}) {
+  cancelBackgroundAnalyses({ exceptSignal } = {}) {
+    for (const [sourceSignal, request] of this.backgroundAnalyses) {
+      if (sourceSignal !== exceptSignal && request.signal !== exceptSignal) request.controller.abort();
+    }
+  }
+
+  promoteAnalysis(signal) {
+    const request = this.backgroundAnalyses.get(signal);
+    if (!request) return false;
+    request.priority = 0;
+    this.backgroundAnalyses.delete(signal);
+    for (const task of [...this.active, ...this.queue]) {
+      if (ANALYSIS_PRIORITIES.get(task.sourceSignal) !== request) continue;
+      task.payload.cpuPriority = 0;
+      this.cpuBudget.promote?.(task.signal, 0);
+    }
+    this.gpuBackend.promote?.(request.signal);
+    return true;
+  }
+
+  async analyze(frame, parameters, { onProgress = () => {}, signal, frameIndex, background = false } = {}) {
+    const sourceSignal = signal;
+    let backgroundRequest, abortBackground;
+    if (background) {
+      const controller = new AbortController();
+      backgroundRequest = { controller, signal: controller.signal, priority: -2 };
+      abortBackground = () => controller.abort();
+      sourceSignal?.addEventListener('abort', abortBackground, { once: true });
+      if (sourceSignal?.aborted) controller.abort();
+      signal = controller.signal;
+      ANALYSIS_PRIORITIES.set(signal, backgroundRequest);
+      this.backgroundAnalyses.set(sourceSignal ?? signal, backgroundRequest);
+    } else this.cancelBackgroundAnalyses({ exceptSignal: signal });
     const progress = createAnalysisProgressReporter(onProgress, { environment: this.environment, signal });
     const routingObservation = {};
     try {
@@ -543,7 +580,15 @@ export class AnalysisPool {
       if (signal?.aborted || this.closed) throw abortError();
       routingObservation.finish?.(result);
       return result;
-    } finally { routingObservation.close?.(); progress.close(); }
+    } finally {
+      routingObservation.close?.(); progress.close();
+      if (backgroundRequest) {
+        sourceSignal?.removeEventListener('abort', abortBackground);
+        const key = sourceSignal ?? backgroundRequest.signal;
+        if (this.backgroundAnalyses.get(key) === backgroundRequest) this.backgroundAnalyses.delete(key);
+        ANALYSIS_PRIORITIES.delete(backgroundRequest.signal);
+      }
+    }
   }
 
   async analyzeWithProgress(frame, parameters, { onProgress = () => {}, signal, frameIndex, routingObservation } = {}) {
@@ -591,7 +636,7 @@ export class AnalysisPool {
         const cached = this.gpuFallbacks.lookup(refusal);
         if (cached) ({ fallbackReason, fallbackCode, fallbackCached } = cached);
         else try {
-          const result = await this.gpuBackend.analyze(frame, parameters, { onProgress, signal, frameIndex });
+          const result = await this.gpuBackend.analyze(frame, parameters, { onProgress, signal, frameIndex, priority: gpuAnalysisPriority(signal) });
           if (signal?.aborted || this.closed) throw abortError();
           return { ...result, backend: 'gpu', gpuRequested: true, elapsedMs: performance.now() - analysisStartedAt };
         } catch (error) {
@@ -649,7 +694,7 @@ export class AnalysisPool {
     const startedAt = performance.now();
     let neighbors, neighborFallbackReason;
     try {
-      neighbors = await this.gpuBackend.analyze(frame, { kind: 'ptmNeighbors' }, { signal, frameIndex, onProgress });
+      neighbors = await this.gpuBackend.analyze(frame, { kind: 'ptmNeighbors' }, { signal, frameIndex, onProgress, priority: gpuAnalysisPriority(signal) });
       if (signal?.aborted || this.closed) throw abortError();
       validatePreparedPtmNeighbors(frame, neighbors, { flags: parameters.flags, validateValues: false });
     } catch (error) {
@@ -692,7 +737,7 @@ export class AnalysisPool {
     let tensor, fallbackReason;
     const tensorStartedAt = performance.now();
     try {
-      tensor = await this.gpuBackend.analyze(frame, tensorParameters, { onProgress: report('gpu'), signal, frameIndex });
+      tensor = await this.gpuBackend.analyze(frame, tensorParameters, { onProgress: report('gpu'), signal, frameIndex, priority: gpuAnalysisPriority(signal) });
       if (signal?.aborted || this.closed) throw abortError();
     } catch (error) {
       if (error.name === 'AbortError' || signal?.aborted || this.closed) throw abortError();
@@ -857,7 +902,8 @@ export class AnalysisPool {
     const controller = new AbortController();
     if (routingOwner) controller.signal[ROUTING_OWNER] = routingOwner;
     this.controllers.add(controller);
-    const releaseBackground = this.cpuBudget.deferBackground?.({ signal: controller.signal }) ?? (() => {});
+    const releaseBackground = (ANALYSIS_PRIORITIES.get(signal)?.priority < 0 ? null
+      : this.cpuBudget.deferBackground?.({ signal: controller.signal })) ?? (() => {});
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
     const cpuAnalysisKey = this.nextCpuAnalysisKey++;
@@ -1355,6 +1401,7 @@ export class AnalysisPool {
   }
 
   async prepareCpuIndex(snapshot, cutoff, signal, sourceSignal, onPhase = () => {}, priority = 0) {
+    priority = ANALYSIS_PRIORITIES.get(sourceSignal)?.priority ?? priority;
     signal ??= new AbortController().signal;
     const cacheKey = cutoff ?? 'nearest';
     if (cutoff === undefined ? snapshot.neighborIndex : snapshot.coordinationIndices.has(cutoff)) return false;
@@ -1532,6 +1579,8 @@ export class AnalysisPool {
   }
 
   runTask(payload, signal, sourceSignal, onPhase = () => {}, sharedMemory = false) {
+    const scheduling = ANALYSIS_PRIORITIES.get(sourceSignal);
+    if (scheduling) payload = { ...payload, cpuPriority: scheduling.priority };
     return new Promise((resolve, reject) => {
       const task = { id: this.nextId++, payload, signal, sourceSignal, resolve, reject, onPhase,
         sharedMemory, worker: null, slot: null, done: false, lease: null, posted: false };

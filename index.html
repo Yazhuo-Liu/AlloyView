@@ -194,7 +194,7 @@
 
           <section class="trajectory-bar" id="trajectory-section" aria-label="Trajectory controls" hidden>
             <div class="trajectory-header">
-              <div><strong id="timestep-label">timestep —</strong><span id="cache-label">cache 1 / 3</span><span>1 s/frame</span></div>
+              <div><strong id="timestep-label">timestep —</strong><span id="cache-label">cache 1 / 3</span><span id="frame-playback-summary">1 fps · Complete</span></div>
               <div class="frame-jump">
                 <output id="frame-label">1 / 1</output>
                 <label for="frame-jump-input">Frame</label>
@@ -212,6 +212,15 @@
               </div>
               <button id="frame-next" type="button" title="Next frame" aria-label="Next frame">▶</button>
               <button id="frame-last" type="button" title="Last frame" aria-label="Last frame">▶|</button>
+            </div>
+            <div class="trajectory-playback-settings">
+              <label for="frame-playback-fps">FPS</label>
+              <input id="frame-playback-fps" type="number" min="0.1" max="60" step="0.1" value="1" inputmode="decimal" aria-label="Playback frames per second" disabled>
+              <label for="frame-playback-mode">Playback</label>
+              <select id="frame-playback-mode" title="Complete waits for current results. Preview keeps moving and may skip frames while calculations finish." disabled>
+                <option value="complete">Complete results</option>
+                <option value="preview">Quick preview</option>
+              </select>
             </div>
           </section>
         </section>

@@ -482,6 +482,43 @@ test('cancel/source changes remove visible-filter subscribers and unavailable pr
   assert.deepEqual(h.tools.pendingKinds(), []);
 });
 
+test('visible-atom analysis uses formal current-frame filters while the viewport shows borrowed colors and masks', async t => {
+  const h = harness(t);
+  await h.tools.onFrame();
+  h.fields['surface-mesh-radius'].value = '3.5';
+  h.fields['surface-mesh-smoothing'].value = '0';
+  h.fields['surface-mesh-selection'].value = 'visible';
+  const frame = h.renderer.frame;
+  // CNA already produced this frame's filter. A different selected color
+  // quantity is still pending, so the renderer retains the old appearance.
+  const formal = Uint8Array.from(frame.ids, (_, atom) => frame.positions[atom * 3] < 12 ? 255 : 0);
+  h.setVisibility(formal); h.setDependencies([]);
+  h.renderer.visibility = Uint8Array.from(formal, value => value ? 0 : 255);
+  const running = h.tools.run();
+  assert.equal(h.pending.length, 1);
+  assert.deepEqual(h.pending[0].options.mask, Uint8Array.from(formal, value => value ? 1 : 0));
+  assert.notDeepEqual(h.pending[0].options.mask, Uint8Array.from(h.renderer.visibility, value => value ? 1 : 0));
+  await h.settle();
+  assert.equal(await running, true);
+  assert.equal(h.tools.getResult().inputCount, formal.filter(Boolean).length);
+});
+
+test('visible-atom analysis rejects mismatched and explicitly preliminary masks instead of analyzing all atoms', async t => {
+  const h = harness(t);
+  await h.tools.onFrame();
+  h.fields['surface-mesh-radius'].value = '3.5';
+  h.fields['surface-mesh-selection'].value = 'visible';
+  h.setVisibility(Uint8Array.of(255));
+  assert.equal(await h.tools.run(), false);
+  assert.equal(h.pending.length, 0);
+  assert.match(h.fields['surface-mesh-status'].textContent, /does not match/);
+  const borrowed = new Uint8Array(h.renderer.frame.ids.length).fill(255);
+  borrowed.preview = true; h.setVisibility(borrowed);
+  assert.equal(await h.tools.run(), false);
+  assert.equal(h.pending.length, 0);
+  assert.match(h.fields['surface-mesh-status'].textContent, /temporary appearance preview/);
+});
+
 test('a foreign backend AbortError clears an active surface state and leaves a retry available', async t => {
   const h = harness(t);
   await h.tools.onFrame();

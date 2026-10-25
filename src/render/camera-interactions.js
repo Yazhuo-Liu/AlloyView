@@ -31,6 +31,22 @@ export function installCameraInteractions(renderer) {
     cancelBox();
     for (const id of ids) release(id);
   }
+  // A newly published result invalidates selection work, not the user's
+  // camera gesture. Releasing orbit/pan captures here would stop a drag in
+  // the middle of an asynchronous analysis completion.
+  function invalidateSelection({ preserveCrystal = false, suppressTap = true } = {}) {
+    lastTap = null;
+    cancelBox();
+    if (!preserveCrystal) cancelCrystal();
+    const invalid = pointer => pointer.mode === 'box' || (!preserveCrystal && pointer.mode === 'crystal');
+    if (drag && invalid(drag)) { const id = drag.id; drag = null; release(id); }
+    else if (drag && suppressTap) drag.moved = true;
+    for (const [id, pointer] of touches) {
+      if (invalid(pointer)) { touches.delete(id); release(id); }
+      else if (suppressTap) pointer.moved = true;
+    }
+    gesture = measure();
+  }
   function hideMarquee() { marquee?.remove(); marquee = null; }
   // A "Move crystal" drag shifts the periodic display origin. Its controller
   // (renderer.crystalDragController) previews in the shaders and commits on
@@ -141,12 +157,12 @@ export function installCameraInteractions(renderer) {
     if (event.pointerType === 'touch') {
       event.preventDefault();
       if (drag) { cancelCrystal(); const id = drag.id; drag = null; release(id); }
-      const crystal = !touches.size && renderer.crystalDragController?.accepts(event);
-      touches.set(event.pointerId, { ...point(event), mode: crystal ? 'crystal' : renderer.selectionInteraction?.mode === 'box' ? 'box' : 'rotate' });
+      const crystal = !renderer.presentationPending && !touches.size && renderer.crystalDragController?.accepts(event);
+      touches.set(event.pointerId, { ...point(event), mode: crystal ? 'crystal' : !renderer.presentationPending && renderer.selectionInteraction?.mode === 'box' ? 'box' : 'rotate' });
       if (touches.size >= 2) {
         cancelBox(); cancelCrystal();
         for (const pointer of touches.values()) { pointer.multi = true; pointer.mode = 'rotate'; }
-      } else if (renderer.selectionInteraction?.mode === 'box') {
+      } else if (!renderer.presentationPending && renderer.selectionInteraction?.mode === 'box') {
         cancelBox(); showMarquee(touches.get(event.pointerId));
       }
       gesture = measure(); // Rebase when fingers are added; never move the camera here.
@@ -154,8 +170,8 @@ export function installCameraInteractions(renderer) {
       if (touches.size || drag || ![0, 1, 2].includes(event.button)) return;
       cancelBox();
       drag = { ...point(event), mode: event.button !== 0 || event.shiftKey ? 'pan'
-        : renderer.crystalDragController?.accepts(event) ? 'crystal'
-          : renderer.selectionInteraction?.mode === 'box' ? 'box' : 'rotate', button: event.button };
+        : !renderer.presentationPending && renderer.crystalDragController?.accepts(event) ? 'crystal'
+          : !renderer.presentationPending && renderer.selectionInteraction?.mode === 'box' ? 'box' : 'rotate', button: event.button };
       if (drag.mode === 'box') { event.preventDefault(); showMarquee(drag); }
     }
     canvas.setPointerCapture(event.pointerId);
@@ -193,7 +209,7 @@ export function installCameraInteractions(renderer) {
     if (pointer.mode === 'box') {
       if (event.type === 'pointerup' && pointer.moved && !pointer.multi && renderer.selectionInteraction?.mode === 'box') finishBox(pointer);
       else cancelBox();
-    } else if (select) {
+    } else if (select && !renderer.presentationPending) {
       const atom = renderer.pick(event.clientX, event.clientY);
       // The picked replica's position, read before handlers can pick again.
       const pick = renderer.lastPick?.index === atom ? renderer.lastPick : null;
@@ -225,5 +241,5 @@ export function installCameraInteractions(renderer) {
   listen(document, 'keydown', event => { if (event.key === 'Escape') reset(); });
   listen(document, 'visibilitychange', () => { if (document.hidden) reset(); });
 
-  return { reset, dispose() { reset(); for (const remove of listeners) remove(); } };
+  return { reset, invalidateSelection, dispose() { reset(); for (const remove of listeners) remove(); } };
 }

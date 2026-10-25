@@ -72,6 +72,66 @@ test('running DXA cancellation terminates native work, ignores stale output and 
   assert.deepEqual(await second, { correct: true }); client.close();
 });
 
+test('announced cooperative startup cancellation preserves the initializing serial Worker until ACK', async () => {
+  const { client, workers } = setup(), controller = new AbortController();
+  const first = client.analyze(source(), {}, { signal: controller.signal });
+  const rejected = assert.rejects(first, { name: 'AbortError' });
+  await flush(); const worker = workers[0], id = worker.messages[0].id;
+  worker.emit({ id, cooperativeStages: true });
+  controller.abort(); await rejected;
+  assert.equal(worker.terminated, false);
+  assert.equal(client.cpuBudget.active, 1);
+  worker.emit({ id, control: null });
+  assert.equal(worker.terminated, false, 'serial control announcement cannot discard a cooperatively cancelling startup');
+  const next = client.analyze(source());
+  worker.emit({ id, ok: false, name: 'AbortError', error: 'Cancelled' });
+  await flush();
+  assert.equal(workers.length, 1);
+  const nextId = worker.messages.findLast(message => message.type === 'analyze').id;
+  worker.emit({ id: nextId, ok: true, result: { backend: 'cpu' } }); await next;
+  assert.equal(client.cpuBudget.active, 0);
+  await client.close();
+});
+
+test('cancellation at a native stage checkpoint retains the Worker and stale ACKs cannot resume old work', async () => {
+  let hold = false, release;
+  const { client, workers } = setup({ yieldToMain: () => hold ? new Promise(resolve => { release = resolve; }) : Promise.resolve() });
+  const controller = new AbortController(), first = client.analyze(source(), {}, { signal: controller.signal });
+  const rejected = assert.rejects(first, { name: 'AbortError' });
+  await flush(); const worker = workers[0], id = worker.messages[0].id;
+  worker.emit({ id, cooperativeStages: true }); worker.emit({ id, control: null });
+  hold = true;
+  worker.emit({ id, checkpoint: { requestId: 17, phase: 'before-tracing' } });
+  controller.abort(); await rejected;
+  assert.equal(worker.terminated, false);
+  assert.equal(client.cpuBudget.active, 1, 'native workspace cleanup must acknowledge before permits are reused');
+  const next = client.analyze(source());
+  hold = false;
+  worker.emit({ id, ok: false, name: 'AbortError', error: 'Cancelled' });
+  release(); await flush();
+  assert.equal(worker.messages.some(message => message.type === 'resume-checkpoint' && message.id === id), false);
+  const nextId = worker.messages.findLast(message => message.type === 'analyze').id;
+  assert.notEqual(nextId, id);
+  worker.emit({ id: nextId, ok: true, result: { backend: 'cpu' } }); await next;
+  assert.equal(workers.length, 1);
+  await client.close();
+});
+
+test('after checkpoint permission, cancelling uninterruptible serial native work still terminates safely', async () => {
+  const { client, workers } = setup(), controller = new AbortController();
+  const task = client.analyze(source(), {}, { signal: controller.signal });
+  const rejected = assert.rejects(task, { name: 'AbortError' });
+  await flush(); const worker = workers[0], id = worker.messages[0].id;
+  worker.emit({ id, cooperativeStages: true }); worker.emit({ id, control: null });
+  worker.emit({ id, checkpoint: { requestId: 1, phase: 'before-native' } });
+  await flush();
+  assert.deepEqual(worker.messages.at(-1), { type: 'resume-checkpoint', id, requestId: 1 });
+  controller.abort(); await rejected;
+  assert.equal(worker.terminated, true);
+  assert.equal(client.cpuBudget.active, 0);
+  await client.close();
+});
+
 test('DXA client serializes whole-frame jobs and cancelling queued work keeps the active kernel', async () => {
   const { client, workers } = setup(), controller = new AbortController();
   const first = client.analyze(source()), second = client.analyze(source(), {}, { signal: controller.signal }), third = client.analyze(source());

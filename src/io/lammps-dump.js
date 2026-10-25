@@ -1,3 +1,4 @@
+import { PARSER_CHECKPOINT_MASK, parseInputSteps, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
 import {
   createCell,
   invert3,
@@ -11,11 +12,8 @@ import {
   NUMBER,
   SKIP,
   TEXT,
-  asBytes,
   decodeText,
-  isByteInput,
   isAsciiBlank,
-  parseBytesWithFallback,
 } from './ascii-rows.js';
 
 const TIMESTEP_MARKER = new TextEncoder().encode('ITEM: TIMESTEP');
@@ -106,13 +104,13 @@ export async function indexLammpsDump(blob, onProgress = () => {}, { onFrame = (
   return { offsets, indexMs: performance.now() - startedAt };
 }
 
-export async function readLammpsFrame(blob, offsets, frameIndex, sourceName = 'trajectory.dump') {
+export async function readLammpsFrame(blob, offsets, frameIndex, sourceName = 'trajectory.dump', options = {}) {
   if (!Number.isInteger(frameIndex) || frameIndex < 0 || frameIndex >= offsets.length) {
     throw new Error(`Trajectory frame ${frameIndex} is outside the range 0..${offsets.length - 1}.`);
   }
   const end = frameIndex + 1 < offsets.length ? offsets[frameIndex + 1] : blob.size;
   const bytes = new Uint8Array(await blob.slice(offsets[frameIndex], end).arrayBuffer());
-  return parseLammpsFrame(bytes, sourceName);
+  return parseLammpsFrameAsync(bytes, sourceName, options);
 }
 
 /**
@@ -123,32 +121,37 @@ export async function readLammpsFrame(blob, offsets, frameIndex, sourceName = 't
  * Internal coordinate-only reads validate every column but omit unrelated
  * scalar buffers; IDs and image-flag auxiliaries keep their full semantics.
  */
-export function parseLammpsFrame(input, sourceName = 'trajectory.dump', { projection = 'full' } = {}) {
-  const startedAt = performance.now();
-  if (!isByteInput(input)) return parseLammpsText(input, sourceName, startedAt, projection);
-  return parseBytesWithFallback(
-    asBytes(input),
-    (bytes) => parseLammpsBytes(bytes, sourceName, startedAt, projection),
-    (text) => parseLammpsText(text, sourceName, startedAt, projection),
-  );
+export function parseLammpsFrame(input, sourceName = 'trajectory.dump', options = {}) {
+  return runParserSteps(parseLammpsSteps(input, sourceName, options));
 }
 
-function parseLammpsText(text, sourceName, startedAt, projection) {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+export function parseLammpsFrameAsync(input, sourceName = 'trajectory.dump', options = {}) {
+  return runParserStepsAsync(parseLammpsSteps(input, sourceName, options), options);
+}
+
+function* parseLammpsSteps(input, sourceName, { projection = 'full' }) {
+  const startedAt = performance.now();
+  return yield* parseInputSteps(input,
+    bytes => parseLammpsBytes(bytes, sourceName, startedAt, projection),
+    text => parseLammpsText(text, sourceName, startedAt, projection));
+}
+
+function* parseLammpsText(text, sourceName, startedAt, projection) {
+  const lines = yield* splitParserLines(text);
   const header = readDumpHeader(lines);
   const atoms = createDumpAtoms(header, projection);
-  readDumpRowsText(lines, header, atoms);
-  return finishDumpFrame(header, atoms, sourceName, startedAt);
+  yield* readDumpRowsText(lines, header, atoms);
+  return yield* finishDumpFrame(header, atoms, sourceName, startedAt);
 }
 
-function parseLammpsBytes(bytes, sourceName, startedAt, projection) {
+function* parseLammpsBytes(bytes, sourceName, startedAt, projection) {
   const atomStart = dumpAtomRowsStart(bytes);
   if (atomStart < 0) return null;
   const lines = decodeText(bytes.subarray(0, atomStart)).replace(/^\uFEFF/, '').split(/\r?\n/);
   const header = readDumpHeader(lines);
   const atoms = createDumpAtoms(header, projection);
-  readDumpRowsBytes(bytes, atomStart, header, atoms);
-  return finishDumpFrame(header, atoms, sourceName, startedAt);
+  yield* readDumpRowsBytes(bytes, atomStart, header, atoms);
+  return yield* finishDumpFrame(header, atoms, sourceName, startedAt);
 }
 
 // The two optional metadata blocks make a valid header at most 13 lines.
@@ -283,7 +286,7 @@ function createDumpAtoms({ count, columns, columnIndex, wrappedCoordinateSet, un
   };
 }
 
-function readDumpRowsText(lines, { cursor: firstLine, count, columns, columnIndex }, atoms) {
+function* readDumpRowsText(lines, { cursor: firstLine, count, columns, columnIndex }, atoms) {
   const { propertyNames, ids, rawTypes, imageFlags, properties, elements, coordinateReaders } = atoms;
   const idSet = new Set();
   const idColumn = columnIndex.get('id'), typeColumn = columnIndex.get('type'), elementColumn = columnIndex.get('element');
@@ -291,6 +294,7 @@ function readDumpRowsText(lines, { cursor: firstLine, count, columns, columnInde
   const propertyColumns = propertyNames.map(name => columnIndex.get(name));
   // Keep the per-atom loop free of allocations.
   for (let atom = 0, cursor = firstLine; atom < count; atom += 1, cursor += 1) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
     // After trim(), splitting on whitespace yields an empty token only for an empty line.
     const line = (lines[cursor] ?? '').trim();
     const tokens = line === '' ? [] : line.split(/\s+/);
@@ -326,6 +330,7 @@ function readDumpRowsText(lines, { cursor: firstLine, count, columns, columnInde
     }
   }
   for (let cursor = firstLine + count; cursor < lines.length; cursor += 1) {
+    if ((cursor & PARSER_CHECKPOINT_MASK) === 0) yield;
     if (lines[cursor].trim()) throw dumpError('Line ' + (cursor + 1) + ': unexpected data after the declared ' + count + ' atom rows.');
   }
 }
@@ -334,7 +339,7 @@ function readDumpRowsText(lines, { cursor: firstLine, count, columns, columnInde
 // this one throws FALLBACK instead, and the text parser reports the error.
 // Reserved columns that the frame does not use (for example xs/ys/zs next to
 // x/y/z) are skipped without conversion, as in the text loop.
-function readDumpRowsBytes(bytes, start, { count, columns, columnIndex }, atoms) {
+function* readDumpRowsBytes(bytes, start, { count, columns, columnIndex }, atoms) {
   const { propertyNames, ids, rawTypes, imageFlags, properties, elements, coordinateReaders } = atoms;
   const columnCount = columns.length;
   const kinds = new Uint8Array(columnCount).fill(SKIP);
@@ -371,6 +376,7 @@ function readDumpRowsBytes(bytes, start, { count, columns, columnIndex }, atoms)
   const texts = new Array(columnCount).fill('');
   const reader = new AsciiRowReader(bytes, start);
   for (let atom = 0; atom < count; atom += 1) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
     if (reader.readRow(kinds, values, texts) !== columnCount) throw FALLBACK;
     const id = values[idColumn];
     if (!Number.isSafeInteger(id) || id < 0) throw FALLBACK;
@@ -403,12 +409,13 @@ function readDumpRowsBytes(bytes, start, { count, columns, columnIndex }, atoms)
   if (!isAsciiBlank(bytes, reader.position)) throw FALLBACK;
 }
 
-function finishDumpFrame(header, atoms, sourceName, startedAt) {
+function* finishDumpFrame(header, atoms, sourceName, startedAt) {
   const { count, cell, timestep, wrappedCoordinateSet, unwrappedCoordinateSet } = header;
   const { ids, rawTypes, types, wrappedValues, unwrappedValues, imageFlags, properties, elements } = atoms;
   if (!header.columnIndex.has('type') && elements) {
     const elementTypes = new Map();
     for (let atom = 0; atom < count; atom += 1) {
+      if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
       if (!elementTypes.has(elements[atom])) elementTypes.set(elements[atom], elementTypes.size + 1);
       rawTypes[atom] = elementTypes.get(elements[atom]);
     }
@@ -419,6 +426,7 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
   const rawTypeLabels = [];
   let largestDenseType = 0;
   for (let atom = 0; atom < count; atom += 1) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
     const value = rawTypes[atom];
     if (value < denseTypeLimit) {
       if (!seenTypes[value]) {
@@ -446,6 +454,7 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
   if (elements) {
     const elementByType = new Array(rawTypeLabels.length);
     for (let atom = 0; atom < count; atom += 1) {
+      if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
       const value = rawTypes[atom];
       const typeIndex = value < denseTypeLimit ? denseTypeMap[value] : sparseTypeMap.get(value);
       const previous = elementByType[typeIndex];
@@ -476,6 +485,7 @@ function finishDumpFrame(header, atoms, sourceName, startedAt) {
   const { origin, vectors, pbc } = cell;
   const summary = createFrameSummaryAccumulator(typeLabels.length);
   for (let atom = 0; atom < count; atom += 1) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
     const rawType = rawTypes[atom];
     types[atom] = rawType < denseTypeLimit ? denseTypeMap[rawType] : sparseTypeMap.get(rawType);
     const offset = atom * 3;

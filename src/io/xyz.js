@@ -1,16 +1,15 @@
-import { cartesianToFractional, createCell, fractionalToCartesian, validateFrame, wrapFractional } from '../data/model.js';
-import { attachFrameSummary, collectFrameSummary, fractionalToCartesianSummary } from '../data/frame-summary.js';
+import { PARSER_CHECKPOINT_MASK, parseInputSteps, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
+import { cartesianToFractionalSteps, fractionalToCartesianSteps, fractionalToCartesianSummarySteps, wrapFractionalSteps, collectFrameSummarySteps, someParserValues } from './cooperative-coordinates.js';
+import { createCell, validateFrame } from '../data/model.js';
+import { attachFrameSummary } from '../data/frame-summary.js';
 import {
   AsciiRowReader,
   FALLBACK,
   NUMBER,
   SKIP,
   TEXT,
-  asBytes,
   isAsciiBlank,
-  isByteInput,
   lineStartAfter,
-  parseBytesWithFallback,
   readHeaderLines,
 } from './ascii-rows.js';
 import { isBlankLine, lineText, scanLineBytes } from './text-lines.js';
@@ -46,12 +45,12 @@ export async function indexXyz(blob, onProgress = () => {}, options = {}) {
   return { offsets, indexMs: performance.now() - startedAt };
 }
 
-export async function readXyzFrame(blob, offsets, index, sourceName = 'trajectory.xyz') {
+export async function readXyzFrame(blob, offsets, index, sourceName = 'trajectory.xyz', options = {}) {
   if (!Number.isInteger(index) || index < 0 || index >= offsets.length) {
     throw new Error(`XYZ trajectory frame ${index} is outside the available range.`);
   }
   const end = offsets[index + 1] ?? blob.size;
-  const frame = parseXyzFrame(new Uint8Array(await blob.slice(offsets[index], end).arrayBuffer()), sourceName);
+  const frame = await parseXyzFrameAsync(new Uint8Array(await blob.slice(offsets[index], end).arrayBuffer()), sourceName, options);
   frame.frameIndex = index;
   return frame;
 }
@@ -64,25 +63,30 @@ export async function readXyzFrame(blob, offsets, index, sourceName = 'trajector
  * Internal coordinate-only reads validate every column but omit unrelated
  * scalar buffers; IDs and image-flag auxiliaries keep their full semantics.
  */
-export function parseXyzFrame(input, sourceName = 'structure.xyz', { projection = 'full' } = {}) {
-  const startedAt = performance.now();
-  if (!isByteInput(input)) return parseXyzText(String(input), sourceName, startedAt, projection);
-  return parseBytesWithFallback(
-    asBytes(input),
-    (bytes) => parseXyzBytes(bytes, sourceName, startedAt, projection),
-    (text) => parseXyzText(text, sourceName, startedAt, projection),
-  );
+export function parseXyzFrame(input, sourceName = 'structure.xyz', options = {}) {
+  return runParserSteps(parseXyzSteps(input, sourceName, options));
 }
 
-function parseXyzText(text, sourceName, startedAt, projection) {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+export function parseXyzFrameAsync(input, sourceName = 'structure.xyz', options = {}) {
+  return runParserStepsAsync(parseXyzSteps(input, sourceName, options), options);
+}
+
+function* parseXyzSteps(input, sourceName, { projection = 'full' }) {
+  const startedAt = performance.now();
+  return yield* parseInputSteps(input,
+    bytes => parseXyzBytes(bytes, sourceName, startedAt, projection),
+    text => parseXyzText(String(text), sourceName, startedAt, projection));
+}
+
+function* parseXyzText(text, sourceName, startedAt, projection) {
+  const lines = yield* splitParserLines(text);
   const header = readXyzHeader(lines, lines.length, projection);
   const atoms = createXyzAtoms(header);
-  readXyzRowsText(lines, header, atoms);
-  return finishXyzFrame(header, atoms, sourceName, startedAt);
+  yield* readXyzRowsText(lines, header, atoms);
+  return yield* finishXyzFrame(header, atoms, sourceName, startedAt);
 }
 
-function parseXyzBytes(bytes, sourceName, startedAt, projection) {
+function* parseXyzBytes(bytes, sourceName, startedAt, projection) {
   const header = readHeaderLines(bytes, (lines, usableLines) => readXyzHeader(lines, usableLines, projection));
   if (!header) return null;
   const start = lineStartAfter(bytes, header.cursor);
@@ -90,9 +94,9 @@ function parseXyzBytes(bytes, sourceName, startedAt, projection) {
   // text parser.
   if (start < 0 || bytes.indexOf(34, start) >= 0 || bytes.indexOf(39, start) >= 0) return null;
   const atoms = createXyzAtoms(header);
-  const end = readXyzRowsBytes(bytes, start, header, atoms);
+  const end = yield* readXyzRowsBytes(bytes, start, header, atoms);
   if (!isAsciiBlank(bytes, end)) return null;
-  return finishXyzFrame(header, atoms, sourceName, startedAt);
+  return yield* finishXyzFrame(header, atoms, sourceName, startedAt);
 }
 
 // Reads the count and comment lines. Only the first `usableLines` lines are
@@ -137,11 +141,12 @@ function createXyzAtoms({ count, fields }) {
   };
 }
 
-function readXyzRowsText(lines, { cursor: firstLine, count, speciesField, positionField, idField, properties }, atoms) {
+function* readXyzRowsText(lines, { cursor: firstLine, count, speciesField, positionField, idField, properties }, atoms) {
   const { ids, types, positions, typeLabels, typeMap, columnCount } = atoms;
   const seenIds = new Set();
   let cursor = firstLine;
   for (let atom = 0; atom < count; atom += 1, cursor += 1) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
     const tokens = tokenizeRow(lines[cursor] ?? '');
     if (tokens.length !== columnCount) throw xyzError(`Atom row ${atom + 1} requires ${columnCount} columns; found ${tokens.length}.`);
     const species = speciesLabel(tokens[speciesField.offset], speciesField.name === 'Z');
@@ -163,13 +168,16 @@ function readXyzRowsText(lines, { cursor: firstLine, count, speciesField, positi
       if (property.data) property.data[atom] = value;
     }
   }
-  if (lines.slice(cursor).some((line) => line.trim())) throw xyzError('Unexpected data after the declared atom rows.');
+  for (; cursor < lines.length; cursor++) {
+    if ((cursor & PARSER_CHECKPOINT_MASK) === 0) yield;
+    if (lines[cursor].trim()) throw xyzError('Unexpected data after the declared atom rows.');
+  }
 }
 
 // Byte-level counterpart of readXyzRowsText: the same arrays, and FALLBACK
 // wherever that loop would throw (see ascii-rows.js). Returns the position
 // after the last row.
-function readXyzRowsBytes(bytes, start, { count, speciesField, positionField, idField, properties }, atoms) {
+function* readXyzRowsBytes(bytes, start, { count, speciesField, positionField, idField, properties }, atoms) {
   const { ids, types, positions, typeLabels, typeMap, columnCount } = atoms;
   const kinds = new Uint8Array(columnCount).fill(SKIP);
   kinds[speciesField.offset] = TEXT;
@@ -199,6 +207,7 @@ function readXyzRowsBytes(bytes, start, { count, speciesField, positionField, id
   const largeIds = new Set();
   const reader = new AsciiRowReader(bytes, start, { fortranExponents: true });
   for (let atom = 0; atom < count; atom += 1) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
     if (reader.readRow(kinds, values, texts) !== columnCount) throw FALLBACK;
     const token = texts[speciesField.offset];
     if (token !== lastToken) {
@@ -257,12 +266,12 @@ function readXyzRowsBytes(bytes, start, { count, speciesField, positionField, id
   return reader.position;
 }
 
-function finishXyzFrame(header, atoms, sourceName, startedAt) {
+function* finishXyzFrame(header, atoms, sourceName, startedAt) {
   const { metadata, fields, speciesField, idField, properties, comment } = header;
   const { ids, types, positions, typeLabels } = atoms;
   const summaryOutput = { types, typeCount: typeLabels.length };
-  const cell = cellFromMetadata(metadata, positions, summaryOutput);
-  const coordinates = coordinatesForCell(positions, cell, 'XYZ', summaryOutput);
+  const cell = yield* cellFromMetadataSteps(metadata, positions, summaryOutput);
+  const coordinates = yield* coordinatesForCellSteps(positions, cell, 'XYZ', summaryOutput);
   return attachFrameSummary(validateFrame({
     ids, idSource: idField ? 'explicit' : 'row-order', types, typeLabels,
     ...coordinates, cell,
@@ -279,20 +288,25 @@ export function parseXyzTimestep(metadata) {
 }
 
 export function coordinatesForCell(rawPositions, cell, format, summaryOutput) {
-  const rawFractional = cartesianToFractional(rawPositions, cell, new Float64Array(rawPositions.length));
-  const fractional = wrapFractional(rawFractional, cell.pbc);
+  return runParserSteps(coordinatesForCellSteps(rawPositions, cell, format, summaryOutput));
+}
+
+export function* coordinatesForCellSteps(rawPositions, cell, format, summaryOutput) {
+  const rawFractional = (yield* cartesianToFractionalSteps(rawPositions, cell, new Float64Array(rawPositions.length)));
+  const fractional = (yield* wrapFractionalSteps(rawFractional, cell.pbc));
   let positions = rawPositions;
   if (cell.pbc.some(Boolean)) {
     if (summaryOutput) {
-      const result = fractionalToCartesianSummary(fractional, cell, summaryOutput.types, summaryOutput.typeCount);
+      const result = (yield* fractionalToCartesianSummarySteps(fractional, cell, summaryOutput.types, summaryOutput.typeCount));
       positions = result.positions;
       summaryOutput.summary = result.summary;
-    } else positions = fractionalToCartesian(fractional, cell);
-  } else if (summaryOutput && !summaryOutput.summary) summaryOutput.summary = collectFrameSummary(summaryOutput.types, positions, summaryOutput.typeCount);
-  const hasImages = rawFractional.some((value, index) => cell.pbc[index % 3] && (value < 0 || value >= 1));
+    } else positions = (yield* fractionalToCartesianSteps(fractional, cell));
+  } else if (summaryOutput && !summaryOutput.summary) summaryOutput.summary = (yield* collectFrameSummarySteps(summaryOutput.types, positions, summaryOutput.typeCount));
+  const hasImages = yield* someParserValues(rawFractional, (value, index) => cell.pbc[index % 3] && (value < 0 || value >= 1));
   if (!hasImages) return { positions, fractional };
   const imageFlags = new Int32Array(rawPositions.length);
   for (let index = 0; index < rawFractional.length; index += 1) {
+    if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
     const image = cell.pbc[index % 3] ? Math.floor(rawFractional[index]) : 0;
     if (image < -2_147_483_648 || image > 2_147_483_647) throw new Error(`${format} coordinates exceed the supported image-flag range.`);
     imageFlags[index] = image;
@@ -301,12 +315,17 @@ export function coordinatesForCell(rawPositions, cell, format, summaryOutput) {
 }
 
 export function inferNonperiodicCell(positions, summaryOutput) {
+  return runParserSteps(inferNonperiodicCellSteps(positions, summaryOutput));
+}
+
+export function* inferNonperiodicCellSteps(positions, summaryOutput) {
   // Free structures already need a bounds pass to infer their cell. Count
   // types there too, and reuse the same extrema for later display.
-  if (summaryOutput) summaryOutput.summary = collectFrameSummary(summaryOutput.types, positions, summaryOutput.typeCount);
+  if (summaryOutput) summaryOutput.summary = (yield* collectFrameSummarySteps(summaryOutput.types, positions, summaryOutput.typeCount));
   const min = summaryOutput?.summary.minimum ?? [Infinity, Infinity, Infinity];
   const max = summaryOutput?.summary.maximum ?? [-Infinity, -Infinity, -Infinity];
   if (!summaryOutput) for (let index = 0; index < positions.length; index += 1) {
+    if ((index & PARSER_CHECKPOINT_MASK) === 0) yield;
     const axis = index % 3;
     min[axis] = Math.min(min[axis], positions[index]);
     max[axis] = Math.max(max[axis], positions[index]);
@@ -318,13 +337,17 @@ export function inferNonperiodicCell(positions, summaryOutput) {
 }
 
 export function cellFromMetadata(metadata, positions, summaryOutput) {
+  return runParserSteps(cellFromMetadataSteps(metadata, positions, summaryOutput));
+}
+
+export function* cellFromMetadataSteps(metadata, positions, summaryOutput) {
   const pbcTokens = metadata.pbc?.trim().split(/\s+/);
   if (pbcTokens && pbcTokens.length !== 3) throw xyzError('pbc requires three boolean flags.');
   if (metadata.Lattice === undefined) {
     if (pbcTokens?.some((token) => booleanValue(token))) {
       throw xyzError('Periodic pbc flags require a Lattice matrix.');
     }
-    return inferNonperiodicCell(positions, summaryOutput);
+    return yield* inferNonperiodicCellSteps(positions, summaryOutput);
   }
   const vectors = metadata.Lattice.trim().split(/\s+/).map((token) => numeric(token, 'Lattice'));
   if (vectors.length !== 9) throw xyzError('Lattice requires nine values, grouped as the three cell vectors.');

@@ -2,7 +2,7 @@ import { indexLammpsDump, readLammpsFrame } from './lammps-dump.js';
 
 const naturalCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
-export async function indexLammpsDumpSeries(inputFiles, onProgress = () => {}) {
+export async function indexLammpsDumpSeries(inputFiles, onProgress = () => {}, options = {}) {
   const files = [...inputFiles].sort((left, right) => naturalCollator.compare(left.name, right.name));
   const chunks = [];
   let frameCount = 0;
@@ -16,7 +16,7 @@ export async function indexLammpsDumpSeries(inputFiles, onProgress = () => {}) {
         fileIndex,
         fileName: file.name,
       });
-    });
+    }, options);
     chunks.push({ file, offsets: indexed.offsets, firstFrame: frameCount });
     frameCount += indexed.offsets.length;
     indexMs += indexed.indexMs;

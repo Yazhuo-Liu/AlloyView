@@ -4,10 +4,10 @@ import { prepareSequenceBaseline, unwrapSequenceFrame } from '../data/trajectory
 import { isReadableLocalFile, normalizeLocalFiles } from '../io/local-files.js';
 import { detectStructureFormatHeader, inferStructureFormatFromPath } from '../io/file-sequences.js';
 import { assertGzipSupported, decompressToFile, readStructureHeader } from '../io/gzip.js';
-import { indexLammpsDump, readLammpsFrame } from '../io/lammps-dump.js';
-import { indexLammpsDumpSeries, readLammpsSeriesFrame } from '../io/lammps-series.js';
-import { indexXyz, readXyzFrame } from '../io/xyz.js';
-import { indexPdb, readPdbFrame } from '../io/pdb.js';
+import { indexLammpsDump } from '../io/lammps-dump.js';
+import { indexLammpsDumpSeries } from '../io/lammps-series.js';
+import { indexXyz } from '../io/xyz.js';
+import { indexPdb } from '../io/pdb.js';
 import { parseLammpsData } from '../io/lammps-data.js';
 import { parsePoscar } from '../io/poscar.js';
 import { FrameParserPool } from '../data/frame-parser-pool.js';
@@ -278,9 +278,9 @@ async function loadSource(inputFiles, requestId, incremental = false, controller
     if (controller.signal.aborted) throw new DOMException('Structure source closed.', 'AbortError');
     if (formats.every((format) => format === 'cfg')) return loadCfgSequence(files, requestId, controller);
     if (incremental && formats.every(format => format === formats[0]) && ['lammps-dump', 'xyz', 'pdb'].includes(formats[0])) return loadProgressive(files, formats[0], requestId, controller);
-    if (formats.every((format) => format === 'lammps-dump')) return loadLammpsDumpSequence(await decompressFiles(files), requestId);
-    if (formats.every((format) => format === 'xyz')) return loadIndexedTextSource(await decompressFiles(files), 'xyz', requestId);
-    if (formats.every((format) => format === 'pdb')) return loadIndexedTextSource(await decompressFiles(files), 'pdb', requestId);
+    if (formats.every((format) => format === 'lammps-dump')) return loadLammpsDumpSequence(await decompressFiles(files), requestId, controller);
+    if (formats.every((format) => format === 'xyz')) return loadIndexedTextSource(await decompressFiles(files), 'xyz', requestId, controller);
+    if (formats.every((format) => format === 'pdb')) return loadIndexedTextSource(await decompressFiles(files), 'pdb', requestId, controller);
     throw new Error('A numbered file sequence must contain a single format: CFG, LAMMPS text dump, XYZ, or PDB. LAMMPS data and POSCAR files open one at a time.');
   }
   const [inputFile] = files;
@@ -292,9 +292,9 @@ async function loadSource(inputFiles, requestId, incremental = false, controller
     const file = await decompressToFile(inputFile);
     const { offsets, indexMs } = await indexLammpsDump(file, ({ loaded, total }) => {
       self.postMessage({ id: requestId, event: 'progress', loaded, total, stage: 'index' });
-    });
+    }, { signal: controller.signal });
     source = { file, format: 'lammps-dump', offsets };
-    const frame = await readLammpsFrame(file, offsets, 0, file.name);
+    const frame = await readSourceFrame(source, 0, requestId, { controller, background: false });
     return { format: source.format, frameCount: offsets.length, indexMs, frame };
   }
   if (format === 'cfg') {
@@ -303,7 +303,7 @@ async function loadSource(inputFiles, requestId, incremental = false, controller
     const frame = await getParserPool().parse({ format, file: inputFile, index: 0, deferUnwrap: true }, { signal: controller.signal });
     return { format: source.format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
   }
-  if (format === 'xyz' || format === 'pdb') return loadIndexedTextSource(await decompressFiles(files), format, requestId);
+  if (format === 'xyz' || format === 'pdb') return loadIndexedTextSource(await decompressFiles(files), format, requestId, controller);
   if (SINGLE_FRAME_PARSERS[format]) {
     const file = inputFile;
     const startedAt = performance.now();
@@ -332,7 +332,7 @@ async function decompressFiles(files) {
   return decompressed;
 }
 
-async function loadIndexedTextSource(inputFiles, format, requestId) {
+async function loadIndexedTextSource(inputFiles, format, requestId, controller = loadController) {
   const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
   const files = [...inputFiles].sort((left, right) => collator.compare(left.name, right.name));
   const chunks = [];
@@ -342,38 +342,24 @@ async function loadIndexedTextSource(inputFiles, format, requestId) {
     const file = files[fileIndex];
     const onProgress = ({ loaded, total }) => self.postMessage({ id: requestId, event: 'progress',
       loaded: fileIndex + (total ? loaded / total : 0), total: files.length, stage: files.length > 1 ? 'series-index' : 'index' });
-    const indexed = format === 'xyz' ? await indexXyz(file, onProgress) : await indexPdb(file, onProgress);
+    const options = { signal: controller.signal };
+    const indexed = format === 'xyz' ? await indexXyz(file, onProgress, options) : await indexPdb(file, onProgress, options);
     chunks.push({ file, indexed, firstFrame: frameCount });
     frameCount += format === 'xyz' ? indexed.offsets.length : indexed.frames.length;
     indexMs += indexed.indexMs;
   }
   const indexedSource = { format: files.length > 1 ? `${format}-sequence` : format, baseFormat: format, chunks, frameCount };
-  const frame = await readIndexedTextFrame(indexedSource, 0);
+  const frame = await readSourceFrame(indexedSource, 0, requestId, { controller, background: false });
   source = indexedSource;
   return { format: source.format, frameCount, indexMs, frame };
 }
 
-async function readIndexedTextFrame(indexedSource, index) {
-  if (!Number.isInteger(index) || index < 0 || index >= indexedSource.frameCount) throw new Error(`Trajectory frame ${index} is outside the available range.`);
-  let chunk = indexedSource.chunks[0];
-  for (let current = 1; current < indexedSource.chunks.length; current += 1) {
-    if (indexedSource.chunks[current].firstFrame > index) break;
-    chunk = indexedSource.chunks[current];
-  }
-  const localIndex = index - chunk.firstFrame;
-  const frame = indexedSource.baseFormat === 'xyz'
-    ? await readXyzFrame(chunk.file, chunk.indexed.offsets, localIndex, chunk.file.name)
-    : await readPdbFrame(chunk.file, chunk.indexed, localIndex, chunk.file.name);
-  frame.frameIndex = index;
-  return frame;
-}
-
-async function loadLammpsDumpSequence(inputFiles, requestId) {
+async function loadLammpsDumpSequence(inputFiles, requestId, controller = loadController) {
   const indexed = await indexLammpsDumpSeries(inputFiles, ({ loaded, total }) => {
     self.postMessage({ id: requestId, event: 'progress', loaded, total, stage: 'series-index' });
-  });
+  }, { signal: controller.signal });
   source = { format: 'lammps-dump-sequence', ...indexed };
-  const frame = await readLammpsSeriesFrame(source, 0);
+  const frame = await readSourceFrame(source, 0, requestId, { controller, background: false });
   return { format: source.format, frameCount: source.frameCount, indexMs: source.indexMs, frame };
 }
 

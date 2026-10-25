@@ -63,17 +63,18 @@ function frameSnapshot() {
 
 function controlsFixture() {
   const elements = Object.fromEntries([...Object.keys(STATISTICS_EXPORT_BUTTONS), 'statistics-export-status'].map(id => [id, new Element()]));
-  let current = frameSnapshot().frame, results = {}, exports = [], clears = 0, download = [];
+  let current = frameSnapshot().frame, results = {}, legend = null, exports = [], clears = 0, download = [];
   let nextOutput;
   const client = { async clearSnapshot() { clears++; }, async export(snapshot, key, kind) {
     exports.push({ snapshot, key, kind });
     if (nextOutput) return nextOutput;
     return { blob: new Blob(['test']), filename: 'file.csv', kind };
   }, dispose() { this.disposed = true; } };
-  const controls = initializeStatisticsExports({ getFrame: () => current, getFileName: () => 'Fe.dump', getResults: () => results,
+  const controls = initializeStatisticsExports({ getFrame: () => current, getFileName: () => 'Fe.dump', getResults: () => results, getLegend: () => legend,
     documentRoot: { getElementById: id => elements[id] }, client, onDownload: (...args) => download.push(args) });
   return { elements, controls, exports, client, download, get clears() { return clears; },
     setFrame(frame) { current = frame; }, frame: () => current, setResults(value) { results = value; },
+    setLegend(value) { legend = value; },
     delayExport() { let resolve; nextOutput = new Promise(done => { resolve = done; }); return resolve; } };
 }
 
@@ -103,6 +104,23 @@ test('export availability follows completed CPU/GPU data, cancellation and all p
   assert.equal(await h.controls.exportTable('summary'), null);
   h.controls.dispose(); assert.equal(h.client.disposed, true);
   assert.equal(h.elements['export-statistics-summary'].listeners.size, 0);
+});
+
+test('statistics never adopt a borrowed appearance legend or its per-atom preview values', async () => {
+  const h = controlsFixture(), realProperty = h.frame().properties[0];
+  const borrowed = { ...realProperty, preview: true, data: Float64Array.of(100, 200) };
+  h.setLegend({ title: 'Previous frame energy', property: borrowed, minimum: 100, maximum: 200, preview: true });
+  await h.controls.exportTable('summary');
+  assert.equal(h.exports[0].snapshot.legend, null);
+  assert.equal(h.exports[0].snapshot.frame.properties[0].data, realProperty.data);
+  assert.deepEqual(Array.from(h.exports[0].snapshot.frame.properties[0].data), [-2, NaN]);
+  h.setLegend({ title: 'Preview property only', property: borrowed, minimum: 100, maximum: 200 });
+  await h.controls.exportTable('summary');
+  assert.equal(h.exports[1].snapshot.legend, null, 'property marker also refuses a borrowed field');
+  h.setLegend({ title: 'Current energy', property: realProperty, minimum: -2, maximum: 0 });
+  await h.controls.exportTable('summary');
+  assert.equal(h.exports[2].snapshot.legend.property, realProperty);
+  h.controls.dispose();
 });
 
 test('frame changes during formatting discard the obsolete download and keep the new controls usable', async () => {

@@ -63,14 +63,28 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   const vectorDataCache = new Map();
   const vectorResolvedComponents = new Map();
   let resolvedAppearance = null, radiusCache = null, vectorSelectorKey = null, vectorSourceKey = null;
+  let appearanceKeyCache = null;
+
+  function getAppearanceKey() {
+    if (appearanceKeyCache?.appearance === appearance && appearanceKeyCache.elements === appearance.elements
+        && appearanceKeyCache.atoms === appearance.atoms) return appearanceKeyCache.key;
+    appearanceKeyCache = { appearance, elements: appearance.elements, atoms: appearance.atoms, key: JSON.stringify(appearance) };
+    return appearanceKeyCache.key;
+  }
 
   function appearanceRadii(frame) {
+    const identity = { frame, types: frame.types, ids: frame.ids, typeLabels: frame.typeLabels,
+      elements: appearance.elements, atoms: appearance.atoms };
+    if (radiusCache && Object.entries(identity).every(([name, value]) => radiusCache[name] === value)) return radiusCache.radii;
     const key = JSON.stringify([frame.typeLabels,
       appearance.elements.filter(entry => entry.radius != null).map(({ label, radius }) => [label, radius]),
       appearance.atoms.filter(entry => entry.radius != null).map(({ id, radius }) => [String(id), radius])]);
-    if (radiusCache?.frame === frame && radiusCache.types === frame.types && radiusCache.ids === frame.ids && radiusCache.key === key) return radiusCache.radii;
+    if (radiusCache?.frame === frame && radiusCache.types === frame.types && radiusCache.ids === frame.ids && radiusCache.key === key) {
+      Object.assign(radiusCache, identity);
+      return radiusCache.radii;
+    }
     const radii = resolveAppearanceRadii(frame, appearance, radiiByType(frame));
-    radiusCache = { frame, types: frame.types, ids: frame.ids, key, radii };
+    radiusCache = { ...identity, key, radii };
     return radii;
   }
 
@@ -713,8 +727,9 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     syncComparisonNow();
   }
   function syncComparisonNow() {
-    const frame = getFrame();
-    if (!frame || !$('compare-view').checked) {
+    const sourceRenderer = renderer.presentedRenderer ?? renderer;
+    const frame = sourceRenderer.frame;
+    if (!getFrame() || !frame || !$('compare-view').checked) {
       renderer.setDisplayPreparationSharing?.(false);
       if (comparisonContainer) comparisonContainer.hidden = true;
       if (comparison?.frame) {
@@ -772,62 +787,63 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     }
     const wasHidden = comparisonContainer.hidden;
     comparisonContainer.hidden = false;
+    comparison.setPresentationBlocked?.(renderer.presentationPending);
     // A hidden cleared canvas can render at 1×1. Publish its live dimensions
     // before synchronous camera reads, fitting, or recipe restoration.
     if (wasHidden || comparison.frame !== frame) comparison.resize();
-    const positions = renderer.rawDisplayPositions ?? renderer.displayPositions;
-    const coordinateMode = renderer.coordinateMode ?? 'wrapped';
-    const preparedDisplay = renderer.exportDisplaySnapshot();
+    const positions = sourceRenderer.rawDisplayPositions ?? sourceRenderer.displayPositions;
+    const coordinateMode = sourceRenderer.coordinateMode ?? 'wrapped';
+    const preparedDisplay = sourceRenderer.exportDisplaySnapshot();
     if (comparison.frame !== frame) {
       const camera = comparison.frame ? cameraSnapshot(comparison) : parkedComparisonCamera;
-      comparison.setFrame(frame, renderer.atomColors, positions, renderer.atomRadii, renderer.repetitions, { coordinateMode, preparedDisplay });
+      comparison.setFrame(frame, sourceRenderer.atomColors, positions, sourceRenderer.atomRadii, sourceRenderer.repetitions, { coordinateMode, preparedDisplay });
       parkedComparisonCamera = null;
       if (camera) restoreCamera(comparison, camera);
       else { comparison.resetCamera(); if ($('compare-preset').value !== 'custom') comparison.setView($('compare-preset').value); }
     } else {
-      if (comparison.atomColors !== renderer.atomColors || comparison.sourceColorRevision !== renderer.colorRevision) comparison.setColors(renderer.atomColors);
+      if (comparison.atomColors !== sourceRenderer.atomColors || comparison.sourceColorRevision !== sourceRenderer.colorRevision) comparison.setColors(sourceRenderer.atomColors);
       if (comparison.rawDisplayPositions !== positions || comparison.coordinateMode !== coordinateMode
-          || comparison.sourceDisplayRevision !== renderer.displayRevision
-          || comparison.sourceBoundsRevision !== renderer.sourceBoundsRevision) {
+          || comparison.sourceDisplayRevision !== sourceRenderer.displayRevision
+          || comparison.sourceBoundsRevision !== sourceRenderer.sourceBoundsRevision) {
         comparison.setDisplayPositions(positions, { coordinateMode, preparedDisplay });
       }
-      if (comparison.atomRadii !== renderer.atomRadii || comparison.sourceRadiusRevision !== renderer.radiusRevision) comparison.setAtomRadii(renderer.atomRadii, { preparedDisplay });
-      if (comparison.repetitions.some((value, axis) => value !== renderer.repetitions[axis])) comparison.setReplications(renderer.repetitions);
+      if (comparison.atomRadii !== sourceRenderer.atomRadii || comparison.sourceRadiusRevision !== sourceRenderer.radiusRevision) comparison.setAtomRadii(sourceRenderer.atomRadii, { preparedDisplay });
+      if (comparison.repetitions.some((value, axis) => value !== sourceRenderer.repetitions[axis])) comparison.setReplications(sourceRenderer.repetitions);
     }
-    comparison.sourceColorRevision = renderer.colorRevision; comparison.sourceRadiusRevision = renderer.radiusRevision;
-    comparison.sourceDisplayRevision = renderer.displayRevision; comparison.sourceBoundsRevision = renderer.sourceBoundsRevision;
-    if (comparison.visibility !== renderer.visibility || comparison.selectionVisibility !== renderer.selectionVisibility) {
-      comparison.setVisibility(renderer.visibility, { selectionVisibility: renderer.selectionVisibility });
+    comparison.sourceColorRevision = sourceRenderer.colorRevision; comparison.sourceRadiusRevision = sourceRenderer.radiusRevision;
+    comparison.sourceDisplayRevision = sourceRenderer.displayRevision; comparison.sourceBoundsRevision = sourceRenderer.sourceBoundsRevision;
+    if (comparison.visibility !== sourceRenderer.visibility || comparison.selectionVisibility !== sourceRenderer.selectionVisibility) {
+      comparison.setVisibility(sourceRenderer.visibility, { selectionVisibility: sourceRenderer.selectionVisibility });
     }
-    comparison.setSelected(renderer.selected);
-    comparison.setSelectedAtoms(Array.from(renderer.selectedAtoms ?? []).filter(index => index >= 0));
-    comparison.setSliceSelectedAtoms(Array.from(renderer.sliceSelectedAtoms ?? []).filter(index => index >= 0));
-    if (renderer.sliceMode === 'legacy') comparison.setSlice(renderer.sliceAxis, renderer.sliceMaximum);
-    else comparison.setSlices(renderer.slices);
-    comparison.setSliceOutlines(renderer.sliceOutlinesVisible);
+    comparison.setSelected(sourceRenderer.selected);
+    comparison.setSelectedAtoms(Array.from(sourceRenderer.selectedAtoms ?? []).filter(index => index >= 0));
+    comparison.setSliceSelectedAtoms(Array.from(sourceRenderer.sliceSelectedAtoms ?? []).filter(index => index >= 0));
+    if (sourceRenderer.sliceMode === 'legacy') comparison.setSlice(sourceRenderer.sliceAxis, sourceRenderer.sliceMaximum);
+    else comparison.setSlices(sourceRenderer.slices);
+    comparison.setSliceOutlines(sourceRenderer.sliceOutlinesVisible);
     comparison.setBackground(rgbHex(renderer.background.map(value => value * 255)));
     comparison.setCellVisible(renderer.cellVisible); comparison.setRadiusScale(renderer.radiusScale);
     comparison.setCellWireframeMode(renderer.cellWireframeMode ?? 'mono');
     // Occlusion is view-independent: the second view reuses the main result.
-    comparison.setAmbientOcclusion(renderer.ambientOcclusionFactors ?? null, { intensity: renderer.ambientOcclusionIntensity ?? 1 });
-    comparison.setBonds(renderer.atomBonds ?? null,
-      { visible: $('show-bonds').checked, radius: number('bonds-radius'), preparedBonds: renderer.preparedBondSnapshot });
-    comparison.setVectorFields(renderer.atomVectorFields ?? []);
-    comparison.setDislocationNetwork(renderer.dislocationNetwork, renderer.dislocationOptions);
-    comparison.setSiteMarkers(renderer.siteMarkers, renderer.siteMarkerOptions);
-    comparison.copySurfaceMeshes?.(renderer);
-    comparison.setTrajectoryLines(renderer.trajectoryLines ?? null, renderer.trajectoryLineOptions ?? {});
-    comparison.setVoronoiCellGeometry(renderer.voronoiCellGeometry, renderer.voronoiCellOptions);
-    comparison.setVoronoiAllCellGeometry(renderer.voronoiAllCellGeometry, renderer.voronoiCellOptions);
-    syncScalarColorPreview();
+    comparison.setAmbientOcclusion(sourceRenderer.ambientOcclusionFactors ?? null, { intensity: sourceRenderer.ambientOcclusionIntensity ?? 1 });
+    comparison.setBonds(sourceRenderer.atomBonds ?? null,
+      { visible: $('show-bonds').checked, radius: number('bonds-radius'), preparedBonds: sourceRenderer.preparedBondSnapshot });
+    comparison.setVectorFields(sourceRenderer.atomVectorFields ?? []);
+    comparison.setDislocationNetwork(sourceRenderer.dislocationNetwork, sourceRenderer.dislocationOptions);
+    comparison.setSiteMarkers(sourceRenderer.siteMarkers, sourceRenderer.siteMarkerOptions);
+    comparison.copySurfaceMeshes?.(sourceRenderer);
+    comparison.setTrajectoryLines(sourceRenderer.trajectoryLines ?? null, sourceRenderer.trajectoryLineOptions ?? {});
+    comparison.setVoronoiCellGeometry(sourceRenderer.voronoiCellGeometry, sourceRenderer.voronoiCellOptions);
+    comparison.setVoronoiAllCellGeometry(sourceRenderer.voronoiAllCellGeometry, sourceRenderer.voronoiCellOptions);
+    syncScalarColorPreview(sourceRenderer);
     comparisonRestore.apply(comparison, comparisonWindow);
     syncComparisonToolbar();
   }
   // A legend drag must not repeat full-frame colors, radii or visibility
   // uploads in the second view. Both views share the prepared scalar input.
-  function syncScalarColorPreview() {
+  function syncScalarColorPreview(sourceRenderer = renderer.presentedRenderer ?? renderer) {
     if (!comparison?.frame || !$('compare-view').checked) return;
-    const preview = renderer.scalarColorPreview;
+    const preview = sourceRenderer.scalarColorPreview;
     if (preview) comparison.setScalarColorPreview(preview.input.data, { ...preview, input: preview.input });
     else comparison.clearScalarColorPreview();
   }
@@ -1173,10 +1189,14 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
     try { await prepareExport(); await renderer.exportJpg(`${getFileStem()}-frame-${getFrameIndex() + 1}.jpg`, getExportOptions()); }
     catch (error) { notify(error.message); }
   });
-  $('export-atom-indices').addEventListener('click', () => {
+  $('export-atom-indices').addEventListener('click', async () => {
     const frame = getFrame(); if (!frame) return;
-    const ids = Array.from(frame.ids).filter((_, index) => renderer.isAnyReplicaVisible(index));
-    downloadBlob(new Blob([ids.join('\n') + '\n'], { type: 'text/plain' }), `${getFileStem()}-visible-atom-ids.txt`);
+    try {
+      await prepareExport();
+      if (frame !== getFrame()) throw new Error('The frame changed while preparing visible atom IDs.');
+      const ids = Array.from(frame.ids).filter((_, index) => renderer.isAnyReplicaVisible(index));
+      downloadBlob(new Blob([ids.join('\n') + '\n'], { type: 'text/plain' }), `${getFileStem()}-visible-atom-ids.txt`);
+    } catch (error) { notify(error.message); }
   });
   $('export-frame-series').addEventListener('click', () => void exportSeries().catch(error => notify(error.message)));
   $('cancel-frame-series').addEventListener('click', () => cancelBatch());
@@ -1185,6 +1205,20 @@ export function initializeAtomEyeTools({ renderer, pool, tools, getFrame, getFra
   loadVectorEditor(); syncVectorSourceUi();
 
   return { onFrame, prepareFrame, reset, abortJobs, cancel, run, selected, customizePalette, filterVisibility, applyRadii, getRadii: () => getFrame() ? appearanceRadii(getFrame()) : null,
+    getAppearanceKey,
+    getVisibleAnalysisKinds: () => {
+      saveVectorEditor();
+      const kinds = new Set();
+      if (jobs.bonds.enabled && $('show-bonds').checked) kinds.add('bonds');
+      for (const field of vectorFields) {
+        if (!field.enabled) continue;
+        if (field.mode === 'generic') for (const name of field.components) {
+          const kind = name && pendingVectorComponentKind(name); if (kind) kinds.add(kind);
+        }
+        else for (const kind of pendingVectorSourceKinds(field.mode)) kinds.add(kind);
+      }
+      return kinds;
+    },
     flushDisplayRefresh: ({ radii = false, vectors = false, statistics = false, comparison = false } = {}) => {
       if (radii) applyRadiiNow();
       if (vectors) updateVectorsNow();

@@ -51,7 +51,7 @@ function nativeSurfaceError(module, canceled) {
 /** Constructs the surface with the native kernel. Browser callers should use
  * DxaClient.surface() to keep the synchronous work off the UI thread. */
 export async function calculateSurfaceMesh(frame, parameters = {}, { mask, onProgress = () => {}, onControl = () => {},
-  resetCancellation = true, memoryBudgetBytes, workerCount: requestedWorkers, signal, startupTimeoutMs } = {}) {
+  resetCancellation = true, memoryBudgetBytes, workerCount: requestedWorkers, signal, startupTimeoutMs, onCheckpoint } = {}) {
   if (signal?.aborted) throw new DOMException('The surface calculation was cancelled.', 'AbortError');
   const settings = validateSurfaceMeshParameters(parameters), count = validateDxaFrame(frame);
   const selection = validateSurfaceMask(mask, count);
@@ -59,7 +59,7 @@ export async function calculateSurfaceMesh(frame, parameters = {}, { mask, onPro
   let workerCount = 1;
   const report = update => onProgress({ backend: 'cpu', workerCount, totalStages: SURFACE_MESH_STAGES, totalAtoms: count, ...update });
   return runDxaKernelTask({ atomCount: count, workerCount: requestedWorkers, memoryBudgetBytes, onControl, resetCancellation, signal,
-    startupTimeoutMs, onProgress: update => report({ ...update, completedStages: 0, totalStages: SURFACE_MESH_STAGES }) },
+    startupTimeoutMs, onCheckpoint, onProgress: update => report({ ...update, completedStages: 0, totalStages: SURFACE_MESH_STAGES }) },
   async (module, kernel) => {
     workerCount = kernel.workerCount;
     const hostTimings = { prepareMs: performance.now() - startedAt, inputMs: 0, collectMs: 0 };

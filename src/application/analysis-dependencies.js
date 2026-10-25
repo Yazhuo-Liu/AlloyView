@@ -74,7 +74,7 @@ export function createAnalysisDependencies({ getFrame, getProducer = () => null,
       return unavailable(name, `${name} creates a cyclic dependency on the ${consumerKind} analysis that requires it.`);
     }
     if (found && consumerKind && producer?.kind === consumerKind) producer = null;
-    if (consumerKind && producer?.failed && found?.analysisKind) return unavailable(name, producer.message);
+    if (producer?.failed && found?.analysisKind) return unavailable(name, producer.message);
     if (producer?.state === 'pending') return { ...producer, name: producer.name ?? name };
     const status = getExpressionStatus(found?.name ?? name);
     if (found && (!waitForProducers || !status || ['error', 'conflict'].includes(status.state))) return ready(found.name);

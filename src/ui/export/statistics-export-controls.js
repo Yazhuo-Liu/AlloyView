@@ -33,7 +33,10 @@ export function initializeStatisticsExports({ getFrame, getFileName = () => 'str
     const allResults = { ...original.atomeyeResults, ...getResults() };
     const results = Object.fromEntries(['rdf', 'bonds', 'bondStatistics', 'voronoi', 'localShear', 'displacement', 'referenceStrain', 'clusters', 'binning', 'wignerSeitz', 'grains', 'surfaceMesh']
       .filter(name => allResults[name]).map(name => [name, allResults[name]?.result ?? allResults[name]]));
-    const network = getDxaNetwork(), groups = getSelectionGroups(), legend = getLegend();
+    const network = getDxaNetwork(), groups = getSelectionGroups(), offeredLegend = getLegend();
+    // Preliminary colors may be borrowed from another frame. They are useful
+    // in the viewport but must not become current-frame display statistics.
+    const legend = offeredLegend?.preview || offeredLegend?.property?.preview ? null : offeredLegend;
     const currentSignature = [original, getFileName(), getFrameIndex(), original.ids, original.types, original.positions, original.timestep,
       original.cell, original.typeLabels, network, groups?.groups ?? groups, ...Object.keys(results).flatMap(name => [name, results[name]?.result ?? results[name]]),
       legend?.property, legend?.title, legend?.minimum, legend?.maximum, legend?.unit,

@@ -133,6 +133,20 @@ test('visible masks wait for enabled producers despite existing imported or earl
   assert.deepEqual(dependency.producers, ['Central symmetry'], 'present computed values retain their transitive mask dependencies');
 });
 
+test('a failed requested producer cannot certify an earlier computed mask as the current formal appearance', () => {
+  const h = harness();
+  const property = { name: 'structureType', analysisKind: 'cna', data: Uint8Array.of(1, 3) };
+  h.frame.properties.push(property);
+  h.filters.crystalSource = 'structureType';
+  h.filters.hiddenCategories = () => new Set([1]);
+  h.producers.set('structureType', { state: 'unavailable', failed: true, message: 'CNA failed for the requested cutoff.' });
+  assert.equal(h.deps.getPropertyDependency('property:structureType').state, 'ready', 'explicit statistics can still inspect the completed earlier column');
+  assert.equal(h.deps.getPropertyDependency('property:structureType', h.frame, { waitForProducers: true }).state, 'unavailable');
+  assert.match(h.deps.getVisibilityDependencies()[0].message, /requested cutoff/);
+  delete property.analysisKind;
+  assert.deepEqual(h.deps.getVisibilityDependencies(), [], 'an actual imported column remains usable independently of the failed optional producer');
+});
+
 test('quoted references follow the expression kernel exact-first case fallback and never alias builtins', () => {
   const h = harness();
   h.frame.properties.push({ name: 'Foo', data: Float64Array.of(3, 4) });

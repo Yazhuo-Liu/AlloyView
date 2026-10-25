@@ -278,6 +278,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .trajectory-controls > button:disabled { cursor: not-allowed; color: var(--disabled-text); background: var(--disabled-bg); }
 .trajectory-controls > .frame-play { width: 34px; color: var(--accent-text); border-color: rgba(79,226,208,.34); }
 .trajectory-controls > .frame-play.active { color: var(--primary-text); background: var(--cyan); border-color: var(--cyan); }
+.trajectory-playback-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding-top: 3px; color: var(--text-soft); font-size: 10px; }
+.trajectory-playback-settings label { margin-left: 5px; }
+.trajectory-playback-settings label:first-child { margin-left: 0; }
+.trajectory-playback-settings input[type="number"] { width: 57px; min-width: 0; height: 26px; padding: 3px 5px; font: 11px var(--mono); }
+.trajectory-playback-settings select { width: 135px; max-width: 100%; min-width: 0; height: 26px; padding: 3px 5px; font-size: 11px; }
 .frame-track { min-width: 0; padding: 1px 8px 0; }
 .frame-track .range { margin: 6px 0 0; }
 .frame-ticks { position: relative; height: 19px; margin: 1px 7px 0; color: var(--muted); font-size: 8px; }
@@ -287,7 +292,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .frame-tick:first-child::before { left: 0; }
 .frame-tick:last-child { transform: translateX(-100%); }
 .frame-tick:last-child::before { left: 100%; }
-.viewport-panel.trajectory-visible .legend, .viewport-panel.trajectory-visible .axis-triad { bottom: 112px; }
+.viewport-panel.trajectory-visible .legend, .viewport-panel.trajectory-visible .axis-triad { bottom: 148px; }
 .viewport-panel.trajectory-visible .interaction-hint { bottom: 108px; }
 
 .legend { position: absolute; z-index: 3; left: 18px; bottom: 18px; min-width: 190px; max-width: 300px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 12px; background: var(--overlay); backdrop-filter: blur(12px); box-shadow: var(--shadow); }
@@ -865,8 +870,8 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .tool-section .section-heading h3 { display: none; }
   .trajectory-bar { width: calc(100% - 24px); }
   .axis-triad { right: 12px; bottom: 12px; width: 80px; height: 80px; }
-  .viewport-panel.trajectory-visible .legend-overlay { bottom: 108px; max-height: calc(100% - 172px); }
-  .viewport-panel.trajectory-visible .axis-triad { bottom: 108px; }
+  .viewport-panel.trajectory-visible .legend-overlay { bottom: 156px; max-height: calc(100% - 220px); }
+  .viewport-panel.trajectory-visible .axis-triad { bottom: 166px; }
   .empty-state { padding: 18px 20px; }
   .empty-logo { width: 80px; height: 80px; margin-bottom: 10px; }
   .empty-state h1 { margin: 9px 0 12px; font-size: 38px; }
@@ -893,7 +898,7 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .frame-jump input { width: 62px; }
   .trajectory-header > div:first-child { gap: 6px; }
   .trajectory-header > div:first-child > span:last-child { display: none; }
-  .viewport-panel.trajectory-visible .axis-triad { bottom: 108px; }
+  .viewport-panel.trajectory-visible .axis-triad { bottom: 166px; }
 }
 
 @media (max-width: 360px) {
@@ -1006,7 +1011,7 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .element-style-row input[type="checkbox"] { width: 32px; height: 32px; }
   .trajectory-controls { grid-template-columns: repeat(3, 32px) minmax(36px, 1fr) repeat(2, 32px); gap: 3px; }
   .trajectory-controls > button, .trajectory-controls > .frame-play { width: 32px; height: 36px; }
-  .frame-jump input, .frame-jump button { height: 32px; }
+  .frame-jump input, .frame-jump button, .trajectory-playback-settings input[type="number"], .trajectory-playback-settings select { height: 32px; }
   .view-toolbar:has(#show-keyboard-shortcuts) { gap: 0; }
   .view-toolbar:has(#show-keyboard-shortcuts) > button { width: 32px; }
   .atom-details-toggle { margin-left: 142px; }

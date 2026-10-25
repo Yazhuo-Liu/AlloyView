@@ -1,6 +1,7 @@
+import { PARSER_CHECKPOINT_MASK, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
 import { createCell, validateFrame } from '../data/model.js';
 import { attachFrameSummary } from '../data/frame-summary.js';
-import { coordinatesForCell, inferNonperiodicCell } from './xyz.js';
+import { coordinatesForCellSteps, inferNonperiodicCellSteps } from './xyz.js';
 import { lineText, scanLineBytes } from './text-lines.js';
 
 export async function indexPdb(blob, onProgress = () => {}, options = {}) {
@@ -92,27 +93,37 @@ function recordName(bytes, from, to) {
   return '';
 }
 
-export async function readPdbFrame(blob, indexed, index, sourceName = 'trajectory.pdb') {
+export async function readPdbFrame(blob, indexed, index, sourceName = 'trajectory.pdb', options = {}) {
   if (!Number.isInteger(index) || index < 0 || index >= indexed.frames.length) {
     throw new Error(`PDB trajectory frame ${index} is outside the available range.`);
   }
   const descriptor = indexed.frames[index];
   const text = await blob.slice(descriptor.start, descriptor.end).text();
   const header = descriptor.header ?? indexed.header;
-  const frame = parsePdbFrame(header ? `${header}\n${text}` : text, sourceName);
+  const frame = await parsePdbFrameAsync(header ? `${header}\n${text}` : text, sourceName, options);
   frame.frameIndex = index;
   return frame;
 }
 
-export function parsePdbFrame(text, sourceName = 'structure.pdb', { projection = 'full' } = {}) {
+export function parsePdbFrame(text, sourceName = 'structure.pdb', options = {}) {
+  return runParserSteps(parsePdbSteps(text, sourceName, options));
+}
+
+export function parsePdbFrameAsync(text, sourceName = 'structure.pdb', options = {}) {
+  return runParserStepsAsync(parsePdbSteps(text, sourceName, options), options);
+}
+
+function* parsePdbSteps(text, sourceName, { projection = 'full' }) {
   const startedAt = performance.now();
-  const lines = String(text).replace(/^\uFEFF/, '').split(/\r?\n/);
+  const lines = yield* splitParserLines(text);
   const atoms = [];
   const titles = [];
   let cell = null;
   let timestep = null;
   let models = 0;
+  let scannedLines = 0;
   for (const line of lines) {
+    if ((scannedLines++ & PARSER_CHECKPOINT_MASK) === 0) yield;
     const record = line.slice(0, 6).trim();
     if (record === 'CRYST1') cell = parseCrystalCell(line);
     else if (record === 'TITLE') titles.push(line.slice(10).trim());
@@ -147,6 +158,7 @@ export function parsePdbFrame(text, sourceName = 'structure.pdb', { projection =
   const seenIds = new Set();
   const properties = projection === 'coordinates' ? [] : ['occupancy', 'bfactor'].map((name) => ({ name, unit: name === 'bfactor' ? 'Å²' : '', data: new Float32Array(count) }));
   for (let atom = 0; atom < count; atom += 1) {
+    if ((atom & PARSER_CHECKPOINT_MASK) === 0) yield;
     const value = atoms[atom];
     if (seenIds.has(value.id)) throw pdbError(`Atom serial ${value.id} occurs more than once in the primary conformer.`);
     seenIds.add(value.id);
@@ -163,8 +175,8 @@ export function parsePdbFrame(text, sourceName = 'structure.pdb', { projection =
     }
   }
   const summaryOutput = { types, typeCount: typeLabels.length };
-  cell ??= inferNonperiodicCell(rawPositions, summaryOutput);
-  const coordinates = coordinatesForCell(rawPositions, cell, 'PDB', summaryOutput);
+  cell ??= yield* inferNonperiodicCellSteps(rawPositions, summaryOutput);
+  const coordinates = yield* coordinatesForCellSteps(rawPositions, cell, 'PDB', summaryOutput);
   return attachFrameSummary(validateFrame({ ids, idSource: 'explicit', types, typeLabels,
     ...coordinates, cell, properties, timestep, title: sourceName,
     pdbTitle: titles.join(' '), sourceFormat: 'pdb', parseMs: performance.now() - startedAt }), summaryOutput.summary);

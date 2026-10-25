@@ -21,7 +21,7 @@ for (const row of report.scenarios) {
 }
 assert.equal(report.context.pixelDifferences, 0); assert.equal(report.context.preparationRetained, true);
 for (const [key, value] of Object.entries(report.sharing)) assert.equal(value, true, key);
-for (const key of ['adopted', 'sameArrayCoordinatesFollow', 'sameArrayRadiusFollows', 'independentCamera', 'hiddenReleased', 'reopenRestoresCamera', 'sourceClosed']) {
+for (const key of ['adopted', 'sameArrayCoordinatesFollow', 'sameArrayRadiusFollows', 'independentCamera', 'hiddenReleased', 'reopenRestoresCamera', 'pendingSceneMatchesMain', 'pendingCameraInteractive', 'committedSceneMatchesMain', 'sourceClosed']) {
   assert.equal(report.ui[key], true, key);
 }
 assert.equal(report.ui.reopenDimensionsReadyAtFramePublication, true);
@@ -81,6 +81,25 @@ async function run(production) {
     && dimensions[1] === Math.round(dimensions[3] * dpr) && dimensions[0] > 1 && dimensions[1] > 1;
   const reopened = second.getCameraState();
   ui.reopenRestoresCamera = cameraNear(reopened, camera);
+
+  // The comparison follows what the primary actually presents, not its
+  // unpublished scientific target. Old-frame picking stays blocked while
+  // each viewport can still orbit with its independent live camera.
+  const initialFrame = main.frame, initialColors = main.atomColors, initialPositions = main.rawDisplayPositions;
+  const initialRadii = main.atomRadii, initialMode = main.coordinateMode, initialRepetitions = main.repetitions;
+  const targetFrame = { ...initialFrame, frameIndex: 777, positions: Float64Array.from(initialFrame.positions), fractional: Float64Array.from(initialFrame.fractional) };
+  targetFrame.positions[0] += 1; targetFrame.fractional[0] += .1;
+  const sceneToken = main.beginSceneUpdate();
+  main.setFrame(targetFrame, initialColors, targetFrame.positions, initialRadii, initialRepetitions, { coordinateMode: initialMode });
+  sync(); await wait(() => second.frame === initialFrame && second.presentationPending, 'Comparison did not retain the presented scene.');
+  ui.pendingSceneMatchesMain = second.frame === main.presentedFrame && second.frame !== main.frame && second.pick(0, 0) === -1;
+  const beforePendingOrbit = second.yaw; second.orbitCamera(.1, 0); second.render();
+  ui.pendingCameraInteractive = Math.abs(second.yaw - beforePendingOrbit - .1) < 1e-10;
+  main.commitSceneUpdate(sceneToken); sync();
+  await wait(() => second.frame === targetFrame && !second.presentationPending, 'Comparison did not adopt the committed target.');
+  ui.committedSceneMatchesMain = second.frame === main.frame && second.displayPositions === main.displayPositions;
+  main.setFrame(initialFrame, initialColors, initialPositions, initialRadii, initialRepetitions, { coordinateMode: initialMode });
+  sync(); await wait(() => second.frame === initialFrame, 'Restore initial comparison frame.');
 
   // Independent renderer computes the previous duplicate preparation path.
   // Only the candidate adopts the master's snapshot; GL contexts stay separate.

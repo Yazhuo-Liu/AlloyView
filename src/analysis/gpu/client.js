@@ -155,11 +155,11 @@ export class GpuAnalysisClient {
     return barrier;
   }
 
-  analyze(frame, parameters, { signal, onProgress = () => {}, frameIndex } = {}) {
+  analyze(frame, parameters, { signal, onProgress = () => {}, frameIndex, priority = 1 } = {}) {
     if (!this.supports(parameters.kind)) return Promise.reject(new Error(`The ${parameters.kind} analysis uses CPU workers.`));
     try { if (frameIndex !== undefined) this.associateFrame(frame, frameIndex); } catch (error) { return Promise.reject(error); }
     // A user calculation takes the next slot, even when prefetch is uploading.
-    this.preemptPreparation();
+    if (priority <= 1) this.preemptPreparation();
     if (parameters.kind === 'voronoi' && parameters.selectedTypes != null) {
       try {
         const selection = prepareVoronoiSelection(frame, parameters.selectedTypes), compactFrame = selection.frame,
@@ -169,11 +169,24 @@ export class GpuAnalysisClient {
         if (index !== undefined) this.frameIndexes.set(compactFrame, index);
         const radii = compactVoronoiRadii(parameters.radii, selection);
         return this.enqueue('analyze', { frame: compactFrame, sourceFrame: frame,
-          parameters: { ...parameters, ...range, selectedTypes: null, ...(radii ? { radii } : {}) }, signal, onProgress }, 1)
+          parameters: { ...parameters, ...range, selectedTypes: null, ...(radii ? { radii } : {}) }, signal, onProgress }, priority)
           .then(result => expandVoronoiResult(result, selection));
       } catch (error) { return Promise.reject(error); }
     }
-    return this.enqueue('analyze', { frame, parameters, signal, onProgress }, 1);
+    return this.enqueue('analyze', { frame, parameters, signal, onProgress }, priority);
+  }
+
+  promote(signal) {
+    let changed = false;
+    for (const task of this.queue) if (task.signal === signal && task.type === 'analyze' && task.priority > 1) {
+      task.priority = 1; changed = true;
+    }
+    if (changed) {
+      this.preemptPreparation();
+      this.queue.sort((first, second) => first.priority - second.priority);
+      this.pump();
+    }
+    return changed;
   }
 
   warmup({ signal, analysisKinds, onProgress = () => {} } = {}) {

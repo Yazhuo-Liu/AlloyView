@@ -65,9 +65,12 @@ const report = await withWebGpuBrowser(async ({ call, evaluate }) => {
     };
     const analyze = AnalysisPool.prototype.analyze;
     AnalysisPool.prototype.analyze = async function(frame, parameters, options) {
-      p.calls.push({kind:parameters.kind, cutoff:parameters.cutoff, phase:p.phase});
+      const call={kind:parameters.kind, cutoff:parameters.cutoff, phase:p.phase, startedAt:performance.now()};
+      p.calls.push(call);
+      options?.signal?.addEventListener('abort',()=>{call.abortedAt=performance.now();},{once:true});
       if (parameters.kind === 'cna' && p.hold && !p.held) { p.held=true; await new Promise(resolve=>p.release=resolve); }
-      return analyze.call(this, frame, parameters, options);
+      try { return await analyze.call(this, frame, parameters, options); }
+      finally { call.finishedAt=performance.now(); }
     };
     const setFrame = WebGLRenderer.prototype.setFrame;
     WebGLRenderer.prototype.setFrame = function(...args) { if (this.canvas.id==='viewport') p.renderer=this; return setFrame.apply(this,args); };
@@ -101,7 +104,10 @@ const report = await withWebGpuBrowser(async ({ call, evaluate }) => {
   await delay(50);
   await evaluate(`recipeChecks.import({display:{colorMode:'property:structureType',radiusPercent:63},analyses:{cna:{enabled:true,mode:'fixed',cutoff:2.8}}})`);
   await delay(250);
-  assert.equal(await evaluate('recipeChecks.calls.filter(call=>call.phase==="serial").length'), 1, 'later recipes must not mutate tools while the first is running');
+  const pendingSerial = await evaluate(`({calls:recipeChecks.calls.filter(call=>call.phase==='serial'),
+    color:document.getElementById('color-mode').value,radius:document.getElementById('radius-percent').value,
+    cutoff:document.getElementById('cna-cutoff').value,status:document.getElementById('configuration-status').textContent})`);
+  assert.equal(pendingSerial.calls.length, 1, `later recipes must not mutate tools while the first is running: ${JSON.stringify(pendingSerial)}`);
   await evaluate('recipeChecks.hold=false;recipeChecks.release()');
   await waitFor(`document.getElementById('configuration-status').textContent.startsWith('Configuration restored.')
     && document.getElementById('cna-cutoff').value === '2.8' && document.getElementById('cna-state').textContent === 'Calculated'`, 'Latest recipe completion');

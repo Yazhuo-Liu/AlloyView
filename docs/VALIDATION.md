@@ -1,5 +1,43 @@
 # Validation record
 
+## Continuous frame presentation and navigation (2026-10-25)
+
+Synchronized baseline: `2b80367`. Independent display snapshots preserve
+ID-mapped colors, filtering, radii and legends during manual frame changes.
+Unreliable identity and world-space overlays retain the complete prior scene
+until atomic publication. Camera gestures survive result updates; unchanged
+colors and visibility skip uploads. Both viewports follow the presented scene.
+
+Single-frame known Unwrap data is prepared before first display. Complete
+playback waits for the required formal scene and an actual RAF draw while
+subtracting elapsed preparation time; preview playback follows a clock and
+coalesces obsolete requests. Scientific/visual completion are separate, and
+export, formal visibility and serialized recipe barriers exclude borrowed or
+superseded results.
+
+The next visible supported analysis chain is predicted on idle resources and
+can be promoted without duplicate work. Actual-byte frame/result budgets,
+bounded recent DXA graphs, six cooperative numeric parsers, native-stage
+cancellation checkpoints and delayed navigation loading indicators preserve
+the existing CPU/GPU/Worker prewarm.
+
+Final Node suite: **2,532 passed**, zero failed, skipped or cancelled. Production
+browser checks covered ordinary/isolated presentation, failure recovery,
+movies, configuration, source loading, trajectory tools, replication, warmup,
+GPU prefetch, stable legend inputs, both views, context recovery and mobile
+layout. Publication build `0692c0e9774543cf` passed the final interactive,
+dependency-failure, recipe-serialization and bundled-runtime checks.
+
+The [complete implementation report](https://github.com/Yazhuo-Liu/AlloyView/blob/main/docs/INTERACTIVE_SMOOTHNESS_IMPLEMENTATION.md)
+and [raw performance comparison](benchmarks/interactive-smoothness-performance-2026-10-25.json)
+record all results, including regressions. In the serial SwiftShader runs,
+unrelated RGB/mask uploads fell from 12/12 to 0/0 and a 500k-atom cancellation
+probe's Worker acknowledgment fell from 133.3 to 14.8 ms, retaining its warmed
+Worker and CPU permit until ACK. Random-seek and some tail latencies regressed;
+an added phase profile places most wait before RAF, without proving a universal
+speedup or physical GPU performance. Extra bounded presentation/result storage
+also increases memory; the report retains heap snapshots and measurement limits.
+
 ## Explicit Unwrap and direct frame navigation (2026-10-24)
 
 Baseline: `e38ad3d`, synchronized from `origin/main` before implementation.

@@ -5,6 +5,8 @@ import { downloadBlob } from '../../io/export-archive.js';
 import { createMeshExport } from '../../io/mesh-export.js';
 import { buildSurfaceDisplayMesh } from '../../render/surface-mesh-geometry.js';
 import { SURFACE_MESH_DEFAULTS, surfaceMeshDisplayState } from '../../render/surface-mesh-layer.js';
+import { FrameCache } from '../../data/frame-cache.js';
+import { estimateFrameBytes } from '../../data/cache-policy.js';
 
 export const DXA_STRUCTURE_PROPERTY = 'dxaStructureType';
 export const DXA_STRUCTURE_LABEL = 'Crystal structure (DXA)';
@@ -40,10 +42,19 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   getColorMode = () => 'type', getColorChoiceVersion = () => 0, onResultsChange = () => {},
   onMemoryChange = () => {}, notify = () => {}, client = new DxaClient(),
   getFileStem = () => 'structure', getFrameIndex = () => 0, onDownload = downloadBlob,
-  afterDisplayRefresh = callback => callback() }) {
+  afterDisplayRefresh = callback => callback(), resultCacheBytes = 64 * 1024 ** 2, resultCacheLimit = 4,
+  automaticDelayMs = 120 }) {
   let enabled = false, controlsEnabled = false, controller = null, request = 0;
   let network = null, failure = false, radius = 0.25;
-  let visibleFamilies = new Set(), familyColors = new Map(), cachedResult = null;
+  let visibleFamilies = new Set(), familyColors = new Map();
+  // Retain a few recently visited graphs under a separate byte budget. Frame
+  // identity prevents reusing a result after parsing/processing replaces it.
+  // Charge the retained frame as well: this cache must not keep unaccounted
+  // geometry alive after the ordinary trajectory LRU evicts it.
+  const resultCache = new FrameCache(resultCacheLimit, { byteBudget: resultCacheBytes,
+    estimate: entry => estimateFrameBytes({ ids: entry.frame.ids, processingSourceBytes: entry.frame.processingSourceBytes,
+      frame: entry.frame, result: entry.result }) + entry.metadataBytes });
+  let cacheSourceVersion;
   let atomStructureFrame = null, colorDefaultPending = true;
   let defectMesh = { ...DXA_DEFECT_MESH_DEFAULTS };
   // Display meshes of results, so that redrawing never rebuilds geometry.
@@ -200,7 +211,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     abortJobs(); enabled = false; failure = false;
     // The controller owns this DXA request. The coordinator also serves
     // surfaces and warm-up work, so releasing it would cancel their requests.
-    cachedResult = null;
+    resultCache.clear(); cacheSourceVersion = undefined;
     colorDefaultPending = true;
     tools.setToolEnabled('dxa', false);
     clearNetwork({ clearSettings }); state('Not calculated');
@@ -217,6 +228,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
       atomStructureFrame = frame;
       colorDefaultPending = false;
     }
+    resultCache.reassess(frame);
     $('dxa-results').hidden = false;
     state('Updating display…');
     const count = result.segments?.length ?? 0;
@@ -243,7 +255,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     afterDisplayRefresh(() => { if (current() && network === result) state('Calculated', true); });
   }
 
-  async function run({ automatic = false, isCurrent = () => true } = {}) {
+  async function run({ automatic = false, navigation = false, isCurrent = () => true } = {}) {
     const frame = getFrame();
     if (!frame || !isCurrent()) return false;
     let settings;
@@ -267,18 +279,24 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     // structure labels are the same with and without it. A cached result is
     // reused unless a mesh is wanted that it does not contain.
     const meshRequest = readDefectMesh().enabled ? { smoothingLevel: defectMesh.smoothingLevel } : null;
-    const key = JSON.stringify(settings), cached = cachedResult;
+    const key = JSON.stringify(settings);
+    if (cacheSourceVersion !== sourceVersion) { resultCache.clear(); cacheSourceVersion = sourceVersion; }
+    resultCache.pin(frame);
+    const cached = resultCache.get(frame);
     if (cached?.frame === frame && cached.key === key
       && (!meshRequest || cached.result.defectMesh?.smoothingLevel === meshRequest.smoothingLevel)) {
       showResult(cached.result, frame, key, shouldSelectStructures(), current); return true;
     }
-    // Global line graphs can be large. Keep only the latest frame/result,
-    // rather than adding unaccounted graph arrays to the trajectory cache.
-    cachedResult = null;
     const job = new AbortController(); controller = job;
-    state('Calculating…');
-    $('dxa-status').textContent = `Preparing CPU DXA for ${integer(frame.ids.length)} atoms…`;
     try {
+      if (automatic && navigation && automaticDelayMs > 0) {
+        state('Queued');
+        $('dxa-status').textContent = 'Waiting for navigation to settle…';
+        await navigationDelay(automaticDelayMs, job.signal);
+        if (!current() || job.signal.aborted) return false;
+      }
+      state('Calculating…');
+      $('dxa-status').textContent = `Preparing CPU DXA for ${integer(frame.ids.length)} atoms…`;
       const result = await client.analyze(frame, settings, {
         signal: job.signal, ...(meshRequest ? { defectMesh: meshRequest } : {}),
         onProgress: progress => {
@@ -294,7 +312,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
         },
       });
       if (!current() || job.signal.aborted) return false;
-      cachedResult = { frame, key, result };
+      resultCache.set(frame, { frame, key, result, metadataBytes: resultMetadataBytes(result) });
       controller = null; showResult(result, frame, key, shouldSelectStructures(), current); return true;
     } catch (error) {
       if (!current() || job.signal.aborted || error.name === 'AbortError') return false;
@@ -312,7 +330,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     abortJobs(); clearNetwork();
     if (!enabled) { state('Not calculated'); return; }
     state('Queued');
-    await run({ automatic: true });
+    await run({ automatic: true, navigation: true });
   }
 
   function serialize() {
@@ -400,8 +418,47 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   });
   reset();
   return Object.freeze({ run, onFrame, cancel, abortJobs, reset, serialize, restore, exportDefectMesh,
+    isEnabled: () => enabled,
+    getPresentationKey: () => JSON.stringify([enabled, radius, [...visibleFamilies], [...familyColors], readDefectMesh(),
+      Object.entries(PARAMETER_FIELDS).map(([key, id]) => [key,
+        key === 'onlyPerfectDislocations' ? $(id).checked : $(id).value])]),
+    cacheStatus: () => ({ size: resultCache.size, bytes: resultCache.bytes,
+      byteBudget: resultCache.byteBudget, limit: resultCache.limit }),
+    reassessCache: frame => resultCache.reassess(frame),
     pendingColorProperties: () => enabled && !failure ? [{ name: DXA_STRUCTURE_PROPERTY, label: DXA_STRUCTURE_LABEL }] : [],
     setEnabled(value) { controlsEnabled = Boolean(value); updateControls(); },
     failed: () => enabled && failure,
   });
+}
+
+function navigationDelay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    let timer;
+    const abort = () => { clearTimeout(timer); reject(new DOMException('DXA navigation was superseded.', 'AbortError')); };
+    if (signal.aborted) { abort(); return; }
+    signal.addEventListener('abort', abort, { once: true });
+    timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, milliseconds);
+  });
+}
+
+/** Numeric arrays are charged by backing buffer above. Account separately for
+ * graph objects, plain arrays and strings; these conservative slot estimates
+ * bound graph retention without enumerating the per-atom typed elements. */
+function resultMetadataBytes(result) {
+  let bytes = 0;
+  const seen = new Set(), pending = [result];
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === 'string') { bytes += value.length * 2; continue; }
+    if (!value || typeof value !== 'object') { bytes += 8; continue; }
+    if (seen.has(value)) continue;
+    seen.add(value);
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer
+      || typeof SharedArrayBuffer === 'function' && value instanceof SharedArrayBuffer) { bytes += 32; continue; }
+    bytes += 64;
+    if (value instanceof Map) for (const [key, entry] of value) { bytes += 32; pending.push(key, entry); }
+    else if (value instanceof Set || Array.isArray(value)) for (const entry of value) { bytes += 8; pending.push(entry); }
+    else for (const [key, entry] of Object.entries(value)) { bytes += 16 + key.length * 2; pending.push(entry); }
+  }
+  return bytes;
 }
