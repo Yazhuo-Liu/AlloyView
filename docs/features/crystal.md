@@ -61,15 +61,43 @@ export and saved configurations preserve the optional display settings.
 The illustrative `crystals/SrTiO3_thermal.cif` example contains synthetic ADPs,
 not experimentally measured or DFT-predicted displacement parameters.
 
-## Powder X-ray diffraction
+## Powder diffraction
 
-Open the folded **Powder X-ray diffraction** section, choose a wavelength and
-click **Calculate diffraction**. Cu Kα1 (1.5406 Å), Co Kα1 (1.78897 Å), Mo Kα1
-(0.7093 Å) and a custom wavelength are available. Set the **2θ** range,
-Gaussian full width at half maximum (FWHM), and profile sampling step in degrees.
-Optional controls apply the powder Lorentz–polarization factor and imported
-atomic-displacement parameters. These are single-wavelength patterns, not Kα1/Kα2
-doublets.
+Open the folded **Powder diffraction** section, select **X-ray**, **Electron**
+or **Neutron**, and click **Calculate diffraction**. All three modes calculate
+Bragg peaks from the complete periodic scientific structure, including hidden
+atoms. They use different physical scattering factors, not just different
+wavelength labels.
+
+| Mode | Input and presets | Coherent scattering model |
+| --- | --- | --- |
+| X-ray | Cu Kα1 (1.5406 Å), Co Kα1 (1.78897 Å), Mo Kα1 (0.7093 Å), or custom wavelength | Neutral-atom IT92 factors, H–Cf; optional Lorentz–polarization correction |
+| Electron | 80, 100, 200 or 300 keV, or custom wavelength | Neutral-atom C4322 factors, H–Cf; kinematical random-powder model; optional powder Lorentz correction |
+| Neutron | 1.8 Å, 2.36 Å, or custom wavelength | Signed real bound coherent nuclear scattering lengths; natural elemental composition where tabulated, plus explicit D (deuterium); optional powder Lorentz correction |
+
+Electron voltage presets use the relativistic de Broglie wavelength. For
+200 keV, λ is approximately 0.02507934 Å, so Bragg peaks appear at much smaller
+angles than ordinary X-ray peaks. Switching to Electron selects a 0.1–4° 2θ
+window and suitable sampling/width defaults. This is an ideal powder angular
+scan: it does not calculate oriented TEM/SAED spots, thickness-dependent
+multiple scattering or dynamical electron diffraction. A detector image or
+ring-integrated intensity uses a different measurement geometry.
+
+Neutron amplitudes can be negative: natural H has b = −3.739 fm while D has
+b = +6.671 fm. Their signs are retained before coherent summation. Unknown
+scattering lengths and element entries requiring a specific isotope are rejected
+rather than treated as zero or assigned an arbitrary isotope. General isotope
+enrichment, magnetic diffraction, incoherent background and absorption/resonance
+corrections are not included. The **crystals/NaD-neutron.cif** example uses
+explicit D and an illustrative rocksalt cell; it is not a measured pattern.
+
+Set the **2θ** range, Gaussian full width at half maximum (FWHM), and profile
+sampling step in degrees. Optional controls apply imported isotropic or
+anisotropic atomic-displacement parameters and the mode's geometric correction.
+The X-ray presets are single wavelengths, not Kα1/Kα2 doublets. X-ray factors
+require sin(θ)/λ < 2 Å⁻¹; electron factors require sin(θ)/λ ≤ 2 Å⁻¹. Settings
+outside the table's fit range fail explicitly. Neutron lengths are constant in
+this nonresonant model and do not use the X-ray fitting range.
 
 The chart shows integrated peak sticks and a broadened profile, each normalized
 to its own maximum of 100. Select a peak with the slider or table to inspect its
@@ -77,42 +105,40 @@ to its own maximum of 100. Select a peak with the slider or table to inspect its
 to the **loaded cell**, including physical replication. Nearby but distinct
 reflections remain separate in the table even when broadening overlaps them.
 The profile includes only reflections whose centers are inside the requested
-angular range; tails from reflections outside it are omitted. Its screen preview
-is bounded, while **Peak table CSV** and **Profile CSV** retain every
-peak and sample, their unrounded values, units and calculation settings.
+angular range; tails from reflections outside it are omitted. **Peak table CSV**
+and **Profile CSV** retain every peak/sample and their unrounded values, together
+with the radiation type, scattering model, units and correction settings. Raw
+intensities have different model units and are not calibrated experimental
+counts or directly comparable across radiation types.
 
-Try the synthetic **crystals/Cu-powder.cif** and
-**crystals/POSCAR-Si-diffraction** examples. With Cu Kα1, their first peaks are
-about 43.32° and 28.44°. These are ideal crystal references, not experimental
-measurements. Hidden atoms, slices, display origins and display-only replicas do
-not change the calculation. Enabling physical **Replicate atoms** changes the
-scientific cell. For very large supercells, a primitive-cell export is usually
-the more efficient input.
+The synthetic **crystals/Cu-powder.cif** and
+**crystals/POSCAR-Si-diffraction** examples provide familiar ideal references.
+With Cu Kα1, their first peaks are about 43.32° and 28.44°. They can also be used
+with electron or neutron modes. Slices, display origins, hidden selections and
+display-only replicas do not alter the calculation. Physical **Replicate atoms**
+changes the scientific cell; a primitive cell is usually more efficient for an
+ideal crystal powder pattern.
 
-This calculation uses neutral-atom IT92 X-ray scattering factors for H–Cf,
-occupancies and, when supplied, isotropic or Cartesian anisotropic displacement
-tensors. It requires three periodic axes and actual element labels; numeric
-types cannot supply an elemental scattering factor. A partial occupancy scales
-the coherent amplitude of that site and does not predict diffuse disorder
-scattering. No electron-density file is required. Anomalous dispersion, ionic
-factors, texture, absorption corrections, instrument refinement and neutron or
-electron diffraction are outside this model. The coefficient fit requires
-sin(θ)/λ below 2 Å⁻¹; invalid settings and excessive work are rejected explicitly.
+Three periodic axes and actual element identities are required. Occupancy scales
+the coherent amplitude of each site; it does not predict diffuse disorder
+scattering. No electron-density grid is required. Ionic/anomalous factors,
+texture and experimental instrument refinement are outside the model.
 
 Preparation, peak grouping, profile construction and CSV formatting run in a
 retained Worker. CPU structure-factor sums split into independent reflection
 ranges sharing the application's CPU budget. With GPU acceleration enabled,
-WebGPU computes the structure-factor sums in bounded atom chunks; uncertain
-weak reflections are checked in double precision on CPU. Unsupported geometry,
-precision or device failures fall back to CPU with a displayed reason.
-Cancelling does not start a CPU fallback. Workers, GPU pipelines and compatible
-source uploads are retained for later calculations. Source loading prepares the
-crystal input in the background without calculating a diffraction pattern.
+WebGPU computes atom contributions in bounded chunks; uncertain weak reflections
+are checked in double precision on CPU. Unsupported precision, excessive
+correction work or device failures fall back to parallel CPU with a displayed
+reason. Cancelling never starts a CPU fallback. Geometry, Workers and GPU
+pipelines are reused across modes while scattering factors remain model-specific.
+Small unit cells can be faster on CPU because dispatch/readback costs dominate.
 
-Settings can be saved in configurations. Parameter edits invalidate the displayed
-pattern; frame changes recalculate an enabled analysis, and Cancel clears it.
-The [implementation record](../DIFFRACTION_IMPLEMENTATION.md) documents the
-equations, precision checks, resource limits and validation.
+Settings are saved in configurations; old X-ray configurations remain valid.
+Mode and parameter edits invalidate previous results/downloads. Frame changes
+recalculate an enabled analysis, and Cancel clears it. The
+[implementation record](../DIFFRACTION_IMPLEMENTATION.md) documents the equations,
+precision checks, data provenance, resource limits and validation.
 
 ## Coordination polyhedra
 

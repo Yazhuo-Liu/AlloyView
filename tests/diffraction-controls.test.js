@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { initializeDiffractionControls, DIFFRACTION_UI_DEFAULTS, diffractionChartPaths, nearestDiffractionPeak } from '../src/ui/view/diffraction-controls.js';
 import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
+import { normalizeDiffractionParameters } from '../src/analysis/diffraction.js';
+import { electronWavelengthFromEnergy } from '../src/crystal/diffraction-scattering.js';
 import { crystalFrame } from './helpers/crystals.js';
 
 class Element {
@@ -113,6 +115,58 @@ test('GPU precision corrections identify their CPU work in progress and the actu
   assert.equal(h.nodes.get('diffraction-backend').title,'16 reflections checked on CPU');
 });
 
+test('radiation changes cancel old work, apply valid mode defaults and show each physical model',async t=>{
+  const h=setup(t),xray=h.controls.run();
+  h.nodes.get('diffraction-radiation').value='electron';h.nodes.get('diffraction-radiation').dispatch('change');
+  assert.equal(h.jobs[0].options.signal.aborted,true);
+  h.jobs[0].resolve(output());assert.equal(await xray,false);assert.equal(h.controls.getResult(),null);
+  const electron=h.controls.serialize();
+  assert.equal(electron.radiation,'electron');assert.equal(electron.wavelengthPreset,'electron-200kev');
+  assert.equal(electron.wavelength,electronWavelengthFromEnergy(200));assert.equal(electron.maxAngle,4);
+  assert.equal(electron.minAngle,.1);assert.equal(electron.step,.002);assert.equal(electron.fwhm,.03);
+  assert.match(h.nodes.get('diffraction-model-help').textContent,/not an oriented single-crystal SAED.*dynamical/);
+  assert.equal(h.nodes.get('diffraction-lp-label').textContent,'Powder Lorentz correction');
+  assert.equal(h.nodes.get('diffraction-preset-label').textContent,'Accelerating voltage / wavelength');
+  assert.deepEqual(h.nodes.get('diffraction-preset').children.map(option=>option.value),['electron-80kev','electron-100kev','electron-200kev','electron-300kev','custom']);
+  for(const energy of [80,100,200,300]){
+    h.nodes.get('diffraction-preset').value=`electron-${energy}kev`;h.nodes.get('diffraction-preset').dispatch('change');
+    const {enabled,wavelengthPreset,...parameters}=h.controls.serialize();
+    assert.equal(parameters.wavelength,electronWavelengthFromEnergy(energy));
+    assert.doesNotThrow(()=>normalizeDiffractionParameters(parameters));
+  }
+  const pending=h.controls.run(),job=h.jobs.at(-1);
+  assert.equal(job.params.radiation,'electron');
+  job.resolve({...output(),radiation:'electron',parameters:job.params});await pending;
+  assert.match(h.nodes.get('diffraction-summary').textContent,/^Electron ·/);
+  assert.match(h.nodes.get('diffraction-chart').children[0].attributes['aria-label'],/^Electron powder/);
+  const exporting=h.controls.exportCsv('profile'),exportJob=h.exports.at(-1);
+  h.nodes.get('diffraction-radiation').value='neutron';h.nodes.get('diffraction-radiation').dispatch('change');
+  exportJob.resolve({blob:new Blob(['old']),filename:'old.csv'});assert.equal(await exporting,false);assert.equal(h.downloads.length,0);
+  assert.equal(h.nodes.get('diffraction-results').hidden,true);
+  const neutron=h.controls.serialize();assert.equal(neutron.wavelength,1.8);assert.equal(neutron.maxAngle,150);assert.equal(neutron.wavelengthPreset,'neutron-1.8');
+  assert.match(h.nodes.get('diffraction-model-help').textContent,/natural isotope composition.*deuterium/);
+  assert.match(h.nodes.get('diffraction-model-help').textContent,/Magnetic scattering, arbitrary isotope enrichment/);
+  h.nodes.get('diffraction-preset').value='neutron-2.36';h.nodes.get('diffraction-preset').dispatch('change');
+  assert.equal(h.controls.serialize().wavelength,2.36);
+  h.nodes.get('diffraction-lp').checked=false;h.nodes.get('diffraction-lp').dispatch('change');
+  const neutronRun=h.controls.run(),neutronJob=h.jobs.at(-1);assert.equal(neutronJob.params.lorentzPolarization,false);
+  neutronJob.resolve({...output(),radiation:'neutron',parameters:neutronJob.params});await neutronRun;
+  assert.match(h.nodes.get('diffraction-summary').textContent,/^Neutron ·/);
+});
+
+test('custom radiation wavelengths and legacy X-ray settings restore without changing their scientific parameters',async t=>{
+  const h=setup(t);
+  await h.controls.restore({radiation:'electron',enabled:false});
+  h.nodes.get('diffraction-wavelength').value='.03';h.nodes.get('diffraction-wavelength').dispatch('change');
+  assert.equal(h.controls.serialize().radiation,'electron');assert.equal(h.controls.serialize().wavelengthPreset,'custom');
+  assert.equal(h.controls.serialize().wavelength,.03);
+  const saved=h.controls.serialize();await h.controls.restore(saved);assert.deepEqual(h.controls.serialize(),saved);
+  const legacy={...DIFFRACTION_UI_DEFAULTS,enabled:false,wavelengthPreset:'co-ka1',wavelength:1.78897,minAngle:15,maxAngle:75};delete legacy.radiation;
+  await h.controls.restore(legacy);assert.deepEqual(h.controls.serialize(),{...legacy,radiation:'xray'});
+  assert.equal(h.nodes.get('diffraction-radiation').value,'xray');assert.equal(h.nodes.get('diffraction-lp-label').textContent,'Lorentz–polarization correction');
+  assert.deepEqual(h.nodes.get('diffraction-preset').children.map(option=>option.value),['cu-ka1','co-ka1','mo-ka1','custom']);
+});
+
 test('peak tables page with bounded DOM while CSV retains the complete current result',async t=>{
   const h=setup(t),pending=h.controls.run();const result=output(120);h.jobs[0].resolve(result);await pending;
   assert.equal(h.nodes.get('diffraction-table-body').children.length,40);assert.match(h.nodes.get('diffraction-table-caption').textContent,/1–40 of 120/);
@@ -144,4 +198,24 @@ test('diffraction configurations retain only validated physical settings and mig
   for(const invalid of [{wavelength:0},{wavelength:NaN},{wavelength:1,wavelengthPreset:'co-ka1'},{minAngle:100,maxAngle:90},{fwhm:0},{step:0},{useThermal:1},{lorentzPolarization:'yes'},{enabled:1},{peaks:[]},{wavelengthPreset:'Cu'}]) {
     assert.throws(()=>createConfiguration({settings:{extensions:{diffraction:invalid}}}),/settings\.extensions\.diffraction/);
   }
+});
+
+test('electron and neutron recipes validate their radiation-specific presets and preserve old X-ray recipes',()=>{
+  for(const radiation of ['electron','neutron']){
+    const settings={enabled:true,...normalizeDiffractionParameters({radiation})};
+    const recipe=createConfiguration({settings:{extensions:{diffraction:settings}}});
+    const saved=recipe.settings.extensions.diffraction;
+    assert.equal(saved.radiation,radiation);assert.equal(saved.wavelengthPreset,radiation==='electron'?'electron-200kev':'neutron-1.8');
+    assert.deepEqual(parseConfiguration(JSON.stringify(recipe)).settings.extensions.diffraction,saved);
+  }
+  const legacy={...DIFFRACTION_UI_DEFAULTS,enabled:true};delete legacy.radiation;
+  assert.deepEqual(createConfiguration({settings:{extensions:{diffraction:legacy}}}).settings.extensions.diffraction,{...legacy,radiation:'xray'});
+  for(const invalid of [
+    {radiation:'proton'},
+    {radiation:'electron',wavelengthPreset:'cu-ka1'},
+    {radiation:'neutron',wavelengthPreset:'electron-200kev'},
+    {radiation:'electron',wavelengthPreset:'electron-300kev',wavelength:electronWavelengthFromEnergy(200)},
+    {radiation:'neutron',wavelengthPreset:'neutron-2.36',wavelength:1.8},
+    {radiation:'electron',maxAngle:90},
+  ])assert.throws(()=>createConfiguration({settings:{extensions:{diffraction:invalid}}}),/settings\.extensions\.diffraction/);
 });

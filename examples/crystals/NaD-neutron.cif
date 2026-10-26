@@ -1,0 +1,20 @@
+data_ideal_NaD
+# Synthetic ideal rocksalt NaD for neutron scattering contrast.
+# The 4.88 Angstrom cell is illustrative; no isotope-dependent relaxation
+# or measured/DFT intensities are implied. D explicitly means deuterium.
+_cell_length_a 4.88
+_cell_length_b 4.88
+_cell_length_c 4.88
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_space_group_IT_number 225
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+Na1 Na 0 0 0 1
+D1 D 0.5 0.5 0.5 1

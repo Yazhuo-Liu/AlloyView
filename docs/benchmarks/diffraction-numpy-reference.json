@@ -3,107 +3,291 @@
   "cases": [
     {
       "name": "fcc-cu",
+      "radiation": "xray",
       "fullReflections": 256,
       "powderPeaks": 6,
-      "maxAmplitudeError": 2.17323800002664e-14
+      "maxAmplitudeError": 2.17323800002664e-14,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "fcc-cu-primitive",
+      "radiation": "xray",
       "fullReflections": 64,
       "powderPeaks": 6,
-      "maxAmplitudeError": 7.105427357601002e-15
+      "maxAmplitudeError": 7.105427357601002e-15,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "bcc-fe",
+      "radiation": "xray",
       "fullReflections": 146,
       "powderPeaks": 5,
-      "maxAmplitudeError": 8.42343552502785e-15
+      "maxAmplitudeError": 8.42343552502785e-15,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "bcc-fe-weak",
+      "radiation": "xray",
       "fullReflections": 146,
       "powderPeaks": 9,
-      "maxAmplitudeError": 1.3170074839724544e-14
+      "maxAmplitudeError": 1.3170074839724544e-14,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "diamond-si",
+      "radiation": "xray",
       "fullReflections": 948,
       "powderPeaks": 9,
-      "maxAmplitudeError": 6.295424678153464e-14
+      "maxAmplitudeError": 6.295424678153464e-14,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "rocksalt-nacl",
+      "radiation": "xray",
       "fullReflections": 1044,
       "powderPeaks": 14,
-      "maxAmplitudeError": 3.445572527451126e-14
+      "maxAmplitudeError": 3.445572527451126e-14,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "partial-occupancy-cu",
+      "radiation": "xray",
       "fullReflections": 256,
       "powderPeaks": 6,
-      "maxAmplitudeError": 1.08661900001332e-14
+      "maxAmplitudeError": 1.08661900001332e-14,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "isotropic-cu",
+      "radiation": "xray",
       "fullReflections": 256,
       "powderPeaks": 6,
-      "maxAmplitudeError": 2.1030962597250993e-14
+      "maxAmplitudeError": 2.1030962597250993e-14,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "triclinic",
+      "radiation": "xray",
       "fullReflections": 532,
       "powderPeaks": 266,
-      "maxAmplitudeError": 2.1431618279190542e-14
+      "maxAmplitudeError": 2.1431618279190542e-14,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "near-degenerate",
+      "radiation": "xray",
       "fullReflections": 584,
       "powderPeaks": 97,
-      "maxAmplitudeError": 4.577566798522237e-15
+      "maxAmplitudeError": 4.577566798522237e-15,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "accidental-overlap",
+      "radiation": "xray",
       "fullReflections": 584,
       "powderPeaks": 50,
-      "maxAmplitudeError": 5.1636710387543275e-14
+      "maxAmplitudeError": 5.1636710387543275e-14,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "uncorrected-pattern",
+      "radiation": "xray",
       "fullReflections": 256,
       "powderPeaks": 6,
-      "maxAmplitudeError": 2.17323800002664e-14
+      "maxAmplitudeError": 2.17323800002664e-14,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "sc-cu",
+      "radiation": "xray",
       "fullReflections": 170,
       "powderPeaks": 10,
-      "maxAmplitudeError": 3.552713678800501e-15
+      "maxAmplitudeError": 3.552713678800501e-15,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "sc-cu-unimodular-shear",
+      "radiation": "xray",
       "fullReflections": 170,
       "powderPeaks": 10,
-      "maxAmplitudeError": 2.948752353404416e-13
+      "maxAmplitudeError": 2.948752353404416e-13,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "left-handed",
+      "radiation": "xray",
       "fullReflections": 532,
       "powderPeaks": 266,
-      "maxAmplitudeError": 2.4083396366869622e-14
+      "maxAmplitudeError": 2.4083396366869622e-14,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "fcc-cu-supercell",
+      "radiation": "xray",
       "fullReflections": 1132,
       "powderPeaks": 6,
-      "maxAmplitudeError": 2.346357796847703e-13
+      "maxAmplitudeError": 2.346357796847703e-13,
+      "amplitudeUnit": "electrons"
     },
     {
       "name": "translated-cu",
+      "radiation": "xray",
       "fullReflections": 256,
       "powderPeaks": 6,
-      "maxAmplitudeError": 1.189263939153438e-13
+      "maxAmplitudeError": 1.189263939153438e-13,
+      "amplitudeUnit": "electrons"
+    },
+    {
+      "name": "electron-fcc-cu",
+      "radiation": "electron",
+      "fullReflections": 4336,
+      "powderPeaks": 35,
+      "maxAmplitudeError": 4.138852702204088e-15,
+      "amplitudeUnit": "angstrom"
+    },
+    {
+      "name": "electron-80keV-cu",
+      "radiation": "electron",
+      "fullReflections": 924,
+      "powderPeaks": 13,
+      "maxAmplitudeError": 4.138852702204088e-15,
+      "amplitudeUnit": "angstrom"
+    },
+    {
+      "name": "electron-300keV-cu",
+      "radiation": "electron",
+      "fullReflections": 8828,
+      "powderPeaks": 56,
+      "maxAmplitudeError": 4.138852702204088e-15,
+      "amplitudeUnit": "angstrom"
+    },
+    {
+      "name": "electron-rocksalt-nacl",
+      "radiation": "electron",
+      "fullReflections": 16278,
+      "powderPeaks": 83,
+      "maxAmplitudeError": 5.648647797509694e-15,
+      "amplitudeUnit": "angstrom"
+    },
+    {
+      "name": "electron-triclinic-thermal",
+      "radiation": "electron",
+      "fullReflections": 8074,
+      "powderPeaks": 4037,
+      "maxAmplitudeError": 3.3820826609804605e-15,
+      "amplitudeUnit": "angstrom"
+    },
+    {
+      "name": "electron-lorentz-off",
+      "radiation": "electron",
+      "fullReflections": 16278,
+      "powderPeaks": 83,
+      "maxAmplitudeError": 5.648647797509694e-15,
+      "amplitudeUnit": "angstrom"
+    },
+    {
+      "name": "neutron-fcc-cu",
+      "radiation": "neutron",
+      "fullReflections": 178,
+      "powderPeaks": 5,
+      "maxAmplitudeError": 1.1342188794983128e-14,
+      "amplitudeUnit": "fm"
+    },
+    {
+      "name": "neutron-rocksalt-nacl",
+      "radiation": "neutron",
+      "fullReflections": 690,
+      "powderPeaks": 10,
+      "maxAmplitudeError": 2.5878256442142547e-14,
+      "amplitudeUnit": "fm"
+    },
+    {
+      "name": "neutron-triclinic-thermal",
+      "radiation": "neutron",
+      "fullReflections": 336,
+      "powderPeaks": 168,
+      "maxAmplitudeError": 2.434023142397426e-14,
+      "amplitudeUnit": "fm"
+    },
+    {
+      "name": "neutron-signed-H-cancellation",
+      "radiation": "neutron",
+      "fullReflections": 250,
+      "powderPeaks": 6,
+      "maxAmplitudeError": 2.747372629207172e-15,
+      "amplitudeUnit": "fm"
+    },
+    {
+      "name": "neutron-hydride",
+      "radiation": "neutron",
+      "fullReflections": 250,
+      "powderPeaks": 13,
+      "maxAmplitudeError": 2.747372629207172e-15,
+      "amplitudeUnit": "fm"
+    },
+    {
+      "name": "neutron-deuteride",
+      "radiation": "neutron",
+      "fullReflections": 250,
+      "powderPeaks": 13,
+      "maxAmplitudeError": 4.901771278267196e-15,
+      "amplitudeUnit": "fm"
+    },
+    {
+      "name": "neutron-lorentz-off",
+      "radiation": "neutron",
+      "fullReflections": 690,
+      "powderPeaks": 10,
+      "maxAmplitudeError": 2.5878256442142547e-14,
+      "amplitudeUnit": "fm"
+    },
+    {
+      "name": "xray-hydride",
+      "radiation": "xray",
+      "fullReflections": 250,
+      "powderPeaks": 13,
+      "maxAmplitudeError": 7.107126803868541e-15,
+      "amplitudeUnit": "electrons"
+    },
+    {
+      "name": "electron-hydride",
+      "radiation": "electron",
+      "fullReflections": 5742,
+      "powderPeaks": 104,
+      "maxAmplitudeError": 8.94586053504344e-16,
+      "amplitudeUnit": "angstrom"
+    },
+    {
+      "name": "xray-deuteride",
+      "radiation": "xray",
+      "fullReflections": 250,
+      "powderPeaks": 13,
+      "maxAmplitudeError": 7.107126803868541e-15,
+      "amplitudeUnit": "electrons"
+    },
+    {
+      "name": "electron-deuteride",
+      "radiation": "electron",
+      "fullReflections": 5742,
+      "powderPeaks": 104,
+      "maxAmplitudeError": 8.94586053504344e-16,
+      "amplitudeUnit": "angstrom"
     }
   ],
   "normalizedPrimitiveSupercellTranslationOccupancyParity": true,
-  "largeUnimodularBasisParity": true
+  "largeUnimodularBasisParity": true,
+  "electronWavelength_A_by_keV": {
+    "80": 0.04175716074647679,
+    "200": 0.025079340436272274,
+    "300": 0.01968748899648993
+  },
+  "NaClRaw111To200IntensityRatio": {
+    "xray": 0.044567453204704975,
+    "electron": 0.09012468371352167,
+    "neutron": 0.202762445848527
+  },
+  "TiH_Raw100To110IntensityRatio": 0.0017589240970310414,
+  "TiD_Raw100To110IntensityRatio": 9.77698578751506,
+  "signedHydrogenCancellationPreserved": true,
+  "deuteriumElectronicFactorEqualsHydrogen": true
 }

@@ -8,5 +8,6 @@
   "volumetric/CHGCAR": "Synthetic periodic Gaussian density · 32³ grid · 2 H markers · integrates to 2 electrons · not DFT data",
   "volumetric/analytic-p-field.cube": "Synthetic signed p-like field · 33³ open Cube grid · positive and negative lobes · not a calculated orbital",
   "crystals/Cu-powder.cif": "Ideal FCC Cu · a=3.615 Å · powder X-ray diffraction reference · Cu Kα1 first peak ≈43.32°",
-  "crystals/POSCAR-Si-diffraction": "Ideal diamond Si · a=5.431 Å · systematic extinction demonstration · first Cu Kα1 peak ≈28.44°"
+  "crystals/POSCAR-Si-diffraction": "Ideal diamond Si · a=5.431 Å · X-ray/electron/neutron extinction reference · first Cu Kα1 peak ≈28.44°",
+  "crystals/NaD-neutron.cif": "Synthetic rocksalt NaD · explicit deuterium · neutron scattering contrast · illustrative a=4.88 Å"
 }

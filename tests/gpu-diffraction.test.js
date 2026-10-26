@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareDiffraction, evaluateDiffractionReflection, calculateDiffractionRange } from '../src/analysis/diffraction.js';
+import { prepareDiffraction, evaluateDiffractionReflection, calculateDiffractionRange, evaluatePreparedScatteringFactor } from '../src/analysis/diffraction.js';
 import { analyzeGpuDiffraction, prepareGpuDiffraction, releaseGpuDiffraction, warmGpuDiffraction, packDiffractionBatch } from '../src/analysis/gpu/diffraction.js';
 import { DIFFRACTION_STRUCTURE_FACTORS_SHADER } from '../src/analysis/gpu/diffraction-shaders.js';
 import { crystalFrame } from './helpers/crystals.js';
+import { getElectronScatteringCoefficients, getNeutronScatteringLength } from '../src/crystal/diffraction-scattering.js';
 
 function prepared(kind='bcc',repeat=1) {
   const frame=crystalFrame(kind,repeat,4);frame.typeLabels=['Fe'];
@@ -126,4 +127,88 @@ test('dense expensive diffraction corrections return to parallel CPU instead of 
   const f=fixture(source);f.runtime.run=async(_shader,bindings)=>new Float32Array(bindings[6].data.buffer).fill(0);
   await assert.rejects(analyzeGpuDiffraction(f.runtime,source),error=>error.name==='GpuUnavailableError'&&/parallel CPU Workers/.test(error.message));
   releaseGpuDiffraction(f.runtime);assert.ok(f.allocations.every(buffer=>buffer.destroyed));
+});
+
+test('exactly zero species amplitudes remain zero without being mistaken for precision failures',async()=>{
+  const source={...prepared(),radiation:'neutron',coefficientStride:1,coefficients:new Float64Array(1)};
+  const f=fixture(source),result=await analyzeGpuDiffraction(f.runtime,source);
+  assert.equal(result.correctedReflections,0);assert.ok(result.intensity.every(value=>value===0));
+  assert.ok(result.amplitudeBound.every(value=>value===0));releaseGpuDiffraction(f.runtime);
+});
+
+test('radiation changes refresh coefficient identity while retaining GPU geometry and repacking every species factor',async()=>{
+  const source=prepared(),f=fixture(source),first=await prepareGpuDiffraction(f.runtime,source),buffers=first.cache.inputs;
+  for(const [radiation,coefficientStride,coefficients] of [
+    ['electron',10,Float64Array.from(getElectronScatteringCoefficients('Fe'))],
+    ['neutron',1,Float64Array.of(getNeutronScatteringLength('Fe'))],
+    ['xray',9,source.coefficients],
+  ]){
+    const model={...source,radiation,coefficientStride,coefficients};
+    const current=await prepareGpuDiffraction(f.runtime,model),batch=packDiffractionBatch(model,current.cache,0,source.reflectionCount);
+    assert.equal(current.inputReused,true);assert.equal(current.cache.inputs,buffers);
+    assert.equal(current.cache.radiation,radiation);assert.equal(current.cache.coefficients,coefficients);
+    assert.equal(current.cache.coefficientStride,coefficientStride);
+    for(let index=0;index<source.reflectionCount;index++)assert.equal(batch.factors[index],Math.fround(evaluatePreparedScatteringFactor(model,0,source.s2[index])));
+  }
+  assert.equal(f.allocations.length,3);releaseGpuDiffraction(f.runtime);
+});
+
+test('negative neutron amplitudes preserve interference and weak residuals with positive absolute error bounds',async()=>{
+  const frame=crystalFrame('bcc',1,4);frame.typeLabels=['Fe','Ti'];frame.types=Uint16Array.from([0,1]);
+  const ratio=-getNeutronScatteringLength('Ti')/getNeutronScatteringLength('Fe');
+  frame.properties=[{name:'occupancy',data:Float64Array.from([ratio*(1-1e-8),1])}];
+  const source=prepareDiffraction(frame,{radiation:'neutron',maxAngle:75,useThermal:false}),f=fixture(source);
+  const {cache}=await prepareGpuDiffraction(f.runtime,source),batch=packDiffractionBatch(source,cache,0,source.reflectionCount);
+  assert.ok(batch.factors[0]>0&&batch.factors[1]<0);
+  assert.ok(batch.bounds.every(value=>value>6));assert.ok(batch.errors.every(value=>value>0));
+  const result=await analyzeGpuDiffraction(f.runtime,source),expected=calculateDiffractionRange(source);
+  const weak=source.s2.findIndex((_,i)=>Math.abs(source.hkls[i*3]+source.hkls[i*3+1]+source.hkls[i*3+2])%2===0);
+  assert.ok(weak>=0&&result.intensity[weak]>0);assert.equal(result.intensity[weak],expected.intensity[weak]);
+  assert.ok(result.correctedReflections>0&&result.correctedReflections<source.reflectionCount);releaseGpuDiffraction(f.runtime);
+});
+
+test('electron small-angle factor packing uses all five Gaussian pairs without an X-ray constant',async()=>{
+  const frame=crystalFrame('diamond',1,5.431);frame.typeLabels=['Si'];
+  const source=prepareDiffraction(frame,{radiation:'electron',useThermal:false}),f=fixture(source);
+  const {cache}=await prepareGpuDiffraction(f.runtime,source),batch=packDiffractionBatch(source,cache,0,source.reflectionCount);
+  assert.equal(source.coefficientStride,10);assert.ok(source.twoTheta.every(value=>value<=4));
+  for(let index=0;index<source.reflectionCount;index++)assert.equal(batch.factors[index],Math.fround(evaluatePreparedScatteringFactor(source,0,source.s2[index])));
+  const result=await analyzeGpuDiffraction(f.runtime,source);assert.ok(result.correctedReflections<source.reflectionCount);
+  releaseGpuDiffraction(f.runtime);
+});
+
+test('invalid radiation coefficient shapes fail before GPU allocation',async()=>{
+  const source=prepared(),f=fixture(source);
+  for(const extra of [{radiation:'neutron',coefficientStride:1},{radiation:'electron',coefficientStride:9},{radiation:'unknown'}]){
+    await assert.rejects(prepareGpuDiffraction(f.runtime,{...source,...extra}),/scattering model|arrays/);
+  }
+  assert.equal(f.allocations.length,0);
+});
+
+function manyReflections(atomCount,reflectionCount,typeCount=1){
+  const original=prepared(),source={...original,atomCount,reflectionCount,
+    fractional:new Float64Array(atomCount*3),types:Uint32Array.from({length:atomCount},(_,i)=>i%typeCount),
+    occupancy:new Float64Array(atomCount).fill(1),hkls:new Int32Array(reflectionCount*3),
+    reciprocal:new Float64Array(reflectionCount*3),s2:new Float64Array(reflectionCount).fill(1/64),
+    typeLabels:Array(typeCount).fill('Fe'),coefficients:new Float64Array(typeCount*9)};
+  for(let type=0;type<typeCount;type++)source.coefficients.set(original.coefficients,type*9);
+  for(let i=0;i<reflectionCount;i++){source.hkls[i*3]=1;source.reciprocal[i*3]=.25;}
+  return source;
+}
+
+test('small structures batch thousands of reflections with bounded GPU readbacks and CPU admissions',async()=>{
+  const source=manyReflections(16,29_906),f=fixture(source);let admissions=0;
+  const result=await analyzeGpuDiffraction(f.runtime,source,{withCpu:operation=>{admissions++;return operation();}});
+  assert.equal(result.real.length,29_906);assert.equal(result.correctedReflections,0);
+  assert.equal(f.dispatches.length,8);assert.equal(admissions,17);
+  assert.ok(f.dispatches.every(({invocations})=>invocations/128<=4096));
+  assert.ok(f.allocations.every(buffer=>buffer.data.length<=256*1024));releaseGpuDiffraction(f.runtime);
+});
+
+test('reflection batches honor storage buffer limits with all98 species and preserve power-of-two scratch bounds',async()=>{
+  const source=manyReflections(98,12_000,98),f=fixture(source),limit=1024*1024;
+  f.runtime.device.limits.maxStorageBufferBindingSize=limit;f.runtime.device.limits.maxBufferSize=limit;
+  const result=await analyzeGpuDiffraction(f.runtime,source);
+  assert.equal(result.real.length,12_000);assert.equal(f.dispatches.length,5);
+  assert.ok(f.allocations.every(buffer=>buffer.data.length<=limit));releaseGpuDiffraction(f.runtime);
 });

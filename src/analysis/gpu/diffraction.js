@@ -1,14 +1,16 @@
 import { GpuUnavailableError, checkSignal, yieldWorker } from './runtime.js';
 import { DIFFRACTION_STRUCTURE_FACTORS_SHADER } from './diffraction-shaders.js';
-import { evaluateDiffractionReflectionSteps } from '../diffraction.js';
+import { evaluateDiffractionReflectionSteps, evaluatePreparedScatteringFactor } from '../diffraction.js';
 import { runParserStepsAsync } from '../../io/cooperative-parser.js';
 
 const caches = new WeakMap();
-const ATOMS_PER_CHUNK = 512, REFLECTIONS_PER_BATCH = 64;
+const ATOMS_PER_CHUNK = 512, MAX_REFLECTIONS_PER_BATCH = 4096;
 const MAX_DISPATCH_WORK = 2_000_000, MAX_UPLOAD_BYTES = 128 * 1024 ** 2;
+const MAX_BATCH_BUFFER_BYTES=8*1024**2, CORRECTION_YIELD_MS=8;
 const FLOAT_MIN_NORMAL = 2 ** -126, MAX_HKL = 1024;
 const COMPLEX_RELATIVE_TOLERANCE = 2e-5;
 const MAX_DENSE_CORRECTION_WORK = 8_000_000;
+const MODEL_STRIDES=Object.freeze({xray:9,electron:10,neutron:1});
 const scoped = (runtime, operation) => runtime.withErrors ? runtime.withErrors(operation) : Promise.resolve().then(operation);
 const unavailable = message => new GpuUnavailableError(`GPU diffraction: ${message}`);
 const copyNumber = value => {
@@ -21,9 +23,13 @@ const copyNumber = value => {
 
 function shape(prepared) {
   const n=prepared?.atomCount,r=prepared?.reflectionCount,t=prepared?.typeLabels?.length;
+  const radiation=prepared?.radiation??'xray',stride=prepared?.coefficientStride??9;
+  if(!Object.hasOwn(MODEL_STRIDES,radiation)||stride!==MODEL_STRIDES[radiation]) {
+    throw new Error('Invalid prepared diffraction scattering model.');
+  }
   if (!Number.isSafeInteger(n)||n<1||!Number.isSafeInteger(r)||r<0||!Number.isSafeInteger(t)||t<1
       ||prepared.fractional?.length!==n*3||prepared.types?.length!==n||prepared.occupancy?.length!==n
-      ||prepared.coefficients?.length!==t*9||prepared.hkls?.length!==r*3||prepared.reciprocal?.length!==r*3
+      ||prepared.coefficients?.length!==t*stride||prepared.hkls?.length!==r*3||prepared.reciprocal?.length!==r*3
       ||prepared.s2?.length!==r||prepared.thermal&&prepared.thermal.length!==n*6) throw new Error('Invalid prepared diffraction arrays.');
   return {n,r,t};
 }
@@ -46,9 +52,9 @@ export function releaseGpuDiffraction(runtime) {
   caches.delete(runtime);
 }
 
-function sameSource(cached,prepared,runtime) {
+function sameAtoms(cached,prepared,runtime) {
   return cached?.device===runtime.device && cached.fractional===prepared.fractional && cached.types===prepared.types
-    &&cached.occupancy===prepared.occupancy&&cached.thermal===prepared.thermal&&cached.coefficients===prepared.coefficients;
+    &&cached.occupancy===prepared.occupancy&&cached.thermal===prepared.thermal&&cached.populations.length===prepared.typeLabels.length;
 }
 
 /** Retain only minimal immutable atom inputs. A wavelength/range/profile edit
@@ -58,7 +64,14 @@ export async function prepareGpuDiffraction(runtime, prepared, { signal, withCpu
   const bytes=n*(prepared.thermal?64:32);
   if(bytes>MAX_UPLOAD_BYTES) throw unavailable('the atom upload exceeds its memory budget.');
   await runtime.initialize(signal);
-  if(sameSource(caches.get(runtime),prepared,runtime)) return {cache:caches.get(runtime),inputReused:true};
+  const resident=caches.get(runtime);
+  if(sameAtoms(resident,prepared,runtime)) {
+    // Radiation changes do not change geometric uploads. Model identity still
+    // follows the current source: species factors are repacked every batch,
+    // never reused from a previous X-ray/electron/neutron calculation.
+    resident.coefficients=prepared.coefficients;resident.radiation=prepared.radiation??'xray';resident.coefficientStride=prepared.coefficientStride??9;
+    return {cache:resident,inputReused:true};
+  }
   const high=new Float32Array(n*4),low=new Float32Array(n*4),thermal=new Float32Array(prepared.thermal?n*8:8);
   const populations=new Float64Array(t),occupancyErrors=new Float64Array(t),maxThermal=new Float64Array(6),thermalErrors=new Float64Array(6);
   await withCpu(async()=>{for(let atom=0;atom<n;atom++) {
@@ -89,7 +102,8 @@ export async function prepareGpuDiffraction(runtime, prepared, { signal, withCpu
   }catch(error){runtime.disposeBuffers(inputs);throw error;}
   releaseGpuDiffraction(runtime);
   const cache={device:runtime.device,fractional:prepared.fractional,types:prepared.types,occupancy:prepared.occupancy,
-    thermal:prepared.thermal,coefficients:prepared.coefficients,inputs,scratch:{},populations,occupancyErrors,maxThermal,thermalErrors};
+    thermal:prepared.thermal,coefficients:prepared.coefficients,radiation:prepared.radiation??'xray',coefficientStride:prepared.coefficientStride??9,
+    inputs,scratch:{},populations,occupancyErrors,maxThermal,thermalErrors};
   caches.set(runtime,cache);return {cache,inputReused:false};
 }
 
@@ -124,8 +138,7 @@ export function packDiffractionBatch(prepared,cache,start,end) {
     }
     let amplitudeBound=0,amplitudeError=0;
     for(let type=0;type<t;type++) {
-      const offset=type*9;let factor=prepared.coefficients[offset+8];
-      for(let k=0;k<4;k++)factor+=prepared.coefficients[offset+k]*Math.exp(-prepared.coefficients[offset+4+k]*s2);
+      const factor=evaluatePreparedScatteringFactor(prepared,type,s2);
       const encoded=copyNumber(factor);factors[local*t+type]=encoded;
       amplitudeBound+=Math.abs(factor)*cache.populations[type];
       amplitudeError+=Math.abs(factor-encoded)*cache.populations[type]+Math.abs(encoded)*cache.occupancyErrors[type];
@@ -153,7 +166,16 @@ export async function analyzeGpuDiffraction(runtime,prepared,{signal,onProgress=
   const {cache,inputReused}=await prepareGpuDiffraction(runtime,prepared,{signal,withCpu});
   const chunks=Math.ceil(n/ATOMS_PER_CHUNK),maxGroups=runtime.device?.limits?.maxComputeWorkgroupsPerDimension??65535;
   if(chunks>maxGroups)throw unavailable('the atom count exceeds one bounded reduction dispatch.');
-  const batchSize=Math.max(1,Math.min(REFLECTIONS_PER_BATCH,Math.floor(MAX_DISPATCH_WORK/n),Math.floor(maxGroups/chunks)));
+  // Tiny primitive cells often have tens of thousands of reflections. Batch
+  // those together instead of paying a GPU readback and CPU admission per64.
+  // Scratch allocations grow to powers of two, so constrain against the
+  // largest power of two that fits every device/storage/workspace limit.
+  const bufferLimit=Math.min(MAX_BATCH_BUFFER_BYTES,runtime.device?.limits?.maxStorageBufferBindingSize??128*1024**2,
+    runtime.device?.limits?.maxBufferSize??256*1024**2);
+  const bufferCapacity=2**Math.floor(Math.log2(bufferLimit));
+  const batchSize=Math.min(MAX_REFLECTIONS_PER_BATCH,Math.floor(MAX_DISPATCH_WORK/n),Math.floor(maxGroups/chunks),
+    Math.floor(bufferCapacity/48),Math.floor(bufferCapacity/(t*4)),Math.floor(bufferCapacity/(chunks*16)));
+  if(batchSize<1)throw unavailable('the device cannot hold one bounded reflection batch.');
   const settings=new Uint32Array([n,t,0,chunks,prepared.thermal?1:0,0,0,0]);
   const config=await scratch(runtime,cache,'settings',settings.byteLength);
   let correctedReflections=0;
@@ -168,7 +190,7 @@ export async function analyzeGpuDiffraction(runtime,prepared,{signal,onProgress=
     await runtime.run(DIFFRACTION_STRUCTURE_FACTORS_SHADER,[config,...cache.inputs,reflectionBuffer,factorBuffer,partialBuffer],count*chunks*128,
       {signal,batchSize:0,workgroupSize:128,wait:false});
     const partials=await runtime.read(partialBuffer,Float32Array,count*chunks*4,{signal});
-    await withCpu(async()=>{for(let local=0;local<count;local++) {
+    await withCpu(async()=>{let correctionDeadline=performance.now()+CORRECTION_YIELD_MS;for(let local=0;local<count;local++) {
       checkSignal(signal);
       const output=first-start+local;let re=0,im=0,bound=0;
       for(let chunk=0;chunk<chunks;chunk++) {
@@ -176,6 +198,12 @@ export async function analyzeGpuDiffraction(runtime,prepared,{signal,onProgress=
       }
       if(![re,im,bound].every(Number.isFinite)||bound<0)throw unavailable('the device returned an invalid complex amplitude.');
       const magnitude=Math.hypot(re,im),uncertainty=packed.errors[local];
+      // This is an exact zero, not an intensity cutoff: every occupied species
+      // has zero scattering amplitude at this reflection. In particular a
+      // zero neutron coherent length needs no double-precision recovery.
+      if(packed.bounds[local]===0) {
+        real[output]=0;imag[output]=0;intensity[output]=0;amplitudeBound[output]=0;continue;
+      }
       if(magnitude===0||uncertainty>magnitude*COMPLEX_RELATIVE_TOLERANCE) {
         // Large repeated crystals can have mostly extinct supercell hkl rows.
         // Recovering those serially would defeat the shared CPU pool. Small
@@ -188,7 +216,10 @@ export async function analyzeGpuDiffraction(runtime,prepared,{signal,onProgress=
         const exact=await runParserStepsAsync(evaluateDiffractionReflectionSteps(prepared,first+local),{signal});
         real[output]=exact.real;imag[output]=exact.imag;intensity[output]=exact.intensity;amplitudeBound[output]=exact.amplitudeBound;
         correctedReflections++;
-        if((correctedReflections&15)===0){report('cpu-precision-correction',output);await yieldWorker();}
+        if(performance.now()>=correctionDeadline){
+          report('cpu-precision-correction',output);await yieldWorker();
+          correctionDeadline=performance.now()+CORRECTION_YIELD_MS;
+        }
       }else {
         real[output]=re;imag[output]=im;intensity[output]=re*re+im*im;amplitudeBound[output]=Math.max(bound,packed.bounds[local]);
       }
@@ -197,6 +228,6 @@ export async function analyzeGpuDiffraction(runtime,prepared,{signal,onProgress=
     report('gpu-structure-factors',last-start);await yieldWorker();
   }
   checkSignal(signal);report('complete',length);
-  return {start,end,real,imag,intensity,amplitudeBound,backend:'gpu',correctedReflections,inputReused,
+  return {start,end,real,imag,intensity,amplitudeBound,radiation:prepared.radiation??'xray',backend:'gpu',correctedReflections,inputReused,
     elapsedMs:performance.now()-startedAt,precision:'f32 with bounded f64 reflection corrections'};
 }

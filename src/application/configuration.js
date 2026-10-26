@@ -1,4 +1,5 @@
 import { normalizeDiffractionParameters, DIFFRACTION_DEFAULTS } from '../analysis/diffraction.js';
+import { DIFFRACTION_WAVELENGTH_PRESETS } from '../crystal/diffraction-presets.js';
 // Portable processing recipes contain no coordinates or computed atom arrays.
 // Local files must be selected again; source metadata is only used to match them.
 import { SCALAR_COLOR_SCHEMES } from '../render/palette.js';
@@ -514,12 +515,13 @@ const DEFECT_MESH_STYLE = { color: '#d9c06a', interiorColor: '#c7ae5c', capColor
 /** Diffraction recipes contain physical settings, never calculated peaks. */
 function normalizeDiffraction(value, path) {
   const input = record(value, path, ['enabled', 'wavelengthPreset', ...Object.keys(DIFFRACTION_DEFAULTS)]);
-  const wavelengths = { 'cu-ka1': 1.5406, 'co-ka1': 1.78897, 'mo-ka1': 0.7093 };
   const { enabled, wavelengthPreset, ...parameters } = input;
   let normalized;
   try { normalized = normalizeDiffractionParameters(parameters); } catch (error) { fail(path, error.message); }
-  const preset = choice(wavelengthPreset ?? (normalized.wavelength === DIFFRACTION_DEFAULTS.wavelength ? 'cu-ka1' : 'custom'), `${path}.wavelengthPreset`, new Set(['custom', ...Object.keys(wavelengths)]));
-  if (preset !== 'custom' && normalized.wavelength !== wavelengths[preset]) fail(path, 'the wavelength and preset must agree');
+  const presets = DIFFRACTION_WAVELENGTH_PRESETS[normalized.radiation??'xray'];
+  const inferred = presets.find(entry=>entry.wavelength===normalized.wavelength)?.id??'custom';
+  const preset = choice(wavelengthPreset ?? inferred, `${path}.wavelengthPreset`, new Set(['custom', ...presets.map(entry=>entry.id)]));
+  if (preset !== 'custom' && normalized.wavelength !== presets.find(entry=>entry.id===preset).wavelength) fail(path, 'the wavelength and preset must agree');
   return { enabled: boolean(enabled, `${path}.enabled`, false), ...normalized, wavelengthPreset: preset };
 }
 

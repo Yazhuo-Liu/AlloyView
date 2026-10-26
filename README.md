@@ -40,11 +40,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   actual space-group identification and refined primitive/conventional cell export
   through the open-source moyo WASM library, anisotropic thermal ellipsoids,
   and CIF/POSCAR structure export plus polyhedron CSV statistics.
-- Powder X-ray diffraction from periodic structures: wavelength presets,
+- Powder X-ray, electron and neutron diffraction from periodic structures: wavelength/voltage presets,
   occupancy and thermal-displacement factors, peak indices and multiplicities,
   Gaussian profiles and complete CSV exports. Reusable CPU Workers and WebGPU
   structure-factor sums share double-precision checks for uncertain reflections.
-  See [Crystal structures](docs/features/crystal.md#powder-x-ray-diffraction).
+  See [Crystal structures](docs/features/crystal.md#powder-diffraction).
 - CHGCAR/CHG, LOCPOT, ELFCAR and Gaussian Cube scalar grids: CPU/WebGPU
   isosurfaces, numerical sections with CSV export, and WebGL rendering in the
   main/second view and PNG images. See [Volumetric data](docs/features/volumetric.md).
@@ -461,3 +461,6 @@ The neutral-atom IT92 scattering-factor table is adapted from Gemmi 0.7.5 under
 MPL-2.0 in a separate, marked source file. Its original source, license and
 [reproducible provenance](https://github.com/Yazhuo-Liu/AlloyView/blob/main/third_party/gemmi-it92/README.md)
 are included; the diffraction algorithms are original AlloyView code.
+The electron C4322 and neutron coherent-length tables come from the same pinned
+Gemmi release under MPL-2.0, with separate source files and
+[reproducible provenance](https://github.com/Yazhuo-Liu/AlloyView/blob/main/third_party/gemmi-diffraction/README.md).

@@ -1,4 +1,5 @@
-import { prepareDiffractionSourceSteps, prepareDiffractionSteps, calculateDiffractionRangeSteps,
+import { normalizeDiffractionParameters, prepareDiffractionSourceSteps, retargetDiffractionSourceSteps,
+  prepareDiffractionSteps, calculateDiffractionRangeSteps,
   finalizeDiffractionSteps, diffractionCsvSteps } from '../analysis/diffraction.js';
 import { runParserStepsAsync } from '../io/cooperative-parser.js';
 
@@ -119,15 +120,22 @@ async function run(data) {
       result = { sourceReady: true };
     } else if (data.type === 'prepare') {
       if (!frame || sourceKey !== data.key) throw new Error('Diffraction source is no longer resident.');
-      const signature = JSON.stringify([data.parameters, Boolean(data.shared)]);
+      const settings = normalizeDiffractionParameters(data.parameters);
+      const signature = JSON.stringify([settings, Boolean(data.shared)]);
       if (!prepared || signature !== preparedParameters) {
-        const thermal = data.parameters?.useThermal !== false;
-        let source = sourceCache.get(thermal);
+        const thermal = settings.useThermal, cacheKey = `${settings.radiation}:${thermal}`;
+        let source = sourceCache.get(cacheKey);
         if (!source) {
-          source = await runParserStepsAsync(prepareDiffractionSourceSteps(frame, { useThermal: thermal }), options);
-          sourceCache.set(thermal, source);
+          const geometry = [...sourceCache.values()].find(value => value.thermalEnabled === thermal);
+          // Radiation edits change species factors, not the immutable atom
+          // geometry. Keep one geometry snapshot per thermal mode, including
+          // its shared-memory copy, when switching between all three models.
+          source = await runParserStepsAsync(geometry
+            ? retargetDiffractionSourceSteps(geometry, settings)
+            : prepareDiffractionSourceSteps(frame, settings), options);
+          sourceCache.set(cacheKey, source);
         }
-        let next = await runParserStepsAsync(prepareDiffractionSteps(frame, data.parameters, { source }), options);
+        let next = await runParserStepsAsync(prepareDiffractionSteps(frame, settings, { source }), options);
         if (data.shared) next = await runParserStepsAsync(sharedPreparedSteps(next), options);
         prepared = next; preparedKey = `${sourceKey}:${++preparationSequence}`; preparedParameters = signature;
       }

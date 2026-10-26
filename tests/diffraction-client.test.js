@@ -41,7 +41,8 @@ function setup(options = {}) {
   return { client, cpuBudget, created, messages, replies };
 }
 function sameScientific(actual, expected) {
-  for (const key of ['parameters', 'atomCount', 'reflectionCount', 'extinctCount', 'peakCount', 'peaks', 'profile', 'reflections', 'warnings', 'scatteringModel']) {
+  for (const key of ['parameters', 'atomCount', 'reflectionCount', 'extinctCount', 'peakCount', 'peaks', 'profile',
+    'reflections', 'warnings', 'radiation', 'scatteringModel', 'scatteringUnits', 'intensityUnits', 'geometryCorrection']) {
     assert.deepEqual(actual[key], expected[key], key);
   }
 }
@@ -270,4 +271,62 @@ test('queued startup cancellation allocates no Worker and background warmup yiel
   lease.release();
   const result = await state.client.analyze(frame(), parameters);
   assert.equal(result.workerCount, 1); assert.equal(state.created.length, 1); assert.equal(budget.active, 0);
+});
+
+const modelParameters = radiation => ({ ...parameters, radiation,
+  ...(radiation === 'electron' ? { wavelength: .025, minAngle: .1, maxAngle: 2, step: .01, fwhm: .04 }
+    : radiation === 'neutron' ? { wavelength: 1.8, maxAngle: 120 } : {}) });
+
+for (const shared of [false, true]) test(`switching X-ray, signed neutron and electron models reuses the retained ${shared ? 'shared' : 'private'} source without stale factors`, async t => {
+  const state = setup({ shared }); t.after(() => state.client.dispose()); const input = frame();
+  input.typeLabels = ['H', 'Cu']; for (let atom = 0; atom < input.types.length; atom++) input.types[atom] = atom % 2;
+  const sourcePositions = input.fractional.slice(), results = [];
+  for (const radiation of ['xray', 'neutron', 'electron', 'xray']) {
+    const settings = modelParameters(radiation), result = await state.client.analyze(input, settings);
+    sameScientific(result, calculateDiffraction(input, settings));
+    assert.equal(result.radiation, radiation); assert.equal(result.parameters.radiation, radiation);
+    assert.ok(result.scatteringUnits); results.push(result);
+    for (const kind of ['peaks', 'profile']) {
+      const exported = await state.client.export(result, kind, { stem: 'H-Cu' }), csv = await exported.blob.text();
+      assert.ok(csv.includes(radiation), 'CSV records the actual radiation model');
+      assert.ok(csv.includes(result.scatteringModel), 'CSV retains the model provenance');
+    }
+  }
+  assert.ok(results[1].reflections.real.some(value => value < -1e-6), 'negative coherent neutron lengths remain signed before squaring');
+  assert.notDeepEqual(results[0].scatteringModel, results[1].scatteringModel);
+  assert.notDeepEqual(results[0].scatteringModel, results[2].scatteringModel);
+  sameScientific(results[0], results[3]);
+  assert.equal(state.messages.filter(message => message.type === 'source').length, 1);
+  assert.equal(state.created.length, 4); assert.deepEqual(input.fractional, sourcePositions);
+  assert.equal(state.cpuBudget.active, 0);
+});
+
+test('GPU unavailability and cancellation preserve the requested radiation and later cache recovery', async t => {
+  const state = setup(); t.after(() => state.client.dispose()); const input = frame();
+  for (const radiation of ['neutron', 'electron']) {
+    const settings = modelParameters(radiation), result = await state.client.analyze(input, settings, { useGpu: true });
+    sameScientific(result, calculateDiffraction(input, settings));
+    assert.equal(result.backend, 'cpu'); assert.ok(result.fallbackReason); assert.equal(result.radiation, radiation);
+  }
+  const controller = new AbortController(), before = state.messages.filter(message => message.type === 'range').length;
+  await assert.rejects(state.client.analyze(input, modelParameters('neutron'), { useGpu: true, signal: controller.signal,
+    onProgress(value) { if (value.phase === 'cpu-fallback') controller.abort(); } }), abort);
+  await state.client.whenIdle();
+  assert.equal(state.messages.filter(message => message.type === 'range').length, before, 'cancelled neutron GPU work cannot retry on CPU');
+  const recovered = await state.client.analyze(input, modelParameters('electron'));
+  sameScientific(recovered, calculateDiffraction(input, modelParameters('electron')));
+  assert.equal(state.messages.filter(message => message.type === 'source').length, 1); assert.equal(state.cpuBudget.active, 0);
+});
+
+test('radiation and thermal cache choices are independent and invalid model settings preserve valid cached inputs', async t => {
+  const state = setup({ shared: true }); t.after(() => state.client.dispose()); const input = frame();
+  for (const radiation of ['xray', 'neutron', 'electron', 'neutron', 'xray']) for (const useThermal of [false, true]) {
+    const settings = { ...modelParameters(radiation), useThermal }, result = await state.client.analyze(input, settings);
+    sameScientific(result, calculateDiffraction(input, settings));
+  }
+  await assert.rejects(state.client.analyze(input, { ...parameters, radiation: 'unsupported' }), /radiation/i);
+  const result = await state.client.analyze(input, modelParameters('xray'));
+  sameScientific(result, calculateDiffraction(input, modelParameters('xray')));
+  assert.equal(state.messages.filter(message => message.type === 'source').length, 1);
+  assert.equal(state.cpuBudget.active, 0); assert.equal(state.cpuBudget.queue.length, 0);
 });

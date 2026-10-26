@@ -95,7 +95,7 @@ not part of this increment. Global symmetry remains CPU WASM; the new
 coordination-polyhedron hull path also remains parallel CPU. WebGPU accelerates
 the newly added isosurface extraction, while WebGL renders all new displays.
 
-Powder X-ray diffraction was subsequently implemented; see the
+Powder X-ray, electron and neutron diffraction were subsequently implemented; see the
 [diffraction implementation record](DIFFRACTION_IMPLEMENTATION.md).
 
 User documentation: [Volumetric data](features/volumetric.md),

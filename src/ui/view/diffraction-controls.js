@@ -1,13 +1,20 @@
-import { DIFFRACTION_DEFAULTS, normalizeDiffractionParameters } from '../../analysis/diffraction.js';
+import { DIFFRACTION_DEFAULTS, DIFFRACTION_RADIATION_DEFAULTS, normalizeDiffractionParameters } from '../../analysis/diffraction.js';
+import { DIFFRACTION_WAVELENGTH_PRESETS, DIFFRACTION_DEFAULT_PRESETS, DIFFRACTION_RADIATION_LABELS } from '../../crystal/diffraction-presets.js';
 import { downloadBlob } from '../../io/export-archive.js';
 
-export const DIFFRACTION_WAVELENGTHS = Object.freeze({ 'cu-ka1': 1.5406, 'co-ka1': 1.78897, 'mo-ka1': 0.7093 });
+export const DIFFRACTION_WAVELENGTHS = Object.freeze(Object.fromEntries(Object.values(DIFFRACTION_WAVELENGTH_PRESETS)
+  .flat().map(preset=>[preset.id,preset.wavelength])));
 export const DIFFRACTION_UI_DEFAULTS = Object.freeze({ ...DIFFRACTION_DEFAULTS, wavelengthPreset: 'cu-ka1' });
 const PAGE_SIZE = 40, SVG = 'http://www.w3.org/2000/svg';
 const PLOT = Object.freeze({ left: 58, right: 624, top: 18, bottom: 230 });
 const concise = value => Number.isFinite(value) ? Number(value.toPrecision(7)).toString() : '—';
 const exact = value => Number.isFinite(value) ? String(value) : '—';
-const HELP = 'Calculate a powder X-ray pattern from the complete periodic structure, including hidden atoms.';
+const HELP = 'Calculate a powder diffraction pattern from the complete periodic structure, including hidden atoms.';
+const MODEL_HELP = Object.freeze({
+  xray: 'Neutral-atom X-ray form factors determine relative intensities. This kinematical powder model omits anomalous scattering.',
+  electron: 'Kinematical electron powder diffraction with neutral-atom elastic scattering factors. This is not an oriented single-crystal SAED pattern and does not include dynamical or multiple scattering. Accelerating-voltage presets use the relativistic electron wavelength.',
+  neutron: 'Coherent nuclear neutron powder diffraction for natural isotope composition, with explicit deuterium (D) also supported. Magnetic scattering, arbitrary isotope enrichment, incoherent background and absorption corrections are not included.',
+});
 const numericFields = [['diffraction-wavelength','wavelength'],['diffraction-min-angle','minAngle'],
   ['diffraction-max-angle','maxAngle'],['diffraction-fwhm','fwhm'],['diffraction-step','step']];
 const booleanFields = [['diffraction-thermal','useThermal'],['diffraction-lp','lorentzPolarization']];
@@ -82,6 +89,7 @@ export function initializeDiffractionControls({ client, getFrame, getSourceVersi
     const available = controlsEnabled && Boolean(getFrame());
     for (const [id] of [...numericFields,...booleanFields]) if ($(id)) $(id).disabled = !available;
     if ($('diffraction-preset')) $('diffraction-preset').disabled = !available;
+    if ($('diffraction-radiation')) $('diffraction-radiation').disabled = !available;
     if ($('run-diffraction')) $('run-diffraction').disabled = !available || Boolean(task);
     if ($('cancel-diffraction')) $('cancel-diffraction').disabled = !enabled && !task && !failed;
     for (const kind of ['peaks','profile']) if ($(`export-diffraction-${kind}`)) $(`export-diffraction-${kind}`).disabled = !fresh() || Boolean(exportTask);
@@ -92,12 +100,23 @@ export function initializeDiffractionControls({ client, getFrame, getSourceVersi
     $('diffraction-state')?.classList?.toggle('ready', label === 'Calculated'); controls();
   }
   function applySettings() {
+    const radiation=settings.radiation??'xray';
+    if ($('diffraction-radiation')) $('diffraction-radiation').value=radiation;
+    const select=$('diffraction-preset');
+    if(select&&doc?.createElement){
+      const entries=[...DIFFRACTION_WAVELENGTH_PRESETS[radiation],{id:'custom',label:'Custom wavelength'}];
+      select.replaceChildren(...entries.map(preset=>{const option=doc.createElement('option');option.value=preset.id;option.textContent=preset.label;return option;}));
+    }
+    text('diffraction-preset-label',radiation==='electron'?'Accelerating voltage / wavelength':'Wavelength preset');
+    text('diffraction-lp-label',radiation==='xray'?'Lorentz–polarization correction':'Powder Lorentz correction');
+    text('diffraction-model-help',MODEL_HELP[radiation]);
+    $('diffraction-chart')?.setAttribute('aria-label',`${DIFFRACTION_RADIATION_LABELS[radiation]} powder diffraction chart`);
     for (const [id,key] of numericFields) if ($(id)) $(id).value = String(settings[key]);
     for (const [id,key] of booleanFields) if ($(id)) $(id).checked = settings[key];
     if ($('diffraction-preset')) $('diffraction-preset').value = settings.wavelengthPreset;
   }
   function readSettings() {
-    const parameters = {};
+    const parameters = {radiation:settings.radiation??'xray'};
     for (const [id,key] of numericFields) parameters[key] = $(id)?.valueAsNumber ?? settings[key];
     for (const [id,key] of booleanFields) parameters[key] = $(id)?.checked ?? settings[key];
     return { ...normalizeDiffractionParameters(parameters), wavelengthPreset: settings.wavelengthPreset };
@@ -107,7 +126,8 @@ export function initializeDiffractionControls({ client, getFrame, getSourceVersi
     result = null; source = null; identity = null; chart = cursor = null; page = inspected = 0;
     $('diffraction-chart')?.replaceChildren(); $('diffraction-table-body')?.replaceChildren();
     if ($('diffraction-results')) $('diffraction-results').hidden = true;
-    text('diffraction-backend','—'); text('diffraction-summary',''); onResultsChange();
+    text('diffraction-backend','—');if($('diffraction-backend'))$('diffraction-backend').title='';
+    text('diffraction-summary',''); onResultsChange();
   }
   function abortJobs() {
     const wasRunning = Boolean(task);
@@ -158,7 +178,7 @@ export function initializeDiffractionControls({ client, getFrame, getSourceVersi
     if ($('diffraction-results')) $('diffraction-results').hidden = false;
     const container = $('diffraction-chart');
     if (container && doc?.createElementNS) {
-      chart = svg('svg',{viewBox:'0 0 640 280',role:'img','aria-label':'Powder X-ray diffraction pattern, relative intensity versus two theta'});
+      chart = svg('svg',{viewBox:'0 0 640 280',role:'img','aria-label':`${DIFFRACTION_RADIATION_LABELS[result.radiation??result.parameters.radiation??'xray']} powder diffraction pattern, relative intensity versus two theta`});
       const paths = diffractionChartPaths(result);
       chart.append(svg('path',{d:`M${PLOT.left},${PLOT.top}V${PLOT.bottom}H${PLOT.right}`,fill:'none',stroke:'currentColor','stroke-width':1}));
       for (let index=0;index<=4;index++) {
@@ -184,7 +204,7 @@ export function initializeDiffractionControls({ client, getFrame, getSourceVersi
       if (!result.peaks.length) cursor.setAttribute('visibility','hidden');
     }
     if ($('diffraction-peak-slider')) {$('diffraction-peak-slider').max=String(Math.max(0,result.peaks.length-1));$('diffraction-peak-slider').value=String(inspected);}
-    text('diffraction-summary',`${result.peaks.length.toLocaleString('en-US')} peaks · ${result.reflectionCount?.toLocaleString('en-US')??'—'} reciprocal reflections · λ ${result.parameters.wavelength} Å · ${Math.round(result.elapsedMs??0)} ms`);
+    text('diffraction-summary',`${DIFFRACTION_RADIATION_LABELS[result.radiation??result.parameters.radiation??'xray']} · ${result.peaks.length.toLocaleString('en-US')} peaks · ${result.reflectionCount?.toLocaleString('en-US')??'—'} reciprocal reflections · λ ${result.parameters.wavelength} Å · ${Math.round(result.elapsedMs??0)} ms`);
     text('diffraction-warnings',(result.warnings??[]).join(' '));if($('diffraction-warnings'))$('diffraction-warnings').hidden=!result.warnings?.length;
     if (!result.peaks.length) text('diffraction-probe','No nonzero Bragg peaks in this angle range.');
     table();inspect(inspected);
@@ -234,6 +254,13 @@ export function initializeDiffractionControls({ client, getFrame, getSourceVersi
   }
   $('run-diffraction')?.addEventListener('click',()=>void run());
   $('cancel-diffraction')?.addEventListener('click',()=>{onEdit();cancel();});
+  $('diffraction-radiation')?.addEventListener('change',()=>{
+    const radiation=$('diffraction-radiation').value;if(!Object.hasOwn(DIFFRACTION_WAVELENGTH_PRESETS,radiation)||radiation===settings.radiation)return;
+    const wavelengthPreset=DIFFRACTION_DEFAULT_PRESETS[radiation];
+    const {useThermal,lorentzPolarization}=settings;
+    settings={...settings,...DIFFRACTION_RADIATION_DEFAULTS[radiation],radiation,wavelengthPreset,wavelength:DIFFRACTION_WAVELENGTHS[wavelengthPreset],useThermal,lorentzPolarization};
+    applySettings();invalidate('Radiation changed. Wavelength, angle range and profile defaults have been updated; calculate to show the new pattern.');onEdit();
+  });
   for(const [id,key] of numericFields)$(id)?.addEventListener('change',()=>{
     if(key==='wavelength'){settings.wavelengthPreset='custom';if($('diffraction-preset'))$('diffraction-preset').value='custom';}
     try{settings=readSettings();}catch(error){invalidate();state('Invalid input',error.message);onEdit();return;}
@@ -241,7 +268,7 @@ export function initializeDiffractionControls({ client, getFrame, getSourceVersi
   });
   for(const [id,key] of booleanFields)$(id)?.addEventListener('change',()=>{settings[key]=$(id).checked;invalidate();onEdit();});
   $('diffraction-preset')?.addEventListener('change',()=>{
-    const preset=$('diffraction-preset').value;if(preset!=='custom'&&!Object.hasOwn(DIFFRACTION_WAVELENGTHS,preset))return;
+    const preset=$('diffraction-preset').value;if(preset!=='custom'&&!DIFFRACTION_WAVELENGTH_PRESETS[settings.radiation??'xray'].some(entry=>entry.id===preset))return;
     settings.wavelengthPreset=preset;if(preset!=='custom')settings.wavelength=DIFFRACTION_WAVELENGTHS[preset];applySettings();invalidate();onEdit();
   });
   $('diffraction-peak-slider')?.addEventListener('input',()=>inspect(Number($('diffraction-peak-slider').value)));
@@ -254,7 +281,10 @@ export function initializeDiffractionControls({ client, getFrame, getSourceVersi
     setEnabled(value){controlsEnabled=Boolean(value);controls();},
     reset(){cancel({silent:true});settings={...DIFFRACTION_UI_DEFAULTS};applySettings();onResultsChange({clearSettings:true});},
     serialize:()=>({enabled,...settings}),
-    async restore(saved,{isCurrent=()=>true}={}){if(!isCurrent())return false;cancel({silent:true});settings={...DIFFRACTION_UI_DEFAULTS,...saved};enabled=Boolean(saved?.enabled);delete settings.enabled;applySettings();return onFrame({isCurrent});},
+    async restore(saved,{isCurrent=()=>true}={}){if(!isCurrent())return false;cancel({silent:true});
+      const radiation=saved?.radiation??'xray';
+      settings={...DIFFRACTION_UI_DEFAULTS,...DIFFRACTION_RADIATION_DEFAULTS[radiation],wavelengthPreset:DIFFRACTION_DEFAULT_PRESETS[radiation],...saved};
+      enabled=Boolean(saved?.enabled);delete settings.enabled;applySettings();return onFrame({isCurrent});},
     isUntouched:()=>!enabled&&Object.entries(DIFFRACTION_UI_DEFAULTS).every(([key,value])=>settings[key]===value),
     isEnabled:()=>enabled,failed:()=>failed?['diffraction']:[],pendingKinds:()=>task?['diffraction']:[]});
 }

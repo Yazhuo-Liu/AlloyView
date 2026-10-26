@@ -1,0 +1,4 @@
+1cb52e1b8d9295e256110a80bb237fcede3383b8f5f470b297180e454e3a343a  third_party/gemmi-diffraction/c4322.hpp
+6d760c68fc1dd45b92cdc0e01ea06d9a8097f0887db35a088fabb10ab63fc44f  third_party/gemmi-diffraction/neutron92.hpp
+fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85  licenses/Gemmi-MPL-2.0.txt
+701c972ee266f9e4442bf01b8e32b673a74812ee12599160399aeceacbf69800  src/crystal/diffraction-scattering-data.js

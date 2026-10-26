@@ -18,12 +18,13 @@ ROOT = Path(__file__).resolve().parents[2]
 BRIDGE = r"""
 import { calculateDiffraction } from './src/analysis/diffraction.js';
 import { getXrayScatteringCoefficients } from './src/crystal/xray-scattering.js';
+import { getElectronScatteringCoefficients, getNeutronScatteringLength, electronWavelengthFromEnergy } from './src/crystal/diffraction-scattering.js';
 const fcc=[[0,0,0],[0,.5,.5],[.5,0,.5],[.5,.5,0]], cubic=a=>[a,0,0,0,a,0,0,0,a];
 const make=(name,vectors,sites,species,types,properties=[],parameters={})=>({name,
   frame:{cell:{vectors:Float64Array.from(vectors),pbc:[true,true,true]},
     fractional:Float64Array.from(sites.flat()),types:Uint32Array.from(types??sites.map(()=>0)),typeLabels:species,
     properties:properties.map(p=>({...p,data:Float64Array.from(p.data)}))},
-  parameters:{wavelength:1.5406,minAngle:5,maxAngle:120,step:.05,fwhm:.2,lorentzPolarization:true,useThermal:true,...parameters}});
+  parameters:{radiation:'xray',wavelength:1.5406,minAngle:5,maxAngle:120,step:.05,fwhm:.2,lorentzPolarization:true,useThermal:true,...parameters}});
 const cases=[
  make('fcc-cu',cubic(3.615),fcc,['Cu']),
  make('fcc-cu-primitive',[0,3.615/2,3.615/2,3.615/2,0,3.615/2,3.615/2,3.615/2,0],[[0,0,0]],['Cu']),
@@ -46,7 +47,31 @@ const base=cases[0], copies=[];
 for(let z=0;z<1;z++)for(let y=0;y<2;y++)for(let x=0;x<2;x++)for(const site of fcc)copies.push([(site[0]+x)/2,(site[1]+y)/2,site[2]]);
 cases.push(make('fcc-cu-supercell',[7.23,0,0,0,7.23,0,0,0,3.615],copies,['Cu']));
 cases.push(make('translated-cu',cubic(3.615),fcc.map(s=>s.map((x,i)=>x+[.123,.337,-.29][i])),['Cu']));
-const data=cases.map(item=>({...item,coefficients:item.frame.typeLabels.map(getXrayScatteringCoefficients),result:calculateDiffraction(item.frame,item.parameters)}));
+const electron={radiation:'electron',wavelength:electronWavelengthFromEnergy(200),minAngle:.1,maxAngle:4,step:.005,fwhm:.03};
+const neutron={radiation:'neutron',wavelength:1.8,minAngle:5,maxAngle:120};
+const copyCase=(name,source,parameters)=>({...source,name,parameters:{...source.parameters,...parameters}});
+cases.push(copyCase('electron-fcc-cu',cases.find(item=>item.name==='fcc-cu'),electron));
+cases.push(copyCase('electron-80keV-cu',cases.find(item=>item.name==='fcc-cu'),{...electron,wavelength:electronWavelengthFromEnergy(80)}));
+cases.push(copyCase('electron-300keV-cu',cases.find(item=>item.name==='fcc-cu'),{...electron,wavelength:electronWavelengthFromEnergy(300)}));
+cases.push(copyCase('electron-rocksalt-nacl',cases.find(item=>item.name==='rocksalt-nacl'),electron));
+cases.push(copyCase('electron-triclinic-thermal',cases.find(item=>item.name==='triclinic'),electron));
+cases.push(copyCase('electron-lorentz-off',cases.find(item=>item.name==='rocksalt-nacl'),{...electron,lorentzPolarization:false}));
+cases.push(copyCase('neutron-fcc-cu',cases.find(item=>item.name==='fcc-cu'),neutron));
+cases.push(copyCase('neutron-rocksalt-nacl',cases.find(item=>item.name==='rocksalt-nacl'),neutron));
+cases.push(copyCase('neutron-triclinic-thermal',cases.find(item=>item.name==='triclinic'),neutron));
+cases.push(make('neutron-signed-H-cancellation',cubic(4),[[0,0,0],[.5,.5,.5]],['H','O'],[0,1],
+ [{name:'occupancy',data:[1,3.739/5.803]}],neutron));
+cases.push(make('neutron-hydride',cubic(4),[[0,0,0],[.5,.5,.5]],['Ti','H'],[0,1],[],neutron));
+cases.push(make('neutron-deuteride',cubic(4),[[0,0,0],[.5,.5,.5]],['Ti','D'],[0,1],[],neutron));
+cases.push(copyCase('neutron-lorentz-off',cases.find(item=>item.name==='rocksalt-nacl'),{...neutron,lorentzPolarization:false}));
+for(const isotope of ['hydride','deuteride']){
+ const source=cases.find(item=>item.name==='neutron-'+isotope);
+ cases.push(copyCase('xray-'+isotope,source,{radiation:'xray'}));
+ cases.push(copyCase('electron-'+isotope,source,electron));
+}
+const coefficientsFor=(radiation,symbol)=>radiation==='electron'?getElectronScatteringCoefficients(symbol==='D'?'H':symbol)
+ :radiation==='neutron'?[getNeutronScatteringLength(symbol)]:getXrayScatteringCoefficients(symbol==='D'?'H':symbol);
+const data=cases.map(item=>({...item,coefficients:item.frame.typeLabels.map(symbol=>coefficientsFor(item.parameters.radiation,symbol)),result:calculateDiffraction(item.frame,item.parameters)}));
 console.log(JSON.stringify(data,(_key,value)=>ArrayBuffer.isView(value)?Array.from(value):value));
 """
 
@@ -83,7 +108,13 @@ def oracle(case):
     valid = (angles >= parameters['minAngle'] - 1e-11) & (angles <= parameters['maxAngle'] + 1e-11)
     rows, reciprocal, q, angles = rows[valid], reciprocal[valid], q[valid], angles[valid]
     s2 = q*q/4
-    f = np.sum(coefficients[None,:,0:4] * np.exp(-s2[:,None,None] * coefficients[None,:,4:8]), axis=2) + coefficients[None,:,8]
+    radiation = parameters.get('radiation', 'xray')
+    if radiation == 'electron':
+        f = np.sum(coefficients[None,:,0:5] * np.exp(-s2[:,None,None] * coefficients[None,:,5:10]), axis=2)
+    elif radiation == 'neutron':
+        f = np.broadcast_to(coefficients[:,0], (len(s2),len(coefficients)))
+    else:
+        f = np.sum(coefficients[None,:,0:4] * np.exp(-s2[:,None,None] * coefficients[None,:,4:8]), axis=2) + coefficients[None,:,8]
     weights = f[:,species] * occupancy[None,:]
     weights *= np.exp(-2*np.pi**2 * np.einsum('ri,aij,rj->ra',reciprocal,covariance,reciprocal))
     amplitudes = np.sum(weights*np.exp(2j*np.pi*(rows@sites.T)),axis=1)
@@ -94,7 +125,8 @@ def oracle(case):
     lp = np.ones(len(angles))
     if parameters['lorentzPolarization']:
         theta = np.deg2rad(angles/2)
-        lp = (1+np.cos(2*theta)**2)/(np.sin(theta)**2*np.cos(theta))
+        polarization = 1+np.cos(2*theta)**2 if radiation == 'xray' else 1
+        lp = polarization/(np.sin(theta)**2*np.cos(theta))
     peaks = []
     for index in np.argsort(angles):
         if not valid[index]: continue
@@ -117,8 +149,9 @@ def oracle(case):
     np.testing.assert_allclose([p['twoTheta'] for p in result['peaks']],[p[0] for p in peaks],rtol=3e-13,atol=2e-11)
     np.testing.assert_allclose([p['intensity'] for p in result['peaks']],[p[1] for p in peaks],rtol=2e-10,atol=1e-8)
     np.testing.assert_array_equal([p['multiplicity'] for p in result['peaks']],[p[2] for p in peaks])
-    return {'name':case['name'],'fullReflections':len(rows),'powderPeaks':len(peaks),
-            'maxAmplitudeError':float(np.max(np.abs(actual-amplitudes[indices]), initial=0))}
+    return {'name':case['name'],'radiation':radiation,'fullReflections':len(rows),'powderPeaks':len(peaks),
+            'maxAmplitudeError':float(np.max(np.abs(actual-amplitudes[indices]), initial=0)),
+            'amplitudeUnit':{'xray':'electrons','electron':'angstrom','neutron':'fm'}[radiation]}
 
 
 def main():
@@ -135,9 +168,41 @@ def main():
                                [p['twoTheta'] for p in cubic['result']['peaks']],rtol=2e-12,atol=1e-10)
     np.testing.assert_allclose([p['relativeIntensity'] for p in sheared['result']['peaks']],
                                [p['relativeIntensity'] for p in cubic['result']['peaks']],rtol=2e-12,atol=1e-10)
+    # SI de Broglie reference, evaluated in the momentum form rather than the
+    # production hc/sqrt(E(E+2mc²)) arrangement. Values use CODATA 2022 m_e.
+    wavelengths = {}
+    for name, energy_kev in [('electron-80keV-cu',80),('electron-fcc-cu',200),('electron-300keV-cu',300)]:
+        energy_joule = energy_kev * 1000 * 1.602176634e-19
+        wavelength = 6.62607015e-34 / math.sqrt(2 * 9.1093837139e-31 * energy_joule
+            * (1 + energy_joule / (2 * 9.1093837139e-31 * 299792458**2))) * 1e10
+        case = next(item for item in cases if item['name']==name)
+        np.testing.assert_allclose(case['parameters']['wavelength'],wavelength,rtol=3e-15,atol=0)
+        wavelengths[str(energy_kev)] = wavelength
+
+    def intensity(case_name, hkl):
+        case = next(item for item in cases if item['name']==case_name)
+        reflections = case['result']['reflections']
+        index = np.flatnonzero(np.all(np.asarray(reflections['hkls']).reshape(-1,3)==hkl,axis=1))[0]
+        return reflections['intensity'][index]
+
+    contrast = {radiation: intensity(name,[1,1,1])/intensity(name,[2,0,0]) for radiation,name in
+        [('xray','rocksalt-nacl'),('electron','electron-rocksalt-nacl'),('neutron','neutron-rocksalt-nacl')]}
+    assert min(abs(a-b) for a,b in itertools.combinations(contrast.values(),2)) > .01
+    hydride = intensity('neutron-hydride',[1,0,0])/intensity('neutron-hydride',[1,1,0])
+    deuteride = intensity('neutron-deuteride',[1,0,0])/intensity('neutron-deuteride',[1,1,0])
+    assert deuteride > 1000 * hydride
+    signed = next(item for item in cases if item['name']=='neutron-signed-H-cancellation')
+    assert all(sum(hkl) % 2 for peak in signed['result']['peaks'] for hkl in peak['hkls'])
+    for radiation in ['xray','electron']:
+        hydrogen = next(item for item in cases if item['name']==radiation+'-hydride')
+        deuterium = next(item for item in cases if item['name']==radiation+'-deuteride')
+        np.testing.assert_array_equal(hydrogen['result']['reflections']['intensity'],deuterium['result']['reflections']['intensity'])
     print(json.dumps({'oracle':'NumPy full +/-hkl enumeration and complex sums','cases':reports,
                       'normalizedPrimitiveSupercellTranslationOccupancyParity':True,
-                      'largeUnimodularBasisParity':True},indent=2))
+                      'largeUnimodularBasisParity':True,'electronWavelength_A_by_keV':wavelengths,
+                      'NaClRaw111To200IntensityRatio':contrast,
+                      'TiH_Raw100To110IntensityRatio':hydride,'TiD_Raw100To110IntensityRatio':deuteride,
+                      'signedHydrogenCancellationPreserved':True,'deuteriumElectronicFactorEqualsHydrogen':True},indent=2))
 
 
 if __name__ == '__main__': main()

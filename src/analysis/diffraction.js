@@ -1,9 +1,17 @@
 import { determinant3, invert3 } from '../data/model.js';
 import { getXrayScatteringCoefficients, XRAY_SCATTERING_MAX_S } from '../crystal/xray-scattering.js';
+import { getElectronScatteringCoefficients, getNeutronScatteringLength, ELECTRON_SCATTERING_MAX_S,
+  electronWavelengthFromEnergy } from '../crystal/diffraction-scattering.js';
 import { runParserSteps, runParserStepsAsync } from '../io/cooperative-parser.js';
 
-export const DIFFRACTION_DEFAULTS = Object.freeze({ wavelength: 1.5406, minAngle: 5, maxAngle: 90,
+export const DIFFRACTION_DEFAULTS = Object.freeze({ radiation: 'xray', wavelength: 1.5406, minAngle: 5, maxAngle: 90,
   step: 0.02, fwhm: 0.15, lorentzPolarization: true, useThermal: true });
+export const DIFFRACTION_RADIATION_DEFAULTS = Object.freeze({
+  xray: DIFFRACTION_DEFAULTS,
+  electron: Object.freeze({ ...DIFFRACTION_DEFAULTS, radiation: 'electron', wavelength: electronWavelengthFromEnergy(200),
+    minAngle: 0.1, maxAngle: 4, step: 0.002, fwhm: 0.03 }),
+  neutron: Object.freeze({ ...DIFFRACTION_DEFAULTS, radiation: 'neutron', wavelength: 1.8, maxAngle: 150 }),
+});
 export const DIFFRACTION_LIMITS = Object.freeze({ maxAtoms: 500_000, maxCandidates: 2_000_000,
   maxReflections: 250_000, maxAtomReflections: 200_000_000, maxProfilePoints: 200_001,
   maxProfileContributions: 50_000_000 });
@@ -11,9 +19,35 @@ const TAU = 2 * Math.PI, DEG = Math.PI / 180;
 const THERMAL_NAMES = ['xx', 'yy', 'zz', 'xy', 'xz', 'yz'].map(axis => `displacementU${axis}`);
 const fail = message => new Error(`Powder diffraction: ${message}`);
 const finite = value => typeof value === 'number' && Number.isFinite(value);
+const SCATTERING_MODELS = Object.freeze({
+  xray: Object.freeze({ coefficientStride: 9, scatteringUnits: 'electrons',
+    scatteringModel: 'IT92 neutral atoms; non-resonant kinematic X-ray diffraction', warnings: [] }),
+  electron: Object.freeze({ coefficientStride: 10, scatteringUnits: 'Å',
+    scatteringModel: 'C4322 neutral atoms; kinematic electron powder diffraction',
+    warnings: ['Electron intensities use neutral-atom single scattering (the kinematic approximation); dynamical and multiple scattering are not included.'] }),
+  neutron: Object.freeze({ coefficientStride: 1, scatteringUnits: 'fm',
+    scatteringModel: 'Neutron92 natural elements and explicit deuterium; real coherent nuclear scattering lengths',
+    warnings: ['Neutron intensities use natural isotope compositions, with explicit D interpreted as deuterium; other isotope enrichment, magnetic scattering, incoherent background and absorption are not included.'] }),
+});
+
+function radiationModel(radiation) {
+  if (!Object.hasOwn(SCATTERING_MODELS, radiation)) throw fail('radiation must be xray, electron or neutron.');
+  return SCATTERING_MODELS[radiation];
+}
+function coefficientsFor(radiation, symbol) {
+  try {
+    if (radiation === 'neutron') return [getNeutronScatteringLength(symbol)];
+    // Deuterium retains its explicit isotope label and nuclear amplitude. Its
+    // neutral electronic density has the H form factor in these models.
+    const electronicSymbol = symbol === 'D' ? 'H' : symbol;
+    if (radiation === 'electron') return getElectronScatteringCoefficients(electronicSymbol);
+    return getXrayScatteringCoefficients(electronicSymbol);
+  } catch (error) { throw fail(error.message); }
+}
 
 export function normalizeDiffractionParameters(parameters = {}) {
-  const result = { ...DIFFRACTION_DEFAULTS, ...parameters };
+  const radiation = parameters.radiation === undefined ? 'xray' : parameters.radiation; radiationModel(radiation);
+  const result = { ...DIFFRACTION_RADIATION_DEFAULTS[radiation], ...parameters };
   for (const key of Object.keys(parameters)) if (!Object.hasOwn(DIFFRACTION_DEFAULTS, key)) throw fail(`unknown setting ${key}.`);
   for (const key of ['wavelength', 'minAngle', 'maxAngle', 'step', 'fwhm']) if (!finite(result[key])) throw fail(`${key} must be finite.`);
   if (result.wavelength < 0.01 || result.wavelength > 10) throw fail('wavelength must be between 0.01 and 10 Å.');
@@ -21,7 +55,9 @@ export function normalizeDiffractionParameters(parameters = {}) {
   if (result.step < 0.0001 || result.step > 5 || Math.ceil((result.maxAngle - result.minAngle) / result.step) + 1 > DIFFRACTION_LIMITS.maxProfilePoints) throw fail('the profile step exceeds the supported range or sample budget.');
   if (result.fwhm < 0.001 || result.fwhm > 20) throw fail('Gaussian FWHM must be between 0.001 and 20 degrees.');
   for (const key of ['lorentzPolarization', 'useThermal']) if (typeof result[key] !== 'boolean') throw fail(`${key} must be boolean.`);
-  if (Math.sin(result.maxAngle * DEG / 2) / result.wavelength >= XRAY_SCATTERING_MAX_S) throw fail(`the IT92 neutral-atom factors require sin(θ)/λ < ${XRAY_SCATTERING_MAX_S} Å⁻¹; reduce the angle or increase the wavelength.`);
+  const sMax = Math.sin(result.maxAngle * DEG / 2) / result.wavelength;
+  if (radiation === 'xray' && sMax >= XRAY_SCATTERING_MAX_S) throw fail(`the IT92 neutral-atom factors require sin(θ)/λ < ${XRAY_SCATTERING_MAX_S} Å⁻¹; reduce the angle or increase the wavelength.`);
+  if (radiation === 'electron' && sMax > ELECTRON_SCATTERING_MAX_S) throw fail(`the C4322 neutral-atom electron factors require sin(θ)/λ ≤ ${ELECTRON_SCATTERING_MAX_S} Å⁻¹; reduce the angle or increase the wavelength.`);
   return result;
 }
 
@@ -62,7 +98,8 @@ function reciprocalUncertainty(cell, inverse) {
 /** Immutable, compact source snapshot. A retained coordinator may reuse this
  * across wavelength/range/profile edits; useThermal changes require another
  * source snapshot, never a silently stale Debye–Waller factor. */
-export function* prepareDiffractionSourceSteps(frame, { useThermal = true } = {}) {
+export function* prepareDiffractionSourceSteps(frame, { useThermal = true, radiation = 'xray' } = {}) {
+  const model = radiationModel(radiation);
   if (typeof useThermal !== 'boolean') throw fail('useThermal must be boolean.');
   const count = frame?.types?.length;
   if (!Number.isSafeInteger(count) || count < 1 || count > DIFFRACTION_LIMITS.maxAtoms
@@ -87,7 +124,7 @@ export function* prepareDiffractionSourceSteps(frame, { useThermal = true } = {}
     if (!Number.isInteger(originalType) || originalType < 0 || originalType >= frame.typeLabels.length) throw fail('an atom has an invalid element index.');
     if (!usedTypes.has(originalType)) {
       const label = frame.typeLabels[originalType];
-      let entry; try { entry = getXrayScatteringCoefficients(label); } catch (error) { throw fail(error.message); }
+      const entry = coefficientsFor(radiation, label);
       usedTypes.set(originalType, typeLabels.length); typeLabels.push(label); coefficients.push(...entry);
     }
     types[atom] = usedTypes.get(originalType);
@@ -118,8 +155,26 @@ export function* prepareDiffractionSourceSteps(frame, { useThermal = true } = {}
   const warnings = [];
   if (partialOccupancy) warnings.push('Partial occupations describe coherent scattering from the average structure; disorder diffuse scattering is not included.');
   if (missingThermal) warnings.push(`${missingThermal.toLocaleString('en-US')} sites have no displacement parameters and use zero thermal displacement.`);
-  return { atomCount: count, fractional, types, occupancy, thermal, thermalEnabled: useThermal,
-    typeLabels, coefficients: Float64Array.from(coefficients), cellVectors, volume, warnings };
+  return { atomCount: count, fractional, types, occupancy, thermal, thermalEnabled: useThermal, radiation,
+    typeLabels, coefficients: Float64Array.from(coefficients), coefficientStride: model.coefficientStride,
+    scatteringModel: model.scatteringModel, scatteringUnits: model.scatteringUnits,
+    cellVectors, volume, baseWarnings: warnings, warnings: [...warnings, ...model.warnings] };
+}
+
+/** Change only the small species table of a trusted, immutable source snapshot.
+ * Radiation switches retain the same atom/cell arrays and their GPU uploads. */
+export function* retargetDiffractionSourceSteps(source, { radiation = 'xray' } = {}) {
+  const model = radiationModel(radiation);
+  if (source.radiation === radiation) return source;
+  const coefficients = new Float64Array(source.typeLabels.length * model.coefficientStride);
+  for (let type = 0; type < source.typeLabels.length; type++) {
+    yield;
+    coefficients.set(coefficientsFor(radiation, source.typeLabels[type]), type * model.coefficientStride);
+  }
+  const baseWarnings = source.baseWarnings ?? source.warnings;
+  return { ...source, radiation, coefficients, coefficientStride: model.coefficientStride,
+    scatteringModel: model.scatteringModel, scatteringUnits: model.scatteringUnits,
+    baseWarnings, warnings: [...baseWarnings, ...model.warnings] };
 }
 
 /** Reciprocal vectors have units Å⁻¹ (no 2π). h_i = a_i·g proves
@@ -127,6 +182,7 @@ export function* prepareDiffractionSourceSteps(frame, { useThermal = true } = {}
 export function* enumerateDiffractionSteps(source, parameters = {}) {
   const settings = normalizeDiffractionParameters(parameters);
   if (source.thermalEnabled !== settings.useThermal) throw fail('the source snapshot does not match the thermal-displacement setting; prepare the source again.');
+  if (source.radiation !== settings.radiation) throw fail('the source snapshot does not match the radiation setting; prepare or retarget the source again.');
   const inverse = invert3(source.cellVectors), inverseError = reciprocalUncertainty(source.cellVectors, inverse);
   const qMax = 2 * Math.sin(settings.maxAngle * DEG / 2) / settings.wavelength;
   const qMin = 2 * Math.sin(settings.minAngle * DEG / 2) / settings.wavelength;
@@ -175,26 +231,29 @@ export function* enumerateDiffractionSteps(source, parameters = {}) {
 export function* prepareDiffractionSteps(frame, parameters = {}, { source } = {}) {
   const settings = normalizeDiffractionParameters(parameters);
   if (!source || source.thermalEnabled !== settings.useThermal) source = yield* prepareDiffractionSourceSteps(frame, settings);
+  else if (source.radiation !== settings.radiation) source = yield* retargetDiffractionSourceSteps(source, settings);
   return yield* enumerateDiffractionSteps(source, settings);
 }
 export const prepareDiffraction = (frame, parameters) => runParserSteps(prepareDiffractionSteps(frame, parameters));
 export const prepareDiffractionAsync = (frame, parameters, execution) => runParserStepsAsync(prepareDiffractionSteps(frame, parameters), execution);
 
-function scattering(coefficients, type, s2) {
-  const base = type * 9;
-  let factor = coefficients[base + 8];
-  for (let i = 0; i < 4; i++) factor += coefficients[base + i] * Math.exp(-coefficients[base + 4 + i] * s2);
+export function evaluatePreparedScatteringFactor(prepared, type, s2) {
+  const { coefficients, radiation = 'xray' } = prepared, stride = prepared.coefficientStride ?? 9, base = type * stride;
+  if (radiation === 'neutron') return coefficients[base];
+  const terms = radiation === 'electron' ? 5 : 4;
+  let factor = radiation === 'electron' ? 0 : coefficients[base + 8];
+  for (let i = 0; i < terms; i++) factor += coefficients[base + i] * Math.exp(-coefficients[base + terms + i] * s2);
   return factor;
 }
 
 /** A sparse exact-CPU oracle for GPU cancellation/weak-reflection recovery. */
 export function* evaluateDiffractionReflectionSteps(prepared, index) {
-  const { atomCount, fractional, types, occupancy, thermal, hkls, reciprocal, coefficients } = prepared;
+  const { atomCount, fractional, types, occupancy, thermal, hkls, reciprocal } = prepared;
   if (!Number.isInteger(index) || index < 0 || index >= prepared.reflectionCount) throw fail('invalid reflection index.');
   const h = hkls[index * 3], k = hkls[index * 3 + 1], l = hkls[index * 3 + 2];
   const gx = reciprocal[index * 3], gy = reciprocal[index * 3 + 1], gz = reciprocal[index * 3 + 2];
-  const factors = new Float64Array(coefficients.length / 9);
-  for (let type = 0; type < factors.length; type++) factors[type] = scattering(coefficients, type, prepared.s2[index]);
+  const factors = new Float64Array(prepared.typeLabels.length);
+  for (let type = 0; type < factors.length; type++) factors[type] = evaluatePreparedScatteringFactor(prepared, type, prepared.s2[index]);
   let real = 0, imag = 0, realCorrection = 0, imagCorrection = 0, amplitudeBound = 0;
   for (let atom = 0; atom < atomCount; atom++) {
     if ((atom & 1023) === 0) yield;
@@ -236,9 +295,9 @@ export function* calculateDiffractionRangeSteps(prepared, { start = 0, end = pre
 export const computeDiffractionRangeSteps = calculateDiffractionRangeSteps;
 export const calculateDiffractionRange = (prepared, range, execution) => runParserSteps(calculateDiffractionRangeSteps(prepared, range, execution));
 
-function lorentzPolarization(twoTheta) {
+function lorentzPolarization(twoTheta, radiation) {
   const theta = twoTheta * DEG / 2;
-  return (1 + Math.cos(2 * theta) ** 2) / (Math.sin(theta) ** 2 * Math.cos(theta));
+  return (radiation === 'xray' ? 1 + Math.cos(2 * theta) ** 2 : 1) / (Math.sin(theta) ** 2 * Math.cos(theta));
 }
 
 export function* finalizeDiffractionSteps(prepared, parts) {
@@ -277,7 +336,7 @@ export function* finalizeDiffractionSteps(prepared, parts) {
     } else {
       groupLower = Math.max(groupLower, lower); groupUpper = Math.min(groupUpper, upper);
     }
-    peak.intensity += 2 * intensity[index] * (settings.lorentzPolarization ? lorentzPolarization(twoTheta) : 1);
+    peak.intensity += 2 * intensity[index] * (settings.lorentzPolarization ? lorentzPolarization(twoTheta, settings.radiation) : 1);
     peak.multiplicity += 2; peak.hkls.push(hkl, hkl.map(value => -value || 0));
     if (!Number.isFinite(peak.intensity)) throw fail('powder intensity exceeds the numeric range.');
     maxIntensity = Math.max(maxIntensity, peak.intensity);
@@ -303,10 +362,13 @@ export function* finalizeDiffractionSteps(prepared, parts) {
   }
   let profileMax = 0; for (const value of profile) profileMax = Math.max(profileMax, value);
   for (let i = 0; i < sampleCount; i++) relative[i] = profileMax > 0 ? 100 * (profile[i] / profileMax) : 0;
-  return { kind: 'powder-xrd', parameters: { ...settings }, atomCount: prepared.atomCount, reflectionCount: count,
+  return { kind: 'powder-xrd', radiation: settings.radiation, parameters: { ...settings }, atomCount: prepared.atomCount, reflectionCount: count,
     extinctCount, peakCount: peaks.length, peaks, profile: { twoTheta: angles, intensity: profile, relativeIntensity: relative },
     reflections: { hkls: prepared.hkls, twoTheta: prepared.twoTheta, dSpacing: prepared.dSpacing, real, imag, intensity, amplitudeBound },
-    warnings: [...prepared.warnings], scatteringModel: 'IT92 neutral atoms; non-resonant kinematic X-ray diffraction', backend: 'cpu' };
+    warnings: [...prepared.warnings], scatteringModel: prepared.scatteringModel, scatteringUnits: prepared.scatteringUnits,
+    intensityUnits: `${prepared.scatteringUnits}²`,
+    geometryCorrection: !settings.lorentzPolarization ? 'none' : settings.radiation === 'xray' ? 'Lorentz-polarization' : 'powder Lorentz',
+    backend: 'cpu' };
 }
 
 export function* calculateDiffractionSteps(frame, parameters = {}, execution = {}) {
@@ -321,20 +383,23 @@ export function* diffractionCsvSteps(result, { kind = 'peaks', stem = 'crystal' 
   if (result?.kind !== 'powder-xrd' || !['peaks', 'profile'].includes(kind)) throw fail('a completed diffraction result and valid export kind are required.');
   const rows = [], settings = result.parameters;
   if (kind === 'peaks') {
-    rows.push('two_theta_deg,d_A,integrated_intensity,relative_intensity_percent,multiplicity,hkl,wavelength_A,fwhm_deg,lorentz_polarization,thermal_displacement\r\n');
+    rows.push('two_theta_deg,d_A,integrated_intensity,relative_intensity_percent,multiplicity,hkl,wavelength_A,fwhm_deg,lorentz_polarization,thermal_displacement,radiation,scattering_model,scattering_units,intensity_units,geometry_correction\r\n');
     for (let i = 0; i < result.peaks.length; i++) {
       if ((i & 255) === 0) yield;
       const item = result.peaks[i], hkl = item.hkls.map(indices => `(${indices.join(' ')})`).join('; ');
       rows.push([item.twoTheta, item.dSpacing, item.intensity, item.relativeIntensity, item.multiplicity,
-        `"${hkl}"`, settings.wavelength, settings.fwhm, settings.lorentzPolarization, settings.useThermal].join(',') + '\r\n');
+        `"${hkl}"`, settings.wavelength, settings.fwhm, settings.radiation === 'xray' && settings.lorentzPolarization, settings.useThermal,
+        settings.radiation, `"${result.scatteringModel}"`, result.scatteringUnits, result.intensityUnits, result.geometryCorrection].join(',') + '\r\n');
     }
   } else {
-    rows.push('two_theta_deg,intensity_per_degree,relative_intensity_percent,wavelength_A,fwhm_deg\r\n');
+    rows.push('two_theta_deg,intensity_per_degree,relative_intensity_percent,wavelength_A,fwhm_deg,radiation,scattering_model,scattering_units,intensity_units,geometry_correction\r\n');
     for (let i = 0; i < result.profile.twoTheta.length; i++) {
       if ((i & 1023) === 0) yield;
-      rows.push([result.profile.twoTheta[i], result.profile.intensity[i], result.profile.relativeIntensity[i], settings.wavelength, settings.fwhm].join(',') + '\r\n');
+      rows.push([result.profile.twoTheta[i], result.profile.intensity[i], result.profile.relativeIntensity[i], settings.wavelength, settings.fwhm,
+        settings.radiation, `"${result.scatteringModel}"`, result.scatteringUnits, `${result.intensityUnits}/degree`, result.geometryCorrection].join(',') + '\r\n');
     }
   }
   const safe = String(stem).split(/[\\/]/).at(-1).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 100) || 'crystal';
-  return { blob: new Blob(rows, { type: 'text/csv;charset=utf-8' }), filename: `${safe}-xrd-${kind}.csv` };
+  const suffix = settings.radiation === 'xray' ? 'xrd' : `${settings.radiation}-diffraction`;
+  return { blob: new Blob(rows, { type: 'text/csv;charset=utf-8' }), filename: `${safe}-${suffix}-${kind}.csv` };
 }

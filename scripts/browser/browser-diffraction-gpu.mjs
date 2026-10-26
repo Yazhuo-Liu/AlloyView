@@ -7,7 +7,7 @@ console.log(JSON.stringify(report,null,2));
 
 async function checks(){
   const [{GpuRuntime},{analyzeGpuDiffraction,releaseGpuDiffraction,warmGpuDiffraction},
-    {prepareDiffraction,calculateDiffractionRange,finalizeDiffractionSteps},{crystalFrame},{createCell},{runParserSteps}]=await Promise.all([
+    {prepareDiffraction,prepareDiffractionSteps,evaluatePreparedScatteringFactor,calculateDiffractionRange,finalizeDiffractionSteps},{crystalFrame},{createCell},{runParserSteps}]=await Promise.all([
       import('./src/analysis/gpu/runtime.js'),import('./src/analysis/gpu/diffraction.js'),
       import('./src/analysis/diffraction.js'),import('./tests/helpers/crystals.js'),import('./src/data/model.js'),import('./src/io/cooperative-parser.js')]);
   const finalizeDiffraction=(prepared,parts)=>runParserSteps(finalizeDiffractionSteps(prepared,parts));
@@ -19,6 +19,7 @@ async function checks(){
     const prepared=source??prepareDiffraction(frame,settings),cpu=calculateDiffractionRange(prepared,range);
     const progress=[],gpu=await analyzeGpuDiffraction(runtime,prepared,{...range,onProgress:value=>progress.push(value)});
     check(gpu.backend==='gpu',label+': requires real GPU execution');
+    check(gpu.radiation===prepared.radiation,label+': backend model metadata must identify the evaluated radiation');
     let maximumAmplitudeError=0,maximumIntensityError=0,extinctions=0,weak=0;
     for(let i=0;i<cpu.real.length;i++){
       const bound=Math.max(cpu.amplitudeBound[i],1e-20);
@@ -41,7 +42,7 @@ async function checks(){
       }
     }
     check(progress.at(-1)?.phase==='complete',label+': missing progress completion');
-    rows.push({label,atoms:prepared.atomCount,reflections:gpu.real.length,correctedReflections:gpu.correctedReflections,
+    rows.push({label,radiation:prepared.radiation,atoms:prepared.atomCount,reflections:gpu.real.length,correctedReflections:gpu.correctedReflections,
       maximumAmplitudeError,maximumIntensityError,extinctions,weak,inputReused:gpu.inputReused});
     return {prepared,gpu};
   }
@@ -50,6 +51,10 @@ async function checks(){
     const fcc=await run('FCC Cu systematic absences',crystal('fcc','Cu',3.615));
     check(fcc.gpu.correctedReflections>0&&fcc.gpu.correctedReflections<fcc.prepared.reflectionCount,'FCC must use GPU for strong reflections and exact CPU for extinctions');
     check((await run('Retained atom uploads and scratch',null,parameters,{source:fcc.prepared})).gpu.inputReused,'unchanged prepared atoms should remain resident');
+    const sharedNeutron=runParserSteps(prepareDiffractionSteps(null,{...parameters,radiation:'neutron'},{source:fcc.prepared}));
+    check(sharedNeutron.fractional===fcc.prepared.fractional,'model retarget must share geometric source arrays');
+    check((await run('Radiation switch retains geometry but replaces scattering factors',null,parameters,{source:sharedNeutron})).gpu.inputReused,'model switch must reuse geometric uploads');
+    check((await run('Switching back to X-ray restores its factors',null,parameters,{source:fcc.prepared})).gpu.inputReused,'returning to X-ray must retain atom uploads');
     await run('BCC Fe systematic absences',crystal('bcc','Fe',2.866));
     await run('Diamond Si additional systematic absences',crystal('diamond','Si',5.431));
     await run('HCP Ti non-dyadic phases',crystal('hcp','Ti',2.95));
@@ -64,6 +69,20 @@ async function checks(){
     const covariance=[.01,.02,.03,.002,-.001,.003];
     skew.properties=['xx','yy','zz','xy','xz','yz'].map((axis,c)=>({name:`displacementU${axis}`,data:Float64Array.from({length:4},(_,i)=>covariance[c]*(1+i*.1))}));
     await run('Triclinic mixed species with anisotropic thermal displacement',skew,{...parameters,useThermal:true});
+    await run('Electron Si small-angle diffraction at 200 keV',crystal('diamond','Si',5.431),
+      {radiation:'electron',maxAngle:1.8,step:.002,useThermal:false});
+    await run('Electron mixed triclinic anisotropic thermal factors',skew,
+      {radiation:'electron',maxAngle:1.8,step:.002,useThermal:true});
+    await run('Neutron HCP Ti negative coherent length',crystal('hcp','Ti',2.95),
+      {...parameters,radiation:'neutron'});
+    const neutronWeak=crystal('bcc','Fe',4);neutronWeak.typeLabels=['Fe','Ti'];neutronWeak.types=Uint16Array.from([0,1]);
+    const neutronProbe=prepareDiffraction(neutronWeak,{...parameters,radiation:'neutron'});
+    const ratio=-evaluatePreparedScatteringFactor(neutronProbe,1,0)/evaluatePreparedScatteringFactor(neutronProbe,0,0);
+    neutronWeak.properties=[{name:'occupancy',data:Float64Array.from([ratio*(1-1e-8),1])}];
+    await run('Neutron signed-species cancellation retains genuine weak peaks',neutronWeak,
+      {...parameters,radiation:'neutron'});
+    await run('Neutron mixed triclinic anisotropic thermal factors',skew,
+      {...parameters,radiation:'neutron',useThermal:true});
     const chunks=await run('Multiple 512-atom workgroups',crystal('bcc','Fe',2.866,7),{...parameters,maxAngle:55});
     check(chunks.gpu.correctedReflections<chunks.prepared.reflectionCount,'multi-chunk reduction must retain genuine nonzero GPU results');
     const ranged=prepareDiffraction(crystal('hcp','Ti',2.95),parameters);

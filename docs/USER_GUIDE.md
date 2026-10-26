@@ -23,14 +23,18 @@ Ti–O octahedra with a 2.2 Å cutoff. Space-group analysis can export refined
 primitive/conventional cells; CIF anisotropic displacement tensors can draw
 thermal ellipsoids. See [Crystal structures](features/crystal.md).
 
-The same **Crystal** panel includes a folded **Powder X-ray diffraction** section.
-Choose Cu/Co/Mo Kα1 or a custom wavelength, the 2θ range and Gaussian FWHM, then
+The same **Crystal** panel includes a folded **Powder diffraction** section.
+Select X-ray, Electron or Neutron. Choose Cu/Co/Mo Kα1, an electron voltage
+(80/100/200/300 keV), a neutron wavelength, or a custom wavelength; set the 2θ range and Gaussian FWHM, then
 calculate peak positions and intensities from the loaded periodic structure.
 Inspect Miller indices, d-spacings and multiplicities in the peak table and
 export the complete peak list or profile as CSV. CPU Workers are always available;
 enabling GPU acceleration uses WebGPU structure-factor sums with double-precision
 recovery for uncertain reflections. The Cu and Si diffraction examples provide
-ideal reference patterns. See [diffraction settings and scope](features/crystal.md#powder-x-ray-diffraction).
+ideal reference patterns; NaD demonstrates explicit deuterium for neutron
+scattering. Electron mode uses a kinematical random-powder model; neutron mode
+uses coherent nuclear scattering and preserves signed scattering lengths.
+See [diffraction settings and scope](features/crystal.md#powder-diffraction).
 
 For CHGCAR/CHG, LOCPOT, ELFCAR and Cube files, **Visualization → Volume**
 displays isosurfaces with CPU or WebGPU extraction, plus numerical sections
