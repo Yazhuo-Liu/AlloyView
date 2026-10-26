@@ -1,0 +1,109 @@
+{
+  "oracle": "NumPy full +/-hkl enumeration and complex sums",
+  "cases": [
+    {
+      "name": "fcc-cu",
+      "fullReflections": 256,
+      "powderPeaks": 6,
+      "maxAmplitudeError": 2.17323800002664e-14
+    },
+    {
+      "name": "fcc-cu-primitive",
+      "fullReflections": 64,
+      "powderPeaks": 6,
+      "maxAmplitudeError": 7.105427357601002e-15
+    },
+    {
+      "name": "bcc-fe",
+      "fullReflections": 146,
+      "powderPeaks": 5,
+      "maxAmplitudeError": 8.42343552502785e-15
+    },
+    {
+      "name": "bcc-fe-weak",
+      "fullReflections": 146,
+      "powderPeaks": 9,
+      "maxAmplitudeError": 1.3170074839724544e-14
+    },
+    {
+      "name": "diamond-si",
+      "fullReflections": 948,
+      "powderPeaks": 9,
+      "maxAmplitudeError": 6.295424678153464e-14
+    },
+    {
+      "name": "rocksalt-nacl",
+      "fullReflections": 1044,
+      "powderPeaks": 14,
+      "maxAmplitudeError": 3.445572527451126e-14
+    },
+    {
+      "name": "partial-occupancy-cu",
+      "fullReflections": 256,
+      "powderPeaks": 6,
+      "maxAmplitudeError": 1.08661900001332e-14
+    },
+    {
+      "name": "isotropic-cu",
+      "fullReflections": 256,
+      "powderPeaks": 6,
+      "maxAmplitudeError": 2.1030962597250993e-14
+    },
+    {
+      "name": "triclinic",
+      "fullReflections": 532,
+      "powderPeaks": 266,
+      "maxAmplitudeError": 2.1431618279190542e-14
+    },
+    {
+      "name": "near-degenerate",
+      "fullReflections": 584,
+      "powderPeaks": 97,
+      "maxAmplitudeError": 4.577566798522237e-15
+    },
+    {
+      "name": "accidental-overlap",
+      "fullReflections": 584,
+      "powderPeaks": 50,
+      "maxAmplitudeError": 5.1636710387543275e-14
+    },
+    {
+      "name": "uncorrected-pattern",
+      "fullReflections": 256,
+      "powderPeaks": 6,
+      "maxAmplitudeError": 2.17323800002664e-14
+    },
+    {
+      "name": "sc-cu",
+      "fullReflections": 170,
+      "powderPeaks": 10,
+      "maxAmplitudeError": 3.552713678800501e-15
+    },
+    {
+      "name": "sc-cu-unimodular-shear",
+      "fullReflections": 170,
+      "powderPeaks": 10,
+      "maxAmplitudeError": 2.948752353404416e-13
+    },
+    {
+      "name": "left-handed",
+      "fullReflections": 532,
+      "powderPeaks": 266,
+      "maxAmplitudeError": 2.4083396366869622e-14
+    },
+    {
+      "name": "fcc-cu-supercell",
+      "fullReflections": 1132,
+      "powderPeaks": 6,
+      "maxAmplitudeError": 2.346357796847703e-13
+    },
+    {
+      "name": "translated-cu",
+      "fullReflections": 256,
+      "powderPeaks": 6,
+      "maxAmplitudeError": 1.189263939153438e-13
+    }
+  ],
+  "normalizedPrimitiveSupercellTranslationOccupancyParity": true,
+  "largeUnimodularBasisParity": true
+}

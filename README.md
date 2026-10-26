@@ -40,6 +40,11 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   actual space-group identification and refined primitive/conventional cell export
   through the open-source moyo WASM library, anisotropic thermal ellipsoids,
   and CIF/POSCAR structure export plus polyhedron CSV statistics.
+- Powder X-ray diffraction from periodic structures: wavelength presets,
+  occupancy and thermal-displacement factors, peak indices and multiplicities,
+  Gaussian profiles and complete CSV exports. Reusable CPU Workers and WebGPU
+  structure-factor sums share double-precision checks for uncertain reflections.
+  See [Crystal structures](docs/features/crystal.md#powder-x-ray-diffraction).
 - CHGCAR/CHG, LOCPOT, ELFCAR and Gaussian Cube scalar grids: CPU/WebGPU
   isosurfaces, numerical sections with CSV export, and WebGL rendering in the
   main/second view and PNG images. See [Volumetric data](docs/features/volumetric.md).
@@ -452,3 +457,7 @@ Space-group identification and the CIF Hall-setting database use the official
 moyo 0.21.0 runtime under MIT OR Apache-2.0; [pinned provenance and checksums](https://github.com/Yazhuo-Liu/AlloyView/blob/main/third_party/moyo/README.md)
 are included. Isosurface extraction and thermal-ellipsoid integration are
 original implementations; no VESTA source code or assets are included.
+The neutral-atom IT92 scattering-factor table is adapted from Gemmi 0.7.5 under
+MPL-2.0 in a separate, marked source file. Its original source, license and
+[reproducible provenance](https://github.com/Yazhuo-Liu/AlloyView/blob/main/third_party/gemmi-it92/README.md)
+are included; the diffraction algorithms are original AlloyView code.

@@ -870,6 +870,37 @@
               <div class="paired-actions"><button id="export-crystal-primitive" class="button button-secondary" type="button" disabled>Export primitive cell</button><button id="export-crystal-conventional" class="button button-secondary" type="button" disabled>Export conventional cell</button></div>
               <p class="help">Exported cells refine lattice and positions within the tolerance. They have new atom IDs and omit source per-atom properties. The loaded structure stays unchanged. Recognition uses a retained CPU Worker and double precision.</p>
             </details>
+            <details id="diffraction-controls"><summary>Powder X-ray diffraction</summary>
+              <p class="help">Predict Bragg peaks from the full periodic structure, including hidden atoms. Neutral-atom X-ray form factors, occupancies and optional thermal displacement parameters determine relative intensities.</p>
+              <label class="field"><span>X-ray wavelength</span><select id="diffraction-preset" disabled><option value="cu-ka1">Cu Kα₁ · 1.5406 Å</option><option value="co-ka1">Co Kα₁ · 1.78897 Å</option><option value="mo-ka1">Mo Kα₁ · 0.7093 Å</option><option value="custom">Custom wavelength</option></select></label>
+              <label class="field"><span>Wavelength</span><span class="input-unit"><input id="diffraction-wavelength" type="number" value="1.5406" min="0.01" max="10" step="0.00001" disabled><i>Å</i></span></label>
+              <div class="paired-fields">
+                <label class="field"><span>Minimum 2θ (°)</span><input id="diffraction-min-angle" type="number" value="5" min="0" max="179.99" step="1" disabled></label>
+                <label class="field"><span>Maximum 2θ (°)</span><input id="diffraction-max-angle" type="number" value="90" min="0.01" max="179.999" step="1" disabled></label>
+                <label class="field"><span>Gaussian FWHM (°)</span><input id="diffraction-fwhm" type="number" value="0.15" min="0.001" max="20" step="0.01" disabled></label>
+                <label class="field"><span>Profile step (°)</span><input id="diffraction-step" type="number" value="0.02" min="0.0001" max="5" step="0.001" disabled></label>
+              </div>
+              <label class="slice-toggle"><input id="diffraction-thermal" type="checkbox" checked disabled><span>Use imported thermal displacement parameters</span></label>
+              <label class="slice-toggle"><input id="diffraction-lp" type="checkbox" checked disabled><span>Lorentz–polarization correction</span></label>
+              <div class="paired-actions"><button id="run-diffraction" class="button button-accent" type="button" disabled>Calculate diffraction</button><button id="cancel-diffraction" class="text-button" type="button" disabled>Cancel</button></div>
+              <div class="analysis-backend-row"><span>Backend</span><output id="diffraction-backend">—</output><span id="diffraction-state" class="state-pill">Not calculated</span></div>
+              <progress id="diffraction-progress" class="analysis-progress" max="1" value="0" aria-label="Diffraction calculation progress" hidden></progress>
+              <p id="diffraction-status" class="help" role="status" aria-live="polite">Calculate from the complete periodic structure.</p>
+              <p class="help">Kinematical powder model for a single wavelength. It does not include anomalous scattering, preferred orientation or an experimental instrument model. Gaussian broadening is a display model; a larger cell may require many more reflections.</p>
+              <div id="diffraction-results" hidden>
+                <p id="diffraction-summary" class="help"></p><p id="diffraction-warnings" class="help" hidden></p>
+                <div id="diffraction-chart" class="statistics-chart" role="group" aria-label="Powder X-ray diffraction chart"></div>
+                <p class="help">Orange: integrated peak sticks. Teal: broadened profile. Each is normalized independently to 100. Dense plot previews combine nearby sticks; the table, probe and CSV retain every peak. Hover or tap the plot, or use the slider, to inspect a peak.</p>
+                <input id="diffraction-peak-slider" type="range" min="0" max="0" value="0" step="1" aria-label="Inspect diffraction peak" style="width:100%" disabled>
+                <p id="diffraction-probe" class="help" role="status"></p>
+                <div class="paired-actions"><button id="export-diffraction-peaks" class="button button-secondary" type="button" disabled>Peak table CSV</button><button id="export-diffraction-profile" class="button button-secondary" type="button" disabled>Profile CSV</button></div>
+                <details><summary>All diffraction peaks</summary>
+                  <div class="cluster-table-wrap"><table class="cluster-table" aria-label="Powder diffraction peaks"><thead><tr><th scope="col">2θ (°)</th><th scope="col">d (Å)</th><th scope="col">I (%)</th><th scope="col">Multiplicity</th><th scope="col">hkl</th></tr></thead><tbody id="diffraction-table-body"></tbody></table></div>
+                  <p id="diffraction-table-caption" class="help"></p>
+                  <div class="paired-actions"><button id="diffraction-previous" class="button button-secondary" type="button" disabled>Previous</button><button id="diffraction-next" class="button button-secondary" type="button" disabled>Next</button></div>
+                </details>
+              </div>
+            </details>
             <details id="thermal-controls"><summary>Thermal displacement ellipsoids</summary>
               <label class="slice-toggle"><input id="thermal-enabled" type="checkbox" disabled><span>Show displacement ellipsoids</span></label>
               <label class="field"><span>Probability <output id="thermal-probability-value">50%</output></span><input id="thermal-probability" type="range" min="1" max="99" step="1" value="50" disabled></label>

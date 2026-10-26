@@ -76,6 +76,8 @@ import { initializeVolumetricTools } from './ui/view/volumetric-tools.js';
 import { VolumetricClient } from './analysis/volumetric-client.js';
 import { CrystalSymmetryClient } from './analysis/crystal-symmetry-client.js';
 import { initializeCrystalSymmetryControls } from './ui/view/crystal-symmetry-controls.js';
+import { DiffractionClient } from './analysis/diffraction-client.js';
+import { initializeDiffractionControls } from './ui/view/diffraction-controls.js';
 import { StructureExportClient } from './io/structure-export-client.js';
 import { downloadBlob } from './io/export-archive.js';
 import { initializeBinningTools } from './ui/analysis/binning-tools.js';
@@ -153,6 +155,7 @@ const analysisPool = new AnalysisPool({ cpuBudget });
 const structureExportClient = new StructureExportClient({ cpuBudget });
 const volumetricClient = new VolumetricClient({ cpuBudget });
 const crystalSymmetryClient = new CrystalSymmetryClient({ cpuBudget });
+const diffractionClient = new DiffractionClient({ cpuBudget });
 const analysisPrediction = new AnalysisPrefetchScheduler({ pool: analysisPool });
 const dxaClient = new DxaClient({ cpuBudget, cpuStageBackend: analysisPool });
 const coordinationPool = new CoordinationPool({
@@ -253,6 +256,8 @@ let surfaceTools;
 let crystalTools;
 let volumetricTools;
 let crystalSymmetryControls;
+let diffractionControls;
+let diffractionWarmController;
 let volumetricWarmController;
 let structureExportController;
 let binningTools;
@@ -613,7 +618,7 @@ const toolPanels = initializeToolPanels({
     else if (kind === 'grains') grainTools?.cancel();
     else if (kind === 'wignerSeitz') wignerSeitzTools?.cancel();
     else if (kind === 'surfaceMesh') surfaceTools?.cancel();
-    else if (kind === 'crystal') { crystalTools?.cancel(); crystalSymmetryControls?.abortJobs(); }
+    else if (kind === 'crystal') { crystalTools?.cancel(); crystalSymmetryControls?.abortJobs(); diffractionControls?.cancel(); }
     else if (kind === 'volumetric') volumetricTools?.cancel();
     else if (kind === 'binning') binningTools?.cancel();
     else if (kind === 'displacement') atomEyeTools?.cancelDisplacement();
@@ -659,7 +664,11 @@ initializeTheme((theme) => {
 
 function setGpuComputing(enabled) {
   analysisPool.setGpuEnabled(enabled);
-  if (!enabled) void volumetricClient.releaseGpuResources({ whenIdle: true }).catch(() => {});
+  if (!enabled) {
+    void volumetricClient.releaseGpuResources({ whenIdle: true }).catch(() => {});
+    void diffractionClient.releaseGpuResources({ whenIdle: true }).catch(() => {});
+  }
+  if (state.frame) warmDiffractionFrame(state.frame);
   if (state.frame?.volumetric) warmVolumetricFrame(state.frame);
   elements['enable-gpu-computing'].setAttribute('aria-pressed', String(enabled));
   if (enabled && state.frame && sourceLoadingOwner === null) scheduleGpuFramePrefetch();
@@ -682,6 +691,18 @@ function warmVolumetricFrame(frame) {
   }).catch(() => {}).finally(() => {
     if (volumetricWarmController === controller) volumetricWarmController = null;
   });
+}
+
+// Only source snapshots and pipeline compilation are prepared in advance;
+// reflection enumeration and scientific intensities start on explicit Calculate.
+function warmDiffractionFrame(frame) {
+  diffractionWarmController?.abort();
+  if (!frame || !(frame.crystal || ['cif', 'poscar', 'vasp-volume'].includes(frame.sourceFormat))) return;
+  const controller = new AbortController(); diffractionWarmController = controller;
+  void diffractionClient.prepare(frame, { useGpu: analysisPool.gpuEnabled, signal: controller.signal })
+    .catch(() => {}).finally(() => {
+      if (diffractionWarmController === controller) diffractionWarmController = null;
+    });
 }
 
 function updateGpuComputingTitle() {
@@ -1158,6 +1179,17 @@ crystalSymmetryControls = initializeCrystalSymmetryControls({
   notify: showToast,
 });
 
+diffractionControls = initializeDiffractionControls({
+  client: diffractionClient,
+  getFrame: () => state.frame,
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  getGpuEnabled: () => analysisPool.gpuEnabled,
+  getFileStem: exportFileStem,
+  onEdit: () => interruptConfigurationRestore('a diffraction analysis edit'),
+  onResultsChange: () => { if (state.frame) { updateMemoryMetric(); reassessFrameCache(state.frame); } },
+  notify: showToast,
+});
+
 volumetricTools = initializeVolumetricTools({
   renderer, tools: toolPanels, client: volumetricClient,
   getFrame: () => state.frame,
@@ -1598,6 +1630,8 @@ window.addEventListener('beforeunload', () => {
   crystalTools?.abortJobs();
   volumetricTools?.abortJobs();
   crystalSymmetryControls?.abortJobs();
+  diffractionControls?.abortJobs();
+  diffractionWarmController?.abort();
   volumetricWarmController?.abort();
   structureExportController?.abort();
   binningTools?.dispose();
@@ -1606,6 +1640,7 @@ window.addEventListener('beforeunload', () => {
   structureExportClient.dispose();
   volumetricClient.dispose();
   crystalSymmetryClient.dispose();
+  diffractionClient.dispose();
 });
 
 function beginSourceOpen() {
@@ -1689,6 +1724,8 @@ function closeSource() {
   crystalTools?.reset();
   volumetricTools?.reset();
   crystalSymmetryControls?.reset();
+  diffractionControls?.reset();
+  void diffractionClient.clear().catch(() => {});
   void volumetricClient.clear().catch(() => {});
   void structureExportClient.clearSnapshot().catch(() => {});
   binningTools?.reset();
@@ -2115,6 +2152,8 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     crystalTools?.reset();
     volumetricTools?.reset();
     crystalSymmetryControls?.reset();
+    diffractionControls?.reset();
+    void diffractionClient.clear().catch(() => {});
     void volumetricClient.clear().catch(() => {});
     void structureExportClient.clearSnapshot().catch(() => {});
     binningTools?.reset();
@@ -2501,6 +2540,8 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
   pending.push(crystalTools.onFrame());
   pending.push(volumetricTools.onFrame());
   crystalSymmetryControls.onFrame();
+  pending.push(diffractionControls.onFrame());
+  warmDiffractionFrame(frame);
   warmVolumetricFrame(frame);
   if (frame.crystal || ['poscar', 'cif', 'vasp-volume'].includes(frame.sourceFormat)) void crystalSymmetryClient.warm().catch(() => {});
   pending.push(binningTools.onFrame());
@@ -3391,6 +3432,8 @@ function abortAnalysisJobs() {
   crystalTools?.abortJobs();
   volumetricTools?.abortJobs();
   crystalSymmetryControls?.abortJobs();
+  diffractionControls?.abortJobs();
+  diffractionWarmController?.abort();
   volumetricWarmController?.abort();
   structureExportController?.abort();
   binningTools?.abortJobs();
@@ -4884,6 +4927,7 @@ function setControlsEnabled(enabled) {
   crystalTools?.setEnabled(enabled);
   volumetricTools?.setEnabled(enabled);
   crystalSymmetryControls?.setEnabled(enabled);
+  diffractionControls?.setEnabled(enabled);
   binningTools?.setEnabled(enabled);
   trajectoryTools?.setEnabled(enabled);
   voronoiCells?.setEnabled(enabled);
@@ -5077,6 +5121,7 @@ function captureConfiguration() {
         ...(surfaceTools.isUntouched() ? {} : { surfaceMesh: surfaceTools.serialize() }),
         ...(crystalTools.isUntouched() ? {} : { crystal: crystalTools.serialize() }),
         ...(volumetricTools.isUntouched() ? {} : { volumetric: volumetricTools.serialize() }),
+        ...(diffractionControls.isUntouched() ? {} : { diffraction: diffractionControls.serialize() }),
         playback: playbackControls.getSettings(), ...attributeExtensions() },
       theme: document.documentElement.dataset.theme,
     },
@@ -5222,6 +5267,8 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     crystalTools?.reset();
     volumetricTools?.reset();
     crystalSymmetryControls?.reset();
+    diffractionControls?.reset();
+    void diffractionClient.clear().catch(() => {});
     void volumetricClient.clear().catch(() => {});
     void structureExportClient.clearSnapshot().catch(() => {});
     binningTools?.reset();
@@ -5358,6 +5405,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
       surfaceTools.restore(saved.extensions.surfaceMesh, { isCurrent: current }),
       crystalTools.restore(saved.extensions.crystal, { isCurrent: current }),
       volumetricTools.restore(saved.extensions.volumetric, { isCurrent: current }),
+      diffractionControls.restore(saved.extensions.diffraction, { isCurrent: current }),
       binningTools.restore(saved.extensions.binning, { isCurrent: current }),
       timeSeries.restore(saved.extensions.timeSeries, { isCurrent: current }),
       trajectoryTools.restoreLines(saved.extensions.trajectory?.lines ?? null, { isCurrent: current })]);
@@ -5374,7 +5422,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     const failed = [...Object.keys(state.analysis).filter(kind => {
       const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
       return state.analysis[kind].enabled && elements[`${prefix}-state`].textContent === 'Failed';
-    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...grainTools.failed(), ...wignerSeitzTools.failed(), ...surfaceTools.failed(), ...crystalTools.failed(), ...volumetricTools.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
+    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...grainTools.failed(), ...wignerSeitzTools.failed(), ...surfaceTools.failed(), ...crystalTools.failed(), ...volumetricTools.failed(), ...diffractionControls.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
     elements['configuration-status'].textContent = failed.length
       ? `Configuration restored; these analyses could not complete: ${failed.join(', ')}.`
       : externalProperties.getPendingFiles().length

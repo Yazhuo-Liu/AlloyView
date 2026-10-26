@@ -43,6 +43,9 @@ test('Markdown renders readable code, tables, links and escaped raw HTML', () =>
   assert.equal(html.includes('<script>'), false);
   assert.ok(html.includes('href="#"'));
   assert.ok(html.includes('href="../user-guide.html#run-locally"'));
+  const provenance = 'https://github.com/project-gemmi/gemmi/blob/v0.7.5/README.md';
+  assert.ok(renderMarkdown(`[Upstream source](${provenance})`).includes(`href="${provenance}"`),
+    'external source links retain their actual Markdown filename');
 });
 
 test('build writes standalone documentation pages, stylesheet and relative viewer navigation', async () => {

@@ -120,7 +120,9 @@
     "test:gpu:volumetric": "node scripts/browser/browser-volumetric-gpu.mjs",
     "test:browser:volumetric": "node scripts/browser/browser-volumetric-tools.mjs --production",
     "test:browser:crystal-symmetry": "node scripts/browser/browser-crystal-symmetry.mjs --production",
-    "test:browser:thermal": "node scripts/browser/browser-thermal-ellipsoids.mjs --production"
+    "test:browser:thermal": "node scripts/browser/browser-thermal-ellipsoids.mjs --production",
+    "test:browser:diffraction": "node scripts/browser/browser-diffraction-tools.mjs --production",
+    "test:gpu:diffraction": "node scripts/browser/browser-diffraction-gpu.mjs"
   },
   "engines": {
     "node": ">=20"

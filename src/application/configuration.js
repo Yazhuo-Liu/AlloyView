@@ -1,3 +1,4 @@
+import { normalizeDiffractionParameters, DIFFRACTION_DEFAULTS } from '../analysis/diffraction.js';
 // Portable processing recipes contain no coordinates or computed atom arrays.
 // Local files must be selected again; source metadata is only used to match them.
 import { SCALAR_COLOR_SCHEMES } from '../render/palette.js';
@@ -270,7 +271,7 @@ function normalizeSelections(value) {
 /** Optional version 1 additions keep older recipes disabled and data-free. */
 function normalizeExtensions(value, fromSnapshot) {
   const path = 'settings.extensions';
-  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'playback', 'textLabels', 'timeSeries', 'globalAttributes', 'scripts', 'movie', 'grains', 'crystal', 'volumetric']);
+  const input = record(value, path, ['bonds', 'vectors', 'displacement', 'referenceStrain', 'localShear', 'rdf', 'measurements', 'appearance', 'comparison', 'dxa', 'externalProperties', 'bondStatistics', 'voronoi', 'voronoiDisplay', 'expressions', 'clusters', 'binning', 'wignerSeitz', 'surfaceMesh', 'trajectory', 'playback', 'textLabels', 'timeSeries', 'globalAttributes', 'scripts', 'movie', 'grains', 'crystal', 'volumetric', 'diffraction']);
   const playback = input.playback === undefined ? null : record(input.playback, `${path}.playback`, ['fps', 'mode']);
   const bonds = record(input.bonds ?? {}, `${path}.bonds`, ['enabled', 'cutoff', 'pairCutoffs', 'radius', 'visible']);
   const vectors = record(input.vectors ?? {}, `${path}.vectors`, ['enabled', 'components', 'scale', 'color', 'mode', 'componentScales', 'referenceFrame', 'minimumImage', 'radius', 'headRadius', 'headLength', 'linkDimensions', 'anchor', 'dimension', 'fields', 'selectedId', 'upMode', 'up']);
@@ -369,6 +370,7 @@ function normalizeExtensions(value, fromSnapshot) {
     ...(input.surfaceMesh === undefined ? {} : { surfaceMesh: normalizeSurfaceMesh(input.surfaceMesh, `${path}.surfaceMesh`, fromSnapshot) }),
     ...(input.crystal === undefined ? {} : { crystal: normalizeCrystal(input.crystal, `${path}.crystal`) }),
     ...(input.volumetric === undefined ? {} : { volumetric: normalizeVolumetric(input.volumetric, `${path}.volumetric`) }),
+    ...(input.diffraction === undefined ? {} : { diffraction: normalizeDiffraction(input.diffraction, `${path}.diffraction`) }),
     ...(input.trajectory === undefined ? {} : { trajectory: normalizeTrajectory(input.trajectory, `${path}.trajectory`) }),
     // Label templates are stored as text and parsed again by the safe template parser; no values are stored.
     ...(input.textLabels === undefined ? {} : { textLabels: normalizeTextLabelState(input.textLabels, { path: `${path}.textLabels` }) }),
@@ -508,6 +510,18 @@ function normalizeMeshStyle(input, path, defaults) {
 const MESH_STYLE_KEYS = ['visible', 'caps', 'opacity', 'color', 'interiorColor', 'capColor'];
 const SURFACE_MESH_STYLE = { color: '#c9d4e3', interiorColor: '#b5524a', capColor: '#8fa3bf' };
 const DEFECT_MESH_STYLE = { color: '#d9c06a', interiorColor: '#c7ae5c', capColor: '#b39b52' };
+
+/** Diffraction recipes contain physical settings, never calculated peaks. */
+function normalizeDiffraction(value, path) {
+  const input = record(value, path, ['enabled', 'wavelengthPreset', ...Object.keys(DIFFRACTION_DEFAULTS)]);
+  const wavelengths = { 'cu-ka1': 1.5406, 'co-ka1': 1.78897, 'mo-ka1': 0.7093 };
+  const { enabled, wavelengthPreset, ...parameters } = input;
+  let normalized;
+  try { normalized = normalizeDiffractionParameters(parameters); } catch (error) { fail(path, error.message); }
+  const preset = choice(wavelengthPreset ?? (normalized.wavelength === DIFFRACTION_DEFAULTS.wavelength ? 'cu-ka1' : 'custom'), `${path}.wavelengthPreset`, new Set(['custom', ...Object.keys(wavelengths)]));
+  if (preset !== 'custom' && normalized.wavelength !== wavelengths[preset]) fail(path, 'the wavelength and preset must agree');
+  return { enabled: boolean(enabled, `${path}.enabled`, false), ...normalized, wavelengthPreset: preset };
+}
 
 /** Scalar grids are source data; recipes retain only field and display choices. */
 function normalizeVolumetric(value, path) {

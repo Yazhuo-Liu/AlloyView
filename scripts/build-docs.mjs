@@ -10,6 +10,7 @@ export const DOC_GUIDES = Object.freeze([
   { source: 'VALIDATION.md', page: 'validation.html', title: 'Validation' },
   { source: 'DEPLOYMENT.md', page: 'deployment.html', title: 'Deployment' },
   { source: 'DXA.md', page: 'dxa.html', title: 'DXA implementation and validation' },
+  { source: 'DIFFRACTION_IMPLEMENTATION.md', page: 'diffraction.html', title: 'Powder diffraction implementation' },
   { source: 'TODO.md', page: 'todo.html', title: 'Improvement backlog' },
 ]);
 
@@ -19,6 +20,7 @@ function escapeHtml(value) {
 
 function safeLink(value) {
   if (/^(?:javascript|data|vbscript):/i.test(value.trim())) return '#';
+  if (/^https?:\/\//i.test(value)) return value;
   const [pathname, fragment] = value.split('#', 2);
   const guide = DOC_GUIDES.find(item => item.source === pathname.split('/').at(-1));
   if (guide) return pathname.slice(0, pathname.length - guide.source.length) + guide.page + (fragment ? `#${fragment}` : '');
