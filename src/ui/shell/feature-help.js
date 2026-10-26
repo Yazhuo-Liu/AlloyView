@@ -1,5 +1,6 @@
 /** The same descriptions power panel help and the documentation navigation. */
 export const FEATURE_HELP = Object.freeze({
+  volumetric: { title: 'Volumetric data', page: 'volumetric', summary: 'Display VASP density, potential, ELF or Cube grids as isosurfaces and numerical sections. Extraction uses WebGPU or reusable CPU Workers; section CSV preserves sample values and Cartesian coordinates.' },
   keyboard: { title: 'Keyboard shortcuts', page: 'keyboard', summary: 'Navigate the camera, trajectory and selected cutting plane with configurable keys and a 0–9 camera step gearbox. Open the viewport ? button to review or rebind commands.' },
   display: { title: 'Display', page: 'display', summary: 'Choose coordinates, atom colors and radii, ambient occlusion, image options, and an independent second camera. Display changes preserve the source data.' },
   crystal: { title: 'Crystal structures', page: 'crystal', summary: 'Inspect CIF/POSCAR cell parameters, symmetry and occupancy; draw coordination polyhedra from selected center and neighbor elements, and export crystal structures or polyhedron statistics.' },

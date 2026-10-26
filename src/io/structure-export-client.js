@@ -1,8 +1,9 @@
+import { THERMAL_PROPERTY_NAMES } from '../crystal/thermal-ellipsoids.js';
 import { MAX_STRUCTURE_EXPORT_ATOMS, MAX_STRUCTURE_EXPORT_BYTES } from './structure-export.js';
 import { runParserStepsAsync } from './cooperative-parser.js';
 
 const properties = new Set(['occupancy', 'Uiso', 'uiso', 'U_iso_or_equiv', 'Biso', 'biso', 'bfactor',
-  'B_iso_or_equiv', 'selectiveDynamicsX', 'selectiveDynamicsY', 'selectiveDynamicsZ']);
+  ...THERMAL_PROPERTY_NAMES, 'B_iso_or_equiv', 'selectiveDynamicsX', 'selectiveDynamicsY', 'selectiveDynamicsZ']);
 const abortError = () => new DOMException('Structure export cancelled.', 'AbortError');
 const failure = message => new Error(`Structure export: ${message}`);
 const sameKey = (left, right) => left?.length === right.length && right.every((value, index) => Object.is(value, left[index]));

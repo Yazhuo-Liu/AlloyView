@@ -1,3 +1,5 @@
+import { THERMAL_DEFAULTS } from '../../crystal/thermal-ellipsoids.js';
+import { normalizeThermalOptions } from '../../render/thermal-ellipsoid-layer.js';
 import { determinant3 } from '../../data/model.js';
 import { analysisBackendLabel, analysisBackendDetails, analysisProgressText } from '../../analysis/status.js';
 
@@ -30,6 +32,7 @@ export function initializeCrystalTools({ renderer, tools, pool, getFrame, getSou
   const job = { enabled: false, failed: false, controller: null, serial: 0, result: null, frame: null,
     settings: copySettings(CRYSTAL_TOOL_DEFAULTS) };
   let controlsEnabled = false, exportBusy = false, generation = 0;
+  let thermalSettings = { ...THERMAL_DEFAULTS };
   const typeInputs = new Map();
 
   function updateControls() {
@@ -37,6 +40,11 @@ export function initializeCrystalTools({ renderer, tools, pool, getFrame, getSou
     for (const id of ['crystal-cutoff', 'crystal-visible', 'crystal-color', 'crystal-opacity', 'crystal-edges']) {
       if ($(id)) $(id).disabled = !available;
     }
+    const thermal = getFrame()?.thermalEllipsoids;
+    for (const id of ['thermal-enabled', 'thermal-probability', 'thermal-opacity']) if ($(id)) $(id).disabled = !available || !thermal?.count;
+    if ($('thermal-status')) $('thermal-status').textContent = thermal?.count
+      ? `${count(thermal.count)} sites have positive-definite displacement tensors. Ellipsoids replace their atom spheres; sites without valid tensors keep ordinary spheres.`
+      : 'No renderable displacement tensors in this structure. Import CIF anisotropic Uij/Bij or isotropic Uiso/Biso values.';
     for (const inputs of typeInputs.values()) for (const input of inputs) input.disabled = !available || input.missingType;
     if ($('run-crystal')) $('run-crystal').disabled = !available || Boolean(job.controller);
     if ($('cancel-crystal')) $('cancel-crystal').disabled = !available || (!job.enabled && !job.failed);
@@ -55,7 +63,7 @@ export function initializeCrystalTools({ renderer, tools, pool, getFrame, getSou
     updateControls();
   }
 
-  function syncTool({ reveal = false } = {}) { tools?.setToolEnabled('crystal', job.enabled, { reveal }); }
+  function syncTool({ reveal = false } = {}) { tools?.setToolEnabled('crystal', job.enabled || thermalSettings.enabled, { reveal }); }
 
   function updateFrameInfo() {
     const frame = getFrame(), metrics = crystalCellMetrics(frame?.cell), crystal = frame?.crystal;
@@ -134,6 +142,7 @@ export function initializeCrystalTools({ renderer, tools, pool, getFrame, getSou
   function draw() {
     const { visible, color, opacity, showEdges } = job.settings;
     renderer?.setCoordinationPolyhedra(job.frame === getFrame() ? job.result : null, { visible, color, opacity, showEdges });
+    renderer?.setThermalEllipsoids?.(getFrame()?.thermalEllipsoids ?? null, thermalSettings);
     onDisplayChange();
   }
 
@@ -240,6 +249,14 @@ export function initializeCrystalTools({ renderer, tools, pool, getFrame, getSou
     return run({ automatic: true });
   }
 
+  function applyThermalSettings() {
+    if ($('thermal-enabled')) $('thermal-enabled').checked = thermalSettings.enabled;
+    if ($('thermal-probability')) $('thermal-probability').value = String(thermalSettings.probability * 100);
+    if ($('thermal-probability-value')) $('thermal-probability-value').textContent = `${Math.round(thermalSettings.probability * 100)}%`;
+    if ($('thermal-opacity')) $('thermal-opacity').value = String(thermalSettings.opacity);
+    if ($('thermal-opacity-value')) $('thermal-opacity-value').textContent = `${Math.round(thermalSettings.opacity * 100)}%`;
+  }
+
   function applySettings() {
     const s = job.settings;
     if ($('crystal-cutoff')) $('crystal-cutoff').value = String(s.cutoff);
@@ -248,22 +265,27 @@ export function initializeCrystalTools({ renderer, tools, pool, getFrame, getSou
     if ($('crystal-color')) $('crystal-color').value = s.color;
     if ($('crystal-opacity')) $('crystal-opacity').value = String(s.opacity);
     if ($('crystal-opacity-value')) $('crystal-opacity-value').textContent = `${Math.round(s.opacity * 100)}%`;
+    applyThermalSettings();
     updateTypeOptions();
   }
 
   function reset() {
+    thermalSettings = { ...THERMAL_DEFAULTS };
     generation++; cancel({ silent: true }); job.settings = copySettings(CRYSTAL_TOOL_DEFAULTS);
     applySettings(); updateFrameInfo(); onResultsChange({ clearSettings: true });
   }
 
-  function serialize() { return { enabled: job.enabled, ...readSettings() }; }
+  function serialize() { return { enabled: job.enabled, ...readSettings(),
+    ...(Object.keys(THERMAL_DEFAULTS).some(key => thermalSettings[key] !== THERMAL_DEFAULTS[key]) ? { thermalEllipsoids: { ...thermalSettings } } : {}) }; }
 
   async function restore(saved, { isCurrent = () => true } = {}) {
     if (!isCurrent()) return false;
     generation++; cancel({ clearSettings: false, silent: true });
+    thermalSettings = normalizeThermalOptions(saved?.thermalEllipsoids ?? THERMAL_DEFAULTS);
     job.settings = copySettings({ ...CRYSTAL_TOOL_DEFAULTS, ...(saved ?? {}) });
+    delete job.settings.thermalEllipsoids;
     delete job.settings.enabled;
-    applySettings(); updateFrameInfo(); job.enabled = Boolean(saved?.enabled); syncTool();
+    applySettings(); updateFrameInfo(); job.enabled = Boolean(saved?.enabled); syncTool(); draw();
     onResultsChange({ clearSettings: false });
     return job.enabled && isCurrent() ? run({ automatic: true, isCurrent }) : false;
   }
@@ -275,6 +297,12 @@ export function initializeCrystalTools({ renderer, tools, pool, getFrame, getSou
     finally { exportBusy = false; updateControls(); }
   }
 
+  for (const id of ['thermal-enabled', 'thermal-probability', 'thermal-opacity']) $(id)?.addEventListener(id === 'thermal-enabled' ? 'change' : 'input', () => {
+    try { thermalSettings = normalizeThermalOptions({ enabled: $('thermal-enabled')?.checked ?? false,
+      probability: Number($('thermal-probability')?.value ?? 50) / 100, opacity: Number($('thermal-opacity')?.value ?? 0.8) }); }
+    catch (error) { notify(error.message); return; }
+    onEdit(); applyThermalSettings(); syncTool(); draw();
+  });
   $('run-crystal')?.addEventListener('click', () => { void run(); });
   $('cancel-crystal')?.addEventListener('click', () => { onEdit(); cancel(); });
   $('crystal-cutoff')?.addEventListener('change', () => {
@@ -296,13 +324,13 @@ export function initializeCrystalTools({ renderer, tools, pool, getFrame, getSou
   return Object.freeze({ run, onFrame, cancel, reset, serialize, restore, redraw: draw, abortJobs: abort,
     setEnabled(value) { controlsEnabled = Boolean(value); updateFrameInfo(); updateTypeOptions(); },
     setExportBusy(value) { exportBusy = Boolean(value); updateControls(); },
-    isEnabled: () => job.enabled,
+    isEnabled: () => job.enabled || thermalSettings.enabled,
     getResult: () => job.result,
     pendingKinds: () => job.enabled && !job.failed && job.controller ? ['coordinationPolyhedra'] : [],
     failed: () => job.failed ? ['crystal'] : [],
     isUntouched() {
       const saved = serialize();
-      return !saved.enabled && Object.keys(CRYSTAL_TOOL_DEFAULTS).every(key => JSON.stringify(saved[key]) === JSON.stringify(CRYSTAL_TOOL_DEFAULTS[key]));
+      return !saved.enabled && !saved.thermalEllipsoids && Object.keys(CRYSTAL_TOOL_DEFAULTS).every(key => JSON.stringify(saved[key]) === JSON.stringify(CRYSTAL_TOOL_DEFAULTS[key]));
     },
   });
 }

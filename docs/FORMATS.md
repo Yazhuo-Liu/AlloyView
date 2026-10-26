@@ -15,7 +15,10 @@ Each parsed frame contains:
   inferred `ix/iy/iz` values;
 - a cell origin, three row vectors, and three PBC flags;
 - named scalar per-atom typed arrays;
-- optional timestep/source metadata.
+- optional timestep/source metadata;
+- optional `volumetric.datasets`, each with Float64 scalar samples in x-fastest
+  order, dimensions, origin, three Cartesian sample-step vectors, explicit
+  periodic flags, units and numerical statistics.
 
 Explicit atom identifiers are distinguished from generated row-order IDs.
 Only explicit stable IDs establish cross-frame correspondence for reference
@@ -176,22 +179,56 @@ Explicit `_space_group_symop_operation_xyz` or legacy
 are parsed as restricted affine expressions, never JavaScript. Equivalent images
 of each special-position site are deduplicated; different asymmetric sites and
 mixed-occupancy species are preserved independently. If operations are absent,
-only undeclared/P1 or unambiguous P−1 structures can be expanded. Other groups require
-explicit operations: the application does not guess a setting or origin from a
-space-group number. Multiple crystal data blocks must be separated for the UI;
+the pinned moyo database resolves declared Hall/Hermann–Mauguin settings across
+all 230 space-group types and 530 Hall settings. Ambiguous coordinate/origin
+settings require an explicit setting or operation list; a number alone does
+not choose between them. Undeclared structures are interpreted as P1.
+Multiple crystal data blocks must be separated for the UI;
 the parser API also accepts a named `block` option.
 
 Occupancy, `asymmetricSiteIndex`, `Uiso` and `Biso` are numeric atom properties
 available for coloring and inspection when present. Partial/zero/unknown
 occupancies do not remove sites or weight existing atom analyses. Disordered
 coincident sites can be displayed but may be unsuitable for analyses that
-require distinct sites. CIF2 collection values, macromolecular mmCIF dictionaries,
-anisotropic displacement ellipsoids and space-group inference are not implemented.
+require distinct sites. CIF2 collection values and macromolecular mmCIF dictionaries
+are not implemented. Complete anisotropic U/B tensors are converted to Cartesian
+covariances and rotated with expanded symmetry sites; they support optional
+thermal ellipsoids. Actual global symmetry identification is a separate Crystal
+tool calculation using the open-source moyo WASM runtime.
 The parser bounds file size, token count, operations and expansion to reject
 excessive inputs instead of truncating them.
 
 Use **Visualization → Crystal** for cell information, coordination polyhedra,
 CIF/POSCAR export and CSV statistics. See [Crystal structures](features/crystal.md).
+
+## VASP scalar volumes and Gaussian Cube
+
+CHGCAR/CHG, LOCPOT and ELFCAR contain a POSCAR structure followed by one or more
+scalar grids. Conventional filenames identify the physical field even when a
+bounded header read cannot reach the grid. A renamed POSCAR-like file with a
+grid is promoted to a volume during full parsing, but an unknown filename leaves
+its scalar unit unspecified. Repeated spin/magnetization grids are retained as
+separate datasets; PAW augmentation-occupancy records are skipped rather than
+mistaken for grid samples. CHGCAR/CHG samples are divided by the cell volume,
+LOCPOT remains in eV, and ELF is dimensionless.
+
+Gaussian Cube supports signed voxel counts for coordinate units, tilted basis
+vectors, nonzero origins, multiple positive-NVAL channels and orbital-ID fields.
+Its z-fastest file samples are reordered to the common x-fastest representation.
+Bohr coordinates become Å. Scalar units remain in file units because Cube does
+not declare whether a field is density, potential or an orbital amplitude.
+At least one atom is required by the viewer frame model; atom-free cubes are
+rejected explicitly. Mixed coordinate-unit signs and incomplete fields are rejected.
+
+VASP axes wrap through the final sample; Cube axes remain open. Integrals use
+periodic rectangle quadrature and open-axis trapezoidal quadrature respectively.
+Each field permits at most 8,388,608 samples; all fields together permit
+33,554,432 samples, at most 64 fields, and 256 MiB decoded text. Parsing yields
+for cancellation and never truncates data to fit. Physical replication tiles
+periodic samples along with atoms; the source grid remains immutable.
+
+See [Volumetric data](features/volumetric.md) for CPU/GPU isosurfaces and section
+CSV export. Volume files currently open as single frames.
 
 ## VASP POSCAR and CONTCAR
 

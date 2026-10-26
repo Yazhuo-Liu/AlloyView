@@ -1,3 +1,4 @@
+import { THERMAL_PROPERTY_NAMES, cartesianThermalToCif, thermalEllipsoidAxes } from '../crystal/thermal-ellipsoids.js';
 import { determinant3 } from '../data/model.js';
 import { isElementSymbol } from '../data/chemical-elements.js';
 import { PARSER_CHECKPOINT_MASK, runParserSteps, runParserStepsAsync } from './cooperative-parser.js';
@@ -76,6 +77,9 @@ function* formatStructureSteps(frame, { format = 'cif', stem = 'structure', titl
   const occupancy = property(frame, ['occupancy'], count);
   const uiso = format === 'cif' ? property(frame, ['Uiso', 'uiso', 'U_iso_or_equiv'], count) : null;
   const biso = format === 'cif' ? property(frame, ['Biso', 'biso', 'bfactor', 'B_iso_or_equiv'], count) : null;
+  const thermal = format === 'cif' ? THERMAL_PROPERTY_NAMES.map(name => property(frame, [name], count)) : [];
+  if (thermal.some(Boolean) && !thermal.every(Boolean)) throw error('anisotropic displacement tensors require all six Cartesian components.');
+  const hasThermal = thermal.length === 6 && thermal.every(Boolean);
   const flags = format === 'poscar' ? ['X', 'Y', 'Z'].map(axis => property(frame, [`selectiveDynamics${axis}`], count)) : [];
   if (flags.some(Boolean) && !flags.every(Boolean)) throw error('POSCAR needs all three selective-dynamics columns, or none.');
   if (format === 'poscar' && frame.crystal?.disordered) {
@@ -109,6 +113,12 @@ function* formatStructureSteps(frame, { format = 'cif', stem = 'structure', titl
     for (const values of [uiso, biso]) {
       if (values && (typeof values[atom] !== 'number' || !Number.isFinite(values[atom]) && !Number.isNaN(values[atom]))) {
         throw error(`atom ${atom + 1} has an invalid atomic displacement parameter.`);
+      }
+    }
+    if (hasThermal) {
+      const tensor = thermal.map(values => values[atom]);
+      if (!tensor.every(Number.isNaN)) {
+        try { thermalEllipsoidAxes(tensor); } catch (cause) { throw error(`atom ${atom + 1}: ${cause.message}`); }
       }
     }
     for (const values of flags) {
@@ -161,6 +171,21 @@ function* formatStructureSteps(frame, { format = 'cif', stem = 'structure', titl
           + (uiso ? ` ${optionalNumber(uiso[atom])}` : '') + (biso ? ` ${optionalNumber(biso[atom])}` : '') + '\n';
       }
       append(chunk);
+    }
+    if (hasThermal) {
+      append('loop_\n_atom_site_aniso_label\n' + ['11','22','33','12','13','23'].map(key => `_atom_site_aniso_U_${key}\n`).join(''));
+      labels.fill(0);
+      for (let start = 0; start < count; start += 1024) {
+        yield;
+        let chunk = '';
+        for (let atom = start; atom < Math.min(count, start + 1024); atom++) {
+          const index = typeToSpecies[frame.types[atom]], label = `${species[index]}${++labels[index]}`;
+          const tensor = thermal.map(values => values[atom]);
+          const values = tensor.every(Number.isNaN) ? tensor : cartesianThermalToCif(tensor, h);
+          chunk += `${label} ${Array.from(values, optionalNumber).join(' ')}\n`;
+        }
+        append(chunk);
+      }
     }
   } else {
     const selective = flags.every(Boolean);

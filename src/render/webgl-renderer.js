@@ -21,6 +21,8 @@ import { DislocationLayer, normalizeDislocationOptions } from './dislocation-lay
 import { TrajectoryLineLayer, normalizeTrajectoryLineOptions } from './trajectory-line-layer.js';
 import { VoronoiCellLayer, VoronoiAllCellLayer, normalizeVoronoiCellOptions } from './voronoi-cell-layer.js';
 import { CoordinationPolyhedraLayer, coordinationPolyhedraGeometry, normalizeCoordinationPolyhedraOptions } from './coordination-polyhedra-layer.js';
+import { VolumetricLayer, volumetricSurfaceGeometry, normalizeVolumetricSurfaceOptions } from './volumetric-layer.js';
+import { ThermalEllipsoidLayer, thermalEllipsoidGeometry, normalizeThermalOptions, thermalRayDepth } from './thermal-ellipsoid-layer.js';
 import { SiteMarkerLayer, normalizeSiteMarkerOptions } from './site-marker-layer.js';
 import { SurfaceMeshLayer, normalizeSurfaceMeshOptions, SURFACE_MESH_DEFAULTS } from './surface-mesh-layer.js';
 import { sharedSurfaceGeometryClient } from './surface-geometry-client.js';
@@ -55,6 +57,8 @@ layout(location=5) in float aRadius;
 layout(location=6) in float aScalar;
 layout(location=7) in float aColorOverride;
 layout(location=8) in float aOcclusion;
+layout(location=9) in vec3 aThermalAxis;
+uniform bool uThermalEnabled;
 ${SCALAR_COLOR_GLSL}
 ${CRYSTAL_DRAG_GLSL}
 uniform mat4 uView;
@@ -105,7 +109,7 @@ void main() {
       }
     }
   }
-  vVisible = aVisible > 0.5 && sliceVisible && scalarShown(aScalar) ? 1 : 0;
+  vVisible = aVisible > 0.5 && sliceVisible && scalarShown(aScalar) && (!uThermalEnabled || dot(aThermalAxis,aThermalAxis) == 0.0) ? 1 : 0;
   // Filtered or sliced-away atoms are dropped before rasterization rather than
   // shading every covered pixel only to discard it.
   if (vVisible == 0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -215,11 +219,11 @@ const SCENE_FIELDS = [
   'scalarColorTexture', 'scalarColorTextureWidth', 'scalarColorInput', 'scalarColorPreview',
   'ambientOcclusionBuffer', 'ambientOcclusionFactors', 'ambientOcclusionIntensity',
   'primitiveLayer', 'dislocationLayer', 'siteMarkerLayer', 'surfaceMeshLayer', 'trajectoryLineLayer',
-  'voronoiCellLayer', 'voronoiAllCellLayer', 'coordinationPolyhedraLayer', 'exportLineLayer', 'retainedSurfaceMeshes',
+  'voronoiCellLayer', 'voronoiAllCellLayer', 'coordinationPolyhedraLayer', 'thermalEllipsoidLayer', 'volumetricLayer', 'exportLineLayer', 'retainedSurfaceMeshes',
   'atomBonds', 'atomVectors', 'atomVectorFields', 'bondOptions', 'vectorOptions',
   'dislocationNetwork', 'dislocationOptions', 'siteMarkers', 'siteMarkerOptions',
   'trajectoryLines', 'trajectoryLineOptions', 'voronoiCellGeometry', 'voronoiAllCellGeometry', 'voronoiCellOptions',
-  'coordinationPolyhedra', 'coordinationPolyhedraOptions',
+  'coordinationPolyhedra', 'coordinationPolyhedraOptions', 'thermalEllipsoids', 'thermalEllipsoidOptions', 'volumetricSurface', 'volumetricSurfaceOptions',
   'voronoiDisplayRevision', 'displayRevision', 'sourceBoundsRevision', 'sourceBoundsCache',
   'preparedDisplaySnapshot', 'ownPreparedDisplaySnapshot', 'preparedDisplayUploads',
   'preparedPrimitivePreparation', 'ownPreparedPrimitivePreparation', 'ownPreparedBondSnapshot', 'preparedBondSnapshot',
@@ -228,7 +232,7 @@ const SCENE_FIELDS = [
   'sliceAxis', 'sliceMaximum', 'sliceMode', 'slices', 'slicePlaneValues', 'sliceCount', 'sliceOutlineGeometry',
 ];
 const SCENE_LAYERS = ['primitiveLayer', 'dislocationLayer', 'siteMarkerLayer', 'surfaceMeshLayer', 'trajectoryLineLayer',
-  'voronoiCellLayer', 'voronoiAllCellLayer', 'coordinationPolyhedraLayer', 'exportLineLayer'];
+  'voronoiCellLayer', 'voronoiAllCellLayer', 'coordinationPolyhedraLayer', 'thermalEllipsoidLayer', 'volumetricLayer', 'exportLineLayer'];
 const CAMERA_FIELDS = ['yaw', 'pitch', 'roll', 'constrainUp', 'target', 'pan', 'distance', 'orthographicScale',
   'projectionMode', 'fov', 'radiusScale', 'background', 'cellVisible', 'cellColor', 'cellWireframeMode',
   'sliceOutlinesVisible', 'sliceOutlineColor', 'renderViewport', 'exportAppearanceBackground'];
@@ -308,9 +312,15 @@ export class WebGLRenderer {
     this.voronoiCellOptions = normalizeVoronoiCellOptions();
     this.voronoiAllCellLayer = null;
     this.voronoiAllCellGeometry = null;
+    this.thermalEllipsoidLayer = null;
+    this.thermalEllipsoids = null;
+    this.thermalEllipsoidOptions = normalizeThermalOptions();
     this.coordinationPolyhedraLayer = null;
     this.coordinationPolyhedra = null;
     this.coordinationPolyhedraOptions = normalizeCoordinationPolyhedraOptions();
+    this.volumetricLayer = null;
+    this.volumetricSurface = null;
+    this.volumetricSurfaceOptions = normalizeVolumetricSurfaceOptions();
     this.voronoiDisplayRevision = 0;
     this.siteMarkerLayer = null;
     this.siteMarkers = null;
@@ -366,7 +376,7 @@ export class WebGLRenderer {
       'uView', 'uProjection', 'uRadiusScale', 'uSliceAxis', 'uSliceMaximum', 'uSelected',
       'uReplicaOffset', 'uReplicaIndex', 'uRepetitions',
       'uSliceMode', 'uSliceCount', 'uSlicePlanes[0]',
-      'uSelectedAtoms[0]', 'uAmbientOcclusion', 'uOcclusionIntensity',
+      'uSelectedAtoms[0]', 'uThermalEnabled', 'uAmbientOcclusion', 'uOcclusionIntensity',
       ...SCALAR_COLOR_UNIFORMS, ...CRYSTAL_DRAG_UNIFORMS,
     ]);
     this.lineUniforms = uniforms(gl, this.lineProgram, ['uViewProjection', 'uColor']);
@@ -625,7 +635,7 @@ export class WebGLRenderer {
     // Lost GL objects cannot be reused on restore. Retain only descriptors and
     // typed arrays; the setters below keep these current while drawing is paused.
     for (const name of ['primitiveLayer', 'dislocationLayer', 'siteMarkerLayer', 'surfaceMeshLayer',
-      'trajectoryLineLayer', 'voronoiCellLayer', 'voronoiAllCellLayer', 'coordinationPolyhedraLayer', 'exportLineLayer']) this[name] = null;
+      'trajectoryLineLayer', 'voronoiCellLayer', 'voronoiAllCellLayer', 'coordinationPolyhedraLayer', 'thermalEllipsoidLayer', 'volumetricLayer', 'exportLineLayer']) this[name] = null;
     this.scalarColorTexture = this.ambientOcclusionBuffer = null;
     this.reportContextState('lost', 'Graphics context lost. Drawing and image export are paused while the view recovers. Atom data and calculations are retained.');
   }
@@ -662,7 +672,9 @@ export class WebGLRenderer {
     if (this.trajectoryLines) this.setTrajectoryLines(this.trajectoryLines, this.trajectoryLineOptions);
     if (this.voronoiCellGeometry) this.setVoronoiCellGeometry(this.voronoiCellGeometry, this.voronoiCellOptions);
     if (this.voronoiAllCellGeometry) this.setVoronoiAllCellGeometry(this.voronoiAllCellGeometry, this.voronoiCellOptions);
+    if (this.thermalEllipsoids) this.setThermalEllipsoids(this.thermalEllipsoids, this.thermalEllipsoidOptions);
     if (this.coordinationPolyhedra) this.setCoordinationPolyhedra(this.coordinationPolyhedra, this.coordinationPolyhedraOptions);
+    if (this.volumetricSurface) this.setVolumetricSurface(this.volumetricSurface, this.volumetricSurfaceOptions);
     if (this.ambientOcclusionFactors) {
       const factors = this.ambientOcclusionFactors;
       this.ambientOcclusionFactors = null;
@@ -748,6 +760,11 @@ export class WebGLRenderer {
     this.voronoiAllCellLayer?.clear();
     this.coordinationPolyhedra = null;
     this.coordinationPolyhedraLayer?.clear();
+    this.thermalEllipsoids = null;
+    this.thermalEllipsoidLayer?.clear();
+    if (this.sphereVao && !this.graphicsUnavailable()) { this.gl.bindVertexArray(this.sphereVao); this.gl.disableVertexAttribArray(9); this.gl.bindVertexArray(null); }
+    this.volumetricSurface = null;
+    this.volumetricLayer?.clear();
     this.updateSceneBounds({ reuseSourceBounds: Boolean(preparedDisplay || summaryBounds) });
     if (this.trajectoryLines && !this.trajectoryLineLayer) this.setTrajectoryLines(this.trajectoryLines, this.trajectoryLineOptions);
     // The returned time covers submitting the uploads. Waiting for the GPU
@@ -803,6 +820,11 @@ export class WebGLRenderer {
     this.voronoiAllCellLayer?.clear();
     this.coordinationPolyhedra = null;
     this.coordinationPolyhedraLayer?.clear();
+    this.thermalEllipsoids = null;
+    this.thermalEllipsoidLayer?.clear();
+    if (this.sphereVao && !this.graphicsUnavailable()) { this.gl.bindVertexArray(this.sphereVao); this.gl.disableVertexAttribArray(9); this.gl.bindVertexArray(null); }
+    this.volumetricSurface = null;
+    this.volumetricLayer?.clear();
     this.displayCell = this.sceneBounds = this.minimumOffset = this.maximumOffset = null;
     this.atomCount = this.displayAtomCount = 0;
     this.repetitions = [1, 1, 1];
@@ -1393,6 +1415,38 @@ export class WebGLRenderer {
     this.requestRender();
   }
 
+  setThermalEllipsoids(data, options = {}) {
+    const settings = normalizeThermalOptions(options, this.thermalEllipsoidOptions);
+    thermalEllipsoidGeometry(data, this.atomCount);
+    const changed = data !== this.thermalEllipsoids || settings.enabled !== this.thermalEllipsoidOptions?.enabled
+      || settings.probability !== this.thermalEllipsoidOptions?.probability;
+    if (!this.graphicsUnavailable()) {
+      if (data && settings.enabled && !this.thermalEllipsoidLayer) this.thermalEllipsoidLayer = new ThermalEllipsoidLayer(this.gl);
+      this.thermalEllipsoidLayer?.setGeometry(data, settings);
+      if (data && this.thermalEllipsoidLayer) this.thermalEllipsoidLayer.bindAtomMask(this);
+      else { this.gl.bindVertexArray(this.sphereVao); this.gl.disableVertexAttribArray(9); this.gl.bindVertexArray(null); }
+    }
+    this.thermalEllipsoids = data; this.thermalEllipsoidOptions = settings;
+    if (changed && this.frame && !this.graphicsUnavailable()) this.updateSceneBounds({ reuseSourceBounds: true });
+    this.requestRender();
+  }
+
+  setVolumetricSurface(result, options = {}) {
+    if (result && !this.frame) throw new Error('Load a structure before displaying an isosurface.');
+    const settings = normalizeVolumetricSurfaceOptions(options, this.volumetricSurfaceOptions);
+    const geometry = volumetricSurfaceGeometry(result);
+    const boundsChanged = result !== this.volumetricSurface || settings.visible !== this.volumetricSurfaceOptions?.visible;
+    if (!this.graphicsUnavailable()) {
+      if (geometry && !this.volumetricLayer) this.volumetricLayer = new VolumetricLayer(this.gl);
+      if (geometry) this.volumetricLayer.setSurface(result, settings);
+      else this.volumetricLayer?.clear();
+    }
+    this.volumetricSurface = result ?? null;
+    this.volumetricSurfaceOptions = settings;
+    if (boundsChanged && this.frame && !this.graphicsUnavailable()) this.updateSceneBounds({ reuseSourceBounds: true });
+    this.requestRender();
+  }
+
   setCoordinationPolyhedra(result, options = {}) {
     if (result && !this.frame) throw new Error('Load a structure before displaying coordination polyhedra.');
     const settings = normalizeCoordinationPolyhedraOptions(options, this.coordinationPolyhedraOptions);
@@ -1653,6 +1707,8 @@ export class WebGLRenderer {
     this.voronoiCellLayer?.extendBounds(this, minimum, maximum);
     this.voronoiAllCellLayer?.extendBounds(this, minimum, maximum);
     this.coordinationPolyhedraLayer?.extendBounds(this, minimum, maximum);
+    this.thermalEllipsoidLayer?.extendBounds(this, minimum, maximum);
+    this.volumetricLayer?.extendBounds(this, minimum, maximum);
     this.sceneBounds = { minimum, maximum };
     this.selectionSourceBounds = { minimum: [...source.minimum], maximum: [...source.maximum] };
     return this.sceneBounds;
@@ -1742,6 +1798,7 @@ export class WebGLRenderer {
     gl.uniformMatrix4fv(this.sphereUniforms.uView, false, this.viewMatrix);
     gl.uniformMatrix4fv(this.sphereUniforms.uProjection, false, this.projectionMatrix);
     gl.uniform1f(this.sphereUniforms.uRadiusScale, this.radiusScale);
+    gl.uniform1i(this.sphereUniforms.uThermalEnabled, this.thermalEllipsoids && this.thermalEllipsoidOptions?.enabled ? 1 : 0);
     gl.uniform1i(this.sphereUniforms.uSliceAxis, this.sliceAxis);
     gl.uniform1f(this.sphereUniforms.uSliceMaximum, this.sliceMaximum);
     gl.uniform1i(this.sphereUniforms.uSliceMode, this.sliceMode === 'planes' ? 1 : 0);
@@ -1769,12 +1826,14 @@ export class WebGLRenderer {
       gl.uniform3f(this.sphereUniforms.uReplicaIndex, ...replica.indices);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.atomCount);
     }
+    this.thermalEllipsoidLayer?.render(this);
     this.primitiveLayer?.render(this);
     this.dislocationLayer?.render(this);
     this.siteMarkerLayer?.render(this);
     this.trajectoryLineLayer?.render(this);
     // Opaque meshes write depth like atoms; translucent ones blend over them.
     this.surfaceMeshLayer?.render(this);
+    this.volumetricLayer?.render(this);
     // Local cell and coordination hull anchors use committed display positions.
     // Keep them hidden while the atom shader previews an uncommitted drag.
     if (!this.crystalDrag) {
@@ -2025,13 +2084,30 @@ export class WebGLRenderer {
         const index = atom * 3;
         const wx = positions[index] + ox, wy = positions[index + 1] + oy, wz = positions[index + 2] + oz;
         const viewZ = v[2] * wx + v[6] * wy + v[10] * wz + v[14];
-        const radius = (radii?.[atom] ?? 0.7) * radiusScale;
+        const thermal = this.thermalEllipsoidOptions?.enabled && this.thermalEllipsoids?.transforms;
+        const thermalOffset = atom * 9;
+        const hasThermal = thermal && Math.hypot(thermal[thermalOffset], thermal[thermalOffset + 1], thermal[thermalOffset + 2]) > 0;
+        const thermalScale = this.thermalEllipsoidLayer?.scale ?? 1;
+        let radius = (radii?.[atom] ?? 0.7) * radiusScale;
+        if (hasThermal) {
+          let maximumSquared = 0;
+          for (let component = 0; component < 9; component += 3) {
+            const offset = thermalOffset + component;
+            maximumSquared = Math.max(maximumSquared, thermal[offset] ** 2 + thermal[offset + 1] ** 2 + thermal[offset + 2] ** 2);
+          }
+          radius = thermalScale * Math.sqrt(maximumSquared);
+        }
         const depthRadius = Number.isFinite(radius) ? radius : 0;
         if (viewZ >= 0) continue;
         const frontDepth = viewZ + Math.max(0, depthRadius);
         if ((!windowDepth || closestWindowDepth < 1 && frontDepth < 0) && frontDepth <= closestDepth) continue;
         const viewX = v[0] * wx + v[4] * wy + v[8] * wz + v[12];
         const viewY = v[1] * wx + v[5] * wy + v[9] * wz + v[13];
+        // A physical ellipsoid can project beyond the atom shader's center
+        // billboard. Bound its entire enclosing sphere before exact ray tests.
+        const screenRadius = hasThermal && Math.abs(p[11]) > 0.5
+          ? (Math.abs(viewZ) > radius ? radius * (Math.abs(viewZ) + Math.hypot(viewX, viewY)) / (Math.abs(viewZ) - radius) : Infinity)
+          : radius;
         const clipX = p[0] * viewX + p[4] * viewY + p[8] * viewZ + p[12];
         const clipW = p[3] * viewX + p[7] * viewY + p[11] * viewZ + p[15];
         if (clipW <= 0) continue;
@@ -2046,9 +2122,9 @@ export class WebGLRenderer {
           // before dividing, and Infinity <= Infinity can be a radius hit.
           // Prove its intermediate products and coordinate subtraction safe
           // before using a differently ordered conservative bound.
-          const projectedMagnitude = (Math.abs(p[0]) * (Math.abs(viewX) + Math.abs(radius)) + Math.abs(p[12])) / clipW;
+          const projectedMagnitude = (Math.abs(p[0]) * (Math.abs(viewX) + Math.abs(screenRadius)) + Math.abs(p[12])) / clipW;
           if (Number.isFinite(projectedMagnitude) && projectedMagnitude <= Number.MAX_VALUE / 2) {
-            const projectedRadius = Math.abs(radius / clipW) * radiusFactor;
+            const projectedRadius = Math.abs(screenRadius / clipW) * radiusFactor;
             // Pad for cancellation, viewX + radius and off-center offsets.
             bound = Math.max(3, projectedRadius) + roundoff * (Math.abs(screenX)
               + (Math.abs(p[0] * viewX / clipW) + Math.abs(p[12] / clipW)) * width + projectedRadius + width);
@@ -2062,10 +2138,10 @@ export class WebGLRenderer {
         const screenY = (0.5 - clipY / clipW * 0.5) * height;
         const distanceSquared = dx ** 2 + (y - screenY) ** 2;
         if (Number.isFinite(bound) && distanceSquared > bound ** 2) continue;
-        const edgeX = viewX + radius;
+        const edgeX = viewX + screenRadius;
         const edgeClipX = p[0] * edgeX + p[4] * viewY + p[8] * viewZ + p[12];
         const edgeClipW = p[3] * edgeX + p[7] * viewY + p[11] * viewZ + p[15];
-        const projectedRadius = Math.abs(edgeClipX / edgeClipW - clipX / clipW) * width * 0.5;
+        const projectedRadius = hasThermal && screenRadius === Infinity ? Infinity : Math.abs(edgeClipX / edgeClipW - clipX / clipW) * width * 0.5;
         const radiusPixels = Math.max(3, projectedRadius);
         if (distanceSquared <= radiusPixels ** 2) {
           // Reconstruct the same hemisphere depth as SPHERE_FRAGMENT, using
@@ -2073,7 +2149,9 @@ export class WebGLRenderer {
           // Outside the actual disc, the 3px tolerance uses its center plane.
           const discRadiusSquared = projectedRadius > 0 && Number.isFinite(projectedRadius)
             ? (dx / projectedRadius) ** 2 + ((y - screenY) / projectedRadius) ** 2 : 1;
-          const surfaceDepth = viewZ + depthRadius * Math.sqrt(Math.max(0, 1 - discRadiusSquared));
+          const surfaceDepth = hasThermal ? thermalRayDepth(thermal, atom, thermalScale, v, [viewX, viewY, viewZ], p, x / width * 2 - 1, 1 - y / height * 2)
+            : viewZ + depthRadius * Math.sqrt(Math.max(0, 1 - discRadiusSquared));
+          if (surfaceDepth === null) continue;
           const fragmentDepth = windowDepth ? Math.max(0, Math.min(1,
             (p[10] * surfaceDepth + p[14]) / (p[11] * surfaceDepth + p[15]) * .5 + .5)) : 0;
           if (windowDepth ? !(fragmentDepth < closestWindowDepth) : !(surfaceDepth > closestDepth)) continue;

@@ -116,7 +116,11 @@
     "test:browser:analysis-prefetch": "node scripts/browser/browser-analysis-prefetch.mjs",
     "test:browser:scene-transactions": "node scripts/browser/browser-scene-transactions.mjs",
     "benchmark:interactive-smoothness": "node scripts/benchmarks/benchmark-interactive-smoothness.mjs",
-    "test:browser:crystal": "node scripts/browser/browser-crystal-tools.mjs --production"
+    "test:browser:crystal": "node scripts/browser/browser-crystal-tools.mjs --production",
+    "test:gpu:volumetric": "node scripts/browser/browser-volumetric-gpu.mjs",
+    "test:browser:volumetric": "node scripts/browser/browser-volumetric-tools.mjs --production",
+    "test:browser:crystal-symmetry": "node scripts/browser/browser-crystal-symmetry.mjs --production",
+    "test:browser:thermal": "node scripts/browser/browser-thermal-ellipsoids.mjs --production"
   },
   "engines": {
     "node": ">=20"

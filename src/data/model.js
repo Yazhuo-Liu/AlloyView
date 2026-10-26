@@ -185,7 +185,11 @@ export function frameTransferables(frame) {
   if (frame.unwrappedPositions) transferables.push(frame.unwrappedPositions.buffer);
   if (frame.filePositions) transferables.push(frame.filePositions.buffer);
   if (frame.imageFlags) transferables.push(frame.imageFlags.buffer);
+  if (frame.thermalEllipsoids?.transforms) transferables.push(frame.thermalEllipsoids.transforms.buffer);
   if (frame.summary?.typeCounts) transferables.push(frame.summary.typeCounts.buffer);
+  for (const dataset of frame.volumetric?.datasets ?? []) {
+    for (const field of ['values', 'origin', 'steps']) if (ArrayBuffer.isView(dataset[field])) transferables.push(dataset[field].buffer);
+  }
   for (const property of frame.properties) if (ArrayBuffer.isView(property.data)) transferables.push(property.data.buffer);
   return [...new Set(transferables)];
 }

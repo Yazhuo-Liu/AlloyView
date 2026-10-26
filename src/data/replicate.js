@@ -3,6 +3,7 @@ import { normalizeRepetitions } from '../render/replication.js';
 import { yieldToMain } from '../shared/task-yield.js';
 import { ReplicationIdCache, retainedIdBytes } from './replication-ids.js';
 import { attachFrameSummary, createFrameSummaryAccumulator, includeFrameSummaryAtom } from './frame-summary.js';
+import { volumetricReplicationPlan, replicateVolumetricData } from './replicate-volume.js';
 
 export const MAX_PHYSICAL_REPLICATION_ATOMS = 4_000_000;
 export const MAX_PHYSICAL_REPLICATION_BYTES = 512 * 1024 ** 2;
@@ -39,7 +40,9 @@ function replicationPlan(frame, values, {
   const atomCount = count * copies;
   if (atomCount > maxAtoms) throw new Error(`Physical replication would create ${atomCount.toLocaleString('en-US')} atoms; the limit is ${maxAtoms.toLocaleString('en-US')}.`);
   const properties = importedProperties(frame);
-  let sourcePropertyBytes = 0;
+  let sourcePropertyBytes = frame.thermalEllipsoids?.transforms?.byteLength ?? 0;
+  if (frame.thermalEllipsoids && (!(frame.thermalEllipsoids.transforms instanceof Float32Array)
+    || frame.thermalEllipsoids.transforms.length !== count * 9)) throw new Error('Physical replication found incomplete thermal ellipsoids.');
   for (const property of properties) {
     if (!property.data || property.data.length !== count || (!(ArrayBuffer.isView(property.data)) && !Array.isArray(property.data))
         || property.data instanceof DataView) throw new Error(`Physical replication found an invalid property: ${property.name ?? 'unnamed'}.`);
@@ -58,7 +61,7 @@ function replicationPlan(frame, values, {
   const originalIdsBytes = count * 8;
   const copyIdsBytes = (copies - 1) * (count * 96 + encodedCharacters * 2);
   const estimatedBytes = atomCount * (coordinatesBytes + (frame.types.BYTES_PER_ELEMENT ?? 2) + 8) + sourcePropertyBytes * copies
-    + originalIdsBytes + copyIdsBytes + count * 64;
+    + originalIdsBytes + copyIdsBytes + count * 64 + volumetricReplicationPlan(frame, repetitions).bytes;
   if (estimatedBytes > maxBytes) throw new Error(`Physical replication exceeds the ${Math.round(maxBytes / 1024 ** 2)} MiB memory limit; reduce the repeat counts.`);
   return { repetitions, copies, sourceAtomCount: count, atomCount, estimatedBytes };
 }
@@ -129,6 +132,7 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
     return { ...structuredClone(metadata), data: Array.isArray(data) ? new Array(atomCount) : new data.constructor(atomCount) };
   });
   const sourceProperties = importedProperties(frame);
+  const thermalTransforms = frame.thermalEllipsoids ? new Float32Array(atomCount * 9) : null;
   const summary = createFrameSummaryAccumulator(frame.typeLabels.length);
   let copy = 0, completedAtoms = 0;
   for (let c = 0; c < repetitions[2]; c += 1) for (let b = 0; b < repetitions[1]; b += 1) for (let a = 0; a < repetitions[0]; a += 1) {
@@ -174,6 +178,7 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
             || unwrappedPositions && !Number.isFinite(unwrappedPositions[targetBase + axis])) throw new Error('The enlarged coordinates exceed the supported numeric range.');
       }
       for (let property = 0; property < properties.length; property += 1) properties[property].data[target] = sourceProperties[property].data[atom];
+      if (thermalTransforms) thermalTransforms.set(frame.thermalEllipsoids.transforms.subarray(atom * 9, atom * 9 + 9), target * 9);
       includeFrameSummaryAtom(summary, types[target], positions, targetBase);
       completedAtoms += 1;
       if (completedAtoms % 16_384 === 0) {
@@ -188,6 +193,8 @@ export async function replicateFrame(frame, values, { signal, onProgress = () =>
   const result = { ...frame, ids, types, typeLabels: structuredClone(frame.typeLabels), fractional, positions,
     filePositions, unwrappedPositions, imageFlags, cell, properties,
     physicalReplication: { repetitions: repetitions.slice(), sourceAtomCount: count, wrappedSource: !imageFlags } };
+  if (frame.volumetric) result.volumetric = await replicateVolumetricData(frame, repetitions, { signal, yieldTask });
+  if (thermalTransforms) result.thermalEllipsoids = { ...frame.thermalEllipsoids, transforms: thermalTransforms, count: frame.thermalEllipsoids.count * plan.copies };
   for (const name of ANALYSIS_FIELDS) delete result[name];
   attachFrameSummary(result, summary);
   validateFrame(result);

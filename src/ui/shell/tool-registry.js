@@ -4,6 +4,7 @@ export const TOOL_CATEGORIES = Object.freeze(['visualization', 'modification']);
 export const BUILTIN_TOOLS = Object.freeze([
   { id: 'display', label: 'Display' },
   { id: 'crystal', label: 'Crystal', analysis: true },
+  { id: 'volumetric', label: 'Volume', analysis: true },
   { id: 'slice', label: 'Slice' },
   { id: 'coordination', label: 'Coordination', analysis: true },
   { id: 'bonds', label: 'Bonds', analysis: true },

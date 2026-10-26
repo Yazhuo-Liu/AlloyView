@@ -1,6 +1,8 @@
 import { createCell, determinant3, invert3, validateFrame } from '../data/model.js';
+import { THERMAL_PROPERTY_NAMES, cifThermalToCartesian, thermalSymmetryTransform, transformThermalTensor, thermalEllipsoidAxes } from '../crystal/thermal-ellipsoids.js';
 import { attachFrameSummary, createFrameSummaryAccumulator, includeFrameSummaryAtom } from '../data/frame-summary.js';
 import { isElementSymbol } from '../data/chemical-elements.js';
+import { resolveSpaceGroup } from '../crystal/space-groups.js';
 import { PARSER_CHECKPOINT_MASK, runParserSteps, runParserStepsAsync } from './cooperative-parser.js';
 
 // The limits bound both token objects and the largest temporary expansion.
@@ -224,10 +226,10 @@ function wrap(value) {
 }
 
 function symmetry(block) {
-  const name = stringValue(scalar(block, ['_space_group_name_h-m_alt', '_symmetry_space_group_name_h-m']));
-  const hall = stringValue(scalar(block, '_space_group_name_hall'));
+  let name = stringValue(scalar(block, ['_space_group_name_h-m_alt', '_symmetry_space_group_name_h-m']));
+  let hall = stringValue(scalar(block, '_space_group_name_hall'));
   const numberToken = scalar(block, ['_space_group_it_number', '_symmetry_int_tables_number']);
-  const number = missing(numberToken) ? null : numberValue(numberToken, 'space-group number');
+  let number = missing(numberToken) ? null : numberValue(numberToken, 'space-group number');
   if (number !== null && (!Number.isInteger(number) || number < 1 || number > 230)) throw error('space-group number must be an integer from 1 to 230.');
   const operationColumn = item(block, SYMMETRY_TAGS);
   let expressions = [], source = 'explicit';
@@ -240,13 +242,11 @@ function symmetry(block) {
       expressions.push(token.value);
     }
   } else {
-    const normalized = name?.replace(/[\s_]/g, '').toLowerCase();
-    const normalizedHall = hall?.replace(/\s/g, '').toLowerCase();
-    const p1 = (number === null || number === 1) && (!normalized || normalized === 'p1') && (!normalizedHall || normalizedHall === 'p1');
-    const inversion = (number === null || number === 2) && (!normalized || normalized === 'p-1') && (!normalizedHall || normalizedHall === '-p1');
-    if (p1) { source = 'P1'; expressions = ['x,y,z']; }
-    else if (inversion) { source = 'P-1'; expressions = ['x,y,z', '-x,-y,-z']; }
-    else throw error('this space group needs explicit _space_group_symop_operation_xyz (or _symmetry_equiv_pos_as_xyz) operators. Export a CIF with symmetry operators or a full P1 cell; the asymmetric unit cannot be displayed as a complete cell.');
+    const setting = stringValue(scalar(block, ['_space_group_it_coordinate_system_code', '_space_group_setting']));
+    const entry = resolveSpaceGroup({ name, hall, number, setting });
+    name ??= entry.shortName; hall ??= entry.hallSymbol; number ??= entry.number;
+    source = entry.number === 1 ? 'P1' : entry.number === 2 ? 'P-1' : 'database';
+    expressions = entry.operations;
   }
   const operations = [], seen = new Set();
   for (const expression of expressions) {
@@ -276,16 +276,40 @@ function sameImage(first, second) {
   });
 }
 
-function addImage(buckets, point) {
+function addImage(buckets, point, onDuplicate) {
   const bins = point.map(value => Math.floor(value * DEDUP_SCALE));
   for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
     const key = [(bins[0] + a + DEDUP_SCALE) % DEDUP_SCALE, (bins[1] + b + DEDUP_SCALE) % DEDUP_SCALE, (bins[2] + c + DEDUP_SCALE) % DEDUP_SCALE].join(',');
-    for (const previous of buckets.get(key) ?? []) if (sameImage(previous, point)) return false;
+    for (const previous of buckets.get(key) ?? []) if (sameImage(previous, point)) { onDuplicate?.(previous); return false; }
   }
   const key = bins.join(',');
   if (!buckets.has(key)) buckets.set(key, []);
   buckets.get(key).push(point);
   return true;
+}
+
+function* anisotropicSites(items, cell) {
+  const labels = items.get('_atom_site_aniso_label');
+  const suffixes = ['11', '22', '33', '12', '13', '23'];
+  const u = suffixes.map(suffix => items.get(`_atom_site_aniso_u_${suffix}`));
+  const b = suffixes.map(suffix => items.get(`_atom_site_aniso_b_${suffix}`));
+  if (![...u, ...b].some(Boolean)) return new Map();
+  const columns = u.some(Boolean) ? u : b;
+  if (!labels || columns.some(column => !column || column.loop !== labels.loop)) throw error('anisotropic displacement parameters require a label and all six Uij or Bij columns in one loop.');
+  const result = new Map();
+  for (let row = 0; row < (labels.loop?.rows ?? 1); row++) {
+    if ((row & PARSER_CHECKPOINT_MASK) === 0) yield;
+    const label = stringValue(at(labels, row));
+    if (!label || result.has(label)) throw error('anisotropic displacement labels must be present and unique.');
+    const values = columns.map(column => numberValue(at(column, row), `anisotropic displacement at ${label}`, { optional: true }));
+    if (values.every(Number.isNaN)) { result.set(label, null); continue; }
+    if (!values.every(Number.isFinite)) throw error(`anisotropic displacement at ${label} must have all six finite components or all six missing values.`);
+    if (!u.some(Boolean)) for (let i = 0; i < 6; i++) values[i] /= 8 * Math.PI ** 2;
+    const cartesian = cifThermalToCartesian(values, cell);
+    try { thermalEllipsoidAxes(cartesian); } catch (cause) { throw error(`${label}: ${cause.message}`); }
+    result.set(label, cartesian);
+  }
+  return result;
 }
 
 function* parseCifSteps(text, sourceName, options) {
@@ -318,6 +342,14 @@ function* parseCifSteps(text, sourceName, options) {
   const labelColumn = column('_atom_site_label'), elementColumn = column('_atom_site_type_symbol');
   if (!labelColumn && !elementColumn) throw error('atom sites need labels or type symbols to identify their elements.');
   const occupancyColumn = column('_atom_site_occupancy'), uisoColumn = column('_atom_site_u_iso_or_equiv'), bisoColumn = column('_atom_site_b_iso_or_equiv');
+  const anisotropic = yield* anisotropicSites(items, cell);
+  if (anisotropic.size && !labelColumn) throw error('anisotropic displacement parameters require atom-site labels.');
+  const hasThermal = anisotropic.size > 0 || Boolean(uisoColumn || bisoColumn);
+  const thermalOperations = hasThermal ? new Map(group.operations.map(operation => [operation, thermalSymmetryTransform(operation.rotation, cell)])) : null;
+  const thermalComponents = hasThermal ? THERMAL_PROPERTY_NAMES.map(() => new Float64Array(capacity).fill(NaN)) : null;
+  const thermalTransforms = hasThermal ? new Float32Array(capacity * 9) : null;
+  let thermalCount = 0, thermalMaxRadius = 0;
+  const seenLabels = new Set();
   const disorderColumns = ['_atom_site_disorder_assembly', '_atom_site_disorder_group'].map(column);
   const types = new Uint16Array(capacity), fractional = new Float64Array(capacity * 3), positions = new Float64Array(capacity * 3), ids = new Float64Array(capacity);
   const occupancy = new Float64Array(capacity), asymmetricSiteIndex = new Uint32Array(capacity);
@@ -328,6 +360,8 @@ function* parseCifSteps(text, sourceName, options) {
   for (let site = 0; site < count; site++) {
     if ((site & PARSER_CHECKPOINT_MASK) === 0) yield;
     const label = stringValue(at(labelColumn, site)) ?? `${stringValue(at(elementColumn, site)) ?? 'Site'}${site + 1}`;
+    if (anisotropic.size && seenLabels.has(label)) throw error('atom-site labels must be unique when anisotropic displacement parameters are supplied.');
+    seenLabels.add(label);
     siteLabels.push(label);
     const symbol = element(at(elementColumn, site), label);
     if (!typeMap.has(symbol)) { typeMap.set(symbol, typeLabels.length); typeLabels.push(symbol); }
@@ -341,12 +375,23 @@ function* parseCifSteps(text, sourceName, options) {
     if (occupied !== 1 || disorderColumns.some(value => !missing(at(value, site)) && at(value, site).value !== '0')) disordered = true;
     const u = uiso ? numberValue(at(uisoColumn, site), `Uiso at site ${label}`, { optional: true }) : null;
     const b = biso ? numberValue(at(bisoColumn, site), `Biso at site ${label}`, { optional: true }) : null;
+    const isotropic = Number.isFinite(u) ? u : Number.isFinite(b) ? b / (8 * Math.PI ** 2) : NaN;
+    const tensor = anisotropic.get(label) ?? (isotropic >= 0 ? new Float64Array([isotropic, isotropic, isotropic, 0, 0, 0]) : null);
     const emitted = new Map();
     for (const operation of group.operations) {
       if ((attempts++ & PARSER_CHECKPOINT_MASK) === 0) yield;
       const transformed = [0, 1, 2].map(axis => wrap(operation.translation[axis]
         + operation.rotation[axis * 3] * point[0] + operation.rotation[axis * 3 + 1] * point[1] + operation.rotation[axis * 3 + 2] * point[2]));
-      if (!addImage(emitted, transformed)) continue;
+      const rotated = tensor ? transformThermalTensor(tensor, thermalOperations.get(operation)) : null;
+      transformed.thermalTensor = rotated;
+      if (!addImage(emitted, transformed, previous => {
+        if (rotated && previous.thermalTensor) {
+          const scale = Math.max(...rotated.map(Math.abs), ...previous.thermalTensor.map(Math.abs), 1e-30);
+          if (rotated.some((value, index) => Math.abs(value - previous.thermalTensor[index]) > 1e-6 * scale)) {
+            throw error(`anisotropic displacement tensor at ${label} violates its special-position site symmetry.`);
+          }
+        }
+      })) continue;
       const offset = expanded * 3;
       fractional.set(transformed, offset);
       for (let axis = 0; axis < 3; axis++) positions[offset + axis] = transformed[0] * cell.vectors[axis]
@@ -358,9 +403,17 @@ function* parseCifSteps(text, sourceName, options) {
       else if (occupied < 1) occupancySummary.partial++;
       if (uiso) uiso[expanded] = u;
       if (biso) biso[expanded] = b;
+      if (tensor) {
+        const ellipsoid = thermalEllipsoidAxes(rotated);
+        for (let k = 0; k < 6; k++) thermalComponents[k][expanded] = rotated[k];
+        thermalTransforms.set(ellipsoid.axes, expanded * 9);
+        if (ellipsoid.valid) thermalCount++;
+        thermalMaxRadius = Math.max(thermalMaxRadius, ellipsoid.radius);
+      }
       expanded++;
     }
   }
+  for (const label of anisotropic.keys()) if (!seenLabels.has(label)) throw error(`anisotropic displacement label ${label} has no corresponding atom site.`);
   const compact = (array, stride = 1) => expanded === capacity ? array : array.slice(0, expanded * stride);
   const outputTypes = compact(types), outputPositions = compact(positions, 3), summary = createFrameSummaryAccumulator(typeLabels.length);
   for (let atom = 0; atom < expanded; atom++) {
@@ -370,12 +423,15 @@ function* parseCifSteps(text, sourceName, options) {
   const warnings = [];
   if (disordered) warnings.push('Disordered or partially occupied sites are retained as separate displayed sites. Atom analyses count sites and do not weight them by occupancy.');
   if (unknownOccupancy) warnings.push('Unknown occupancy values remain NaN; they are not replaced with full occupancy.');
+  if (hasThermal && thermalCount < expanded) warnings.push(`${expanded - thermalCount} sites have missing, nonpositive or singular displacement tensors and retain ordinary atom spheres. Source displacement values are preserved.`);
   const properties = [{ name: 'occupancy', unit: '', data: compact(occupancy) }, { name: 'asymmetricSiteIndex', unit: '', data: compact(asymmetricSiteIndex) }];
   if (uiso) properties.push({ name: 'Uiso', unit: 'Å²', data: compact(uiso) });
   if (biso) properties.push({ name: 'Biso', unit: 'Å²', data: compact(biso) });
+  if (thermalComponents) for (let k = 0; k < 6; k++) properties.push({ name: THERMAL_PROPERTY_NAMES[k], unit: 'Å²', data: compact(thermalComponents[k]) });
   return attachFrameSummary(validateFrame({
     ids: compact(ids), idSource: 'row-order', types: outputTypes, typeLabels, positions: outputPositions,
     fractional: compact(fractional, 3), cell, properties, timestep: null, title: sourceName, sourceFormat: 'cif', parseMs: performance.now() - startedAt,
+    ...(thermalTransforms ? { thermalEllipsoids: { transforms: compact(thermalTransforms, 9), count: thermalCount, maxRadius: thermalMaxRadius } } : {}),
     crystal: { format: 'cif', block: block.name, spaceGroup: { name: group.name, number: group.number, hall: group.hall },
       symmetryOperations: group.operations.map(operation => operation.expression), symmetrySource: group.source,
       asymmetricSiteCount: count, expandedAtomCount: expanded, siteLabels, disordered, occupancySummary,

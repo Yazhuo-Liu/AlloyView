@@ -35,17 +35,17 @@ function harness(t) {
   }, createElement() { const element = new Element(); element.ownerDocument = this; return element; } };
   t.after(() => { globalThis.document = previous; });
   let currentFrame = frame(), source = 1;
-  const jobs = [], draws = [], exports = [], changes = [], enabled = [], notifications = [];
+  const jobs = [], draws = [], thermalDraws = [], exports = [], changes = [], enabled = [], notifications = [];
   const controller = initializeCrystalTools({
     getFrame: () => currentFrame, getSourceVersion: () => source,
-    renderer: { setCoordinationPolyhedra: (...args) => draws.push(args) },
+    renderer: { setCoordinationPolyhedra: (...args) => draws.push(args), setThermalEllipsoids: (...args) => thermalDraws.push(args) },
     tools: { setToolEnabled: (...args) => enabled.push(args) },
     pool: { analyze(input, params, options) { return new Promise((resolve, reject) => jobs.push({ input, params, options, resolve, reject })); } },
     onResultsChange: change => changes.push(change), notify: message => notifications.push(message),
     onExport: format => { exports.push(format); }, onExportStatistics: result => { exports.push(result); },
   });
   controller.setEnabled(true);
-  return { controller, jobs, draws, exports, changes, enabled, notifications, fields,
+  return { controller, jobs, draws, thermalDraws, exports, changes, enabled, notifications, fields,
     getFrame: () => currentFrame, setFrame(next) { currentFrame = next; }, changeSource() { source++; },
     field: id => fields.get(id),
     choose(key, label, checked) {
@@ -203,5 +203,38 @@ test('Crystal recipes are optional, portable, strict, and accept a CIF source', 
     { color: 'red' }, { centerTypes: [0] }, { centerTypes: ['Ti', 'Ti'] }, { neighborTypes: '' },
     { showEdges: 1 }, { enabled: 'yes' }, { cells: [] }, { vertices: [0, 0, 0] }]) {
     assert.throws(() => createConfiguration({ settings: { extensions: { crystal: invalid } } }), /settings\.extensions\.crystal/);
+  }
+});
+
+
+test('thermal display restores independently of polyhedron calculations and follows frames without recomputation', async t => {
+  const h = harness(t), geometry = { transforms: new Float32Array(27), count: 3, maxRadius: .4 };
+  h.getFrame().thermalEllipsoids = geometry;
+  await h.controller.onFrame();
+  assert.equal(h.field('thermal-enabled').disabled, false);
+  assert.equal(h.field('thermal-enabled').checked, false);
+  h.field('thermal-enabled').checked = true; h.field('thermal-enabled').dispatch('change');
+  assert.equal(h.jobs.length, 0);
+  assert.equal(h.thermalDraws.at(-1)[0], geometry);
+  assert.equal(h.thermalDraws.at(-1)[1].enabled, true);
+  h.field('thermal-probability').value = '95'; h.field('thermal-probability').dispatch('input');
+  assert.equal(h.thermalDraws.at(-1)[1].probability, .95);
+  const saved = h.controller.serialize(); assert.equal(saved.enabled, false);
+  assert.equal(saved.thermalEllipsoids.probability, .95);
+  h.controller.reset(); assert.equal(h.field('thermal-enabled').checked, false);
+  await h.controller.restore(saved);
+  assert.equal(h.field('thermal-enabled').checked, true); assert.equal(h.jobs.length, 0);
+  h.setFrame(frame()); await h.controller.onFrame();
+  assert.equal(h.thermalDraws.at(-1)[0], null); assert.equal(h.field('thermal-enabled').disabled, true);
+  assert.equal(h.controller.serialize().thermalEllipsoids.enabled, true);
+});
+
+test('thermal recipe contains only validated appearance, with no computed tensors', () => {
+  const extensions = { crystal: { enabled: false, ...CRYSTAL_TOOL_DEFAULTS, thermalEllipsoids: { enabled: true, probability: .9, opacity: .6 } } };
+  const configuration = createConfiguration({ settings: { extensions } });
+  const restored = parseConfiguration(JSON.stringify(configuration));
+  assert.deepEqual(restored.settings.extensions.crystal.thermalEllipsoids, extensions.crystal.thermalEllipsoids);
+  for (const patch of [{probability:0},{probability:1},{opacity:0},{transforms:[1]}]) {
+    assert.throws(()=>createConfiguration({settings:{extensions:{crystal:{...extensions.crystal,thermalEllipsoids:{...extensions.crystal.thermalEllipsoids,...patch}}}}}));
   }
 });

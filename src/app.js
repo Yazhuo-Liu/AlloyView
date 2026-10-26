@@ -72,6 +72,10 @@ import { GrainSegmentationClient } from './analysis/grains-client.js';
 import { initializeWignerSeitzTools } from './ui/analysis/wigner-seitz-tools.js';
 import { initializeSurfaceTools } from './ui/analysis/surface-tools.js';
 import { initializeCrystalTools } from './ui/view/crystal-tools.js';
+import { initializeVolumetricTools } from './ui/view/volumetric-tools.js';
+import { VolumetricClient } from './analysis/volumetric-client.js';
+import { CrystalSymmetryClient } from './analysis/crystal-symmetry-client.js';
+import { initializeCrystalSymmetryControls } from './ui/view/crystal-symmetry-controls.js';
 import { StructureExportClient } from './io/structure-export-client.js';
 import { downloadBlob } from './io/export-archive.js';
 import { initializeBinningTools } from './ui/analysis/binning-tools.js';
@@ -147,6 +151,8 @@ const crystalCategoryProperties = new Set(['structureType', 'ptmStructureType', 
 const cpuBudget = new CpuBudget({ environment: globalThis });
 const analysisPool = new AnalysisPool({ cpuBudget });
 const structureExportClient = new StructureExportClient({ cpuBudget });
+const volumetricClient = new VolumetricClient({ cpuBudget });
+const crystalSymmetryClient = new CrystalSymmetryClient({ cpuBudget });
 const analysisPrediction = new AnalysisPrefetchScheduler({ pool: analysisPool });
 const dxaClient = new DxaClient({ cpuBudget, cpuStageBackend: analysisPool });
 const coordinationPool = new CoordinationPool({
@@ -245,6 +251,9 @@ let grainTools;
 let wignerSeitzTools;
 let surfaceTools;
 let crystalTools;
+let volumetricTools;
+let crystalSymmetryControls;
+let volumetricWarmController;
 let structureExportController;
 let binningTools;
 let trajectoryTools;
@@ -459,6 +468,7 @@ function visibleScenePending(completion = displayCompletion) {
   if (dxaTools?.isEnabled()) prefixes.add('dxa');
   if (surfaceTools?.isEnabled() && surfaceTools.serialize().visible) prefixes.add('surface-mesh');
   if (crystalTools?.isEnabled() && crystalTools.serialize().visible) prefixes.add('crystal');
+  if (volumetricTools?.isEnabled() && volumetricTools.serialize().visible) prefixes.add('volume');
   const sites = wignerSeitzTools?.serialize();
   if (sites?.enabled && sites.showMarkers) prefixes.add('wigner-seitz');
   if (document.getElementById('show-voronoi-cell')?.checked || renderer.voronoiAllCellOptions?.enabled) prefixes.add('voronoi');
@@ -603,7 +613,8 @@ const toolPanels = initializeToolPanels({
     else if (kind === 'grains') grainTools?.cancel();
     else if (kind === 'wignerSeitz') wignerSeitzTools?.cancel();
     else if (kind === 'surfaceMesh') surfaceTools?.cancel();
-    else if (kind === 'crystal') crystalTools?.cancel();
+    else if (kind === 'crystal') { crystalTools?.cancel(); crystalSymmetryControls?.abortJobs(); }
+    else if (kind === 'volumetric') volumetricTools?.cancel();
     else if (kind === 'binning') binningTools?.cancel();
     else if (kind === 'displacement') atomEyeTools?.cancelDisplacement();
     else if (state.analysis[kind]) cancelAnalysis(kind);
@@ -648,6 +659,8 @@ initializeTheme((theme) => {
 
 function setGpuComputing(enabled) {
   analysisPool.setGpuEnabled(enabled);
+  if (!enabled) void volumetricClient.releaseGpuResources({ whenIdle: true }).catch(() => {});
+  if (state.frame?.volumetric) warmVolumetricFrame(state.frame);
   elements['enable-gpu-computing'].setAttribute('aria-pressed', String(enabled));
   if (enabled && state.frame && sourceLoadingOwner === null) scheduleGpuFramePrefetch();
   void gpuPrefetch.setEnabled(enabled);
@@ -656,6 +669,19 @@ function setGpuComputing(enabled) {
   topologyTools?.syncGpuAcceleration();
   updateCacheLabel();
   updateGpuComputingTitle();
+}
+
+// Reuse immutable grids and idle Workers; background preparation never delays
+// opening a file or publishes a calculated isosurface.
+function warmVolumetricFrame(frame) {
+  volumetricWarmController?.abort();
+  if (!frame?.volumetric?.datasets?.length) return;
+  const controller = new AbortController(); volumetricWarmController = controller;
+  void volumetricClient.prepare(frame.volumetric.datasets[0], {
+    useGpu: analysisPool.gpuEnabled, signal: controller.signal,
+  }).catch(() => {}).finally(() => {
+    if (volumetricWarmController === controller) volumetricWarmController = null;
+  });
 }
 
 function updateGpuComputingTitle() {
@@ -1124,6 +1150,30 @@ crystalTools = initializeCrystalTools({
   onExportStatistics: result => exportCrystalStructure('polyhedra', result),
 });
 
+crystalSymmetryControls = initializeCrystalSymmetryControls({
+  client: crystalSymmetryClient,
+  getFrame: () => state.frame,
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  onExportCell: exportStandardCrystalCell,
+  notify: showToast,
+});
+
+volumetricTools = initializeVolumetricTools({
+  renderer, tools: toolPanels, client: volumetricClient,
+  getFrame: () => state.frame,
+  getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
+  getGpuEnabled: () => analysisPool.gpuEnabled,
+  getFileStem: exportFileStem,
+  onEdit: () => interruptConfigurationRestore('a volume display edit'),
+  onDisplayChange: () => atomEyeTools?.syncComparison(),
+  onResultsChange: () => {
+    if (!state.frame) return;
+    updateMemoryMetric(); reassessFrameCache(state.frame);
+    tryCommitCurrentAppearance(); updateAppearanceStatus();
+  },
+  notify: showToast,
+});
+
 binningTools = initializeBinningTools({
   tools: toolPanels,
   getFrame: () => state.frame,
@@ -1546,11 +1596,16 @@ window.addEventListener('beforeunload', () => {
   wignerSeitzTools?.abortJobs();
   surfaceTools?.abortJobs();
   crystalTools?.abortJobs();
+  volumetricTools?.abortJobs();
+  crystalSymmetryControls?.abortJobs();
+  volumetricWarmController?.abort();
   structureExportController?.abort();
   binningTools?.dispose();
   voronoiCells?.abortJobs();
   statisticsExports?.dispose();
   structureExportClient.dispose();
+  volumetricClient.dispose();
+  crystalSymmetryClient.dispose();
 });
 
 function beginSourceOpen() {
@@ -1632,6 +1687,9 @@ function closeSource() {
   wignerSeitzTools?.reset();
   surfaceTools?.reset();
   crystalTools?.reset();
+  volumetricTools?.reset();
+  crystalSymmetryControls?.reset();
+  void volumetricClient.clear().catch(() => {});
   void structureExportClient.clearSnapshot().catch(() => {});
   binningTools?.reset();
   trajectoryTools?.reset();
@@ -1781,9 +1839,9 @@ async function classifyStructureEntries(entries, originLabel, isCurrent) {
       if (isPotentialStructurePath(entry.relativePath)) {
         const header = await readStructureHeader(entry.file);
         if (!isCurrent()) return;
-        const detectedFormat = detectStructureFormatHeader(header);
+        const detectedFormat = detectStructureFormatHeader(header, entry.relativePath);
         const filenameHint = inferStructureFormatFromPath(entry.relativePath);
-        format = detectedFormat ?? (['cfg', 'xyz', 'pdb', 'poscar', 'cif'].includes(filenameHint) ? filenameHint : null);
+        format = detectedFormat ?? (['cfg', 'xyz', 'pdb', 'poscar', 'cif', 'cube', 'vasp-volume'].includes(filenameHint) ? filenameHint : null);
       }
       classified[index] = { ...entry, format };
       completed += 1;
@@ -1802,7 +1860,7 @@ async function unrecognizedFilesMessage(candidates) {
   const first = candidates[0];
   const preview = await first.file.slice(0, 120).text();
   const compactPreview = preview.replace(/\s+/g, ' ').trim().slice(0, 72) || '(empty file)';
-  return `No CFG, LAMMPS, XYZ, PDB, CIF or POSCAR data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
+  return `No CFG, LAMMPS, XYZ, PDB, CIF, POSCAR or volumetric data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
 }
 
 function showSourceChooser(catalog, originLabel, entries = state.availableEntries, { singleFiles = false } = {}) {
@@ -2055,6 +2113,9 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     wignerSeitzTools?.reset();
     surfaceTools?.reset();
     crystalTools?.reset();
+    volumetricTools?.reset();
+    crystalSymmetryControls?.reset();
+    void volumetricClient.clear().catch(() => {});
     void structureExportClient.clearSnapshot().catch(() => {});
     binningTools?.reset();
     trajectoryTools?.reset();
@@ -2222,7 +2283,7 @@ async function waitForSourceIndex({ signal } = {}) {
 function sourceFormatLabel(format) {
   const sequence = format.endsWith('-sequence');
   const base = sequence ? format.slice(0, -9) : format;
-  return `${({ cfg: 'CFG', 'lammps-dump': 'LAMMPS', 'lammps-data': 'LAMMPS data', xyz: 'XYZ', pdb: 'PDB', poscar: 'POSCAR', cif: 'CIF' })[base] ?? base.toUpperCase()}${sequence ? ' · sequence' : ''}`;
+  return `${({ cfg: 'CFG', 'lammps-dump': 'LAMMPS', 'lammps-data': 'LAMMPS data', xyz: 'XYZ', pdb: 'PDB', poscar: 'POSCAR', cif: 'CIF', cube: 'Cube', 'vasp-volume': 'VASP volume' })[base] ?? base.toUpperCase()}${sequence ? ' · sequence' : ''}`;
 }
 
 async function showFrame(index, { waitForAnalyses = true, completePresentation = false, signal } = {}) {
@@ -2322,6 +2383,7 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
   if (renderer.dislocationNetwork || dxaTools?.isEnabled()) completion.layerPrefixes.add('dxa');
   if (renderer.surfaceMeshes().length || surfaceTools?.isEnabled()) completion.layerPrefixes.add('surface-mesh');
   if (renderer.coordinationPolyhedra || crystalTools?.isEnabled()) completion.layerPrefixes.add('crystal');
+  if (renderer.volumetricSurface || volumetricTools?.isEnabled()) completion.layerPrefixes.add('volume');
   if (renderer.siteMarkers) completion.layerPrefixes.add('wigner-seitz');
   if (renderer.voronoiCellGeometry || renderer.voronoiAllCellGeometry) completion.layerPrefixes.add('voronoi');
   completion.promise.catch(() => {});
@@ -2366,7 +2428,7 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
   const palette = appearancePreview?.palette ?? fallbackPalette;
   const geometricLayers = renderer.atomBonds || renderer.atomVectorFields?.length || renderer.dislocationNetwork
     || renderer.siteMarkers || renderer.surfaceMeshes().length || renderer.voronoiCellGeometry || renderer.voronoiAllCellGeometry
-    || surfaceTools?.isEnabled() || crystalTools?.isEnabled() || dxaTools?.isEnabled();
+    || surfaceTools?.isEnabled() || crystalTools?.isEnabled() || volumetricTools?.isEnabled() || dxaTools?.isEnabled();
   if (renderer.frame && (completePresentation || geometricLayers || !currentAppearanceAvailable() && !appearancePreview)) {
     transaction = renderer.beginSceneUpdate();
     sceneUpdateToken = transaction;
@@ -2437,6 +2499,10 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
   pending.push(wignerSeitzTools.onFrame());
   pending.push(surfaceTools.onFrame());
   pending.push(crystalTools.onFrame());
+  pending.push(volumetricTools.onFrame());
+  crystalSymmetryControls.onFrame();
+  warmVolumetricFrame(frame);
+  if (frame.crystal || ['poscar', 'cif', 'vasp-volume'].includes(frame.sourceFormat)) void crystalSymmetryClient.warm().catch(() => {});
   pending.push(binningTools.onFrame());
   syncCancelButton('coordination');
   completion.geometryDone = true;
@@ -3323,6 +3389,9 @@ function abortAnalysisJobs() {
   wignerSeitzTools?.abortJobs();
   surfaceTools?.abortJobs();
   crystalTools?.abortJobs();
+  volumetricTools?.abortJobs();
+  crystalSymmetryControls?.abortJobs();
+  volumetricWarmController?.abort();
   structureExportController?.abort();
   binningTools?.abortJobs();
   voronoiCells?.abortJobs();
@@ -4813,6 +4882,8 @@ function setControlsEnabled(enabled) {
   wignerSeitzTools?.setEnabled(enabled);
   surfaceTools?.setEnabled(enabled);
   crystalTools?.setEnabled(enabled);
+  volumetricTools?.setEnabled(enabled);
+  crystalSymmetryControls?.setEnabled(enabled);
   binningTools?.setEnabled(enabled);
   trajectoryTools?.setEnabled(enabled);
   voronoiCells?.setEnabled(enabled);
@@ -4905,6 +4976,26 @@ async function exportCrystalStructure(format, result = null) {
   }
 }
 
+/** Refined symmetry cells are separate exports; never replace source atoms. */
+async function exportStandardCrystalCell(frame, format, kind, { signal, isCurrent = () => true } = {}) {
+  const source = state.frame, version = `${state.sourceVersion}:${state.processingRevision}`;
+  structureExportController?.abort();
+  const controller = new AbortController(); structureExportController = controller;
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) controller.abort();
+  try {
+    const output = await structureExportClient.export(frame, {
+      format, stem: `${exportFileStem()}-${kind}`, title: `${state.file?.name ?? 'Crystal'} · ${kind} cell`,
+    }, { signal: controller.signal });
+    if (controller.signal.aborted || !isCurrent() || source !== state.frame || version !== `${state.sourceVersion}:${state.processingRevision}`) return;
+    downloadBlob(output.blob, output.filename);
+  } finally {
+    signal?.removeEventListener('abort', abort);
+    if (structureExportController === controller) structureExportController = null;
+  }
+}
+
 function exportFileStem() { return (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''); }
 
 function syncSliceGizmo() {
@@ -4985,6 +5076,7 @@ function captureConfiguration() {
         // The surface mesh is saved only once it is used or changed.
         ...(surfaceTools.isUntouched() ? {} : { surfaceMesh: surfaceTools.serialize() }),
         ...(crystalTools.isUntouched() ? {} : { crystal: crystalTools.serialize() }),
+        ...(volumetricTools.isUntouched() ? {} : { volumetric: volumetricTools.serialize() }),
         playback: playbackControls.getSettings(), ...attributeExtensions() },
       theme: document.documentElement.dataset.theme,
     },
@@ -5128,6 +5220,9 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     wignerSeitzTools?.reset();
     surfaceTools?.reset();
     crystalTools?.reset();
+    volumetricTools?.reset();
+    crystalSymmetryControls?.reset();
+    void volumetricClient.clear().catch(() => {});
     void structureExportClient.clearSnapshot().catch(() => {});
     binningTools?.reset();
     voronoiCells?.reset();
@@ -5262,6 +5357,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
       wignerSeitzTools.restore(saved.extensions.wignerSeitz, { isCurrent: current }),
       surfaceTools.restore(saved.extensions.surfaceMesh, { isCurrent: current }),
       crystalTools.restore(saved.extensions.crystal, { isCurrent: current }),
+      volumetricTools.restore(saved.extensions.volumetric, { isCurrent: current }),
       binningTools.restore(saved.extensions.binning, { isCurrent: current }),
       timeSeries.restore(saved.extensions.timeSeries, { isCurrent: current }),
       trajectoryTools.restoreLines(saved.extensions.trajectory?.lines ?? null, { isCurrent: current })]);
@@ -5278,7 +5374,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     const failed = [...Object.keys(state.analysis).filter(kind => {
       const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
       return state.analysis[kind].enabled && elements[`${prefix}-state`].textContent === 'Failed';
-    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...grainTools.failed(), ...wignerSeitzTools.failed(), ...surfaceTools.failed(), ...crystalTools.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
+    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...grainTools.failed(), ...wignerSeitzTools.failed(), ...surfaceTools.failed(), ...crystalTools.failed(), ...volumetricTools.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
     elements['configuration-status'].textContent = failed.length
       ? `Configuration restored; these analyses could not complete: ${failed.join(', ')}.`
       : externalProperties.getPendingFiles().length

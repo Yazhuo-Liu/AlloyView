@@ -11,12 +11,13 @@ import { indexPdb } from '../io/pdb.js';
 import { parseLammpsData } from '../io/lammps-data.js';
 import { parsePoscar } from '../io/poscar.js';
 import { parseCif } from '../io/cif.js';
+import { parseCube, parseVaspVolume } from '../io/volumetric.js';
 import { FrameParserPool } from '../data/frame-parser-pool.js';
 import { openIndexedTrajectory } from './indexed-trajectory.js';
 import { TrajectoryProcessor } from './trajectory-processor.js';
 import { ensureFileUnwrappedPositions, hasFileUnwrap } from '../data/coordinate-display.js';
 
-const SINGLE_FRAME_PARSERS = { 'lammps-data': parseLammpsData, poscar: parsePoscar, cif: parseCif };
+const SINGLE_FRAME_PARSERS = { 'lammps-data': parseLammpsData, poscar: parsePoscar, cif: parseCif, cube: parseCube, 'vasp-volume': parseVaspVolume };
 
 let source = null;
 let wasmModulePromise;
@@ -274,7 +275,7 @@ async function loadSource(inputFiles, requestId, incremental = false, controller
     const formats = [];
     for (const file of files) {
       const header = await readStructureHeader(file);
-      formats.push(detectStructureFormatHeader(header) ?? inferStructureFormatFromPath(file.name));
+      formats.push(detectStructureFormatHeader(header, file.name) ?? inferStructureFormatFromPath(file.name));
     }
     if (controller.signal.aborted) throw new DOMException('Structure source closed.', 'AbortError');
     if (formats.every((format) => format === 'cfg')) return loadCfgSequence(files, requestId, controller);
@@ -282,11 +283,11 @@ async function loadSource(inputFiles, requestId, incremental = false, controller
     if (formats.every((format) => format === 'lammps-dump')) return loadLammpsDumpSequence(await decompressFiles(files), requestId, controller);
     if (formats.every((format) => format === 'xyz')) return loadIndexedTextSource(await decompressFiles(files), 'xyz', requestId, controller);
     if (formats.every((format) => format === 'pdb')) return loadIndexedTextSource(await decompressFiles(files), 'pdb', requestId, controller);
-    throw new Error('A numbered file sequence must contain a single format: CFG, LAMMPS text dump, XYZ, or PDB. CIF, LAMMPS data and POSCAR files open one at a time.');
+    throw new Error('A numbered file sequence must contain a single format: CFG, LAMMPS text dump, XYZ, or PDB. CIF, LAMMPS data, POSCAR and volumetric files open one at a time.');
   }
   const [inputFile] = files;
   const header = await readStructureHeader(inputFile);
-  const format = detectStructureFormatHeader(header) ?? inferStructureFormatFromPath(inputFile.name);
+  const format = detectStructureFormatHeader(header, inputFile.name) ?? inferStructureFormatFromPath(inputFile.name);
   if (controller.signal.aborted) throw new DOMException('Structure source closed.', 'AbortError');
   if (incremental && ['lammps-dump', 'xyz', 'pdb'].includes(format)) return loadProgressive(files, format, requestId, controller);
   if (format === 'lammps-dump') {
@@ -310,9 +311,10 @@ async function loadSource(inputFiles, requestId, incremental = false, controller
     const startedAt = performance.now();
     source = { file, format, offsets: [0] };
     const frame = await getParserPool().parse({ format, file, index: 0 }, { signal: controller.signal });
-    return { format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
+    source.format = frame.sourceFormat === 'vasp-volume' ? 'vasp-volume' : format;
+    return { format: source.format, frameCount: 1, indexMs: performance.now() - startedAt - frame.parseMs, frame };
   }
-  throw new Error('Unrecognized file format. Supported structures are AtomEye CFG, LAMMPS text dump and data files, XYZ / Extended XYZ, PDB, CIF, and VASP POSCAR, uncompressed or gzip-compressed.');
+  throw new Error('Unrecognized file format. Supported structures are AtomEye CFG, LAMMPS text dump and data files, XYZ / Extended XYZ, PDB, CIF, VASP POSCAR/CHGCAR/LOCPOT/ELFCAR, and Gaussian Cube, uncompressed or gzip-compressed.');
 }
 
 async function loadProgressive(files, format, requestId, controller = loadController) {
@@ -371,7 +373,7 @@ async function loadCfgSequence(inputFiles, requestId, controller = loadControlle
   for (let index = 0; index < files.length; index += 1) {
     if (controller.signal.aborted) throw new DOMException('Structure source closed.', 'AbortError');
     const header = await readStructureHeader(files[index], 4096);
-    const format = detectStructureFormatHeader(header) ?? inferStructureFormatFromPath(files[index].name);
+    const format = detectStructureFormatHeader(header, files[index].name) ?? inferStructureFormatFromPath(files[index].name);
     if (format !== 'cfg') {
       throw new Error(`Multi-file trajectories currently require AtomEye CFG files; “${files[index].name}” is not CFG.`);
     }

@@ -14,7 +14,7 @@
 </p>
 
 AlloyView is a browser-based viewer for atomistic structures and trajectories
-in metals, alloys and crystalline materials. Open AtomEye CFG, LAMMPS dumps and data files, XYZ, PDB, CIF or VASP POSCAR
+in metals, alloys and crystalline materials. Open AtomEye CFG, LAMMPS dumps and data files, XYZ, PDB, CIF, VASP POSCAR and volumetric DFT files
 (also gzip-compressed), inspect atoms, calculate structural properties, and
 export figures. Files are parsed and analyzed on your device; structure data is
 never uploaded by the application.
@@ -37,7 +37,12 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   triclinic cells, numeric scalar/vector properties and periodic boundary flags.
 - Crystal inspection: CIF symmetry expansion and occupancies, precise POSCAR
   coordinates, element-selected coordination polyhedra in reusable CPU Workers,
+  actual space-group identification and refined primitive/conventional cell export
+  through the open-source moyo WASM library, anisotropic thermal ellipsoids,
   and CIF/POSCAR structure export plus polyhedron CSV statistics.
+- CHGCAR/CHG, LOCPOT, ELFCAR and Gaussian Cube scalar grids: CPU/WebGPU
+  isosurfaces, numerical sections with CSV export, and WebGL rendering in the
+  main/second view and PNG images. See [Volumetric data](docs/features/volumetric.md).
 - Individual files, multi-frame trajectories and numbered structure sequences,
   with a timeline and continuous playback.
 - WebGL 2 sphere rendering, element-aware atom radii, six standard views,
@@ -443,3 +448,7 @@ its embedded Voro++ code is BSD licensed; [third-party notices](licenses/)
 ship with the static build. Dislocation analysis and grain segmentation
 derive from OVITO 3.9.4 under the MIT option of its dual license. Voro++ also supplies the per-atom Voronoi clipping
 kernel. See the [source provenance](docs/STRUCTURE_ANALYSIS.md#source-references-and-provenance).
+Space-group identification and the CIF Hall-setting database use the official
+moyo 0.21.0 runtime under MIT OR Apache-2.0; [pinned provenance and checksums](https://github.com/Yazhuo-Liu/AlloyView/blob/main/third_party/moyo/README.md)
+are included. Isosurface extraction and thermal-ellipsoid integration are
+original implementations; no VESTA source code or assets are included.

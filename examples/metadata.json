@@ -4,5 +4,7 @@
   "fe-bcc-carbon-inclusion.dump": "BCC Fe + spherical diamond-C inclusion · 28,248 atoms · slice through the center to reveal C · unrelaxed",
   "NiGB_minimized.cfg": "Nickel grain boundary · 129,904 atoms · CPU/GPU benchmark",
   "crystals/SrTiO3.cif": "Ideal cubic SrTiO3 · CIF symmetry expansion: 3 sites → 5 atoms · Ti–O octahedra at 2.2 Å cutoff",
-  "crystals/POSCAR-SrTiO3": "Ideal cubic SrTiO3 · POSCAR · 5 atoms · Ti–O octahedra at 2.2 Å cutoff"
+  "crystals/POSCAR-SrTiO3": "Ideal cubic SrTiO3 · POSCAR · 5 atoms · Ti–O octahedra at 2.2 Å cutoff",
+  "volumetric/CHGCAR": "Synthetic periodic Gaussian density · 32³ grid · 2 H markers · integrates to 2 electrons · not DFT data",
+  "volumetric/analytic-p-field.cube": "Synthetic signed p-like field · 33³ open Cube grid · positive and negative lobes · not a calculated orbital"
 }

@@ -1,5 +1,9 @@
 # CIF/POSCAR crystal viewing implementation — 2026-10-25
 
+This records the first phase. The subsequent implementation of volumes, actual
+space-group analysis and thermal ellipsoids is documented in
+[DFT volumes and crystallography](DFT_VOLUMES_IMPLEMENTATION.md).
+
 ## Scope and baseline
 
 Synchronized `origin/main` at `aa48224` before implementation. The user clarified

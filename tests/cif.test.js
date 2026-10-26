@@ -164,10 +164,10 @@ test('multiple CIF crystal blocks require explicit selection while metadata-only
   assert.throws(() => parseCif(two, 'multiple.cif', { block: 'absent' }), /no crystal data block/);
 });
 
-test('missing nontrivial symmetry is rejected instead of silently showing only the asymmetric unit', () => {
+test('unambiguous nontrivial symmetry expands from the Hall database; contradictory declarations remain errors', () => {
   for (const declaration of ["_space_group_name_H-M_alt 'F m -3 m'", '_symmetry_Int_Tables_number 225', "_space_group_name_Hall '-F 4 2 3'"])
-    assert.throws(() => parseCif(simple.replace(siteHeader, `${declaration}\n${siteHeader}`)), /needs explicit.*asymmetric unit/);
-  assert.throws(() => parseCif(simple.replace(siteHeader, `_space_group_IT_number 1\n_space_group_name_H-M_alt 'P -1'\n${siteHeader}`)), /needs explicit/);
+    assert.equal(parseCif(simple.replace(siteHeader, `${declaration}\n${siteHeader}`)).ids.length, 8);
+  assert.throws(() => parseCif(simple.replace(siteHeader, `_space_group_IT_number 1\n_space_group_name_H-M_alt 'P -1'\n${siteHeader}`)), /inconsistent/);
   assert.throws(() => parseCif(simple.replace(siteHeader, `${symmetryLoop(['-x,-y,-z'])}${siteHeader}`)), /identity operation/);
 });
 

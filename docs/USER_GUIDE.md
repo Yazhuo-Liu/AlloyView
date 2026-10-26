@@ -19,7 +19,13 @@ The viewer supports this workflow:
 For CIF/POSCAR structures, **Visualization → Crystal** shows the current cell
 and source symmetry, draws element-selected coordination polyhedra, and exports
 CIF, POSCAR or polyhedron CSV statistics. The bundled SrTiO3 examples demonstrate
-Ti–O octahedra with a 2.2 Å cutoff. See [Crystal structures](features/crystal.md).
+Ti–O octahedra with a 2.2 Å cutoff. Space-group analysis can export refined
+primitive/conventional cells; CIF anisotropic displacement tensors can draw
+thermal ellipsoids. See [Crystal structures](features/crystal.md).
+
+For CHGCAR/CHG, LOCPOT, ELFCAR and Cube files, **Visualization → Volume**
+displays isosurfaces with CPU or WebGPU extraction, plus numerical sections
+and their CSV export. See [Volumetric data](features/volumetric.md).
 
 The single **Examples** button opens an in-app listing generated from supported
 structure files and numbered sequence folders under `examples/`. Add a file or

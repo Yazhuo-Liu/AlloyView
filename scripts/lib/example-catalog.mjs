@@ -3,7 +3,7 @@ import { basename, resolve } from 'node:path';
 import { catalogLocalSources, detectStructureFormatHeader } from '../../src/io/file-sequences.js';
 
 const naturalCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
-const formatLabels = { cfg: 'CFG structure', 'lammps-dump': 'LAMMPS dump', 'lammps-data': 'LAMMPS data', xyz: 'XYZ structure', pdb: 'PDB structure', cif: 'CIF crystal', poscar: 'POSCAR crystal' };
+const formatLabels = { cfg: 'CFG structure', 'lammps-dump': 'LAMMPS dump', 'lammps-data': 'LAMMPS data', xyz: 'XYZ structure', pdb: 'PDB structure', cif: 'CIF crystal', poscar: 'POSCAR crystal', cube: 'Gaussian Cube volume', 'vasp-volume': 'VASP volume' };
 const generatedFiles = new Set(['manifest.json', 'metadata.json']);
 
 function comparePaths(left, right) {
@@ -21,7 +21,7 @@ async function structureHeader(path) {
   try {
     const buffer = Buffer.alloc(64 * 1024);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return { format: detectStructureFormatHeader(buffer.subarray(0, bytesRead).toString('utf8')), size: (await handle.stat()).size };
+    return { format: detectStructureFormatHeader(buffer.subarray(0, bytesRead).toString('utf8'), path), size: (await handle.stat()).size };
   } finally {
     await handle.close();
   }
