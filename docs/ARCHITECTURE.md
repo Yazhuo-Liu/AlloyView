@@ -41,7 +41,7 @@ src/
 ├── io/                     File parsing, import/export formats and their clients
 ├── properties/             Expressions, computed properties and global attributes
 ├── render/                 Rendering, geometry, camera state and display models
-├── shared/                 Small cross-domain runtime helpers
+├── shared/                 Small cross-domain helpers: event-loop yielding, cooperative step drivers, CPU budgets, local File checks
 ├── ui/
 │   ├── analysis/           Analysis tool controllers
 │   ├── automation/         Keyboard commands and script controls
@@ -63,26 +63,75 @@ The main distinctions are:
 - `analysis/` owns scientific calculations and their execution machinery.
   Measurements, grain and binning clients, selection expansion and CPU pools
   live beside the algorithms they use. GPU-specific implementations remain
-  under `analysis/gpu/`.
+  under `analysis/gpu/`. The CPU budget itself is `shared/cpu-budget.js`,
+  because frame loading and rendering share it with the analysis pools. GPU
+  kernels import their shared helpers (cancellation, unavailability errors,
+  buffer reads, yielding) from `analysis/gpu/support.js`, never from
+  `runtime.js`, so the runtime can load kernels lazily without a cycle.
 - `data/` owns frame and trajectory lifetimes, shared reads, replication,
   selection-group state and time-series storage. The structure-loading client
   is `data/structure-worker-client.js`. CPU and GPU prefetch schedulers remain
-  `data/cpu-prefetch.js` and `data/gpu-prefetch.js`.
+  `data/cpu-prefetch.js` and `data/gpu-prefetch.js`. Definitions that analysis,
+  rendering and the UI all consume also live here rather than with their first
+  caller: replication counts (`replication.js`), element radii
+  (`atomic-radii.js`), quaternion conversions (`quaternion.js`), the
+  structure-type property vocabulary (`structure-properties.js`) and the GPU
+  trajectory window (`gpu-trajectory-window.js`). `cache-policy.js` charges
+  analysis-private per-ID tables through `registerRetainedIdBytes`, so it never
+  imports an analysis.
 - `io/` parses and formats data. External-property and statistics-export Worker
   clients live here, together with format definitions and archive generation.
+  The cooperative step drivers that parsers share with diffraction and
+  volumetric preparation are `shared/cooperative-steps.js`;
+  `io/cooperative-parser.js` keeps the parser-specific input and line handling.
 - `properties/` evaluates expressions and exposes per-atom computed properties
-  and frame-level attribute registries. UI controls for these capabilities
-  live separately under `ui/properties/`.
+  and frame-level attribute registries. Imported vector-family discovery
+  (`properties/vector-components.js`) serves expressions, color quantities and
+  the renderer's vector settings. UI controls for these capabilities live
+  separately under `ui/properties/`.
 - `render/` owns WebGL rendering and display-specific models such as appearance,
   vectors, text labels, camera paths and slicing geometry. Its charts display
-  analysis results without owning the numerical analysis.
+  analysis results without owning the numerical analysis. Pure geometry
+  builders are named `*-geometry.js` (`surface-mesh-geometry.js`,
+  `voronoi-cell-geometry.js`): they contain no WebGL or DOM code, and they are
+  the only `render/` modules a Worker may import.
 - `ui/` binds controls and events to these capabilities. Analysis controllers
   are in `ui/analysis/`; the tool registry and navigation are in `ui/shell/`.
   Existing controllers with several related responsibilities, such as the
-  comparison-view tools, remain intact.
+  comparison-view tools, remain intact. Page chrome that `app.js` composes
+  rather than implements also lives here: `ui/shell/format.js`,
+  `ui/shell/status-chrome.js` (toast, loading indicator, interaction hint) and
+  `ui/shell/source-dialog.js`; `ui/view/legend-panel.js` and
+  `ui/view/axis-triad.js` own the color legend and the axis triad; and
+  `ui/analysis/lattice-reference-controls.js` owns the strain lattice
+  references. These factories receive getters and callbacks from `app.js` and
+  never import it.
 - `video/` owns movie output settings, frame encoding, byte sinks and MP4/WebM
   muxers. Movie UI controls remain in `ui/export/`; camera interpolation
   remains in `render/camera-path.js`.
+
+## Dependency direction
+
+Directories form layers. A module imports only from its own layer or a lower
+one, and never from `src/app.js`:
+
+```text
+ui/  >  application/  >  render/, video/, workers/  >  analysis/  >  io/, properties/  >  data/, crystal/  >  shared/
+```
+
+`tests/module-dependencies.test.js` enforces this: static imports must be
+acyclic, every static or dynamic import must point at the same or a lower
+layer, and Worker entrypoints may import only `render/*-geometry.js` from
+`render/`. Worker entrypoint URLs and static assets are `new URL(...)`
+references, not imports, so a client in `data/` or `io/` may own its Worker.
+The one accepted upward import, the inline frame parser reused by
+`data/frame-parser-pool.js`, is listed in the test; extend that list only with
+a comment explaining why the layering is right as it stands.
+
+When a lower layer needs something defined higher up, move the definition
+down (a constant, a pure helper, a vocabulary) or invert the dependency with a
+registration hook, as `data/cache-policy.js` does for retained analysis tables.
+Do not add a forwarding re-export in the lower layer.
 
 ## Where to add a module
 
