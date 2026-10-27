@@ -179,8 +179,8 @@ never fetched.
 ## WebGPU on GitHub Pages
 
 The Pages build contains the GPU Worker and the same GPU preparation and cache
-code used locally. **Enable GPU acceleration** is on by default. AlloyView
-initializes WebGPU in the background,
+code used locally. **Enable GPU acceleration** is off by default; once it is
+turned on, AlloyView initializes WebGPU in the background,
 prepares the current frame, then loads the whole sequence if it fits or keeps
 nearby frames. The initial hardware budget is 2 GiB including calculation
 workspace; memory is allocated as needed, and allocation exhaustion reduces

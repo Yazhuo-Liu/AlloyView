@@ -26,7 +26,7 @@ The GPU accumulates covariance matrices with compensated arithmetic, solves the 
 
 Cutoff boundaries, ambiguous closest images and nearly singular fits receive exact CPU correction for the affected atoms, using one reusable reference-neighbor index. The closest-image GPU search has a 256-candidate bound per relative change; cases outside that bound also receive correction. Each atom can examine at most 50,000 reference image candidates and evaluate at most 50,000 current images on GPU. Corrections are limited to 16,384 atoms, after which the full analysis uses CPU. Unsupported geometry, precision or device-memory requirements likewise use CPU. Cancellation stops the job with the usual reset behavior and does not restart it through fallback.
 
-GPU acceleration is on by default. Switching the preference keeps completed results; calculate again to use the selected backend. See [performance](performance.md) for preparation, caching and timing considerations.
+GPU acceleration is off by default. Switching the preference keeps completed results; calculate again to use the selected backend. See [performance](performance.md) for preparation, caching and timing considerations.
 
 ## Implementation
 

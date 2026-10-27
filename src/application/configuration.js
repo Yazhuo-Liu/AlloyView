@@ -245,7 +245,7 @@ function normalizeSettings(value, fromSnapshot) {
   const repetitions = vector(input.replicate ?? [1, 1, 1], 'settings.replicate', 1, 4096, true);
   if (repetitions.reduce((product, count) => product * count, 1) > 4096) fail('settings.replicate', 'exceeds 4096 displayed cells');
   return {
-    compute: { gpuEnabled: boolean(compute.gpuEnabled, 'settings.compute.gpuEnabled', true) },
+    compute: { gpuEnabled: boolean(compute.gpuEnabled, 'settings.compute.gpuEnabled', false) },
     display: normalizeDisplay(input.display ?? {}),
     analyses: normalizeAnalyses(input.analyses ?? {}, fromSnapshot),
     extensions: normalizeExtensions(input.extensions ?? {}, fromSnapshot),

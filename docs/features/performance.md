@@ -466,7 +466,7 @@ reinitializes that coordinator. Shared-memory cancellation retains its pool.
 
 ## Enable GPU acceleration
 
-The **Enable GPU acceleration** switch beside **Light / Dark** is on by default and prefers WebGPU for supported analyses. Turn it off to use CPU Workers. The preference applies to the next calculation: completed results remain available, and clicking **Calculate** again uses the selected backend. JSON configuration export/import includes this preference; explicit saved off settings remain off, while configurations without a GPU preference use the enabled default.
+The **Enable GPU acceleration** switch beside **Light / Dark** is off by default, so analyses use CPU Workers until it is turned on; with it on, supported analyses prefer WebGPU. The preference applies to the next calculation: completed results remain available, and clicking **Calculate** again uses the selected backend. JSON configuration export/import includes this preference; explicit saved on settings turn it on, while configurations without a GPU preference keep the default, which is off.
 
 | Analysis | GPU acceleration enabled |
 | --- | --- |

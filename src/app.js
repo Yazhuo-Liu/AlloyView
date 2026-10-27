@@ -747,7 +747,8 @@ elements['enable-gpu-computing'].addEventListener('click', () => {
   interruptConfigurationRestore('a GPU acceleration preference change');
   setGpuComputing(!analysisPool.gpuEnabled);
 });
-setGpuComputing(true);
+// GPU acceleration is opt-in: CPU Workers are the default until the user turns it on.
+setGpuComputing(false);
 
 try {
   renderer = new WebGLRenderer(elements.viewport, {

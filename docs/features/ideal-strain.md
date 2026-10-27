@@ -33,7 +33,7 @@ The phase must match its selected reference and pass the fit tolerance. Unsuppor
 
 ## GPU acceleration
 
-**Enable GPU acceleration** is on by default. A fresh ideal-strain calculation prepares nearest-neighbor inputs on GPU, fits PTM correspondence in CPU WebAssembly Workers, then applies the ideal lattice reference and evaluates the nine strain fields on GPU. A compatible cached PTM fit skips neighbor preparation and fitting. Editing only the element reference, `a` or hexagonal `c` can reuse that geometric fit and its resident GPU upload.
+**Enable GPU acceleration** is off by default. With it on, a fresh ideal-strain calculation prepares nearest-neighbor inputs on GPU, fits PTM correspondence in CPU WebAssembly Workers, then applies the ideal lattice reference and evaluates the nine strain fields on GPU. A compatible cached PTM fit skips neighbor preparation and fitting. Editing only the element reference, `a` or hexagonal `c` can reuse that geometric fit and its resident GPU upload.
 
 The reference shader selects each atom's element and crystal reference, checks its PTM phase and fit, restores absolute lattice scale with independent hexagonal `a`/`c`, then constructs `F` and the tensor invariants. CPU input preparation packs the original PTM structures, Float64 scales and deformation arrays; it no longer calculates per-atom reference factors or phase decisions. High/low fit and reference components retain precision during compensated matrix arithmetic and preserve the numerical-zero convention for ideal crystals. The returned fields remain Float32. A GPU whose shader compiler fails the [exact-arithmetic self-test](performance.md#how-the-gpu-backend-works) runs this stage on CPU Workers.
 
