@@ -6,6 +6,7 @@ import { determinant3 } from '../../data/model.js';
 import { DISTINCT_CATEGORY_COLORS } from '../../render/palette.js';
 import { renderGrainMergeChart } from '../../render/grain-merge-chart.js';
 import { GRAIN_ORIENTATION_COLOR_MODES } from '../../render/orientation-colors.js';
+import { GRAIN_ORIENTATION_COLOR_OPTIONS } from '../../render/color-quantities.js';
 
 export const GRAIN_PROPERTIES = Object.freeze([Object.freeze({ key: 'grainId', name: 'grainId', label: 'Grain ID' })]);
 /** Distinct hues for grain IDs 1, 2, … in turn; sizes order the IDs, so the
@@ -474,9 +475,7 @@ export function initializeGrainTools({ client, tools, getFrame, getFrames = () =
     pendingKinds: () => job.enabled && !job.failed && (job.controller || job.queued) ? ['grains'] : [],
     pendingColorProperties: () => job.enabled && !job.failed ? GRAIN_PROPERTIES.map(({ name, label }) => ({ name, label })) : [],
     /** Orientation color modes to offer while a result is still on its way. */
-    pendingColorModes: () => job.enabled && !job.failed ? [
-      { value: GRAIN_ORIENTATION_COLOR_MODES[0], label: 'Grain orientation · inverse pole figure' },
-      { value: GRAIN_ORIENTATION_COLOR_MODES[1], label: 'Grain orientation · Rodrigues RGB' }] : [],
+    pendingColorModes: () => job.enabled && !job.failed ? GRAIN_ORIENTATION_COLOR_OPTIONS : [],
     failed: () => job.failed ? ['grains'] : [],
   });
 }

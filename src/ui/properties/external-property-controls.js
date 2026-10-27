@@ -207,6 +207,10 @@ export function initializeExternalPropertyControls({
     importFile, applyToFrame, applyToFrames, rename, remove, reset,
     getState: snapshot,
     getPendingFiles: () => pendingFiles().map(entry => ({ ...entry.file })),
+    /** Enabled columns, for Color by placeholders while a file is pending or a
+     * frame-scoped column has no values in the current frame. */
+    pendingColorProperties: () => state.files.flatMap(file => file.columns.filter(column => column.enabled).map(column => ({
+      name: column.name, label: `${column.name}${column.unit ? ` [${column.unit}]` : ''}`, note: 'waiting for external data…' }))),
     setState(value, { silent = true } = {}) {
       const next = normalizeExternalPropertyState(value);
       const keep = new Set(next.files.filter(entry => {

@@ -302,7 +302,7 @@ test('computed property editing validates names, dependencies and frame variable
   h.frame = next;
   h.controls.sync(next);
   assert.deepEqual(next.properties.filter(isComputedProperty).map(property => property.name), ['A']);
-  assert.deepEqual(h.controls.pendingColorProperties(), [{ name: 'q', label: 'q [eV]' }]);
+  assert.deepEqual(h.controls.pendingColorProperties(), [{ name: 'q', label: 'q [eV]', note: 'waiting for expression inputs…' }]);
   h.controls.setState({ properties: [] });
   h.controls.sync(next);
   assert.equal(next.properties.some(isComputedProperty), false);

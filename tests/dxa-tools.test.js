@@ -467,5 +467,5 @@ test('invalid settings and analysis failure clear obsolete lines and leave Cance
   assert.equal(h.renderer.network, null);
   assert.match(h.fields['dxa-status'].textContent, /too short/);
   h.tools.cancel();
-  assert.equal(h.tools.failed(), false);
+  assert.deepEqual(h.tools.failed(), []);
 });

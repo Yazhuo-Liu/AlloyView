@@ -2,7 +2,8 @@ import { FrameCache } from './data/frame-cache.js';
 import { ensureFileUnwrappedPositions, fileDisplayPositions, hasFileUnwrap } from './data/coordinate-display.js';
 import { initializeFrameNavigationControls } from './ui/view/frame-navigation-controls.js';
 import { SharedFrameRequests } from './data/shared-frame-requests.js';
-import { ColorQuantityResolver, colorPropertyKey, initialColorQuantities } from './render/color-quantities.js';
+import { ColorQuantityResolver, colorPropertyKey, PTM_ORIENTATION_COLOR_OPTIONS } from './render/color-quantities.js';
+import { createColorQuantityRegistry } from './application/color-quantity-registry.js';
 import { colorsByDiscreteProperty } from './render/discrete-colors.js';
 import { DEFAULT_ORIENTATION_SETTINGS, OrientationColorResolver, normalizeOrientationSettings, ORIENTATION_COLOR_MODES,
   ptmOrientationSource, grainOrientationSource } from './render/orientation-colors.js';
@@ -221,6 +222,41 @@ const state = {
   },
 };
 
+const STRAIN_FIELD_LABELS = Object.freeze({ atomicShearStrain: 'Atomic shear strain', atomicHydrostaticStrain: 'Atomic hydrostatic strain',
+  atomicVolumeChange: 'Atomic volume change' });
+const strainFieldLabel = field => STRAIN_FIELD_LABELS[field] ?? `${field.replace('strain', '')} (crystal frame)`;
+const CSP_AUTO_OUTPUTS = Object.freeze([['centralSymmetryStructureType', 'Local structure (Auto symmetry)'],
+  ['centralSymmetryNeighbors', 'Central symmetry neighbor count']]);
+/** [property name, label] pairs a built-in analysis publishes. Central symmetry
+ * adds its Auto-symmetry outputs in that mode, or always when `auto` is forced,
+ * which appearance identity does to stay independent of the mode. */
+function builtinAnalysisOutputs(kind, { auto = state.analysis.centrosymmetry.parameters?.mode === 'auto' } = {}) {
+  switch (kind) {
+    case 'coordination': return [['coordination', 'coordination']];
+    case 'strain': return [...STRAIN_FIELDS.map(field => [field, strainFieldLabel(field)]), ['idealStrainStructureType', 'Crystal structure (Ideal strain)']];
+    case 'ptm': return [[ANALYSES.ptm.name, ANALYSES.ptm.label], ...PTM_EXTRA_OUTPUTS];
+    case 'centrosymmetry': return [[ANALYSES.centrosymmetry.name, ANALYSES.centrosymmetry.label], ...(auto ? CSP_AUTO_OUTPUTS : [])];
+    default: return [[ANALYSES[kind].name, ANALYSES[kind].label]];
+  }
+}
+const builtinAnalysisPrefix = kind => kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
+const builtinAnalysisState = kind => elements[`${builtinAnalysisPrefix(kind)}-state`].textContent;
+const enabledBuiltinAnalyses = () => Object.keys(state.analysis).filter(kind => state.analysis[kind].enabled);
+/** The analyses run from this file announce their quantities like every other tool. */
+const builtinAnalyses = {
+  pendingColorProperties: () => enabledBuiltinAnalyses().filter(kind => kind === 'coordination' || builtinAnalysisState(kind) !== 'Failed')
+    .flatMap(kind => builtinAnalysisOutputs(kind).map(([name, label]) => ({ name, label }))),
+  pendingKinds: () => enabledBuiltinAnalyses().filter(kind => !['Failed', 'Calculated'].includes(builtinAnalysisState(kind))),
+  getPropertyKind: name => enabledBuiltinAnalyses().find(kind => builtinAnalysisOutputs(kind).some(([field]) => field === name)) ?? null,
+  failed: () => enabledBuiltinAnalyses().filter(kind => builtinAnalysisState(kind) === 'Failed'),
+};
+/** PTM and ideal strain both fit orientations, so the keys are offered while either runs. */
+const ptmOrientationColors = {
+  pendingColorModes: () => ['ptm', 'strain'].some(kind => state.analysis[kind].enabled && !['Failed', 'Calculated'].includes(builtinAnalysisState(kind)))
+    ? PTM_ORIENTATION_COLOR_OPTIONS : [],
+};
+const colorQuantities = createColorQuantityRegistry();
+
 const FOLDER_FILE_LIMIT = 20_000;
 const localPathCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
@@ -344,12 +380,7 @@ function appearanceContext() {
   const uses = fields => fields.some(name => lowerNames.has(name.toLowerCase()));
   const analyses = [];
   for (const [kind, job] of Object.entries(state.analysis)) {
-    const fields = kind === 'coordination' ? ['coordination']
-      : kind === 'strain' ? [...STRAIN_FIELDS, 'idealStrainStructureType']
-        : kind === 'ptm' ? [ANALYSES.ptm.name, ...PTM_EXTRA_OUTPUTS.map(([name]) => name)]
-          : kind === 'centrosymmetry' ? [ANALYSES[kind].name, 'centralSymmetryStructureType', 'centralSymmetryNeighbors']
-            : [ANALYSES[kind].name];
-    if (uses(fields)) analyses.push([kind, job.enabled, job.cutoff, job.parameters]);
+    if (uses(builtinAnalysisOutputs(kind, { auto: true }).map(([name]) => name))) analyses.push([kind, job.enabled, job.cutoff, job.parameters]);
   }
   for (const [name, tool] of [['topology', topologyTools], ['clusters', clusterTools], ['grains', grainTools], ['wignerSeitz', wignerSeitzTools]]) {
     const kinds = new Set([...names].map(field => tool?.getPropertyKind(field)).filter(Boolean));
@@ -553,34 +584,24 @@ function propertyProducer(name, frame) {
     return /…$|^Queued$|^Waiting$/.test(text) ? { name: label, state: 'pending' }
       : { name: label, state: 'unavailable', failed: text === 'Failed', message: `${name} is unavailable: ${label} ${text === 'Failed' ? 'failed' : 'is not calculating for this frame'}.` };
   };
-  for (const [kind, analysis] of Object.entries(state.analysis)) {
-    if (!analysis.enabled) continue;
-    const outputs = kind === 'coordination' ? ['coordination']
-      : kind === 'strain' ? [...STRAIN_FIELDS, 'idealStrainStructureType']
-        : kind === 'ptm' ? [ANALYSES.ptm.name, ...PTM_EXTRA_OUTPUTS.map(([field]) => field)]
-          : kind === 'centrosymmetry' && analysis.parameters?.mode === 'auto'
-            ? [ANALYSES[kind].name, 'centralSymmetryStructureType', 'centralSymmetryNeighbors']
-            : [ANALYSES[kind].name];
-    if (matches(outputs)) {
-      // Frame replay chains ideal strain behind its enabled PTM fit. This is
-      // an actual producer dependency even before the strain controller starts.
-      if (kind === 'strain' && state.analysis.ptm.enabled && analysisTasks.get('ptm')?.frame === frame
-          && !['Failed', 'Calculated'].includes(elements['ptm-state'].textContent)) return { name: ANALYSES.strain.label, state: 'pending' };
-      return status(kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix,
-        kind === 'coordination' ? 'Coordination' : ANALYSES[kind].label);
+  for (const kind of enabledBuiltinAnalyses()) {
+    if (!matches(builtinAnalysisOutputs(kind).map(([field]) => field))) continue;
+    // Frame replay chains ideal strain behind its enabled PTM fit. This is
+    // an actual producer dependency even before the strain controller starts.
+    if (kind === 'strain' && state.analysis.ptm.enabled && analysisTasks.get('ptm')?.frame === frame
+        && !['Failed', 'Calculated'].includes(elements['ptm-state'].textContent)) return { name: ANALYSES.strain.label, state: 'pending' };
+    return status(builtinAnalysisPrefix(kind), kind === 'coordination' ? 'Coordination' : ANALYSES[kind].label);
+  }
+  for (const { provider, name: field, label } of colorQuantities.pendingProperties()) {
+    if (field.toLowerCase() !== lower) continue;
+    // Tools whose state lives in their status pills report through those.
+    if (provider === dxaTools) return status('dxa', 'DXA');
+    if (provider === atomEyeTools) {
+      return status(field === 'bondCoordination' ? 'bonds' : field === 'localShear' ? 'local-shear'
+        : REFERENCE_STRAIN_FIELDS.includes(field) ? 'reference-strain' : 'displacement', label);
     }
-  }
-  for (const tool of [topologyTools, clusterTools, grainTools, wignerSeitzTools]) {
-    const field = tool?.pendingColorProperties().find(item => item.name.toLowerCase() === lower);
-    const kind = field && tool.getPropertyKind(field.name);
-    if (kind && tool.pendingKinds().includes(kind)) return { name: field.label, state: 'pending', kind };
-  }
-  if (dxaTools?.pendingColorProperties().some(field => field.name.toLowerCase() === lower)) return status('dxa', 'DXA');
-  const field = atomEyeTools?.pendingColorProperties().find(item => item.name.toLowerCase() === lower);
-  if (field) {
-    const prefix = field.name === 'bondCoordination' ? 'bonds' : field.name === 'localShear' ? 'local-shear'
-      : REFERENCE_STRAIN_FIELDS.includes(field.name) ? 'reference-strain' : 'displacement';
-    return status(prefix, field.label);
+    const kind = provider.getPropertyKind?.(field);
+    if (kind && provider.pendingKinds?.().includes(kind)) return { name: label, state: 'pending', kind };
   }
   return null;
 }
@@ -930,25 +951,8 @@ atomEyeTools = initializeAtomEyeTools({
   ensureIndexed: waitForSourceIndex,
   getFrames: () => new Set([state.frame, ...cache.frames.values()].filter(Boolean)),
   getSourceVersion: () => `${state.sourceVersion}:${state.processingRevision}`,
-  getPendingAnalysisKinds: () => [...Object.entries(state.analysis).filter(([kind, analysis]) => {
-    const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
-    return analysis.enabled && !['Failed', 'Calculated'].includes(elements[`${prefix}-state`].textContent);
-  }).map(([kind]) => kind), ...(topologyTools?.pendingKinds() ?? []), ...(clusterTools?.pendingKinds() ?? []),
-    ...(wignerSeitzTools?.pendingKinds() ?? []), ...(grainTools?.pendingKinds() ?? [])],
-  getAnalysisPropertyKind: name => {
-    for (const [kind, analysis] of Object.entries(state.analysis)) {
-      if (!analysis.enabled) continue;
-      const outputs = kind === 'coordination' ? ['coordination']
-        : kind === 'strain' ? STRAIN_FIELDS
-          : kind === 'ptm' ? [ANALYSES[kind].name, ...PTM_EXTRA_OUTPUTS.map(([field]) => field)]
-            : kind === 'centrosymmetry' && analysis.parameters?.mode === 'auto'
-              ? [ANALYSES[kind].name, 'centralSymmetryStructureType', 'centralSymmetryNeighbors']
-              : [ANALYSES[kind].name];
-      if (outputs.includes(name)) return kind;
-    }
-    return topologyTools?.getPropertyKind(name) ?? clusterTools?.getPropertyKind(name) ?? wignerSeitzTools?.getPropertyKind(name)
-      ?? grainTools?.getPropertyKind(name) ?? null;
-  },
+  getPendingAnalysisKinds: () => colorQuantities.pendingKinds(),
+  getAnalysisPropertyKind: name => colorQuantities.propertyKind(name),
   getSelectedIndex: () => state.selectedId === null || !state.frame ? -1 : findAtomIndex(state.frame.ids, state.selectedId),
   selectAtom: handleAtomPick,
   getSelectionGroups: () => state.selectionGroups.groups,
@@ -1130,6 +1134,10 @@ wignerSeitzTools = initializeWignerSeitzTools({
   onEdit: () => interruptConfigurationRestore('a Wigner–Seitz analysis edit'),
   notify: showToast,
 });
+
+// Color by lists these sources' pending quantities in this order, after the published ones.
+for (const provider of [ptmOrientationColors, externalProperties, expressionTools, builtinAnalyses, atomEyeTools, dxaTools,
+  topologyTools, clusterTools, grainTools, wignerSeitzTools]) colorQuantities.register(provider);
 
 surfaceTools = initializeSurfaceTools({
   renderer, tools: toolPanels, client: dxaClient,
@@ -3062,87 +3070,12 @@ function refreshColorOptions() {
 }
 
 function refreshColorOptionsNow() {
-  const previous = state.colorMode;
-  elements['color-mode'].replaceChildren(option('type', 'Atom type'));
-  const propertyNames = new Set();
-  initialColorQuantities(state.frame).forEach(({ value, label }) => {
-    if (value.startsWith('property:')) {
-      const name = value.slice(9);
-      if (propertyNames.has(name)) return;
-      propertyNames.add(name);
-    }
-    elements['color-mode'].append(option(value, label));
-  });
-  if (((state.analysis.ptm.enabled && !['Failed', 'Calculated'].includes(elements['ptm-state'].textContent))
-      || (state.analysis.strain.enabled && !['Failed', 'Calculated'].includes(elements['strain-state'].textContent)))
-      && ![...elements['color-mode'].options].some(item => item.value === 'builtin:ptm:ipf')) {
-    elements['color-mode'].append(option('builtin:ptm:ipf', 'PTM orientation · inverse pole figure (calculating…)'),
-      option('builtin:ptm:quaternion', 'PTM orientation · Rodrigues RGB (calculating…)'));
-  }
-  // Keep a saved external quantity selected while its local file is pending,
-  // or while a frame-scoped column is unavailable in the current frame.
-  for (const file of externalProperties?.getState().files ?? []) {
-    for (const column of file.columns) {
-      if (!column.enabled || propertyNames.has(column.name)) continue;
-      propertyNames.add(column.name);
-      elements['color-mode'].append(option(`property:${column.name}`, `${column.name}${column.unit ? ` [${column.unit}]` : ''} (waiting for external data…)`));
-    }
-  }
-  for (const { name, label } of expressionTools?.pendingColorProperties() ?? []) {
-    if (propertyNames.has(name)) continue;
-    propertyNames.add(name);
-    elements['color-mode'].append(option(`property:${name}`, `${label} (waiting for expression inputs…)`));
-  }
-  if (state.analysis.coordination.enabled && !propertyNames.has('coordination')) {
-    elements['color-mode'].append(option('property:coordination', 'coordination (calculating…)'));
-  }
-  for (const [kind, { name, label, prefix }] of Object.entries(ANALYSES)) {
-    if (state.analysis[kind].enabled && elements[`${prefix}-state`].textContent !== 'Failed') {
-      const outputs = kind === 'strain' ? STRAIN_FIELDS.map(field => [field, field === name ? label : field])
-        : kind === 'ptm' ? [[name, label], ...PTM_EXTRA_OUTPUTS]
-          : [[name, label]];
-      for (const [field, fieldLabel] of outputs) {
-        if (!propertyNames.has(field)) elements['color-mode'].append(option(`property:${field}`, `${fieldLabel} (calculating…)`));
-      }
-    }
-  }
-  if (state.analysis.centrosymmetry.enabled && state.analysis.centrosymmetry.parameters?.mode === 'auto'
-      && elements['csp-state'].textContent !== 'Failed') {
-    for (const [name, label] of [['centralSymmetryStructureType', 'Local structure (Auto symmetry)'],
-      ['centralSymmetryNeighbors', 'Central symmetry neighbor count']]) {
-      if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
-    }
-  }
-  for (const { name, label } of atomEyeTools.pendingColorProperties()) {
-    if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
-  }
-  for (const { name, label } of dxaTools?.pendingColorProperties() ?? []) {
-    if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
-  }
-  for (const { name, label } of topologyTools?.pendingColorProperties() ?? []) {
-    if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
-  }
-  for (const { name, label } of clusterTools?.pendingColorProperties() ?? []) {
-    if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
-  }
-  for (const { name, label } of grainTools?.pendingColorProperties() ?? []) {
-    if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
-  }
-  for (const { value, label } of grainTools?.pendingColorModes() ?? []) {
-    if (![...elements['color-mode'].options].some(item => item.value === value)) elements['color-mode'].append(option(value, `${label} (calculating…)`));
-  }
-  for (const { name, label } of wignerSeitzTools?.pendingColorProperties() ?? []) {
-    if (!propertyNames.has(name)) elements['color-mode'].append(option(`property:${name}`, `${label} (calculating…)`));
-  }
-  const available = [...elements['color-mode'].options].some((item) => item.value === previous);
-  // Missing/failed output changes availability, never the user's requested
-  // quantity. A later frame can recover without a second manual selection.
-  if (!available) elements['color-mode'].append(option(previous,
-    `${previous.startsWith('property:') ? previous.slice(9) : previous} (unavailable in this frame)`));
-  state.colorMode = previous;
+  // A missing or failed output changes availability, never the requested
+  // quantity: the selection stays listed so a later frame can recover it.
+  const options = colorQuantities.options(state.frame, { selected: state.colorMode });
+  elements['color-mode'].replaceChildren(...options.map(({ value, label }) => option(value, label)));
   elements['color-mode'].value = state.colorMode;
 }
-
 function applyColors() {
   requestDisplayRefresh({ colors: true, statistics: true, comparison: true });
 }
@@ -3637,10 +3570,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
     } else if (kind === 'strain') {
       const visiblePtmKey = JSON.stringify(state.analysis.ptm.parameters);
       storePtmResult(frame, result, parameters, state.analysis.ptm.enabled && visiblePtmKey === ptmKey);
-      const labels = { atomicShearStrain: 'Atomic shear strain', atomicHydrostaticStrain: 'Atomic hydrostatic strain',
-        atomicVolumeChange: 'Atomic volume change' };
-      properties = STRAIN_FIELDS.map(field => ({ ...metadata, name: field,
-        displayName: labels[field] ?? `${field.replace('strain', '')} (crystal frame)`, data: result[field] }));
+      properties = STRAIN_FIELDS.map(field => ({ ...metadata, name: field, displayName: strainFieldLabel(field), data: result[field] }));
       const structures = result.structures ?? frame.ptm?.structures;
       if (structures) properties.push({ ...metadata, name: 'idealStrainStructureType',
         displayName: 'Crystal structure (Ideal strain)', data: structures, categories: PTM_TYPES });
@@ -4464,10 +4394,8 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     // "Restored" includes the saved quantity selector, even when its external
     // file is pending, and completion pills queued behind the display work.
     displayRefresh.flush();
-    const failed = [...Object.keys(state.analysis).filter(kind => {
-      const prefix = kind === 'coordination' ? 'analysis' : ANALYSES[kind].prefix;
-      return state.analysis[kind].enabled && elements[`${prefix}-state`].textContent === 'Failed';
-    }), ...atomEyeTools.failed(), ...topologyTools.failed(), ...clusterTools.failed(), ...grainTools.failed(), ...wignerSeitzTools.failed(), ...surfaceTools.failed(), ...crystalTools.failed(), ...volumetricTools.failed(), ...diffractionControls.failed(), ...binningTools.failed(), ...(dxaTools.failed() ? ['dxa'] : [])];
+    const failed = [...colorQuantities.failedKinds(),
+      ...[surfaceTools, crystalTools, volumetricTools, diffractionControls, binningTools].flatMap(tool => tool.failed())];
     elements['configuration-status'].textContent = failed.length
       ? `Configuration restored; these analyses could not complete: ${failed.join(', ')}.`
       : externalProperties.getPendingFiles().length

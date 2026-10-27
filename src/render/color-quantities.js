@@ -12,6 +12,14 @@ export const BUILTIN_COLOR_MODES = Object.freeze([
   ...ORIENTATION_COLOR_MODES,
 ]);
 
+/** Orientation keys, offered once their source analysis has results or is on its way. */
+export const PTM_ORIENTATION_COLOR_OPTIONS = Object.freeze([
+  Object.freeze({ value: 'builtin:ptm:ipf', label: 'PTM orientation · inverse pole figure' }),
+  Object.freeze({ value: 'builtin:ptm:quaternion', label: 'PTM orientation · Rodrigues RGB' })]);
+export const GRAIN_ORIENTATION_COLOR_OPTIONS = Object.freeze([
+  Object.freeze({ value: 'builtin:grains:ipf', label: 'Grain orientation · inverse pole figure' }),
+  Object.freeze({ value: 'builtin:grains:quaternion', label: 'Grain orientation · Rodrigues RGB' })]);
+
 /** Keep builtin range keys separate from even identically named file columns. */
 export function colorPropertyKey(name) {
   return /^(?:builtin:|property:)/.test(name) ? `property:${name}` : name;
@@ -32,10 +40,8 @@ export function initialColorQuantities(frame) {
   return [
     ...['x', 'y', 'z'].map(axis => ({ value: `builtin:position:${axis}`, label: `Position ${axis.toUpperCase()} [Å]` })),
     ...(velocity ? [{ value: 'builtin:velocity:magnitude', label: `Speed magnitude${velocity[0].unit && velocity.every(property => property.unit === velocity[0].unit) ? ` [${velocity[0].unit}]` : ''}` }] : []),
-    ...(ptmOrientationSource(frame) ? [{ value: 'builtin:ptm:ipf', label: 'PTM orientation · inverse pole figure' },
-      { value: 'builtin:ptm:quaternion', label: 'PTM orientation · Rodrigues RGB' }] : []),
-    ...(grainOrientationSource(frame) ? [{ value: 'builtin:grains:ipf', label: 'Grain orientation · inverse pole figure' },
-      { value: 'builtin:grains:quaternion', label: 'Grain orientation · Rodrigues RGB' }] : []),
+    ...(ptmOrientationSource(frame) ? PTM_ORIENTATION_COLOR_OPTIONS : []),
+    ...(grainOrientationSource(frame) ? GRAIN_ORIENTATION_COLOR_OPTIONS : []),
     ...frame.properties.map(property => ({ value: `property:${property.name}`,
       label: `${velocityLabels.get(property.name) ?? property.displayName ?? property.name}${property.unit ? ` [${property.unit}]` : ''}` })),
   ];

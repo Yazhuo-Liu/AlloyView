@@ -301,12 +301,10 @@ try {
 
   assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-label")'), 'Enable GPU acceleration');
   assert.equal(await evaluate('document.getElementById("enable-gpu-computing").textContent.trim()'), 'Enable GPU acceleration');
-  assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'true', 'GPU acceleration defaults to on');
-  await evaluate('document.getElementById("enable-gpu-computing").click()');
-  assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'false');
+  assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'false', 'GPU acceleration defaults to off');
   await evaluate('document.getElementById("enable-gpu-computing").click()');
   assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'true');
-  // Keep the standard scientific regression on its explicit CPU baseline.
+  // The standard scientific regression runs on the CPU baseline, which is the default.
   await evaluate('document.getElementById("enable-gpu-computing").click()');
   assert.equal(await evaluate('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed")'), 'false');
 
@@ -392,15 +390,17 @@ try {
   await evaluate('document.getElementById("enable-gpu-computing").click()');
   await call('DOM.setFileInputFiles', { nodeId: gpuConfigurationInput, files: [cpuRecipePath] });
   await waitFor('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed") === "false" && document.getElementById("configuration-status").textContent.includes("restored")', 'saved CPU preference replay');
-  assert.equal((await exportConfiguration()).settings.compute.gpuEnabled, false, 'explicit saved OFF survives the new GPU default');
+  assert.equal((await exportConfiguration()).settings.compute.gpuEnabled, false, 'explicit saved OFF survives a JSON round trip');
+  // A recipe without a GPU preference keeps the default, which is off, even
+  // when the switch is on at import time.
   const legacyGpuRecipe = structuredClone(cpuRecipe);
   delete legacyGpuRecipe.settings.compute;
   const legacyGpuRecipePath = resolve(profile, 'legacy-gpu-default.json');
   await writeFile(legacyGpuRecipePath, JSON.stringify(legacyGpuRecipe));
-  await call('DOM.setFileInputFiles', { nodeId: gpuConfigurationInput, files: [legacyGpuRecipePath] });
-  await waitFor('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed") === "true" && document.getElementById("configuration-status").textContent.includes("restored")', 'legacy recipe uses enabled GPU default');
-  assert.equal((await exportConfiguration()).settings.compute.gpuEnabled, true, 'missing legacy GPU preference adopts the enabled default');
   await evaluate('document.getElementById("enable-gpu-computing").click()');
+  await call('DOM.setFileInputFiles', { nodeId: gpuConfigurationInput, files: [legacyGpuRecipePath] });
+  await waitFor('document.getElementById("enable-gpu-computing").getAttribute("aria-pressed") === "false" && document.getElementById("configuration-status").textContent.includes("restored")', 'legacy recipe uses the disabled GPU default');
+  assert.equal((await exportConfiguration()).settings.compute.gpuEnabled, false, 'missing legacy GPU preference adopts the disabled default');
   const closedDraws = await evaluate('window.logoDraws');
   await evaluate('document.getElementById("close-file").click()');
   await checkHome();

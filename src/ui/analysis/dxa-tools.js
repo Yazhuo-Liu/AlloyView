@@ -427,7 +427,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     reassessCache: frame => resultCache.reassess(frame),
     pendingColorProperties: () => enabled && !failure ? [{ name: DXA_STRUCTURE_PROPERTY, label: DXA_STRUCTURE_LABEL }] : [],
     setEnabled(value) { controlsEnabled = Boolean(value); updateControls(); },
-    failed: () => enabled && failure,
+    failed: () => enabled && failure ? ['dxa'] : [],
   });
 }
 

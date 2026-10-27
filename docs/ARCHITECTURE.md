@@ -98,7 +98,9 @@ The main distinctions are:
 - `ui/` binds controls and events to these capabilities. Analysis controllers
   are in `ui/analysis/`; tool tab navigation is in `ui/shell/tool-panels.js`,
   while the tool registry (tab categories and the built-in tool list) is
-  `application/tool-registry.js`, which configuration validation also uses.
+  `application/tool-registry.js`, which configuration validation also uses,
+  and `application/color-quantity-registry.js` collects what each tool
+  contributes to the **Color by** menu.
   Existing controllers with several related responsibilities, such as the
   comparison-view tools, remain intact. Page chrome that `app.js` composes
   rather than implements also lives here: `ui/shell/format.js`,
@@ -142,6 +144,21 @@ caller. For example, a new analysis gets its calculation in `analysis/`, its
 Worker protocol in `workers/` if needed, and its settings controller in
 `ui/analysis/`. A new file format belongs in `io/`, while a reusable expression
 operation belongs in `properties/`.
+
+An analysis that colors atoms publishes its results as frame properties
+through `analysis/results.js` (`replaceAnalysisProperty`). The property's
+shape decides the legend: an array with `categories` gets the checkbox legend
+with per-class visibility, a numeric array gets the scalar range legend with
+its "Hide values outside range" option, and both keep their filters per
+property. Nothing else registers a legend. What the tool is still computing
+or waiting for is announced through a color-quantity provider, an object with
+any of `pendingColorProperties()`, `pendingColorModes()`, `pendingKinds()`,
+`getPropertyKind(name)` and `failed()`, which `app.js` registers with
+`application/color-quantity-registry.js`. The registry builds the **Color by**
+menu (published quantities first, then "(calculating…)" placeholders in
+registration order), answers which analysis produces a property, and lists
+failed kinds for the configuration summary, so adding a tool never edits the
+menu code.
 
 Keep state and calculations usable without constructing the page. Put DOM
 binding, dialogs and input handling in the appropriate `ui/` area. Worker
