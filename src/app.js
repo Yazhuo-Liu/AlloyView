@@ -1,11 +1,10 @@
 import { FrameCache } from './data/frame-cache.js';
 import { ensureFileUnwrappedPositions, fileDisplayPositions, hasFileUnwrap } from './data/coordinate-display.js';
 import { initializeFrameNavigationControls } from './ui/view/frame-navigation-controls.js';
-import { frameTypeOrder } from './data/frame-summary.js';
 import { SharedFrameRequests } from './data/shared-frame-requests.js';
 import { ColorQuantityResolver, colorPropertyKey, initialColorQuantities } from './render/color-quantities.js';
-import { colorsByDiscreteProperty, discreteValues } from './render/discrete-colors.js';
-import { DEFAULT_ORIENTATION_SETTINGS, OrientationColorResolver, drawIpfKey, normalizeOrientationSettings, ORIENTATION_COLOR_MODES,
+import { colorsByDiscreteProperty } from './render/discrete-colors.js';
+import { DEFAULT_ORIENTATION_SETTINGS, OrientationColorResolver, normalizeOrientationSettings, ORIENTATION_COLOR_MODES,
   ptmOrientationSource, grainOrientationSource } from './render/orientation-colors.js';
 import { framePreparationSignal } from './data/frame-preparation.js';
 import { processedFrameHeader } from './data/processed-frame-header.js';
@@ -28,8 +27,7 @@ import { analysisProgressText as formatAnalysisProgress, analysisBackendLabel, a
 import { STRUCTURE_TYPES } from './analysis/cna.js';
 import { PTM_ORDERING_TYPES, PTM_TYPES, retainPtmNeighborLists } from './analysis/ptm.js';
 import { STRAIN_FIELDS } from './analysis/atomic-strain.js';
-import { ELEMENT_LATTICES, STRAIN_STRUCTURES, referenceForElement, validateReferences } from './analysis/lattice.js';
-import { estimateLatticeReferences } from './analysis/lattice-estimate.js';
+import { referenceForElement, validateReferences } from './analysis/lattice.js';
 import { clearAnalysisResults, replaceAnalysisProperty } from './analysis/results.js';
 import {
   catalogLocalSources,
@@ -42,8 +40,6 @@ import {
   colorsByProperty,
   colorsByCategory,
   colorsByType,
-  coupleScalarRange,
-  SCALAR_COLOR_SCHEMES,
   visibilityByProperty,
   visibilityByCategory,
   visibilityByType,
@@ -110,8 +106,12 @@ import { initializeFeatureHelp } from './ui/shell/feature-help.js';
 import { normalizeSelectionGroups, selectionGroupVisibility } from './data/selection-groups.js';
 import { initializeSelectionGroupControls } from './ui/selection/selection-group-controls.js';
 import { initializeCrystalVisibilityControls } from './ui/view/crystal-visibility-controls.js';
-import { createLegendScale, updateLegendScale } from './render/legend-histogram.js';
-import { createLegendRangeSlider } from './render/legend-range-slider.js';
+import { formatBytes, formatDuration, formatInteger, formatValue, formatVector, option } from './ui/shell/format.js';
+import { createAxisTriad } from './ui/view/axis-triad.js';
+import { createStatusChrome } from './ui/shell/status-chrome.js';
+import { createSourceDialog, sourceFormatLabel } from './ui/shell/source-dialog.js';
+import { createLegendPanel } from './ui/view/legend-panel.js';
+import { createLatticeReferenceControls } from './ui/analysis/lattice-reference-controls.js';
 
 const elements = Object.fromEntries([
   'file-input', 'folder-input', 'open-local', 'open-examples', 'empty-open', 'viewport', 'sidebar', 'enable-gpu-computing',
@@ -137,6 +137,9 @@ const elements = Object.fromEntries([
   'source-dialog', 'source-dialog-kicker', 'source-dialog-title', 'source-dialog-summary', 'source-dialog-close', 'source-options',
 ].map((id) => [id, document.getElementById(id)]));
 
+const axisTriad = createAxisTriad({ elements });
+const statusChrome = createStatusChrome({ elements });
+const { showToast, setLoading, reportReadProgress, showInteractionHint, dismissInteractionHint, setRangeProgress, updateMemoryMetric } = statusChrome;
 const cache = new FrameCache(3);
 const scalarColorRanges = new Map();
 const colorQuantityResolver = new ColorQuantityResolver();
@@ -164,6 +167,13 @@ const coordinationPool = new CoordinationPool({
 });
 const analysisControllers = new Map();
 const analysisTasks = new Map();
+const latticeReferences = createLatticeReferenceControls({
+  elements, pool: analysisPool,
+  getFrame: () => state.frame, getFrameIndex: () => state.frameIndex, getSourceVersion: () => state.sourceVersion,
+  isSourceLoading: () => sourceLoadingOwner !== null, isStrainEnabled: () => state.analysis.strain.enabled,
+  runStrain: () => runStructureAnalysis('strain'), storePtmResult, reassessFrameCache,
+  formatProgress: (progress, kind) => analysisProgressText(progress, kind), notify: message => showToast(message),
+});
 const ANALYSES = {
   cna: { prefix: 'cna', name: 'structureType', label: 'Crystal structure (CNA)', help: 'Calculate to color by crystal structure. The legend checkboxes control visibility.' },
   centrosymmetry: { prefix: 'csp', name: 'centralSymmetry', label: 'Central symmetry (normalized)', help: 'Runs on the complete structure, including hidden atoms.' },
@@ -202,9 +212,6 @@ const state = {
   cachePlan: null,
   prefetchToken: 0,
   playing: false,
-  references: [],
-  referenceLabels: [],
-  referenceByLabel: new Map(),
   analysis: {
     coordination: { enabled: false, cutoff: null, request: 0 },
     cna: { enabled: false, parameters: null, key: null, request: 0 },
@@ -217,18 +224,14 @@ const state = {
 const FOLDER_FILE_LIMIT = 20_000;
 const localPathCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
-let toastTimer = null;
 let frameNavigationControls;
 let playbackControls;
 let playbackBuffer = null;
 let framePrefetchController = null;
 const framePrefetchRequests = new Map();
 let frameNavigationController = null;
-let interactionHintTimer = null;
-let interactionHintFadeTimer = null;
 let cutoffTimer = null;
 let coordinationQueue = Promise.resolve();
-let loadingOwner = null, loadingReadProgress = false, loadingTimer = null;
 let appearancePreview = null, appearanceDependency = null, displayCompletion = null;
 let sceneUpdateToken = null, navigationDirection = 1;
 let rememberedAppearance = null;
@@ -238,9 +241,6 @@ let appearanceObjectSequence = 0;
 let sourceOpenRequest = 0;
 let sourceFetchController = null;
 let sourceLoadingOwner = null;
-let exampleCatalog = null;
-let exampleCatalogPromise = null;
-let latticeEstimateRequest = 0;
 let renderer;
 let atomEyeTools;
 let cameraControls;
@@ -271,8 +271,6 @@ let scriptControls;
 let movieControls;
 let dxaTools;
 let crystalVisibility;
-let currentColorLegend = null;
-let commitScalarLegendEdit = null;
 let selectionGroupControls;
 let colorChoiceVersion = 0;
 let backgroundCustomized = false;
@@ -425,7 +423,7 @@ function sameAppearanceInputs(first, second) {
 
 function rememberCompletedAppearance(palette = null) {
   if (!state.frame || appearancePreview || !currentAppearanceAvailable() || renderer.presentationPending) return;
-  const context = appearanceContext(), legend = palette?.legend ?? currentColorLegend;
+  const context = appearanceContext(), legend = palette?.legend ?? legendPanel.currentLegend;
   if (!legend || legend.preview) return;
   const identity = [state.frame, renderer.atomColors, renderer.visibility, renderer.atomRadii, context.settingsKey,
     legend.property?.data, legend.property?.categories, legend.title, legend.unit, legend.minimum, legend.maximum];
@@ -497,7 +495,7 @@ function tryCommitCurrentAppearance() {
     if (sceneUpdateToken === completion.transaction) sceneUpdateToken = null;
     completion.appearanceDone = true;
     appearancePreview = null;
-    if (currentColorLegend) renderLegend(currentColorLegend);
+    if (legendPanel.currentLegend) legendPanel.render(legendPanel.currentLegend);
     atomEyeTools.syncComparison();
     displayRefresh.flush();
     rememberCompletedAppearance();
@@ -533,7 +531,7 @@ function scheduleAnalysisPrediction() {
   }
   const saved = structuredClone(Object.fromEntries(Object.entries(state.analysis).map(([kind, job]) => [kind,
     { enabled: job.enabled, parameters: job.parameters, cutoff: job.cutoff ?? (kind === 'coordination' ? elements.cutoff.valueAsNumber : null) }])));
-  const references = state.references.map(reference => ({ ...reference }));
+  const references = latticeReferences.getReferences().map(reference => ({ ...reference }));
   const hidden = Boolean(crystalSource && hiddenCategoriesFor(crystalSource).size);
   const grainEnabled = grainTools?.isEnabled();
   const requestOptions = { quantity, visibilitySource: crystalSource, hidden, analyses: saved, references,
@@ -756,13 +754,13 @@ try {
     cpuBudget,
     onPick: handleAtomPick,
     onStats: ({ fps }) => { elements['metric-fps'].textContent = `${fps.toFixed(1)} FPS`; },
-    onCameraChange: updateAxisTriad,
+    onCameraChange: directions => axisTriad.update(directions),
     onProjectionChange: syncProjectionControls,
     onRender: () => {
       if (!renderer?.presentationPending) { sliceGizmo?.update(); ambientOcclusion?.update(); }
     },
     // Exports wait for current ambient occlusion, after a legend edit commits.
-    onBeforeCapture: () => { commitScalarLegendEdit?.(); displayRefresh.flush(); ambientOcclusion?.ensureCurrent(); },
+    onBeforeCapture: () => { legendPanel.commitPendingEdit(); displayRefresh.flush(); ambientOcclusion?.ensureCurrent(); },
   });
 } catch (error) {
   showToast(error.message);
@@ -988,7 +986,7 @@ crystalVisibility = initializeCrystalVisibilityControls({
   onChange: () => {
     interruptConfigurationRestore('a crystal visibility change');
     if (!state.frame) return;
-    applyScalarVisibility(currentColorLegend ?? paletteForCurrentMode().legend);
+    applyScalarVisibility(legendPanel.currentLegend ?? paletteForCurrentMode().legend);
     atomEyeTools.syncComparison();
   },
 });
@@ -1252,7 +1250,7 @@ trajectoryTools = initializeTrajectoryToolControls({
   onLinesChange: () => atomEyeTools?.syncComparison(),
   onEdit: () => interruptConfigurationRestore('a trajectory tool edit'),
   notify: showToast,
-  setBusy: text => { if (text) setLoading(true, text, 'trajectory-unwrap'); else if (loadingOwner === 'trajectory-unwrap') setLoading(false); },
+  setBusy: text => { if (text) setLoading(true, text, 'trajectory-unwrap'); else if (statusChrome.loadingOwner === 'trajectory-unwrap') setLoading(false); },
 });
 
 voronoiCells = initializeVoronoiCellControls({
@@ -1271,7 +1269,7 @@ statisticsExports = initializeStatisticsExports({
   getFrameIndex: () => state.frameIndex,
   getDxaNetwork: () => renderer.dislocationNetwork,
   getSelectionGroups: () => state.selectionGroups,
-  getLegend: () => appearancePreview || renderer.presentationPending ? null : currentColorLegend,
+  getLegend: () => appearancePreview || renderer.presentationPending ? null : legendPanel.currentLegend,
   getResults: () => binningTools?.exportResults() ?? {},
   notify: showToast,
 });
@@ -1310,11 +1308,23 @@ timeSeries = initializeTimeSeries({
   notify: showToast,
 });
 
+const legendPanel = createLegendPanel({
+  elements, renderer, displayRefresh,
+  scalarColorRanges, scalarColorSchemes, scalarHideOutside, scalarColorModes, hiddenAtomTypes,
+  getFrame: () => state.frame, getColorMode: () => state.colorMode, getSelectionGroups: () => state.selectionGroups.groups,
+  getDisplayCompletion: () => displayCompletion, getCrystalVisibility: () => crystalVisibility, getAtomEyeTools: () => atomEyeTools,
+  getOrientationSettings: () => orientationSettings, setOrientationSettings: settings => { orientationSettings = settings; },
+  hiddenCategoriesFor, currentPalette: paletteForCurrentMode,
+  applyColors, applyScalarVisibility, refreshSelectionPanel: updateSelectionPanel, chooseColorMode: selectColorMode,
+  onEdit: interruptConfigurationRestore, notify: showToast,
+});
+const sourceDialog = createSourceDialog({ elements, manifestUrl: new URL('../examples/manifest.json', import.meta.url),
+  getEntries: () => state.availableEntries, openSource: source => loadFiles(source.files, source), openExample: loadCatalogExample });
 const bccLogo = initializeBccLogo(elements['empty-state']);
-void loadExampleCatalog().catch(() => {});
+void sourceDialog.loadExampleCatalog().catch(() => {});
 
-elements['open-local'].addEventListener('click', showLocalPicker);
-elements['empty-open'].addEventListener('click', showLocalPicker);
+elements['open-local'].addEventListener('click', sourceDialog.showLocalPicker);
+elements['empty-open'].addEventListener('click', sourceDialog.showLocalPicker);
 elements['file-input'].addEventListener('change', () => {
   const entries = fileEntries(elements['file-input'].files);
   if (entries.length > 0) inspectLocalEntries(entries, {
@@ -1331,8 +1341,7 @@ elements['folder-input'].addEventListener('change', () => {
   });
   elements['folder-input'].value = '';
 });
-elements['source-dialog-close'].addEventListener('click', () => elements['source-dialog'].close());
-elements['open-examples'].addEventListener('click', showExampleChooser);
+elements['open-examples'].addEventListener('click', sourceDialog.showExampleChooser);
 elements['close-file'].addEventListener('click', closeSource);
 
 frameNavigationControls = initializeFrameNavigationControls({
@@ -1446,18 +1455,16 @@ for (const kind of Object.keys(state.analysis)) {
 elements['ptm-rmsd'].addEventListener('change', updatePtmSettings);
 for (const checkbox of document.querySelectorAll('[data-ptm-template]')) checkbox.addEventListener('change', updatePtmSettings);
 elements['lattice-reset'].addEventListener('click', () => {
-  cancelLatticeEstimation();
-  state.references = state.references.map((reference, type) => referenceForElement(reference.element || state.frame.typeLabels[type]));
-  renderLatticeReferences();
+  latticeReferences.resetToElements();
   if (state.analysis.strain.enabled) runStructureAnalysis('strain');
 });
 elements['lattice-estimate'].addEventListener('click', () => {
   interruptConfigurationRestore('a lattice reference change');
-  void estimateMissingReferences();
+  void latticeReferences.estimateMissing();
 });
 elements['lattice-estimate-cancel'].addEventListener('click', () => {
   if (state.analysis.strain.enabled && elements['strain-state'].textContent === 'Estimating reference…') cancelAnalysis('strain');
-  else cancelLatticeEstimation('Estimation cancelled.');
+  else latticeReferences.cancelEstimation('Estimation cancelled.');
 });
 elements['cna-mode'].addEventListener('change', () => {
   updateCnaMethodUi();
@@ -1547,7 +1554,7 @@ const analysesSettled = () => {
   displayRefresh.flush();
   const error = binningTools?.getAutomationError();
   if (error) return { settled: false, error };
-  return loadingOwner === null && elements.loading.hidden && ![...document.querySelectorAll('.analysis-section .state-pill')]
+  return statusChrome.loadingOwner === null && elements.loading.hidden && ![...document.querySelectorAll('.analysis-section .state-pill')]
     .some(pill => /…$|^Queued$|^Waiting$/.test(pill.textContent.trim()));
 };
 const showFrameForAutomation = async (index) => {
@@ -1594,7 +1601,7 @@ scriptControls = initializeScriptControls({
 const fileDrop = initializeFileDrop({
   overlay: elements['file-drop-overlay'],
   onFiles: files => {
-    if (elements['source-dialog'].open) elements['source-dialog'].close();
+    sourceDialog.close();
     inspectLocalEntries(fileEntries(files), {
       singleFiles: true,
       originLabel: 'dropped files',
@@ -1683,7 +1690,6 @@ function closeSource() {
   rememberCompletedAppearance.pending?.controller.abort();
   rememberCompletedAppearance.pending = null;
   formalVisibilityCache = null;
-  previewLegendControls.clear();
   appearanceSnapshots.clear();
   appearancePreview = appearanceDependency = rememberedAppearance = displayCompletion = sceneUpdateToken = null;
   externalProperties?.reset();
@@ -1695,7 +1701,6 @@ function closeSource() {
   configurationRequest++;
   restorationController?.abort();
   restorationOwner = null;
-  commitScalarLegendEdit = null;
   colorQuantityResolver.clear();
   sourceLoadingOwner = null;
   sourceOpenRequest++;
@@ -1706,9 +1711,6 @@ function closeSource() {
   state.prefetchToken++;
   frameNavigationControls?.cancel();
   clearTimeout(cutoffTimer);
-  clearTimeout(toastTimer);
-  clearTimeout(interactionHintTimer);
-  clearTimeout(interactionHintFadeTimer);
   stopFramePlayback();
   abortAnalysisJobs();
   cpuPrefetch.clearSource();
@@ -1745,9 +1747,8 @@ function closeSource() {
     file: null, files: [], frame: null, format: null, frameCount: 0, frameIndex: 0, indexComplete: true, indexError: null,
     selectedId: null, colorMode: 'type', coordinateMode: 'file', periodicOrigin: [0, 0, 0], repetitions: [1, 1, 1], replicateAtoms: false,
     source: null, availableSources: [], availableEntries: [], cachePlan: null,
-    references: [], referenceLabels: [],
   });
-  state.referenceByLabel.clear();
+  latticeReferences.clear();
   state.selectionGroups = normalizeSelectionGroups();
   selectionGroupControls.refresh();
   toolPanels.setToolEnabled('selectionGroups', false);
@@ -1755,7 +1756,7 @@ function closeSource() {
   orientationColorResolver.clear(); orientationSettings = normalizeOrientationSettings(DEFAULT_ORIENTATION_SETTINGS);
   hiddenStructureTypes.clear(); hiddenAtomTypes.clear(); hiddenCategories.clear();
   crystalVisibility.reset();
-  currentColorLegend = null;
+  legendPanel.currentLegend = null;
   for (const [kind, analysis] of Object.entries(state.analysis)) {
     analysis.request++;
     analysis.enabled = false;
@@ -1786,11 +1787,10 @@ function closeSource() {
   elements['coordinate-mode'].value = 'file';
   frameNavigationControls?.reset();
   elements['coordinate-mode'].querySelector('[value="unwrapped"]').disabled = true;
-  elements['lattice-references'].replaceChildren();
   elements['selection-data'].replaceChildren();
   updateSelectionPanel();
   elements.legend.hidden = true;
-  legendView = null;
+  legendPanel.reset();
   elements['color-legend'].replaceChildren();
   elements['slice-position'].value = '100';
   sliceControls.reset();
@@ -1799,12 +1799,9 @@ function closeSource() {
   toolPanels.selectTool('display');
   elements.sidebar.scrollTop = 0;
   setControlsEnabled(false);
-  setLoading(false);
-  elements.toast.hidden = elements['interaction-hint'].hidden = true;
-  elements['interaction-hint'].classList.remove('is-hiding');
+  statusChrome.reset();
   elements['close-file'].hidden = true;
-  if (elements['source-dialog'].open) elements['source-dialog'].close();
-  elements['source-options'].replaceChildren();
+  sourceDialog.reset();
   elements['file-input'].value = elements['folder-input'].value = '';
   fileDrop.clear();
   elements['empty-state'].hidden = false;
@@ -1812,16 +1809,6 @@ function closeSource() {
   elements['empty-open'].focus({ preventScroll: true });
 }
 
-function showLocalPicker() {
-  elements['source-dialog-kicker'].textContent = 'LOCAL SOURCES';
-  elements['source-dialog-title'].textContent = 'Open local structures';
-  elements['source-dialog-summary'].textContent = 'Choose individual files or a folder. All structure data is processed on this device.';
-  elements['source-options'].replaceChildren(
-    exampleOption('Choose files…', 'Files', 'Open CFG or LAMMPS files, or select multiple trajectory frames.', () => elements['file-input'].click()),
-    exampleOption('Choose folder…', 'Folder', 'Browse all files and automatically detect numbered sequences.', () => elements['folder-input'].click()),
-  );
-  elements['source-dialog'].showModal();
-}
 
 async function inspectLocalEntries(entries, {
   allowManualCfgSequence = false,
@@ -1852,7 +1839,7 @@ async function inspectLocalEntries(entries, {
       return;
     }
     setLoading(false);
-    showSourceChooser(catalog, originLabel, classified, { singleFiles });
+    sourceDialog.showSourceChooser(catalog, originLabel, classified, { singleFiles });
   } catch (error) {
     if (!isCurrent()) return;
     setLoading(false);
@@ -1900,138 +1887,6 @@ async function unrecognizedFilesMessage(candidates) {
   return `No CFG, LAMMPS, XYZ, PDB, CIF, POSCAR or volumetric data was recognized in ${count} candidate file${count === 1 ? '' : 's'}. First candidate: “${first.relativePath}” (${formatBytes(first.file.size)}), beginning “${compactPreview}”.`;
 }
 
-function showSourceChooser(catalog, originLabel, entries = state.availableEntries, { singleFiles = false } = {}) {
-  elements['source-dialog-kicker'].textContent = 'LOCAL SOURCES';
-  elements['source-dialog-title'].textContent = singleFiles ? 'Choose a file to open' : 'Choose a structure or sequence';
-  elements['source-dialog-summary'].textContent = singleFiles
-    ? `Choose one of the ${catalog.supportedCount} recognized structure files. Each file opens individually.`
-    : `The browser supplied ${entries.length} files from the ${originLabel}. ${catalog.supportedCount} structure files and ${catalog.sequenceCount} numbered structure sequence${catalog.sequenceCount === 1 ? '' : 's'} were recognized.`;
-  const fragment = document.createDocumentFragment();
-  const sequences = catalog.sources.filter((source) => source.kind === 'sequence');
-  if (sequences.length > 0) {
-    fragment.append(sourceListHeading('Detected sequences', `${sequences.length}`));
-    for (const source of sequences) {
-      fragment.append(sourceOption(
-        source,
-        `${sourceFormatLabel(source.format)} sequence`,
-        source.detail,
-      ));
-    }
-  }
-  fragment.append(sourceListHeading('All files', `${entries.length}`));
-  const sequenceByPath = new Map();
-  for (const sequence of sequences) {
-    for (const entry of sequence.entries) sequenceByPath.set(entry.relativePath, sequence);
-  }
-  const singleByPath = new Map(catalog.sources
-    .filter((source) => source.kind === 'file')
-    .map((source) => [source.entries[0].relativePath, source]));
-  for (const entry of entries) {
-    const sequence = sequenceByPath.get(entry.relativePath);
-    const single = singleByPath.get(entry.relativePath);
-    if (sequence) {
-      fragment.append(sourceOption(
-        sequence,
-        'Sequence member',
-        `Opens detected sequence · ${sequence.detail}`,
-        entry.relativePath,
-      ));
-    } else if (single) {
-      fragment.append(sourceOption(single, sourceFormatLabel(entry.format), single.detail));
-    } else {
-      fragment.append(sourceOption(null, 'Other', 'Not recognized as CFG or LAMMPS structure data', entry.relativePath));
-    }
-  }
-  elements['source-options'].replaceChildren(fragment);
-  elements['source-dialog'].showModal();
-}
-
-function sourceListHeading(title, count) {
-  const heading = document.createElement('div');
-  heading.className = 'source-list-heading';
-  const label = document.createElement('strong');
-  label.textContent = title;
-  const total = document.createElement('small');
-  total.textContent = count;
-  heading.append(label, total);
-  return heading;
-}
-
-function sourceOption(source, kindLabel, detailText, labelOverride = null) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'source-option';
-  button.disabled = !source;
-  const title = document.createElement('strong');
-  title.textContent = labelOverride ?? source?.label ?? 'Unknown file';
-  const kind = document.createElement('span');
-  kind.className = 'source-option-kind';
-  kind.textContent = kindLabel;
-  const detail = document.createElement('small');
-  detail.textContent = detailText;
-  button.append(title, kind, detail);
-  if (source) {
-    button.addEventListener('click', () => {
-      elements['source-dialog'].close();
-      loadFiles(source.files, source);
-    });
-  }
-  return button;
-}
-
-function showExampleChooser() {
-  elements['source-dialog-kicker'].textContent = 'EXAMPLES';
-  elements['source-dialog-title'].textContent = 'Choose an example';
-  elements['source-dialog-summary'].textContent = 'Files and folders bundled under examples/.';
-  if (exampleCatalog) renderExampleCatalog(exampleCatalog);
-  else {
-    elements['source-options'].replaceChildren();
-    elements['source-dialog-summary'].textContent = 'Loading bundled examples…';
-  }
-  void loadExampleCatalog({ refresh: true }).then(catalog => {
-    if (elements['source-dialog'].open && elements['source-dialog-kicker'].textContent === 'EXAMPLES') renderExampleCatalog(catalog);
-  }).catch(error => {
-    if (!elements['source-dialog'].open || elements['source-dialog-kicker'].textContent !== 'EXAMPLES') return;
-    elements['source-dialog-summary'].textContent = error.message;
-    if (!exampleCatalog) elements['source-options'].replaceChildren(exampleOption('Retry loading examples', 'Retry', '', showExampleChooser));
-  });
-  elements['source-dialog'].showModal();
-}
-
-function loadExampleCatalog({ refresh = false } = {}) {
-  if (exampleCatalog && !refresh) return Promise.resolve(exampleCatalog);
-  if (exampleCatalogPromise) return exampleCatalogPromise;
-  exampleCatalogPromise = fetch(new URL('../examples/manifest.json', import.meta.url), { cache: 'no-cache' }).then(async response => {
-    if (!response.ok) throw new Error(`Example list request failed: HTTP ${response.status}`);
-    const catalog = await response.json();
-    if (catalog.version !== 1 || !Array.isArray(catalog.examples)) throw new Error('Invalid example list.');
-    exampleCatalog = catalog;
-    return catalog;
-  }).finally(() => { exampleCatalogPromise = null; });
-  return exampleCatalogPromise;
-}
-
-function renderExampleCatalog(catalog) {
-  elements['source-dialog-summary'].textContent = catalog.examples.length
-    ? 'Files and folders bundled under examples/.' : 'No supported structure files are bundled under examples/.';
-  const fragment = document.createDocumentFragment();
-  fragment.append(sourceListHeading('examples/', `${catalog.examples.length} items`));
-  for (const entry of catalog.examples) fragment.append(exampleOption(
-    entry.label, entry.kind === 'sequence' ? 'Folder' : sourceFormatLabel(entry.format),
-    entry.detail, () => loadCatalogExample(entry),
-  ));
-  elements['source-options'].replaceChildren(fragment);
-}
-
-function exampleOption(labelText, kindLabel, detailText, action) {
-  const button = sourceOption(null, kindLabel, detailText, labelText);
-  button.disabled = false;
-  button.addEventListener('click', () => {
-    elements['source-dialog'].close();
-    action();
-  });
-  return button;
-}
 
 function fileEntries(files) {
   return [...files].map((file) => ({
@@ -2165,10 +2020,7 @@ async function loadFiles(inputFiles, sourceDescriptor = null) {
     globalAttributes?.reset({ resetReference: true });
     for (const kind of Object.keys(state.analysis)) toolPanels.setToolEnabled(kind, false);
     toolPanels.setToolEnabled('replicate', false);
-    state.references = result.frame.typeLabels.map(referenceForElement);
-    state.referenceLabels = [...result.frame.typeLabels];
-    state.referenceByLabel.clear();
-    renderLatticeReferences(result.frame);
+    latticeReferences.resetFor(result.frame);
     hiddenStructureTypes.clear();
     hiddenAtomTypes.clear();
     hiddenCategories.clear();
@@ -2319,11 +2171,6 @@ async function waitForSourceIndex({ signal } = {}) {
   if (state.indexError) throw new Error(`Trajectory indexing stopped: ${state.indexError}`);
 }
 
-function sourceFormatLabel(format) {
-  const sequence = format.endsWith('-sequence');
-  const base = sequence ? format.slice(0, -9) : format;
-  return `${({ cfg: 'CFG', 'lammps-dump': 'LAMMPS', 'lammps-data': 'LAMMPS data', xyz: 'XYZ', pdb: 'PDB', poscar: 'POSCAR', cif: 'CIF', cube: 'Cube', 'vasp-volume': 'VASP volume' })[base] ?? base.toUpperCase()}${sequence ? ' · sequence' : ''}`;
-}
 
 async function showFrame(index, { waitForAnalyses = true, completePresentation = false, signal } = {}) {
   if (signal?.aborted) return false;
@@ -2335,7 +2182,7 @@ async function showFrame(index, { waitForAnalyses = true, completePresentation =
   const abort = () => navigation.abort();
   signal?.addEventListener('abort', abort, { once: true });
   if (index !== state.frameIndex) navigationDirection = Math.sign(index - state.frameIndex);
-  if (index !== state.frameIndex) cancelLatticeEstimation();
+  if (index !== state.frameIndex) latticeReferences.cancelEstimation();
   const interruptedReplication = Boolean(replicationController);
   if (interruptedReplication) {
     replicationController.abort();
@@ -2384,7 +2231,7 @@ async function showFrame(index, { waitForAnalyses = true, completePresentation =
     displayed.catch(() => {});
     // Geometry is uploaded synchronously; analyses and optional trajectory
     // work can continue while the user sees and interacts with the new frame.
-    if (loadingOwner === navigation) setLoading(false);
+    if (statusChrome.loadingOwner === navigation) setLoading(false);
     if (waitForAnalyses === 'appearance') {
       await displayCompletion.appearanceReady;
       await renderer.whenPresented(frame, { signal: navigation.signal });
@@ -2403,7 +2250,7 @@ async function showFrame(index, { waitForAnalyses = true, completePresentation =
   } finally {
     signal?.removeEventListener('abort', abort);
     // Also when another request took over without showing the indicator.
-    if (loadingOwner === navigation) setLoading(false);
+    if (statusChrome.loadingOwner === navigation) setLoading(false);
   }
 }
 
@@ -2418,7 +2265,7 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
   completion.appearanceReady = new Promise((resolve, reject) => { completion.resolveAppearance = resolve; completion.rejectAppearance = reject; });
   completion.appearanceReady.catch(() => {});
   completion.layerPrefixes = new Set();
-  completion.retainedLegend = currentColorLegend;
+  completion.retainedLegend = legendPanel.currentLegend;
   if (renderer.dislocationNetwork || dxaTools?.isEnabled()) completion.layerPrefixes.add('dxa');
   if (renderer.surfaceMeshes().length || surfaceTools?.isEnabled()) completion.layerPrefixes.add('surface-mesh');
   if (renderer.coordinationPolyhedra || crystalTools?.isEnabled()) completion.layerPrefixes.add('crystal');
@@ -2454,7 +2301,7 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
     elements[`${prefix}-state`].textContent = 'Queued';
     elements[`${prefix}-state`].classList.remove('ready');
   }
-  renderLatticeReferences(frame);
+  latticeReferences.render(frame);
   syncAxisVisibility();
   configureCoordinateMode(frame);
   atomEyeTools.prepareFrame(frame);
@@ -2579,7 +2426,7 @@ async function displayFrame(frame, { resetCamera = false, completePresentation =
     await renderer.whenSurfaceMeshesReady();
     if (state.frame !== frame || displayCompletion !== completion) { resolveCompletion(false); return; }
     if (transaction) renderer.commitSceneUpdate(transaction);
-    if (currentColorLegend) renderLegend(currentColorLegend);
+    if (legendPanel.currentLegend) legendPanel.render(legendPanel.currentLegend);
     atomEyeTools.syncComparison();
     displayRefresh.flush();
     if (sceneUpdateToken === transaction) sceneUpdateToken = null;
@@ -3332,7 +3179,7 @@ function applyColorsNow() {
     } else appearancePreview = null;
     if (renderer.atomColors !== palette.colors) renderer.setColors(palette.colors);
     applyScalarVisibility(palette.legend);
-    renderLegend(palette.legend);
+    legendPanel.render(palette.legend);
     appearanceDependency = refs;
     rememberCompletedAppearance(palette);
     updateAppearanceStatus();
@@ -3379,7 +3226,7 @@ function formalVisibility() {
 }
 
 function applyScalarVisibility(legend, options = {}) {
-  currentColorLegend = legend;
+  legendPanel.currentLegend = legend;
   const mask = appearancePreview && legend.preview ? appearancePreview.visibility : visibilityForLegend(legend, options);
   renderer.setVisibility(mask, {
     selectionVisibility: selectionGroupVisibility(state.frame, state.selectionGroups.groups),
@@ -3421,7 +3268,7 @@ function paletteForCurrentMode() {
 }
 
 function abortAnalysisJobs() {
-  cancelLatticeEstimation();
+  latticeReferences.cancelEstimation();
   atomEyeTools?.abortJobs();
   dxaTools?.abortJobs();
   topologyTools?.abortJobs();
@@ -3450,7 +3297,7 @@ function syncCancelButton(kind) {
 }
 
 function cancelAnalysis(kind) {
-  if (kind === 'strain') cancelLatticeEstimation();
+  if (kind === 'strain') latticeReferences.cancelEstimation();
   atomEyeTools?.cancelVectorDependency?.(kind);
   const analysis = state.analysis[kind];
   // Invalidate results immediately, including work that has already completed
@@ -3461,7 +3308,7 @@ function cancelAnalysis(kind) {
   if (kind === 'coordination') {
     clearTimeout(cutoffTimer);
     analysis.cutoff = null;
-    if (loadingOwner === 'coordination') setLoading(false);
+    if (statusChrome.loadingOwner === 'coordination') setLoading(false);
   } else { analysis.key = null; analysis.parameters = null; }
   analysisControllers.get(kind)?.abort();
   analysisControllers.delete(kind);
@@ -3587,182 +3434,6 @@ async function ptmForGrains(frame, { signal, onProgress = () => {} } = {}) {
   return { ptm: frame.ptm, reused: false, engine: result.engine };
 }
 
-const LATTICE_ESTIMATE_HELP = 'Missing references can be estimated from PTM geometry. Existing values are kept. Estimates include the current frame’s bulk strain; edit them to use a known stress-free lattice.';
-
-function missingReferenceTypes(frame = state.frame) {
-  if (!frame) return [];
-  return frameTypeOrder(frame).filter(type => {
-    const reference = state.references[type];
-    return !reference || !Number.isFinite(reference.a)
-      || ([2, 7].includes(reference.structure) && !Number.isFinite(reference.c));
-  });
-}
-
-function compatiblePtm(frame, flags, rmsdCutoff) {
-  if (!frame.ptm) return null;
-  try {
-    const cached = JSON.parse(frame.ptm.key);
-    return cached.rmsdCutoff === rmsdCutoff && (cached.flags & flags) === flags ? cached : null;
-  } catch { return null; }
-}
-
-function cancelLatticeEstimation(message = LATTICE_ESTIMATE_HELP) {
-  latticeEstimateRequest += 1;
-  analysisControllers.get('lattice-reference')?.abort();
-  analysisControllers.delete('lattice-reference');
-  elements['lattice-estimate'].disabled = !state.frame || sourceLoadingOwner !== null;
-  elements['lattice-estimate-cancel'].disabled = true;
-  elements['lattice-estimate-cancel'].hidden = true;
-  elements['lattice-estimate-status'].textContent = message;
-}
-
-async function estimateMissingReferences({ frame = state.frame, forStrain = false } = {}) {
-  if (!frame) return false;
-  const missing = missingReferenceTypes(frame);
-  if (!missing.length) {
-    elements['lattice-estimate-status'].textContent = 'Existing reference values kept. Clear a lattice value to estimate it from this structure.';
-    return true;
-  }
-  cancelLatticeEstimation();
-  const request = latticeEstimateRequest;
-  const sourceVersion = state.sourceVersion;
-  const controller = new AbortController();
-  analysisControllers.set('lattice-reference', controller);
-  const isCurrent = () => request === latticeEstimateRequest && !controller.signal.aborted
-    && frame === state.frame && sourceVersion === state.sourceVersion;
-  elements['lattice-estimate'].disabled = true;
-  elements['lattice-estimate-cancel'].disabled = false;
-  elements['lattice-estimate-cancel'].hidden = false;
-  const progressText = text => {
-    if (!isCurrent()) return;
-    elements['lattice-estimate-status'].textContent = text;
-    if (forStrain) elements['strain-status'].textContent = text;
-  };
-  const parameters = { flags: 127, rmsdCutoff: .1 };
-  try {
-    if (!compatiblePtm(frame, parameters.flags, parameters.rmsdCutoff)) {
-      progressText('Identifying reference crystals and fitting their lattice geometry…');
-      const result = await analysisPool.analyze(frame, { kind: 'ptm', ...parameters,
-        neighborLists: retainPtmNeighborLists(frame) }, {
-        frameIndex: state.frameIndex, signal: controller.signal,
-        onProgress: progress => progressText(analysisProgressText(progress, 'ptm')),
-      });
-      if (!isCurrent()) return false;
-      storePtmResult(frame, result, parameters, false);
-      reassessFrameCache(frame);
-    }
-    const estimates = await estimateLatticeReferences(frame, frame.ptm, {
-      signal: controller.signal,
-      onProgress: (completed, total) => progressText(`Estimating lattice references… ${formatInteger(completed)} / ${formatInteger(total)}`),
-    });
-    if (!isCurrent()) return false;
-    const details = [];
-    for (const type of missing) {
-      const estimate = estimates[type];
-      const reference = state.references[type] ?? referenceForElement(frame.typeLabels[type]);
-      const label = frame.typeLabels[type];
-      if (estimate?.status !== 'estimated') {
-        details.push(`${label}: ${estimate?.status === 'ambiguous' ? 'mixed crystal phases; choose a reference manually' : 'no reliable crystal reference; enter lattice values manually'}`);
-        continue;
-      }
-      if (!Number.isFinite(reference.a)) {
-        reference.structure = estimate.structure;
-        reference.a = estimate.a;
-        if (estimate.c !== undefined && !Number.isFinite(reference.c)) reference.c = estimate.c;
-      } else if (reference.structure === estimate.structure && [2, 7].includes(reference.structure)
-          && !Number.isFinite(reference.c)) reference.c = estimate.c;
-      else {
-        details.push(`${label}: detected ${PTM_TYPES.find(item => item.id === estimate.structure).label}; selected reference kept, enter its missing values manually`);
-        continue;
-      }
-      state.references[type] = reference;
-      details.push(`${label}: ${PTM_TYPES.find(item => item.id === reference.structure).label}, a = ${reference.a.toFixed(6)} Å${[2, 7].includes(reference.structure) && Number.isFinite(reference.c) ? `, c = ${reference.c.toFixed(6)} Å` : ''}`);
-    }
-    renderLatticeReferences(frame);
-    elements['lattice-estimate-status'].textContent = `${details.join('; ')}. Estimated from the current frame; existing values kept.`;
-    if (!forStrain && state.analysis.strain.enabled) void runStructureAnalysis('strain');
-    return true;
-  } catch (error) {
-    if (!isCurrent() || error.name === 'AbortError') return false;
-    progressText(error.message);
-    if (!forStrain) showToast(error.message);
-    return false;
-  } finally {
-    if (request === latticeEstimateRequest) {
-      analysisControllers.delete('lattice-reference');
-      elements['lattice-estimate'].disabled = !state.frame || sourceLoadingOwner !== null;
-      elements['lattice-estimate-cancel'].disabled = true;
-      elements['lattice-estimate-cancel'].hidden = true;
-    }
-  }
-}
-
-function renderLatticeReferences(frame = state.frame) {
-  if (!frame) return;
-  if (state.referenceLabels.join('\0') !== frame.typeLabels.join('\0')) {
-    state.referenceLabels = [...frame.typeLabels];
-    state.references = frame.typeLabels.map(label => state.referenceByLabel.get(label) ?? referenceForElement(label));
-  }
-  elements['lattice-references'].replaceChildren();
-  state.references.forEach((reference, type) => {
-    const label = frame.typeLabels[type];
-    state.referenceByLabel.set(label, reference);
-    const row = document.createElement('div');
-    row.className = 'lattice-reference';
-    const field = (caption, control) => {
-      const holder = document.createElement('label');
-      holder.append(document.createTextNode(caption), control);
-      return holder;
-    };
-    const element = document.createElement('select');
-    element.dataset.referenceElement = String(type);
-    element.setAttribute('aria-label', `Reference element for ${label}`);
-    element.append(option('', `${label} · Unknown`));
-    for (const symbol of Object.keys(ELEMENT_LATTICES)) element.append(option(symbol, symbol));
-    element.value = reference.element;
-    const structure = document.createElement('select');
-    structure.dataset.referenceStructure = String(type);
-    structure.setAttribute('aria-label', `Reference crystal for ${label}`);
-    for (const id of STRAIN_STRUCTURES) structure.append(option(String(id), PTM_TYPES.find(item => item.id === id).label));
-    structure.value = String(reference.structure);
-    const number = (axis) => {
-      const input = document.createElement('input');
-      input.type = 'number'; input.min = '.001'; input.step = '.001';
-      input.value = Number.isFinite(reference[axis]) ? String(reference[axis]) : '';
-      input.placeholder = 'Enter reference';
-      input.dataset[`lattice${axis.toUpperCase()}`] = String(type);
-      input.setAttribute('aria-label', `Reference ${axis} in angstroms for ${label}`);
-      input.addEventListener('input', () => cancelLatticeEstimation());
-      input.addEventListener('change', () => {
-        reference[axis] = input.valueAsNumber;
-        if (state.analysis.strain.enabled) runStructureAnalysis('strain');
-      });
-      return input;
-    };
-    const a = number('a'), c = number('c');
-    const cField = field('c (Å)', c);
-    cField.hidden = ![2, 7].includes(reference.structure);
-    row.append(field(`${label} · Element`, element), field('Reference crystal', structure), field('a (Å)', a), cField);
-    element.addEventListener('change', () => {
-      cancelLatticeEstimation();
-      state.references[type] = referenceForElement(element.value);
-      renderLatticeReferences(frame);
-      if (state.analysis.strain.enabled) runStructureAnalysis('strain');
-    });
-    structure.addEventListener('change', () => {
-      cancelLatticeEstimation();
-      reference.structure = Number(structure.value);
-      if ([2, 7].includes(reference.structure) && !Number.isFinite(reference.c)
-          && Number.isFinite(reference.a) && reference.a > 0) {
-        reference.c = reference.a * Math.sqrt(8 / 3);
-        c.value = Number.isFinite(reference.c) ? String(reference.c) : '';
-      }
-      cField.hidden = ![2, 7].includes(reference.structure);
-      if (state.analysis.strain.enabled) runStructureAnalysis('strain');
-    });
-    elements['lattice-references'].append(row);
-  });
-}
 
 function storePtmResult(frame, result, parameters, expose = true) {
   if (!result.structures) return;
@@ -3818,7 +3489,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
       else parameters = ptmParameters();
     }
     if (kind === 'strain') {
-      if (missingReferenceTypes(frame).length) {
+      if (latticeReferences.missingTypes(frame).length) {
         analysis.enabled = true;
         analysis.parameters = parameters;
         toolPanels.setToolEnabled(kind, true, { reveal: !automatic });
@@ -3826,7 +3497,7 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
         elements['strain-state'].classList.remove('ready');
         elements['run-strain'].disabled = true;
         syncCancelButton(kind);
-        const estimated = await estimateMissingReferences({ frame, forStrain: true });
+        const estimated = await latticeReferences.estimateMissing({ frame, forStrain: true });
         if (frame !== state.frame || analysis !== state.analysis.strain || invocation !== analysis.request) return;
         if (!estimated) {
           elements['strain-state'].textContent = 'Not calculated';
@@ -3835,11 +3506,11 @@ async function runStructureAnalysis(kind, { automatic = false, frame = state.fra
           return;
         }
       }
-      parameters = { ...parameters, references: state.references.map(reference => ({ ...reference })) };
+      parameters = { ...parameters, references: latticeReferences.getReferences().map(reference => ({ ...reference })) };
       validateReferences(parameters.references, frame.types);
       // Always include the templates needed by the selected reference phases.
       parameters.flags |= parameters.references.reduce((mask, reference) => mask | (1 << (reference.structure - 1)), 0);
-      const fitted = compatiblePtm(frame, parameters.flags, parameters.rmsdCutoff);
+      const fitted = latticeReferences.compatiblePtm(frame, parameters.flags, parameters.rmsdCutoff);
       if (fitted) parameters.flags = fitted.flags;
     }
     if (parameters.mode === 'fixed' && (!Number.isFinite(parameters.cutoff) || parameters.cutoff <= 0)) {
@@ -4053,7 +3724,7 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
         elements['metric-analysis'].textContent = `${formatDuration(existing.analysisMs)} · ${analysisBackendLabel(backend)}`;
         elements['metric-analysis'].title = analysisBackendDetails(backend);
         elements['run-analysis'].disabled = false;
-        if (loadingOwner === 'coordination') setLoading(false);
+        if (statusChrome.loadingOwner === 'coordination') setLoading(false);
       });
     }
     analysisControllers.delete('coordination');
@@ -4112,7 +3783,7 @@ async function runCoordination({ automatic = false, frame = state.frame, frameIn
   } finally {
     if (isCurrent()) {
       elements['run-analysis'].disabled = false;
-      if (loadingOwner === 'coordination') setLoading(false);
+      if (statusChrome.loadingOwner === 'coordination') setLoading(false);
     }
     if (analysisControllers.get('coordination') === controller) analysisControllers.delete('coordination');
     if (isCurrent()) notifyAnalysisDependencies();
@@ -4236,7 +3907,7 @@ function updateSelectionPanel(index = null) {
     hideClass.className = 'button button-secondary';
     elements['selection-data'].after(hideClass);
   }
-  const legend = currentColorLegend;
+  const legend = legendPanel.currentLegend;
   hideClass.hidden = legend?.kind !== 'types';
   if (!hideClass.hidden) {
     const raw = legend.atomTypes ? frame.typeLabels[frame.types[index]] : legend.property.data[index];
@@ -4257,630 +3928,6 @@ function updateSelectionPanel(index = null) {
   elements['clear-selection'].hidden = false;
 }
 
-let legendView = null;
-const previewLegendControls = new Map();
-function renderLegend(legend) {
-  for (const [control, disabled] of previewLegendControls) control.disabled = disabled;
-  previewLegendControls.clear();
-  const held = renderer.presentationPending && displayCompletion?.retainedLegend;
-  if (!held) renderLegendContents(legend);
-  if (held || legend.preview) {
-    for (const control of elements['color-legend'].querySelectorAll('input, select, button')) {
-      if (control.id === 'legend-color-mode') continue;
-      previewLegendControls.set(control, control.disabled);
-      control.disabled = true;
-    }
-  }
-}
-
-function renderLegendContents(legend) {
-  currentColorLegend = legend;
-  crystalVisibility?.refresh();
-  const eligible = legend.property && (!legend.property.categories || legend.discrete)
-    ? discreteValues(legend.discrete ? { ...legend.property, categories: undefined } : legend.property) : null;
-  const scaleModeVisible = Boolean(eligible || legend.property && scalarColorModes.get(legend.property.name) === 'discrete');
-  const schema = JSON.stringify([state.colorMode, legend.kind, legend.property?.name, Boolean(legend.atomTypes), Boolean(legend.discrete),
-    Boolean(legend.emptyRange), Boolean(legend.unit), scaleModeVisible,
-    legend.items?.map(item => [item.id, item.label]), legend.mode, legend.source,
-    legend.kind === 'orientation' && orientationSettings.direction === 'custom', legend.keys?.map(key => [key.title, key.labels])]);
-  if (legendView?.schema === schema && legendView.root === elements['color-legend']) {
-    legendView.refresh(legend, eligible);
-    elements.legend.hidden = false;
-    return;
-  }
-  commitScalarLegendEdit = null;
-  // Color by is shared across schemas, so choosing a different quantity does
-  // not detach its own focused select or interrupt keyboard navigation.
-  const retainedPropertyControl = legendView?.propertyControl?.isConnected ? legendView.propertyControl : null;
-  const view = legendView = { schema, root: elements['color-legend'], frame: state.frame };
-  const refreshers = [];
-  view.refresh = (next, nextEligible = eligible) => {
-    legend = next; view.frame = state.frame;
-    for (const refresh of refreshers) refresh(nextEligible);
-  };
-  const isCurrent = () => legendView === view && state.frame === view.frame && Boolean(state.frame);
-  for (const child of [...elements['color-legend'].childNodes]) if (child !== retainedPropertyControl) child.remove();
-  const propertyControl = view.propertyControl = retainedPropertyControl ?? document.createElement('label');
-  propertyControl.className = 'legend-property';
-  const propertyLabel = retainedPropertyControl?.querySelector('span') ?? document.createElement('span');
-  propertyLabel.textContent = 'Color by';
-  const propertySelect = retainedPropertyControl?.querySelector('select') ?? document.createElement('select');
-  propertySelect.id = 'legend-color-mode';
-  const refreshPropertyOptions = () => {
-    const existing = new Map([...propertySelect.options].map(item => [item.value, item]));
-    for (let index = 0; index < elements['color-mode'].options.length; index++) {
-      const sourceOption = elements['color-mode'].options[index];
-      const item = existing.get(sourceOption.value) ?? option(sourceOption.value, sourceOption.textContent);
-      existing.delete(sourceOption.value);
-      if (item.textContent !== sourceOption.textContent) item.textContent = sourceOption.textContent;
-      item.disabled = sourceOption.disabled;
-      if (propertySelect.options[index] !== item) propertySelect.insertBefore(item, propertySelect.options[index] ?? null);
-    }
-    for (const item of existing.values()) item.remove();
-    propertySelect.value = state.colorMode;
-    propertySelect.title = propertySelect.selectedOptions[0]?.textContent ?? 'Choose the coloring quantity';
-  };
-  refreshers.push(refreshPropertyOptions); refreshPropertyOptions();
-  if (!retainedPropertyControl) {
-    propertySelect.addEventListener('change', () => {
-      if (propertySelect.isConnected && state.frame) selectColorMode(propertySelect.value);
-    });
-    propertyControl.append(propertyLabel, propertySelect);
-    elements['color-legend'].append(propertyControl);
-  }
-  const title = document.createElement('div');
-  title.className = 'legend-title';
-  const label = document.createElement('strong');
-  label.textContent = legend.title;
-  title.append(label);
-  refreshers.push(() => { label.textContent = legend.title; });
-  if ((legend.kind === 'scalar' || legend.discrete) && legend.unit) {
-    const unit = document.createElement('span');
-    unit.textContent = legend.unit;
-    title.append(unit);
-    refreshers.push(() => { unit.textContent = legend.unit; });
-  }
-  elements['color-legend'].append(title);
-  if (legend.kind === 'orientation') {
-    refreshers.push(renderOrientationLegend(() => legend, isCurrent));
-    elements.legend.hidden = false;
-    return;
-  }
-  if ((legend.property && !legend.property.categories) || legend.discrete) {
-    if (scaleModeVisible) {
-      const control = document.createElement('label');
-      control.className = 'legend-property';
-      const caption = document.createElement('span'); caption.textContent = 'Color scale';
-      const select = document.createElement('select'); select.id = 'legend-scale-mode';
-      select.append(option('continuous', 'Continuous'), option('discrete', `Discrete integer values (up to 32)`));
-      select.value = legend.discrete ? 'discrete' : 'continuous';
-      select.options[1].disabled = !eligible;
-      if (!eligible) select.title = 'This frame needs 1–32 distinct safe integer values for discrete colors.';
-      refreshers.push(nextEligible => {
-        select.value = legend.discrete ? 'discrete' : 'continuous';
-        select.options[1].disabled = !nextEligible;
-        select.title = nextEligible ? '' : 'This frame needs 1–32 distinct safe integer values for discrete colors.';
-      });
-      select.addEventListener('change', () => {
-        if (!isCurrent()) return;
-        interruptConfigurationRestore('a color scale change');
-        scalarColorModes.set(legend.property.name, select.value);
-        applyColors(); updateSelectionPanel();
-      });
-      control.append(caption, select); elements['color-legend'].append(control);
-    }
-  }
-  if (legend.kind === 'scalar' && legend.emptyRange) {
-    const message = document.createElement('p');
-    message.id = 'legend-empty-range';
-    message.className = 'help';
-    message.textContent = 'No visible finite values';
-    const automatic = document.createElement('button');
-    automatic.type = 'button';
-    automatic.id = 'legend-auto';
-    automatic.className = 'legend-auto active';
-    automatic.textContent = 'Auto';
-    automatic.disabled = true;
-    automatic.setAttribute('aria-pressed', 'true');
-    automatic.setAttribute('aria-label', 'Automatic color range on');
-    automatic.title = 'Show group atoms to fit an automatic color range.';
-    elements['color-legend'].append(message, automatic);
-    elements.legend.hidden = false;
-    return;
-  }
-  if (legend.kind === 'types') {
-    const items = document.createElement('div');
-    items.className = 'legend-items crystal-items';
-    const hidden = legend.atomTypes ? hiddenAtomTypes : hiddenCategoriesFor(legend.property.name);
-    const controls = [];
-    for (const item of legend.items) {
-      const row = document.createElement('label');
-      row.className = 'legend-item';
-      const swatch = document.createElement('i');
-      swatch.className = 'legend-swatch';
-      swatch.style.background = `rgb(${item.color.join(' ')})`;
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = item.visible;
-      checkbox.dataset.categoryId = String(item.id);
-      checkbox.dataset.categoryProperty = legend.property?.name ?? 'type';
-      if (legend.atomTypes) checkbox.dataset.atomType = item.label;
-      else if (crystalCategoryProperties.has(legend.property.name)) checkbox.dataset.structureType = String(item.id);
-      checkbox.setAttribute('aria-label', `Show ${item.label} atoms`);
-      row.title = item.description ?? `Show or hide ${item.label} atoms`;
-      row.classList.toggle('is-hidden', !item.visible);
-      checkbox.addEventListener('change', () => {
-        if (!isCurrent()) return;
-        interruptConfigurationRestore('a category visibility change');
-        const key = legend.atomTypes ? item.label : item.id;
-        if (checkbox.checked) hidden.delete(key);
-        else hidden.add(key);
-        row.classList.toggle('is-hidden', !checkbox.checked);
-        // Visibility edits keep the displayed legend; recoloring every atom is unnecessary.
-        applyScalarVisibility(currentColorLegend ?? paletteForCurrentMode().legend);
-        atomEyeTools.syncComparison();
-      });
-      row.append(checkbox);
-      row.append(swatch, document.createTextNode(item.label));
-      const count = document.createElement('span');
-      count.className = 'legend-count';
-      count.textContent = `${formatInteger(item.count)} · ${(legend.atomCount ? 100 * item.count / legend.atomCount : 0).toFixed(1)}%`;
-      row.append(count);
-      items.append(row);
-      controls.push({ checkbox, row, swatch, count, key: legend.atomTypes ? item.label : item.id });
-    }
-    const actions = document.createElement('div');
-    actions.className = 'legend-category-actions';
-    for (const [name, text, checked] of [['select-all', 'Select all', true], ['unselect-all', 'Unselect all', false]]) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.dataset.legendAction = name;
-      button.textContent = text;
-      button.setAttribute('aria-label', `${checked ? 'Show' : 'Hide'} every ${legend.title} category`);
-      button.addEventListener('click', () => {
-        if (!isCurrent()) return;
-        interruptConfigurationRestore('a category visibility change');
-        for (const { checkbox, row, key } of controls) {
-          if (checked) hidden.delete(key);
-          else hidden.add(key);
-          checkbox.checked = checked;
-          row.classList.toggle('is-hidden', !checked);
-        }
-        // Visibility edits keep the displayed legend; recoloring every atom is unnecessary.
-        applyScalarVisibility(currentColorLegend ?? paletteForCurrentMode().legend);
-        atomEyeTools.syncComparison();
-      });
-      actions.append(button);
-    }
-    refreshers.push(() => {
-      controls.forEach(({ checkbox, row, swatch, count }, index) => {
-        const item = legend.items[index];
-        checkbox.checked = item.visible;
-        row.classList.toggle('is-hidden', !item.visible);
-        row.title = item.description ?? `Show or hide ${item.label} atoms`;
-        swatch.style.background = `rgb(${item.color.join(' ')})`;
-        count.textContent = `${formatInteger(item.count)} · ${(legend.atomCount ? 100 * item.count / legend.atomCount : 0).toFixed(1)}%`;
-      });
-      for (const button of actions.children) button.setAttribute('aria-label',
-        `${button.dataset.legendAction === 'select-all' ? 'Show' : 'Hide'} every ${legend.title} category`);
-    });
-    elements['color-legend'].append(actions, items);
-  } else {
-    const scale = createLegendScale(document, legend, { format: formatValue });
-    const range = document.createElement('div');
-    range.className = 'legend-range';
-    const minimum = document.createElement('span');
-    minimum.textContent = formatValue(legend.minimum);
-    const maximum = document.createElement('span');
-    maximum.textContent = formatValue(legend.maximum);
-    range.append(minimum, maximum);
-    const controls = document.createElement('div');
-    controls.className = 'legend-controls';
-    const schemeControl = document.createElement('label');
-    schemeControl.className = 'legend-scheme';
-    const schemeLabel = document.createElement('span');
-    schemeLabel.textContent = 'Color map';
-    const schemeSelect = document.createElement('select');
-    for (const scheme of SCALAR_COLOR_SCHEMES) {
-      schemeSelect.append(option(scheme.value, scheme.label));
-    }
-    schemeSelect.value = legend.scheme;
-    schemeControl.append(schemeLabel, schemeSelect);
-    const rangePolicyControl = document.createElement('label');
-    rangePolicyControl.className = 'legend-scheme';
-    const rangePolicyLabel = document.createElement('span'); rangePolicyLabel.textContent = 'Range across frames';
-    const rangePolicy = document.createElement('select'); rangePolicy.id = 'legend-range-policy';
-    rangePolicy.append(option('frame', 'Fit each frame'), option('fixed', 'Keep fixed range'));
-    rangePolicyControl.append(rangePolicyLabel, rangePolicy);
-    let step = scalarLegendStep(legend);
-    const minimumControl = legendNumberControl('Min', legend.minimum, step);
-    const editableMaximum = legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step;
-    const maximumControl = legendNumberControl('Max', editableMaximum, step);
-    const actions = document.createElement('div');
-    actions.className = 'legend-actions';
-    const visibility = document.createElement('label');
-    visibility.className = 'legend-visibility';
-    const visibilityCheckbox = document.createElement('input');
-    visibilityCheckbox.type = 'checkbox';
-    visibilityCheckbox.checked = scalarHideOutside.get(legend.property.name) !== false;
-    visibility.append(visibilityCheckbox, document.createTextNode('Hide values outside range'));
-    const automatic = document.createElement('button');
-    automatic.type = 'button';
-    automatic.id = 'legend-auto';
-    automatic.className = 'legend-auto';
-    automatic.textContent = 'Auto';
-    const syncAutomatic = () => {
-      const enabled = !scalarColorRanges.has(legend.property.name);
-      rangePolicy.value = enabled ? 'frame' : 'fixed';
-      automatic.classList.toggle('active', enabled);
-      automatic.setAttribute('aria-pressed', String(enabled));
-      automatic.setAttribute('aria-label', `Automatic color range ${enabled ? 'on' : 'off'}`);
-      automatic.title = enabled
-        ? 'Auto on: limits follow each frame. Click to keep the current range.'
-        : 'Auto off: limits stay fixed across frames. Click to fit the current frame.';
-    };
-    syncAutomatic();
-    actions.append(automatic);
-    let pendingSliderRange = null;
-    let previewActive = false;
-    const finishSliderPreview = (limits = pendingSliderRange ?? scalarColorRanges.get(legend.property.name)) => {
-      pendingSliderRange = null;
-      if (!isCurrent() || !rangeSlider.element.isConnected || !limits) return;
-      previewActive = false;
-      commitScalarLegendEdit = null;
-      applyRange(limits);
-    };
-    const rangeSlider = createLegendRangeSlider(document, {
-      minimum: legend.minimum, maximum: editableMaximum, dataMinimum: legend.dataMinimum, dataMaximum: legend.dataMaximum,
-      step, format: formatValue,
-      onInput: (requested, changed) => {
-        if (!isCurrent()) return;
-        interruptConfigurationRestore('a color range edit');
-        const limits = coupleScalarRange(requested.minimum, requested.maximum, changed, step);
-        if (!limits) return;
-        minimumControl.input.value = formatEditableNumber(limits.minimum);
-        maximumControl.input.value = formatEditableNumber(limits.maximum);
-        // Save the exact limits immediately (also for export before the next
-        // animation frame), while drawing the temporary preview once per frame.
-        scalarColorRanges.set(legend.property.name, limits);
-        scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
-        commitScalarLegendEdit = () => finishSliderPreview();
-        syncAutomatic();
-        if (!pendingSliderRange) {
-          requestAnimationFrame(() => {
-            const pending = pendingSliderRange;
-            pendingSliderRange = null;
-            // A frame change may have replaced this legend and its property.
-            if (pending && isCurrent() && rangeSlider.element.isConnected) previewRange(pending);
-          });
-        }
-        pendingSliderRange = limits;
-      },
-      onCommit: (limits) => finishSliderPreview(limits),
-    });
-    controls.append(schemeControl, rangePolicyControl, rangeSlider.element, minimumControl.label, maximumControl.label, visibility, actions);
-    const freezeCurrentRange = () => {
-      const limits = scalarColorRanges.get(legend.property.name)
-        ?? { minimum: legend.minimum, maximum: legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step };
-      scalarColorRanges.set(legend.property.name, limits);
-      return limits;
-    };
-    const applyRange = (limits) => {
-      if (!isCurrent()) return;
-      pendingSliderRange = null;
-      previewActive = false;
-      commitScalarLegendEdit = null;
-      const palette = atomEyeTools.customizePalette(colorsByProperty(legend.property, limits, legend.scheme,
-        hiddenCategoriesFor(legend.property.name), selectionGroupVisibility(state.frame, state.selectionGroups.groups)));
-      scalarColorRanges.set(legend.property.name, limits);
-      scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
-      renderer.setColors(palette.colors);
-      applyScalarVisibility(palette.legend);
-      atomEyeTools.syncComparison();
-      // The histogram and hover probe describe the displayed range.
-      legend = palette.legend;
-      updateLegendScale(scale, legend, { histogram: true });
-      minimum.textContent = formatValue(limits.minimum);
-      maximum.textContent = formatValue(limits.maximum);
-      syncAutomatic();
-      displayRefresh.flush();
-    };
-    const previewRange = (limits) => {
-      if (!isCurrent()) return;
-      const previewLegend = { ...legend, ...limits, customRange: true };
-      if (!previewActive || !renderer.scalarColorPreview) {
-        const overrides = atomEyeTools.customizePalette({ colors: renderer.atomColors, legend }, { trackColorOverrides: true }).colorOverrides;
-        // Preserve element, structure, appearance and selection filters once;
-        // the moving scalar range is evaluated by both atom and bond shaders.
-        applyScalarVisibility(previewLegend, { includeScalarRange: false });
-        const preview = renderer.setScalarColorPreview(legend.property.data, { ...previewLegend, colorOverrides: overrides,
-          hideOutside: visibilityCheckbox.checked, onCommit: () => finishSliderPreview() });
-        if (!preview) { applyRange(limits); return; }
-        atomEyeTools.syncComparison();
-        previewActive = true;
-      } else {
-        const preview = renderer.setScalarColorPreview(legend.property.data, { ...previewLegend, input: renderer.scalarColorPreview.input,
-          hideOutside: visibilityCheckbox.checked, onCommit: () => finishSliderPreview() });
-        if (!preview) { applyRange(limits); return; }
-        atomEyeTools.syncScalarColorPreview();
-      }
-      currentColorLegend = previewLegend;
-      // Rebuilding histogram counts would scan all atoms per tick. Keep the
-      // gradient/value probe responsive and restore exact counts on release.
-      updateLegendScale(scale, previewLegend, { histogram: false });
-      minimum.textContent = formatValue(limits.minimum);
-      maximum.textContent = formatValue(limits.maximum);
-    };
-    const applyLiveRange = (changed) => {
-      if (!isCurrent()) return;
-      interruptConfigurationRestore('a color range edit');
-      // Even an incomplete edit turns Auto off. Preserve the last valid range
-      // until both numbers are valid, without replacing the active input.
-      const wasAutomatic = !scalarColorRanges.has(legend.property.name);
-      const previousRange = freezeCurrentRange();
-      syncAutomatic();
-      const coupled = coupleScalarRange(
-        minimumControl.input.valueAsNumber,
-        maximumControl.input.valueAsNumber,
-        changed,
-        step,
-      );
-      if (!coupled) {
-        if (wasAutomatic) applyRange(previousRange);
-        return;
-      }
-      const { minimum: requestedMinimum, maximum: requestedMaximum } = coupled;
-      // Preserve the active field's editing state (e.g. typing a decimal).
-      // Only adjust its opposite bound when enforcing the ordered range.
-      if (changed !== 'minimum') minimumControl.input.value = formatEditableNumber(requestedMinimum);
-      if (changed !== 'maximum') maximumControl.input.value = formatEditableNumber(requestedMaximum);
-      const limits = { minimum: requestedMinimum, maximum: requestedMaximum };
-      // A typed limit beyond the data widens the slider track.
-      rangeSlider.set(limits);
-      applyRange(limits);
-    };
-    minimumControl.input.addEventListener('input', () => applyLiveRange('minimum'));
-    maximumControl.input.addEventListener('input', () => applyLiveRange('maximum'));
-    minimumControl.input.addEventListener('change', () => applyLiveRange('minimum'));
-    maximumControl.input.addEventListener('change', () => applyLiveRange('maximum'));
-    schemeSelect.addEventListener('change', () => {
-      if (!isCurrent()) return;
-      interruptConfigurationRestore('a color map change');
-      scalarColorSchemes.set(legend.property.name, schemeSelect.value);
-      applyColors();
-    });
-    visibilityCheckbox.addEventListener('change', () => {
-      if (!isCurrent()) return;
-      interruptConfigurationRestore('a color visibility change');
-      scalarHideOutside.set(legend.property.name, visibilityCheckbox.checked);
-      applyScalarVisibility(currentColorLegend ?? paletteForCurrentMode().legend);
-      atomEyeTools.syncComparison();
-    });
-    automatic.addEventListener('click', () => {
-      if (!isCurrent()) return;
-      interruptConfigurationRestore('a color range change');
-      if (scalarColorRanges.has(legend.property.name)) scalarColorRanges.delete(legend.property.name);
-      else freezeCurrentRange();
-      applyColors();
-    });
-    rangePolicy.addEventListener('change', () => {
-      if (!isCurrent()) return;
-      interruptConfigurationRestore('a color range policy change');
-      if (rangePolicy.value === 'frame') scalarColorRanges.delete(legend.property.name);
-      else freezeCurrentRange();
-      applyColors();
-    });
-    refreshers.push(() => {
-      step = scalarLegendStep(legend);
-      const upper = legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step;
-      minimumControl.input.step = maximumControl.input.step = String(step);
-      // Preserve a focused field's browser editing buffer, including incomplete
-      // number syntax. Its opposite bound and the displayed range still update.
-      if (document.activeElement !== minimumControl.input) minimumControl.input.value = formatEditableNumber(legend.minimum);
-      if (document.activeElement !== maximumControl.input) maximumControl.input.value = formatEditableNumber(upper);
-      rangeSlider.update({ minimum: legend.minimum, maximum: upper, dataMinimum: legend.dataMinimum, dataMaximum: legend.dataMaximum, step });
-      minimum.textContent = formatValue(legend.minimum); maximum.textContent = formatValue(legend.maximum);
-      schemeSelect.value = legend.scheme;
-      visibilityCheckbox.checked = scalarHideOutside.get(legend.property.name) !== false;
-      previewActive = Boolean(renderer.scalarColorPreview);
-      updateLegendScale(scale, legend, { histogram: !previewActive });
-      syncAutomatic();
-    });
-    for (const input of [minimumControl.input, maximumControl.input]) input.addEventListener('blur', () => {
-      if (isCurrent()) input.value = formatEditableNumber(input === minimumControl.input ? legend.minimum
-        : legend.maximum > legend.minimum ? legend.maximum : legend.minimum + step);
-    });
-    elements['color-legend'].append(scale, range, controls);
-  }
-  elements.legend.hidden = false;
-}
-
-function renderOrientationLegend(getLegend, isCurrent) {
-  let legend = getLegend();
-  const refreshers = [];
-  if (legend.mode === 'ipf') {
-    const control = document.createElement('label'); control.className = 'legend-property';
-    const caption = document.createElement('span'); caption.textContent = 'Sample direction';
-    const select = document.createElement('select'); select.id = 'legend-ipf-direction';
-    for (const value of ['x', 'y', 'z', 'custom']) select.append(option(value, value === 'custom' ? 'Custom vector' : value.toUpperCase()));
-    select.value = orientationSettings.direction;
-    refreshers.push(() => { select.value = orientationSettings.direction; });
-    select.addEventListener('change', () => {
-      if (!isCurrent()) return;
-      interruptConfigurationRestore('an orientation color change');
-      orientationSettings = normalizeOrientationSettings({ ...orientationSettings, direction: select.value }); applyColors();
-    });
-    control.append(caption, select); elements['color-legend'].append(control);
-    if (orientationSettings.direction === 'custom') {
-      const row = document.createElement('div'); row.className = 'legend-ipf-custom';
-      const inputs = ['X', 'Y', 'Z'].map((axis, component) => {
-        const label = document.createElement('label'); label.textContent = axis;
-        const input = document.createElement('input'); input.type = 'number'; input.step = '.1';
-        input.id = `legend-ipf-${axis.toLowerCase()}`; input.value = String(orientationSettings.custom[component]);
-        label.append(input); row.append(label); return input;
-      });
-      for (const input of inputs) input.addEventListener('change', () => {
-        if (!isCurrent()) return;
-        try {
-          const custom = inputs.map(input => input.value.trim() === '' ? NaN : Number(input.value));
-          const settings = normalizeOrientationSettings({ direction: 'custom', custom });
-          interruptConfigurationRestore('an orientation color change'); orientationSettings = settings; applyColors();
-        } catch (error) { showToast(error.message); }
-      });
-      refreshers.push(() => inputs.forEach((input, index) => {
-        if (document.activeElement !== input) input.value = String(orientationSettings.custom[index]);
-      }));
-      elements['color-legend'].append(row);
-    }
-    for (const key of legend.keys) {
-      const title = document.createElement('p'); title.className = 'legend-ipf-family'; title.textContent = key.title;
-      const canvas = document.createElement('canvas'); canvas.className = 'legend-ipf-key';
-      canvas.width = 240; canvas.height = 126; canvas.setAttribute('role', 'img');
-      canvas.setAttribute('aria-label', `${key.title} inverse pole figure key: ${key.labels.join(', ')}`);
-      let previousColor = null;
-      const refreshKey = () => {
-        const color = getComputedStyle(elements['color-legend']).getPropertyValue('--text-soft').trim() || '#355563';
-        if (color === previousColor) return;
-        previousColor = color;
-        drawIpfKey(canvas.getContext('2d'), key, 0, 0, canvas.width, canvas.height, { color, fontSize: 11 });
-      };
-      refreshers.push(refreshKey); refreshKey();
-      elements['color-legend'].append(title, canvas);
-    }
-  }
-  const explanation = document.createElement('p'); explanation.className = 'help';
-  explanation.textContent = legend.mode === 'ipf'
-    ? 'Crystal symmetry reduces the chosen sample direction to the RGB key. Other and unsupported structures are gray.'
-    : 'Red, green and blue encode the Rodrigues vector of the orientation reduced to the crystal\'s fundamental zone, scaled to the zone\'s extent. Symmetry-equivalent orientations share a color. This display is not an IPF key.';
-  elements['color-legend'].append(explanation);
-  if (legend.source === 'grains') {
-    const grains = document.createElement('p'); grains.className = 'help';
-    grains.textContent = 'Every atom has the color of its grain\'s mean orientation. Atoms in no grain are gray.';
-    elements['color-legend'].append(grains);
-  }
-  const count = document.createElement('p'); count.className = 'help';
-  const refreshCount = () => {
-    count.hidden = !legend.undefinedCount;
-    count.textContent = `Undefined: ${formatInteger(legend.undefinedCount)} · ${(legend.atomCount ? 100 * legend.undefinedCount / legend.atomCount : 0).toFixed(1)}%`;
-  };
-  refreshers.push(refreshCount); refreshCount();
-  elements['color-legend'].append(count);
-  return () => { legend = getLegend(); for (const refresh of refreshers) refresh(); };
-}
-
-function legendNumberControl(name, value, step) {
-  const label = document.createElement('label');
-  const text = document.createElement('span');
-  text.textContent = name;
-  const input = document.createElement('input');
-  input.type = 'number';
-  input.step = String(step);
-  input.value = formatEditableNumber(value);
-  label.append(text, input);
-  return { label, input };
-}
-
-function scalarLegendStep(legend) {
-  if (legend.property.data instanceof Uint8Array
-      || legend.property.data instanceof Uint16Array
-      || legend.property.data instanceof Uint32Array
-      || legend.property.data instanceof Int8Array
-      || legend.property.data instanceof Int16Array
-      || legend.property.data instanceof Int32Array) return 1;
-  const span = Math.abs(legend.dataMaximum - legend.dataMinimum);
-  const precision = Math.max(Math.abs(legend.minimum), Math.abs(legend.maximum)) * Number.EPSILON * 2;
-  return Math.max(span > 0 ? 10 ** Math.floor(Math.log10(span / 100)) : 0.01, precision);
-}
-
-function formatEditableNumber(value) {
-  return String(value);
-}
-
-let axisTriadKey = '';
-function updateAxisTriad(directions) {
-  // Every render reports the camera, including frame changes and recoloring
-  // that leave it still. The triad depends only on these three directions.
-  const key = ['x', 'y', 'z'].map(axis => `${directions[axis].x},${directions[axis].y},${directions[axis].depth}`).join(';');
-  if (key === axisTriadKey) return;
-  axisTriadKey = key;
-  const origin = 48;
-  const length = 35;
-  const renderOrder = [];
-  for (const axis of ['x', 'y', 'z']) {
-    const direction = directions[axis];
-    const endpointX = origin + direction.x * length;
-    const endpointY = origin + direction.y * length;
-    const projectedLength = Math.hypot(direction.x, direction.y);
-    const unitX = projectedLength > 1e-5 ? direction.x / projectedLength : 0;
-    const unitY = projectedLength > 1e-5 ? direction.y / projectedLength : -1;
-    const perpendicularX = -unitY;
-    const perpendicularY = unitX;
-    const labelDistance = projectedLength > 0.08 ? 7.5 / projectedLength : 0;
-    const line = elements[`axis-${axis}-line`];
-    const label = elements[`axis-${axis}-label`];
-    const group = line.parentElement;
-    const shadow = group.querySelector('.axis-shadow');
-    const shaftHighlight = group.querySelector('.axis-shaft-highlight');
-    const cone = group.querySelector('.axis-cone');
-    const coneBase = group.querySelector('.axis-cone-base');
-    const coneHighlight = group.querySelector('.axis-cone-highlight');
-    const depth = Math.max(0, Math.min(1, (direction.depth + 1) / 2));
-    const viewAligned = projectedLength < 0.08;
-    const visibleLength = projectedLength * length;
-    const coneLength = Math.min(10.5 + depth * 2, Math.max(3.5, visibleLength * 0.42));
-    const coneRadius = 4.2 + depth * 1.35;
-    const shaftEndX = endpointX - unitX * coneLength;
-    const shaftEndY = endpointY - unitY * coneLength;
-    const coneSideAX = shaftEndX + perpendicularX * coneRadius;
-    const coneSideAY = shaftEndY + perpendicularY * coneRadius;
-    const coneSideBX = shaftEndX - perpendicularX * coneRadius;
-    const coneSideBY = shaftEndY - perpendicularY * coneRadius;
-    const highlightOffset = -0.85;
-    const lineWidth = 4.2 + depth * 1.25;
-
-    for (const shaft of [line, shadow]) {
-      shaft.setAttribute('x2', shaftEndX.toFixed(2));
-      shaft.setAttribute('y2', shaftEndY.toFixed(2));
-    }
-    shaftHighlight.setAttribute('x1', (origin + perpendicularX * highlightOffset).toFixed(2));
-    shaftHighlight.setAttribute('y1', (origin + perpendicularY * highlightOffset).toFixed(2));
-    shaftHighlight.setAttribute('x2', (shaftEndX + perpendicularX * highlightOffset).toFixed(2));
-    shaftHighlight.setAttribute('y2', (shaftEndY + perpendicularY * highlightOffset).toFixed(2));
-    cone.setAttribute('points', `${coneSideAX.toFixed(2)},${coneSideAY.toFixed(2)} ${endpointX.toFixed(2)},${endpointY.toFixed(2)} ${coneSideBX.toFixed(2)},${coneSideBY.toFixed(2)}`);
-    coneBase.setAttribute('cx', '0');
-    coneBase.setAttribute('cy', '0');
-    coneBase.setAttribute('rx', (viewAligned ? coneRadius + 3 : 1.55 + depth * 0.65).toFixed(2));
-    coneBase.setAttribute('ry', (viewAligned ? coneRadius + 3 : coneRadius).toFixed(2));
-    coneBase.setAttribute('transform', viewAligned
-      ? `translate(${origin} ${origin})`
-      : `translate(${shaftEndX.toFixed(2)} ${shaftEndY.toFixed(2)}) rotate(${(Math.atan2(unitY, unitX) * 180 / Math.PI).toFixed(2)})`);
-    coneHighlight.setAttribute('x1', (shaftEndX + perpendicularX * coneRadius * 0.36).toFixed(2));
-    coneHighlight.setAttribute('y1', (shaftEndY + perpendicularY * coneRadius * 0.36).toFixed(2));
-    coneHighlight.setAttribute('x2', (endpointX - unitX * 1.35).toFixed(2));
-    coneHighlight.setAttribute('y2', (endpointY - unitY * 1.35).toFixed(2));
-    label.setAttribute('x', (viewAligned ? origin : endpointX + direction.x * labelDistance).toFixed(2));
-    label.setAttribute('y', (viewAligned ? origin - 9 : endpointY + direction.y * labelDistance + 3).toFixed(2));
-    line.style.strokeWidth = lineWidth.toFixed(2);
-    shadow.style.strokeWidth = (lineWidth + 2.8).toFixed(2);
-    group.style.opacity = String(0.5 + depth * 0.5);
-    for (const item of [line, shadow, shaftHighlight, cone, coneHighlight]) {
-      item.style.display = viewAligned ? 'none' : '';
-    }
-    group.classList.toggle('view-aligned', viewAligned);
-
-    const shaftGradient = document.getElementById(`axis-${axis}-shaft-gradient`);
-    const coneGradient = document.getElementById(`axis-${axis}-cone-gradient`);
-    for (const gradient of [shaftGradient, coneGradient]) {
-      gradient.setAttribute('x1', (origin + perpendicularX * lineWidth).toFixed(2));
-      gradient.setAttribute('y1', (origin + perpendicularY * lineWidth).toFixed(2));
-      gradient.setAttribute('x2', (origin - perpendicularX * lineWidth).toFixed(2));
-      gradient.setAttribute('y2', (origin - perpendicularY * lineWidth).toFixed(2));
-    }
-    renderOrder.push({ depth: direction.depth, group });
-  }
-  renderOrder.sort((left, right) => left.depth - right.depth);
-  for (const { group } of renderOrder) elements['axis-arrows'].append(group);
-}
 
 function syncProjectionControls(mode) {
   for (const value of ['perspective', 'orthographic']) {
@@ -4952,8 +3999,8 @@ function setControlsEnabled(enabled) {
     elements[id].disabled = !enabled;
   }
   for (const button of document.querySelectorAll('[data-view]')) button.disabled = !enabled;
-  elements['lattice-estimate'].disabled = !enabled || analysisControllers.has('lattice-reference');
-  elements['lattice-estimate-cancel'].disabled = !enabled || !analysisControllers.has('lattice-reference');
+  elements['lattice-estimate'].disabled = !enabled || latticeReferences.isEstimating();
+  elements['lattice-estimate-cancel'].disabled = !enabled || !latticeReferences.isEstimating();
   for (const input of document.querySelectorAll('[data-ptm-template], #lattice-references input, #lattice-references select')) input.disabled = !enabled;
   for (const button of document.querySelectorAll('[data-background]')) button.disabled = !enabled;
   for (const kind of Object.keys(state.analysis)) {
@@ -5092,7 +4139,7 @@ function captureConfiguration() {
         centrosymmetry: { enabled: state.analysis.centrosymmetry.enabled, ...cspParameters(),
           neighbors: elements['csp-neighbors'].value === 'auto' ? 12 : Number(elements['csp-neighbors'].value) },
         ptm: { enabled: state.analysis.ptm.enabled, flags: ptmFlags, rmsdCutoff: elements['ptm-rmsd'].valueAsNumber },
-        strain: { enabled: state.analysis.strain.enabled, references: state.references.map((reference, type) => ({ ...reference, label: state.referenceLabels[type] })) },
+        strain: { enabled: state.analysis.strain.enabled, references: latticeReferences.serialize() },
       },
       replicate: [...state.repetitions],
       replicateAtoms: state.replicateAtoms,
@@ -5212,7 +4259,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
   restorationController = controller;
   restorationOwner = request;
   try {
-    cancelLatticeEstimation();
+    latticeReferences.cancelEstimation();
     replicationController?.abort();
     replicationRequest++;
     frameNavigationControls?.cancel();
@@ -5239,7 +4286,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
             { signal: controller.signal });
         }
       } finally {
-        if (loadingOwner === preparation) setLoading(false);
+        if (statusChrome.loadingOwner === preparation) setLoading(false);
       }
     }
     if (!current()) return;
@@ -5338,10 +4385,7 @@ async function restoreConfigurationNow(config, { request, sourceVersion, sourceR
     elements['csp-neighbors'].value = saved.analyses.centrosymmetry.mode === 'auto' ? 'auto' : String(saved.analyses.centrosymmetry.neighbors);
     elements['ptm-rmsd'].value = String(saved.analyses.ptm.rmsdCutoff);
     for (const checkbox of document.querySelectorAll('[data-ptm-template]')) checkbox.checked = Boolean(saved.analyses.ptm.flags & Number(checkbox.dataset.ptmTemplate));
-    state.references = references;
-    state.referenceLabels = state.frame ? [...state.frame.typeLabels] : [];
-    state.referenceByLabel.clear();
-    renderLatticeReferences();
+    latticeReferences.restore(references);
     updateCnaMethodUi();
     scalarColorRanges.clear(); scalarColorSchemes.clear(); scalarHideOutside.clear(); scalarColorModes.clear();
     orientationSettings = normalizeOrientationSettings(saved.colors.orientation);
@@ -5587,7 +4631,7 @@ async function applyTrajectoryProcessing() {
     const frame = await getFrame(index, { signal: navigation.signal });
     if (!frame || request !== state.frameRequest) return;
     const displayed = displayFrame(frame);
-    if (loadingOwner === navigation) setLoading(false);
+    if (statusChrome.loadingOwner === navigation) setLoading(false);
     await displayed;
     if (request === state.frameRequest) scheduleFramePrefetch(index);
   } catch (error) {
@@ -5598,7 +4642,7 @@ async function applyTrajectoryProcessing() {
     showToast(`Smoothing was turned off: ${error.message}`);
     await applyTrajectoryProcessing();
   } finally {
-    if (loadingOwner === navigation) setLoading(false);
+    if (statusChrome.loadingOwner === navigation) setLoading(false);
   }
 }
 
@@ -5635,7 +4679,7 @@ async function changeReplication(counts, physical) {
   const interrupted = replicationController;
   interrupted?.abort();
   replicationController = null;
-  if (interrupted && loadingOwner === interrupted) setLoading(false);
+  if (interrupted && statusChrome.loadingOwner === interrupted) setLoading(false);
   const request = ++replicationRequest;
   const frame = state.frame, index = state.frameIndex, version = state.sourceVersion;
   const current = () => request === replicationRequest && version === state.sourceVersion && sourceLoadingOwner === null;
@@ -5666,7 +4710,7 @@ async function changeReplication(counts, physical) {
     const prepared = await prepareAnalysisFrame(frame, counts, physical, {
       signal: controller.signal,
       onProgress: ({ completedAtoms, totalAtoms }) => {
-        if (current() && loadingOwner === controller) elements['loading-text'].textContent = `Replicating atoms… ${formatInteger(completedAtoms)} / ${formatInteger(totalAtoms)}`;
+        if (current() && statusChrome.loadingOwner === controller) elements['loading-text'].textContent = `Replicating atoms… ${formatInteger(completedAtoms)} / ${formatInteger(totalAtoms)}`;
       },
     });
     if (!current() || controller.signal.aborted || state.frame !== frame || state.frameIndex !== index) return;
@@ -5678,7 +4722,7 @@ async function changeReplication(counts, physical) {
     throw error;
   } finally {
     if (replicationController === controller) replicationController = null;
-    if (loadingOwner === controller) setLoading(false);
+    if (statusChrome.loadingOwner === controller) setLoading(false);
     if (current()) scheduleGpuFramePrefetch();
   }
 }
@@ -5689,110 +4733,11 @@ function syncAxisVisibility() {
   elements['axis-triad'].setAttribute('aria-hidden', String(hidden));
 }
 
-function showInteractionHint() {
-  clearTimeout(interactionHintTimer);
-  clearTimeout(interactionHintFadeTimer);
-  elements['interaction-hint'].classList.remove('is-hiding');
-  elements['interaction-hint'].hidden = false;
-  interactionHintTimer = setTimeout(dismissInteractionHint, 5000);
-}
-
-function dismissInteractionHint() {
-  clearTimeout(interactionHintTimer);
-  clearTimeout(interactionHintFadeTimer);
-  if (elements['interaction-hint'].hidden) return;
-  elements['interaction-hint'].classList.add('is-hiding');
-  interactionHintFadeTimer = setTimeout(() => {
-    elements['interaction-hint'].hidden = true;
-    elements['interaction-hint'].classList.remove('is-hiding');
-  }, 300);
-}
-
-/** Show or hide the loading indicator. Whoever shows it hides it; a caller
- * that others can interrupt passes an `owner`, and hides it only while
- * `loadingOwner` is still that owner. `readProgress` lets structure Worker
- * progress replace the text. */
-function setLoading(visible, text = '', owner = null, readProgress = owner === null, { delay = 0 } = {}) {
-  clearTimeout(loadingTimer);
-  loadingTimer = null;
-  loadingOwner = visible ? owner : null;
-  loadingReadProgress = visible && readProgress;
-  if (text) elements['loading-text'].textContent = text;
-  if (visible && delay > 0) {
-    elements.loading.hidden = true;
-    loadingTimer = setTimeout(() => {
-      loadingTimer = null;
-      if (loadingOwner === owner) elements.loading.hidden = false;
-    }, delay);
-  } else elements.loading.hidden = !visible;
-}
-
-/** Progress of a structure Worker read describes a wait that some caller
- * announced and will end. A read nobody announced stays silent, rather than
- * showing an indicator that nothing hides. */
-function reportReadProgress(text) {
-  if (loadingReadProgress) elements['loading-text'].textContent = text;
-}
-
 /** Abort the frame request in flight, hide the indicator it showed, and
  * return the controller that owns the next request. */
 function beginFrameNavigation({ deferAbort = false } = {}) {
   const interrupted = frameNavigationController;
   if (!deferAbort) interrupted?.abort();
-  if (interrupted && loadingOwner === interrupted) setLoading(false);
+  if (interrupted && statusChrome.loadingOwner === interrupted) setLoading(false);
   return frameNavigationController = new AbortController();
-}
-
-function showToast(message, success = false) {
-  clearTimeout(toastTimer);
-  elements.toast.textContent = message;
-  elements.toast.classList.toggle('success', success);
-  elements.toast.hidden = false;
-  toastTimer = setTimeout(() => { elements.toast.hidden = true; }, success ? 2600 : 6500);
-}
-
-function setRangeProgress(range) {
-  const minimum = Number(range.min || 0);
-  const maximum = Number(range.max || 100);
-  const value = Number(range.value);
-  const percentage = maximum > minimum ? (value - minimum) / (maximum - minimum) * 100 : 0;
-  range.style.setProperty('--range-progress', `${percentage}%`);
-}
-
-function updateMemoryMetric() {
-  if (performance.memory?.usedJSHeapSize) {
-    elements['metric-memory'].textContent = formatBytes(performance.memory.usedJSHeapSize);
-  }
-}
-
-function option(value, label) {
-  const element = document.createElement('option');
-  element.value = value;
-  element.textContent = label;
-  return element;
-}
-
-function formatDuration(milliseconds) {
-  if (!Number.isFinite(milliseconds)) return '—';
-  return milliseconds < 1000 ? `${milliseconds.toFixed(1)} ms` : `${(milliseconds / 1000).toFixed(2)} s`;
-}
-
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
-  return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
-}
-
-function formatInteger(value) { return new Intl.NumberFormat('en-US').format(value); }
-
-function formatValue(value) {
-  if (!Number.isFinite(value)) return String(value);
-  if (Number.isInteger(value)) return String(value);
-  if (Math.abs(value) >= 1e4 || (Math.abs(value) > 0 && Math.abs(value) < 1e-4)) return value.toExponential(5);
-  return Number(value.toPrecision(7)).toString();
-}
-
-function formatVector(array, index, suffix = '') {
-  return `(${formatValue(array[index])}, ${formatValue(array[index + 1])}, ${formatValue(array[index + 2])})${suffix}`;
 }
