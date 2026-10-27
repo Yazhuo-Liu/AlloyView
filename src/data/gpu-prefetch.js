@@ -1,7 +1,7 @@
 import { DEFAULT_PLAYBACK_INTERVAL_MS } from './playback.js';
 
-export { gpuTrajectoryWindow as gpuPrefetchOrder } from '../analysis/gpu/cache-policy.js';
-import { gpuTrajectoryWindow as gpuPrefetchOrder } from '../analysis/gpu/cache-policy.js';
+export { gpuTrajectoryWindow as gpuPrefetchOrder } from './gpu-trajectory-window.js';
+import { gpuTrajectoryWindow as gpuPrefetchOrder } from './gpu-trajectory-window.js';
 
 // A frame shown by playback is replaced after the playback interval. Its
 // Voronoi inputs are built only if it stays displayed longer than that.

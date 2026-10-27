@@ -1,4 +1,5 @@
-import { PARSER_CHECKPOINT_MASK, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
+import { PARSER_CHECKPOINT_MASK, splitParserLines } from './cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 import { cartesianToFractionalSteps, collectFrameSummarySteps, fractionalToCartesianSteps } from './cooperative-coordinates.js';
 import { createCell, determinant3, validateFrame } from '../data/model.js';
 import { attachFrameSummary } from '../data/frame-summary.js';
@@ -36,11 +37,11 @@ export function looksLikePoscar(text) {
  * numbered in file order; all axes are periodic. Velocities and predictor
  * blocks after the coordinates are ignored. */
 export function parsePoscar(text, sourceName = 'POSCAR') {
-  return runParserSteps(parsePoscarSteps(text, sourceName));
+  return runCooperativeSteps(parsePoscarSteps(text, sourceName));
 }
 
 export function parsePoscarAsync(text, sourceName = 'POSCAR', options = {}) {
-  return runParserStepsAsync(parsePoscarSteps(text, sourceName), options);
+  return runCooperativeStepsAsync(parsePoscarSteps(text, sourceName), options);
 }
 
 function* parsePoscarSteps(text, sourceName) {

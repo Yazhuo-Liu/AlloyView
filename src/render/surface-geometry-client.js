@@ -1,4 +1,4 @@
-import { CpuBudget } from '../analysis/cpu-budget.js';
+import { CpuBudget } from '../shared/cpu-budget.js';
 
 const aborted = () => new DOMException('Surface geometry preparation was cancelled.', 'AbortError');
 const yieldTask = () => new Promise(resolve => setTimeout(resolve, 0));

@@ -184,7 +184,7 @@ test('source indexing updates are tied to the current load and remain available 
 });
 
 test('reset cancels a replication waiting for CPU capacity before it can recreate stale Workers', async () => {
-  const { CpuBudget } = await import('../src/analysis/cpu-budget.js');
+  const { CpuBudget } = await import('../src/shared/cpu-budget.js');
   const originalWorker = globalThis.Worker;
   globalThis.Worker = FakeWorker;
   try {
@@ -205,7 +205,7 @@ test('reset cancels a replication waiting for CPU capacity before it can recreat
 });
 
 test('replication cancellation preserves the CPU lease until its reusable Worker acknowledges', async () => {
-  const { CpuBudget } = await import('../src/analysis/cpu-budget.js');
+  const { CpuBudget } = await import('../src/shared/cpu-budget.js');
   const originalWorker = globalThis.Worker;
   globalThis.Worker = FakeWorker;
   try {
@@ -325,7 +325,7 @@ test('the last cancelling frame consumer sends exactly one parser cancel and lat
 });
 
 test('a foreground join promotes an already queued physical-replication dependency without restarting it', async () => {
-  const { CpuBudget } = await import('../src/analysis/cpu-budget.js');
+  const { CpuBudget } = await import('../src/shared/cpu-budget.js');
   const originalWorker = globalThis.Worker;
   globalThis.Worker = FakeWorker;
   try {

@@ -1,7 +1,7 @@
-import { CpuBudget } from './cpu-budget.js';
+import { CpuBudget } from '../shared/cpu-budget.js';
 import { DIFFRACTION_LIMITS, prepareDiffractionSteps, calculateDiffractionRangeSteps,
   finalizeDiffractionSteps, diffractionCsvSteps } from './diffraction.js';
-import { runParserStepsAsync } from '../io/cooperative-parser.js';
+import { runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 
 const abortError = () => new DOMException('Diffraction calculation cancelled.', 'AbortError');
 const checkAbort = signal => { if (signal?.aborted) throw abortError(); };
@@ -191,7 +191,7 @@ export class DiffractionClient {
   async prepareSource(slot, frame, key, signal, background = false) {
     if (slot.sourceKey === key) return false;
     await this.withPermit(signal, background, async () => {
-      const snapshot = await runParserStepsAsync(snapshotSteps(frame), { signal }); checkAbort(signal);
+      const snapshot = await runCooperativeStepsAsync(snapshotSteps(frame), { signal }); checkAbort(signal);
       await this.request(slot, { type: 'source', key, frame: snapshot }, { signal, transfer: [...buffers(snapshot)] });
     });
     if (slot === this.slots[0]) await this.releaseRangeInputs(signal);
@@ -256,9 +256,9 @@ export class DiffractionClient {
       const started = performance.now(), progress = value => { checkAbort(activeSignal); onProgress?.(value); checkAbort(activeSignal); };
       const key = this.sourceKey(frame);
       if (!this.createWorker) return this.withPermit(activeSignal, false, async () => {
-        const prepared = await runParserStepsAsync(prepareDiffractionSteps(frame, parameters), { signal: activeSignal });
-        const part = await runParserStepsAsync(calculateDiffractionRangeSteps(prepared, { start: 0, end: prepared.reflectionCount }, { onProgress: progress }), { signal: activeSignal });
-        const result = await runParserStepsAsync(finalizeDiffractionSteps(prepared, [part]), { signal: activeSignal });
+        const prepared = await runCooperativeStepsAsync(prepareDiffractionSteps(frame, parameters), { signal: activeSignal });
+        const part = await runCooperativeStepsAsync(calculateDiffractionRangeSteps(prepared, { start: 0, end: prepared.reflectionCount }, { onProgress: progress }), { signal: activeSignal });
+        const result = await runCooperativeStepsAsync(finalizeDiffractionSteps(prepared, [part]), { signal: activeSignal });
         return { ...result, backend: 'cpu', workerCount: 1, elapsedMs: performance.now() - started,
           fallbackReason: useGpu ? 'Workers are unavailable; using the CPU implementation.' : null };
       });
@@ -318,7 +318,7 @@ export class DiffractionClient {
       if (!['peaks', 'profile'].includes(kind)) throw new Error('Choose a diffraction peak or profile CSV.');
       const copy = { ...result }; delete copy.reflections;
       if (kind === 'peaks') delete copy.profile; else delete copy.peaks;
-      if (!this.createWorker) return runParserStepsAsync(diffractionCsvSteps(copy, { kind, stem }), { signal: activeSignal });
+      if (!this.createWorker) return runCooperativeStepsAsync(diffractionCsvSteps(copy, { kind, stem }), { signal: activeSignal });
       return this.request(this.slot(0), { type: 'csv', result: copy, options: { kind, stem } }, { signal: activeSignal });
     }), { signal });
   }

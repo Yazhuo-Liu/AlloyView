@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { StructureWorkerClient } from '../src/data/structure-worker-client.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 
 class FakeWorker {
   static all = [];

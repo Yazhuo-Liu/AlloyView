@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 import { AnalysisPool, chooseWorkerCount } from '../src/analysis/analysis-pool.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 import { calculatePtm, PTM_FIELDS } from '../src/analysis/ptm.js';
 import { crystalFrame } from './helpers/crystals.js';
 

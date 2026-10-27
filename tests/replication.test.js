@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell } from '../src/data/model.js';
-import { createReplication, normalizeRepetitions } from '../src/render/replication.js';
+import { createReplication, normalizeRepetitions } from '../src/data/replication.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 
 const cell = () => createCell({

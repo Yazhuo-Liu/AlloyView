@@ -8,7 +8,7 @@ import { SURFACE_MESH_DEFAULTS, surfaceMeshDisplayState } from '../../render/sur
 import { FrameCache } from '../../data/frame-cache.js';
 import { estimateFrameBytes } from '../../data/cache-policy.js';
 
-export const DXA_STRUCTURE_PROPERTY = 'dxaStructureType';
+import { DXA_STRUCTURE_PROPERTY } from '../../data/structure-properties.js';
 export const DXA_STRUCTURE_LABEL = 'Crystal structure (DXA)';
 // DXA's native lattice IDs differ from CNA/PTM for the diamond classes.
 // Keep this vocabulary tied to the same lattice IDs used by the DXA kernel.

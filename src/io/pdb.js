@@ -1,4 +1,5 @@
-import { PARSER_CHECKPOINT_MASK, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
+import { PARSER_CHECKPOINT_MASK, splitParserLines } from './cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 import { createCell, validateFrame } from '../data/model.js';
 import { attachFrameSummary } from '../data/frame-summary.js';
 import { coordinatesForCellSteps, inferNonperiodicCellSteps } from './xyz.js';
@@ -106,11 +107,11 @@ export async function readPdbFrame(blob, indexed, index, sourceName = 'trajector
 }
 
 export function parsePdbFrame(text, sourceName = 'structure.pdb', options = {}) {
-  return runParserSteps(parsePdbSteps(text, sourceName, options));
+  return runCooperativeSteps(parsePdbSteps(text, sourceName, options));
 }
 
 export function parsePdbFrameAsync(text, sourceName = 'structure.pdb', options = {}) {
-  return runParserStepsAsync(parsePdbSteps(text, sourceName, options), options);
+  return runCooperativeStepsAsync(parsePdbSteps(text, sourceName, options), options);
 }
 
 function* parsePdbSteps(text, sourceName, { projection = 'full' }) {

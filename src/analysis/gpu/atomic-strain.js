@@ -1,7 +1,7 @@
 import { STRAIN_FIELDS } from '../atomic-strain.js';
 import { validateReferences } from '../lattice.js';
 import { atomRange } from '../neighbors.js';
-import { GpuUnavailableError, checkSignal, readGpuBuffers, yieldWorker } from './runtime.js';
+import { GpuUnavailableError, checkSignal, readGpuBuffers, yieldWorker } from './support.js';
 import { ATOMIC_STRAIN_SHADER } from './atomic-strain-shaders.js';
 import { validateAnalysisInput } from '../errors.js';
 

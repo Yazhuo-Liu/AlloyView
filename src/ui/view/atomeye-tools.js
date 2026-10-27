@@ -1,5 +1,5 @@
 import { applyAppearance, findAtomIndex, hexColor, rgbHex, resolveAppearanceRadii } from '../../render/appearance.js';
-import { radiusForElement, radiiByType } from '../../render/atomic-radii.js';
+import { radiusForElement, radiiByType } from '../../data/atomic-radii.js';
 import { colorsByType, combineVisibilityMasks } from '../../render/palette.js';
 import { analysisProgressText, analysisBackendLabel, analysisBackendDetails } from '../../analysis/status.js';
 import { WebGLRenderer, legendExportTheme } from '../../render/webgl-renderer.js';

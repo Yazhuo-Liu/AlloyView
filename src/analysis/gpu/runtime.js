@@ -2,8 +2,9 @@ import { cellFaceHeights } from '../../data/model.js';
 import { NEIGHBOR_BINDINGS_WGSL, SORT_NEIGHBORS_SHADER } from './neighbors.js';
 import { gpuPreparationKinds } from './preparation.js';
 import { conservativeGpuBudget, DEFAULT_GPU_BUDGET_BYTES, frameUploadBytes, gpuWorkspaceBytes,
-  trajectoryCapacity, frameEvictionOrder, gpuTrajectoryWindow } from './cache-policy.js';
-import { yieldToEventLoop as yieldWorker } from '../../shared/task-yield.js';
+  trajectoryCapacity, frameEvictionOrder } from './cache-policy.js';
+import { gpuTrajectoryWindow } from '../../data/gpu-trajectory-window.js';
+import { checkSignal, GpuDeviceLostError, GpuUnavailableError, gpuInputUnsupported, nextGpuFrameSerial, yieldWorker } from './support.js';
 
 const MAX_INPUT_BYTES = 256 * 1024 ** 2;
 const CONFIG_BYTES = 128;
@@ -55,23 +56,6 @@ export function neighborDispatchPolicy(maximumOccupancy, stencilBins, imageBudge
       && candidateWork <= GPU_MAX_NEIGHBOR_CANDIDATE_WORK };
 }
 
-export function gpuInputUnsupported(message, code) {
-  const error = new GpuUnavailableError(message);
-  error.gpuUnsupportedScope = 'input-revision'; error.gpuUnsupportedCode = code;
-  return error;
-}
-
-export class GpuUnavailableError extends Error {
-  constructor(message, unsupportedCode) {
-    super(message); this.name = 'GpuUnavailableError';
-    if (unsupportedCode) { this.gpuUnsupportedCode = unsupportedCode; this.gpuUnsupportedScope = 'cell-cutoff'; }
-  }
-}
-
-export class GpuDeviceLostError extends GpuUnavailableError {
-  constructor(message) { super(message); this.name = 'GpuDeviceLostError'; this.gpuDeviceLost = true; }
-}
-
 // Analyses whose kernels compute with double-float pairs (dsAdd/dsMultiply or
 // ddAdd/ddMul). They need the error terms that exact-pairs.js verifies on each
 // device; every other kernel tolerates single-precision differences.
@@ -82,21 +66,6 @@ export function usesExactPairs(source) { return /\bfn (?:dsAdd|ddAdd)\(/.test(so
 /** SwiftShader/llvmpipe and fallback adapters keep conservative batch sizes. */
 export function isSoftwareGpuAdapter(info = {}) {
   return Boolean(info.isFallbackAdapter) || /swiftshader|software|llvmpipe/i.test(`${info.vendor ?? ''} ${info.architecture ?? ''} ${info.description ?? ''}`);
-}
-
-export function checkSignal(signal) {
-  if (signal?.aborted) throw new DOMException('Analysis cancelled.', 'AbortError');
-}
-
-/** Read several `{ buffer, Type, length, offset }` ranges with one staging
- * mapping. Runtimes that only implement `read` are read sequentially. */
-export async function readGpuBuffers(runtime, requests, options = {}) {
-  if (typeof runtime.readMany === 'function') return runtime.readMany(requests, options);
-  const values = [];
-  for (const { buffer, Type, length, offset = 0 } of requests) {
-    values.push(await runtime.read(buffer, Type, length, offset ? { ...options, offset } : options));
-  }
-  return values;
 }
 
 /** One device and queue shared by all GPU analyses in the dedicated worker. */
@@ -338,7 +307,7 @@ export class GpuRuntime {
 
   frameKey(frame) {
     const frameId = frame.gpuFrameId ?? frame;
-    return typeof frameId === 'number' ? frameId : frameId.gpuKey ?? (frameId.gpuKey = ++GpuRuntime.frameSerial);
+    return typeof frameId === 'number' ? frameId : frameId.gpuKey ?? (frameId.gpuKey = nextGpuFrameSerial());
   }
 
   async uploadFrame(frame, { signal, frameIndex } = {}) {
@@ -1129,7 +1098,6 @@ export class GpuRuntime {
     this.device?.destroy(); this.device = null; this.warmupPromise = null;
   }
 }
-GpuRuntime.frameSerial = 0;
 
 // Our generated shaders declare simple buffer bindings in group zero. An
 // explicit layout also accepts resources referenced only by unused helpers.
@@ -1139,7 +1107,6 @@ function bindingDeclarations(source) {
 }
 
 // Lets cancellation messages reach the GPU Worker between batches.
-export { yieldWorker };
 
 /** Native compilation/device acquisition can complete in the background, but
  * cancellation must release the serialized worker task promptly. The shared

@@ -6,7 +6,7 @@ import { calculateVoronoi, calculateVoronoiGeometry, calculateVoronoiGeometryBat
 import { validateVoronoiRadii, radicalReach, voronoiRadiiForTypes, voronoiRadiiFingerprint } from '../src/analysis/voronoi-radii.js';
 import { compactVoronoiRadii, prepareVoronoiSelection } from '../src/analysis/voronoi-selection.js';
 import { AnalysisPool } from '../src/analysis/analysis-pool.js';
-import { createVoronoiCellMesh } from '../src/render/voronoi-cell-layer.js';
+import { createVoronoiCellMesh } from '../src/render/voronoi-cell-geometry.js';
 import { createCell } from '../src/data/model.js';
 import { parseLammpsFrame } from '../src/io/lammps-dump.js';
 import { crystalFrame } from './helpers/crystals.js';

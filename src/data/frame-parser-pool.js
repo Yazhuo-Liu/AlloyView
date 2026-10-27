@@ -1,4 +1,4 @@
-import { cpuWorkerLimit } from '../analysis/cpu-budget.js';
+import { cpuWorkerLimit } from '../shared/cpu-budget.js';
 import { parseFrameDescriptor } from '../workers/frame-parser.js';
 
 const aborted = () => new DOMException('Frame parsing cancelled.', 'AbortError');

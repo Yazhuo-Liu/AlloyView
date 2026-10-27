@@ -4,7 +4,7 @@ import test from 'node:test';
 import { cartesianToFractional, cellVertices, createCell, fractionalToCartesian } from '../src/data/model.js';
 import { parseLammpsFrame } from '../src/io/lammps-dump.js';
 import { AtomPrimitiveLayer, normalizeVectorOptions } from '../src/render/atom-primitives.js';
-import { createReplication } from '../src/render/replication.js';
+import { createReplication } from '../src/data/replication.js';
 import { normalizeTrajectoryLineOptions } from '../src/render/trajectory-line-layer.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 

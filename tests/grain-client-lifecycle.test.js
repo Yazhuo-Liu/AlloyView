@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GrainSegmentationClient } from '../src/analysis/grains-client.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 
 const nextTurn = () => new Promise(resolve => setImmediate(resolve));
 

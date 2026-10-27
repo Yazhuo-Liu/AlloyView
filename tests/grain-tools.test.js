@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GRAIN_COLORS, GRAIN_LEGEND_LIMIT, GRAIN_NONE_COLOR, displayedGrainThreshold, grainCategories, grainColor, grainVolumes,
   initializeGrainTools } from '../src/ui/analysis/grain-tools.js';
-import { GRAIN_DEFAULT_MST_THRESHOLD, calculateGrains, quaternionBungeEuler } from '../src/analysis/grains.js';
+import { GRAIN_DEFAULT_MST_THRESHOLD, calculateGrains } from '../src/analysis/grains.js';
+import { quaternionBungeEuler } from '../src/data/quaternion.js';
 import { calculatePtm } from '../src/analysis/ptm.js';
 import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
 import { createAttributeRegistry } from '../src/properties/global-attributes.js';

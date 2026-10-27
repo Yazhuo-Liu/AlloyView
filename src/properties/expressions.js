@@ -1,6 +1,6 @@
 import { canonicalAtomNumber } from '../data/atom-ids.js';
 import { determinant3 } from '../data/model.js';
-import { importedVectorComponents } from '../render/vector-settings.js';
+import { importedVectorComponents } from './vector-components.js';
 
 /** A small arithmetic language for per-atom properties and selections.
  * Text is tokenized and parsed into a plain syntax tree, names are bound to a

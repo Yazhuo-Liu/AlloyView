@@ -1,4 +1,4 @@
-import { radiiByType } from './atomic-radii.js';
+import { radiiByType } from '../data/atomic-radii.js';
 import { selectionGroupStyles } from '../data/selection-groups.js';
 import { atomIndexEntry, atomIndicesById } from '../data/atom-ids.js';
 

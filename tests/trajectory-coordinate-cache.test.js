@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 import { FrameParserPool } from '../src/data/frame-parser-pool.js';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 import { smoothTrajectoryFrame, smoothingWindow } from '../src/data/trajectory-tools.js';

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 import { SurfaceGeometryClient } from '../src/render/surface-geometry-client.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 import { createCell } from '../src/data/model.js';
 import { buildSurfaceDisplayMesh, displayMeshOpenEdges, displayMeshVolume } from '../src/render/surface-mesh-geometry.js';
 import { createMeshExport } from '../src/io/mesh-export.js';

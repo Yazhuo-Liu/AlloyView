@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { isReadableLocalFile } from '../src/io/local-files.js';
+import { isReadableLocalFile } from '../src/shared/local-files.js';
 import { cfgText, crystalFrame, dumpText } from './helpers/crystals.js';
 
 test('Worker parses current and previously cached load messages', async (t) => {

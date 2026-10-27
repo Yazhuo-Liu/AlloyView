@@ -2,7 +2,7 @@ import { NeighborSearch } from '../neighbors.js';
 import { validateBondStatisticsParameters, createBondStatisticsAccumulators, calculateBondStatisticsAtom,
   addBondStatisticsSample, mergeBondStatisticsMoment, bondStatisticsHistogramBin, finalizeBondStatistics } from '../bond-statistics.js';
 import { prepareGpuBondParameters } from './bonds.js';
-import { checkSignal, GpuUnavailableError, gpuInputUnsupported, readGpuBuffers, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, gpuInputUnsupported, readGpuBuffers, yieldWorker } from './support.js';
 import { validateAnalysisInput } from '../errors.js';
 import { BOND_STATISTICS_SHADER, BOND_STATISTICS_ATOM_WORDS, BOND_STATISTICS_CORRECTION_WORDS,
   BOND_STATISTICS_FLAG_PRECISION, BOND_STATISTICS_FLAG_NEIGHBORS, MAX_GPU_BOND_STATISTICS_NEIGHBORS } from './bond-statistics-shaders.js';

@@ -1,6 +1,6 @@
 import { cellFaceHeights } from '../../data/model.js';
 import { calculatePreparedDisplacements, prepareDisplacementCalculation } from '../displacement.js';
-import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './support.js';
 import { DISPLACEMENT_SHADER } from './displacement-shaders.js';
 import { validateAnalysisInput } from '../errors.js';
 

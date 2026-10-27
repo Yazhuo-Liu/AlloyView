@@ -1,4 +1,5 @@
-import { createVoronoiCellBatch, MINIMUM_VORONOI_CELL_SCALE } from '../../render/voronoi-cell-layer.js';
+import { MINIMUM_VORONOI_CELL_SCALE } from '../../render/voronoi-cell-layer.js';
+import { createVoronoiCellBatch } from '../../render/voronoi-cell-geometry.js';
 
 /** Geometry is an optional display step. Selected-cell inspection remains
  * bounded; full tessellations stream through the resident parallel CPU pool. */

@@ -6,7 +6,7 @@
 // the perpendicular bisector shifted by (rᵢ² − rⱼ²)/(2|d|) along d. Equal radii
 // give exactly the ordinary bisector, so the Voronoi tessellation is a special case.
 
-import { radiusForElement } from '../render/atomic-radii.js';
+import { radiusForElement } from '../data/atomic-radii.js';
 
 /** Per-atom radii must be finite and nonnegative, one per tessellation site. */
 export function validateVoronoiRadii(radii, count) {

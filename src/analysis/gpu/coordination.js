@@ -1,6 +1,6 @@
 import { minimumImageDistanceSquared } from '../coordination.js';
 import { makeNeighborShader } from './neighbors.js';
-import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './support.js';
 
 const CORRECTION_CAPACITY = 65_536;
 export const COORDINATION_SHADER = makeNeighborShader({

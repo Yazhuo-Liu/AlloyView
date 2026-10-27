@@ -11,7 +11,7 @@ import { framePreparationSignal } from './data/frame-preparation.js';
 import { processedFrameHeader } from './data/processed-frame-header.js';
 import { findAtomIndex } from './render/appearance.js';
 import { chooseFrameCachePolicy, estimateFrameBytes } from './data/cache-policy.js';
-import { normalizeRepetitions } from './render/replication.js';
+import { normalizeRepetitions } from './data/replication.js';
 import { GpuPrefetchScheduler } from './data/gpu-prefetch.js';
 import { CpuPrefetchScheduler } from './data/cpu-prefetch.js';
 import { AnalysisPrefetchScheduler } from './application/analysis-prefetch.js';
@@ -22,7 +22,7 @@ import { recommendCoordinationCutoff, COORDINATION_CUTOFF_PRESETS,
   coordinationCutoffPresetForElement, inferCoordinationCutoffPreset } from './analysis/cutoff.js';
 import { CoordinationPool } from './analysis/coordination-pool.js';
 import { AnalysisPool } from './analysis/analysis-pool.js';
-import { CpuBudget } from './analysis/cpu-budget.js';
+import { CpuBudget } from './shared/cpu-budget.js';
 import { DxaClient } from './analysis/dxa-client.js';
 import { analysisProgressText as formatAnalysisProgress, analysisBackendLabel, analysisBackendDetails } from './analysis/status.js';
 import { STRUCTURE_TYPES } from './analysis/cna.js';
@@ -49,7 +49,7 @@ import {
   visibilityByType,
   combineVisibilityMasks,
 } from './render/palette.js';
-import { normalizeRadiusPercent } from './render/atomic-radii.js';
+import { normalizeRadiusPercent } from './data/atomic-radii.js';
 import { WebGLRenderer } from './render/webgl-renderer.js';
 import { initializeBccLogo } from './render/bcc-logo.js';
 import { StructureWorkerClient } from './data/structure-worker-client.js';
@@ -104,11 +104,12 @@ import { createDisplayRefresh } from './render/display-refresh.js';
 import { createAppearanceSnapshots } from './render/appearance-snapshot.js';
 import { affectedPropertyNames, createAnalysisDependencies } from './application/analysis-dependencies.js';
 import { REFERENCE_STRAIN_FIELDS } from './analysis/reference-strain.js';
-import { initializeDxaTools, DXA_STRUCTURE_PROPERTY } from './ui/analysis/dxa-tools.js';
+import { initializeDxaTools } from './ui/analysis/dxa-tools.js';
+import { CRYSTAL_STRUCTURE_PROPERTIES, DXA_STRUCTURE_PROPERTY, isCrystalStructureProperty } from './data/structure-properties.js';
 import { initializeFeatureHelp } from './ui/shell/feature-help.js';
 import { normalizeSelectionGroups, selectionGroupVisibility } from './data/selection-groups.js';
 import { initializeSelectionGroupControls } from './ui/selection/selection-group-controls.js';
-import { initializeCrystalVisibilityControls, isCrystalStructureProperty } from './ui/view/crystal-visibility-controls.js';
+import { initializeCrystalVisibilityControls } from './ui/view/crystal-visibility-controls.js';
 import { createLegendScale, updateLegendScale } from './render/legend-histogram.js';
 import { createLegendRangeSlider } from './render/legend-range-slider.js';
 
@@ -148,8 +149,7 @@ const scalarHideOutside = new Map();
 const hiddenStructureTypes = new Set();
 const hiddenAtomTypes = new Set();
 const hiddenCategories = new Map();
-const crystalCategoryProperties = new Set(['structureType', 'ptmStructureType', 'centralSymmetryStructureType',
-  'idealStrainStructureType', DXA_STRUCTURE_PROPERTY]);
+const crystalCategoryProperties = new Set(CRYSTAL_STRUCTURE_PROPERTIES);
 const cpuBudget = new CpuBudget({ environment: globalThis });
 const analysisPool = new AnalysisPool({ cpuBudget });
 const structureExportClient = new StructureExportClient({ cpuBudget });

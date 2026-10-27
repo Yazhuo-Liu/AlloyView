@@ -1,5 +1,6 @@
 import { parsePrimitiveColor } from './atom-primitives.js';
-import { createVoronoiCellBatch, VoronoiAllCellLayer } from './voronoi-cell-layer.js';
+import { VoronoiAllCellLayer } from './voronoi-cell-layer.js';
+import { createVoronoiCellBatch } from './voronoi-cell-geometry.js';
 
 const geometryCache = new WeakMap();
 const validatedGeometry = new WeakMap();

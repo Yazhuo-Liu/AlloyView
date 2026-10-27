@@ -1,9 +1,5 @@
 import { visibilityByCategory } from '../../render/palette.js';
-
-export const CRYSTAL_VISIBILITY_SOURCE_NAMES = Object.freeze([
-  'structureType', 'ptmStructureType', 'centralSymmetryStructureType',
-  'idealStrainStructureType', 'dxaStructureType',
-]);
+import { CRYSTAL_STRUCTURE_PROPERTIES, isCrystalStructureProperty } from '../../data/structure-properties.js';
 
 const sourceLabels = Object.freeze({
   structureType: 'CNA',
@@ -12,10 +8,6 @@ const sourceLabels = Object.freeze({
   idealStrainStructureType: 'Ideal-lattice strain',
   dxaStructureType: 'DXA',
 });
-
-export function isCrystalStructureProperty(name) {
-  return CRYSTAL_VISIBILITY_SOURCE_NAMES.includes(name);
-}
 
 /** Structure classifications remain attached to their own property vocabulary.
  * Only the chosen classification filters atoms, independently of their colors.
@@ -56,7 +48,7 @@ export function createCrystalVisibilityState({ getFrame, getColorMode = () => 't
 
   function getSources(available = currentProperties()) {
     const present = new Set(available.map(property => property.name));
-    const names = CRYSTAL_VISIBILITY_SOURCE_NAMES.filter(name => knownSources.has(name) || name === source);
+    const names = CRYSTAL_STRUCTURE_PROPERTIES.filter(name => knownSources.has(name) || name === source);
     return names.map(name => ({ name, label: sourceLabels[name],
       title: knownSources.get(name)?.title ?? sourceLabels[name], available: present.has(name) }));
   }
@@ -136,7 +128,7 @@ export function createCrystalVisibilityState({ getFrame, getColorMode = () => 't
   }
 
   function serialize() {
-    return { source, hiddenBySource: Object.fromEntries(CRYSTAL_VISIBILITY_SOURCE_NAMES
+    return { source, hiddenBySource: Object.fromEntries(CRYSTAL_STRUCTURE_PROPERTIES
       .map(name => [name, [...getHidden(name)].sort((a, b) => a - b)])
       .filter(([, ids]) => ids.length)) };
   }
@@ -155,7 +147,7 @@ export function createCrystalVisibilityState({ getFrame, getColorMode = () => 't
           throw new Error('Invalid crystal visibility category.');
         }
       }
-      for (const name of CRYSTAL_VISIBILITY_SOURCE_NAMES) {
+      for (const name of CRYSTAL_STRUCTURE_PROPERTIES) {
         const hidden = getHidden(name);
         hidden.clear();
         for (const id of savedHidden[name] ?? []) hidden.add(id);
@@ -178,7 +170,7 @@ export function createCrystalVisibilityState({ getFrame, getColorMode = () => 't
   }
 
   function reset() {
-    for (const name of CRYSTAL_VISIBILITY_SOURCE_NAMES) getHidden(name).clear();
+    for (const name of CRYSTAL_STRUCTURE_PROPERTIES) getHidden(name).clear();
     knownSources.clear();
     source = null;
     cachedData = null;

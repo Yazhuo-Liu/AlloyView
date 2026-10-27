@@ -1,6 +1,7 @@
 import { clearAnalysisResults, replaceAnalysisProperty } from '../../analysis/results.js';
 import { analysisProgressText } from '../../analysis/status.js';
-import { GRAIN_ALGORITHMS, GRAIN_DEFAULTS, GRAIN_DEFAULT_MST_THRESHOLD, quaternionAxisAngle, validateGrainParameters } from '../../analysis/grains.js';
+import { GRAIN_ALGORITHMS, GRAIN_DEFAULTS, GRAIN_DEFAULT_MST_THRESHOLD, validateGrainParameters } from '../../analysis/grains.js';
+import { quaternionAxisAngle } from '../../data/quaternion.js';
 import { determinant3 } from '../../data/model.js';
 import { DISTINCT_CATEGORY_COLORS } from '../../render/palette.js';
 import { renderGrainMergeChart } from '../../render/grain-merge-chart.js';

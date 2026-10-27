@@ -1,5 +1,5 @@
 import { cartesianToFractional, determinant3, fractionalToCartesian } from '../data/model.js';
-import { cpuWorkerLimit } from './cpu-budget.js';
+import { cpuWorkerLimit } from '../shared/cpu-budget.js';
 
 export const DXA_LATTICES = Object.freeze([
   { id: 'fcc', label: 'FCC', kernelId: 1 },

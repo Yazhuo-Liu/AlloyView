@@ -1,6 +1,6 @@
 import { THERMAL_PROPERTY_NAMES } from '../crystal/thermal-ellipsoids.js';
 import { MAX_STRUCTURE_EXPORT_ATOMS, MAX_STRUCTURE_EXPORT_BYTES } from './structure-export.js';
-import { runParserStepsAsync } from './cooperative-parser.js';
+import { runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 
 const properties = new Set(['occupancy', 'Uiso', 'uiso', 'U_iso_or_equiv', 'Biso', 'biso', 'bfactor',
   ...THERMAL_PROPERTY_NAMES, 'B_iso_or_equiv', 'selectiveDynamicsX', 'selectiveDynamicsY', 'selectiveDynamicsZ']);
@@ -130,13 +130,13 @@ export class StructureExportClient {
         task.key = snapshotKey(task.frame, this.frameIds.get(task.frame));
         if (this.cached && sameKey(this.cached.key, task.key)) task.snapshotId = this.cached.id;
         else {
-          payload.snapshot = await runParserStepsAsync(copySnapshot(task.frame), { signal: task.controller.signal });
+          payload.snapshot = await runCooperativeStepsAsync(copySnapshot(task.frame), { signal: task.controller.signal });
           task.snapshotId = task.id;
           transfer = snapshotTransfers(payload.snapshot);
         }
         payload.snapshotId = task.snapshotId;
       } else if (task.type === 'export-polyhedra') {
-        payload.rows = await runParserStepsAsync(copyPolyhedraRows(task.frame, task.result), { signal: task.controller.signal });
+        payload.rows = await runCooperativeStepsAsync(copyPolyhedraRows(task.frame, task.result), { signal: task.controller.signal });
       }
       if (this.active !== task || task.controller.signal.aborted) throw abortError();
       const worker = this.ensureWorker();

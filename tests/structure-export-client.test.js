@@ -4,7 +4,7 @@ import { Worker as NodeWorker } from 'node:worker_threads';
 import { StructureExportClient } from '../src/io/structure-export-client.js';
 import { createStructureExport } from '../src/io/structure-export.js';
 import { parsePoscar } from '../src/io/poscar.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 
 const frame = () => parsePoscar('crystal\n1\n4 0 0\n0 4 0\n0 0 4\nFe O\n1 1\nDirect\n0 0 0\n0.123456789012345 0.5 0.5\n');
 const budget = () => new CpuBudget({ environment: { navigator: { hardwareConcurrency: 3 } } });

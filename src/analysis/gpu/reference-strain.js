@@ -1,7 +1,7 @@
 import { cellFaceHeights, imageLatticeCell } from '../../data/model.js';
 import { atomRange } from '../neighbors.js';
 import { REFERENCE_STRAIN_FIELDS, calculateReferenceStrain, prepareReferenceStrainContext } from '../reference-strain.js';
-import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, readGpuBuffers, yieldWorker } from './support.js';
 import { REFERENCE_STRAIN_SHADER, REFERENCE_STRAIN_CLEAR_SHADER } from './reference-strain-shaders.js';
 import { validateAnalysisInput } from '../errors.js';
 

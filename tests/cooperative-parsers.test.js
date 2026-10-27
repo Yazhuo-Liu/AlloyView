@@ -9,9 +9,10 @@ import { parsePdbFrame, parsePdbFrameAsync } from '../src/io/pdb.js';
 import { parseLammpsData, parseLammpsDataAsync } from '../src/io/lammps-data.js';
 import { parsePoscar, parsePoscarAsync } from '../src/io/poscar.js';
 import { FrameParserPool } from '../src/data/frame-parser-pool.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 import { readFileBytes } from '../src/io/gzip.js';
-import { runParserStepsAsync, splitParserLines } from '../src/io/cooperative-parser.js';
+import { splitParserLines } from '../src/io/cooperative-parser.js';
+import { runCooperativeStepsAsync } from '../src/shared/cooperative-steps.js';
 
 const encode = text => new TextEncoder().encode(text);
 const matrix = 'H0(1,1) = 10\nH0(1,2) = 0\nH0(1,3) = 0\nH0(2,1) = 2\nH0(2,2) = 10\nH0(2,3) = 0\nH0(3,1) = 0\nH0(3,2) = 1\nH0(3,3) = 10\n';
@@ -71,7 +72,7 @@ test('default time slices deliver real timer cancellation for every supported fo
 test('cooperative line splitting preserves CRLF, BOM, final blanks and signed numeric text', async () => {
   for (const text of ['', '\uFEFF', 'a\r\nb\n', '\uFEFFa\r\nb\r', '\n\n', '-0\n1d-3\r\n']) {
     const expected = text.replace(/^\uFEFF/, '').split(/\r?\n/);
-    assert.deepEqual(await runParserStepsAsync(splitParserLines(text)), expected);
+    assert.deepEqual(await runCooperativeStepsAsync(splitParserLines(text)), expected);
   }
 });
 

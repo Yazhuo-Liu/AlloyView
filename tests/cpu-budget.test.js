@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CpuBudget, cpuWorkerLimit } from '../src/analysis/cpu-budget.js';
+import { CpuBudget, cpuWorkerLimit } from '../src/shared/cpu-budget.js';
 
 test('CPU budget follows reported cores minus two with a single-thread minimum', () => {
   for (const [cores, expected] of [[8, 6], [16, 14], [64, 62], [4, 2], [2, 1], [1, 1], [NaN, 1]]) {

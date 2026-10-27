@@ -1,6 +1,6 @@
 import { isosurfaceSteps, volumeSliceSteps, validateVolumeValuesSteps, prepareVolumetricRenderGeometrySteps,
   volumeSliceCsvSteps } from '../analysis/volumetric.js';
-import { runParserStepsAsync } from '../io/cooperative-parser.js';
+import { runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 
 let resident = null, active = null, gpuRuntime = null, gpuModule = null;
 self.addEventListener('message', ({ data }) => {
@@ -33,7 +33,7 @@ async function run(data) {
       result = { gpuReady: false };
     } else if (data.type === 'prepare') {
       if (resident?.key !== data.key) {
-        await runParserStepsAsync(validateVolumeValuesSteps(data.dataset), options);
+        await runCooperativeStepsAsync(validateVolumeValuesSteps(data.dataset), options);
         resident = { key: data.key, dataset: data.dataset };
       }
       result = { ready: true };
@@ -45,18 +45,18 @@ async function run(data) {
       }
       result = { gpuReady: true };
     } else if (data.type === 'csv') {
-      result = await runParserStepsAsync(volumeSliceCsvSteps(data.result, data.options), options);
+      result = await runCooperativeStepsAsync(volumeSliceCsvSteps(data.result, data.options), options);
     } else if (data.type === 'analyze') {
       if (!resident || resident.key !== data.key) throw new Error('The volumetric grid is not resident in its Worker.');
       const { dataset } = resident;
       if (data.useGpu) {
         const { runtime, module } = await gpuResources(options.signal);
         result = await module.analyzeGpuIsosurface(runtime, dataset, data.parameters, { ...options, onProgress: progress });
-      } else if (data.parameters.kind === 'slice') result = await runParserStepsAsync(volumeSliceSteps(dataset, data.parameters, { trusted: true }), options);
-      else result = await runParserStepsAsync(isosurfaceSteps(dataset, { ...data.parameters, onProgress: progress }, { trusted: true }), options);
+      } else if (data.parameters.kind === 'slice') result = await runCooperativeStepsAsync(volumeSliceSteps(dataset, data.parameters, { trusted: true }), options);
+      else result = await runCooperativeStepsAsync(isosurfaceSteps(dataset, { ...data.parameters, onProgress: progress }, { trusted: true }), options);
       if (result.kind === 'isosurface' || result.vertices) {
         result.kind = 'isosurface';
-        result = await runParserStepsAsync(prepareVolumetricRenderGeometrySteps(result, dataset), options);
+        result = await runCooperativeStepsAsync(prepareVolumetricRenderGeometrySteps(result, dataset), options);
       }
     } else throw new Error('Unknown volumetric Worker request.');
     const buffers = new Set();

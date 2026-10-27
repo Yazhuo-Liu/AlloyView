@@ -1,7 +1,7 @@
 import { CSP_SUMMARY_FIELDS } from '../centrosymmetry.js';
 import { atomRange } from '../neighbors.js';
 import { analyzeGpuCna, adaptiveCnaInitialRadius, MAX_GPU_CNA_RADIUS_ATTEMPTS } from './cna.js';
-import { checkSignal, GpuUnavailableError, gpuInputUnsupported, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, gpuInputUnsupported, yieldWorker } from './support.js';
 import { CSP_SHADER, CSP_RESULT_WORDS } from './centrosymmetry-shaders.js';
 import { analysisValidationError } from '../errors.js';
 

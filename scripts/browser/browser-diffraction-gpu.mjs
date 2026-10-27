@@ -7,10 +7,10 @@ console.log(JSON.stringify(report,null,2));
 
 async function checks(){
   const [{GpuRuntime},{analyzeGpuDiffraction,releaseGpuDiffraction,warmGpuDiffraction},
-    {prepareDiffraction,prepareDiffractionSteps,evaluatePreparedScatteringFactor,calculateDiffractionRange,finalizeDiffractionSteps},{crystalFrame},{createCell},{runParserSteps}]=await Promise.all([
+    {prepareDiffraction,prepareDiffractionSteps,evaluatePreparedScatteringFactor,calculateDiffractionRange,finalizeDiffractionSteps},{crystalFrame},{createCell},{runCooperativeSteps}]=await Promise.all([
       import('./src/analysis/gpu/runtime.js'),import('./src/analysis/gpu/diffraction.js'),
-      import('./src/analysis/diffraction.js'),import('./tests/helpers/crystals.js'),import('./src/data/model.js'),import('./src/io/cooperative-parser.js')]);
-  const finalizeDiffraction=(prepared,parts)=>runParserSteps(finalizeDiffractionSteps(prepared,parts));
+      import('./src/analysis/diffraction.js'),import('./tests/helpers/crystals.js'),import('./src/data/model.js'),import('./src/shared/cooperative-steps.js')]);
+  const finalizeDiffraction=(prepared,parts)=>runCooperativeSteps(finalizeDiffractionSteps(prepared,parts));
   const runtime=new GpuRuntime(),rows=[];
   const check=(condition,message)=>{if(!condition)throw new Error(message);};
   const crystal=(kind,element,lattice,repeat=1)=>({...crystalFrame(kind,repeat,lattice),typeLabels:[element]});
@@ -51,7 +51,7 @@ async function checks(){
     const fcc=await run('FCC Cu systematic absences',crystal('fcc','Cu',3.615));
     check(fcc.gpu.correctedReflections>0&&fcc.gpu.correctedReflections<fcc.prepared.reflectionCount,'FCC must use GPU for strong reflections and exact CPU for extinctions');
     check((await run('Retained atom uploads and scratch',null,parameters,{source:fcc.prepared})).gpu.inputReused,'unchanged prepared atoms should remain resident');
-    const sharedNeutron=runParserSteps(prepareDiffractionSteps(null,{...parameters,radiation:'neutron'},{source:fcc.prepared}));
+    const sharedNeutron=runCooperativeSteps(prepareDiffractionSteps(null,{...parameters,radiation:'neutron'},{source:fcc.prepared}));
     check(sharedNeutron.fractional===fcc.prepared.fractional,'model retarget must share geometric source arrays');
     check((await run('Radiation switch retains geometry but replaces scattering factors',null,parameters,{source:sharedNeutron})).gpu.inputReused,'model switch must reuse geometric uploads');
     check((await run('Switching back to X-ray restores its factors',null,parameters,{source:fcc.prepared})).gpu.inputReused,'returning to X-ray must retain atom uploads');

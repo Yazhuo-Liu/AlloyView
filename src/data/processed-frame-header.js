@@ -1,6 +1,6 @@
 import { createCell } from './model.js';
 import { MAX_PHYSICAL_REPLICATION_ATOMS } from './replicate.js';
-import { normalizeRepetitions } from '../render/replication.js';
+import { normalizeRepetitions } from './replication.js';
 
 /** Apply the physical cell/count transformation without constructing atoms.
  * Smoothing must be performed by the normal frame path before calling this.

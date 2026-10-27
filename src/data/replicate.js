@@ -1,5 +1,5 @@
 import { createCell, invert3, validateFrame } from './model.js';
-import { normalizeRepetitions } from '../render/replication.js';
+import { normalizeRepetitions } from './replication.js';
 import { yieldToMain } from '../shared/task-yield.js';
 import { ReplicationIdCache, retainedIdBytes } from './replication-ids.js';
 import { attachFrameSummary, createFrameSummaryAccumulator, includeFrameSummaryAtom } from './frame-summary.js';

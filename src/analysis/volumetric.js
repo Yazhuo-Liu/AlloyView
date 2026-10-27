@@ -1,5 +1,5 @@
 import { validateVolumetricDataset, volumetricCellDimensions, volumetricGridPosition } from '../data/volumetric-grid.js';
-import { runParserSteps, runParserStepsAsync } from '../io/cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 
 export const MAX_VOLUMETRIC_TRIANGLES = 1_000_000;
 export const VOLUMETRIC_TETRAHEDRA = Object.freeze([[0, 1, 3, 7], [0, 3, 2, 7], [0, 2, 6, 7],
@@ -29,8 +29,8 @@ export function validateVolumetricParameters(dataset, parameters = {}) {
   return { ...parameters, kind, axis, index };
 }
 
-export function calculateIsosurface(dataset, parameters) { return runParserSteps(isosurfaceSteps(dataset, parameters)); }
-export function calculateIsosurfaceAsync(dataset, parameters, options) { return runParserStepsAsync(isosurfaceSteps(dataset, parameters), options); }
+export function calculateIsosurface(dataset, parameters) { return runCooperativeSteps(isosurfaceSteps(dataset, parameters)); }
+export function calculateIsosurfaceAsync(dataset, parameters, options) { return runCooperativeStepsAsync(isosurfaceSteps(dataset, parameters), options); }
 
 /** Piecewise-linear marching tetrahedra. Every cube uses the same body
  * diagonal and face diagonals, including the final periodic voxel. Cases use
@@ -124,8 +124,8 @@ export function* validateVolumeValuesSteps(dataset) {
   }
 }
 
-export function calculateVolumeSlice(dataset, parameters) { return runParserSteps(volumeSliceSteps(dataset, parameters)); }
-export function calculateVolumeSliceAsync(dataset, parameters, options) { return runParserStepsAsync(volumeSliceSteps(dataset, parameters), options); }
+export function calculateVolumeSlice(dataset, parameters) { return runCooperativeSteps(volumeSliceSteps(dataset, parameters)); }
+export function calculateVolumeSliceAsync(dataset, parameters, options) { return runCooperativeStepsAsync(volumeSliceSteps(dataset, parameters), options); }
 
 /** A plane through the grid, with linear interpolation only along its normal
  * coordinate. Its u/v axes follow the remaining two step vectors, retaining

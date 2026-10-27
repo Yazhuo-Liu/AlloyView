@@ -34,4 +34,4 @@ For consecutive frames with the same source ID sequence and repeat counts, the W
 
 ## Implementation
 
-[Display replication geometry](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/replication.js), [physical atom replication](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/data/replicate.js) and [its Worker](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/replication-worker.js), [source-lattice images for wrapped trajectories](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/data/model.js), [instanced rendering](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/webgl-renderer.js).
+[Display replication geometry](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/data/replication.js), [physical atom replication](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/data/replicate.js) and [its Worker](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/workers/replication-worker.js), [source-lattice images for wrapped trajectories](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/data/model.js), [instanced rendering](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/render/webgl-renderer.js).

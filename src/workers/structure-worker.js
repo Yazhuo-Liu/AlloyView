@@ -1,7 +1,7 @@
 import { calculateCoordination } from '../analysis/coordination.js';
 import { cellFaceHeights, frameTransferables } from '../data/model.js';
 import { prepareSequenceBaseline, unwrapSequenceFrame } from '../data/trajectory.js';
-import { isReadableLocalFile, normalizeLocalFiles } from '../io/local-files.js';
+import { isReadableLocalFile, normalizeLocalFiles } from '../shared/local-files.js';
 import { detectStructureFormatHeader, inferStructureFormatFromPath } from '../io/file-sequences.js';
 import { assertGzipSupported, decompressToFile, readStructureHeader } from '../io/gzip.js';
 import { indexLammpsDump } from '../io/lammps-dump.js';

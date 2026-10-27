@@ -1,7 +1,7 @@
-import { GpuUnavailableError, checkSignal, yieldWorker } from './runtime.js';
+import { GpuUnavailableError, checkSignal, yieldWorker } from './support.js';
 import { DIFFRACTION_STRUCTURE_FACTORS_SHADER } from './diffraction-shaders.js';
 import { evaluateDiffractionReflectionSteps, evaluatePreparedScatteringFactor } from '../diffraction.js';
-import { runParserStepsAsync } from '../../io/cooperative-parser.js';
+import { runCooperativeStepsAsync } from '../../shared/cooperative-steps.js';
 
 const caches = new WeakMap();
 const ATOMS_PER_CHUNK = 512, MAX_REFLECTIONS_PER_BATCH = 4096;
@@ -213,7 +213,7 @@ export async function analyzeGpuDiffraction(runtime,prepared,{signal,onProgress=
             &&(correctedReflections+1)/(output+1)>.25) {
           throw unavailable('many reflections need double-precision recovery; using parallel CPU Workers.');
         }
-        const exact=await runParserStepsAsync(evaluateDiffractionReflectionSteps(prepared,first+local),{signal});
+        const exact=await runCooperativeStepsAsync(evaluateDiffractionReflectionSteps(prepared,first+local),{signal});
         real[output]=exact.real;imag[output]=exact.imag;intensity[output]=exact.intensity;amplitudeBound[output]=exact.amplitudeBound;
         correctedReflections++;
         if(performance.now()>=correctionDeadline){

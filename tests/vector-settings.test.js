@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { availableVectorSources, createVectorField, findVectorComponents, importedVectorComponents, linkedArrowDimensions, renameVectorFieldProperty, vectorFieldData } from '../src/render/vector-settings.js';
+import { availableVectorSources, createVectorField, linkedArrowDimensions, renameVectorFieldProperty, vectorFieldData } from '../src/render/vector-settings.js';
+import { findVectorComponents, importedVectorComponents } from '../src/properties/vector-components.js';
 import { registerVectorProperties } from '../src/analysis/vector-properties.js';
 
 test('presets select a complete numeric family without mixing vector sources', () => {

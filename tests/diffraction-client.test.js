@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Worker, MessageChannel } from 'node:worker_threads';
 import { DiffractionClient } from '../src/analysis/diffraction-client.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 import { calculateDiffraction } from '../src/analysis/diffraction.js';
 import { crystalFrame } from './helpers/crystals.js';
 

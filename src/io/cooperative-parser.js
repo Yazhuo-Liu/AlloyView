@@ -1,49 +1,10 @@
-import { yieldToEventLoop } from '../shared/task-yield.js';
 import { asBytes, byteParserStatistics, decodeText, isByteInput } from './ascii-rows.js';
 
 export const PARSER_CHECKPOINT_MASK = 1023;
 
-/** Synchronous public readers and cancellable Worker readers execute the same
- * generator. Numeric loops checkpoint once per 1,024 rows; only the async
- * driver yields to the event loop, and only after its time budget expires. */
-export function runParserSteps(steps) {
-  for (;;) {
-    const result = steps.next();
-    if (result.done) return result.value;
-  }
-}
-
-function checkAbort(signal) {
-  if (signal?.aborted) throw new DOMException('Frame parsing cancelled.', 'AbortError');
-}
-
-const yieldParser = () => typeof globalThis.setImmediate === 'function'
-  ? new Promise(resolve => globalThis.setImmediate(resolve)) : yieldToEventLoop();
-
-export async function runParserStepsAsync(steps, { signal, budgetMs = 8,
-  now = () => performance.now(), yieldControl = yieldParser } = {}) {
-  checkAbort(signal);
-  let deadline = now() + budgetMs;
-  try {
-    for (;;) {
-      checkAbort(signal);
-      const result = steps.next();
-      if (result.done) { checkAbort(signal); return result.value; }
-      if (now() >= deadline) {
-        await yieldControl();
-        checkAbort(signal);
-        deadline = now() + budgetMs;
-      }
-    }
-  } finally {
-    // Release partial arrays and scanner state on cancellation. Abort is
-    // checked outside the iterator, so byte fallback cannot swallow it.
-    steps.return?.();
-  }
-}
-
 /** Preserve byte fast-path statistics, exact text fallback and error messages.
- * All numeric work inside both readers is shared with the synchronous API. */
+ * Parsers run these generators through runCooperativeSteps/Async from
+ * shared/cooperative-steps.js; numeric loops checkpoint once per 1,024 rows. */
 export function* parseInputSteps(input, parseBytes, parseText) {
   if (!isByteInput(input)) return yield* parseText(input);
   const bytes = asBytes(input);

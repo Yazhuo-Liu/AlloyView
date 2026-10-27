@@ -5,7 +5,8 @@ import { Worker } from 'node:worker_threads';
 import { DxaClient } from '../src/analysis/dxa-client.js';
 import { DXA_DEFECT_MESH_SMOOTHING, calculateDxa, normalizeDefectMeshRequest } from '../src/analysis/dxa.js';
 import { createConfiguration, parseConfiguration } from '../src/application/configuration.js';
-import { DXA_DEFECT_MESH_DEFAULTS, DXA_STRUCTURE_PROPERTY, initializeDxaTools } from '../src/ui/analysis/dxa-tools.js';
+import { DXA_DEFECT_MESH_DEFAULTS, initializeDxaTools } from '../src/ui/analysis/dxa-tools.js';
+import { DXA_STRUCTURE_PROPERTY } from '../src/data/structure-properties.js';
 import { createAttributeRegistry } from '../src/properties/global-attributes.js';
 import { parseLammpsFrame } from '../src/io/lammps-dump.js';
 import {

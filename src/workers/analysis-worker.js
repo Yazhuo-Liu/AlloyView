@@ -17,7 +17,7 @@ import { calculateDxaLocalRange, calculateDxaTetrahedraRange, releaseDxaCpuStage
 
 import { NeighborSearch } from '../analysis/neighbors.js';
 import { calculateCoordinationPolyhedra, MAX_POLYHEDRA_BYTES } from '../analysis/coordination-polyhedra.js';
-import { createVoronoiCellBatch } from '../render/voronoi-cell-layer.js';
+import { createVoronoiCellBatch } from '../render/voronoi-cell-geometry.js';
 import { createAtomProgressThrottle } from '../analysis/progress.js';
 
 const atomProgressDue = createAtomProgressThrottle();

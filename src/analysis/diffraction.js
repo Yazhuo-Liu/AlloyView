@@ -2,7 +2,7 @@ import { determinant3, invert3 } from '../data/model.js';
 import { getXrayScatteringCoefficients, XRAY_SCATTERING_MAX_S } from '../crystal/xray-scattering.js';
 import { getElectronScatteringCoefficients, getNeutronScatteringLength, ELECTRON_SCATTERING_MAX_S,
   electronWavelengthFromEnergy } from '../crystal/diffraction-scattering.js';
-import { runParserSteps, runParserStepsAsync } from '../io/cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 
 export const DIFFRACTION_DEFAULTS = Object.freeze({ radiation: 'xray', wavelength: 1.5406, minAngle: 5, maxAngle: 90,
   step: 0.02, fwhm: 0.15, lorentzPolarization: true, useThermal: true });
@@ -234,8 +234,8 @@ export function* prepareDiffractionSteps(frame, parameters = {}, { source } = {}
   else if (source.radiation !== settings.radiation) source = yield* retargetDiffractionSourceSteps(source, settings);
   return yield* enumerateDiffractionSteps(source, settings);
 }
-export const prepareDiffraction = (frame, parameters) => runParserSteps(prepareDiffractionSteps(frame, parameters));
-export const prepareDiffractionAsync = (frame, parameters, execution) => runParserStepsAsync(prepareDiffractionSteps(frame, parameters), execution);
+export const prepareDiffraction = (frame, parameters) => runCooperativeSteps(prepareDiffractionSteps(frame, parameters));
+export const prepareDiffractionAsync = (frame, parameters, execution) => runCooperativeStepsAsync(prepareDiffractionSteps(frame, parameters), execution);
 
 export function evaluatePreparedScatteringFactor(prepared, type, s2) {
   const { coefficients, radiation = 'xray' } = prepared, stride = prepared.coefficientStride ?? 9, base = type * stride;
@@ -279,7 +279,7 @@ export function* evaluateDiffractionReflectionSteps(prepared, index) {
   if (![real, imag, intensity, amplitudeBound].every(Number.isFinite)) throw fail('structure-factor arithmetic exceeds the numeric range.');
   return { real, imag, intensity, amplitudeBound };
 }
-export const evaluateDiffractionReflection = (prepared, index) => runParserSteps(evaluateDiffractionReflectionSteps(prepared, index));
+export const evaluateDiffractionReflection = (prepared, index) => runCooperativeSteps(evaluateDiffractionReflectionSteps(prepared, index));
 
 export function* calculateDiffractionRangeSteps(prepared, { start = 0, end = prepared.reflectionCount } = {}, { onProgress } = {}) {
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > prepared.reflectionCount) throw fail('invalid reflection range.');
@@ -293,7 +293,7 @@ export function* calculateDiffractionRangeSteps(prepared, { start = 0, end = pre
   return { start, end, real, imag, intensity, amplitudeBound };
 }
 export const computeDiffractionRangeSteps = calculateDiffractionRangeSteps;
-export const calculateDiffractionRange = (prepared, range, execution) => runParserSteps(calculateDiffractionRangeSteps(prepared, range, execution));
+export const calculateDiffractionRange = (prepared, range, execution) => runCooperativeSteps(calculateDiffractionRangeSteps(prepared, range, execution));
 
 function lorentzPolarization(twoTheta, radiation) {
   const theta = twoTheta * DEG / 2;
@@ -376,8 +376,8 @@ export function* calculateDiffractionSteps(frame, parameters = {}, execution = {
   const part = yield* calculateDiffractionRangeSteps(prepared, {}, execution);
   return yield* finalizeDiffractionSteps(prepared, [part]);
 }
-export const calculateDiffraction = (frame, parameters, execution) => runParserSteps(calculateDiffractionSteps(frame, parameters, execution));
-export const calculateDiffractionAsync = (frame, parameters, execution) => runParserStepsAsync(calculateDiffractionSteps(frame, parameters, execution), execution);
+export const calculateDiffraction = (frame, parameters, execution) => runCooperativeSteps(calculateDiffractionSteps(frame, parameters, execution));
+export const calculateDiffractionAsync = (frame, parameters, execution) => runCooperativeStepsAsync(calculateDiffractionSteps(frame, parameters, execution), execution);
 
 export function* diffractionCsvSteps(result, { kind = 'peaks', stem = 'crystal' } = {}) {
   if (result?.kind !== 'powder-xrd' || !['peaks', 'profile'].includes(kind)) throw fail('a completed diffraction result and valid export kind are required.');

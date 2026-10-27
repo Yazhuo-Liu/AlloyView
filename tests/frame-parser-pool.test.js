@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FrameParserPool } from '../src/data/frame-parser-pool.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 
 class ParserWorker {
   constructor() { this.listeners = new Map(); this.messages = []; }

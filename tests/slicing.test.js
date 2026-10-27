@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { cartesianToFractional, cellVertices, createCell, invert3 } from '../src/data/model.js';
 import { cross, dot, subtract, transformPoint } from '../src/render/math.js';
-import { createReplication } from '../src/render/replication.js';
+import { createReplication } from '../src/data/replication.js';
 import {
   DEFAULT_SLAB_THICKNESS, MAX_MILLER_INDEX, MAX_SLICE_PLANES, MAX_SLICES, flippedSliceSide, millerPlane,
   nearestLatticePlanePosition, planeBoxPolygon, planeCellPolygon, pointVisible, projectBoundsOnNormal,

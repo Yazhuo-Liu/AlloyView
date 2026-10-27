@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell } from '../src/data/model.js';
 import { createCrystalDragState } from '../src/render/crystal-drag.js';
-import { createReplication } from '../src/render/replication.js';
+import { createReplication } from '../src/data/replication.js';
 import {
   SURFACE_MESH_DEFAULTS, SURFACE_MESH_IDS, SurfaceMeshLayer, normalizeSurfaceMeshOptions, surfaceMeshDisplayState,
 } from '../src/render/surface-mesh-layer.js';

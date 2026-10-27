@@ -1,6 +1,6 @@
 import { determinant3 } from '../../data/model.js';
 import { validateVolumetricDataset, volumetricCellDimensions } from '../../data/volumetric-grid.js';
-import { GpuUnavailableError, checkSignal, yieldWorker } from './runtime.js';
+import { GpuUnavailableError, checkSignal, yieldWorker } from './support.js';
 import { VOLUMETRIC_COUNT_SHADER, VOLUMETRIC_EMIT_SHADER } from './volumetric-shaders.js';
 
 const caches = new WeakMap();

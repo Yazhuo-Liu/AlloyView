@@ -1,9 +1,10 @@
+import { GPU_TRAJECTORY_WINDOW } from '../../data/gpu-trajectory-window.js';
+
 const MiB = 1024 ** 2;
 
 export const DEFAULT_GPU_BUDGET_BYTES = 2 * 1024 ** 3;
 export const FALLBACK_GPU_BUDGET_BYTES = 128 * MiB;
 export const MIN_GPU_WORKSPACE_BYTES = 32 * MiB;
-export const GPU_TRAJECTORY_WINDOW = 5;
 
 /** Limits are capability hints, never a measurement of free VRAM. Bound the
  * app allocation budget by both adapter capabilities and coarse host memory;
@@ -19,21 +20,6 @@ export function conservativeGpuBudget(limits = {}, info = {}, deviceMemoryGiB) {
     candidates.push(FALLBACK_GPU_BUDGET_BYTES);
   }
   return Math.max(64 * MiB, Math.floor(Math.min(...candidates)));
-}
-
-/** A small nearest-first window, including the displayed frame. Near either
- * end, unused slots look farther in the available direction. */
-export function gpuTrajectoryWindow(currentIndex, frameCount, capacity = GPU_TRAJECTORY_WINDOW) {
-  const count = Math.max(0, Math.trunc(frameCount));
-  if (!count || !Number.isInteger(currentIndex) || currentIndex < 0 || currentIndex >= count) return [];
-  const limit = Math.min(count, GPU_TRAJECTORY_WINDOW, Math.max(1, Math.trunc(capacity) || 1));
-  const indices = [currentIndex];
-  for (let distance = 1; indices.length < limit; distance += 1) {
-    if (currentIndex + distance < count) indices.push(currentIndex + distance);
-    if (indices.length >= limit) break;
-    if (currentIndex - distance >= 0) indices.push(currentIndex - distance);
-  }
-  return indices;
 }
 
 export function frameUploadBytes(frame) {

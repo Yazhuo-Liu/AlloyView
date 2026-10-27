@@ -1,7 +1,7 @@
 import { classify, classifyAdaptiveEnvironment } from '../cna.js';
 import { NeighborSearch, atomRange } from '../neighbors.js';
 import { determinant3 } from '../../data/model.js';
-import { checkSignal, GpuUnavailableError, gpuInputUnsupported, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, gpuInputUnsupported, yieldWorker } from './support.js';
 import { CNA_FIXED_SHADER, CNA_ADAPTIVE_SHADER, CNA_RESULT_WORDS, CNA_FLAG_PRECISION, CNA_FLAG_BUDGET,
   CNA_FLAG_CP_GRAPH, CNA_FLAG_BCC_GRAPH, CNA_FLAG_SHELL12, CNA_FLAG_SHELL14 } from './cna-shaders.js';
 

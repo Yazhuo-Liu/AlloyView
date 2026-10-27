@@ -508,7 +508,7 @@ async function initializeChecks() {
   const [{ WebGLRenderer }, { AnalysisPool }, { transformPoint }, { createVoronoiCellMesh }] = await Promise.all([
     import(new URL('./render/webgl-renderer.js', app)), import(new URL('./analysis/analysis-pool.js', app)),
     import(new URL('./render/math.js', app)),
-    import(new URL('./render/voronoi-cell-layer.js', app)),
+    import(new URL('./render/voronoi-cell-geometry.js', app)),
   ]);
   const checks = window.voronoiChecks = { history: [], download: null, holdKind: null, held: null };
   const setFrame = WebGLRenderer.prototype.setFrame, analyze = AnalysisPool.prototype.analyze,

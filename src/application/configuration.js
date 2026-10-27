@@ -10,7 +10,7 @@ import { normalizeOrientationSettings } from '../render/orientation-colors.js';
 import { AMBIENT_OCCLUSION_DIRECTIONS, AMBIENT_OCCLUSION_RESOLUTIONS, DEFAULT_AMBIENT_OCCLUSION } from '../render/ambient-occlusion.js';
 import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from '../data/selection-groups.js';
 import { DXA_DEFAULTS, DXA_FAMILIES } from '../analysis/dxa.js';
-import { CRYSTAL_VISIBILITY_SOURCE_NAMES } from '../ui/view/crystal-visibility-controls.js';
+import { CRYSTAL_STRUCTURE_PROPERTIES } from '../data/structure-properties.js';
 import { COORDINATION_CUTOFF_PRESETS } from '../analysis/cutoff.js';
 import { normalizeExternalPropertyState } from '../io/external-properties.js';
 import { normalizeComputedPropertyState } from '../properties/computed-properties.js';
@@ -989,7 +989,7 @@ function normalizeColors(value) {
   return { ranges, schemes, hideOutside, hiddenStructureTypes, hiddenAtomTypes, hiddenCategories,
     ...(modes ? { modes } : {}), ...(orientation ? { orientation } : {}),
     ...(input.crystalVisibilitySource === undefined ? {} : {
-      crystalVisibilitySource: nullableChoice(input.crystalVisibilitySource, 'settings.colors.crystalVisibilitySource', new Set(CRYSTAL_VISIBILITY_SOURCE_NAMES)),
+      crystalVisibilitySource: nullableChoice(input.crystalVisibilitySource, 'settings.colors.crystalVisibilitySource', new Set(CRYSTAL_STRUCTURE_PROPERTIES)),
     }) };
 }
 

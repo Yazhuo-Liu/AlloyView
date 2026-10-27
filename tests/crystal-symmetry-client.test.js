@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Worker as NodeWorker } from 'node:worker_threads';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 import { CrystalSymmetryClient } from '../src/analysis/crystal-symmetry-client.js';
 import { crystalFrame } from './helpers/crystals.js';
 

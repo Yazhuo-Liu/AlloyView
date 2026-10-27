@@ -1,4 +1,4 @@
-import { isReadableLocalFile } from '../io/local-files.js';
+import { isReadableLocalFile } from '../shared/local-files.js';
 import { parseExternalProperties, mapExternalProperties, normalizeExternalPropertyState, validateExternalPropertyName, validateExternalPropertyAllocation } from '../io/external-properties.js';
 
 const imports = new Map();

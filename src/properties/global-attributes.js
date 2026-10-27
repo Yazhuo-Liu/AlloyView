@@ -1,5 +1,6 @@
 import { determinant3 } from '../data/model.js';
 import { frameTypeCounts } from '../data/frame-summary.js';
+import { MAX_ATTRIBUTE_NAME_LENGTH } from '../data/time-series.js';
 import { scalarStatistics } from '../io/statistics-export.js';
 
 /** Per-frame scalar attributes for text labels and time series. Names are
@@ -15,7 +16,6 @@ import { scalarStatistics } from '../io/statistics-export.js';
  * from frames read in the background. kind 'analysis' marks values that
  * exist only once an analysis or expression has run on the displayed frame. */
 
-export const MAX_ATTRIBUTE_NAME_LENGTH = 256;
 export const ATTRIBUTE_KINDS = Object.freeze(['file', 'analysis']);
 
 // Categorical outputs of crystal analyses, named after their tool.

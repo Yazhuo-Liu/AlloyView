@@ -3,7 +3,7 @@ import { atomRange } from '../neighbors.js';
 import { VORONOI_FIELDS, validateVoronoiParameters, initialGeometry, finalizeVoronoiStatistics, calculateVoronoi, createVoronoiContext } from '../voronoi.js';
 import { prepareVoronoiSelection, voronoiSelectionRange, expandVoronoiResult, compactVoronoiRadii } from '../voronoi-selection.js';
 import { validateVoronoiRadii, radicalWeights, radicalReach } from '../voronoi-radii.js';
-import { GpuRuntime, checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, nextGpuFrameSerial, yieldWorker } from './support.js';
 import { GPU_VORONOI_MAX_FACES, GPU_VORONOI_MAX_FACE_VERTICES, GPU_VORONOI_STATE_WORDS, GPU_VORONOI_MAX_PLANES,
   VORONOI_INITIALIZE_SHADER, VORONOI_CLIP_SHADER, VORONOI_RADICAL_CLIP_SHADER, GPU_VORONOI_RADICAL_EMPTY_CODE } from './voronoi-shaders.js';
 
@@ -123,7 +123,7 @@ export async function prepareGpuVoronoiFrame(runtime, source, parameters = {}, {
   checkSignal(signal);
   const selection = prepareVoronoiSelection(source, parameters.selectedTypes), frame = selection.frame;
   if (!selection.isAll) {
-    if (frame.gpuFrameId === undefined) frame.gpuFrameId = -++GpuRuntime.frameSerial;
+    if (frame.gpuFrameId === undefined) frame.gpuFrameId = -nextGpuFrameSerial();
     frame.gpuDerivedFrame = true;
   }
   const release = runtime.pinFrames?.([frame]);
@@ -166,7 +166,7 @@ export async function analyzeGpuVoronoi(runtime, frame, parameters = {}, { signa
   const radii = compactVoronoiRadii(parameters.radii, selection);
   // The normal client compacts before transferring input. Direct/runtime users
   // receive the same scientific behavior, with a separate resident cache key.
-  if (selection.frame.gpuFrameId === undefined) selection.frame.gpuFrameId = -++GpuRuntime.frameSerial;
+  if (selection.frame.gpuFrameId === undefined) selection.frame.gpuFrameId = -nextGpuFrameSerial();
   selection.frame.gpuDerivedFrame = true;
   const release = runtime.pinFrames?.([selection.frame]);
   try {

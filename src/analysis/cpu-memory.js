@@ -1,4 +1,4 @@
-import { cpuWorkerLimit } from './cpu-budget.js';
+import { cpuWorkerLimit } from '../shared/cpu-budget.js';
 
 const MiB = 1024 ** 2;
 const GiB = 1024 ** 3;

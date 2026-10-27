@@ -1,4 +1,7 @@
-import { MAX_ATTRIBUTE_NAME_LENGTH } from '../properties/global-attributes.js';
+
+/** Attribute names are user-facing labels; this bound keeps saved series and
+ * registries from growing unboundedly through pathological names. */
+export const MAX_ATTRIBUTE_NAME_LENGTH = 256;
 
 /** Per-frame values of chosen global attributes. Points are keyed by frame
  * index and by the settings that produced them: each value carries its

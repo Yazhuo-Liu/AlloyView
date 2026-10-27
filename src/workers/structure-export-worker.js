@@ -1,5 +1,5 @@
 import { createStructureExportAsync, MAX_STRUCTURE_EXPORT_BYTES, MAX_STRUCTURE_EXPORT_ATOMS } from '../io/structure-export.js';
-import { runParserStepsAsync } from '../io/cooperative-parser.js';
+import { runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 
 let snapshot = null, snapshotId = null, active = null;
 self.addEventListener('message', event => {
@@ -24,7 +24,7 @@ async function handle(message) {
       if (!snapshot || snapshotId !== message.snapshotId) throw new Error('The requested structure snapshot is no longer available.');
       result = await createStructureExportAsync(snapshot, message.options, { signal: task.controller.signal });
     } else if (message.type === 'export-polyhedra') {
-      result = await runParserStepsAsync(polyhedraCsv(message.rows, message.options), { signal: task.controller.signal });
+      result = await runCooperativeStepsAsync(polyhedraCsv(message.rows, message.options), { signal: task.controller.signal });
     } else throw new Error('Unknown structure export command.');
     self.postMessage({ id, ok: true, result, snapshotId });
   } catch (error) {

@@ -3,7 +3,7 @@ import { MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { modalCoordination, shearInvariant } from '../local-shear.js';
 import { makeShearCoordinationShader, makeShearMetricsShader, SHEAR_REDUCTION_SHADER, SHEAR_FINALIZE_SHADER,
   SHEAR_CORRECTION_SHADER, SHEAR_WORKGROUP_SIZE } from './local-shear-shaders.js';
-import { readGpuBuffers, yieldWorker } from './runtime.js';
+import { readGpuBuffers, yieldWorker } from './support.js';
 
 export const MAX_GPU_SHEAR_COORDINATION = 64;
 

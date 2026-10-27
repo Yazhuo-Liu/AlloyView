@@ -3,7 +3,8 @@ import { THERMAL_PROPERTY_NAMES, cifThermalToCartesian, thermalSymmetryTransform
 import { attachFrameSummary, createFrameSummaryAccumulator, includeFrameSummaryAtom } from '../data/frame-summary.js';
 import { isElementSymbol } from '../data/chemical-elements.js';
 import { resolveSpaceGroup } from '../crystal/space-groups.js';
-import { PARSER_CHECKPOINT_MASK, runParserSteps, runParserStepsAsync } from './cooperative-parser.js';
+import { PARSER_CHECKPOINT_MASK } from './cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 
 // The limits bound both token objects and the largest temporary expansion.
 // They reject incomplete input rather than returning a truncated unit cell.
@@ -27,11 +28,11 @@ export function looksLikeCif(text) {
 }
 
 export function parseCif(text, sourceName = 'structure.cif', options = {}) {
-  return runParserSteps(parseCifSteps(text, sourceName, options));
+  return runCooperativeSteps(parseCifSteps(text, sourceName, options));
 }
 
 export function parseCifAsync(text, sourceName = 'structure.cif', options = {}) {
-  return runParserStepsAsync(parseCifSteps(text, sourceName, options), options);
+  return runCooperativeStepsAsync(parseCifSteps(text, sourceName, options), options);
 }
 
 /** A CIF 1.x lexer. Quoted values and column-one semicolon fields retain

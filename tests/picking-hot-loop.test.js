@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell, fractionalToCartesian } from '../src/data/model.js';
 import { lookAt, orthographic, perspective } from '../src/render/math.js';
-import { createReplication } from '../src/render/replication.js';
+import { createReplication } from '../src/data/replication.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 import { baselinePick } from './helpers/pick-reference.js';
 

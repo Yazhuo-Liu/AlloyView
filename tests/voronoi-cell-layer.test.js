@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCell } from '../src/data/model.js';
 import { calculateVoronoiGeometry } from '../src/analysis/voronoi.js';
-import { createVoronoiCellBatch, normalizeVoronoiCellOptions, NO_NEIGHBOR, periodicCopies, VoronoiCellLayer, VoronoiAllCellLayer } from '../src/render/voronoi-cell-layer.js';
+import { normalizeVoronoiCellOptions, VoronoiCellLayer, VoronoiAllCellLayer } from '../src/render/voronoi-cell-layer.js';
+import { createVoronoiCellBatch, NO_NEIGHBOR, periodicCopies } from '../src/render/voronoi-cell-geometry.js';
 
 // A one-atom periodic cube, relabeled as another source atom. Its faces all
 // border its own periodic images, so no other cell shares them.

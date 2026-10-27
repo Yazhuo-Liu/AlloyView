@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { Worker } from 'node:worker_threads';
 import { calculateIsosurface, calculateVolumeSlice, calculateIsosurfaceAsync, volumeSliceCsvSteps } from '../src/analysis/volumetric.js';
 import { VolumetricClient } from '../src/analysis/volumetric-client.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
-import { runParserSteps } from '../src/io/cooperative-parser.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
+import { runCooperativeSteps } from '../src/shared/cooperative-steps.js';
 
 function grid(dimensions = [3, 3, 3], fn = x => x, extras = {}) {
   const [nx, ny, nz] = dimensions, values = new Float64Array(nx * ny * nz);
@@ -58,7 +58,7 @@ test('slices interpolate in fractional grid coordinates and preserve exact physi
   assert.deepEqual([...slice.origin], [4.5, 5, 7]);
   const seam = calculateVolumeSlice(source, { axis: 0, index: 3 }); assert.equal(seam.values[0], 0); assert.equal(seam.origin[0], 6);
   assert.throws(() => calculateVolumeSlice(source, { axis: 1, index: 4 }), /within/);
-  const csv = runParserSteps(volumeSliceCsvSteps(slice, { stem: '../charge density' }));
+  const csv = runCooperativeSteps(volumeSliceCsvSteps(slice, { stem: '../charge density' }));
   assert.equal(csv.filename, 'charge_density-slice.csv');
   assert.match(await csv.blob.text(), /1,0,5.5,7,7,3.5,"e\/Å³"/);
 });

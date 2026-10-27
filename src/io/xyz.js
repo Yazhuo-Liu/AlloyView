@@ -1,4 +1,5 @@
-import { PARSER_CHECKPOINT_MASK, parseInputSteps, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
+import { PARSER_CHECKPOINT_MASK, parseInputSteps, splitParserLines } from './cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 import { cartesianToFractionalSteps, fractionalToCartesianSteps, fractionalToCartesianSummarySteps, wrapFractionalSteps, collectFrameSummarySteps, someParserValues } from './cooperative-coordinates.js';
 import { createCell, validateFrame } from '../data/model.js';
 import { attachFrameSummary } from '../data/frame-summary.js';
@@ -64,11 +65,11 @@ export async function readXyzFrame(blob, offsets, index, sourceName = 'trajector
  * scalar buffers; IDs and image-flag auxiliaries keep their full semantics.
  */
 export function parseXyzFrame(input, sourceName = 'structure.xyz', options = {}) {
-  return runParserSteps(parseXyzSteps(input, sourceName, options));
+  return runCooperativeSteps(parseXyzSteps(input, sourceName, options));
 }
 
 export function parseXyzFrameAsync(input, sourceName = 'structure.xyz', options = {}) {
-  return runParserStepsAsync(parseXyzSteps(input, sourceName, options), options);
+  return runCooperativeStepsAsync(parseXyzSteps(input, sourceName, options), options);
 }
 
 function* parseXyzSteps(input, sourceName, { projection = 'full' }) {
@@ -288,7 +289,7 @@ export function parseXyzTimestep(metadata) {
 }
 
 export function coordinatesForCell(rawPositions, cell, format, summaryOutput) {
-  return runParserSteps(coordinatesForCellSteps(rawPositions, cell, format, summaryOutput));
+  return runCooperativeSteps(coordinatesForCellSteps(rawPositions, cell, format, summaryOutput));
 }
 
 export function* coordinatesForCellSteps(rawPositions, cell, format, summaryOutput) {
@@ -315,7 +316,7 @@ export function* coordinatesForCellSteps(rawPositions, cell, format, summaryOutp
 }
 
 export function inferNonperiodicCell(positions, summaryOutput) {
-  return runParserSteps(inferNonperiodicCellSteps(positions, summaryOutput));
+  return runCooperativeSteps(inferNonperiodicCellSteps(positions, summaryOutput));
 }
 
 export function* inferNonperiodicCellSteps(positions, summaryOutput) {
@@ -337,7 +338,7 @@ export function* inferNonperiodicCellSteps(positions, summaryOutput) {
 }
 
 export function cellFromMetadata(metadata, positions, summaryOutput) {
-  return runParserSteps(cellFromMetadataSteps(metadata, positions, summaryOutput));
+  return runCooperativeSteps(cellFromMetadataSteps(metadata, positions, summaryOutput));
 }
 
 export function* cellFromMetadataSteps(metadata, positions, summaryOutput) {

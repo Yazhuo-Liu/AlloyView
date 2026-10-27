@@ -1,4 +1,5 @@
-import { PARSER_CHECKPOINT_MASK, parseInputSteps, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
+import { PARSER_CHECKPOINT_MASK, parseInputSteps, splitParserLines } from './cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 import {
   createCell,
   invert3,
@@ -122,11 +123,11 @@ export async function readLammpsFrame(blob, offsets, frameIndex, sourceName = 't
  * scalar buffers; IDs and image-flag auxiliaries keep their full semantics.
  */
 export function parseLammpsFrame(input, sourceName = 'trajectory.dump', options = {}) {
-  return runParserSteps(parseLammpsSteps(input, sourceName, options));
+  return runCooperativeSteps(parseLammpsSteps(input, sourceName, options));
 }
 
 export function parseLammpsFrameAsync(input, sourceName = 'trajectory.dump', options = {}) {
-  return runParserStepsAsync(parseLammpsSteps(input, sourceName, options), options);
+  return runCooperativeStepsAsync(parseLammpsSteps(input, sourceName, options), options);
 }
 
 function* parseLammpsSteps(input, sourceName, { projection = 'full' }) {

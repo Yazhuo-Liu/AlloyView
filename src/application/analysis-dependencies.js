@@ -1,5 +1,5 @@
 import { EXPRESSION_ALIASES, EXPRESSION_BUILTIN_NAMES } from '../properties/expressions.js';
-import { importedVectorComponents } from '../render/vector-settings.js';
+import { importedVectorComponents } from '../properties/vector-components.js';
 import { colorPropertyKey } from '../render/color-quantities.js';
 
 const builtins = new Set(EXPRESSION_BUILTIN_NAMES.map(name => name.toLowerCase()));

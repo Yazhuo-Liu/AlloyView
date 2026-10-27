@@ -1,7 +1,8 @@
 import { THERMAL_PROPERTY_NAMES, cartesianThermalToCif, thermalEllipsoidAxes } from '../crystal/thermal-ellipsoids.js';
 import { determinant3 } from '../data/model.js';
 import { isElementSymbol } from '../data/chemical-elements.js';
-import { PARSER_CHECKPOINT_MASK, runParserSteps, runParserStepsAsync } from './cooperative-parser.js';
+import { PARSER_CHECKPOINT_MASK } from './cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 
 export const STRUCTURE_EXPORT_FORMATS = Object.freeze([
   Object.freeze({ value: 'cif', label: 'CIF · expanded P1 cell' }),
@@ -17,21 +18,21 @@ const error = message => new Error(`Structure export: ${message}`);
  * POSCAR retains the source lattice-vector orientation. Neither file format
  * stores an arbitrary Cartesian cell origin. */
 export function createStructureExport(frame, options = {}) {
-  return downloadResult(runParserSteps(formatStructureSteps(frame, options)));
+  return downloadResult(runCooperativeSteps(formatStructureSteps(frame, options)));
 }
 
 export async function createStructureExportAsync(frame, options = {}, execution = {}) {
-  return downloadResult(await runParserStepsAsync(formatStructureSteps(frame, options), execution));
+  return downloadResult(await runCooperativeStepsAsync(formatStructureSteps(frame, options), execution));
 }
 
 /** Text helpers are useful for downstream tools and round-trip validation.
  * Downloads use Blob parts directly, avoiding a second full-size string. */
 export function structureExportText(frame, options = {}) {
-  return runParserSteps(formatStructureSteps(frame, options)).parts.join('');
+  return runCooperativeSteps(formatStructureSteps(frame, options)).parts.join('');
 }
 
 export async function structureExportTextAsync(frame, options = {}, execution = {}) {
-  return (await runParserStepsAsync(formatStructureSteps(frame, options), execution)).parts.join('');
+  return (await runCooperativeStepsAsync(formatStructureSteps(frame, options), execution)).parts.join('');
 }
 
 function downloadResult({ parts, ...metadata }) {

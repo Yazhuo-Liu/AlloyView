@@ -1,6 +1,6 @@
 import { determinant3 } from '../data/model.js';
 import { frameTypeCounts } from '../data/frame-summary.js';
-import { quaternionAxisAngle, quaternionBungeEuler } from '../analysis/grains.js';
+import { quaternionAxisAngle, quaternionBungeEuler } from '../data/quaternion.js';
 
 /** CSV values use JavaScript's shortest round-trip decimal representation.
  * Undefined/null are empty cells; NaN and infinities retain their identities.

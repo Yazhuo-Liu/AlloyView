@@ -5,7 +5,7 @@ import { calculateCoordinationPolyhedra } from '../src/analysis/coordination-pol
 import { AnalysisPool } from '../src/analysis/analysis-pool.js';
 import { NeighborSearch } from '../src/analysis/neighbors.js';
 import { createCell, cartesianToFractional } from '../src/data/model.js';
-import { createVoronoiCellMesh } from '../src/render/voronoi-cell-layer.js';
+import { createVoronoiCellMesh } from '../src/render/voronoi-cell-geometry.js';
 import { crystalFrame } from './helpers/crystals.js';
 
 function shell(points, vectors = [12, 0, 0, 0, 12, 0, 0, 0, 12]) {

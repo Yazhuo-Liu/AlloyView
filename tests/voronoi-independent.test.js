@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { calculateVoronoi, calculateVoronoiGeometry } from '../src/analysis/voronoi.js';
-import { createVoronoiCellMesh, VoronoiCellLayer } from '../src/render/voronoi-cell-layer.js';
+import { VoronoiCellLayer } from '../src/render/voronoi-cell-layer.js';
+import { createVoronoiCellMesh } from '../src/render/voronoi-cell-geometry.js';
 import { createCell } from '../src/data/model.js';
 
 const points = [[.079, .184, .727], [.342, .781, .091], [.674, .382, .523],

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 import { DisjointSet, GRAIN_DEFAULTS, GRAIN_MIN_PLOT_SIZE, buildGrainDendrogram, calculateGrains, fitMergeDistances, grainEdgeWeight,
-  quaternionAxisAngle, quaternionBungeEuler, segmentGrains, stableAscendingOrder, suggestMergeThreshold, validateGrainParameters } from '../src/analysis/grains.js';
+  segmentGrains, stableAscendingOrder, suggestMergeThreshold, validateGrainParameters } from '../src/analysis/grains.js';
+import { quaternionAxisAngle, quaternionBungeEuler } from '../src/data/quaternion.js';
 import { latticeDisorientation } from '../src/analysis/disorientation.js';
 import { calculatePtm } from '../src/analysis/ptm.js';
 import { GrainSegmentationClient } from '../src/analysis/grains-client.js';

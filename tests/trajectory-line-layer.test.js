@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCell } from '../src/data/model.js';
-import { createReplication } from '../src/render/replication.js';
+import { createReplication } from '../src/data/replication.js';
 import { TrajectoryLineLayer, normalizeTrajectoryLineOptions } from '../src/render/trajectory-line-layer.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 

@@ -1,7 +1,7 @@
 import { PTM_MAX_NEIGHBORS } from '../ptm.js';
 import { adaptiveCnaInitialRadius, MAX_GPU_CNA_RADIUS_ATTEMPTS } from './cna.js';
 import { exactCoordinateWords } from './centrosymmetry.js';
-import { checkSignal, GpuUnavailableError, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, yieldWorker } from './support.js';
 import { PTM_NEIGHBORS_SHADER, PTM_NEIGHBOR_ROW_WORDS } from './ptm-neighbors-shaders.js';
 
 export const MAX_GPU_PTM_NEIGHBOR_BYTES = 256 * 1024 ** 2;

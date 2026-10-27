@@ -1,7 +1,7 @@
-import { CpuBudget } from './cpu-budget.js';
+import { CpuBudget } from '../shared/cpu-budget.js';
 import { validateVolumetricDataset, volumetricCellDimensions, volumetricDatasetMetadata } from '../data/volumetric-grid.js';
 import { validateVolumetricParameters, isosurfaceSteps, volumeSliceSteps, prepareVolumetricRenderGeometrySteps, volumeSliceCsvSteps } from './volumetric.js';
-import { runParserStepsAsync } from '../io/cooperative-parser.js';
+import { runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 
 const abortError = () => new DOMException('Volumetric analysis was cancelled.', 'AbortError');
 const checkAbort = signal => { if (signal?.aborted) throw abortError(); };
@@ -149,11 +149,11 @@ export class VolumetricClient {
       let values;
       if (this.sharedMemory) {
         if (this.snapshot?.key !== key) {
-          const pending = runParserStepsAsync(copyValues(dataset.values, true), { signal });
+          const pending = runCooperativeStepsAsync(copyValues(dataset.values, true), { signal });
           this.snapshot = { key, pending };
         }
         try { values = await this.snapshot.pending; } catch (error) { if (this.snapshot?.key === key) this.snapshot = null; throw error; }
-      } else values = await runParserStepsAsync(copyValues(dataset.values), { signal });
+      } else values = await runCooperativeStepsAsync(copyValues(dataset.values), { signal });
       checkAbort(signal);
       const copy = { ...volumetricDatasetMetadata(dataset), revision: dataset.revision ?? 0, values };
       await this.request(slot, { type: 'prepare', key, dataset: copy }, { signal,
@@ -195,8 +195,8 @@ export class VolumetricClient {
         if (useGpu && options.kind === 'isosurface') fallbackReason = 'Workers are unavailable; using the CPU implementation.';
         const result = await this.withPermit(activeSignal, false, async () => {
           const steps = options.kind === 'slice' ? volumeSliceSteps(dataset, options) : isosurfaceSteps(dataset, { ...options, onProgress: progress });
-          let result = await runParserStepsAsync(steps, { signal: activeSignal });
-          if (result.kind === 'isosurface') result = await runParserStepsAsync(prepareVolumetricRenderGeometrySteps(result, dataset), { signal: activeSignal });
+          let result = await runCooperativeStepsAsync(steps, { signal: activeSignal });
+          if (result.kind === 'isosurface') result = await runCooperativeStepsAsync(prepareVolumetricRenderGeometrySteps(result, dataset), { signal: activeSignal });
           return result;
         });
         return { ...result, backend: 'cpu', workerCount: 1, elapsedMs: performance.now() - startedAt, fallbackReason };
@@ -236,7 +236,7 @@ export class VolumetricClient {
           } catch (error) { failure ??= error; controller.abort(); }
         }));
         if (failure) throw failure;
-        const result = await runParserStepsAsync(mergeSurfaces(ranges, dataset, options), { signal: activeSignal });
+        const result = await runCooperativeStepsAsync(mergeSurfaces(ranges, dataset, options), { signal: activeSignal });
         progress({ phase: 'complete', backend: 'cpu', workerCount: count, completedCells, totalCells: options.endCell - options.startCell });
         return { ...result, backend: 'cpu', workerCount: count, gridUploads, sharedMemory: this.sharedMemory, fallbackReason, elapsedMs: performance.now() - startedAt };
       } finally { activeSignal.removeEventListener('abort', abort); }
@@ -245,8 +245,8 @@ export class VolumetricClient {
 
   exportSliceCsv(result, options = {}, { signal } = {}) {
     return this.enqueue(activeSignal => this.withPermit(activeSignal, false, async () => {
-      if (!this.createWorker) return runParserStepsAsync(volumeSliceCsvSteps(result, options), { signal: activeSignal });
-      const values = await runParserStepsAsync(copyValues(result.values), { signal: activeSignal });
+      if (!this.createWorker) return runCooperativeStepsAsync(volumeSliceCsvSteps(result, options), { signal: activeSignal });
+      const values = await runCooperativeStepsAsync(copyValues(result.values), { signal: activeSignal });
       const copy = { kind: result.kind, values, width: result.width, height: result.height,
         origin: result.origin, steps: result.steps, unit: result.unit };
       return this.request(this.slot(0), { type: 'csv', result: copy, options }, { signal: activeSignal, transfer: [values.buffer] });

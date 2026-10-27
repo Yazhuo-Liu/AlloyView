@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GpuRuntime, GPU_HARDWARE_BATCH_ATOMS, GPU_SOFTWARE_BATCH_ATOMS, GPU_BATCHES_IN_FLIGHT, GPU_MAX_BATCH_ATOMS,
   GPU_MIN_BATCH_ATOMS, GPU_TARGET_BATCH_MS, GPU_MAX_BIN_OCCUPANCY, GPU_MAX_NEIGHBOR_DENSITY_FACTOR,
-  isSoftwareGpuAdapter, readGpuBuffers, neighborDispatchPolicy } from '../src/analysis/gpu/runtime.js';
+  isSoftwareGpuAdapter, neighborDispatchPolicy } from '../src/analysis/gpu/runtime.js';
+import { readGpuBuffers } from '../src/analysis/gpu/support.js';
 import { exactCoordinateWords, prepareCspCoordinates } from '../src/analysis/gpu/centrosymmetry.js';
 import { SORT_NEIGHBORS_SHADER } from '../src/analysis/gpu/neighbors.js';
 import { crystalFrame } from './helpers/crystals.js';

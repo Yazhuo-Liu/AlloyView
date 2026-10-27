@@ -1,6 +1,6 @@
 import { DXA_CODE_WARMUP_MIN_ATOMS, dxaWorkerCount, normalizeDefectMeshRequest, preflightDxaMemory, validateDxaFrame, validateDxaParameters } from './dxa.js';
 import { validateSurfaceMask, validateSurfaceMeshParameters } from './surface-mesh.js';
-import { CpuBudget } from './cpu-budget.js';
+import { CpuBudget } from '../shared/cpu-budget.js';
 import { createAnalysisProgressReporter } from './progress.js';
 
 const COPY_CHUNK_VALUES = 512 * 1024;

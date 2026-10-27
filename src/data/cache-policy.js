@@ -1,5 +1,15 @@
-import { referenceMappingCacheBytes } from '../analysis/reference-strain.js';
 import { retainedIdBytes } from './replication-ids.js';
+
+/** Analyses that keep a private per-ID table beside a frame (such as the
+ * numeric reference mapping) register an estimator here, so their retained
+ * bytes are charged to the frame that owns the IDs without this module
+ * depending on any analysis. Each estimator receives a frame's `ids` and
+ * returns the bytes it retains for them, or 0. */
+const retainedIdBytesEstimators = new Set();
+export function registerRetainedIdBytes(estimator) {
+  retainedIdBytesEstimators.add(estimator);
+  return () => { retainedIdBytesEstimators.delete(estimator); };
+}
 
 const MEBIBYTE = 1024 ** 2;
 const GIBIBYTE = 1024 ** 3;
@@ -18,7 +28,8 @@ export function frameMemoryUsage(frame) {
   // Numeric correspondence lookups are weakly keyed by the reference IDs.
   // Their private snapshot/table remains live beside an otherwise unchanged
   // frame, so include it without exposing it as a scientific property.
-  let idBytes = frame?.ids ? referenceMappingCacheBytes(frame.ids) : 0;
+  let idBytes = 0;
+  if (frame?.ids) for (const estimate of retainedIdBytesEstimators) idBytes += estimate(frame.ids);
   // Physical replication retains the parsed source for switching back, and
   // uses stable compound IDs stored as strings rather than a typed ID buffer.
   const knownIdBytes = frame?.ids ? retainedIdBytes(frame.ids) : undefined;

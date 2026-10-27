@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeRadiusPercent, radiiByType } from '../src/render/atomic-radii.js';
+import { normalizeRadiusPercent, radiiByType } from '../src/data/atomic-radii.js';
 
 test('atom radii follow element labels and retain a generic fallback', () => {
   const radii = radiiByType({

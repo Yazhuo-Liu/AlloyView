@@ -3,7 +3,7 @@ import { Worker } from 'node:worker_threads';
 import { performance } from 'node:perf_hooks';
 import { availableParallelism } from 'node:os';
 import { GrainSegmentationClient } from '../../src/analysis/grains-client.js';
-import { CpuBudget } from '../../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../../src/shared/cpu-budget.js';
 import { calculatePtm } from '../../src/analysis/ptm.js';
 import { crystalFrame } from '../../tests/helpers/crystals.js';
 

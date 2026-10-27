@@ -1,4 +1,5 @@
-import { PARSER_CHECKPOINT_MASK, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
+import { PARSER_CHECKPOINT_MASK, splitParserLines } from './cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 import { createCell, validateFrame } from '../data/model.js';
 import { attachFrameSummary } from '../data/frame-summary.js';
 import { coordinatesForCellSteps } from './xyz.js';
@@ -38,11 +39,11 @@ export function looksLikeLammpsData(text) {
  * is ignored; boundaries are not stored in data files, so every axis is
  * periodic, as `read_data` assumes until a `boundary` command says otherwise. */
 export function parseLammpsData(text, sourceName = 'LAMMPS data') {
-  return runParserSteps(parseLammpsDataSteps(text, sourceName));
+  return runCooperativeSteps(parseLammpsDataSteps(text, sourceName));
 }
 
 export function parseLammpsDataAsync(text, sourceName = 'LAMMPS data', options = {}) {
-  return runParserStepsAsync(parseLammpsDataSteps(text, sourceName), options);
+  return runCooperativeStepsAsync(parseLammpsDataSteps(text, sourceName), options);
 }
 
 function* parseLammpsDataSteps(text, sourceName) {

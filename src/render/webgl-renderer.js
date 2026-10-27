@@ -1,7 +1,7 @@
 import { createConservativeDepthProgram, resetConservativeDepth, orderedOpaqueReplicas } from './conservative-depth.js';
 import { cartesianToFractional, cellVertices } from '../data/model.js';
 import { frameCoordinateBounds, invalidateFrameCoordinateBounds } from '../data/frame-summary.js';
-import { createReplication } from './replication.js';
+import { createReplication } from '../data/replication.js';
 import { installCameraInteractions } from './camera-interactions.js';
 import { selectAtomsInRectangle } from './box-selection.js';
 import { VIEW_PRESETS } from './camera-presets.js';

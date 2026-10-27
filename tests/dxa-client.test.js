@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DxaClient } from '../src/analysis/dxa-client.js';
 import { createCell } from '../src/data/model.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 
 class FakeWorker {
   constructor() { this.listeners = new Map(); this.messages = []; this.terminated = false; }

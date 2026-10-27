@@ -1,4 +1,4 @@
-import { importedVectorComponents } from './vector-settings.js';
+import { importedVectorComponents } from '../properties/vector-components.js';
 import { ORIENTATION_COLOR_MODES, grainOrientationSource, ptmOrientationSource } from './orientation-colors.js';
 import { fileDisplayPositions } from '../data/coordinate-display.js';
 

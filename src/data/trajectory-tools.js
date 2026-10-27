@@ -1,7 +1,7 @@
 import { canonicalAtomNumber } from './atom-ids.js';
 import { cartesianToFractional, createCell, fractionalToCartesian, invert3 } from './model.js';
 import { fractionalToCartesianSummary } from './frame-summary.js';
-import { normalizeRepetitions } from '../render/replication.js';
+import { normalizeRepetitions } from './replication.js';
 
 /** Label shown beside display coordinates inferred by `TrajectoryUnwrapper`. */
 export const INFERRED_UNWRAP_SOURCE = 'inferred from adjacent frames';

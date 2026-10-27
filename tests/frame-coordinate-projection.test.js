@@ -9,7 +9,7 @@ import { parseXyzFrame } from '../src/io/xyz.js';
 import { parsePdbFrame } from '../src/io/pdb.js';
 import { parseFrameDescriptor } from '../src/workers/frame-parser.js';
 import { FrameParserPool } from '../src/data/frame-parser-pool.js';
-import { CpuBudget } from '../src/analysis/cpu-budget.js';
+import { CpuBudget } from '../src/shared/cpu-budget.js';
 import { decompressToFile } from '../src/io/gzip.js';
 
 const encode = text => new TextEncoder().encode(text);

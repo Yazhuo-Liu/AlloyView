@@ -3,6 +3,7 @@ import { atomRange, NeighborSearch, NeighborBuffer } from './neighbors.js';
 import { yieldToMain } from '../shared/task-yield.js';
 import { canonicalAtomNumber } from '../data/atom-ids.js';
 import { cpuMemoryBudget } from './cpu-memory.js';
+import { registerRetainedIdBytes } from '../data/cache-policy.js';
 
 export const REFERENCE_STRAIN_FIELDS = Object.freeze([
   'referenceShearStrain', 'referenceHydrostaticStrain', 'referenceVolumeChange',
@@ -466,3 +467,6 @@ function minimumImageChange(change, cell, heights, scale) {
   change[0] += s0; change[1] += s1; change[2] += s2;
   if (scale) for (let axis = 0; axis < 3; axis += 1) change[axis] /= scale[axis];
 }
+
+// Frame caches charge the retained lookup table to the frame owning the IDs.
+registerRetainedIdBytes(ids => referenceMappingCacheBytes(ids));

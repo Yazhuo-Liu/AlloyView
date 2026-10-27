@@ -7,7 +7,7 @@ import {
   dislocationSlicePlanes, normalizeDislocationOptions,
 } from '../src/render/dislocation-layer.js';
 import { validateSlices } from '../src/render/slicing.js';
-import { createReplication } from '../src/render/replication.js';
+import { createReplication } from '../src/data/replication.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 
 const cell = createCell({ vectors: [10, 0, 0, 4, 8, 0, 0, 0, 12], origin: [4, 5, 6], triclinic: true });

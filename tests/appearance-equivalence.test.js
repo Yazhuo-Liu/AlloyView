@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyAppearance, findAtomIndex, hexColor } from '../src/render/appearance.js';
-import { radiiByType } from '../src/render/atomic-radii.js';
+import { radiiByType } from '../src/data/atomic-radii.js';
 import { normalizeSelectionGroups, selectionGroupStyles } from '../src/data/selection-groups.js';
 
 // The original per-atom implementation, kept as the specification.

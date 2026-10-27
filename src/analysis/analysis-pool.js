@@ -14,7 +14,7 @@ import { REFERENCE_STRAIN_FIELDS, referenceMappingCacheBytes } from './reference
 import { GpuAnalysisClient } from './gpu/client.js';
 import { validateReferences } from './lattice.js';
 import { validatePtmParameters, validatePreparedPtmNeighbors, PTM_NEIGHBOR_LIST_FIELDS } from './ptm.js';
-import { CpuBudget } from './cpu-budget.js';
+import { CpuBudget } from '../shared/cpu-budget.js';
 import { cpuMemoryBudget, chooseMemoryWorkerCount } from './cpu-memory.js';
 import { yieldToMain } from '../shared/task-yield.js';
 import { analyzeDxaStagePool, DXA_STAGE_KINDS } from './dxa-cpu-pool.js';

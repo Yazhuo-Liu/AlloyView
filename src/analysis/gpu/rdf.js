@@ -2,7 +2,7 @@ import { rdfNormalization, finalizeRdf } from '../rdf.js';
 import { MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { cellFaceHeights } from '../../data/model.js';
 import { makeNeighborShader } from './neighbors.js';
-import { GpuUnavailableError, gpuInputUnsupported, readGpuBuffers, yieldWorker } from './runtime.js';
+import { GpuUnavailableError, gpuInputUnsupported, readGpuBuffers, yieldWorker } from './support.js';
 import { validateAnalysisInput } from '../errors.js';
 
 const U32_MAX = 0xffff_ffff;

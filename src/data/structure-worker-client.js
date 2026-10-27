@@ -1,5 +1,5 @@
-import { normalizeLocalFiles } from '../io/local-files.js';
-import { cpuWorkerLimit } from '../analysis/cpu-budget.js';
+import { normalizeLocalFiles } from '../shared/local-files.js';
+import { cpuWorkerLimit } from '../shared/cpu-budget.js';
 import { SharedFrameRequests } from './shared-frame-requests.js';
 import { ReplicationIdsReceiver } from './replication-ids.js';
 

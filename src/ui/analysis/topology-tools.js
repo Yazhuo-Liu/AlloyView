@@ -4,7 +4,7 @@ import { analysisBackendLabel, analysisBackendDetails, analysisProgressText } fr
 import { renderDistributionChart, renderStatisticsTable } from '../../render/distribution-chart.js';
 import { initializeVoronoiResults } from '../../render/voronoi-results.js';
 import { voronoiRadiiForTypes, voronoiRadiiFingerprint } from '../../analysis/voronoi-radii.js';
-import { radiusForElement } from '../../render/atomic-radii.js';
+import { radiusForElement } from '../../data/atomic-radii.js';
 import { COMPUTED_PROPERTY_KIND } from '../../properties/computed-properties.js';
 
 export const TOPOLOGY_PROPERTIES = Object.freeze({

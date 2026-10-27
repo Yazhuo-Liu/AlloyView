@@ -1,6 +1,6 @@
 import { MAX_BONDS, MAX_NEIGHBORS_PER_ATOM } from '../bonds.js';
 import { NeighborSearch, atomRange } from '../neighbors.js';
-import { checkSignal, GpuUnavailableError, gpuInputUnsupported, readGpuBuffers, yieldWorker } from './runtime.js';
+import { checkSignal, GpuUnavailableError, gpuInputUnsupported, readGpuBuffers, yieldWorker } from './support.js';
 import { BONDS_COUNT_SHADER, BONDS_WRITE_SHADER, BOND_ATOM_WORDS, BOND_RECORD_WORDS } from './bonds-shaders.js';
 import { validateAnalysisInput } from '../errors.js';
 

@@ -1,7 +1,7 @@
 import { normalizeDiffractionParameters, prepareDiffractionSourceSteps, retargetDiffractionSourceSteps,
   prepareDiffractionSteps, calculateDiffractionRangeSteps,
   finalizeDiffractionSteps, diffractionCsvSteps } from '../analysis/diffraction.js';
-import { runParserStepsAsync } from '../io/cooperative-parser.js';
+import { runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 
 let active = null, frame = null, sourceKey = null, prepared = null, preparedKey = null;
 let preparationSequence = 0, preparedParameters = null, sourceCache = new Map(), sharedCache = new WeakMap();
@@ -130,13 +130,13 @@ async function run(data) {
           // Radiation edits change species factors, not the immutable atom
           // geometry. Keep one geometry snapshot per thermal mode, including
           // its shared-memory copy, when switching between all three models.
-          source = await runParserStepsAsync(geometry
+          source = await runCooperativeStepsAsync(geometry
             ? retargetDiffractionSourceSteps(geometry, settings)
             : prepareDiffractionSourceSteps(frame, settings), options);
           sourceCache.set(cacheKey, source);
         }
-        let next = await runParserStepsAsync(prepareDiffractionSteps(frame, settings, { source }), options);
-        if (data.shared) next = await runParserStepsAsync(sharedPreparedSteps(next), options);
+        let next = await runCooperativeStepsAsync(prepareDiffractionSteps(frame, settings, { source }), options);
+        if (data.shared) next = await runCooperativeStepsAsync(sharedPreparedSteps(next), options);
         prepared = next; preparedKey = `${sourceKey}:${++preparationSequence}`; preparedParameters = signature;
       }
       result = { key: preparedKey, atomCount: prepared.atomCount, reflectionCount: prepared.reflectionCount,
@@ -156,15 +156,15 @@ async function run(data) {
       } finally { for (const port of data.ports) port.close(); }
     } else if (data.type === 'range') {
       if (!prepared || preparedKey !== data.key) throw new Error('Diffraction stage input is no longer resident.');
-      result = await runParserStepsAsync(calculateDiffractionRangeSteps(prepared, { start: data.start, end: data.end }, { onProgress: progress }), options);
+      result = await runCooperativeStepsAsync(calculateDiffractionRangeSteps(prepared, { start: data.start, end: data.end }, { onProgress: progress }), options);
     } else if (data.type === 'gpu') {
       if (!prepared || preparedKey !== data.key) throw new Error('Diffraction stage input is no longer resident.');
       const { runtime, module } = await gpuResources(options.signal);
       result = await module.analyzeGpuDiffraction(runtime, prepared, { ...options, onProgress: progress, withCpu });
     } else if (data.type === 'finalize') {
       if (!prepared || preparedKey !== data.key) throw new Error('Diffraction stage input is no longer resident.');
-      result = await runParserStepsAsync(finalizeDiffractionSteps(prepared, data.parts), options);
-    } else if (data.type === 'csv') result = await runParserStepsAsync(diffractionCsvSteps(data.result, data.options), options);
+      result = await runCooperativeStepsAsync(finalizeDiffractionSteps(prepared, data.parts), options);
+    } else if (data.type === 'csv') result = await runCooperativeStepsAsync(diffractionCsvSteps(data.result, data.options), options);
     else throw new Error('Unknown diffraction Worker request.');
     const owned = bufferSet(prepared), transfer = [...bufferSet(result)].filter(buffer => !owned.has(buffer));
     self.postMessage({ id: data.id, ok: true, result, sourceKey, preparedKey }, transfer);

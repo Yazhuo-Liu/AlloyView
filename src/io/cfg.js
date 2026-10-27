@@ -1,4 +1,5 @@
-import { PARSER_CHECKPOINT_MASK, parseInputSteps, runParserSteps, runParserStepsAsync, splitParserLines } from './cooperative-parser.js';
+import { PARSER_CHECKPOINT_MASK, parseInputSteps, splitParserLines } from './cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 import { fractionalToCartesianSteps, fractionalToCartesianSummarySteps, wrapFractionalSteps, someParserValues } from './cooperative-coordinates.js';
 import {
   createCell,
@@ -31,11 +32,11 @@ const CFG_BOUNDARY_TOLERANCE = 1e-5;
  * scalar buffers; IDs and image-flag auxiliaries keep their full semantics.
  */
 export function parseCfg(input, sourceName = 'structure.cfg', options = {}) {
-  return runParserSteps(parseCfgSteps(input, sourceName, options));
+  return runCooperativeSteps(parseCfgSteps(input, sourceName, options));
 }
 
 export function parseCfgAsync(input, sourceName = 'structure.cfg', options = {}) {
-  return runParserStepsAsync(parseCfgSteps(input, sourceName, options), options);
+  return runCooperativeStepsAsync(parseCfgSteps(input, sourceName, options), options);
 }
 
 function* parseCfgSteps(input, sourceName, { projection = 'full', deferUnwrap = false }) {

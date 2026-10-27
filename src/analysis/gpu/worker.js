@@ -1,4 +1,5 @@
-import { GpuRuntime, checkSignal, GpuUnavailableError, EXACT_PAIR_ANALYSIS_KINDS } from './runtime.js';
+import { GpuRuntime, EXACT_PAIR_ANALYSIS_KINDS } from './runtime.js';
+import { checkSignal, GpuUnavailableError } from './support.js';
 import { analyzeGpuCoordination } from './coordination.js';
 import { analyzeGpuRdf } from './rdf.js';
 import { validateAnalysisParameters } from '../analysis-validation.js';

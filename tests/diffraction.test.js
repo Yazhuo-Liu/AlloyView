@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { crystalFrame } from './helpers/crystals.js';
 import { createCell } from '../src/data/model.js';
 import { replicateFrame } from '../src/data/replicate.js';
-import { runParserSteps } from '../src/io/cooperative-parser.js';
+import { runCooperativeSteps } from '../src/shared/cooperative-steps.js';
 import { calculateDiffraction, calculateDiffractionAsync, prepareDiffraction, prepareDiffractionSourceSteps,
   enumerateDiffractionSteps, calculateDiffractionRange, finalizeDiffractionSteps, evaluateDiffractionReflection,
   normalizeDiffractionParameters, diffractionCsvSteps, retargetDiffractionSourceSteps,
@@ -110,14 +110,14 @@ test('nearby triclinic peaks are kept distinct, and Gaussian profile area equals
 
 test('disjoint CPU ranges reproduce every result and source preparation reuses immutable inputs across settings', () => {
   const frame = fixture('diamond', 1, 5.431, 'Si'), prepared = prepareDiffraction(frame), count = prepared.reflectionCount;
-  const result = runParserSteps(finalizeDiffractionSteps(prepared, [calculateDiffractionRange(prepared, { start: 7, end: count }), calculateDiffractionRange(prepared, { start: 0, end: 7 })]));
+  const result = runCooperativeSteps(finalizeDiffractionSteps(prepared, [calculateDiffractionRange(prepared, { start: 7, end: count }), calculateDiffractionRange(prepared, { start: 0, end: 7 })]));
   assert.deepEqual(result, calculateDiffraction(frame));
-  const source = runParserSteps(prepareDiffractionSourceSteps(frame));
-  const a = runParserSteps(enumerateDiffractionSteps(source, { wavelength: 1.5406 }));
-  const b = runParserSteps(enumerateDiffractionSteps(source, { wavelength: .71073 }));
+  const source = runCooperativeSteps(prepareDiffractionSourceSteps(frame));
+  const a = runCooperativeSteps(enumerateDiffractionSteps(source, { wavelength: 1.5406 }));
+  const b = runCooperativeSteps(enumerateDiffractionSteps(source, { wavelength: .71073 }));
   assert.equal(a.fractional, b.fractional); assert.equal(a.coefficients, b.coefficients); assert.notEqual(a.hkls, b.hkls);
-  assert.throws(() => runParserSteps(enumerateDiffractionSteps(source, { useThermal: false })), /thermal-displacement setting/);
-  assert.throws(() => runParserSteps(finalizeDiffractionSteps(prepared, [calculateDiffractionRange(prepared, { end: 7 })])), /incomplete/);
+  assert.throws(() => runCooperativeSteps(enumerateDiffractionSteps(source, { useThermal: false })), /thermal-displacement setting/);
+  assert.throws(() => runCooperativeSteps(finalizeDiffractionSteps(prepared, [calculateDiffractionRange(prepared, { end: 7 })])), /incomplete/);
 });
 
 test('scientific and work-limit validation rejects malformed inputs rather than inventing chemistry or infinite work', () => {
@@ -139,7 +139,7 @@ test('async preparation and structure-factor work cancel without mutating source
 test('peak and curve CSV exports retain scientific values, hkl multiplicities and explicit settings', async () => {
   const result = calculateDiffraction(fixture('diamond', 1, 5.431, 'Si'));
   for (const kind of ['peaks', 'profile']) {
-    const output = runParserSteps(diffractionCsvSteps(result, { kind, stem: 'Si' })), text = await output.blob.text();
+    const output = runCooperativeSteps(diffractionCsvSteps(result, { kind, stem: 'Si' })), text = await output.blob.text();
     assert.match(text, /wavelength_A/); assert.match(text, /1\.5406/); assert.equal(text.trim().split(/\r?\n/).length, 1 + (kind === 'peaks' ? result.peaks.length : result.profile.twoTheta.length));
     assert.match(output.filename, new RegExp(`Si-xrd-${kind}\\.csv`));
   }
@@ -206,15 +206,15 @@ test('electron and neutron powder corrections omit X-ray polarization and retain
 
 test('explicit deuterium shares hydrogen electronic factors while preserving its nuclear amplitude and source label', () => {
   const hydrogen = fixture('sc', 1, 4, 'H'), deuterium = fixture('sc', 1, 4, 'D');
-  const source = runParserSteps(prepareDiffractionSourceSteps(deuterium, { radiation: 'neutron', useThermal: false }));
+  const source = runCooperativeSteps(prepareDiffractionSourceSteps(deuterium, { radiation: 'neutron', useThermal: false }));
   for (const radiation of ['xray', 'electron']) {
     const settings = { radiation, useThermal: false };
     const h = calculateDiffraction(hydrogen, settings), d = calculateDiffraction(deuterium, settings);
     assert.deepEqual(d.peaks, h.peaks); assert.deepEqual(d.profile, h.profile);
-    const target = runParserSteps(retargetDiffractionSourceSteps(source, settings));
+    const target = runCooperativeSteps(retargetDiffractionSourceSteps(source, settings));
     assert.deepEqual(target.typeLabels, ['D']); assert.equal(target.fractional, source.fractional);
-    const prepared = runParserSteps(enumerateDiffractionSteps(target, settings));
-    assert.deepEqual(runParserSteps(finalizeDiffractionSteps(prepared, [calculateDiffractionRange(prepared)])), d);
+    const prepared = runCooperativeSteps(enumerateDiffractionSteps(target, settings));
+    assert.deepEqual(runCooperativeSteps(finalizeDiffractionSteps(prepared, [calculateDiffractionRange(prepared)])), d);
   }
   assert.equal(source.coefficients[0], 6.671); assert.deepEqual(source.typeLabels, ['D']);
   const h = prepareDiffraction(hydrogen, { radiation: 'neutron', useThermal: false });
@@ -223,26 +223,26 @@ test('explicit deuterium shares hydrogen electronic factors while preserving its
 });
 
 test('radiation retargeting reuses geometry and refreshes only scattering tables without mutating other models', () => {
-  const source = runParserSteps(prepareDiffractionSourceSteps(fixture())), xray = source.coefficients.slice();
+  const source = runCooperativeSteps(prepareDiffractionSourceSteps(fixture())), xray = source.coefficients.slice();
   for (const radiation of ['electron', 'neutron']) {
-    const target = runParserSteps(retargetDiffractionSourceSteps(source, { radiation }));
+    const target = runCooperativeSteps(retargetDiffractionSourceSteps(source, { radiation }));
     for (const key of ['fractional', 'types', 'occupancy', 'thermal', 'cellVectors']) assert.equal(target[key], source[key]);
     assert.equal(target.radiation, radiation); assert.notEqual(target.coefficients, source.coefficients);
-    assert.equal(runParserSteps(retargetDiffractionSourceSteps(target, { radiation })), target);
-    assert.throws(() => runParserSteps(enumerateDiffractionSteps(source, { radiation })), /radiation setting/);
-    const prepared = runParserSteps(enumerateDiffractionSteps(target, { radiation }));
+    assert.equal(runCooperativeSteps(retargetDiffractionSourceSteps(target, { radiation })), target);
+    assert.throws(() => runCooperativeSteps(enumerateDiffractionSteps(source, { radiation })), /radiation setting/);
+    const prepared = runCooperativeSteps(enumerateDiffractionSteps(target, { radiation }));
     const split = Math.floor(prepared.reflectionCount / 2);
-    assert.deepEqual(runParserSteps(finalizeDiffractionSteps(prepared, [calculateDiffractionRange(prepared, { end: split }), calculateDiffractionRange(prepared, { start: split })])), calculateDiffraction(fixture(), { radiation }));
+    assert.deepEqual(runCooperativeSteps(finalizeDiffractionSteps(prepared, [calculateDiffractionRange(prepared, { end: split }), calculateDiffractionRange(prepared, { start: split })])), calculateDiffraction(fixture(), { radiation }));
   }
   assert.deepEqual(source.coefficients, xray); assert.equal(source.radiation, 'xray');
-  const unknown = runParserSteps(prepareDiffractionSourceSteps(fixture('sc', 1, 4, 'Tc')));
-  assert.throws(() => runParserSteps(retargetDiffractionSourceSteps(unknown, { radiation: 'neutron' })), /natural|isotope|unsupported/i);
+  const unknown = runCooperativeSteps(prepareDiffractionSourceSteps(fixture('sc', 1, 4, 'Tc')));
+  assert.throws(() => runCooperativeSteps(retargetDiffractionSourceSteps(unknown, { radiation: 'neutron' })), /natural|isotope|unsupported/i);
   assert.equal(unknown.radiation, 'xray');
 });
 
 test('electron and neutron CSVs identify radiation, scattering model, amplitude units and geometry correction', async () => {
   for (const radiation of ['electron', 'neutron']) for (const kind of ['peaks', 'profile']) {
-    const result = calculateDiffraction(fixture(), { radiation }), output = runParserSteps(diffractionCsvSteps(result, { kind }));
+    const result = calculateDiffraction(fixture(), { radiation }), output = runCooperativeSteps(diffractionCsvSteps(result, { kind }));
     const text = await output.blob.text();
     assert.match(text, /radiation,scattering_model,scattering_units,intensity_units,geometry_correction/);
     assert.match(text, new RegExp(radiation)); assert.ok(text.includes(result.scatteringModel)); assert.ok(text.includes(result.scatteringUnits));
@@ -253,7 +253,7 @@ test('electron and neutron CSVs identify radiation, scattering model, amplitude 
 test('peak CSV distinguishes X-ray polarization from optional electron and neutron powder Lorentz correction', async () => {
   for (const radiation of ['xray', 'electron', 'neutron']) for (const enabled of [true, false]) {
     const result = calculateDiffraction(fixture(), { radiation, lorentzPolarization: enabled });
-    const output = runParserSteps(diffractionCsvSteps(result));
+    const output = runCooperativeSteps(diffractionCsvSteps(result));
     const [header, row] = (await output.blob.text()).trim().split('\r\n');
     const fields = row.match(/"[^"]*"|[^,]+/g), names = header.split(',');
     assert.equal(fields[names.indexOf('lorentz_polarization')], String(radiation === 'xray' && enabled));

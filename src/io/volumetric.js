@@ -1,5 +1,6 @@
 import { parsePoscar, parsePoscarAsync, looksLikePoscar, MAX_POSCAR_ATOMS } from './poscar.js';
-import { runParserSteps, runParserStepsAsync, splitParserLines, PARSER_CHECKPOINT_MASK } from './cooperative-parser.js';
+import { splitParserLines, PARSER_CHECKPOINT_MASK } from './cooperative-parser.js';
+import { runCooperativeSteps, runCooperativeStepsAsync } from '../shared/cooperative-steps.js';
 import { cartesianToFractionalSteps, collectFrameSummarySteps } from './cooperative-coordinates.js';
 import { attachFrameSummary } from '../data/frame-summary.js';
 import { createCell, determinant3, validateFrame } from '../data/model.js';
@@ -92,21 +93,21 @@ export function looksLikeVaspVolume(text) {
 }
 
 export function parseCube(text, sourceName = 'structure.cube', options = {}) {
-  return runParserSteps(cubeSteps(text, sourceName, options));
+  return runCooperativeSteps(cubeSteps(text, sourceName, options));
 }
 export function parseCubeAsync(text, sourceName = 'structure.cube', options = {}) {
-  return runParserStepsAsync(cubeSteps(text, sourceName, options), options);
+  return runCooperativeStepsAsync(cubeSteps(text, sourceName, options), options);
 }
 
 export function parseVaspVolume(text, sourceName = 'vasp-volume', options = {}) {
-  const prepared = runParserSteps(prepareVaspSteps(text, sourceName, options));
+  const prepared = runCooperativeSteps(prepareVaspSteps(text, sourceName, options));
   const frame = parsePoscar(prepared.header, sourceName);
-  return runParserSteps(vaspDataSteps(frame, prepared));
+  return runCooperativeSteps(vaspDataSteps(frame, prepared));
 }
 export async function parseVaspVolumeAsync(text, sourceName = 'vasp-volume', options = {}) {
-  const prepared = await runParserStepsAsync(prepareVaspSteps(text, sourceName, options), options);
+  const prepared = await runCooperativeStepsAsync(prepareVaspSteps(text, sourceName, options), options);
   const frame = await parsePoscarAsync(prepared.header, sourceName, options);
-  return runParserStepsAsync(vaspDataSteps(frame, prepared), options);
+  return runCooperativeStepsAsync(vaspDataSteps(frame, prepared), options);
 }
 
 function parseDimensions(row) {
