@@ -368,7 +368,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .loading[hidden], .toast[hidden] { display: none; }
 .spinner { flex: 0 0 16px; width: 16px; height: 16px; border: 2px solid rgba(79,226,208,.18); border-top-color: var(--cyan); border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(1turn); } }
-.toast { position: absolute; z-index: 6; left: 50%; top: 20px; transform: translateX(-50%); max-width: min(560px, calc(100% - 40px)); border: 1px solid rgba(255,125,115,.45); border-radius: 8px; padding: 11px 14px; color: var(--danger-text); background: var(--danger-bg); box-shadow: var(--shadow); pointer-events: none; }
+.toast { position: absolute; z-index: 6; left: 50%; top: 64px; transform: translateX(-50%); max-width: min(560px, calc(100% - 40px)); border: 1px solid rgba(255,125,115,.45); border-radius: 8px; padding: 11px 14px; color: var(--danger-text); background: var(--danger-bg); box-shadow: var(--shadow); pointer-events: none; }
 .toast.success { color: var(--success-text); background: var(--success-bg); border-color: var(--accent-line); }
 
 .source-dialog { width: min(680px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 32px)); margin: auto; padding: 0; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; color: var(--text); background: var(--overlay-strong); box-shadow: 0 28px 90px rgba(0,0,0,.65); }
@@ -821,7 +821,7 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
   .atom-details-overlay { top: 12px; right: auto; left: 12px; width: min(340px, calc(100% - 24px)); max-height: calc(100% - 70px); align-items: flex-start; }
   .atom-details-toggle { margin-left: 138px; }
   /* Status messages appear below the top row instead of over its buttons. */
-  .toast { top: 58px; }
+  .toast { top: 116px; }
   .viewport-panel.trajectory-visible .atom-details-overlay { max-height: calc(100% - 166px); }
   .sidebar { min-height: 0; overflow-y: auto; overflow-x: hidden; border-left: 0; border-top: 1px solid var(--line); overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; padding-bottom: env(safe-area-inset-bottom, 0px); }
   .sidebar-resizer { display: none; }
@@ -908,6 +908,9 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
 
 @media (max-width: 920px) and (max-height: 520px) {
   .workspace { grid-template-rows: minmax(0, 60fr) minmax(0, 40fr); }
+  /* The viewport is only ~200px tall here: keep status messages to one slim
+     line in the free band between the Details and View toggles. */
+  .toast { top: 14px; max-width: min(46%, 360px); padding: 5px 10px; font-size: 10px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .empty-logo, .empty-copy, .format-note { display: none; }
   .empty-state h1 { font-size: 30px; margin-bottom: 14px; }
   .empty-state .button-large { min-height: 38px; padding: 0 16px; font-size: 12px; }
@@ -990,6 +993,9 @@ input[type="color"] { width: 100%; height: 36px; border: 1px solid var(--line-st
    enlarged invisible hit box, and desktop controls retain their compact size. */
 @media (max-width: 920px) {
   button { min-width: 32px; min-height: 36px; touch-action: manipulation; }
+  /* A grid button takes a length min-height as its height in Chrome, which
+     clips the two-line source cards; let their content size them. */
+  .source-option { min-height: auto; }
   .theme-switch button, .gpu-switch, .comparison-actions button, .comparison-toolbar button { min-height: 36px; }
   :root .keyboard-shortcuts button { min-width: 32px; min-height: 36px; }
   .background-swatches button { min-width: 32px; }
