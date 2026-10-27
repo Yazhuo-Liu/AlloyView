@@ -2,7 +2,7 @@
 
 ## Import attributes
 
-Open a structure, then choose **Modification tools → External properties** and **Import properties**. Select one or more local `.aux`, `.csv`, `.txt`, or `.tsv` files. Each file must provide exactly one numeric row per source atom. Imported properties become available for scalar coloring, atom details and [vector arrows](vectors.md).
+Open a structure, then choose **Modify → External properties** and **Import properties**. Select one or more local `.aux`, `.csv`, `.txt`, or `.tsv` files. Each file must provide exactly one numeric row per source atom. Imported properties become available for scalar coloring, atom details and [vector arrows](vectors.md).
 
 The file list shows each filename, its property names, the mapping method and the frames to which its values apply. **Rename** changes an imported property's name. **Remove** removes one property; **Remove file** removes every property from that file. Source files remain unchanged.
 

@@ -58,8 +58,8 @@ src/
 The main distinctions are:
 
 - `application/` coordinates application behavior. Configuration serialization
-  and restoration, the command-script language, and analysis dependency
-  resolution belong here. `app.js` remains the composition entry.
+  and restoration, the command-script language, the tool registry, and analysis
+  dependency resolution belong here. `app.js` remains the composition entry.
 - `analysis/` owns scientific calculations and their execution machinery.
   Measurements, grain and binning clients, selection expansion and CPU pools
   live beside the algorithms they use. GPU-specific implementations remain
@@ -96,7 +96,9 @@ The main distinctions are:
   `voronoi-cell-geometry.js`): they contain no WebGL or DOM code, and they are
   the only `render/` modules a Worker may import.
 - `ui/` binds controls and events to these capabilities. Analysis controllers
-  are in `ui/analysis/`; the tool registry and navigation are in `ui/shell/`.
+  are in `ui/analysis/`; tool tab navigation is in `ui/shell/tool-panels.js`,
+  while the tool registry (tab categories and the built-in tool list) is
+  `application/tool-registry.js`, which configuration validation also uses.
   Existing controllers with several related responsibilities, such as the
   comparison-view tools, remain intact. Page chrome that `app.js` composes
   rather than implements also lives here: `ui/shell/format.js`,

@@ -1,4 +1,5 @@
 import { normalizeDiffractionParameters, DIFFRACTION_DEFAULTS } from '../analysis/diffraction.js';
+import { TOOL_CATEGORIES, createToolRegistry } from './tool-registry.js';
 import { DIFFRACTION_WAVELENGTH_PRESETS } from '../crystal/diffraction-presets.js';
 // Portable processing recipes contain no coordinates or computed atom arrays.
 // Local files must be selected again; source metadata is only used to match them.
@@ -239,6 +240,8 @@ function normalizeSource(value) {
   return output;
 }
 
+const toolRegistry = createToolRegistry();
+
 function normalizeSettings(value, fromSnapshot) {
   const input = record(value, 'settings', ['display', 'analyses', 'extensions', 'replicate', 'replicateAtoms', 'slices', 'colors', 'camera', 'activeTool', 'activeCategory', 'selectedAtomId', 'theme', 'compute', 'selectionGroups']);
   const compute = record(input.compute ?? {}, 'settings.compute', ['gpuEnabled']);
@@ -257,8 +260,10 @@ function normalizeSettings(value, fromSnapshot) {
     camera: normalizeCamera(input.camera ?? null),
     activeTool: input.activeTool === 'configuration' ? null : nullableChoice(
       input.activeTool === undefined || input.activeTool === 'selection' ? 'display' : input.activeTool, 'settings.activeTool', TOOLS),
-    activeCategory: choice(input.activeCategory ?? (['replicate', 'externalProperties', 'expressions', 'trajectory'].includes(input.activeTool) ? 'modification' : 'visualization'),
-      'settings.activeCategory', new Set(['visualization', 'modification'])),
+    // Recipes from before the per-group tabs saved 'visualization'; the tool
+    // itself still identifies the tab to show.
+    activeCategory: choice(input.activeCategory === undefined || input.activeCategory === 'visualization'
+      ? toolRegistry.categoryFor(input.activeTool) : input.activeCategory, 'settings.activeCategory', new Set(TOOL_CATEGORIES)),
     selectedAtomId: identifier(input.selectedAtomId ?? null, 'settings.selectedAtomId', true),
     theme: choice(input.theme ?? 'dark', 'settings.theme', new Set(['light', 'dark'])),
   };

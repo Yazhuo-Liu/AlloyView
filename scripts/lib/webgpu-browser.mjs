@@ -122,6 +122,8 @@ export async function withWebGpuBrowser(run, { software = true, isolated = false
       return result.result?.value;
     }
     await call('Runtime.enable');
+    // Checks measure settled layouts; smooth scrolling and transitions stay out of them.
+    await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/AlloyView/__gpu_test__.html` });
     for (let attempt = 0; attempt < 100; attempt += 1) {
       if (await evaluate('document.readyState === "complete" && location.pathname.endsWith("__gpu_test__.html")')) break;

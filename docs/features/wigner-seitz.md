@@ -2,7 +2,7 @@
 
 ## Controls
 
-Open **Visualization tools → Wigner–Seitz**, choose a **Reference frame** and
+Open **Order & defects → Wigner–Seitz**, choose a **Reference frame** and
 press **Calculate defects**. The reference frame supplies the lattice sites,
 usually the perfect crystal at the start of a trajectory. Every atom of the
 displayed frame is assigned to its nearest reference site; a site's

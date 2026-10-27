@@ -1,6 +1,6 @@
 # Expressions
 
-Open a structure, then choose **Modification tools → Expressions**. The tool computes new per-atom properties from arithmetic expressions and selects atoms that satisfy a condition. Expressions are parsed by a small dedicated parser and interpreted over typed arrays; they are never run as JavaScript, so a shared configuration cannot execute code.
+Open a structure, then choose **Modify → Expressions**. The tool computes new per-atom properties from arithmetic expressions and selects atoms that satisfy a condition. Expressions are parsed by a small dedicated parser and interpreted over typed arrays; they are never run as JavaScript, so a shared configuration cannot execute code.
 
 ## Compute a property
 

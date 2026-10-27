@@ -2,7 +2,7 @@
 
 ## Controls
 
-Open **Visualization tools → Time series**. Type an attribute name in
+Open **Statistics → Time series**. Type an attribute name in
 **Attribute**, or pick one from its list, and press **Add**; up to eight
 attributes can be plotted. The names are the [global attributes](text-labels.md#global-attributes)
 used by text labels, for example `Cell.volume`, `Strain.a`, `Mean.c_pe`,

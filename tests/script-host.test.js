@@ -6,7 +6,7 @@ import { KeyboardCommandRegistry } from '../src/ui/automation/keyboard-commands.
 import { captureCamera } from '../src/render/camera-path.js';
 import { WebGLRenderer } from '../src/render/webgl-renderer.js';
 import { cameraCommand, createAutomationLock, createScriptHost, SCRIPT_EXAMPLES } from '../src/ui/automation/script-controls.js';
-import { BUILTIN_TOOLS } from '../src/ui/shell/tool-registry.js';
+import { BUILTIN_TOOLS } from '../src/application/tool-registry.js';
 
 const DEGREE = Math.PI / 180;
 const close = (actual, expected, tolerance, label) => assert.ok(Math.abs(actual - expected) <= tolerance, `${label ?? 'value'}: ${actual} ≈ ${expected}`);

@@ -14,13 +14,13 @@ export async function runAtomToolsSmoke({ call, evaluate, waitFor, showTool, exp
   assert.equal(await evaluate('document.getElementById("export-eps")'), null, 'raster EPS export is removed');
   const configurationPlacement = await evaluate(`(() => {
     const section = document.getElementById('configuration-section');
-    const structure = document.getElementById('file-name').closest('.side-section');
-    const tools = document.querySelector('[data-tool-button]').closest('.side-section');
-    return Boolean(structure.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING)
-      && Boolean(section.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING)
+    const panels = [...document.querySelectorAll('[data-tool-panel]')];
+    const credits = document.querySelector('.sidebar-credits');
+    return panels.every(panel => Boolean(panel.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING))
+      && Boolean(section.compareDocumentPosition(credits) & Node.DOCUMENT_POSITION_FOLLOWING)
       && !section.hasAttribute('data-tool-panel');
   })()`);
-  assert.equal(configurationPlacement, true, 'configuration belongs between Structure and Tools');
+  assert.equal(configurationPlacement, true, 'configuration belongs below the tool panels, above the credits');
   await waitFor('Boolean(document.querySelector(".feature-help-link")) && Boolean(document.getElementById("feature-help-styles")?.sheet)', 'feature documentation help');
   const documentation = await evaluate(`(async () => {
     const github = document.getElementById('github-link');

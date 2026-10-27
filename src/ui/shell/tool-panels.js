@@ -1,4 +1,4 @@
-import { createToolRegistry, TOOL_CATEGORIES } from './tool-registry.js';
+import { createToolRegistry, TOOL_CATEGORIES } from '../../application/tool-registry.js';
 
 /**
  * Show one configuration panel while keeping independently enabled analyses.
@@ -18,10 +18,13 @@ export function initializeToolPanels({ registry = createToolRegistry(), onDeacti
   const categoryPanels = new Map([...document.querySelectorAll('[data-tool-category-panel]')]
     .map(panel => [panel.dataset.toolCategoryPanel, panel]));
   const enabledTools = new Set();
+  // A tab first shows its first tool in registry (button) order, which need not
+  // be the first settings panel in document order.
   const rememberedTools = new Map(TOOL_CATEGORIES.map(category => [category,
-    [...panels.keys()].find(name => registry.categoryFor(name) === category) ?? null]));
-  let activeCategory = 'visualization';
-  let activeTool = panels.has('display') ? 'display' : null;
+    registry.list(category).map(tool => tool.id).find(name => panels.has(name))
+      ?? [...panels.keys()].find(name => registry.categoryFor(name) === category) ?? null]));
+  let activeTool = panels.has('display') ? 'display' : panels.keys().next().value ?? null;
+  let activeCategory = registry.categoryFor(activeTool ?? 'display');
   rememberedTools.set(activeCategory, activeTool);
 
   function render() {
@@ -65,7 +68,16 @@ export function initializeToolPanels({ registry = createToolRegistry(), onDeacti
     if (previousCategory !== activeCategory) onCategoryChange(activeCategory, { userInitiated });
     onSelectionChange(activeTool, { userInitiated });
     if (focus) buttons.get(name)?.focus();
+    // The settings panel sits below the tool grid; a click that opens one
+    // scrolls the sidebar just enough to show it, keeping the grid in view.
+    if (userInitiated) revealPanel(panels.get(name));
     return true;
+  }
+
+  function revealPanel(panel) {
+    if (typeof panel?.scrollIntoView !== 'function') return;
+    const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    panel.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
   }
 
   function setActiveCategory(category, { focus = false, userInitiated = false } = {}) {

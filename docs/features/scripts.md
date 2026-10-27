@@ -7,7 +7,7 @@ images. Scripts use the same command names as the
 
 ## Controls
 
-Open **Visualization tools → Scripts**.
+Open **Automation → Scripts**.
 
 - **Commands** is the editor. Problems are checked as you type and the first
   one is shown below the editor with its line and column.

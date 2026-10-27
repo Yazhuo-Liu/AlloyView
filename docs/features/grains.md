@@ -7,7 +7,7 @@ atom, and is a port of the grain segmentation modifier of OVITO 3.9.4.
 
 ## Controls
 
-Open **Visualization tools → Grains** and press **Find grains**. The analysis
+Open **Order & defects → Grains** and press **Find grains**. The analysis
 runs PTM with the templates and RMSD threshold set in the PTM panel, then
 groups the atoms. It uses the complete analyzed frame, including hidden and
 sliced-out atoms, and recalculates when the frame, a setting here or a PTM

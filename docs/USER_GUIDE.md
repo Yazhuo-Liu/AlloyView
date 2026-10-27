@@ -107,13 +107,18 @@ trajectory lines) is reported in that tool's panel and never shows it.
 On desktop, drag the divider between the viewport and the right controls panel
 to adjust its width. The browser saves the chosen width. Double-click the
 divider or press Enter while it is focused to reset it; Left/Right arrow keys
-also adjust it. **Tools** has two tabs side by side: **Visualization tools**
-contains Display, Slice, Vectors, selections and the analysis tools;
-**Modification tools** contains Replicate, External properties and Expressions.
-Select a button in either category to show that tool's settings.
+also adjust it. **Tools** has seven tabs: **Display** (Display, Slice,
+Vectors, Labels, Selections), **Structure** (Crystal, Volume, Surface,
+Coordination, Bonds, Voronoi, Clusters), **Order & defects** (CNA, PTM,
+Symmetry, Grains, DXA, Wigner–Seitz), **Strain & motion** (Strain, Frame
+strain, Local shear, Displacement), **Statistics** (Statistics, Binning, Time
+series), **Automation** (Scripts, Movie, Performance) and **Modify**
+(Replicate, External properties, Expressions, Trajectory). Select a button in
+a tab to show that tool's settings below it; the panel scrolls into view when
+needed. **Configuration** export and import sit at the bottom of the panel.
 Only one configuration panel is shown at a time. A dot marks an enabled
-analysis; opening another tool or category keeps existing analyses running.
-Each category remembers its last open settings panel. Use Left/Right, Home or
+analysis; opening another tool or tab keeps existing analyses running.
+Each tab remembers its last open settings panel. Use Left/Right, Home or
 End while a category tab has focus to switch categories. Click the
 current tool again or **Close / cancel** to cancel that analysis and clear its
 results. **Cancel** clears the result while leaving the settings open to retry.
@@ -276,7 +281,7 @@ are saved locally when browser storage is available. See
 
 ## Periodic display origin
 
-Expand **Visualization tools → Display → Periodic display origin** to shift
+Expand **Display → Display → Periodic display origin** to shift
 the wrapping boundary along the periodic cell vectors. The **a/b/c fraction**
 fields take fractional offsets, including negative values; a value of `0.5`
 shifts atoms by half that cell vector before wrapping. Nonperiodic directions
@@ -318,7 +323,7 @@ It also stops an active drag so releasing the pointer cannot apply an old shift.
 
 ## Display replication
 
-Select **Modification tools → Replicate**, enter independent total copy counts along **a**, **b** and
+Select **Modify → Replicate**, enter independent total copy counts along **a**, **b** and
 **c**, then click **Apply**. Each count includes the original cell: `2 × 3 × 1`
 displays six cells. Only periodic directions are editable. Copies follow the
 actual cell vectors, including tilted or rotated vectors in a triclinic cell.
@@ -357,7 +362,7 @@ background analysis preparation grows its existing pools during the copy.
 
 ## Trajectory tools
 
-Select **Modification tools → Trajectory** for Unwrap, smoothing and atom paths.
+Select **Modify → Trajectory** for Unwrap, smoothing and atom paths.
 They are off by default. **File coordinates (default)** shows the positions saved
 in a CFG, including out-of-cell positions, without adding `ix/iy/iz` counts.
 **Wrapped into periodic cell** remains an independent display choice.
@@ -643,7 +648,7 @@ kernel runs serially. See [deployment](DEPLOYMENT.md#cross-origin-isolation-for-
 
 ## Extend the modification tools
 
-[The tool registry](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/ui/shell/tool-registry.js)
+[The tool registry](https://github.com/Yazhuo-Liu/AlloyView/blob/main/src/application/tool-registry.js)
 stores each tool's stable ID, label, category and analysis flag. Modification
 tools can also declare `changesStructure` or `changesProperties` metadata.
 Future editors for adding, deleting or moving atoms selected by clicking or
@@ -728,8 +733,8 @@ resident inputs for subsequent jobs;
 input preparation yields between large chunks so the status and **Cancel**
 controls can remain responsive.
 
-**Enable GPU acceleration** beside the Light/Dark buttons is on by default.
-It prefers WebGPU for coordination, adaptive/fixed-cutoff CNA,
+**Enable GPU acceleration** beside the Light/Dark buttons is off by default.
+When turned on, it prefers WebGPU for coordination, adaptive/fixed-cutoff CNA,
 manual/Auto central symmetry, displacement, reference-frame strain, RDF,
 local geometric shear, bonds, bond-length/angle distributions, local Q4/Q6,
 PTM neighbor preparation and ideal lattice strain
@@ -993,7 +998,7 @@ counts. While enabled, frame or cutoff changes recalculate the statistics.
 **Cancel** clears these results independently of the bond cylinders. See
 [Bonds](features/bonds.md) for the definitions and CPU/GPU paths.
 
-**Voronoi**, in Visualization tools, partitions the physical simulation cell
+**Voronoi**, in the Structure tab, partitions the physical simulation cell
 into nearest-atom regions using actual periodic images and triclinic cell
 geometry. Nonperiodic directions use the finite simulation-cell boundary.
 Results include atomic volume, surface area, neighbor coordination and the
@@ -1054,7 +1059,7 @@ face rows include accepted/boundary flags and neighbor atom IDs. The CPU/Wasm
 Worker pool retains its kernel and memory between calculations. See
 [Voronoi](features/voronoi.md) for interpretation and boundary conventions.
 
-**Clusters**, in Visualization tools, groups atoms that are connected through
+**Clusters**, in the Structure tab, groups atoms that are connected through
 chains of neighbors. Choose **Cutoff radius** for the panel's own cutoff or
 **Bond cutoffs** to reuse the Bonds default and element-pair cutoffs, and
 optionally restrict **Atoms** to one named selection; atoms outside it get
@@ -1071,7 +1076,7 @@ gyration tensors. A cluster connected to its own periodic image is marked
 Worker pool and the results are identical to a single-threaded calculation.
 See [Cluster analysis](features/clusters.md).
 
-**Grains**, in Visualization tools, divides a polycrystal into grains: regions
+**Grains**, in the Order & defects tab, divides a polycrystal into grains: regions
 of one lattice with nearly one orientation. It runs PTM with the templates
 and RMSD threshold of the PTM panel and reuses a matching fit. **Graph
 clustering (automatic)** chooses the merge threshold from the data; the
@@ -1098,7 +1103,7 @@ original numerical order. Small or memory-limited jobs keep the single-Worker
 path. Threshold and minimum-size edits reuse the retained merge model instead
 of repeating PTM or parallel preparation.
 
-**Binning**, in Visualization tools, divides the cell into equal slabs along
+**Binning**, in the Statistics tab, divides the cell into equal slabs along
 one cell vector (**Profile (1D)**) or columns along two (**Map (2D)**) and
 reports, for each bin, the **Atom count**, the **Number density** in Å⁻³, or
 the **Mean**, **Sum**, **Minimum**, **Maximum** or population **Standard
@@ -1137,7 +1142,7 @@ for the frame, `CNA.FCC.fraction`, `PTM.BCC.count`, `DXA.total_length`,
 Values that also appear in the Statistics **Structure summary** CSV are equal
 to its rows. The full list is in [Text labels](features/text-labels.md#global-attributes).
 
-**Labels**, in Visualization tools, overlays text such as
+**Labels**, in the Display tab, overlays text such as
 `Timestep [Timestep] · FCC [CNA.FCC.fraction:.1%]` on the viewport at a
 corner, an edge or the center, with offsets, font size, color and an optional
 theme or colored box. Placeholders take printf/Python number formats
@@ -1279,7 +1284,7 @@ See [Selections](features/selection-groups.md) for detailed controls and limits.
 
 ## Computed properties and expression selection
 
-**Modification tools → Expressions** computes per-atom properties from
+**Modify → Expressions** computes per-atom properties from
 arithmetic expressions and selects atoms by a condition. Under **Compute
 property**, enter a name such as `vonMises`, an optional unit and an
 expression, for example
@@ -1416,7 +1421,7 @@ final ZIP assembly short; cancellation releases the partial archive.
 
 ## Command scripts and movies
 
-**Visualization tools → Scripts** runs a list of commands, one per line:
+**Automation → Scripts** runs a list of commands, one per line:
 
 ```text
 # Six images of the displayed frame
@@ -1448,7 +1453,7 @@ image downloads, and **Stop** ends it. Scripts are saved in configuration
 JSON as text and never start on import. See
 [Command scripts](features/scripts.md) for the full reference.
 
-**Visualization tools → Movie** animates the camera. Set a view and select
+**Automation → Movie** animates the camera. Set a view and select
 **Add keyframe**; repeat for each pose; edit the times in the list.
 **Preview** plays the path in the viewport. Stopping it or reaching the end
 returns to the starting frame and view, even if another frame is still loading.

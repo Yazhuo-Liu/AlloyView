@@ -92,6 +92,9 @@ try {
       const category = await evaluate(`document.querySelector('[data-tool-button="${name}"]').closest('[data-tool-category-panel]').dataset.toolCategoryPanel`);
       if (await evaluate(`document.getElementById('tool-category-${category}').getAttribute('aria-selected')!=='true'`)) await press(`#tool-category-${category}`);
       if (await evaluate(`document.querySelector('[data-tool-button="${name}"]').getAttribute('aria-expanded')!=='true'`)) await press(`[data-tool-button="${name}"]`);
+      // A tab switch shows the tab's remembered panel without starting it, unlike
+      // a click on the tool button. Displacement starts on open, so start it here.
+      else if (name === 'displacement' && await evaluate('document.getElementById("displacement-state").textContent') === 'Not calculated') await press('#run-displacement');
     }
     async function expand(selector) {
       if (await evaluate(`!document.querySelector(${JSON.stringify(selector)}).open`)) await press(`${selector} > summary`);
@@ -148,7 +151,7 @@ try {
     await press('#tool-category-modification');
     assert.equal(await evaluate('advancedToolsChecks.heldSignal?.aborted'), false, 'category switch preserves the in-flight analysis signal');
     assert.notEqual(await evaluate('document.getElementById("analysis-state").textContent'), 'Not calculated');
-    await press('#tool-category-visualization');
+    await press('#tool-category-structure');
     assert.equal(await evaluate('advancedToolsChecks.activeTool()'), 'coordination', 'returning to a category restores its settings');
     await evaluate('advancedToolsChecks.releaseAnalysis()');
     await waitFor('document.getElementById("analysis-state").textContent==="Calculated"', 'held CPU coordination completes');
@@ -445,7 +448,7 @@ try {
       await closeOverlays();
       await showTool('coordination');
       const beforeCategory = await evaluate('advancedToolsChecks.propertyValues("coordination")');
-      await press('#tool-category-modification'); await press('#tool-category-visualization');
+      await press('#tool-category-modification'); await press('#tool-category-structure');
       assert.deepEqual(await evaluate('advancedToolsChecks.propertyValues("coordination")'), beforeCategory, 'phone category switches retain calculated properties');
       assert.equal(await evaluate('document.getElementById("analysis-state").textContent'), 'Calculated');
       assert.equal(await evaluate('document.getElementById("camera-controls").hidden && document.getElementById("camera-controls").inert'), true, 'compact phone camera panel remains folded until requested');
@@ -463,7 +466,7 @@ try {
       await waitFor('document.getElementById("sidebar").scrollTop>0', 'compact phone tools scrolling');
       await evaluate(`(async()=>{const panel=document.getElementById('sidebar');let previous=panel.scrollTop,stable=0;for(let attempt=0;attempt<50&&stable<3;attempt++){await new Promise(resolve=>setTimeout(resolve,40));const current=panel.scrollTop;stable=current===previous?stable+1:0;previous=current;}})()`);
       assert.deepEqual(await evaluate('advancedToolsChecks.cameraAndViewport()'), beforeScroll, 'phone tools scroll keeps viewport and camera fixed');
-      await evaluate(`(() => {const sidebar=document.getElementById('sidebar'),tools=document.getElementById('tool-category-visualization').closest('.side-section');sidebar.scrollTop+=tools.getBoundingClientRect().top-sidebar.getBoundingClientRect().top-8;})()`);
+      await evaluate(`(() => {const sidebar=document.getElementById('sidebar'),tools=document.getElementById('tool-category-display').closest('.side-section');sidebar.scrollTop+=tools.getBoundingClientRect().top-sidebar.getBoundingClientRect().top-8;})()`);
       compactPhones.push({ width, height, screenshot: await screenshot(`tools-${width}x${height}.png`) });
     }
 

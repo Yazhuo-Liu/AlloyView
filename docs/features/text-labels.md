@@ -2,7 +2,7 @@
 
 ## Controls
 
-Open **Visualization tools → Labels** and press **Add label**. Each label has a
+Open **Display → Labels** and press **Add label**. Each label has a
 text template, a position, offsets, a font size, a text color and an optional
 box. Up to 16 labels can be shown at once; **Label** chooses the one being
 edited and **Delete** removes it. **Show label** hides a label without deleting

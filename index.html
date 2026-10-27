@@ -248,54 +248,58 @@
             </div>
           </section>
 
-          <section id="configuration-section" class="side-section">
-            <div class="section-heading"><div><p class="section-kicker">SAVE / RESTORE</p><h3>Configuration</h3></div></div>
-            <div class="configuration-actions">
-              <button id="export-configuration" class="button button-secondary" type="button" disabled>Export JSON</button>
-              <button id="import-configuration" class="button button-accent" type="button">Import JSON</button>
-              <input id="configuration-file" type="file" accept=".json,application/json" hidden>
-            </div>
-            <p class="help">Save source file names, camera, display settings, slices, and enabled analyses. Reopen the original files on this device to restore a saved view.</p>
-            <p id="configuration-status" class="help" role="status" aria-live="polite">Export the current settings or import a saved configuration.</p>
-          </section>
-
           <section class="side-section tool-section">
             <div class="section-heading tool-selector-heading">
               <div><p class="section-kicker">TOOLS</p><h3>Choose a tool</h3></div>
               <button id="close-tool" class="text-button" type="button" hidden>Close</button>
             </div>
             <div class="tool-category-tabs" role="tablist" aria-label="Tool categories">
-              <button id="tool-category-visualization" type="button" role="tab" data-tool-category="visualization" aria-controls="visualization-tools" aria-selected="true" tabindex="0">Visualization tools</button>
-              <button id="tool-category-modification" type="button" role="tab" data-tool-category="modification" aria-controls="modification-tools" aria-selected="false" tabindex="-1">Modification tools</button>
+              <button id="tool-category-display" type="button" role="tab" data-tool-category="display" aria-controls="display-tools" aria-selected="true" tabindex="0">Display</button>
+              <button id="tool-category-structure" type="button" role="tab" data-tool-category="structure" aria-controls="structure-tools" aria-selected="false" tabindex="-1">Structure</button>
+              <button id="tool-category-defects" type="button" role="tab" data-tool-category="defects" aria-controls="defects-tools" aria-selected="false" tabindex="-1">Order &amp; defects</button>
+              <button id="tool-category-strain" type="button" role="tab" data-tool-category="strain" aria-controls="strain-tools" aria-selected="false" tabindex="-1">Strain &amp; motion</button>
+              <button id="tool-category-statistics" type="button" role="tab" data-tool-category="statistics" aria-controls="statistics-tools" aria-selected="false" tabindex="-1">Statistics</button>
+              <button id="tool-category-automation" type="button" role="tab" data-tool-category="automation" aria-controls="automation-tools" aria-selected="false" tabindex="-1">Automation</button>
+              <button id="tool-category-modification" type="button" role="tab" data-tool-category="modification" aria-controls="modification-tools" aria-selected="false" tabindex="-1">Modify</button>
             </div>
-            <div id="visualization-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="visualization" aria-labelledby="tool-category-visualization">
+            <div id="display-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="display" aria-labelledby="tool-category-display">
               <button type="button" data-tool-button="display" aria-controls="tool-display" aria-pressed="true" aria-expanded="true"><span class="tool-button-label">Display</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="slice" aria-controls="tool-slice" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Slice</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="vectors" aria-controls="tool-vectors" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Vectors</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="textLabels" aria-controls="tool-text-labels" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Labels</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="selectionGroups" aria-controls="tool-selection-groups" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Selections</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+            </div>
+            <div id="structure-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="structure" aria-labelledby="tool-category-structure" hidden>
               <button type="button" data-tool-button="crystal" aria-controls="tool-crystal" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Crystal</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="volumetric" aria-controls="tool-volumetric" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Volume</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="slice" aria-controls="tool-slice" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Slice</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="surfaceMesh" aria-controls="tool-surface-mesh" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Surface</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="coordination" aria-controls="tool-coordination" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Coordination</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="bonds" aria-controls="tool-bonds" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Bonds</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="voronoi" aria-controls="tool-voronoi" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Voronoi</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="clusters" aria-controls="tool-clusters" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Clusters</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="surfaceMesh" aria-controls="tool-surface-mesh" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Surface</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="vectors" aria-controls="tool-vectors" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Vectors</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+            </div>
+            <div id="defects-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="defects" aria-labelledby="tool-category-defects" hidden>
+              <button type="button" data-tool-button="cna" aria-controls="tool-cna" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">CNA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="ptm" aria-controls="tool-ptm" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">PTM</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="centrosymmetry" aria-controls="tool-centrosymmetry" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Symmetry</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="grains" aria-controls="tool-grains" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Grains</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="dxa" aria-controls="tool-dxa" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">DXA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="wignerSeitz" aria-controls="tool-wigner-seitz" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Wigner–Seitz</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+            </div>
+            <div id="strain-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="strain" aria-labelledby="tool-category-strain" hidden>
+              <button type="button" data-tool-button="strain" aria-controls="tool-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="referenceStrain" aria-controls="tool-reference-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Frame strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+              <button type="button" data-tool-button="localShear" aria-controls="tool-local-shear" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Local shear</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="displacement" aria-controls="tool-displacement" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Displacement</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+            </div>
+            <div id="statistics-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="statistics" aria-labelledby="tool-category-statistics" hidden>
               <button type="button" data-tool-button="statistics" aria-controls="tool-statistics" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Statistics</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="binning" aria-controls="tool-binning" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Binning</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="timeSeries" aria-controls="tool-time-series" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Time series</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="textLabels" aria-controls="tool-text-labels" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Labels</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
+            </div>
+            <div id="automation-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="automation" aria-labelledby="tool-category-automation" hidden>
               <button type="button" data-tool-button="scripts" aria-controls="tool-scripts" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Scripts</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="movie" aria-controls="tool-movie" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Movie</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="cna" aria-controls="tool-cna" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">CNA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="dxa" aria-controls="tool-dxa" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">DXA</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="centrosymmetry" aria-controls="tool-centrosymmetry" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Symmetry</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="ptm" aria-controls="tool-ptm" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">PTM</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="grains" aria-controls="tool-grains" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Grains</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="strain" aria-controls="tool-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="referenceStrain" aria-controls="tool-reference-strain" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Frame strain</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="wignerSeitz" aria-controls="tool-wigner-seitz" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Wigner–Seitz</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="localShear" aria-controls="tool-local-shear" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Local shear</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
-              <button type="button" data-tool-button="selectionGroups" aria-controls="tool-selection-groups" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Selections</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="performance" aria-controls="tool-performance" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Performance</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
             </div>
             <div id="modification-tools" class="tool-selector" role="tabpanel" data-tool-category-panel="modification" aria-labelledby="tool-category-modification" hidden>
@@ -304,7 +308,7 @@
               <button type="button" data-tool-button="expressions" aria-controls="tool-expressions" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Expressions</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
               <button type="button" data-tool-button="trajectory" aria-controls="tool-trajectory" aria-pressed="false" aria-expanded="false"><span class="tool-button-label">Trajectory</span><span class="tool-enabled-dot" aria-hidden="true" hidden>●</span></button>
             </div>
-            <p class="help tool-selector-help">Select a tool to show its settings. Switching categories keeps analyses enabled. Close an analysis to cancel it and clear its results.</p>
+            <p class="help tool-selector-help">Switching tabs keeps analyses enabled; closing an analysis cancels it and clears its results.</p>
           </section>
 
           <section id="tool-display" class="side-section" data-tool-panel="display">
@@ -1615,6 +1619,17 @@
                 <div><dt>JS memory</dt><dd id="metric-memory">Not exposed by browser</dd></div>
               </dl>
             </details>
+          </section>
+
+          <section id="configuration-section" class="side-section">
+            <div class="section-heading"><div><p class="section-kicker">SAVE / RESTORE</p><h3>Configuration</h3></div></div>
+            <div class="configuration-actions">
+              <button id="export-configuration" class="button button-secondary" type="button" disabled>Export JSON</button>
+              <button id="import-configuration" class="button button-accent" type="button">Import JSON</button>
+              <input id="configuration-file" type="file" accept=".json,application/json" hidden>
+            </div>
+            <p class="help">Saves file names, camera, display settings, slices and enabled analyses. Reopen the same files on this device to restore the view.</p>
+            <p id="configuration-status" class="help" role="status" aria-live="polite">Export the current settings or import a saved configuration.</p>
           </section>
           <footer class="sidebar-credits" aria-label="Project credits">
             <p>

@@ -10,7 +10,7 @@ Select a group in the list to edit it. **Add atoms** retains its existing member
 
 **Member IDs and manual edits** shows a preview of the group's IDs and accepts space- or comma-separated IDs. The selected Add, Remove or Replace operation also applies to these entries. This allows editing hidden atoms and IDs absent from the current frame. Alternatively, check **Show group atoms** before picking members again. Group counts distinguish IDs present in the current frame from absent IDs.
 
-To select atoms by a condition such as `CSP > 8 && Type == 3`, or to invert a group or expand it by periodic neighbors, use **Modification tools → [Expressions](expressions.md)**. Its results are ordinary groups that this tool edits further.
+To select atoms by a condition such as `CSP > 8 && Type == 3`, or to invert a group or expand it by periodic neighbors, use **Modify → [Expressions](expressions.md)**. Its results are ordinary groups that this tool edits further.
 
 ## Viewport controls
 

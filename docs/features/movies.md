@@ -6,7 +6,7 @@ encoding happen in the browser; nothing is uploaded.
 
 ## Controls
 
-Open **Visualization tools → Movie**.
+Open **Automation → Movie**.
 
 ### Keyframes
 

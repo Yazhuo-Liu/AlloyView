@@ -15,7 +15,7 @@ import { GRAIN_ORIENTATION_COLOR_MODES, ORIENTATION_COLOR_MODES, OrientationColo
 import { DISTINCT_CATEGORY_COLORS, colorsByCategory, visibilityByCategory, UNLISTED_CATEGORY_ID } from '../src/render/palette.js';
 import { STATISTICS_EXPORT_BUTTONS } from '../src/ui/export/statistics-export-controls.js';
 import { STATISTICS_TABLES, buildStatisticsTable } from '../src/io/statistics-export.js';
-import { BUILTIN_TOOLS } from '../src/ui/shell/tool-registry.js';
+import { BUILTIN_TOOLS } from '../src/application/tool-registry.js';
 import { GRAIN_FIXTURES } from './helpers/grain-fixtures.js';
 import { axisAngleQuaternion } from './helpers/polycrystal.js';
 
@@ -89,7 +89,7 @@ function harness(t, { frame = bicrystal(), client = new GrainSegmentationClient(
 
 test('the Grains tool is registered and its colors cycle through distinct hues', () => {
   const tool = BUILTIN_TOOLS.find(entry => entry.id === 'grains');
-  assert.deepEqual({ label: tool.label, analysis: tool.analysis, category: tool.category }, { label: 'Grains', analysis: true, category: 'visualization' });
+  assert.deepEqual({ label: tool.label, analysis: tool.analysis, category: tool.category }, { label: 'Grains', analysis: true, category: 'defects' });
   assert.equal(GRAIN_COLORS, DISTINCT_CATEGORY_COLORS);
   assert.deepEqual(grainColor(0), GRAIN_NONE_COLOR);
   assert.deepEqual(grainColor(1), GRAIN_COLORS[0]);

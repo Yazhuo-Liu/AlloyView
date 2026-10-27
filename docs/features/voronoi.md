@@ -1,6 +1,6 @@
 # Voronoi analysis
 
-Open **Visualization tools → Voronoi** and run the analysis. By default, each
+Open **Structure → Voronoi** and run the analysis. By default, each
 atom owns the region closer to it than to any other atomic site or periodic
 image. The analysis constructs the actual convex polyhedron, including its polygonal
 faces; it does not estimate a volume from a nearest-neighbor sphere. The

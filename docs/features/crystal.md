@@ -1,6 +1,6 @@
 # Crystal structures
 
-Open **Visualization tools → Crystal** after loading CIF, POSCAR/CONTCAR or
+Open **Structure → Crystal** after loading CIF, POSCAR/CONTCAR or
 another supported periodic structure. The panel shows the current cell lengths,
 angles and volume. CIF symmetry labels describe the input declaration, not a
 new symmetry analysis. Expanded-site counts and occupancy warnings accompany

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { initializeToolPanels } from '../src/ui/shell/tool-panels.js';
-import { createToolRegistry } from '../src/ui/shell/tool-registry.js';
+import { createToolRegistry } from '../src/application/tool-registry.js';
 
 class Element {
   constructor(dataset = {}) {
@@ -31,8 +31,9 @@ function harness(t) {
   const toolNames = ['display', 'slice', 'coordination', 'displacement', 'replicate', 'externalProperties'];
   const buttons = Object.fromEntries(toolNames.map(name => [name, new Element({ toolButton: name })]));
   const panels = Object.fromEntries(toolNames.map(name => [name, new Element({ toolPanel: name })]));
-  const tabs = Object.fromEntries(['visualization', 'modification'].map(name => [name, new Element({ toolCategory: name })]));
-  const groups = Object.fromEntries(['visualization', 'modification'].map(name => [name, new Element({ toolCategoryPanel: name })]));
+  const categories = ['display', 'structure', 'strain', 'modification'];
+  const tabs = Object.fromEntries(categories.map(name => [name, new Element({ toolCategory: name })]));
+  const groups = Object.fromEntries(categories.map(name => [name, new Element({ toolCategoryPanel: name })]));
   const host = new Element(), close = new Element();
   for (const panel of Object.values(panels)) host.append(panel);
   globalThis.document = {
@@ -56,7 +57,7 @@ function harness(t) {
 
 test('category navigation remembers settings and preserves running analyses', t => {
   const h = harness(t);
-  assert.equal(h.tools.getActiveCategory(), 'visualization');
+  assert.equal(h.tools.getActiveCategory(), 'display');
   assert.equal(h.tools.getActiveTool(), 'display');
   assert.equal(h.panels.display.hidden, false);
   assert.equal(h.groups.modification.hidden, true);
@@ -68,7 +69,7 @@ test('category navigation remembers settings and preserves running analyses', t 
   assert.equal(h.buttons.display.hidden, true);
   assert.equal(h.buttons.replicate.hidden, false);
   h.buttons.externalProperties.dispatch('click');
-  h.tabs.visualization.dispatch('click');
+  h.tabs.strain.dispatch('click');
   assert.equal(h.tools.getActiveTool(), 'displacement');
   assert.equal(h.changes.at(-1)[1].userInitiated, false);
   assert.equal(h.tools.isToolEnabled('displacement'), true);
@@ -85,7 +86,7 @@ test('programmatic selection and revealed results show their own category', t =>
   assert.equal(h.groups.modification.hidden, false);
   assert.equal(h.panels.externalProperties.hidden, false);
   h.tools.setToolEnabled('coordination', true, { reveal: true });
-  assert.equal(h.tools.getActiveCategory(), 'visualization');
+  assert.equal(h.tools.getActiveCategory(), 'structure');
   assert.equal(h.tools.getActiveTool(), 'coordination');
   assert.equal(h.close.textContent, 'Close / cancel');
   assert.equal(h.buttons.coordination.attributes['aria-pressed'], 'true');
@@ -101,7 +102,7 @@ test('explicitly closing an analysis clears it and keeps its category empty on r
   assert.equal(h.tools.isToolEnabled('coordination'), false);
   assert.deepEqual(h.analysesClosed, ['coordination']);
   h.tools.setActiveCategory('modification');
-  h.tools.setActiveCategory('visualization');
+  h.tools.setActiveCategory('structure');
   assert.equal(h.tools.getActiveTool(), null);
   assert.equal(h.close.hidden, true);
   assert.ok(Object.values(h.panels).every(panel => panel.hidden));
@@ -109,20 +110,20 @@ test('explicitly closing an analysis clears it and keeps its category empty on r
 
 test('tab keyboard navigation updates roving focus, selection and panels', t => {
   const h = harness(t);
-  assert.equal(h.tabs.visualization.tabIndex, 0);
-  assert.equal(h.tabs.modification.tabIndex, -1);
-  assert.equal(h.tabs.visualization.dispatch('keydown', { key: 'ArrowRight' }), true);
-  assert.equal(document.activeElement, h.tabs.modification);
-  assert.equal(h.tabs.modification.attributes['aria-selected'], 'true');
-  assert.equal(h.tabs.modification.tabIndex, 0);
-  assert.equal(h.tabs.visualization.tabIndex, -1);
-  h.tabs.modification.dispatch('keydown', { key: 'Home' });
-  assert.equal(document.activeElement, h.tabs.visualization);
-  h.tabs.visualization.dispatch('keydown', { key: 'End' });
+  assert.equal(h.tabs.display.tabIndex, 0);
+  assert.equal(h.tabs.structure.tabIndex, -1);
+  assert.equal(h.tabs.display.dispatch('keydown', { key: 'ArrowRight' }), true);
+  assert.equal(document.activeElement, h.tabs.structure);
+  assert.equal(h.tabs.structure.attributes['aria-selected'], 'true');
+  assert.equal(h.tabs.structure.tabIndex, 0);
+  assert.equal(h.tabs.display.tabIndex, -1);
+  h.tabs.structure.dispatch('keydown', { key: 'Home' });
+  assert.equal(document.activeElement, h.tabs.display);
+  h.tabs.display.dispatch('keydown', { key: 'End' });
   assert.equal(document.activeElement, h.tabs.modification);
   h.tabs.modification.dispatch('keydown', { key: 'ArrowRight' });
-  assert.equal(document.activeElement, h.tabs.visualization);
-  h.tabs.visualization.dispatch('keydown', { key: 'ArrowLeft' });
+  assert.equal(document.activeElement, h.tabs.display);
+  h.tabs.display.dispatch('keydown', { key: 'ArrowLeft' });
   assert.equal(document.activeElement, h.tabs.modification);
   assert.equal(h.tabs.modification.dispatch('keydown', { key: 'Escape' }), false);
 });
@@ -145,8 +146,10 @@ test('future modification editors can mount through the registry and share navig
 
 test('registry provides built-in classification and rejects ambiguous registrations', () => {
   const registry = createToolRegistry();
-  assert.equal(registry.categoryFor('display'), 'visualization');
+  assert.equal(registry.categoryFor('display'), 'display');
+  assert.equal(registry.categoryFor('cna'), 'defects');
   assert.equal(registry.categoryFor('replicate'), 'modification');
+  assert.deepEqual(registry.list('automation').map(tool => tool.id), ['scripts', 'movie', 'performance']);
   assert.equal(registry.isAnalysis('coordination'), true);
   assert.equal(registry.isAnalysis('vectors'), false);
   assert.deepEqual(registry.list('modification').map(tool => tool.id), ['replicate', 'externalProperties', 'expressions', 'trajectory']);

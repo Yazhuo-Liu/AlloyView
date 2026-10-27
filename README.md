@@ -118,7 +118,7 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Coordination histograms and total/element-pair radial distribution functions
   with CSV export. Normalized RDF requires three periodic axes and a cutoff
   within half the shortest cell face height.
-- Voronoi tessellation in Visualization tools, using dynamically scheduled
+- Voronoi tessellation in the Structure tab, using dynamically scheduled
   CPU/Wasm Workers (or, on request, a WebGPU kernel) for periodic or finite-cell geometry. Results include atomic
   volume, surface area, coordination, full Voronoi indices and population
   distributions, with optional input-type selection, radical (radius-weighted)
@@ -167,7 +167,7 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
   settings for mixed structures, or manual 8/12 neighbors. All analyses share
   a bounded scheduler and retain per-frame results. CPU Workers
   and PTM kernels are reused, with preparation stages and PTM atom progress.
-- **Enable GPU acceleration**, on by default beside the theme controls,
+- **Enable GPU acceleration**, off by default beside the theme controls,
   supports coordination, adaptive/fixed-cutoff CNA, manual/Auto central symmetry,
   displacement, reference-frame strain, RDF, local geometric shear, bonds,
   bond-length/angle distributions and local Q4/Q6,
@@ -214,9 +214,10 @@ are on the right. Switch between **Light** and **Dark** in the top bar.
 - Light and dark themes with matching project logos and a saved preference.
 - A resizable controls panel with saved width, plus live display and legend
   edits and automatic coordination updates when the cutoff changes.
-- Side-by-side **Visualization tools** and **Modification tools** tabs preserve
-  enabled analyses and remember their settings panels. Modification tools
-  contain replication, external properties and expressions, with a registry for future atom
+- Tool tabs (**Display**, **Structure**, **Order & defects**, **Strain & motion**,
+  **Statistics**, **Automation** and **Modify**) preserve enabled analyses and
+  remember their settings panels. **Modify** contains replication, external
+  properties, expressions and trajectory tools, with a registry for future atom
   editors. Phones keep the viewport above independently scrolling tools and
   collapsed camera/legend controls.
 - An optional movable, resizable second view reuses the current frame and
@@ -254,10 +255,12 @@ WebGL 2 support. No installation or account is needed.
 3. **Adjust the view.** Choose colors and atom size in **Display**, change the
    viewport color with **BG**, or hide the cell and axes. Trajectories expose
    wrapped/unwrapped coordinates and frame controls below the viewport.
-   Under **Tools**, use **Visualization tools** for display and analysis and
-   **Modification tools** for Replicate, External properties and Expressions. Categories
-   remember their last settings panel and keep enabled analyses running.
-   Select **Modification tools → Replicate** to set total copies along periodic
+   Under **Tools**, the tabs **Display**, **Structure**, **Order & defects**,
+   **Strain & motion**, **Statistics** and **Automation** hold display and
+   analysis tools; **Modify** holds Replicate, External properties, Expressions
+   and Trajectory. Tabs remember their last settings panel and keep enabled
+   analyses running.
+   Select **Modify → Replicate** to set total copies along periodic
    **a/b/c** directions and click **Apply**. **Replicate atoms for analysis** is off by default;
    enable it to analyze physical copies in an enlarged cell, using more memory
    and computation. **Selections** creates named groups by clicking, dragging

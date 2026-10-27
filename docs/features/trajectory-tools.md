@@ -1,6 +1,6 @@
 # Trajectory tools
 
-**Modification tools → Trajectory** contains explicit Unwrap controls, coordinate
+**Modify → Trajectory** contains explicit Unwrap controls, coordinate
 smoothing and atom-path lines. All are off by default. **File coordinates
 (default)** displays the positions saved in the selected CFG, including positions
 outside the primary cell, without adding image counts. Ordinary navigation reads

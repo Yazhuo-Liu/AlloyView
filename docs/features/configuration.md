@@ -2,7 +2,7 @@
 
 ## Controls
 
-Configuration import/export is always available directly below the structure summary. **Export JSON** saves the current source metadata and settings. **Import JSON** reads a saved configuration; it does not occupy the Tools selector.
+Configuration import/export is always available at the bottom of the controls panel, below the tool settings. **Export JSON** saves the current source metadata and settings. **Import JSON** reads a saved configuration; it does not occupy the Tools selector.
 
 ## Restore logic
 
@@ -28,7 +28,7 @@ recipes without the entry restore [ambient occlusion](display.md#ambient-occlusi
 off. Keyboard bindings remain a local browser preference and are not
 included in a shared configuration.
 
-External property files are recorded separately with their file metadata, ID or row-order mapping, import frame, and column names. Their numeric values are not embedded in the JSON. Files still loaded in the current session are reused. In a fresh session, reopen the source and select the requested property files under **Modification tools → External properties**. The panel shows which files are pending; colors and vector fields become available when their columns have been restored. Row-order imports use the original import frame to preserve the mapping when later frames reorder stable atom IDs.
+External property files are recorded separately with their file metadata, ID or row-order mapping, import frame, and column names. Their numeric values are not embedded in the JSON. Files still loaded in the current session are reused. In a fresh session, reopen the source and select the requested property files under **Modify → External properties**. The panel shows which files are pending; colors and vector fields become available when their columns have been restored. Row-order imports use the original import frame to preserve the mapping when later frames reorder stable atom IDs.
 
 Computed properties are recorded in `settings.extensions.expressions.properties` as a list of `{ name, unit, expression }` in evaluation order. The values are not stored. Import checks the names and parses each expression with the safe expression parser, rejecting syntax errors, self-references and references to later properties before any setting is applied; nothing in the file is executed as code. The values are recalculated once the source frame and enabled analyses are restored. See [Expressions](expressions.md).
 

@@ -2,7 +2,7 @@
 
 ## Controls
 
-Open **Visualization tools → Clusters** and press **Calculate clusters**. Two
+Open **Structure → Clusters** and press **Calculate clusters**. Two
 atoms are neighbors when their distance is at most the cutoff; a cluster is a
 set of atoms connected through a chain of neighbors. Every atom belongs to
 exactly one cluster, and an atom without neighbors is a cluster of one.

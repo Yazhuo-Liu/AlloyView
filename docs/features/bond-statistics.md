@@ -2,7 +2,7 @@
 
 ## Controls
 
-Open **Visualization tools → Bonds → Bond distributions and Q4/Q6**. Set the default bond cutoff and any element-pair overrides in the main Bonds settings, choose **Length bins** and **Angle bins**, then press **Calculate distributions and Q4/Q6**. A pair cutoff of zero excludes that element pair. One calculation produces both distributions, local Q4/Q6 values and summary statistics; drawing bond cylinders is optional.
+Open **Structure → Bonds → Bond distributions and Q4/Q6**. Set the default bond cutoff and any element-pair overrides in the main Bonds settings, choose **Length bins** and **Angle bins**, then press **Calculate distributions and Q4/Q6**. A pair cutoff of zero excludes that element pair. One calculation produces both distributions, local Q4/Q6 values and summary statistics; drawing bond cylinders is optional.
 
 Lengths span zero to the largest configured default or element-pair cutoff. Angles span 0–180°. Each distribution supports 1–4,096 equal-width bins. The panel shows progress and the backend used. **Cancel** stops this statistics calculation and clears its results while keeping the input settings.
 

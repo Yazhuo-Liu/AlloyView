@@ -2,7 +2,7 @@
 
 ## Controls
 
-Open **Visualization tools → Surface**, set the **Probe sphere radius** and
+Open **Structure → Surface**, set the **Probe sphere radius** and
 press **Construct surface**. The tool builds the closed surface that separates
 solid from empty space, draws it as a triangle mesh and reports its area, the
 solid and empty volumes and every enclosed void. It finds free surfaces of

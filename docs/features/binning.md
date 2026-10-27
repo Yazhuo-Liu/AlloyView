@@ -2,7 +2,7 @@
 
 ## Controls
 
-Open **Visualization tools → Binning**, choose the bins and the quantity, and
+Open **Statistics → Binning**, choose the bins and the quantity, and
 press **Calculate profile** (or **Calculate map**). The result is a chart in
 the panel and a CSV table; atom colors and properties do not change.
 

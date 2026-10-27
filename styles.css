@@ -411,15 +411,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, canvas:focus-vi
 .atom-details .selection-data dt { overflow-wrap: anywhere; }
 .atom-details .measurement-data { display: block; }
 .atom-details .measurement-data p { margin: 8px 0; overflow-wrap: anywhere; }
-.tool-selector { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.tool-selector { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
 .tool-selector-heading, .tool-panel-toolbar { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .tool-selector-heading { margin-bottom: 5px; }
-.tool-category-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; margin: 12px 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-soft); }
-.tool-category-tabs button { min-width: 0; min-height: 42px; padding: 6px 7px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); font-size: 11px; line-height: 1.35; cursor: pointer; touch-action: manipulation; }
+.tool-category-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px; margin: 12px 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-soft); }
+.tool-category-tabs button { min-width: 0; min-height: 36px; padding: 5px 4px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); font-size: 11px; line-height: 1.35; cursor: pointer; touch-action: manipulation; }
 .tool-category-tabs button:hover { color: var(--text); background: var(--button-hover); }
 .tool-category-tabs button[aria-selected="true"] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent-text); }
 .tool-selector[data-tool-category-panel="modification"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.tool-selector button[data-tool-button] { position: relative; min-width: 0; min-height: 38px; padding: 7px 6px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--muted); font-size: 10px; cursor: pointer; }
+.tool-selector button[data-tool-button] { position: relative; min-width: 0; min-height: 34px; padding: 6px 6px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control-bg); color: var(--muted); font-size: 10px; cursor: pointer; }
 .tool-selector button[data-tool-button]:hover { color: var(--text); background: var(--button-hover); border-color: var(--accent-line); }
 .tool-selector button[data-tool-button].active { color: var(--accent-text); background: var(--accent-soft); border-color: var(--cyan); }
 .tool-enabled-dot { position: absolute; top: 5px; right: 5px; width: 5px; height: 5px; border-radius: 50%; background: var(--cyan); opacity: 0; font-size: 0; }
