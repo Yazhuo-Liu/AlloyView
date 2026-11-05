@@ -1399,9 +1399,16 @@
               <div class="section-heading statistics-subheading"><h3>Burgers vector families</h3></div>
               <label class="field"><span>Line radius</span><span class="input-unit"><input id="dxa-line-radius" type="number" value="0.75" min="0.001" step="0.05" disabled><i>Å</i></span></label>
               <label class="slice-toggle"><input id="dxa-show-line-directions" type="checkbox" disabled><span>Show line directions · yellow</span></label>
+              <div class="paired-fields">
+                <label class="field"><span>Line direction radius</span><span class="input-unit"><input id="dxa-line-direction-radius" type="number" value="0.84" min="0.001" max="1000000" step="0.05" disabled><i>Å</i></span></label>
+                <label class="field"><span>Line direction scale</span><span class="input-unit"><input id="dxa-line-direction-scale" type="number" value="1" min="0.001" max="1000000" step="0.25" disabled><i>×</i></span></label>
+              </div>
               <label class="slice-toggle"><input id="dxa-show-burgers-vectors" type="checkbox" disabled><span>Show Burgers vectors · cyan</span></label>
-              <label class="field"><span>Burgers arrow scale</span><span class="input-unit"><input id="dxa-burgers-scale" type="number" value="2" min="0.001" max="1000000" step="0.25" disabled><i>×</i></span></label>
-              <p class="help">Click a Burgers arrow to select it, then drag its root along the dislocation line. Arrow scale changes only the display length.</p>
+              <div class="paired-fields">
+                <label class="field"><span>Burgers vector radius</span><span class="input-unit"><input id="dxa-burgers-radius" type="number" value="0.84" min="0.001" max="1000000" step="0.05" disabled><i>Å</i></span></label>
+                <label class="field"><span>Burgers vector scale</span><span class="input-unit"><input id="dxa-burgers-scale" type="number" value="2" min="0.001" max="1000000" step="0.25" disabled><i>×</i></span></label>
+              </div>
+              <p class="help">Each arrow has its own shaft radius and length scale. Click a Burgers arrow to select it, then drag its root along the dislocation line.</p>
               <div id="dxa-vector-selection" class="dxa-vector-selection" hidden>
                 <p id="dxa-vector-selected" class="help" role="status" aria-live="polite"></p>
                 <label class="field"><span>Burgers arrow position</span><input id="dxa-vector-position" type="range" min="0" max="100" step="0.1" value="50" disabled></label>

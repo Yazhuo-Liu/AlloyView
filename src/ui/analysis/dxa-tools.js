@@ -8,6 +8,7 @@ import { SURFACE_MESH_DEFAULTS, surfaceMeshDisplayState } from '../../render/sur
 import { FrameCache } from '../../data/frame-cache.js';
 import { estimateFrameBytes } from '../../data/cache-policy.js';
 import { dislocationSegmentSignature } from '../../render/dislocation-vector-state.js';
+import { DISLOCATION_VECTOR_DEFAULTS, DISLOCATION_VECTOR_MINIMUM, DISLOCATION_VECTOR_MAXIMUM } from '../../render/dislocation-vector-style.js';
 
 import { DXA_STRUCTURE_PROPERTY } from '../../data/structure-properties.js';
 export const DXA_STRUCTURE_LABEL = 'Crystal structure (DXA)';
@@ -28,6 +29,10 @@ const PARAMETER_FIELDS = {
   circuitStretchability: 'dxa-stretchability', lineSmoothingIterations: 'dxa-smoothing',
   linePointInterval: 'dxa-point-interval', onlyPerfectDislocations: 'dxa-perfect-only',
 };
+const VECTOR_STYLE_FIELDS = {
+  burgersVectorRadius: 'dxa-burgers-radius', burgersVectorScale: 'dxa-burgers-scale',
+  lineDirectionRadius: 'dxa-line-direction-radius', lineDirectionScale: 'dxa-line-direction-scale',
+};
 /** The optional defect mesh: OVITO's surface around the regions that are not
  * the reference crystal and were not resolved into dislocation lines. */
 export const DXA_DEFECT_MESH_DEFAULTS = Object.freeze({ enabled: false, smoothingLevel: DXA_DEFECT_MESH_SMOOTHING, ...SURFACE_MESH_DEFAULTS.dxaDefect });
@@ -47,7 +52,8 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   automaticDelayMs = 120 }) {
   let enabled = false, controlsEnabled = false, controller = null, request = 0;
   let network = null, failure = false, radius = 0.75;
-  let showLineDirections = false, showBurgersVectors = false, burgersVectorScale = 2;
+  let showLineDirections = false, showBurgersVectors = false;
+  let vectorStyle = { ...DISLOCATION_VECTOR_DEFAULTS };
   let selectedVectorId = null, annotations = new WeakMap(), pendingAnnotations = [];
   let visibleFamilies = new Set(), familyColors = new Map();
   // Retain a few recently visited graphs under a separate byte budget. Frame
@@ -138,7 +144,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     $('run-dxa').disabled = !controlsEnabled || Boolean(controller);
     $('cancel-dxa').disabled = !controlsEnabled || (!enabled && !failure);
     for (const input of $('dxa-families').querySelectorAll('input')) input.disabled = !controlsEnabled;
-    for (const id of ['dxa-show-line-directions', 'dxa-show-burgers-vectors', 'dxa-burgers-scale']) {
+    for (const id of ['dxa-show-line-directions', 'dxa-show-burgers-vectors', ...Object.values(VECTOR_STYLE_FIELDS)]) {
       if ($(id)) $(id).disabled = !controlsEnabled;
     }
     updateVectorControls();
@@ -150,7 +156,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   function writeVectorSettings() {
     if ($('dxa-show-line-directions')) $('dxa-show-line-directions').checked = showLineDirections;
     if ($('dxa-show-burgers-vectors')) $('dxa-show-burgers-vectors').checked = showBurgersVectors;
-    if ($('dxa-burgers-scale')) $('dxa-burgers-scale').value = String(burgersVectorScale);
+    for (const [name, id] of Object.entries(VECTOR_STYLE_FIELDS)) if ($(id)) $(id).value = String(vectorStyle[name]);
   }
 
   function updateVectorControls() {
@@ -209,7 +215,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     renderer.setDislocationNetwork(network, {
       enabled: Boolean(network) && enabled, radius,
       visibleFamilies: [...visibleFamilies], familyColors: Object.fromEntries(familyColors),
-      showLineDirections, showBurgersVectors, burgersVectorScale,
+      showLineDirections, showBurgersVectors, ...vectorStyle,
       vectorAnnotations: vectorAnnotations(), selectedVectorId,
     });
     const style = readDefectMesh(), shown = Boolean(network) && enabled && style.enabled;
@@ -413,8 +419,9 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     const mesh = readDefectMesh();
     return { enabled, ...parameters(), radius,
       visibleFamilies: [...visibleFamilies], familyColors: [...familyColors].map(([family, color]) => ({ family, color })),
-      ...(showLineDirections || showBurgersVectors || burgersVectorScale !== 2 || vectorAnnotations().length
-        ? { showLineDirections, showBurgersVectors, burgersVectorScale, vectorAnnotations: vectorAnnotations() } : {}),
+      ...(showLineDirections || showBurgersVectors || vectorAnnotations().length
+        || Object.entries(DISLOCATION_VECTOR_DEFAULTS).some(([name, value]) => vectorStyle[name] !== value)
+        ? { showLineDirections, showBurgersVectors, ...vectorStyle, vectorAnnotations: vectorAnnotations() } : {}),
       // Untouched defect mesh settings are left out, as in recipes saved
       // before the mesh existed.
       ...(Object.keys(DXA_DEFECT_MESH_DEFAULTS).some(name => mesh[name] !== DXA_DEFECT_MESH_DEFAULTS[name]) ? { defectMesh: { ...mesh } } : {}) };
@@ -427,7 +434,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     cancel({ clearSettings: false }); writeParameters(saved); radius = saved.radius;
     showLineDirections = saved.showLineDirections ?? false;
     showBurgersVectors = saved.showBurgersVectors ?? false;
-    burgersVectorScale = saved.burgersVectorScale ?? 2;
+    vectorStyle = Object.fromEntries(Object.entries(DISLOCATION_VECTOR_DEFAULTS).map(([name, value]) => [name, saved[name] ?? value]));
     pendingAnnotations = (saved.vectorAnnotations ?? []).map(value => ({ ...value }));
     writeVectorSettings();
     defectMesh = { ...DXA_DEFECT_MESH_DEFAULTS, ...(saved.defectMesh ?? {}) };
@@ -442,7 +449,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
 
   function reset() {
     cancel(); writeParameters(DXA_DEFAULTS); radius = 0.75;
-    showLineDirections = showBurgersVectors = false; burgersVectorScale = 2;
+    showLineDirections = showBurgersVectors = false; vectorStyle = { ...DISLOCATION_VECTOR_DEFAULTS };
     writeVectorSettings();
     defectMesh = { ...DXA_DEFECT_MESH_DEFAULTS };
     writeDefectMesh();
@@ -509,13 +516,15 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     if (!showBurgersVectors) selectedVectorId = null;
     draw();
   });
-  $('dxa-burgers-scale')?.addEventListener('change', () => {
-    const value = $('dxa-burgers-scale').valueAsNumber;
-    if (!Number.isFinite(value) || value <= 0 || value > 1e6) {
-      $('dxa-burgers-scale').value = String(burgersVectorScale); notify('Enter a positive Burgers arrow scale up to 1000000.'); return;
-    }
-    onEdit(); burgersVectorScale = value; draw();
-  });
+  for (const [name, id] of Object.entries(VECTOR_STYLE_FIELDS)) {
+    $(id)?.addEventListener('change', () => {
+      const value = $(id).valueAsNumber;
+      if (!Number.isFinite(value) || value < DISLOCATION_VECTOR_MINIMUM || value > DISLOCATION_VECTOR_MAXIMUM) {
+        $(id).value = String(vectorStyle[name]); notify('Enter an arrow radius or scale between 1e-12 and 1000000.'); return;
+      }
+      onEdit(); vectorStyle[name] = value; draw();
+    });
+  }
   $('dxa-vector-position')?.addEventListener('input', () => moveVector(selectedVectorId, { position: $('dxa-vector-position').valueAsNumber / 100 }));
   $('dxa-vector-flip')?.addEventListener('click', () => flipVector());
   $('dxa-vector-clear')?.addEventListener('click', () => selectVector(null));
@@ -524,7 +533,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     selectVector, moveVector, flipVector,
     isEnabled: () => enabled,
     getPresentationKey: () => JSON.stringify([enabled, radius, [...visibleFamilies], [...familyColors], readDefectMesh(),
-      showLineDirections, showBurgersVectors, burgersVectorScale, vectorAnnotations(),
+      showLineDirections, showBurgersVectors, vectorStyle, vectorAnnotations(),
       Object.entries(PARAMETER_FIELDS).map(([key, id]) => [key,
         key === 'onlyPerfectDislocations' ? $(id).checked : $(id).value])]),
     cacheStatus: () => ({ size: resultCache.size, bytes: resultCache.bytes,

@@ -6,6 +6,7 @@ import { MAX_SLICE_PLANES, SLICE_EPSILON, sliceHalfSpaces } from './slicing.js';
 import { translatePeriodicPoints } from './periodic-origin.js';
 import { crystalDragImages } from './crystal-drag.js';
 import { createDislocationVectorGeometry, createDislocationVectorPaths } from './dislocation-vectors.js';
+import { DISLOCATION_VECTOR_DEFAULTS, DISLOCATION_VECTOR_MINIMUM, DISLOCATION_VECTOR_MAXIMUM } from './dislocation-vector-style.js';
 
 // A dislocation is a geometric curve, not a bond between two atom indices.
 // Keep the connected source-cell tube pieces in one indexed buffer. Periodic display
@@ -97,8 +98,16 @@ export function normalizeDislocationOptions(options = {}, previous = {}) {
   const vectorValue = (name, fallback) => Object.hasOwn(options, name) ? options[name] : previous[name] ?? fallback;
   const showLineDirections = vectorValue('showLineDirections', false), showBurgersVectors = vectorValue('showBurgersVectors', false);
   if (typeof showLineDirections !== 'boolean' || typeof showBurgersVectors !== 'boolean') throw new Error('Dislocation vector visibility must be true or false.');
-  const burgersVectorScale = vectorValue('burgersVectorScale', 2);
-  if (!Number.isFinite(burgersVectorScale) || burgersVectorScale <= 0) throw new Error('Burgers vector scale must be greater than zero.');
+  const vectorStyle = {};
+  const styleLabels = { burgersVectorRadius: 'Burgers vector radius', burgersVectorScale: 'Burgers vector scale',
+    lineDirectionRadius: 'Line direction radius', lineDirectionScale: 'Line direction scale' };
+  for (const [name, fallback] of Object.entries(DISLOCATION_VECTOR_DEFAULTS)) {
+    const value = vectorValue(name, fallback);
+    if (!Number.isFinite(value) || value < DISLOCATION_VECTOR_MINIMUM || value > DISLOCATION_VECTOR_MAXIMUM) {
+      throw new Error(`${styleLabels[name]} must be between ${DISLOCATION_VECTOR_MINIMUM} and ${DISLOCATION_VECTOR_MAXIMUM}.`);
+    }
+    vectorStyle[name] = value;
+  }
   const annotations = vectorValue('vectorAnnotations', []), identifiers = new Set();
   if (!Array.isArray(annotations)) throw new Error('Dislocation vector annotations must be an array.');
   const vectorAnnotations = annotations.map(annotation => {
@@ -117,7 +126,7 @@ export function normalizeDislocationOptions(options = {}, previous = {}) {
   return {
     enabled: Boolean(options.enabled ?? options.visible ?? previous.enabled ?? true),
     radius, visibleFamilies, familyVisibility, familyColors,
-    showLineDirections, showBurgersVectors, burgersVectorScale, vectorAnnotations, selectedVectorId,
+    showLineDirections, showBurgersVectors, ...vectorStyle, vectorAnnotations, selectedVectorId,
   };
 }
 
@@ -276,8 +285,9 @@ export class DislocationLayer {
       this.vectorSources = null;
     } else if (!network) this.clear();
     if (network && (normalized.showLineDirections || normalized.showBurgersVectors)) {
-      const vectorKey = JSON.stringify([normalized.radius, normalized.showLineDirections, normalized.showBurgersVectors,
-        normalized.burgersVectorScale, normalized.vectorAnnotations, normalized.selectedVectorId]);
+      const vectorKey = JSON.stringify([normalized.showLineDirections, normalized.showBurgersVectors,
+        normalized.burgersVectorRadius, normalized.burgersVectorScale, normalized.lineDirectionRadius, normalized.lineDirectionScale,
+        normalized.vectorAnnotations, normalized.selectedVectorId]);
       if (!this.vectorSources || this.vectorKey !== vectorKey) {
         this.vectorSources ??= createDislocationVectorPaths(network, renderer.frame.cell, normalized, renderer);
         this.vectorGeometry = createDislocationVectorGeometry(this.vectorSources, renderer.frame.cell, normalized);

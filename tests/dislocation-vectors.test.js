@@ -4,6 +4,7 @@ import { cartesianToFractional, createCell, fractionalToCartesian } from '../src
 import { createReplication } from '../src/data/replication.js';
 import { DislocationLayer, createDislocationTubeGeometry, normalizeDislocationOptions } from '../src/render/dislocation-layer.js';
 import { createDislocationVectorGeometry, createDislocationVectorPaths, sampleDislocationVectorPath } from '../src/render/dislocation-vectors.js';
+import { DISLOCATION_VECTOR_DEFAULTS, DISLOCATION_VECTOR_MINIMUM, DISLOCATION_VECTOR_MAXIMUM } from '../src/render/dislocation-vector-style.js';
 
 const openCell = createCell({ vectors: [20, 0, 0, 0, 20, 0, 0, 0, 20], pbc: [false, false, false] });
 const cell = createCell({ vectors: [10, 0, 0, 4, 8, 0, 0, 0, 12], origin: [4, 5, 6], triclinic: true });
@@ -18,6 +19,9 @@ test('vector options validate, copy annotations, preserve previous settings, and
   const defaults = normalizeDislocationOptions();
   assert.equal(defaults.radius, .75);
   assert.equal(defaults.burgersVectorScale, 2);
+  assert.equal(defaults.burgersVectorRadius, .84);
+  assert.equal(defaults.lineDirectionRadius, .84);
+  assert.equal(defaults.lineDirectionScale, 1);
   assert.equal(defaults.showLineDirections, false);
   const settings = normalizeDislocationOptions({ ...enabled, vectorAnnotations: [annotation], selectedVectorId: 3 });
   annotation.position = .9;
@@ -27,7 +31,16 @@ test('vector options validate, copy annotations, preserve previous settings, and
   assert.notEqual(next.vectorAnnotations, settings.vectorAnnotations);
   assert.notEqual(next.vectorAnnotations[0], settings.vectorAnnotations[0]);
   assert.equal(next.showBurgersVectors, true);
-  for (const value of [0, -1, Infinity, NaN, '2', null]) assert.throws(() => normalizeDislocationOptions({ burgersVectorScale: value }), /scale/);
+  for (const name of Object.keys(DISLOCATION_VECTOR_DEFAULTS)) {
+    for (const value of [0, -1, Infinity, NaN, '2', null, DISLOCATION_VECTOR_MINIMUM / 2, DISLOCATION_VECTOR_MAXIMUM + 1]) {
+      assert.throws(() => normalizeDislocationOptions({ [name]: value }), /radius|scale/);
+      assert.throws(() => createDislocationVectorGeometry([], openCell, { [name]: value }), /between/);
+    }
+    for (const value of [DISLOCATION_VECTOR_MINIMUM, DISLOCATION_VECTOR_MAXIMUM]) {
+      assert.equal(normalizeDislocationOptions({ [name]: value })[name], value);
+    }
+    assert.equal(normalizeDislocationOptions({}, { [name]: 4 })[name], 4);
+  }
   assert.throws(() => normalizeDislocationOptions({ showLineDirections: 1 }), /visibility/);
   assert.throws(() => normalizeDislocationOptions({ vectorAnnotations: [{ ...annotation, position: 1.01 }] }), /position/);
   assert.throws(() => normalizeDislocationOptions({ vectorAnnotations: [annotation, annotation] }), /distinct/);
@@ -141,6 +154,58 @@ test('screw vectors remain wider than the line and all arrow surfaces have finit
   }
 });
 
+test('four arrow dimensions change independently and preserve anchors, native vectors and flip semantics', () => {
+  const result = network([1, 4, 4, 18, 4, 4]), original = structuredClone(result);
+  const sources = createDislocationVectorPaths(result, openCell);
+  const geometry = options => createDislocationVectorGeometry(sources, openCell, { ...enabled, ...options });
+  const base = geometry(), object = base.objects[0];
+  const midpoint = value => value.lineStart.map((component, axis) => (component + value.lineEnd[axis]) / 2);
+  const length = (start, end) => Math.hypot(...end.map((component, axis) => component - start[axis]));
+  const rows = (mesh, kind) => {
+    const output = [];
+    for (let index = 0; index < mesh.values.length; index += 12) {
+      if ((mesh.values[index + 9] > .5) === (kind === 'line')) output.push(Array.from(mesh.values.slice(index, index + 12)));
+    }
+    return output;
+  };
+  const shaftRadii = (mesh, kind) => {
+    const axis = kind === 'line' ? 0 : 1, center = kind === 'line' ? midpoint(mesh.objects[0]) : mesh.objects[0].root;
+    return rows(mesh, kind).filter(row => Math.abs(row[6 + axis]) < 1e-8).map(row =>
+      Math.hypot(...[0, 1, 2].filter(component => component !== axis).map(component => row[component] + row[3 + component] - center[component])));
+  };
+  near(length(object.lineStart, object.lineEnd), 3.75);
+  near(length(object.root, object.burgersEnd), 4);
+  for (const kind of ['line', 'burgers']) {
+    assert.ok(shaftRadii(base, kind).length > 0);
+    shaftRadii(base, kind).forEach(value => near(value, .84, 1e-6));
+  }
+  assert.deepEqual(geometry({ radius: 8 }).values, base.values, 'tube radius does not affect either arrow');
+  const settings = { burgersVectorRadius: 1.68, burgersVectorScale: 6, lineDirectionRadius: 2.52, lineDirectionScale: 3 };
+  for (const [name, value] of Object.entries(settings)) {
+    const changed = geometry({ [name]: value }), changedObject = changed.objects[0];
+    const kind = name.startsWith('burgers') ? 'burgers' : 'line', other = kind === 'burgers' ? 'line' : 'burgers';
+    assert.deepEqual(rows(changed, other), rows(base, other), `${name} leaves the other arrow geometry unchanged`);
+    vectorNear(changedObject.root, object.root);
+    vectorNear(midpoint(changedObject), midpoint(object));
+    vectorNear(changedObject.tangent, object.tangent);
+    vectorNear(changedObject.burgers, object.burgers);
+    if (name.endsWith('Radius')) {
+      vectorNear(changedObject.burgersEnd, object.burgersEnd);
+      vectorNear(changedObject.lineStart, object.lineStart);
+      vectorNear(changedObject.lineEnd, object.lineEnd);
+      shaftRadii(changed, kind).forEach(radius => near(radius, value, 1e-6));
+    } else if (kind === 'burgers') near(length(changedObject.root, changedObject.burgersEnd), 12);
+    else near(length(changedObject.lineStart, changedObject.lineEnd), 11.25);
+  }
+  const forward = geometry(settings).objects[0];
+  const reverse = geometry({ ...settings, vectorAnnotations: [{ segmentId: 3, position: .5, flipped: true }] }).objects[0];
+  vectorNear(reverse.root, forward.root);
+  vectorNear(reverse.lineStart, forward.lineEnd);
+  vectorNear(reverse.lineEnd, forward.lineStart);
+  vectorNear(reverse.burgers, forward.burgers.map(value => -value));
+  assert.deepEqual(result, original);
+});
+
 function mockGl() {
   let next = 0, bound, vao;
   const calls = { uploads: [], draws: [] };
@@ -171,6 +236,19 @@ test('annotation dragging updates only arrow buffers while camera, slices and re
   assert.equal(layer.vectorSources, paths);
   assert.equal(calls.uploads.length, originalUploads + 2);
   assert.ok(calls.uploads.slice(originalUploads).every(upload => upload.buffer !== layer.meshBuffer && upload.buffer !== layer.indexBuffer));
+  for (const [name, value] of Object.entries({ burgersVectorRadius: 1.1, burgersVectorScale: 3, lineDirectionRadius: 1.2, lineDirectionScale: 2 })) {
+    const before = calls.uploads.length;
+    layer.setNetwork(renderer, result, { [name]: value });
+    assert.equal(layer.geometry, tubes);
+    assert.equal(layer.vectorSources, paths);
+    assert.equal(calls.uploads.length, before + 2);
+    assert.ok(calls.uploads.slice(before).every(upload => upload.buffer !== layer.meshBuffer && upload.buffer !== layer.indexBuffer));
+    assert.deepEqual(calls.uploads.at(-2).value, layer.vectorGeometry.values, 'render/export buffer uses the edited arrow geometry');
+  }
+  const arrows = layer.vectorGeometry, arrowUploads = calls.uploads.length;
+  layer.setNetwork(renderer, result, { radius: 1.5 });
+  assert.equal(layer.vectorGeometry, arrows);
+  assert.equal(calls.uploads.length, arrowUploads, 'changing tube radius does not rebuild arrows');
   renderer.sliceCount = 1;
   const uploads = calls.uploads.length;
   layer.setNetwork(renderer, result);

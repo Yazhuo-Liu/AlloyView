@@ -11,6 +11,7 @@ import { normalizeOrientationSettings } from '../render/orientation-colors.js';
 import { AMBIENT_OCCLUSION_DIRECTIONS, AMBIENT_OCCLUSION_RESOLUTIONS, DEFAULT_AMBIENT_OCCLUSION } from '../render/ambient-occlusion.js';
 import { normalizeSelectionGroups, MAX_SELECTION_GROUPS, MAX_SELECTION_ATOM_IDS } from '../data/selection-groups.js';
 import { DXA_DEFAULTS, DXA_FAMILIES } from '../analysis/dxa.js';
+import { DISLOCATION_VECTOR_DEFAULTS, DISLOCATION_VECTOR_MINIMUM, DISLOCATION_VECTOR_MAXIMUM } from '../render/dislocation-vector-style.js';
 import { CRYSTAL_STRUCTURE_PROPERTIES } from '../data/structure-properties.js';
 import { COORDINATION_CUTOFF_PRESETS } from '../analysis/cutoff.js';
 import { normalizeExternalPropertyState } from '../io/external-properties.js';
@@ -674,7 +675,7 @@ function normalizeComparisonLayout(value, path) {
 function normalizeDxa(value, path) {
   const input = record(value, path, ['enabled', 'lattice', 'trialCircuitLength', 'circuitStretchability',
     'onlyPerfectDislocations', 'lineSmoothingIterations', 'linePointInterval', 'radius', 'visibleFamilies', 'familyColors', 'defectMesh',
-    'showLineDirections', 'showBurgersVectors', 'burgersVectorScale', 'vectorAnnotations']);
+    'showLineDirections', 'showBurgersVectors', ...Object.keys(DISLOCATION_VECTOR_DEFAULTS), 'vectorAnnotations']);
   // The optional defect mesh: requested per extraction, with its own style.
   const defectMesh = input.defectMesh === undefined ? null
     : record(input.defectMesh, `${path}.defectMesh`, ['enabled', 'smoothingLevel', ...MESH_STYLE_KEYS]);
@@ -707,10 +708,12 @@ function normalizeDxa(value, path) {
     linePointInterval: number(input.linePointInterval ?? DXA_DEFAULTS.linePointInterval, `${path}.linePointInterval`, 0, 1e6),
     radius: number(input.radius ?? 0.75, `${path}.radius`, 1e-12, MAX_COORDINATE),
     visibleFamilies, familyColors,
-    ...(['showLineDirections', 'showBurgersVectors', 'burgersVectorScale', 'vectorAnnotations'].some(key => Object.hasOwn(input, key)) ? {
+    ...(['showLineDirections', 'showBurgersVectors', ...Object.keys(DISLOCATION_VECTOR_DEFAULTS), 'vectorAnnotations'].some(key => Object.hasOwn(input, key)) ? {
       showLineDirections: boolean(input.showLineDirections, `${path}.showLineDirections`, false),
       showBurgersVectors: boolean(input.showBurgersVectors, `${path}.showBurgersVectors`, false),
-      burgersVectorScale: number(input.burgersVectorScale ?? 2, `${path}.burgersVectorScale`, 1e-12, 1e6), vectorAnnotations,
+      ...Object.fromEntries(Object.entries(DISLOCATION_VECTOR_DEFAULTS).map(([name, value]) => [name,
+        number(Object.hasOwn(input, name) ? input[name] : value, `${path}.${name}`, DISLOCATION_VECTOR_MINIMUM, DISLOCATION_VECTOR_MAXIMUM)])),
+      vectorAnnotations,
     } : {}),
     ...(defectMesh === null ? {} : { defectMesh: {
       enabled: boolean(defectMesh.enabled, `${path}.defectMesh.enabled`, false),

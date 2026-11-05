@@ -34,7 +34,9 @@ and display settings; restoring an enabled tool recomputes its network.
 
 ## Line directions and Burgers vectors
 
-Enable **Show line directions** for yellow tangent arrows and **Show Burgers vectors** for cyan arrows. Each dislocation segment has its own Burgers-vector object. The arrows use the extracted vector in spatial coordinates; **Burgers arrow scale** multiplies its displayed length without changing the scientific vector. Both displays are initially off.
+Enable **Show line directions** for yellow tangent arrows and **Show Burgers vectors** for cyan arrows. Each dislocation segment has its own Burgers-vector object. Both displays are initially off.
+
+Each arrow type has independent **radius** and **scale** controls. **Burgers vector radius** and **Line direction radius** set the shaft radius in Å (both default to 0.84 Å); arrowheads widen in proportion. **Burgers vector scale** (default 2) multiplies the extracted spatial Burgers vector's length. **Line direction scale** (default 1) multiplies a reference arrow length of 3.75 Å, reduced to 30% of the displayed curve length for short segments. Changing any one of these four settings leaves the other arrow's dimensions and both anchors unchanged. The dislocation tube's **Line radius** is separate and no longer changes arrow dimensions.
 
 Click a Burgers arrow to select it, then drag the highlighted root along that dislocation. The root follows the displayed smooth curve, including periodic pieces. **Position along line** sets the same location numerically, from 0% to 100% of the curve's arc length. With the root focused, arrow keys move it by 1% (Shift by 10%). **Deselect** clears the selection.
 
@@ -42,7 +44,7 @@ Click a Burgers arrow to select it, then drag the highlighted root along that di
 
 Arrows follow family visibility, slices, periodic origin and display replication. They appear in the second view and image/movie exports; the selection handle is an editing overlay and is not exported. Selection and dragging operate in the primary view, outside slice editing, atom-group picking, measurement and crystal-move modes.
 
-Configurations save visibility, arrow scale and edited positions/directions. A saved annotation is restored only when the newly extracted segment matches its geometry and Burgers-vector signature, preventing a reused numeric segment ID from moving an unrelated arrow.
+Configurations save visibility, all four arrow dimensions and edited positions/directions. Older configurations without the new dimension fields use the defaults above. These are display settings; resizing arrows does not rerun DXA or change the extracted vectors. A saved annotation is restored only when the newly extracted segment matches its geometry and Burgers-vector signature, preventing a reused numeric segment ID from moving an unrelated arrow.
 
 ## Defect mesh
 

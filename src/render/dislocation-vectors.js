@@ -2,6 +2,7 @@ import { cartesianToFractional, fractionalToCartesian } from '../data/model.js';
 import { createPrimitiveMesh } from './atom-primitives.js';
 import { createDislocationCurve } from './dislocation-curves.js';
 import { translatePeriodicPoints } from './periodic-origin.js';
+import { DISLOCATION_VECTOR_DEFAULTS, DISLOCATION_VECTOR_MINIMUM, DISLOCATION_VECTOR_MAXIMUM } from './dislocation-vector-style.js';
 
 const EPSILON = 1e-12;
 const add = (a, b) => a.map((value, axis) => value + b[axis]);
@@ -130,12 +131,12 @@ function appendShape(values, indices, shape, start, end, radius, color, bounds, 
 function appendArrow(values, indices, start, end, radius, color, bounds, anchor = start) {
   const delta = subtract(end, start), length = Math.hypot(...delta);
   if (!(length > EPSILON)) return;
-  const headLength = Math.min(length * .42, radius * 2.8);
+  const headLength = Math.min(length * .42, radius * 2.5);
   const neck = add(end, scale(delta, -headLength / length));
-  // Shafts protrude slightly from the tube; even a screw Burgers vector
-  // parallel to its dislocation remains visible instead of hiding inside it.
-  appendShape(values, indices, CYLINDER, start, neck, radius * 1.12, color, bounds, anchor);
-  appendShape(values, indices, CONE, neck, end, radius * 2.0, color, bounds, anchor);
+  // Radius is the actual shaft radius, independent of the dislocation tube.
+  // These proportions preserve the original glyph appearance at defaults.
+  appendShape(values, indices, CYLINDER, start, neck, radius, color, bounds, anchor);
+  appendShape(values, indices, CONE, neck, end, radius * (25 / 14), color, bounds, anchor);
 }
 
 /** One object/Burgers arrow per source segment, regardless of periodic cuts.
@@ -144,26 +145,33 @@ export function createDislocationVectorGeometry(sources, cell, options = {}) {
   const values = [], indices = [], objects = [];
   const bounds = { minimum: [Infinity, Infinity, Infinity], maximum: [-Infinity, -Infinity, -Infinity] };
   const annotations = new Map((options.vectorAnnotations ?? []).map(value => [value.segmentId, value]));
-  const radius = options.radius ?? .75, vectorScale = options.burgersVectorScale ?? 2;
+  const style = {};
+  for (const [name, fallback] of Object.entries(DISLOCATION_VECTOR_DEFAULTS)) {
+    const value = Object.hasOwn(options, name) ? options[name] : fallback;
+    if (!Number.isFinite(value) || value < DISLOCATION_VECTOR_MINIMUM || value > DISLOCATION_VECTOR_MAXIMUM) {
+      throw new Error(`${name} must be between ${DISLOCATION_VECTOR_MINIMUM} and ${DISLOCATION_VECTOR_MAXIMUM}.`);
+    }
+    style[name] = value;
+  }
   for (const source of sources) {
     const annotation = annotations.get(source.segmentId), position = annotation?.position ?? .5, sign = annotation?.flipped ? -1 : 1;
     const sample = sampleDislocationVectorPath(source, position), root = wrappedPoint(sample.point, cell, source.wrap);
     const tangent = scale(sample.tangent, sign), burgers = scale(source.spatialBurgersVector, sign);
-    const burgersEnd = add(root, scale(burgers, vectorScale));
+    const burgersEnd = add(root, scale(burgers, style.burgersVectorScale));
     // Offset the direction arrow along the line so parallel screw arrows have
     // distinct heads. Keep its anchor on the source curve, including loops.
     const away = dot(sample.tangent, source.spatialBurgersVector) >= 0 ? -1 : 1;
-    let linePosition = position + away * Math.min(.2, Math.max(radius * 6, 2) / source.length);
+    let linePosition = position + away * Math.min(.2, 4.5 / source.length);
     linePosition = source.closed ? (linePosition % 1 + 1) % 1 : Math.max(.05, Math.min(.95, linePosition));
     const lineSample = sampleDislocationVectorPath(source, linePosition), lineCenter = wrappedPoint(lineSample.point, cell, source.wrap);
-    const lineTangent = scale(lineSample.tangent, sign), lineLength = Math.min(source.length * .3, Math.max(radius * 5, 1));
+    const lineTangent = scale(lineSample.tangent, sign), lineLength = Math.min(source.length * .3, 3.75) * style.lineDirectionScale;
     const lineStart = add(lineCenter, scale(lineTangent, -lineLength / 2));
     const lineEnd = add(lineCenter, scale(lineTangent, lineLength / 2));
     const selected = options.selectedVectorId === source.segmentId;
     const lineColor = selected ? [1, .85, .3] : [1, .68, .08];
     const burgersColor = selected ? [.55, 1, 1] : [.05, .9, 1];
-    if (options.showLineDirections) appendArrow(values, indices, lineStart, lineEnd, radius, lineColor, bounds, lineCenter);
-    if (options.showBurgersVectors) appendArrow(values, indices, root, burgersEnd, radius, burgersColor, bounds);
+    if (options.showLineDirections) appendArrow(values, indices, lineStart, lineEnd, style.lineDirectionRadius, lineColor, bounds, lineCenter);
+    if (options.showBurgersVectors) appendArrow(values, indices, root, burgersEnd, style.burgersVectorRadius, burgersColor, bounds);
     objects.push({ segmentId: source.segmentId, familyId: source.familyId, position, flipped: sign < 0, root, tangent,
       burgers, burgersEnd, lineStart, lineEnd, paths: source.paths, selected });
   }

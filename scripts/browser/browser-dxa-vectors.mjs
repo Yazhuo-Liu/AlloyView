@@ -21,6 +21,12 @@ const close = (actual, expected, tolerance = 1e-8) => {
   assert.equal(actual.length, expected.length);
   actual.forEach((value, index) => assert.ok(Math.abs(value - expected[index]) <= tolerance, `${actual} vs ${expected}`));
 };
+const vectorSizes = [
+  { key: 'burgersVectorRadius', id: 'dxa-burgers-radius', initial: .84, value: 1.2, arrow: 'burgers', dimension: 'radius' },
+  { key: 'burgersVectorScale', id: 'dxa-burgers-scale', initial: 2, value: 3, arrow: 'burgers', dimension: 'length' },
+  { key: 'lineDirectionRadius', id: 'dxa-line-direction-radius', initial: .84, value: 1.1, arrow: 'line', dimension: 'radius' },
+  { key: 'lineDirectionScale', id: 'dxa-line-direction-scale', initial: 1, value: 1.5, arrow: 'line', dimension: 'length' },
+];
 try {
   const report = await withWebGpuBrowser(async ({ call, evaluate }) => {
     const origin = await evaluate('location.origin');
@@ -61,6 +67,10 @@ try {
     }
     const object = () => evaluate('dxaVectorChecks.object()');
     const recipe = () => evaluate('dxaVectorChecks.exportRecipe()');
+    async function change(id, value) {
+      await evaluate(`(() => { const input=document.getElementById(${JSON.stringify(id)});
+        input.value=${JSON.stringify(String(value))}; input.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+    }
     await inputFile('#file-input', source);
     await waitFor('dxaVectorChecks.renderer?.frame && !document.getElementById("run-dxa").disabled', 'source import');
     const category = await evaluate('document.querySelector("[data-tool-button=dxa]").closest("[data-tool-category-panel]").dataset.toolCategoryPanel');
@@ -69,6 +79,10 @@ try {
     await waitFor('document.getElementById("dxa-state").textContent === "Calculated"', 'complete DXA');
     assert.equal(await evaluate('dxaVectorChecks.renderer.dislocationOptions.radius'), .75);
     assert.equal(await evaluate('document.getElementById("dxa-line-radius").value'), '0.75');
+    for (const { key, id, initial } of vectorSizes) {
+      assert.equal(await evaluate(`dxaVectorChecks.renderer.dislocationOptions.${key}`), initial);
+      assert.equal(await evaluate(`document.getElementById(${JSON.stringify(id)}).value`), String(initial));
+    }
     await evaluate('dxaVectorChecks.sourceScience=dxaVectorChecks.science(); dxaVectorChecks.renderer.setVisibility(new Uint8Array(dxaVectorChecks.renderer.atomCount)); dxaVectorChecks.renderer.setView("right")');
     await click('#dxa-show-line-directions');
     const lineIndices = await evaluate('dxaVectorChecks.renderer.dislocationLayer.vectorGeometry.indexCount');
@@ -119,10 +133,33 @@ try {
     assert.equal(unflipped.flipped, false); close(unflipped.burgers, moved.burgers); close(unflipped.tangent, moved.tangent);
     await click('#dxa-vector-flip');
     assert.equal(await evaluate('dxaVectorChecks.science() === dxaVectorChecks.sourceScience'), true);
+    const expectedSizes = Object.fromEntries(vectorSizes.map(({ key, initial }) => [key, initial]));
+    const dimensionChecks = [];
+    for (const { key, id, value, arrow, dimension } of vectorSizes) {
+      const before = await evaluate('dxaVectorChecks.appearance()'), previousValue = expectedSizes[key];
+      await change(id, value); expectedSizes[key] = value;
+      const after = await evaluate('dxaVectorChecks.appearance()'), other = arrow === 'line' ? 'burgers' : 'line';
+      assert.deepEqual(after.options, expectedSizes, `${id} updates only its corresponding option`);
+      assert.deepEqual(after[other], before[other], `${id} leaves the other arrow geometry unchanged`);
+      assert.notEqual(after[arrow].meshHash, before[arrow].meshHash, `${id} updates the drawn mesh`);
+      close(after.root, before.root); close(after.lineCenter, before.lineCenter);
+      close([after[arrow][dimension] / before[arrow][dimension]], [value / previousValue], 1e-4);
+      const unchangedDimension = dimension === 'radius' ? 'length' : 'radius';
+      close([after[arrow][unchangedDimension]], [before[arrow][unchangedDimension]], 1e-4);
+      if (dimension === 'radius') assert.deepEqual(after.endpoints, before.endpoints, 'arrow thickness does not move either endpoint');
+      await change(id, 0);
+      assert.deepEqual(await evaluate('dxaVectorChecks.appearance()'), after, 'invalid size does not change the render');
+      assert.equal(await evaluate(`document.getElementById(${JSON.stringify(id)}).value`), String(value));
+      dimensionChecks.push({ control: id, dimension, ratio: after[arrow][dimension] / before[arrow][dimension] });
+    }
+    assert.equal(await evaluate('dxaVectorChecks.science() === dxaVectorChecks.sourceScience'), true);
+    assert.equal(await evaluate('dxaVectorChecks.analyses'), 1, 'resizing arrows does not repeat DXA');
+    assert.deepEqual(await evaluate('dxaVectorChecks.camera()'), camera, 'resizing arrows leaves the camera unchanged');
     const saved = await recipe(), settings = saved.settings.extensions.dxa;
     assert.equal(settings.showLineDirections, true); assert.equal(settings.showBurgersVectors, true);
     assert.equal(settings.vectorAnnotations.length, 1); assert.equal(settings.vectorAnnotations[0].flipped, true);
     assert.match(settings.vectorAnnotations[0].signature, /^[a-f0-9]{16}$/);
+    for (const { key, value } of vectorSizes) assert.equal(settings[key], value);
     await writeFile(resolve(temporary, 'vectors-recipe.json'), JSON.stringify(saved));
     await click('#dxa-show-burgers-vectors');
     assert.equal(await evaluate('document.querySelector("svg.dislocation-vector-gizmo").style.display'), 'none');
@@ -131,6 +168,11 @@ try {
     const restored = (await recipe()).settings.extensions.dxa;
     assert.deepEqual(restored.vectorAnnotations, settings.vectorAnnotations);
     assert.equal(restored.showLineDirections, true); assert.equal(restored.showBurgersVectors, true);
+    for (const { key, id, value } of vectorSizes) {
+      assert.equal(restored[key], value);
+      assert.equal(await evaluate(`dxaVectorChecks.renderer.dislocationOptions.${key}`), value);
+      assert.equal(await evaluate(`document.getElementById(${JSON.stringify(id)}).value`), String(value));
+    }
     assert.equal(await evaluate('dxaVectorChecks.science() === dxaVectorChecks.sourceScience'), true);
     await evaluate('dxaVectorChecks.renderer.setVisibility(new Uint8Array(dxaVectorChecks.renderer.atomCount)); dxaVectorChecks.renderer.setCameraState({fieldWidth:40})');
     await delay(100);
@@ -147,7 +189,7 @@ try {
     assert.equal(await evaluate('dxaVectorChecks.renderer.gl.getError()'), 0);
     return { atoms: screw.ids.length, initialPosition: initial.position, draggedPosition: moved.position,
       radius: .75, sourceUnchanged: true, cameraUnchanged: true, scientificRunsBeforeRestore: 1,
-      simultaneousFlip: true, recipeRestored: true, screenshot, exportedPng,
+      simultaneousFlip: true, independentSizes: expectedSizes, dimensionChecks, recipeRestored: true, screenshot, exportedPng,
       exportPixels: { shown: exported.shown, hidden: exported.hidden } };
   }, { software: true, requireGpu: false, isolated: true });
   await writeFile(resolve(artifacts, 'report.json'), JSON.stringify(report, null, 2) + '\n');
@@ -171,6 +213,28 @@ async function initializeChecks() {
     const object = checks.renderer.dislocationLayer.vectorGeometry.objects[0];
     return { segmentId: object.segmentId, position: object.position, flipped: object.flipped,
       root: object.root, tangent: object.tangent, burgers: object.burgers, lineStart: object.lineStart, lineEnd: object.lineEnd };
+  };
+  checks.appearance = () => {
+    const r = checks.renderer, geometry = r.dislocationLayer.vectorGeometry, object = geometry.objects[0];
+    if (geometry.objects.length !== 1) throw new Error('This geometry check expects the single screw dislocation fixture.');
+    const from = { line: object.lineStart, burgers: object.root }, to = { line: object.lineEnd, burgers: object.burgersEnd };
+    const arrows = Object.fromEntries(['line', 'burgers'].map(name => {
+      const delta = to[name].map((value, axis) => value - from[name][axis]), length = Math.hypot(...delta);
+      return [name, { length, radius: 0, meshHash: 2166136261, axis: delta.map(value => value / length) }];
+    }));
+    const { values } = geometry, words = new Uint32Array(values.buffer, values.byteOffset, values.length);
+    for (let index = 0; index < values.length; index += 12) {
+      const name = values[index + 9] > values[index + 10] ? 'line' : 'burgers', arrow = arrows[name];
+      const delta = [0, 1, 2].map(axis => values[index + axis] + values[index + axis + 3] - from[name][axis]);
+      const along = delta.reduce((sum, value, axis) => sum + value * arrow.axis[axis], 0);
+      arrow.radius = Math.max(arrow.radius, Math.hypot(...delta.map((value, axis) => value - along * arrow.axis[axis])));
+      for (let field = 0; field < 12; field++) arrow.meshHash = Math.imul(arrow.meshHash ^ words[index + field], 16777619) >>> 0;
+    }
+    for (const arrow of Object.values(arrows)) delete arrow.axis;
+    return { ...arrows, root: object.root, endpoints: { line: [object.lineStart, object.lineEnd], burgers: [object.root, object.burgersEnd] },
+      lineCenter: object.lineStart.map((value, axis) => (value + object.lineEnd[axis]) / 2),
+      options: Object.fromEntries(['burgersVectorRadius', 'burgersVectorScale', 'lineDirectionRadius', 'lineDirectionScale']
+        .map(key => [key, r.dislocationOptions[key]])) };
   };
   checks.science = () => JSON.stringify(checks.renderer.dislocationNetwork.segments.map(segment => ({
     id: segment.id, points: Array.from(segment.points), burgers: Array.from(segment.burgersVector),
