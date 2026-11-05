@@ -67,6 +67,7 @@
     "benchmark:voronoi:browser": "node scripts/benchmarks/benchmark-voronoi-browser.mjs",
     "benchmark:dxa": "node scripts/benchmarks/benchmark-dxa.mjs",
     "benchmark:dxa-cpu": "node scripts/benchmarks/benchmark-dxa-cpu.mjs",
+    "benchmark:dxa-memory": "node scripts/benchmarks/benchmark-dxa-memory.mjs",
     "benchmark:dxa-compare": "node scripts/benchmarks/benchmark-dxa-compare.mjs",
     "build:wasm": "bash wasm/build.sh",
     "build:ptm": "bash wasm/build-ptm.sh",

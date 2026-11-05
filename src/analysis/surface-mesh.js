@@ -42,7 +42,7 @@ export function suggestProbeRadius(frame) {
 }
 
 function nativeSurfaceError(module, canceled) {
-  const pointer = module._alloy_surface_last_error();
+  const pointer = module._alloy_surface_last_error() >>> 0;
   const message = pointer ? module.UTF8ToString(pointer) : 'Surface construction failed.';
   if (canceled || /was canceled/.test(message)) return new DOMException('The surface calculation was cancelled.', 'AbortError');
   return new Error(message || 'Surface construction failed.');
@@ -65,8 +65,8 @@ export async function calculateSurfaceMesh(frame, parameters = {}, { mask, onPro
     const hostTimings = { prepareMs: performance.now() - startedAt, inputMs: 0, collectMs: 0 };
     let hostStarted = performance.now();
     const positions = dxaCartesianCoordinates(frame);
-    const coordinates = module._malloc(positions.byteLength), cellPointer = module._malloc(12 * 8);
-    const maskPointer = selection ? module._malloc(count) : 0;
+    const coordinates = module._malloc(positions.byteLength) >>> 0, cellPointer = module._malloc(12 * 8) >>> 0;
+    const maskPointer = selection ? module._malloc(count) >>> 0 : 0;
     const stageTimings = [];
     let stagePhase, stageStarted;
     const previousProgress = module.onSurfaceProgress;
@@ -90,7 +90,7 @@ export async function calculateSurfaceMesh(frame, parameters = {}, { mask, onPro
       kernel.checkCancellation();
       report({ phase: 'analyzing', completedStages: 0 });
       const summaryPointer = module._alloy_surface_construct(coordinates, count, cellPointer, pbc, maskPointer,
-        settings.radius, settings.smoothingLevel);
+        settings.radius, settings.smoothingLevel) >>> 0;
       if (!summaryPointer) throw nativeSurfaceError(module, kernel.canceled());
       kernel.checkCancellation();
       hostStarted = performance.now();
@@ -100,7 +100,8 @@ export async function calculateSurfaceMesh(frame, parameters = {}, { mask, onPro
       const vertexCount = module._alloy_surface_vertex_count(), faceCount = module._alloy_surface_face_count();
       const regionCount = module._alloy_surface_region_count();
       const slice = (heap, pointer, length) => {
-        const start = pointer / heap.BYTES_PER_ELEMENT;
+        // Preserve the unsigned Wasm address before converting it to an index.
+        const start = (pointer >>> 0) / heap.BYTES_PER_ELEMENT;
         return heap.slice(start, start + length);
       };
       const raw = { ...summary,

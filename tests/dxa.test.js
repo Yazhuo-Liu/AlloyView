@@ -78,8 +78,18 @@ test('DXA source coordinates wrap PBC images with complete triclinic vectors and
 test('whole-frame DXA memory preflight rejects excessive work without silently truncating atoms', () => {
   assert.ok(estimateDxaMemory(259_808) > 700 * 1024 ** 2);
   assert.equal(preflightDxaMemory(100, estimateDxaMemory(100)), estimateDxaMemory(100));
-  assert.throws(() => preflightDxaMemory(1_000_000), /exceeding.*budget/);
-  assert.throws(() => preflightDxaMemory(4, NaN), /budget/);
+  assert.equal(preflightDxaMemory(752_330), estimateDxaMemory(752_330));
+  assert.equal(preflightDxaMemory(1_000_000), estimateDxaMemory(1_000_000));
+  assert.throws(() => preflightDxaMemory(752_330, 1.5 * 1024 ** 3), /exceeding.*budget/);
+  assert.equal(preflightDxaMemory(1_000_000, 8 * 1024 ** 3), estimateDxaMemory(1_000_000));
+  assert.ok(estimateDxaMemory(2_000_000) > 4 * 1024 ** 3);
+  assert.equal(preflightDxaMemory(2_000_000), estimateDxaMemory(2_000_000));
+  assert.equal(preflightDxaMemory(2_000_000, 16 * 1024 ** 3), estimateDxaMemory(2_000_000),
+    'the conservative whole-job estimate is not the size of a single native allocation');
+  assert.throws(() => preflightDxaMemory(6_000_000, 16 * 1024 ** 3), /exceeding.*budget/);
+  for (const budget of [0, -1, NaN, Infinity]) {
+    assert.throws(() => preflightDxaMemory(4, budget), /budget/);
+  }
 });
 
 test('DXA normalization retains Burgers vectors, connectivity and source lengths/density', () => {

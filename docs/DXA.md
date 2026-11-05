@@ -50,6 +50,56 @@ also serves Surface, so geometry changes must validate both analyses.
 
 ## Diagnostic interfaces
 
+### Memory budget and native capacity
+
+DXA's whole-job working-memory budget defaults to 80% of the browser's
+`navigator.deviceMemory` hint, capped at **16 GiB**. Without a valid hint it
+defaults to 16 GiB. The client resolves this once and passes the same budget to
+the coordinator and private stage Workers. Explicit `memoryBudgetBytes` remains
+available to API callers. The [browser hint](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/deviceMemory)
+is rounded and privacy-limited; it cannot measure actual host or free RAM.
+`performance.memory.jsHeapSizeLimit` is not used as a physical-RAM or Wasm limit.
+
+Both shipped Wasm32 kernels can now grow from 32 MiB to **4 GiB per heap**,
+independently of the whole-job budget. JavaScript buffers and private Workers
+can bring the total above a single heap's capacity. Raising the job budget
+cannot provide a 16 GiB contiguous native heap; that would require a different
+addressing model. The [Emscripten build setting](https://emscripten.org/docs/tools_reference/settings_reference.html#maximum-memory)
+also requires unsigned JavaScript addresses above 2 GiB. The DXA, private-stage
+and Surface adapters handle those addresses, with real high-address regression
+tests for both private and shared kernels.
+
+Admission retains the conservative `32 MiB + 3,072 bytes × atom count` estimate.
+It is neither measured usage nor the required size of a single native heap.
+Previously the fixed 1.5 GiB budget rejected every structure above 513,365 atoms
+before native analysis began. No atoms are dropped to fit the budget.
+
+For `examples/100_tilt4_twist2.cfg` (752,330 atoms, default FCC settings), the
+estimate is 2,236 MiB. A complete Node 24 run with 8 threads took about 16 seconds,
+retained a **764 MiB Wasm heap**, and peaked at **1,015 MiB process RSS**.
+Chromium also completed the full input both without isolation (one native thread,
+659 MiB heap) and with isolation (eight native threads, 764 MiB heap).
+These measurements exclude the application's rendered scene; RSS includes Node,
+input and JavaScript buffers, while heap capacity is not live allocation size.
+
+A separate diagnostic run found 834,495 tessellation points (82,165 periodic
+images), approximately 5.02 million cells and 5.27 million edges. Major reported
+capacities were 206 MiB for Delaunay connectivity, 77 MiB for cell metadata and
+247 MiB for retained elastic-mapping edges. This explains why native workspace
+exceeds the coordinate arrays, but the original rejection was caused by the
+fixed budget and conservative estimate, not by exhausting host RAM.
+
+Reproduce with `npm run benchmark:dxa-memory`; add `-- --profile` in a separate
+run for allocation counters. Use `--input FILE.cfg --threads N --lattice fcc`
+to select another input. [Recorded measurements](benchmarks/dxa-memory-100-tilt4-twist2.json)
+include input and kernel hashes. Parallel Delaunay tie choices can change segment
+details between runs; memory profiling does not establish scientific equivalence.
+The old and rebuilt private kernels also produced identical complete scientific
+output on this sample with one native thread (471 segments and all atom labels,
+points, Burgers vectors and junctions), as recorded in the same report.
+
+### Profiling interfaces
+
 `Module.onDxaProfile` is the opt-in switch. Formal timings disable it; collect
 profiles in separate complete extractions. Disabled diagnostics do not read
 clocks or run diagnostic topology traversals, but some conditional branches and

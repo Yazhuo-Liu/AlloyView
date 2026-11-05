@@ -105,12 +105,13 @@ function checkedRange(start, end, count) {
 }
 
 function nativeError(module, name) {
-  const pointer = module[name]();
+  const pointer = module[name]() >>> 0;
   return new Error(pointer ? module.UTF8ToString(pointer) : 'CPU DXA stage failed.');
 }
 
 function allocate(module, values) {
-  const pointer = module._malloc(values.byteLength);
+  // Wasm i32 exports may represent addresses above 2 GiB as negative numbers.
+  const pointer = module._malloc(values.byteLength) >>> 0;
   if (!pointer) throw new Error('Insufficient memory for a CPU DXA stage input.');
   new values.constructor(module.HEAPU8.buffer, pointer, values.length).set(values);
   return pointer;
@@ -162,7 +163,7 @@ export async function calculateDxaLocalRange(input, { residentKey, startAtom, en
   onPhase('analyzing');
   if (!module._alloy_dxa_local_identify(startAtom, endAtom)) throw nativeError(module, '_alloy_dxa_local_error');
   const width = module._alloy_dxa_local_neighbor_width(), count = endAtom - startAtom;
-  const types = module._alloy_dxa_local_structures_ptr(), neighbors = module._alloy_dxa_local_neighbors_ptr();
+  const types = module._alloy_dxa_local_structures_ptr() >>> 0, neighbors = module._alloy_dxa_local_neighbors_ptr() >>> 0;
   if (!types || !neighbors || width !== resident.neighborWidth) throw new Error('CPU DXA local output is incomplete.');
   return { startAtom, endAtom, structures: module.HEAP32.slice(types / 4 + startAtom, types / 4 + endAtom),
     neighbors: module.HEAP32.slice(neighbors / 4 + startAtom * width, neighbors / 4 + endAtom * width),
@@ -192,7 +193,7 @@ export async function calculateDxaTetrahedraRange(input, { residentKey, startAto
   }
   if (!resident || resident.key !== residentKey || resident.kind !== 'tetrahedra') throw new Error('The resident CPU DXA interface tables are unavailable.');
   checkedRange(startAtom, endAtom, resident.tetrahedronCount);
-  const count = endAtom - startAtom, output = module._malloc(count * 4);
+  const count = endAtom - startAtom, output = module._malloc(count * 4) >>> 0;
   if (!output) throw new Error('Insufficient memory for CPU DXA interface labels.');
   try {
     onPhase('analyzing');

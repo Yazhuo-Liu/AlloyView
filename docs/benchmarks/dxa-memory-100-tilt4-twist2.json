@@ -1,0 +1,290 @@
+{
+  "generatedAt": "2026-11-05T16:50:35.184Z",
+  "artifacts": {
+    "dxa-kernel.mjs": "30e9164dfac3ba1fd6c51d830779be61692f2b8bad4a0bf544e91ee8b3e3a322",
+    "dxa-kernel.wasm": "2ffc88a8d15efaecad079717facc5e821e8e650c8c7419e2938e50f45360700c",
+    "dxa-kernel-threaded.mjs": "ffeb880ff6b6f9a99972f6704062ad3bfd2748b2a15647a428a7421d937c9808",
+    "dxa-kernel-threaded.wasm": "2cee7643fad7fa5b82c665f5f7370538c2b95b78e5aa050ec63048e363e243ea"
+  },
+  "measured": {
+    "runtime": "v24.19.0",
+    "input": "examples/100_tilt4_twist2.cfg",
+    "inputSha256": "3de7bfd83579bde04fc6e8f65b5a1d9e14fa1c1bc65db2c13bc0d554c542fffa",
+    "atoms": 752330,
+    "hostMemoryBytes": 333424648192,
+    "memoryBudgetBytes": 17179869184,
+    "memoryEstimateBytes": 2344712192,
+    "wasmMemoryLimitBytes": 4294967296,
+    "requestedWorkers": 8,
+    "profilingEnabled": false,
+    "memoryDefinition": "Wasm bytes are retained linear-memory capacity, not live allocations. RSS includes Node, input, JS copies and all pthreads; peak RSS is cumulative for this fresh process.",
+    "afterParsing": {
+      "rssBytes": 199536640,
+      "peakRssBytes": 199536640
+    },
+    "stages": [
+      {
+        "phase": "initializing",
+        "rssBytes": 208711680,
+        "peakRssBytes": 208711680
+      },
+      {
+        "phase": "warming",
+        "rssBytes": 213954560,
+        "peakRssBytes": 213954560
+      },
+      {
+        "phase": "indexing",
+        "rssBytes": 301117440,
+        "peakRssBytes": 301117440
+      },
+      {
+        "phase": "analyzing",
+        "rssBytes": 354856960,
+        "peakRssBytes": 354856960
+      },
+      {
+        "phase": "Identify local crystal structures",
+        "rssBytes": 431534080,
+        "peakRssBytes": 431534080
+      },
+      {
+        "phase": "Build crystal clusters",
+        "rssBytes": 470200320,
+        "peakRssBytes": 470200320
+      },
+      {
+        "phase": "Connect crystal reference frames",
+        "rssBytes": 478720000,
+        "peakRssBytes": 478720000
+      },
+      {
+        "phase": "Periodic Delaunay tessellation",
+        "rssBytes": 478720000,
+        "peakRssBytes": 478720000
+      },
+      {
+        "phase": "Build tessellation edges",
+        "rssBytes": 788049920,
+        "peakRssBytes": 788049920
+      },
+      {
+        "phase": "Assign crystal clusters",
+        "rssBytes": 1048883200,
+        "peakRssBytes": 1048883200
+      },
+      {
+        "phase": "Map edges to the ideal lattice",
+        "rssBytes": 1048883200,
+        "peakRssBytes": 1048883200
+      },
+      {
+        "phase": "Construct crystal interface mesh",
+        "rssBytes": 1050849280,
+        "peakRssBytes": 1050849280
+      },
+      {
+        "phase": "Trace Burgers circuits and dislocation lines",
+        "rssBytes": 1050849280,
+        "peakRssBytes": 1050849280
+      },
+      {
+        "phase": "Connect dislocation junctions",
+        "rssBytes": 1063301120,
+        "peakRssBytes": 1063301120
+      },
+      {
+        "phase": "Smooth and coarsen dislocation lines",
+        "rssBytes": 1063301120,
+        "peakRssBytes": 1063301120
+      },
+      {
+        "phase": "Serialize dislocation network",
+        "rssBytes": 1063301120,
+        "peakRssBytes": 1063301120
+      },
+      {
+        "phase": "DXA complete",
+        "rssBytes": 1063301120,
+        "peakRssBytes": 1063301120
+      },
+      {
+        "phase": "collecting",
+        "rssBytes": 1063301120,
+        "peakRssBytes": 1063301120
+      }
+    ],
+    "elapsedMs": 15969.410605,
+    "workerCount": 8,
+    "wasmMemoryBytes": 801112064,
+    "rssBytes": 1004236800,
+    "peakRssBytes": 1063956480,
+    "stageTimings": [
+      {
+        "phase": "Identify local crystal structures",
+        "elapsedMs": 1439.0300159999997,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Build crystal clusters",
+        "elapsedMs": 694.118516,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Connect crystal reference frames",
+        "elapsedMs": 76.84798500000034,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Periodic Delaunay tessellation",
+        "elapsedMs": 5586.549798,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Build tessellation edges",
+        "elapsedMs": 3017.824222000001,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Assign crystal clusters",
+        "elapsedMs": 15.923532999999225,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Map edges to the ideal lattice",
+        "elapsedMs": 1191.8996889999999,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Construct crystal interface mesh",
+        "elapsedMs": 2340.88782,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Trace Burgers circuits and dislocation lines",
+        "elapsedMs": 1213.4914079999999,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Connect dislocation junctions",
+        "elapsedMs": 0.8245510000015202,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Smooth and coarsen dislocation lines",
+        "elapsedMs": 0.8600709999991523,
+        "backend": "cpu"
+      },
+      {
+        "phase": "Serialize dislocation network",
+        "elapsedMs": 23.200963999999658,
+        "backend": "cpu"
+      }
+    ],
+    "segments": 463,
+    "totalLength": 8413.090364220136,
+    "structureCounts": {
+      "0": 48404,
+      "1": 699746,
+      "2": 4180
+    },
+    "atomLabelSha256": "89d47924340f18b0a51392538075ee56724c8a5510551ea94fafb42a317b1f37"
+  },
+  "diagnostic": {
+    "profilingEnabled": true,
+    "memoryCounters": {
+      "geogram.pdel.topologyCapacityBytes": 216134205,
+      "delaunay.primaryPoints": 752330,
+      "delaunay.totalPoints": 834495,
+      "delaunay.totalCells": 5015545,
+      "delaunay.pointCapacityBytes": 25165824,
+      "delaunay.particleIndexCapacityBytes": 4194304,
+      "delaunay.cellInfoCapacityBytes": 80248720,
+      "edges.count": 5273899,
+      "edges.payload_bytes": 168764768,
+      "edges.adjacency_bytes": 84382384,
+      "edges.offset_bytes": 6018644,
+      "edges.retained_bytes": 259165796,
+      "edges.build_peak_bytes": 259165796,
+      "mapping.batchCapacityBytes": 4194304,
+      "mesh.facet-mask-bytes": 4441757,
+      "mesh.ghost-face-lookup-bytes": 1048576,
+      "mesh.interface-faces": 63532,
+      "mesh.internalFaceCapacityBytes": 762384,
+      "mesh.internalVertexCapacityBytes": 1250160,
+      "mesh.internalEdgeCapacityBytes": 17301504,
+      "mesh.staticComponents.scratchCapacityBytes": 162326,
+      "tracing.scratch.peakBytes": 122880,
+      "tracing.scratch.retainedBytes": 122880,
+      "tracing.scratch.recordBytes": 120
+    },
+    "wasmMemoryBytes": 801112064,
+    "peakRssBytes": 1084874752
+  },
+  "browser": [
+    {
+      "isolated": false,
+      "reportedMemoryGiB": 32,
+      "atoms": 752330,
+      "labels": 752330,
+      "budgetGiB": 16,
+      "wasmMiB": 659.375,
+      "workerCount": 1,
+      "elapsedMs": 29032.5,
+      "segments": 471,
+      "structureCounts": {
+        "0": 48404,
+        "1": 699746,
+        "2": 4180
+      }
+    },
+    {
+      "isolated": true,
+      "reportedMemoryGiB": 32,
+      "atoms": 752330,
+      "labels": 752330,
+      "budgetGiB": 16,
+      "wasmMiB": 764,
+      "workerCount": 8,
+      "elapsedMs": 14265.134999997914,
+      "segments": 463,
+      "structureCounts": {
+        "0": 48404,
+        "1": 699746,
+        "2": 4180
+      }
+    }
+  ],
+  "serialScientificParity": {
+    "exactMatch": true,
+    "comparison": "Previous HEAD private kernel versus rebuilt 4 GiB private kernel, same complete input and one native thread; exclude only parallelEdgePasses.",
+    "runs": [
+      {
+        "variant": "old",
+        "atomCount": 752330,
+        "segments": 471,
+        "totalLength": 8386.692602476738,
+        "structureCounts": {
+          "0": 48404,
+          "1": 699746,
+          "2": 4180
+        },
+        "fullHash": "455e12942662e25c91e52acf1720082694439563758298002af84d6183fc857d",
+        "heapMiB": 659.375
+      },
+      {
+        "variant": "new",
+        "atomCount": 752330,
+        "segments": 471,
+        "totalLength": 8386.692602476738,
+        "structureCounts": {
+          "0": 48404,
+          "1": 699746,
+          "2": 4180
+        },
+        "fullHash": "455e12942662e25c91e52acf1720082694439563758298002af84d6183fc857d",
+        "heapMiB": 659.375
+      }
+    ]
+  }
+}

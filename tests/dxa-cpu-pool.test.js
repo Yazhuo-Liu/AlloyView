@@ -53,10 +53,11 @@ const goodLocal = data => ({ startAtom: data.startAtom, endAtom: data.endAtom,
 
 test('CPU stage admission counts actual output chunks and retained grown native heaps', () => {
   const pool = { limit: 8, environment, slots: new Set() }, snapshot = tables(30000);
-  assert.equal(chooseDxaStageWorkers(pool, 'tetrahedra', snapshot, { workerCount: 8 }).workerCount, 4);
-  assert.throws(() => chooseDxaStageWorkers(pool, 'tetrahedra', tables(8192)), /two parallel/);
+  const memoryBudgetBytes = 1.5 * 1024 ** 3;
+  assert.equal(chooseDxaStageWorkers(pool, 'tetrahedra', snapshot, { workerCount: 8, memoryBudgetBytes }).workerCount, 4);
+  assert.throws(() => chooseDxaStageWorkers(pool, 'tetrahedra', tables(8192), { memoryBudgetBytes }), /two parallel/);
   pool.slots.add({ dxaHeapBytes: 1.4 * 1024 ** 3, dxaWarmed: true });
-  assert.throws(() => chooseDxaStageWorkers(pool, 'tetrahedra', snapshot), /memory\/concurrency/);
+  assert.throws(() => chooseDxaStageWorkers(pool, 'tetrahedra', snapshot, { memoryBudgetBytes }), /memory\/concurrency/);
 });
 
 test('DXA admission counts fifteen real warmed PTM/Voronoi heaps once and permits both local and interface stages', () => {
@@ -64,17 +65,18 @@ test('DXA admission counts fifteen real warmed PTM/Voronoi heaps once and permit
     slots: new Set(Array.from({ length: 15 }, () => ({ ptmWarmed: true, voronoiWarmed: true,
       moduleHeapBytes: { ptm: 17039360, voronoi: 16908288, dxa: 0 }, residentInputBytes: 4 * mib }))) };
   const input = localInput(); input.atomCount = 60229; input.coordinates = new Float64Array(input.atomCount * 3);
-  const local = chooseDxaStageWorkers(pool, 'local', input, { workerCount: 15 });
-  assert.equal(local.workerCount, 15); assert.ok(local.memoryEstimateBytes <= 1.5 * 1024 ** 3);
+  const memoryBudgetBytes = 1.5 * 1024 ** 3;
+  const local = chooseDxaStageWorkers(pool, 'local', input, { workerCount: 15, memoryBudgetBytes });
+  assert.equal(local.workerCount, 15); assert.ok(local.memoryEstimateBytes <= memoryBudgetBytes);
   for (const slot of [...pool.slots].slice(0, local.workerCount)) {
     slot.dxaWarmed = true; slot.moduleHeapBytes.dxa = 32 * mib;
   }
   const snapshot = tables(400000); snapshot.atomCount = input.atomCount;
-  const classified = chooseDxaStageWorkers(pool, 'tetrahedra', snapshot, { workerCount: 15 });
+  const classified = chooseDxaStageWorkers(pool, 'tetrahedra', snapshot, { workerCount: 15, memoryBudgetBytes });
   assert.ok(classified.workerCount >= 2, 'resident local-stage heaps and complete interface tables must still fit real parallel work');
-  assert.ok(classified.memoryEstimateBytes <= 1.5 * 1024 ** 3);
+  assert.ok(classified.memoryEstimateBytes <= memoryBudgetBytes);
   for (const slot of pool.slots) slot.moduleHeapBytes.voronoi = 128 * mib;
-  assert.throws(() => chooseDxaStageWorkers(pool, 'local', input, { workerCount: 2 }), /memory\/concurrency/,
+  assert.throws(() => chooseDxaStageWorkers(pool, 'local', input, { workerCount: 2, memoryBudgetBytes }), /memory\/concurrency/,
     'actual grown native heaps continue to enforce the total memory budget');
 });
 

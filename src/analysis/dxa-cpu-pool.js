@@ -1,4 +1,5 @@
 import { estimateDxaMemory } from './dxa.js';
+import { dxaMemoryBudget } from './dxa-memory.js';
 import { DXA_STAGE_FIELDS, dxaStageMetadata, validateDxaLocalInput, validateDxaSnapshot } from './dxa-cpu-stages.js';
 import { yieldToMain } from '../shared/task-yield.js';
 
@@ -25,7 +26,7 @@ export function chooseDxaStageWorkers(pool, stage, input, { workerCount, memoryB
   const inputBytes = dxaStageInputBytes(stage, input);
   const outputBytes = stage === 'local' ? atomCount * (1 + validated.neighborWidth) * 4 : workCount * 4;
   const coordinatorBytes = estimateDxaMemory(atomCount);
-  const budget = memoryBudgetBytes ?? 1.5 * 1024 ** 3;
+  const budget = memoryBudgetBytes ?? dxaMemoryBudget(pool.environment);
   if (!Number.isFinite(budget) || budget <= 0) throw new Error('CPU DXA stage memory budget must be positive and finite.');
   if (workerCount !== undefined && (!Number.isSafeInteger(workerCount) || workerCount < 1)) throw new Error('CPU DXA stage worker count must be a positive integer.');
   // A slot may already have PTM/Voronoi heaps. Account for those, the serial

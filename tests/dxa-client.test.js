@@ -21,6 +21,43 @@ const setup = (options = {}) => {
 };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('DXA resolves the page memory hint once and forwards the budget to warmup, analysis and surface jobs', async () => {
+  const environment = { navigator: { deviceMemory: 4, hardwareConcurrency: 4 } };
+  for (const memoryBudgetBytes of [undefined, 6 * 1024 ** 3]) {
+    const expected = memoryBudgetBytes ?? Math.floor(.8 * 4 * 1024 ** 3);
+    const { client, workers } = setup({ environment, memoryBudgetBytes });
+    try {
+      assert.equal(client.memoryBudgetBytes, expected);
+      for (const [type, run] of [
+        ['warmup', () => client.warmup({ atomCount: 752_330 })],
+        ['analyze', () => client.analyze(source())],
+        ['surface', () => client.surface(source())],
+      ]) {
+        const pending = run(); await flush();
+        const worker = workers[0], message = worker.messages.at(-1);
+        assert.equal(message.type, type);
+        assert.equal(message.memoryBudgetBytes, expected);
+        worker.emit({ id: message.id, ok: true, result: { backend: 'cpu' } });
+        await pending;
+      }
+      assert.equal(workers.length, 1);
+    } finally { await client.close(); }
+  }
+});
+
+test('a small-device DXA budget rejects the large sample before creating any Worker', async () => {
+  const { client, workers } = setup({ environment: { navigator: { deviceMemory: 2, hardwareConcurrency: 4 } } });
+  const atomCount = 752_330, frame = { ...source(), fractional: new Float64Array(atomCount * 3) };
+  try {
+    await assert.rejects(client.warmup({ atomCount }), /exceeding.*budget/);
+    await assert.rejects(client.analyze(frame), /exceeding.*budget/);
+    await assert.rejects(client.surface(frame), /exceeding.*budget/);
+    assert.equal(workers.length, 0);
+    assert.equal(client.pending.size, 0);
+    assert.equal(client.cpuBudget.active, 0);
+  } finally { await client.close(); }
+});
+
 test('DXA client transfers owned coordinate copies without detaching the displayed frame', async () => {
   const { client, workers } = setup(), frame = source(), progress = [];
   const request = client.analyze(frame, { lattice: 'bcc', gpuEnabled: true }, { onProgress: event => progress.push(event) });
@@ -478,15 +515,18 @@ test('private CPU stage failure reacquires a native permit and supplies a stage 
 
 test('automatic private DXA degree has separate local and interface-snapshot caps; explicit requests apply to both', async () => {
   for (const [requested, expected] of [[undefined, { local: 8, tetrahedra: 4 }], [6, { local: 6, tetrahedra: 6 }]]) {
-    const environment = { ...staticEnvironment, navigator: { hardwareConcurrency: 40 } };
+    const environment = { ...staticEnvironment, navigator: { hardwareConcurrency: 40, deviceMemory: 4 } };
+    const memoryBudgetBytes = Math.floor(.8 * 4 * 1024 ** 3);
     const atomCount = 60229, degrees = {};
     const cpuStageBackend = {
       async analyzeDxaLocal(input, options) {
+        assert.equal(options.memoryBudgetBytes, memoryBudgetBytes);
         degrees.local = options.workerCount;
         return { structures: new Int32Array(atomCount), neighbors: new Int32Array(atomCount * 12),
           neighborWidth: 12, maxNeighborDistance: 3, workerCount: options.workerCount };
       },
       async analyzeDxaTetrahedra(input, options) {
+        assert.equal(options.memoryBudgetBytes, memoryBudgetBytes);
         degrees.tetrahedra = options.workerCount;
         return { regions: new Int32Array(input.tetrahedronCount), workerCount: options.workerCount };
       },
@@ -496,6 +536,7 @@ test('automatic private DXA degree has separate local and interface-snapshot cap
     const pending = client.analyze(frame, {}, { workerCount: requested }); await flush();
     const worker = workers[0], initial = worker.messages[0];
     assert.equal(initial.workerCount, 1); assert.equal(initial.cpuOffload, true);
+    assert.equal(initial.memoryBudgetBytes, memoryBudgetBytes);
     worker.emit({ id: initial.id, cpuStageRequest: { requestId: 5, stage: 'local', input: {} } }); await flush();
     worker.emit({ id: initial.id, cpuStageRequest: { requestId: 6, stage: 'tetrahedra', input: { tetrahedronCount: 9 } } }); await flush();
     assert.deepEqual(degrees, expected);

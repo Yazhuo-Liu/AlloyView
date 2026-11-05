@@ -2,6 +2,7 @@ import { DXA_CODE_WARMUP_MIN_ATOMS, dxaWorkerCount, normalizeDefectMeshRequest, 
 import { validateSurfaceMask, validateSurfaceMeshParameters } from './surface-mesh.js';
 import { CpuBudget } from '../shared/cpu-budget.js';
 import { createAnalysisProgressReporter } from './progress.js';
+import { dxaMemoryBudget } from './dxa-memory.js';
 
 const COPY_CHUNK_VALUES = 512 * 1024;
 // Automatic private-stage Workers on hosts without shared memory, one per
@@ -24,7 +25,7 @@ export class DxaClient {
     this.workerFactory = workerFactory;
     this.codeWarmupMinAtoms = codeWarmupMinAtoms;
     this.stageWorkerLimits = { ...DEFAULT_STAGE_WORKER_LIMITS, ...stageWorkerLimits };
-    this.memoryBudgetBytes = memoryBudgetBytes;
+    this.memoryBudgetBytes = memoryBudgetBytes ?? dxaMemoryBudget(environment);
     this.workerCount = workerCount;
     this.environment = environment;
     this.cpuBudget = cpuBudget ?? new CpuBudget({ environment });
