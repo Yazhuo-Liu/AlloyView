@@ -7,6 +7,7 @@ import { buildSurfaceDisplayMesh } from '../../render/surface-mesh-geometry.js';
 import { SURFACE_MESH_DEFAULTS, surfaceMeshDisplayState } from '../../render/surface-mesh-layer.js';
 import { FrameCache } from '../../data/frame-cache.js';
 import { estimateFrameBytes } from '../../data/cache-policy.js';
+import { dislocationSegmentSignature } from '../../render/dislocation-vector-state.js';
 
 import { DXA_STRUCTURE_PROPERTY } from '../../data/structure-properties.js';
 export const DXA_STRUCTURE_LABEL = 'Crystal structure (DXA)';
@@ -45,7 +46,9 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   afterDisplayRefresh = callback => callback(), resultCacheBytes = 64 * 1024 ** 2, resultCacheLimit = 4,
   automaticDelayMs = 120 }) {
   let enabled = false, controlsEnabled = false, controller = null, request = 0;
-  let network = null, failure = false, radius = 0.25;
+  let network = null, failure = false, radius = 0.75;
+  let showLineDirections = false, showBurgersVectors = false, burgersVectorScale = 2;
+  let selectedVectorId = null, annotations = new WeakMap(), pendingAnnotations = [];
   let visibleFamilies = new Set(), familyColors = new Map();
   // Retain a few recently visited graphs under a separate byte budget. Frame
   // identity prevents reusing a result after parsing/processing replaces it.
@@ -135,6 +138,65 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     $('run-dxa').disabled = !controlsEnabled || Boolean(controller);
     $('cancel-dxa').disabled = !controlsEnabled || (!enabled && !failure);
     for (const input of $('dxa-families').querySelectorAll('input')) input.disabled = !controlsEnabled;
+    for (const id of ['dxa-show-line-directions', 'dxa-show-burgers-vectors', 'dxa-burgers-scale']) {
+      if ($(id)) $(id).disabled = !controlsEnabled;
+    }
+    updateVectorControls();
+  }
+
+  const vectorAnnotations = () => network ? [...(annotations.get(network)?.values() ?? [])].map(value => ({ ...value })) : [];
+  const selectedSegment = () => network?.segments?.find(segment => segment.id === selectedVectorId);
+
+  function writeVectorSettings() {
+    if ($('dxa-show-line-directions')) $('dxa-show-line-directions').checked = showLineDirections;
+    if ($('dxa-show-burgers-vectors')) $('dxa-show-burgers-vectors').checked = showBurgersVectors;
+    if ($('dxa-burgers-scale')) $('dxa-burgers-scale').value = String(burgersVectorScale);
+  }
+
+  function updateVectorControls() {
+    const segment = selectedSegment();
+    const available = Boolean(segment && enabled && controlsEnabled && showBurgersVectors
+      && visibleFamilies.has(segment.familyId ?? segment.family ?? 'other'));
+    if ($('dxa-vector-selection')) $('dxa-vector-selection').hidden = !available;
+    for (const id of ['dxa-vector-position', 'dxa-vector-flip', 'dxa-vector-clear']) if ($(id)) $(id).disabled = !available;
+    if (!available) return;
+    const annotation = annotations.get(network)?.get(segment.id), position = annotation?.position ?? .5;
+    const sign = annotation?.flipped ? -1 : 1;
+    const vector = (segment.burgersVector ?? []).map(value => Number((value * sign).toPrecision(5)));
+    if ($('dxa-vector-selected')) $('dxa-vector-selected').textContent = `Line ${segment.id} · b = (${vector.join(', ')}) in crystal coordinates`;
+    if ($('dxa-vector-position')) $('dxa-vector-position').value = String(position * 100);
+    if ($('dxa-vector-position-value')) $('dxa-vector-position-value').textContent = `${(position * 100).toFixed(1)}% along the line`;
+  }
+
+  function selectVector(id) {
+    if (id !== null && (!enabled || !showBurgersVectors || !network?.segments?.some(segment => segment.id === id
+      && visibleFamilies.has(segment.familyId ?? segment.family ?? 'other')))) return false;
+    selectedVectorId = id;
+    draw();
+    return true;
+  }
+
+  function moveVector(id, { position } = {}) {
+    const segment = selectedSegment();
+    if (!enabled || !showBurgersVectors || !segment || id !== selectedVectorId
+      || !Number.isFinite(position) || position < 0 || position > 1) return false;
+    const entries = annotations.get(network) ?? new Map();
+    entries.set(id, { segmentId: id, position, flipped: entries.get(id)?.flipped ?? false,
+      signature: dislocationSegmentSignature(segment) });
+    annotations.set(network, entries);
+    onEdit(); draw();
+    return true;
+  }
+
+  function flipVector(id = selectedVectorId) {
+    const segment = selectedSegment();
+    if (!enabled || !showBurgersVectors || !segment || id !== selectedVectorId) return false;
+    const entries = annotations.get(network) ?? new Map(), previous = entries.get(id);
+    entries.set(id, { segmentId: id, position: previous?.position ?? .5, flipped: !previous?.flipped,
+      signature: dislocationSegmentSignature(segment) });
+    annotations.set(network, entries);
+    onEdit(); draw();
+    return true;
   }
 
   function state(text, ready = false) {
@@ -147,6 +209,8 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     renderer.setDislocationNetwork(network, {
       enabled: Boolean(network) && enabled, radius,
       visibleFamilies: [...visibleFamilies], familyColors: Object.fromEntries(familyColors),
+      showLineDirections, showBurgersVectors, burgersVectorScale,
+      vectorAnnotations: vectorAnnotations(), selectedVectorId,
     });
     const style = readDefectMesh(), shown = Boolean(network) && enabled && style.enabled;
     try {
@@ -190,6 +254,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     meshExportController?.abort(); meshExportController = null;
     const hadResult = Boolean(network || atomStructureFrame);
     network = null;
+    selectedVectorId = null;
     if (atomStructureFrame) clearAnalysisResults(atomStructureFrame, 'dxa');
     atomStructureFrame = null;
     $('dxa-results').hidden = true;
@@ -212,6 +277,7 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     // The controller owns this DXA request. The coordinator also serves
     // surfaces and warm-up work, so releasing it would cancel their requests.
     resultCache.clear(); cacheSourceVersion = undefined;
+    annotations = new WeakMap(); pendingAnnotations = [];
     colorDefaultPending = true;
     tools.setToolEnabled('dxa', false);
     clearNetwork({ clearSettings }); state('Not calculated');
@@ -220,6 +286,16 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
 
   function showResult(result, frame, key, selectStructures, current) {
     network = result; failure = false;
+    if (pendingAnnotations.length) {
+      const bySignature = new Map(result.segments.map(segment => [dislocationSegmentSignature(segment), segment]));
+      const entries = new Map();
+      for (const value of pendingAnnotations) {
+        const segment = bySignature.get(value.signature);
+        if (segment) entries.set(segment.id, { ...value, segmentId: segment.id });
+      }
+      annotations.set(result, entries);
+      pendingAnnotations = [];
+    }
     if (result.atomStructureTypes) {
       replaceAnalysisProperty(frame, { name: DXA_STRUCTURE_PROPERTY, displayName: DXA_STRUCTURE_LABEL,
         data: result.atomStructureTypes, categories: DXA_STRUCTURE_TYPES, unit: '',
@@ -337,6 +413,8 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     const mesh = readDefectMesh();
     return { enabled, ...parameters(), radius,
       visibleFamilies: [...visibleFamilies], familyColors: [...familyColors].map(([family, color]) => ({ family, color })),
+      ...(showLineDirections || showBurgersVectors || burgersVectorScale !== 2 || vectorAnnotations().length
+        ? { showLineDirections, showBurgersVectors, burgersVectorScale, vectorAnnotations: vectorAnnotations() } : {}),
       // Untouched defect mesh settings are left out, as in recipes saved
       // before the mesh existed.
       ...(Object.keys(DXA_DEFECT_MESH_DEFAULTS).some(name => mesh[name] !== DXA_DEFECT_MESH_DEFAULTS[name]) ? { defectMesh: { ...mesh } } : {}) };
@@ -347,6 +425,11 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     // Configuration color filters have already been restored by the caller.
     // Replace DXA's computed result without discarding those saved choices.
     cancel({ clearSettings: false }); writeParameters(saved); radius = saved.radius;
+    showLineDirections = saved.showLineDirections ?? false;
+    showBurgersVectors = saved.showBurgersVectors ?? false;
+    burgersVectorScale = saved.burgersVectorScale ?? 2;
+    pendingAnnotations = (saved.vectorAnnotations ?? []).map(value => ({ ...value }));
+    writeVectorSettings();
     defectMesh = { ...DXA_DEFECT_MESH_DEFAULTS, ...(saved.defectMesh ?? {}) };
     writeDefectMesh();
     $('dxa-line-radius').value = String(radius);
@@ -358,7 +441,9 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
   }
 
   function reset() {
-    cancel(); writeParameters(DXA_DEFAULTS); radius = 0.25;
+    cancel(); writeParameters(DXA_DEFAULTS); radius = 0.75;
+    showLineDirections = showBurgersVectors = false; burgersVectorScale = 2;
+    writeVectorSettings();
     defectMesh = { ...DXA_DEFECT_MESH_DEFAULTS };
     writeDefectMesh();
     $('dxa-line-radius').value = String(radius); resetFamilies(); renderFamilies();
@@ -416,10 +501,30 @@ export function initializeDxaTools({ renderer, tools, getFrame, getSourceVersion
     if (!Number.isFinite(value) || value <= 0) { $('dxa-line-radius').value = String(radius); notify('Enter a positive line radius.'); return; }
     onEdit(); radius = value; draw();
   });
+  $('dxa-show-line-directions')?.addEventListener('change', () => {
+    onEdit(); showLineDirections = $('dxa-show-line-directions').checked; draw();
+  });
+  $('dxa-show-burgers-vectors')?.addEventListener('change', () => {
+    onEdit(); showBurgersVectors = $('dxa-show-burgers-vectors').checked;
+    if (!showBurgersVectors) selectedVectorId = null;
+    draw();
+  });
+  $('dxa-burgers-scale')?.addEventListener('change', () => {
+    const value = $('dxa-burgers-scale').valueAsNumber;
+    if (!Number.isFinite(value) || value <= 0 || value > 1e6) {
+      $('dxa-burgers-scale').value = String(burgersVectorScale); notify('Enter a positive Burgers arrow scale up to 1000000.'); return;
+    }
+    onEdit(); burgersVectorScale = value; draw();
+  });
+  $('dxa-vector-position')?.addEventListener('input', () => moveVector(selectedVectorId, { position: $('dxa-vector-position').valueAsNumber / 100 }));
+  $('dxa-vector-flip')?.addEventListener('click', () => flipVector());
+  $('dxa-vector-clear')?.addEventListener('click', () => selectVector(null));
   reset();
   return Object.freeze({ run, onFrame, cancel, abortJobs, reset, serialize, restore, exportDefectMesh,
+    selectVector, moveVector, flipVector,
     isEnabled: () => enabled,
     getPresentationKey: () => JSON.stringify([enabled, radius, [...visibleFamilies], [...familyColors], readDefectMesh(),
+      showLineDirections, showBurgersVectors, burgersVectorScale, vectorAnnotations(),
       Object.entries(PARAMETER_FIELDS).map(([key, id]) => [key,
         key === 'onlyPerfectDislocations' ? $(id).checked : $(id).value])]),
     cacheStatus: () => ({ size: resultCache.size, bytes: resultCache.bytes,

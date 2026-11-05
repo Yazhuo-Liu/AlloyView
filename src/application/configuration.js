@@ -673,7 +673,8 @@ function normalizeComparisonLayout(value, path) {
 
 function normalizeDxa(value, path) {
   const input = record(value, path, ['enabled', 'lattice', 'trialCircuitLength', 'circuitStretchability',
-    'onlyPerfectDislocations', 'lineSmoothingIterations', 'linePointInterval', 'radius', 'visibleFamilies', 'familyColors', 'defectMesh']);
+    'onlyPerfectDislocations', 'lineSmoothingIterations', 'linePointInterval', 'radius', 'visibleFamilies', 'familyColors', 'defectMesh',
+    'showLineDirections', 'showBurgersVectors', 'burgersVectorScale', 'vectorAnnotations']);
   // The optional defect mesh: requested per extraction, with its own style.
   const defectMesh = input.defectMesh === undefined ? null
     : record(input.defectMesh, `${path}.defectMesh`, ['enabled', 'smoothingLevel', ...MESH_STYLE_KEYS]);
@@ -687,6 +688,16 @@ function normalizeDxa(value, path) {
     return { family: choice(entry.family, `${entryPath}.family`, families), color: hexColor(entry.color, `${entryPath}.color`) };
   });
   ensureUnique(familyColors.map(entry => entry.family), `${path}.familyColors`);
+  const vectorAnnotations = list(input.vectorAnnotations ?? [], `${path}.vectorAnnotations`, 100_000).map((value, index) => {
+    const entryPath = `${path}.vectorAnnotations[${index}]`;
+    const entry = record(value, entryPath, ['segmentId', 'position', 'flipped', 'signature']);
+    const signature = string(entry.signature, `${entryPath}.signature`, 16);
+    if (!/^[a-f0-9]{16}$/.test(signature)) fail(`${entryPath}.signature`, 'must identify the extracted curve');
+    return { segmentId: number(entry.segmentId, `${entryPath}.segmentId`, 0, Number.MAX_SAFE_INTEGER, true),
+      position: number(entry.position, `${entryPath}.position`, 0, 1),
+      flipped: boolean(entry.flipped, `${entryPath}.flipped`, false), signature };
+  });
+  ensureUnique(vectorAnnotations.map(entry => entry.segmentId), `${path}.vectorAnnotations`);
   return {
     enabled: boolean(input.enabled, `${path}.enabled`, false), lattice,
     trialCircuitLength: number(input.trialCircuitLength ?? DXA_DEFAULTS.trialCircuitLength, `${path}.trialCircuitLength`, 3, 100, true),
@@ -694,8 +705,13 @@ function normalizeDxa(value, path) {
     onlyPerfectDislocations: boolean(input.onlyPerfectDislocations, `${path}.onlyPerfectDislocations`, false),
     lineSmoothingIterations: number(input.lineSmoothingIterations ?? DXA_DEFAULTS.lineSmoothingIterations, `${path}.lineSmoothingIterations`, 0, 100, true),
     linePointInterval: number(input.linePointInterval ?? DXA_DEFAULTS.linePointInterval, `${path}.linePointInterval`, 0, 1e6),
-    radius: number(input.radius ?? 0.25, `${path}.radius`, 1e-12, MAX_COORDINATE),
+    radius: number(input.radius ?? 0.75, `${path}.radius`, 1e-12, MAX_COORDINATE),
     visibleFamilies, familyColors,
+    ...(['showLineDirections', 'showBurgersVectors', 'burgersVectorScale', 'vectorAnnotations'].some(key => Object.hasOwn(input, key)) ? {
+      showLineDirections: boolean(input.showLineDirections, `${path}.showLineDirections`, false),
+      showBurgersVectors: boolean(input.showBurgersVectors, `${path}.showBurgersVectors`, false),
+      burgersVectorScale: number(input.burgersVectorScale ?? 2, `${path}.burgersVectorScale`, 1e-12, 1e6), vectorAnnotations,
+    } : {}),
     ...(defectMesh === null ? {} : { defectMesh: {
       enabled: boolean(defectMesh.enabled, `${path}.defectMesh.enabled`, false),
       smoothingLevel: number(defectMesh.smoothingLevel ?? 8, `${path}.defectMesh.smoothingLevel`, 0, 100, true),

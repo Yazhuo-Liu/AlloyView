@@ -565,7 +565,10 @@
           <section id="tool-slice" class="side-section" data-tool-panel="slice" hidden>
             <div class="section-heading">
               <div><p class="section-kicker">CLIPPING PLANES</p><h3>Slices</h3></div>
-              <button id="add-slice" class="button button-secondary" type="button" disabled>Add slice</button>
+              <div class="slice-create-actions">
+                <button id="add-slice" class="button button-secondary" type="button" disabled>Add slice</button>
+                <button id="add-slab" class="button button-secondary" type="button" disabled>Add slab</button>
+              </div>
             </div>
             <details class="tool-details slice-atom-controls">
               <summary>Build a plane from atoms</summary>
@@ -581,7 +584,7 @@
               <p id="slice-pick-help" class="help" role="status" aria-live="polite">Pick atoms in the viewport to build a plane, or move the current slice to an atom.</p>
             </details>
             <div id="slice-list" class="slice-list" role="group" aria-label="Slices"></div>
-            <p id="slice-empty" class="selection-empty">Add a slice to cut the displayed structure with a plane.</p>
+            <p id="slice-empty" class="selection-empty">Add a slice to keep one side of a plane, or add a slab with a chosen thickness.</p>
             <div id="slice-settings" class="slice-settings" hidden>
               <div class="slice-actions">
                 <label class="slice-toggle"><input id="slice-enabled" type="checkbox" checked disabled><span>Enable this slice</span></label>
@@ -618,14 +621,30 @@
                 <p id="slice-sweep-help" class="help">Hold − or + to sweep. Arrow Up and Down in the position field also move one step.</p>
               </div>
               <label class="field"><span>Keep atoms on</span><select id="slice-side" disabled><option value="negative">Negative side · n · r ≤ d</option><option value="positive">Positive side · n · r ≥ d</option></select></label>
-              <div class="slice-slab-row">
-                <label class="slice-toggle"><input id="slice-slab" type="checkbox" disabled><span>Slab · keep |n · r − d| ≤ t/2</span></label>
-                <span class="input-unit"><input id="slice-thickness" type="number" min="0.000001" value="2" step="any" aria-label="Slab thickness t" title="Slab thickness t in Å" disabled><i>Å</i></span>
-              </div>
+              <label class="slice-toggle"><input id="slice-slab" type="checkbox" disabled><span>Keep a slab around this plane</span></label>
+              <label class="field"><span>Slab thickness</span><span class="input-unit"><input id="slice-thickness" type="number" min="0.000001" value="2" step="any" aria-label="Slab thickness t" aria-describedby="slice-slab-help" disabled><i>Å</i></span></label>
+              <p id="slice-slab-help" class="help">The plane position is the slab center. Half the thickness is kept on each side.</p>
               <label class="slice-toggle slice-gizmo-toggle"><input id="slice-show-gizmo" type="checkbox" checked disabled><span>Show plane and editing arrow</span></label>
               <p class="help">Normals are normalized on commit. Position is the signed distance from the Cartesian origin in Å. All enabled slices apply together.</p>
               <p class="help">Drag the arrow head to rotate the normal on a guide sphere. Drag the shaft to move the plane. Values above update while dragging.</p>
             </div>
+            <details id="slice-boundary-controls" class="tool-details slice-boundary-controls">
+              <summary>Trim boundary layers</summary>
+              <label class="field"><span>Boundary reference</span><select id="slice-boundary-reference" disabled><option value="atoms">Outer atom layers · ignore vacuum</option><option value="cell">Simulation-cell faces</option></select></label>
+              <label class="field"><span>Thickness to remove from each face</span><span class="input-unit"><input id="slice-boundary-thickness" type="number" min="0.000001" value="2" step="any" aria-describedby="slice-boundary-help slice-boundary-status" disabled><i>Å</i></span></label>
+              <div class="field">
+                <span id="slice-boundary-axis-label">Trim both faces along</span>
+                <div class="slice-boundary-axes" role="group" aria-labelledby="slice-boundary-axis-label">
+                  <label class="slice-toggle"><input id="slice-boundary-a" type="checkbox" checked disabled><span>a faces</span></label>
+                  <label class="slice-toggle"><input id="slice-boundary-b" type="checkbox" checked disabled><span>b faces</span></label>
+                  <label class="slice-toggle"><input id="slice-boundary-c" type="checkbox" checked disabled><span>c faces</span></label>
+                </div>
+              </div>
+              <p id="slice-boundary-help" class="help">Uses the cell-face directions; a, b, c match X, Y, Z for an aligned box. Thickness is measured perpendicular to each face. Open directions are selected initially.</p>
+              <button id="slice-boundary-apply" class="button button-secondary tool-run-button" type="button" disabled>Add boundary slices</button>
+              <p id="slice-boundary-status" class="help" role="status" aria-live="polite">Creates an editable slab for each selected direction. Delete or disable these slices to restore the boundary atoms.</p>
+              <p class="help">Clipping only hides atoms. Analyses and structure-file exports keep the full structure.</p>
+            </details>
             <div class="slice-outline-options">
               <label class="slice-toggle"><input id="slice-show-outlines" type="checkbox" disabled><span>Show cut outlines on the cell</span></label>
               <label class="slice-toggle"><input id="slice-export-outlines" type="checkbox" checked disabled><span>Include outlines in exported images</span></label>
@@ -1378,7 +1397,21 @@
             <p id="dxa-status" class="help" role="status" aria-live="polite">Extract lines and Burgers vectors from the complete structure.</p>
             <div id="dxa-results" hidden>
               <div class="section-heading statistics-subheading"><h3>Burgers vector families</h3></div>
-              <label class="field"><span>Line radius</span><span class="input-unit"><input id="dxa-line-radius" type="number" value="0.25" min="0.001" step="0.05" disabled><i>Å</i></span></label>
+              <label class="field"><span>Line radius</span><span class="input-unit"><input id="dxa-line-radius" type="number" value="0.75" min="0.001" step="0.05" disabled><i>Å</i></span></label>
+              <label class="slice-toggle"><input id="dxa-show-line-directions" type="checkbox" disabled><span>Show line directions · yellow</span></label>
+              <label class="slice-toggle"><input id="dxa-show-burgers-vectors" type="checkbox" disabled><span>Show Burgers vectors · cyan</span></label>
+              <label class="field"><span>Burgers arrow scale</span><span class="input-unit"><input id="dxa-burgers-scale" type="number" value="2" min="0.001" max="1000000" step="0.25" disabled><i>×</i></span></label>
+              <p class="help">Click a Burgers arrow to select it, then drag its root along the dislocation line. Arrow scale changes only the display length.</p>
+              <div id="dxa-vector-selection" class="dxa-vector-selection" hidden>
+                <p id="dxa-vector-selected" class="help" role="status" aria-live="polite"></p>
+                <label class="field"><span>Burgers arrow position</span><input id="dxa-vector-position" type="range" min="0" max="100" step="0.1" value="50" disabled></label>
+                <output id="dxa-vector-position-value" class="help" for="dxa-vector-position"></output>
+                <div class="paired-actions">
+                  <button id="dxa-vector-flip" class="button button-secondary" type="button" disabled>Flip line + Burgers vector</button>
+                  <button id="dxa-vector-clear" class="button button-secondary" type="button" disabled>Deselect</button>
+                </div>
+                <p class="help">Flip reverses both directions together, preserving their relative orientation and the extracted network.</p>
+              </div>
               <div id="dxa-families" class="legend-items crystal-items" role="group" aria-label="Dislocation line colors and visibility"></div>
               <p id="dxa-summary" class="help"></p>
               <div class="paired-actions statistics-export-actions">

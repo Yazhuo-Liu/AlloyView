@@ -14,9 +14,19 @@ Each plane has its own **step** in Å, 1 Å for a new plane. Under **Sweep along
 
 ## Slabs
 
-Check **Slab · keep |n · r − d| ≤ t/2** to keep atoms within half the thickness `t` of the plane on both sides. Set `t` in Å in the field beside the check box; a new plane uses 2 Å. In slab mode **Keep atoms on** and **Flip** are unavailable because a slab has no retained side, and the list shows the plane as **Slab**. The step and thickness are independent: a slab one interplanar spacing thick, swept by the same spacing, shows one atomic plane at a time. Turning slab mode off restores the saved side and keeps the thickness for later.
+Choose **Add slab**, or check **Keep a slab around this plane** on an existing slice, to keep atoms within half the thickness `t` of the plane on both sides (`|n · r − d| ≤ t/2`). Set **Slab thickness** in Å; a new slab uses 2 Å and is centered in the displayed structure. In slab mode **Keep atoms on** and **Flip** are unavailable because a slab has no retained side, and the list shows the plane as **Slab**. The step and thickness are independent: a slab one interplanar spacing thick, swept by the same spacing, shows one atomic plane at a time. Turning slab mode off restores the saved side and keeps the thickness for later.
 
 A slab is one slice. It combines with the other enabled slices exactly as a half-space does: an atom stays visible only when every enabled slice keeps it. Slabs can therefore be combined with half-spaces, or two slabs can be crossed to keep a column.
+
+## Trim boundary layers
+
+Expand **Trim boundary layers**, enter the thickness to hide **from each face**, choose the cell directions **a**, **b**, **c**, and press **Add boundary slices**. Directions with open boundaries are selected initially; if every direction is periodic, all three are selected. Each chosen direction creates one slab retaining the interior. For example, trimming 4 Å from each face of an atomic region 20 Å thick leaves a 12 Å interior slab.
+
+**Outer atom layers (ignore vacuum)** measures the outermost displayed atom centers along each cell-face normal. This is useful for a free surface surrounded by vacuum: trimming starts at the material rather than the simulation-box face. **Simulation-cell faces** instead measures inward from the displayed box. Thickness is a perpendicular distance in Å, including for tilted cells. Display replicas are treated as one outer region, without trimming their internal joins. The atom reference includes hidden atoms and ignores existing slices when measuring the boundary.
+
+The generated slabs combine with existing slices and can be edited, disabled or deleted individually. A trim that would remove an entire direction, or exceed the 16-slice limit, adds nothing and reports the problem. Like other slices, these are fixed Cartesian cuts; they do not automatically follow a changing free surface in a trajectory. Recreate them to fit a later frame. Configurations store them as ordinary slabs.
+
+Boundary trimming changes the displayed scene, including DXA lines and image exports. It preserves all source atoms, analysis input and structure exports: DXA still analyzes the complete structure.
 
 ## Miller-index normals
 

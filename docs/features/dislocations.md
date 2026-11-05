@@ -16,7 +16,7 @@ cutoffs. Increasing them can find more complex dislocations but increases work.
 2.5 nearest-neighbor spacings and controls line coarsening.
 
 Each Burgers-vector family has an independent visibility checkbox and color.
-Line radius controls a connected tube surface, with shared rings and smooth
+Line radius defaults to **0.75 Å** and controls a connected tube surface, with shared rings and smooth
 display interpolation at bends. Closed loops share their closing ring;
 periodic joins use matching frames in the full triclinic cell. Display pieces
 cut by periodic boundaries have filled end faces, so they appear as solid rods
@@ -31,6 +31,18 @@ lines independently of these atom filters.
 **Cancel** stops extraction and clears this tool's calculated network without
 removing other analyses. Configuration export/import includes DXA processing
 and display settings; restoring an enabled tool recomputes its network.
+
+## Line directions and Burgers vectors
+
+Enable **Show line directions** for yellow tangent arrows and **Show Burgers vectors** for cyan arrows. Each dislocation segment has its own Burgers-vector object. The arrows use the extracted vector in spatial coordinates; **Burgers arrow scale** multiplies its displayed length without changing the scientific vector. Both displays are initially off.
+
+Click a Burgers arrow to select it, then drag the highlighted root along that dislocation. The root follows the displayed smooth curve, including periodic pieces. **Position along line** sets the same location numerically, from 0% to 100% of the curve's arc length. With the root focused, arrow keys move it by 1% (Shift by 10%). **Deselect** clears the selection.
+
+**Flip line + Burgers vector**, or **F** with the selected arrow focused, reverses both its tangent and Burgers vector. Their relative orientation is preserved. This is a display convention: the extracted network, topology, measured lengths and scientific exports remain unchanged. Flipping twice restores the original orientation.
+
+Arrows follow family visibility, slices, periodic origin and display replication. They appear in the second view and image/movie exports; the selection handle is an editing overlay and is not exported. Selection and dragging operate in the primary view, outside slice editing, atom-group picking, measurement and crystal-move modes.
+
+Configurations save visibility, arrow scale and edited positions/directions. A saved annotation is restored only when the newly extracted segment matches its geometry and Burgers-vector signature, preventing a reused numeric segment ID from moving an unrelated arrow.
 
 ## Defect mesh
 

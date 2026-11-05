@@ -1,5 +1,6 @@
 import { sliceBetweenAtoms, sliceThroughAtoms, sliceThroughAtom } from '../../render/slice-from-atoms.js';
 import { dot } from '../../render/math.js';
+import { boundarySliceAxes, createBoundarySlices } from '../../render/boundary-slices.js';
 import {
   DEFAULT_SLAB_THICKNESS, DEFAULT_SLICE_STEP, flippedSliceSide, millerPlane, nearestLatticePlanePosition,
   stepSlicePosition, validateMillerIndices, validateSliceLength,
@@ -9,6 +10,7 @@ export const MAX_SLICES = 16;
 // Holding a step button repeats like a key: one step, a pause, then a stream.
 const STEP_REPEAT_DELAY = 400;
 const STEP_REPEAT_INTERVAL = 80;
+const BOUNDARY_HELP = 'Creates an editable slab for each selected direction. Delete or disable these slices to restore the boundary atoms.';
 
 /** Sidebar editing for independent Cartesian clipping planes. */
 export function initializeSliceControls({
@@ -17,6 +19,7 @@ export function initializeSliceControls({
   getSelectedPoint = () => null,
   getSelectedAtomId = () => null,
   getCell = () => null,
+  getBoundaryGeometry = () => ({ cell: getCell(), positions: null, repetitions: [1, 1, 1] }),
   resolveAtomPoint,
   onChange = () => {},
   onSelectionChange = () => {},
@@ -25,7 +28,7 @@ export function initializeSliceControls({
 } = {}) {
   const element = (id) => document.getElementById(id);
   const controls = {
-    add: element('add-slice'), remove: element('delete-slice'), list: element('slice-list'),
+    add: element('add-slice'), addSlab: element('add-slab'), remove: element('delete-slice'), list: element('slice-list'),
     empty: element('slice-empty'), settings: element('slice-settings'), status: element('slice-status'),
     name: element('slice-name'), enabled: element('slice-enabled'), gizmo: element('slice-show-gizmo'),
     normal: ['x', 'y', 'z'].map((axis) => element(`slice-normal-${axis}`)),
@@ -39,6 +42,9 @@ export function initializeSliceControls({
     step: element('slice-step'), stepBack: element('slice-step-back'), stepForward: element('slice-step-forward'),
     flip: element('slice-flip'), slab: element('slice-slab'), thickness: element('slice-thickness'),
     showOutlines: element('slice-show-outlines'), exportOutlines: element('slice-export-outlines'),
+    boundaryThickness: element('slice-boundary-thickness'), boundaryReference: element('slice-boundary-reference'),
+    boundaryAxes: ['a', 'b', 'c'].map(axis => element(`slice-boundary-${axis}`)),
+    boundaryApply: element('slice-boundary-apply'), boundaryStatus: element('slice-boundary-status'),
   };
   let slices = [];
   let selectedId = null;
@@ -47,6 +53,8 @@ export function initializeSliceControls({
   let picking = false;
   let pickedAtoms = [];
   let pickMessage = '';
+  let boundaryAxesInitialized = false;
+  let boundaryMessage = '';
   // Outline display is one choice for all planes, kept across source reloads.
   let showOutlines = false;
   let exportOutlines = true;
@@ -203,12 +211,45 @@ export function initializeSliceControls({
     else input.removeAttribute('aria-invalid');
   }
 
+  function renderBoundaryControls() {
+    const cell = getCell() ?? getBoundaryGeometry()?.cell;
+    const available = frameLoaded && Boolean(cell?.vectors?.length === 9);
+    if (available && !boundaryAxesInitialized) {
+      boundarySliceAxes(cell).forEach((enabled, axis) => { controls.boundaryAxes[axis].checked = enabled; });
+      boundaryAxesInitialized = true;
+    }
+    for (const input of [controls.boundaryThickness, controls.boundaryReference, ...controls.boundaryAxes]) {
+      input.disabled = !available;
+    }
+    let valid = available, message = boundaryMessage || BOUNDARY_HELP;
+    setInvalid(controls.boundaryThickness);
+    if (available) {
+      try {
+        validateSliceLength(Number(controls.boundaryThickness.value), 'boundary thickness');
+      } catch (error) {
+        valid = false;
+        message = error.message;
+        setInvalid(controls.boundaryThickness, message);
+      }
+      const count = controls.boundaryAxes.filter(input => input.checked).length;
+      if (!count) { valid = false; message = 'Choose at least one pair of boundary faces.'; }
+      else if (count + slices.length > MAX_SLICES) {
+        valid = false;
+        message = `Boundary trimming needs ${count} slice slots; only ${MAX_SLICES - slices.length} remain. Delete slices first.`;
+      }
+    }
+    controls.boundaryApply.disabled = !valid;
+    controls.boundaryStatus.textContent = available ? message : 'Load a structure with a cell to trim its boundary layers.';
+  }
+
   function render({ editor = true } = {}) {
     const slice = selected();
     renderList();
     controls.settings.hidden = !slice;
     controls.add.disabled = !frameLoaded || slices.length >= MAX_SLICES;
     controls.add.title = slices.length >= MAX_SLICES ? `Maximum of ${MAX_SLICES} slices` : 'Add an independent clipping plane';
+    controls.addSlab.disabled = controls.add.disabled;
+    controls.addSlab.title = slices.length >= MAX_SLICES ? `Maximum of ${MAX_SLICES} slices` : 'Keep a slab with a chosen thickness';
     for (const input of [controls.remove, controls.name, controls.enabled, controls.gizmo,
       ...controls.normal, controls.offset, controls.side, ...controls.presets,
       ...controls.miller, controls.step, controls.stepBack, controls.stepForward, controls.flip,
@@ -242,6 +283,7 @@ export function initializeSliceControls({
     controls.exportOutlines.disabled = !frameLoaded || !showOutlines;
     renderMiller();
     renderPicking();
+    renderBoundaryControls();
     setStatus();
   }
 
@@ -396,18 +438,54 @@ export function initializeSliceControls({
     return getState();
   }
 
-  function addSlice(plane) {
-    if (!frameLoaded || slices.length >= MAX_SLICES) return null;
-    const defaults = plane || getDefaultSlice() || {};
-    while (slices.some((slice) => slice.id === `slice-${nextId}`)) nextId += 1;
-    const number = nextId++;
-    const id = `slice-${number}`;
-    const slice = normalizeSlice({ ...defaults, id, name: `Slice ${number}` }, slices.length);
-    slices.push(slice);
-    selectedId = id;
+  // Normalize the entire batch before committing it. A boundary preset must
+  // never leave only some directions clipped after a validation/capacity error.
+  function appendSlices(planes) {
+    if (!frameLoaded || !planes.length || slices.length + planes.length > MAX_SLICES) return null;
+    let candidateId = nextId;
+    const added = planes.map((plane, index) => {
+      while (slices.some(slice => slice.id === `slice-${candidateId}`)) candidateId++;
+      const number = candidateId++;
+      return normalizeSlice({ ...plane, id: `slice-${number}`, name: plane.name ?? `Slice ${number}` }, slices.length + index);
+    });
+    nextId = candidateId;
+    slices.push(...added);
+    selectedId = added[0].id;
     render();
     notify({ selectionChanged: true });
-    return clone(slice);
+    return added.map(clone);
+  }
+
+  function addSlice(plane) {
+    return appendSlices([plane || getDefaultSlice() || {}])?.[0] ?? null;
+  }
+
+  function addSlab() {
+    return addSlice({ ...getDefaultSlice(), slab: true, thickness: DEFAULT_SLAB_THICKNESS });
+  }
+
+  function addBoundarySlices() {
+    if (!frameLoaded) return null;
+    try {
+      const axes = controls.boundaryAxes.map(input => input.checked);
+      const count = axes.filter(Boolean).length;
+      if (count + slices.length > MAX_SLICES) {
+        throw new Error(`Boundary trimming needs ${count} slice slots; only ${MAX_SLICES - slices.length} remain. Delete slices first.`);
+      }
+      const thickness = Number(controls.boundaryThickness.value);
+      const planes = createBoundarySlices(getBoundaryGeometry(), {
+        thickness, axes, reference: controls.boundaryReference.value,
+      });
+      const added = appendSlices(planes);
+      if (!added) return null;
+      boundaryMessage = `Added ${added.length} boundary ${added.length === 1 ? 'slice' : 'slices'}, removing ${formatValue(thickness)} Å from each selected face. Edit, disable or delete them in the list above.`;
+      renderBoundaryControls();
+      return added;
+    } catch (error) {
+      boundaryMessage = error.message;
+      renderBoundaryControls();
+      return null;
+    }
   }
 
   function createFromPickedAtoms(count) {
@@ -489,6 +567,14 @@ export function initializeSliceControls({
   }
 
   controls.add.addEventListener('click', () => addSlice());
+  controls.addSlab.addEventListener('click', addSlab);
+  controls.boundaryThickness.value = String(DEFAULT_SLAB_THICKNESS);
+  controls.boundaryReference.value = 'atoms';
+  controls.boundaryApply.addEventListener('click', addBoundarySlices);
+  for (const input of [controls.boundaryThickness, controls.boundaryReference, ...controls.boundaryAxes]) {
+    input.addEventListener('input', () => { boundaryMessage = ''; renderBoundaryControls(); });
+    input.addEventListener('change', () => { boundaryMessage = ''; renderBoundaryControls(); });
+  }
   controls.pick?.addEventListener('click', () => setPicking(!picking));
   controls.clearPicks?.addEventListener('click', clearPickedAtoms);
   controls.fromTwo?.addEventListener('click', () => createFromPickedAtoms(2));
@@ -578,17 +664,21 @@ export function initializeSliceControls({
   });
   render();
   return Object.freeze({
-    getState, setState, addSlice, createFromPickedAtoms, moveToPickedAtom,
+    getState, setState, addSlice, addSlab, addBoundarySlices, createFromPickedAtoms, moveToPickedAtom,
     applyMiller, stepSelected, flipSelected,
     setPicking, isPicking: () => picking, addPickedAtom, clearPickedAtoms,
     getPickedAtomIds: () => pickedAtoms.map((atom) => atom.id),
     // Called whenever the displayed frame or coordinates change; the Miller
     // preview follows the current frame's cell.
-    refreshPickedAtoms() { pickMessage = ''; renderMiller(); renderPicking(); },
+    refreshPickedAtoms() { pickMessage = ''; renderMiller(); renderPicking(); renderBoundaryControls(); },
     reset({ silent = true } = {}) {
       setPicking(false);
       clearPickedAtoms();
       nextId = 0;
+      boundaryAxesInitialized = false;
+      boundaryMessage = '';
+      controls.boundaryThickness.value = String(DEFAULT_SLAB_THICKNESS);
+      controls.boundaryReference.value = 'atoms';
       return setState({ slices: [], selectedId: null }, { silent });
     },
     setEnabled(enabled) {

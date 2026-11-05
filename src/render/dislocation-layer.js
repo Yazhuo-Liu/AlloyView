@@ -5,6 +5,7 @@ import { appendDislocationTube, createDislocationCurve } from './dislocation-cur
 import { MAX_SLICE_PLANES, SLICE_EPSILON, sliceHalfSpaces } from './slicing.js';
 import { translatePeriodicPoints } from './periodic-origin.js';
 import { crystalDragImages } from './crystal-drag.js';
+import { createDislocationVectorGeometry, createDislocationVectorPaths } from './dislocation-vectors.js';
 
 // A dislocation is a geometric curve, not a bond between two atom indices.
 // Keep the connected source-cell tube pieces in one indexed buffer. Periodic display
@@ -81,7 +82,7 @@ function normalizedColor(value) {
 }
 
 export function normalizeDislocationOptions(options = {}, previous = {}) {
-  const radius = options.radius ?? previous.radius ?? 0.2;
+  const radius = options.radius ?? previous.radius ?? 0.75;
   if (!Number.isFinite(radius) || radius <= 0) throw new Error('Dislocation line radius must be greater than zero.');
   const selected = Object.hasOwn(options, 'visibleFamilies') ? options.visibleFamilies : previous.visibleFamilies ?? null;
   if (selected !== null && !Array.isArray(selected) && !(selected instanceof Set)) {
@@ -93,9 +94,30 @@ export function normalizeDislocationOptions(options = {}, previous = {}) {
   if (Object.values(familyVisibility).some(value => typeof value !== 'boolean')) throw new Error('Dislocation family visibility must be true or false.');
   const familyColors = { ...(previous.familyColors ?? {}), ...(options.familyColors ?? {}) };
   for (const [id, color] of Object.entries(familyColors)) familyColors[id] = normalizedColor(color);
+  const vectorValue = (name, fallback) => Object.hasOwn(options, name) ? options[name] : previous[name] ?? fallback;
+  const showLineDirections = vectorValue('showLineDirections', false), showBurgersVectors = vectorValue('showBurgersVectors', false);
+  if (typeof showLineDirections !== 'boolean' || typeof showBurgersVectors !== 'boolean') throw new Error('Dislocation vector visibility must be true or false.');
+  const burgersVectorScale = vectorValue('burgersVectorScale', 2);
+  if (!Number.isFinite(burgersVectorScale) || burgersVectorScale <= 0) throw new Error('Burgers vector scale must be greater than zero.');
+  const annotations = vectorValue('vectorAnnotations', []), identifiers = new Set();
+  if (!Array.isArray(annotations)) throw new Error('Dislocation vector annotations must be an array.');
+  const vectorAnnotations = annotations.map(annotation => {
+    if (!annotation || !Number.isSafeInteger(annotation.segmentId) || annotation.segmentId < 0 || identifiers.has(annotation.segmentId)) {
+      throw new Error('Dislocation vector annotations require distinct nonnegative segment identifiers.');
+    }
+    if (!Number.isFinite(annotation.position) || annotation.position < 0 || annotation.position > 1) throw new Error('Dislocation arrow position must lie between zero and one.');
+    if (typeof annotation.flipped !== 'boolean') throw new Error('Dislocation arrow reversal must be true or false.');
+    if (annotation.signature !== undefined && typeof annotation.signature !== 'string') throw new Error('Dislocation vector signatures must be strings.');
+    identifiers.add(annotation.segmentId);
+    return { segmentId: annotation.segmentId, position: annotation.position, flipped: annotation.flipped,
+      ...(annotation.signature === undefined ? {} : { signature: annotation.signature }) };
+  });
+  const selectedVectorId = vectorValue('selectedVectorId', null);
+  if (selectedVectorId !== null && (!Number.isSafeInteger(selectedVectorId) || selectedVectorId < 0)) throw new Error('Selected dislocation vector requires a segment identifier.');
   return {
     enabled: Boolean(options.enabled ?? options.visible ?? previous.enabled ?? true),
     radius, visibleFamilies, familyVisibility, familyColors,
+    showLineDirections, showBurgersVectors, burgersVectorScale, vectorAnnotations, selectedVectorId,
   };
 }
 
@@ -226,13 +248,18 @@ export class DislocationLayer {
     this.count = 0;
     this.vertexCount = this.indexCount = 0;
     this.geometry = null;
+    this.vectorGeometry = null;
+    this.vectorSources = null;
+    this.vectorKey = null;
+    this.vectorVao = null;
   }
 
   setNetwork(renderer, network, options = {}) {
     const normalized = normalizeDislocationOptions(options, this.options);
     const appearanceKey = JSON.stringify([normalized.visibleFamilies, normalized.familyVisibility, normalized.familyColors]);
     const displayKey = JSON.stringify([renderer.periodicOrigin ?? [0, 0, 0], renderer.coordinateMode ?? 'wrapped']);
-    if (network && (this.network !== network || this.cell !== renderer.frame.cell || this.appearanceKey !== appearanceKey || this.displayKey !== displayKey)) {
+    const changed = network && (this.network !== network || this.cell !== renderer.frame.cell || this.appearanceKey !== appearanceKey || this.displayKey !== displayKey);
+    if (changed) {
       const geometry = createDislocationTubeGeometry(network, renderer.frame.cell, normalized, renderer);
       this.minimum = geometry.minimum;
       this.maximum = geometry.maximum;
@@ -246,7 +273,28 @@ export class DislocationLayer {
       this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
       this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, geometry.indices, this.gl.STATIC_DRAW);
       this.gl.bindVertexArray(null);
+      this.vectorSources = null;
     } else if (!network) this.clear();
+    if (network && (normalized.showLineDirections || normalized.showBurgersVectors)) {
+      const vectorKey = JSON.stringify([normalized.radius, normalized.showLineDirections, normalized.showBurgersVectors,
+        normalized.burgersVectorScale, normalized.vectorAnnotations, normalized.selectedVectorId]);
+      if (!this.vectorSources || this.vectorKey !== vectorKey) {
+        this.vectorSources ??= createDislocationVectorPaths(network, renderer.frame.cell, normalized, renderer);
+        this.vectorGeometry = createDislocationVectorGeometry(this.vectorSources, renderer.frame.cell, normalized);
+        this.ensureVectorBuffers();
+        const gl = this.gl;
+        gl.bindVertexArray(this.vectorVao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.vectorMeshBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, this.vectorGeometry.values, gl.DYNAMIC_DRAW ?? gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.vectorIndexBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.vectorGeometry.indices, gl.DYNAMIC_DRAW ?? gl.STATIC_DRAW);
+        gl.bindVertexArray(null);
+        this.vectorKey = vectorKey;
+      }
+    } else {
+      this.vectorGeometry = null;
+      this.vectorKey = null;
+    }
     this.options = normalized;
     this.network = network;
     this.cell = renderer.frame?.cell ?? null;
@@ -254,17 +302,42 @@ export class DislocationLayer {
     this.displayKey = displayKey;
   }
 
+  ensureVectorBuffers() {
+    if (this.vectorVao) return;
+    const gl = this.gl;
+    this.vectorVao = gl.createVertexArray();
+    this.vectorMeshBuffer = gl.createBuffer();
+    this.vectorIndexBuffer = gl.createBuffer();
+    gl.bindVertexArray(this.vectorVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vectorMeshBuffer);
+    for (let attribute = 0; attribute < 4; attribute++) {
+      gl.enableVertexAttribArray(attribute);
+      gl.vertexAttribPointer(attribute, 3, gl.FLOAT, false, 48, attribute * 12);
+      gl.vertexAttribDivisor(attribute, 0);
+    }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.vectorIndexBuffer);
+    gl.bindVertexArray(null);
+  }
+
   clear() {
     this.network = null;
     this.count = 0;
     this.vertexCount = this.indexCount = 0;
     this.geometry = null;
+    this.vectorGeometry = this.vectorSources = this.vectorKey = null;
     this.minimum = this.maximum = null;
     this.gl.bindVertexArray(this.vao);
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.meshBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, 0, this.gl.STATIC_DRAW);
     this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
     this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, 0, this.gl.STATIC_DRAW);
+    if (this.vectorVao) {
+      this.gl.bindVertexArray(this.vectorVao);
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vectorMeshBuffer);
+      this.gl.bufferData(this.gl.ARRAY_BUFFER, 0, this.gl.STATIC_DRAW);
+      this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, this.vectorIndexBuffer);
+      this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, 0, this.gl.STATIC_DRAW);
+    }
     this.gl.bindVertexArray(null);
   }
 
@@ -275,7 +348,6 @@ export class DislocationLayer {
     gl.bindVertexArray(this.vao);
     gl.uniformMatrix4fv(u.uView, false, renderer.viewMatrix);
     gl.uniformMatrix4fv(u.uProjection, false, renderer.projectionMatrix);
-    gl.uniform1f(u.uRadius, this.options.radius);
     gl.uniform1i(u.uSliceCount, planes.count);
     gl.uniform4fv(u['uSlicePlanes[0]'], planes.values);
     // A crystal drag previews the lines without rebuilding them: see
@@ -295,9 +367,17 @@ export class DislocationLayer {
       }
       for (const image of images) {
         gl.uniform3f(u.uDragOffset, ...image);
+        gl.bindVertexArray(this.vao);
+        gl.uniform1f(u.uRadius, this.options.radius);
         gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_INT, 0);
+        if (this.vectorGeometry?.indexCount) {
+          gl.bindVertexArray(this.vectorVao);
+          gl.uniform1f(u.uRadius, 1);
+          gl.drawElements(gl.TRIANGLES, this.vectorGeometry.indexCount, gl.UNSIGNED_INT, 0);
+        }
       }
     }
+    gl.bindVertexArray(null);
   }
 
   extendBounds(renderer, minimum, maximum) {
@@ -305,6 +385,10 @@ export class DislocationLayer {
     for (let axis = 0; axis < 3; axis += 1) {
       minimum[axis] = Math.min(minimum[axis], this.minimum[axis] + (renderer.minimumOffset?.[axis] ?? 0) - this.options.radius);
       maximum[axis] = Math.max(maximum[axis], this.maximum[axis] + (renderer.maximumOffset?.[axis] ?? 0) + this.options.radius);
+      if (this.vectorGeometry?.indexCount) {
+        minimum[axis] = Math.min(minimum[axis], this.vectorGeometry.minimum[axis] + (renderer.minimumOffset?.[axis] ?? 0));
+        maximum[axis] = Math.max(maximum[axis], this.vectorGeometry.maximum[axis] + (renderer.maximumOffset?.[axis] ?? 0));
+      }
     }
   }
 }

@@ -317,5 +317,5 @@ test('clearing the dislocation renderer API retains the loaded analysis frame', 
   assert.equal(renderer.frame, frame);
   assert.equal(renderer.dislocationNetwork, null);
   assert.equal(redraws, 1);
-  assert.equal(renderer.dislocationOptions.radius, 0.2);
+  assert.equal(renderer.dislocationOptions.radius, 0.75);
 });

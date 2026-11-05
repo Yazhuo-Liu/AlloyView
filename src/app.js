@@ -93,6 +93,7 @@ import { initializeMobileControls } from './ui/shell/mobile-controls.js';
 import { initializeFileDrop } from './ui/shell/file-drop.js';
 import { initializeSliceControls } from './ui/view/slice-controls.js';
 import { initializeSliceGizmo } from './render/slice-gizmo.js';
+import { initializeDislocationVectorGizmo } from './render/dislocation-vector-gizmo.js';
 import { initializeCrystalDragControls } from './ui/view/crystal-drag-controls.js';
 import { createConfiguration, parseConfiguration, matchesSource, downloadConfiguration } from './application/configuration.js';
 import { createConfigurationRestoreQueue, settleConfigurationAnalyses } from './application/configuration-restore.js';
@@ -312,6 +313,7 @@ let colorChoiceVersion = 0;
 let backgroundCustomized = false;
 let sliceControls;
 let sliceGizmo;
+let dislocationVectorGizmo;
 let crystalDrag;
 let pendingConfiguration = null;
 let configurationRequest = 0;
@@ -664,6 +666,7 @@ const toolPanels = initializeToolPanels({
     syncSliceGizmo();
     selectionGroupControls?.setActive(name === 'selectionGroups');
     syncSelectionGroupInteraction();
+    syncDislocationVectorGizmo();
     if (name === 'vectors' && userInitiated && state.frame) atomEyeTools?.updateVectors();
     if (name === 'displacement' && userInitiated && state.frame && !toolPanels.isToolEnabled(name)) {
       interruptConfigurationRestore('a displacement calculation');
@@ -780,6 +783,7 @@ try {
     onProjectionChange: syncProjectionControls,
     onRender: () => {
       if (!renderer?.presentationPending) { sliceGizmo?.update(); ambientOcclusion?.update(); }
+      syncDislocationVectorGizmo();
     },
     // Exports wait for current ambient occlusion, after a legend edit commits.
     onBeforeCapture: () => { legendPanel.commitPendingEdit(); displayRefresh.flush(); ambientOcclusion?.ensureCurrent(); },
@@ -892,6 +896,8 @@ function syncSelectionGroupInteraction() {
 sliceControls = initializeSliceControls({
   getSelectedAtomId: () => state.selectedId,
   getCell: () => state.frame?.cell ?? null,
+  getBoundaryGeometry: () => ({ cell: state.frame?.cell, positions: renderer.displayPositions,
+    repetitions: renderer.repetitions }),
   resolveAtomPoint: (id, atom) => displayedAtomPoint(id, atom?.replicaIndices),
   getSelectedPoint: () => displayedAtomPoint(state.selectedId),
   getPickedPoints: () => atomEyeTools?.serialize().measurements.atomIds.map(id => ({ id, position: displayedAtomPoint(id) }))
@@ -1018,11 +1024,21 @@ dxaTools = initializeDxaTools({
     atomEyeTools.syncComparison();
     statisticsExports?.refresh();
     globalAttributes?.refresh();
+    syncDislocationVectorGizmo();
   },
   onMemoryChange: reassessFrameCache, notify: showToast,
   getFileStem: () => (state.file?.name ?? 'alloyview').replace(/\.[^.]+$/, ''),
   getFrameIndex: () => state.frameIndex,
 });
+
+dislocationVectorGizmo = initializeDislocationVectorGizmo(renderer, {
+  onSelect: id => dxaTools.selectVector(id),
+  onChange: (id, change) => dxaTools.moveVector(id, change),
+  onFlip: id => dxaTools.flipVector(id),
+});
+for (const id of ['toggle-crystal-drag', 'mobile-toggle-crystal-drag', 'origin-drag-mode', 'measure-mode']) {
+  document.getElementById(id)?.addEventListener('click', syncDislocationVectorGizmo);
+}
 
 topologyTools = initializeTopologyTools({
   renderer, pool: analysisPool, tools: toolPanels, afterDisplayRefresh,
@@ -1633,6 +1649,7 @@ window.addEventListener('beforeunload', () => {
   coordinationPool.close();
   void dxaClient.close();
   sliceGizmo.dispose();
+  dislocationVectorGizmo.dispose();
   cameraControls?.dispose();
   keyboardControls.dispose();
   scriptControls?.stop();
@@ -3944,6 +3961,7 @@ function setControlsEnabled(enabled) {
   configureReplicationUi(enabled);
   frameNavigationControls?.refresh();
   sliceControls.setEnabled(enabled);
+  syncDislocationVectorGizmo();
   syncAxisVisibility();
 }
 
@@ -4024,6 +4042,14 @@ function syncSliceGizmo() {
   if (!sliceControls || !sliceGizmo) return;
   sliceGizmo.setState({ ...sliceControls.getState(), visible: Boolean(state.frame) && sourceLoadingOwner === null
     && toolPanels.getActiveTool() === 'slice' && !sliceControls.isPicking() });
+}
+
+function syncDislocationVectorGizmo() {
+  dislocationVectorGizmo?.setEnabled(Boolean(state.frame) && sourceLoadingOwner === null
+    && toolPanels.getActiveTool() !== 'slice' && !sliceControls?.isPicking()
+    && !selectionGroupControls?.getInteractionState().enabled
+    && !document.getElementById('measure-mode')?.checked
+    && !renderer.canvas.classList.contains('crystal-drag-mode'));
 }
 
 function interruptConfigurationRestore(reason, { keepPredictionFrame } = {}) {
